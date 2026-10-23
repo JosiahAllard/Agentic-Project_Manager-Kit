@@ -34,6 +34,7 @@ ALLOWED = (
     ('kitlib/guard/rules.py', 'its old name conductor', W2B),
     ('kitlib/guard/rules.py', "'conductor' is the", W2B),
     ('kitlib/guard/rules.py', "AGENT_MARKS = ('coordinator', 'conductor'", W2B),
+    ('kitlib/guard/gaterole.py', "MARKS = ('coordinator', 'conductor', 'pm')", W2B),
     ('docs/guard.md', 'its old name `conductor`', W2B),
     ('docs/guard.md', "`conductor` (the coordinator's old mark, removed after the switch)", W2B),
     # The launcher still runs the agent by its old name and marks it coordinator.

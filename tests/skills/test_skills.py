@@ -8,11 +8,26 @@ from tests.shipped import ROOT, frontmatter, violations
 
 SKILLS = ROOT / "content" / "skills"      # every host ships these (docs/content.md)
 GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
-EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "coordinator-dispatch", "doc-claims-discipline",
-            "flaky-test-triage", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
-            "shell-and-worktree-traps", "subagent-dispatch"}
+EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "builder", "coordinator-dispatch", "doc-claims-discipline",
+            "flaky-test-triage", "hub-ops", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
+            "shell-and-worktree-traps", "subagent-dispatch",
+            "specialty-3d-assets", "specialty-rigging", "specialty-tech-art", "specialty-sound",
+            "specialty-review", "specialty-research", "specialty-records", "specialty-spec"}
+# a task specialty a generic agent loads because its brief names it (docs/specialty-skills.md
+# "Specialty skills"): the agent type its Dispatch line names as the minimum
+SPECIALTY_MIN = {"specialty-3d-assets": "senior-worker", "specialty-rigging": "senior-worker",
+                 "specialty-tech-art": "senior-worker",
+                 "specialty-sound": "worker", "specialty-review": "analyst",
+                 "specialty-research": "analyst", "specialty-records": "docs-writer",
+                 "specialty-spec": "docs-writer"}
+CREATIVE = ("specialty-3d-assets", "specialty-rigging", "specialty-tech-art", "specialty-sound")
+# companion files written once in meaning and carried byte for byte by each skill that needs them
+SHARED_COMPANIONS = {"creative.md": CREATIVE, "doc-writing.md": ("specialty-records", "specialty-spec")}
 # reference files a skill carries beside its SKILL.md
-EXTRA_FILES = {"coordinator-dispatch": ["roster.md"]}
+EXTRA_FILES = {"coordinator-dispatch": ["roster.md"], "specialty-3d-assets": ["creative.md"],
+               "specialty-rigging": ["creative.md"],
+               "specialty-tech-art": ["creative.md"], "specialty-sound": ["creative.md", "measuring.md"],
+               "specialty-records": ["doc-writing.md"], "specialty-spec": ["doc-writing.md"]}
 # one repo's own: never shipped in the plugin (docs/shipping.md, "Stays repo-local")
 REPO_LOCAL = {"worktree-start"}
 REPO_LOCAL_SUFFIX = "-train-eval"     # the training-and-evaluation workflow skill
@@ -124,6 +139,34 @@ class SkillFilesTest(unittest.TestCase):
             text = p.read_text(encoding="utf-8")
             for needle, fix in HOST_ONLY:
                 self.assertNotIn(needle, text, f"{p.parent.name}/{p.name} says {needle!r}: {fix}")
+
+    def test_specialty_skills_open_with_a_dispatch_line(self):
+        """A specialty skill's first body line says the minimum agent type a brief names with it and
+        the profile sections it reads; creative work never runs on weak-worker
+        (docs/specialty-skills.md "Specialty skills", "Decisions" 5)."""
+        self.assertEqual({n for n in EXPECTED if n.startswith("specialty-")}, set(SPECIALTY_MIN))
+        for name, minimum in SPECIALTY_MIN.items():
+            text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
+            body = re.sub(r"\A---\r?\n.*?\r?\n---\r?\n", "", text, flags=re.S)
+            first = next(ln for ln in body.splitlines() if ln.strip() and not ln.startswith("#"))
+            self.assertTrue(first.startswith("Dispatch: "), f"{name}: first body line {first!r}")
+            self.assertRegex(first, r"(?<![\w-])%s(?![\w-])" % re.escape(minimum), name)
+            self.assertIn("profile", first, f"{name}: Dispatch line names no profile section")
+            if name in CREATIVE:
+                self.assertIn("never weak-worker", first, name)
+
+    def test_shared_companions_are_identical(self):
+        for companion, owners in SHARED_COMPANIONS.items():
+            texts = {n: (SKILLS / n / companion).read_bytes() for n in owners}
+            self.assertEqual(len(set(texts.values())), 1, f"{companion} differs between {sorted(texts)}")
+
+    def test_specialty_skill_points_at_each_companion(self):
+        for name, extras in EXTRA_FILES.items():
+            if not name.startswith("specialty-"):
+                continue
+            text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
+            for extra in extras:
+                self.assertIn(f"`{extra}`", text, f"{name}/SKILL.md never names its {extra}")
 
     def test_repo_owned_doc_name_passes_though_kit_has_it(self):
         with tempfile.TemporaryDirectory() as d:

@@ -58,11 +58,13 @@ class Install(unittest.TestCase):
         with self.assertRaisesRegex(autostart.LaunchError, 'WindowsApps') as cm:
             autostart.install('/kit/tools/launch.py', python=STORE, run=never, isfile=lambda p: True)
         self.assertIn('nothing registered', str(cm.exception))
-        out = autostart.install('/kit/tools/launch.py', python=STORE, whatif=True, run=never,
-                                isfile=lambda p: True)
-        self.assertEqual(len(out), 3, out)
-        self.assertTrue(out[2].startswith('install-autostart would refuse: '), out[2])
-        self.assertIn('WindowsApps', out[2])
+        with self.assertRaisesRegex(autostart.LaunchError, 'WindowsApps') as cm:  # what-if: the same
+            autostart.install('/kit/tools/launch.py', python=STORE, whatif=True, run=never,
+                              isfile=lambda p: True)
+        lines = cm.exception.lines
+        self.assertEqual(len(lines), 3, lines)
+        self.assertTrue(lines[2].startswith('install-autostart would refuse: '), lines[2])
+        self.assertIn('WindowsApps', lines[2])
         with self.assertRaisesRegex(autostart.LaunchError, 'WindowsApps'):
             autostart.install('/kit/tools/launch.py', run=never, isfile=lambda p: True,
                               base_prefix=os.path.dirname(STORE))

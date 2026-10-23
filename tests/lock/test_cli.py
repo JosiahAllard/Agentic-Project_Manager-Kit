@@ -191,17 +191,85 @@ class Cli(StoreCase):
                 self.assertEqual(code, 2)
                 self.assertIn("unrecognized arguments", err)
 
-    def test_resource_and_priority_are_not_cli_flags(self):
-        """Only library callers (kitlib.gate.land) set a run's resource and priority."""
-        for verb in ("run", "background"):
-            for flag in (["--resource", "x"], ["--priority", "land"], ["--res", "x"],
-                         ["--prio", "land"]):
-                with self.subTest(verb=verb, flag=flag):
-                    code, _, err = self.call(verb, "--kind", "engine-test", "--repo", "kit",
-                                             "--slug", "t", *flag, cmd=[sys.executable, "-V"])
-                    self.assertEqual(code, 2)
-                    self.assertIn("unrecognized arguments", err)
+    def test_priority_is_not_a_cli_flag_and_resource_is_on_run_only(self):
+        """Only library callers (kitlib.gate.land) set a run's priority. --resource is run's
+        alone (background does not book through kitlib.lock.run.book), never abbreviated."""
+        cases = [("run", ["--priority", "land"]), ("run", ["--prio", "land"]),
+                 ("run", ["--res", "x"]), ("background", ["--resource", "x"]),
+                 ("background", ["--priority", "land"]), ("background", ["--prio", "land"]),
+                 ("background", ["--res", "x"])]
+        for verb, flag in cases:
+            with self.subTest(verb=verb, flag=flag):
+                code, _, err = self.call(verb, "--repo", "kit", "--slug", "t", *flag,
+                                         *(["--kind", "engine-test"] if verb == "run" else []),
+                                         cmd=[sys.executable, "-V"])
+                self.assertEqual(code, 2)
+                self.assertIn("unrecognized arguments", err)
         self.assertIsNone(self.store.read("queue.json"))
+
+    def run_with(self, slug, *extra):
+        return self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", slug,
+                         "--cores", "1", "--no-wait", *extra, cmd=[sys.executable, "-V"])
+
+    def ended(self, slug):
+        return [self.store.read("ended/" + n) for n in os.listdir(self.store.path("ended"))
+                if n.startswith("r-") and self.store.read("ended/" + n)["slug"] == slug]
+
+    def test_run_resource_reaches_book_and_a_second_run_naming_it_waits(self):
+        """run --resource R books with resource=R (kitlib.lock.run.book): the record carries it,
+        and while another live run holds R a second --no-wait run naming R is busy (6) even with
+        slots free; one naming another resource or none is not kept out."""
+        from kitlib.lock import run as rm
+        from kitlib.lock import store as store_mod
+        from .helpers import clean_env
+        ports = "ports:e2e-a"
+        self.confine(2)                         # slots alone would let both run at once
+        code, _, err = self.run_with("solo", "--resource", ports)
+        self.assertEqual(code, 0, err)
+        self.assertEqual([r.get("resource") for r in self.ended("solo")], [ports])
+        first = rm.book("engine-test", "kit", "first", cores=1, store=self.store,
+                        env=clean_env(), resource=ports)
+        try:
+            code, _, err = self.run_with("second", "--resource", ports)
+            self.assertEqual(code, store_mod.EXIT_BUSY, err)
+            self.assertIn("resource %s is held by" % ports, err)
+            self.assertIn(first.id, err)
+            for extra in (("--resource", "ports:e2e-b"), ()):
+                with self.subTest(extra=extra):
+                    code, _, err = self.run_with("other", *extra)
+                    self.assertEqual(code, 0, err)
+        finally:
+            first.release()
+        code, _, err = self.run_with("second", "--resource", ports)    # free again: it runs
+        self.assertEqual(code, 0, err)
+
+    def test_an_empty_resource_is_usage_and_books_nothing(self):
+        """An empty --resource is usage (exit 2) before anything is booked, detached or not: a
+        detached run must not print '<run id> pid N' and exit 0 with the refusal only in its log."""
+        with mock.patch.object(self.tool, "detach", return_value=0) as det:
+            for extra in ((), ("--detach",)):
+                with self.subTest(extra=extra):
+                    code, _, err = self.run_with("t", "--resource", "", *extra)
+                    self.assertEqual(code, 2, err)
+                    self.assertIn("a resource is a non-empty string", err)
+        det.assert_not_called()
+        self.assertIsNone(self.store.read("queue.json"))
+        self.assertFalse(os.path.isdir(self.store.path("ended")))
+
+    def test_a_landing_resource_is_usage_and_books_nothing(self):
+        """landing:<git dir> is land.py's resource (kitlib.gate.land): run --resource refuses
+        it before anything is booked, detached or not."""
+        with mock.patch.object(self.tool, "detach", return_value=0) as det:
+            for extra in ((), ("--detach",)):
+                with self.subTest(extra=extra):
+                    code, _, err = self.run_with("t", "--resource", "landing:z:\\repo\\.git",
+                                                 *extra)
+                    self.assertEqual(code, 2, err)
+                    self.assertIn("usage: --resource landing:z:\\repo\\.git: landing "
+                                  "resources belong to land.py", err)
+        det.assert_not_called()
+        self.assertIsNone(self.store.read("queue.json"))
+        self.assertFalse(os.path.isdir(self.store.path("ended")))
 
     def test_division_is_refused_under_an_agent_host_with_a_stripped_environment(self):
         # The old CLI made any caller without CLAUDE_CODE_SESSION_ID / CLAUDE_PID the
@@ -232,6 +300,49 @@ class Cli(StoreCase):
         shown = json.loads(out[out.index("{"):])
         self.assertEqual(shown["wanted_division"]["medium_cores"], 1)
         self.assertEqual(self.call("division", "--default", owner=True)[0], 0)
+
+    def test_division_on_a_failed_look_says_why_it_is_not_in_force(self):
+        """A look that could not read the gpus is never adopted, idle or not: `division --set`
+        gives that reason, not that the division applies once nothing is live or queued."""
+        self.layout()
+        with open(self.hw_path, "w", encoding="utf-8") as f:
+            json.dump(dict(self.hw, gpus=[], source=dict(self.hw["source"], gpu="none"),
+                           failed=["gpus"], problems=["Win32_VideoController: exit 1"]), f)
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        first = out.splitlines()[0]
+        self.assertIn("the gpus could not be read (Win32_VideoController: exit 1)", first)
+        self.assertNotIn("applies once nothing is live", out)
+
+    def test_division_with_an_invalid_layout_json_under_a_live_run_is_not_in_force_now(self):
+        """The wanted layout is used but layout.json is not written: the CLI says that, not
+        "in force now"."""
+        self.layout()
+        self.live_record("r-20261006T120000Z-abcdef")
+        self.store.drop("layout.json")
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        first = out.splitlines()[0]
+        self.assertNotIn("in force now", first)
+        self.assertIn("is written once no run is live or queued (1 now)", first)
+
+    def test_division_on_a_fresh_failed_look_says_it_is_provisional(self):
+        with open(self.hw_path, "w", encoding="utf-8") as f:
+            json.dump(dict(self.hw, gpus=[], source=dict(self.hw["source"], gpu="none"),
+                           failed=["gpus"], problems=["Win32_VideoController: exit 1"]), f)
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        first = out.splitlines()[0]
+        self.assertNotIn("in force now", first)
+        self.assertIn("provisional", first)
+
+    def test_division_under_a_live_run_applies_once_idle(self):
+        self.layout()
+        self.live_record("r-20261006T120000Z-abcdef")
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        self.assertIn("division written; it applies once nothing is live or queued",
+                      out.splitlines()[0])
 
     def test_top_is_the_owners(self):
         rid = "r-20261006T120000Z-abcdef"

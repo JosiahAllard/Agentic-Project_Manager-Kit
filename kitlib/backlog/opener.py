@@ -4,10 +4,11 @@ docs/backlog.md).
 
   open_repo(root)   -> (top, cfg, rules); Failure when `root` is no repository or its `.kit.json`
                        cannot be read
-  open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store
+  open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store, its
+                       `liveness` probe the worktree classifier's (liveness)
   planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, or `retarget`);
                        Usage for any other verb, raised before a plan exists
-  retarget_dry(args, store) -> the Change `retarget` would write, checked as a write would be;
+  retarget_dry(args, ctx) -> the Change `retarget` would write, checked as a write would be;
                        nothing is published
 
 `planner` and `retarget_dry` take an object with tools/backlog.py's argument names (`verb`, `id`,
@@ -25,8 +26,8 @@ from .errors import Failure, Usage
 
 # `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
 FIELD_FLAGS = [k for k in rmod.FIELDS if k != 'hold_ruling']
-WRITES = ('add', 'set', 'block', 'unblock', 'pull', 'release', 'close', 'retire', 'set-status',
-          'unpark')
+WRITES = ('add', 'set', 'block', 'unblock', 'pull', 'release', 'close', 'retire', 'delete',
+          'set-status', 'unpark', 'clear-review')
 
 
 def open_repo(root):
@@ -47,9 +48,24 @@ def open_store(root, fetch=True, session=None, branch=None):
     section = cfg.section('backlog')
     backend = smod.open_backend(top, cfg, fetch=fetch)
     store = smod.Store(backend, rules, session=session)
+    code_main, code_remote = section['code_main'], cfg.remote
+    code = pullmod.code_config(top)
+    if code is not None:
+        # The PM data worktree: its own main and remote are the data's; the code lands on the
+        # main checkout's (docs/backlog.md "The fold-in guard").
+        code_main, code_remote = code_main or code.main_branch, code.remote
     ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
-                       branch=branch, code_main=section['code_main'] or cfg.main_branch)
+                       branch=branch, code_main=code_main or cfg.main_branch,
+                       code_remote=code_remote, liveness=lambda name: liveness(top, name))
     return ctx
+
+
+def liveness(top, branch):
+    """plan.Context's `liveness` probe: kitlib.worktree.classify.branch_liveness on the repository
+    `top` is in. Imported here, when a block or release asks, never at load: kitlib.worktree
+    imports this package's store."""
+    from kitlib.worktree import classify
+    return classify.branch_liveness(top, branch)
 
 
 def set_changes(args):
@@ -67,12 +83,12 @@ def planner(args, ctx):
         body = pmod.read_body_file(args.body_file) if args.body_file else None
         changes = set_changes(args)
         return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, args.ruling, body,
-                                       args.hold_ruling)
+                                       args.hold_ruling, role_checked=True)
     if v == 'block':
         return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling,
                                          reason=args.reason)
     if v == 'retarget':
-        return lambda s: retmod.plan_retarget(s, args.old, args.new)
+        return lambda s: retmod.plan_retarget(s, ctx, args.old, args.new)
     if v == 'unblock':
         return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
     if v == 'pull':
@@ -81,24 +97,31 @@ def planner(args, ctx):
     if v == 'release':
         return lambda s: pmod.plan_release(s, ctx, args.id, args.reason)
     if v == 'close':
-        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, args.ruling)
+        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, args.ruling,
+                                          role_checked=True)
     if v == 'set-status':
         return lambda s: pmod.plan_set_status(s, ctx, args.id, args.status, args.q)
     if v == 'unpark':
         return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
     if v == 'retire':
-        return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
+        return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling,
+                                           role_checked=True)
+    if v == 'delete':
+        return lambda s: pmod.plan_delete(s, ctx, args.id, args.why, args.ruling,
+                                           role_checked=True)
+    if v == 'clear-review':
+        return lambda s: pmod.plan_clear_review(s, ctx, args.id, args.reason)
     # The caller's mistake, so Usage (errors.py); raised here, before any plan could run.
     raise Usage('`%s` is not a write verb: `planner` plans %s' % (v, ', '.join(WRITES + ('retarget',))))
 
 
-def retarget_dry(args, store):
+def retarget_dry(args, ctx):
     """`retarget` without `--apply`: the change it would write, planned against a fresh read and
     checked as a write would be; nothing is published."""
-    snap = store.load()
+    snap = ctx.store.load()
     smod.require_readable(snap)
     with smod.plan_notes() as notes, smod.notes_on_refusal(notes):
-        change = retmod.plan_retarget(snap, args.old, args.new)
+        change = retmod.plan_retarget(snap, ctx, args.old, args.new)
     change = smod.with_plan_notes(change, notes)
     if change.writes:
         with smod.notes_on_refusal(notes):

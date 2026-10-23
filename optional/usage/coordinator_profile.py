@@ -1,7 +1,7 @@
 """Per-session profile of a coordinator's own turns: model, turns, context size, cache behaviour,
 cost drivers.
 
-usage: python ~/.claude/tools/usage/coordinator_profile.py <project transcript folder> [since]
+usage: python <kit>/optional/usage/coordinator_profile.py <project transcript folder> [since]
                                                          [--days 7]
 
 Reads only the folder's top-level *.jsonl (the main sessions, not subagents/), oldest first.
@@ -42,9 +42,11 @@ def profile(path, since):
         if d.get("type") != "assistant":
             continue
         m = d.get("message") or {}
-        if m.get("id") in seen:
+        mid = m.get("id")
+        if mid is not None and mid in seen:
             continue
-        seen.add(m.get("id"))
+        if mid is not None:
+            seen.add(mid)
         u = m.get("usage") or {}
         turns += 1
         models[m.get("model")] += 1

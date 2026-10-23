@@ -1,11 +1,15 @@
 """kitlib.gate.land and owner-only paths (docs/gate.md "Landing", step 4): a branch with a commit
 that changes an owner-only path and is not authored by the owner ("owner".email, read from
 --expect-main's config) is REFUSED before any merge, whatever its trailers say; the owner's own
-commit lands."""
+commit lands, and so does an agent commit with an owner approval the hub verifies for it."""
 import json
+from unittest import mock
 
 from kitlib import gate as G
+from kitlib.guard import ownercommits
+from kitlib.hubsite import approvals as ap
 from tests.gate import test_land
+from tests.guard import test_ownercommits as toc
 from tests.home import no_machine_owner
 
 BRANCH = test_land.BRANCH
@@ -101,6 +105,53 @@ class OwnerPaths(OwnerLandCase):
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(self.remote_main(), out.merge)
+
+
+class OwnerApproval(OwnerLandCase):
+    """An agent commit carrying `Owner-Approval: hub:A-<n>` lands when the hub verifies that
+    approval for exactly that commit (kitlib.guard.ownercommits, through its approvals seam: the
+    stand-in hub of tests/guard/test_ownercommits.py), and is refused like any agent commit when
+    it does not."""
+
+    def setUp(self):
+        super().setUp()
+        self.hub = toc.StandInHub()
+        patcher = mock.patch.object(ownercommits, 'default_approvals', lambda: self.hub)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def approve_and_commit(self, content, consume=True):
+        base = self.repo.git('rev-parse', '--verify', '-q', '%s:CLAUDE.md' % self.main,
+                             check=False) or None
+        doc = ap.new_doc(toc.REPO, 'owner-only edit', self.main, [
+            {'path': 'CLAUDE.md', 'base_blob': base, 'content': 'approved\n'}], toc.NOW)
+        doc.update(ap.decide_fields(toc.KEY, 'A-001', doc, ap.APPROVE, toc.NOW))
+        self.hub.docs['A-001'] = doc
+        _, tip = self.branch_as(AGENT, {'CLAUDE.md': content}, message='owner-approved edit',
+                                trailer='Owner-Approval: hub:A-001')
+        if consume:
+            doc.update(ap.consume_fields(toc.KEY, 'A-001', doc, tip, toc.NOW))
+        return tip
+
+    def test_an_approved_agent_commit_lands(self):
+        tip = self.approve_and_commit('approved\n')
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertEqual([a[0] for a in self.hub.asked], ['A-001'])
+
+    def test_a_forged_approval_is_refused_before_any_merge(self):
+        tip = self.approve_and_commit('not what the owner approved\n')
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-001 refused: %s)'
+                      % (tip[:10], AGENT, ap.WHY_FILES), out.lines[0])
+        self.assert_untouched(out, G.REFUSED)
+
+    def test_an_approval_never_consumed_is_refused(self):
+        tip = self.approve_and_commit('approved\n', consume=False)
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertIn('owner approval hub:A-001 refused: %s' % ap.WHY_COMMIT, out.lines[0])
+        self.assert_untouched(out, G.REFUSED)
 
 
 class NoOwnerEmail(test_land.LandCase):

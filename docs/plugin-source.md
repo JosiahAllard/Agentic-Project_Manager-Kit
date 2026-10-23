@@ -16,6 +16,7 @@ The export root is the machine config's `plugin.export_dir`, by default `%LOCALA
 - `refresh.pid`: held while a refresh runs (`RefreshLock`). It is created exclusively and holds `{pid, ctime}`. A file whose process is gone, or whose pid now belongs to a process with another start time, is taken over. An empty or unreadable file is one a starting refresh has made but not yet written: it counts as live until its modified time is more than 10 seconds old (`LOCK_GRACE_S`), and is taken over after. A second refresh is refused with "a refresh is already running".
 - `refresh.log`: the output of a refresh that `pm_watch` started (`spawn_refresh`).
 - `pins/`: the exports `tools/land.py` and `tools/gate.py` run from when started from the kit's main checkout or from an export whose marker names it, `pins/<sha12>` (marker `made_by` `kitlib.gate.pin`), with their own `pins/refresh.pid` and `pins/leases/` (docs/gate.md "Pinned tools"). The plugin's marketplace never names them.
+- `headers/`: one file per session or subagent, `<session_id>-<agent id or main>`, holding the export folder its kit header named (`kitlib.host.headerfollow` `note`). At a later tool event, `headerfollow` `line` compares the record with the folder the guard's alternatives name (`kitlib.guard.rules` `advice_kit`). When they differ, it returns one line naming the current kit folder and rewrites the record, so a session started before a refresh is told once per refresh. A SessionStart drops records older than 7 days (`MAX_AGE_DAYS`). Prune never touches the folder, since it is not a `<sha12>` export. `kitlib.host.hookmain` calls it: `dispatch` notes the folder at the header part of a start event, and `run` adds the line to the answer of the next tool event, whatever its verdict, through the adapter's optional `tool_context` (the Claude adapter has it: an `additionalContext` beside the verdict, so a deny's or an ask's reason keeps its format). An adapter without `tool_context` (Codex today) gets no line, and its record is not read, so the record is never spent where the agent cannot see it. `line` is called first with `write=False`, and the record is rewritten only after the answer is written. The line never changes a verdict: any exception in `note`, `line` or `tool_context` means no line.
 
 ## Refresh
 
@@ -31,19 +32,32 @@ The export root is the machine config's `plugin.export_dir`, by default `%LOCALA
    - Each folder's result goes into `state.json`. A failed folder does not stop the others, and the exit code is then 1.
    - A folder whose last refresh at the same sha succeeded is skipped. When the export, the marketplace and every folder are already current, nothing runs.
 
+Every mode, dry runs included, first prints `WARNING: pm-kit marketplace <where> is <path>, not the export <root> (...)` for each account folder's `plugins\known_marketplaces.json` `pm-kit` `installLocation`, and the managed settings file's `extraKnownMarketplaces` `pm-kit` source path, that is not the export root (`kitlib.pluginsource` `marketplace_mismatches`; the file's path from the default host adapter's `managed_settings_path`, through `kitlib.machinesetup.extras` `Host.managed_path`). It reads only and fixes nothing. A missing file or entry gives no line, a file that cannot be read gives a `could not check` line, and neither changes the exit code. The session start runs the same check (see "Behind warnings").
+
 Without `claude` on PATH, the export is still made, no folder is refreshed, and the exit code is 1. The tool takes no machine lock and imports nothing from `kitlib.lock` or `kitlib.gate`. `kitlib.pluginsource` `ensure_export` makes or keeps the export alone, with no `claude` call, for an installer that then adds the root as a marketplace. It keeps each folder's `migrated: true`, and when `state.json` cannot be read it raises `StateError` and writes nothing, rather than replace the state with one that has no flags.
 
 ## Prune
 
+Before it removes anything, `tools/plugin_refresh.py --apply` reads what is in use (`kitlib.pluginsource` `read_in_use`):
+
+- every running process's command line and program path (one `Win32_Process` read, `kitlib.pmstart` `list_processes`);
+- every scheduled task's definition (`schtasks /Query /XML ONE`: program, arguments and working folder). A task that runs from an export folder breaks when the folder is removed. A non-elevated read works: verified 2026-10-19 with `schtasks /Query /XML /TN` on the hub and procwatch tasks, which returned the full XML with `<Arguments>` and exit 0;
+- the pin leases, `<root>\pins\leases\<sha12>-<pid>.json`, by file name, live or not (pluginsource imports nothing from `kitlib.gate`).
+
+A `<sha12>` is in use when one of these names it as a whole path part (`in_use_sha12s`), followed by a separator, a quote, `;`, `,`, `)` or `&`. A read that fails is printed (`prune: what is in use could not be read whole (...)`), and the others still count. An empty process list counts as a failed read, since a real one always holds the reader itself.
+
+Known limit: a non-elevated `Win32_Process` read returns a null `CommandLine` for elevated processes and for other users' processes, so such a process does not protect the export it runs from. The rename claim covers it only while the process holds a file there open.
+
 Never removed (`kitlib.pluginsource` `prune`, `KEEP`):
 
 - the folder `marketplace.json` names;
-- the 3 newest export folders by their marker's `exported_at`, because a running session may still load hooks or its MCP server from one;
-- every export folder replaced less than 7 days ago (`YOUNG_DAYS`), for the same reason. A folder is dated by when it was replaced, the `exported_at` of the next newer export, not by its own: one that was current for weeks and then replaced by three quick landings is kept. A folder whose own or replacing export's `exported_at` cannot be read is kept, and an unreadable date counts as the newest;
+- the 3 newest export folders by their marker's `exported_at`;
+- every export folder a running process, a scheduled task or a pin lease names;
+- every export folder replaced less than 1 day ago (`IN_USE_YOUNG_DAYS`), which covers every export made or current in the last 24 hours: a session whose MCP server has exited still runs hooks from its folder, and no process names it then. When any of the three reads failed, or no reader is given (`ensure_export`'s callers, `kitlib.gate` tests), this is 7 days (`YOUNG_DAYS`): what cannot be read counts as possibly in use. A folder is dated by when it was replaced, the `exported_at` of the next newer export, not by its own: one that was current for weeks and then replaced by three quick landings is kept. A folder whose own or replacing export's `exported_at` cannot be read is kept, and an unreadable date counts as the newest;
 - a link or junction, which is never followed or removed;
 - anything that is not a `<sha12>` folder holding the marker, so the `pins` folder is never touched; `kitlib.gate.pin` `prune` prunes it, by its leases (docs/gate.md "Pinned tools").
 
-Every other export folder is removed. A `<sha12>.tmp` folder other than the current export's is a half-written export left by a run that stopped, and is removed too (prune runs under `refresh.pid`, so no export is being written then). Prune never touches an account folder or a plugin cache.
+Every other export folder is removed by claim (`_claim_remove`): it is first renamed to `<sha12>.pruning-<pid>`. Windows refuses the rename while a file inside is open, so a folder still in use is kept whole and reported (`WARNING: could not remove ...: in use: it could not be claimed`). A claimed folder that cannot be removed whole stays claimed, and the next prune removes the rest. A `<sha12>.tmp` folder other than the current export's is a half-written export left by a run that stopped, and is removed too (prune runs under `refresh.pid`, so no export is being written then); so is a `<sha12>.pruning-<pid>` folder. Prune never touches an account folder or a plugin cache: see "Old caches".
 
 ## Migrating
 
@@ -55,32 +69,35 @@ Every other export folder is removed. A `<sha12>.tmp` folder other than the curr
 
 A folder whose three steps succeed is recorded `migrated: true`; a failed migrate records `migrated: false`. Only a migrated folder is refreshed by `--apply` (see "Refresh"). Migrate one folder first, `python tools/plugin_refresh.py --migrate --apply --folder "<folder>"`, and check that a session there starts and loads `pm-kit:coordinator`; then migrate the rest. Set the machine config's `plugin` key only after every folder is migrated, since older kit copies reject it.
 
-The tool never deletes an old cache. The migrate report lists, for each account folder, `<folder>\plugins\cache\pm-kit\pm-kit\<kit version>`. The path is made from names (`kitlib.pluginsource` `old_cache`) and is never looked up on disk, so a listed path may not exist. Remove each listed path `$p` only after both of these:
+A migrate never deletes an old cache. The migrate report lists, for each account folder, `<folder>\plugins\cache\pm-kit\pm-kit\<kit version>`. The path is made from names (`kitlib.pluginsource` `old_cache`) and is never looked up on disk, so a listed path may not exist. Remove old caches only after the migrate is verified, with `--prune-caches` (see "Old caches").
 
-- the migrate is verified;
-- every session has restarted, because an old session's MCP lock server may still run from the old folder and hold files open (an inference, see "Open questions").
+## Old caches
 
-```powershell
-cmd /c dir /s /b /al "$p"     # read-only: lists reparse points inside; must print nothing ("File Not Found")
-cmd /c rmdir /s /q "$p"       # only when the line above printed nothing
-Test-Path -LiteralPath $p     # must print False
-```
+Claude Code copies each install into `<folder>\plugins\cache\pm-kit\pm-kit\<version>` (`kitlib.pluginsource` `cache_dir`), and never removes the old versions. `python tools/plugin_refresh.py --prune-caches` lists them in every account folder (or those `--folder` names); it is a dry run, and with `--apply` it removes them, under the refresh lock, by claim as in "Prune". It cannot be combined with `--migrate` (exit 2). Kept (`prune_caches`):
 
-`dir /al` lists junctions without following them. With none inside, `rmdir /s` does not reach outside the cache (inference: standard `cmd` behaviour, not tested here).
+- every version of an account, when the in-use read is not whole, the account's `plugins\installed_plugins.json` is missing, cannot be read or names no `pm-kit@pm-kit` install (`claude` `installed_path`), or a link or junction lies on the way to the cache;
+- the version the install record's `installPath` names;
+- the newest version, by folder modified time, and each replaced (the next newer one's modified time) less than 1 day ago, or whose time cannot be read;
+- a version a running process or scheduled task names as `...\pm-kit\pm-kit\<version>`;
+- a link or junction, which is never followed or removed.
+
+Each line is `kept <path> (<why>)`, `would remove <path>`, `removed <path>` or `FAILED to remove <path> (<why>)`, then the counts. The exit code is 1 when a removal failed, else 0.
 
 ## Behind warnings
 
-- **Session start.** The PM's session start (`kitlib.pmstart` `plugin_current`, run after `kit_sync`, which fetches) prints a line in three cases:
+- **Session start.** The PM's session start (`kitlib.pmstart` `plugin_current`, run after `kit_sync`, which fetches) prints a line when:
   - there is no export yet;
   - `state.json`'s sha is not the kit's `refs/remotes/<remote>/main`;
   - a folder is not migrated;
-  - a migrated folder's last refresh failed, or it has not been refreshed to the current export yet (`not refreshed to <sha12>`), or `state.json` cannot be read.
+  - a migrated folder's last refresh failed, or it has not been refreshed to the current export yet (`not refreshed to <sha12>`), or `state.json` cannot be read;
+  - once the export is readable and the tracking ref is too, a migrated folder's `known_marketplaces.json`, or the managed settings file, points the `pm-kit` marketplace off the export root (`marketplace_mismatches`, as in "Refresh"). The check never raises: a file that cannot be read or has the wrong shape gives one `could not check the pm-kit marketplace path in <file>: ...` line per file (`kitlib.pluginsource.claude` `_check_one`), and any other failure gives one `could not check the pm-kit marketplace paths: ...` line (`kitlib.pluginsource` `_marketplace_lines`).
 
-  With no export, or a folder not migrated, the line names `python "<kit>/tools/plugin_refresh.py" --migrate --apply` (`refresh_cmd(True)`), since `--apply` alone refuses such a folder; otherwise it names `python "<kit>/tools/plugin_refresh.py" --apply` (`refresh_cmd()`). `<kit>` is the kit's absolute path (`live_root`), since the PM reading the line works in another folder. The check reads only the export root, never an account folder or cache. A folder's last successful refresh stands in for what it has installed: this is a proxy, not a reading of the install.
+  With no export, or a folder not migrated, the line names `python "<kit>/tools/plugin_refresh.py" --migrate --apply` (`refresh_cmd(True)`), since `--apply` alone refuses such a folder; otherwise it names `python "<kit>/tools/plugin_refresh.py" --apply` (`refresh_cmd()`). `<kit>` is the kit's absolute path (`live_root`), since the PM reading the line works in another folder. The refresh checks read only the export root; the marketplace check reads each migrated folder's `plugins\known_marketplaces.json` and the managed settings file, never a cache. A folder's last successful refresh stands in for what it has installed: this is a proxy, not a reading of the install.
 - **Watcher.** `pm_watch` (`kitlib.pmwatch` `plugin_check`, over `kitlib.pluginsource` `poll`) prints `PLUGIN pm-kit plugin behind kit main <sha12>: python "<kit>/tools/plugin_refresh.py" --apply`, or `--migrate --apply` when there is no export or a folder is not migrated. It checks on the branch cadence (`--branch-poll`) by reading one ref and `state.json`:
   - The event comes once per main sha. The sha is kept as `plugin_main` in the watcher's state file, so a relaunch does not repeat it.
   - An export that is already behind is reported on the first run.
   - A landing's push updates `refs/remotes/<remote>/main` (`kitlib/gate/land.py` `push`), so a kit landing is seen without a fetch.
+  - The ref is read in the kit's source checkout: when the kit running the check is itself an export (it holds the marker), `kitlib.pluginsource` `source_kit` names the main checkout its marker records; an export whose marker names none that still exists is a failed check (pm_start prints `could not check the pm-kit plugin: ...`).
   - With no tracking ref, it prints nothing. A tracking ref that cannot be read, or a `state.json` that cannot be read, is a failed check; a check that fails three times running gives `ERROR plugin check`.
 - **Auto refresh.** With `plugin.auto_refresh: true` (default false), that first event also starts `tools/plugin_refresh.py --apply` itself, detached and windowless, and appends `(auto_refresh: started)`. While a live process holds `refresh.pid`, it starts nothing and appends `(auto_refresh: a refresh is already running)`. With no export, or a folder not migrated, it starts nothing and appends `(auto_refresh: not started: no export yet)` or `(auto_refresh: not started: not migrated in <folders>)`.
 
@@ -92,4 +109,4 @@ These are not confirmed. Each is marked with what would settle it.
 - **Cache folder.** The cache folder of a copied plugin is `<CLAUDE_CONFIG_DIR>/plugins/cache/...`. This is inferred from the observation above, and it is where `old_cache` points.
 - **Version format.** The stamped version format (`0.1.0-main.<n>`) is assumed to be accepted by `claude plugin update`. To settle it, run the first `--apply`.
 - **The claude subcommands.** INFERENCE, not run against a real `claude` here (the tests use a fake one that logs its arguments): that `claude plugin marketplace update pm-kit`, `claude plugin update pm-kit@pm-kit`, `claude plugin marketplace remove pm-kit`, `claude plugin marketplace add <path>` and `claude plugin install pm-kit@pm-kit -s user` exist with these names and flags, and that `-s user` installs at user scope (`kitlib.pluginsource` `UPDATE_STEPS`, `migrate_steps`). To settle it, run `--migrate --apply --folder` on one folder and read its output and `state.json`.
-- **Open files in old sessions.** INFERENCE: that a session started before a migrate or refresh keeps its MCP server running from the folder it loaded, and holds files there open, so removing that folder before every session restarts can fail or break the session. This is why prune keeps young and recent exports and why old caches are left to the owner. To settle it, list the open handles under an old cache while such a session runs.
+- **Open files in old sessions.** INFERENCE: that a session started before a migrate or refresh keeps its MCP server running from the folder it loaded, and holds files there open, so removing that folder before every session restarts can fail or break the session. This is why prune keeps what a process names and recent exports, and removes by claim, so a folder with an open file is kept whole. To settle it, list the open handles under an old cache while such a session runs.

@@ -383,12 +383,14 @@ class Start(Base):
             self.assertNotRegex(text, old)
         self.assertIn('lands nothing', text)
         self.assertIn('every LAND verdict', text)
-        self.assertIn('never wait on it', text)
+        self.assertIn('cleared for landing', text)
+        self.assertIn('hold the rest until the owner gives the go', text)
+        self.assertIn('never wait on the old session', text)
         self.assertNotIn('--auto', text)
 
     def test_only_a_coordinators_successor_is_told_to_land(self):
         out = self.go(prompt='go', predecessor='old-a1')
-        self.assertIn('Land every LAND verdict', out)
+        self.assertIn('Queue every LAND verdict', out)
         for kw in ({'agent': 'consultant'}, {'agent': 'deep-worker'}, {'no_agent': True}):
             out = self.go(prompt='go', predecessor='old-a1', **kw)
             self.assertIn('You succeed old-a1', out)
@@ -419,7 +421,7 @@ class Start(Base):
 
     def test_the_compact_window_defaults_per_kind(self):
         self.assertIn('--autocompact 170000 ', self.go(no_agent=True))
-        self.assertIn('--autocompact 170000 ', self.go(agent='reviewer'))
+        self.assertIn('--autocompact 170000 ', self.go(agent='analyst'))
         self.assertIn('--autocompact 300000 ', self.go(autocompact=300000))
         self.assertNotIn('--autocompact', self.go(autocompact=0))
         self.assertEqual((start.DEFAULT_AUTOCOMPACT, start.CONSULTANT_DEFAULT_AUTOCOMPACT, start.DEEP_AUTOCOMPACT),
@@ -432,7 +434,7 @@ class Start(Base):
         self.assertIn('--autocompact 170000 ', out)
 
     def test_an_entry_of_a_long_role_gets_that_roles_window(self):
-        for agent, window_ in (('consultant', 350000), ('deep-worker', 500000), ('reviewer', 170000)):
+        for agent, window_ in (('consultant', 350000), ('deep-worker', 500000), ('analyst', 170000)):
             self.h.write_state('sessions.json', {'k': {'repo': 'alpha', 'agent': agent, 'stem': 'alpha-x',
                                                        'state': 's.md', 'account': 2}})
             out = '\n'.join(start.start_entry(self.h.settings, self.host, 'k', whatif=True))
@@ -443,7 +445,7 @@ class Start(Base):
         out = self.go(agent=p + 'deep-worker')
         self.assertIn('--agent %sdeep-worker ' % p, out)
         self.assertIn("-n 'alpha-deep-worker-a1'", out)
-        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'reviewer', 170000),
+        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'analyst', 170000),
                                ('other:consultant', 170000)):
             with self.subTest(agent):
                 args = start.entry_start_args(self.h.settings, 'k', {'repo': 'alpha', 'agent': agent,
@@ -457,13 +459,13 @@ class Start(Base):
 
     def test_a_bare_kit_agent_starts_under_the_plugins_prefix(self):
         """The plugin registers its agents only as pm-kit:<name>; a bare one is qualified, named bare."""
-        out = self.go(agent='reviewer')
-        self.assertIn('--agent pm-kit:reviewer ', out)
-        self.assertIn("-n 'alpha-reviewer-a1'", out)
-        self.h.write_state('sessions.json', {'k': {'repo': 'alpha', 'agent': 'reviewer', 'stem': 'alpha-x',
+        out = self.go(agent='analyst')
+        self.assertIn('--agent pm-kit:analyst ', out)
+        self.assertIn("-n 'alpha-analyst-a1'", out)
+        self.h.write_state('sessions.json', {'k': {'repo': 'alpha', 'agent': 'analyst', 'stem': 'alpha-x',
                                                    'state': 's.md', 'account': 2}})
         out = '\n'.join(start.start_entry(self.h.settings, self.host, 'k', whatif=True))
-        self.assertIn('--agent pm-kit:reviewer ', out)
+        self.assertIn('--agent pm-kit:analyst ', out)
 
     def test_a_repos_own_agent_starts_as_given(self):
         for agent in ('my-repo-agent', 'conductor'):

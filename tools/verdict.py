@@ -4,10 +4,24 @@
                  --reviewer-id ID --author A --range BASE..TIP --session S [--record ID ...] [-C DIR]
       queue B at SHA (the coordinator, after reading the review; never the reviewer). SHA must be
       B's head now. A re-add replaces B's entry. V: LAND | "LAND WITH FOLLOW-UP"; R: Low |
-      Medium | High. Prints `QUEUED <branch> <tip>`.
+      Medium | High. Prints `QUEUED <branch> <tip>`. A High-risk verdict whose reviewer is the
+      calling coordinator (--reviewer-id is --session, or --reviewer names the coordinator role)
+      prints `REFUSED: ...` and an `Instead:` line naming a dispatched analyst (exit 2, nothing
+      written; verdicts.self_review_why).
+  verdict.py carry --branch B [-C DIR]
+      after a main sync of a queued branch: move B's verdict to B's head when every commit after
+      the review is a conflict-free merge of main and B's own diff against main is the one
+      reviewed (docs/gate.md "Carrying a verdict forward"), checked against main as last fetched
+      (`<remote>/<main_branch>`). Prints `CARRIED <branch> <head> from reviewed <sha>: ...`, or
+      `NOT CARRIED: <why>` (exit 1, nothing written; review and queue the head instead).
   verdict.py list [-C DIR]
-      one line per entry, oldest first: `<STATE> <branch> <tip> <risk> <verdict> <queued_utc> ...`;
-      `BAD <file>: <why>` for a file in the queue that is not an entry; `NOTHING QUEUED` when empty.
+      first drops each entry that waits to land no more (verdicts.expire), one line each:
+      `EXPIRED <branch> <tip>: landed: ...` when the tip is in main as last fetched
+      (`<remote>/<main_branch>`), `EXPIRED <branch> <tip>: superseded: ...` when it is not and the
+      branch is gone; `KEPT ALL: ...` when main as fetched cannot be read (nothing dropped). Then
+      one line per entry left, oldest first: `<STATE> <branch> <tip> <risk> <verdict> <queued_utc> ...`
+      (`carried_from=<sha>` on a carried one); `BAD <file>: <why>` for a file in the queue that is
+      not an entry; `NOTHING QUEUED` when none is left.
   verdict.py drop BRANCH [--tip SHA] [-C DIR]
       remove BRANCH's entry (with --tip, only when it is queued at SHA). Prints `DROPPED <branch>`.
 
@@ -15,8 +29,8 @@
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate.verdicts, prints and
 exits. Exit codes: 0 done; 1 not done (git gave no answer, a queue file cannot be read or written,
-nothing queued to drop, or list found a file that is not an entry); 2 usage (the arguments, or an
-entry add finds malformed; nothing written); 3 tip mismatch (add: SHA is not the branch's head, or
+nothing queued to drop or carry, a carry refused, or list found a file that is not an entry); 2 usage (the arguments, or an
+entry add finds malformed or a High-risk self-review; nothing written); 3 tip mismatch (add: SHA is not the branch's head, or
 there is no such branch; nothing written).
 """
 import argparse
@@ -25,6 +39,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from kitlib import config as kconfig                              # noqa: E402
 from kitlib.gate import verdicts                                    # noqa: E402
 from kitlib.git import refs, repo                                  # noqa: E402
 
@@ -60,6 +75,9 @@ def parser():
     ad.add_argument('--record', action='append', default=[], metavar='ID',
                     help='a backlog record the branch carries (repeatable)')
     common(ad)
+    ca = sub.add_parser('carry', help="move a queued verdict to the branch's head after a main sync")
+    ca.add_argument('--branch', required=True)
+    common(ca)
     ls = sub.add_parser('list', help='the queue, oldest first')
     common(ls)
     dr = sub.add_parser('drop', help="remove a branch's entry")
@@ -79,10 +97,52 @@ def line(e):
     return ' '.join([e['state'].upper(), e['branch'], e['tip'], e['risk'], e['verdict'].replace(' ', '_'),
                      e['queued_utc'], 'reviewer=%s/%s' % (e['reviewer'], e['reviewer_model']),
                      'reviewer_id=%s' % e['reviewer_id'], 'records=%s' % (','.join(e['records']) or '-')]
+                    + (['carried_from=%s' % e['carried']['from']] if 'carried' in e else [])
                     + (['last=%s' % last[0]] if last else []))
 
 
+def main_as_fetched(root):
+    """`(<remote>/<main_branch> as last fetched, None)`, or `(None, why)`; no network."""
+    root = os.path.abspath(root)
+    try:
+        cfg = kconfig.load(root)
+    except kconfig.ConfigError as e:
+        return None, 'the kit configuration cannot be read: %s' % e
+    sha, why = refs.remote_tip(cfg.remote, cfg.main_branch, root)
+    return (sha, None) if sha else (None, '%s/%s: %s' % (cfg.remote, cfg.main_branch, why))
+
+
+def carry(a, common_dir):
+    root = os.path.abspath(a.root)
+    try:
+        cfg = kconfig.load(root)
+        remote, main = cfg.remote, cfg.main_branch
+    except kconfig.ConfigError as e:
+        return fail('NOT CARRIED', 'the kit configuration cannot be read: %s' % e, NOT_DONE)
+    base, why = refs.remote_tip(remote, main, root)
+    if not base:
+        return fail('NOT CARRIED', 'main as fetched (%s/%s) cannot be read: %s; fetch first'
+                    % (remote, main, why), NOT_DONE)
+    try:
+        got = verdicts.carry(common_dir, root, a.branch, base)
+    except verdicts.CarryRefused as e:
+        return fail('NOT CARRIED', '%s; review and queue the head instead' % e, NOT_DONE)
+    if got is None:
+        return fail('NOT QUEUED', a.branch, NOT_DONE)
+    _, e = got
+    c = e['carried']
+    n = len(c['merges'])
+    print('CARRIED %s %s from reviewed %s: %d main merge%s, no conflict, the branch\'s own diff '
+          'unchanged against %s/%s %s; %s by %s/%s (%s)'
+          % (e['branch'], e['tip'], c['from'], n, '' if n == 1 else 's', remote, main,
+             c['main'][:10], e['verdict'], e['reviewer'], e['reviewer_model'], e['reviewer_id']),
+          flush=True)
+    return DONE
+
+
 def run(a, common_dir):
+    if a.cmd == 'carry':
+        return carry(a, common_dir)
     if a.cmd == 'add':
         entry = {'branch': a.branch, 'tip': a.tip, 'verdict': a.verdict, 'risk': a.risk,
                  'reviewer': a.reviewer, 'reviewer_model': a.reviewer_model,
@@ -93,6 +153,15 @@ def run(a, common_dir):
         return DONE
     if a.cmd == 'list':
         good, bad = verdicts.scan(common_dir)
+        main, why = main_as_fetched(a.root) if good else (None, None)
+        if good and not main:
+            print('KEPT ALL: main as fetched cannot be read (%s), so no entry is dropped as landed '
+                  'or superseded' % why)
+        gone = verdicts.expire(common_dir, good, main)
+        for e, why in gone:
+            print('EXPIRED %s %s: %s' % (e['branch'], e['tip'], why))
+        dropped = [id(e) for e, _ in gone]
+        good = [e for e in good if id(e) not in dropped]
         for e in good:
             print(line(e))
         for path, why in bad:
@@ -117,6 +186,8 @@ def main(argv=None):
         return fail('NOT DONE', 'no git repository at %s: %s' % (root, why), NOT_DONE)
     try:
         return run(a, common_dir)
+    except verdicts.SelfReview as e:
+        return fail('REFUSED', str(e), USAGE)
     except verdicts.BadEntry as e:
         p.print_usage(sys.stderr)
         sys.stderr.write('USAGE: %s\n' % e)

@@ -94,6 +94,22 @@ class Set(VerbCase):
         with self.assertRaises(Refusal):
             self.verb('set', 'FOO', [], hold_ruling='R-9002')
 
+    def test_set_scope_replaces_the_list_and_names_what_it_removed(self):
+        self.seed(rec('FOO', scope=['a/one.py', 'a/two.py', 'a/three.py']))
+        change = self.verb('set', 'FOO', [('scope', ['a/two.py', 'b/new.py'])])
+        self.assertEqual(self.get('FOO').all('scope'), ['a/two.py', 'b/new.py'])
+        self.assertIn('  removed 2 scope entries: a/one.py, a/three.py', change.lines)
+
+    def test_set_scope_that_removes_nothing_says_nothing_about_removal(self):
+        self.seed(rec('FOO', scope=['a/one.py']))
+        change = self.verb('set', 'FOO', [('scope', ['a/one.py', 'b/new.py'])])
+        self.assertFalse([ln for ln in change.lines if 'removed' in ln], change.lines)
+
+    def test_set_scope_that_removes_one_entry_says_entry(self):
+        self.seed(rec('FOO', scope=['a/one.py', 'a/two.py']))
+        change = self.verb('set', 'FOO', [('scope', ['a/two.py'])])
+        self.assertIn('  removed 1 scope entry: a/one.py', change.lines)
+
     def test_unknown_and_required_fields(self):
         self.seed(rec('FOO'))
         with self.assertRaises(Usage):
@@ -143,15 +159,29 @@ class RulingShapeOnly(VerbCase):
 
 class BlockUnblock(VerbCase):
 
-    def test_block_replaces_blocked_on_and_unblock_opens(self):
-        self.seed(rec('FOO'), rec('BAR'))
-        self.verb('block', 'FOO', ['item:BAR', 'live-client'])
+    def test_block_adds_to_blocked_on_and_unblock_removes(self):
+        # A second block once wiped the first's blockers.
+        self.seed(rec('FOO'), rec('BAR'), rec('BAZ'))
+        self.verb('block', 'FOO', ['item:BAR'])
+        change = self.verb('block', 'FOO', ['live-client'])
         self.assertEqual(self.get('FOO').all('blocked_on'), ['item:BAR', 'live-client'])
-        self.verb('block', 'FOO', ['live-client'])
+        self.assertIn('  blocked_on: item:BAR -> item:BAR, live-client', change.lines)
+        self.verb('block', 'FOO', ['live-client', 'item:BAZ'])
+        self.assertEqual(self.get('FOO').all('blocked_on'),
+                         ['item:BAR', 'live-client', 'item:BAZ'])
+        for m in ('item:BAR', 'item:BAZ'):
+            self.verb('unblock', 'FOO', on=m, reason='that blocker is done now')
         self.assertEqual(self.get('FOO').all('blocked_on'), ['live-client'])
         self.verb('unblock', 'FOO')
         self.assertEqual((self.get('FOO').get('state'), self.get('FOO').get('blocked_on')),
                          ('open', '-'))
+
+    def test_a_block_on_members_it_already_has_changes_nothing(self):
+        self.seed(rec('FOO'), rec('BAR'))
+        self.verb('block', 'FOO', ['item:BAR', 'live-client'])
+        change = self.verb('block', 'FOO', ['live-client'])
+        self.assertEqual(self.get('FOO').all('blocked_on'), ['item:BAR', 'live-client'])
+        self.assertIn('  (no change)', change.lines)
 
     def test_block_refusals(self):
         self.seed(rec('FOO'), priced('BAR', state='pulled', pulled_at=TODAY, pulled_by=BRANCH))
@@ -159,16 +189,23 @@ class BlockUnblock(VerbCase):
                              (['owner'], Usage), (['whenever'], Usage)):
             with self.assertRaises(exc, msg=members):
                 self.verb('block', 'FOO', members)
-        with self.assertRaises(Refusal):
+        # A pulled record blocks only with a reason (tests/backlog/test_block_stopped.py).
+        with self.assertRaises(Usage) as cm:
             self.verb('block', 'BAR', ['live-client'])
+        self.assertIn('needs `--reason T`', str(cm.exception))
 
-    def test_the_owners_hold_is_released_only_with_a_ruling(self):
+    def test_the_owners_hold_is_released_only_by_unblock_with_a_ruling(self):
+        # `block` only adds, so it never releases the owner's hold and takes no `--ruling`.
         self.seed(rec('FOO', **OWNER_BLOCKED))
         with self.assertRaises(Refusal):
             self.verb('unblock', 'FOO')
-        with self.assertRaises(Refusal):
-            self.verb('block', 'FOO', ['live-client'])
-        self.verb('block', 'FOO', ['live-client'], ruling='R-9001')
+        with self.assertRaises(Usage):
+            self.verb('block', 'FOO', ['live-client'], ruling='R-9001')
+        self.verb('block', 'FOO', ['live-client'])
+        r = self.get('FOO')
+        self.assertEqual((r.all('blocked_on'), r.get('hold_ruling'), r.get('owner_ask')),
+                         (['owner', 'live-client'], None, 'which one?'))
+        self.verb('unblock', 'FOO', on='owner', reason='the owner answered it', ruling='R-9001')
         r = self.get('FOO')
         self.assertEqual((r.all('blocked_on'), r.get('hold_ruling')), (['live-client'], 'R-9001'))
 
@@ -203,12 +240,18 @@ class PullRelease(VerbCase):
         for rid in ('UNP', 'BLK', 'MIN', 'REQ'):
             with self.assertRaises(Refusal, msg=rid):
                 self.verb('pull', rid)
-        self.verb('pull', 'MIN', reason='the owner said go', ruling='R-9001')
+        # pull-held refuses every role, so a ruling never releases a -1 by pulling it
+        # (Owner gates): the owner or the PM releases the hold with `set` first
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'MIN', reason='the owner said go', ruling='R-9001')
+        self.assertIn('set MIN --priority', str(cm.exception))
         r = self.get('MIN')
         self.assertEqual((r.get('priority'), r.get('hold_ruling'), r.get('owner_ask')),
-                         ('-', 'R-9001', None))
+                         ('-1', None, 'which?'))
+        self.seed(priced('NOW'))
+        self.verb('pull', 'NOW')
         with self.assertRaises(Refusal) as cm:
-            self.verb('pull', 'MIN', reason='twice is once too many')
+            self.verb('pull', 'NOW', reason='twice is once too many')
         self.assertIn('already in flight', str(cm.exception))
 
     def test_release_own_pull_clears_the_pull_and_the_preempt(self):

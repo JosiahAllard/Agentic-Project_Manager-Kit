@@ -1,6 +1,7 @@
 """The session mark (kitlib.sessionmark, docs/guard.md "Session mark") and the rules that read it:
-who counts as the owner for the owner-only lock tools, which sessions are agent sessions for
-kill-by-name and lock-state, the owner-identity rule, and the lock MCP server's owner check."""
+who counts as the owner for the retired owner-only lock tool names, which sessions are agent
+sessions for kill-by-name and lock-state, the owner-identity rule, and that the lock MCP server
+installs no owner check."""
 import importlib.util
 import os
 import unittest
@@ -10,8 +11,8 @@ from kitlib import sessionmark
 from kitlib.guard import context, rules
 from kitlib.host import Action
 from kitlib.lock import api
-from kitlib.lockmcp import PLUGIN_NAME
-from kitlib.lockmcp import server as lockmcp
+from kitlib.lockmcp import OWNER_ONLY, PLUGIN_NAME
+from kitlib.lockmcp.server import TOOLS
 
 from . import world as W
 from .claudehost import MCP_PREFIX, action, decide
@@ -71,47 +72,27 @@ class Mark(unittest.TestCase):
                 self.assertNotEqual(context.default_session_role(action({}), {sessionmark.ENV: value}), context.OWNER)
 
 
-class OwnerCheck(unittest.TestCase):
-    """The lock MCP server's owner check: the default owner, or (in a session nothing marks) a
-    caller under the session's agent host."""
+class LockServerOwner(unittest.TestCase):
+    """The lock MCP server has no write tools, so it installs no owner check: an unmarked session
+    no longer makes a caller under its agent host the owner."""
 
     OWNER = {'role': 'owner', 'claude': None}
     UNDER_HOST = {'role': 'agent', 'claude': [100, 1.5]}
-    UNREAD = {'role': 'agent', 'claude': None}           # the tree could not be read
 
-    def test_unmarked(self):
-        check = sessionmark.owner_check({})
-        self.assertIsNone(check.marked)
-        self.assertTrue(check(self.OWNER))
-        self.assertTrue(check(self.UNDER_HOST))
-        self.assertFalse(check(self.UNREAD))
-        self.assertFalse(check(None))
-
-    def test_marked(self):
-        check = sessionmark.owner_check(COORDINATOR)
-        self.assertEqual(check.marked, 'coordinator')
-        self.assertTrue(check(self.OWNER))
-        self.assertFalse(check(self.UNDER_HOST))
-
-    def test_the_environment_is_read_once(self):
-        env = dict(COORDINATOR)
-        check = sessionmark.owner_check(env)
-        env.pop(sessionmark.ENV)
-        self.assertFalse(check(self.UNDER_HOST))
-
-    def test_lock_server_main_installs_it(self):
+    def test_lock_server_main_keeps_the_default_owner(self):
         spec = importlib.util.spec_from_file_location('kit_lock_server_entry', os.path.join(REPO, 'mcp', 'lock_server.py'))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         old = api.set_owner_check(None)
         self.addCleanup(api.set_owner_check, old)
-        with mock.patch.object(mod, 'serve') as serve, mock.patch.object(mod.sys, 'stdout'):
-            self.assertEqual(mod.main(environ={}), 0)
+        with mock.patch.dict(os.environ), mock.patch.object(mod, 'serve') as serve, \
+                mock.patch.object(mod.sys, 'stdout'):
+            os.environ.pop(sessionmark.ENV, None)
+            self.assertEqual(mod.main(), 0)
             serve.assert_called_once()
-            self.assertTrue(api.is_owner(self.UNDER_HOST))
-            self.assertEqual(mod.main(environ=COORDINATOR), 0)
             self.assertFalse(api.is_owner(self.UNDER_HOST))
             self.assertTrue(api.is_owner(self.OWNER))
+        self.assertFalse(hasattr(sessionmark, 'owner_check'))
 
 
 class LockMcpByMark(unittest.TestCase):
@@ -122,15 +103,16 @@ class LockMcpByMark(unittest.TestCase):
     def ev(self, tool, sub=False):
         return event(tool, {'id': 'h-1'}, self.w.wt, sub=sub)
 
-    def test_owner_only_names_are_lock_tools(self):
-        self.assertTrue(set(lockmcp.OWNER_ONLY) <= set(lockmcp.TOOLS))
+    def test_owner_only_names_are_the_retired_writes(self):
+        # the server serves none of them; the guard still denies them to a server from an older release
+        self.assertFalse(set(OWNER_ONLY) & set(TOOLS))
 
     def test_unmarked_main_session_is_the_owner(self):
-        for name in lockmcp.OWNER_ONLY:
+        for name in OWNER_ONLY:
             self.assertIsNone(decide(self.ev(MCP_PREFIX + name), self.w.ctx(environ={})), name)
 
     def test_marked_and_subagent_sessions_are_denied(self):
-        name = MCP_PREFIX + lockmcp.OWNER_ONLY[0]
+        name = MCP_PREFIX + OWNER_ONLY[0]
         for env, sub, who in (({}, True, 'subagent'), (PM, False, 'pm'), (COORDINATOR, False, 'coordinator'),
                               ({context.ROLE_ENV: 'owner'}, False, 'marked-owner')):
             with self.subTest(who):
@@ -291,7 +273,12 @@ class OwnerIdentity(unittest.TestCase):
     def test_allowed(self):
         for shell, text in self.ALLOWED:
             with self.subTest(text):
-                self.assertIsNone(self.run_one(shell, text, sub=True))
+                d = self.run_one(shell, text, sub=True)
+                if ' commit ' in text:
+                    # owner-identity runs first: a plain commit then meets git-plain-commit alone
+                    self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                else:
+                    self.assertIsNone(d)
 
     def test_the_owner_session_may(self):
         for shell, text in self.DENIED:
@@ -301,7 +288,8 @@ class OwnerIdentity(unittest.TestCase):
     def test_no_owner_email_no_rule(self):
         w = W.World()
         self.addCleanup(w.cleanup)
-        self.assertIsNone(decide(bash(self.DENIED[0][1], w.wt, True), w.ctx()))
+        d = decide(bash(self.DENIED[0][1], w.wt, True), w.ctx())
+        self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
 
 
 if __name__ == '__main__':

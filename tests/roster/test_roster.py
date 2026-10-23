@@ -4,7 +4,6 @@ from content/roles and each host's tier -> model map (decision 17, docs/multi-ho
 The check runs on the real tree; the edits run on a temp copy and must leave every byte outside the
 rendered regions alone.
 """
-import importlib
 import io
 import os
 import re
@@ -12,14 +11,10 @@ import shutil
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
-from kitlib import content, reviewpack, roster
+from kitlib import content, roster
 from kitlib.host import registry
 from kitlib.host.content import ContentError
-from tests.docs.test_cli import repo_with_docs
-from tests.gitfixture import fixture_env
-from tests.home import no_machine_owner
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(KIT_ROOT, 'tools'))
@@ -164,11 +159,11 @@ class TempCopyTest(unittest.TestCase):
 
     def test_crlf_is_kept(self):
         write_file(self.roster, read(self.roster).replace(b'\n', b'\r\n'))
-        self.edit_role('records', b'effort: low', b'effort: medium')
+        self.edit_role('docs-writer', b'effort: medium', b'effort: high')
         cli.main(['--write', '-C', self.top], io.StringIO())
         data = read(self.roster)
         self.assertNotIn(b'\n', data.replace(b'\r\n', b''))
-        self.assertIn(b'| records | standard | medium |', data)
+        self.assertIn(b'| docs-writer | standard | high |', data)
 
     def test_an_unreadable_roster_is_usage(self):
         os.remove(self.roster)
@@ -183,8 +178,8 @@ def _content(root):
 
 class ReviewerRuleTest(unittest.TestCase):
     """The "Reviewer model" rule in the dispatch skill's roster.md is prose a coordinator follows by
-    matching strings: the group labels the review pack prints and the name of the strict-path
-    tuple. Each one it names must still be what the code prints or defines."""
+    matching strings: the builder roles its rows name. Each row names exactly its builders, each a
+    role, matched as whole words."""
 
     RULE_FILE = os.path.join(KIT_ROOT, 'content', 'skills', 'coordinator-dispatch', 'roster.md')
 
@@ -194,56 +189,48 @@ class ReviewerRuleTest(unittest.TestCase):
         self.assertIsNotNone(m, 'no "Reviewer model" bullet in roster.md')
         return re.sub(r'\s+', ' ', m.group(0))       # a wrapped line is still one sentence
 
-    def printed_groups(self):
-        """The group lines a real pack prints under its `files` line, in order: a throwaway repo
-        whose branch changes one file at each risk level and one the risk map does not list."""
-        repo = repo_with_docs()
-        self.addCleanup(repo.cleanup)
-        env = mock.patch.dict(os.environ, fixture_env(), clear=True)
-        env.start()
-        self.addCleanup(env.stop)
-        # no owner email in .kit.json: the owner rules read the machine config's, here none
-        no_machine_owner(self)
-        repo.write('docs/ops/risk-map.md', '- High | hi/\n- Medium | med/\n- Low | low/\n')
-        repo.git('add', '-A')
-        repo.git('commit', '-q', '-m', 'risk map')
-        repo.git('checkout', '-q', '-b', 'phase/x')
-        for folder in ('hi', 'med', 'low', 'other'):
-            repo.write('%s/a.py' % folder, 'x = 1\n')
-        repo.git('add', '-A')
-        repo.git('commit', '-q', '-m', 'one file per level')
-        lines = reviewpack.pack(repo.root, 'phase/x', base='main').lines
-        start = next(i for i, l in enumerate(lines) if l.startswith('files '))
-        groups = []
-        for line in lines[start + 1:]:
-            if not line.startswith('  '):
-                break
-            m = re.match(r'  (\S.*) \(\d+\)$', line)
-            if m:
-                groups.append(m.group(1))
-        return groups
+    STRONG_BUILDERS = {'strong-worker', 'senior-worker', 'deep-worker'}
+    LIGHT_BUILDERS = {'worker', 'weak-worker'}
 
     def test_rule_names_only_what_the_code_prints_and_defines(self):
         rule = self.rule()
-        printed = self.printed_groups()
-        self.assertEqual(len(printed), 4, printed)      # the fixture reached every level
-        # the list of groups the rule tells the coordinator to read: `<label> (N)`
-        listed = re.findall(r'`([^`]+) \(N\)`', rule)
-        self.assertEqual(listed, printed)
-        # the labels its rows turn on: `<label>` group, `<a>` or `<b>` group
-        in_rows = []
-        for run in re.findall(r'((?:`[^`]+`(?:,| or| and)? )+)groups?\b', rule):
-            in_rows.extend(re.findall(r'`([^`]+)`', run))
-        self.assertTrue(in_rows, 'the rule names no group in its rows')
-        self.assertEqual(sorted(set(in_rows) - set(printed)), [])
-        self.assertEqual(sorted(set(printed) - set(in_rows)), [], 'a printed group no row covers')
-        # the strict landing paths: a name in a module, both as the rule spells them
-        m = re.search(r'`(\w+)` in `<kit>/(kitlib/[\w/]+)\.py`', rule)     # a skill writes the kit's root <kit>
-        self.assertIsNotNone(m, 'the rule names no strict-path tuple')
-        self.assertEqual(m.group(1), 'STRICT_DEFAULTS')
-        module = importlib.import_module(m.group(2).replace('/', '.'))
-        self.assertTrue(getattr(module, m.group(1), None), '%s.%s' % (module.__name__, m.group(1)))
-        self.assertIn('hosts/*/shell/agents/**', getattr(module, m.group(1)))
+        roles = {r.name: r for r in content.load_roles(KIT_ROOT)}
+        self.assertIn('light tier', rule)
+
+        def named(text):        # whole words: 'worker' must not match inside 'strong-worker'
+            return {n for n in roles if re.search(r'(?<![\w-])%s(?![\w-])' % re.escape(n), text)}
+
+        self.assertIn('The first row that fits:', rule)
+        rows_text = rule.split('The first row that fits:', 1)[1].split('A light reviewer', 1)[0]
+        rows = [r for r in re.split(r'\s(?=\d\. )', rows_text.strip()) if r]
+        self.assertEqual(len(rows), 3, rows)
+        # every builder the rows name is a role, and every role they name is one of these builders
+        self.assertEqual(named(rows_text), self.STRONG_BUILDERS | self.LIGHT_BUILDERS)
+        self.assertEqual(named(rows[0]), self.STRONG_BUILDERS)
+        self.assertIn('raise to strong', rows[0])
+        self.assertEqual(named(rows[1]), self.LIGHT_BUILDERS)
+        self.assertIn('light as pinned', rows[1])
+        self.assertTrue(rows[2].startswith('3. Otherwise'), rows[2])
+        self.assertEqual(named(rows[2]), set())
+        # the rows split builders by their pinned tier
+        for name in self.STRONG_BUILDERS:
+            self.assertIn(roles[name].tier, ('strong', 'deep'), name)
+        for name in self.LIGHT_BUILDERS:
+            self.assertIn(roles[name].tier, ('light', 'standard'), name)
+
+    def test_rule_names_the_read_type_at_its_pinned_tier(self):
+        """The rule raises the analyst (the read type a review goes to) from the tier its role file
+        pins: the rule says `light tier` and the file pins light."""
+        rule = self.rule()
+        roles = {r.name: r for r in content.load_roles(KIT_ROOT)}
+        self.assertIn('analyst', roles)
+        self.assertRegex(rule, r'(?<![\w-])analyst(?![\w-])')
+        self.assertEqual(roles['analyst'].tier, 'light')
+        self.assertIn('%s tier' % roles['analyst'].tier, rule)
+
+    def test_agent_definitions_are_a_strict_landing_path(self):
+        from kitlib.gate import strict_defaults
+        self.assertIn('hosts/*/shell/agents/**', strict_defaults.STRICT_DEFAULTS)
 
 
 if __name__ == '__main__':

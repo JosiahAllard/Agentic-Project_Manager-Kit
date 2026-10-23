@@ -6,32 +6,36 @@ Each row: (name, payload builder, expected kind or None for allow, rule, the tex
 forward-slash form; {main_bs} keeps backslashes)."""
 import json
 import os
+import re
 import unittest
 
 from kitlib import lockmcp as lockmcp_names, pmdata
 from kitlib.config import user as kuser
 from kitlib.git import repo
-from kitlib.guard import context, rules
+from kitlib.guard import commands as cm, context, rules, shell as sh
 from kitlib.lockmcp import server as lockmcp
 
 from . import world as W
 from .claudehost import MCP_PREFIX, decide
 from .extra_rows import ROWS as EXTRA_ROWS
 from .review_rows import ROWS as REVIEW_ROWS
-from .shell_rows import LOCK, ROWS as SHELL_ROWS
+from .shell_rows import COMMIT, LOCK, ROWS as SHELL_ROWS
 from .world import bash, event, ps
 
 ROWS = [
     # ---------------------------------------------------------------- wrapped gate (P16)
     ('gate piped to tail', lambda w: bash('python tools/gate.py --full 2>&1 | tail -5', w.wt),
      'deny', 'wrapped-gate',
-     'python tools/gate.py --full > "{temp}/wt-gate.log" 2>&1'),
+     'python "{kit}/tools/gate.py" -C "{wt}" --full'),
     ('cd then gate piped (P16 shape), subagent', lambda w: bash('cd %s && python tools/gate.py 2>&1 | tail -n 40' % W.fwd(w.wt), w.main, sub=True),
      'deny', 'wrapped-gate',
-     'python tools/gate.py > "{temp}/wt-gate.log" 2>&1'),
+     'python "{kit}/tools/gate.py" -C "{wt}"'),
+    ('gate with a relative -C piped', lambda w: bash('python tools/gate.py -C . --full | tail -5', w.wt),
+     'deny', 'wrapped-gate',
+     'python "{kit}/tools/gate.py" -C . --full'),
     ('lock run piped, PowerShell', lambda w: ps('python ~/.claude/tools/machine_lock/machine_lock.py run --lock --kind engine-test --repo demo --slug wt -- python -m unittest 2>&1 | Select-Object -Last 20', w.wt),
      'deny', 'wrapped-gate',
-     'python ~/.claude/tools/machine_lock/machine_lock.py run --lock --kind engine-test --repo demo --slug wt -- python -m unittest > "{temp}/wt-gate.log" 2>&1'),
+     'python "{kit}/tools/machine_lock.py" run --lock --kind engine-test --repo demo --slug wt -- python -m unittest'),
     ('gate to a log', lambda w: bash('python tools/gate.py --full > "%s/g.log" 2>&1' % W.fwd(w.temp), w.wt), None, None, None),
     ('gate with || is not a pipe', lambda w: bash('python tools/gate.py || echo failed', w.wt), None, None, None),
 
@@ -94,10 +98,10 @@ ROWS = [
     ('commit -am in main', lambda w: bash('git commit -am "x"', w.main), 'deny', 'git-commit-all',
      'git -C "{main}" add -- <each path you changed>'),
     ('commit whose message starts -a', lambda w: bash('git commit -m "-a note"', w.main), None, None, None),
-    ('git in a place git cannot tell', lambda w: bash('git checkout x', w.unknown), 'deny', 'git-checkout', None),
-    ('git after a cd it cannot follow', lambda w: bash('cd "$WT" && git stash', w.wt), 'deny', 'git-stash', None),
-    ('restore after a cd it cannot follow', lambda w: bash('cd "$WT" && git restore a.py', w.wt), 'deny', 'git-restore', None),
-    ('subagent commit after a cd it cannot follow', lambda w: bash('cd "$WT" && git commit -m x', w.wt, sub=True), 'deny', 'git-main-history', None),
+    ('git in a place git cannot tell', lambda w: bash('git checkout x', w.unknown), 'deny', 'unplaced', None),
+    ('git after a cd it cannot follow', lambda w: bash('cd "$WT" && git stash', w.wt), 'deny', 'unplaced', None),
+    ('restore after a cd it cannot follow', lambda w: bash('cd "$WT" && git restore a.py', w.wt), 'deny', 'unplaced', None),
+    ('subagent commit after a cd it cannot follow', lambda w: bash('cd "$WT" && git commit -m x', w.wt, sub=True), 'deny', 'unplaced', None),
     ('main-role commit after a cd it cannot follow', lambda w: bash('cd "$WT" && git commit -m x', w.wt), None, None, None),
     ('git in no checkout', lambda w: bash('git checkout x', w.plain), None, None, None),
     ('branch -D anywhere', lambda w: bash('git branch -D kit/old', w.wt), 'deny', 'git-branch-force-delete',
@@ -124,7 +128,8 @@ ROWS = [
     ('subagent revert in main', lambda w: bash('git revert abc123', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent am in main', lambda w: bash('git am x.patch', w.main, sub=True), 'deny', 'git-main-history', None),
     ('main-role commit in main', lambda w: bash('git commit -m "x"', w.main), None, None, None),
-    ('subagent commit in its worktree', lambda w: bash('git commit -m "x"', w.wt, sub=True), None, None, None),
+    ('subagent commit in its worktree', lambda w: bash('git commit -m "x"', w.wt, sub=True), 'deny', 'git-plain-commit',
+     COMMIT),
     ('subagent log in main', lambda w: bash('git log -1', w.main, sub=True), None, None, None),
 
     # ---------------------------------------------------------------- push to main (push_block on)
@@ -144,13 +149,13 @@ ROWS = [
                                                       'old_string': 'a', 'new_string': 'b'}, w.wt, sub=True),
      'deny', 'main-checkout', 'Edit(file_path="{wt}/src/a.py")'),
     ('subagent Write in main from the main checkout', lambda w: event('Write', {'file_path': os.path.join(w.main, 'b.md'), 'content': 'x'}, w.main, sub=True),
-     'deny', 'main-checkout', 'git -C "{main}" worktree add .claude/worktrees/<slug> -b <branch>'),
+     'deny', 'main-checkout', 'Write(file_path="<worktree>/b.md")'),
     ('subagent NotebookEdit in main', lambda w: event('NotebookEdit', {'notebook_path': os.path.join(w.main, 'n.ipynb'), 'new_source': ''}, w.wt, sub=True),
      'deny', 'main-checkout', None),
     ('subagent Edit in its worktree', lambda w: event('Edit', {'file_path': os.path.join(w.wt, 'a.py'), 'old_string': 'a', 'new_string': 'b'}, w.wt, sub=True),
      None, None, None),
     ('subagent Edit where git cannot tell', lambda w: event('Edit', {'file_path': os.path.join(w.unknown, 'a.py'), 'old_string': 'a', 'new_string': 'b'}, w.wt, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('subagent Edit outside any repo, run from there', lambda w: event('Write', {'file_path': os.path.join(w.plain, 'a.txt'), 'content': ''}, w.plain, sub=True),
      None, None, None),
     ('subagent Edit outside any repo, run from its worktree', lambda w: event('Write', {'file_path': os.path.join(w.plain, 'a.txt'), 'content': ''}, w.wt, sub=True),
@@ -166,33 +171,64 @@ ROWS = [
     ('subagent Out-File into main', lambda w: ps('"x" | Out-File -Encoding utf8 %s\\o.txt' % w.main, w.wt, sub=True), 'deny', 'main-checkout', None),
     ('subagent rm in main', lambda w: bash('rm -f %s/stale.txt' % W.fwd(w.main), w.wt, sub=True), 'deny', 'main-checkout', None),
     ('subagent Remove-Item in main', lambda w: ps('Remove-Item %s\\stale.txt -Force' % w.main, w.wt, sub=True), 'deny', 'main-checkout', None),
-    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), None, None, None),
+    # a PowerShell target that is not literal can name the main checkout: refused from a worktree too
+    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), 'deny', 'unplaced',
+     '"x" > "{wt}/<file>"'),
+    ('subagent bash write to a variable path', lambda w: bash('echo x > "$OUT"', w.wt, sub=True), None, None, None),
     ('subagent redirect in its worktree', lambda w: bash('echo hi > notes.txt', w.wt, sub=True), None, None, None),
     ('subagent redirect in a heredoc body is data', lambda w: bash("cat > notes.txt <<'EOF'\nx > %s/y.txt\nEOF" % W.fwd(w.main), w.wt, sub=True),
      None, None, None),
     ('main session redirect into main', lambda w: bash('echo hi > out.txt', w.main), None, None, None),
 
     # ---------------------------------------------------------------- unreadable lines (fallback)
-    ('unclosed quote hiding a checkout', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout', None),
+    ('unclosed quote hiding a checkout', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout',
+     'git -C "{main}" worktree add .claude/worktrees/<slug> <branch>'),
     ('unclosed quote in a worktree', lambda w: bash("echo 'x ; git checkout main", w.wt), None, None, None),
     ('unclosed quote hiding a restore', lambda w: bash("echo 'x ; git restore a.py", w.main), 'deny', 'git-restore', None),
     ('unclosed quote hiding restore --staged', lambda w: bash("echo 'x ; git restore --staged a.py", w.main), None, None, None),
     ('unclosed quote hiding restore -SW', lambda w: bash("echo 'x ; git restore -SW a.py", w.main), 'deny', 'git-restore', None),
     ('unclosed quote hiding a subagent merge', lambda w: bash("echo 'x ; git merge kit/wt", w.main, sub=True), 'deny', 'git-main-history', None),
     ('unclosed quote hiding a main-role merge', lambda w: bash("echo 'x ; git merge kit/wt", w.main), 'deny', 'unreadable',
-     "echo 'x ; git merge kit/wt'"),
+     'bash "{temp}/script.sh"'),
     ('unclosed quote hiding a subagent merge in its worktree', lambda w: bash("echo 'x ; git merge kit/wt", w.wt, sub=True), 'deny', 'unreadable', None),
-    ('unclosed quote hiding a checkout, real alternative', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout',
-     'git -C "{main}" worktree add .claude/worktrees/<slug> <branch>'),
     ('cmd /c with a trailing backslash root', lambda w: bash('cmd /c "dir /s C:\\"', w.wt), 'deny', 'root-search', None),
     ('variable program running godot', lambda w: bash('GODOT=/c/tools/godot.exe; $GODOT --headless', w.wt), 'deny', 'heavy',
      LOCK + ' --kind engine-run --repo demo --slug wt -- <the program $GODOT names> --headless'),
+
+    # ---------------------------------------------------------------- backlog roles (tests/guard/test_backlog_role.py)
+    ('subagent builder closes a record', lambda w: bash('python "%s/tools/backlog.py" -C "%s" close X-1'
+                                                        % (W.fwd(w.kit_dir), W.fwd(w.wt)), w.wt, sub=True),
+     'deny', 'backlog-role', 'python "{kit}/tools/backlog.py" -C "{wt}" show X-1'),
+    ('subagent builder adds a record', lambda w: bash('python "%s/tools/backlog.py" add --summary s'
+                                                      % W.fwd(w.kit_dir), w.wt, sub=True), None, None, None),
+    ('subagent code importing the backlog library', lambda w: bash('python -c "from kitlib.backlog import store"',
+                                                                   w.wt, sub=True),
+     'deny', 'backlog-raw-write', 'python "{kit}/tools/backlog.py" -C <worktree> <verb> <arguments>'),
+    ('subagent push of the backlog store ref', lambda w: bash('git push origin HEAD:refs/backlog/main', w.wt, sub=True),
+     'deny', 'backlog-raw-write', 'python "{kit}/tools/backlog.py" -C <worktree> <verb> <arguments>'),
+
+    # ---------------------------------------------------------------- git run by interpreter code
+    ('subagent heredoc python running git update-ref', lambda w: bash(
+        "python - <<'EOF'\nimport subprocess\nsubprocess.run(['git', '-C', w, 'update-ref', ref, c])\nEOF",
+        w.wt, sub=True), 'deny', 'interpreter-git', 'git -C "{wt}" <the git command your code ran>'),
+    ('subagent python -c committing through a shell string', lambda w: bash(
+        'python -c "import subprocess; subprocess.run(\'git commit -m x\', shell=True)"', w.wt, sub=True),
+     'deny', 'interpreter-git', COMMIT),
+    ('subagent python -c merging through an f-string', lambda w: bash(
+        'python -c "import subprocess; subprocess.run(f\'git -C {w} merge x\', shell=True)"', w.wt, sub=True),
+     'deny', 'interpreter-git', 'python "{kit}/tools/sync_base.py" -C "{wt}" <hash> --model "<your model>"'),
+    ('owner python -c running git', lambda w: bash(
+        'python -c "import subprocess; subprocess.run([\'git\', \'push\'])"', w.wt), None, None, None),
 ] + SHELL_ROWS + REVIEW_ROWS + EXTRA_ROWS
 
 # An alternative is a command to run as written: no closing full stop, no leading prose word
 # (docs/guard.md "Rules"). The prose goes in its own sentence before "Instead:".
 PROSE_WORDS = ('run', 'work', 'make', 'read', 'write', 'commit', 'merge', 'name', 'nothing', 'fix', 'ask', 'the',
                'as', 'from', 'reproduce', 'approve', 'stage', 'search', 'use')
+
+
+setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
+tearDownModule = W.allow_unplaced
 
 
 class RuleTable(unittest.TestCase):
@@ -389,7 +425,7 @@ class PmDataPlace(unittest.TestCase):
         self.assertFalse(ctx.is_pm_data(self.w.wt))
         self.assertEqual(ctx.main_top(self.w.wt), self.w.main)
         self.assertIsNone(decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx()))
-        self.assertIsNone(decide(bash('git commit -m x', self.w.wt, sub=True), self.w.ctx()))
+        self.assertIsNone(decide(bash('git add a.py', self.w.wt, sub=True), self.w.ctx()))
 
     def test_without_pm_data_the_worktree_stays_linked(self):
         ctx = self.w.ctx()
@@ -639,15 +675,6 @@ class OwnerLockTools(unittest.TestCase):
         ('ps', 'cmd /c start "" reserve_ui.pyw'),
         ('ps', 'Invoke-Item %s' % UI_WIN),
         ('ps', 'ii reserve_ui.pyw'),
-        ('bash', 'python -c "import runpy; runpy.run_path(\'reserve_ui.pyw\')"'),
-        # the window's package, started from python -c
-        ('bash', 'python -c "from kitlib.lockui import window; window.main()"'),
-        ('ps', 'pythonw -c "import kitlib.lockui.window as w; w.main()"'),
-        ('bash', 'python -c "from kitlib import lockui"'),
-        ('bash', 'python -Sc "from kitlib.lockui.window import main; main()"'),
-        ('bash', 'p=%s; pythonw "$p"' % UI),
-        ('ps', '$ui = "%s"; & $ui' % UI_WIN),
-        ('ps', '$p = "reserve_ui.pyw"; pythonw $p'),
         ('bash', 'pyw reserve_ui.pyw'),
         ('ps', 'pyw -3 reserve_ui.pyw'),
         ('ps', 'pyw.exe %s' % UI_WIN),
@@ -657,21 +684,6 @@ class OwnerLockTools(unittest.TestCase):
         ('ps', 'explorer reserve_ui.pyw'),
         ('bash', 'explorer.exe %s' % UI_WIN),
         ('bash', 'python -m reserve_ui'),
-        # combined short flags: -m or -c at the end of a cluster, or a module joined to -m
-        ('bash', 'python -um runpy reserve_ui.pyw'),
-        ('ps', 'python -Bm runpy %s' % UI_WIN),
-        ('bash', 'python -Im reserve_ui'),
-        ('bash', 'python -mrunpy reserve_ui.pyw'),
-        ('bash', 'python -umrunpy reserve_ui.pyw'),
-        ('bash', 'python -Sc "import runpy; runpy.run_path(\'reserve_ui.pyw\')"'),
-        ('bash', 'mod=reserve_ui; python -m $mod'),
-        ('ps', '$m = "runpy"; python -um $m reserve_ui.pyw'),
-        ('bash', 'python -m runpy %s' % UI),
-        ('bash', 'python < reserve_ui.pyw'),
-        ('bash', 'python - < %s' % UI),
-        ('bash', 'cat reserve_ui.pyw | python'),
-        ('bash', 'cat %s | pythonw -' % UI),
-        ('ps', 'Get-Content reserve_ui.pyw | python'),
         # the live lock CLI's owner writes
         ('bash', 'python %s reserve whole --for 2h' % LIVE),
         ('ps', 'py %s reserve half --until 18:00' % LIVE_WIN),
@@ -684,8 +696,6 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', '%s release' % LIVE),
         ('bash', 'python %s --test-root C:/tmp/x reserve whole --for 1h' % LIVE),
         ('bash', 'cmd //c python %s release' % LIVE),
-        ('bash', 'python %s run --lock --kind build --repo demo --slug wt -- python %s reserve whole --for 1h'
-         % (LIVE, LIVE)),
         # the kit lock CLI's owner writes
         ('bash', 'python tools/machine_lock.py hold whole --for 1h'),
         ('ps', 'python tools\\machine_lock.py hold half --from 18:00 --until 20:00'),
@@ -699,8 +709,6 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', 'python tools/machine_lock.py stop r-1 --force'),
         ('bash', 'python tools/machine_lock.py top r-1'),
         ('ps', 'python tools\\machine_lock.py --test-root C:/tmp/x top r-1'),
-        ('bash', 'python %s run --lock --kind build --repo demo --slug wt -- python tools/machine_lock.py top r-1'
-         % LIVE),
     ]
 
     ALLOWED = [
@@ -731,7 +739,7 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', 'git diff -- %s' % UI_REL),
         ('ps', 'git show HEAD:%s' % UI_REL),
         ('bash', 'git log --oneline -- %s' % UI_REL),
-        ('bash', 'git commit -m "port reserve_ui.pyw" -- %s' % UI_REL),
+        ('bash', 'git commit --dry-run -m "port reserve_ui.pyw" -- %s' % UI_REL),
         # python -m of another module that only names reserve_ui
         ('bash', 'python -m py_compile %s' % UI_REL),
         ('ps', 'python -m pytest -k reserve_ui'),
@@ -757,6 +765,13 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', 'python tools/reserve_check.py release'),
         ('bash', 'echo "machine_lock reserve whole"'),
         ('bash', 'python tools/release.py game on'),
+        # the rule reads the file a command runs, never text that only names a tool
+        ('bash', 'cat tools/machine_lock.py'),
+        ('bash', 'grep -n "hold whole" tools/machine_lock.py'),
+        ('ps', 'Select-String -Path tools/machine_lock.py -Pattern reserve'),
+        ('bash', 'echo "python tools/machine_lock.py hold whole"'),
+        ('bash', 'git log -p -- tools/machine_lock.py'),
+        ('bash', 'python -c "import kitlib.lockui"'),
     ]
 
     def setUp(self):
@@ -776,11 +791,11 @@ class OwnerLockTools(unittest.TestCase):
                 with self.subTest(text, sub=sub):
                     d = self.run_one(shell, text, sub)
                     self.assertIsNotNone(d, 'allowed')
-                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
                     self.assertIn(OWNER_ONLY, d.reason)
                     self.assertNotRegex(d.reason, r'\b[RQ]-\d+')
                     self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
-                        status, rules.tag('owner-lock', 'subagent' if sub else 'main'))), d.reason)
+                        status, rules.tag('owner-tool', 'subagent' if sub else 'main'))), d.reason)
 
     def test_the_owner_session_may(self):
         # a main session nothing marks is the owner's own (docs/guard.md "Session mark")
@@ -795,27 +810,48 @@ class OwnerLockTools(unittest.TestCase):
                 d = self.run_one(shell, text, True)
                 self.assertIsNone(d, d and d.reason)
 
-    def _first(self, text):
-        from kitlib.guard import commands as cm, shell as sh
-        p = cm.read(text, sh.BASH, self.w.wt)
-        self.assertFalse(p.clean)
-        self.assertEqual(len(p.commands), 1, [c.words for c in p.commands])
-        c = p.commands[0]
-        return c, cm.invocation(c), self.w.wt, 'main'
+    # docs/guard.md "Fallback": a line the parser cannot read that names the lock CLI is refused
+    # whole, its read verbs included, in every session but the owner's own
+    UNCLEAN = [
+        ('bash', 'eval "$c"; python tools/machine_lock.py status'),
+        ('bash', 'eval "$c"; python %s status' % LIVE),
+        ('bash', "echo 'x ; python tools/machine_lock.py hold list"),
+        ('bash', 'eval "$c"; python -m tools.machine_lock status'),
+        # the forms the parsed rule reads: -m ending a flag cluster, and a quoted module
+        ('bash', 'eval "$c"; python -m machine_lock status'),
+        ('bash', 'eval "$c"; python -Im machine_lock status'),
+        ('bash', "eval \"$c\"; python -m 'machine_lock' status"),
+        ('ps', 'iex $c; python -m "machine_lock" status'),
+        ('ps', 'iex $c; python tools\\machine_lock.py status'),
+    ]
 
-    def test_unread_line_rereads_with_owner_lock(self):
-        # an unclosed quote hides the command inside echo's argument, so only the fallback sees it:
-        # it re-reads the text from the wrapped-gate match and runs the parsed rules on it
-        text = ("echo 'x ; python %s run --lock --kind build --repo demo --slug wt -- python %s reserve whole"
-                " --for 1h | tee out.log" % (LIVE, LIVE))
-        self.assertIsNone(rules.owner_lock(None, self.w.ctx(environ=MARKED), *self._first(text)), 'the parse saw it')
-        for sub in (True, False):
-            with self.subTest(sub=sub):
-                d = self.run_one('bash', text, sub)
-                self.assertIsNotNone(d, 'allowed')
-                self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
-                self.assertIn('could not read this command', d.reason)
-                self.assertIn(OWNER_ONLY, d.reason)
+    def test_an_unclean_line_naming_the_lock_cli_is_refused(self):
+        for shell, text in self.UNCLEAN:
+            for sub, environ in ((True, None), (False, None), (False, UNHELD)):
+                with self.subTest(text, sub=sub, environ=environ):
+                    d = self.run_one(shell, text, sub, environ)
+                    self.assertIsNotNone(d, 'allowed')
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
+                    self.assertIn('could not read this command', d.reason)
+                    self.assertIn('names the lock CLI', d.reason)
+            with self.subTest(text, owner=True):
+                d = self.run_one(shell, text, False, environ={})
+                self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
+
+    def test_an_unclean_line_running_an_owner_write_gives_the_write(self):
+        d = self.run_one('bash', "echo 'x ; python tools/machine_lock.py hold whole --for 1h", True)
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
+        self.assertIn(OWNER_ONLY, d.reason)
+        self.assertIn('machine_lock.py hold whole', d.reason)
+
+    def test_an_unclean_line_naming_another_lock_file_is_not_held(self):
+        for text in ('eval "$c"; python -m unittest tests/lock/test_machine_lock.py',
+                     'eval "$c"; ls tools/machine_lock', 'eval "$c"; cat docs/machine_lock.pyw',
+                     'eval "$c"; python -Im machine_locks status'):
+            with self.subTest(text):
+                d = self.run_one('bash', text, True)
+                self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
 
 
 class OwnerSetup(unittest.TestCase):
@@ -834,19 +870,11 @@ class OwnerSetup(unittest.TestCase):
                  '--agent-email b@example.invalid --apply'),
         ('bash', 'cd C:/kit && python tools/machine_setup.py --apply'),
         ('bash', 'python -m tools.machine_setup --apply'),
-        ('bash', 'f=--apply; python tools/machine_setup.py $f'),
-        ('ps', '$s = "C:\\kit\\tools\\machine_setup.py"; python $s --apply'),
         ('ps', '& C:\\kit\\installer\\machine-setup.ps1 -OwnerEmail a@example.invalid -Apply'),
         ('ps', 'powershell -NoProfile -File C:\\kit\\installer\\machine-setup.ps1 -apply'),
         ('ps', 'powershell -File installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail a@example.invalid '
                '-AgentEmail b@example.invalid -App'),
         ('ps', 'Start-Process python -ArgumentList "tools/machine_setup.py --apply"'),
-        # a double quote PowerShell 5.1 would pass on unescaped: it can carry an --apply in
-        ('ps', '& C:\\kit\\installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail \'x" --apply --repo-name "n\' '
-               '-AgentEmail b@example.invalid'),
-        ('bash', 'python -c "from kitlib.machinesetup import owner; owner.write_owner_email(None, None, \'a@x.io\')"'),
-        ('bash', 'python -Sc "import kitlib.machinesetup.machineconfig"'),
-        ('bash', "python - <<'EOF'\nfrom kitlib.machinesetup import owner\nEOF"),
     ]
     ALLOWED = [
         ('bash', 'python tools/machine_setup.py'),
@@ -880,29 +908,38 @@ class OwnerSetup(unittest.TestCase):
                     self.assertEqual(d.verdict, 'deny', d.reason)
                     if d.rule == 'unreadable':                 # a subagent's unclean line: refused whole
                         continue
-                    self.assertEqual(d.rule, 'owner-setup', d.reason)
+                    self.assertEqual(d.rule, 'owner-tool', d.reason)
                     self.assertIn("only the owner runs it to act", d.reason)
                     self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
-                        dry, rules.tag('owner-setup', 'subagent' if sub else 'main'))), d.reason)
+                        dry, rules.tag('owner-tool', 'subagent' if sub else 'main'))), d.reason)
 
     def test_the_owner_session_may(self):
         for shell, text in self.BLOCKED:
             with self.subTest(text):
                 d = self.run_one(shell, text, False, environ={})
-                self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+                self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
 
     def test_allowed(self):
         for shell, text in self.ALLOWED:
             for sub in (True, False):
                 with self.subTest(text, sub=sub):
                     d = self.run_one(shell, text, sub)
-                    self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+                    self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
+
+    def test_code_that_only_names_the_setup_package_passes(self):
+        """A python heredoc whose text names kitlib.machinesetup but imports nothing of it runs no
+        machine setup: a subagent's run of it is allowed whole (observed refused as owner-setup)."""
+        text = ("python - <<'EOF'\nimport pathlib\n"
+                "t = pathlib.Path('docs/guard.md').read_text(encoding='utf-8')\n"
+                "print(t.count('kitlib.machinesetup'))\nEOF")
+        d = self.run_one('bash', text, True)
+        self.assertIsNone(d, d and d.reason)
 
     def test_an_unread_line_that_runs_it_is_refused(self):
         text = "echo 'x ; python tools/machine_setup.py --owner-email a@example.invalid --apply"
         d = self.run_one('bash', text, False)
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-setup'), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
         self.assertIn('could not read this command', d.reason)
         self.assertIsNone(self.run_one('bash', text, False, environ={}))
 
@@ -1158,6 +1195,84 @@ class RolesFromConfig(unittest.TestCase):
                 self.assertEqual(git('git merge --no-ff kit/wt', kind).rule, 'git-main-history')
 
 
+class MainCwdHint(unittest.TestCase):
+    def test_a_command_writing_through_a_main_cwd_is_told_to_cd_first(self):
+        # a subagent whose cwd is the main checkout runs python - or -c;
+        # the refusal stays, its advice is the same run from the worktree (or a script by path)
+        w = W.World()
+        self.addCleanup(w.cleanup)
+        for ev in (bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True),
+                   ps('python -c "print(1)"', w.main, sub=True)):
+            d = decide(ev, w.ctx())
+            self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
+            self.assertIn('It writes through its working directory, which is the main checkout', d.reason)
+            self.assertTrue(d.instead.startswith('cd "<worktree>"'), d.instead)
+            self.assertNotIn('Make the change in a worktree of it', d.reason)
+        # a redirect to a named file keeps the plain worktree advice
+        d = decide(bash('python x.py > out.log 2>&1', w.main, sub=True), w.ctx())
+        self.assertNotIn('It writes through its working directory', d.reason)
+
+
+# python's code on the line, or read from standard input, counts as a write of the directory python
+# runs in, whatever the code is: the guard does not read it (docs/guard.md "Shell writes")
+PY_UNREAD = 'counted as written: the guard does not read what the code python is given writes'
+
+
+class PythonCodeCountsAsWrite(unittest.TestCase):
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def judge(self, ev):
+        d = decide(ev, self.w.ctx())
+        return ('allow', None) if d is None else (d.verdict, d.rule)
+
+    def test_python_c_read_only_program_in_main_checkout_counts_as_write(self):
+        code = "import json,sys; print(json.load(open(sys.argv[1]))['a'])"
+        for make, text in ((bash, 'python -I -c "%s" x.json' % code), (bash, 'python -I -c "print(1)"'),
+                           (ps, 'python -I -c "print(1)"'), (bash, "py -3 -Ic 'print(1)'"),
+                           (bash, 'python -c "import time; time.sleep(5)"')):
+            with self.subTest(text):
+                d = decide(make(text, self.w.main, sub=True), self.w.ctx())
+                self.assertEqual(d and (d.verdict, d.rule), ('deny', 'unplaced'), d and d.reason)
+                self.assertIn(PY_UNREAD, d.reason)
+                self.assertNotIn('sleep-wait', d.reason)
+
+    def test_python_c_advice_is_cd_worktree_line(self):
+        for make, text, instead in (
+                (bash, 'python -c "print(1)"', 'cd "<worktree>" && python -c "print(1)"'),
+                (bash, 'python3 -Bc \'print(1)\' a b', 'cd "<worktree>" && python3 -Bc \'print(1)\' a b'),
+                (ps, 'python -c "print(1)"', 'cd "<worktree>"; if ($?) { python -c "print(1)" }'),
+                (ps, '& "C:\\Py\\python.exe" -c "print(1)"',
+                 'cd "<worktree>"; if ($?) { & "C:\\Py\\python.exe" -c "print(1)" }')):
+            with self.subTest(text):
+                d = decide(make(text, self.w.main, sub=True), self.w.ctx())
+                self.assertEqual(d and d.instead, instead, d and d.reason)
+                self.assertIn('Read and Grep tools', d.reason)
+                self.assertNotIn('python -I -c', d.reason)
+                self.assertNotIn('worktree add', d.instead)
+
+    def test_python_c_in_own_worktree_passes(self):
+        for make, text in ((bash, 'python -c "open(\'x\', \'w\').write(\'y\')"'),
+                           (ps, 'python -c "import os; os.remove(\'x\')"'),
+                           (bash, "python - <<'EOF'\nopen('x', 'w')\nEOF")):
+            with self.subTest(text):
+                self.assertEqual(self.judge(make(text, self.w.wt, sub=True)), ('allow', None))
+
+    def test_python_stdin_counts_as_write_of_cwd(self):
+        sp = 'counted as written: Start-Process hands python a command line the guard does not read'
+        for make, text, why in ((bash, 'echo "print(1)" | python -I -', PY_UNREAD),
+                                (bash, "python - <<'EOF'\nprint(1)\nEOF", PY_UNREAD),
+                                (bash, 'echo "print(1)" | python', PY_UNREAD), (ps, "'print(1)' | python -", PY_UNREAD),
+                                (ps, "Start-Process python -ArgumentList '-c','print(1)'", sp)):
+            with self.subTest(text):
+                d = decide(make(text, self.w.main, sub=True), self.w.ctx())
+                self.assertEqual(d and (d.verdict, d.rule), ('deny', 'unplaced'), d and d.reason)
+                self.assertTrue(d.reason.startswith('the directory `'), d.reason)
+                self.assertIn(why, d.reason)
+                self.assertEqual(self.judge(make(text, self.w.wt, sub=True)), ('allow', None))
+
+
 class OtherTools(unittest.TestCase):
     def test_reads_and_unknown_tools_pass(self):
         w = W.World()
@@ -1166,6 +1281,234 @@ class OtherTools(unittest.TestCase):
                    event('Glob', {'pattern': '**/*'}, w.main, sub=True),
                    bash('', w.main), event('Bash', {}, w.main)):
             self.assertIsNone(decide(ev, w.ctx()))
+
+
+class PlainCommit(unittest.TestCase):
+    """git verbs that make a commit in a linked worktree are commit.py's for every agent session
+    (rules.git_plain_commit): plain git writes no Co-Authored-By trailer."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def decide(self, text, environ=None, sub=False, shell=bash):
+        return decide(shell(text, self.w.wt, sub), self.w.ctx(environ=environ or {}))
+
+    def test_every_marked_session_is_held(self):
+        for mark in ('coordinator', 'pm', 'deep-worker', 'conductor', 'consultant'):
+            with self.subTest(mark):
+                d = self.decide('git commit -m x -- a.py', {context.ROLE_ENV: mark})
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertIn('writes no Co-Authored-By trailer', d.reason)
+                self.assertIn('/tools/commit.py" -C "%s" -m "<subject>" <each path you changed>' % W.fwd(self.w.wt),
+                              d.reason)
+
+    def test_an_unmarked_main_session_is_the_owners(self):
+        for text in ('git commit -m x', 'git merge main', 'git revert HEAD', 'git am x.patch', 'git pull'):
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text))
+
+    def test_a_nested_shell_is_read(self):
+        d = self.decide("bash -c 'git commit -m x'", sub=True)
+        self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+
+    def test_the_main_checkout_keeps_its_own_rules(self):
+        d = decide(bash('git commit -m x', self.w.main, True), self.w.ctx())
+        self.assertEqual(d and d.rule, 'git-main-history', d and d.reason)
+
+    def test_the_held_form_in_the_alternative_passes(self):
+        for text in ('git revert HEAD~2', 'git cherry-pick abc123', 'git am fix.patch', 'git revert -m 1 HEAD',
+                     'git cherry-pick --mainline=2 abc123', 'git revert --skip', 'git cherry-pick --skip'):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                held = d.instead.replace('<patch>', 'fix.patch')      # the placeholder is no shell word
+                self.assertIsNone(self.decide(held, sub=True), held)
+
+    def test_a_sequence_step_names_what_commit_py_leaves(self):
+        for text in ('git cherry-pick --continue', 'git revert --continue', 'git am --continue'):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertIn('commits only the change in progress', d.reason)
+                self.assertIn('--quit', d.reason)
+        d = self.decide('git merge --continue', sub=True)
+        self.assertNotIn('commits only the change in progress', d.reason)
+
+    def test_a_skip_drops_the_change_in_progress(self):
+        d = self.decide('git revert --skip', sub=True)
+        self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+        self.assertIn('reset --merge', d.reason)
+        self.assertNotIn('Commit with the kit tool', d.reason)
+
+    def test_the_main_checkout_commit_all_names_no_lander_flag(self):
+        d = decide(bash('git commit -am x', self.w.main), self.w.ctx())
+        self.assertEqual(d and d.rule, 'git-commit-all', d and d.reason)
+        self.assertNotIn('--lander-main-checkout', d.reason + d.instead)
+
+    def test_scan(self):
+        for sub, argv, makes in (
+                ('commit', ['-m', 'x'], True), ('commit', ['--dry-run'], False), ('commit', ['--dry-r'], True),
+                ('revert', ['-n', 'HEAD'], False), ('revert', ['-mn', 'HEAD'], True), ('revert', ['-nm', '1', 'HEAD'], False),
+                ('revert', ['--no-commit', '--co', 'HEAD'], True), ('revert', ['--', '--no-commit'], True),
+                ('merge', ['--no-commit', '--no-ff', 'main'], False), ('merge', ['--squash', '--no-squash'], True),
+                ('merge', ['--ff-only', '--ff'], True), ('merge', ['--no-commit=x'], True),
+                ('merge', ['-X', '--no-commit', 'main'], True), ('pull', ['--no-commit'], False),
+                ('am', ['--abort'], False), ('am', ['--3way', 'x.patch'], True),
+                ('revert', ['-n', '--commit', 'HEAD'], True), ('cherry-pick', ['-n', '--commit', 'x'], True),
+                ('cherry-pick', ['-xn', '--comm', 'x'], True), ('merge', ['--mess', '--no-commit', 'main'], True),
+                ('merge', ['--frob', 'main', '--no-commit'], True), ('revert', ['-Sn', 'HEAD'], True),
+                ('cherry-pick', ['-Skey', '-n', 'x'], False), ('revert', ['-wn', 'HEAD'], True),
+                ('revert', ['--no-edit', '--no-commit', 'HEAD'], False),
+                ('merge', ['--no-ff', '--no-edit', '--no-commit', 'main'], False),
+                ('merge', ['--no-commit', '--frob', 'main'], False), ('revert', ['-n', '--', 'HEAD'], False)):
+            with self.subTest(sub=sub, argv=argv):
+                cmd = cm.read('git %s %s' % (sub, ' '.join(argv)), sh.BASH, W.fwd(self.w.wt)).commands[0]
+                self.assertEqual(rules.commit_scan(sub, cm.git_call(cm.invocation(cmd)).rest)[0], makes)
+
+    def test_a_computed_word_after_a_hold_is_read_as_a_commit(self):
+        # a known limit (rules.py, above COMMIT_VERBS): `$X` may be --commit, but is read as a commit
+        cmd = cm.read('git cherry-pick -n $X', sh.BASH, W.fwd(self.w.wt)).commands[0]
+        self.assertFalse(rules.commit_scan('cherry-pick', cm.git_call(cm.invocation(cmd)).rest)[0])
+
+    def test_quit_advice_says_to_read_what_is_left_first(self):
+        for text, where in (('git cherry-pick --skip', 'sequencer/todo'), ('git revert --continue', 'sequencer/todo'),
+                            ('git am --skip', 'rebase-apply'), ('git am --continue', 'rebase-apply')):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertIn('--quit forgets what is left, so read it first', d.reason)
+                self.assertIn('rev-parse --git-path %s' % where, d.reason)
+
+    def test_am_options_are_gits(self):
+        for argv, makes in ((['--show-current-patch=diff'], False), (['--show-current-patch=raw'], False),
+                            (['--show-current-patch'], False), (['-Skey', '--abort'], False),
+                            (['-S', '--abort'], False), (['--quoted-cr', 'strip', '--abort'], False),
+                            (['--whitespace', 'fix', '--abort'], False), (['-mun', '--abort'], False),
+                            (['--quoted-cr', '--abort'], True), (['-C', '--abort'], True),
+                            (['x.patch'], True)):
+            with self.subTest(argv=argv):
+                cmd = cm.read('git am %s' % ' '.join(argv), sh.BASH, W.fwd(self.w.wt)).commands[0]
+                self.assertEqual(rules.commit_scan('am', cm.git_call(cm.invocation(cmd)).rest)[0], makes)
+        self.assertIsNone(self.decide('git am --show-current-patch=diff', sub=True))
+
+    def test_held_form_keeps_strategy_and_drops_an_unplaced_value(self):
+        wt = W.fwd(self.w.wt)
+        for text, instead in (
+                ('git cherry-pick -X theirs abc', 'git -C "%s" cherry-pick --no-commit -Xtheirs abc' % wt),
+                ('git cherry-pick -Xours abc', 'git -C "%s" cherry-pick --no-commit -Xours abc' % wt),
+                ('git revert --strategy ort --strategy-option=theirs HEAD',
+                 'git -C "%s" revert --no-commit --strategy ort --strategy-option=theirs HEAD' % wt),
+                ('git cherry-pick -m 1 -X theirs abc', 'git -C "%s" cherry-pick --no-commit -m 1 -Xtheirs abc' % wt),
+                ('git cherry-pick --frob val abc', 'git -C "%s" cherry-pick --no-commit <commit>' % wt),
+                ('git revert -w HEAD', 'git -C "%s" revert --no-commit <commit>' % wt),
+                ("git cherry-pick -X 'a;b' abc", 'git -C "%s" cherry-pick --no-commit \'-Xa;b\' abc' % wt),
+                ("git cherry-pick -X 'a b' abc", 'git -C "%s" cherry-pick --no-commit \'-Xa b\' abc' % wt),
+                ('git revert --strategy-option "it\'s" HEAD',
+                 'git -C "%s" revert --no-commit --strategy-option <value> HEAD' % wt),
+                ('git cherry-pick "-Xit\'s" abc', 'git -C "%s" cherry-pick --no-commit -X<value> abc' % wt),
+                ('git revert "--strategy-option=it\'s" HEAD',
+                 'git -C "%s" revert --no-commit --strategy-option=<value> HEAD' % wt),
+                ('git cherry-pick -X "$s" abc', 'git -C "%s" cherry-pick --no-commit -X<value> abc' % wt),
+                ('git revert --strategy $s HEAD', 'git -C "%s" revert --no-commit --strategy <value> HEAD' % wt),
+                ('git cherry-pick -X a,b abc', 'git -C "%s" cherry-pick --no-commit \'-Xa,b\' abc' % wt),
+                ('git revert --strategy @s HEAD', 'git -C "%s" revert --no-commit --strategy \'@s\' HEAD' % wt)):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertEqual(d.instead, instead)
+
+
+# the kit's own tools, as whole names (after a path separator, a quote or a space), and any
+# other script file name: a refusal of git that code runs may name only the first
+KIT_TOOL_NAMES = re.compile(r'(?<![\w.-])(commit|sync_base)\.py(?!\w)')
+SCRIPT_NAME = re.compile(r'(?i)\.(py|pyw|js|mjs|cjs|ts|ps1|sh|bat|cmd)\b')
+
+
+class InterpreterGit(unittest.TestCase):
+    """git that python or node code given on the line runs is refused for every agent session
+    (rules.interpreter_git): the guard reads git only as a typed shell command."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def decide(self, text, cwd=None, environ=None, sub=True, shell=bash):
+        return decide(shell(text, cwd or self.w.wt, sub), self.w.ctx(environ=environ or {}))
+
+    def assert_refused(self, d, text):
+        self.assertEqual(d and (d.verdict, d.rule), ('deny', 'interpreter-git'), d and d.reason)
+        self.assertIn('reads git only as a typed shell command', d.reason)
+        self.assertIn('commit.py', d.reason)
+        self.assertIn('sync_base.py', d.reason)
+        self.assertIn('do not route it through a program or a script file', d.reason)
+        # neither the advice nor the Instead may name a script file but the kit's own tools: a
+        # refused git command must never be routed through one
+        for said in (d.reason.split(' runs git from ', 1)[1], d.instead):
+            self.assertNotRegex(KIT_TOOL_NAMES.sub('', said), SCRIPT_NAME, said)
+
+    def test_the_script_check_strips_only_the_kit_tools(self):
+        self.assertEqual(KIT_TOOL_NAMES.sub('', 'python "x/tools/commit.py" and sync_base.py'), 'python "x/tools/" and ')
+        for name in ('my_commit.py', 'recommit.py', 'x-sync_base.py', 'commit.py.bak.py'):
+            with self.subTest(name):
+                self.assertRegex(KIT_TOOL_NAMES.sub('', name), SCRIPT_NAME)
+
+    def test_code_running_git_is_refused(self):
+        wt = W.fwd(self.w.wt)
+        for shell, text, instead in (
+                (bash, "python - <<'EOF'\nimport subprocess\nsubprocess.run(['git','-C',w,'update-ref',r,c])\nEOF",
+                 'git -C "%s" <the git command your code ran>' % wt),
+                (bash, 'py -3 -c "import os; os.system(\'git push\')"', None),
+                (bash, 'python3 <<< "import subprocess; subprocess.run([\'git\', \'status\'])"', None),
+                (bash, 'echo "import subprocess; subprocess.run([\'git\',\'push\'])" | python -', None),
+                (ps, "@'\nimport subprocess\nsubprocess.run(['git','push'])\n'@ | python -", None),
+                (bash, 'node -e "require(\'child_process\').execSync(\'git branch -D x\')"', None),
+                (bash, 'node -r x -e "require(\'child_process\').execSync(\'git commit -m y\')"',
+                 rules.kit_tool(self.w.ctx(), 'commit')),
+                (bash, 'node --require x --import y -e "require(\'child_process\').execSync(\'git push\')"',
+                 None),
+                (bash, 'node -pe "require(\'child_process\').execSync(\'git commit -m x\')"',
+                 rules.kit_tool(self.w.ctx(), 'commit')),
+                (bash, 'node --loader a --experimental-loader b -C c --conditions d --input-type module '
+                       '-e "require(\'child_process\').execSync(\'git push\')"', None),
+                (bash, 'python -c "import subprocess; subprocess.run([r\'C:/Program Files/Git/cmd/git.exe\', \'st\'])"',
+                 None),
+                (bash, 'python -c "import subprocess as s; s.run(f\'git -C {w} cherry-pick {c}\', shell=True)"',
+                 rules.kit_tool(self.w.ctx(), 'commit')),
+                (bash, 'python -c "import shutil, subprocess; subprocess.run([shutil.which(\'git\'), \'log\'])"', None),
+                (bash, 'python -c "import subprocess; subprocess.run([\'git\', \'rev-parse\', \'HEAD\'])"', None)):
+            with self.subTest(text):
+                d = self.decide(text, shell=shell)
+                self.assert_refused(d, text)
+                if instead is not None:
+                    self.assertIn(instead, d.instead)
+
+    def test_every_marked_session_is_held_and_the_owner_is_not(self):
+        text = 'python -c "import subprocess; subprocess.run([\'git\', \'status\'])"'
+        for mark in ('coordinator', 'deep-worker', 'consultant', 'conductor', 'pm'):
+            with self.subTest(mark):
+                self.assert_refused(self.decide(text, environ={context.ROLE_ENV: mark}, sub=False), text)
+        self.assertIsNone(self.decide(text, sub=False))
+
+    def test_any_directory_is_held(self):
+        d = self.decide('python -c "import subprocess; subprocess.run([\'git\', \'status\'])"', cwd=self.w.temp)
+        self.assert_refused(d, 'temp')
+        self.assertEqual(d.instead, 'git -C "<worktree>" <the git command your code ran>')
+
+    def test_code_that_runs_no_git_passes(self):
+        for text in ('python -c "print(\'git\')"',
+                     'git log | python -c "import sys,subprocess; subprocess.run([\'python\',\'x.py\'], '
+                     'input=sys.stdin.read())"',
+                     'git show HEAD:x.py | python -',
+                     'python -c "import subprocess; subprocess.run([\'python\', \'-V\'])"',
+                     'python -c "import subprocess; subprocess.run([\'gitk\'])"',
+                     'python tools/x.py', 'python -m json.tool x.json'):
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text))
+
+    def test_the_main_checkout_keeps_unplaced(self):
+        d = self.decide('python -c "import subprocess; subprocess.run([\'git\', \'status\'])"', cwd=self.w.main)
+        self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
 
 
 if __name__ == '__main__':

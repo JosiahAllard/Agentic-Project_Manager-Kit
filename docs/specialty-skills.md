@@ -1,8 +1,8 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Nothing here is built. Written for the state after two pending
-changes land: senior-worker on opus/high with strong-worker on opus/medium (the tier change), and a
-weak-worker on haiku 5.5 (the weak-worker change). Those rows come from the owner's rulings, not from main.
+Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Built: the seven `content/skills/specialty-*` skills (branch A); the `analyst` and `docs-writer` types and the cutover (branch B). Its last commit named the types in `templates/common/AGENTS.md`, `content/skills/subagent-dispatch/SKILL.md`, `docs/gate.md` and `docs/go-live.md`; the Role-policy modes line in `docs/guard.md` follows after kit/guard-v2 lands (that branch owns the file). The roster it assumes is the current one:
+senior-worker on opus/high with strong-worker on opus/medium (content/roles/senior-worker.md and strong-worker.md), and a
+weak-worker on haiku 5.5 (content/roles/weak-worker.md).
 
 ## Owner ruling
 
@@ -51,16 +51,17 @@ know-how. Every inference is marked "inference"; the rest is read from the code.
 | type | tier / effort | mode, group | note |
 |---|---|---|---|
 | weak-worker, worker, strong-worker, senior-worker | per the tier and weak-worker changes | write, builder | the brief picks one per task; specialty skills ride on these |
-| read type (reviewer + researcher) | standard / high | read, read-only | skills `specialty-review`, `specialty-research` |
+| read type (reviewer + researcher) | light / high | read, read-only | skills `specialty-review`, `specialty-research` |
 | docs type (records + spec-writer) | standard / medium, raised for specs | write, docs | skills `specialty-records`, `specialty-spec` |
 | lander, test-runner, coordinator, pm, consultant, deep-worker | unchanged | unchanged | |
 
 Retired: asset-smith, tech-artist, sound-smith, researcher, reviewer, records, spec-writer (7 files);
-added: `analyst` (the read type) and `docs-writer` (the docs type); the generic terms are used below. Role files: 16 now, 12 with weak-worker.
+added: `analyst` (the read type) and `docs-writer` (the docs type); the generic terms are used below. Role files: 18 before, 13 after (`content/roles/`, helper included).
+The analyst keeps the reviewer's light/high pin, so the "Reviewer model" rule is unchanged; `roster.md` raises a research dispatch to the standard tier.
 
 ## Specialty skills
 
-Seven folders `content/skills/specialty-<name>/SKILL.md`, long material in companion files, shipped
+Eight folders `content/skills/specialty-<name>/SKILL.md`, long material in companion files, shipped
 by the existing render (Claude loads `content/skills/`; Codex gets the copy
 `hosts/codex/shell/skills/`, docs/content.md "Skills"). The `specialty-` prefix: a skill named
 `branch-review` already exists (the coordinator's), a bare `records` would read as the retired type,
@@ -68,7 +69,8 @@ and names start with a letter (`_NAME` in `kitlib/host/content.py`).
 
 | skill | replaces | brief names (inference) | keeps from the role |
 |---|---|---|---|
-| specialty-3d-assets | asset-smith | senior-worker | script is the asset, budgets, contact sheet, options-first, no rigging |
+| specialty-3d-assets | asset-smith | senior-worker | script is the asset, budgets, contact sheet, options-first; props here, characters and rigs in specialty-rigging |
+| specialty-rigging | - (new) | senior-worker | scripted rig to the repo's body contract, weight and bend checks, contact sheet, skins on one shared rig |
 | specialty-tech-art | tech-artist | senior-worker | art that is code, checked by rendering, art-direction stop |
 | specialty-sound | sound-smith | worker; senior-worker for design | measure clips, ends in a question for the owner |
 | specialty-review | reviewer | read type | brief + diff range + logs, report format |
@@ -83,9 +85,9 @@ creative brief block (FEEL / REFERENCES / AVOID / SCOPE OF CHOICE) and options-f
 
 ## The merged read type (reviewer + researcher)
 
-Mode `read`, sandbox `read-only`, standard tier, effort high: both inputs agree. The reviewer stays
-at the default standard tier; the "Reviewer model" rule in `roster.md` raises it per dispatch,
-unchanged. Guard: `LOCK_VERBS['read'] = {'status'}`, checkout read-only to the shell, owner paths
+Mode `read`, sandbox `read-only`, effort high: both inputs agree. The researcher is standard tier;
+the reviewer is pinned to the light tier (since the reviewer split) and the "Reviewer model" rule in
+`roster.md` raises it per dispatch. Guard: `LOCK_VERBS['read'] = {'status'}`, checkout read-only to the shell, owner paths
 read-only (`kitlib/guard/rolepolicy.py` `RULES`); identical to today.
 
 What replaces the researcher's `write` capability (decided): the report is returned as text, plus a
@@ -159,13 +161,13 @@ spec-writer|researcher`) 105 hits in 41 files; qualified reviewer/records forms 
 
 | area (hits / files) | retired names | reviewer, records forms |
 |---|---|---|
-| content/roles | 9 / 6 (incl. `coordinator.md`, `{{agent:reviewer}}` example) | 2 / 1 |
+| content/roles | 9 / 6 (incl. `coordinator.md`, an `{{agent:<name>}}` example naming reviewer) | 2 / 1 |
 | content/skills | 10 / 3 | 1 / 1 (`branch-review`) |
 | rendered Claude agents; `.claude-plugin/plugin.json` | 14 / 6; 5 / 1 | 2 / 1 |
 | rendered Codex agents `kit-*.toml`; skills copy | 14 / 6; 10 / 3 | 4 / 3 |
 | kit docs (agent-review 12, ROSTER 6, guard 2, go-live 2, content 1) | 23 / 5 | 2 / 2 |
 | kit code | `kitlib/backlog/roles.py` docstring 1 | `hosts/codex/adapter/command_canary.py` 4; `kitlib/gate/land.py` 1 (prose) |
-| kit templates | 0 | `templates/common/AGENTS.md` 1 (`pm-kit:records`) |
+| kit templates | 0 | `templates/common/AGENTS.md` 1 (the `pm-kit:` form of records) |
 | kit tests | 17 / 8 (`test_agents`, `test_render`, `test_roles`, fakehost fixtures) | 13 / 6 (`test_start`, codex, `test_land_strict`) |
 | downstream repo with an art pipeline (a) | 15 lines / 4 files: agent profile, coordinator runbook 5, assets doc 2, `.kit.json` `doc_index.roles` 7 keys | |
 | downstream repo (b) | 7 lines / 5 files: agent and coordinator profiles, REPO.md 2, brief template 2, conventions digest | |

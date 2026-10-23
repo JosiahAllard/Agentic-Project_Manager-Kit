@@ -1,4 +1,4 @@
-"""Game mode: while a listed game runs, the lock keeps one L3 domain (a Ryzen CCD) for it.
+"""Game mode: while a listed game runs, the lock keeps one L3 domain (a cache-sharing group of cores) for it.
 
 games.json: {"enabled": bool, "games": [{"exe": "Game.exe", "pin": bool, "name": "..."}]}
 

@@ -64,6 +64,11 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(beats), 2)
         self.assertEqual(saved[-1], {"n": 2})            # the state is saved before the exit
 
+    def test_a_pass_sleeps_a_minute_inside_the_heartbeat_stale_limit(self):
+        from kitlib import pmstart
+        self.assertEqual(W.POLL_SLEEP, 60)               # machine load: half the passes of the old 30 s
+        self.assertLess(W.POLL_SLEEP * 2, pmstart.BEAT_STALE)
+
     def test_a_failed_heartbeat_write_never_stops_the_stream(self):
         w, emitted, slept, tries = FakeWatcher([["A 1"], ["B 1"]]), [], [], []
 

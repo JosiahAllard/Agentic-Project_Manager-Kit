@@ -50,12 +50,12 @@ class Launcher(unittest.TestCase):
         other = Path(self.world.main) / ".claude" / "worktrees" / "other"
         other.mkdir(parents=True)
         place = repo.Place(repo.LINKED, str(other), "", str(other / ".git"), str(Path(self.world.main) / ".git"))
-        for role in ("worker", "reviewer", "test-runner"):
+        for role in ("worker", "analyst", "test-runner"):
             with self.subTest(role=role), self.assertRaisesRegex(ValueError, ".codex/worktrees"):
                 plan(role, other, "task-1", self.brief, classify=lambda _: place, codex_exe=self.codex_exe)
 
     def test_reader_can_inspect_main_and_lander_requires_main(self):
-        self.assertEqual(self.build("reviewer", self.world.main).role, "reviewer")
+        self.assertEqual(self.build("analyst", self.world.main).role, "analyst")
         self.assertEqual(self.build("lander", self.world.main).role, "lander")
         with self.assertRaises(ValueError):
             self.build("lander")

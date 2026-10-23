@@ -31,9 +31,9 @@ PS_ASSIGN_OPS = {'=', '+=', '-=', '*=', '/=', '%=', '??='}
 # the environment that moves git's directory, work tree or index, or sets its config (core.worktree)
 GIT_ENV_NAMES = (r'GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+'
                  r'|CONFIG_PARAMETERS)')
-GIT_ENV_PS_RE = re.compile(r'(?i)^\$env:' + GIT_ENV_NAMES + r'$')
 GIT_ENV_NET_RE = re.compile(r'(?i)SetEnvironmentVariable\s*\(\s*[\'"](' + GIT_ENV_NAMES + r')[\'"]')
 EXPORTERS = {'export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx'}
+EXPORT_LISTERS = ('export', 'declare', 'typeset', 'local', 'readonly')     # -p lists, sets nothing
 SOURCED_STDIN = ('/dev/stdin', '/dev/fd/0', '/proc/self/fd/0')     # source / . of these reads standard input
 # wrappers whose options take a value: the option words to step over before the program
 WRAPPER_VALUES = {'time': ('-f', '-o', '--format', '--output'), 'stdbuf': ('-i', '-o', '-e'),
@@ -43,9 +43,19 @@ SP_SWITCHES = ('-wait', '-nonewwindow', '-passthru', '-usenewenvironment', '-loa
                '-whatif', '-confirm')
 SP_VALUES = ('-filepath', '-argumentlist', '-workingdirectory', '-verb', '-windowstyle', '-credential',
              '-redirectstandardinput', '-redirectstandardoutput', '-redirectstandarderror', '-environment')
-SP_ALIASES = {'-args': '-argumentlist', '-path': '-filepath', '-lup': '-loaduserprofile',
+SP_ALIASES = {'-args': '-argumentlist', '-path': '-filepath', '-pspath': '-filepath', '-lup': '-loaduserprofile',
               '-nnw': '-nonewwindow', '-rso': '-redirectstandardoutput', '-rse': '-redirectstandarderror',
-              '-rsi': '-redirectstandardinput', '-wd': '-workingdirectory'}
+              '-rsi': '-redirectstandardinput', '-wd': '-workingdirectory', '-runas': '-credential',
+              '-wi': '-whatif', '-cf': '-confirm',
+              '-vb': '-verbose', '-db': '-debug', '-ea': '-erroraction', '-wa': '-warningaction',
+              '-infa': '-informationaction', '-ev': '-errorvariable', '-wv': '-warningvariable',
+              '-iv': '-informationvariable', '-ov': '-outvariable', '-ob': '-outbuffer',
+              '-pv': '-pipelinevariable', '-proga': '-progressaction'}
+# the common parameters every cmdlet takes, Start-Process among them: the switches, the ones that take a
+# value. Kept apart from SP_SWITCHES and SP_VALUES, which name Start-Process's own
+PS_COMMON_SWITCHES = ('-verbose', '-debug')
+PS_COMMON_VALUES = ('-erroraction', '-warningaction', '-informationaction', '-errorvariable', '-warningvariable',
+                    '-informationvariable', '-outvariable', '-outbuffer', '-pipelinevariable', '-progressaction')
 
 
 class Invocation(object):
@@ -54,13 +64,19 @@ class Invocation(object):
     words); `cmd` the Command; `dyn` the program word is not literal; `index` the program word's
     place in cmd.words; `via` 'start-process' when Start-Process runs it, 'xargs' when xargs
     feeds it its arguments; `writes` the files Start-Process redirects into; `word` the program
-    Word."""
-    __slots__ = ('name', 'path', 'args', 'cmd', 'dyn', 'index', 'via', 'writes', 'word')
+    Word. Start-Process only: `listed` the -ArgumentList elements as written, before any split
+    (the program's command line is their texts joined with spaces), `workdir` the
+    -WorkingDirectory Word or None, `unread` why the guard cannot read the call's parameters (expand
+    flags it), or None."""
+    __slots__ = ('name', 'path', 'args', 'cmd', 'dyn', 'index', 'via', 'writes', 'word', 'listed', 'workdir',
+                 'unread')
 
-    def __init__(self, name, path, args, cmd, dyn, index, via=None, writes=(), word=None):
+    def __init__(self, name, path, args, cmd, dyn, index, via=None, writes=(), word=None, listed=(),
+                 workdir=None, unread=None):
         self.name, self.path, self.args, self.cmd, self.dyn, self.index = (
             name, path, args, cmd, dyn, index)
         self.via, self.writes, self.word = via, list(writes), word
+        self.listed, self.workdir, self.unread = list(listed), workdir, unread
 
     @property
     def argv(self):
@@ -145,7 +161,7 @@ def _param(words, names):
     """Index of the value of a PowerShell parameter (any unambiguous prefix of `names`, or
     -Name:value), or None."""
     for k, w in enumerate(words):
-        t = w.text.lower()
+        t = sh.ps_dashed(w.text.lower())
         if not t.startswith('-') or len(t) < 2:
             continue
         name, colon, _v = t.partition(':')
@@ -161,8 +177,9 @@ def quoted(cmd, w):
 
 def canon_param(text, names, aliases=None):
     """A PowerShell parameter word (-Name, -Name:value) as the canonical name it selects among
-    `names` (exact, an alias, or the one name it is a prefix of), or None."""
-    t = text.lower().split(':', 1)[0]
+    `names` (exact, an alias, or the one name it is a prefix of), or None. Its dash may be any of
+    shell.PS_DASHES."""
+    t = sh.ps_dashed(text.lower().split(':', 1)[0])
     if not t.startswith('-') or len(t) < 2:
         return None
     if t in names:
@@ -173,47 +190,122 @@ def canon_param(text, names, aliases=None):
     return hits[0] if len(hits) == 1 else None
 
 
+def _ps_param_word(cmd, w):
+    """True when PowerShell reads the word as a parameter name: not quoted, not computed, a dash
+    (any of shell.PS_DASHES) and then a letter, _ or ?. `--headless` and `-1` are values."""
+    if quoted(cmd, w) or w.dyn:
+        return False
+    t = sh.ps_dashed(w.text)
+    return len(t) > 1 and t[0] == '-' and (t[1].isalpha() or t[1] in '_?')
+
+
+class Unread(object):
+    """A Start-Process call with no program the guard can name and a parameter it cannot read:
+    `why`. invocation gives it only to expand (which flags it); every other caller gets None, as
+    for any call with no program, so rolepolicy.lock_verb still reads its words (NO_PROGRAM)."""
+    __slots__ = ('why',)
+
+    def __init__(self, why):
+        self.why = why
+
+
+# PowerShell's stop-parsing token between two words (the scanner keeps no word for it)
+PS_STOP_PARSING_RE = re.compile('[%s]{2}%%' % ''.join(sh.PS_DASHES))
+
+
+def _sp_unreadable(cmd, words, i):
+    """Why a Start-Process call's binding cannot be read from its words, or None: an unquoted `--`
+    (every later word positional), a splat (`@p`: its parameters are in the hashtable) or `--%`
+    (the rest of the line passed as written). The guard refuses these rather than read them."""
+    for w in words[i + 1:]:
+        if quoted(cmd, w):
+            continue
+        if PS_SPLAT_RE.match(w.text):
+            return 'a splatted Start-Process argument (%s)' % w.text
+        t = w.text
+        if len(t) >= 2 and t[0] in sh.PS_DASHES and t[1] in sh.PS_DASHES and (len(t) == 2 or t[2] == '%'):
+            return 'a Start-Process %s (end of parameters or stop-parsing)' % t
+    src = cmd.source or ''
+    for a, b in zip(words[i:], words[i + 1:]):
+        if a.end is None or b.start is None or not 0 <= a.end <= b.start <= len(src):
+            return 'a Start-Process call whose words the guard cannot place in its line'
+        if PS_STOP_PARSING_RE.search(src[a.end:b.start]):
+            return 'a Start-Process --% (stop-parsing)'
+    return None
+
+
 def _start_process(cmd, words, i):
-    """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere."""
+    """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere.
+
+    The words carry no commas, so an array (`'/c','echo x'`) is several words. -ArgumentList, in
+    its space or colon form, takes every word up to the next parameter word: a FilePath given by
+    position after it is the last of them. With no -ArgumentList, every positional word after the
+    program is the list (PowerShell binds the whole array). A parameter word that is neither a
+    Start-Process parameter nor a common one (or an ambiguous prefix), or a switch given `-Name:`
+    and its value after a space, sets `unread`: the guard cannot tell what PowerShell binds, so the
+    line is refused, never read with the program shifted. The readings are close to PowerShell's
+    binding, not exact: a line PowerShell refuses is read as more text, never less."""
     rest = words[i + 1:]
-    names = SP_SWITCHES + SP_VALUES
-    prog, args, writes, positional = None, [], [], []
+    names = SP_SWITCHES + SP_VALUES + PS_COMMON_SWITCHES + PS_COMMON_VALUES
+    switches = SP_SWITCHES + PS_COMMON_SWITCHES
+    prog, writes, positional, listed, workdir = None, [], [], [], None
+    unread = _sp_unreadable(cmd, words, i)
     k = 0
+
+    def list_words(j):
+        # the words from rest[j] up to the next parameter word
+        e = j
+        while e < len(rest) and not _ps_param_word(cmd, rest[e]):
+            e += 1
+        return rest[j:e], e
+
     while k < len(rest):
         w = rest[k]
-        p = None if quoted(cmd, w) or w.dyn else canon_param(w.text, names, SP_ALIASES)
-        if p is None:
+        if not _ps_param_word(cmd, w):
             positional.append(w)
             k += 1
             continue
-        if p in SP_SWITCHES:
+        p = canon_param(w.text, names, SP_ALIASES)
+        if p is None:
+            unread = unread or 'a Start-Process parameter the guard does not know (%s)' % w.text
             k += 1
             continue
-        if ':' in w.text:
+        raw = cmd.source[w.start:w.end] if 0 <= w.start < w.end <= len(cmd.source) else w.text
+        # -Name: value, its value the next word; -Name:C: is its value C:, never bare
+        bare = ':' in w.text and ':' in raw and raw.split(':', 1)[1] == ''
+        if p in switches:
+            if bare:
+                unread = unread or 'a Start-Process switch given a value after a space (%s)' % w.text
+            k += 1
+            continue
+        if ':' in w.text and not bare:
             vals, k = [sh.Word(w.text.split(':', 1)[1], w.dyn, w.start, w.end)], k + 1
+            if p == '-argumentlist':
+                more, k = list_words(k)             # -ArgumentList:'/c','echo x'
+                vals += more
         elif p == '-argumentlist':
-            j = k + 1
-            while j < len(rest) and (quoted(cmd, rest[j]) or rest[j].dyn or
-                                     canon_param(rest[j].text, names, SP_ALIASES) is None):
-                j += 1
-            vals, k = rest[k + 1:j], j
+            vals, k = list_words(k + 1)
         else:
             vals, k = rest[k + 1:k + 2], k + 2
         if p == '-filepath' and vals:
             prog = vals[0]
         elif p == '-argumentlist':
-            for v in vals:
-                args.extend(_split_list(v))
+            listed.extend(vals)
         elif p in ('-redirectstandardoutput', '-redirectstandarderror'):
             writes.extend(vals)
+        elif p == '-workingdirectory' and vals:
+            workdir = vals[0]
     if prog is None and positional:
         prog = positional.pop(0)
-    if not args and positional:
-        args = _split_list(positional[0])
+    if prog is None and len(listed) > 1:
+        prog = listed.pop()                         # -ArgumentList '/c ...' cmd: FilePath by position
+    listed = positional + listed
     if prog is None:
-        return None
+        # no program the guard can name: None as for any such call, an Unread for expand to refuse
+        return None if unread is None else Unread(unread)
+    args = [x for v in listed for x in _split_list(v)]
     return Invocation(base_name(prog.text), prog.text, args, cmd, prog.dyn, i, via='start-process',
-                      writes=writes, word=prog)
+                      writes=writes, word=prog, listed=listed, workdir=workdir, unread=unread)
 
 
 def _split_list(w):
@@ -249,9 +341,10 @@ def passed(cmd, w):
     return w.text
 
 
-def invocation(cmd):
+def invocation(cmd, unread=False):
     """The Invocation `cmd` runs, or None (an assignment only, an empty command, a keyword that
-    runs no program, a PowerShell expression)."""
+    runs no program, a PowerShell expression). With `unread` (expand only), a Start-Process call
+    with no program and a parameter the guard cannot read gives an Unread instead of None."""
     words = cmd.words
     i = 0
     called = False
@@ -318,7 +411,8 @@ def invocation(cmd):
                                       word=words[g])
             continue
         if cmd.shell == sh.PS and name in ('start-process', 'saps', 'start'):
-            return _start_process(cmd, words, i)
+            sp = _start_process(cmd, words, i)
+            return sp if unread or not isinstance(sp, Unread) else None
         if cmd.shell == sh.CMD and name == 'start':
             i += 1
             if i < len(words) and quoted(cmd, words[i]):
@@ -443,8 +537,32 @@ LINE_CD_RE = re.compile(r'(?i)(?<![\w.-])(?:%s)(?![\w.-])' % '|'.join(
 BASH_VALUE_OPTS = {'-o', '+o', '-O', '+O', '--rcfile', '--init-file'}
 PS_VALUE_PARAMS = ('executionpolicy', 'windowstyle', 'workingdirectory', 'configurationname',
                    'outputformat', 'inputformat', 'version', 'psconsolefile', 'settingsfile',
-                   'custompipename')
-PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'if', 'v', 'ea'}
+                   'custompipename', 'configurationfile')
+PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'o', 'if', 'v', 'ea'}
+# switches whose next word is read both as their value and as the start of the command: -i and
+# -in are -InputFormat with a value to powershell.exe and -Interactive without one to pwsh; an
+# -EncodedArguments prefix is judged both ways too (so it is read before PS_VALUE_PARAMS is)
+PS_VALUE_EITHER = {'i', 'in', 'ea'}
+# such switches on one reading path that _nested_text follows both ways; past that it flags the
+# line and reads each further one as taking no value
+PS_FORKS_MAX = 16
+# the switches powershell.exe 5.1 knows, each (name, shortest prefix it takes), and its aliases
+# (observed on 5.1 for every prefix). It runs any other switch, and every word after it, as the
+# command. The server modes are left out: they read no command line, so treating them as
+# unknown only reads more.
+PS51_SWITCHES = (('command', 'c'), ('configurationname', 'config'), ('encodedcommand', 'e'),
+                 ('encodedarguments', 'encodeda'), ('executionpolicy', 'ex'), ('file', 'f'),
+                 ('help', 'h'), ('inputformat', 'i'), ('mta', 'mta'), ('noexit', 'noe'),
+                 ('nologo', 'nol'), ('noninteractive', 'noni'), ('noprofile', 'nop'),
+                 ('outputformat', 'o'), ('sta', 'st'), ('windowstyle', 'w'), ('workingdirectory', 'wo'))
+PS51_ALIASES = {'ec', 'ea', 'ep', 'if', 'of', 'wd', '?'}
+
+
+def _ps51_known(t):
+    """True when powershell.exe 5.1 reads the switch word `t` ('-name', lower case) as a switch."""
+    body = t[1:]
+    return body in PS51_ALIASES or any(body.startswith(short) and name.startswith(body)
+                                       for name, short in PS51_SWITCHES)
 
 
 def _ps_takes_value(t):
@@ -452,6 +570,23 @@ def _ps_takes_value(t):
     if body in PS_VALUE_ALIASES:
         return True
     return len(body) >= 2 and body not in ('in', 'i') and any(p.startswith(body) for p in PS_VALUE_PARAMS)
+
+
+def _ps_value_either(t):
+    body = t[1:]
+    return body in PS_VALUE_EITHER or (body.startswith('encodeda') and 'encodedarguments'.startswith(body))
+
+
+def _ps_switch(w):
+    """A powershell.exe or pwsh switch word as '-name' in lower case (it reads /Command and
+    –Command as -Command), or its text in lower case."""
+    t = w.text.lower()
+    return '-' + t[1:] if t[:1] == '/' else sh.ps_dashed(t)
+
+
+def _ps_command_switch(t):
+    return t.startswith('-') and len(t) > 1 and ('command'.startswith(t[1:]) or t == '-cwa' or
+                                                 'commandwithargs'.startswith(t[1:]))
 
 
 def span_text(cmd, words):
@@ -463,9 +598,105 @@ def span_text(cmd, words):
     return ' '.join(x.text for x in words)
 
 
+SP_SHELLS = BASH_SHELLS | PS_SHELLS | {'cmd'}
+CMD_RUN_SWITCHES = ('/c', '/k', '/r', '//c', '//k', '//r')
+# a word that may hold a run switch cmd reads, not on its own: cmd splits its switches at , ; =
+# as well as spaces and finds a / switch inside a word (/cecho, /q/c, ;/c, x/c, "/c"), so a /c,
+# /k or /r anywhere in a word before the run switch is searched for, never matched at its start
+CMD_RUN_HIDDEN_RE = re.compile(r'(?i)/[ckr]')
+
+
+def _cmd_hidden_switch(text):
+    """True when a cmd word that is not a run switch on its own may still hold one."""
+    return bool(CMD_RUN_HIDDEN_RE.search(text))
+
+
 def _nested_text(inv, parsed):
     """(text, shell) a nested shell or eval runs, (text, shell, cwd) when it runs elsewhere
-    (env -C), (STDIN, shell) when the shell reads its commands from standard input, or None."""
+    (env -C, Start-Process -WorkingDirectory), (STDIN, shell) when the shell reads its commands
+    from standard input, or None. For powershell and pwsh, and cmd started by Start-Process, the
+    text is a tuple of readings, each a text or STDIN, once each."""
+    if inv.via == 'start-process' and inv.name in SP_SHELLS:
+        return _sp_shell_text(inv, parsed)
+    return _shell_text(inv, parsed)
+
+
+# the characters PowerShell reads in a -WorkingDirectory as a wildcard pattern (Start-Process
+# resolves the text as a pattern, so '<drive>\repo?' finds <drive>\repo1) and its pattern escape
+SP_WORKDIR_WILD = frozenset('*?[`')
+SP_WORKDIR_DEVICE = ('\\\\.\\', '\\\\?\\')
+
+
+def sp_workdir_unplaceable(text):
+    """True when the literal -WorkingDirectory `text` of a Start-Process call names no one folder
+    the guard can place exactly: empty; a wildcard character (SP_WORKDIR_WILD); a bare drive C:
+    or a drive-relative C:x (PowerShell reads both from that drive's current location, which the
+    text does not tell); a colon past the drive (another PowerShell drive or provider, a stream);
+    a device path \\\\.\\ or \\\\?\\; a Git Bash /c/x spelling (shell.msys_to_win), which PowerShell
+    reads as a folder on the current drive. An absolute path, a share, a FileSystem::<abs> path,
+    ~ and a plain relative path are placed (shell.resolve_path)."""
+    p = sh.ps_filesystem_path(text) or text
+    if not p or any(c in SP_WORKDIR_WILD for c in p):
+        return True
+    if re.match(r'^[A-Za-z]:(?![\\/])', p) or ':' in p[2:]:
+        return True
+    if p[:4].replace('/', '\\') in SP_WORKDIR_DEVICE:
+        return True
+    return sh.msys_to_win(p) != p
+
+
+def run_dir(inv):
+    """The directory the program of `inv` runs in: its Command's (Command.cwd), or for a
+    Start-Process call with a -WorkingDirectory the folder that names (shell.resolve_path from the
+    Command's directory), None when the text is computed or names no one folder exactly
+    (sp_workdir_unplaceable). PowerShell itself still places what Start-Process redirects into
+    (-RedirectStandardOutput, -RedirectStandardError) from its own location, the Command's
+    directory: only what the program reads relative to its directory moves."""
+    if inv.via != 'start-process' or inv.workdir is None:
+        return inv.cmd.cwd
+    w = inv.workdir
+    if w.dyn or sp_workdir_unplaceable(w.text):
+        return None
+    return sh.resolve_path(w.text, inv.cmd.cwd, shell=sh.PS, home=inv.cmd.home)
+
+
+def _sp_shell_text(inv, parsed):
+    """_nested_text for a shell Start-Process starts. Start-Process hands the program one command
+    line, its -ArgumentList elements joined with spaces; a computed element makes the text
+    unreadable. A computed -WorkingDirectory, or a literal one the guard cannot place exactly
+    (sp_workdir_unplaceable), gives the nested line no directory (None, run_dir), so a write there
+    is refused as one whose directory is unknown. cmd runs the rest of that line after its
+    /c (/k, /r), read with its outer quotes kept and dropped (cmd keeps or drops them by what lies
+    between); bash and powershell read the words _split_list made of each element."""
+    if any(w.dyn for w in inv.listed):
+        parsed.flag('a shell Start-Process starts with an argument list that is not literal (%s)' % inv.path)
+        return None
+    where = ()
+    if inv.workdir is not None:
+        where = (run_dir(inv),)
+    if inv.name != 'cmd':
+        found = _shell_text(inv, parsed)
+        return found and found[:2] + where
+    line = ' '.join(w.text for w in inv.listed)
+    for m in re.finditer(r'\S+', line):
+        t = m.group(0).lower()
+        if t in CMD_RUN_SWITCHES:
+            rest = line[m.end():].strip()
+            if not rest:
+                return None
+            readings = (rest,)
+            if rest.startswith('"'):
+                k = rest.rfind('"')
+                readings += ((rest[1:k] + rest[k + 1:]) if k > 0 else rest[1:],)
+            return (readings, sh.CMD) + where
+        if _cmd_hidden_switch(t):
+            parsed.flag('a cmd switch Start-Process passes that the guard cannot read (%s)' % m.group(0))
+            return None
+    return None
+
+
+def _shell_text(inv, parsed):
+    """_nested_text for every program but a shell Start-Process starts."""
     name, a = inv.name, inv.args
     if name == 'env':
         found = env_nested(inv.cmd.words, inv.index, inv.cmd)
@@ -510,37 +741,102 @@ def _nested_text(inv, parsed):
             return None                         # bash script.sh: a file, not text
         return STDIN, sh.BASH
     if name in PS_SHELLS:
-        k = 0
-        while k < len(a):
-            t = a[k].text.lower()
-            if t.startswith('-e') and 'encodedcommand'.startswith(t[1:]) or t in ('-ec', '-enc'):
-                parsed.flag('an encoded PowerShell command')
+        # the readings, each a text or STDIN, kept once each and parsed each on its own
+        # (commands.expand): one reading's unclosed <# or quote hides no other
+        lit = 'a nested powershell command whose text is not literal'
+        seen = {}
+
+        def nested(why, *readings):
+            # every way the shells may read the words is judged
+            texts = [words for words in readings if words]
+            if any(w.dyn for words in texts for w in words):
+                parsed.flag(why)
                 return None
-            if t.startswith('-') and len(t) > 1 and 'command'.startswith(t[1:]):
-                rest = a[k + 1:]
-                if [w.text for w in rest] == ['-']:
-                    return STDIN, sh.PS
-                if any(w.dyn for w in rest):
-                    parsed.flag('a nested powershell -Command whose text is not literal')
+            return joined(tuple(' '.join(w.text for w in words) for words in texts))
+
+        def joined(*found):
+            out = []
+            for r in (r for f in found for r in f or ()):
+                if r not in out:
+                    out.append(r)
+            return tuple(out) or None
+
+        def scan(k, unknown, forks):
+            # forks is in the key: past PS_FORKS_MAX a path reads less, so its result is its own
+            if (k, unknown, forks) not in seen:
+                seen[(k, unknown, forks)] = read_from(k, unknown, forks)
+            return seen[(k, unknown, forks)]
+
+        def read_from(k, unknown, forks):
+            while k < len(a):
+                t = _ps_switch(a[k])
+                if t.startswith('-e') and 'encodedcommand'.startswith(t[1:]) or t in ('-ec', '-enc'):
+                    parsed.flag('an encoded PowerShell command')
                     return None
-                return ' '.join(w.text for w in rest), sh.PS
-            if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
-                return None
-            if t.startswith('-') and _ps_takes_value(t):
-                k += 2
-                continue
-            if t.startswith('-'):
-                k += 1
-                continue
-            rest = a[k:]
-            if any(w.dyn for w in rest):
-                parsed.flag('a nested powershell command whose text is not literal')
-                return None
-            return ' '.join(w.text for w in rest), sh.PS
-        return STDIN, sh.PS
+                # powershell.exe runs a switch it does not know, and every word after it, as the
+                # command (unknown); pwsh refuses it, or reads it as a switch, and goes on
+                first = a[unknown:] if unknown is not None else []
+                if _ps_command_switch(t):
+                    rest = a[k + 1:]
+                    if [w.text for w in rest] == ['-']:
+                        if unknown is None:
+                            return (STDIN,)
+                        # the script comes from the pipe; the words from the unknown switch on
+                        # are still judged as powershell.exe's command
+                        parsed.flag(lit)
+                        return nested(lit, first)
+                    return nested('a nested powershell -Command whose text is not literal', first, rest)
+                if unknown is None and t.startswith('-') and t != '-' and not _ps51_known(t):
+                    # a value switch included: powershell.exe never takes its value
+                    unknown = k
+                if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
+                    if k + 1 < len(a) and not a[k + 1].dyn and a[k + 1].text == '-':
+                        # `-File -` reads the script from standard input, as `-Command -` does;
+                        # the words after it, if any, never make it a file
+                        if unknown is None:
+                            return (STDIN,)
+                        parsed.flag(lit)
+                        return nested(lit, first)
+                    return nested(lit, first) if first else None
+                if t.startswith('-') and _ps_value_either(t) and k + 1 < len(a):
+                    if forks < PS_FORKS_MAX:
+                        # the next word as the switch's value, and as the start of the command
+                        return joined(scan(k + 1, unknown, forks + 1), scan(k + 2, unknown, forks + 1))
+                    # past the cap the line is flagged, and the reading with no value still judged
+                    parsed.flag('a powershell switch line with too many readings')
+                    k += 1
+                    continue
+                if t.startswith('-'):
+                    k += 2 if _ps_takes_value(t) else 1      # as pwsh reads it
+                    continue
+                # a word that is no switch starts the command: pwsh's, and powershell.exe's when no
+                # unknown switch started it before (pwsh reads `--c x` as `-c x`, powershell.exe
+                # runs `--c x`); a shell that took it as the value of a switch before it reads a
+                # later -Command
+                later = next((j for j in range(k + 1, len(a)) if _ps_command_switch(_ps_switch(a[j]))), None)
+                then = a[later + 1:] if later is not None else []
+                if [w.text for w in then] == ['-']:
+                    parsed.flag(lit)
+                    return None
+                return nested(lit, first, a[k:], then)
+            if unknown is not None:
+                # powershell.exe runs the words from the unknown switch on; pwsh, when it knows
+                # the switch, reads standard input
+                found = nested(lit, a[unknown:])
+                return found and joined(found, (STDIN,))
+            return (STDIN,)
+        readings = scan(0, None, 0)
+        return (readings, sh.PS) if readings else None
     if name == 'cmd':
         for k, w in enumerate(a):
-            if w.text.lower() in ('/c', '/k', '/r', '//c', '//k', '//r'):
+            if w.dyn:
+                # a computed word before the run switch may itself be /c
+                parsed.flag('a cmd switch that is not literal')
+                return None
+            if w.text.lower() not in CMD_RUN_SWITCHES and _cmd_hidden_switch(w.text):
+                parsed.flag('a cmd switch the guard cannot read (%s)' % w.text)
+                return None
+            if w.text.lower() in CMD_RUN_SWITCHES:
                 rest = a[k + 1:]
                 if any(x.dyn for x in rest):
                     parsed.flag('a nested cmd /c whose text is not literal')
@@ -559,7 +855,7 @@ def _nested_text(inv, parsed):
         if p:
             how, k = p
             words = [sh.Word(a[k].text.split(':', 1)[1], a[k].dyn, 0, 0)] if how == 'colon' else a[k:k + 1]
-        words = [w for w in words if not w.text.startswith('-')][:1]
+        words = [w for w in words if not sh.ps_dashed(w.text).startswith('-')][:1]
         if not words:
             if inv.cmd.piped_in:
                 return STDIN, sh.PS
@@ -669,6 +965,34 @@ def _assigned(c, words, name_re):
     return out
 
 
+def exporter_args(c, inv):
+    """The words an exporter (EXPORTERS) may set a variable by. None when a -p before the first
+    name of declare, typeset or local lists the variables named (declare -p GIT_DIR: bash then
+    ignores every other option); export -p and readonly -p list only with no name, and with one
+    still export, mark or set it (export -p GIT_DIR=x), so their words are read. None for set
+    outside cmd: bash's set takes options and positional parameters
+    (set -- GIT_DIR, set GIT_DIR=x sets $1) and PowerShell's is Set-Variable, a variable of its
+    own. The option words before the first name, or before --, are passed over."""
+    if inv.name == 'set':
+        return list(inv.args) if c.shell == sh.CMD else []
+    if inv.name not in EXPORT_LISTERS:
+        return list(inv.args)
+    out, opts = [], True
+    for w in inv.args:
+        t = said(c, w)
+        if opts and not w.dyn:
+            if t == '--':
+                opts = False
+                continue
+            if len(t) > 1 and t[0] in '-+' and '=' not in t:
+                if t[0] == '-' and 'p' in t[1:] and inv.name in ('declare', 'typeset', 'local'):
+                    return []
+                continue
+        opts = False
+        out.append(w)
+    return out
+
+
 def env_assignments(c, names):
     """[(variable, value text)] of the environment variables matching the regex `names` (case
     ignored) that the command sets: an assignment before the program (FOO=1 prog, env FOO=1 prog),
@@ -708,7 +1032,7 @@ def env_assignments(c, names):
         return out
     args = inv.args
     if inv.name in EXPORTERS:
-        out += _assigned(c, args, name_re)
+        out += _assigned(c, exporter_args(c, inv), name_re)
         if inv.name == 'setx' and len(args) > 1 and name_re.match(args[0].text):
             out.append((args[0].text, args[1].text))
     elif inv.name in PS_ENV_SETTERS:
@@ -741,29 +1065,36 @@ def _option_values(args, opt_re):
 def git_env_set(c):
     """The variable of GIT_ENV_NAMES (GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, GIT_INDEX_FILE,
     GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>, GIT_CONFIG_PARAMETERS) the command
-    sets, or None: every spelling env_assignments reads, export (or the like) naming one with no
+    sets, or None: every spelling env_assignments and ps_env_targets read, export (or the like) naming one with no
     value (export GIT_DIR after read GIT_DIR), and a word naming one in a cmdlet that may make an
     env: item (PS_ENV_ITEM_CMDLETS: Rename-Item env:X -NewName GIT_DIR, Copy-Item env:X
     env:GIT_DIR). A word that only names one (echo "GIT_DIR=x", Write-Output $env:GIT_DIR,
     Get-Content env:GIT_DIR) does not. Every word is read as the shell passes it (said: a
-    backslash bash drops, dropped). Anything else that may change the environment is
-    git_env_unsafe's."""
+    backslash bash drops, dropped). A name the text computes, and any other way to change the
+    environment, is not read: the guard catches honest mistakes, not evasion."""
     for name, _val in env_assignments(c, GIT_ENV_NAMES):
         return name
     words = c.words
     if not words:
         return None
     if c.shell == sh.PS:
-        if len(words) > 1 and GIT_ENV_PS_RE.match(words[0].text) and words[1].text in PS_ASSIGN_OPS:
-            return words[0].text.split(':', 1)[1]
-        m = GIT_ENV_NET_RE.search(c.source[c.start:c.end]) if 0 <= c.start <= c.end <= len(c.source) else None
-        if m:
-            return m.group(1)
+        for name in ps_env_targets(c):          # $env:A, $env:GIT_DIR = 1, 'x' and $a = $env:GIT_DIR = 'x'
+            if GIT_ENV_NAME_RE.match(name):
+                return name
+        src = c.source or ''
+        for w in words:
+            # the call, not a string that names it (a commit message, Write-Host "..."): read the
+            # source from an unquoted word that names SetEnvironmentVariable, as env_assignments does
+            if w.start is None or quoted(c, w) or 'setenvironmentvariable' not in w.text.lower():
+                continue
+            m = GIT_ENV_NET_RE.search(src, w.start)
+            if m and m.start() < (w.end if w.end is not None else len(src)):
+                return m.group(1)
     inv = cmd_invocation(c, invocation(c))
     if inv is None:
         return None
     if inv.name in EXPORTERS:
-        for w in inv.args:
+        for w in exporter_args(c, inv):
             name = said(c, w).split('=', 1)[0]
             name = name[:-1] if name.endswith('+') else name
             if GIT_ENV_NAME_RE.match(name):
@@ -776,40 +1107,8 @@ def git_env_set(c):
     return None
 
 
-# ---------------------------------------------------------------- fail closed: the rest of the environment
+# ---------------------------------------------------------------- the environment a line sets
 
-# GIT_* names that only set who and when (identity, dates) or turn a prompt off: a line may set them
-# and still place its git. Every other GIT_* name may move git (GIT_EXEC_PATH, GIT_CONFIG_GLOBAL,
-# GIT_OBJECT_DIRECTORY, GIT_EDITOR, ...)
-GIT_SAFE_NAMES = frozenset(('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_AUTHOR_DATE', 'GIT_COMMITTER_NAME',
-                            'GIT_COMMITTER_EMAIL', 'GIT_COMMITTER_DATE', 'GIT_TERMINAL_PROMPT',
-                            'GIT_MERGE_AUTOEDIT', 'GIT_OPTIONAL_LOCKS'))
-# names that change what a shell runs or which options it starts with
-SHELL_ENV_NAMES = frozenset(('SHELLOPTS', 'BASHOPTS', 'BASH_ENV', 'ENV'))
-LITERAL_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
-BASH_EXPORTERS = ('export', 'declare', 'typeset', 'local', 'readonly')
-NAMEREF_DECLARERS = ('declare', 'typeset', 'local')
-# PowerShell's item cmdlets and their aliases; the setters' second positional word is the value
-PS_ITEM_CMDLETS = frozenset(('set-item', 'si', 'new-item', 'ni', 'remove-item', 'ri', 'rm', 'del', 'erase', 'rd',
-                             'rmdir', 'rename-item', 'ren', 'rni', 'copy-item', 'copy', 'cp', 'cpi', 'move-item',
-                             'mi', 'move', 'mv', 'set-content', 'sc', 'add-content', 'ac', 'clear-item', 'cli',
-                             'clear-content', 'clc'))
-PS_VALUE_SETTERS = ('set-item', 'si', 'set-content', 'sc', 'add-content', 'ac')
-# Set-Content and Add-Content bind piped input to -Value: their item is the path the text names
-# (with none, `not items` in _ps_item_unsafe still fails closed)
-PS_PIPED_VALUE = ('set-content', 'sc', 'add-content', 'ac')
-PS_ITEM_PARAMS = ('-path', '-literalpath', '-pspath', '-destination', '-name', '-newname')
-PS_ITEM_VALUE_PARAMS = ('-value', '-itemtype', '-type', '-encoding', '-filter', '-include', '-exclude',
-                        '-credential', '-stream', '-delimiter')
-PS_ITEM_SWITCHES = ('-force', '-recurse', '-passthru', '-whatif', '-confirm', '-nonewline', '-asbytestream',
-                    '-container', '-raw')
-PS_ITEM_ALIASES = {'-lp': '-literalpath'}
-PS_CD_CMDLETS = ('set-location', 'sl', 'cd', 'chdir', 'push-location', 'pushd')
-PS_SCRIPT_RE = re.compile(r'(?i)\.psm?1$')
-# the env: drive, bare or provider-qualified (Environment::FOO): ENV_DRIVE
-ENV_DRIVE_RE = re.compile(r'(?i)^' + ENV_DRIVE)
-# a path that starts with an environment variable's value: $env:TEMP, "$env:TEMP\x", ${env:TEMP}/x
-PS_ENV_READ_RE = re.compile(r'(?i)^\$(?:env:([A-Za-z_]\w*)|\{env:([A-Za-z_]\w*)\})(?=$|[\\/])')
 PS_ENV_REF_ANY_RE = re.compile(r'(?i)\$(?:\{env:([^}]*)\}|env:([\w`]*))')
 PS_ENV_ONE_WORD_RE = re.compile(r'(?i)^\$(?:\{env:[^}]*\}|env:[\w`]*)\s*(?:[-+*/%]|\?\?)?=(?!=)')
 PS_ASSIGN_PREFIX_RE = re.compile(r'(?:[-+*/%]|\?\?)?=(?!=)')    # matched at a word's start: $env:X ="v"
@@ -823,54 +1122,6 @@ PS_SCRIPT_TEXT_RE = re.compile(r'(?i)\b(?:invokescript|newscriptblock|expandstri
                                r'\[\s*(?:system\.)?(?:management\.)?(?:automation\.)?'
                                r'(?:scriptblock|powershell)\s*\]\s*::\s*create\b|'
                                r'(?:^|\))\s*::\s*[A-Za-z_]')
-# a PowerShell string the shell passes as it is written: '...' or "..." with no $ or ` in it
-PS_PLAIN_STRING_RE = re.compile(r'''(?:'(?:[^']|'')*'|"(?:[^"$`]|"")*")''', re.S)
-# a "..." string as written that runs no code: $name and ${name} expand, `x is an escape, and no
-# $( opens a subexpression (the only code an expandable string runs). The curly double quotes
-# are left out: PowerShell may end the string at one where the guard's reading does not
-PS_TEXT_STRING_RE = re.compile('"(?:[^"`$“”„]|""|`[^“”„]|'
-                               '\\$(?!\\()(?:\\{[^}"$`“”„]*\\})?)*"', re.S)
-# item cmdlets whose env: item may be renamed, copied or made under a name a later path reads
-PS_ENV_NAMERS = frozenset(('rename-item', 'ren', 'rni', 'copy-item', 'copy', 'cp', 'cpi', 'move-item', 'mi',
-                           'move', 'mv', 'new-item', 'ni', 'set-item', 'si'))
-# every cmdlet that may set, clear or remove the env: item its path names: the item and content
-# cmdlets (Set-Content, Add-Content, Clear-Content, Clear-Item, Remove-Item and their aliases) and
-# the property cmdlets (which the provider may refuse: fail closed)
-PS_ENV_ITEM_NAMERS = PS_ITEM_CMDLETS | PS_ENV_NAMERS | frozenset((
-    'set-itemproperty', 'sp', 'new-itemproperty', 'clear-itemproperty', 'clp', 'remove-itemproperty', 'rp',
-    'rename-itemproperty', 'rnp', 'copy-itemproperty', 'cpp', 'move-itemproperty', 'mp'))
-NET_ENV_RE = re.compile(r'(?i)\[(?:system\.)?environment\]')
-NET_GET_LITERAL_RE = re.compile(r'''(?i)\[(?:system\.)?environment\]::GetEnvironmentVariable\s*\(\s*'''
-                                r'''(?:'[^']*'|"[^"$`]*")\s*[,)]''')
-PS_VARIABLE_CMDLETS = ('set-variable', 'sv', 'new-variable', 'nv', 'set')
-PS_COMMON_VAR_PARAMS = ('-outvariable', '-ov', '-errorvariable', '-ev', '-warningvariable', '-wv',
-                        '-informationvariable', '-iv', '-pipelinevariable', '-pv')
-PS_RESHAPERS = ('set-alias', 'sal', 'new-alias', 'nal', 'new-psdrive', 'ndr', 'mount', 'import-module', 'ipmo')
-
-
-def env_name_unsafe(name):
-    """True unless `name` is a literal environment variable name ([A-Za-z_][A-Za-z0-9_]*) that
-    cannot move git or the shell: not a GIT_* name outside GIT_SAFE_NAMES, not SHELL_ENV_NAMES."""
-    if not LITERAL_NAME_RE.match(name):
-        return True
-    up = name.upper()
-    return up.startswith('GIT_') and up not in GIT_SAFE_NAMES or up in SHELL_ENV_NAMES
-
-
-def _assign_name(text):
-    name = text.split('=', 1)[0]
-    return name[:-1] if name.endswith('+') else name
-
-
-def _shown(c):
-    """The command as written, for a refusal: '`export \\GIT_DIR=x`'."""
-    w = c.words
-    if w and 0 <= w[0].start <= w[-1].end <= len(c.source or ''):
-        text = c.source[w[0].start:w[-1].end]
-    else:
-        text = ' '.join(c.argv)
-    text = ' '.join(text.split())
-    return '`%s`' % (text if len(text) <= 60 else text[:57] + '...')
 
 
 def ps_env_targets(c):
@@ -897,340 +1148,16 @@ def ps_env_targets(c):
 
 
 def line_env_names(commands):
-    """The upper-case names of the environment variables the line's commands set literally, every
-    name an item, content or property cmdlet on the env drive names, in any spelling of it
-    (_ps_env_item_names: Rename-Item env:FOO TEMP, Copy-Item env:A env:TEMP, New-Item env:TEMP,
-    Set-Content Environment::PATH x, Clear-Item env:HOME): such a name may then hold any text,
-    every name a bash builtin assigns from its arguments (bash_var_targets: read HOME, printf -v
-    HOME, for HOME in ...), and PATH for cmd's path command (cmd_path_set)."""
+    """The upper-case names of the environment variables the line's commands set literally:
+    NAME=value in every spelling env_assignments reads, and $env:NAME = v (ps_env_targets)."""
     names = set()
     for c in commands:
         names.update(n.upper() for n, _v in env_assignments(c, r'[A-Za-z_]\w*'))
         names.update(n.upper() for n in ps_env_targets(c))
-        names.update(_ps_env_item_names(c))
-        names.update(bash_var_targets(c))
-        if cmd_path_set(c):
-            names.add('PATH')
     return names
 
 
-# cmd's own path command as the first word: path X, PATH=X, path;X, path ; (which empties PATH),
-# @path X, with any leading cmd delimiter. Whatever follows the name, other than a letter or digit,
-# counts (fail closed); only a bare path, which prints PATH, does not.
-CMD_PATH_RE = re.compile(r'(?i)^[@;,=\s]*path(?![A-Za-z0-9_\-])')
-
-
-def cmd_path_set(c):
-    """True when the cmd command `c` is cmd's path command with anything after it (CMD_PATH_RE):
-    it sets PATH for the rest of the line. The words before it that are only @ and delimiters
-    (CMD_LEAD_RE: @ path X, , path X) are passed over, as cmd drops them. A bare path (or @path,
-    @ path) with no other word only prints it."""
-    if c.shell != sh.CMD or not c.words:
-        return False
-    words, k = c.words, 0
-    while k + 1 < len(words) and not words[k].dyn and CMD_LEAD_RE.sub('', words[k].text) == '':
-        k += 1
-    first = words[k].text
-    if not CMD_PATH_RE.match(first):
-        return False
-    return not (k == len(words) - 1 and CMD_LEAD_RE.sub('', first).lower() == 'path')
-
-
-# a bash builtin's target the text does not name (read $n): bash_var_targets gives it as this name,
-# which no variable has
-COMPUTED_NAME = '<COMPUTED>'
-# the bash builtins that assign a variable named by an argument, not by NAME=value: their short
-# options that take a value (in the same word or the next), and the options whose value is a name
-VAR_BUILTINS = {'read': ('adinNptu', 'a'), 'printf': ('v', 'v'), 'mapfile': ('dnOsuCc', ''),
-                'readarray': ('dnOsuCc', '')}
-# an arithmetic assignment: NAME (or NAME[i]) followed by = or a compound = (+=, <<=, ...) but not
-# ==, or by ++ / --; ++NAME / --NAME. A target written $n or ${n} is one the shell computes.
-_ARITH_OP = r'\s*(?:\[[^\]]*\]\s*)?(?:(?:\*\*|<<|>>|[-+*/%&^|])?=(?!=)|\+\+|--)'
-ARITH_SET_RE = re.compile(r'(?<![\w$])([A-Za-z_]\w*)' + _ARITH_OP + r'|(?:\+\+|--)\s*([A-Za-z_]\w*)')
-ARITH_COMPUTED_RE = re.compile(r'\$\{?[\w@*#?!-]+\}?' + _ARITH_OP + r'|(?:\+\+|--)\s*\$')
-ARITH_EXPANSION_RE = re.compile(r'\$\(\((.*?)(?:\)\)|$)', re.S)
-
-
-def arith_targets(text):
-    """The upper-case names a bash arithmetic expression assigns (HOME=1, HOME+=1, HOME++,
-    ++HOME, x=1,HOME=2), and COMPUTED_NAME when it assigns one written $n or ${n}."""
-    out = [(m.group(1) or m.group(2)).upper() for m in ARITH_SET_RE.finditer(text)]
-    if ARITH_COMPUTED_RE.search(text):
-        out.append(COMPUTED_NAME)
-    return out
-
-
-def _arith_command(c):
-    """True when the bash command `c` is the text of an arithmetic command, `(( ... ))` or a
-    part of `for (( ...; ...; ... ))`: its two innermost groups are ( ( and the source between
-    the nearest (( before it and its start closes none of them."""
-    g = c.groups
-    if len(g) < 2 or g[-1][1] != '(' or g[-2][1] != '(' or c.start is None:
-        return False
-    j = c.source.rfind('((', 0, c.start)
-    if j < 0:
-        return False
-    between = c.source[j + 2:c.start]
-    return between.count(')') <= between.count('(')
-
-
-def bash_var_targets(c):
-    """The upper-case names a bash command assigns from its arguments rather than NAME=value:
-    `read [options] NAME...` (and read -a NAME), `printf -v NAME`, `mapfile`/`readarray
-    [options] NAME`, `getopts OPTSTRING NAME`, `for NAME in ...` and `select NAME in ...` (and
-    `for NAME; do`, which loops over the positional parameters), and the arithmetic assignments
-    (arith_targets) of `let EXPR...`, `(( EXPR ))`, `for (( ...; ...; ... ))` and a $(( EXPR ))
-    in any word. A target the shell computes (read $n, $(($n=1))) is COMPUTED_NAME: it may be
-    any variable."""
-    words = c.words
-    if c.shell != sh.BASH or not words:
-        return []
-    out = []
-    for w in words:
-        if w.dyn and '$((' in w.text:
-            for m in ARITH_EXPANSION_RE.finditer(w.text):
-                out += arith_targets(m.group(1))
-    if _arith_command(c):
-        return out + arith_targets(c.text)
-    if not quoted(c, words[0]) and words[0].text in ('for', 'select') and len(words) > 1:
-        # for NAME in ...; for NAME; do; for NAME do (the last two loop over "$@"); not for ((...))
-        if words[1].text.startswith('(') or (len(words) > 2 and words[2].text not in ('in', 'do')):
-            return out
-        return out + _var_target(c, words[1])
-    inv = invocation(c)
-    if inv is None:
-        return out
-    if inv.name == 'let':
-        for w in inv.args:
-            out += arith_targets(passed(c, w))
-        return out
-    if inv.name == 'getopts':
-        pos = [w for w in inv.args if not w.text.startswith('-')]
-        return out + (_var_target(c, pos[1]) if len(pos) > 1 else [])
-    if inv.name not in VAR_BUILTINS:
-        return out
-    values, named = VAR_BUILTINS[inv.name]
-    pos, args, k = [], inv.args, 0
-    while k < len(args):
-        w = args[k]
-        t = passed(c, w)
-        if t == '--':
-            pos.extend(args[k + 1:])
-            break
-        if t.startswith('-') and len(t) > 1 and not w.dyn:
-            for j, ch in enumerate(t[1:], 1):
-                if ch not in values:
-                    continue
-                if t[j + 1:]:
-                    val = sh.Word(t[j + 1:], w.dyn, w.start, w.end)
-                else:
-                    k += 1
-                    val = args[k] if k < len(args) else None
-                if ch in named and val is not None:
-                    out += _var_target(c, val)
-                break
-            k += 1
-            continue
-        pos.append(w)
-        k += 1
-    if inv.name == 'printf':
-        return out                              # its positional words are the format and values
-    if inv.name in ('mapfile', 'readarray'):
-        pos = pos[:1]
-    for w in pos:
-        out += _var_target(c, w)
-    return out
-
-
-def _var_target(c, w):
-    if w.dyn:
-        return [COMPUTED_NAME]
-    t = passed(c, w)
-    return [t.upper()] if LITERAL_NAME_RE.match(t) else []
-
-
-def _ps_env_item_names(c):
-    """The upper-case names a PowerShell item, content or property cmdlet (PS_ENV_ITEM_NAMERS)
-    may set, clear or remove on the environment drive (ENV_DRIVE_RE, every spelling): each
-    literal name after the drive (Set-Content Environment::PATH x, Clear-Item env:HOME,
-    Remove-Item Microsoft.PowerShell.Core\\Environment::PATH), COMPUTED_NAME for a drive word with
-    no literal name after it there (a wildcard, a bare drive with -Include), and, for a cmdlet of
-    PS_ENV_NAMERS that may make an item under a new name, every literal word of the command once
-    one names the drive (Rename-Item env:X TEMP)."""
-    inv = invocation(c) if c.shell == sh.PS else None
-    if inv is None or inv.name not in PS_ENV_ITEM_NAMERS:
-        return set()
-    vals = []
-    for w in inv.args:
-        t = said(c, w)
-        if not quoted(c, w) and t.startswith('-'):
-            if ':' not in t:
-                continue                        # a parameter name; its value is the next word
-            t = t.split(':', 1)[1]
-        vals.append(t)
-    if not any(ENV_DRIVE_RE.match(t) for t in vals):
-        return set()
-    out = set()
-    for t in vals:
-        m = ENV_DRIVE_RE.match(t)
-        if not m and inv.name not in PS_ENV_NAMERS:
-            continue                            # Set-Content env:PATH x: x is the value, no name
-        rest = t[m.end():] if m else t
-        if LITERAL_NAME_RE.match(rest):
-            out.add(rest.upper())
-        elif m and inv.name not in PS_ENV_NAMERS:
-            out.add(COMPUTED_NAME)              # Clear-Item env:PAT*, Remove-Item env:\ -Include PATH
-    return out
-
-
-def git_env_unsafe(c, line_sets=frozenset()):
-    """A short description of the command ('`...`') when it may change the environment in a way
-    the guard cannot read, else None: fail closed, so a git on the same line cannot be placed
-    (mark_git_env). Literal NAME=value forms with a name of LITERAL_NAME_RE that env_name_unsafe
-    passes are read; everything else counts: a name the shell computes or unquotes (export
-    \\GIT_DIR=, env "$n"=x, local -x $n=), a GIT_* name outside GIT_SAFE_NAMES, SHELLOPTS and the
-    like, declare/typeset/local -n, bash's set -a / -o allexport in any place, shopt -o
-    allexport, a nested bash/sh -a or -o allexport, alias, a sourced script; PowerShell item
-    cmdlets (Set-Item, New-Item, Remove-Item, Rename-Item, Copy-Item, Move-Item, Set-Content,
-    Add-Content, Clear-Item) whose item is computed (other than a path under $env:VAR, a read)
-    or an env: name env_name_unsafe refuses, or whose item comes from a pipe or an expression;
-    Set-Location to env: or a computed place; [Environment]:: other than a literal-name
-    GetEnvironmentVariable; InvokeProvider; Set-Variable or -OutVariable on env:; aliases, PS
-    drives and modules; a script run in the same process (. x.ps1, cmd's call or x.bat);
-    Start-Process -Environment; cmd's set with a name that is not literal. `line_sets`: the
-    names the line sets literally (line_env_names), so $env:TEMP in a path is a read only when
-    the line does not set TEMP."""
-    return _shown(c) if _env_unsafe(c, line_sets) else None
-
-
-def _env_unsafe(c, line_sets):
-    words = c.words
-    if not words:
-        return False
-    inv = cmd_invocation(c, invocation(c))
-    if c.shell == sh.BASH:
-        if _bash_env_unsafe(c, inv):
-            return True
-    if c.shell == sh.PS and _ps_env_unsafe(c, inv, line_sets):
-        return True
-    if inv is None:
-        return False
-    if inv.via == 'xargs' and inv.name == 'git' and any(
-            not quoted(c, w) and base_name(passed(c, w)) == 'xargs' and xargs_opts(c, words, k)[0] is not None
-            for k, w in enumerate(words[:inv.index])):
-        return True                             # xargs -I {} env {} git: its input may be GIT_DIR=
-    if c.shell == sh.CMD:
-        if inv.name == 'call' or inv.path.lower().endswith(('.bat', '.cmd')):
-            return True                         # a batch file runs in this cmd and may set anything
-        if inv.name == 'set':
-            for w in inv.args:
-                t = _unquote(passed(c, w))
-                if t.startswith('/') or '=' not in t:
-                    continue
-                name = _assign_name(t).rstrip('*/%&|^<>-')
-                if env_name_unsafe(name) or w.dyn:
-                    return True
-    if inv.name == 'setx':
-        names = [w for w in inv.args if not w.text.startswith('/')][:1]
-        if names and (names[0].dyn or env_name_unsafe(names[0].text)):
-            return True
-    return False
-
-
-def _bash_env_unsafe(c, inv):
-    words = c.words
-    end = inv.index if inv is not None else len(words)
-    for w in words[:end]:                       # FOO=1 prog, and assignments with no program
-        t = said(c, w)
-        if ASSIGN_RE.match(t) and env_name_unsafe(_assign_name(t)):
-            return True
-    for i, w in enumerate(words[:end + 1]):     # env NAME=v ... (env -S / -C too)
-        if not quoted(c, w) and base_name(passed(c, w)) == 'env':
-            k = i + 1
-            while k < len(words):
-                t = passed(c, words[k])
-                if t in ENV_VALUE_OPTS:
-                    k += 2
-                    continue
-                if t.startswith('-'):
-                    k += 1
-                    continue
-                if '=' not in t:
-                    break
-                if words[k].dyn or env_name_unsafe(_assign_name(t)):
-                    return True
-                k += 1
-    if inv is None:
-        return False
-    name, args = inv.name, inv.args
-    if name in BASH_EXPORTERS:
-        for w in args:
-            t = passed(c, w)
-            if t[:1] in '-+' and len(t) > 1 and not w.dyn and '=' not in t:
-                if name in NAMEREF_DECLARERS and t[0] == '-' and 'n' in t[1:]:
-                    return True                 # declare -n r=GIT_DIR: r names another variable
-                continue
-            if t == '--':
-                continue
-            # the name as the shell unquotes it; an expansion in it ($n, `...`, {a,b}) is not
-            # LITERAL_NAME_RE. A computed value is not split here: bash reads it as an assignment
-            if env_name_unsafe(_assign_name(t)):
-                return True
-    if name == 'set':
-        want_o = False
-        for w in args:
-            t = passed(c, w)
-            if want_o:
-                if 'allexport' in t or w.dyn:
-                    return True
-                want_o = False
-                continue
-            if w.dyn:
-                return True
-            if t[:1] in '-+' and len(t) > 1 and t != '--':
-                if t[0] == '-' and ('a' in t[1:] or 'allexport' in t):
-                    return True                 # set -a, set +e -a, set -ea: every assignment exported
-                want_o = t[0] == '-' and 'o' in t[1:]
-                continue
-            break
-    if name == 'shopt' and any(w.dyn or 'allexport' in passed(c, w) for w in args):
-        return True
-    if name in BASH_SHELLS:
-        k = 0
-        while k < len(args):
-            t = passed(c, args[k])
-            if args[k].dyn:
-                return True
-            if t in ('-o', '+o'):
-                if t == '-o' and (k + 1 >= len(args) or args[k + 1].dyn or 'allexport' in passed(c, args[k + 1])):
-                    return True
-                k += 2
-                continue
-            if t.startswith('-') and not t.startswith('--') and len(t) > 1:
-                if 'a' in t[1:]:
-                    return True                 # bash -a -c / bash -ac: the nested text exports all
-                if 'c' in t[1:]:
-                    break
-                k += 1
-                continue
-            if t.startswith('+') or t.startswith('--'):
-                k += 1
-                continue
-            break
-    if name in ('source', '.') and not (args and passed(c, args[0]) in SOURCED_STDIN):
-        return True                             # a script the guard does not read runs in this shell
-    if name == 'alias':
-        return True
-    if name == 'trap' and _trap_unsafe(c, args):
-        return True
-    if name in ('mapfile', 'readarray') and any(w.dyn or MAPFILE_CALLBACK_RE.match(passed(c, w)) for w in args):
-        return True                             # mapfile -C cmd: runs cmd in this shell as it reads
-    return False
-
-
-MAPFILE_CALLBACK_RE = re.compile(r'^-[A-Za-z]*C')
 MAPFILE_VALUE_OPTS = 'dnOsuCc'                  # mapfile/readarray options that take a value
-TRAP_AT_EXIT = ('EXIT', '0')                    # the only trap that cannot run before a later command
 
 
 def trap_operands(c, args):
@@ -1245,23 +1172,6 @@ def trap_operands(c, args):
     if len(ops) < 2 or not ops[0].dyn and passed(c, ops[0]) == '-':
         return None
     return ops[0], ops[1:]
-
-
-def _trap_unsafe(c, args):
-    """A trap whose handler may run in this shell before a later command: any signal but EXIT
-    (or 0), since the line may raise one itself (kill -USR1 $$, a child ending, DEBUG, ERR,
-    RETURN). trap '' SIG ignores and trap - SIG resets; trap -p lists."""
-    found = trap_operands(c, args)
-    if found is None:
-        return False
-    hw, sigs = found
-    if not hw.dyn and passed(c, hw) == '':
-        return False
-    for w in sigs:
-        up = passed(c, w).upper()
-        if w.dyn or (up[3:] if up.startswith('SIG') else up) not in TRAP_AT_EXIT:
-            return True
-    return False
 
 
 def mapfile_callback(c, args):
@@ -1287,171 +1197,57 @@ def mapfile_callback(c, args):
     return None
 
 
-def _ps_env_unsafe(c, inv, line_sets):
-    words = c.words
-    src = c.source or ''
-    for n in ps_env_targets(c):
-        if env_name_unsafe(n):
-            return True
-    plain = [_ps_plain_string(c, w) for w in words]
-    if words and 0 <= words[0].start <= words[-1].end <= len(src):
-        lo = words[0].start
-        scan = list(src[lo:words[-1].end])
-        for w, p in zip(words, plain):
-            if p:                               # a string's words are its value, not code
-                scan[w.start - lo:w.end - lo] = ' ' * (w.end - w.start)
-        if PS_SCRIPT_TEXT_RE.search(''.join(scan)):
-            return True                         # $ExecutionContext.InvokeCommand.InvokeScript('...')
-    for w, p in zip(words, plain):
-        if p:
-            continue                            # git commit -m "Handle InvokeScript": a message
-        low = w.text.lower()
-        if 'invokeprovider' in low or 'setenvironmentvariable' in low or PS_SCRIPT_TEXT_RE.search(w.text):
-            return True
-        if not quoted(c, w) and PS_SPLAT_RE.match(w.text):
-            return True                         # Set-Item @h: the item and value are in the hashtable
-        if NET_ENV_RE.search(w.text):
-            if not (0 <= w.start < len(src) and NET_GET_LITERAL_RE.match(src, w.start)):
-                return True                     # [Environment]::<anything but a literal GetEnvironmentVariable>
-        elif w.dyn and '::' in w.text and not _ps_text_string(c, w):
-            return True                         # $t::SetEnvironmentVariable, $t::$m(...); "$b :: $f" is text
-        if low in PS_COMMON_VAR_PARAMS or low.split(':', 1)[0] in PS_COMMON_VAR_PARAMS and ':' in low:
-            k = words.index(w)
-            val = low.split(':', 1)[1] if ':' in low else (words[k + 1].text.lower() if k + 1 < len(words) else '')
-            if 'env:' in val:
-                return True
-    if inv is None:
-        return False
-    name, args = inv.name, inv.args
-    if name in PS_RESHAPERS:
-        return True
-    if PS_SCRIPT_RE.search(inv.path) or inv.index > 0 and words[inv.index - 1].text == '.':
-        return True                             # a script dot-sourced or run in this process
-    if name in ('invoke-command', 'icm') and any(PS_SCRIPT_RE.search(w.text) or w.dyn for w in args):
-        return True
-    if inv.via == 'start-process' and any(
-            not w.dyn and canon_param(w.text, SP_SWITCHES + SP_VALUES, SP_ALIASES) == '-environment'
-            for w in words):
-        return True
-    if name in PS_VARIABLE_CMDLETS:
-        if any('env:' in w.text.lower() for w in args):
-            return True
-        first = [w for w in args if not (w.text.startswith('-') and not w.dyn)][:1]
-        if first and first[0].dyn:
-            return True
-    if name in PS_CD_CMDLETS:
-        for w in args:
-            if not w.dyn and w.text.startswith('-') and ':' not in w.text:
-                continue
-            t = w.text.split(':', 1)[1] if not w.dyn and PS_OPT_PREFIX_RE.match(w.text) else w.text
-            if w.dyn or ENV_DRIVE_RE.match(t) or '::' in t:
-                return True
-        if _expression_follows(c):
-            return True
-    if name in PS_ITEM_CMDLETS:
-        return _ps_item_unsafe(c, inv, line_sets)
-    return False
+GIT_ENV_SCOPED = 'GIT_INDEX_FILE'
+# a line that may define a function or an alias: a git word there may run other commands
+LINE_DEFINES_RE = re.compile(r'\(\s*\)|\b(?:function|alias)\b')
 
 
-def _ps_plain_string(c, w):
-    """True when the word is one PowerShell string as written, with nothing it computes: its
-    text is a value, never code this command runs."""
-    src = c.source or ''
-    return (not w.dyn and 0 <= w.start < w.end <= len(src) and
-            PS_PLAIN_STRING_RE.fullmatch(src, w.start, w.end) is not None)
-
-
-def _ps_text_string(c, w):
-    """True when the word is one PowerShell "..." string as written that expands only variables
-    (PS_TEXT_STRING_RE): a :: in it is text, never a static call ("$t::M()" prints the call)."""
-    src = c.source or ''
-    return 0 <= w.start < w.end <= len(src) and PS_TEXT_STRING_RE.fullmatch(src, w.start, w.end) is not None
-
-
-def _expression_follows(c):
-    """True when the command's text ends where a ( expression starts: the parser reads
-    Set-Item -Path ("env:GIT_"+"DIR") as Set-Item -Path, then the expression apart."""
-    if not c.words:
-        return False
-    src, k = c.source or '', c.words[-1].end
-    while k < len(src) and src[k] in ' \t':
-        k += 1
-    return k < len(src) and src[k] == '('
-
-
-def _ps_item_unsafe(c, inv, line_sets):
-    """An item cmdlet whose item the text does not show as a file path or a safe env: name."""
-    if c.piped_in and inv.name not in PS_PIPED_VALUE or _expression_follows(c):
-        return True                             # the item comes from a pipe or an expression
-    args = inv.args
-    names = PS_ITEM_PARAMS + PS_ITEM_VALUE_PARAMS + PS_ITEM_SWITCHES
-    items, k, pos = [], 0, 0
-    while k < len(args):
-        w = args[k]
-        literal_opt = not quoted(c, w) and not w.dyn and w.text.startswith('-') and len(w.text) > 1
-        p = canon_param(w.text, names, PS_ITEM_ALIASES) if literal_opt else None
-        if literal_opt and p is None or p in PS_ITEM_SWITCHES:
-            k += 1                              # a switch, or a parameter the guard does not know
-            continue
-        if p is None:
-            if not (inv.name in PS_VALUE_SETTERS and pos == 1):
-                items.append(w)
-            pos += 1
-            k += 1
-            continue
-        if ':' in w.text:
-            val, k = sh.Word(w.text.split(':', 1)[1], w.dyn, w.start, w.end), k + 1
-        elif k + 1 < len(args):
-            val, k = args[k + 1], k + 2
-        else:
-            return True                         # a parameter whose value the text does not show
-        if p in PS_ITEM_PARAMS:
-            items.append(val)
-    if not items:
-        return True
-    on_env = any(not w.dyn and ENV_DRIVE_RE.match(w.text) for w in items)
-    for w in items:
-        if w.dyn:
-            m = PS_ENV_READ_RE.match(w.text)
-            if not m or on_env or (m.group(1) or m.group(2)).upper() in line_sets:
-                return True
-            continue
-        m = ENV_DRIVE_RE.match(w.text)
-        if m:
-            rest = w.text[m.end():]
-            if rest and env_name_unsafe(rest):
-                return True
-        elif on_env and env_name_unsafe(w.text):
-            return True                         # New-Item -Path env: -Name X, Rename-Item env:A X
-    return False
+def git_env_prefix(c):
+    """GIT_INDEX_FILE when that is the one variable of GIT_ENV_NAMES the command sets, as an
+    assignment before the git it runs (GIT_INDEX_FILE=<tmp> git read-tree, env GIT_INDEX_FILE=<tmp>
+    git ...): bash hands it to that git and what it runs alone, not to the line's other commands.
+    Else None."""
+    if c.shell != sh.BASH:
+        return None
+    inv = cmd_invocation(c, invocation(c))
+    if inv is None or inv.name != 'git':
+        return None
+    names = {n.upper() for n, _v in env_assignments(c, GIT_ENV_NAMES)}
+    return GIT_ENV_SCOPED if names == {GIT_ENV_SCOPED} else None
 
 
 def mark_git_env(parsed):
-    """When any command of the line sets GIT_DIR or the like (git_env_set), or may change the
-    environment in a way the guard cannot read (git_env_unsafe), every git of the line acts on a
-    place the text does not say: c.git_env is that variable's name or the command
-    ('`set -a`'), else False. The whole line, not the commands after the setter: expand appends
-    nested text (eval, bash -c, Invoke-Expression, a sourced here-string) after the line's own
-    commands, so order says nothing about which runs first. A line with no git is not
-    affected. c.home_env is the first of HOME_ENV_NAMES the line sets (line_env_names: an
-    assignment, read HOME, printf -v HOME, for HOME in ..., let HOME=1, $((HOME=1)); see
-    bash_var_targets), or 'a variable named at run time'
-    for a builtin whose target is computed (read $n), else False: git then reads another user
-    config (rules.home_config and rules.git_alias_config judge git with it). c.path_env is True
-    when the line sets PATH the same ways, cmd's path command included (or a name computed at
-    run time, or a wildcard on the env drive): git then finds a
-    filter's bare program name (git-lfs) elsewhere (rules.archive_filter_set)."""
+    """When any command of the line sets GIT_DIR or the like (git_env_set), every git of the
+    line acts on a place the text does not say: c.git_env is that variable's name, else False.
+    The whole line, not the commands after the setter: expand appends nested text (eval, bash
+    -c, Invoke-Expression, a sourced here-string) after the line's own commands, so order says
+    nothing about which runs first. One setter reaches less: GIT_INDEX_FILE set before a git
+    alone (git_env_prefix, the temp-index pattern) marks that git and the commands nested in it,
+    unless the line may define a function or an alias (LINE_DEFINES_RE). A line with no git is
+    not affected. c.home_env is the first
+    of HOME_ENV_NAMES the line sets literally (line_env_names), else False: git then reads
+    another user config (rules.home_config judges git with it). c.path_env is True when the line
+    sets PATH literally: git then finds a filter's bare program name (git-lfs) elsewhere
+    (rules.archive_filter_set). A name the text computes is not read (honest mistakes only)."""
     cmds = parsed.commands
     sets = line_env_names(cmds)
-    name = next((n for n in map(git_env_set, cmds) if n), None)
-    if name is None:
-        name = next((why for why in (git_env_unsafe(c, sets) for c in cmds) if why), None)
-    home = next((n for n in HOME_ENV_NAMES if n in sets), None)
-    if home is None and COMPUTED_NAME in sets:
-        home = 'a variable named at run time'
-    path = 'PATH' in sets or COMPUTED_NAME in sets
+    defines = any(LINE_DEFINES_RE.search(c.source or '') for c in cmds)
+    name, scoped = None, {}
     for c in cmds:
-        c.git_env = name or False
+        n = git_env_set(c)
+        if not n:
+            continue
+        if not defines and git_env_prefix(c):
+            scoped[id(c)] = n
+        elif name is None:
+            name = n
+    home = next((n for n in HOME_ENV_NAMES if n in sets), None)
+    path = 'PATH' in sets
+    for c in cmds:
+        own, o = None, c
+        while o is not None and own is None:
+            own, o = scoped.get(id(o)), o.nested_in
+        c.git_env = name or own or False
         c.home_env = home or False
         c.path_env = path
 
@@ -1534,9 +1330,20 @@ def expand(parsed):
             parsed.flag('a cmd if statement')
         if cmd.shell == sh.CMD and first == 'for':
             parsed.flag('a cmd for loop')
-        inv = invocation(cmd)
+        inv = invocation(cmd, unread=True)
+        if isinstance(inv, Unread):
+            parsed.flag(inv.why)                # Start-Process, no program and a parameter unread
+            continue
         if inv is None:
             continue
+        if inv.unread:
+            # Start-Process with a parameter the guard cannot read: refused, its program still read
+            parsed.flag(inv.unread)
+        if cmd.split:
+            # `Set-Content -Value $s.Trim() -Path x`: the scanner cut the command at a ( ) or { }
+            # and read the rest as commands of their own; its arguments are not all known
+            parsed.flag('a command the line splits around a ( ) or { } group, its arguments past it '
+                        'read as other commands (%s)' % inv.path)
         if inv.dyn:
             if not call_subexpr(inv):           # rules.call_subexpr_pmdata judges `& (...)`
                 parsed.flag('a command whose program is not literal (%s)' % inv.path)
@@ -1564,12 +1371,22 @@ def expand(parsed):
             continue
         text, shell = found[:2]
         where, where_home = (found[2], found[2]) if len(found) > 2 else (cmd.cwd, cmd.cwd_home)
-        if text is STDIN:
-            text = _stdin_text(cmd, parsed)
-            if text is None:
-                continue
-        _nest(parsed, cmd, text, shell, where, where_home)
+        # a tuple is a powershell line's readings: each is parsed on its own, standard input once
+        for one in text if isinstance(text, tuple) else (text,):
+            if one is STDIN:
+                one = _stdin_text(cmd, parsed)
+                if one is None:
+                    continue
+            _nest(parsed, cmd, one, shell, where, where_home)
     return parsed
+
+
+# the nested texts one line's read parses at most (every one passes through _nest), past which the
+# line is flagged: each nested powershell reading may fork again, so without a cap on the total a
+# line of repeated `-i pwsh` makes some 17 readings per level, 17^6 parses down to MAX_DEPTH. The
+# readings are not merged across levels: the same text under another outer command is judged with
+# that command's chain (nested_in), so only this total bounds the work.
+MAX_NESTS = 64
 
 
 def _nest(parsed, cmd, text, shell, cwd, cwd_home):
@@ -1578,6 +1395,10 @@ def _nest(parsed, cmd, text, shell, cwd, cwd_home):
     if cmd.depth + 1 > sh.MAX_DEPTH:
         parsed.flag('shells nested deeper than %d' % sh.MAX_DEPTH)
         return []
+    if parsed.nests >= MAX_NESTS:
+        parsed.flag('more than %d nested shell texts' % MAX_NESTS)
+        return []
+    parsed.nests += 1
     _p, cmds = sh.parse(text, shell, cwd, depth=cmd.depth + 1, parsed=parsed, cwd_home=cwd_home)
     for c in cmds:
         if c.nested_in is None:
@@ -1629,22 +1450,36 @@ def _git_word(w):
 
 
 class GitCall(object):
-    """A git invocation: `dir` the directory it acts on (git -C applied to the command's cwd;
-    None when the text cannot tell), `sub` its subcommand, `rest` the Words after it, `alias`
+    """A git invocation: `dir` the directory it acts on (git -C applied to the directory git
+    starts in, run_dir: the command's cwd, or a Start-Process -WorkingDirectory; None when the
+    text cannot tell), `sub` its subcommand, `rest` the Words after it, `alias`
     (name, value) when the line defines a git alias (-c alias.name=value). Every word is the
     text the shell passes (a backslash bash drops is dropped); `sub_dyn` the subcommand is not
     literal; `blind` what points git at a place the text does not show, which a -C cannot undo (a
     GIT_ENV_NAMES variable, --git-dir, --work-tree, -c core.worktree, --config-env, a computed
-    -c), else None."""
-    __slots__ = ('dir', 'sub', 'rest', 'inv', 'unknown', 'alias', 'sub_dyn', 'blind')
+    -c), else None. `synth`: how many Words at the start of `rest` a git alias's value gave (the
+    guard's expansion of one), not words of the line."""
+    __slots__ = ('dir', 'sub', 'rest', 'inv', 'unknown', 'alias', 'sub_dyn', 'blind', 'synth')
 
-    def __init__(self, dir_, sub, rest, inv, unknown, alias=None, sub_dyn=False, blind=None):
+    def __init__(self, dir_, sub, rest, inv, unknown, alias=None, sub_dyn=False, blind=None, synth=0):
         self.dir, self.sub, self.rest, self.inv, self.unknown = dir_, sub, rest, inv, unknown
-        self.alias, self.sub_dyn, self.blind = alias, sub_dyn, blind
+        self.alias, self.sub_dyn, self.blind, self.synth = alias, sub_dyn, blind, synth
 
     @property
     def argv(self):
         return [w.text for w in self.rest]
+
+    def before(self):
+        """The invocation's Words before the word that names the subcommand (git's own options)."""
+        a = list(self.inv.args)
+        return a[:len(a) - (len(self.rest) - self.synth) - 1]
+
+    def after(self):
+        """The invocation's Words after the word that names the subcommand (`rest` without the
+        words an alias's value gave)."""
+        a = list(self.inv.args)
+        n = len(self.rest) - self.synth
+        return a[len(a) - n:] if n else []
 
 
 def git_call(inv):
@@ -1653,7 +1488,7 @@ def git_call(inv):
     appends may hold --git-dir and the subcommand."""
     if inv is None or inv.name != 'git':
         return None
-    d = inv.cmd.cwd
+    d = run_dir(inv)                            # Start-Process -WorkingDirectory: git starts there
     git_env = inv.cmd.git_env
     unknown = d is None or bool(git_env)
     # what sets a git dir or work tree the text cannot place: -C never undoes it
@@ -1689,7 +1524,7 @@ def git_call(inv):
             if k + 1 >= len(a) or a[k + 1].dyn:
                 d, unknown = None, True
             elif not blind:                     # after --git-dir and the like, -C moves only the cwd
-                d = sh.resolve_path(a[k + 1].text, None if unknown else d)
+                d = sh.resolve_path(a[k + 1].text, None if unknown else d, home=inv.cmd.home)
                 unknown = d is None
             k += 2
             continue

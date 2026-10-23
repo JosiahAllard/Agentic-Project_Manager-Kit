@@ -32,7 +32,7 @@ from kitlib.lock import holds as hl                                # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
 from kitlib.lock import status as st                               # noqa: E402
 from kitlib.lock.background import run_background                  # noqa: E402
-from kitlib.lock.run import ORIGIN_ENV, run_command                # noqa: E402
+from kitlib.lock.run import ORIGIN_ENV, check_resource, run_command  # noqa: E402
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
 from kitlib.proc import bash, process                              # noqa: E402
@@ -149,6 +149,10 @@ def parser():
                         "container's): it takes only cpu slots whose threads all lie inside "
                         "and waits for those; exit 2 when they are too few for its size "
                         "(--cores) or it has --hold")
+    r.add_argument("--resource", metavar="NAME",
+                   help="an exclusive resource (any non-empty name, e.g. ports:e2e-a) the run "
+                        "holds for its whole life: while another live run holds it, a run naming "
+                        "it waits (exit 6 with --no-wait), however many slots are free")
     r.add_argument("--on-release", metavar="CMDLINE", help="a shell command run after the command "
                    "ends (MACHINE_LOCK_END says how) and before the slots are freed")
     w = r.add_mutually_exclusive_group()
@@ -298,6 +302,12 @@ def cmd_run(a, cmd, store, argv):
     if not cmd:
         say("usage: machine_lock.py %s ... -- <command>: no command after --" % a.cmd)
         return EXIT_USAGE
+    resource = getattr(a, "resource", None)     # run only; before a detach books anything
+    check_resource(resource)                    # "" is usage here, not in a detached log
+    if resource and resource.startswith("landing:"):
+        say("usage: --resource %s: landing resources belong to land.py (kitlib.gate.land); "
+            "name another resource" % resource)
+        return EXIT_USAGE
     try:                            # before a detach, whose log is the only place it would show
         bash.resolve(cmd)
     except bash.BareBashError as e:
@@ -311,7 +321,8 @@ def cmd_run(a, cmd, store, argv):
         return run_background(cmd, a.repo, a.slug, **common)
     return run_command(cmd, a.kind, a.repo, a.slug, cores=a.cores, hold=a.hold,
                        gpu_share=a.gpu_share, wait_s=a.wait_s, no_wait=a.no_wait,
-                       on_release_cmd=a.on_release, within=a.within, **common)
+                       on_release_cmd=a.on_release, within=a.within, resource=a.resource,
+                       **common)
 
 
 def cmd_status(a, store):
@@ -419,7 +430,12 @@ def cmd_division(a, store):
     if a.set is not None or a.default:
         r = api.set_division(actor(a, store), None if a.default else a.set, store)
         code = api_result(r, lambda res: "division written; %s" % (
+            # applied: the layout in use is the wanted one; with a pending reason it is used
+            # unwritten (layout.json invalid under live runs) or provisional (a failed look).
+            "in use now, but %s" % res["pending"] if res["applied"] and res["pending"] else
             "in force now" if res["applied"] else
+            "not in force: %s" % res["pending"]
+            if res["pending"] and not st.waits_for_idle(res["pending"]) else
             "it applies once nothing is live or queued"))
         if code:
             return code

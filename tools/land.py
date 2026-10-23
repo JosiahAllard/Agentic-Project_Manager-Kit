@@ -2,7 +2,7 @@
 "Landing").
 
   land.py BRANCH [BRANCH ...] --expect-tip SHA [--expect-tip SHA ...] [--expect-main SHA]
-          [-C DIR] [--lane L] [--summary TEXT] [--full] [--fresh] [--wait SECONDS]
+          [-C DIR] [--summary TEXT] [--full] [--fresh] [--wait SECONDS]
           [--log-dir D] [--keep-branch] [--submit]
       from the main checkout: take the landing's turn in the machine lock's queue (one booking,
       whose slot the merged gate runs in) and the landing lock, fetch, merge each branch onto
@@ -14,12 +14,14 @@
       Landed: each branch's remote branch, worktree and local branch go, never forced (what main
       does not contain, or work, or a holder, keeps it); --keep-branch keeps all three. --fresh
       runs every step of the merged gate (no gate reuse, docs/gate.md "Gate reuse").
-      A branch that changes a strict path (kitlib/gate/strict_defaults.py, read from main) lands
-      alone, only with a verdict queued for its tip (tools/verdict.py add) by a strong-tier
-      reviewer who is not its author, and its merged gate runs --full --fresh whatever was
-      passed (docs/gate.md "Strict paths").
-      --submit: the same landing, started detached and windowless; prints one line, SUBMITTED
-      ... wait: <the gate.py wait-result command that waits for its result record>, and exits 0
+      Every branch lands only with a verdict queued for its tip (tools/verdict.py add, or carried
+      to it over main merges by tools/verdict.py carry and checked again here) by a reviewer who
+      is not its author (docs/gate.md "Landing" step 4). A branch that changes a strict path
+      (kitlib/gate/strict_defaults.py, read from main) lands alone, its reviewer strong-tier, and
+      its merged gate runs --full --fresh whatever was passed (docs/gate.md "Strict paths").
+      --submit: the same landing, started detached and windowless; prints a REVIEW line for each
+      branch with a verdict queued at its tip, then the last line, SUBMITTED ... wait: <the
+      gate.py wait-result command that waits for its result record>, and exits 0
   land.py --queue [-C DIR]
       read-only: the landing lock's holder and the landings in the machine lock's queue
   land.py --sweep-landed [--apply] [-C DIR]
@@ -81,7 +83,6 @@ def parser():
     p.add_argument('--expect-tip', action='append', default=[], metavar='SHA',
                    help='the tip of each BRANCH, in the same order')
     p.add_argument('-C', dest='root', default='.', help='the main checkout (default: here)')
-    p.add_argument('--lane', default='full')
     p.add_argument('--summary', help='the merge title after "Merge <branch>: "')
     p.add_argument('--full', action='store_true', help='gate every non-manual step')
     p.add_argument('--fresh', action='store_true',
@@ -104,7 +105,7 @@ def parser():
 def child_args(a, root):
     """The arguments of the detached landing a --submit starts: this landing's, -C and --log-dir
     absolute."""
-    args = ['-C', root, '--lane', a.lane]
+    args = ['-C', root]
     if a.expect_main:
         args += ['--expect-main', a.expect_main]
     for tip in a.expect_tip:
@@ -120,12 +121,19 @@ def child_args(a, root):
     return args + list(a.branches)
 
 
-def restore(root, payload):
+def restore(root, a):
     """The detached landing's `submitted`, its output now going to the submission's log; None
-    when the payload cannot be read: the submission's records are then finished refused
-    (submit.abandon) and that is said, on the hidden console."""
+    when the payload is not the one a submission wrote for this landing (submit.Untrusted: that
+    is said on stderr and, at the submission's own path, in its log; no record is written) or,
+    read with the submission's token, cannot be read (the submission's records are
+    then finished refused, submit.abandon, and that is said, on the hidden console)."""
+    payload = a.submitted
     try:
-        sub = submitmod.restore(root, payload)
+        sub = submitmod.restore(root, payload, a.branches, a.expect_tip,
+                                expect_main=a.expect_main)
+    except submitmod.Untrusted as e:    # also in the submission's log: stderr may be hidden
+        sys.stderr.write(submitmod.untrusted_refusal(payload, e) + '\n')
+        return None
     except submitmod.SubmitError as e:
         emit(submitmod.abandon(root, payload, str(e)))
         return None
@@ -151,7 +159,7 @@ def main(argv):
         p.error('--apply goes with --sweep-landed')
     if a.sweep_landed:
         if (a.branches or a.expect_main or a.expect_tip or a.queue or a.keep_branch or a.full
-                or a.fresh or a.summary or a.wait is not None or a.log_dir or a.lane != 'full'
+                or a.fresh or a.summary or a.wait is not None or a.log_dir
                 or a.submit or a.submitted):
             p.error('--sweep-landed takes only --apply and -C')
         try:
@@ -176,13 +184,13 @@ def main(argv):
                                      a.expect_tip, expect_main=a.expect_main))
     submitted = None
     if a.submitted:
-        submitted = restore(root, a.submitted)
+        submitted = restore(root, a)
         if submitted is None:
             return G.REFUSED
     branch = a.branches[0] if len(a.branches) == 1 else a.branches
     tip = a.expect_tip[0] if len(a.expect_tip) == 1 else a.expect_tip
     try:
-        out = landmod.land(root, branch, a.expect_main, tip, lane=a.lane, summary=a.summary,
+        out = landmod.land(root, branch, a.expect_main, tip, summary=a.summary,
                            full=a.full, wait_s=a.wait, say=say,
                            book_kw={'store': Store(say=say)}, log_dir=a.log_dir,
                            keep_branch=a.keep_branch, fresh=a.fresh, submitted=submitted)

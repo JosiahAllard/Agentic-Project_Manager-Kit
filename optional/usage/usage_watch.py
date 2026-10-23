@@ -1,6 +1,6 @@
 """Usage watcher for a coordinator. Silent while nothing changes; exits with ONE line when it does.
 
-usage: python ~/.claude/tools/usage/usage_watch.py [--config-dir <dir>] [--poll 300] [--once]
+usage: python <kit>/optional/usage/usage_watch.py [--config-dir <dir>] [--poll 300] [--once]
 
 Start it as a BACKGROUND command at coordinator start. It polls the account's
 `usage-status.json` and stays quiet, so it costs no turns. It exits - which wakes the

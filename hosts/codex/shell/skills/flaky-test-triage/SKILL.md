@@ -15,7 +15,7 @@ description: Use when a load-sensitive or timing-dependent test fails intermitte
 
 ## Never
 
-- Rerun to turn a red green: only a flake on the repo's list earns one rerun.
+- Rerun to turn a red green: only a flake on the repo's known-flake list gets one rerun; any other failing run is real.
 - Loosen an assertion or a timeout without the evidence above.
 
 Details: the repo profile, "Known flakes".

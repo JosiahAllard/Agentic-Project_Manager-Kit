@@ -18,8 +18,11 @@
       The port is hub.port of the machine config (default 8790); --port 0 takes a free one,
       named on the start line. The store is hub.store, else hub/ in the PM data worktree.
       --store PATH serves that folder instead, as a scratch copy: git sync is off for that run,
-      so nothing in it is committed or pushed, here or at the close. An empty PATH is a usage
-      error, never the configured store. A store another server holds is refused.
+      so nothing in it is committed or pushed, here or at the close, and no push notification
+      is sent. An empty PATH is a usage error, never the configured store. A store another
+      server holds is refused.
+      Push notifications (docs/action-hub.md "Push notifications") run when the host adapter
+      has push() and launcher.state_dir is set; otherwise a start-up note says why they are off.
       With hub.access set in the machine config the server also listens on hub.tunnel_port
       (default 8791, loopback too) for a tunnel program, which this tool never runs: every
       request there needs a Cloudflare Access token (kitlib.hubsite.tunnel). A start-up note
@@ -111,13 +114,29 @@ the server alone decides what a role may do.
                                                      (default pm), refused when the hub does
                                                      not know it
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
+  hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
+        [--option "label::description" ...] [--recommended N] [--refs ID ...]
+        [--urgent | --no-urgent]                     `EDITED Q-1`; an --option list replaces
+                                                     the old one
+  hub.py questions withdraw Q-1 --from KEY --if-version V    `WITHDRAWN Q-1`
+                                                     edit and withdraw: an open question whose
+                                                     from is KEY (pm when it has none)
   hub.py answer Q-1 --choice N|other [--note TEXT] [--if-version V]     (owner)
                                                      `ANSWERED Q-1 <label>`
   hub.py todos [--status S] [--repo R]              `T-1 open [repo] title` for each
-  hub.py todos add --title T [--detail D] [--command C ...] [--repo R] [--refs ID ...]
-        [--urgent] [--from NAME | --owner]           `ADDED T-2`; --owner: the owner's own to-do
+  hub.py todos add --title T [--detail D] [--command C ...] [--steps F] [--repo R]
+        [--refs ID ...] [--urgent] [--from NAME | --owner]
+                                                     `ADDED T-2`; --owner: the owner's own to-do;
+                                                     --steps F: a UTF-8 JSON file holding the
+                                                     list of steps the hub makes into commands
+                                                     (docs/hub-mcp.md "To-do steps")
   hub.py todos done T-1 [--undo] [--if-version V]   (owner) `DONE T-1`, `REOPENED T-1`
   hub.py todos ack T-1                              `ACKED T-1`
+  hub.py todos edit T-1 --from NAME --if-version V [--title T] [--detail D] [--command C ...]
+        [--repo R] [--refs ID ...] [--urgent | --no-urgent]     `EDITED T-1`
+  hub.py todos withdraw T-1 --from NAME --if-version V      `WITHDRAWN T-1`
+                                                     edit and withdraw: an open to-do whose
+                                                     from is NAME (pm when it has none)
   hub.py stories [--status S] [--repo R]            `S-1 v2 submitted [repo] title` for each
   hub.py stories add --repo R --title T --story-file F [--urgent]       (owner) `SUBMITTED S-2`
   hub.py stories set S-1 --status review|questions|added|declined [--reviewer NAME]
@@ -132,6 +151,30 @@ the server alone decides what a role may do.
   hub.py inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...]
         [--from NAME]                                `POSTED M-2`
   hub.py inbox read M-1 [--undo] [--if-version V]   (owner) `READ M-1`, `UNREAD M-1`
+  hub.py pages [--repo R]                           `ID v2 - [repo] title` for each published page
+  hub.py pages publish ID --title T --html-file F [--repo R] [--summary S] [--refs ID ...]
+        [--from NAME] [--if-version V]               `PUBLISHED ID`; F is a UTF-8 HTML file the
+                                                     hub's page check (kitlib.hubsite.pagecheck)
+                                                     passes, checked here before it is sent;
+                                                     over a page already published, --if-version
+                                                     is its version (docs/action-hub.md
+                                                     "pages/<id> and page_html/<id>")
+  hub.py pages show ID [--out F]                    the page's HTML, or with --out F written to F
+                                                     as UTF-8 and `WROTE F` printed
+  hub.py approvals [--status S] [--repo R]          `A-1 pending [repo] title` for each request
+                                                     for the owner's approval, its status read
+                                                     now (an expired one says expired;
+                                                     kitlib.hubsite.approvals status_at)
+  hub.py approvals show A-1                         its status, repo, head, title and reason,
+                                                     then `<path> <base_blob> -> <blob>` per file
+  hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...] [--checkout DIR] [--repo R]
+        [--head SHA] [--reason TEXT]                 `REQUESTED A-001`: asks the owner to approve
+                                                     writing each PATH (relative to the repo top)
+                                                     as CONTENT_FILE's exact UTF-8 bytes; its base
+                                                     is PATH's blob at --head (default: HEAD of
+                                                     the checkout DIR, default .), none for a new
+                                                     file; --repo defaults to DIR's origin. It only
+                                                     asks: no delete, no --from (kitlib.hubapprove)
   hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
                                                      each item of owner input not yet handled: R
                                                      is the session key to handle it now (pm
@@ -155,9 +198,9 @@ the server alone decides what a role may do.
       a finding is an error.
 
 `--choice N` and `--recommended N` are the option's place in the question's list, counted from
-0 as the api counts it. `questions log` and `stories set` need --if-version V: the version of the
-document the caller read and decided on, which the `questions` and `stories` lines show as `v2`
-and --json as `version`. Without it the verb is a usage error and asks nothing; with a version
+0 as the api counts it. `questions log`, `stories set` and each `edit` and `withdraw` need
+--if-version V: the version of the document the caller read and decided on, which the `questions`
+and `stories` lines show as `v2` and --json (`todos --json` too) as `version`. Without it the verb is a usage error and asks nothing; with a version
 the document no longer has, the server refuses the write (`REFUSED conflict`).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, prints and exits.
@@ -169,6 +212,7 @@ started nothing; 4 `wait --timeout` ran out with nothing to say, or `stop` or `r
 of time (nothing was killed).
 """
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -176,21 +220,23 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kitlib import hubvalidate                                     # noqa: E402
+from kitlib import hubapprove, hubvalidate                         # noqa: E402
 from kitlib.config import copies, user                             # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tunnel   # noqa: E402
+from kitlib.hubsite import approvals                               # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import control                                 # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
+from kitlib.hubsite import pagecheck                               # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
 OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
 VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart', 'migrate',
-              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pending', 'wait',
-              'validate')
+              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pages', 'approvals',
+              'pending', 'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -275,6 +321,15 @@ def _pins(p, required=False):
                    required=required, help='refuse unless the document has this version')
 
 
+def _creator(p, metavar):
+    """The id, --from and --if-version of a creator's edit or withdraw: the hub checks --from
+    against the item's own (kitlib.hubsite.api _creator)."""
+    p.add_argument('id')
+    p.add_argument('--from', dest='who', required=True, metavar=metavar,
+                   help='the from the item was added with (pm when it was added without one)')
+    _pins(p, required=True)
+
+
 def _repo(p):
     """--repo of an `add` whose verb lists by --repo too. No default is set, as in _asks: the
     sub-verb's own would put None over a --repo given before `add`. Read it with getattr."""
@@ -298,8 +353,8 @@ def _leaf(subs, name, what):
 
 def _client_verbs(sub):
     S = hubvalidate.STATUSES
-    q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling',
-                S['questions'])
+    q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
+                'edit, withdraw: change or remove one you asked', S['questions'])
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
     _repo(x)
@@ -318,6 +373,19 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('ruling', metavar='ruling-id')
     _pins(x, required=True)
+    x = _leaf(q, 'edit', 'change an open question you asked')
+    _creator(x, 'KEY')
+    x.add_argument('--title')
+    x.add_argument('--context-file', dest='context_file', metavar='F',
+                   help='a UTF-8 file with the new context')
+    x.add_argument('--option', dest='options', action='append', type=_option, default=[],
+                   metavar='"label::description"',
+                   help='an answer to choose (repeatable; the list given replaces the old one)')
+    x.add_argument('--recommended', type=_count, metavar='N',
+                   help='the place of the recommended option (counts from 0)')
+    x.add_argument('--refs', nargs='+', metavar='ID')
+    x.add_argument('--urgent', action=argparse.BooleanOptionalAction, default=None)
+    _creator(_leaf(q, 'withdraw', 'remove an open question you asked'), 'KEY')
 
     x = _asks(sub.add_parser('answer', help='answer a question (the owner)'))
     x.add_argument('id')
@@ -327,12 +395,15 @@ def _client_verbs(sub):
     x.add_argument('--note')
     _pins(x)
 
-    t = _listed(sub, 'todos', 'list the to-dos; add, done, ack', S['todos'])
+    t = _listed(sub, 'todos', 'list the to-dos; add, done, ack, edit, withdraw', S['todos'])
     x = _leaf(t, 'add', 'add a to-do')
     x.add_argument('--title', required=True)
     x.add_argument('--detail')
     x.add_argument('--command', dest='commands', action='append', metavar='C',
                    help='a command the to-do names (repeatable)')
+    x.add_argument('--steps', dest='steps_file', metavar='F',
+                   help='a UTF-8 JSON file holding a list of steps: {edit, old, new}, '
+                        '{open, line} or {run}; the hub makes them commands after --command')
     _repo(x)
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action='store_true')
@@ -344,6 +415,17 @@ def _client_verbs(sub):
     x.add_argument('--undo', action='store_true')
     _pins(x)
     _leaf(t, 'ack', 'say that the PM has seen a to-do').add_argument('id')
+    x = _leaf(t, 'edit', 'change an open to-do you added')
+    _creator(x, 'NAME')
+    x.add_argument('--title')
+    x.add_argument('--detail')
+    x.add_argument('--command', dest='commands', action='append', metavar='C',
+                   help='a command the to-do names (repeatable; the list given replaces the old '
+                        'one)')
+    x.add_argument('--repo', dest='edit_repo', metavar='R')
+    x.add_argument('--refs', nargs='+', metavar='ID')
+    x.add_argument('--urgent', action=argparse.BooleanOptionalAction, default=None)
+    _creator(_leaf(t, 'withdraw', 'remove an open to-do you added'), 'NAME')
 
     s = _listed(sub, 'stories', 'list the stories; add, set, withdraw', S['stories'])
     x = _leaf(s, 'add', 'submit a story (the owner)')
@@ -388,6 +470,36 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('--undo', action='store_true')
     _pins(x)
+
+    g = _listed(sub, 'pages', 'list the published pages; publish, show')
+    x = _leaf(g, 'publish', 'publish an HTML page to the hub')
+    x.add_argument('id')
+    x.add_argument('--title', required=True)
+    x.add_argument('--html-file', dest='html_file', required=True, metavar='F',
+                   help='a UTF-8 HTML file: no script, no remote URL, Mermaid rendered to svg')
+    _repo(x)
+    x.add_argument('--summary')
+    x.add_argument('--refs', nargs='+', metavar='ID')
+    x.add_argument('--from', dest='who', metavar='NAME')
+    _pins(x)
+    x = _leaf(g, 'show', "a page's HTML")
+    x.add_argument('id')
+    x.add_argument('--out', metavar='F', help='write the HTML to this file instead')
+
+    x = _listed(sub, 'approvals', "list the requests for the owner's approval; show; add: ask "
+                "for one", S['approvals'])
+    _leaf(x, 'show', 'one request and its files').add_argument('id')
+    y = _leaf(x, 'add', "ask the owner to approve writing these files")
+    y.add_argument('--checkout', default='.', metavar='DIR',
+                   help='the git checkout the change is for (default: .)')
+    y.add_argument('--title', required=True)
+    y.add_argument('--file', dest='files', action='append', nargs=2, required=True,
+                   metavar=('PATH', 'CONTENT_FILE'),
+                   help='a path relative to the repo top and the UTF-8 file holding its new '
+                        'text (repeatable)')
+    _repo(y)
+    y.add_argument('--head', metavar='SHA', help="the base commit (default: the checkout's HEAD)")
+    y.add_argument('--reason')
 
     x = _asks(sub.add_parser('pending', help='the owner input the PM has not handled'))
     x.add_argument('--for', dest='for_key', metavar='KEY',
@@ -484,6 +596,25 @@ def _log(level, text):
     _say('%s: %s' % (word, serve.scrub(text)), sys.stderr)   # closed console: a handler goes on
 
 
+def _push_delivery():
+    """(delivery, folder) for push notifications (docs/action-hub.md "Push notifications"): the
+    host adapter's push() and the launcher's state folder, or (None, None) with one note line
+    saying why there are none. A scratch store (`serve --store`) never asks."""
+    from kitlib.launcher import settings as launcher_settings
+    try:
+        launch = launcher_settings.load()
+        folder = launch.state_dir()
+        import _host
+        make = getattr(_host.adapter_module().ADAPTER, 'push', None)
+        if make is None:
+            _log('note', 'push notifications off: this host has no delivery')
+            return None, None
+        return make(launch), folder
+    except Exception as e:              # noqa: BLE001 - the hub serves without push notifications
+        _log('note', 'push notifications off: %s: %s' % (type(e).__name__, e))
+        return None, None
+
+
 def _serve(a, stop):
     s = settings.load()
     if a.port is not None:
@@ -491,7 +622,10 @@ def _serve(a, stop):
     scratch = a.store is not None       # never the truth of the text: '' is refused by the parser
     if scratch:
         s = s._replace(store=os.path.abspath(a.store), push=False)
-    hub = serve.build(s, serve.machine_sources(sync=not scratch), log=_log)
+    sources = serve.machine_sources(sync=not scratch)
+    if not scratch:
+        sources.push, sources.push_dir = _push_delivery()
+    hub = serve.build(s, sources, log=_log)
 
     def started(h):
         for note in h.notes:
@@ -605,10 +739,12 @@ def _setup(a, stop):
     else:
         print('NOTE: no store folder is set: set hub.store or pm_data in the machine config '
               '(this tool does not write it), or start with --store PATH')
-    print('start the server with: %s' % START)
     if a.autostart:
+        print('start the server detached, once the task is registered: %s' % _START_TASK)
         for line in hub_autostart.install(os.path.abspath(__file__)):
             print(line)
+    else:
+        print('start the server with: %s' % START)
     return 0
 
 
@@ -670,6 +806,22 @@ NOT_STARTED = {
     control.HAND_STARTED: "the server was started by hand, not by the scheduled task '%s', so "
                           "nothing was started" % hub_autostart.TASK_NAME,
 }
+_TASK = "-TaskName '%s'" % hub_autostart.TASK_NAME
+_START_TASK = 'Start-ScheduledTask %s' % _TASK
+
+
+def task_advice(outcome):
+    """The last line when a restart started nothing, by control's outcome (None: the task could
+    not be started). `serve` is not it: a server started in a console ends with that shell; the
+    scheduled task runs it detached and windowless."""
+    if outcome == control.NO_TASK:
+        return 'register the task, then start it: python "%s" setup --autostart; %s' % (
+            os.path.abspath(__file__), _START_TASK)
+    if outcome == control.DISABLED:
+        return 'enable the task, then start it: Enable-ScheduledTask %s; %s' % (_TASK, _START_TASK)
+    return 'start it with: %s' % _START_TASK
+
+
 # a server the task starts has no console: what it says at start-up goes nowhere
 NO_CONSOLE = ('a server the scheduled task starts has no console, so its start-up lines are not '
               'shown: run hub.py serve in a console to see why it does not answer: %s' % START)
@@ -720,7 +872,7 @@ def _restart(a, stop):
         _stopped(port, e.stopped)
         print(serve.scrub('the scheduled task could not be started: %s' % e.reason),
               file=sys.stderr)
-        print('start it with: %s' % START, file=sys.stderr)
+        print(task_advice(None), file=sys.stderr)
         return 1
     except control.TimedOut as e:
         print(serve.scrub('TIMED OUT: %s' % e), file=sys.stderr)
@@ -731,7 +883,7 @@ def _restart(a, stop):
     _stopped(port, got.stopped)
     if got.outcome != control.RESTARTED:
         print(NOT_STARTED[got.outcome])
-        print('start it with: %s' % START)
+        print(task_advice(got.outcome))
         return client.NOT_RUNNING
     print("RESTARTED: the hub server answers on port %d (the scheduled task '%s' started it)"
           % (got.port, hub_autostart.TASK_NAME))
@@ -825,6 +977,15 @@ def _text_of(path, what):
         raise serve.ServeError('cannot read the %s file %s: %s' % (what, path, type(e).__name__))
 
 
+def _json_of(path, what):
+    """The JSON value of a UTF-8 file (a BOM is skipped); the server judges its shape."""
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        raise serve.ServeError('cannot read the %s file %s: %s' % (what, path, type(e).__name__))
+
+
 def _body(**fields):
     """The fields that were given: None, an empty list and a flag that is off are left out."""
     return {k: v for k, v in fields.items()            # 0 is a value: a place, a version
@@ -848,7 +1009,25 @@ def _questions(a, stop):
         got = hub.post(_one('questions', a) + '/log', client.AGENT,
                        {'ruling': a.ruling, 'if_version': a.if_version})
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
+    if a.sub == 'edit':
+        context = _text_of(a.context_file, 'context') if a.context_file else None
+        got = hub.post(_one('questions', a) + '/edit', client.AGENT, _edits(a, _body(
+            title=a.title, context=context, options=a.options, recommended=a.recommended,
+            refs=a.refs)))
+        return _wrote(a, got, 'EDITED %s' % got.get('id'))
+    if a.sub == 'withdraw':
+        got = hub.post(_one('questions', a) + '/delete', client.AGENT, _edits(a, {}))
+        return _wrote(a, got, 'WITHDRAWN %s' % got.get('id'))
     return _list(a, 'questions', version=True)
+
+
+def _edits(a, body):
+    """The body of a creator's edit or withdraw: its fields, --from and --if-version, and
+    --urgent or --no-urgent when one was given (_body leaves a False out)."""
+    body.update({'from': a.who, 'if_version': a.if_version})
+    if getattr(a, 'urgent', None) is not None:
+        body['urgent'] = a.urgent
+    return body
 
 
 def _answer(a, stop):
@@ -863,6 +1042,8 @@ def _todos(a, stop):
     if a.sub == 'add':
         body = _body(title=a.title, detail=a.detail, commands=a.commands,
                      repo=getattr(a, 'repo', None), refs=a.refs, urgent=a.urgent)
+        if a.steps_file:
+            body['steps'] = _json_of(a.steps_file, 'steps')
         if a.who:
             body['from'] = a.who
         got = hub.post('/todos', client.OWNER if a.owner else client.AGENT, body)
@@ -875,6 +1056,13 @@ def _todos(a, stop):
     if a.sub == 'ack':
         got = hub.post(_one('todos', a) + '/ack', client.AGENT)
         return _wrote(a, got, 'ACKED %s' % got.get('id'))
+    if a.sub == 'edit':
+        got = hub.post(_one('todos', a) + '/edit', client.AGENT, _edits(a, _body(
+            title=a.title, detail=a.detail, commands=a.commands, repo=a.edit_repo, refs=a.refs)))
+        return _wrote(a, got, 'EDITED %s' % got.get('id'))
+    if a.sub == 'withdraw':
+        got = hub.post(_one('todos', a) + '/delete', client.AGENT, _edits(a, {}))
+        return _wrote(a, got, 'WITHDRAWN %s' % got.get('id'))
     return _list(a, 'todos')
 
 
@@ -930,6 +1118,73 @@ def _inbox(a, stop):
                  [_item(d, 'read' if d.get('read') else 'unread') for d in items])
 
 
+def _pages(a, stop):
+    """No delete: deleting a page is the owner's, on the hub page only."""
+    hub = _hub(a)
+    if a.sub == 'publish':
+        html = _text_of(a.html_file, 'html')
+        why = pagecheck.check(html)
+        if why:
+            raise serve.ServeError('the page check refuses %s: %s' % (a.html_file, why))
+        got = hub.post('/pages', client.AGENT, _body(
+            id=a.id, title=a.title, html=html, repo=getattr(a, 'repo', None), summary=a.summary,
+            refs=a.refs, if_version=a.if_version, **{'from': a.who}))
+        return _wrote(a, got, 'PUBLISHED %s' % got.get('id'))
+    if a.sub == 'show':
+        got = hub.page(a.id)
+        html = got.get('html') if isinstance(got.get('html'), str) else ''
+        if a.out:
+            try:
+                with open(a.out, 'w', encoding='utf-8', newline='') as f:
+                    f.write(html)
+            except OSError as e:
+                raise serve.ServeError('cannot write %s: %s' % (a.out, type(e).__name__))
+            return _show(a, {'ok': True, 'id': got.get('id'), 'version': got.get('version'),
+                             'out': a.out}, ['WROTE %s' % a.out])
+        if getattr(a, 'json', False):
+            return _show(a, got, [])
+        try:
+            sys.stdout.write(html + '\n')
+        except UnicodeEncodeError:
+            enc = getattr(sys.stdout, 'encoding', None) or 'ascii'
+            sys.stdout.write(html.encode(enc, 'backslashreplace').decode(enc) + '\n')
+        return client.OK
+    return _list(a, 'pages', version=True)
+
+
+def _approvals(a, stop):
+    """The requests from GET /snapshot (the api has no route that lists approvals), each with
+    its status read now: approvals.status_at applies the expiry, `malformed` for a bad document.
+    add posts one request (kitlib.hubapprove): it never decides or consumes one."""
+    if a.sub == 'add':
+        try:
+            body = hubapprove.build(a.checkout, a.title, [tuple(f) for f in a.files],
+                                    repo=getattr(a, 'repo', None), head=a.head, reason=a.reason)
+        except hubapprove.RequestError as e:
+            raise serve.ServeError(e.message)
+        got = hubapprove.request(_hub(a), body)
+        return _wrote(a, got, 'REQUESTED %s' % got.get('id'))
+    docs = (_hub(a).get('/snapshot').get('collections') or {}).get('approvals') or {}
+    now = datetime.datetime.now(datetime.timezone.utc)
+    items = [dict(docs[k], id=k, status=approvals.status_at(docs[k], now) or 'malformed')
+             if isinstance(docs[k], dict) else {'id': k, 'status': 'malformed'}
+             for k in sorted(docs, key=api._natural)]
+    if a.sub == 'show':
+        d = next((d for d in items if d['id'] == a.id), None)
+        if d is None:
+            raise serve.ServeError('no approval %s' % a.id)
+        lines = [_item(d), 'head %s' % d.get('head')] + (
+            ['reason %s' % d['reason']] if d.get('reason') else [])
+        lines += ['%s %s -> %s' % (f.get('path'), f.get('base_blob') or 'new',
+                                   f.get('blob') or 'deleted')
+                  for f in d.get('files') or [] if isinstance(f, dict)]
+        return _show(a, d, lines)
+    status, repo = getattr(a, 'status', 'all'), getattr(a, 'repo', '').strip().lower()
+    items = [d for d in items if status in ('all', d['status'])
+             and (not repo or str(d.get('repo') or '').strip().lower() == repo)]
+    return _show(a, {'items': items}, [_item(d) for d in items])
+
+
 def _routed(p):
     """`to=<route> from=<from>` of pending item p: the session key that is to handle it now and
     the key it is for (docs/action-hub.md "Who handles a pending item"); `-` for one not given."""
@@ -964,7 +1219,9 @@ def _wait(a, stop):
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
          'unpair': _unpair, 'stop': _stop, 'restart': _restart, 'migrate': _migrate,
          'questions': _questions, 'answer': _answer, 'todos': _todos,
-         'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pending': _pending,
+         'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pages': _pages,
+         'approvals': _approvals,
+         'pending': _pending,
          'wait': _wait, 'validate': _validate}
 
 

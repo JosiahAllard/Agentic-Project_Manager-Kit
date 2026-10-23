@@ -679,9 +679,9 @@ class DivisionDialog(Dialog):
                                               (lay.get("half") or {}).get("gpu") or 0),
                                  lay.get("agent_cap"),
                                  lay.get("medium_cores"), lay.get("source"))]
-        hc = lay.get("hardware_change") or {}
-        if hc.get("pending") or hc.get("changed"):
-            lines.append("A new division waits until nothing runs or queues.")
+        wait = m.layout_wait(lay)
+        if wait:
+            lines.append(wait[0].upper() + wait[1:] + ("" if wait.endswith(".") else "."))
         lines += ["hardware: %s" % p for p in hw.get("problems") or []]
         ttk.Label(f, text="\n".join(lines), wraplength=560, justify="left").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))

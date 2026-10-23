@@ -145,7 +145,7 @@ def _scenario(exe, scratch, repositories, parent_role, child_role, profile, perm
         (agents / (child_role + '.toml')).write_text(
             'name=' + json.dumps(child_role) + '\ndescription="Private canary role"\n'
             'model="pmkit-child-probe"\n'
-            'default_permissions=' + json.dumps(':read-only' if child_role == 'kit-reviewer' else ':workspace') + '\n'
+            'default_permissions=' + json.dumps(':read-only' if child_role == 'kit-analyst' else ':workspace') + '\n'
             'developer_instructions="Invoke pmkit_run with tool worktree_paths and args containing one dot once, then finish."\n',
             encoding='utf-8', newline='\n')
     provider = ThreadingHTTPServer(('127.0.0.1', 0), _handler())
@@ -231,7 +231,7 @@ def _scenario(exe, scratch, repositories, parent_role, child_role, profile, perm
                     'spawn_spec': provider.spawn_specs, 'tool_outputs': provider.tool_outputs,
                     'filesystem_probe': filesystem_probe, 'root_policy': json.loads(root.policy_json)}))
             binding = bindings.bindings[observed[0]['thread']]
-            expected = parent_role if child_role is None else ('reviewer' if child_role == 'kit-reviewer' else 'worker')
+            expected = parent_role if child_role is None else ('analyst' if child_role == 'kit-analyst' else 'worker')
             if binding.role != expected:
                 raise RuntimeError('actual native role differs from the expected canary role')
             if binding.permission_profile != selected_permissions and child_role is None:
@@ -289,10 +289,10 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
             if not repositories.is_relative_to(destination):
                 raise ValueError('private repository fixtures redirected outside their reviewed directory')
             cases = (('worker', None, ':workspace', False),
-                     ('worker', 'kit-reviewer', ':read-only', False),
+                     ('worker', 'kit-analyst', ':read-only', False),
                      (None, 'kit-worker', ':workspace', False),
-                     ('worker', 'kit-reviewer', ':workspace', True),
-                     ('reviewer', None, ':read-only', False))
+                     ('worker', 'kit-analyst', ':workspace', True),
+                     ('analyst', None, ':read-only', False))
             results = []
             for role, child, permissions, refusal in cases:
                 try:

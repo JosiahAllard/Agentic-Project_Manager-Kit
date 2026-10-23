@@ -80,6 +80,24 @@ class PullTakeover(StoreCase):
                       change.lines)
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
 
+    def test_a_marked_dead_pull_is_refused_until_the_mark_is_cleared(self):
+        self.seed(self.pulled('DEAD', GONE, review='owner-hub 2026-10-15'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'DEAD')
+        self.assertIn('marked for review', str(cm.exception))
+        self.assertIn('clear-review DEAD', str(cm.exception))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+        self.verb('clear_review', 'DEAD', 'the coordinator read it')
+        self.verb('pull', 'DEAD')
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
+
+    def test_a_marked_live_pull_still_refuses_already_in_flight(self):
+        self.repo.git('branch', 'kit/live-one')
+        self.seed(self.pulled('LIVE', 'kit/live-one', review='owner-hub 2026-10-15'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'LIVE')
+        self.assertIn('already in flight', str(cm.exception))
+
     def test_a_failed_branch_probe_holds_the_pull(self):
         self.seed(self.pulled('DEAD', GONE))
         with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
@@ -121,6 +139,28 @@ class PullTakeover(StoreCase):
         self.land(GONE + '-two')
         self.seed(self.pulled('DEAD', GONE))
         self.verb('pull', 'DEAD')
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
+
+    def test_a_merge_off_mains_first_parent_line_is_no_landing(self):
+        # GONE merged into a side branch (`Merge GONE: ...` there), and the side branch landed:
+        # that merge is in main's history but not on its first-parent line, so GONE never landed
+        # on main and its pull is dead.
+        when = '%sT12:00:00+0000' % EARLIER
+        self.repo.git('checkout', '-q', '-b', 'kit/side')
+        self.repo.git('checkout', '-q', '-b', GONE)
+        self.repo.write('landed/gone.txt', 'x\n')
+        self.repo.commit('work', 'landed')
+        self.repo.git('checkout', '-q', 'kit/side')
+        with mock.patch.dict(os.environ, GIT_COMMITTER_DATE=when, GIT_AUTHOR_DATE=when):
+            self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge %s: its summary' % GONE, GONE)
+            self.repo.git('checkout', '-q', 'main')
+            self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge kit/side: its summary',
+                          'kit/side')
+        self.repo.git('branch', '-D', GONE)
+        self.repo.git('branch', '-D', 'kit/side')
+        self.seed(self.pulled('DEAD', GONE))
+        change = self.verb('pull', 'DEAD')
+        self.assertIn('took over a dead pull from %s' % GONE, '\n'.join(change.lines))
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
 
     def test_a_history_git_cannot_read_fails_closed(self):

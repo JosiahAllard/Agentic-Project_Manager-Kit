@@ -3,18 +3,37 @@ It writes nothing into any repository: a repository works with the kit with noth
 
   machine_setup.py [--owner-email EMAIL]               DRY RUN of the machine setup: the guard's
                                                        entry in each account's settings.json, the
-                                                       kit plugin per account, the owner's email in
-                                                       the machine config, the agents' temp folder
+                                                       kit plugin per account (then, there, the 3
+                                                       machine-lock tools' allow rules and the drop
+                                                       of the kit SessionStart hooks the plugin
+                                                       runs), the owner's email in the machine
+                                                       config, the agents' temp folder
   machine_setup.py ... --apply                         make them
   machine_setup.py --old-kit DIR [--apply]             switch the Claude config folders from an
-                                                       older kit clone instead (links, settings,
-                                                       the owner's email, the extras)
+                                                       older kit clone instead (settings, the
+                                                       owner's email, the extras)
+                                                       In both modes no link is made: each link an
+                                                       earlier setup left is reported with the
+                                                       command that removes the link only
   machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--apply]
                                                        the committed repo setup instead: writes
                                                        .kit.json, the ignore lines, a starter
                                                        docs/INDEX.md (and with --stubs, --stack
                                                        their files) into the repository PATH
                                                        (docs/install.md "Committed setup (--repo)")
+  machine_setup.py --managed-settings [--home DIR] [--kit DIR] [--apply]
+                                                       write Claude Code's machine-wide managed
+                                                       settings file (Program Files/ClaudeCode)
+                                                       from the kit's template and the overlay
+                                                       ~/.pm-kit/managed-settings.json instead;
+                                                       --apply needs an elevated terminal
+                                                       (docs/machine-setup.md "Managed settings")
+  machine_setup.py --pm-repo PATH [--kit DIR] [--apply]
+                                                       set the PM-repo pointer (HKLM\\SOFTWARE\\pm-kit
+                                                       pm_repo) to the PM repository's work tree
+                                                       PATH instead; --apply needs an elevated
+                                                       terminal (docs/machine-setup.md "PM repo
+                                                       pointer")
   machine-wide options: --config-dir DIR (repeatable; default: the plugin's account folders, ~/.claude,
                              every ~/.claude-* folder but the machine config's own and each folder
                              of the launcher's accounts and orgs; with --old-kit, the first two)
@@ -28,6 +47,10 @@ It writes nothing into any repository: a repository works with the kit with noth
                              --apply registers it, after one dry run of the sweep printing what it
                              would remove; a task already registered is left as is)
            --register-sweep-task  the default now; still accepted
+           --no-worktree-sweep  do not register the `<repo>-worktree-sweep` task of each repository
+                             in the machine config's launcher.repos (by default --apply registers a
+                             missing one, or one that runs a removed plugin export, after one dry run
+                             of the sweep printing what it would remove)
            --shortcut        the machine schedule shortcut on the desktop (always with --old-kit)
            --procwatch       register (or update) the "Claude procwatch" scheduled task: every 15 min,
                              report only, its log in the agents' temp folder
@@ -53,12 +76,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kitlib import machinesetup                                     # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
 from kitlib.machinesetup import owner as mowner                     # noqa: E402
+from kitlib.machinesetup import pointer as mpointer                 # noqa: E402
 from kitlib.machinesetup import repo as mrepo                       # noqa: E402
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'stubs', 'pm_data', 'private_remote')
 MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'no_sweep_task',
-                'shortcut', 'procwatch', 'procwatch_kill',
+                'no_worktree_sweep', 'shortcut', 'procwatch', 'procwatch_kill',
                 'desktop', 'home')
 
 
@@ -66,9 +90,14 @@ def parser():
     p = argparse.ArgumentParser(prog='machine_setup.py', description=__doc__.split('\n')[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument('--old-kit', help='the older kit clone the machine links point into')
+    mode.add_argument('--old-kit', help='the older kit clone to switch the config folders from')
     mode.add_argument('--fresh', action='store_true', help='the default mode (its old name)')
     mode.add_argument('--repo', help='the committed repo setup of this repository instead')
+    mode.add_argument('--managed-settings', action='store_true',
+                      help="write the default host's machine-wide managed settings file from the "
+                           "kit's template instead (--apply needs an elevated terminal)")
+    mode.add_argument('--pm-repo', help="set the PM-repo pointer in the registry to this PM repository's "
+                                        'work tree instead (--apply needs an elevated terminal)')
     p.add_argument('--owner-email', default=None, help="the owner's email (the machine config; with "
                    '--repo, .kit.json "owner".email)')
     p.add_argument('--pm-settings', default=None,
@@ -82,6 +111,8 @@ def parser():
                    help="do not register the agents' temp sweep task (registered by default)")
     p.add_argument('--register-sweep-task', action='store_true',
                    help='the default; still accepted')
+    p.add_argument('--no-worktree-sweep', action='store_true',
+                   help="do not register each launcher repository's worktree sweep task (registered by default)")
     p.add_argument('--shortcut', action='store_true', help='the machine schedule shortcut on the desktop')
     p.add_argument('--procwatch', action='store_true',
                    help='register or update the procwatch scheduled task (report only)')
@@ -110,6 +141,22 @@ def main(argv=None):
         return machinesetup.EXIT_USAGE if e.code else 0
     safe_stdout()
     out = lambda line: print(line, flush=True)              # noqa: E731
+    if a.managed_settings:
+        given = [n for n in REPO_ONLY + MACHINE_ONLY + ('owner_email',)
+                 if n != 'home' and getattr(a, n) not in (None, False)]
+        if given:
+            return usage('--%s does not go with --managed-settings (it takes --kit, --home and --apply)'
+                         % given[0].replace('_', '-'))
+        home = a.home if a.home is not None else kuser.home_dir()
+        code, _ = machinesetup.run_managed(machinesetup.ManagedContext(home, a.kit), apply=a.apply, out=out)
+        return code
+    if a.pm_repo is not None:
+        given = [n for n in REPO_ONLY + MACHINE_ONLY + ('owner_email',) if getattr(a, n) not in (None, False)]
+        if given:
+            return usage('--%s does not go with --pm-repo (it takes --kit and --apply)'
+                         % given[0].replace('_', '-'))
+        code, _ = machinesetup.run_pointer(mpointer.PointerContext(a.pm_repo, a.kit), apply=a.apply, out=out)
+        return code
     if a.repo is not None:
         given = [n for n in MACHINE_ONLY if getattr(a, n) not in (None, False)]
         if given:
@@ -136,7 +183,8 @@ def main(argv=None):
                                agent_temp=a.agent_temp, desktop=a.desktop,
                                pm_settings=a.pm_settings, sweep_task=not a.no_sweep_task,
                                owner_email=a.owner_email, shortcut=True if a.shortcut else None,
-                               procwatch=a.procwatch, procwatch_kill=a.procwatch_kill)
+                               procwatch=a.procwatch, procwatch_kill=a.procwatch_kill,
+                               worktree_sweep=not a.no_worktree_sweep)
     if a.apply and not ctx.owner_email and interactive() and mowner.needs_prompt(ctx):
         ctx.owner_email = ask_owner_email(mowner.suggestion(ctx))
     code, _ = machinesetup.run(ctx, apply=a.apply, out=out)

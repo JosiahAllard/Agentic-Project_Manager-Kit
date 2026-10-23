@@ -27,6 +27,9 @@ the program's; the Terminal window or tab is then retitled to the program's path
 each Terminal window or tab with an unused PseudoConsoleWindow record within CORRELATE_S seconds,
 one whose exe is the one the title names first, then (a window only) the nearest in time. Pseudo
 records themselves are not counted: a program started with no window (CREATE_NO_WINDOW) makes none.
+A window whose program is a console host (conhost, OpenConsole) within CORRELATE_S of a window of a
+known program with the same ours (any ours, when the host window is not counted) is taken for that
+program's twin and dropped (_drop_twins), so another run's window never hides one of this run's.
 
 Whose window. `ours(pid)` (Monitor's argument, called on the monitor thread) says whether a pid is
 the caller's: True, False, or None for unknown. A machine-lock run passes its job's membership
@@ -56,6 +59,14 @@ The title heuristic (looks_launched) and its limits:
   service) has no windows to see: the monitor then records nothing and cannot tell.
 - A window handle is compared by value: a pre-start window destroyed and its handle reused by a
   new one in the same run would be missed (Windows makes this rare).
+
+What spawned it (proc_info). When the monitor reads a window's program (a console window's own
+pid, a PseudoConsoleWindow's pid for a Terminal window or tab) it also reads, there and then, the
+program's command line, its parent pid and the parent's command line (kitlib.proc.process), each cut
+to CMDLINE_CAP characters. A process gone or not readable by then gives UNREADABLE for that field,
+never an exception; a parent gone, unreadable or created after the program (its pid reused) gives
+a parent pid of None. The report shows them on `cmd:` and `parent:` lines under the window's own
+line; a Window built without them (cmdline None) shows neither.
 """
 import ctypes
 import os
@@ -64,7 +75,7 @@ import threading
 import time
 from ctypes import wintypes
 
-from kitlib.proc import win32
+from kitlib.proc import process, win32
 
 CONSOLE = "ConsoleWindowClass"
 TERMINAL = "CASCADIA_HOSTING_WINDOW_CLASS"
@@ -87,6 +98,9 @@ STOP_WAIT_S = 5.0       # stop(): the thread has ended, or the monitor says it d
 QUIET_S = 0.05          # stop(): no event for this long and the queue is taken as drained
 DRAIN_S = 0.2           # stop(): the most it waits for that quiet before it ends the thread
 RECORD_CAP = 50         # records(): the most windows a record keeps
+CMDLINE_CAP = 2000      # proc_info(): the most characters of a command line kept
+TEXT_CAP = 300          # Window.detail_lines(): the most characters of a command line shown
+UNREADABLE = "(unreadable)"     # proc_info(): a field the process no longer lets be read
 
 WINEVENTPROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
                                   wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
@@ -180,6 +194,40 @@ def exe_of(pid):
         win32.close(h)
 
 
+def _cut(text, cap):
+    return text if len(text) <= cap else text[:cap] + "..."
+
+
+def _cmdline(pid, ctime=None):
+    try:
+        c = process.command_line(pid, ctime)
+    except Exception:
+        return UNREADABLE
+    return UNREADABLE if c is None else _cut(c, CMDLINE_CAP)
+
+
+def proc_info(pid):
+    """(command line, parent pid, parent command line) of pid, read now. A field that cannot be
+    read is UNREADABLE (parent pid: None); it never raises (module docstring, "What spawned
+    it")."""
+    if not pid:
+        return UNREADABLE, None, UNREADABLE
+    cmd, ppid, pct = _cmdline(pid), None, None
+    try:
+        h = process.open_process(pid)
+        if h:
+            try:
+                ctime, ppid = process.handle_ctime(h), process.parent_pid(h)
+            finally:
+                process.close(h)
+            pct = process.proc_ctime(ppid) if ppid else None
+            if pct is None or (ctime is not None and pct > ctime):
+                ppid = None         # gone, unreadable, or its pid reused since
+    except Exception:
+        ppid = None
+    return cmd, ppid, (_cmdline(ppid, pct) if ppid else UNREADABLE)
+
+
 def base(path):
     return os.path.basename(path or "").lower()
 
@@ -212,13 +260,16 @@ class Window:
     """One window the monitor saw open. how: 'window' (a console or Terminal window shown after
     start) or 'tab' (a pre-start Terminal window retitled to a launched program). pid and exe are
     the program's, when known; host_pid and host_exe the window's host (conhost, Windows Terminal).
-    ours: True, False or None (unknown), as the monitor's ours() said for pid."""
+    ours: True, False or None (unknown), as the monitor's ours() said for pid. cmdline, parent_pid,
+    parent_cmdline: proc_info(pid) when the program was read, else None."""
 
     def __init__(self, cls, how, title, pid=None, exe=None, host_pid=None, host_exe=None,
-                 ours=None, at=None, mono=None, hwnd=None):
+                 ours=None, at=None, mono=None, hwnd=None, cmdline=None, parent_pid=None,
+                 parent_cmdline=None):
         self.cls, self.how, self.title = cls, how, title
         self.pid, self.exe, self.host_pid, self.host_exe = pid, exe, host_pid, host_exe
         self.ours = ours
+        self.cmdline, self.parent_pid, self.parent_cmdline = cmdline, parent_pid, parent_cmdline
         self.at = time.time() if at is None else at
         self.mono = time.monotonic() if mono is None else mono
         self.title_mono = self.mono
@@ -226,7 +277,8 @@ class Window:
 
     def copy(self, **kw):
         w = Window(self.cls, self.how, self.title, self.pid, self.exe, self.host_pid,
-                   self.host_exe, self.ours, self.at, self.mono, self.hwnd)
+                   self.host_exe, self.ours, self.at, self.mono, self.hwnd, self.cmdline,
+                   self.parent_pid, self.parent_cmdline)
         w.title_mono = self.title_mono
         for k, v in kw.items():
             setattr(w, k, v)
@@ -242,18 +294,31 @@ class Window:
         return '%s %s %s%s %s title "%s" [%s]' % (when, self.how, who, host, self.cls,
                                                   self.title, self.tag())
 
+    def detail_lines(self):
+        """`cmd:` and `parent:` lines (what spawned the window), or [] when the program's command
+        line was never read."""
+        if self.cmdline is None:
+            return []
+        parent = ("pid %s: %s" % (self.parent_pid, _cut(self.parent_cmdline or UNREADABLE,
+                                                          TEXT_CAP))
+                  if self.parent_pid else UNREADABLE)
+        return ["cmd: %s" % _cut(self.cmdline, TEXT_CAP), "parent: %s" % parent]
+
     def as_dict(self):
         return {"at": round(self.at, 3), "cls": self.cls, "how": self.how, "title": self.title,
                 "pid": self.pid, "exe": self.exe, "host_pid": self.host_pid,
-                "host_exe": self.host_exe, "ours": self.ours}
+                "host_exe": self.host_exe, "ours": self.ours, "cmdline": self.cmdline,
+                "parent_pid": self.parent_pid, "parent_cmdline": self.parent_cmdline}
 
 
 class Pseudo:
-    """A PseudoConsoleWindow shown: the program behind a Terminal window or tab."""
+    """A PseudoConsoleWindow shown: the program behind a Terminal window or tab. info: its
+    proc_info(), or None when not read."""
 
-    def __init__(self, pid, exe, ours, mono=None):
+    def __init__(self, pid, exe, ours, mono=None, info=None):
         self.pid, self.exe, self.ours = pid, exe, ours
         self.mono = time.monotonic() if mono is None else mono
+        self.info = info
 
 
 def _same_exe(exe, title):
@@ -265,7 +330,8 @@ def attribute(windows, pseudos, within=CORRELATE_S):
     """The windows to report: each Terminal window or tab paired with the program behind it (module
     docstring, "Correlation"). A console window keeps its own pid. A tab no program matches by
     exe, or one whose program is not known to be the caller's, is dropped as a likely tab
-    switch. Pure: the inputs are not changed."""
+    switch. A console host's twin of a program's window is then dropped (_drop_twins).
+    Pure: the inputs are not changed."""
     used, out = set(), []
     for w in sorted(windows, key=lambda w: w.mono):
         if w.cls != TERMINAL:
@@ -283,8 +349,32 @@ def attribute(windows, pseudos, within=CORRELATE_S):
             continue
         i, p = pick[0]
         used.add(i)
-        out.append(w.copy(pid=p.pid, exe=p.exe, ours=p.ours))
-    return out
+        cmd, ppid, pcmd = p.info or (None, None, None)
+        out.append(w.copy(pid=p.pid, exe=p.exe, ours=p.ours, cmdline=cmd, parent_pid=ppid,
+                          parent_cmdline=pcmd))
+    return _drop_twins(out, within)
+
+
+def _drop_twins(windows, within):
+    """One window per twin pair: a window whose program is a console host (openconsole.exe,
+    conhost.exe) beside a window of a known real program shown within `within` seconds is the
+    host's twin of that program's window, so it is dropped and the program's window stays (with its
+    own ours). The mate has the same ours; a host window already not counted (ours False) may take
+    any mate, so a drop never lowers the count. Pairs are made first where the real window's
+    host_pid is the host window's pid, then where the two have the same ours, then nearest in
+    time. Each real window drops at most one host window; a window with no exe is no mate; a host
+    window with no partner stays."""
+    real = [w for w in windows if w.exe and base(w.exe) not in HOSTS]
+    hosts = [(j, w) for j, w in enumerate(windows) if base(w.exe) in HOSTS]
+    pairs = sorted((r.host_pid != h.pid or not h.pid, r.ours != h.ours, abs(r.mono - h.mono), j, i)
+                   for j, h in hosts for i, r in enumerate(real)
+                   if abs(r.mono - h.mono) <= within and (r.ours == h.ours or h.ours is False))
+    taken, drop = set(), set()
+    for _, _, _, j, i in pairs:
+        if j not in drop and i not in taken:
+            taken.add(i)
+            drop.add(j)
+    return [w for j, w in enumerate(windows) if j not in drop]
 
 
 class Monitor:
@@ -438,7 +528,7 @@ class Monitor:
         if cls == PSEUDO:
             if event == EVENT_OBJECT_SHOW:
                 pid = window_pid(hwnd)
-                p = Pseudo(pid, exe_of(pid), self._owner(pid))
+                p = Pseudo(pid, exe_of(pid), self._owner(pid), info=proc_info(pid))
                 with self._lock:
                     self._pseudo.append(p)
             return
@@ -451,8 +541,10 @@ class Monitor:
             title, pid = window_text(hwnd), window_pid(hwnd)
             if cls != TERMINAL:
                 host = thread_pid(thread)
-                w = Window(cls, "window", title, pid, exe_of(pid), host, exe_of(host),
-                           self._owner(pid), hwnd=hwnd)
+                exe, owner = exe_of(pid), self._owner(pid)     # before proc_info: whose
+                cmd, ppid, pcmd = proc_info(pid)                # it is is read first
+                w = Window(cls, "window", title, pid, exe, host, exe_of(host), owner, hwnd=hwnd,
+                           cmdline=cmd, parent_pid=ppid, parent_cmdline=pcmd)
             else:
                 w = Window(cls, "window", title, None, None, pid, exe_of(pid), hwnd=hwnd)
             with self._lock:
@@ -498,11 +590,14 @@ def report_lines(windows, error=None, gone=0, fails=False):
     if ours:
         head += (" - FAILED: a console window opened" if fails else
                  " - WARNING: a console window opened (the verdict does not count it)")
-    lines = [head] + ["  " + w.text() for w in ours]
+    lines = [head]
+    for w in ours:
+        lines += ["  " + w.text()] + ["    " + x for x in w.detail_lines()]
     others = [w for w in windows or () if w.ours is False]
     if others:
         lines.append("  also seen, another run's: %d" % len(others))
-        lines += ["    " + w.text() for w in others]
+        for w in others:
+            lines += ["    " + w.text()] + ["      " + x for x in w.detail_lines()]
     if gone:
         lines.append("  also seen: %d console host window(s) shown and gone before they could "
                      "be read" % gone)

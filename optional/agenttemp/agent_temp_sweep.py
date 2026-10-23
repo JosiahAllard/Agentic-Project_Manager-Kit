@@ -10,7 +10,7 @@ name, or claude/<project>/<session>; * and ? match within one name; case-insensi
 is kept when an item names it, a folder holding it, or anything inside it: the sweep never enters a
 unit, so "kit-coordinator/r2" keeps all of kit-coordinator, and "*/x" keeps every top-level folder.
 Built in, whatever the config says (BUILT_IN_KEEP): a top-level "<name>-coordinator" or
-"<name>-consultant" folder is always kept, since the launcher keeps a consultant's notes file
+"<name>-consultant" folder, and the top-level "shared" folder, is always kept, since the launcher keeps a consultant's notes file
 there and a coordinator its state note (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER).
 
 The units are the top-level files and folders of dir, except a folder named "claude": Claude Code
@@ -42,12 +42,48 @@ folder or file in it or any folder above it), or the machine config folder or th
 folder inside one or a folder holding one (kitlib.machinesetup.agenttemp.unsafe_dir, which machine
 setup applies to the folder it sets up too). Standard library and the kit's own kitlib only.
 
+The user temp's claude folder (a second root). Sessions not started by the kit's launcher (the
+desktop app's Code tab) keep their scratch under the user's own TEMP, <user temp>/claude/<project>/
+<session>, outside dir. With "user_temp": true in the config (a boolean, default false), each run
+also sweeps that folder: the user temp is HKCU\\Environment TEMP (else TMP), %VAR% expanded, never
+the process environment (the launcher sets a session's TEMP to dir). Only its claude/ units are
+swept, under every rule above (age, keep-list, live, claim); nothing else in the user temp is
+listed or touched, and its claude/ folder itself is never removed. It is skipped, with one
+"user temp: skipped: <why>" line and no change to the exit code, when the registry has no value,
+when <user temp>/claude does not exist or may not be swept (second_root_unsafe), or when it is dir,
+in dir or holds it (swept once, by the main run). second_root_unsafe: the folder may have no link
+anywhere in its path, and must pass dir's refusals (unsafe_dir), with one exception: a folder in the
+home folder is allowed when it is exactly %LOCALAPPDATA%\\Temp\\claude (as written and by real path),
+Windows' default user temp; every other refusal still holds there.
+
+The one-time drain (--drain-old-user-temp; a dry run unless --apply). It sweeps only the Windows
+default user temp's claude folder, %LOCALAPPDATA%\\Temp\\claude (derived, never typed in), with the
+rules of a second root, once the user's TEMP points elsewhere. The gate: while any claude.exe
+(the CLI or the desktop app, name case-blind) started before HKCU\\Environment was last written, the
+drain removes nothing and exits 4, naming each such process; it also exits 4 when the process list
+or that time cannot be read (fail closed). The last write is never earlier than the TEMP change, so
+the gate can only hold back more. An empty process list, or a TEMP that is missing, not absolute
+or still holds an unexpanded %VAR%, shuts it too. Known limits: the gate counts claude.exe only, so
+Claude Code run by node.exe (the npm install) is not counted; and a claude.exe started after the
+change by a parent started before it inherits the parent's old TEMP. Only the age and claim rules
+protect those sessions' folders. The dry run prints the gate and the list either way. It has
+nothing to drain (exit 0) when that folder is missing, is the current user temp's, or lies in dir.
+Owner steps, after a kit with this flag is the one the scheduled task runs:
+  1. add "user_temp": true to agent_temp_sweep in the machine config (an older sweep refuses the key);
+  2. restart the Claude desktop app and end every session started before the TEMP change;
+  3. python <kit>\\optional\\agenttemp\\agent_temp_sweep.py --drain-old-user-temp  (read the list)
+  4. python <kit>\\optional\\agenttemp\\agent_temp_sweep.py --drain-old-user-temp --apply
+     (re-run later for what was too young; exit 4 means a session still predates the change).
+
 Exit codes: 0 done (or nothing to do); 1 some old entry could not be removed (in use or failed);
 2 no config, a bad config, an unsafe dir or a dir that cannot be listed; 3 the process list could
-not be read, so every old unit under claude/ was kept (3 wins over 1).
+not be read, so every old unit under claude/ was kept (3 wins over 1); 4 (--drain-old-user-temp
+only) the drain's gate is shut: a claude.exe predates the user environment's last change, or that
+cannot be told.
 """
 import argparse
 import collections
+import datetime
 import fnmatch
 import json
 import os
@@ -57,7 +93,7 @@ import sys
 import time
 
 # The machine config's place comes from the kit library (kitlib.config.user), found at the kit's
-# root through the real path: an installed junction (~/.claude/tools/agenttemp) resolves into the kit.
+# root through the real path: a link to this folder resolves into the kit.
 # Without it nothing is swept: load() refuses (exit 2), never a traceback (exit 1 means a partial sweep).
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.insert(0, KIT_ROOT)
@@ -76,8 +112,10 @@ SESSIONS = "claude"             # Claude Code's scratch: <dir>/claude/<project>/
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 KEPT = ("young", "kept", "live", "skipped")    # actions that leave a unit in place by design
 EXIT_LIST_UNAVAILABLE = 3       # the process list could not be read: every old claude/ unit was kept
+EXIT_DRAIN_REFUSED = 4          # --drain-old-user-temp: a claude.exe predates the TEMP change, or unknown
+FIELDS = ("dir", "max_age_days", "keep", "user_temp")
 
-Config = collections.namedtuple("Config", "dir max_age_days keep")
+Config = collections.namedtuple("Config", "dir max_age_days keep user_temp")
 
 
 class SweepConfigError(ValueError):
@@ -88,7 +126,9 @@ def check(cfg):
     """The errors in an "agent_temp_sweep" object, as text lines (empty: valid)."""
     if not isinstance(cfg, dict):
         return ["%s must be an object" % KEY]
-    errs = ["%s: unknown key %r" % (KEY, k) for k in cfg if k not in ("dir", "max_age_days", "keep")]
+    errs = ["%s: unknown key %r" % (KEY, k) for k in cfg if k not in FIELDS]
+    if not isinstance(cfg.get("user_temp", False), bool):
+        errs.append("%s.user_temp must be true or false" % KEY)
     d = cfg.get("dir")
     if not (isinstance(d, str) and os.path.isabs(d)):
         errs.append("%s.dir must be an absolute path" % KEY)
@@ -140,7 +180,8 @@ def load_config(home=None):
     errs = check(cfg)
     if errs:
         raise SweepConfigError("; ".join(errs))
-    return Config(cfg["dir"], cfg.get("max_age_days", DEFAULT_MAX_AGE_DAYS), list(cfg.get("keep", [])))
+    return Config(cfg["dir"], cfg.get("max_age_days", DEFAULT_MAX_AGE_DAYS), list(cfg.get("keep", [])),
+                  cfg.get("user_temp", False))
 
 
 def unsafe_dir(d, home=None):
@@ -156,6 +197,127 @@ def unsafe_dir(d, home=None):
         return why
     if not os.path.isdir(d):
         return "%s is not a folder" % d
+    return None
+
+
+def registry_user_temp():
+    """The user's own temp folder: HKCU\\Environment TEMP, else TMP, %VAR% expanded; None when
+    neither is set or the key cannot be read. Never the process environment: the kit's launcher sets
+    a session's TEMP to the agents' temp folder."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            for name in ("TEMP", "TMP"):
+                try:
+                    value, kind = winreg.QueryValueEx(k, name)
+                except OSError:
+                    continue
+                if isinstance(value, str) and value.strip():
+                    if kind == winreg.REG_EXPAND_SZ:
+                        value = winreg.ExpandEnvironmentStrings(value)
+                    return value
+    except (ImportError, OSError):
+        return None
+    return None
+
+
+def local_temp():
+    """Windows' default user temp, %LOCALAPPDATA%\\Temp; None without LOCALAPPDATA."""
+    base = os.environ.get("LOCALAPPDATA")
+    return os.path.join(base, "Temp") if base and os.path.isabs(base) else None
+
+
+def env_changed_at():
+    """When HKCU\\Environment was last written (epoch seconds), or None when it cannot be read.
+    Setting TEMP writes it, so this is never earlier than the TEMP change."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            return winreg.QueryInfoKey(k)[2] / 1e7 - 11644473600.0     # 100 ns ticks since 1601
+    except (ImportError, OSError):
+        return None
+
+
+_ISO = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}[:][0-9]{2}[:][0-9]{2})(?:[.]([0-9]+))?"
+                  r"(Z|[+-][0-9]{2}[:][0-9]{2})?$")
+
+
+def started_at(s):
+    """A process's Created (ISO 8601, as kitlib.pmstart.list_processes gives it: up to 7 fraction
+    digits, a local offset or Z) as epoch seconds; None when it does not parse."""
+    m = _ISO.match(str(s).strip()) if isinstance(s, str) else None
+    if not m:
+        return None
+    frac = ((m.group(2) or "") + "000000")[:6]
+    zone = m.group(3) or ""
+    try:
+        return datetime.datetime.fromisoformat(
+            "%s.%s%s" % (m.group(1), frac, "+00:00" if zone == "Z" else zone)).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _forms(path):
+    """[normcase abspath, normcase realpath] of path (one when they agree)."""
+    a = os.path.normcase(os.path.abspath(path))
+    try:
+        r = os.path.normcase(os.path.realpath(a))
+    except (OSError, ValueError):
+        return [a]
+    return [a] if r == a else [a, r]
+
+
+def _within(a, b):
+    """a is b or lies under it (normcase'd absolute paths)."""
+    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
+def overlaps(a, b):
+    """a and b are the same folder, or one holds the other, as written or by real path."""
+    return any(_within(x, y) or _within(y, x) for x in _forms(a) for y in _forms(b))
+
+
+def _link_on_path(path):
+    """The first link (symlink, junction, any reparse point) in path or a folder above it, or None."""
+    p = os.path.abspath(path)
+    while True:
+        if is_link(p):
+            return p
+        up = os.path.dirname(p)
+        if up == p:
+            return None
+        p = up
+
+
+def second_root_unsafe(root, home=None):
+    """Why the session folder `root` (<user temp>/claude) may not be swept as a second root, or
+    None. It may have no link in it or above it; it must pass unsafe_dir (dir's refusals), with
+    one exception: the home-folder refusal is lifted for exactly %LOCALAPPDATA%\\Temp\\claude
+    (local_temp(), as written; no link means the real path is the same), where the kit and machine
+    config refusals and the git checkout refusal still hold; and it must be an existing folder."""
+    root = os.path.abspath(root)
+    link = _link_on_path(root)
+    if link:
+        return "%s is a link or under one (%s)" % (root, link)
+    why = unsafe_dir(root, home)
+    if not why:
+        return None
+    lt = local_temp()
+    if not (lt and os.path.basename(root) == SESSIONS and
+            os.path.normcase(os.path.dirname(root)) == os.path.normcase(os.path.abspath(lt))):
+        return why
+    if kagenttemp is None:
+        return why
+    home = os.path.abspath(home or os.path.expanduser("~"))
+    for name, other in (("the kit checkout", KIT_ROOT),
+                        ("the machine config folder", kuser.config_dir(home))):
+        if overlaps(root, other):
+            return "%s is %s %s, in it or holds it" % (root, name, other)
+    top = kagenttemp.in_checkout(root)
+    if top:
+        return "%s is inside a git checkout or worktree (%s has .git)" % (root, top)
+    if not os.path.isdir(root):
+        return "%s is not a folder" % root
     return None
 
 
@@ -282,17 +444,19 @@ def _listing(rel, path, skipped):
         return []
 
 
-def units(d, skipped=None):
+def units(d, skipped=None, sessions_only=False):
     """[(relpath, parent, name)] of the sweep's units, relpath "/"-joined: every top-level entry of
     d but a real folder named claude; for that, every entry of each claude/<project> folder, and
     each file or link straight in claude/. Every path is d joined with names os.scandir gave.
     skipped: a list that gets (relpath, why) for each claude/ or claude/<project> folder that
-    cannot be listed; nothing in it is a unit."""
+    cannot be listed; nothing in it is a unit. sessions_only: the claude/ units alone (a second
+    root: the rest of d is not the kit's)."""
     skipped = [] if skipped is None else skipped
     out = []
     for e in _top(d):
         if not _is_sessions(e):
-            out.append((e.name, d, e.name))
+            if not sessions_only:
+                out.append((e.name, d, e.name))
             continue
         for p in _listing(e.name, e.path, skipped):
             if not _real_dir(p):
@@ -326,8 +490,9 @@ def is_kept(rel, keep):
 
 
 # kept whatever "keep" says: the launcher's <repo>-consultant notes folder and a coordinator's
-# <repo>-coordinator state-note folder (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER)
-BUILT_IN_KEEP = ("*-coordinator", "*-consultant")
+# <repo>-coordinator state-note folder (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER),
+# and the top-level "shared" folder the agents keep their cross-session files in
+BUILT_IN_KEEP = ("*-coordinator", "*-consultant", "shared")
 
 
 LIST_TIMEOUT = 30       # seconds for the process list; the session start's 4 s is too short at 04:00
@@ -349,15 +514,16 @@ def live_ids(procs):
     return ids
 
 
-def sweep(d, max_age_days, apply=False, now=None, home=None, keep=(), lister=None):
+def sweep(d, max_age_days, apply=False, now=None, home=None, keep=(), lister=None, sessions_only=False):
     """[Entry] for every unit of d (units()) and every claude/<project> folder it removes, oldest
     first. action: "young" (too new), "kept" (keep-list or BUILT_IN_KEEP), "live" (under claude/: a running process
     names it, or the process list could not be read), "would" (old; apply not set), "removed", or
     "in-use" / "failed" (kept), or "skipped" (a claude/ or claude/<project> folder that could not
     be listed; its units are not in the list). lister gives the processes (default_lister); it is called only
     when an old unit under claude/ is met. Raises SweepConfigError when d may not be swept
-    (unsafe_dir)."""
-    why = unsafe_dir(d, home)
+    (unsafe_dir). sessions_only: d is a second root (a user temp): only its claude/ units are
+    swept, and the check is second_root_unsafe on d/claude, not unsafe_dir on d."""
+    why = second_root_unsafe(os.path.join(d, SESSIONS), home) if sessions_only else unsafe_dir(d, home)
     if why:
         raise SweepConfigError(why)
     now = time.time() if now is None else now
@@ -380,7 +546,7 @@ def sweep(d, max_age_days, apply=False, now=None, home=None, keep=(), lister=Non
 
     projects = [(rel, p, _own_time(p)) for rel, p in _projects(d)]
     skipped = []
-    found = units(d, skipped)
+    found = units(d, skipped, sessions_only)
     out = [Entry(rel, 0.0, "skipped", why) for rel, why in skipped]
     projects = [x for x in projects if x[0] not in {rel for rel, _ in skipped}]
     keep = tuple(keep or ()) + BUILT_IN_KEEP
@@ -472,33 +638,158 @@ def main(argv=None, home=None, out=None, now=None, lister=None):
     p.add_argument("--apply", action="store_true", help="remove (default: only list, a dry run)")
     p.add_argument("--home", help="the home folder whose machine config is read (default: the real "
                                   "home; machine setup's --home passes it)")
+    p.add_argument("--drain-old-user-temp", action="store_true",
+                   help="sweep only %%LOCALAPPDATA%%\\Temp\\claude, the Windows default user temp's "
+                        "session folder, once no claude.exe predates the user environment's last "
+                        "change (else exit 4); a dry run unless --apply")
     a = p.parse_args(argv)
     home = a.home or home
+    lister = _once(lister or default_lister)       # one process list for every root and the gate
     try:
         cfg = load_config(home)
         if cfg is None:
             print("agent_temp_sweep: no %r key in the machine config; nothing to sweep" % KEY,
                   file=sys.stderr)
             return 2
-        d, age = cfg.dir, cfg.max_age_days
-        entries = sweep(d, age, apply=a.apply, now=now, home=home, keep=cfg.keep, lister=lister)
+        if a.drain_old_user_temp:
+            return drain(cfg, a.apply, now, home, lister, out)
+        entries = sweep(cfg.dir, cfg.max_age_days, apply=a.apply, now=now, home=home, keep=cfg.keep,
+                        lister=lister)
     except SweepConfigError as e:
         print("agent_temp_sweep: refused: %s" % e, file=sys.stderr)
         return 2
+    code = report(cfg.dir, entries, cfg.max_age_days, a.apply, out)
+    if cfg.user_temp:
+        code = max(code, user_temp_sweep(cfg, a.apply, now, home, lister, out))    # 3 wins over 1
+    return code
+
+
+def _once(lister):
+    """lister, called at most once: its list (or its exception) is given again on every call."""
+    box = {}
+
+    def call():
+        if "v" not in box:
+            try:
+                box["v"], box["e"] = lister(), None
+            except Exception as e:
+                box["v"], box["e"] = None, e
+        if box["e"] is not None:
+            raise box["e"]
+        return box["v"]
+    return call
+
+
+def report(root, entries, age, apply, out):
+    """Prints a sweep's entries (but the young) and its summary line; the exit code it calls for."""
     for e in entries:
         if e.action != "young":
             print(e.line(), file=out)
     old = [e for e in entries if e.action not in KEPT]
     print("%s: %d entries, %d kept (newer than %g days, on the keep-list, a live session or not "
           "listable), %d %s" % (
-              d, len(entries), len(entries) - len(old), age, len(old),
-              "old" if a.apply else "old (dry run: --apply removes them)"), file=out)
+              root, len(entries), len(entries) - len(old), age, len(old),
+              "old" if apply else "old (dry run: --apply removes them)"), file=out)
     blind = [e for e in entries if e.action == "live" and e.why.startswith(UNREADABLE)]
     if blind:
         print("agent_temp_sweep: kept every claude/ folder: process list unavailable: %s"
               % blind[0].why[len(UNREADABLE) + 2:-1], file=out)    # UNREADABLE (<why>)
         return EXIT_LIST_UNAVAILABLE
     return 1 if any(e.action in ("in-use", "failed") for e in old) else 0
+
+
+def user_temp_sweep(cfg, apply, now, home, lister, out):
+    """The second root: <user temp>/claude, its session units only. A note and 0 when it is
+    skipped (no registry value, no such folder, dir's own, or second_root_unsafe refuses it)."""
+    u = registry_user_temp()
+    if not u or not os.path.isabs(u):
+        why = "HKCU\\Environment has no TEMP or TMP" if not u else "its TEMP %r is not absolute" % u
+    else:
+        root = os.path.join(u, SESSIONS)
+        if overlaps(root, cfg.dir):
+            why = "%s is %s, in it or holds it (the main run sweeps it)" % (root, cfg.dir)
+        elif not os.path.isdir(root):
+            why = "%s is not a folder" % root
+        else:
+            why = second_root_unsafe(root, home)
+    if why:
+        print("user temp: skipped: %s" % why, file=out)
+        return 0
+    try:
+        entries = sweep(u, cfg.max_age_days, apply=apply, now=now, home=home, keep=cfg.keep,
+                        lister=lister, sessions_only=True)
+    except SweepConfigError as e:
+        print("user temp: skipped: %s" % e, file=out)
+        return 0
+    return report(root, entries, cfg.max_age_days, apply, out)
+
+
+def drain_blockers(lister):
+    """Why the drain may not run yet: one line per claude.exe (any case) that started before
+    HKCU\\Environment was last written or whose start cannot be read, or one line when that time
+    or the process list cannot be read (fail closed). [] when the drain may run."""
+    changed = env_changed_at()
+    if changed is None:
+        return ["the time HKCU\\Environment was last written cannot be read"]
+    try:
+        procs = list(lister() or ())
+    except Exception as e:
+        return ["%s (%s: %s)" % (UNREADABLE, type(e).__name__, e)]
+    if not procs:                       # a real list holds this python at least
+        return ["%s (it came back empty)" % UNREADABLE]
+    when = datetime.datetime.fromtimestamp(changed).isoformat(timespec="seconds")
+    out = []
+    for p in procs:
+        p = p or {}
+        if str(p.get("Name") or "").lower() != "claude.exe":
+            continue
+        t = started_at(p.get("Created"))
+        if t is None:
+            out.append("pid %s: its start time %r cannot be read" % (p.get("ProcessId"), p.get("Created")))
+        elif t < changed:
+            out.append("pid %s started %s, before the user environment changed (%s)"
+                       % (p.get("ProcessId"), p.get("Created"), when))
+    return out
+
+
+def drain(cfg, apply, now, home, lister, out):
+    """--drain-old-user-temp: sweeps %LOCALAPPDATA%\\Temp\\claude as a second root once the gate
+    (drain_blockers) is open; dry run: lists it either way. Exit 4 when the gate is shut."""
+    lt = local_temp()
+    root = os.path.join(lt, SESSIONS) if lt else None
+    u = registry_user_temp()
+    if not root:
+        nothing = "LOCALAPPDATA is not set"
+    elif not os.path.isdir(root):
+        nothing = "%s is not there" % root
+    elif u and os.path.isabs(u) and "%" not in u and overlaps(os.path.join(u, SESSIONS), root):
+        nothing = "%s is the current user temp's (HKCU\\Environment TEMP %s)" % (root, u)
+    elif overlaps(root, cfg.dir):
+        nothing = "%s is %s, in it or holds it (the daily run sweeps it)" % (root, cfg.dir)
+    else:
+        nothing = None
+    if nothing:
+        print("drain: nothing to drain: %s" % nothing, file=out)
+        return 0
+    blockers = drain_blockers(lister)
+    if not u:
+        blockers.insert(0, "HKCU\\Environment has no TEMP or TMP, so %s may still be in use" % root)
+    elif not os.path.isabs(u) or "%" in u:     # relative or an unexpanded %VAR%: which folder it is cannot be told
+        blockers.insert(0, "HKCU\\Environment TEMP %r is not absolute or holds an unexpanded %%VAR%%, "
+                        "so %s may still be in use" % (u, root))
+    for b in blockers:
+        print("drain: held: %s" % b, file=out)
+    if blockers and apply:
+        print("drain: refused: nothing removed; end those sessions (restart the desktop app) and "
+              "run it again", file=out)
+        return EXIT_DRAIN_REFUSED
+    entries = sweep(lt, cfg.max_age_days, apply=apply, now=now, home=home, keep=cfg.keep,
+                    lister=lister, sessions_only=True)
+    code = report(root, entries, cfg.max_age_days, apply, out)
+    if blockers:
+        print("drain: the gate is shut; --apply would remove nothing yet", file=out)
+        return EXIT_DRAIN_REFUSED
+    return code
 
 
 if __name__ == "__main__":

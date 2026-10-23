@@ -12,15 +12,21 @@ thread running is replaced. Each worker imports the units' top-level packages on
 Each unit gets its own temp folder: TEMP and TMP point at
 `<run folder>/<n>`, so `tempfile` scratch, scratch lock stores (whose mutex names derive from their
 path) and fixture repositories never meet another unit's. The run folder is made in the kit's temp folder
-for the checkout (work_parent: kitlib.config.user.work_temp, on the checkout's own drive), else,
-with a note, under this process's temp folder, and removed at the end.
+for the checkout (work_parent: kitlib.config.user.work_temp, on the checkout's own drive and out
+of every session's TEMP), else, with a note, in the kit's default temp folder or this process's
+temp folder, and removed at the end. An unfenced run that made its folder in the kit's temp folder
+first removes the run folders there a killed run left over a day ago (prune_stale), and says how
+many.
 
 The process. Each pool worker, and each own-process unit (kitlib.pytests.runner.run_unit), is
 created suspended, put in its own kill-on-close job, shielded from kills by pid, then resumed; a
 unit still running after `timeout` seconds is killed with everything it started (for a pooled
 unit, its worker too) and reported TIMEOUT, and a unit that ran no test is a FAIL. End the runner,
 never a unit or a worker, by its pid. The log's `interpreters` line counts the workers started,
-those replaced and why, and the units run in their own process. With kit_tests' opt-in
+those replaced and why, the units run in their own process, and the process starts of the pooled
+units (kitlib.tooldeps.pool `starts`: conhosts and nested jobs included), naming the HEAVIEST
+units by them; a pooled unit's own line says `, N process starts` after its test count, before
+its module name, when it started any (an own-process unit's are not counted). With kit_tests' opt-in
 `--pid-hold` (never in the gate), the caller starts this process's pid hold before the units'
 environment is copied (kitlib.pytests.runner.PidHoldRun: warmed, published), so no process a test
 starts can be given the pid of a shell a stale taskkill is still aimed at; `run` writes whether
@@ -87,7 +93,7 @@ CPUMASK_ENV = 'MACHINE_LOCK_CPUMASK'
 # The variable kitlib.lock.giveback (GIVE_ENV) offers a give back with; units never inherit it.
 GIVE_ENV = 'MACHINE_LOCK_GIVE_BACK'
 FALLBACK_JOBS = 2
-UNIT_TIMEOUT = 3600
+UNIT_TIMEOUT = 300
 COUNT_TIMEOUT = 600
 INTERRUPTED = 130           # the exit status of a run stopped by Ctrl+C
 POLL = 0.5                  # seconds between checks for Ctrl+C while units run
@@ -237,11 +243,71 @@ def work_parent(root):
     return kuser.work_temp(root)
 
 
+# A run folder's name, and a direct test run's fixture folder's (tests/gitfixture.py
+# fixture_parent): the two prune_stale removes once STALE_AFTER seconds old.
+RUN_PREFIX = 'kit-tests-'
+DIRECT_PREFIX = 'kit-direct-'
+STALE_AFTER = 24 * 3600
+_REPARSE = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+
+
 def make_work(root):
-    """(the run folder, note): a new `kit-tests-*` folder in work_parent(root), made if missing;
-    else, with a note saying why, one in this process's temp folder (kuser.make_temp)."""
-    work, note = kuser.make_temp(root, 'kit-tests-')
+    """(the run folder, note): a new RUN_PREFIX folder in work_parent(root), made if missing;
+    else, with a note saying why, one in the kit's default temp folder or this process's
+    (kuser.make_temp)."""
+    work, note = kuser.make_temp(root, RUN_PREFIX)
     return work, note and 'the run folder %s' % note
+
+
+def _plain_dir(path):
+    """Whether `path` is a folder itself: not a link, junction or other reparse point."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(st.st_mode) or getattr(st, 'st_file_attributes', 0) & _REPARSE:
+        return None
+    return st
+
+
+def prune_stale(parent, now=None, after=STALE_AFTER):
+    """(removed, kept): remove the RUN_PREFIX and DIRECT_PREFIX folders directly in `parent`
+    whose own modification time is at least `after` seconds before `now`, left by a run that was
+    killed or crashed: nothing else sweeps the kit's temp folder. Each is first claimed by
+    renaming it to `<name>.stale-<pid>` (one whose removal stopped part way keeps its first
+    name); Windows refuses that while any process has a file open in it, and such a folder is
+    counted kept and left whole. Links, junctions and
+    other reparse points are never followed or removed, whether they are the entry or inside it
+    (shutil.rmtree removes a link inside, not what it points at). A `parent` that cannot be
+    listed is (0, 0)."""
+    now = time.time() if now is None else now
+    removed = kept = 0
+    try:
+        names = sorted(e.name for e in os.scandir(parent))
+    except OSError:
+        return 0, 0
+    for name in names:
+        if not name.startswith((RUN_PREFIX, DIRECT_PREFIX)):
+            continue
+        path = os.path.join(parent, name)
+        st = _plain_dir(path)
+        if st is None or now - st.st_mtime < after:
+            continue
+        # A claimed folder whose removal stopped part way is claimed again under its first name.
+        claimed = os.path.join(parent, '%s.stale-%d' % (name.split('.stale-')[0], os.getpid()))
+        if os.path.normcase(claimed) == os.path.normcase(path):
+            claimed += '-again'
+        try:
+            os.rename(path, claimed)
+        except OSError:
+            kept += 1
+            continue
+        if _plain_dir(claimed) is None:
+            kept += 1
+            continue
+        rmtree_force(claimed, ignore_errors=True)
+        removed += 1
+    return removed, kept
 
 
 def _source(root, module):
@@ -435,6 +501,11 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
     work, work_note = make_work(root)
     if work_note:
         say('kit_tests: %s' % work_note)
+    elif not kuser.fenced():
+        removed, kept = prune_stale(os.path.dirname(work))
+        if removed or kept:
+            say('kit_tests: removed %d stale run folder(s) from %s (%d older one(s) left: in use)'
+                % (removed, os.path.dirname(work), kept))
     counter = itertools.count(1)
     counter_lock = threading.Lock()
     workers = None if injected else worker_pool.WorkerPool(root, work, unit_env(base_env, work),
@@ -462,6 +533,7 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
         finally:
             rmtree_force(folder, ignore_errors=True)
         unit_id, status, ran, secs, text = r
+        starts = workers.starts(module) if workers is not None else None    # pooled units only
         skipped = skipped_of(text)
         why = proof.get(module_of(module))
         if skipped and why and status == 'OK':
@@ -471,9 +543,10 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
                  'selection.json skip_fails), so a skip FAILS: %s\n' % (module, skipped, why))
         with say_lock:
             done.append(r)
-            out.write('  [%d/%d] %-7s %6.0fs %4d tests%s  %s%s\n' % (
+            out.write('  [%d/%d] %-7s %6.0fs %4d tests%s%s  %s%s\n' % (
                 len(done), total[0], status, secs, ran,
-                ', %d skipped' % skipped if skipped else '', module,
+                ', %d skipped' % skipped if skipped else '',
+                ', %d process starts' % starts if starts else '', module,
                 ' (serial)' if module in serial else ''))
             out.flush()
         return r
@@ -539,7 +612,7 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
             workers.close()
         rmtree_force(work, ignore_errors=True)
     if workers is not None:
-        say(interpreters_line(workers.stats(), done, own))
+        say(interpreters_line(workers.stats(), done, own, workers.starts()))
         for name, why in workers.why_replaced():
             say('kit_tests: pool worker replaced after %s: %s' % (name, why))
     if hold is not None:
@@ -551,15 +624,27 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
                   not_run=(total[0] - len(done)) if interrupted else None)
 
 
-def interpreters_line(stats, done, own):
+HEAVIEST = 3        # the units interpreters_line names by their process starts
+
+
+def interpreters_line(stats, done, own, starts=None):
     """The log line saying how many interpreters ran the units: the pool workers started, the
-    ones ended early and why (WorkerPool.stats), and the units that ran in their own process."""
+    ones ended early and why (WorkerPool.stats), and the units that ran in their own process.
+    `starts` {unit: process starts} (WorkerPool.starts): their sum, counted in the pooled units'
+    jobs (conhosts and nested jobs included; the pool workers themselves not), and the HEAVIEST
+    units by it."""
     started, ended = stats
     alone = sum(1 for r in done if module_of(r[0][0]) in own)
     why = ', '.join('%d %s' % (n, w) for w, n in sorted(ended.items()))
-    return ('kit_tests: interpreters: %d pool worker(s) ran %d unit(s)%s; %d unit(s) in their own '
+    line = ('kit_tests: interpreters: %d pool worker(s) ran %d unit(s)%s; %d unit(s) in their own '
             'process' % (started, len(done) - alone,
                          ' (%d replaced: %s)' % (sum(ended.values()), why) if ended else '', alone))
+    if starts:
+        top = sorted(((n, u) for u, n in starts.items() if n), key=lambda x: (-x[0], x[1]))
+        line += '; %d process start(s) in %d pooled unit(s)%s' % (
+            sum(starts.values()), len(starts),
+            ' (most: %s)' % ', '.join('%s %d' % (u, n) for n, u in top[:HEAVIEST]) if top else '')
+    return line
 
 
 def report(results, wall, jobs, n_serial, out, label='selected', not_run=None):

@@ -401,7 +401,7 @@ class ConfigLineForms(unittest.TestCase):
 
 
 class NoGitLaunched(unittest.TestCase):
-    """The observable: a guarded call in a checkout starts no git child (KIT-HOOK-SPAWNS)."""
+    """The observable: a guarded call in a checkout starts no git child."""
 
     @unittest.skipUnless(MINE, OWNER_NOTE)
     def test_classify_of_a_checkout_starts_no_process(self):

@@ -14,6 +14,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
@@ -23,7 +25,7 @@ from kitlib.backlog import roles as broles
 from kitlib.git import repo as gitrepo
 from kitlib.guard import rolepolicy
 from kitlib.guard.context import Ctx
-from kitlib.host import header, registry
+from kitlib.host import content as hcontent, header, registry
 
 from hosts.claude.adapter import content as claude_content
 from tests.home import TempHomeCase
@@ -79,7 +81,7 @@ class Base(unittest.TestCase):
 
 class Sections(Base):
     def test_every_section_given_first_then_held(self):
-        for name in ('worker', 'pm', 'consultant', 'reviewer'):
+        for name in ('worker', 'pm', 'consultant', 'analyst'):
             with self.subTest(role=name):
                 got = [s.title for s in self.view(name, brief=True)]
                 self.assertEqual(len(got), len(TITLES))
@@ -157,6 +159,43 @@ class Start(Base):
     def test_a_dispatched_role_is_asked_at_subagent_start(self):
         self.view('worker')
         self.assertEqual([c[0] for c in self.calls], ['SubagentStart'])
+
+    def test_a_dispatched_role_on_claude_shows_the_agent_start_block(self):
+        # The block's default budget is 1.0 s of wall time. Under the time fence (docs/flaky-tests.md)
+        # it is the ceiling, so a reading slower than that (a loaded machine; here a stub that sleeps
+        # past it) still finishes: the hook's own default is what is checked, with no budget passed in.
+        from hosts.claude.adapter.host import ADAPTER
+        from kitlib import agentstart
+        real = agentstart.repo.classify
+        calls = []
+
+        def slow(path, *args, **kwargs):
+            calls.append(path)
+            time.sleep(1.2)
+            return real(path, *args, **kwargs)
+        with mock.patch.object(agentstart.repo, 'classify', slow):
+            got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        self.assertEqual(len(calls), 1)
+        self.assertIn('Agent start (worker):', got)
+        self.assertIn('checkout  NOT CHECKED', got)      # the temp repo is in no git work tree
+        self.assertNotIn('over the', got)
+
+    def test_a_real_run_keeps_the_one_second_budget(self):
+        # Without the fence's marker (a real run) the hook still gives up at 1.0 s.
+        from hosts.claude.adapter.host import ADAPTER
+        from kitlib import agentstart
+        real = agentstart.repo.classify
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(path, *args, **kwargs):
+            release.wait(60)
+            return real(path, *args, **kwargs)
+        with mock.patch.dict(os.environ), mock.patch.object(agentstart.repo, 'classify', stuck):
+            os.environ.pop('KIT_TIME_FENCE', None)
+            got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        self.assertIn('Agent start (worker):', got)
+        self.assertIn('NOT CHECKED - the rest: over the 1.0 s budget', got)
 
     def test_nothing_past_the_header_is_said(self):
         got = self.view('worker', start_text=lambda event, kit, payload, environ, part: header.text(kit))
@@ -241,8 +280,8 @@ class GivenAndHeld(Base):
         self.assertIn('default model', self.text(self.view('worker', renderer=NoModel(), brief=True), 'Model, tools'))
 
     def test_backlog_rights_are_the_policy_rows(self):
-        for name, action, want in (('worker', 'pull', 'may'), ('reviewer', 'add', 'may not'),
-                                   ('reviewer', 'read', 'may'), ('lander', 'close', 'only through the landing tool'),
+        for name, action, want in (('worker', 'pull', 'may'), ('analyst', 'add', 'may not'),
+                                   ('analyst', 'read', 'may'), ('lander', 'close', 'only through the landing tool'),
                                    ('worker', 'release', 'only on a record it pulled itself')):
             with self.subTest(role=name, action=action):
                 lines = self.section(self.view(name, brief=True), 'Backlog rights').lines
@@ -258,17 +297,17 @@ class GivenAndHeld(Base):
 
 class Switches(Base):
     def test_policy_off_with_no_kit_json(self):
-        text = self.text(self.view('reviewer', brief=True), '.kit.json')
+        text = self.text(self.view('analyst', brief=True), '.kit.json')
         self.assertIn('none: every default', text)
         self.assertIn('guard.role_policy: false', text)
         self.assertIn('mode as the guard reads it: none', text)
 
     def test_policy_on_and_a_roles_override_are_what_the_guard_reads(self):
         write(os.path.join(self.repo, '.kit.json'), json.dumps(
-            {'guard': {'role_policy': True}, 'roles': {'reviewer': {'mode': 'test'}}}))
-        text = self.text(self.view('reviewer', brief=True), '.kit.json')
+            {'guard': {'role_policy': True}, 'roles': {'analyst': {'mode': 'test'}}}))
+        text = self.text(self.view('analyst', brief=True), '.kit.json')
         self.assertIn('guard.role_policy: true', text)
-        self.assertIn("roles.reviewer: {'mode': 'test'}", text)
+        self.assertIn("roles.analyst: {'mode': 'test'}", text)
         self.assertIn('mode as the guard reads it: test', text)
         self.assertIn('edit_main_checkout: False', text)
 
@@ -284,7 +323,7 @@ class Switches(Base):
 
 class GuardRules(Base):
     def test_the_rules_are_the_role_policys_rows_for_the_mode(self):
-        for name in ('reviewer', 'worker', 'lander', 'test-runner'):
+        for name in ('analyst', 'worker', 'lander', 'test-runner'):
             role = content.load(KIT).role(name)
             with self.subTest(role=name):
                 text = self.text(self.view(name, brief=True), 'Guard rules')
@@ -293,7 +332,7 @@ class GuardRules(Base):
                 self.assertIn(rolepolicy.verbs_text(rolepolicy.LOCK_VERBS[role.mode]), text)
 
     def test_a_read_mode_is_held_to_more_than_a_write_mode(self):
-        read = self.text(self.view('reviewer', brief=True), 'Guard rules')
+        read = self.text(self.view('analyst', brief=True), 'Guard rules')
         write_ = self.text(self.view('worker', brief=True), 'Guard rules')
         self.assertIn('role-edit:', read)
         self.assertNotIn('role-edit:', write_)
@@ -303,10 +342,17 @@ class GuardRules(Base):
             self.assertIn(p, owner)
 
     def test_a_role_file_writes_list_is_named(self):
-        role = next(r for r in content.load(KIT).roles if r.writes)
-        text = self.text(self.view(role.name, brief=True), 'Guard rules')
+        """No kit role names a `writes` path now, so the role is a synthetic role file in a temp folder."""
+        path = os.path.join(self.repo, 'roles', 'scribe.md')
+        write(path, '---\nname: scribe\ndescription: Notes.\ntier: standard\nsandbox: read-only\n'
+                    'mode: read\nwrites: [docs/ops/notes.local.md, notes/*.txt]\ncapabilities: all\n---\nbody\n')
+        with open(path, 'rb') as f:
+            role = hcontent.parse_role(f.read(), path)
+        self.assertEqual(role.writes, ('docs/ops/notes.local.md', 'notes/*.txt'))
+        text = '\n'.join(agentview.guard_rules(role).lines)
         for w in role.writes:
             self.assertIn(w, text)
+        self.assertIn('(its writes: docs/ops/notes.local.md, notes/*.txt)', text)
 
 
 class Cli(TempHomeCase):

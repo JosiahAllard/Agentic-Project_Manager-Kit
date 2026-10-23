@@ -55,7 +55,7 @@ PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, foll
                 "branch, a review or a worker's report; a new one says so in its summary) stays unpriced until "
                 "you or the PM promote it. Check "
                 "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
-                "size and fit, then price it 2-5 under the standing valuation rules (`set <ID> --priority <n> "
+                "size and fit, then price it 2-5 (`set <ID> --priority <n> "
                 "--priority-by agent`). Promote a follow-up at any time it enters a work set: price it 2-5; "
                 "price before pull. When `next --all` lists fewer startable records than the set needs, pick the "
                 "follow-ups worth doing now, check each for duplicates, size and fit, and price only those going "
@@ -202,8 +202,8 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
     except ValueError:
         return "landing lock (%s): HELD, record unreadable" % entry.get("repo")
     who = "pid %s" % r["pid"] if r.get("pid") is not None else "a token holder"
-    return "landing lock (%s): HELD - lane %s, branches %s, %s, phase %s, since %s" % (
-        entry.get("repo"), r.get("lane"), " ".join(r.get("branches") or ()) or "-", who,
+    return "landing lock (%s): HELD - branches %s, %s, phase %s, since %s" % (
+        entry.get("repo"), " ".join(r.get("branches") or ()) or "-", who,
         r.get("phase"), r.get("started_utc"))
 
 

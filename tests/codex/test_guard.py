@@ -53,7 +53,7 @@ class MarkedSessions(Base):
     """Codex's hooks carry no subagent identity, so hookmain holds a marked session as an
     unidentified agent of its mark's role (kitlib.host.hookmain): the main-checkout rule and the
     write jail hold it as they hold a subagent elsewhere. The owner's unmarked session is unchanged."""
-    ROLES = ('worker', 'senior-worker', 'reviewer', 'test-runner', 'lander', 'pm', 'coordinator')
+    ROLES = ('worker', 'senior-worker', 'analyst', 'test-runner', 'lander', 'pm', 'coordinator')
 
     def test_root_session_patch_to_main_is_denied(self):
         self.denied(self.patch(os.path.join(self.w.main, 'worker.py')), 'main-checkout')
@@ -93,7 +93,7 @@ class NoEditModes(Base):
         self.addCleanup(self.w.cleanup)
 
     def test_test_read_and_lander_roles_do_not_edit_their_checkout(self):
-        for role in ('test-runner', 'reviewer', 'lander', 'consultant'):
+        for role in ('test-runner', 'analyst', 'lander', 'consultant'):
             with self.subTest(role=role):
                 self.denied(self.event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}),
                             'host-role-edit', role=role)
@@ -101,7 +101,8 @@ class NoEditModes(Base):
 
     def test_write_roles_the_writes_list_and_temp_stay_open(self):
         self.allowed(self.event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}), role='worker')
-        notes = os.path.join(self.w.wt, 'docs', 'ops', 'consultant-notes.local.md')
+        # the consultant's notes file is in agent temp (no role file names a `writes` path now)
+        notes = os.path.join(self.w.temp, 'repo-consultant', 'notes.md')
         self.allowed(self.event('Write', {'file_path': notes, 'content': 'x'}), role='consultant')
         self.allowed(self.event('Write', {'file_path': os.path.join(self.w.temp, 'a.py'), 'content': 'x'}),
                      role='test-runner')
@@ -199,14 +200,14 @@ class Patches(Base):
         self.denied(self.event('apply_patch', {'command': patch}), 'write-jail', role='coordinator')
 
     def test_read_test_and_lander_roles_do_not_patch_their_checkout(self):
-        for role in ('reviewer', 'test-runner', 'lander'):
+        for role in ('analyst', 'test-runner', 'lander'):
             with self.subTest(role=role):
                 self.denied(self.patch('worker.py'), 'host-role-edit', role=role)
 
     def test_host_configuration_is_read_only_to_a_reader(self):
         for path in ('AGENTS.md', '.codex/config.toml', '.codex/agents/worker.toml'):
             with self.subTest(path=path):
-                self.assertEqual(self.judge(self.patch(path), role='reviewer').verdict, 'deny')
+                self.assertEqual(self.judge(self.patch(path), role='analyst').verdict, 'deny')
 
     def test_a_malformed_patch_fails_closed(self):
         with self.assertRaises(ValueError):
@@ -219,11 +220,14 @@ class Shell(Base):
             with self.subTest(role=role):
                 self.denied(self.event('Bash', {'command': 'find $USERPROFILE -name x', 'shell': 'bash.exe'}),
                             'root-search', role=role)
-                self.denied(self.event('Bash', {'command': 'godot --headless'}), 'heavy', role=role)
+                # heavy is a warning by default (kitlib.guard.modes): the call runs, with the warning
+                d = self.judge(self.event('Bash', {'command': 'godot --headless'}), role=role)
+                self.assertEqual(d.verdict, 'allow', d.reason)
+                self.assertIn('rule=heavy', d.reason)
 
     def test_a_held_lock_allows_a_heavy_run(self):
         self.w.held = True
-        self.allowed(self.event('Bash', {'command': 'godot --headless'}))
+        self.assertEqual(self.judge(self.event('Bash', {'command': 'godot --headless'})), Decision('allow'))
 
     def test_shell_patch_transport_is_refused_in_a_marked_session(self):
         cmd = "apply_patch <<'EOF'\n*** Begin Patch\n*** Delete File: AGENTS.md\n*** End Patch\nEOF"

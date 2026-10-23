@@ -5,8 +5,8 @@ tools/worktree_remove.py `<path> --scratch` is the entry point. Nothing here pri
 `remove_scratch(top, argument)` removes the tree only when every one of these holds, checked in
 this order before anything is touched:
 
-- the path is under a scratch root (`roots`: AGENT_TEMP, TEMP, TMP and the shared temp folder of
-  kitlib.config.user, read from the environment at run time; a root that is not an absolute
+- the path is under a scratch root (`roots`: AGENT_TEMP, TEMP, TMP and the system temp folder
+  (kitlib.config.user.system_temp, never the machine config's `temp_dir`), read from the environment at run time; a root that is not an absolute
   existing folder, is reached through a link, is a drive root, the home folder or above it, or
   holds the main checkout is no root), no link or junction is on the way, and it is not inside
   the main checkout or a worktree folder (a workstream worktree keeps the slug form and its own
@@ -53,7 +53,7 @@ def roots(environ, main):
     env = os.environ if environ is None else environ
     named = [(k, env.get(k)) for k in ROOT_VARS]
     try:
-        named.append(('shared temp', kuser.shared_temp(env)))
+        named.append(('system temp', kuser.system_temp(env)))
     except RuntimeError:
         pass
     home = env.get('USERPROFILE') or os.path.expanduser('~')
@@ -102,7 +102,7 @@ def target(ctx, argument, rts, dropped):
                 ' scratch one; use the slug form without --scratch; %s' % (path, home, NOTHING))
         return REFUSED
     if not rts:
-        ctx.say('refused   %s: no scratch root (AGENT_TEMP, TEMP, TMP or the shared temp folder)'
+        ctx.say('refused   %s: no scratch root (AGENT_TEMP, TEMP, TMP or the system temp folder)'
                 ' is usable%s; %s' % (path, ': ' + '; '.join(dropped) if dropped else '', NOTHING))
         return REFUSED
     if not any(_strictly_under(path, r) for r in rts):
@@ -140,11 +140,17 @@ def target(ctx, argument, rts, dropped):
     return path, entry
 
 
+PER_WORKTREE = ('refs/worktree', 'refs/bisect', 'refs/rewritten')
+
+
 def reflog(path):
-    """`([commit ids in the tree's HEAD reflog, oldest first], None)` or `(None, why)`. The file
-    (`<its git dir>/logs/HEAD`, which `git worktree remove` deletes with the tree) is read here:
-    no reflog file is no entries, as `git log -g` would print none. That holds only for the files
-    ref format: a reftable repository never has the file, so any other format refuses."""
+    """`([commit ids in the tree's HEAD reflog, oldest first, then the tips of its per-worktree
+    refs (PER_WORKTREE)], None)` or `(None, why)`: every commit only the tree's git dir may keep,
+    which `git worktree remove` deletes with the tree. The reflog file (`<its git dir>/logs/HEAD`)
+    is read here: no reflog file is no entries, as `git log -g` would print none, and the
+    per-worktree refs are read all the same. That holds only
+    for the files ref format: a reftable repository never has the file, so any other format
+    refuses. A per-worktree ref that is not a commit refuses."""
     args = ('rev-parse', '--show-ref-format')
     rc, out, err = remove.git(path, *args)
     if rc != 0 or not out:
@@ -161,7 +167,7 @@ def reflog(path):
         with open(log, encoding='utf-8', errors='replace') as fh:
             text = fh.read()
     except FileNotFoundError:
-        return [], None
+        text = ''               # no reflog: its per-worktree refs are still read below
     except OSError as e:
         return None, 'its HEAD reflog %s could not be read (%s)' % (log, e)
     oids = []
@@ -171,6 +177,19 @@ def reflog(path):
                                      for o in pair):
             return None, 'its HEAD reflog %s has a line this verb cannot read: %r' % (log, line)
         oids.extend(o for o in pair if o.strip('0') and o not in oids)
+    # A per-worktree ref (refs/worktree, refs/bisect, refs/rewritten) lives in the tree's git dir
+    # and goes with it: its commit must be kept by a shared ref, as a reflog entry must.
+    args = ('for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', *PER_WORKTREE)
+    rc, out, err = remove.git(path, *args)
+    if rc != 0:
+        return None, remove.failure(args[:1], rc, err)
+    for line in out.splitlines():
+        p = line.split(' ', 2)
+        if len(p) != 3 or p[1] != 'commit':
+            return None, ('its per-worktree ref %s is not a commit (%r), which this verb cannot'
+                          ' check' % (p[-1], line))
+        if p[0] not in oids:
+            oids.append(p[0])
     return oids, None
 
 
@@ -228,7 +247,8 @@ def reachable(ctx, path, head, logged):
             if why:
                 unknown(oid, why)
             else:
-                ctx.say('refused   %s: its HEAD reflog holds %s, which no ref reaches (a commit'
+                ctx.say('refused   %s: its HEAD reflog or a per-worktree ref holds %s, which no'
+                        ' ref reaches (a commit'
                         ' made there and left behind); whether to drop it is the owner\'s call; %s'
                         % (path, oid[:10], NOTHING))
             return None
@@ -406,8 +426,8 @@ def _delete(ctx, path, rel, blobs):
 
 
 def unmoved(ctx, path, head, logged):
-    """True when the tree's HEAD and HEAD reflog are what was checked; else says why (a commit made
-    while the verb ran would otherwise be removed with the tree)."""
+    """True when the tree's HEAD, HEAD reflog and per-worktree ref tips are what was checked; else
+    says why (a commit made while the verb ran would otherwise be removed with the tree)."""
     rc, now, err = remove.git(path, 'rev-parse', '--verify', 'HEAD')
     if rc != 0 or now != head:
         ctx.say('failed    %s: HEAD moved after it was checked (%s, was %s); git worktree remove'
@@ -416,8 +436,8 @@ def unmoved(ctx, path, head, logged):
         return False
     again, why = reflog(path)
     if again != logged:
-        ctx.say('failed    %s: its HEAD reflog changed after it was checked%s; git worktree remove'
-                ' was NOT run' % (path, ' (%s)' % why if why else ''))
+        ctx.say('failed    %s: its HEAD reflog or a per-worktree ref changed after it was checked%s;'
+                ' git worktree remove was NOT run' % (path, ' (%s)' % why if why else ''))
         return False
     return True
 

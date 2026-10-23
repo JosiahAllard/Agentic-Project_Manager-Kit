@@ -3,8 +3,11 @@ Quoted text is not a command or a redirect; cd chains move the working directory
 redirects, here-docs, here-strings and command substitutions are seen; an unclosed quote marks
 the parse unclean so the fallback patterns run."""
 import unittest
+from unittest import mock
 
+from kitlib.config import user as kuser
 from kitlib.guard import shell as s
+from tests.home import fence_decoy
 
 CWD = 'D:\\w'
 
@@ -68,6 +71,154 @@ class Tokeniser(unittest.TestCase):
             with self.subTest(text=text):
                 p, _ = cmds(text, s.BASH)
                 self.assertEqual(p.unclean, ['an unclosed quote'])
+
+
+class BraceExpansion(unittest.TestCase):
+    """bash writes out every unquoted {a,b} group of a word, in its own order, nested groups too
+    (docs/guard.md "Arguments the shell rewrites"); past BRACE_LIMIT words the word is computed,
+    the parse unclean and the word kept as brace_over, which rule brace-limit refuses."""
+
+    def words(self, word):
+        p, c = cmds('rm ' + word, s.BASH)
+        return p, c[0].words[1:]
+
+    def assert_words(self, word, expected):
+        p, ws = self.words(word)
+        self.assertEqual(p.unclean, [], word)
+        self.assertEqual([w.text for w in ws], expected, word)
+        self.assertFalse(any(w.dyn for w in ws), word)
+
+    def test_every_group_in_bash_order(self):
+        self.assert_words('{a,b}{1,2}', ['a1', 'a2', 'b1', 'b2'])
+        self.assert_words('~/.pm-kit/{owner,x}-{delegations,y}.json',
+                          ['~/.pm-kit/owner-delegations.json', '~/.pm-kit/owner-y.json',
+                           '~/.pm-kit/x-delegations.json', '~/.pm-kit/x-y.json'])
+        self.assert_words('a{b,c}{d,e}{f,g}', ['abdf', 'abdg', 'abef', 'abeg', 'acdf', 'acdg', 'acef', 'aceg'])
+        self.assert_words('x{a,b}y{c}z', ['xay{c}z', 'xby{c}z'])
+
+    def test_nested_groups(self):
+        self.assert_words('~/.pm-kit/{x,{owner-delegations,y}}.json',
+                          ['~/.pm-kit/x.json', '~/.pm-kit/owner-delegations.json', '~/.pm-kit/y.json'])
+        self.assert_words('{a,b{c,d}}e', ['ae', 'bce', 'bde'])
+        self.assert_words('{{a,b}}', ['{a}', '{b}'])
+        self.assert_words('{a,{b}}', ['a', '{b}'])
+
+    def test_an_empty_alternative(self):
+        self.assert_words('a{,x}b', ['ab', 'axb'])
+
+    def test_what_bash_leaves_as_written(self):
+        for word, text in (("'{a,b}'", '{a,b}'), ('"{a,b}"', '{a,b}'), ('{a}', '{a}'), ('{}', '{}'),
+                           ('\\{a,b}', '{a,b}')):
+            with self.subTest(word):
+                self.assert_words(word, [text])
+        self.assert_words('{a,b}\\{c,d}', ['a{c,d}', 'b{c,d}'])
+
+    def test_powershell_has_no_brace_expansion(self):
+        p, c = cmds('Remove-Item "x/{b,c}{d,e}" \'y{b,c}\'', s.PS)
+        self.assertEqual(p.unclean, [])
+        self.assertEqual(c[0].argv, ['Remove-Item', 'x/{b,c}{d,e}', 'y{b,c}'])
+
+    def test_up_to_the_limit_every_word_is_written_out(self):
+        self.assertEqual(s.BRACE_LIMIT, 256)
+        p, ws = self.words('{a,b,c,d}{a,b,c,d}{a,b,c,d}{a,b,c,d}')
+        self.assertEqual(p.unclean, [])
+        self.assertIsNone(p.brace_over)
+        self.assertEqual(len(ws), 256)
+        self.assertEqual((ws[0].text, ws[1].text, ws[-1].text), ('aaaa', 'aaab', 'dddd'))
+
+    def test_past_the_limit_the_word_is_computed(self):
+        for word in ('x/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}',     # 512 across groups
+                     'x/{a,b{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}}',
+                     'x/{' + ','.join(str(n) for n in range(257)) + '}'):    # 257 in one group
+            with self.subTest(word[:40]):
+                p, ws = self.words(word)
+                self.assertEqual(p.unclean, ['a brace expansion of more than 256 words'])
+                self.assertEqual(len(ws), 1)
+                self.assertTrue(ws[0].dyn)
+                self.assertEqual(ws[0].text, word)
+                text, start, end = p.brace_over
+                self.assertEqual(text[start:end], word)
+        # the first such word is the one kept
+        p, _c = cmds('echo {a,b}; rm x/{%s} y/{%s}' % (','.join(str(n) for n in range(257)),
+                                                     ','.join(str(n) for n in range(300))), s.BASH)
+        text, start, end = p.brace_over
+        self.assertTrue(text[start:end].startswith('x/{0,1,2,'), text[start:start + 20])
+
+
+ROUTED = 'C:\\routed-home'
+GIVEN = 'C:\\given-home'
+
+
+class HomeFolder(unittest.TestCase):
+    """With no `home` given, home_folder is the folder kitlib.config.user.home_dir() gives, so a
+    guard test that reaches `~`, a home variable or a bare cd with the real home meets the home
+    fence instead of reading the real home (docs/test-tools.md "Home fence"). A `home` given
+    wins, and home_dir() is not asked."""
+
+    def routed(self):
+        patch = mock.patch.object(kuser, 'home_dir', return_value=ROUTED)
+        home_dir = patch.start()
+        self.addCleanup(patch.stop)
+        return home_dir
+
+    def test_tilde_is_the_folder_home_dir_gives(self):
+        home_dir = self.routed()
+        for shell in (None, s.BASH, s.PS, s.CMD):
+            with self.subTest(shell=shell):
+                self.assertEqual(s.resolve_path('~', CWD, shell), ROUTED)
+                self.assertEqual(s.resolve_path('~/a/b', CWD, shell), ROUTED + '\\a\\b')
+                self.assertEqual(s.resolve_path('~\\a', CWD, shell), ROUTED + '\\a')
+                self.assertIsNone(s.resolve_path('~user/a', CWD, shell))
+        self.assertTrue(home_dir.called)
+
+    def test_a_home_given_wins_and_home_dir_is_not_asked(self):
+        home_dir = self.routed()
+        self.assertEqual(s.home_folder(GIVEN), GIVEN)
+        self.assertEqual(s.resolve_path('~/a', CWD, home=GIVEN), GIVEN + '\\a')
+        self.assertEqual(s.home_text('~/a', GIVEN), GIVEN + '/a')
+        self.assertEqual(s.home_text('$HOME/a', GIVEN, dyn=True), GIVEN + '/a')
+        self.assertFalse(home_dir.called)
+
+    def test_home_text_reads_tilde_and_a_home_variable_as_home_dir_gives(self):
+        self.routed()
+        self.assertEqual(s.home_folder(), ROUTED)
+        self.assertEqual(s.home_text('~/a'), ROUTED + '/a')
+        for text in ('$HOME/a', '${HOME}/a', '$env:USERPROFILE/a', '%USERPROFILE%/a'):
+            with self.subTest(text=text):
+                self.assertEqual(s.home_text(text, dyn=True), ROUTED + '/a')
+
+    def test_a_bare_cd_goes_to_the_folder_home_dir_gives(self):
+        self.routed()
+        for line, sh in (('cd && ls', s.BASH), ('cd -- && ls', s.BASH), ('Set-Location; ls', s.PS)):
+            with self.subTest(line=line):
+                _, c = cmds(line, sh)
+                self.assertEqual(c[1].cwd_home, ROUTED)
+        _, c = cmds('cd $HOME/a && ls', s.BASH)
+        self.assertEqual(c[1].cwd_home, ROUTED + '\\a')
+
+    def test_tilde_meets_the_fence(self):
+        fence_decoy(self)
+        for text in ('~', '~/a', '~\\a'):
+            with self.subTest(text=text):
+                with self.assertRaises(kuser.HomeFenced):
+                    s.resolve_path(text, CWD)
+        self.assertEqual(s.resolve_path('C:\\m\\x', CWD), 'C:\\m\\x')
+        self.assertEqual(s.resolve_path('~/a', CWD, home=GIVEN), GIVEN + '\\a')
+
+    def test_home_text_meets_the_fence(self):
+        fence_decoy(self)
+        for text, dyn in (('~/a', False), ('$HOME/a', True), ('%USERPROFILE%', True)):
+            with self.subTest(text=text):
+                with self.assertRaises(kuser.HomeFenced):
+                    s.home_text(text, dyn=dyn)
+        self.assertEqual(s.home_text('C:\\m'), 'C:\\m')
+
+    def test_a_cd_home_meets_the_fence(self):
+        fence_decoy(self)
+        for line in ('cd ~/a && echo x > f', 'cd && echo x > f', 'cd $HOME && echo x > f'):
+            with self.subTest(line=line):
+                with self.assertRaises(kuser.HomeFenced):
+                    cmds(line, s.BASH)
 
 
 if __name__ == '__main__':

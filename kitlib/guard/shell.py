@@ -19,6 +19,8 @@ Deliberate departures from the shells, all toward reading what a Windows user me
 import os
 import re
 
+from kitlib.config import user as kuser
+
 from . import paths
 
 BASH, PS, CMD = 'bash', 'ps', 'cmd'
@@ -27,14 +29,100 @@ MAX_DEPTH = 6
 # PowerShell splits words on every whitespace character it knows; bash only on space and tab.
 PS_SPACE = (' \t\f\v\u00a0\u0085\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008'
             '\u2009\u200a\u2028\u2029\u202f\u205f\u3000')
+# PowerShell reads an en dash, an em dash and a horizontal bar as '-' before a parameter name (a tuple:
+# `'' in` a str is True)
+PS_DASHES = ('-', '–', '—', '―')
+
+
+def ps_dashed(text):
+    """`text` with a leading PowerShell dash written as '-', so a parameter test reads -Path,
+    –Path and —Path alike."""
+    return '-' + text[1:] if text[:1] in PS_DASHES else text
+
+
 BASH_ESC = ' \t"\'\\$`&|;<>(){}#*?[]!~'
 CD_VERBS = {'cd', 'chdir', 'set-location', 'sl', 'push-location', 'pushd'}
 CD_UNKNOWN = {'popd', 'pop-location'}
+# the one module-qualified spelling of each PowerShell cd cmdlet (another module, a `/`, an alias
+# behind a module is no command PowerShell runs: cd_target reads it as a cd to a place unknown)
+PS_QUALIFIED_CD = {'microsoft.powershell.management\\' + v: v
+                   for v in ('set-location', 'push-location', 'pop-location')}
+# PowerShell keywords a ( ) group follows (if (...), foreach (...), switch -regex (...)): the ( after
+# them, or in a command they start, is a group, not an argument (_Scan.ps_paren_arg)
+PS_PAREN_KEYWORDS = {'if', 'elseif', 'else', 'foreach', 'for', 'while', 'do', 'until', 'switch',
+                     'function', 'filter', 'param', 'catch', 'trap', 'try', 'finally', 'return',
+                     'throw', 'exit', 'break', 'continue', 'data', 'dynamicparam', 'begin', 'process',
+                     'end', 'class', 'enum', 'using', 'in'}
 PS_ESC = {'n': '\n', 't': '\t', 'r': '\r', '0': '\0', 'a': '\a', 'b': '\b', 'f': '\f', 'v': '\v',
           'e': '\x1b'}
 _PS_VAR = re.compile(r'\$(?:[A-Za-z_]\w*:)?[\w?^$]+')
 _BASH_VAR = re.compile(r'\$(?:[A-Za-z_]\w*|\d|[@*#?$!\-])')
-_BRACE = re.compile(r'\{([^\s{}\'"$`\\;|&()<>]*,[^\s{}\'"$`\\;|&()<>]*)\}')
+# A PowerShell word a touching ( calls a method of, as PowerShell reads a command's arguments: a
+# member access on an expression ($s.Replace, 'abc'.Replace, @a.Count, [IO.Path]::Combine), with a
+# -Param: before it or not (_Scan.ps_paren_arg; `.Name` after a ) ] or } is one too)
+_PS_MEMBER_HEAD = re.compile(r'^(?:-[^\s:]+:)?[$\'"@(\[]')
+_PS_MEMBER_TAIL = re.compile(r'(?:\.|::)[A-Za-z_]\w*$')
+_PS_ASSIGN = ('=', '+=', '-=', '*=', '/=', '%=', '??=')
+
+
+def _ps_keyword_led(words, src):
+    """True when PowerShell words (a command's, up to a ( or { ) start with a keyword that takes a
+    ( ) or { } (PS_PAREN_KEYWORDS), first or first after an assignment's `=`: `$r = if (...)`.
+    Only a token spelled bare in `src` counts: a quoted '=' or 'if' is an argument."""
+    def bare(w):
+        return w.start is not None and src[w.start:w.end] == w.text
+    if not words:
+        return False
+    first = words[0]
+    for k, w in enumerate(words[:-1]):
+        if w.text in _PS_ASSIGN and bare(w):
+            first = words[k + 1]
+    return first.text.lower() in PS_PAREN_KEYWORDS and bare(first)
+
+
+def _brace_group(s, i):
+    """(alternatives, end) of the bash brace group `{a,b}` that starts at s[i], groups nested in
+    it written out (`{a,b{c,d}}`: a, bc, bd); alternatives None when it gives more than
+    BRACE_LIMIT words. None when s[i] starts no group bash expands as read here: no comma at its
+    own level, or a space, quote, expansion, backslash or operator before its `}` (left literal:
+    docs/guard.md "Known limits")."""
+    alts, cur, over, comma, j = [], [''], False, False, i + 1
+    while j < len(s):
+        c = s[j]
+        if c == '{':
+            g = _brace_group(s, j)
+            if g is None:
+                k = s.find('}', j)
+                plain = s[j + 1:k] if k > j else None
+                if plain is None or any(ch.isspace() or ch in BRACE_STOP + '{,' for ch in plain):
+                    return None
+                g = [s[j:k + 1]], k + 1         # `{a,{b}}`: the inner `{b}` is text (a, {b})
+            sub, j = g
+            over = over or sub is None or len(cur) * len(sub) > BRACE_LIMIT
+            cur = [''] if over else [a + b for a in cur for b in sub]
+            continue
+        if c == ',' or c == '}':
+            alts.extend(cur)
+            over = over or len(alts) > BRACE_LIMIT
+            cur, alts = [''], ([] if over else alts)
+            if c == '}':
+                if not comma:
+                    return None                 # `{a}`: bash leaves it as written
+                return (None if over else alts), j + 1
+            comma = True
+            j += 1
+            continue
+        if c.isspace() or c in BRACE_STOP:
+            return None
+        cur = [a + c for a in cur]
+        j += 1
+    return None
+
+
+# bash: the most words one word's brace groups may give together; past it the word is computed and
+# rule brace-limit refuses the line (kitlib.guard.rules.brace_limit)
+BRACE_LIMIT = 256
+BRACE_STOP = '\'"$`\\;|&()<>'      # ends a brace group's reading: quotes, expansions, operators
 _ANSI = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', "'": "'", '"': '"', '?': '?', 'a': '\a',
          'b': '\b', 'f': '\f', 'v': '\v', 'e': '\x1b', 'E': '\x1b'}
 _ANSI_NUM = re.compile(r'x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|c.')
@@ -74,14 +162,15 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home')
+                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home',
+                 'split')
 
-    def __init__(self, source, shell, depth):
+    def __init__(self, source, shell, depth, home=None):
         self.words, self.redirects, self.subs = [], [], []
         self.start = self.end = None
         self.source, self.shell, self.depth = source, shell, depth
+        self.home = home            # the folder `~` names, its Parsed's home (home_folder: None is the user's)
         self.cwd = None
-        self.cwd_ps_drive = False   # cwd None after a PowerShell cd into a place ps_unplaceable names (track)
         self.cwd_home = None        # cwd, with a cd to a home variable ($HOME/x) followed too (track)
         self.piped_out = self.piped_in = False
         self.groups = ()            # the ( ) or { } groups it is inside, outermost first: (id, '(' or '{')
@@ -91,6 +180,10 @@ class Command(object):
         self.git_env = False        # the GIT_DIR-like variable some command of the line sets (commands.mark_git_env), else False
         self.home_env = False       # the variable naming git's user config folder the line sets (HOME, ...), else False
         self.path_env = False       # True when some command of the line sets PATH (commands.mark_git_env)
+        # PowerShell: a ( ) or { } it touches is read as a group (a method call's arguments, a script
+        # block) and more of the line follows the group before a separator, words or another group:
+        # its arguments go on past the group, in commands of their own (_Scan.commands)
+        self.split = False
 
     @property
     def grouped(self):
@@ -117,6 +210,9 @@ class Parsed(object):
         self.home = home            # the folder `~` names (home_folder)
         self.commands = []
         self.unclean = []
+        self.nests = 0              # nested shell texts parsed into it (commands._nest, MAX_NESTS)
+        self.brace_over = None      # (text, start, end) of the first word whose brace groups give more
+                                    # than BRACE_LIMIT words; text is that word's shell text, nested or not
 
     @property
     def clean(self):
@@ -135,7 +231,7 @@ class _Scan(object):
     def __init__(self, text, shell, depth, parsed):
         self.s, self.n, self.i = text, len(text), 0
         self.shell, self.depth, self.parsed = shell, depth, parsed
-        self.toks = []              # ('w', Word, subs) | ('op', text) | ('r', Redirect) | ('subs', cmds)
+        self.toks = []              # ('w', Word, subs) | ('op', text[, call]) | ('r', Redirect) | ('subs', cmds)
         self.heredocs = []          # (delimiter, strip_tabs, quoted, Redirect) waiting for a newline
         self.brace = 0
         self.closed = False
@@ -208,6 +304,9 @@ class _Scan(object):
                 continue
             if self.shell == PS and self.startswith('<#'):
                 j = self.s.find('#>', self.i + 2)
+                if j < 0:
+                    # powershell.exe runs no -Command text whose <# has no #>; fail closed
+                    self.flag('an unclosed <# comment')
                 self.i = self.n if j < 0 else j + 2
                 continue
             if c == '#' and self.shell != CMD:
@@ -265,6 +364,21 @@ class _Scan(object):
                 return '}'
             return None
         if self.shell == PS:
+            kind = self.ps_paren_arg() if c == '(' else None
+            if kind == 'arg':
+                # `Set-Content (Join-Path a b) x`: PowerShell runs what the ( ) holds and passes its
+                # value, one argument (not literal) whose commands are read as nested ones;
+                # `-Path:(...)` is that parameter's value, one word as `-Path:$x` is
+                j = self.i
+                self.i += 1
+                cmds = self.sub_until()
+                last = self.toks[-1]
+                if self.s[j - 1] == ':' and last[0] == 'w' and last[1].end == j:
+                    w = last[1]
+                    self.toks[-1] = ('w', Word(w.text + self.s[j:self.i], True, w.start, self.i), last[2] + cmds)
+                else:
+                    self.toks.append(('w', Word(self.s[j:self.i], True, j, self.i), cmds))
+                return 'arg'
             if c in ';|(){}':
                 self.op(c, 1)
                 return c
@@ -289,6 +403,47 @@ class _Scan(object):
         if c in '&|()':
             self.op(c, 1)
             return c
+        return None
+
+    def ps_paren_arg(self):
+        """What the PowerShell ( at self.i opens: 'arg', an argument; 'call', a method call's
+        arguments; None, a group. In a command that has words before it, whose first word (or
+        first after an assignment's `=`) is no keyword that takes a ( ) (if, foreach, while...;
+        _ps_keyword_led), a ( that does not touch the word before it is an argument, whatever
+        stands between (a space, a comma, a redirection, a backtick line continuation, a
+        <#comment#>): `Copy-Item data (...)`. So is the value of a `-Param:` or a `-Param` it
+        touches (`-Destination(...)`, after the command's first word). A ( touching any other
+        word passes the word and then the ( ) as the next argument, as PowerShell reads it
+        (`func(arg)`: `Copy-Item a.txt(...)`, `./x(...)`, `'x'(...)`, `$x(...)`, `[string](...)`),
+        unless the word is a member access (_PS_MEMBER_HEAD/_TAIL: `$s.Replace(...)`,
+        `'abc'.Replace(...)`, `[IO.Path]::Combine(...)`, `(Get-Date).AddDays(...)`): that ( calls
+        the method, and the word, the method's result, is marked not literal. A ( that starts a
+        command is a group, and so is one that touches a group's ) (`$a.M(1)(...)`): the
+        command it cuts reads past it (commands); a writer's group is rules.ps_unread's."""
+        words = []
+        for t in reversed(self.toks):
+            if t[0] == 'op':
+                break
+            if t[0] == 'w':
+                words.insert(0, t[1])
+        if not words:
+            return None
+        last = self.toks[-1][1] if self.toks[-1][0] == 'w' else None
+        touch = last is not None and last.end == self.i and last.start < last.end
+        src = self.s[last.start:last.end] if touch else ''
+        if touch and _PS_MEMBER_TAIL.search(src) and (
+                _PS_MEMBER_HEAD.match(src) or (src[0] == '.' and self.s[last.start - 1:last.start] in (')', ']', '}'))):
+            # `$s.Replace(...)`: a method call, its value only known at run time
+            self.toks[-1] = ('w', Word(last.text, True, last.start, last.end, last.synth, last.alt), self.toks[-1][2])
+            return 'call'
+        if _ps_keyword_led(words, self.s):
+            return None
+        if not touch:
+            return 'arg'
+        param = last.text.startswith('-') and len(last.text) > 1 and not last.dyn
+        plain = src[0] != '-' or ':' in src                     # -Path:$x(...) too, not -Path(...)
+        if plain or (param and len(words) > 1):
+            return 'arg'
         return None
 
     _BASH_REDIR = re.compile(r'(\d+|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)')
@@ -348,6 +503,18 @@ class _Scan(object):
     def target(self, raw=False):
         while self.i < self.n and self.space(self.s[self.i]):
             self.i += 1
+        if self.shell == PS and not raw and self.i < self.n and self.s[self.i] in '({':
+            # `> (Join-Path a b)`: the file the ( ) computes, its commands read as nested ones;
+            # `> { ... }`: the script block's text. Either is a target that is not literal
+            j = self.i
+            if self.s[j] == '(':
+                self.i += 1
+                cmds = self.sub_until()
+                if cmds:
+                    self.toks.append(('subs', cmds))
+            else:
+                self.i = self.balanced(j, '{', '}')
+            return Word(self.s[j:self.i], True, j, self.i)
         if self.i >= self.n or self.s[self.i] in '\r\n;|&()<>':
             return None
         if raw:
@@ -405,7 +572,7 @@ class _Scan(object):
         sh, s = self.shell, self.s
         self._kept = []             # bash: indexes in out of backslashes bash would drop
         self._synth = False
-        self._brace = None          # bash: (index in out, [alternatives]) of an unquoted {a,b}
+        self._braces = []           # bash: (index in out, [alternatives] or None) of each unquoted {a,b}
         if sh == PS and (self.startswith("@'") or self.startswith('@"')):
             rest = s[self.i + 2:self.i + 4]
             if rest[:1] == '\n' or rest == '\r\n':
@@ -433,10 +600,20 @@ class _Scan(object):
             cmds = self.sub_until()
             self.toks.append(('w', Word('@(...)', True, start, self.i), cmds))
             return
+        index = 0                   # PowerShell: [ ] open in the word
         while self.i < self.n:
             c = s[self.i]
             if self.space(c) or c in '\r\n':
                 break
+            if sh == PS and c == '(' and index:
+                # `$x[(sv PWD <main>)]`: a ( inside the word's [ ] index is part of the word, and its
+                # commands nested ones
+                j = self.i
+                self.i += 1
+                subs = subs + self.sub_until()
+                out.append(s[j:self.i])
+                dyn = True
+                continue
             if sh == BASH:
                 if c in ';|&()<>':
                     break
@@ -457,12 +634,12 @@ class _Scan(object):
                         out.append('\\')
                         self.i += 1
                     continue
-                if c == '{' and self._brace is None:
-                    m = _BRACE.match(s, self.i)
-                    if m:
-                        self._brace = (len(out), m.group(1).split(','))
+                if c == '{':
+                    g = _brace_group(s, self.i)
+                    if g:
+                        self._braces.append((len(out), g[0]))
                         out.append('')
-                        self.i = m.end()
+                        self.i = g[1]
                         continue
                 if c == "'":
                     j = s.find("'", self.i + 1)
@@ -514,6 +691,10 @@ class _Scan(object):
                     d, sb = self.dollar(out)
                     dyn, subs = dyn or d, subs + sb
                     continue
+                if c == '[':
+                    index += 1
+                elif c == ']' and index:
+                    index -= 1
                 out.append(c)
                 self.i += 1
                 continue
@@ -542,12 +723,21 @@ class _Scan(object):
             # a character no rule consumed (a stray > in PowerShell): a word of its own
             out.append(s[self.i])
             self.i += 1
-        if self._brace is not None:
-            # bash expands {a,b} into one word per alternative
-            k, alts = self._brace
-            for a in alts:
-                parts = list(out)
-                parts[k] = a
+        if self._braces:
+            # bash expands each {a,b} in turn: one word per alternative of the first group, each
+            # of them one per alternative of the next, and so on (`{a,b}{1,2}`: a1 a2 b1 b2)
+            words = [list(out)]
+            for k, alts in self._braces:
+                if alts is None or len(words) * len(alts) > BRACE_LIMIT:
+                    # more words than the guard writes out: computed, as a variable would be, and
+                    # kept for rule brace-limit, which refuses the line (rules.brace_limit)
+                    self.flag('a brace expansion of more than %d words' % BRACE_LIMIT)
+                    if self.parsed.brace_over is None:
+                        self.parsed.brace_over = (s, start, self.i)
+                    self.toks.append(('w', Word(s[start:self.i], True, start, self.i, synth=True), subs))
+                    return
+                words = [w[:k] + [a] + w[k + 1:] for w in words for a in alts]
+            for parts in words:
                 self.toks.append(('w', Word(''.join(parts), dyn, start, self.i, synth=True), subs))
                 subs = []
             return
@@ -743,7 +933,7 @@ class _Scan(object):
         ids = [0]
 
         def new(prev):
-            c = Command(self.s, self.shell, self.depth)
+            c = Command(self.s, self.shell, self.depth, getattr(self.parsed, 'home', None))
             c.groups = tuple(stack)
             c.prev_op = prev
             return c
@@ -754,11 +944,34 @@ class _Scan(object):
                 return True
             return False
 
+        # PowerShell: a command a ( or { cuts has a group argument, unless the ( calls a method or
+        # the group is a keyword's (`if (...) {`); a command a ( or { cuts (`Set-Content -Value
+        # $s.Trim() -Path x`) is split when more of the line follows the group's close before a
+        # separator, words or another group
+        ps = self.shell == PS
+        cuts = []                   # per open group, the command it cut (None: it cut none)
+        after = None                # the command the group that just closed cut
+
+        def go_on():
+            if ps and after is not None:
+                after.split = True
+
         cur = new(None)
         for t in self.toks:
             kind = t[0]
             if kind == 'op':
                 o = t[1]
+                if o in ('(', '{'):
+                    go_on()                     # `$a.M(1)(...)`: a group right after a group
+                    cut = cur if cur.words or cur.redirects else after
+                    if cut is not None and ps and _ps_keyword_led(cut.words, self.s):
+                        cut = None              # `if (...) {`, `foreach (...)`: the keyword's own
+                    cuts.append(cut)
+                    after = None
+                elif o in (')', '}') and stack:
+                    after = cuts.pop()
+                else:
+                    after = None                # ; && || | newline: the command ended
                 if o == '|':
                     src = None
                     if keep(cur):
@@ -779,6 +992,8 @@ class _Scan(object):
                 cur = new(o)
                 continue
             if kind == 'subs':
+                go_on()
+                after = None
                 cur.subs.extend(t[1])
                 continue
             if kind == 'r':
@@ -787,6 +1002,8 @@ class _Scan(object):
                 if r.target is not None and not r.body:
                     self.span(cur, r.target)
                 continue
+            go_on()
+            after = None
             w, subs = t[1], t[2]
             cur.words.append(w)
             cur.subs.extend(subs)
@@ -819,10 +1036,13 @@ def msys_to_win(p):
     return (m.group(1).upper() + ':' + (m.group(2) or '/')) if m else p
 
 
-# A PowerShell provider-qualified path: [<module>\]<provider>::<rest>. FileSystem (bare or from
-# its own module) holds files, so its <rest>, when absolute, is the file; any other provider, or
-# a module the guard does not know, is a place it cannot tell.
-PS_PROVIDER_RE = re.compile(r'^(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
+# A PowerShell provider-qualified path: [\][<module>\]<provider>::<rest>. FileSystem (bare or
+# from its own module) holds files, so its <rest> is the file: absolute (ps_filesystem_path), or
+# relative and read from the location (ps_filesystem_relative); any other provider, or a module
+# the guard does not know, is a place it cannot tell. PowerShell takes a \ before a bare provider
+# (\FileSystem::<drive>:\x is <drive>:\x); a / there, or a \ before a module, it refuses, and the guard reads
+# them as the place they would name. A module of . or .. is no module (_ps_provider).
+PS_PROVIDER_RE = re.compile(r'^[\\/]?(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
 PS_FILESYSTEM_MODULES = (None, 'microsoft.powershell.core')
 # A PowerShell drive whose name is anything but one ASCII letter (Main:\x, Temp:\x, env:FOO, 1:\x,
 # _:\x, a non-ASCII letter): a drive the session may have made with New-PSDrive, which takes such
@@ -831,10 +1051,30 @@ PS_LONG_DRIVE_RE = re.compile(r'^(?![A-Za-z]:)[^\\/:]+:')
 _ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//)')
 
 
+def is_absolute(p):
+    """True when the text `p` names its folder whatever the current one: a drive and a separator,
+    or a share. A rooted \\x is not (it takes the current drive; os.path.isabs reads it as
+    absolute before Python 3.13)."""
+    return bool(_ABS_RE.match(p or ''))
+
+
+def _ps_provider(p):
+    """The PS_PROVIDER_RE match of `p` when the guard reads it as a provider-qualified path, else
+    None: a relative path whose first folder is . or .. is read as a path, its :: a stream.
+    PowerShell writes .\\x.txt::$DATA into the stream of x.txt in the location; ..\\x.txt::$DATA it
+    reads as a provider named ..\\x.txt and refuses, writing nothing, so the guard's reading (a
+    stream of x.txt in the folder above) is the stricter one."""
+    m = PS_PROVIDER_RE.match(p or '')
+    if m and m.group(1) in ('.', '..'):
+        return None
+    return m
+
+
 def ps_filesystem_path(p):
     """The file path a PowerShell `FileSystem::<abs>` (or
-    `Microsoft.PowerShell.Core\\FileSystem::<abs>`) spells, else None."""
-    m = PS_PROVIDER_RE.match(p or '')
+    `Microsoft.PowerShell.Core\\FileSystem::<abs>`, either after a leading separator) spells,
+    else None."""
+    m = _ps_provider(p)
     if not m or m.group(2).lower() != 'filesystem':
         return None
     module = m.group(1).lower() if m.group(1) is not None else None
@@ -843,20 +1083,44 @@ def ps_filesystem_path(p):
     return m.group(3)
 
 
+def ps_filesystem_relative(p):
+    """The relative path a PowerShell `FileSystem::<rel>` (or
+    `Microsoft.PowerShell.Core\\FileSystem::<rel>`, either after a leading separator) spells, read
+    from the location as the guard reads a .NET method's relative path; else None. PowerShell
+    itself reads it from the process's directory, which a cd does not move (docs/guard.md "Known
+    limits"). A drive-relative C:x, ~, another provider or a long drive in <rel> is no such path."""
+    m = _ps_provider(p)
+    if not m or m.group(2).lower() != 'filesystem':
+        return None
+    module = m.group(1).lower() if m.group(1) is not None else None
+    rest = m.group(3)
+    if (module not in PS_FILESYSTEM_MODULES or not rest or _ABS_RE.match(rest)
+            or re.match(r'^[A-Za-z]:', rest) or rest.startswith('~')
+            or _ps_provider(rest) or PS_LONG_DRIVE_RE.match(rest)):
+        return None
+    return rest
+
+
 def ps_unplaceable(p):
     """True when PowerShell reads the text `p` as a place the guard cannot tell: a
-    provider-qualified path other than an absolute FileSystem:: one, or a drive whose name is not
-    one ASCII letter. A one-letter drive (absolute or drive-relative) and a relative path are not."""
+    provider-qualified path other than a FileSystem:: one the guard reads (ps_filesystem_path,
+    ps_filesystem_relative) (x.txt::$DATA and sub\\x.txt::$DATA among them: PowerShell reads x.txt
+    as a provider's name), or a drive whose name is not one ASCII letter. A one-letter drive
+    (absolute or drive-relative) and a relative path (.\\x.txt::$DATA among them, _ps_provider) are
+    not."""
     if not p or p[:2] in ('\\\\', '//'):
         return False
-    if PS_PROVIDER_RE.match(p):
-        return ps_filesystem_path(p) is None
+    if _ps_provider(p):
+        return ps_filesystem_path(p) is None and ps_filesystem_relative(p) is None
     return bool(PS_LONG_DRIVE_RE.match(p))
 
 
 def home_folder(home=None):
-    """`home`, else the user's home folder (os.path.expanduser)."""
-    return home or os.path.expanduser('~')
+    """`home`, else the user's home folder as kitlib.config.user.home_dir() gives it, so the
+    tests' home fence applies (docs/test-tools.md "Home fence"). Its HomeFenced is a
+    BaseException: it passes every `except Exception` in the guard and kitlib.host.hookmain, and
+    boot/hook.py run() blocks the call."""
+    return home or kuser.home_dir()
 
 
 # a word's text that starts with a variable naming the home folder, in any shell's spelling,
@@ -890,13 +1154,16 @@ def home_text(text, home=None, dyn=False):
 def resolve_path(p, cwd, shell=None, home=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
     drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
-    `FileSystem::<abs>` is <abs> and any other provider or a drive not named by one ASCII letter
-    is None (ps_unplaceable); bash and cmd text is read as it always was. `~` is `home`
-    (home_folder)."""
+    `FileSystem::<abs>` (after a leading separator too) is <abs>, `FileSystem::<rel>` is <rel> in
+    `cwd` (ps_filesystem_relative), any other provider or a drive not named by one ASCII letter
+    is None (ps_unplaceable), and .\\x.txt::$DATA is a stream of a file in `cwd`; bash and cmd
+    text is read as it always was. `~` is `home` (home_folder)."""
     if not p:
         return None
     if shell == PS:
         fs = ps_filesystem_path(p)
+        if fs is None:
+            fs = ps_filesystem_relative(p)
         if fs is not None:
             p = fs
         elif ps_unplaceable(p):
@@ -937,11 +1204,20 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     read too, bash cd's own options and a `--` are passed over, and a bash or PowerShell cd with
     no place goes home (bash's cd, and PowerShell 7's; Windows PowerShell's stays put, but only a
     deny reads it). A bash cd behind `builtin` or `command` is the cd itself (cd_words), and
-    PowerShell's `cd $null` is a cd with no place."""
+    PowerShell's `cd $null` is a cd with no place. A PowerShell cd to a relative FileSystem:: path
+    (ps_filesystem_relative: FileSystem::., FileSystem::sub) goes where the text cannot tell:
+    PowerShell reads it from the process's directory, which no cd before it moved. A PowerShell
+    `Microsoft.PowerShell.Management\\Set-Location` (or Push-, Pop-Location) is that cmdlet
+    (PS_QUALIFIED_CD); any other module-qualified cd word is a cd to a place unknown."""
     words = cd_words(cmd)
     if not words:
         return False, cwd
     verb = words[0].text.lower()
+    name = re.split(r'[\\/]', verb)[-1]
+    if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
+        if verb not in PS_QUALIFIED_CD:
+            return True, None                   # a qualified cd word PowerShell does not run
+        verb = PS_QUALIFIED_CD[verb]
     if verb in CD_UNKNOWN:
         return True, None
     if verb not in CD_VERBS:
@@ -969,18 +1245,9 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
             return True, None
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
         return True, None
+    if cmd.shell == PS and ps_filesystem_relative(p) is not None:
+        return True, None                       # read from the process's directory, not the location
     return True, resolve_path(p, cwd, cmd.shell, home)
-
-
-def ps_cd_unplaceable(cmd):
-    """True when `cmd` is a PowerShell cd whose one literal place is one ps_unplaceable names
-    (cd Main:\\, Set-Location -LiteralPath Registry::x)."""
-    if cmd.shell != PS or len(cmd.words) < 2 or cmd.words[0].text.lower() not in CD_VERBS:
-        return False
-    rest = cmd.words[1:]
-    if rest[0].text.lower() in ('-path', '-literalpath', '-lp'):
-        rest = rest[1:]
-    return len(rest) == 1 and not rest[0].dyn and ps_unplaceable(rest[0].text)
 
 
 BASH_PREFIX_WORDS = {'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time'}
@@ -999,32 +1266,36 @@ def _keyword_cd(c):
     return 0 < first and k < len(c.words) and c.words[k].text.lower() in CD_VERBS | CD_UNKNOWN
 
 
-def track(cmds, cwd, ps_drive=False, home=None, cwd_home=None):
+def track(cmds, cwd, home=None, cwd_home=None):
     """Each command's cwd, in order: a cd changes it for the commands after it. A bash ( ) group
     is a subshell: a cd inside it holds to its end, then the directory before it comes back; a
     bash { } group shares the directory. A cd the text cannot tell, one inside a PowerShell or
     cmd group, one behind a keyword, one in a pipeline, in the background or beside || makes the
     directory unknown (None) from there on. Substitutions run in the directory of the command
-    that holds them. A command whose cwd is None after a PowerShell cd into a place
-    ps_unplaceable names (cd Main:\\) gets cwd_ps_drive, until a cd reaches a known place. `~` is
-    `home` (home_folder). cwd_home is the directory tracked from `cwd_home` (default `cwd`) with
+    that holds them; a cd inside a PowerShell one makes its holder's directory unknown, and every
+    later one's. `~` is `home` (home_folder). cwd_home is the directory tracked from `cwd_home` (default `cwd`) with
     a cd to a home variable read too (cd_target home_vars): only for the rules that deny, since a
     line can set the variable to another folder."""
-    here, drive = cwd, ps_drive
+    here = cwd
     here_h = cwd if cwd_home is None else cwd_home
-    open_ = []                  # (group, the directory before it, its drive flag, its cwd_home)
+    open_ = []                  # (group, the directory before it, its cwd_home)
+    sub_from = {}               # id(command): (cwd, cwd_home) its substitutions start in
     for c in cmds:
         common = 0
         while common < len(open_) and common < len(c.groups) and open_[common][0] == c.groups[common]:
             common += 1
         while len(open_) > common:
-            g, before, before_drive, before_h = open_.pop()
+            g, before, before_h = open_.pop()
             if g[1] == '(' and c.shell == BASH:
-                here, drive, here_h = before, before_drive, before_h
+                here, here_h = before, before_h
         for g in c.groups[common:]:
-            open_.append((g, here, drive, here_h))
+            open_.append((g, here, here_h))
+        sub_from[id(c)] = (here, here_h)
+        # PowerShell runs a $( ) or an argument's ( ) in the caller's scope: a cd there moves this
+        # command and every one after it (bash's $( ) is a subshell)
+        if c.shell == PS and any(cd_target(x, None, home)[0] for x in flatten(c.subs)):
+            here = here_h = None
         c.cwd, c.cwd_home = here, here_h
-        c.cwd_ps_drive = drive and here is None
         changed, to = cd_target(c, here, home)
         to_h = cd_target(c, here_h, home, home_vars=True)[1]
         if _keyword_cd(c):
@@ -1034,10 +1305,10 @@ def track(cmds, cwd, ps_drive=False, home=None, cwd_home=None):
                       or (c.groups and c.shell != BASH))
             here = None if unsure else to
             here_h = None if unsure else to_h
-            drive = ps_cd_unplaceable(c) or (drive and here is None)
     for c in cmds:
         if c.subs:
-            track(c.subs, c.cwd, c.cwd_ps_drive, home, c.cwd_home)
+            at, at_h = sub_from[id(c)]
+            track(c.subs, at, home, at_h)
     return cmds
 
 

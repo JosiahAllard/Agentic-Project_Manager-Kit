@@ -31,6 +31,17 @@ unless the caller asks for what they carry):
                 `.kit.json`, inline or in its file) or "auto" (detected from the tree,
                 kitlib.gate.detect), or null. A reader takes a record without it as "gate.json"
                 (source_of)
+  full          true when the gate ran `--full` (every non-manual step, each by its full_cmd when
+                it has one; kitlib.gate.steps.select), false for any other run. Only the JSON
+                true counts (full_of): a record without the key was written by a gate from before
+                records said which (an older kit, or a kit branch's own gate.py), and a reader that needs a full gate (verify_full; a landing's branch tips)
+                takes it as not full. Nothing in the older keys tells the two apart: the steps
+                carry names only, and a step with a full_cmd has the same name in both modes
+  mode          what the gate selected (MODES): "full" (--full; `full` is true), "select" (the
+                steps the change selects, plus "gate".smoke_steps; kitlib.gate.steps.select) or
+                "docs" (a docs-only change: only "gate".docs_only steps ran;
+                kitlib.gate.steps.docs_only). A record without it is "full" when full_of says so,
+                else unknown (mode_of: None), and a landing takes an unknown mode only as --full
 
 verify() re-derives everything git can answer: the record's file name, `commit`, `tree` and
 `author` must match the repository now, and `gate_config` must match the caller's config when it
@@ -52,7 +63,8 @@ SCHEMA = 1
 VERDICT = 'OK'
 KEYS = ('schema', 'verdict', 'commit', 'tree', 'base', 'gate_config', 'kit', 'author', 'repo',
         'started_utc', 'ended_utc', 'steps')
-ADDED_KEYS = ('config_rev', 'source')
+ADDED_KEYS = ('config_rev', 'source', 'full', 'mode')
+MODES = ('full', 'select', 'docs')
 RETRIES = 5
 RETRY_SLEEP = 0.2
 
@@ -126,11 +138,51 @@ def source_of(record):
     return record.get('source') or 'gate.json'
 
 
+def full_of(record):
+    """True only when the record says its gate ran --full (`full` is the JSON true); a record
+    written before the key, or with anything else there, is not a full gate."""
+    return record.get('full') is True
+
+
+def mode_of(record):
+    """A record's mode: its `mode` when it is one of MODES and agrees with `full` ("full" exactly
+    when full_of); a record without the key is "full" when full_of, else None (unknown), as is
+    one whose mode is anything else."""
+    mode = record.get('mode')
+    if mode is None:
+        return 'full' if full_of(record) else None
+    if mode not in MODES or (mode == 'full') != full_of(record):
+        return None
+    return mode
+
+
+def verify_full(root, commit):
+    """`(record, None)` when verify() takes `commit`'s record and it is from a --full gate
+    (full_of), else `(None, why)`: verify's reason first, then that the gate was not --full."""
+    rec, why = verify(root, commit)
+    if rec is None:
+        return None, why
+    if full_of(rec):
+        return rec, None
+    if 'full' not in rec:
+        return None, ('the record for %s does not say whether the gate ran --full (written by a '
+                      'gate from before records said so), so it does not count' % rec['commit'])
+    return None, 'the record for %s is from a gate run without --full' % rec['commit']
+
+
 def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None, ended_utc=None,
-          config_rev=None, source=None):
+          config_rev=None, source=None, full=False, mode=None):
     """The record for `rev` (resolved here: commit, tree and author come from git, never the
     caller). `config_rev`: the commit the gate config was read from (resolved to a full hash).
-    `source`: "gate.json" or "auto" (kitlib.gate.detect), or None."""
+    `source`: "gate.json" or "auto" (kitlib.gate.detect), or None. `full`: the gate ran --full.
+    `mode`: one of MODES; None: "full" with `full`, else "select". "full" goes with `full` and
+    only with it (RecordError)."""
+    full = full is True
+    if mode is None:
+        mode = 'full' if full else 'select'
+    if mode not in MODES or (mode == 'full') != full:
+        raise RecordError('mode %r with full %r: the mode is one of %s, and "full" exactly when '
+                          'the gate ran --full' % (mode, full, ', '.join(MODES)))
     commit, tree, author = _facts(root, rev)
     if base is not None and not refs.is_sha(base):
         resolved, why = refs.resolve(base, root)
@@ -149,7 +201,7 @@ def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
         'gate_config': config_hash(gate_config), 'kit': dict(kit), 'author': author,
         'repo': repo_name or '', 'started_utc': started_utc, 'ended_utc': ended_utc or utc(),
         'steps': [_step(s, i) for i, s in enumerate(steps or [])],
-        'config_rev': config_rev, 'source': source,
+        'config_rev': config_rev, 'source': source, 'full': full, 'mode': mode,
     }
 
 
@@ -183,10 +235,10 @@ def write(root, record):
 
 
 def record_pass(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
-                config_rev=None, source=None):
+                config_rev=None, source=None, full=False, mode=None):
     """build() then write(): `(path, record)`. Only a passing gate calls this."""
     rec = build(root, rev, gate_config, kit, repo_name, started_utc, steps, base,
-                config_rev=config_rev, source=source)
+                config_rev=config_rev, source=source, full=full, mode=mode)
     return write(root, rec), rec
 
 

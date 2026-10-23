@@ -14,6 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'procwatch')
 sys.path.insert(0, CODE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(CODE, '..', '..'))      # the kit root, for kitlib
 import procwatch as PW  # noqa: E402
 
 MIN, HOUR = 60, 3600
@@ -23,12 +24,41 @@ LIVE_BASH = (50, 1)      # the tool shell's MSYS ids: pid 50, started from Windo
 GONE = 99                # an MSYS parent pid that no longer exists
 
 
+_SAVED_HOME = {}
+_HOME_DIR = None
+
+
+def setUpModule():
+    # procwatch reads the machine config through kitlib (the kit temp folder); under the kit's home
+    # fence that needs a temp home, here and in the procwatch processes the tests start.
+    global _HOME_DIR
+    _HOME_DIR = tempfile.TemporaryDirectory()
+    for k in ('USERPROFILE', 'HOME'):
+        _SAVED_HOME[k] = os.environ.get(k)
+        os.environ[k] = _HOME_DIR.name
+
+
+def tearDownModule():
+    for k, v in _SAVED_HOME.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    _HOME_DIR.cleanup()
+
+
 def proc(pid, ppid, name, cmd="", image=None, age=HOUR, cpu=0.0, ws=10 * 2**20, msys=None):
-    """msys = (msys pid, msys parent pid) for a Git-Bash program, as Git's ps -l reports it."""
+    """msys = (msys pid, msys parent pid[, tty]) for a Git-Bash program, as Git's ps -l reports it
+    (tty `?`: no terminal, as in an agent's tool shell)."""
     return {"pid": pid, "ppid": ppid, "name": name, "cmd": cmd,
             "image": image if image is not None else rf"C:\x\{name}", "ctime": NOW - int(age * 1e7),
             "age": age, "cpu_pct": cpu, "cpu_s": 1.0, "ws": ws, "priv": ws, "handles": 100, "session": 1,
-            "mpid": msys[0] if msys else None, "mppid": msys[1] if msys else None}
+            "mpid": msys[0] if msys else None, "mppid": msys[1] if msys else None,
+            "mtty": msys[2] if msys and len(msys) > 2 else None}
+
+
+NO_TTY = "?"
+AGENT_TAIL = "tail.exe -n +1 -F Z:/AgentTemp/claude/Z--repo/1234/tasks/b1.output"    # a Monitor's tail
 
 
 def gitp(pid, ppid, name, cmd, age, msys):
@@ -47,11 +77,113 @@ def by_pid(procs):
 
 
 class Classify(unittest.TestCase):
+    def test_origin_skips_unlisted_apps(self):
+        for app in ("discord.exe", "steam.exe"):
+            ps = by_pid(world(proc(700, 4180, app), proc(701, 700, "child.exe")))
+            self.assertEqual(ps[701]["origin"], "explorer.exe", app)
+
+    def test_procwatch_origins_env_adds_an_app(self):
+        old = os.environ.get("PROCWATCH_ORIGINS")
+        os.environ["PROCWATCH_ORIGINS"] = "obs64.exe"
+        try:
+            ps = by_pid(world(proc(700, 4180, "obs64.exe"), proc(701, 700, "child.exe")))
+        finally:
+            if old is None:
+                del os.environ["PROCWATCH_ORIGINS"]
+            else:
+                os.environ["PROCWATCH_ORIGINS"] = old
+        self.assertEqual(ps[701]["origin"], "obs64.exe")
+
+    def _with_agent_temp(self, reader):
+        """Run `reader` as the launcher's AGENT_TEMP reader (kitlib.pmstart.agent_temp_env); the
+        kit's own temp folder (work_temp) is set to a different folder so a wrong source shows."""
+        import kitlib.config.user as KU
+        import kitlib.pmstart as PS
+        old = PS.agent_temp_env, KU.work_temp
+        PS.agent_temp_env = reader
+        KU.work_temp = lambda *a, **k: r"Q:\kit-own-temp"
+
+        def clear():
+            for name in ("_agent_temp_claude", "_kit_temp_claude"):     # the resolver is cached
+                if hasattr(PW, name):
+                    getattr(PW, name).cache_clear()
+
+        def restore():
+            PS.agent_temp_env, KU.work_temp = old
+            clear()
+        self.addCleanup(restore)
+        clear()
+
+    def test_agent_script_in_the_agent_temp_folder_is_an_agent_script(self):
+        # the agents' TEMP is AGENT_TEMP (kitlib.pmstart.agent_temp_env), not the kit's own temp folder
+        calls = []
+        self._with_agent_temp(lambda: calls.append(1) or r"Q:\odd-agent-temp")
+        ps = by_pid(world(
+            proc(900, 77, "python.exe", r"python.exe Q:\odd-agent-temp\claude\x\job.py", age=2 * HOUR),
+            # the kit's own temp folder is not where agents run from
+            proc(901, 77, "python.exe", r"python.exe Q:\kit-own-temp\claude\x\job.py", age=2 * HOUR),
+            *[proc(910 + i, 77, "python.exe", "python.exe job.py") for i in range(5)]))
+        self.assertEqual(ps[900]["rule"], "agent-script")
+        self.assertNotEqual(ps[901]["rule"], "agent-script")
+        self.assertEqual(len(calls), 1)         # resolved once, not once per process
+
+    def test_agent_temp_given_with_forward_slashes_matches_a_backslashed_command_line(self):
+        self._with_agent_temp(lambda: "D:/Foo")
+        ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe D:\Foo\claude\x\job.py", age=2 * HOUR)))
+        self.assertEqual(ps[900]["rule"], "agent-script")
+
+    def test_unset_or_unreadable_agent_temp_keeps_the_rule_off(self):
+        def unreadable():
+            raise OSError("registry")
+        for reader in (lambda: None, lambda: "", unreadable):
+            with self.subTest(reader):
+                self._with_agent_temp(reader)
+                ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe Q:\x\claude\job.py", age=2 * HOUR)))
+                self.assertNotEqual(ps[900]["rule"], "agent-script")
+
     def test_orphaned_tail_follow_and_grep_are_kill_ok_suspects(self):
-        ps = by_pid(world(gitp(900, 77, "tail.exe", r"tail.exe -n +1 -f C:\t\x.output", 2 * HOUR, (60, GONE)),
-                          gitp(901, 78, "grep.exe", 'grep.exe --line-buffered -E "FAIL"', 2 * HOUR, (61, GONE))))
+        # agent-started: no terminal, and the tail follows a file under the agents' temp folder
+        ps = by_pid(world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)),
+                          gitp(901, 78, "grep.exe", 'grep.exe --line-buffered -E "FAIL"', 2 * HOUR,
+                               (61, GONE, NO_TTY))))
         for pid, rule in ((900, "msys-follow"), (901, "msys-filter")):
             self.assertEqual((ps[pid]["verdict"], ps[pid]["rule"], ps[pid]["kill_ok"]), ("SUSPECT", rule, True))
+
+    def test_orphaned_agent_follow_is_kill_ok_for_every_agent_path_form(self):
+        self._with_agent_temp(lambda: r"Q:\odd-agent-temp")
+        for cmd in (AGENT_TAIL,
+                    r"tail.exe -F Z:\AgentTemp\claude\p\s\tasks\b1.output",
+                    "tail.exe -F /z/agenttemp/claude/p/s/tasks/b1.output",
+                    r"tail.exe -f D:\local\Temp\claude\p\s\tasks\b1.output",   # <TEMP>\claude\
+                    "tail.exe -F Z:/GitHub/repo/.claude/worktrees/x/gate.log",
+                    r"tail.exe -F Q:\odd-agent-temp\claude\p\x.log",           # the resolved agent temp
+                    "tail.exe -F /q/odd-agent-temp/claude/p/x.log",            # ... in MSYS form
+                    "tail.exe -F q:/Odd-Agent-Temp/claude/p/x.log"):
+            with self.subTest(cmd):
+                p = by_pid(world(gitp(900, 77, "tail.exe", cmd, 2 * HOUR, (60, GONE, NO_TTY))))[900]
+                self.assertEqual((p["verdict"], p["kill_ok"]), ("SUSPECT", True))
+
+    def test_orphaned_follow_outside_agent_paths_is_reported_not_ended(self):
+        for cmd in (r"tail.exe -n +1 -f C:\t\x.output", "tail.exe -F /c/logs/claude.log",
+                    "tail.exe -F D:/claudette/x.log"):
+            with self.subTest(cmd):
+                p = by_pid(world(gitp(900, 77, "tail.exe", cmd, 2 * HOUR, (60, GONE, NO_TTY))))[900]
+                self.assertEqual((p["verdict"], p["rule"], p["kill_ok"]), ("SUSPECT", "msys-follow", False))
+                self.assertIn("reported only", p["reason"])
+
+    def test_orphaned_follow_with_a_terminal_or_no_tty_known_is_not_ended(self):
+        for msys in ((60, GONE, "pty0"), (60, GONE, "cons1"), (60, GONE)):
+            with self.subTest(msys):
+                p = by_pid(world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, msys)))[900]
+                self.assertEqual((p["verdict"], p["kill_ok"]), ("SUSPECT", False))
+
+    def test_orphaned_filter_or_sleep_with_a_terminal_is_not_ended(self):
+        for name, cmd in (("grep.exe", "grep.exe FAIL"), ("sleep.exe", "sleep 9999")):
+            for tty, ok in (("pty0", False), (None, False), (NO_TTY, True)):
+                with self.subTest((name, tty)):
+                    msys = (60, GONE, tty) if tty else (60, GONE)
+                    p = by_pid(world(gitp(900, 77, name, cmd, 2 * HOUR, msys)))[900]
+                    self.assertEqual((p["verdict"], p["kill_ok"]), ("SUSPECT", ok))
 
     def test_live_parent_or_young_means_expected(self):
         ps = by_pid(world(gitp(900, 501, "tail.exe", "tail.exe -f x", 2 * HOUR, (60, 50)),
@@ -163,12 +295,31 @@ class Classify(unittest.TestCase):
         self.assertEqual(ps[900]["group"], "agent tool commands (parent alive)")
 
     def test_kill_respects_only_and_reports_results(self):
-        ps = world(gitp(900, 77, "tail.exe", "tail -f a", 2 * HOUR, (60, GONE)),
-                   gitp(901, 77, "sleep.exe", "sleep 9999", 2 * HOUR, (61, GONE)))
+        ps = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)),
+                   gitp(901, 77, "sleep.exe", "sleep 9999", 2 * HOUR, (61, GONE, NO_TTY)))
         seen = []
         done = PW.kill(ps, only={"msys-sleep"}, terminate=lambda pid, ct: seen.append(pid) or "killed")
         self.assertEqual(seen, [901])
         self.assertEqual(done, [(901, "sleep.exe", "msys-sleep", "killed")])
+
+    def test_kill_passes_the_seen_creation_time(self):
+        ps = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)))
+        seen = []
+        PW.kill(ps, terminate=lambda pid, ct: seen.append((pid, ct)) or "killed")
+        self.assertEqual(seen, [(900, by_pid(ps)[900]["ctime"])])
+
+    def test_kill_skips_an_unknown_creation_time(self):
+        ps = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)))
+        by_pid(ps)[900]["ctime"] = None
+        self.assertEqual(PW.kill(ps, terminate=lambda *a: self.fail("ended with no creation time")), [])
+
+    def test_kill_rechecks_the_agent_gate(self):
+        ps = world(gitp(900, 77, "tail.exe", r"tail.exe -f C:\t\x.output", 2 * HOUR, (60, GONE, NO_TTY)),
+                   gitp(901, 77, "sleep.exe", "sleep 9999", 2 * HOUR, (61, GONE, "pty0")))
+        for p in ps:
+            if p["pid"] in (900, 901):
+                p["kill_ok"] = True             # however kill_ok came to be set, kill() asks again
+        self.assertEqual(PW.kill(ps, terminate=lambda *a: self.fail("ended a non-agent process")), [])
 
     def test_kill_live_parent_only_for_root_search(self):
         ps = world(gitp(900, 77, "find.exe", '"C:\\Git\\usr\\bin\\find.exe" / -iname x', 15 * MIN, (60, 50)),
@@ -178,9 +329,60 @@ class Classify(unittest.TestCase):
         self.assertEqual(seen, [900])      # root search with a live shell: killed; live-parent sleep: never
 
     def test_summary_counts(self):
-        rows = PW.summarize(world(gitp(900, 77, "tail.exe", "tail -f a", 2 * HOUR, (60, GONE))))
+        rows = PW.summarize(world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY))))
         sus = [r for r in rows if r["verdict"] == "SUSPECT"]
         self.assertEqual([(r["count"], r["kill_ok"], r["pids"]) for r in sus], [(1, 1, [900])])
+
+    def test_log_line_counts_what_kill_would_end(self):
+        import datetime
+        procs = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)),
+                      gitp(901, 77, "tail.exe", r"tail.exe -f C:\t\x.output", 2 * HOUR, (61, GONE, NO_TTY)))
+        rows = PW.summarize(procs)
+        when = datetime.datetime(2026, 10, 20, 11, 0, 0)
+        line = PW.log_line(when, procs, rows, "3.3")
+        self.assertTrue(line.startswith("2026-10-20T11:00:00 procs=5 suspect=2 pool=3.3G kill_ok=1 "), line)
+        self.assertIn("msys-follow=2", line)
+        self.assertNotIn("killed=", line)
+        self.assertTrue(PW.log_line(when, procs, rows, "3.3", killed=[(900, "tail.exe", "msys-follow", "killed"),
+                                                                       (9, "x", "y", "reused")])
+                        .endswith(" killed=1"))
+
+
+class ParsePs(unittest.TestCase):
+    """winproc.parse_ps_l: Git's `ps -l` text -> {windows pid: (msys pid, msys parent pid, tty)}."""
+    TEXT = ("      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n"
+            "  1563560  320617  320617      50444  ?         197609 11:10:25 /usr/bin/tail\n"
+            "S  320617       1  320617      48084  pty0      197609   Oct 15 /usr/bin/bash\n"
+            "I     777     776     777       9999  cons1     197609 09:00:00 /usr/bin/sleep\n"
+            "garbage line\n")
+
+    def test_reads_ids_and_tty(self):
+        import winproc as W
+        self.assertEqual(W.parse_ps_l(self.TEXT), {50444: (1563560, 320617, "?"), 48084: (320617, 1, "pty0"),
+                                                   9999: (777, 776, "cons1")})
+
+    def test_empty_output_is_an_empty_table(self):
+        import winproc as W
+        self.assertEqual(W.parse_ps_l(""), {})
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class MsysTable(unittest.TestCase):
+    """winproc.msys_table: a failed ps gives no table, never a partial one."""
+
+    def _run(self, returncode):
+        import winproc as W
+        from unittest import mock
+        out = "  1563560  320617  320617      50444  ?         197609 11:10:25 /usr/bin/tail\n"
+        done = subprocess.CompletedProcess(["ps", "-l"], returncode, stdout=out, stderr="")
+        with mock.patch("subprocess.run", return_value=done):
+            return W.msys_table(ps_exe="ps.exe")
+
+    def test_nonzero_exit_is_no_table(self):
+        self.assertIsNone(self._run(1))
+
+    def test_zero_exit_parses_the_rows(self):
+        self.assertEqual(self._run(0), {50444: (1563560, 320617, "?")})
 
 
 class LogPath(unittest.TestCase):
@@ -192,11 +394,27 @@ class LogPath(unittest.TestCase):
         self.tool = os.path.join(self.tmp.name, "tool")
         os.makedirs(self.tool)
         self.default = os.path.join(self.home, ".claude", "logs", "procwatch.log")
+        self._faked_agent_temp(None)                    # the machine's own AGENT_TEMP must not leak in
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def test_bare_flag_uses_the_logs_folder(self):
+        self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), self.default)
+
+    def _faked_agent_temp(self, value):
+        import kitlib.pmstart as PS
+        old = PS.agent_temp_env
+        PS.agent_temp_env = lambda: value
+        self.addCleanup(setattr, PS, "agent_temp_env", old)
+
+    def test_bare_flag_uses_the_agent_temp_folder(self):
+        folder = os.path.join(self.tmp.name, "agenttemp")
+        self._faked_agent_temp(folder)
+        self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), os.path.join(folder, "procwatch.log"))
+
+    def test_bare_flag_falls_back_without_an_agent_temp_folder(self):
+        self._faked_agent_temp(None)
         self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), self.default)
 
     def test_a_path_in_the_tool_folder_is_moved(self):
@@ -220,6 +438,52 @@ class LogPath(unittest.TestCase):
             self.assertEqual(PW.log_path(inside, home=self.home, here=self.tool), self.default)
         finally:
             os.rmdir(link)                              # removes the junction, not its target
+
+
+class FakeWinproc:
+    """A stand-in for winproc in collect(): pid 10 is listed by the snapshot but has exited by the
+    time collect reads it (a short-lived process that took a dead parent's pid); pid 20 is that
+    dead parent's child."""
+    CT = NOW - int(HOUR * 1e7)
+
+    def snapshot(self):
+        return [(10, 4, "git.exe"), (20, 10, "python.exe")]
+
+    def cpu_sample(self, pids):
+        return {}
+
+    def sleep(self, s):
+        pass
+
+    def filetime_now(self):
+        return NOW
+
+    def msys_table(self):
+        return None
+
+    def details(self, pid):
+        d = {"ctime": None, "cpu": None, "image": None, "cmd": None, "handles": None, "ws": None,
+             "priv": None, "gone": False}
+        if pid == 10:
+            d["gone"] = True
+        else:
+            d.update(ctime=self.CT, cpu=0.0, image=r"C:\x\python.exe", cmd="python.exe x.py")
+        return d
+
+
+class CollectRace(unittest.TestCase):
+    def test_a_process_gone_before_it_is_read_is_not_listed_so_its_child_is_an_orphan(self):
+        saved = sys.modules.get("winproc")
+        sys.modules["winproc"] = FakeWinproc()
+        try:
+            procs = PW.classify(PW.collect(sample_s=0), 0)
+        finally:
+            if saved is None:
+                sys.modules.pop("winproc", None)
+            else:
+                sys.modules["winproc"] = saved
+        self.assertEqual([p["pid"] for p in procs], [20])
+        self.assertFalse(procs[0]["parent_alive"])
 
 
 def _terminate(W, pid):
@@ -252,14 +516,22 @@ class Live(unittest.TestCase):
         spawner = (f"import subprocess,sys; g=subprocess.Popen([sys.executable,'-c',"
                    f"'import time; time.sleep(120)  # {tag}'], stdin=subprocess.DEVNULL, "
                    f"stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); open(sys.argv[1],'w').write(str(g.pid))")
-        subprocess.run([sys.executable, "-c", spawner, pidfile], check=True, timeout=30)   # parent exits
+        # The parent exits, but this Popen keeps its process handle open until the test ends, so
+        # Windows cannot give its pid to another process. With the handle closed (subprocess.run),
+        # a busy machine could reuse the pid for a process collect cannot read (it exits before it
+        # is read, or belongs to another user); an unreadable parent counts as alive, and the
+        # orphan was once reported with a live parent.
+        parent = subprocess.Popen([sys.executable, "-c", spawner, pidfile])
+        self.assertEqual(parent.wait(30), 0)
         with open(pidfile) as f:
             orphan = int(f.read())
         os.remove(pidfile)
         try:
             procs = PW.collect(sample_s=0.5)
+            self.assertNotIn(parent.pid, {p["pid"] for p in procs})     # exited, and its pid still held
             mine = [p for p in procs if p["pid"] == orphan]
             self.assertEqual(len(mine), 1)
+            self.assertEqual(mine[0]["ppid"], parent.pid)
             self.assertIn(tag, mine[0]["cmd"])
             rule = ("selftest", "self-test orphan", lambda p: tag in (p.get("cmd") or ""),
                     lambda p, ctx: "self-test orphan" if not p["parent_alive"] else None, True)
@@ -277,6 +549,7 @@ class Live(unittest.TestCase):
             self.assertEqual(done, [(orphan, "python.exe", "selftest", "killed")])
         finally:
             _terminate(W, orphan)
+            del parent                  # closes the held handle
 
     def test_a_live_git_bash_program_is_not_called_an_orphan(self):
         import winproc as W
@@ -295,6 +568,7 @@ class Live(unittest.TestCase):
             PW.classify(procs, 0.2)
             p = mine[0]
             self.assertIsNotNone(p["mpid"])
+            self.assertIsNotNone(p["mtty"], "Git's ps -l TTY column was not read")
             self.assertTrue(p["parent_alive"], "a running Git-Bash child was reported as an orphan")
         finally:
             for q in procs:
@@ -309,7 +583,19 @@ class Live(unittest.TestCase):
         self.assertIn(r.returncode, (0, 1), r.stderr)
         self.assertIn("processes", r.stdout)
 
+    def test_bare_log_flag_writes_in_the_agent_temp_folder(self):
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, USERPROFILE=home, HOME=home, AGENT_TEMP=home)
+            r = subprocess.run([sys.executable, os.path.join(CODE, "procwatch.py"), "--sample", "0.2", "--log"],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120, env=env)
+            self.assertIn(r.returncode, (0, 1), r.stderr)
+            with open(os.path.join(home, "procwatch.log"), encoding="utf-8") as f:
+                self.assertIn(" procs=", f.read())
+
     def test_bare_log_flag_writes_under_the_profile_logs_folder(self):
+        import kitlib.pmstart as PS
+        if PS.agent_temp_env():
+            self.skipTest("an agent temp folder is set here; the fallback is covered by LogPath")
         with tempfile.TemporaryDirectory() as home:
             env = dict(os.environ, USERPROFILE=home, HOME=home)
             r = subprocess.run([sys.executable, os.path.join(CODE, "procwatch.py"), "--sample", "0.2", "--log"],

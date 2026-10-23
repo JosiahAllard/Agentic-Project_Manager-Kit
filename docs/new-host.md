@@ -45,7 +45,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 |---|---|
 | `tool_event` | The one `hook_events` entry whose calls the guard judges. Every other hook event is a start event: the adapter adds context for it. |
 | `tool_field` | The dotted key of the tool's name in that event's payload: `tool_name`, or `call.name` for the fake host |
-| `guarded_tools` | Every tool a guard rule or the host's own `screen` can refuse, by name; an entry ending in `*` is a prefix (`mcp__*`). A call to any other tool is allowed before the kit boots, so it never pays for a boot or a release check. The conformance suite fails when a recorded payload that parses into an edit, shell or MCP call names a tool left out. |
+| `guarded_tools` | Every tool a guard rule or the host's own `screen` can refuse, by name; an entry ending in `*` is a prefix (`mcp__*`). A call to any other tool is allowed before the kit boots, so it never pays for a boot or a release check. The conformance suite fails when a recorded payload that parses into an edit, shell, read or MCP call (any kind but `other`; tests/host/conformance.py) names a tool left out. |
 | `fast_path` | `all`: an unguarded call skips the kit in every session. `unmarked`: only in a session no launcher marked (`PM_KIT_ROLE` unset), for a host whose `screen` must see every call of a marked session (Codex holds a marked session to an allowlist). |
 
 `profile` holds the host data the core reads. Each field has a consumer (`kitlib.host.HostProfile`):
@@ -113,6 +113,11 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   the file writes it: `model` when it names one, `tools` when it limits the role to a tool list).
   The conformance suite checks each against `render`.
 - `command_host()`, `launcher()` and `plugin_installer()`: `None` until the host has them.
+- `push(settings)` (optional): the Action Hub's push-notification delivery, an object with
+  `deliver(recipient, text)` and `is_pm(recipient)` (`kitlib/hubsite/push.py` docstring), over the
+  launcher's settings. `deliver` must end within `push.STOP_S`, the hub's close join. `tools/hub.py serve` asks for it with `getattr`; without it the hub serves
+  with no push notifications (docs/action-hub.md "Push notifications"; Claude:
+  `hosts/claude/adapter/peer.py` `HubPush`).
 - The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
   copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
   not the whole kit cannot reach the kit's `boot/` from a plugin cache, so it ships `boot/kitboot.py`

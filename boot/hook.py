@@ -88,7 +88,7 @@ def main(argv, stdin, stdout, environ=os.environ, hosts=HOSTS):
     if event == entry['hook']['tool_event'] and part is None:
         try:
             if skips(entry['hook'], json.loads(text), environ):
-                return 0                               # Read, Grep...: nothing to decide
+                return 0                               # TodoWrite, WebFetch...: nothing to decide
         except Exception:
             pass                                       # hookmain reads it again and denies
     if HERE not in sys.path:

@@ -71,7 +71,7 @@ def remote_main(root, remote, main):
     clone has no remote at all. NoAnswer when git cannot say whether it has the remote, or when
     `remote` is missing but other remotes exist.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - any failure of `remote get-url` read as "no remote", so a
+    GOTCHA: any failure of `remote get-url` read as "no remote", so a
     git ended from outside (exit 1, no output: refs.KILLED_SHAPE) let the LOCAL main decide and
     could answer LANDED for a branch the remote does not have. Only git's own "No such remote"
     exit (2) means no remote; any other failure is no answer.
@@ -103,7 +103,7 @@ def remote_main(root, remote, main):
 def contains(root, tip, target):
     """`(True/False, None)`; `(None, NOT_HERE)` when `target` is not a commit this clone has;
     `(None, why)` when git gives no answer (refs.is_ancestor's None, a git ended from outside
-    included: KIT-GIT-EXIT1-ANSWERS-2, where `bool()` turned it into a NO)."""
+    included, where `bool()` turned it into a NO)."""
     have, why = refs.resolve(target, root, known=True)
     if have == '':
         return None, NOT_HERE
@@ -209,8 +209,7 @@ def look(root, ref):
     """Outcome(code, lines) of one look at `ref` (a branch name or a commit) in `root`'s repository."""
     try:
         cfg = load(root)
-        lanes = tuple(cfg.section('landing').get('lanes') or ())
-        lock = landing.LandingLock.for_config(root, cfg, lanes=lanes)
+        lock = landing.LandingLock.for_config(root, cfg)
     except (ConfigError, landing.LockError) as e:
         return Outcome(CANNOT, ['landed: refused: kit configuration: %s' % e])
     main_branch, remote = cfg.main_branch, cfg.remote
@@ -223,7 +222,7 @@ def look(root, ref):
                                 % (ref, root)])
     out = []
     # known=True: a git ended from outside is no answer, never "no such branch"
-    # (KIT-GIT-EXIT1-ANSWERS-2). An unread local main is shown as such and measures nothing.
+    # An unread local main is shown as such and measures nothing.
     local, why = refs.resolve('refs/heads/%s' % main_branch, root, known=True)
     out.append('tip        %s  %s' % (tip[:12], ref))
     out.append('local      %s  %s%s' % ((local or '-')[:12], main_branch,

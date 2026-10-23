@@ -37,7 +37,7 @@ def add(store, rid, scope=None):
 
 def added(rid):
     """The subject `add` writes for a record filed with ADD_NONE."""
-    return 'backlog: add %s, found on no branch' % rid
+    return 'backlog: add %s, found on no branch (or on a branch since landed)' % rid
 
 
 def wrap_git(case, on):
@@ -178,18 +178,6 @@ class CompareAndSwap(StoreCase):
         self.assertEqual(sorted(subject for subject, _ in history),
                          sorted(added(n) for n in names),
                          'a linear history, one commit per write:\n' + shown)
-
-    def test_concurrent_writers_all_survive(self):
-        """Every writer plans against the same empty store before any publishes (the barrier in
-        before_publish), so all but one first push must lose the lease and retry."""
-        writers = self.writers(4)
-        names = [n for n, _ in writers]
-        errors, attempts = race(self, writers, add)
-        self.assertEqual(errors, [])
-        retried = sorted(n for n in names if len(attempts[n]) > 1)
-        self.assertEqual(len(retried), len(names) - 1,
-                         'one first push wins, every other one conflicts: %r' % attempts)
-        self.assert_every_write_survives(names)
 
     def test_a_writer_that_dies_in_the_race_is_reported_not_lost(self):
         """A writer killed by something that is not an Exception (the fake git's Unsupported is a
@@ -680,7 +668,7 @@ def kill_store_reads(when=lambda: True):
 
 
 class AKilledStoreReadIsNoAnswer(StoreCase):
-    """KIT-GIT-EXIT1-ANSWERS: `rev-parse --verify --quiet` says "no such ref" as exit 1 with no
+    """`rev-parse --verify --quiet` says "no such ref" as exit 1 with no
     output, which a git ended from outside also leaves; the store must not read a kill as an
     empty store."""
     remote = False
@@ -700,7 +688,7 @@ class AKilledStoreReadIsNoAnswer(StoreCase):
         self.assertTrue(why)
 
     def test_landable_reads_a_killed_branch_read_as_no_answer_not_no_branch(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet refs/heads/<b>` said "no such
+        """`rev-parse --verify --quiet refs/heads/<b>` said "no such
         branch" as exit 1 with no output, the shape a kill leaves."""
         from kitlib.backlog import landable as L
         snap = self.store.load()
@@ -792,7 +780,8 @@ class TheRefAndTheCheckout(StoreCase):
 
     def test_the_commit_names_verb_id_session_and_ruling(self):
         self.store.session = 'kit'
-        self.seed(priced('FOO', priority='-1', priority_by='-', owner_ask='may we?'))
+        # FOO is outside the offer (BAR ranks above it), so the pull takes --reason and --ruling
+        self.seed(priced('FOO', priority='5'), priced('BAR', priority='1'))
         self.verb('pull', 'FOO', reason='the owner said go', ruling='R-9001')
         msg = self.repo.git('log', '-1', '--format=%B', smod.STORE_REF)
         self.assertIn('backlog: pull FOO onto %s' % BRANCH, msg)

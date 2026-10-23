@@ -3,8 +3,9 @@
     python procwatch.py                 report (the default; changes nothing)
     python procwatch.py --json          the full classification as JSON
     python procwatch.py --log [FILE]    also append a one-line summary to FILE (for a scheduled run);
-                                        no FILE = ~/.claude/logs/procwatch.log (folder made); a FILE
-                                        inside this tool's folder is moved there too
+                                        no FILE = procwatch.log in the agent temp folder, else
+                                        ~/.claude/logs/procwatch.log (folder made); a FILE inside this
+                                        tool's folder is moved there too
     python procwatch.py --kill          ALSO terminate the kill-allowlisted suspects (see RULES)
     python procwatch.py --kill --only msys-follow,msbuild-node   narrow the kill to these rules
 
@@ -17,15 +18,26 @@ they are never called orphans.
 
 --kill touches a process only when ALL hold: its rule is kill-allowlisted (RULES kill=True), it
 is a suspect under that rule (which always includes: its parent is dead and it is older than the
-rule's age floor; idle where the rule says so), it is not protected, and its creation time is
-re-checked immediately before TerminateProcess. Protected (never touched, listed as expected):
+rule's age floor; idle where the rule says so), it passes its rule's KILL_GATE test where it has
+one, it is not protected, its creation time was read, and that creation time is re-checked
+immediately before TerminateProcess (a pid now held by another process is left alone). It never
+ends a process by name or command-line match alone: other sessions' gates run the same programs.
+KILL_GATE checks, for a Git-Bash program: msys-filter and msys-sleep, only that Git's ps shows
+no terminal (TTY `?`; a program in a terminal window shows pty0/cons1); msys-follow, that AND
+its command line names an agent path (a `.claude` folder, `<TEMP>\\claude\\`,
+`<AGENT_TEMP>\\claude\\` or the resolved agent temp folder, in Windows or MSYS form). A suspect
+that fails its gate stays in the report ("reported only") and its log count; never ended.
+Protected (never touched, listed as expected):
 PROTECT_PATTERNS - ComfyUI plus any regexes in the PROCWATCH_PROTECT environment variable
 (';'-separated, matched against the command line), e.g. a repo's live production process.
+The origin label names the nearest known ancestor app; the PROCWATCH_ORIGINS environment
+variable (';'-separated exe names) adds more.
 
 Exit: 0 no suspects, 1 suspects reported, 2 error. Standard library only; Windows only.
 """
 import argparse
 import datetime
+import functools
 import json
 import os
 import re
@@ -150,8 +162,68 @@ def _r_agent_script(p, ctx):
     return "agent background script whose session is gone" if _dead_parent_older(p, 60 * MIN) else None
 
 
+@functools.lru_cache(maxsize=None)
+def _agent_temp_claude():
+    """'<agent temp folder>\\claude\\', lower case, backslashes: the agents' TEMP, which the launcher
+    sets from AGENT_TEMP (kitlib.pmstart.agent_temp_env: process environment, then the user
+    registry). A string that matches no command line when AGENT_TEMP is unset or kitlib cannot be
+    read, e.g. a copy of this tool outside the kit."""
+    root = os.path.normpath(os.path.join(HERE, "..", ".."))
+    if root not in sys.path:
+        sys.path.append(root)
+    try:
+        from kitlib.pmstart import agent_temp_env
+        temp = agent_temp_env()
+    except (ImportError, OSError):
+        # kitlib missing or the registry unreadable: keep this rule off rather than guess a folder
+        return "\x00"           # an impossible path: no match
+    if not temp:
+        return "\x00"
+    return os.path.join(temp.replace("/", "\\"), "claude", "").lower()
+
+
 def _r_conhost(p, ctx):
     return "console host with a dead parent" if _dead_parent_older(p, 30 * MIN) else None
+
+
+AGENT_PATHS = ("/.claude/", "/temp/claude/", "/agenttemp/claude/")    # in the forward-slash form below
+
+
+def _agent_path(cmd):
+    """Does this command line name a path agent tooling uses: a `.claude` folder (worktrees, a
+    session's files), `<TEMP>\\claude\\` (a Monitor's or background task's output), or the agent temp
+    folder's `claude\\`? Compared lower case with `\\` as `/`; the resolved agent temp in both the
+    Windows (`<drive>:/x/claude/`) and MSYS (`/z/x/claude/`) forms."""
+    c = (cmd or "").lower().replace("\\", "/")
+    if any(x in c for x in AGENT_PATHS):
+        return True
+    temp = _agent_temp_claude()
+    if temp == "\x00":
+        return False
+    win = temp.replace("\\", "/")
+    msys = "/" + win[0] + win[2:] if len(win) > 2 and win[1] == ":" else None
+    return win in c or bool(msys and msys in c)
+
+
+def _no_terminal(p):
+    """Git's ps shows no terminal for it (TTY `?`), as for every program an agent's tool shell runs;
+    a program run in a terminal window shows pty<n>/cons<n>. Unknown (no TTY read) is not `?`."""
+    return p.get("mtty") == "?"
+
+
+def _agent_follow(p):
+    return _no_terminal(p) and _agent_path(p.get("cmd"))
+
+
+# Kill-allowlisted rules whose match is a common program anyone may run: --kill also needs this
+# proof that agent tooling started it (the docstring). Failing it, the suspect is reported only.
+KILL_GATE = {"msys-follow": _agent_follow, "msys-filter": _no_terminal, "msys-sleep": _no_terminal}
+GATE_NOTE = "reported only: failed its kill gate (needs no terminal TTY; msys-follow also an agent path)"
+
+
+def _gate_ok(p):
+    gate = KILL_GATE.get(p.get("rule"))
+    return gate is None or bool(gate(p))
 
 
 # Groups --kill may end even while the parent (the agent's tool shell) is alive, past this age: a search from a
@@ -190,7 +262,8 @@ RULES = [
     ("agent-script", "agent background script (python/node from a .claude path)",
      lambda p: _name(p) in {"python.exe", "pythonw.exe", "node.exe"} and
      ("\\.claude" in _cmd(p) or "/.claude" in _cmd(p) or "\\temp\\claude\\" in _cmd(p)
-      or "\\agenttemp\\claude\\" in _cmd(p)),             # agents' TEMP moved off the system drive
+      or "\\agenttemp\\claude\\" in _cmd(p)                # agents' TEMP moved off the system drive
+      or _agent_temp_claude() in _cmd(p)),                # ... or the agent temp folder, as resolved
      _r_agent_script, False),
     ("conhost", "console host", lambda p: _name(p) == "conhost.exe", _r_conhost, False),
 ]
@@ -200,6 +273,15 @@ RULE_IDS = [r[0] for r in RULES]
 def protected(p):
     s = ((p.get("image") or "") + " " + (p.get("cmd") or "")).lower()
     return any(re.search(x, s) for x in PROTECT_PATTERNS)
+
+
+ORIGIN_APPS = {"code.exe", "explorer.exe", "services.exe", "svchost.exe", "comfy desktop.exe",
+               "windowsterminal.exe"}
+
+
+def _extra_origins():
+    """Exe names from env PROCWATCH_ORIGINS (';'-separated), read per call."""
+    return {x.strip().lower() for x in os.environ.get("PROCWATCH_ORIGINS", "").split(";") if x.strip()}
 
 
 def origin(p, by_pid):
@@ -216,8 +298,7 @@ def origin(p, by_pid):
                 m = re.search(r"-n\s+(\S+)", q.get("cmd") or "")
                 return "coordinator claude.exe " + (m.group(1) if m else str(q["pid"]))
             return f"claude.exe {q['pid']} session"
-        if n in {"code.exe", "explorer.exe", "services.exe", "svchost.exe", "steam.exe",
-                 "discord.exe", "comfy desktop.exe", "windowsterminal.exe"}:
+        if n in ORIGIN_APPS or n in _extra_origins():
             return n
         hops += 1
     return "orphan" if not p["parent_alive"] else f"{q['name']} {q['pid']} (its parent is gone)"
@@ -268,6 +349,9 @@ def classify(procs, cpu_window_s):
             live_floor = LIVE_PARENT_KILL.get(rid)
             p["kill_ok"] = bool(reason and kill and (not p["parent_alive"] or (
                 live_floor is not None and (p["age"] or 0) >= live_floor)))
+            if p["kill_ok"] and not _gate_ok(p):
+                p["kill_ok"] = False
+                p["reason"] = f"{reason}; {GATE_NOTE}"
             continue
         p["rule"] = None
         p["verdict"], p["reason"] = "EXPECTED", ""
@@ -328,12 +412,18 @@ def collect(sample_s=3.0):
     snap = W.snapshot()
     msys = W.msys_table() or {}      # after the snapshot, so every Git-Bash process in it is listed
     procs = []
+    unknown = (None, None, None)
     for pid, ppid, name in snap:
         if pid == 0:
             continue
         d = W.details(pid)
+        if d.get("gone"):
+            # exited since the snapshot. Listed with an unknown creation time it would pass as the
+            # live parent of any process whose dead parent's pid it had taken (classify).
+            continue
         age = (now - d["ctime"]) / 1e7 if d["ctime"] else None
         cpu_pct = None
+        mpid, mppid, mtty = msys.get(pid, unknown)
         f = first.get(pid)
         if f and d["cpu"] is not None and f[0] == d["ctime"]:
             cpu_pct = round(100.0 * (d["cpu"] - f[1]) / sample_s, 1)
@@ -341,7 +431,7 @@ def collect(sample_s=3.0):
                       "ctime": d["ctime"], "age": age, "cpu_s": d["cpu"], "cpu_pct": cpu_pct,
                       "ws": d["ws"], "priv": d["priv"], "handles": d["handles"],
                       "session": None if d["image"] else 0,
-                      "mpid": msys.get(pid, (None, None))[0], "mppid": msys.get(pid, (None, None))[1]})
+                      "mpid": mpid, "mppid": mppid, "mtty": mtty})
     return procs
 
 
@@ -389,14 +479,16 @@ def print_report(rows, procs, out=sys.stdout):
 
 
 def kill(procs, only=None, terminate=None):
-    """Terminate kill-allowlisted suspects. Returns [(pid, name, rule, result)]."""
+    """Terminate kill-allowlisted suspects, by pid and only while the creation time classify saw is
+    still the pid's (terminate re-checks it). Returns [(pid, name, rule, result)]."""
     if terminate is None:
         import winproc as W
         terminate = W.terminate_verified
     done = []
     for p in procs:
         if (not p["kill_ok"] or p["verdict"] != "SUSPECT" or protected(p)
-                or (p["parent_alive"] and p.get("rule") not in LIVE_PARENT_KILL)):
+                or (p["parent_alive"] and p.get("rule") not in LIVE_PARENT_KILL)
+                or p.get("ctime") is None or not _gate_ok(p)):
             continue
         if only and p.get("rule") not in only:
             continue
@@ -404,8 +496,29 @@ def kill(procs, only=None, terminate=None):
     return done
 
 
+def log_line(when, procs, rows, pool_gb, killed=None):
+    """The --log summary line. kill_ok= counts the suspects --kill would end (a report-only run
+    shows what turning --kill on would do); killed= (only when --kill ran) counts those ended."""
+    sus = [r for r in rows if r["verdict"] == "SUSPECT"]
+    return (f"{when:%Y-%m-%dT%H:%M:%S} procs={len(procs)} suspect={sum(r['count'] for r in sus)} "
+            f"pool={pool_gb}G kill_ok={sum(r['kill_ok'] for r in sus)} " +
+            " ".join(f"{r['group'].split(':')[0]}={r['count']}" for r in sus) +
+            (f" killed={sum(1 for k in killed if k[3] == 'killed')}" if killed is not None else ""))
+
+
 def default_log(home=None):
-    """The scheduled run's log: <home>/.claude/logs/procwatch.log (home = the user's profile)."""
+    """The log a hand --log writes: procwatch.log in the agent temp folder (kitlib.pmstart.agent_temp_env);
+    with none set or readable, <home>/.claude/logs/procwatch.log (home = the user's profile)."""
+    try:
+        root = os.path.normpath(os.path.join(HERE, "..", ".."))
+        if root not in sys.path:
+            sys.path.append(root)
+        from kitlib.pmstart import agent_temp_env
+        temp = agent_temp_env()
+    except (ImportError, OSError):
+        temp = None
+    if temp:
+        return os.path.join(temp, "procwatch.log")
     return os.path.join(home or os.path.expanduser("~"), ".claude", "logs", "procwatch.log")
 
 
@@ -431,7 +544,7 @@ def main(argv=None):
     ap.add_argument("--sample", type=float, default=3.0, help="CPU sampling window in seconds")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--log", nargs="?", const="", default=None,
-                    help="append a one-line summary to this file (no file: ~/.claude/logs/procwatch.log)")
+                    help="append a one-line summary to this file (no file: procwatch.log in the agent temp folder, else ~/.claude/logs/procwatch.log)")
     ap.add_argument("--kill", action="store_true", help="terminate kill-allowlisted suspects")
     ap.add_argument("--only", help="comma list of rule ids --kill may act on: " + ",".join(RULE_IDS))
     a = ap.parse_args(argv)
@@ -466,10 +579,7 @@ def main(argv=None):
     if a.log is not None:
         path = log_path(a.log or None)
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        line = (f"{datetime.datetime.now():%Y-%m-%dT%H:%M:%S} procs={len(procs)} suspect="
-                f"{sum(r['count'] for r in sus)} pool={gb('paged_pool')}G " +
-                " ".join(f"{r['group'].split(':')[0]}={r['count']}" for r in sus) +
-                (f" killed={sum(1 for k in killed if k[3] == 'killed')}" if a.kill else ""))
+        line = log_line(datetime.datetime.now(), procs, rows, gb("paged_pool"), killed if a.kill else None)
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     return 1 if (sus or pool_high) else 0

@@ -601,7 +601,9 @@ class T(unittest.TestCase):
             fh.write('%d %s' % (os.getpid(), os.environ['TEMP']))
 '''
 
-SLEEP_AFTER = '''        time.sleep(4)
+HOLD_UNTIL_GO = '''        deadline = time.time() + 90         # the test makes PROBE_GO; 90 s only if it never does
+        while not os.path.exists(os.environ['PROBE_GO']) and time.time() < deadline:
+            time.sleep(0.02)
 '''
 
 CASES = '''import unittest
@@ -752,6 +754,36 @@ class RealUnits(TempHomeCase):
         self.assertIn('kit_tests: interpreters: 1 pool worker(s) ran 2 unit(s); 1 unit(s) in '
                       'their own process', out.getvalue())
 
+    def test_a_pooled_unit_s_process_starts_are_on_its_line_and_summed_on_the_interpreters_line(
+            self):
+        mods, env = self.pid_units(2)
+        write(self.root, {'tests/p/test_1.py': PID_PROBE + (
+            "\n    def test_starts(self):\n        import subprocess, sys\n"
+            "        for _ in range(2):\n"
+            "            subprocess.run([sys.executable, '-c', 'pass'], check=True)\n")})
+        out = io.StringIO()
+        rc, _summary = selfrun.run(mods, self.root, 1, out=out, environ=env, timeout=120)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn('2 tests, 2 process starts  tests.p.test_1\n', out.getvalue())
+        self.assertNotIn('process starts  tests.p.test_0', out.getvalue())   # it started none
+        self.assertIn('kit_tests: interpreters: 1 pool worker(s) ran 2 unit(s); 0 unit(s) in '
+                      'their own process; 2 process start(s) in 2 pooled unit(s) (most: '
+                      'tests.p.test_1 2)\n', out.getvalue())
+
+    def test_the_interpreters_line_names_the_heaviest_units_by_process_starts(self):
+        done = [((m, 1, 1), 'OK', 1, 0.0, '') for m in ('t.a', 't.b', 't.c', 't.d', 't.e')]
+        line = selfrun.interpreters_line((2, {}), done, {}, {'t.a': 4, 't.b': 9, 't.c': 0,
+                                                             't.d': 4, 't.e': 1})
+        self.assertEqual(line, 'kit_tests: interpreters: 2 pool worker(s) ran 5 unit(s); 0 unit(s) '
+                               'in their own process; 18 process start(s) in 5 pooled unit(s) '
+                               '(most: t.b 9, t.a 4, t.d 4)')
+        self.assertEqual(selfrun.interpreters_line((1, {}), done[:1], {}, {'t.a': 0}),
+                         'kit_tests: interpreters: 1 pool worker(s) ran 1 unit(s); 0 unit(s) in '
+                         'their own process; 0 process start(s) in 1 pooled unit(s)')
+        self.assertEqual(selfrun.interpreters_line((1, {}), done[:1], {}, {}),
+                         'kit_tests: interpreters: 1 pool worker(s) ran 1 unit(s); 0 unit(s) in '
+                         'their own process')
+
     def test_the_units_packages_are_their_top_level_packages(self):
         self.assertEqual(selfrun.unit_packages(['tests.p.test_0', 'tests.test_x', 'other.a.B',
                                                 'top_level']), ['other', 'tests'])
@@ -766,13 +798,51 @@ class RealUnits(TempHomeCase):
 
     def test_ctrl_c_waits_for_the_running_units_then_ends_every_worker(self):
         from kitlib.proc import process
-        mods, env = self.pid_units(4, extra=SLEEP_AFTER)
+        mods, env = self.pid_units(4, extra=HOLD_UNTIL_GO)
+        go = os.path.join(self.root, 'go')
+        env['PROBE_GO'] = go
         out = io.StringIO()
-        timer = threading.Timer(1.5, _thread.interrupt_main)     # Ctrl+C, as the console
-        timer.start()
-        self.addCleanup(timer.cancel)
+        probe_out = env['PROBE_OUT']
+        stop = threading.Event()
+        cancelled = threading.Event()
+        self.addCleanup(stop.set)
+        failed = []
+
+        class Pool(selfrun.ThreadPoolExecutor):
+            def shutdown(self, *args, **kwargs):
+                super().shutdown(*args, **kwargs)
+                if kwargs.get('cancel_futures'):
+                    cancelled.set()             # the queued units are cancelled: none can start
+
+        def wait_for(ready, what):
+            deadline = time.time() + 60
+            while not stop.is_set():
+                if ready():
+                    return
+                if time.time() > deadline:
+                    failed.append('%s within 60 s: %s' % (what, os.listdir(probe_out)))
+                    return
+                stop.wait(0.02)
+
+        def interrupt_then_let_the_units_end():
+            # Ctrl+C, as the console, once both running units have written their probe. They hold
+            # until `go` exists, made only once the run has cancelled its queued units, so no delay
+            # decides whether a third unit starts: a fixed one misses on a loaded machine.
+            try:
+                wait_for(lambda: len(os.listdir(probe_out)) >= 2, 'fewer than 2 units wrote a probe')
+                _thread.interrupt_main()        # even after a miss, so the run ends; checks fail
+                wait_for(cancelled.is_set, 'the run did not cancel its queued units after Ctrl+C')
+            finally:
+                open(go, 'w').close()
+
+        poller = threading.Thread(target=interrupt_then_let_the_units_end, daemon=True)
+        poller.start()
         t = time.time()
-        rc, summary = selfrun.run(mods, self.root, 2, out=out, environ=env, timeout=120)
+        with mock.patch.object(selfrun, 'ThreadPoolExecutor', Pool):
+            rc, summary = selfrun.run(mods, self.root, 2, out=out, environ=env, timeout=120)
+        stop.set()
+        poller.join(5)
+        self.assertEqual(failed, [])
         self.assertEqual(rc, selfrun.INTERRUPTED, out.getvalue())
         self.assertLess(time.time() - t, 30)
         found = self.probes()

@@ -468,7 +468,7 @@ def reads_merge_head(argv):
 
 
 class AKilledGitIsNoAnswer(SyncCase):
-    """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the shape
+    """A git ended from outside exits 1 having printed nothing, the shape
     `rev-parse --verify --quiet` gave for "no such ref"; such a kill is no answer, never one."""
 
     def test_a_killed_merge_head_read_after_a_clean_merge_is_refused_not_a_fast_forward(self):
@@ -727,7 +727,7 @@ class WaitsForALandingInFlight(SyncCase):
         self.git('merge', '-q', '--no-ff', '-m', 'lander merge, not pushed yet', 'landing')
         merge = self.head()
         self.git('switch', '-q', 'work')
-        return target, merge, self.lock().take('full', ['landing'])
+        return target, merge, self.lock().take(['landing'])
 
     def sync_on(self, target, t, wait=True):
         said = []
@@ -802,7 +802,7 @@ class InFlightUnsetNeverWaits(SyncCase):
         later = self.add_commit('docs/later.md', 'later\n', 'the base moved again')
         self.push_base()
         self.git('switch', '-q', 'work')
-        landing.LandingLock.for_config(self.main, load_config(self.main)).take('full', ['x'])
+        landing.LandingLock.for_config(self.main, load_config(self.main)).take(['x'])
 
         def never(_s):
             raise AssertionError('slept with "landing".in_flight unset')

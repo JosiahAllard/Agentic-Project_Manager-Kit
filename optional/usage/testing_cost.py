@@ -1,7 +1,7 @@
 """Estimate how much of a project's Claude usage went on testing, from its session transcripts.
 (A report, not a test module: its tests are in test_testing_cost.py.)
 
-usage: python ~/.claude/tools/usage/testing_cost.py <project transcript folder> [since] [--days 7]
+usage: python <kit>/optional/usage/testing_cost.py <project transcript folder> [since] [--days 7]
                                                  [--pattern <regex>]
 
 A turn counts as testing when it is a test-runner's, when it starts a shell command matching TEST
@@ -73,9 +73,11 @@ def tally(paths, since, test_re):
                     if is_test_command(cmd, test_re):
                         is_test = True
                         pending.add(c.get("id"))
-            if msg.get("id") in seen:
+            mid = msg.get("id")
+            if mid is not None and mid in seen:
                 continue
-            seen.add(msg.get("id"))
+            if mid is not None:
+                seen.add(mid)
             cost = U.weighted(msg.get("usage"), msg.get("model"))
             t = tot[at]
             t["cost"] += cost

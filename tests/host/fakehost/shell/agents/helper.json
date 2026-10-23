@@ -1,0 +1,5 @@
+{
+  "model": "fake-small",
+  "name": "helper",
+  "sandbox": "workspace-write"
+}

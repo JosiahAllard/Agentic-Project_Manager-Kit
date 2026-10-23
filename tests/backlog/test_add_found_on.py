@@ -7,12 +7,16 @@ import os
 import unittest
 from unittest import mock
 
+from kitlib import pmdata
+from kitlib.backlog import opener
 from kitlib.backlog import plan as pmod
+from kitlib.backlog import pull_branch
 from kitlib.backlog.errors import Failure, Refusal, Usage
 from kitlib.git import cmd, refs
 
 from tests.backlog import test_cli, test_verbs
-from tests.backlog.helpers import ADD_FLAGS, TODAY, StoreCase, priced
+from tests.backlog.helpers import ADD_FLAGS, TODAY, StoreCase, kit_json_ref, priced
+from tests.realgit import real_git
 
 FOO = 'kit/foo'
 WHY = 'it needs the owner to choose between two formats'
@@ -60,9 +64,9 @@ class FoundOn(StoreCase):
 
     def test_none_skips_the_overlap_check_and_records_the_reason(self):
         change = self.add(['kitlib/x/**'], found_on='none')
-        self.assertEqual(change.subject, 'backlog: add NEW, found on no branch')
+        self.assertEqual(change.subject, 'backlog: add NEW, found on no branch (or on a branch since landed)')
         self.assertTrue(self.get('NEW').get('summary').endswith(
-            '(found on no branch; not folded: %s)' % WHY), self.get('NEW').get('summary'))
+            '(found on no branch (or on a branch since landed); not folded: %s)' % WHY), self.get('NEW').get('summary'))
 
     def test_a_scope_the_branch_changed_is_refused(self):
         before = self.remote_tip()
@@ -125,16 +129,16 @@ class FoundOn(StoreCase):
         self.assertEqual(self.repo.git('rev-parse', '--verify', '--quiet',
                                        'refs/remotes/origin/kit/far', check=False), '')
         change = self.add(['docs/y.md'], found_on='kit/far')
-        self.assertIn('NOTE: branch kit/far is not a local branch (only on upstream); its diff '
-                      'was not compared', change.lines)
+        self.assertIn('NOTE: branch kit/far is not a local branch; its diff was compared as last '
+                      'fetched from upstream', change.lines)
         self.assertIsNotNone(self.get('NEW'))
 
     def test_a_branch_several_remotes_have_names_each_in_the_note(self):
         other = self.second_remote()
         self.remote_only('kit/far', 'kitlib/x/b.py', remotes=('origin', other))
         change = self.add(['docs/y.md'], found_on='kit/far')
-        self.assertIn('NOTE: branch kit/far is not a local branch (only on origin, upstream); its '
-                      'diff was not compared', change.lines)
+        self.assertIn('NOTE: branch kit/far is not a local branch; its diff was compared as last '
+                      'fetched from origin, upstream', change.lines)
 
     def test_a_branch_no_remote_of_several_has_is_refused(self):
         self.second_remote()
@@ -150,9 +154,131 @@ class FoundOn(StoreCase):
         with self.assertRaises(Refusal) as cm:
             self.add(['tools/z/a.py'], found_on=gone)
         self.assertIn('(scope of BAR, pulled by kit/gone)', str(cm.exception))
-        change = self.add(['kitlib/x/**'], found_on=gone)
-        self.assertIn('NOTE: branch kit/gone is not a local branch (only on origin); its diff was '
-                      'not compared', change.lines)
+        change = self.add(['docs/y.md'], found_on=gone)
+        self.assertIn('NOTE: branch kit/gone is not a local branch; its diff was compared as last '
+                      'fetched from origin', change.lines)
+
+    def test_a_branch_only_a_remote_has_has_its_diff_compared(self):
+        other = self.second_remote()
+        self.remote_only('kit/far', 'kitlib/x/b.py', remotes=(other,))
+        with self.assertRaises(Refusal) as cm:
+            self.add(['kitlib/x/**'], found_on='kit/far')
+        self.assertIn('kitlib/x/** vs kitlib/x/b.py (changed on upstream/kit/far)',
+                      str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_each_remote_tip_of_a_remote_only_branch_is_compared(self):
+        self.remote_only('kit/far', 'kitlib/x/b.py')
+        other = self.second_remote()
+        self.branch_with('kit/far', 'tools/w/c.py')     # another tip, pushed to upstream alone
+        self.repo.git('push', '-q', '-f', other, 'kit/far')
+        self.repo.git('branch', '-q', '-D', 'kit/far')
+        for scope, where in (('kitlib/x/**', 'origin/kit/far'), ('tools/w/**', 'upstream/kit/far')):
+            with self.subTest(scope=scope):
+                with self.assertRaises(Refusal) as cm:
+                    self.add([scope], found_on='kit/far')
+                self.assertIn('(changed on %s)' % where, str(cm.exception))
+        change = self.add(['docs/y.md'], found_on='kit/far')
+        self.assertIn('NOTE: branch kit/far is not a local branch; its diff was compared as last '
+                      'fetched from origin, upstream', change.lines)
+
+    def land(self, branch, *paths, subject=None):
+        """`branch` merged into main with land.py's subject (`Merge <branch>`, or `subject`),
+        main pushed, and the branch deleted: a branch that landed and was removed."""
+        self.branch_with(branch, *paths)
+        self.repo.git('merge', '-q', '--no-ff', '-m', subject or 'Merge %s' % branch, branch)
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.repo.git('branch', '-q', '-D', branch)
+
+    def test_a_landed_and_removed_branch_is_accepted_by_its_landing_merge(self):
+        for name, subject in (('kit/done', None), ('kit/done2', 'Merge kit/done2: the summary')):
+            with self.subTest(name=name):
+                self.land(name, 'kitlib/x/%s.py' % name[4:], subject=subject)
+                change = self.add(['kitlib/x/**'], found_on=name, rid='NEW' + name[8:])
+                self.assertTrue(any(line.startswith('NOTE: branch %s landed on main as ' % name)
+                                    for line in change.lines), change.lines)
+                self.assertEqual(change.subject, 'backlog: add NEW%s, found on %s'
+                                 % (name[8:], name))
+
+    def test_a_landed_branch_name_in_another_case_is_accepted(self):
+        self.land('kit/done', 'kitlib/x/done.py')
+        change = self.add(['docs/y.md'], found_on='Kit/Done')
+        self.assertTrue(any(line.startswith('NOTE: branch Kit/Done landed on main as ')
+                            for line in change.lines), change.lines)
+
+    def test_a_merge_subject_that_only_starts_with_the_name_is_no_proof(self):
+        self.land('kit/donex', 'kitlib/x/d.py')
+        self.branch_with('kit/plain', 'kitlib/x/p.py')
+        self.repo.git('merge', '-q', '--ff-only', 'kit/plain')
+        self.repo.git('commit', '-q', '--allow-empty', '-m', 'Merge kit/done')   # not a merge
+        self.repo.git('push', '-q', 'origin', 'main')
+        with self.assertRaises(Refusal) as cm:
+            self.add(['docs/y.md'], found_on='kit/done')
+        self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_a_merge_off_the_code_mains_first_parent_chain_is_no_proof(self):
+        # kit/x is merged into kit/side, which then lands: `Merge kit/x` is reachable from main
+        # but was never made on main, so kit/x did not land there.
+        self.repo.git('checkout', '-q', '-b', 'kit/side')
+        self.branch_with('kit/x', 'kitlib/x/inner.py')
+        self.repo.git('checkout', '-q', 'kit/side')
+        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge kit/x', 'kit/x')
+        self.repo.git('checkout', '-q', 'main')
+        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge kit/side', 'kit/side')
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.repo.git('branch', '-q', '-D', 'kit/x')
+        self.repo.git('branch', '-q', '-D', 'kit/side')
+        self.assertIn('Merge kit/x', self.repo.git('log', '--merges', '--format=%s', 'main'))
+        with self.assertRaises(Refusal) as cm:
+            self.add(['docs/y.md'], found_on='kit/x')
+        self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+        change = self.add(['docs/y.md'], found_on='kit/side')
+        self.assertTrue(any(line.startswith('NOTE: branch kit/side landed on main as ')
+                            for line in change.lines), change.lines)
+
+    def test_a_missing_branch_with_a_code_main_that_does_not_resolve_fails(self):
+        # Neither origin/trunk nor trunk resolves: whether kit/gone landed cannot be told, so
+        # this is ERROR, never the `exists neither here nor on a remote` refusal.
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=self.ctx.branch, today=TODAY,
+                                code_main='trunk')
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'], found_on='kit/gone')
+        self.assertIn('`trunk` does not resolve', str(cm.exception))
+        self.assertIn('backlog.code_main', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_a_ref_list_git_cannot_give_fails(self):
+        real = cmd.run_text
+        self.failing('cmd', run_text=lambda args, root, **kw: (None, 'git broke')
+                     if args[:1] == ['for-each-ref'] else real(args, root, **kw))
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'])
+        self.assertIn('cannot list the refs to look for branch kit/foo: git broke',
+                      str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_a_landing_merge_git_cannot_search_fails(self):
+        real = cmd.run_text
+        self.failing('cmd', run_text=lambda args, root, **kw: (None, 'git broke')
+                     if args[:2] == ['log', '--merges'] else real(args, root, **kw))
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'], found_on='kit/nowhere')
+        self.assertIn('git broke', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+    def test_remotes_with_asks_every_remote(self):
+        other = self.second_remote()
+        self.remote_only('kit/one', 'kitlib/x/b.py', remotes=(other,))
+        self.remote_only('kit/both', 'kitlib/x/c.py', remotes=('origin', other))
+        for branch, want in (('kit/one', ['upstream']), ('kit/both', ['origin', 'upstream']),
+                             ('KIT/BOTH', ['origin', 'upstream']), ('kit/none', [])):
+            with self.subTest(branch=branch):
+                got = pmod._remotes_with(self.ctx, branch)
+                self.assertEqual([r for r, _ref, _tip in got], want)
+                self.assertEqual([ref for _r, ref, _tip in got],
+                                 ['refs/remotes/%s/%s' % (r, branch.lower()) for r in want])
 
     def test_no_merge_base_fails_closed_naming_the_key(self):
         self.branch_with('kit/orphan', 'elsewhere.txt', orphan=True)
@@ -216,8 +342,9 @@ class FoundOn(StoreCase):
         self.assertIn('`--found-on kit/nowhere` names a branch that exists neither here nor on a '
                       'remote', msg)
         self.assertIn('pass an existing branch, or `none`', msg)
-        self.assertEqual(msg.splitlines()[-1], 'a branch that has landed and been removed is '
-                         'written as `none`, with the branch named in --why-not-folded')
+        self.assertEqual(msg.splitlines()[-1], 'a branch that landed is found by its `Merge '
+                         'kit/nowhere` merge on main; one removed without landing is written as '
+                         '`none`, with the branch named in --why-not-folded')
         self.assertIsNone(self.get('NEW'))
         self.assertEqual(self.remote_tip(), before)
 
@@ -300,6 +427,72 @@ class FoundOn(StoreCase):
         self.assertIsNone(self.get('NEW'))
 
 
+@real_git('packed-refs: the fake has no git pack-refs; a loose ref file matches any letter case on '
+          'Windows, a packed-refs line does not')
+class FoundOnPackedRefs(StoreCase):
+    """Loose and packed refs are found alike, the name compared ignoring case (git's own list of
+    ref names, kitlib/backlog/plan.py `_ref_names` and `_spelling`)."""
+    branch_with = FoundOn.branch_with
+    add = FoundOn.add
+    remote_only = FoundOn.remote_only
+    second_remote = FoundOn.second_remote
+
+    def setUp(self):
+        super().setUp()
+        self.branch_with(FOO, 'kitlib/x/a.py')
+
+    def test_a_packed_branch_named_in_another_case_is_found_and_compared(self):
+        # Windows: a loose ref file matches any letter case, a packed-refs line does not. Both
+        # are found the same way: by git's own list of names, compared ignoring case.
+        for packed in (False, True):
+            with self.subTest(packed=packed):
+                if packed:
+                    self.repo.git('pack-refs', '--all')
+                    self.assertFalse(os.path.exists(os.path.join(
+                        self.repo.root, '.git', 'refs', 'heads', 'kit', 'foo')))
+                with self.assertRaises(Refusal) as cm:
+                    self.add(['kitlib/x/**'], found_on='KIT/FOO')
+                self.assertIn('kitlib/x/** vs kitlib/x/a.py (changed on KIT/FOO)',
+                              str(cm.exception))
+                change = self.add(['docs/y.md'], found_on='KIT/FOO', rid='NEW%d' % packed)
+                self.assertEqual(change.subject, 'backlog: add NEW%d, found on KIT/FOO' % packed)
+
+    def test_a_packed_remote_branch_named_in_another_case_is_found(self):
+        self.remote_only('kit/far', 'kitlib/x/b.py')
+        self.repo.git('pack-refs', '--all')
+        with self.assertRaises(Refusal) as cm:
+            self.add(['kitlib/x/**'], found_on='Kit/Far')
+        self.assertIn('(changed on origin/kit/far)', str(cm.exception))
+
+    def test_remotes_with_finds_packed_and_loose_refs_in_any_case(self):
+        other = self.second_remote()
+        self.remote_only('kit/one', 'kitlib/x/b.py', remotes=(other,))
+        self.remote_only('kit/both', 'kitlib/x/c.py', remotes=('origin', other))
+        self.repo.git('pack-refs', '--all')
+        self.remote_only('kit/loose', 'kitlib/x/d.py', remotes=('origin',))
+        for branch, want in (('kit/one', ['upstream']), ('kit/both', ['origin', 'upstream']),
+                             ('KIT/BOTH', ['origin', 'upstream']), ('kit/loose', ['origin']),
+                             ('KIT/LOOSE', ['origin']), ('kit/none', [])):
+            with self.subTest(branch=branch):
+                self.assertEqual([r for r, _ref, _tip in pmod._remotes_with(self.ctx, branch)],
+                                 want)
+
+    def test_two_branches_that_differ_only_in_case_are_usage_however_named(self):
+        # rev-parse refs/heads/kit/foo opens the loose Kit/Foo file here, not the packed kit/foo
+        self.repo.git('pack-refs', '--all')
+        self.repo.git('branch', 'Kit/Foo', 'main')      # loose, beside the packed kit/foo
+        names = self.repo.git('for-each-ref', '--format=%(refname)', 'refs/heads/').split()
+        self.assertIn('refs/heads/kit/foo', names)
+        self.assertIn('refs/heads/Kit/Foo', names)
+        for name in ('KIT/FOO', FOO, 'Kit/Foo'):
+            with self.subTest(name=name):
+                with self.assertRaises(Usage) as cm:
+                    self.add(['docs/y.md'], found_on=name)
+                self.assertIn('matches refs/heads/Kit/Foo, refs/heads/kit/foo, which differ only '
+                              'in letter case', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
+
 class FoundOnNoRemote(StoreCase):
     """A repository with no remote at all: `git remote` lists nothing."""
     remote = False
@@ -311,6 +504,101 @@ class FoundOnNoRemote(StoreCase):
                       found_on='kit/nowhere', why_not_folded=WHY)
         self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
         self.assertIsNone(self.get('NEW'))
+
+
+# The PM data worktree's own .kit.json, as a pmdata store writes it: its main branch is
+# the data branch and its remote the data remote; `code_main` names the code's main (or is unset).
+PM_KIT_JSON = {'backlog': {'id_grammar': 'upper', 'code_main': 'main'},
+               'repo': {'main_branch': 'pmdata', 'remote': 'private'}}
+
+
+class PmDataWorktree(StoreCase):
+    """The PM data worktree (kitlib.pmdata): a worktree of the code repository on the data branch,
+    whose .kit.json names the data remote. The code lands on the main checkout's remote
+    (`repo.remote`, origin here), so `add --found-on` measures from that remote's main, not from
+    the local main, which lags it until somebody pulls (kitlib/backlog/opener.py `open_store`,
+    kitlib/backlog/pull_branch.py `code_config`). Build the branches first, the worktree last:
+    `branch_with` adds everything under the main checkout."""
+    branch_with = FoundOn.branch_with
+    land = FoundOn.land
+
+    def pm_worktree(self, kit_json=PM_KIT_JSON):
+        tree = self.repo.git('rev-parse', 'main^{tree}')
+        root = self.repo.git('commit-tree', tree, '-m', 'PM data root')    # no history with main
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', root)
+        self.repo.git('branch', 'pmdata', root)
+        self.repo.git('remote', 'add', 'private', self.repo.remote)
+        path = os.path.join(self.repo.root, '.claude', 'worktrees', 'pm')
+        self.repo.git('worktree', 'add', '-q', path, 'pmdata')
+        kit_json_ref(self.repo, kit_json, root=path)
+        return path
+
+    def lag_main(self, stale):
+        """Local main back at `stale`, behind origin/main: a main checkout nobody pulled into."""
+        self.repo.git('update-ref', 'refs/heads/main', stale)
+        self.repo.git('checkout', '-q', '-f', 'main')
+        self.assertNotEqual(self.repo.git('rev-parse', 'main'),
+                            self.repo.git('rev-parse', 'refs/remotes/origin/main'))
+
+    def later_on_main(self, path='kitlib/x/later.py'):
+        """A commit on origin/main touching `path`; returns the commit before it."""
+        stale = self.repo.head()
+        self.repo.write(path, 'later\n')
+        self.repo.commit('later on main', path)
+        self.repo.git('push', '-q', 'origin', 'main')
+        return stale
+
+    def plan(self, ctx, scopes, found_on):
+        return pmod.plan_add(ctx.store.load(), ctx, 'NEW', 'a defect found while working', scopes,
+                             found_on=found_on, why_not_folded=WHY)
+
+
+class FoundOnInThePmDataWorktree(PmDataWorktree):
+
+    def test_a_branch_cut_from_the_code_remotes_main_is_measured_from_it(self):
+        # kit/new is cut after kitlib/x/later.py landed; local main still lacks it. Measured from
+        # the local main, later.py would read as kit/new's own work.
+        stale = self.later_on_main()
+        self.branch_with('kit/new', 'kitlib/y/own.py')
+        self.lag_main(stale)
+        ctx = opener.open_store(self.pm_worktree(), fetch=False)
+        change = self.plan(ctx, ['kitlib/x/later.py'], 'kit/new')
+        self.assertIn('ADDED NEW, found on kit/new', change.lines)
+        with self.assertRaises(Refusal) as cm:
+            self.plan(ctx, ['kitlib/y/**'], 'kit/new')
+        self.assertIn('kitlib/y/** vs kitlib/y/own.py (changed on kit/new)', str(cm.exception))
+
+    def test_a_branch_that_landed_on_the_code_remotes_main_is_proof(self):
+        stale = self.repo.head()
+        self.land('kit/done', 'kitlib/x/done.py')
+        self.lag_main(stale)
+        ctx = opener.open_store(self.pm_worktree(), fetch=False)
+        change = self.plan(ctx, ['docs/y.md'], 'kit/done')
+        self.assertTrue(any(line.startswith('NOTE: branch kit/done landed on main as ')
+                            for line in change.lines), change.lines)
+
+    def test_an_unset_code_main_is_the_main_checkouts_main(self):
+        self.branch_with(FOO, 'kitlib/x/a.py')
+        kit_json = {'backlog': {'id_grammar': 'upper'}, 'repo': PM_KIT_JSON['repo']}
+        ctx = opener.open_store(self.pm_worktree(kit_json), fetch=False)
+        self.assertEqual(ctx.code_main, 'main')
+        change = self.plan(ctx, ['docs/y.md'], FOO)
+        self.assertIn('ADDED NEW, found on kit/foo', change.lines)
+
+    def test_a_code_main_that_does_not_resolve_still_fails(self):
+        kit_json = {'backlog': {'id_grammar': 'upper', 'code_main': 'trunk'},
+                    'repo': PM_KIT_JSON['repo']}
+        ctx = opener.open_store(self.pm_worktree(kit_json), fetch=False)
+        with self.assertRaises(Failure) as cm:
+            self.plan(ctx, ['docs/y.md'], 'kit/gone')
+        self.assertIn('`trunk` does not resolve', str(cm.exception))
+        self.assertIn('backlog.code_main', str(cm.exception))
+
+    def test_outside_the_pm_data_worktree_the_code_remote_is_repo_remote(self):
+        self.pm_worktree()
+        self.assertIsNone(pull_branch.code_config(self.repo.root))
+        ctx = opener.open_store(self.repo.root, fetch=False)
+        self.assertEqual((ctx.code_remote, ctx.code_main), (ctx.remote, ctx.main_branch))
 
 
 class FoundOnCli(unittest.TestCase):

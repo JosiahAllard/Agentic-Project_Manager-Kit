@@ -18,7 +18,8 @@ worktree (docs/launcher.md "The home worktree"): never edit or check out in it; 
 
 ## Build and test
 The gate is `python tools/gate.py` (docs/gate.md); `--full` runs the whole suite and takes the
-machine lock itself. Single packages: `python tools/kit_tests.py <tests/pkg>` (docs/test-tools.md).
+machine lock itself. Selected tests: `python tools/kit_tests.py --select` (what the change reaches;
+`--changed <path> ...` names the paths, `--plan` prints the pick; docs/test-tools.md).
 Red-first through `tools/redfirst.py` (docs/redfirst.md), never an in-place mutant.
 
 ### Known flakes
@@ -30,13 +31,22 @@ module lines only.
 
 ## Landing
 Landing is standing owner-approved work: the lander lands a reviewed branch on the coordinator's or
-project manager's go, with the reviewer's verdict in its brief. From the main checkout, on main,
-after `git merge --ff-only <remote>/<main>`:
-`python tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha>`.
-It queues, locks, merges and gates the merge in its own landing tree, pushes and verifies, then
-brings the main checkout to the merge (docs/gate.md "Landing"). Success: a `LANDED ` line and exit
-0; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`) is
-reported as is, with the doc's recovery steps, and not retried. Batches: docs/gate.md.
+project manager's go, with the reviewer's verdict in its brief. From the main checkout, on main:
+`python tools/land.py <branch> --expect-tip <sha> --submit`, then the `gate.py wait-result ... --kind land`
+command it prints, run in the background. No agent merges or pushes: a detached process books its turn
+in the machine lock (the landing queue), merges onto the main it finds, gates the merge in its own
+landing tree and pushes only when green (docs/gate.md "Landing"). Success: a `RESULT pass land` line
+with `LANDED `. `CONFLICT <branch> with main <sha>: the author merges main` goes back to the branch's
+author; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`, `NOT RUN:`) is reported as
+is, with the doc's recovery steps, and not retried. Batches allowed: up to
+`"landing".batch_max` branches (3), each with its own reviewer, range and LAND verdict; never a
+high-risk branch (docs/gate.md "Batch").
+
+## Review
+A coordinator reviews a branch itself when it is small (about 150 lines) and low or medium risk: read
+every hunk; skim docs and additive content. Larger or High: a fresh reviewer.
+Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. Reseed a
+strong- or deep-tier coder whose context is above about 150k tokens.
 
 ## Shared resources that must be serialised
 The machine lock (docs/lock-api.md), through the live install only, never a copy on a branch.

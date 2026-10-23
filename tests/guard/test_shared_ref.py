@@ -88,6 +88,8 @@ class SharedRefsFromAWorktree(SharedRefBase):
                            'git update-ref -- refs/heads/main HEAD', 'git update-ref -d -- refs/heads/main'])
 
     def test_a_subcommand_the_text_does_not_name_is_refused(self):
+        W.deny_unplaced()                   # a git line the guard cannot read is unplaced (warn by default)
+        self.addCleanup(W.allow_unplaced)
         for env in (None, tj.COORDINATOR):
             with self.subTest(env=env):
                 text = 'git $X -d refs/heads/main'
@@ -172,17 +174,19 @@ class SharedRefsFromAWorktree(SharedRefBase):
         self.each_allowed(['git update-ref --no-deref HEAD HEAD~1'])
         self.each_refused(['git update-ref refs/heads/kit/wt HEAD~1'])
 
-    def test_a_symbolic_ref_is_judged_by_where_it_points(self):
+    def test_a_ref_other_than_head_is_judged_by_its_name(self):
+        # a symbolic ref is not followed (docs/guard-v2.md B6, cut: only an attacker plants a
+        # scratch ref that points at main); HEAD is still judged by the branch it is on
         put(os.path.join(self.common, 'refs', 'tmp', 'link'), 'ref: refs/heads/main\n')
         put(os.path.join(self.wt_git, 'ORIG_HEAD'), 'ref: refs/heads/kit/sib\n')
-        self.each_refused(['git update-ref refs/tmp/link HEAD', 'git update-ref -d refs/tmp/link',
-                           'git update-ref ORIG_HEAD HEAD'])
-        # --no-deref writes the symbolic ref itself, which is the session's own scratch ref
-        self.each_allowed(['git update-ref --no-deref refs/tmp/link HEAD', 'git update-ref --no-d refs/tmp/link HEAD'])
+        self.each_allowed(['git update-ref refs/tmp/link HEAD', 'git update-ref -d refs/tmp/link',
+                           'git update-ref ORIG_HEAD HEAD',
+                           'git update-ref --no-deref refs/tmp/link HEAD', 'git update-ref --no-d refs/tmp/link HEAD'])
         put(os.path.join(self.common, 'refs', 'tmp', 'mine'), 'ref: refs/heads/kit/wt\n')
         self.each_allowed(['git update-ref refs/tmp/mine HEAD'])
 
-    def test_a_link_inside_the_ref_store_is_refused(self):
+    def test_a_link_inside_the_ref_store_is_not_followed(self):
+        # docs/guard-v2.md B18, cut: a junction in refs/ is no honest mistake
         heads = os.path.join(self.common, 'refs', 'heads')
         os.makedirs(heads)
         try:
@@ -190,11 +194,14 @@ class SharedRefsFromAWorktree(SharedRefBase):
             _winapi.CreateJunction(heads, os.path.join(self.common, 'refs', 'tmp'))
         except (ImportError, AttributeError, OSError) as e:
             self.skipTest('no junction: %s' % e)
-        self.each_refused(['git update-ref refs/tmp/main HEAD', 'git update-ref -d refs/tmp/main'])
+        self.each_allowed(['git update-ref refs/tmp/main HEAD', 'git update-ref -d refs/tmp/main'])
 
-    def test_a_reftable_repository_is_refused(self):
+    def test_a_reftable_repository_is_judged_by_name_and_head(self):
+        # docs/guard-v2.md B19, cut: a reftable repository is not refused as one; the names are
+        # judged as anywhere, and HEAD by the HEAD file git still writes
         os.makedirs(os.path.join(self.common, 'reftable'))
-        self.each_refused(['git update-ref refs/tmp/x HEAD', 'git update-ref HEAD HEAD~1'])
+        self.each_allowed(['git update-ref refs/tmp/x HEAD', 'git update-ref HEAD HEAD~1'])
+        self.each_refused(['git update-ref refs/heads/main HEAD~1'])
 
     def test_a_sibling_worktree_head_is_its_own(self):
         # git run in the sibling moves the branch checked out there, as a commit there would
@@ -222,6 +229,100 @@ class SharedRefsFromAWorktree(SharedRefBase):
         self.allowed(self.worker(d.instead))
         d = self.refused(self.worker('git update-ref -d refs/tmp/x', cwd=self.w.main), 'git-main-history')
         self.assertIn('worktree add', d.instead)
+
+
+class StrayRefCleanup(SharedRefBase):
+    """A coordinator's main session deletes a stray ref (refs/ outside refs/heads, refs/tags,
+    refs/stash and refs/backlog) in its own repository, when git deletes that ref itself; every other session is
+    held as before, and its refusal names the coordinator."""
+
+    def coordinator(self, text, cwd=None, env=tj.COORDINATOR, tool='Bash'):
+        return self.session(text, env, cwd or self.w.main, tool)
+
+    def test_a_coordinator_deletes_a_stray_ref_in_its_own_repository(self):
+        m, wt = self.main, self.wt
+        for text in ('git update-ref -d refs/scratch/a', 'git -C "%s" update-ref -d refs/scratch/a' % m,
+                     'git -C "%s" update-ref -d refs/scratch/a' % wt, 'git update-ref -m gone -d refs/scratch/a',
+                     'git update-ref -d refs/scratch/a 0123abc', 'git update-ref --no-deref -d refs/scratch/a',
+                     'git update-ref -d refs/remotes/origin/x', 'git update-ref -d refs/notes/commits',
+                     'git update-ref -d refs/Scratch/deep/er'):
+            with self.subTest(text):
+                self.allowed(self.coordinator(text))
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a', cwd=self.w.wt))
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a', env=tj.OLD_MARK))
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a', tool='PowerShell'))
+        put(os.path.join(self.common, 'refs', 'scratch', 'a'), '0123456789012345678901234567890123456789\n')
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a'))
+
+    def test_a_coordinator_still_may_not_delete_a_branch_tag_stash_or_store(self):
+        for text in ('git update-ref -d refs/heads/kit/x', 'git update-ref -d refs/heads/main',
+                     'git update-ref -d refs/HEADS/main', 'git update-ref -d refs/tags/v1',
+                     'git update-ref -d refs/TAGS/v1', 'git update-ref -d refs/stash', 'git update-ref -d refs/backlog/main',
+                     'git update-ref -d refs/BACKLOG/main', 'git update-ref -d refs/Backlog/store',   # one file on NTFS
+                     'git update-ref -d HEAD', 'git update-ref -d main', 'git update-ref -d refs/tmp/../heads/main',
+                     'git update-ref -d refs/scratch/a.lock', 'git update-ref -d refs/'):
+            with self.subTest(text):
+                d = self.coordinator(text)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_a_coordinator_still_may_not_write_or_delete_an_unnamed_ref(self):
+        for text in ('git update-ref refs/scratch/a HEAD', 'git update-ref -d "$R"', 'git update-ref --stdin',
+                     'git update-ref -d refs/scratch/$X', 'echo refs/scratch/a | xargs git update-ref -d'):
+            with self.subTest(text):
+                d = self.coordinator(text)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_an_unread_stray_ref_delete_tells_the_coordinator_to_name_it(self):
+        d = self.refused(self.coordinator('git update-ref --frobnicate -d refs/scratch/a'))
+        self.assertIn('you delete it in your own repository, naming the ref literally', d.reason)
+        self.assertIn('show-ref refs/scratch/a', d.instead)
+        self.allowed(self.coordinator(d.instead))
+
+    def test_a_coordinator_deletes_only_in_its_own_repository(self):
+        d = self.refused(self.coordinator('git -C "%s" update-ref -d refs/scratch/a' % W.fwd(self.w.foreign)))
+        self.assertIn('only in its own repository', d.reason)
+        self.assertIn('show-ref refs/scratch/a', d.instead)
+        self.allowed(self.coordinator(d.instead))
+
+    def test_a_symbolic_or_unreadable_ref_is_deleted_with_no_deref(self):
+        put(os.path.join(self.common, 'refs', 'scratch', 'link'), 'ref: refs/heads/main\n')
+        d = self.refused(self.coordinator('git update-ref -d refs/scratch/link'))
+        self.assertIn('symbolic ref to refs/heads/main', d.reason)
+        self.assertIn('update-ref --no-deref -d refs/scratch/link', d.instead)
+        self.allowed(self.coordinator(d.instead))
+        os.makedirs(os.path.join(self.common, 'refs', 'scratch', 'dir'))     # a folder git reads no ref from
+        self.refused(self.coordinator('git update-ref -d refs/scratch/dir'))
+        self.allowed(self.coordinator('git update-ref --no-deref -d refs/scratch/dir'))
+
+    def test_a_reftable_repository_needs_no_deref(self):
+        os.makedirs(os.path.join(self.common, 'reftable'))
+        d = self.refused(self.coordinator('git update-ref -d refs/scratch/a'))
+        self.assertIn('reftable', d.reason)
+        self.allowed(self.coordinator(d.instead))
+
+    def test_every_other_session_is_held_and_sent_to_its_coordinator(self):
+        text = 'git update-ref -d refs/scratch/a'
+        calls = [('worker', lambda: self.worker(text)),
+                 ('coordinator subagent', lambda: self.worker(text, agent_type='coordinator')),
+                 ('lander', lambda: self.worker(text, cwd=self.w.main, agent_type='lander'))]
+        calls += [(env[tj.context.ROLE_ENV], lambda env=env: self.session(text, env))
+                  for env in (tj.DEEP, tj.CONSULTANT)]
+        for label, call in calls:
+            with self.subTest(label):
+                d = self.refused(call())
+                self.assertIn('your coordinator deletes it', d.reason)
+                self.assertIn('show-ref refs/scratch/a', d.instead)
+        self.allowed(self.worker(self.refused(self.worker(text)).instead))
+        self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})     # a held plain mark
+        self.assertIn('your coordinator deletes it', self.refused(self.session(text, tj.PLAIN)).reason)
+
+    def test_the_pm_the_owner_and_an_unheld_mark_are_unchanged(self):
+        for env in (tj.PM, {}, tj.PLAIN):
+            with self.subTest(env=env):
+                self.allowed(self.session('git update-ref -d refs/scratch/a', env, self.w.main))
+                self.allowed(self.session('git update-ref -d refs/tags/v1', env, self.w.main))
 
 
 def junction(test, target, link):
@@ -376,7 +477,7 @@ class SharedRefSessions(SharedRefBase):
         kit = W.fwd(self.w.kit_dir)
         for text in ('python "%s/tools/sync_base.py" -C "%s"' % (kit, self.wt),
                      'python "%s/tools/land.py" -C "%s" kit/wt --expect-tip %s' % (kit, self.main, W.SHA_WT),
-                     'git commit -m "guard: refuse git update-ref refs/heads/main"',
+                     'git commit --dry-run -m "guard: refuse git update-ref refs/heads/main"',
                      'echo "git update-ref -d refs/heads/main"',
                      'git log --grep update-ref'):
             with self.subTest(text):
@@ -419,6 +520,8 @@ class SharedRefFallback(SharedRefBase):
         self.refused(self.session(text, tj.COORDINATOR))
 
     def test_an_unclean_update_ref_in_main_for_the_owner(self):
+        W.deny_softened()                       # unreadable is a warning by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
         d = self.session("echo 'x ; git update-ref refs/heads/main HEAD", {}, self.w.main)
         self.assertIsNotNone(d, 'allowed')
         self.assertEqual((d.verdict, d.rule), ('deny', 'unreadable'), d.reason)

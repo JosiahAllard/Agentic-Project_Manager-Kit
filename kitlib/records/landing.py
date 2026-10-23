@@ -1,12 +1,12 @@
 """The landing lock: one per repository, held from a landing's merge to its push or its end (ported
 from an earlier per-repository tools/landing_lock.py; made repo-neutral for the kit).
 
-The lock is the file `<git common dir>/<name>` (default `kit-landing.lock`; `lock_name(cfg)`
-honours a legacy `"landing".lock_file` of `git:<name>` and refuses any other value): inside the git dir, so the main checkout
-and every worktree see the same one, and it is never tracked. It is created with O_CREAT|O_EXCL -
+The lock is the file `<git common dir>/kit-landing.lock` (LOCK_NAME): inside the git dir, so the
+main checkout and every worktree see the same one, and it is never tracked. It is created with O_CREAT|O_EXCL -
 of two takers exactly one wins - and holds one JSON object:
 
-  lane            `full` or a lane the repo declares (the caller passes them: its hook's)
+  lane            always `full`, written for older kits' readers (they refuse a record without
+                  it); nothing here reads it
   branches        the branches being landed
   pid, pid_start  a process holder (its creation time from kitlib.proc), or both null (a token
                   holder: the command that took it has exited)
@@ -45,12 +45,10 @@ import os
 import secrets
 import time
 
-from kitlib.config.types import ConfigError
 from kitlib.git import refs, repo
 
 LOCK_NAME = 'kit-landing.lock'
-GIT_PREFIX = 'git:'
-FULL = 'full'
+FULL = 'full'                  # the record's constant lane, kept for older kits' readers
 PHASES = ('merge', 'gate', 'push', 'undo', 'stuck')
 RETRIES = 5
 RETRY_SLEEP = 0.2
@@ -102,29 +100,12 @@ def process_alive(pid, start):
         return True
 
 
-def lock_name(cfg=None):
-    """The lock's file name in the common dir: `"landing".lock_file` `git:<name>` when a repo still
-    names its own (one lock per repository whichever tool takes it), else LOCK_NAME. A lock_file
-    that is not `git:<name>` is a ConfigError: a lock elsewhere would not be the one every checkout
-    sees, and ignoring it would let two tools take two different locks."""
-    value = cfg.section('landing').get('lock_file') if cfg is not None else None
-    if value is None:
-        return LOCK_NAME
-    if not isinstance(value, str) or not value.startswith(GIT_PREFIX):
-        raise ConfigError('"landing".lock_file %r must be git:<name>, a file in the git common dir'
-                          % (value,))
-    name = value[len(GIT_PREFIX):].strip()
-    if not name or '/' in name.replace('\\', '/') or name in ('.', '..'):
-        raise LockError('"landing".lock_file %r must name one file in the git common dir' % value)
-    return name
-
-
 def describe(record):
     if not record:
         return 'landing lock: free'
     who = ('pid %s' % record.get('pid')) if record.get('pid') is not None else 'a token holder'
-    return ('landing lock: HELD - lane %s, branches %s, %s, phase %s, since %s, %s at take %s'
-            % (record.get('lane'), ' '.join(record.get('branches') or ()) or '-', who,
+    return ('landing lock: HELD - branches %s, %s, phase %s, since %s, %s at take %s'
+            % (' '.join(record.get('branches') or ()) or '-', who,
                record.get('phase'), record.get('started_utc'), record.get('main_branch') or 'main',
                (record.get('origin_at_take') or '?')[:10]))
 
@@ -136,10 +117,10 @@ def _utc(now=None):
 class LandingLock(object):
     """The landing lock of the repository `root` is in (any of its checkouts).
 
-    `lanes`: the lanes besides `full` the repo declares. `start_of(pid)` and `is_alive(pid,
-    start)` are kitlib.proc's by default; tests pass their own."""
+    `start_of(pid)` and `is_alive(pid, start)` are kitlib.proc's by default; tests pass their
+    own."""
 
-    def __init__(self, root, main='main', remote='origin', lanes=(), name=LOCK_NAME,
+    def __init__(self, root, main='main', remote='origin', name=LOCK_NAME,
                  start_of=process_start, is_alive=process_alive):
         common, why = repo.common_dir(root)
         if not common:
@@ -148,12 +129,11 @@ class LandingLock(object):
         self.common = common
         self.path = os.path.join(common, name)
         self.main, self.remote = main, remote
-        self.lanes = (FULL,) + tuple(x for x in lanes if x != FULL)
         self.start_of, self.is_alive = start_of, is_alive
 
     @classmethod
-    def for_config(cls, root, cfg, lanes=(), **kw):
-        return cls(root, cfg.main_branch, cfg.remote, lanes, lock_name(cfg), **kw)
+    def for_config(cls, root, cfg, **kw):
+        return cls(root, cfg.main_branch, cfg.remote, **kw)
 
     # ---------------------------------------------------------------- reading
 
@@ -175,9 +155,8 @@ class LandingLock(object):
             rec = json.loads(text)
         except ValueError as e:
             raise LockError('%s is not a lock record: %s' % (self.path, e))
-        if not isinstance(rec, dict) or rec.get('lane') not in self.lanes or not rec.get('token'):
-            raise LockError('%s is not a lock record (lane %r; known lanes %s)' % (
-                self.path, rec.get('lane') if isinstance(rec, dict) else None, ', '.join(self.lanes)))
+        if not isinstance(rec, dict) or not rec.get('token'):
+            raise LockError('%s is not a lock record (no token)' % self.path)
         return rec
 
     def holder_state(self, record):
@@ -192,11 +171,9 @@ class LandingLock(object):
 
     # ---------------------------------------------------------------- writing
 
-    def take(self, lane, branches, pid=None, now=None):
-        """Take the lock for `lane` and `branches`; the record, token included. Busy while anyone
-        holds it. `pid` given: a process holder; None: a token holder."""
-        if lane not in self.lanes:
-            raise LockError('lane must be one of %s' % ', '.join(self.lanes))
+    def take(self, branches, pid=None, now=None):
+        """Take the lock for `branches`; the record, token included. Busy while anyone holds it.
+        `pid` given: a process holder; None: a token holder."""
         if not branches or not all(isinstance(b, str) and b for b in branches):
             raise LockError('a landing lock names the branches it lands')
         # A lock already there is Busy before the record is built: a waiter's look then asks git
@@ -206,7 +183,8 @@ class LandingLock(object):
         if os.path.exists(self.path):
             self._busy()
         record = {
-            'lane': lane, 'branches': list(branches), 'pid': pid,
+            # `lane` is read by no tool here: an older kit refuses a record without it.
+            'lane': FULL, 'branches': list(branches), 'pid': pid,
             'pid_start': self.start_of(pid) if pid is not None else None,
             'token': secrets.token_hex(8), 'started_utc': _utc(now), 'main_branch': self.main,
             'origin_at_take': self._ref('refs/remotes/%s/%s' % (self.remote, self.main)),
@@ -234,13 +212,13 @@ class LandingLock(object):
         return record
 
     def _busy(self):
-        """Raise Busy naming the holder: lane '?' when the file is not a record, 'released while
-        we looked' when it is gone again."""
+        """Raise Busy naming the holder: phase '?' and no token when the file is not a record,
+        'released while we looked' when it is gone again."""
         try:
             holder = self.read()
         except LockError as e:
-            holder = {'lane': '?', 'phase': '?', 'error': str(e)}
-        raise Busy(holder or {'lane': '?', 'phase': 'released while we looked'})
+            holder = {'phase': '?', 'error': str(e)}
+        raise Busy(holder or {'phase': 'released while we looked'})
 
     def _held_by(self, token):
         rec = self.read()
@@ -313,7 +291,7 @@ class LandingLock(object):
 
         Fail closed: a file that cannot be read, is empty, or is not a JSON object is never
         broken, holder_gone or not - a taker between its exclusive create and its write leaves
-        exactly that (KIT-LANDLOCK-BREAK-LIVE)."""
+        exactly that."""
         judged = self._text()
         if judged is None:
             if not os.path.exists(self.path):
@@ -331,10 +309,10 @@ class LandingLock(object):
         try:
             rec = self.read()
         except LockError as e:
-            rec = {'lane': '?', 'phase': '?', 'unreadable': str(e), 'pid': None}
-            # an old-format record (unknown lane, no token) still names its process: check it
+            rec = {'phase': '?', 'unreadable': str(e), 'pid': None}
+            # an old-format record (no token) still names its process: check it
             if raw.get('pid') is not None:
-                rec.update(lane=raw.get('lane', '?'), phase=raw.get('phase', '?'), pid=raw['pid'],
+                rec.update(phase=raw.get('phase', '?'), pid=raw['pid'],
                            pid_start=raw.get('pid_start'))
         if rec is None:
             return False, 'nobody holds the landing lock: nothing to break'
@@ -353,18 +331,15 @@ class LandingLock(object):
         self._retry('removing %s' % self.path, os.remove, self.path)
         return True, rec
 
-    def gate_refusal(self, lane):
-        """None when the lock lets a merged-tree gate of `lane` run, else the refusal: held for
-        that lane, not stuck, and <remote>/<main> unmoved since the take."""
+    def gate_refusal(self):
+        """None when the lock lets a merged-tree gate run, else the refusal: held, not stuck,
+        and <remote>/<main> unmoved since the take."""
         try:
             rec = self.read()
         except LockError as e:
             return 'the landing lock cannot be read (%s)' % e
         if rec is None:
             return 'nobody holds the landing lock: take it before a merged-tree gate'
-        if rec.get('lane') != lane:
-            return 'the landing lock is held for lane %s, and this gate is lane %s: %s' % (
-                rec.get('lane'), lane, describe(rec))
         if rec.get('phase') == 'stuck':
             return 'the landing lock is stuck (a landing stopped half-way): %s' % describe(rec)
         origin = self._ref('refs/remotes/%s/%s' % (self.remote, self.main))

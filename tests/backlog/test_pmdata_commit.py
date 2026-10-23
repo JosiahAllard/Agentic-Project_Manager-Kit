@@ -287,8 +287,9 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(self.status(), [])
 
     def test_a_write_that_is_not_clean_still_writes_over_an_edit(self):
-        """`clean` is the landing's (at_landing._pm_data_store): a backlog.py write keeps
-        committing the record as the worktree holds it."""
+        """A store write that is not `clean` (the landing opens its store with clean=True, see
+        at_landing.pm_data_store) still commits the record as the worktree holds it, over a
+        hand edit."""
         with open(self.path('BAR'), 'a', encoding='utf-8', newline='\n') as f:
             f.write('\nedited by hand\n')
         before = self.head()
@@ -781,6 +782,21 @@ class PmDataStore(unittest.TestCase):
         self.assertTrue(os.path.exists(self.path('BAR')))
         with open(lock) as f:
             self.assertEqual(f.read(), 'another git\n')
+
+    def test_the_busy_message_says_how_to_remove_a_stale_lock(self):
+        """A writer hard-killed while it held the lock leaves it behind: the Busy message names
+        the lock file as a stale one and the step, deleting that file once no writer is running."""
+        lock = self.lock_path()
+        with open(lock, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, lock)
+        with mock.patch.object(smod, 'INDEX_WAIT', 0.2):
+            with self.assertRaises(errors.Busy) as cm:
+                self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        text = str(cm.exception)
+        self.assertIn('stale', text)
+        self.assertIn('delete %s' % cm.exception.lock, text)
+        self.assertIn('no git command or store write is running', text)
 
     def test_a_lock_given_up_while_the_write_waits_is_taken(self):
         lock = self.lock_path()

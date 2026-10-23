@@ -45,21 +45,31 @@ import kitlib.config as kconfig
 from kitlib.config import policy
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
+from kitlib.gate import budget
 from kitlib.gate import detect
+from kitlib.gate import gatecap
+from kitlib.gate import gitstatus
 from kitlib.gate import hookrev
 from kitlib.gate import result
 from kitlib.gate import stash
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.lock import run as lockrun
-from kitlib.lock.store import EXIT_USAGE, LockError
+from kitlib.lock.store import EXIT_USAGE, LockError, Store
 from kitlib.proc import process, winwatch
 from kitlib.proc.job import JobError
 from kitlib.records import gate_ok
 
 NO_STEP = ('REFUSED: no gate step selected: the "gate".steps of .kit.json cover none of the %d '
-           'changed path(s), so nothing would run; no gate-OK record is written. Give a step '
-           '"always": true or globs that cover these paths')
+           'changed path(s), or each step they select is dropped by another\'s skip_if_selected, '
+           'so nothing would run; no gate-OK record is written. Give a step "always": true or '
+           'globs that cover these paths')
+# --full and the merged gate select every step but the manual ones, whatever changed: none left
+# means every step is manual, or each is dropped by another selected step's skip_if_selected.
+NO_STEP_FULL = ('REFUSED: no gate step selected: every step in the "gate".steps of .kit.json is '
+                'manual, or is dropped by another selected step\'s skip_if_selected, so nothing '
+                'would run; no gate-OK record is written. Give the gate a step that is not manual '
+                'and that no other step\'s skip_if_selected names')
 NO_CHECKS = ('GATE OK (auto-detected: no stack found, so NO checks ran; give the gate steps with a '
              '"gate" section in .kit.json or tools/gate.json)')
 PROBE_TIMEOUT = 60      # seconds a `requires` probe argv may take
@@ -78,8 +88,15 @@ def gate_config(cfg):
     The kit guard and the pre-push hook verify a record with this same value. An auto-detected gate
     (kitlib.gate.detect) hashes this too, not its detected steps: they are a function of the
     commit's tree (which the record names), its base's tree (`base`) and the kit (its `kit`), so
-    the hash still names what decides the steps."""
-    return cfg.section('gate')
+    the hash still names what decides the steps. A key of HASH_IF_SET that is unset is left out,
+    so a config that sets none of them hashes as it did before the key existed: a record a kit
+    without the key wrote still verifies."""
+    gate = cfg.section('gate')
+    return {k: v for k, v in gate.items() if not (k in HASH_IF_SET and v is None)}
+
+
+# "gate" keys added after records were first written; unset, they are not in gate_config().
+HASH_IF_SET = ('smoke_steps', 'docs_only')
 
 
 def gate_config_at(root, rev):
@@ -480,7 +497,7 @@ def plan_lines(chosen, why, all_steps, base_text, changed):
 
 
 def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book_kw, merged=False,
-          checks_rev=None, gate=None, slot=None, seen=None):
+          checks_rev=None, gate=None, slot=None, seen=None, capped=False, budget_branch=None):
     """Runs `chosen` in a slot of `kind`: `(results, None)`, or `(None, Outcome)` when the hook
     module or the booking refuses. The hook module's checks come from the work tree, or from
     commit `checks_rev` when given (a landing: --expect-main). `chosen` is never empty. The slot
@@ -494,7 +511,15 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     first, so nothing the gate started runs on into the push or an undo.
     After the steps it says the run's console-window report (window_results), in a held `slot`
     too (its monitor stops there, before its daemons and tree are ended); `seen`, a dict when
-    given, gets `windows`: the windows as dicts, None when nothing was watched."""
+    given, gets `windows`: the windows as dicts, None when nothing was watched.
+    The lock run records the tree it tests (tested_tree; book's `tree`, Slot.note_tree for a held
+    slot): a branch's HEAD tree, a landing's merge tree, the daily full run's commit's tree.
+    `capped`: a branch gate's booking first waits for the session gate cap (kitlib.gate.gatecap,
+    in the store it books in); a landing and the daily full run leave it False and never wait.
+    `budget_branch`: with `capped`, the branch whose gate budget (kitlib.gate.budget) is asked
+    first, before the cap is waited for or anything is booked: `(None, REFUSED Outcome)` when it
+    is spent. None: not asked (a detached HEAD). The run is booked with it as book's `branch`,
+    which its history line keeps, so the budget counts the run by its branch, not its slug."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -510,8 +535,10 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
                 'nothing ran' % (e.code,)])
     ctx = {'root': root, 'base': base, 'merged': merged, 'changed': list(changed),
            'options': options}
+    tree = tested_tree(root)
     if slot is not None:
         say('the gate runs in the slot the landing holds (run %s)' % slot.id)
+        slot.note_tree(tree)
         try:
             results = run_steps(slot.launcher, chosen, gate or cfg.section('gate'), ctx, log_dir,
                                 say, checks)
@@ -529,8 +556,16 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         slot.stop_daemons()
         slot.end_tree()
         return results, None
+    if capped:
+        store = (book_kw or {}).get('store') or Store()
+        over = budget.refusal(root, store, name, budget_branch, say)
+        if over:
+            return None, G.Outcome(G.REFUSED, over, record=None,
+                                   no_record='the branch gate budget')
+        gatecap.wait_turn(store, name, say)
     try:
-        slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True))
+        mine = {'branch': budget_branch} if capped and budget_branch else {}
+        slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True, tree=tree, **mine))
     except LockError as e:
         return None, lock_refusal(e)
     with slot:
@@ -540,6 +575,17 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         results += window_results(slot, say, seen)
         slot.release(0 if verdict(results)[0] and not nothing_ran(results) else 1, 'done')
     return results, None
+
+
+def tested_tree(root):
+    """The git tree hash of HEAD in `root` when its work tree is clean (no uncommitted or
+    untracked path), else None: a gate of uncommitted files tests no commit's tree. None too
+    when git cannot answer; the tree is a note on the lock run, never a reason to refuse."""
+    entries, _ = gitstatus.status(root)
+    if entries != []:
+        return None
+    tree, _ = refs.tree_of('HEAD', root)
+    return tree or None
 
 
 def window_results(slot, say, seen=None):
@@ -637,6 +683,17 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
     return out
 
 
+def zero_count_warnings(gate):
+    """The lines of steps.zero_count_passes(gate), or one line saying the check could not run:
+    a warning only, so nothing it raises stops or fails the gate. Each line is escaped to ASCII
+    (backslashreplace), so a console that cannot encode a pattern (cp1252) cannot raise either."""
+    try:
+        lines = list(S.zero_count_passes(gate))
+    except Exception as e:          # noqa: BLE001 - a warning never fails or stops the gate
+        lines = ['the zero-count "pass" check could not run: %s: %s' % (type(e).__name__, e)]
+    return [str(line).encode('ascii', 'backslashreplace').decode('ascii') for line in lines]
+
+
 def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False, slug=None,
                    log_dir=None, say=None, book_kw=None):
     """_branch_gate() once the config is read. seen[0]: the gate it runs (detect.effective),
@@ -683,10 +740,14 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
         gate = eff.gate
         say(detect.label(eff))
     empty = detect.nothing_detected(eff)
+    from kitlib.gate import reuse   # reuse imports this module
+    docs = not (full or only or empty) and reuse.docs_only_change(cfg, gate, changed)
+    if docs:
+        say('a docs-only change: only the "docs_only" steps run (docs/gate.md "Docs-only changes")')
     try:
         all_steps = S.build(gate, top, mb, cfg.tools_dir, full=full)
         chosen, picked = S.select(gate, all_steps, changed, full=full, only=only,
-                                  read=S.working_tree_reader(top))
+                                  read=S.working_tree_reader(top), docs=docs)
     except S.UnknownStep as e:
         return G.Outcome(G.USAGE, ['USAGE: --only: %s' % e])
     except S.GateConfigError as e:
@@ -696,30 +757,36 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
         return G.Outcome(G.OK, plan_lines(chosen, picked, all_steps, base_text, changed),
                          chosen=[s.name for s in chosen])
     if not chosen and not empty:
-        return G.Outcome(G.REFUSED, [NO_STEP % len(changed)], record=None,
+        text = NO_STEP_FULL if full and not only else NO_STEP % len(changed)
+        return G.Outcome(G.REFUSED, [text], record=None,
                          no_record='no gate step selected', head=head, base=mb, changed=changed)
-    entries, why = refs.status(top)
+    entries, why = gitstatus.status(top)
     if entries is None:
         return G.Outcome(G.REFUSED, ['REFUSED: git status failed: %s' % why])
     untracked = [p for xy, p in entries if xy == '??']
     if gate.get('warn_untracked') and untracked:
         say('WARNING: %d untracked file(s) are gated but not committed: %s' % (
             len(untracked), ', '.join(untracked[:10])))
+    for line in zero_count_warnings(gate):
+        say('WARNING: %s' % line)
     name = repo_name(cfg, top)
     started = gate_ok.utc()
     logs = new_log_dir(cfg, top, name, branch or head[:10], log_dir)
     say('gate %s at %s, base %s: %s' % (branch or '(detached)', head[:10], base_text,
                                         ', '.join(s.name for s in chosen) or 'no step'))
-    from kitlib.gate import reuse   # reuse imports this module
     plan = None if empty else reuse.branch_plan(top, cfg, chosen, mb, changed, full=full,
                                                 only=only, head=head, branch=branch)
     reused = _say_plan(plan, chosen, logs, say)
     run = _to_run(chosen, reused)
     results, watched = [], {}
     if run:
+        # capped and budget_branch: the session gate cap (kitlib.gate.gatecap) and the branch
+        # gate budget (kitlib.gate.budget) are a branch gate's only; a landing and the daily full
+        # run book through gated() without them, and a fully reused gate never gets here.
         results, refused = gated(cfg, top, mb, changed, run, gate['kind'], name,
                                  slug or slug_of(branch or head[:10]), logs, say, book_kw,
-                                 gate=gate, seen=watched)
+                                 gate=gate, seen=watched, capped=True,
+                                 budget_branch=branch or None)
         if refused is not None:
             return refused
     results = _with_reused(results, chosen, reused)
@@ -735,7 +802,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     if refused:
         facts['no_record'] = 'no gate step ran'
         return G.Outcome(G.REFUSED, [refused, 'logs: %s' % logs], **facts)
-    after, _ = refs.status(top)
+    after, _ = gitstatus.status(top)
     head_now, _ = refs.head(top)
     no = None
     if only:
@@ -757,7 +824,8 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     try:
         path, _rec = gate_ok.record_pass(top, head, gate_config(cfg), kit_identity(), name, started,
                                          record_steps(results), base=mb, config_rev=head,
-                                         source=eff.source)
+                                         source=eff.source, full=bool(full),
+                                         mode='docs' if docs else None)
     except gate_ok.RecordError as e:
         facts['no_record'] = str(e)
         lines.append('FAILED: the gate passed, and its gate-OK record could not be written: %s' % e)
@@ -770,12 +838,13 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
 # ---------------------------------------------------------------- the merged-tree gate
 
 def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None, book_kw=None,
-                lane_args=None, reuse=None, slot=None, tree=None):
+                reuse=None, slot=None, tree=None, docs=False):
     """_merged_gate() with its source (kitlib.gate.detect) in facts['source'] and as the last
     line. With no "gate" section in `cfg` the gate is detected from the merged tree, plus the
     steps `base` owes (detect.effective). `slot`: the Slot the landing already holds; the steps
     run in it and no second slot is booked (gated). `tree`: the checkout holding the merge (a
-    landing's landing tree, kitlib.gate.land); default `root`."""
+    landing's landing tree, kitlib.gate.land); default `root`. `docs`: a docs-only merge may run
+    only its docs steps (_merged_gate)."""
     try:
         eff = detect.effective(cfg, tree or root, base=base)
     except detect.DetectError as e:
@@ -783,23 +852,32 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     if eff.source == detect.AUTO:
         (say or _quiet)(detect.label(eff))
     out = _merged_gate(root, cfg, eff, base, full=full, slug=slug, log_dir=log_dir, say=say,
-                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot, tree=tree)
+                       book_kw=book_kw, reuse=reuse, slot=slot, tree=tree, docs=docs)
     out.facts['source'] = eff.source
     out.lines.append(detect.label(eff))
     return out
 
 
 def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, say=None,
-                 book_kw=None, lane_args=None, reuse=None, slot=None, tree=None):
+                 book_kw=None, reuse=None, slot=None, tree=None, docs=False):
     """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
     `root`) against `base` (the main it was merged into). The steps run in `tree`, and their hook
     checks get it as ctx['root']; the repository's name and its log folder are `root`'s (the main
-    checkout's), wherever the tree is. The paths base..HEAD changes select the steps (every
-    non-manual step with full, each running its full_cmd when it has one), and each step's
-    merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
-    OK, FAILED, REFUSED (also when no step is selected) or a machine lock code; facts verdict,
-    results, log_dir, head, windows (as the branch gate's). Check steps run the hook module of
-    commit `base`, as the config is read from it (kitlib.gate.hookrev), never the merged tree's.
+    checkout's), wherever the tree is. Every non-manual step is selected, as gate.py --full
+    selects them, whatever paths base..HEAD changes: a fresh landing tree lacks the main
+    checkout's ignored caches, so a step the branch's paths would not select (an asset import)
+    must still run. Each runs its cmd, or its full_cmd, when it has one, with `full` (a strict
+    landing). Each step's
+    merged_args are appended. Outcome codes:
+    OK, FAILED, REFUSED (also when no step is selected: every step manual, or each dropped by
+    another's skip_if_selected) or a machine lock code; facts verdict,
+    results, log_dir, head, windows (as the branch gate's), docs. Check steps run the hook module
+    of commit `base`, as the config is read from it (kitlib.gate.hookrev), never the merged tree's.
+
+    `docs` True and not `full`: when base..HEAD is a docs-only change under `cfg` (the base's;
+    kitlib.gate.reuse.docs_only_change: its "gate".docs_only, never a config, hook or strict path)
+    only the docs_only steps (and setup) run, and facts['docs'] is True (the landing records the
+    merge with mode "docs"; docs/gate.md "Docs-only changes").
 
     `reuse(chosen) -> (reuse.Plan)` (kitlib.gate.reuse.planner): the steps it names are not run
     and count as REUSED; its lines, then the lines of its keep (the results it stores in the gate
@@ -816,16 +894,20 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     changed, why = changed_between(tree, base, head)
     if changed is None:
         return G.Outcome(G.REFUSED, ['REFUSED: git cannot list the merged paths: %s' % why])
+    from kitlib.gate import reuse as R     # reuse imports this module; `reuse` is the planner
+    docs = bool(docs) and not (full or empty) and R.docs_only_change(cfg, gate, changed)
     try:
-        all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, extra=lane_args,
-                            full=full)
-        chosen, _ = S.select(gate, all_steps, changed, full=full, read=S.working_tree_reader(tree))
+        all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, full=full)
+        chosen, _ = S.select(gate, all_steps, changed, full=not docs, docs=docs,
+                             read=S.working_tree_reader(tree))
     except S.GateConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     if not chosen and not empty:
-        return G.Outcome(G.REFUSED, [NO_STEP % len(changed)], head=head)
+        return G.Outcome(G.REFUSED, [NO_STEP_FULL], head=head)
     name = repo_name(cfg, root)
     logs = new_log_dir(cfg, root, name, 'land-' + slug, log_dir)
+    if docs:
+        say('a docs-only merge: only the "docs_only" steps run (docs/gate.md "Docs-only changes")')
     say('merged-tree gate at %s against %s: %s' % (
         head[:10], base[:10], ', '.join(s.name for s in chosen) or 'no step'))
     plan = reuse(chosen) if reuse is not None and not empty else None
@@ -844,6 +926,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     refused = nothing_ran(results) if ok and not empty else None
     if refused:
         return G.Outcome(G.REFUSED, [refused, 'logs: %s' % logs], verdict=line, results=results,
-                         log_dir=logs, head=head, windows=watched.get('windows'))
+                         log_dir=logs, head=head, windows=watched.get('windows'), docs=docs)
     return G.Outcome(G.OK if ok else G.FAILED, [line, 'logs: %s' % logs], verdict=line,
-                     results=results, log_dir=logs, head=head, windows=watched.get('windows'))
+                     results=results, log_dir=logs, head=head, windows=watched.get('windows'),
+                     docs=docs)

@@ -8,7 +8,7 @@ Layout under the store folder `root` (the caller resolves it; nothing here reads
                                     holds, so that folder opens as a store with no conversion),
                                     plus the store's own `version` (int) and `updated_at`; a
                                     document with no `version` (an old-hub file) is at version 0
-    <root>/_meta.json               {revision, counters: {Q, M, T, P, S}}
+    <root>/_meta.json               {revision, counters: {Q, M, T, P, S, A}}
     <root>/_store.lock              the single-writer lock (below); never a document
 
 Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
@@ -59,8 +59,9 @@ restarts the revision from what it holds, 0 when it is missing), so the caller r
 instead.
 
 pending(): the owner input nobody has handled yet (design section 4): answered questions,
-submitted stories, sent to_pm items, and to-dos that are done or added by the owner without
-pm_ack.
+submitted stories, sent to_pm items, to-dos that are done or added by the owner without
+pm_ack, and approvals the owner decided that are not consumed (approval_decided), read at the
+store's clock.
 
 Nothing here prints, parses arguments or exits.
 """
@@ -79,6 +80,7 @@ from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError, describe
 from . import schema
 
 LOCK_NAME = '_store.lock'
+PAGES_LOCK = threading.Lock()   # serialises a hub page's write or delete: its card and body docs
 META_NAME = '_meta.json'
 RING = 512                      # events held for changes_since and wait
 REPLACE_S = 2.0                 # how long os.replace is retried while a reader holds the file
@@ -294,6 +296,12 @@ class Store(object):
         if not self._open:
             raise HubError('store', 'the hub store %s is closed' % self.root)
 
+    def check_open(self):
+        """HubError store once the store is closed: for a caller that waits on wait() for
+        something else (the machine lock), which a close ends with no error."""
+        with self._mutex:
+            self._check_open()
+
     # ---------------------------------------------------------------- reads
     @property
     def revision(self):
@@ -322,7 +330,9 @@ class Store(object):
     def pending(self):
         with self._mutex:
             self._check_open()
-            return pending_items(self._docs)
+            # the clock is read only when an approval can need it (a test clock counts calls)
+            now = _aware(self.clock()) if self._docs.get('approvals') else None
+            return pending_items(self._docs, now)
 
     def changes_since(self, since):
         with self._mutex:
@@ -467,11 +477,48 @@ def _s(v):
     return v if isinstance(v, str) else ''
 
 
-def pending_items(docs):
+def _aware(text):
+    """The store clock's ISO time as an aware datetime; the current time when it is not one."""
+    try:
+        t = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        t = None
+    if t is None or t.tzinfo is None:
+        return datetime.datetime.now(datetime.timezone.utc)
+    return t
+
+
+def approval_decided(doc, now):
+    """The status ('approved' or 'denied') of an approval document the owner decided and nobody
+    consumed, while it still counts at `now` (an aware datetime); else None. An approval counts
+    until approvals.status_at expires it (APPROVED_TTL_S after decided_at); a denial, which never
+    expires there, for the same APPROVED_TTL_S after decided_at (the PM's ruling). A consumed,
+    pending or expired one, a bad time and a naive `now` give None."""
+    from . import approvals as ap   # approvals imports api, which imports this module
+    status = ap.status_at(doc, now)
+    if status == ap.APPROVED:
+        return status
+    if status != ap.DENIED:
+        return None
+    try:
+        at = datetime.datetime.fromisoformat(doc.get('decided_at'))
+        if at.tzinfo is not None and at <= now < at + datetime.timedelta(
+                seconds=ap.APPROVED_TTL_S):
+            return status
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def pending_items(docs, now=None):
     """[Pending] of owner input not yet handled in docs ({collection: {id: document}}), oldest
-    first: questions answered and not logged, stories submitted, to_pm items sent, and to-dos
-    done or added by the owner (`from: you`) with no pm_ack. Inbox reads are not pending. A
-    question's and a to-do's `sender` is its stored `from`; a story's and a note's is ''."""
+    first: questions answered and not logged, stories submitted, to_pm items sent, to-dos done
+    or added by the owner (`from: you`) with no pm_ack, and approvals decided and not consumed
+    (approval_decided at `now`, an aware datetime; the current time when None). Inbox reads are
+    not pending. A question's and a to-do's `sender` is its stored `from`; a story's, a note's
+    and an approval's is '' (the api routes an approval by its repo)."""
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
     out = []
     for doc_id, d in docs.get('questions', {}).items():
         if d.get('status') == 'answered':
@@ -492,4 +539,8 @@ def pending_items(docs):
             out.append(Pending('todo', doc_id, _s(d.get('title')), _s(d.get('repo')),
                                _s(d.get('done_at')) or _s(d.get('added_at')),
                                _s(d.get('from'))))
+    for doc_id, d in docs.get('approvals', {}).items():
+        if approval_decided(d, now):
+            out.append(Pending('approval', doc_id, _s(d.get('title')), _s(d.get('repo')),
+                               _s(d.get('decided_at'))))
     return sorted(out, key=lambda p: (p.at, p.kind, p.id))

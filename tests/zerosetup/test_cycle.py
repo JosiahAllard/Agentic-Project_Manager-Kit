@@ -10,8 +10,9 @@ The cycle, in the order a PM and a worker run it:
   2. the PM makes the worker's worktree (kitlib.worktree.new.create, tools/new_worktree.py),
      which runs the first-use repo prep (kitlib.git.prep: info/exclude, core.hooksPath);
   3. the worker commits in the worktree (kitlib.commit.commit, tools/commit.py);
-  4. the worker gates the branch with no gate configured (kitlib.gate.runner.branch_gate: the
-     stack is detected, `source: auto`, and the clone's own unittest tests run);
+  4. the worker gates the branch --full with no gate configured (kitlib.gate.runner.branch_gate:
+     the stack is detected, `source: auto`, and the clone's own unittest tests run), which writes
+     the full-gate OK record a landing takes for the tip;
   5. the PM lands it from the main checkout (kitlib.gate.land.Lander, `gate.py land`): merge, the
      merged tree's gate, the push to the remote, the branch cleanup.
 
@@ -51,7 +52,7 @@ from kitlib.machinesetup import owner as mowner
 from kitlib.machinesetup.common import Plan
 from kitlib.worktree import new as wtnew
 from tests import gitfixture
-from tests.gate.fixtures import test_env
+from tests.gate.fixtures import queue_review, test_env
 from tests.home import temp_home
 from tests.lock.helpers import StoreCase
 from tests.realgit import real_git
@@ -194,13 +195,16 @@ class Cycle(object):
         # ... and pushes its branch: the worktree shares the clone's remote (decision 23)
         self.git('push', '-q', 'origin', 'kit/fix-add', cwd=wt)
         self.assertEqual(self.remote_git('rev-parse', 'kit/fix-add'), tip)
-        # 4. the worker's gate: no gate configured, the clone's own tests detected and run
-        gated = runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs)
+        # 4. the worker's gate: no gate configured, the clone's own tests detected and run, --full
+        #    (the record a landing takes for the tip)
+        gated = runner.branch_gate(wt, full=True, book_kw=self.book_kw, log_dir=self.logs)
         self.assertEqual(gated.code, G.OK, gated.lines)
         self.assertEqual(gated.source, 'auto')
         self.assertEqual([(r['name'], r['status']) for r in gated.results], [('python-tests', 'PASS')])
         self.assertEqual(self.status(), '')
-        # 5. the PM lands it: merge, gate the merged tree, push, clean up the branch
+        # 5. the coordinator queues the review's LAND verdict; the PM lands it: merge, gate the
+        #    merged tree, push, clean up the branch
+        self.assertEqual(queue_review(self.clone, 'kit/fix-add', tip), ['kit/fix-add'])
         landed = land.Lander(self.clone, 'kit/fix-add', start, tip, git_env=self.env,
                              book_kw=self.book_kw, log_dir=self.logs).run()
         self.assertEqual(landed.code, G.OK, landed.lines)
@@ -267,6 +271,9 @@ class _Slot(object):
     def stop_daemons(self):
         pass
 
+    def note_tree(self, tree):
+        pass                    # no lock record to note the tested tree on
+
     def end_tree(self):
         pass
 
@@ -313,7 +320,9 @@ class AnyPlatform(Cycle, unittest.TestCase):
         patch = mock.patch.object(lockstore, 'real_root', lambda: os.path.join(self.base, 'machine-store'))
         patch.start()
         self.addCleanup(patch.stop)
-        self.book_kw = {'env': self.env}
+        # A scratch lock store: under the kit's tests the machine's store is fenced (Store.path raises
+        # HomeFenced, kitlib/lock/store.py), so the gates this test books cannot use it.
+        self.book_kw = {'env': self.env, 'store': lockstore.Store(root=os.path.join(self.base, 'scratch-store'))}
 
     def pre_commit_passed(self, wt):
         """The commit asked for its pre-commit hook; the kit's, run in the worktree as git runs it

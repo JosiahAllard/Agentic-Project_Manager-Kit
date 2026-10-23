@@ -15,7 +15,7 @@ Exit 0 `no overlap`; 1 `OVERLAP`; 2 usage or `CANNOT ANSWER`; 130 Ctrl+C. `CANNO
 - a ref cannot be read: a broken ref, a line `for-each-ref` printed that is not a ref line, or git giving no answer partway through.
   - A dangling `origin/HEAD` (the remote's default branch it points at is gone) draws a git warning (`ignoring dangling symref`), so it gives `CANNOT ANSWER`; `git remote set-head origin -a` repairs it.
 
-`-C` that is not a directory, or is in no git work tree, is a usage error.
+`-C` that is not a directory, or is in no git work tree, is a usage error; a drive-letter path with no separators left (`Z:GitHub...`, an unquoted backslash path mangled by Git Bash) gets a quoting hint (`kitlib.git.repo.not_a_directory`).
 
 ## The set
 

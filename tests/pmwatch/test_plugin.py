@@ -128,6 +128,31 @@ class PluginEventTest(unittest.TestCase):
             self.assertTrue(errs[0][0].startswith("ERROR plugin check: "), errs)
             self.assertIn("git broke" if broken == "ref" else P.STATE, errs[0][0])
 
+    def export_kit(self, checkout):
+        """A folder shaped like the plugin export the watcher runs from: a marker, no .git."""
+        folder = os.path.join(self.k.base, "export-kit")
+        os.makedirs(folder)
+        with open(os.path.join(folder, P.MARKER), "w", encoding="utf-8") as fh:
+            json.dump({"checkout": checkout}, fh)
+        return folder
+
+    def test_a_kit_that_is_an_export_reads_the_ref_from_its_source_checkout(self):
+        os.makedirs(self.k.root)
+        self.export_at(self.main())
+        new = self.advance()
+        s = P.Settings(self.k.root, False, "origin")
+        got, _ = W.plugin_check(kit=self.export_kit(self.k.kit), settings=s, folders=[])(None)
+        self.assertEqual(got, ["pm-kit plugin behind kit main %s: %s" % (new[:12], P.refresh_cmd())])
+
+    def test_an_export_with_no_source_checkout_is_a_failed_check_with_a_clear_line(self):
+        s = P.Settings(self.k.root, False, "origin")
+        check = W.plugin_check(kit=self.export_kit(os.path.join(self.k.base, "gone")), settings=s,
+                               folders=[])
+        with self.assertRaises(P.RefreshError) as cm:
+            check(None)
+        self.assertIn("export", str(cm.exception))
+        self.assertIn("source checkout", str(cm.exception))
+
     def test_no_tracking_ref_is_silent(self):
         with mock.patch.object(P, "tracking_main", lambda kit, remote: ("", None)):
             w = self.watcher(auto=True)

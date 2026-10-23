@@ -243,6 +243,116 @@ class NoIdentity(unittest.TestCase):
         self.assertIn('within 7 s', a.last.reason)
 
 
+class RefusalLog(unittest.TestCase):
+    """Every deny run() answers is logged after the answer is written: one line in
+    <pm_data>/audit/refusals.jsonl (kitlib.guard.refusal_log; docs/guard-v2.md "Refusal log"),
+    whatever made it (the guard, a guard error, the deadline, the host's screen). Nothing else is
+    logged, and the log never changes the answer or the exit code."""
+
+    def setUp(self):
+        from tests.gitfixture import rmtree
+        from tests.home import machine_config, temp_home
+        home = temp_home(self)
+        self.data = tempfile.mkdtemp(prefix='kit-pmdata-')
+        self.addCleanup(rmtree, self.data)
+        machine_config(home, {'pm_data': {'path': self.data}})
+        self.log = os.path.join(self.data, 'audit', 'refusals.jsonl')
+
+    def rows(self):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log, encoding='utf-8') as fh:
+            return [json.loads(line) for line in fh]
+
+    def test_a_deny_writes_one_line_with_its_rule_and_role(self):
+        deny = lambda *x, **k: Decision('deny', 'some-rule', 'why: rm -rf C:/x', 'do this')   # noqa: E731
+        self.assertEqual(run(FakeAdapter(), {'kind': 'shell', 'who': 'a1'}, deny), (3, 'deny some-rule\n'))
+        rows = self.rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['host'], rows[0]['rule'], rows[0]['role'], rows[0]['agent'], rows[0]['kind'],
+                          rows[0]['instead_given']), ('fake', 'some-rule', 'subagent', 'a1', 'shell', True))
+        self.assertNotIn('rm -rf', json.dumps(rows[0]))
+
+    def test_allow_ask_and_a_warning_write_nothing(self):
+        for d in (Decision('allow'), Decision('ask', 'r', 'why', 'cmd'), Decision('allow', 'w', 'a warning')):
+            with self.subTest(d=d):
+                run(FakeAdapter(), {'kind': 'shell'}, lambda *x, **k: d)
+        self.assertEqual(self.rows(), [])
+
+    def test_a_guard_error_and_a_timeout_are_logged(self):
+        def boom(*x, **k):
+            raise RuntimeError('boom')
+        self.assertEqual(run(FakeAdapter(), {'kind': 'mcp'}, boom), (3, 'deny guard-error\n'))
+        self.assertEqual(run(FakeAdapter(parse_error=ValueError('bad')), {}, boom), (3, 'deny guard-error\n'))
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+
+        def slow(*x, **k):
+            gate.wait(5)
+            return Decision('allow')
+        self.assertEqual(run(FakeAdapter(), {'who': 'a1'}, slow, deadline=0.05), (3, 'deny guard-timeout\n'))
+        self.assertEqual([(r['rule'], r['role']) for r in self.rows()],
+                         [('guard-error', 'main'), ('guard-error', 'main'), ('guard-timeout', 'subagent')])
+
+    def test_a_host_screen_deny_is_logged_once_for_a_call_of_several_actions(self):
+        a = Several.Multi(('a', 'b', 'c'), screen=lambda act: Decision('deny', 'host-rule', 'no') if act.path != 'a' else None)
+        self.assertEqual(run(a, {}, lambda *x, **k: Decision('allow')), (3, 'deny host-rule\n'))
+        self.assertEqual([(r['rule'], r['kind']) for r in self.rows()], [('host-rule', 'edit')])
+
+    def test_a_log_that_fails_leaves_the_answer_unchanged(self):
+        deny = lambda *x, **k: Decision('deny', 'r', 'why')                            # noqa: E731
+        with mock.patch('kitlib.guard.refusal_log.append', side_effect=OSError('disk full')):
+            self.assertEqual(run(FakeAdapter(), {}, deny), (3, 'deny r\n'))
+        with mock.patch('kitlib.guard.refusal_log.record', side_effect=RuntimeError('broken')):
+            self.assertEqual(run(FakeAdapter(), {}, deny), (3, 'deny r\n'))
+        self.assertEqual(self.rows(), [])
+
+    def test_the_line_is_written_after_the_answer(self):
+        order = []
+
+        class Out(io.StringIO):
+            def write(self, text):
+                order.append('answer')
+                return super().write(text)
+        with mock.patch('kitlib.guard.decide', lambda *x, **k: Decision('deny', 'r', 'why')), \
+                mock.patch('kitlib.guard.refusal_log.record', side_effect=lambda *a, **k: order.append('log')):
+            hookmain.run(FakeAdapter(), 'PreToolUse', io.StringIO('{}'), Out(), environ={}, entry='h')
+        self.assertEqual(order, ['answer', 'log'])
+
+    def test_a_marked_call_on_a_host_without_identity_logs_the_role_the_guard_judged(self):
+        a = FakeAdapter()
+        a.capabilities = HostCapabilities(('PreToolUse',), True, False, True, True, 'x')
+        tags = []
+
+        def deny(action, ctx=None, environ=None, profile=None):
+            role = 'subagent' if action.agent else 'main'
+            tags.append(role)
+            return Decision('deny', 'r', 'why [kit guard: rule=r role=%s]' % role)
+        with mock.patch('kitlib.guard.decide', deny):
+            code = hookmain.run(a, 'PreToolUse', io.StringIO('{"kind": "edit"}'), io.StringIO(),
+                                environ={'PM_KIT_ROLE': 'worker'}, entry='h.py')
+        self.assertEqual((code, tags), (3, ['subagent']))
+        self.assertEqual([(r['role'], r['agent'], r['agent_role']) for r in self.rows()],
+                         [('subagent', hookmain.UNIDENTIFIED, 'worker')])
+
+    def test_a_hung_git_cannot_hold_the_deny_up(self):
+        from kitlib.guard import refusal_log
+        started = []
+
+        def hung(*a, **k):
+            started.append(a)
+            time.sleep(5)
+            raise OSError('hung')
+        deny = lambda *x, **k: Decision('deny', 'r', 'why')                            # noqa: E731
+        with mock.patch('kitlib.git.cmd.call', side_effect=hung), \
+                mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
+            began = time.monotonic()
+            self.assertEqual(run(FakeAdapter(), {'kind': 'shell'}, deny), (3, 'deny r\n'))
+            took = time.monotonic() - began
+        self.assertEqual((len(self.rows()), started), (1, []))
+        self.assertLess(took, refusal_log.BOUND)
+
+
 class CommandLine(unittest.TestCase):
     def test_the_one_hook_command_line_is_exec_form(self):
         line = hookmain.command_line(os.path.join('k', 'hook.py'))
@@ -307,15 +417,16 @@ class Dispatch(unittest.TestCase):
     def test_the_tool_event_runs_the_guard_with_the_adapters_deadline_and_the_command_line(self):
         a, got = self.Starts(), {}
 
-        def fake_run(adapter, event, stdin, stdout, environ, entry, deadline, started, args):
-            got.update(event=event, text=stdin.read(), entry=entry, deadline=deadline, started=started, args=args)
+        def fake_run(adapter, event, stdin, stdout, environ, entry, deadline, started, args, kit):
+            got.update(event=event, text=stdin.read(), entry=entry, deadline=deadline, started=started, args=args,
+                       kit=kit)
             return 7
         with mock.patch.object(hookmain, 'run', fake_run):
             code = hookmain.dispatch(a, 'PreToolUse', 'C:/k', '{"kind": "shell"}', io.StringIO(),
                                      'C:/k/boot/hook.py', ['h', 'PreToolUse'], started=1.5)
         self.assertEqual(code, 7)
         self.assertEqual(got, {'event': 'PreToolUse', 'text': '{"kind": "shell"}', 'entry': 'C:/k/boot/hook.py',
-                               'deadline': 5, 'started': 1.5, 'args': ['h', 'PreToolUse']})
+                               'deadline': 5, 'started': 1.5, 'args': ['h', 'PreToolUse'], 'kit': 'C:/k'})
         with self.assertRaises(ValueError):
             hookmain.dispatch(a, 'PreToolUse', 'C:/k', '{}', io.StringIO(), part='pm')
 
@@ -329,6 +440,102 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(out.getvalue(), 'deny guard-error\n')
         d = hookmain.failure(RuntimeError('x'), 'main', 'C:/k/boot/hook.py', ('h', 'PreToolUse'))
         self.assertEqual(d.instead, 'python "C:/k/boot/hook.py" h PreToolUse < event.json')
+
+
+class HeaderFollow(unittest.TestCase):
+    """The header-update line (kitlib.host.headerfollow): noted at the header part of a start
+    event, told with the verdict of a later tool event."""
+
+    class Tells(Dispatch.Starts):
+        def tool_context(self, event_name, text, rendered):
+            return rendered + '<ctx %s> %s\n' % (event_name, text)
+
+    def test_the_header_part_notes_the_kit_with_the_payloads_agent(self):
+        seen = []
+        with mock.patch('kitlib.host.headerfollow.note', lambda *a: seen.append(a)):
+            hookmain.dispatch(self.Tells(), 'Begin', 'C:/k', '{"session_id": "s", "who": "a1"}', io.StringIO())
+            a = self.Tells()
+            a.start_text = lambda *args: 'checks'
+            hookmain.dispatch(a, 'Begin', 'C:/k', '{"session_id": "s"}', io.StringIO(), part='pm')
+        self.assertEqual(seen, [('C:/k', {'session_id': 's', 'who': 'a1'}, 'a1', 'Begin')])
+
+    def tool(self, adapter, verdict, line='LINE', reason=None, boom=False):
+        """(exit code, stdout, the calls to headerfollow.line as (write flag, ...))."""
+        out, seen = io.StringIO(), []
+        reason = ('' if verdict == 'allow' else 'why') if reason is None else reason
+
+        def told(kit, payload, agent=None, environ=None, current=None, write=True):
+            seen.append((write, kit, payload, agent, environ))
+            if boom:
+                raise RuntimeError('record unreadable')
+            return line
+        with mock.patch('kitlib.guard.decide', lambda *x, **k: Decision(verdict, 'r', reason)), \
+                mock.patch('kitlib.host.headerfollow.line', told):
+            code = hookmain.run(adapter, 'PreToolUse', io.StringIO('{"session_id": "s", "who": "a1"}'), out,
+                                environ={'X': '1'}, entry='C:/k/boot/hook.py', kit='C:/k')
+        return code, out.getvalue(), seen
+
+    def test_an_allow_tells_the_line_through_tool_context_and_settles_the_record_after(self):
+        code, out, seen = self.tool(self.Tells(), 'allow')
+        self.assertEqual((code, out), (0, '<ctx PreToolUse> LINE\n'))
+        args = ('C:/k', {'session_id': 's', 'who': 'a1'}, 'a1', {'X': '1'})
+        self.assertEqual(seen, [(False,) + args, (True,) + args])
+        self.assertEqual(self.tool(self.Tells(), 'allow', None)[:2], (0, ''))
+
+    def test_a_deny_and_an_ask_keep_their_reason_and_get_the_line_as_context(self):
+        for verdict, code in (('deny', 3), ('ask', 0)):
+            a = self.Tells()
+            got = self.tool(a, verdict)
+            self.assertEqual(got[:2], (code, '%s r\n<ctx PreToolUse> LINE\n' % verdict), verdict)
+            self.assertEqual(a.last.reason, 'why', verdict)
+            self.assertEqual([w for w, *_ in got[2]], [False, True], verdict)
+
+    def test_a_warned_allow_keeps_its_reason_and_gets_the_line_as_context(self):
+        a = self.Tells()
+        self.assertEqual(self.tool(a, 'allow', reason='warn')[:2], (0, '<ctx PreToolUse> LINE\n'))
+        self.assertEqual(a.last.reason, 'warn')
+
+    def test_a_raising_headerfollow_changes_neither_the_decision_nor_the_output(self):
+        for verdict in ('allow', 'ask', 'deny'):
+            a, base = self.Tells(), self.Tells()
+            got = self.tool(a, verdict, boom=True)
+            want = self.tool(base, verdict, line=None)
+            self.assertEqual(got[:2], want[:2], verdict)
+            self.assertEqual(a.last, base.last, verdict)
+            self.assertTrue(got[2], verdict)            # it was reached, and swallowed
+
+    def test_a_raising_tool_context_changes_nothing_and_leaves_the_record_unspent(self):
+        class Bad(self.Tells):
+            def tool_context(self, event_name, text, rendered):
+                raise RuntimeError('x')
+        for verdict in ('allow', 'deny'):
+            code, out, seen = self.tool(Bad(), verdict)
+            self.assertEqual(out, '' if verdict == 'allow' else 'deny r\n')
+            self.assertEqual([w for w, *_ in seen], [False], verdict)
+
+    def test_an_adapter_without_tool_context_reads_no_record_for_any_verdict(self):
+        """Codex prints nothing for an allow and has no context channel: its record is not spent
+        into a reason nobody sees, nor appended to a deny's tag."""
+        for verdict, reason, want in (('allow', '', ''), ('allow', 'warn', ''), ('ask', 'why', 'ask r\n'),
+                                      ('deny', 'why', 'deny r\n')):
+            a = FakeAdapter()
+            code, out, seen = self.tool(a, verdict, reason=reason)
+            self.assertEqual((out, seen), (want, []), (verdict, reason))
+            self.assertEqual(a.last.reason, reason)
+
+    def test_a_raising_note_does_not_fail_a_start_event(self):
+        out = io.StringIO()
+        with mock.patch('kitlib.host.headerfollow.note', side_effect=RuntimeError('disk')):
+            code = hookmain.dispatch(self.Tells(), 'Begin', 'C:/k', '{"session_id": "s"}', out)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.getvalue())
+
+    def test_no_kit_no_line(self):
+        out = io.StringIO()
+        with mock.patch('kitlib.guard.decide', lambda *x, **k: Decision('allow')), \
+                mock.patch('kitlib.host.headerfollow.line', side_effect=AssertionError('read')):
+            hookmain.run(self.Tells(), 'PreToolUse', io.StringIO('{"session_id": "s"}'), out, environ={})
+        self.assertEqual(out.getvalue(), '')
 
 
 if __name__ == '__main__':

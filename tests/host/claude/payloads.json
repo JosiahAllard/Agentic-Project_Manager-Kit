@@ -215,8 +215,29 @@
     }
    },
    "action": {
-    "kind": "other",
+    "kind": "read",
     "tool": "Read",
+    "path": "C:/r/a.py",
+    "cwd": "C:/r"
+   }
+  },
+  {
+   "name": "other",
+   "event": "PreToolUse",
+   "payload": {
+    "session_id": "8f5c9cf4-0000-4000-8000-000000000000",
+    "transcript_path": "C:/home/u/.claude/projects/C--r/8f5c9cf4-0000-4000-8000-000000000000.jsonl",
+    "cwd": "C:/r",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "TodoWrite",
+    "tool_input": {
+     "todos": []
+    }
+   },
+   "action": {
+    "kind": "other",
+    "tool": "TodoWrite",
     "cwd": "C:/r"
    }
   },
@@ -244,13 +265,13 @@
     "cwd": "C:/r",
     "hook_event_name": "SubagentStart",
     "agent_id": "a0335183081908f5a",
-    "agent_type": "pm-kit:reviewer"
+    "agent_type": "pm-kit:analyst"
    },
    "action": {
     "kind": "subagent_start",
     "cwd": "C:/r",
     "agent": "a0335183081908f5a",
-    "agent_role": "reviewer"
+    "agent_role": "analyst"
    }
   }
  ],

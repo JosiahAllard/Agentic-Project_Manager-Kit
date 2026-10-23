@@ -95,6 +95,18 @@ class Host(object):
         this interpreter, reading the machine config of `home`."""
         return agenttemp.sweep_dry_run(kit, sys.executable, home=home)
 
+    def task_list(self):
+        """Every scheduled task with its actions (kitlib.pmstart.consoletasks.read_tasks):
+        RuntimeError, OSError or ET.ParseError when schtasks cannot be read."""
+        from kitlib.pmstart import consoletasks
+        return consoletasks.read_tasks(timeout=agenttemp.TASK_TIMEOUT)
+
+    def worktree_sweep_dry_run(self, tool, main):
+        """The worktree sweep's report lines from one run without --apply on the main checkout
+        `main` (worktreesweep.dry_run), under this interpreter."""
+        from . import worktreesweep
+        return worktreesweep.dry_run(tool, main, sys.executable)
+
     def guard_entry(self, kit):
         """The guard's settings entry, as the kit's hook entry prints it for the default host:
         `boot/hook.py <host> --settings-entry`, run by this interpreter."""
@@ -107,6 +119,27 @@ class Host(object):
         if not isinstance(entry, dict) or not all(isinstance(v, list) for v in entry.values()):
             raise ValueError('boot/hook.py --settings-entry printed no {event: [groups]} object')
         return entry
+
+    def managed_path(self):
+        """The default host's machine-wide managed settings file (kitlib.machinesetup.managed):
+        its adapter's optional managed_settings_path(); None when the adapter has none, or names
+        no file on this machine."""
+        import importlib
+        from kitlib.host import registry
+        try:
+            adapter = importlib.import_module(registry.host(registry.default()).adapter).ADAPTER
+        except (ImportError, AttributeError, OSError, ValueError):     # registry.RegistryError
+            return None
+        get = getattr(adapter, 'managed_settings_path', None)
+        return get() if get is not None else None
+
+    def is_admin(self):
+        """Whether this process runs elevated, so it may write under Program Files."""
+        try:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except (ImportError, AttributeError, OSError):
+            return False
 
     def git_email(self, kit):
         """`git config user.email` in the kit checkout (the user's global value unless the kit

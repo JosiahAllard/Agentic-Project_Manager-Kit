@@ -610,6 +610,56 @@ def memory(cfg, repos=None, check=None, pm_repo=None, folder=None):
     return lines
 
 
+def allow_rules(cfg, repos=None, pm_repo=None, settings=None):
+    """Permission rules naming a plugin export other than the current one (kitlib.allowrules;
+    docs/pm-start.md "Allow rules"): for each repository in launcher.repos and the PM's own, one
+    line per settings file (.claude/settings.local.json, .claude/settings.json) and state (gone,
+    not current), with the command that prints the land lines to paste (any other rule's hash the
+    owner changes by hand). None when every rule names the
+    current export. Nothing is read when there is no repository; a loader (`settings`, default
+    plugin_settings) that gives None checks nothing."""
+    from kitlib import allowrules, kitroot, pluginsource
+    from kitlib.stubs import memory as kmemory
+    repos = launcher_repos() if repos is None else repos
+    targets = [(name, repos[name]) for name in sorted(repos)]
+    top = (pm_repo or pm_memory_repo)(cfg)
+    if top and not any(_same_folder(top, p) for p in repos.values()):
+        targets.append(("PM repo", top))
+    if not targets:
+        return []
+    s = plugin_settings() if settings is None else settings
+    if s is None:
+        return []
+    root = s.export_dir
+    current = pluginsource.current_folder(root)
+    lines = []
+    for label, path in targets:
+        if not os.path.isdir(path):
+            lines.append("could not check allow_rules (%s): no repository folder %s" % (label, path))
+            continue
+        for rel, f in ((kmemory.local_rel(), kmemory.local_path(path)),
+                       (kmemory.settings_rel(), kmemory.settings_path(path))):
+            try:
+                found = allowrules.named_exports(f, root) or {}
+            except (OSError, ValueError) as e:
+                lines.append("could not check allow_rules (%s): %s: %s" % (label, rel, e))
+                continue
+            by_state = {}
+            for folder in sorted(found):
+                state = allowrules.export_state(root, folder, current)
+                if state != allowrules.CURRENT:
+                    by_state.setdefault(state, []).append(folder)
+            for state in (allowrules.GONE, allowrules.NOT_CURRENT):
+                if state in by_state:
+                    folders = by_state[state]
+                    lines.append("allow rules (%s): %s names plugin export %s (%s) in %d rule(s); the current "
+                                 "export is %s: %s prints the land lines to paste; any other rule naming the "
+                                 "old export needs its hash changed by hand (owner)"
+                                 % (label, rel, ", ".join(folders), state, sum(found[x] for x in folders),
+                                    current or "none", kitroot.command("allow_rules", path)))
+    return lines
+
+
 def repo_prep(repos=None, prep=None):
     """The first-use repo prep (kitlib.git.prep.run; docs/new-worktree.md "First-use prep") of each
     repository in launcher.repos, the repositories the kit's workers make worktrees in: its lines,
@@ -646,6 +696,32 @@ def plugin_current(settings=None, kit=None, folders=None):
     if s is None:
         return []
     return pluginsource.current_lines(kit or pluginsource.kit_root(), s, folders=folders)
+
+
+def plugin_enabled(settings=None, folders=None):
+    """One line naming the account folders whose settings.json does not enable the pm-kit plugin
+    (enabledPlugins["pm-kit@pm-kit"] absent), with the machine setup command that installs it
+    (docs/machine-setup.md "Default mode"); false is the owner's choice and is silent. A settings.json
+    that is not a JSON object is its own "could not check" line. None for `settings` reads the machine
+    config (plugin_settings); a loader that gives None checks nothing. None for `folders`: this
+    machine's account folders (kitlib.pluginsource.account_folders)."""
+    from kitlib import pluginsource
+    from kitlib.machinesetup import plugin
+    s = plugin_settings() if settings is None else settings
+    if s is None:
+        return []
+    lines, absent = [], []
+    for d in pluginsource.account_folders() if folders is None else folders:
+        have = plugin.enabled(os.path.join(d, "settings.json"), pluginsource.PLUGIN_ID)
+        if have is None:
+            lines.append("could not check the pm-kit plugin in %s: its settings.json is not a JSON object" % d)
+        elif have is plugin.ABSENT:
+            absent.append(d)
+    if absent:
+        lines.insert(0, 'pm-kit plugin: not enabled in %s: python "%s/tools/machine_setup.py" --apply '
+                        '(docs/machine-setup.md "Default mode")'
+                     % (", ".join(absent), pluginsource.live_root().replace("\\", "/")))
+    return lines
 
 
 AGENT_TEMP_ENV = "AGENT_TEMP"
@@ -700,6 +776,58 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
     return lines
 
 
+def worktree_sweep_lines(repos=None, read=None, plugin=None):
+    """One line per repository in launcher.repos whose `<repo>-worktree-sweep` task is missing, or
+    runs from a removed plugin export (kitlib.machinesetup.worktreesweep, docs/machine-setup.md
+    "Extras"); none when every task is current. A task list that cannot be read is one "could not
+    check" line; a repository that cannot be read is its own; repositories that take one task name
+    (machine setup registers it for none) are one line naming each. `read`: the task list
+    (consoletasks.read_tasks); `plugin`: the plugin Settings, None or a raising loader checks
+    presence only."""
+    from kitlib.machinesetup import worktreesweep
+    from kitlib.worktree.task import task_name
+    repos = launcher_repos() if repos is None else repos
+    if not repos:
+        return []
+    try:
+        tasks = (read or consoletasks.read_tasks)()
+    except Exception as e:      # access denied, a timeout, no schtasks: unknown, never "not registered"
+        return ["could not check the worktree sweep tasks: %s: %s" % (type(e).__name__, e)]
+    try:
+        s = (plugin or plugin_settings)()
+    except Exception:           # the plugin_current check names a bad plugin config
+        s = None
+    export = s.export_dir if s is not None else None
+    lines, resolved = [], []
+    for label in sorted(repos):
+        try:
+            if not os.path.isdir(repos[label]):
+                raise OSError("no repository folder %s" % repos[label])
+            main, name = worktreesweep.repo_task(repos[label])
+        except Exception as e:
+            lines.append("could not check the worktree sweep task (%s): %s: %s"
+                         % (label, type(e).__name__, _failure_text(e)))
+            continue
+        resolved.append((label, os.path.normpath(main), name))
+    for (label, _, name), group, shared in worktreesweep.by_task(resolved):
+        name = task_name(name)
+        if shared:
+            lines.append("worktree sweep task %s is shared: %s take that one name, so machine_setup.py "
+                         "registers it for none; give each its own repo.name in .kit.json"
+                         % (name, worktreesweep.sharers(group)))
+            continue
+        have = worktreesweep.find(tasks, name)
+        if have is None:
+            lines.append("worktree sweep task %s (%s) is not registered: machine_setup.py --apply registers "
+                         "it (the owner's act)" % (name, label))
+            continue
+        gone = worktreesweep.removed_export(have, export) if export else None
+        if gone:
+            lines.append("worktree sweep task %s (%s) runs from a removed plugin export %s: machine_setup.py "
+                         "--apply registers it again (the owner's act)" % (name, label, gone))
+    return lines
+
+
 def _failure_text(e):
     """The reason in a "could not check" line: the exception's own text, with any rejected value
     taken out (_without_values) when it is a machine config refusal (kitlib.config or
@@ -733,12 +861,20 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("liveness", lambda: liveness(cfg, procs_once(), **fakes.get("liveness", {}))),
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
+        # A plugin_current fake's settings and folders stand for this check's too.
+        ("plugin_enabled", lambda: plugin_enabled(**fakes.get("plugin_enabled", {
+            k: v for k, v in fakes.get("plugin_current", {}).items() if k in ("settings", "folders")}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
         # A stubs fake's repos stand for launcher.repos here too.
         ("memory", lambda: memory(cfg, **fakes.get("memory", {k: v for k, v in fakes.get("stubs", {}).items()
                                                               if k == "repos"}))),
+        ("allow_rules", lambda: allow_rules(cfg, **fakes.get("allow_rules", {k: v for k, v in fakes.get(
+            "stubs", {}).items() if k == "repos"}))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
+        # A stubs fake's repos stand for launcher.repos here too.
+        ("worktree_sweep", lambda: worktree_sweep_lines(**fakes.get("worktree_sweep", {
+            k: v for k, v in fakes.get("stubs", {}).items() if k == "repos"}))),
         ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]

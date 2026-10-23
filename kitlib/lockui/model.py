@@ -7,8 +7,13 @@ The agent strip holds agent work: runs now (to their expected end), queued runs 
 queue plans them, agent holds ("bookings": an owner or game hold over the same time takes
 the slots it covers, shown as lost) and past runs from history (a bar for when the run held its
 slots, _x the end it was expected to have; late when it took longer).
+
+to_json() is that view as the Action Hub's GET lock/view sends it: plain JSON, one allow-list of
+keys for every listener, and fixed phrases over the tunnel for warnings that can name a path.
 """
 import datetime as dt
+
+from kitlib.lock import status as st
 
 COLOURS = {"whole": "#d9534f", "half": "#f0ad4e", "slots": "#e5c07b", "game": "#c678dd",
            "sel": "#5b9bd5", "now": "#4caf50", "agent": "#7f8fa6", "booked": "#9b7fd4",
@@ -369,17 +374,134 @@ def _cores(snap, runs, holds):
     return {"head": head, "cpu": cpu, "gpu": gpu}
 
 
-def _warnings(snap):
+_LAYOUT_WAITS = {
+    st.IDLE: "a new division waits until nothing runs or queues",
+    st.UNWRITTEN: "layout.json is missing or not valid to this kit; it is written once nothing "
+                  "runs or queues",
+    st.FAILED_LOOK: "a look at the hardware failed (the hardware lines say what): the layout in "
+                    "force stays until a look succeeds",
+    st.PROVISIONAL: "the layout in force is provisional: it came from a look at the hardware that "
+                    "failed (the hardware lines say what), and the first look that succeeds "
+                    "replaces it once nothing runs or queues"}
+
+
+def layout_wait(lay):
+    """What the window says about the snapshot layout `lay`'s hardware_change, or None: its
+    `reason` (from an older snapshot without one, kitlib.lock.status.pending_reason of its pending
+    text), as a sentence here or else the pending text itself; the idle wait when only `changed`
+    is set."""
+    hc = lay.get("hardware_change") or {}
+    reason = hc["reason"] if "reason" in hc else st.pending_reason(hc.get("pending"))
+    if reason in _LAYOUT_WAITS:
+        return _LAYOUT_WAITS[reason]
+    if reason and hc.get("pending"):
+        return hc["pending"]
+    if hc.get("pending") or hc.get("changed"):
+        return _LAYOUT_WAITS[st.IDLE]
+    return None
+
+
+# Over the tunnel (to_json remote) a warning whose words can name a file or folder on this machine
+# is one of these fixed phrases instead; the window and the local owner read the words.
+REMOTE_SAYS = {
+    "layout": "the machine's layout has a warning; the schedule window on this machine says which",
+    "pending": "a change to the machine's layout is pending; the schedule window on this machine "
+               "says what",
+    "queue": "the run queue could not be read",
+    "holds_error": "the holds could not be read",
+    "kinds_error": "the run kinds table could not be read",
+    "hardware": "%d hardware problem(s); the schedule window on this machine says what"}
+
+
+def _warnings(snap, remote=False):
+    """The window's warnings; remote: a fixed phrase in place of each that can name a path."""
     out = []
     lay = snap.get("layout") or {}
     if lay.get("warning"):
-        out.append(lay["warning"])
-    if (lay.get("hardware_change") or {}).get("pending") or (lay.get("hardware_change") or {}).get("changed"):
-        out.append("a new division waits until nothing runs or queues")
+        out.append(REMOTE_SAYS["layout"] if remote else lay["warning"])
+    wait = layout_wait(lay)
+    if wait:
+        out.append(REMOTE_SAYS["pending"] if remote and wait not in _LAYOUT_WAITS.values()
+                   else wait)
     if (snap.get("queue") or {}).get("error"):
-        out.append(snap["queue"]["error"])
+        out.append(REMOTE_SAYS["queue"] if remote else snap["queue"]["error"])
     for k in ("holds_error", "kinds_error"):
         if snap.get(k):
-            out.append(snap[k])
-    out += ["hardware: %s" % p for p in (snap.get("hardware") or {}).get("problems") or []]
+            out.append(REMOTE_SAYS[k] if remote else snap[k])
+    probs = (snap.get("hardware") or {}).get("problems") or []
+    if remote:
+        out += [REMOTE_SAYS["hardware"] % len(probs)] if probs else []
+    else:
+        out += ["hardware: %s" % p for p in probs]
     return out
+
+
+# ------------------------------------------------------------------ the view as JSON
+# One allow-list for every listener (the hub's GET lock/view): a key not named here is not sent,
+# so a process id, a log path, a session or the store folder never leaves the machine.
+HOLD_KEYS = ("id", "owner", "scope", "start", "end", "start_local", "end_local", "note", "covers",
+             "slots", "slots_fixed", "live", "state", "lapses_at", "repo", "slug", "kind")
+RUN_KEYS = ("id", "state", "repo", "slug", "kind", "since", "held_since", "expected_end",
+            "expect_s", "expect_from", "cores", "gpus", "background", "overrun", "usage")
+STRIP_KEYS = ("type", "id", "open", "late", "text")
+DIVISION_KEYS = ("division", "default_division", "owner_division", "wanted_division",
+                 "cpu_slots", "gpu_slots", "agent_cap")
+GAME_KEYS = ("enabled", "hold", "slots", "would_take")
+
+
+def _t(t):
+    return t.astimezone().isoformat(timespec="seconds") if t is not None else None
+
+
+def _pick(d, keys):
+    return {k: d[k] for k in keys if k in d}
+
+
+def _hold_json(h):
+    out = _pick(h, HOLD_KEYS)
+    if isinstance(h.get("game"), dict):
+        out["game"] = _pick(h["game"], ("name", "exe"))
+    return out
+
+
+def _parts(parts):
+    return [[text, list(tags)] for text, tags in parts]
+
+
+def to_json(view, snap, remote=False):
+    """build()'s view of `snap` as plain JSON for the hub: times as local ISO text, only the
+    allow-listed keys, and remote (the tunnel) warnings as REMOTE_SAYS phrases."""
+    snap = snap or {}
+    now = view["now"]
+    strip = []
+    for it in view["strip"]:
+        x = _pick(it, STRIP_KEYS)
+        x.update(start=_t(it["_s"]), end=_t(it["_e"]), expect_end=_t(it.get("_x")),
+                 lane=it.get("_lane", 0))
+        x.setdefault("late", False)
+        strip.append(x)
+    agent = []
+    for h in view["agent_holds"]:
+        x = _hold_json(h)
+        x.update(lost=h["_lost"], lost_to=list(h["_lost_to"]))
+        agent.append(x)
+    lay = snap.get("layout") or {}
+    hc = lay.get("hardware_change") or {}
+    division = _pick(lay, DIVISION_KEYS)
+    division.update(changed=bool(hc.get("changed")),
+                    reason=hc["reason"] if "reason" in hc else st.pending_reason(hc.get("pending")))
+    g = snap.get("game") or {}
+    game = _pick(g, GAME_KEYS)
+    game["games"] = [_pick(x, ("name", "exe", "anti_cheat", "pin")) for x in g.get("games") or []
+                     if isinstance(x, dict)]
+    game["running"] = (_pick(g["running"], ("name", "exe")) if isinstance(g.get("running"), dict)
+                       else None)
+    game.setdefault("enabled", False)
+    return {"now": _t(now), "zone": now.tzname(), "revision": snap.get("revision"),
+            "holds": [_hold_json(h) for h in view["holds"]], "agent_holds": agent,
+            "runs": [_pick(r, RUN_KEYS) for r in view["runs"]], "colour": dict(view["colour"]),
+            "strip": strip, "lanes": view["lanes"],
+            "details": _parts(view["details"]), "queue": _parts(view["queue"]),
+            "bookings": _parts(view["bookings"]), "cores": view["cores"],
+            "memory": view["memory"], "warnings": _warnings(snap, remote),
+            "game": game, "division": division}

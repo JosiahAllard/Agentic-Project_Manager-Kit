@@ -4,7 +4,9 @@ tools/review_pack.py; docs/review-pack.md).
 `pack(path, branch, base, diff)` is the whole command; tools/review_pack.py parses, calls it, prints
 `Outcome.lines` and exits with `Outcome.code`. It never prints and never exits.
 
-The pack: base and merge-base, whether the branch contains the base tip, commits, files changed
+The pack: base and merge-base, whether the branch contains the base tip, commits, whether the tip
+has a full-gate OK record (the `gate` line, gate_line: printed only, the exit status unchanged;
+a landing refuses a tip without one), files changed
 with +/- grouped by the risk level in docs/ops/risk-map.md (unlisted = High), owner-only paths
 touched and whether an Owner-Approved trailer covers them, the branch's commits with no
 Co-Authored-By trailer (when configured, below), and the doc-budget verdict. `diff` set: only the
@@ -59,6 +61,7 @@ from kitlib.config import owner as ownermod
 from kitlib.git import cmd as gitcmd
 from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
+from kitlib.records import gate_ok
 from kitlib import verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.proc import spawn
@@ -395,7 +398,7 @@ def tips(root, base, branch, mb):
     --no-walk=unsorted` (the base tip is in the branch exactly when it is the merge-base `mb`). A
     failed or odd answer falls back to one read per rev, each through git_answer(): a read that
     fails or prints nothing stops the pack naming it, so no answer comes from a read that failed.
-    GOTCHA: TOOLS-REVIEWPACK-PERREV-FLAKE - a git ended from outside (a stale `taskkill /PID`
+    GOTCHA: a git ended from outside (a stale `taskkill /PID`
     that reached a reused pid, kitlib.proc.shield's GOTCHA) exits 1 having printed nothing, the
     same shape as `merge-base --is-ancestor`'s NO. The fallback asked that read, so a killed one
     printed a NO git never said; it now compares the base's full hash with `mb`, as the log does."""
@@ -413,9 +416,11 @@ def tips(root, base, branch, mb):
 
 
 def coauthor_section(root, base, branch, remote, rules):
-    """`(lines, failing count)`: the branch's commits with no Co-Authored-By trailer, each with
-    its trailers-rule verdict, then a WARNING per unproven owner claim. Stop when the range cannot
-    be read: an unread range must not read as "every commit trailered"."""
+    """`(lines, failing count)`: the branch's commits with no Co-Authored-By trailer or with an
+    Owner-Approval, each with its trailers-rule verdict and `owner approval hub:A-<n>` when it has
+    one (docs/commit.md "Owner approval"; shown, never an owner claim), then a WARNING per
+    unproven owner claim. Stop when the range cannot be read: an unread range must not read as
+    "every commit trailered"."""
     commits, err = trailers.branch_commits(base, root, head=branch, remote=remote,
                                            approved_key=rules.trailer)
     if commits is None:
@@ -426,9 +431,12 @@ def coauthor_section(root, base, branch, remote, rules):
     failing = sum(v in trailers.FAILED_VERDICTS for _, v in lacking)
     lines = ['co-author  %d commit(s) | %d without a Co-Authored-By trailer | %d failing'
              % (len(commits), len(lacking), failing)]
-    for c, v in lacking:
-        lines.append('  %-7s %-14s %s "%s"' % (c.hash[:7], trailers.label(c, v),
-                                               'merge' if c.merge else 'commit', c.subject[:60]))
+    for c, v in judged:
+        if v == trailers.TRAILERED and not c.approval:
+            continue
+        lines.append('  %-7s %-14s %s "%s"%s' % (
+            c.hash[:7], trailers.label(c, v), 'merge' if c.merge else 'commit', c.subject[:60],
+            ''.join(' | owner approval %s' % a for a in c.approval)))
     for c, _v in lacking:
         why = trailers.unproven_claim(c, rules)
         if why:
@@ -496,6 +504,19 @@ def pack(path, branch, base=None, diff=None):
         return Outcome(USAGE, lines)
 
 
+def gate_line(top, branch):
+    """The `gate` line: whether `branch`'s tip has the record a landing requires, a gate-OK
+    record of exactly that commit from a `gate.py --full` pass (gate_ok.verify_full; docs/gate.md
+    "Landing"). Printed only: it never changes the exit status."""
+    tip, why = gitrefs.resolve(branch, top)
+    if not tip:
+        return 'gate     tip of %s cannot be read (%s); landing will refuse' % (branch, why)
+    rec, why = gate_ok.verify_full(top, tip)
+    if rec is None:
+        return 'gate     tip %s: NO full-gate OK record (%s); landing will refuse' % (tip[:10], why)
+    return 'gate     tip %s: full gate OK, ended %s' % (tip[:10], rec.get('ended_utc'))
+
+
 def _pack(lines, path, branch, base, diff):
     top, why = gitrepo.toplevel(path)
     if top is None:
@@ -535,6 +556,7 @@ def _pack(lines, path, branch, base, diff):
                   '--').splitlines()
     lines.append('commits  %d (no merges)' % len(commits))
     lines.extend('           ' + c for c in commits[:40])
+    lines.append(gate_line(top, branch))
 
     levels = risk_rules(top)
     groups = {}

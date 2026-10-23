@@ -29,6 +29,7 @@ MODULE_RE = r'[A-Za-z_][A-Za-z0-9_]*'
 STAGES = ('first', 'main', 'last')
 
 Strs = ListOf(Str())
+BRANCH_TEMPLATE = Str(pattern=r'[^{}]*\{slug\}[^{}]*', what='a branch name holding {slug} once')
 Paths = ListOf(RelPath())
 Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
@@ -41,7 +42,8 @@ Regexes = Either(Regex(), ListOf(Regex()))
 OWNER_PATHS = list(dict.fromkeys(
     ['AGENTS.md'] + list(registry.union('owner_paths'))
     + ['docs/agent-profile.md', '.github/workflows/', '.kit.json', 'tools/gate.json',
-       'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']))
+       'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py',
+       'hosts/claude/managed-settings.json']))
 OWNER_PATHS_EXCEPT = [w + '/' for w in registry.union('worktrees_directory')]
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
@@ -94,20 +96,29 @@ STEP = Obj({
     'reuse': Field(Either(Bool(), Str(pattern=NAME_RE, what='a group name')), None, 'a branch gate rerun or a landing does not run the step again while the gate cache holds a pass of its key (its input files, command, gate config and kit files); a group name: its group is reused together or not at all'),
 }, required=('name',), what='step object')
 
+# gate.docs_only (kitlib.gate.steps.docs_only): which changes are docs, and the steps they run.
+DOCS_ONLY = Obj({
+    'globs': Field(ListOf(Str(), nonempty=True), None, 'every changed path matches one of these'),
+    'exclude': Field(Strs, None, 'and none matches one of these'),
+    'steps': Field(ListOf(Str(pattern=NAME_RE, what='a step name'), nonempty=True), None,
+                   'the steps a docs-only change runs (a scrub check, say)'),
+}, required=('globs', 'steps'), what='{globs, exclude, steps}')
+
+# daily_full.bisect (kitlib.dailyfull, docs/daily-full.md "Bisect").
+BISECT = Obj({
+    'max_probes': Field(Int(0, 50), 5, 'most commits one bisect runs the red steps at; 0: no bisect'),
+    'prefix': Field(Str(pattern=r'[A-Z][A-Z0-9-]*', what='a record id prefix'), None,
+                    'files <prefix>-DAILY-RED-<commit> for the culprit found; unset: nothing is filed'),
+    'session': Field(Str(pattern=r'[a-z][a-z0-9-]*', what='a session name'), None,
+                     'the session the filed record carries'),
+}, what='{max_probes, prefix, session}')
+
 # A folder outside git an agent session may write, and how (kitlib/guard/jail.py, docs/guard.md "Write jail").
 DATA_ROOT = Obj({
     'path': Field(Str(pattern=r'(?:[A-Za-z]:[\\/]|\\\\|//).+', what='an absolute folder path'), None, 'the folder, absolute'),
     'mode': Field(Enum('add-only', 'read-only', 'open'), None, 'add-only: new files only, never overwrite, move or delete; read-only: no write; open: any write'),
     'why': Field(Str(), None, 'the reason, a ruling or a measurement'),
 }, required=('path', 'mode'), what='{path, mode, why}')
-
-# A landing lane (gate.py land --lane).
-LANE = Obj({
-    'branch_prefix': Field(Strs, None, 'a branch landing on the lane starts with one of these'),
-    'paths': Field(Strs, None, 'every path the branch changes matches one of these globs'),
-    'why': Field(Str(), None, 'the ruling that made the lane'),
-    'merged_args': Field(Strs, None, 'arguments added to every step command of a landing on this lane, after the step merged_args'),
-}, what='{branch_prefix, paths, why, merged_args}')
 
 # A red-first runner (tools/redfirst.py, kitlib/redfirst/verdict.py): the first whose glob matches.
 RUNNER = Obj({
@@ -173,6 +184,7 @@ SECTIONS = {
         'kind': Field(Str(pattern=NAME_RE, what='a kind name'), 'daily-full', 'the kinds-table kind the run books'),
         'max_wait': Field(Int(0), 7200, 'seconds it waits for its lock slot before it skips'),
         'stale_hours': Field(Int(1), 36, 'hours after which --summary calls the last result stale'),
+        'bisect': Field(BISECT, None, 'after a red run, bisect the first-parent commits since the last green run for the commit that turned the red steps red (docs/daily-full.md "Bisect"); unset: no bisect'),
     },
     'doc_budget': {
         'default': Field(Int(0), None, 'byte cap for a capped doc with no budget'),
@@ -211,16 +223,16 @@ SECTIONS = {
                             required=('match',), what='{match, excuse, expect}'),
                         None, 'error-line policy'),
         'kind': Field(Str(pattern=NAME_RE, what='a kind name'), 'engine-test', 'the kinds-table kind a gate run books (gate.py and gate.py land)'),
+        'smoke_steps': Field(ListOf(Str(pattern=NAME_RE, what='a step name')), None, 'steps a default (not --full) branch gate runs whatever changed; a landing takes such a gate\'s record for a tip once these steps passed in it (docs/gate.md "Landing"); unset: a landing needs a --full record'),
+        'docs_only': Field(DOCS_ONLY, None, 'a change whose every path is docs: the branch gate runs only its steps, and a landing takes that record (docs/gate.md "Docs-only changes"); unset: no change is docs-only'),
     },
     'guard': {
         'data_roots': Field(ListOf(DATA_ROOT), [], 'folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")'),
         'role_policy': Field(Bool(), False, 'hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only'),
     },
     'landing': {
-        'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
         'log_dir': Field(RelPath(), None, 'where gate logs live'),
-        'lanes': Field(MapOf(LANE, 'lane'), {}, 'lanes besides full that gate.py land --lane takes'),
-        'wait_s': Field(Int(0, 86400), 3600, 'seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise'),
+        'wait_s': Field(Int(0, 86400), 21600, 'seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise'),
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
         'reuse_never': Field(Strs, [], 'globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache'),
@@ -307,7 +319,7 @@ SECTIONS = {
         'build_output': Field(ListOf(Either(Str(), Obj({'piece': Field(Str(), None, 'piece id'), 'path': Field(Str(), None, 'folder in the piece')}, required=('piece', 'path'), what='{piece, path}'))), [], 'build output path globs, or {piece, path} folders resolved through the pieces table'),
         'keepers': Field(Strs, [], 'file globs that refuse a removal, added to the kit list'),
         'archive_next_free': Field(Bool(), False, 'archive under the next free name'),
-        'branch_template': Field(Str(pattern=r'[^{}]*\{slug\}[^{}]*', what='a branch name holding {slug} once'), None, 'branch name for a slug'),
+        'branch_template': Field(Either(BRANCH_TEMPLATE, ListOf(BRANCH_TEMPLATE, nonempty=True)), None, 'branch name for a slug, or a list of them (a worktree on any one is removable)'),
     },
 }
 
@@ -322,7 +334,7 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
 # dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
-RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo')}
+RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo'), 'landing': ('lanes', 'lock_file')}
 # Whole sections no tool reads any more. A config that still carries one loads: the section is
 # dropped unchecked, whatever it holds. Any other unknown section still refuses.
 RETIRED_SECTIONS = ('ruling_cites',)

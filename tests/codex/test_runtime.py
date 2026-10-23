@@ -3,6 +3,7 @@ import io
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -28,13 +29,13 @@ class Bindings(unittest.TestCase):
     def registry(self, request):
         return RoleBindings(request, classify=lambda _: SimpleNamespace(kind=repo.LINKED))
 
-    def test_child_reviewer_uses_native_role_and_resolved_read_only_permissions(self):
-        child = snapshot('kit-reviewer', True, 'readOnly')
+    def test_child_analyst_uses_native_role_and_resolved_read_only_permissions(self):
+        child = snapshot('kit-analyst', True, 'readOnly')
         request = mock.Mock(side_effect=[{'thread': child['thread']}, child])
         registry = self.registry(request)
         registry.add_root(snapshot(), 'worker')
         bound = registry.resolve('child')
-        self.assertEqual(bound.role, 'reviewer')
+        self.assertEqual(bound.role, 'analyst')
         self.assertEqual(json.loads(bound.policy_json)['type'], 'readOnly')
         self.assertEqual(request.call_args_list[1].args, ('thread/resume', {'threadId': 'child'}))
 
@@ -48,7 +49,7 @@ class Bindings(unittest.TestCase):
     def test_forged_parent_role_session_or_checkout_fails_before_resume(self):
         for key, value in (('parentThreadId', 'other'), ('agentRole', 'kit-pm'),
                            ('sessionId', 'other'), ('cwd', str(Path(ROOT).parent))):
-            child = snapshot('kit-reviewer', True, 'readOnly')
+            child = snapshot('kit-analyst', True, 'readOnly')
             child['thread'][key] = value
             request = mock.Mock(return_value={'thread': child['thread']})
             registry = self.registry(request)
@@ -78,7 +79,7 @@ class Bindings(unittest.TestCase):
 
     def test_read_role_cannot_use_a_writable_native_profile(self):
         with self.assertRaises(ValueError):
-            self.registry(mock.Mock()).add_root(snapshot(), 'reviewer')
+            self.registry(mock.Mock()).add_root(snapshot(), 'analyst')
 
     @unittest.skipUnless(os.name == 'nt', 'Windows paths')
     def test_native_workspace_path_case_is_normalized(self):
@@ -339,10 +340,31 @@ class BoundGuard(unittest.TestCase):
 
     def test_bound_guard_ignores_the_inherited_role(self):
         self.assertIsNone(self.judge('worker', 'a.py'))
-        self.assertIn('rule=host-role-edit', self.judge('reviewer', 'a.py'))
+        self.assertIn('rule=host-role-edit', self.judge('analyst', 'a.py'))
+
+    def test_a_broker_deny_is_logged_and_an_allow_is_not(self):
+        # kitlib.guard.refusal_log (docs/guard-v2.md "Refusal log"): one line per deny, in the
+        # pm_data the machine config names, with the bound role and never the patch's text
+        from tests.gitfixture import rmtree
+        from tests.home import machine_config, temp_home
+        from hosts.codex.adapter.runtime import evaluate_bound
+        home = temp_home(self)
+        data = tempfile.mkdtemp(prefix='kit-pmdata-')
+        self.addCleanup(rmtree, data)
+        machine_config(home, {'pm_data': {'path': data}})
+        self.assertIsNone(self.judge('worker', 'a.py'))
+        self.assertIn('rule=host-role-edit', self.judge('analyst', 'secret-name.py', child=True))
+        binding = SimpleNamespace(role='worker', cwd=self.w.wt, parent=None, thread='t')
+        self.assertIn('rule=host-runtime-error', json.dumps(evaluate_bound({'cwd': 7}, binding)))
+        with open(os.path.join(data, 'audit', 'refusals.jsonl'), encoding='utf-8') as fh:
+            rows = [json.loads(line) for line in fh]
+        self.assertEqual([(r['host'], r['rule'], r['role'], r['agent_role'], r['agent']) for r in rows],
+                         [('codex', 'host-role-edit', 'subagent', 'analyst', 't'),
+                          ('codex', 'host-runtime-error', 'subagent', '-', '-')])
+        self.assertNotIn('secret-name', json.dumps(rows))
 
     def test_reader_lander_and_test_roles_cannot_patch_files(self):
-        for role in ('reviewer', 'lander', 'test-runner'):
+        for role in ('analyst', 'lander', 'test-runner'):
             with self.subTest(role=role):
                 self.assertIn('rule=host-role-edit', self.judge(role, 'worker.py'))
 
@@ -356,6 +378,19 @@ class BoundGuard(unittest.TestCase):
         for child in (False, True):
             with self.subTest(child=child):
                 self.assertIn('rule=main-checkout', self.judge('worker', target, child=child))
+
+    def backlog(self, role, args, child=False):
+        return self.run_bound(role, {'tool_name': 'PowerShell', 'tool_input': {
+            'command': 'python tools/backlog.py ' + args}}, child)
+
+    def test_a_bound_root_meets_the_backlog_tools_own_check(self):
+        """A root binding is a marked session, judged as an agent of its mark (hookmain.UNIDENTIFIED):
+        the backlog's role check is the tool's own, run under the bound mark, so a coordinator root
+        may claim its item. A child bound to a session-only role is unlisted, as on Claude."""
+        pull = '--session s --as kit/x pull X-1'
+        self.assertIsNone(self.backlog('coordinator', pull))
+        self.assertIn('rule=backlog-role', self.backlog('coordinator', pull, child=True) or '')
+        self.assertIn('rule=backlog-role', self.backlog('worker', 'close X-1', child=True) or '')
 
     def test_bound_guard_role_policy_checks_run_with_the_policy_off(self):
         self.assertIn('rule=role-shell', self.shell('worker', 'powershell.exe'))
@@ -392,7 +427,7 @@ class BoundGuard(unittest.TestCase):
                  'status': lambda role: self.shell(role, 'git status')}
         for shape in self.BROKEN:
             self.break_kit_json(shape)
-            for role in ('reviewer', 'test-runner', 'worker', 'coordinator'):
+            for role in ('analyst', 'test-runner', 'worker', 'coordinator'):
                 for name, call in calls.items():
                     with self.subTest(shape=shape, role=role, call=name):
                         reason = call(role) or ''
@@ -414,7 +449,7 @@ class BoundGuard(unittest.TestCase):
 
     def test_a_sandboxed_command_carries_the_bound_role_and_host(self):
         from hosts.codex.adapter.runtime import command_env
-        env = command_env('reviewer')
-        self.assertEqual((env['PM_KIT_ROLE'], env['PM_KIT_HOST'], env['PM_KIT_SESSION_NAME']), ('reviewer', 'codex', None))
+        env = command_env('analyst')
+        self.assertEqual((env['PM_KIT_ROLE'], env['PM_KIT_HOST'], env['PM_KIT_SESSION_NAME']), ('analyst', 'codex', None))
         self.assertIn('CLAUDE_AGENT_MODEL', env, 'another host\'s model variable is cleared')
         self.assertIsNone(env['CLAUDE_AGENT_MODEL'])

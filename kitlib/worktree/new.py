@@ -46,6 +46,11 @@ starting with a capital). A slug that differs only in case from a folder already
 folder, or a branch that differs only in case from a local branch, is refused. Branch existence
 is an exact-spelling match.
 
+A base commit (`base` a full commit hash, or `approval` hub:A-<n>, whose `head` approval_base
+reads from the hub as kitlib.commit.approval does): a NEW branch starts at that commit, after the
+fetch, when the repository has it. No landing wait, lock or remote comparison applies: the start
+point is fixed. Made for commit.py --owner-approval, which needs HEAD to be the approval's base.
+
 Exit codes: OK 0; REFUSED 1 (nothing made, the lines say why); CONFIG 2 (the kit configuration
 was refused).
 """
@@ -184,6 +189,36 @@ def branch_name(base, remote):
     return base
 
 
+def base_commit(base):
+    """`base` as a full commit hash (lowercased), or None when it is no full hash (a branch)."""
+    low = base.lower() if isinstance(base, str) else None
+    return low if gitrefs.is_sha(low) else None
+
+
+def approval_base(value, client=None):
+    """`(base commit, None)` of the owner approval `value` (hub:A-<n>), or `(None, why)`. The hub
+    is asked as commit.py asks it (kitlib.commit.approval: doc_id, hub_client, fetch,
+    state_error), so a consumed or undecided approval is refused here as there; `client` None is
+    the machine's hub."""
+    from kitlib.commit import approval as ap
+    did = ap.doc_id(value)
+    if did is None:
+        return None, '--approval takes %s, as %s (not %r)' % (ap.VALUE, ap.oc.EXAMPLE, value)
+    client, why = ap.hub_client(client)
+    if client is None:
+        return None, why
+    doc, why = ap.fetch(client, did)
+    if doc is None:
+        return None, why
+    why = ap.state_error(did, doc)
+    if why:
+        return None, why
+    sha = base_commit(doc['head'])
+    if sha is None:
+        return None, 'hub:%s names no full base commit (%r)' % (did, doc['head'])
+    return sha, None
+
+
 def main_checkout_of(common):
     """`<main>/.git` (git's `--git-common-dir`) -> `<main>` in its one real spelling: abspath for
     one kind of separator, realpath so a checkout reached through a junction registers every new
@@ -192,8 +227,10 @@ def main_checkout_of(common):
 
 
 def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=time.sleep,
-           clock=time.monotonic, host=None, prep=None):
+           clock=time.monotonic, host=None, prep=None, approval=None, hub=None):
     """Outcome(code, lines) of making the worktree for `branch` in the repository `root` is in.
+    `base` a full commit hash, or `approval` (hub:A-<n>; `hub` the client, None the machine's),
+    starts a new branch at that commit (module docstring, "A base commit").
     `wait` False is --no-wait; `say(line)` gets the lines said while waiting for a landing in
     flight (None: they lead the Outcome's lines); `sleep` and `clock` are time's, for tests.
     `host` is a hosts.json name whose folder the worktree goes in (kitlib.worktree.hostdirs); None
@@ -206,12 +243,15 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     main = main_checkout_of(common)
     try:
         cfg = load(main)
-        lanes = tuple(cfg.section('landing').get('lanes') or ())
-        lock = landing.LandingLock.for_config(main, cfg, lanes=lanes)
+        lock = landing.LandingLock.for_config(main, cfg)
         reader = inflight.reader(main, cfg, lock)
     except (ConfigError, landing.LockError) as e:
         return Outcome(CONFIG, ['new_worktree: refused: kit configuration: %s' % e])
     remote = cfg.remote
+    commit = base_commit(base)
+    if (commit or approval is not None) and (existing or (approval is not None and base)):
+        return Outcome(REFUSED, ['refused   a base commit or --approval starts a NEW branch, '
+                                 'and --approval takes no --base; nothing was created.'])
     base = branch_name(base, remote) if base else cfg.main_branch
     # The kit's own tools, named in the hints below: a repository holds no copy of them.
     check = kitroot.command('worktree_remove', main) + ' --check'
@@ -263,6 +303,13 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
         return refuse('branch exists already: %s @ %s. To resume it: --existing. To start a new '
                       'branch, pick a name that is free.'
                       % (branch, git(main, 'rev-parse', 'refs/heads/' + branch)[1][:7]))
+    if approval is not None:
+        commit, why = approval_base(approval, hub)
+        if commit is None:
+            return refuse('refused   %s; nothing was created.' % why)
+        out.append('approval  %s is for base %s; this branch starts there' % (approval, commit[:12]))
+    if commit is not None:
+        return _at_commit(main, cfg, path, branch, commit, out, prep)
     began = clock()                           # wait_s counts from here, the looks included
     if reader is not None:                    # before the fetch: a landing that pushes is fetched
         out.extend(inflight.settle(reader, wait, say, sleep, clock, start=began)[1])
@@ -274,7 +321,7 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     def refs():
         """(m, om): each a commit, or '' when the ref names none; _Unread when git gives no answer.
 
-        GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet`, whose "no such
+        GOTCHA: this asked `rev-parse --verify --quiet`, whose "no such
         ref" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill read as
         "did not resolve". resolve(known=True) tells the two apart; a str or a raise, never None,
         so `m[:7]` below always has a string."""
@@ -323,15 +370,9 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
             out.append("unpushed  %s's commit(s) %s, not counted below" % (base, shas))
 
     add = (path, branch) if existing else (path, '-b', branch, start)
-    rc, said, err = git(main, 'worktree', 'add', *add, timeout=FETCH_TIMEOUT)
-    if rc != 0:
-        return refuse('worktree add failed: %s' % (err or said or 'exit %s' % rc))
-    out.append('worktree  %s' % path)
-    try:
-        folders = hostdirs.folders(cfg)
-    except RegistryError:
-        folders = (cfg.repo['worktrees_dir'],)
-    out.extend('prep      %s' % line for line in (prep or gitprep.run)(main, folders))
+    why = _add(main, cfg, path, add, out, prep)
+    if why:
+        return refuse(why)
     if existing:
         tip = git(main, 'rev-parse', 'refs/heads/' + branch)[1]
         missing = git(main, 'rev-list', '--count', '%s..%s' % (tip, start))[1]
@@ -344,7 +385,46 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
                       'a landing is in progress' if held else 'it is behind'))
     else:
         out.append('branch    %s from %s @ %s' % (branch, base, m[:7]))
+    return _made(path, out)
+
+
+def _add(main, cfg, path, add, out, prep):
+    """`git worktree add <add>`, then the first-use prep, their lines appended to `out`; the
+    refusal line when the add failed, else None."""
+    rc, said, err = git(main, 'worktree', 'add', *add, timeout=FETCH_TIMEOUT)
+    if rc != 0:
+        return 'worktree add failed: %s' % (err or said or 'exit %s' % rc)
+    out.append('worktree  %s' % path)
+    try:
+        folders = hostdirs.folders(cfg)
+    except RegistryError:
+        folders = (cfg.repo['worktrees_dir'],)
+    out.extend('prep      %s' % line for line in (prep or gitprep.run)(main, folders))
+    return None
+
+
+def _made(path, out):
     out.append('rules     absolute paths and `git -C "%s"`; do not cd into it in Bash; commit by '
                'explicit path; you do not land' % path)
     out.append('next      %s' % kitroot.command('preflight', path))
     return Outcome(OK, out)
+
+
+def _at_commit(main, cfg, path, branch, commit, out, prep):
+    """A new branch at the full hash `commit`: fetch, then refuse unless the repository has that
+    commit; no landing wait, lock or remote comparison (the start point is fixed)."""
+    rc, _, err = git(main, 'fetch', cfg.remote, timeout=FETCH_TIMEOUT)
+    if rc != 0:
+        return Outcome(REFUSED, out + ['fetch failed: %s' % (err or 'exit %s' % rc)])
+    sha, why = gitrefs.resolve(commit, main, known=True)
+    if sha is None:
+        return Outcome(REFUSED, out + ['refused   %s could not be read (%s); nothing was created. '
+                                       '%s' % (commit[:12], why, REFUSAL)])
+    if not sha:
+        return Outcome(REFUSED, out + ['refused   no commit %s in this repository, after fetching '
+                                       '%s; nothing was created.' % (commit, cfg.remote)])
+    why = _add(main, cfg, path, (path, '-b', branch, sha), out, prep)
+    if why:
+        return Outcome(REFUSED, out + [why])
+    out.append('branch    %s from commit %s' % (branch, sha[:12]))
+    return _made(path, out)

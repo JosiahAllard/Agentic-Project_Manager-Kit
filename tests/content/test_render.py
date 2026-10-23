@@ -136,16 +136,15 @@ class ManifestTest(unittest.TestCase):
         """The owner's table (docs/guard.md "Role policy"): leads control, builders write, the
         read-only roles read, the test-runner tests, the lander lands. role_modes reads the same."""
         want = {'pm': 'controller', 'coordinator': 'controller',
-                'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
-                'asset-smith': 'write', 'sound-smith': 'write', 'tech-artist': 'write', 'spec-writer': 'write',
-                'records': 'write', 'reviewer': 'read', 'researcher': 'read', 'consultant': 'read',
-                'test-runner': 'test', 'lander': 'lander'}
+                'weak-worker': 'write', 'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
+                'docs-writer': 'write', 'analyst': 'read', 'consultant': 'read',
+                'test-runner': 'test', 'lander': 'lander', 'helper': 'write'}
         self.assertEqual({r.name: r.mode for r in content.load(KIT_ROOT).roles}, want)
         self.assertEqual(content.role_modes(KIT_ROOT), want)
         self.assertEqual(content.role_mode('opus-worker', KIT_ROOT), 'write')
-        self.assertEqual({r.name: r.writes for r in content.load(KIT_ROOT).roles if r.writes},
-                         {'consultant': ('docs/ops/consultant-notes.local.md',)})
-        self.assertEqual(content.role_writes('consultant', KIT_ROOT), ('docs/ops/consultant-notes.local.md',))
+        # the consultant's notes file is in agent temp now, so no role file names a `writes` path
+        self.assertEqual({r.name: r.writes for r in content.load(KIT_ROOT).roles if r.writes}, {})
+        self.assertEqual(content.role_writes('consultant', KIT_ROOT), ())
         for r in content.load(KIT_ROOT).roles:
             with self.subTest(r.name):
                 agent = read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents', r.name + '.md'))
@@ -367,7 +366,7 @@ class TempTreeTest(unittest.TestCase):
         write(role, read(role).replace(b'effort: medium', b'effort: high', 1))
         self.assertEqual(content.drift(self.root, self.rs), ['differs: hosts/claude/shell/agents/worker.md'])
         content.write(self.root, self.rs)
-        self.assertIn(b'\neffort: high\r\n', read(self.path('hosts', 'claude', 'shell', 'agents', 'worker.md')))
+        self.assertIn(b'\neffort: high\n', read(self.path('hosts', 'claude', 'shell', 'agents', 'worker.md')))
 
     def test_a_kit_version_change_reaches_every_manifest(self):
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
@@ -375,6 +374,36 @@ class TempTreeTest(unittest.TestCase):
                          ['differs: .claude-plugin/marketplace.json', 'differs: .claude-plugin/plugin.json'])
         content.write(self.root, self.rs)
         self.assertEqual(json.loads(read(self.path('.claude-plugin', 'plugin.json')))['version'], '9.8.7')
+
+    def test_an_installed_plugin_export_is_never_written(self):
+        # --write run from an installed export once rewrote its plugin.json
+        from kitlib import pluginsource
+        self.assertEqual(content.EXPORT_MARKER, pluginsource.MARKER)
+        write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
+        write(self.path('.pm-kit-export'), b'Z:/somewhere\n')
+        before = read(self.path('.claude-plugin', 'plugin.json'))
+        with self.assertRaises(hc.ContentError):
+            content.write(self.root, self.rs)
+        out = io.StringIO()
+        self.assertEqual(cli.main(['--write', '-C', self.root], out), 2)
+        self.assertEqual(len(out.getvalue().splitlines()), 1)
+        self.assertIn('-C <checkout>', out.getvalue())
+        self.assertEqual(read(self.path('.claude-plugin', 'plugin.json')), before)
+        self.assertEqual(cli.main(['--check', '-C', self.root], io.StringIO()), 1)   # --check still reads it
+
+    def test_a_folder_inside_an_installed_plugin_export_is_never_written(self):
+        write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
+        export = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, export, True)
+        write(os.path.join(export, '.pm-kit-export'), b'Z:/somewhere\n')
+        sub = os.path.join(export, 'nested', 'kit')               # a renderable tree two folders down
+        shutil.copytree(self.root, sub)
+        manifest = os.path.join(sub, '.claude-plugin', 'plugin.json')
+        before = read(manifest)
+        with self.assertRaises(hc.ContentError):
+            content.write(sub, self.rs)
+        self.assertEqual(cli.main(['--write', '-C', sub], io.StringIO()), 2)
+        self.assertEqual(read(manifest), before)
 
     def test_a_bad_kit_json_is_usage(self):
         write(self.path('kit.json'), b'{"version": "1"}\n')

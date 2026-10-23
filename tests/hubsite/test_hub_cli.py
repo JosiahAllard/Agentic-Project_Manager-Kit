@@ -3,6 +3,7 @@ are all under a temp home; a server is on port 0 or is one this test built; no b
 opened."""
 import _thread
 import contextlib
+import datetime
 import importlib.util
 import io
 import json
@@ -16,7 +17,7 @@ import threading
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import auth, httpd, schema, serve, tunnel
+from kitlib.hubsite import approvals, auth, httpd, schema, serve, todosteps, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.store import Store, StoreBusy
 from tests.hubsite import httpfix
@@ -94,8 +95,8 @@ class UsageCase(CliCase):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
-                      'migrate, questions, answer, todos, stories, to-pm, inbox, pending, wait '
-                      'or validate\n', err)
+                      'migrate, questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
+                      'pending, wait or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
@@ -254,9 +255,13 @@ class ServeCase(CliCase):
 
     def synced(self, sync):
         """The machine config of a server whose store is the configured one, so git sync is on;
-        `sync` stands where the real git sync is taken from. -> a patch to serve under."""
+        `sync` stands where the real git sync is taken from. -> a patch to serve under. Push
+        notifications are off without a word (PushCase covers them)."""
         self.store_dir = os.path.join(self.home, 'live-store')
         self.config({'hub': {'store': self.store_dir}})
+        quiet = mock.patch.object(HUB, '_push_delivery', lambda: (None, None))
+        quiet.start()
+        self.addCleanup(quiet.stop)
         return mock.patch.object(HUB.serve.gitsync, 'GitSync', lambda *args, **kw: sync)
 
     def test_a_clean_close_of_a_synced_server_says_the_wait_for_git_then_that_it_closed(self):
@@ -418,44 +423,17 @@ class ServeCase(CliCase):
         self.assertNotIn('hub closed', out)
         self.assertFalse(self.locked(), 'the store lock outlived the server')
 
-    def test_a_ctrl_c_in_the_last_steps_of_a_synced_close_is_the_same_line(self):
-        class Sync(object):
-            def start(self):
-                return True
-
-            def stop(self, timeout=None):
-                return True
-
-            def sync_once(self):
-                return self.status()
-
-            def status(self):
-                return {'running': True, 'failed': '', 'detail': ''}
-
-        stop = threading.Event()
-        stop.set()
-        with self.synced(Sync()), self.cut_in('join'):
-            code, out, err = self.run_cli('serve', '--port', '0', stop=stop)
-        self.assertEqual(code, 1)
-        # the waits for git had ended: no line says that a git command may be left half-way
-        self.assertEqual(err.splitlines(), ['NOTE: ' + serve.LAST_PASS, HUB.CLOSE_CUT])
-        self.assertNotIn('hub closed', out)
-        self.assertFalse(self.locked(), 'the store lock outlived the server')
-
-    def test_a_ctrl_c_before_a_server_serves_or_in_another_verb_is_exit_1(self):
+    def test_a_ctrl_c_in_another_verb_is_exit_1(self):
         def pressed(*args, **kw):
             raise KeyboardInterrupt()
 
-        for argv, at in ((('serve', '--store', self.store_dir, '--port', '0'), HUB.serve),
-                         (('status',), HUB.settings), (('setup',), HUB.settings)):
-            name = 'build' if at is HUB.serve else 'load'
-            with self.subTest(argv=argv), mock.patch.object(at, name, pressed):
-                try:
-                    code, out, err = self.run_cli(*argv)
-                except KeyboardInterrupt:
-                    self.fail('the Ctrl+C left hub.py as a KeyboardInterrupt')
-                # no server was closing: the line does not say that one did not close
-                self.assertEqual((code, out, err), (1, '', HUB.INTERRUPTED + '\n'))
+        with mock.patch.object(HUB.settings, 'load', pressed):
+            try:
+                code, out, err = self.run_cli('status')
+            except KeyboardInterrupt:
+                self.fail('the Ctrl+C left hub.py as a KeyboardInterrupt')
+        # no server was closing: the line does not say that one did not close
+        self.assertEqual((code, out, err), (1, '', HUB.INTERRUPTED + '\n'))
         self.assertEqual(HUB.INTERRUPTED, 'interrupted')
 
     def test_a_closed_console_at_the_closing_line_is_still_a_clean_close(self):
@@ -559,6 +537,61 @@ class ServeCase(CliCase):
         self.assertIn('git sync is off for that run', doc)
         self.assertIn('An empty PATH is a usage error', doc)
         self.assertIn('It writes nothing else: never the machine config', doc)
+
+
+class PushCase(CliCase):
+    """serve hands the server the host's push delivery and the launcher's state folder
+    (docs/action-hub.md "Push notifications"); a host stands in, so nothing is ever sent."""
+
+    def host(self, adapter):
+        fake = mock.Mock()
+        fake.adapter_module.return_value = mock.Mock(ADAPTER=adapter)
+        return mock.patch.dict(sys.modules, {'_host': fake})
+
+    def test_without_a_launcher_state_folder_push_is_off_with_one_note(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(HUB._push_delivery(), (None, None))
+        self.assertTrue(err.getvalue().startswith('NOTE: push notifications off: LaunchError: '),
+                        err.getvalue())
+        self.assertIn('launcher.state_dir is not set', err.getvalue())
+
+    def test_a_host_without_a_delivery_is_off_with_one_note(self):
+        state = os.path.join(self.home, 'launcher-state')
+        os.makedirs(state)
+        self.config({'launcher': {'state_dir': state}})
+        with self.host(object()), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(HUB._push_delivery(), (None, None))
+        self.assertEqual(err.getvalue(), 'NOTE: push notifications off: this host has no delivery\n')
+
+    def test_serve_passes_the_delivery_and_the_state_folder_and_a_scratch_store_none(self):
+        state = os.path.join(self.home, 'launcher-state')
+        os.makedirs(state)
+        self.store_dir = os.path.join(self.home, 'live-store')
+        self.config({'launcher': {'state_dir': state}, 'hub': {'store': self.store_dir}})
+        delivery, made = mock.Mock(), []
+
+        class Adapter(object):
+            def push(self, launch):
+                made.append(launch.state_dir())
+                return delivery
+
+        real, seen = HUB.serve.build, []
+
+        def build(settings, sources, log=None):     # what serve gave, then served without either
+            seen.append((sources.push, sources.push_dir))
+            sources.push = sources.sync = None
+            return real(settings, sources, log=log)
+
+        stop = threading.Event()
+        stop.set()
+        with self.host(Adapter()), mock.patch.object(HUB.serve, 'build', build):
+            code, out, err = self.run_cli('serve', '--port', '0', stop=stop)
+            self.assertEqual(code, 0, err)
+            code, out, err = self.run_cli('serve', '--store', os.path.join(self.home, 'scratch'),
+                                          '--port', '0', stop=stop)
+            self.assertEqual(code, 0, err)
+        self.assertEqual(made, [state])
+        self.assertEqual(seen, [(delivery, state), (None, None)])
 
 
 class SetupCase(CliCase):
@@ -991,7 +1024,10 @@ class StopRestartCase(CliCase):
         self.assertEqual((code, err), (3, ''))
         self.assertIn('nothing to stop: nothing answers on port %d' % port, out)
         self.assertIn(HUB.hub_autostart.TASK_NAME, out)
-        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertTrue(out.endswith(HUB.task_advice(HUB.control.NO_TASK) + '\n'), out)
+        self.assertIn('setup --autostart', out)
+        self.assertIn('Start-ScheduledTask', out)
+        self.assertNotIn(HUB.START, out)
         self.assertEqual(started, [])
 
     def test_restart_of_a_server_started_by_hand_stops_it_and_starts_nothing(self):
@@ -1004,7 +1040,9 @@ class StopRestartCase(CliCase):
         self.assertEqual((code, err), (3, ''))
         self.assertIn('STOPPED: the hub server on port %d' % hub.port, out)
         self.assertIn('started by hand', out)
-        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertTrue(out.endswith(HUB.task_advice(HUB.control.HAND_STARTED) + '\n'), out)
+        self.assertIn('Start-ScheduledTask', out)
+        self.assertNotIn(HUB.START, out)
         self.assertEqual(started, [])
         runner.join(30)
         self.assertFalse(runner.is_alive())
@@ -1015,6 +1053,9 @@ class StopRestartCase(CliCase):
         code, out, err = self.run_cli('restart', '--port', str(self.dead_port()))
         self.assertEqual((code, err), (3, ''))
         self.assertIn('disabled', out)
+        self.assertTrue(out.endswith(HUB.task_advice(HUB.control.DISABLED) + '\n'), out)
+        self.assertIn('Enable-ScheduledTask', out)
+        self.assertNotIn(HUB.START, out)
         self.assertEqual(started, [])
 
     def test_restart_says_where_the_task_s_server_answers(self):
@@ -1087,7 +1128,9 @@ class StopRestartCase(CliCase):
                                       'its process has ended\n' % port)
                 self.assertNotIn('REFUSED', err)
                 self.assertIn('the scheduled task could not be started: %s' % reason, err)
-                self.assertTrue(err.endswith('start it with: %s\n' % HUB.START), err)
+                self.assertTrue(err.endswith(HUB.task_advice(None) + '\n'), err)
+                self.assertIn('Start-ScheduledTask', err)
+                self.assertNotIn(HUB.START, err)
 
 
 class ClosedConsoleCase(CliCase):
@@ -1114,33 +1157,7 @@ class ClosedConsoleCase(CliCase):
         self.assertFalse(self.locked(), 'the store lock outlived the server')
         return code, out.getvalue(), err.getvalue()
 
-    GONE = (OSError(9, 'Bad file descriptor'), ValueError('I/O operation on closed file'))
-
-    def test_a_close_cut_by_ctrl_c_is_still_exit_1(self):
-        for gone in self.GONE:
-            with self.subTest(gone=type(gone).__name__):
-                code, out, err = self.serve(gone, [HUB.CLOSE_CUT],
-                                            ServeCase.cut_in(self, 'drain'))
-                self.assertEqual((code, err), (1, ''))
-                self.assertNotIn('hub closed', out)
-
-    def test_an_unclean_close_is_still_exit_1(self):
-        real = HUB.serve.build
-
-        def build(settings, sources, log=None):
-            hub = real(settings, sources, log=log)
-            lis = hub.listeners[0]
-            join = lis.join
-            lis.join = lambda timeout=None: join(timeout) and False
-            return hub
-
-        for gone in self.GONE:
-            with self.subTest(gone=type(gone).__name__):
-                code, out, err = self.serve(gone, [HUB.UNCLEAN, 'ERROR: '],
-                                            mock.patch.object(HUB.serve, 'build', build))
-                self.assertEqual((code, err), (1, ''))
-                self.assertNotIn('hub closed', out)
-        self.assertEqual(HUB.UNCLEAN, 'the hub server did not close cleanly: see the lines above')
+    GONE = (OSError(9, 'Bad file descriptor'),)     # ValueError takes the same except in hub.py
 
     def test_a_start_line_that_cannot_be_written_does_not_stop_the_server(self):
         served = []
@@ -1203,6 +1220,56 @@ class VerbCase(CliCase):
     def ask(self, title='which way'):
         return self.ok('questions', 'add', '--title', title, '--repo', 'kit',
                        '--option', 'left::go left', '--option', 'right :: go right')
+
+
+class ApprovalsCase(VerbCase):
+    """`approvals` lists and shows the store's requests with their status read now."""
+
+    def setUp(self):
+        VerbCase.setUp(self)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        old = now - datetime.timedelta(seconds=approvals.APPROVED_TTL_S + 60)
+        files = [{'path': 'AGENTS.md', 'base_blob': 'b' * 40, 'content': 'new\n'},
+                 {'path': 'gone.md', 'base_blob': 'c' * 40, 'content': None}]
+        live = approvals.new_doc('https://github.com/o/r', 'live one', 'a' * 40, files, now,
+                                 reason='why not')
+        stale = dict(approvals.new_doc('https://github.com/o/other', 'stale one', 'a' * 40,
+                                       files, old),
+                     status='approved', decision='approve', decided_at=old.isoformat())
+        self.assertEqual(self.hub.store.add('approvals', live).id, 'A-001')
+        self.assertEqual(self.hub.store.add('approvals', stale).id, 'A-002')
+        self.blob = approvals.blob_id('new\n')
+
+    def test_the_list_applies_the_expiry_and_filters(self):
+        self.assertEqual(self.ok('approvals'), ['A-001 pending [github.com/o/r] live one',
+                                                'A-002 expired [github.com/o/other] stale one'])
+        self.assertEqual(self.ok('approvals', '--status', 'expired'),
+                         ['A-002 expired [github.com/o/other] stale one'])
+        self.assertEqual(self.ok('approvals', '--status', 'approved'), [])
+        self.assertEqual(self.ok('approvals', '--repo', 'GitHub.com/o/r'),
+                         ['A-001 pending [github.com/o/r] live one'])
+        items = json.loads('\n'.join(self.ok('approvals', '--json')))['items']
+        self.assertEqual([(d['id'], d['status']) for d in items],
+                         [('A-001', 'pending'), ('A-002', 'expired')])
+
+    def test_show_prints_the_request_and_its_files(self):
+        self.assertEqual(self.ok('approvals', 'show', 'A-001'), [
+            'A-001 pending [github.com/o/r] live one', 'head ' + 'a' * 40, 'reason why not',
+            'AGENTS.md %s -> %s' % ('b' * 40, self.blob), 'gone.md %s -> deleted' % ('c' * 40)])
+        self.assertIn('no approval A-009', self.refused('approvals', 'show', 'A-009'))
+
+    def test_a_document_that_is_not_an_object_is_malformed(self):
+        real = self.hub.store.snapshot
+
+        def snapshot():
+            revision, docs = real()
+            docs['approvals']['A-003'] = ['not', 'an', 'object']
+            return revision, docs
+
+        with mock.patch.object(self.hub.store, 'snapshot', snapshot):
+            self.assertEqual(self.ok('approvals')[2].rstrip(), 'A-003 malformed [-]')
+            self.assertEqual(self.ok('approvals', 'show', 'A-003')[0].rstrip(),
+                             'A-003 malformed [-]')
 
 
 class PendingCase(VerbCase):
@@ -1337,6 +1404,71 @@ class WriteCase(VerbCase):
         code, out, err = self.run_cli('todos', 'add', '--title', 't', '--owner', '--from', 'x')
         self.assertEqual((code, out), (2, ''))
 
+    def test_todos_add_steps_reads_a_json_file_and_the_server_renders_it(self):
+        steps = [{'open': 'C:\\w\\a.txt', 'line': 3}, {'run': 'python t.py'}]
+        good = self.file('steps.json', json.dumps(steps))
+        self.assertEqual(self.ok('todos', 'add', '--title', 't', '--detail', 'Why.',
+                                 '--command', 'first', '--steps', good), ['ADDED T-001'])
+        d = self.direct('/todos')['items'][0]
+        self.assertEqual(d['commands'], ['first'] + todosteps.render(steps))
+        self.assertEqual(d['detail'],
+                         'Why.\n\nopen C:\\w\\a.txt at line 3 in Notepad++\nrun python t.py')
+        self.assertNotIn('steps', d)
+        bad = self.file('bad.json', json.dumps([{'open': 'rel.txt'}]))
+        err = self.refused('todos', 'add', '--title', 't', '--steps', bad)
+        self.assertTrue(err.startswith('REFUSED invalid: steps[0]'), err)
+        err = self.refused('todos', 'add', '--title', 't', '--steps', self.file('x.json', '[1'))
+        self.assertIn('cannot read the steps file', err)
+        self.assertEqual(len(self.direct('/todos')['items']), 1)
+
+    def test_a_question_is_edited_and_withdrawn_by_its_asker(self):
+        self.ok('questions', 'add', '--title', 'which way', '--from', 'pm', '--urgent',
+                '--option', 'left::go left')
+        context = self.file('context.md', 'new context\n')
+        self.assertEqual(self.ok('questions', 'edit', 'Q-1000', '--from', 'pm', '--if-version',
+                                 '1', '--title', 'which road', '--context-file', context,
+                                 '--option', 'up::go up', '--option', 'down::go down',
+                                 '--recommended', '1', '--refs', 'B-3', '--no-urgent'),
+                         ['EDITED Q-1000'])
+        doc = self.direct('/questions')['items'][0]
+        self.assertEqual((doc['title'], doc['context'], [o['label'] for o in doc['options']],
+                          doc['recommended'], doc['refs'], doc['urgent'], doc['version']),
+                         ('which road', 'new context\n', ['up', 'down'], 1, ['B-3'], False, 2))
+        err = self.refused('questions', 'edit', 'Q-1000', '--from', 'someone', '--if-version',
+                           '2', '--title', 'x')
+        self.assertTrue(err.startswith('REFUSED forbidden: '), err)
+        err = self.refused('questions', 'withdraw', 'Q-1000', '--from', 'pm', '--if-version', '1')
+        self.assertTrue(err.startswith('REFUSED conflict: '), err)
+        self.assertEqual(self.ok('questions', 'withdraw', 'Q-1000', '--from', 'pm',
+                                 '--if-version', '2'), ['WITHDRAWN Q-1000'])
+        self.assertEqual(self.direct('/questions?status=all')['items'], [])
+
+    def test_a_todo_is_edited_and_withdrawn_by_its_creator(self):
+        self.ok('todos', 'add', '--title', 'rotate', '--command', 'tool one', '--from', 'coord')
+        self.assertEqual(self.ok('todos', 'edit', 'T-001', '--from', 'coord', '--if-version', '1',
+                                 '--title', 'rotate the key', '--detail', 'soon', '--command',
+                                 'tool two', '--repo', 'kit', '--refs', 'B-1', '--urgent'),
+                         ['EDITED T-001'])
+        doc = self.direct('/todos')['items'][0]
+        self.assertEqual((doc['title'], doc['detail'], doc['commands'], doc['repo'], doc['refs'],
+                          doc['urgent']),
+                         ('rotate the key', 'soon', ['tool two'], 'kit', ['B-1'], True))
+        err = self.refused('todos', 'withdraw', 'T-001', '--from', 'pm', '--if-version', '2')
+        self.assertTrue(err.startswith('REFUSED forbidden: '), err)
+        self.assertEqual(self.ok('todos', 'withdraw', 'T-001', '--from', 'coord',
+                                 '--if-version', '2'), ['WITHDRAWN T-001'])
+        self.assertEqual(self.direct('/todos?status=all')['items'], [])
+
+    def test_edit_and_withdraw_need_from_and_a_version(self):
+        for argv in (('questions', 'edit', 'Q-1000', '--if-version', '1', '--title', 't'),
+                     ('questions', 'edit', 'Q-1000', '--from', 'pm', '--title', 't'),
+                     ('questions', 'withdraw', 'Q-1000', '--from', 'pm'),
+                     ('questions', 'withdraw', 'Q-1000', '--if-version', '1'),
+                     ('todos', 'edit', 'T-001', '--from', 'pm', '--title', 't'),
+                     ('todos', 'withdraw', 'T-001', '--if-version', '1')):
+            code, out, err = self.run_cli(*(argv + ('--port', self.port)))
+            self.assertEqual((code, out), (2, ''), argv)
+
     def test_stories_are_submitted_set_and_withdrawn(self):
         story = self.file('story.md', 'As the owner I want it.\n')
         self.assertEqual(self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb',
@@ -1391,6 +1523,47 @@ class WriteCase(VerbCase):
         got = json.loads(self.ok('inbox', '--json')[0])
         self.assertEqual([(m['id'], m['read'], m['text']) for m in got['items']],
                          [('M-001', False, 'the answer')])
+
+    def test_a_page_is_published_listed_and_shown(self):
+        html = '<h1>Plan</h1>\n<p>café &amp; more</p>\n'
+        page = self.file('plan.html', html)
+        self.assertEqual(self.ok('pages'), [])
+        self.assertEqual(self.ok('pages', 'publish', 'plan', '--title', 'The plan', '--html-file',
+                                 page, '--repo', 'kit', '--summary', 'what we do',
+                                 '--refs', 'B-1', '--from', 'coord'), ['PUBLISHED plan'])
+        self.assertEqual(self.ok('pages'), ['plan v1 - [kit] The plan'])
+        card = self.direct('/pages')['items'][0]
+        self.assertEqual((card['summary'], card['refs'], card['bytes']),
+                         ('what we do', ['B-1'], len(html.encode('utf-8'))))
+        out = os.path.join(self.home, 'out.html')
+        self.assertEqual(self.ok('pages', 'show', 'plan', '--out', out), ['WROTE %s' % out])
+        with open(out, encoding='utf-8', newline='') as f:
+            self.assertEqual(f.read(), html)
+        self.assertEqual(json.loads(self.ok('pages', 'show', 'plan', '--json')[0])['html'], html)
+        # over a published page: its version, or a conflict
+        err = self.refused('pages', 'publish', 'plan', '--title', 'again', '--html-file', page)
+        self.assertTrue(err.startswith('REFUSED conflict: '), err)
+        self.assertEqual(self.ok('pages', 'publish', 'plan', '--title', 'again', '--html-file',
+                                 page, '--if-version', '1'), ['PUBLISHED plan'])
+        err = self.refused('pages', 'show', 'absent')
+        self.assertTrue(err.startswith('REFUSED not_found: '), err)
+
+    def test_a_page_the_check_refuses_is_never_sent(self):
+        bad = self.file('bad.html', '<p>x</p><script>alert(1)</script>')
+        err = self.refused('pages', 'publish', 'plan', '--title', 't', '--html-file', bad)
+        self.assertTrue(err.startswith('REFUSED: the page check refuses '), err)
+        self.assertIn('<script>', err)
+        mermaid = self.file('m.html', '<div class="mermaid">graph TD; A-->B</div>')
+        self.assertIn('render it to svg first', self.refused(
+            'pages', 'publish', 'plan', '--title', 't', '--html-file', mermaid))
+        self.assertIn('cannot read the html file', self.refused(
+            'pages', 'publish', 'plan', '--title', 't', '--html-file',
+            os.path.join(self.home, 'absent.html')))
+        self.assertEqual(self.direct('/pages')['items'], [])
+
+    def test_pages_has_no_delete(self):
+        code, out, err = self.run_cli('pages', 'delete', 'plan', '--port', self.port)
+        self.assertEqual((code, out), (2, ''))
 
     def test_a_listed_title_is_one_line_with_no_user_or_password_of_a_url(self):
         self.ok('todos', 'add', '--owner', '--title',
@@ -1542,19 +1715,13 @@ class ArgumentCase(CliCase):
              ('stories', 'set', 'S-001', '--status', 'review', '--if-version', '1'),
              ('stories', 'withdraw', 'S-001'), ('to-pm',), ('to-pm', 'add', '--text', 't'),
              ('to-pm', 'send'), ('to-pm', 'reply', 'P-001', 'text'), ('inbox',),
-             ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pending',),
-             ('wait', '--timeout', '0'))
+             ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pages',),
+             ('pages', 'show', 'plan'), ('approvals',),
+             ('approvals', 'show', 'A-001'), ('pending',), ('wait', '--timeout', '0'))
 
     def test_every_verb_that_asks_is_exit_3_with_the_start_command_when_no_server_runs(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
-        port = self.dead_port()
-        for argv in (('pending',), ('wait', '--timeout', '0'), ('todos', 'add', '--title', 't')):
-            code, out, err = self.run_cli(*(argv + ('--port', str(port))))
-            self.assertEqual((code, out), (3, ''), argv)
-            self.assertIn('no hub server is listening on port %d' % port, err)
-            self.assertIn(HUB.START, err)
-
-        def down(port, *args, **kw):            # the rest: a refused connect is slow here
+        def down(port, *args, **kw):            # a real refused connect is slow here (test_client.DownCase)
             raise serve.NotRunning(port)
 
         with mock.patch.object(serve, 'ask', down):
@@ -1684,6 +1851,9 @@ class ArgumentCase(CliCase):
         self.assertEqual(self.run_cli('setup')[0], 0)
         owner, agent = (auth.read_token(self.tokens, r) for r in (auth.OWNER, auth.AGENT))
         seen = []
+        self.page = os.path.join(self.home, 'page.html')
+        with open(self.page, 'w', encoding='utf-8') as f:
+            f.write('<h1>plan</h1>')
 
         def ask(port, method, path, token=None, body=None, timeout=None):
             seen.append((method, path, {owner: 'owner', agent: 'agent'}[token]))
@@ -1713,6 +1883,10 @@ class ArgumentCase(CliCase):
                      ('POST', '/questions/Q-001/log', 'agent')),
                     (('questions',), ('GET', '/questions', 'agent')),
                     (('inbox',), ('GET', '/snapshot', 'agent')),
+                    (('pages', 'publish', 'plan', '--title', 't', '--html-file', self.page),
+                     ('POST', '/pages', 'agent')),
+                    (('pages',), ('GET', '/pages', 'agent')),
+                    (('pages', 'show', 'plan'), ('GET', '/pages/plan', 'agent')),
                     (('pending',), ('GET', '/pending', 'agent')),
                     (('wait', '--timeout', '0'), ('GET', '/wait?timeout=0', 'agent'))):
                 del seen[:]

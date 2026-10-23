@@ -28,6 +28,7 @@ class PullFromTheMainBranch(StoreCase):
         self.assertIn('pulled_by: main', text)
         self.assertIn('--as <branch>', text)
         self.assertIn("branch's worktree", text)
+        self.assertLess(text.index('--as <branch>'), text.index("branch's worktree"))
         self.assertEqual(self.remote_tip(), before)
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
@@ -58,6 +59,25 @@ class PullFromTheMainBranch(StoreCase):
         ctx = pmod.Context(self.store, self.repo.root, main_branch='main', today=TODAY)
         self.pull(ctx, 'FOO')
         self.assertEqual(self.get('FOO').get('pulled_by'), BRANCH)
+
+    def refusal_text(self, *seed_args, **seed_kw):
+        self.seed(priced('FOO', **seed_kw))
+        ctx = pmod.Context(self.store, self.repo.root, main_branch='main', today=TODAY)
+        with self.assertRaises(Refusal) as cm:
+            self.pull(ctx, 'FOO')
+        return str(cm.exception)
+
+    def test_the_hint_names_the_records_own_session(self):
+        self.store.session = 'kit'
+        text = self.refusal_text(session='kit')
+        self.assertIn('backlog.py -C <store> --session kit --as <branch> pull FOO', text)
+
+    def test_the_hint_leaves_out_session_for_a_record_without_one(self):
+        # `--session` narrows `next` to session-owned records: a hint naming it for a record that
+        # has no `session:` would be refused again as not in next's offer.
+        text = self.refusal_text()
+        self.assertIn('backlog.py -C <store> --as <branch> pull FOO', text)
+        self.assertNotIn('--session', text)
 
     def test_the_records_own_refusal_comes_first(self):
         # An unpriced record says why it cannot be pulled at all before where it is pulled from.
@@ -102,6 +122,14 @@ class PullFromThePmDataWorktree(StoreCase):
             self.assertEqual(pull_branch.main_branches(self.ctx_as('master')),
                              ['pmdata', 'main', 'master'])
 
+    def test_code_config_is_the_main_checkouts_configuration(self):
+        cfg = pull_branch.code_config(self.pm)
+        self.assertEqual((cfg.main_branch, cfg.remote), ('main', 'origin'))
+        self.assertIsNone(pull_branch.code_config(self.repo.root))
+        self.assertIsNone(pull_branch.code_config(self.repo.worktree('other')))
+        with mock.patch.object(kconfig, 'load', side_effect=kconfig.ConfigError('bad')):
+            self.assertIsNone(pull_branch.code_config(self.pm))
+
     def test_another_worktree_has_only_its_own_main(self):
         wt = self.repo.worktree('other')
         self.assertEqual(pull_branch.code_mains(wt), ())
@@ -116,6 +144,21 @@ class RefusalText(unittest.TestCase):
         self.assertIn('pulled_by: master',
                       pull_branch.refusal('FOO', 'master', ['pmdata', 'main', 'master']))
         self.assertIsNone(pull_branch.refusal('FOO', BRANCH, ('pmdata', 'main')))
+
+    def test_the_session_form_is_for_a_record_with_a_session(self):
+        self.assertIn('-C <store> --session kit --as <branch> pull FOO',
+                      pull_branch.refusal('FOO', 'main', 'main', 'kit'))
+        self.assertNotIn('--session', pull_branch.refusal('FOO', 'main', 'main'))
+
+    def test_the_as_form_comes_first_with_the_session_filled_in(self):
+        # A coordinator pulls at dispatch from the main checkout: the `--as` form is the one it
+        # can run as it stands, so it leads, with its own `--session` when known.
+        text = pull_branch.refusal('FOO', 'main', 'main', 'kit')
+        as_form = 'backlog.py -C <store> --session kit --as <branch> pull FOO'
+        self.assertIn(as_form, text)
+        self.assertLess(text.index(as_form), text.index('backlog.py -C <worktree> pull FOO'))
+        self.assertIn('-C <store> --as <branch> pull FOO',
+                      pull_branch.refusal('FOO', 'main', 'main'))
 
 
 if __name__ == '__main__':

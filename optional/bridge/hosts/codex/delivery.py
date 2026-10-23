@@ -28,6 +28,9 @@ class DesktopLease:
     executor: CodexContext
     endpoint: NativeEndpoint = field(repr=False)
     recheck: object = field(repr=False)
+    # None: the sender is its own executor. Otherwise the owner-leased Codex
+    # writer that carries delivery for a sender of another host.
+    writer: ChatBinding | None = None
 
 
 def native_id(message):
@@ -53,7 +56,8 @@ class CodexDesktopAdapter:
         if capabilities and self._receipts is not None:
             capabilities += (Capability.READ_STATUS,)
         return AdapterDescription('codex-desktop', capabilities,
-            'SEND is restricted to a distinct selected Codex source with a frontend-issued writer lease; '
+            'SEND is restricted to a distinct selected Codex source, or an owner-leased Codex writer '
+            'for another host, with a frontend-issued lease; '
             'private tools/call protocol; acceptance means scheduling only; '
             'exact native receipt observation is a separate host port.')
 
@@ -77,8 +81,16 @@ class CodexDesktopAdapter:
                 raise BeforeWriteError('codex-desktop-lease-unverified')
             executor = lease.executor.binding(message.recipient.identity.workspace.host_id)
             # Native self-target dispatch is unsafe in the observed companion.
-            # An unrelated relay thread must never substitute for this source.
-            if executor != message.sender or executor == message.recipient:
+            # An unrelated relay thread must never substitute for this source;
+            # only an owner-leased writer may, and never for a Codex sender.
+            if lease.writer is None:
+                expected = message.sender
+            elif (type(lease.writer) is not ChatBinding or lease.writer == message.sender
+                    or message.sender.identity.adapter_id.startswith('codex-')):
+                raise BeforeWriteError('codex-desktop-executor-not-selected')
+            else:
+                expected = lease.writer
+            if executor != expected or executor == message.recipient:
                 raise BeforeWriteError('codex-desktop-executor-not-selected')
             try:
                 checked = lease.recheck() is True
@@ -148,9 +160,11 @@ class CodexDesktopAdapter:
             # certified before-write result merely by raising BeforeWriteError.
             if may_have_written:
                 raise DeliveryError('codex-native-result-unconfirmed') from None
-            # A before-write refusal keeps its own code (which check refused); anything
-            # else before the write is reported as an unavailable context.
-            code = (error.code if type(error) is BeforeWriteError
+            # A refusal before the write keeps its own fixed code (which check refused),
+            # whether raised as a BeforeWriteError or as the host's DeliveryError (the
+            # channel check); anything else is reported as an unavailable context. Either
+            # way it is still a BeforeWriteError: only the code is diagnostic.
+            code = (error.code if isinstance(error, DeliveryError)
                 else 'codex-native-context-unavailable-before-write')
             raise BeforeWriteError(code) from None
 

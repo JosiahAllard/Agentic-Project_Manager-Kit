@@ -256,6 +256,38 @@ class Check(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.passes(commands=[cmd])
 
+    def test_a_raw_git_delete_is_refused_naming_abandon_as_the_route(self):
+        """No carve-out for a raw delete; the refusal names the route."""
+        for cmd in ('git worktree remove "Z:/r/.claude/worktrees/x"', 'git branch -D api/x',
+                    'git tag -d archive/x', 'git update-ref -d refs/heads/x'):
+            with self.subTest(cmd=cmd):
+                why = self.refused('commands', commands=[cmd])
+                self.assertIn('coordinator work', why)
+                self.assertIn('worktree_remove.py <slug> --abandon "<why>"', why)
+                self.assertIn("on the owner's or the PM's ruling", why)
+        self.assertNotIn('--abandon', self.refused('commands', commands=['git push -f origin x']))
+
+    def test_a_raw_ref_delete_also_names_the_coordinators_own_delete(self):
+        """A ref outside refs/heads, refs/tags, refs/stash and refs/backlog is the coordinator's to
+        delete itself."""
+        own = ('a ref outside refs/heads, refs/tags, refs/stash and refs/backlog the coordinator '
+               'deletes itself')
+        for cmd in ('git update-ref -d refs/scratch/x', 'git update-ref -d refs/heads/x', 'git update-ref --stdin'):
+            with self.subTest(cmd=cmd):
+                why = self.refused('commands', commands=[cmd])
+                self.assertIn(own, why)
+                self.assertIn('in its own repository (git update-ref -d <ref>)', why)
+        self.assertNotIn(own, self.refused('commands', commands=['git branch -D api/x']))
+
+    def test_a_worktree_add_move_or_prune_is_refused_without_the_abandon_route(self):
+        """Still coordinator work, but nothing is being abandoned there: no --abandon advice."""
+        for cmd in ('git worktree add "Z:/r/.claude/worktrees/x" -b api/x',
+                    'git worktree move "Z:/r/.claude/worktrees/x" "Z:/r/y"', 'git worktree prune'):
+            with self.subTest(cmd=cmd):
+                why = self.refused('commands', commands=[cmd])
+                self.assertIn('is coordinator work (git worktree add/remove)', why)
+                self.assertNotIn('--abandon', why)
+
     def test_generated_edit_code_and_edit_text_are_not_judged(self):
         # an edit may well write the word notepad, or prose, into a file
         self.passes(steps=[edit(old='use notepad', new='open it and apply the change'),

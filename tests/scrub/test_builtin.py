@@ -15,15 +15,24 @@ The fixtures in TheChecks are built from pieces, so this file holds none of the 
 import unittest
 
 from kitlib import forbidden, scrub
-from tests.scrub.test_scrub import read_text, tracked_files
+from tests.scrub.test_scrub import FIXTURE_FOLDERS, read_text, tracked_files
 
 # (path glob, class, text the line contains, why): permanent exceptions.
-ALLOWED = (
+# Where an owner question or ruling id's shape (`Q` or `R`, a dash, digits) is a data format the
+# code under test parses, not a citation: the hub's own ids, and the ledger and backlog fixtures.
+ID_SHAPE_FOLDERS = (
+    ('kitlib/hubsite/*', "the hub's store and API: question ids are its data"),
+    ('kitlib/hubmcp/*', "the hub's MCP tools: question ids are its data"),
+    ('tests/hubsite/*', "tests of the hub's store and API: question ids are its data"),
+    ('tests/hubmcp/*', "tests of the hub's MCP tools: question ids are its data"),
+    ('tests/hubvalidate/*', 'tests of the hub id validator, which checks the id shape'),
+    ('tests/guard/test_rules_hub*.py', "tests of the guard's hub rules, which match the id shape"),
+    ('tools/hub.py', "the hub CLI's help and examples show question ids"),
+    ('docs/action-hub.md', "the hub's doc: question ids are its data"),
+) + tuple((folder + '*', why) for folder, why in FIXTURE_FOLDERS)
+
+ALLOWED = tuple(('%s' % glob, 'record-id', '', why) for glob, why in ID_SHAPE_FOLDERS) + (
     ('kitlib/git/fake/wtcmds.py', 'pinned-hash', 'abc1234', 'an invented hash in the fake git'),
-    ('kitlib/guard/rules.py', 'drive', 'handling, so C:', 'a docstring on bash quoting'),
-    ('tests/scrub/test_generic.py', 'drive', "'C:", "an allow entry quoting the docstring above"),
-    ('tests/hubvalidate/test_hubvalidate.py', 'record-id', "['repo'] = '",
-     "the kit's repo tag upper-cased to prove the alias match folds case"),
     ('tests/launcher/test_current_account.py', 'record-id', "HOME + '\\\\.",
      'an invented config folder upper-cased to prove Windows case folding'),
     ('tests/guard/test_config_move.py', 'record-id', "os.path.dirname(self.w.ledger), '",
@@ -37,11 +46,6 @@ ALLOWED = (
 # Invented neutral fixtures replace the owner's real records and examples, and invented ids take
 # the EX- prefix (scrub.MADE_UP_ID_PREFIX).
 PENDING_FIXTURES = {
-    ('record-id', 'tests/docs/test_budget.py'): 1,
-    ('record-id', 'tests/guard/test_entry.py'): 1,
-    ('record-id', 'tests/guard/test_fsplace.py'): 1,
-    ('record-id', 'tests/guard/test_place.py'): 1,
-    ('record-id', 'tests/worktree/test_new_worktree.py'): 1,
 }
 # Record ids in comments and docs become the reason written out; provenance pointers at the
 # replaced kit and pinned commit hashes go.
@@ -57,13 +61,13 @@ PENDING_HISTORY = {
     ('provenance', 'docs/commit.md'): 2,
     ('provenance', 'docs/doc-tools.md'): 2,
     ('provenance', 'docs/gate.md'): 14,
-    ('provenance', 'docs/go-live.md'): 5,
+    ('provenance', 'docs/go-live.md'): 4,
     ('provenance', 'docs/install.md'): 1,
     ('provenance', 'docs/landed.md'): 2,
     ('provenance', 'docs/launcher.md'): 3,
     ('provenance', 'docs/ledger.md'): 1,
     ('provenance', 'docs/lock-release.md'): 1,
-    ('provenance', 'docs/machine-setup.md'): 7,
+    ('provenance', 'docs/machine-setup.md'): 5,
     ('provenance', 'docs/new-worktree.md'): 2,
     ('provenance', 'docs/pending.md'): 1,
     ('provenance', 'docs/pm-watch.md'): 1,
@@ -100,7 +104,6 @@ PENDING_HISTORY = {
     ('provenance', 'kitlib/machinepaths/__init__.py'): 2,
     ('provenance', 'kitlib/machinesetup/__init__.py'): 4,
     ('provenance', 'kitlib/machinesetup/extras.py'): 1,
-    ('provenance', 'kitlib/machinesetup/links.py'): 3,
     ('provenance', 'kitlib/machinesetup/settings.py'): 8,
     ('provenance', 'kitlib/preflight/leftovers.py'): 1,
     ('provenance', 'kitlib/proc/shield.py'): 2,
@@ -150,71 +153,26 @@ PENDING_HISTORY = {
     ('provenance', 'tests/worktree/test_new_worktree.py'): 2,
     ('provenance', 'tests/worktree/test_worktree_remove.py'): 1,
     ('provenance', 'tools/machine_setup.py'): 1,
-    ('record-id', 'docs/gate.md'): 1,
-    ('record-id', 'docs/guard.md'): 2,
-    ('record-id', 'docs/install.md'): 2,
-    ('record-id', 'docs/new-worktree.md'): 1,
-    ('record-id', 'docs/test-tools.md'): 2,
-    ('record-id', 'docs/worktree-paths.md'): 1,
-    ('record-id', 'kitlib/backlog/landable.py'): 1,
-    ('record-id', 'kitlib/backlog/migrate.py'): 1,
-    ('record-id', 'kitlib/docs/budget.py'): 1,
-    ('record-id', 'kitlib/forbidden/__init__.py'): 1,
-    ('record-id', 'kitlib/gate/cleanup.py'): 1,
-    ('record-id', 'kitlib/git/batch.py'): 2,
-    ('record-id', 'kitlib/git/cache.py'): 1,
-    ('record-id', 'kitlib/git/checkout.py'): 1,
-    ('record-id', 'kitlib/git/refs.py'): 5,
-    ('record-id', 'kitlib/guard/rules.py'): 1,
-    ('record-id', 'kitlib/landed/__init__.py'): 3,
-    ('record-id', 'kitlib/pmdata/init.py'): 1,
-    ('record-id', 'kitlib/preflight/settings.py'): 1,
-    ('record-id', 'kitlib/proc/shield.py'): 1,
-    ('record-id', 'kitlib/pytests/child.py'): 1,
-    ('record-id', 'kitlib/pytests/runner.py'): 1,
-    ('record-id', 'kitlib/records/landing.py'): 1,
-    ('record-id', 'kitlib/redfirst/run.py'): 1,
-    ('record-id', 'kitlib/reviewpack/__init__.py'): 1,
-    ('record-id', 'kitlib/reviewpack/trailers.py'): 1,
-    ('record-id', 'kitlib/syncbase/__init__.py'): 1,
-    ('record-id', 'kitlib/worktree/new.py'): 1,
-    ('record-id', 'kitlib/worktree/remove.py'): 1,
-    ('record-id', 'tests/backlog/test_migrate.py'): 1,
-    ('record-id', 'tests/backlog/test_offer.py'): 1,
-    ('record-id', 'tests/backlog/test_pull_holder.py'): 1,
-    ('record-id', 'tests/backlog/test_show_history.py'): 1,
-    ('record-id', 'tests/backlog/test_store.py'): 2,
+    ('record-id', 'docs/guard.md'): 1,
+    ('record-id', 'docs/install.md'): 1,
+    ('record-id', 'tests/delegations/test_cli.py'): 1,
+    ('record-id', 'tests/delegations/test_run.py'): 13,
     ('record-id', 'tests/docs/test_install_junctions.py'): 1,
-    ('record-id', 'tests/forbidden/test_forbidden.py'): 1,
-    ('record-id', 'tests/gate/test_already_landed.py'): 1,
-    ('record-id', 'tests/gate/test_land_cleanup.py'): 1,
-    ('record-id', 'tests/git/test_git.py'): 2,
-    ('record-id', 'tests/guard/test_pmdata_fixes.py'): 1,
-    ('record-id', 'tests/guard/test_pmdata_gaps.py'): 3,
-    ('record-id', 'tests/landed/test_landed.py'): 2,
-    ('record-id', 'tests/lock/test_layout_mismatch.py'): 1,
-    ('record-id', 'tests/pmdata/test_init.py'): 1,
-    ('record-id', 'tests/records/test_landing.py'): 1,
-    ('record-id', 'tests/records/test_landing_break_live.py'): 1,
-    ('record-id', 'tests/records/test_landing_look_cost.py'): 1,
-    ('record-id', 'tests/redfirst/test_run.py'): 1,
-    ('record-id', 'tests/reviewpack/test_base.py'): 1,
-    ('record-id', 'tests/scrub/test_generic.py'): 1,
-    ('record-id', 'tests/syncbase/test_sync.py'): 1,
-    ('record-id', 'tests/worktree/test_worktree_remove.py'): 2,
+    ('record-id', 'tests/guard/test_backlog_role.py'): 1,
+    ('record-id', 'tests/guard/test_cheap.py'): 5,
+    ('record-id', 'tests/host/test_claude_peer.py'): 2,
 }
 # Owner-specific prose becomes generic: "the owner" for the pronouns, no one machine's parts.
 PENDING_OWNER_TEXT = {
     ('gender', 'kitlib/backlog/at_landing.py'): 1,
-    ('gender', 'kitlib/backlog/plan.py'): 7,
+    ('gender', 'kitlib/backlog/plan.py'): 2,
     ('gender', 'kitlib/backlog/record.py'): 1,
     ('gender', 'kitlib/commit/__init__.py'): 2,
     ('gender', 'kitlib/config/owner.py'): 1,
     ('gender', 'kitlib/coordinatorstart/__init__.py'): 2,
-    ('gender', 'kitlib/worktree/remove.py'): 6,
+    ('gender', 'kitlib/worktree/remove.py'): 3,
     ('gender', 'kitlib/worktree/task.py'): 1,
     ('gender', 'tests/coordinatorstart/test_coordinatorstart.py'): 1,
-    ('gender', 'tests/gate/test_hardening.py'): 1,
     ('gender', 'tests/gate/test_land_owner.py'): 1,
     ('gender', 'tests/guard/test_rules.py'): 1,
     ('hardware', 'kitlib/lock/layout.py'): 2,
@@ -226,11 +184,7 @@ PENDING_OWNER_TEXT = {
     ('hardware', 'tests/lock/test_run.py'): 1,
     ('hardware', 'tests/lockmcp/scratch_server.py'): 1,
 }
-# Machine-specific defaults become config or move to optional/.
-PENDING_MACHINE_DEFAULTS = {
-    ('hardware', 'kitlib/lock/game.py'): 2,
-}
-PENDING = (PENDING_FIXTURES, PENDING_HISTORY, PENDING_OWNER_TEXT, PENDING_MACHINE_DEFAULTS)
+PENDING = (PENDING_FIXTURES, PENDING_HISTORY, PENDING_OWNER_TEXT)
 
 
 def j(*parts):
@@ -307,12 +261,31 @@ class TheChecks(unittest.TestCase):
     def test_what_only_looks_like_a_hit_passes(self):
         files = {'docs/a.md': j('the ', 'the', 'me, ', 'hel', 'p and ', 'hist', 'ory; ', 'where',
                                 'as she shell\n'),
-                 'docs/b.md': j('YYYY', '-MM-DD, ', 'UTF', '-8, ', 'EX', '-WIDGET-1', ', ', 'R', '-1234',
-                                ', abc-def-1\n'),
+                 'docs/b.md': j('YYYY', '-MM-DD, ', 'UTF', '-8, ', 'EX', '-WIDGET-1', ', ', 'R', '-nnnn, x',
+                                'R', '-1234 and a ', 'Q', '-nnnn, abc-def-1\n'),
                  'docs/c.md': j('4b825dc642cb6eb9a06', '0e54bf8d69288fbee4904', ' ', '0123456789',
                                 'abcdef', ' deadbeef 1234567 ', 'a1b2c3', '\n'),
                  'docs/d.md': j('2', ' cores, ', '4', ' threads, the PM kit, ', 'sup', 'port from x\n')}
         self.assertEqual(self.found(files), [])
+
+    def test_a_one_letter_question_or_ruling_id_is_a_record_id(self):
+        # An id glued to a letter is another token; T, A, M, P and S ids are the hub's, and pass.
+        files = {'docs/a.md': j('see ', 'Q', '-123', ' and ', 'R', '-4\n'),
+                 'tests/x/test_y.py': j('"', 'Q', '-1', '"\n'),
+                 'docs/b.md': j('x', 'R', '-1234 ', 'T', '-1 ', 'A', '-001 ', 'S', '-1 ', 'Q', '-x ',
+                                'q', '-1\n')}
+        self.assertEqual(self.found(files), [
+            'docs/a.md:1: ' + j('Q', '-123') + ' (record-id)',
+            'docs/a.md:1: ' + j('R', '-4') + ' (record-id)',
+            'tests/x/test_y.py:1: ' + j('Q', '-1') + ' (record-id)'])
+
+    def test_the_id_shape_allowlist_covers_the_hub_but_not_other_files(self):
+        line = j('ask ', 'Q', '-123\n')
+        files = {'tests/hubsite/test_a.py': line, 'tools/hub.py': line,
+                 'tests/ledger/test_a.py': j('R', '-9001\n'), 'kitlib/other.py': line,
+                 'tests/guard/test_rules_hub_read.py': line, 'tests/guard/test_other.py': line}
+        hits, _ = scrub.scan(sorted(files), files.get, ALLOWED)
+        self.assertEqual([h.path for h in hits], ['kitlib/other.py', 'tests/guard/test_other.py'])
 
     def test_standard_crypto_names_are_no_record_ids(self):
         real = j('ABC', '-DEF-12')

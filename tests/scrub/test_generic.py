@@ -16,7 +16,7 @@ invented paths on purpose), the two name checks read tests/ too.
   retired name (kitlib.config.migration.OLD_DIR_NAME), read from those files at test time, so this
   file names none of them. Each may stand only on a line of KIT_NAMES_ALLOWED; everywhere else code
   derives it and text says what it is. The folder's current name (kitlib.config.user.DIR_NAME) is
-  neutral (KIT-CONFIG-DIR-RENAME), and so is the Claude plugin's name (.claude-plugin/plugin.json),
+  neutral, and so is the Claude plugin's name (.claude-plugin/plugin.json),
   so neither is a kit name.
 
 An allow entry that matches nothing is printed as stale, not failed: the line it allowed is gone.
@@ -41,11 +41,7 @@ DRIVE_ALLOWED = (
      'the same roles rendered for Codex, the backslash escaped as TOML writes it'),
     ('docs/backlog-lint.example.json', '"root": "D:/src/alpha"', 'an invented example root'),
     ('docs/guard.md', '| `root-search` |', 'the root-search rule names the searches it denies'),
-    ('docs/guard.md', '| `heredoc-winpath` |', 'the rule describes the escapes it passes'),
-    ('docs/guard.md', '- **heredoc-winpath:**', 'the rule describes the paths it reads'),
     ('kitlib/guard/commands.py', 'C:\\\\x\\\\Godot_v4.exe', 'a docstring example of a program path'),
-    ('kitlib/guard/rules.py', '"x:\\t"', 'a comment on escapes that are not paths'),
-    ('kitlib/guard/rules.py', 'C:\\\\\\\\Users reaches python', 'a docstring on bash quoting'),
     ('kitlib/guard/shell.py', 'unquoted Windows path (C:\\\\tmp', 'a docstring on bash quoting'),
     ('kitlib/guard/shell.py', "# C:\\ before a space", 'a comment on a drive root'),
     ('optional/comfy/comfy_gen.py', 'DESKTOP_EXE_DEFAULT = r"C:\\Program Files',

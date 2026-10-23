@@ -15,10 +15,25 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
   its AGENT_TEMP variable, sweep config key and permissions (kitlib.machinesetup.agenttemp,
   extras), and the sweep task (opt-out: `sweep_task` false). Opt-in: the PM SessionStart hook
   (`pm_settings`), the machine schedule shortcut (`shortcut`), the procwatch task (`procwatch`).
-- The switch from an older kit clone (`old_kit`): the links (kitlib.machinesetup.links), each
-  config folder's settings.json (its old kit hooks removed or re-pointed, the guard's entry
-  added), the owner's email, and the extras: the shortcut, the agents' temp folder and
-  KIT_MACHINE_LOCK for comfy. No plugin install (tools/plugin_refresh.py --migrate does it).
+- The switch from an older kit clone (`old_kit`): each config folder's settings.json (its old kit
+  hooks removed or re-pointed, the guard's entry added), the owner's email, and the extras: the
+  shortcut, the agents' temp folder and KIT_MACHINE_LOCK for comfy. No plugin install
+  (tools/plugin_refresh.py --migrate does it).
+
+In both modes each repository in the machine config's launcher.repos gets its nightly worktree
+sweep task when it has none or its task runs a removed plugin export, after one dry run of the
+sweep (kitlib.machinesetup.worktreesweep; opt-out: `worktree_sweep` false).
+
+In both modes machine setup makes no link: kitlib.machinesetup.links reports each link an earlier
+setup left under a config folder, with the command that removes the link only, and the settings
+step re-points a path through `<config>/tools/<link>` to the kit's own file
+(settings.repoint_links).
+
+Claude Code's machine-wide managed settings file (kitlib.machinesetup.managed) is read in both
+modes and written in neither: when it carries this kit's guard entry, no account settings.json gains
+its own, and the default mode notes whether the file is in sync with the
+kit's template. Writing it is `--managed-settings` (run_managed), a mode of its own that needs an
+elevated terminal.
 
 The committed repo setup is kitlib.machinesetup.repo (`--repo PATH`, run_repo), a mode of its own.
 run_agent_temp() does the agents' temp folder steps alone (tools/agent_temp_init.py).
@@ -30,7 +45,7 @@ import os
 from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
-from . import agenttemp, extras, links, owner, plugin, settings
+from . import agenttemp, extras, links, managed, owner, plugin, settings, worktreesweep
 from .common import Change, Plan, Report, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
@@ -42,11 +57,13 @@ class Context(object):
     pass a fake. No `old_kit` is the default mode (`fresh` says the same and may not go with
     `old_kit`); `pm_settings` goes with the default mode only. `owner_email` is --owner-email.
     `shortcut` None: the machine schedule shortcut in the old kit switch only. `procwatch`: also
-    register the procwatch task (kitlib.machinesetup.procwatch); `procwatch_kill` makes it kill."""
+    register the procwatch task (kitlib.machinesetup.procwatch); `procwatch_kill` makes it kill.
+    `worktree_sweep` false: each repository's worktree sweep task is a note, not a change."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
                  host=None, today=None, fresh=False, pm_settings=None, sweep_task=True,
-                 owner_email=None, shortcut=None, procwatch=False, procwatch_kill=False):
+                 owner_email=None, shortcut=None, procwatch=False, procwatch_kill=False,
+                 worktree_sweep=True):
         if fresh and old_kit:
             raise ValueError('give old_kit or fresh, not both')
         fresh = not old_kit
@@ -65,6 +82,7 @@ class Context(object):
         self.config_dirs = dedupe(os.path.abspath(d) for d in config_dirs)
         self.agent_temp = agent_temp
         self.sweep_task = bool(sweep_task)
+        self.worktree_sweep = bool(worktree_sweep)
         if procwatch_kill and not procwatch:
             raise ValueError('procwatch_kill goes with procwatch')
         self.procwatch = bool(procwatch)
@@ -72,6 +90,8 @@ class Context(object):
         self.desktop = desktop
         self.host = host or extras.Host()
         self.today = today or datetime.date.today().strftime('%Y%m%d')
+        self.managed_file = None                                     # managed.survey_live sets both
+        self.managed_data = None
 
 
 def default_config_dirs(home):
@@ -127,22 +147,24 @@ def survey(ctx):
             plan.refuse('no config folder at %s' % d)
     if plan.refusals:
         return plan
-    if ctx.fresh:
-        plan.note('links', 'fresh: no older kit clone, no links switched')
-        if not ctx.config_dirs_given:
-            plan.note('links', 'config folders: every ~/.claude and ~/.claude-* folder (a backup copy '
-                               'too) and the launcher\'s account folders, the set tools/plugin_refresh.py '
-                               'runs in; name the ones to edit with --config-dir to leave any other out')
-    else:
-        for d in ctx.config_dirs:
-            links.survey(plan, d, ctx)
+    if ctx.fresh and not ctx.config_dirs_given:
+        plan.note('links', 'config folders: every ~/.claude and ~/.claude-* folder (a backup copy '
+                           'too) and the launcher\'s account folders, the set tools/plugin_refresh.py '
+                           'runs in; name the ones to edit with --config-dir to leave any other out')
+    for d in ctx.config_dirs:
+        links.survey(plan, d, ctx)                                   # notes only: no link is made
+    managed.survey_live(plan, ctx)                                   # the guard, the plugin: from there?
+    if plan.refusals:
+        return plan
     for d in ctx.config_dirs:
         settings.survey(plan, d, ctx)
+    managed.note_sync(plan, ctx)                                     # never written in this mode
     if ctx.fresh:
         settings.survey_pm(plan, ctx)
         plugin.survey_hosts(plan, ctx)
     owner.survey(plan, ctx)
     extras.survey(plan, ctx)
+    worktreesweep.survey(plan, ctx)
     return plan
 
 
@@ -208,6 +230,51 @@ def run_repo(ctx, apply=False, out=None):
     return repo.run(ctx, apply=apply, out=out)
 
 
+ManagedContext = managed.ManagedContext
+
+
+def run_managed(ctx, apply=False, out=None):
+    """(exit code, lines) of the --managed-settings mode (kitlib.machinesetup.managed.survey; ctx a
+    ManagedContext): the managed settings file made from the kit's template, as run()."""
+    lines = []
+
+    def emit(*ls):
+        for l in ls:
+            lines.append(l)
+            if out:
+                out(l)
+
+    emit('managed-settings: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
+         '  kit:            %s' % ctx.kit,
+         '  template:       %s' % kit_file(ctx.kit, managed.SOURCE),
+         '  overlay:        %s%s' % (managed.overlay_path(ctx.home),
+                                     '' if os.path.lexists(managed.overlay_path(ctx.home)) else ' (none)'),
+         '  managed file:   %s' % ctx.host.managed_path())
+    if not os.path.lexists(managed.overlay_path(ctx.home)):
+        emit('WARNING: no overlay found at %s: the file is made from the template '
+             'alone, without your own lines (the agents\' git identity, the auto-mode lines that name '
+             'you)' % managed.overlay_path(ctx.home))
+    return _carry_out('managed-settings', managed.survey(ctx, apply=apply), apply, emit, lines)
+
+
+def run_pointer(ctx, apply=False, out=None):
+    """(exit code, lines) of the --pm-repo mode (kitlib.machinesetup.pointer.survey; ctx a
+    PointerContext): the PM-repo pointer in the registry, as run()."""
+    from . import pointer
+    lines = []
+
+    def emit(*ls):
+        for l in ls:
+            lines.append(l)
+            if out:
+                out(l)
+
+    emit('pm-repo: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
+         '  kit:            %s' % ctx.kit,
+         '  pm repo:        %s' % ctx.pm_repo)
+    return _carry_out('pm-repo', pointer.survey(ctx, apply=apply), apply, emit, lines)
+
+
 class AgentTempContext(object):
     """What the agent temp init alone (tools/agent_temp_init.py) reads: the subset of Context that
     kitlib.machinesetup.agenttemp and the folder's ACL step use."""
@@ -250,5 +317,6 @@ def run_agent_temp(ctx, apply=False, out=None):
     return _carry_out('agent-temp-init', survey_agent_temp(ctx), apply, emit, lines)
 
 
-__all__ = ['AgentTempContext', 'Change', 'Context', 'Plan', 'account_dirs', 'dedupe', 'default_config_dirs',
-           'run', 'run_agent_temp', 'run_repo', 'survey', 'survey_agent_temp']
+__all__ = ['AgentTempContext', 'Change', 'Context', 'ManagedContext', 'Plan', 'account_dirs', 'dedupe',
+           'default_config_dirs', 'run', 'run_agent_temp', 'run_managed', 'run_pointer', 'run_repo',
+           'survey', 'survey_agent_temp']

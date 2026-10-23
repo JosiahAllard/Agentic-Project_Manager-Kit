@@ -53,6 +53,21 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    commits). A machine that ran an older kit clone uses `-OldKit <that clone>` instead
    (docs/machine-setup.md). Run it yourself: the guard refuses `-Apply` to agent sessions, since
    it stores the owner's email (docs/guard.md "Owner machine setup").
+
+   The settings every account shares (the guard's hook, the status line, the plugin's marketplace) can
+   instead live once in Claude Code's machine-wide managed settings file, under
+   `%ProgramFiles%\ClaudeCode`. From an elevated terminal:
+
+   ```
+   powershell -NoProfile -File installer\machine-setup.ps1 -ManagedSettings [-Apply]
+   ```
+
+   It writes that file from the kit's template `hosts/claude/managed-settings.json`, merged with
+   your own lines from `~/.pm-kit/managed-settings.json` when that file is there
+   (docs/machine-setup.md "Managed settings"). A file already there is not merged: it is replaced
+   whole, so the run is refused when it is not JSON or has keys that neither the template nor your
+   overlay holds (they are named; add them to the template). With it in place the default mode adds
+   no guard entry to any account, and notes when the file is out of date.
 2. **A repository** needs nothing installed: any git checkout with an `origin` remote whose
    default branch is pushed (`origin/HEAD` names main) works as it is. `<kit>/tools/new_worktree.py`
    fetches `origin` (it refuses if the fetch fails), and `<kit>/tools/preflight.py` does only with
@@ -231,11 +246,14 @@ get a stub, because they act on the machine, the owner's files or the kit itself
   A repository's own commands use it only through a gate (booked by `gate.py`) or a wrapped heavy
   run.
 - `kit_tests.py` (the kit's own suites), `lock_release_check.py` (its `-C` is the kit's release
-  checkout), `backlog_lint.py`, `agent_roster.py`, `agent_view.py` (its `-C` names the repository
-  it describes, but what it shows is the kit's roles): run by the kit's maintainers or the PM
-  (docs/test-tools.md, docs/lock-release.md, docs/backlog-lint.md, docs/ROSTER.md, docs/content.md).
+  checkout), `backlog_audit.py`, `backlog_lint.py`, `agent_roster.py`, `agent_view.py` (its `-C`
+  names the repository it describes, but what it shows is the kit's roles): run by the kit's
+  maintainers or the PM (docs/test-tools.md, docs/lock-release.md, docs/backlog.md,
+  docs/backlog-lint.md, docs/ROSTER.md, docs/content.md).
 - `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub.py`, `hub_mirror.py`, `pending.py`,
   `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and the machine.
+- `delegated.py`: the PM's, to run one operation of the owner's delegation list on the owner's
+  order (docs/delegations.md "Running").
 - `no_window.py`: the carrier a scheduled task runs under `pythonw` so that no console window
   opens (docs/daily-full.md "The schedule").
 
@@ -265,10 +283,10 @@ questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the l
 the skills and agents write every kit path (every tool, `kitlib/`, `optional/`, the kit's docs)
 as `<kit>/<path>` (tests/skills and tests/content/test_skill_commands.py check it); the kit
 header hook tells each session and subagent the folder `<kit>` stands for (docs/content.md "Kit
-header"). Agent and skill text gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so neither uses it.
+header"). `${CLAUDE_PLUGIN_ROOT}` is substituted in a plugin skill's text (owner's machine test, Claude Code 2.1.302); agent text was not tested, so no kit agent or skill uses it.
 Source: https://code.claude.com/docs/en/plugin-marketplaces.
 `claude plugin validate` passes with warnings only (no author field; CLAUDE.md is not loaded) and
-reports no reserved name.
+reports no reserved name. With `CLAUDE_CONFIG_DIR` set to an account folder and `CLAUDE_CODE_PLUGIN_DIRS` naming another kit export, `claude plugin list` shows the per-config-dir install (scope user, and scope project when run from a folder whose settings enable it) and a session-only `pm-kit@inline` from the `CLAUDE_CODE_PLUGIN_DIRS` folder; all load side by side with no duplicate error (observed on 2.1.302). The Desktop app (Code tab) picks the plugin up and lists its skills under `/` as `pm-kit:<skill>`; a Desktop session's kit header names the same plugin folder that `claude plugin list` shows for `pm-kit@pm-kit` (observed).
 
 The plugin root is the whole kit (export), and `.claude-plugin/plugin.json` stays at its root: the
 hooks and the MCP server run kitlib and tools beside them. plugin.json, marketplace.json and the hooks
@@ -295,18 +313,18 @@ An account set up by `machine_setup.py` has per-item junctions under `~/.claude`
 skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
 
 **Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
-Only the 12 kit skill names are touched (the directories under `content/skills`); any other link stays.
+Only the 22 kit skill names are touched (the directories under `content/skills`); any other link stays.
 `cmd /c rmdir` removes the link only, never the target:
 
 ```powershell
-$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch'
+$kit = 'backlog-ops','branch-review','branch-sync','builder','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','hub-ops','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','specialty-3d-assets','specialty-rigging','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-records','specialty-spec'
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
   Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
   ForEach-Object { cmd /c rmdir "$($_.FullName)" }
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType -and $_.Name -in $kit }
 ```
 
-The last command must print nothing. Then `ListSkills` shows each of the 12 names once.
+The last command must print nothing. Then `ListSkills` shows each of the 22 names once.
 
 **Stage 1b.** Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
 
@@ -320,18 +338,26 @@ cmd /c rmdir "$env:USERPROFILE\.claude\agents"
 `settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
 `$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
 
-**Stage 3.** The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
-lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
-retires them.
+**Stage 3.** The `tools/*` and `knowledge/*` junctions go last. Machine setup makes no link: it
+reports each one an earlier setup left, and re-points a `settings.json` path through
+`~/.claude/tools/<name>` (the status line's, for one) to the kit's own file (docs/machine-setup.md
+"Links"). Run it with `--apply` first, then remove each link with the line its dry run prints, which
+removes the link only, never the target (never `/s`):
+
+```
+leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
+```
+
+A second dry run then reports no leftover link.
 
 `<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
-`--found-on none` when no branch found it) and `--why-not-folded "<reason>"` (docs/backlog.md
+`--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
 "The fold-in guard").
 
-The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in
+The rulings ledger is once per machine: set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file) in
 the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
-`templates/common/LEDGER.md` (docs/ledger.md "A new ledger").
+`templates/common/LEDGER.md` (docs/ledger.md "A new ledger"). Every ledger write needs git to run, since it places the write lock (docs/ledger.md "Write lock").
 
 ## Stubs: tools/kit_stubs.py
 
@@ -343,8 +369,8 @@ python <kit>/tools/kit_stubs.py memory [-C DIR] [--apply]
 
 `memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.local.json`
 (git-ignored; the value is a machine path) would get (dry run), and with `--apply` adds it when
-neither that file nor `.claude/settings.json` has the key; exit 1 when the local file
-cannot be edited (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
+neither that file nor `.claude/settings.json` has the key; exit 1 when either file
+cannot be read as a JSON object (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
 "Memory folder (`memory`)").
 
 Opt-in, for a repository that wants committed stubs (the old setup; decision 21 made the default

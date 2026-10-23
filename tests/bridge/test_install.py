@@ -1,5 +1,6 @@
 """Staging-only bridge installation artifacts and owned Windows rollback."""
 import copy
+from dataclasses import replace
 import hashlib
 import json
 import msvcrt
@@ -104,7 +105,8 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(set(packet),{'protocol','servers'})
         expected={'command':str(Path(sys.executable).resolve()),
             'args':['-I','-B',str(self.kit/'optional/bridge/mcp_frontend.py'),str(self.state/'service.json')]}
-        self.assertEqual(packet['servers']['codex'],{'name':'agent-bridge','configuration':expected})
+        self.assertEqual(packet['servers']['codex'],{'name':'agent-bridge',
+            'configuration':dict(expected,env_vars=['CODEX_APP_TOOLS_PIPE_PATH'])})
         self.assertEqual(packet['servers']['claude'],{'name':'fixture_bridge-9','configuration':expected,
             'plugin_name':'owned-plugin','scoped_name':'plugin:owned-plugin:fixture_bridge-9'})
         dependencies={item.role:item.path for item in result.dependencies}
@@ -114,6 +116,56 @@ class InstallTests(unittest.TestCase):
         bindings={item.role:item.path for item in result.bindings}
         self.assertEqual(bindings['service-marker'],self.state/'service.json')
         self.assertEqual(bindings['claude.terminal_account'],self.account)
+
+    def test_channel_allowlist_copies_names_without_reading_current_values(self):
+        value='owned_channel_value_never_copy'
+        with mock.patch.dict(os.environ,{'CODEX_APP_TOOLS_PIPE_PATH':value}):
+            result=self.prepare()
+        servers=self.read('mcp.json')['servers']
+        self.assertEqual(servers['codex']['configuration']['env_vars'],['CODEX_APP_TOOLS_PIPE_PATH'])
+        self.assertNotIn('env_vars',servers['claude']['configuration'])
+        self.assertEqual(load_config(self.output/'runtime.json').profiles,self.doc['profiles'])
+        manifest=self.read('manifest.json')
+        hashes={item['destination']:item['sha256'] for item in manifest['files']}
+        for artifact in result.files:
+            data=artifact.path.read_bytes()
+            self.assertNotIn(value.encode(),data)
+            self.assertEqual(artifact.sha256,hashlib.sha256(data).hexdigest())
+            if artifact.role!='manifest':
+                self.assertEqual(hashes[str(artifact.path)],artifact.sha256)
+
+    def test_channel_lists_and_commands_are_private_to_each_host_in_either_order(self):
+        reading=install.registry.read_profile
+        packet=install._packet
+        for reverse in (False,True):
+            with self.subTest(reverse=reverse):
+                config=install.parse_config(self.doc)
+                if reverse:
+                    config=replace(config,profiles=dict(reversed(tuple(config.profiles.items()))))
+                captured=[]
+                schemas={}
+                def profile(kind,kit):
+                    schema=reading(kind,kit)
+                    schema['channel_env']=[kind.upper()+'_FIXTURE_CHANNEL']
+                    schemas[kind]=schema
+                    return schema
+                def inspect(value,*args,**kwargs):
+                    if isinstance(value,dict) and 'servers' in value:
+                        captured.append(value['servers'])
+                    return packet(value,*args,**kwargs)
+                with mock.patch.object(install.registry,'read_profile',side_effect=profile),\
+                        mock.patch.object(install,'_packet',side_effect=inspect):
+                    install._render(config,self.output)
+                self.assertEqual(len(captured),1)
+                codex=captured[0]['codex']['configuration']
+                claude=captured[0]['claude']['configuration']
+                self.assertEqual(codex['env_vars'],['CODEX_FIXTURE_CHANNEL'])
+                self.assertEqual(claude['env_vars'],['CLAUDE_FIXTURE_CHANNEL'])
+                codex['env_vars'].append('LOCAL_ONLY')
+                codex['args'].append('local-only')
+                self.assertEqual(claude['env_vars'],['CLAUDE_FIXTURE_CHANNEL'])
+                self.assertNotIn('local-only',claude['args'])
+                self.assertEqual(schemas['codex']['channel_env'],['CODEX_FIXTURE_CHANNEL'])
 
     def test_claude_hook_uses_verified_direct_exec_and_only_exact_native_server_tools(self):
         self.prepare()

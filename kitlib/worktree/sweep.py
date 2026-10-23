@@ -16,6 +16,17 @@ machine lock record naming it; a backlog record `state: pulled` with `pulled_by`
 open claim); last activity under `idle_s`; any uncommitted, untracked or ignored-not-build-output
 file; then the holder probe; and with `apply`, last, the status read again. A swept worktree goes
 through `remove.git_remove` (never retried, never forced) and `remove.delete_branch` (`-d`).
+
+Stale marks (kitlib.worktree.marks): an UNLANDED worktree a coordinator marked stale is ABANDONED
+instead, by `remove._abandon` (its archive tag first, then the tree, then the branch), after the
+same checks but the landed and fresh ones; its open-claim check matches the branch without regard
+to case. A mark is void (the tree is skipped as UNLANDED, the mark kept) when the tree is not the
+one it names, its tip moved, or its last activity is newer than the mark. The marks are read once,
+after the base: a marks file that cannot be read counts as a failure (exit 1) and no marked tree is
+acted on, while the landed sweep goes on. Under `apply`, the abandon runs under the marks lock and
+only while the mark is still the one read; it is held to the checked tip (`expect`), and the mark is
+dropped once the abandon is done. Last, a mark whose branch is gone is dropped (`apply`), and a
+mark whose branch has no worktree is named for `--unmark-stale`.
 """
 import datetime
 import json
@@ -29,7 +40,7 @@ from kitlib.config import ConfigError, user
 from kitlib.proc import spawn
 from kitlib.records import landing
 
-from . import holders, remove
+from . import holders, marks, remove
 from .holders import canon, extended, plain, prune, WALK_MAX
 from .remove import OK, REFUSED, failure, git
 
@@ -62,11 +73,10 @@ def fetch_base(ctx, timeout=FETCH_TIMEOUT_S):
 
 def landing_hold(ctx):
     """None when the landing lock is free, else why the sweep defers: held, unreadable, or its
-    place unknown. The lock is kitlib.records.landing's (`<common dir>/<"landing".lock_file>`),
+    place unknown. The lock is kitlib.records.landing's (`<common dir>/kit-landing.lock`),
     the one every landing takes."""
     try:
-        lock = landing.LandingLock.for_config(
-            ctx.main, ctx.cfg, lanes=tuple(ctx.cfg.section('landing').get('lanes') or ()))
+        lock = landing.LandingLock.for_config(ctx.main, ctx.cfg)
     except (ConfigError, landing.LockError) as e:
         return 'the landing lock cannot be placed (%s)' % e
     try:
@@ -213,9 +223,11 @@ def last_activity(main, path, branch):
     return (best[0], best[1]), None
 
 
-def sweep_skip(ctx, entry, home, base, chain, ancestors, entries, machine, now, idle_s):
+def sweep_skip(ctx, entry, home, base, chain, ancestors, entries, machine, now, idle_s, mark=None):
     """Why this worktree is NOT swept, or None when every check before the holder probe passed.
-    Cheapest checks first; the first that fails is the reason printed."""
+    Cheapest checks first; the first that fails is the reason printed. `mark` is the stale mark of
+    its branch (kitlib.worktree.marks), or None: an UNLANDED tree whose mark holds passes, to be
+    abandoned."""
     s, main = ctx.s, ctx.main
     path, branch, head = entry['path'], entry['branch'], entry['head']
     up = s['upstream']
@@ -235,11 +247,17 @@ def sweep_skip(ctx, entry, home, base, chain, ancestors, entries, machine, now, 
             ': ' + entry['locked'] if entry['locked'] else '')
     if not head:
         return 'git reported no HEAD for it'
+    stale = head not in ancestors and mark is not None
     if head not in ancestors:
         rc, count, _ = git(main, 'rev-list', '--count', '%s..%s' % (base, head))
-        return 'UNLANDED: %s has %s commit(s) not in %s %s' % (
+        unlanded = 'UNLANDED: %s has %s commit(s) not in %s %s' % (
             branch, count if rc == 0 and count else 'an unknown number of', up, base[:10])
-    if head in chain:
+        if mark is None:
+            return unlanded
+        void = marks.void_reason(mark, path, head)
+        if void:
+            return '%s; its stale mark is void: %s' % (unlanded, void)
+    elif head in chain:
         return ('no commit of its own has landed (fresh, or only synced with %s): a fresh'
                 ' worktree is never swept' % s['base'])
     others = sorted(os.path.normpath(e['path']) for e in entries
@@ -249,7 +267,7 @@ def sweep_skip(ctx, entry, home, base, chain, ancestors, entries, machine, now, 
     holder = machine_lock_holder(machine, path, branch)
     if holder:
         return 'machine lock holder: %s' % holder
-    ids, why = remove.pulled_by(ctx, base, branch)
+    ids, why = (marks.claims if stale else remove.pulled_by)(ctx, base, branch)
     if ids is None:
         return 'the open-claim check failed (%s)' % why
     if ids:
@@ -259,6 +277,10 @@ def sweep_skip(ctx, entry, home, base, chain, ancestors, entries, machine, now, 
     if got is None:
         return 'its last activity cannot be read (%s)' % why
     when, what = got
+    if stale:
+        void = marks.void_reason(mark, path, head, got)
+        if void:
+            return 'UNLANDED; its stale mark is void: %s' % void
     if now - when < idle_s:
         return 'active %.1f h ago (newest: %s), under the %d h idle bar' % (
             max(now - when, 0) / 3600.0, what, idle_s // 3600)
@@ -343,12 +365,19 @@ def _sweep(ctx, apply, now, machine, idle_s):
     ctx.say('base      %s %s (fetched)' % (up, base[:10]))
     home = canon(remove.home_of(ctx))
     entries = remove.worktree_entries(listing)
-    counts = {'removed': 0, 'would remove': 0, 'skipped': 0, 'failed': 0}
+    counts = {'removed': 0, 'would remove': 0, 'skipped': 0, 'failed': 0, 'abandoned': 0,
+              'would abandon': 0}
     deferred = False
+    where, marked = read_marks(ctx)
+    if marked is None:
+        counts['failed'] += 1
     for entry in entries:
         path = os.path.normpath(entry['path'])
         name = '%s [%s]' % (path, entry['branch'] or 'detached')
-        reason = sweep_skip(ctx, entry, home, base, chain, ancestors, entries, held, now, idle_s)
+        mark = marks.find(marked, entry['branch']) if entry['branch'] else None
+        stale = mark is not None and entry['head'] not in ancestors
+        reason = sweep_skip(ctx, entry, home, base, chain, ancestors, entries, held, now, idle_s,
+                            mark)
         if reason:
             ctx.say('skipped   %s: %s' % (name, reason))
             counts['skipped'] += 1
@@ -361,8 +390,15 @@ def _sweep(ctx, apply, now, machine, idle_s):
             counts['skipped'] += 1
             continue
         if not apply:
-            ctx.say('would     remove %s, then git branch -d %s' % (path, entry['branch']))
-            counts['would remove'] += 1
+            if stale:
+                ctx.say('would     abandon %s under %s%s (marked stale %s by %s: %s), then delete'
+                        ' branch %s' % (path, remove.ARCHIVE, os.path.basename(path),
+                                        marks.shown_at(mark), mark['by'], mark['why'],
+                                        entry['branch']))
+                counts['would abandon'] += 1
+            else:
+                ctx.say('would     remove %s, then git branch -d %s' % (path, entry['branch']))
+                counts['would remove'] += 1
             continue
         why = landing_hold(ctx)
         if why:
@@ -376,12 +412,104 @@ def _sweep(ctx, apply, now, machine, idle_s):
                     % (name, changed))
             counts['skipped'] += 1
             continue
+        if stale:
+            counts[abandon_marked(ctx, where, entry, mark, name)] += 1
+            continue
         if not remove.git_remove(ctx, path, entry['path']):
             counts['failed'] += 1
             continue
         counts['removed'] += 1
         if remove.delete_branch(ctx, entry['branch'], False) != OK:
             counts['failed'] += 1
+    if marked and not deferred:
+        counts['failed'] += end_marks(ctx, where, marked, entries, apply)
     ctx.say('summary   %s%s' % (', '.join('%s %d' % kv for kv in counts.items()),
                                 ', stopped by the landing lock' if deferred else ''))
     return REFUSED if counts['failed'] or deferred else OK
+
+
+def read_marks(ctx):
+    """`(marks file, marks)` for the sweep, or `(file or None, None)` when they cannot be read:
+    said as a failure, and then no marked tree is acted on."""
+    where = None
+    try:
+        where = marks.file_of(ctx)
+        got, why = marks.load(where)
+    except marks.MarksError as e:
+        got, why = None, str(e)
+    if got is None:
+        ctx.say('failed    the stale marks cannot be read (%s): no marked worktree is abandoned;'
+                ' the landed sweep goes on' % why)
+    return where, got
+
+
+def abandon_marked(ctx, where, entry, mark, name):
+    """Abandon the marked tree of `entry` under the marks lock, only while its mark is still
+    `mark`, held to the tip it was checked at; drop the mark once that is done. Returns the count
+    it adds to: abandoned, skipped or failed."""
+    branch = entry['branch']
+    try:
+        with marks.locked(where):
+            now_marks, why = marks.load(where)
+            if now_marks is None:
+                ctx.say('failed    %s: the stale marks cannot be read again (%s); git was NOT run'
+                        % (name, why))
+                return 'failed'
+            if marks.find(now_marks, branch) != mark:
+                ctx.say('skipped   %s: its stale mark changed or was cleared since it was read;'
+                        ' git was NOT run' % name)
+                return 'skipped'
+            status = remove._abandon(ctx, entry['path'], marks.tag_why(mark), False, None,
+                                     expect=entry['head'])
+            if status != OK:
+                ctx.say('  mark     the stale mark of %s stays' % branch)
+                return 'failed'
+            marks.save(where, [m for m in now_marks if m['branch'] != branch])
+    except marks.MarksError as e:
+        ctx.say('failed    %s: %s' % (name, e))
+        return 'failed'
+    ctx.say('unmarked  %s: abandoned, so its stale mark is dropped' % branch)
+    return 'abandoned'
+
+
+def end_marks(ctx, where, marked, entries, apply):
+    """The last pass over the marks read at the start: a mark whose branch is gone is dropped
+    (`apply`; else `would drop`), and a mark whose branch has no worktree is named for
+    `--unmark-stale`. Returns the failures to count."""
+    on = {e['branch'] for e in entries if e['branch']}
+    gone, failed = [], 0
+    for mark in marked:
+        branch = mark['branch']
+        tip, why = remove.branch_tip(ctx.main, branch)
+        if tip is None:
+            ctx.say('failed    the stale mark of %s: its branch cannot be read (%s)' % (branch, why))
+            failed += 1
+        elif not tip:
+            gone.append(mark)
+        elif branch not in on:
+            ctx.say('note      the stale mark of %s names no worktree (none is on the branch, and'
+                    ' the sweep abandons only a tree): clear it with `%s %s --unmark-stale`'
+                    % (branch, ctx.s['tool'], branch))
+    if not gone:
+        return failed
+    if not apply:
+        for mark in gone:
+            ctx.say('would     drop the stale mark of %s: the branch is gone' % mark['branch'])
+        return failed
+    try:
+        with marks.locked(where):
+            now_marks, why = marks.load(where)
+            if now_marks is None:
+                ctx.say('failed    the stale marks cannot be read again (%s); no mark was dropped'
+                        % why)
+                return failed + 1
+            drop = [m for m in gone if marks.find(now_marks, m['branch']) == m]
+            if drop:
+                names = {m['branch'] for m in drop}
+                marks.save(where, [m for m in now_marks if m['branch'] not in names])
+    except marks.MarksError as e:
+        ctx.say('failed    the stale marks of gone branches were not dropped: %s' % e)
+        return failed + 1
+    for mark in drop:
+        ctx.say('dropped   the stale mark of %s: the branch is gone' % mark['branch'])
+    return failed

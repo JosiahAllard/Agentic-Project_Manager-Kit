@@ -127,6 +127,15 @@ class FakeHost(object):
     def git_email(self, kit):
         return self.git_email_value
 
+    managed = None                                                   # the managed settings file: none
+    admin = False                                                    # an elevated process
+
+    def managed_path(self):
+        return self.managed
+
+    def is_admin(self):
+        return self.admin
+
     def guard_entry(self, kit):
         return {'PreToolUse': [{'matcher': 'Bash|PowerShell', 'hooks': [
             {'type': 'command', 'command': PYW,
@@ -243,12 +252,6 @@ class Base(unittest.TestCase):
         out['host'] = (dict(self.host.env), list(self.host.calls), self.host.acl_fixed)
         return out
 
-    def target(self, *parts):
-        return common.norm(common.link_target(os.path.join(*parts)))
-
-    def kitp(self, rel):
-        return common.norm(os.path.join(self.kit, *rel.split('/')))
-
     def entry(self, *words):
         """The exec-form args of the kit's hook entry with `words` after the host."""
         return [fwd(os.path.join(self.kit, 'boot', 'hook.py')), 'claude'] + list(words)
@@ -262,42 +265,33 @@ class DryRunApplyAgain(Base):
         self.assertEqual(self.snapshot(), before)
         self.assertIn('DRY RUN', out)
         self.assertIn('re-run with --apply', out)
-        self.assertIn('replace the link', out)
-        self.assertIn('a real folder: rename it to comfy.old-%s' % TODAY, out)
+        self.assertNotIn('replace the link', out)                            # no link is made
+        self.assertNotIn('.old-', out)                                       # nothing renamed aside
+        self.assertIn('leftover link %s -> ' % os.path.join(self.c1, 'tools'), out)
+        self.assertIn('remove it with: cmd /c rmdir "%s"' % os.path.join(self.c1, 'tools'), out)
+        self.assertIn('%s: a real folder, left as it is' % os.path.join(self.c2, 'tools', 'comfy'), out)
         diff = [l.strip() for l in out.splitlines()]
         self.assertIn('-' + ' ' * 12 + '"command": "python %s/hooks/no_root_search.py"' % fwd(self.old), diff)
         self.assertTrue(any(l.startswith('+') and 'boot/hook.py' in l for l in diff), out)
-        self.assertIn('the kit has no skill worktree-start', out)
+        self.assertIn('also loads worktree-start, which the kit has no skill for', out)
         self.assertIn('agents', out)
         self.assertIn('left as is', out)
         self.assertIn('icacls', out)
-        self.assertIn('not carried over', out)
-        self.assertIn('heavy_run.py', out)
-        self.assertIn('%s -> ' % os.path.join(self.c2, 'tools', 'oldthing'), out)
+        self.assertIn('leftover link %s -> ' % os.path.join(self.c2, 'tools', 'oldthing'), out)
         self.assertIn('KIT_MACHINE_LOCK', out)
         self.assertNotIn(os.path.join(self.c2, 'skills', 'land-branch'), out)   # follows account 1
 
     def test_apply_makes_every_change_and_a_second_run_has_nothing_to_do(self):
         s1_before = readb(self.s1)
+        links_before = {p: v for p, v in self.snapshot().items() if isinstance(v, str) and v.startswith('link:')}
         code, out = self.run_it(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('made ', out)
-        # links
-        self.assertFalse(common.is_link(os.path.join(self.c1, 'tools')))
-        self.assertEqual(self.target(self.c1, 'tools', 'machine_lock'), self.kitp('tools'))
-        self.assertEqual(self.target(self.c1, 'tools', 'kitlib'), self.kitp('kitlib'))
-        self.assertEqual(self.target(self.c1, 'tools', 'usage'), self.kitp('optional/usage'))
-        self.assertEqual(self.target(self.c1, 'skills', 'land-branch'), self.kitp('content/skills/land-branch'))
-        self.assertEqual(self.target(self.c1, 'skills', 'worktree-start'),     # no kit skill: kept
-                         common.norm(os.path.join(self.old, 'skills', 'worktree-start')))
-        self.assertEqual(self.target(self.c1, 'knowledge', 'asset-generation'), self.kitp('knowledge/asset-generation'))
-        self.assertEqual(self.target(self.c1, 'agents'), common.norm(os.path.join(self.old, 'agents')))
-        self.assertEqual(self.target(self.c2, 'tools', 'machine_lock'), self.kitp('tools'))
-        self.assertEqual(self.target(self.c2, 'tools', 'comfy'), self.kitp('optional/comfy'))
-        aside = os.path.join(self.c2, 'tools', 'comfy.old-' + TODAY, 'local-notes.txt')
-        self.assertEqual(readb(aside).decode('utf-8').strip(), 'keep me')
-        self.assertTrue(common.is_link(os.path.join(self.c2, 'skills')))
-        self.assertTrue(os.path.isfile(os.path.join(self.c1, 'tools', 'machine_lock', 'machine_lock.py')))
+        # links: every one as it was, none made (test_no_link.py has the leftover notes)
+        self.assertEqual({p: v for p, v in self.snapshot().items() if isinstance(v, str) and v.startswith('link:')},
+                         links_before)
+        self.assertEqual(readb(os.path.join(self.c2, 'tools', 'comfy', 'local-notes.txt')).decode('utf-8').strip(),
+                         'keep me')
         # the old kit is untouched
         self.assertTrue(os.path.isfile(os.path.join(self.old, 'tools', 'comfy', 'comfy_gen.py')))
         # settings
@@ -317,7 +311,10 @@ class DryRunApplyAgain(Base):
         self.assertEqual(pre[1]['hooks'][0]['args'], self.entry('PreToolUse'))
         self.assertEqual(doc['hooks']['SessionStart'][0]['hooks'][0],          # re-pointed, then exec form
                          {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'pm')})
-        self.assertEqual(doc['statusLine'], self.settings_doc()['statusLine'])   # through tools/usage: kept
+        self.assertEqual(doc['statusLine'], {'type': 'command',                  # through tools/usage: re-pointed
+                                             'command': 'powershell -NoProfile -File "%s"'
+                                                        % fwd(os.path.join(self.kit, 'optional', 'usage',
+                                                                           'statusline-usage.ps1'))})
         doc2 = json.loads(readb(self.s2).decode('utf-8'))
         self.assertEqual(doc2['hooks']['SessionStart'][0]['hooks'][0],
                          {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'coordinator')})
@@ -376,13 +373,13 @@ class Refusals(Base):
         os.remove(os.path.join(self.kit, 'optional', 'usage', 'statusline-usage.ps1'))
         self.assertRefusedUnchanged('statusline-usage.ps1')
 
-    def test_a_missing_link_target_in_the_kit_refuses(self):
+    def test_no_link_is_made_so_a_missing_kit_folder_or_a_file_at_a_link_name_is_no_refusal(self):
         shutil.rmtree(os.path.join(self.kit, 'optional', 'procwatch'))
-        self.assertRefusedUnchanged('optional/procwatch')
-
-    def test_a_file_where_a_link_goes_refuses(self):
         touch(os.path.join(self.c2, 'tools', 'kitlib'))
-        self.assertRefusedUnchanged('is a file where a link')
+        code, out = self.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertNotIn('REFUSED', out)
+        self.assertNotIn(os.path.join(self.c2, 'tools', 'kitlib'), out)
 
     def test_the_kit_as_its_own_old_kit_refuses(self):
         code, lines = M.run(M.Context(self.home, self.kit, self.kit, host=self.host, today=TODAY,
@@ -844,6 +841,293 @@ class ChangeReports(unittest.TestCase):
         self.assertEqual(code, M.EXIT_OK)
         self.assertNotIn('processed file', '\n'.join(lines))
         self.assertLess(lines.index('  would remove a'), lines.index('done: register'))
+
+
+LOCK_RULES = ['mcp__plugin_pm-kit_machine-lock__lock_snapshot', 'mcp__plugin_pm-kit_machine-lock__lock_run',
+              'mcp__plugin_pm-kit_machine-lock__lock_hold']
+PLUGIN_HOOKS_JSON = os.path.join(KIT, 'hosts', 'claude', 'shell', 'hooks', 'hooks.json')
+
+
+def give_plugin_hooks(kit):
+    """The kit's real plugin hooks file (hosts/claude/shell/hooks/hooks.json), named by a manifest,
+    copied into the temp kit `kit`."""
+    hooks = os.path.join(kit, 'hosts', 'claude', 'shell', 'hooks', 'hooks.json')
+    os.makedirs(os.path.dirname(hooks), exist_ok=True)
+    shutil.copyfile(PLUGIN_HOOKS_JSON, hooks)
+    touch(os.path.join(kit, '.claude-plugin', 'plugin.json'),
+          json.dumps({'name': 'pm-kit', 'version': '0.1.0', 'hooks': './hosts/claude/shell/hooks/hooks.json'}))
+
+
+def exec_hook(script, *words, python='pythonw'):
+    return {'type': 'command', 'command': python, 'args': [fwd(script)] + list(words)}
+
+
+class PluginEdit(unittest.TestCase):
+    """settings.plugin_edit: the lock tools' allow rules and the kit SessionStart entries the plugin
+    replaces, on parsed JSON (docs/machine-setup.md "Default mode")."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='machinesetup-plugin-edit-')
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.kit = os.path.join(self.root, 'kit')
+        self.home = os.path.join(self.root, 'home')
+        give_plugin_hooks(self.kit)
+        self.entry = os.path.join(self.kit, 'boot', 'hook.py')
+
+    def edit(self, data):
+        return settings.plugin_edit(data, self.kit, self.home)
+
+    def test_only_an_exact_kit_sessionstart_entry_goes(self):
+        other_kit = os.path.join(self.root, 'other-kit', 'boot', 'hook.py')
+        back = self.entry.replace('/', '\\')
+        back = back[0].lower() + back[1:]                            # drive letter case, back slashes
+        data = {'hooks': {
+            'SessionStart': [
+                {'matcher': 'startup', 'hooks': [exec_hook(self.entry, 'claude', 'SessionStart'),
+                                                 {'type': 'command', 'command': 'echo hi'}]},
+                {'matcher': 'startup|resume|compact',
+                 'hooks': [{'type': 'command', 'command': 'python "%s" claude SessionStart coordinator' % back}]},
+                {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'pm')]},
+                {'hooks': [exec_hook(other_kit, 'claude', 'SessionStart')]},
+                {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'x')]},
+                {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', python='C:/Py/python.exe')]},
+                {'hooks': []},                                       # empty before: not this step's
+            ],
+            'SubagentStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SubagentStart')]}],
+        }}
+        before = json.dumps(data, sort_keys=True)
+        new, added, dropped, kept = self.edit(data)
+        self.assertEqual(json.dumps(data, sort_keys=True), before)  # the input is not changed
+        self.assertEqual(added, LOCK_RULES)
+        self.assertEqual(dropped, ['hook.py claude SessionStart', 'hook.py claude SessionStart coordinator',
+                                   'hook.py claude SessionStart'])
+        self.assertEqual(kept, [])
+        ss = new['hooks']['SessionStart']
+        self.assertEqual(ss, [
+            {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'echo hi'}]},
+            {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'pm')]},
+            {'hooks': [exec_hook(other_kit, 'claude', 'SessionStart')]},
+            {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'x')]},
+            {'hooks': []},
+        ])
+        self.assertEqual(new['hooks']['SubagentStart'], data['hooks']['SubagentStart'])
+
+    def coordinator(self, *matcher):
+        g = {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'coordinator')]}
+        if matcher:
+            g['matcher'] = matcher[0]
+        return g
+
+    def test_a_matcher_the_plugins_covers_goes(self):
+        for m in ('startup|compact', 'resume', 'startup|resume|compact', ' compact | startup '):
+            result = self.edit({'hooks': {'SessionStart': [self.coordinator(m)]}})
+            self.assertEqual(result[0]['hooks'], {}, m)
+            self.assertEqual(result[2], ['hook.py claude SessionStart coordinator'], m)
+            self.assertEqual(result[3], [], m)
+
+    def test_a_wider_matcher_is_kept_and_named(self):
+        for m, missing in (('startup|clear', ['clear']), ('clear', ['clear']), ('startup|resume|foo', ['foo']),
+                           ('start.*', None)):
+            data = {'hooks': {'SessionStart': [self.coordinator(m)]}}
+            result = self.edit(data)
+            self.assertEqual(result[0]['hooks'], data['hooks'], m)
+            self.assertEqual(result[2], [], m)
+            self.assertEqual(result[3], [('hook.py claude SessionStart coordinator', m, missing)], m)
+
+    def test_an_empty_or_absent_matcher_is_kept_against_a_narrower_plugin_matcher(self):
+        for g in (self.coordinator(), self.coordinator(''), self.coordinator('*')):
+            data = {'hooks': {'SessionStart': [g]}}
+            result = self.edit(data)
+            self.assertEqual(result[0]['hooks'], data['hooks'], g)
+            self.assertEqual(result[2], [], g)
+            self.assertEqual(result[3], [('hook.py claude SessionStart coordinator', g.get('matcher'),
+                                          ['clear'])], g)
+        for m in (None, '', '*'):                                    # the plugin's matcher covers every source
+            g = {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart')]}
+            if m is not None:
+                g['matcher'] = m
+            result = self.edit({'hooks': {'SessionStart': [g]}})
+            self.assertEqual((result[0]['hooks'], result[2], result[3]),
+                             ({}, ['hook.py claude SessionStart'], []), m)
+
+    def test_an_event_this_step_empties_goes_and_hooks_stays(self):
+        data = {'hooks': {'SessionStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SessionStart')]}]}}
+        new, _added, dropped, _kept = self.edit(data)
+        self.assertEqual(new['hooks'], {})
+        self.assertEqual(dropped, ['hook.py claude SessionStart'])
+
+    def test_allow_rules_are_appended_once_in_order(self):
+        data = {'permissions': {'allow': ['Bash(git status)', LOCK_RULES[1]], 'deny': ['x']}}
+        new, added, dropped, kept = self.edit(data)
+        self.assertEqual(added, [LOCK_RULES[0], LOCK_RULES[2]])
+        self.assertEqual(dropped, [])
+        self.assertEqual(new['permissions'], {'allow': ['Bash(git status)', LOCK_RULES[1], LOCK_RULES[0],
+                                                        LOCK_RULES[2]], 'deny': ['x']})
+        again, added, dropped, kept = self.edit(new)
+        self.assertEqual((again, added, dropped, kept), (new, [], [], []))
+        new, added, _, _ = self.edit({})
+        self.assertEqual(new, {'permissions': {'allow': LOCK_RULES}})
+
+    def test_a_wrong_shape_is_a_value_error(self):
+        for data in ({'permissions': []}, {'permissions': {'allow': 'x'}}):
+            with self.assertRaises(ValueError):
+                self.edit(data)
+
+    def test_no_plugin_hooks_file_drops_nothing(self):
+        os.remove(os.path.join(self.kit, '.claude-plugin', 'plugin.json'))
+        data = {'hooks': {'SessionStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SessionStart')]}]}}
+        new, _added, dropped, _kept = self.edit(data)
+        self.assertEqual(dropped, [])
+        self.assertEqual(new['hooks'], data['hooks'])
+
+
+class PluginSettings(unittest.TestCase):
+    """The default mode's per-folder plugin settings change: after the plugin install, the lock
+    tools' allow rules and the drop of the kit SessionStart entries the plugin runs. The fixture is
+    tests/machinesetup/test_fresh.py's FreshBase (fake home, temp kit with a bare remote, FakeClaude:
+    no claude process, no real account folder), used whole as `self.fx`: that module imports this
+    one, so it is imported here at setUp."""
+
+    def setUp(self):
+        from tests.machinesetup import test_fresh as F
+        self.F = F
+        if sys.platform != 'win32':
+            self.skipTest('the wrapper and the kit are Windows only')
+        self.fx = F.FreshBase()
+        self.addCleanup(self.fx.doCleanups)
+        self.fx.setUp()
+        give_plugin_hooks(self.fx.kit)
+        self.entry = os.path.join(self.fx.kit, 'boot', 'hook.py')
+        self.doc = {
+            'permissions': {'allow': ['Bash(git status)']},
+            'hooks': {
+                'SessionStart': [
+                    {'matcher': 'startup', 'hooks': [exec_hook(self.entry, 'claude', 'SessionStart'),
+                                                     {'type': 'command', 'command': 'echo hi'}]},
+                    {'matcher': 'startup|resume|compact',
+                     'hooks': [{'type': 'command',
+                                'command': 'python "%s" claude SessionStart coordinator' % fwd(self.entry)}]},
+                    {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'pm')]},
+                ],
+                'SubagentStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SubagentStart')]}],
+            },
+        }
+        self.write(self.fx.s2, self.doc)
+
+    def write(self, path, doc):
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(doc, f, indent=2)
+
+    def load(self, path):
+        return self.F.load(path)
+
+    def test_apply_adds_the_rules_and_drops_only_the_kit_sessionstart_entries(self):
+        code, out = self.fx.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        doc = self.load(self.fx.s2)
+        self.assertIs(doc['enabledPlugins'][self.F.PID], True)       # the CLI's write is kept
+        self.assertIn('pm-kit', doc['extraKnownMarketplaces'])
+        self.assertEqual(doc['permissions']['allow'], ['Bash(git status)'] + LOCK_RULES)
+        self.assertEqual(doc['hooks']['SessionStart'], [
+            {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'echo hi'}]},
+            {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'pm')]},
+        ])
+        self.assertEqual(doc['hooks']['SubagentStart'], self.doc['hooks']['SubagentStart'])
+        self.assertTrue(self.F.guard_in(doc, self.fx.kit))           # the settings step's guard entry
+        self.assertEqual(self.load(self.fx.s1)['permissions']['allow'], LOCK_RULES)
+        bak = self.fx.s2 + '.machine-setup-%s-plugin-settings.bak' % TODAY
+        old = self.F.load(bak)                                       # what the CLI left, before this edit
+        self.assertIs(old['enabledPlugins'][self.F.PID], True)
+        self.assertEqual(old['hooks']['SessionStart'], self.doc['hooks']['SessionStart'])
+        done = [l for l in out.splitlines() if l.startswith('done: ')]
+        install = max(i for i, l in enumerate(done) if 'enable the kit plugin' in l)
+        edit = min(i for i, l in enumerate(done) if 'lock tools' in l)
+        self.assertLess(install, edit)
+        self.assertIn('add 3 allow rules for the lock tools (%s) and remove 2 kit SessionStart entries the '
+                      'plugin runs (hook.py claude SessionStart; hook.py claude SessionStart coordinator)'
+                      % ', '.join(LOCK_RULES), out)
+        before = self.fx.snapshot()
+        code, out = self.fx.run_it(apply=True)                       # again: nothing to do
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertNotIn('lock tools', out)
+        self.assertEqual(self.fx.snapshot(), before)
+
+    def test_dry_run_names_the_rules_and_entries_and_writes_nothing(self):
+        before = self.fx.snapshot()
+        code, out = self.fx.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.fx.snapshot(), before)
+        self.assertIn('%s: after the kit plugin is enabled, add 3 allow rules for the lock tools' % self.fx.s2, out)
+        self.assertIn('remove 2 kit SessionStart entries the plugin runs', out)
+        self.assertIn('backup: settings.json.machine-setup-%s-plugin-settings.bak' % TODAY, out)
+        diff = [l.strip() for l in out.splitlines()]                 # the diff on the file as it is now
+        self.assertTrue([l for l in diff if l.startswith('+') and LOCK_RULES[0] in l], out)
+        self.assertTrue([l for l in diff if l.startswith('-') and 'SessionStart coordinator' in l], out)
+        self.assertNotIn('the SessionStart hook', out)               # the change replaces its twin note
+        self.assertIn('the SubagentStart hook hook.py claude SubagentStart is also the kit plugin\'s hook', out)
+
+    def test_dry_run_notes_an_entry_kept_for_its_wider_matcher(self):
+        self.doc['hooks']['SessionStart'][1]['matcher'] = 'startup|resume|clear|compact'
+        self.write(self.fx.s2, self.doc)
+        before = self.fx.snapshot()
+        code, out = self.fx.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.fx.snapshot(), before)
+        self.assertIn('remove 1 kit SessionStart entries the plugin runs (hook.py claude SessionStart)', out)
+        self.assertIn('%s: the kit SessionStart entry hook.py claude SessionStart coordinator stays: its matcher '
+                      '"startup|resume|clear|compact" also covers clear, which the kit plugin\'s does not'
+                      % self.fx.s2, out)
+        code, out = self.fx.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.load(self.fx.s2)['hooks']['SessionStart'][0:2], [
+            {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'echo hi'}]},
+            self.doc['hooks']['SessionStart'][1]])
+
+    def test_a_folder_with_the_plugin_off_is_left_alone(self):
+        self.doc['enabledPlugins'] = {self.F.PID: False}
+        self.write(self.fx.s2, self.doc)
+        code, out = self.fx.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        doc = self.load(self.fx.s2)
+        self.assertEqual(doc['permissions'], self.doc['permissions'])
+        self.assertEqual(doc['hooks']['SessionStart'], self.doc['hooks']['SessionStart'])
+        self.assertFalse([n for n in os.listdir(self.fx.c2) if n.endswith('-plugin-settings.bak')])
+
+    def test_no_cli_waits_unless_the_plugin_is_already_enabled(self):
+        self.fx.host.cli = False
+        code, out = self.fx.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.load(self.fx.s2)['hooks']['SessionStart'], self.doc['hooks']['SessionStart'])
+        self.assertNotIn('permissions', self.load(self.fx.s1))
+        self.assertIn('the lock tools\' allow rules and the kit SessionStart hook drop wait for it', out)
+        self.doc['enabledPlugins'] = {self.F.PID: True}              # enabled before (the kit checkout)
+        self.write(self.fx.s2, self.doc)
+        code, out = self.fx.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        doc = self.load(self.fx.s2)
+        self.assertEqual(doc['permissions']['allow'], ['Bash(git status)'] + LOCK_RULES)
+        self.assertEqual(len(doc['hooks']['SessionStart']), 2)
+
+    def test_a_wrong_shape_permissions_refuses_and_writes_nothing(self):
+        self.doc['permissions'] = {'allow': 'Bash(git status)'}
+        self.write(self.fx.s2, self.doc)
+        before = self.fx.snapshot()
+        code, out = self.fx.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('%s: "permissions.allow" is not a list' % self.fx.s2, out)
+        self.assertEqual(self.fx.snapshot(), before)
+
+    def test_the_edit_refuses_a_folder_whose_plugin_is_not_enabled(self):
+        from kitlib.machinesetup import plugin
+        raw = (json.dumps(self.doc, indent=2) + '\n').encode('utf-8')
+        with open(self.fx.s2, 'wb') as f:
+            f.write(raw)
+        bak = self.fx.s2 + '.bak-test'
+        with self.assertRaises(RuntimeError) as e:
+            plugin.edit_settings(self.fx.kit, self.fx.home, self.fx.s2, bak, self.F.PID)
+        self.assertIn('is not true', str(e.exception))
+        self.assertEqual(readb(self.fx.s2), raw)
+        self.assertFalse(os.path.exists(bak))
 
 
 if __name__ == '__main__':

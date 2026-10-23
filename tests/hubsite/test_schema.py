@@ -1,7 +1,8 @@
 """kitlib.hubsite.schema: required fields, types and ids."""
+import datetime
 import unittest
 
-from kitlib.hubsite import schema
+from kitlib.hubsite import approvals, schema
 
 
 def codes(findings):
@@ -37,6 +38,43 @@ class CheckTest(unittest.TestCase):
     def test_story_ids_come_from_hubvalidate(self):
         self.assertEqual(schema.ID_PREFIX['stories'], 'S')
         self.assertEqual(schema.ID_PREFIX['questions'], 'Q')
+        self.assertEqual(schema.ID_PREFIX['approvals'], 'A')
+
+    def test_an_approval_request_passes_and_needs_its_head(self):
+        doc = approvals.new_doc('https://github.com/o/r', 't', 'a' * 40,
+                                [{'path': 'x.md', 'base_blob': None, 'content': 'x\n'}],
+                                datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc))
+        self.assertEqual(schema.check('approvals', doc), [])
+        doc.pop('head')
+        self.assertEqual(codes(schema.check('approvals', doc)), [('head', 'schema-field')])
+        doc.pop('files')
+        self.assertEqual(codes(schema.check('approvals', doc)),
+                         [('head', 'schema-field'), ('files', 'schema-field')])
+
+    OP = {'status': 'pending', 'kind': 'op', 'op': 'D-001', 'repo': '*', 'title': 't',
+          'line': 'tool.exe --x 1', 'args_sha256': 'a' * 64, 'what': 'w',
+          'created_at': '2026-01-02T00:00:00+00:00'}
+
+    def test_an_op_approval_passes_without_head_or_files_and_needs_its_own_fields(self):
+        self.assertEqual(schema.check('approvals', dict(self.OP)), [])
+        for field in ('op', 'line', 'args_sha256', 'repo', 'title', 'created_at'):
+            doc = dict(self.OP)
+            doc.pop(field)
+            self.assertEqual(codes(schema.check('approvals', doc)), [(field, 'schema-field')],
+                             field)
+
+    def test_an_approval_with_no_kind_still_needs_head_and_files(self):
+        doc = dict(self.OP)
+        doc.pop('kind')
+        self.assertEqual(codes(schema.check('approvals', doc)),
+                         [('head', 'schema-field'), ('files', 'schema-field')])
+
+    def test_an_unknown_approval_kind_is_an_error(self):
+        for kind in ('files', 'OP', '', ' op'):
+            self.assertEqual(codes(schema.check('approvals', dict(self.OP, kind=kind))),
+                             [('kind', 'schema-field')], kind)
+        self.assertEqual(codes(schema.check('approvals', dict(self.OP, kind=['op']))),
+                         [('kind', 'schema-field')])
 
 
 class IdTest(unittest.TestCase):

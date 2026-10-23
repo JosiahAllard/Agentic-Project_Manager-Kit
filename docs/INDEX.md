@@ -16,6 +16,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
+- `docs/allow-rules.md` | allow rules for landing: the permission lines allow_rules.py prints, what each lets through | letting an agent submit a landing without a prompt | kw: allow-rules, allow_rules, permissions
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
 - `docs/hub-mcp.md` | hub MCP server: the Action Hub's api as MCP tools, the owner's tools pinned | the hub from an agent | kw: hub-mcp, hub, mcp
 - `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
@@ -26,13 +27,17 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
 - `docs/content.md` | content/ and render_content: roles and skills written once, rendered per host with the plugin manifests (kit.json's version) and the kit header | editing an agent or a skill | kw: content, render_content, roles, render, kit.json, manifest, header
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
+- `docs/delegations.md` | the owner's delegation list: location, schema 1, the hard exclusions E1 to E5, running one, known limits | reading or changing what the PM may run for the owner, or running it | kw: delegations, owner-delegations, exclusions, delegated, runner
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
+- `docs/flaky-tests.md` | flaky tests: the time fence design (first step built: kitlib.clock, agentstart's budget), survey of nondeterminism in tests/ | a test fails under load, adding a time budget | kw: flaky, flake, time-fence, clock, budget
 - `docs/gate.md` | gate.py | running the gate | kw: gate, test, stash
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal, hub secrets
+- `docs/guard-v2.md` | guard v2 design: keep/cut list, target size, open guard records | planning guard cuts | kw: guard-v2, guard, cuts, refusals
 - `docs/kitboot.md` | boot/kitboot.py: which kit a host entry runs, the pinned release check before kitlib | a hook or the lock server will not load the kit | kw: kitboot, boot, PM_KIT_ROOT, PM_KIT_RELEASE_ID, release
 - `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer, junctions, plugin
+- `docs/jev-fit-audit.md` | Jev fit audit step 1: the kit's routing and labelling decisions, cost and fit findings (desk study, no trial) | weighing a structured-decision model for kit decisions | kw: jev, fit-audit, audit, cost
 - `docs/kit-json.md` | `.kit.json` keys, types and defaults | configuring | kw: kit-json, config
 - `docs/landed.md` | landed: has a branch landed | checking a branch | kw: landed
 - `docs/launcher.md` | launcher | starting sessions | kw: launcher, launch
@@ -40,7 +45,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-api.md` | machine lock API | heavy runs | kw: lock, machine-lock
 - `docs/lock-mcp.md` | lock MCP server | lock from an agent | kw: lock-mcp, mcp
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
-- `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup
+- `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup, leftover links
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
 - `docs/multi-host-plan.md` | multi-host architecture plan (proposal) | changing host adapters, plugins or the bridge | kw: multi-host, codex, host, plugin, bridge
 - `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
@@ -60,6 +65,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/review-pack.md` | review_pack | preparing a review | kw: review-pack, review
 - `docs/shipping.md` | what ships | changing the shipped set | kw: shipping, ships
 - `docs/specialty-skills.md` | decided spec (not built): specialties as skills, merged read and docs agent types (analyst, docs-writer) | changing the roster or a specialty skill | kw: specialty, skills, roster, roles, merge
+- `docs/subtraction-audit.md` | kit subtraction audit: code, tools and config to remove or shrink, kept items, owner decisions | planning removals | kw: subtraction-audit, audit, removal
 - `docs/sync-base.md` | sync_base | main moved | kw: sync-base, merge
 - `docs/test-tools.md` | testlist, tool_deps, pytests | test selection | kw: testlist, tool_deps, pytests, tests
 - `docs/windows-token-leak.md` | Windows token leak: slow process launches | slow launches | kw: windows, token-leak
@@ -96,15 +102,18 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/doc_budget.py` | doc size budgets (`docs/doc-tools.md`) | kw: doc_budget
 - `tools/codemap.py` | where code lives (`docs/doc-tools.md`) | kw: codemap
 - `tools/backlog.py` | backlog store (`docs/backlog.md`) | kw: backlog
+- `tools/backlog_audit.py` | backlog audit check (`docs/backlog.md` "Audit log") | kw: backlog_audit
 - `tools/backlog_lint.py` | backlog lint (`docs/backlog-lint.md`) | kw: backlog_lint
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
+- `tools/allow_rules.py` | print the land permission rules for a repository (`docs/allow-rules.md`) | kw: allow_rules, permissions
 - `tools/landed.py` | has a branch landed (`docs/landed.md`) | kw: landed
 - `tools/branch_overlap.py` | unmerged branches that change files in a set (`docs/branch-overlap.md`) | kw: branch_overlap, overlap
 - `tools/machine_lock.py` | machine lock (`docs/lock-api.md`) | kw: machine_lock, lock
 - `tools/lock_release_check.py` | lock release pre-check (`docs/lock-release.md`) | kw: lock_release_check
-- `tools/worktree_remove.py` | remove a worktree (`docs/worktree-remove.md`) | kw: worktree_remove
+- `tools/worktree_remove.py` | remove a worktree, or mark one stale for the nightly sweep (`docs/worktree-remove.md`) | kw: worktree_remove, mark-stale, stale-mark
 - `tools/ledger.py` | rulings ledger (`docs/ledger.md`) | kw: ledger
+- `tools/delegated.py` | run one operation of the owner's delegation list on the owner's order (`docs/delegations.md` "Running") | kw: delegated, delegations, run
 - `tools/pending.py` | pending steps (`docs/pending.md`) | kw: pending
 - `tools/launch.py` | launcher (`docs/launcher.md`) | kw: launch, launcher
 - `tools/pm_watch.py` | PM watcher (`docs/pm-watch.md`) | kw: pm_watch

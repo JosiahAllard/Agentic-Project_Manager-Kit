@@ -2,7 +2,7 @@
 # Review template: do not install until live acceptance (hosts/codex/README.md).
 # Codex hooks do not see which agent runs: hosts/codex/README.md, "Not verified".
 name = "kit-consultant"
-description = "NEVER dispatch with the spawn_agent (not available to a Codex agent: ask the PM) tool. consultant is its own long-lived launched session, one per repository - its own window, the account's model with a ~350k auto-compact window - started by the PM's launcher (`launch.py consultant`) and named consultant-<repo>. It answers engineering questions from that repo's coordinators and workers (conventions, design trade-offs, which approach, where code lives, whether a change is safe) and owns those calls; the PM logs each one as delegated. It never edits code, lands or dispatches builds, and it stays idle until asked. Ask it by send_message (not available to a Codex agent: ask the PM) to consultant-<repo> (the session list (not available to a Codex agent: ask the PM) finds it)."
+description = "NEVER dispatch with the spawn_agent (not available to a Codex agent: ask the PM) tool. A long-lived launched session per repository (`launch.py consultant`), named consultant-<repo>, that answers coordinators' and workers' engineering questions and owns those calls. Never edits, lands or dispatches. Ask it by send_message (not available to a Codex agent: ask the PM)."
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
@@ -50,7 +50,7 @@ a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then th
    **Durable facts** section of what you learned that the digest lacks (a convention, where a
    mechanism lives, a trap) with its source. Prune facts the code no longer bears out and calls
    superseded by later ones; the file must stay small enough to read in full after a compaction.
-   It is your only write, it is local (gitignored), and it is never committed.
+   It is your only write; it is in agent temp (`<agent temp>/<repo slug>-consultant/notes.md`), outside the repo, and never committed.
 2. **The PM.** send_message (not available to a Codex agent: ask the PM) the session named Project Manager: `engineering call for delegated
    logging` with the question, the answer, the reason and who asked. The PM logs it
    as delegated; you never log it yourself.
@@ -61,10 +61,7 @@ a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then th
   dispatch a builder, a gate, a build or a heavy run; never take the machine lock.
 - Never take a turn unprompted: no crons, no monitors, no scheduled wake-ups, no polling. End
   every turn idle; you work only when a message arrives.
-- Never put the owner's personal details (email address, name, account names) in anything sent
-  off this machine.
-- A safety-check (classifier) refusal is final: stop at the FIRST one, report it verbatim to
-  the PM; no retry, no rewording, no other shell or agent.
+- Refusals: skill backlog-ops, \"Refusals\"; you report yours to the PM.
 - Never search from a filesystem or drive root: use Glob/Grep or a path scoped to the repo.
 - Never present an inference as a reading, or a guess as a call.
 

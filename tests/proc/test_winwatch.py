@@ -211,10 +211,15 @@ class RealWindows(Watched):
         self.assertEqual(winwatch.base(w.exe), "python.exe")
         self.assertEqual(w.host_pid, p.pid)         # the window's thread is the child's own
         self.assertIs(w.ours, True)
+        self.assertIn("import ctypes, sys", w.cmdline)  # what spawned it: read while it ran
+        self.assertEqual(w.parent_pid, os.getpid())
+        self.assertNotEqual(w.parent_cmdline, winwatch.UNREADABLE)
         lines = winwatch.report_lines([w])
         self.assertTrue(lines[0].startswith("windows opened: 1 - WARNING"), lines)
         self.assertIn("pid %d python.exe" % p.pid, lines[1])
         self.assertTrue(lines[1].endswith("[this run]"), lines)
+        self.assertTrue(lines[2].startswith("    cmd: ") and "import ctypes" in lines[2], lines)
+        self.assertTrue(lines[3].startswith("    parent: pid %d: " % os.getpid()), lines)
 
     def test_a_window_shown_just_before_stop_is_recorded(self):
         """The tail: stop() straight after the probe's window shows (it prints its handle after
@@ -319,6 +324,89 @@ class StartStop(unittest.TestCase):
         self.assertIsNone(winwatch.Monitor(ours=lambda pid: "in")._owner(1234))
 
 
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class ProcInfo(unittest.TestCase):
+    """proc_info: what spawned a window, read from the process; never an exception."""
+
+    def test_a_live_child_gives_its_command_line_and_parent(self):
+        marker = "kit-winwatch-procinfo-marker"
+        p = subprocess.Popen([python_exe(), "-c", "import sys; sys.stdin.read()", marker],
+                             creationflags=win32.CREATE_NO_WINDOW, stdin=subprocess.PIPE)
+        try:
+            cmd, ppid, pcmd = winwatch.proc_info(p.pid)
+        finally:
+            p.stdin.close()
+            p.wait(EXIT_WAIT_S)
+        self.assertIn(marker, cmd)
+        self.assertEqual(ppid, os.getpid())
+        self.assertNotEqual(pcmd, winwatch.UNREADABLE)
+        self.assertEqual(p.returncode, 0)
+
+    def test_a_gone_process_is_unreadable(self):
+        p = subprocess.Popen([python_exe(), "-c", "pass"], creationflags=win32.CREATE_NO_WINDOW)
+        p.wait(EXIT_WAIT_S)
+        gone = p.pid
+        del p
+        u = winwatch.UNREADABLE
+        # An exited process whose object some handle still holds gives no command line, but
+        # may still give its parent; one fully gone gives neither. Either way: no exception.
+        cmd, ppid, pcmd = winwatch.proc_info(gone)
+        self.assertEqual(cmd, u)
+        self.assertIn(ppid, (None, os.getpid()))
+        self.assertEqual(winwatch.proc_info(None), (u, None, u))
+        self.assertEqual(winwatch.proc_info(0), (u, None, u))
+
+    def test_a_raising_reader_is_unreadable(self):
+        def boom(*a):
+            raise OSError("x")
+        with mock.patch.object(winwatch.process, "command_line", boom), \
+                mock.patch.object(winwatch.process, "open_process", boom):
+            u = winwatch.UNREADABLE
+            self.assertEqual(winwatch.proc_info(os.getpid()), (u, None, u))
+
+    def test_a_parent_newer_than_the_child_is_not_its_parent(self):
+        with mock.patch.object(winwatch.process, "handle_ctime", lambda h: 100), \
+                mock.patch.object(winwatch.process, "proc_ctime", lambda pid: 200):
+            cmd, ppid, pcmd = winwatch.proc_info(os.getpid())
+        self.assertNotEqual(cmd, winwatch.UNREADABLE)
+        self.assertEqual((ppid, pcmd), (None, winwatch.UNREADABLE))
+
+    def test_a_long_command_line_is_cut(self):
+        with mock.patch.object(winwatch.process, "command_line",
+                               lambda pid, ct=None: "x" * (winwatch.CMDLINE_CAP + 50)):
+            cmd = winwatch.proc_info(os.getpid())[0]
+        self.assertEqual(cmd, "x" * winwatch.CMDLINE_CAP + "...")
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class ReadOrder(unittest.TestCase):
+    """Whose a window is (ours) is read before proc_info, so the extra reads never widen the time
+    in which the program can exit before ours() sees it."""
+
+    def events(self, cls):
+        calls = []
+        mon = winwatch.Monitor(ours=lambda pid: calls.append("ours") or True, classes=(cls,))
+        fakes = {"class_name": lambda h: cls, "window_text": lambda h: "t",
+                 "window_pid": lambda h: 5, "thread_pid": lambda t: 6,
+                 "exe_of": lambda pid: calls.append("exe") or "x.exe",
+                 "proc_info": lambda pid: calls.append("info") or ("c", 4, "p")}
+        with mock.patch.multiple(winwatch, **fakes):
+            mon._event(winwatch.EVENT_OBJECT_SHOW, 1, 2)
+        return mon, calls
+
+    def test_console_window(self):
+        mon, calls = self.events(winwatch.CONSOLE)
+        self.assertLess(calls.index("ours"), calls.index("info"), calls)
+        self.assertLess(calls.index("exe"), calls.index("info"), calls)
+        w = mon._new[1]
+        self.assertEqual((w.ours, w.cmdline, w.parent_pid), (True, "c", 4))
+
+    def test_pseudo_window(self):
+        mon, calls = self.events(winwatch.PSEUDO)
+        self.assertEqual(calls, ["exe", "ours", "info"])
+        self.assertEqual(mon.pseudos()[0].info, ("c", 4, "p"))
+
+
 class LooksLaunched(unittest.TestCase):
     def test_paths_and_names(self):
         for t in (r"C:\Python\python.exe", r'"C:\Program Files\Git\bin\bash.exe" --login',
@@ -352,6 +440,14 @@ class Attribute(unittest.TestCase):
         out = winwatch.attribute([w], [winwatch.Pseudo(55, self.PY, True, mono=10.2)])
         self.assertEqual((out[0].pid, out[0].exe, out[0].ours), (55, self.PY, True))
         self.assertIsNone(w.pid)                    # the input is not changed
+        self.assertIsNone(out[0].cmdline)           # a program not read gives no command line
+
+    def test_terminal_window_takes_its_programs_command_line(self):
+        w = W(winwatch.TERMINAL, "window", self.PY, 10.0, host_pid=7)
+        info = ("python -m unittest x", 44, "python tools/gate.py")
+        out = winwatch.attribute([w], [winwatch.Pseudo(55, self.PY, True, mono=10.2, info=info)])
+        self.assertEqual((out[0].cmdline, out[0].parent_pid, out[0].parent_cmdline), info)
+        self.assertIsNone(w.cmdline)                # the input is not changed
 
     def test_the_exe_the_title_names_wins_over_time(self):
         w = W(winwatch.TERMINAL, "window", self.GIT, 10.0)
@@ -380,6 +476,65 @@ class Attribute(unittest.TestCase):
         self.assertEqual(out[0].pid, 1)                                      # the run's own
         out = winwatch.attribute([t], [winwatch.Pseudo(3, self.PY, False, mono=10.0)])
         self.assertEqual((out[0].pid, out[0].ours), (3, False))              # by exe
+
+    def test_a_host_twin_is_reported_once_as_the_program(self):
+        oc = r"C:\Term\OpenConsole.exe"
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        twin = W(winwatch.CONSOLE, "window", "a", 10.1, pid=6, exe=oc, ours=False)
+        far = W(winwatch.CONSOLE, "window", "b", 30.0, pid=7, exe=oc, ours=False)
+        out = winwatch.attribute([twin, real, far], [])
+        self.assertEqual([w.pid for w in out], [5, 7])      # the lone host window stays
+        lines = winwatch.report_lines(out)
+        self.assertTrue(lines[0].startswith("windows opened: 1 "), lines)
+        self.assertEqual(len([x for x in lines if "[not this run]" in x]), 1, lines)
+
+    OC = r"C:\Term\OpenConsole.exe"
+
+    def test_another_runs_window_does_not_hide_a_counted_host_window(self):
+        other = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=False)
+        host = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=True)
+        out = winwatch.attribute([other, host], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 1 "))
+
+    def test_a_window_with_no_exe_absorbs_nothing(self):
+        bare = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=None, ours=True)
+        host = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=True)
+        out = winwatch.attribute([bare, host], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+
+    def test_one_real_window_drops_only_the_nearest_host_window(self):
+        far = W(winwatch.CONSOLE, "window", "a", 9.0, pid=6, exe=self.OC, ours=True)
+        real = W(winwatch.CONSOLE, "window", "b", 10.0, pid=5, exe=self.PY, ours=True)
+        near = W(winwatch.CONSOLE, "window", "c", 10.1, pid=7, exe=self.OC, ours=True)
+        out = winwatch.attribute([far, real, near], [])
+        self.assertEqual([w.pid for w in out], [6, 5])
+
+    def test_the_host_pid_mate_wins_over_a_same_ours_mate(self):
+        # h1 is real's own host (host_pid) and not counted; h2 is a separate counted window
+        # of another host, nearer in time and with real's ours. h1 is the twin, so h2 stays.
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True, host_pid=6)
+        h1 = W(winwatch.CONSOLE, "window", "a", 10.3, pid=6, exe=self.OC, ours=False)
+        h2 = W(winwatch.CONSOLE, "window", "b", 10.1, pid=8, exe=self.OC, ours=True)
+        out = winwatch.attribute([real, h1, h2], [])
+        self.assertEqual([w.pid for w in out], [5, 8])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 2 "))
+
+    def test_a_same_ours_mate_wins_when_host_pid_does_not_decide(self):
+        # Neither host is real's host_pid; h1 (not counted) is nearer, h2 has real's ours.
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        h1 = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=False)
+        h2 = W(winwatch.CONSOLE, "window", "a", 10.3, pid=8, exe=self.OC, ours=True)
+        out = winwatch.attribute([real, h1, h2], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 1 "))
+
+    def test_a_conhost_twin_is_dropped(self):
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        twin = W(winwatch.CONSOLE, "window", "a", 10.2, pid=6,
+                 exe=r"C:\Windows\System32\conhost.exe", ours=True)
+        out = winwatch.attribute([real, twin], [])
+        self.assertEqual([w.pid for w in out], [5])
 
     def test_a_console_window_keeps_its_pid(self):
         w = W(winwatch.CONSOLE, "window", "x", 10.0, pid=9, ours=True)
@@ -418,6 +573,25 @@ class Report(unittest.TestCase):
         d = W(winwatch.CONSOLE, "window", "t", 1.0, pid=5, ours=True).as_dict()
         self.assertEqual((d["cls"], d["how"], d["pid"], d["ours"]),
                          (winwatch.CONSOLE, "window", 5, True))
+        self.assertEqual((d["cmdline"], d["parent_pid"], d["parent_cmdline"]), (None, None, None))
+        d = W(winwatch.CONSOLE, "window", "t", 1.0, pid=5, cmdline="a b", parent_pid=4,
+              parent_cmdline="c").copy().as_dict()
+        self.assertEqual((d["cmdline"], d["parent_pid"], d["parent_cmdline"]), ("a b", 4, "c"))
+
+    def test_command_lines_under_each_window(self):
+        u = winwatch.UNREADABLE
+        ours = W(winwatch.CONSOLE, "window", "t", 1.0, pid=5, ours=True,
+                 cmdline="python -c x", parent_pid=4, parent_cmdline="python -m unittest")
+        gone = W(winwatch.CONSOLE, "window", "u", 2.0, pid=6, ours=None, cmdline=u,
+                 parent_pid=None, parent_cmdline=u)
+        other = W(winwatch.CONSOLE, "window", "o", 3.0, pid=7, ours=False,
+                  cmdline="y" * (winwatch.TEXT_CAP + 9), parent_pid=3, parent_cmdline=u)
+        lines = winwatch.report_lines([ours, gone, other])
+        self.assertEqual(lines[2:4], ["    cmd: python -c x", "    parent: pid 4: python -m unittest"])
+        self.assertEqual(lines[5:7], ["    cmd: (unreadable)", "    parent: (unreadable)"])
+        self.assertEqual(lines[7], "  also seen, another run's: 1")
+        self.assertEqual(lines[9:], ["      cmd: %s..." % ("y" * winwatch.TEXT_CAP),
+                                     "      parent: pid 3: (unreadable)"])
 
     def test_records_are_capped(self):
         ws = [W(winwatch.CONSOLE, "window", "t", 1.0, pid=i, ours=True) for i in range(5)]

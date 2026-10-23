@@ -18,7 +18,10 @@ branch checked out) takes part too: the PM's records of this repository live the
                     record: its pulls no Closes line names are released ("releases <ID>: part
                     landed <merge sha> ..."), not closed. What cannot be closed or released is a
                     WARNING line naming the command, and the landing stands; trailer ids no store
-                    holds, and Part-of ids the branch holds nowhere, are NOTE lines
+                    holds, and Part-of ids the branch holds nowhere, are NOTE lines. The implicit
+                    default store (refs/backlog/main while .kit.json names no "backlog".store;
+                    store.default_store_refusal) is only read, the local ref too when the remote
+                    has none: a record that only it holds is a WARNING that it is stranded there
   landable_commands the `backlog.py landable` command of each store that takes part
 
 Neither creates a store or adds the store's fetch refspec when the remote has no store, and
@@ -262,13 +265,14 @@ def release_reason(merge, branch):
 def _release_plan(ctx, rid, branch, reason):
     """plan_release as `branch` (ctx.branch; its own pull, so no liveness probe), run only while
     `rid` is still pulled by `branch` in the fresh snapshot; its commit subject is `releases
-    <ID>: <reason>`, as a close's is `closes <ID>: <reason>`."""
+    <ID>: <reason>`, as a close's is `closes <ID>: <reason>`. `kept=False`: the landing's cleanup
+    deletes the branch, so no `Stopped on branch ... branch kept.` line, and no branch read."""
     def plan(snap):
         rec = snap.get(rid)
         if rec is None or rec.get('state') != 'pulled' or rec.get('pulled_by') != branch:
             return smod.Change({}, '', ['%s is no longer pulled by %s; left as it is'
                                         % (rid, branch)])
-        change = pmod.plan_release(snap, ctx, rid, reason)
+        change = pmod.plan_release(snap, ctx, rid, reason, kept=False)
         change.subject = 'releases %s: %s' % (rid, ' '.join(reason.split()))
         return change
     return plan
@@ -305,10 +309,10 @@ def pm_data_root(root):
     return None, 'no worktree has the PM data branch %s checked out' % record.branch
 
 
-def _pm_data_store(root, configured):
+def pm_data_store(root, configured):
     """`(store root, Config, backend, None)` of the PM data branch's store, `(None,) * 4` when
     there is none or it is the configured store (`configured`: its describe(), or None), or
-    `(None, None, None, why)` when it cannot be opened."""
+    `(None, None, None, why)` when it cannot be opened. Public: kitlib/gate/land.py calls it."""
     pm_root, why = pm_data_root(root)
     if pm_root is None:
         return None, None, None, why
@@ -330,11 +334,14 @@ class _Seen(object):
     some store; `read`, how many stores were read; `unread`, whether one could not be. And what
     the landing did, so its NOTE lines claim only that: `closed` and `released`, the ids whose
     close or release was written (committed or not: a WARNING says which); `unreleased`, the ids
-    it set out to release and did not."""
+    it set out to release and did not. `default`: id -> _Stranded, the records the implicit
+    default store holds that the landing would close or release (it writes none there); `live`,
+    the snapshots of the other stores read, whose records are not stranded."""
 
     def __init__(self):
         self.held, self.part_held, self.read, self.unread = set(), set(), 0, False
         self.closed, self.released, self.unreleased = set(), [], []
+        self.default, self.live = {}, []
 
     def done(self, rid, act):
         if act.release:
@@ -357,7 +364,7 @@ class _Part(object):
 
 def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None, batch=()):
     """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
-    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). With
+    when it is a `ref` or `branch` store, and in the PM data branch's store (pm_data_store). With
     `tip` and `base` (the branch tip merged and the main it was merged onto), every record a
     `Closes:` trailer in `tip --not base` names (closes_trailers) is closed too while it is
     pulled, whoever pulled it: a pull made in the main checkout records the main branch, which no
@@ -397,7 +404,7 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None,
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,
                                lambda *args: close_command(root, *args), named, seen, quiet,
                                part))
-    pm_root, pm_cfg, pm_backend, why = _pm_data_store(
+    pm_root, pm_cfg, pm_backend, why = pm_data_store(
         root, backend.describe() if backend is not None else None)
     if why:
         seen.unread = True
@@ -410,7 +417,11 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None,
         lines.extend(_close_in(pm_backend, pm_root, pm_cfg, branch, merge, session,
                                lambda *args: backlog_command(pm_root, *args), named, seen,
                                quiet, part))
-    unknown = [rid for rid in named if rid not in seen.held]
+    if not seen.unread:
+        for rid in sorted(seen.default):
+            if not any(snap.get(rid) is not None for snap in seen.live):
+                lines.append(seen.default[rid].warning(branch, root, pm_root))
+    unknown = [rid for rid in named if rid not in seen.held and rid not in seen.default]
     if unknown and seen.read and not seen.unread:
         lines.append('NOTE: %s landed, and a Closes trailer of its commits names %s, which no '
                      'backlog store this landing reads holds (a typo, or a case that differs from '
@@ -422,7 +433,8 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None,
                      % (branch, rid, 'it was closed, not released' if rid in seen.closed else
                         'it was not released, and it was not closed either (see the lines '
                         'above)'))
-    stray = [rid for rid in part.ids if rid not in named and rid not in seen.part_held]
+    stray = [rid for rid in part.ids
+             if rid not in named and rid not in seen.part_held and rid not in seen.default]
     if stray and seen.read and not seen.unread:
         did = []
         if seen.released:
@@ -446,7 +458,7 @@ class _Act(object):
     `args` is the backlog.py command that does it by hand."""
 
     def __init__(self, rid, branch, merge, release=False):
-        self.release = release
+        self.rid, self.release = rid, release
         if release:
             self.verb, self.past, self.noun = 'release', 'released', 'release'
             self.reason = release_reason(merge, branch)
@@ -488,22 +500,55 @@ def _after_put_back(store, rid, branch, command, reason, named=False, act=None):
                '' if named else ' by %s' % branch, past, command('show', rid)))
 
 
+class _Stranded(object):
+    """A record the implicit default store (`where`: refs/backlog/main, read only) holds that the
+    landing would close or release: `rec`, the record; `named`, whether a Closes line names it
+    (else the branch holds it pulled); `act`, the _Act the landing would make."""
+
+    def __init__(self, where, rec, named, act):
+        self.where, self.rec, self.named, self.act = where, rec, named, act
+
+    def warning(self, branch, root, pm_root):
+        """The WARNING that the record is stranded in the default store: close_landed prints it
+        when no other store read holds the id."""
+        act, rid = self.act, self.act.rid
+        args = list(act.args)
+        if not act.release and rmod.is_owner_held(self.rec):
+            args += ['--ruling', 'R-nnnn']          # the owner's ruling ends it (plan_close)
+        state = self.rec.get('state') or '?'
+        if state == 'pulled':
+            state = 'pulled by %s' % (self.rec.get('pulled_by') or '?')
+        what = ('a Closes line of its commits names %s, which only %s holds (%s)'
+                % (rid, self.where, state) if self.named
+                else 'it holds %s pulled only in %s' % (rid, self.where))
+        live = ('the PM data worktree %s' % pm_root.replace('\\', '/') if pm_root
+                else 'this repository\'s live backlog store')
+        return ('WARNING: %s landed, and %s: the default backlog store, read only while .kit.json '
+                'names no "backlog".store, so %s was not %s; the record is stranded there: add it '
+                'to %s and %s it there, or, if %s is this repository\'s live store, name it in '
+                '.kit.json ("backlog": {"store": "ref"}) and %s it with: %s'
+                % (branch, what, rid, act.past, live, act.verb, smod.STORE_REF, act.verb,
+                   close_command(root, *args)))
+
+
 def _refused_advice(exc, backend, root, act, args, command):
-    """How to make a write the store refused: `command(*args)`, except on the implicit default
-    `ref` store (store.default_store_refusal), which refuses that command too: there it is the
-    same write against the PM data worktree the refusal names, or, with none, the command once
-    .kit.json names its store."""
-    if not (isinstance(exc, Refusal) and getattr(backend, 'implicit', False)):
-        return '%s it with: %s' % (act.verb, command(*args))
-    try:
-        pm_root, _why = pm_data_root(root)
-    except Exception:                       # noqa: BLE001 - the advice is best effort
-        pm_root = None
-    if pm_root:
-        return '%s it in the PM data worktree with: %s' % (
-            act.verb, backlog_command(pm_root.replace('\\', '/'), *args))
-    return '%s it, once .kit.json names its "backlog".store, with: %s' % (act.verb,
-                                                                          command(*args))
+    """How to make a write the store refused: `command(*args)`. The implicit default store is
+    never written (_close_in reads it only), so no refusal of its comes here."""
+    return '%s it with: %s' % (act.verb, command(*args))
+
+
+def _read_default(snap, where, branch, merge, named, seen, part):
+    """Record in `seen.default` what the implicit default store's `snap` holds that the landing
+    would close (an id a Closes line names) or close or release (the branch's own pulls)."""
+    for rid in named:
+        rec = snap.get(rid)
+        if rec is not None:
+            seen.default.setdefault(rid, _Stranded(where, rec, True, _Act(rid, branch, merge)))
+    for rec in snap.readable:
+        if (rec.get('state') == 'pulled' and rec.get('pulled_by') == branch
+                and rec.stem not in named):
+            seen.default.setdefault(rec.stem, _Stranded(
+                where, rec, False, _Act(rec.stem, branch, merge, release=part.partial)))
 
 
 def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None,
@@ -517,11 +562,16 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
     WARNING that the holder's builder must be told, unless the holder is in `quiet` (the code
     repository's mains and the batch's branches: _live_holder_warning). `part` (a _Part): when
     the branch has a `Part-of:` line, a record it holds pulled that no Closes line names is
-    released (_release_plan), not closed."""
+    released (_release_plan), not closed.
+    The implicit default store (`backend.implicit`) is only read, into `seen.default`
+    (_read_default), for close_landed's stranded-record WARNING: the local ref when the remote has
+    no store, as the landing's own store commands would find it."""
     seen = seen if seen is not None else _Seen()
     part = part if part is not None else _Part()
     reason = 'landed %s' % merge
     unread = backlog_command(root, 'landable', branch)
+    implicit = getattr(backend, 'implicit', False)
+    where = getattr(backend, 'remote_ref', None) or smod.STORE_REF
     if getattr(backend, 'remote', None):
         remote_tip, why = refs.ls_remote(backend.remote, backend.remote_ref, root,
                                          timeout=FETCH_TIMEOUT)
@@ -529,9 +579,17 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
             seen.unread = True
             return [_store_unread(branch, '%s on %s: %s' % (backend.remote_ref, backend.remote,
                                                             why), unread)]
-        if not remote_tip:
+        if not remote_tip and not implicit:
             seen.read += 1                  # no store, so it holds none of them
             return []                       # no store: create none, add no refspec
+        if not remote_tip:                  # the default store: read the local ref, no fetch
+            try:
+                backend = smod.open_backend(root, cfg, fetch=False)
+            except (kconfig.ConfigError, Refusal, OSError) as exc:
+                seen.unread = True
+                return [_store_unread(branch, 'the local %s: %s' % (smod.STORE_REF, exc),
+                                      unread)]
+            where = 'the local %s (%s has none)' % (backend.local_ref, backend.remote)
     section = cfg.section('backlog')
     store = smod.Store(backend, rmod.Rules(section['id_grammar'], section['phases']),
                        session=session)
@@ -542,6 +600,10 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
         seen.unread = True
         return [_store_unread(branch, '%s: %s' % (exc.label, exc), unread)]
     seen.read += 1
+    if implicit:
+        _read_default(snap, where, branch, merge, named, seen, part)
+        return []
+    seen.live.append(snap)
     seen.held.update(rid for rid in named if snap.get(rid) is not None)
     held = set(r.stem for r in snap.readable               # the store's lookup key (Snapshot.by_id)
                if r.get('state') == 'pulled' and r.get('pulled_by') == branch)

@@ -1,6 +1,7 @@
 """kitlib.gate.land: one landing into a scratch repository with a bare remote in temp, gated on the
 scratch lock store. Each test proves one contract: refusals before any merge, a red merge undone,
 the push verified, landings into one repository taking turns."""
+import datetime
 import json
 import os
 import subprocess
@@ -10,8 +11,9 @@ import time
 import unittest
 from unittest import mock
 
+import kitlib.config as kconfig
 from kitlib import gate as G
-from kitlib.gate import land, runner
+from kitlib.gate import land, result, runner
 from kitlib.git import refs
 from kitlib.lock import queue as lockqueue
 from kitlib.records import gate_ok, landing
@@ -27,23 +29,40 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 
 class LandCase(fixtures.GateRepoCase):
-    KIT = {'landing': {'lanes': {'docs': {'branch_prefix': ['docs/'], 'paths': ['docs/*']}}}}
+    KIT = {}
+    # lander() gives each tip the full-gate OK record a landing requires (fixtures.gate_full);
+    # a test of that check itself sets it False and gates its tips (test_land_tip_gated)
+    GATE_TIPS = True
+    REVIEW_TIPS = True      # fixtures.queue_review: each branch without an entry gets a verdict
 
     def lander(self, branch, expect_main, expect_tip, **kw):
         kw.setdefault('git_env', self.env)
         kw.setdefault('book_kw', self.book_kw)
         kw.setdefault('log_dir', self.logs)
+        if self.GATE_TIPS:
+            self.gate_tips(expect_tip)
+        if self.REVIEW_TIPS:
+            fixtures.queue_review(self.repo.root, branch, expect_tip)
         return land.Lander(self.repo.root, branch, expect_main, expect_tip, **kw)
 
+    def gate_tips(self, *tips):
+        """fixtures.gate_full on each tip (a tip may be a list, as a batch's --expect-tip is);
+        the record files it made are left out of records()."""
+        flat = [t for tip in tips for t in (tip if isinstance(tip, (list, tuple)) else [tip])]
+        made = fixtures.gate_full(self.repo.root, *flat)
+        self.__dict__.setdefault('fixture_records', set()).update(made)
+
     def lock(self):
-        return landing.LandingLock(self.repo.root, lanes=('docs',))
+        return landing.LandingLock(self.repo.root)
 
     def main_now(self):
         return self.repo.git('rev-parse', 'refs/heads/main')
 
     def records(self):
+        """The gate-OK record files, less those gate_tips made for the tips."""
         d = gate_ok.record_dir(self.repo.root)
-        return sorted(os.listdir(d)) if os.path.isdir(d) else []
+        made = self.__dict__.get('fixture_records', set())
+        return sorted(n for n in os.listdir(d) if n not in made) if os.path.isdir(d) else []
 
     def assert_untouched(self, out, code):
         self.assertEqual(out.code, code, out.lines)
@@ -119,24 +138,13 @@ class Lands(LandCase):
     def test_usage_and_refusals(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         self.assertEqual(self.lander(BRANCH, 'abc', tip).run().code, G.USAGE)
-        self.assertEqual(self.lander(BRANCH, self.main, tip, lane='nosuch').run().code, G.USAGE)
         wt = self.repo.path('.claude', 'worktrees', 'feature')
         out = land.Lander(wt, BRANCH, self.main, tip, git_env=self.env).run()
         self.assertEqual(out.code, G.REFUSED)
         self.assertIn('not a main checkout', out.lines[0])
         self.assertEqual(self.lander('main', self.main, tip).run().code, G.REFUSED)
         self.assertEqual(self.lander('kit/nosuch', self.main, tip).run().code, G.REFUSED)
-        self.assertEqual(self.lander(BRANCH, self.main, tip, lane='docs').run().code, G.REFUSED)
         self.assertIsNone(self.lock().read())
-
-    def test_lane_takes_only_its_paths(self):
-        wt = self.repo.worktree('d', branch='docs/d')
-        self.repo.write('docs/x.md', 'x\n', root=wt)
-        self.repo.write('code.py', 'x\n', root=wt)
-        tip = self.repo.commit('mixed', 'docs/x.md', 'code.py', cwd=wt)
-        out = self.lander('docs/d', self.main, tip, lane='docs').run()
-        self.assertIn('lane docs takes only docs/*; the branch changes code.py', out.lines[0])
-        self.assert_untouched(out, G.REFUSED)
 
 
 @real_git('git reflog')
@@ -172,14 +180,25 @@ class PushCase(LandCase):
 class PushRejected(PushCase):
     """Moved out of PushVerified for the real-git tier."""
 
-    def test_a_push_the_remote_rejects_is_stuck(self):
+    def test_a_push_the_remote_rejects_is_not_landed(self):
+        # git exits 1 and the remote's main is still the base: nothing was published, so the
+        # landing is NOT LANDED and the lock released, as on a red merged gate
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         hook = os.path.join(self.repo.remote, 'hooks', 'pre-receive')
         with open(hook, 'w', newline='\n') as f:
             f.write('#!/bin/sh\necho rejected by test >&2\nexit 1\n')
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assert_stuck(out, tip)
-        self.assertIn('failed', out.lines[0])
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertTrue(out.lines[-1].startswith('NOT LANDED: '), out.lines)
+        self.assertIn('still the base %s' % self.main[:10], out.lines[-1])
+        self.assertFalse([l for l in out.lines if l.startswith('STUCK')], out.lines)
+        self.assertTrue(out.merge)
+        self.assertIsNone(self.lock().read())
+        self.assertEqual(self.main_now(), self.main)
+        self.assertEqual(self.remote_main(), self.main)
+        os.remove(hook)                                 # the next landing is not BUSY: it lands
+        nxt = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(nxt.code, G.OK, nxt.lines)
 
 
 class PushVerified(PushCase):
@@ -262,18 +281,61 @@ class HookFromMain(LandCase):
 
 
 class NoStepSelected(LandCase):
-    GATE = {'steps': [{'name': 'unit', 'globs': ['src/*'], 'cmd': fixtures.RED_AWARE,
-                       'pass': '^ok$'}]}
+    # The merged gate selects every step that is not manual (tests/gate/test_land_select.py). Two
+    # steps that each drop the other (skip_if_selected) leave it nothing, as all-manual steps do:
+    # the base is refused before the merge (Lander.no_full_step), and the merged gate itself, met
+    # anyway, refuses with the advice for --full (runner.NO_STEP_FULL), not the one for paths.
+    GATE = {'steps': [{'name': 'unit', 'always': True, 'cmd': fixtures.RED_AWARE,
+                       'pass': '^ok$', 'skip_if_selected': ['other']},
+                      {'name': 'other', 'always': True, 'cmd': fixtures.RED_AWARE,
+                       'pass': '^ok$', 'skip_if_selected': ['unit']}]}
 
-    def test_a_landing_with_no_step_selected_is_refused_and_undone(self):
+    def test_a_landing_with_no_step_selected_is_refused_before_the_merge(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assertTrue(out.lines[0].startswith('REFUSED: no gate step selected'), out.lines)
-        self.assertTrue(out.undone)
+        self.assertIn('leaves no step for --full to select', out.lines[0])
+        self.assertIn("is dropped by another selected step's skip_if_selected", out.lines[0])
+        self.assertIn('nothing was merged', out.lines[0])
+        self.assertFalse(out.facts.get('undone'))         # no merge was made to undo
         self.assert_untouched(out, G.REFUSED)             # no record, nothing pushed
-        # the landing's one turn, booked before the merge and given back; the gate booked none
+        # the landing's one turn, booked and given back; no gate ran, so none booked another
         self.assertEqual([c.get('priority') for c in self.book_calls], ['land'], self.book_calls)
         self.assertEqual([r['slug'] for r in self.store.history_records(1)], ['kit-feature'])
+
+    def test_the_merged_gate_refuses_with_the_full_advice(self):
+        out = runner.merged_gate(self.repo.root, kconfig.load(self.repo.root), self.main,
+                                 log_dir=self.logs, book_kw=self.book_kw)
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertEqual(out.lines[0], runner.NO_STEP_FULL)   # then the gate's source label
+        self.assertEqual(self.book_calls, [])             # refused before it booked
+
+
+class QueueTime(LandCase):
+    """A direct landing's result record says when it joined the landing queue, as a submitted
+    landing's does (the submission): started_at is taken before book_turn waits for its turn."""
+
+    def test_started_at_is_before_the_turn_was_booked(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        real_utc, real_book = gate_ok.utc, land.lockrun.book
+        late = [datetime.timedelta(0)]
+        stamps = {}
+
+        def utc(when=None):         # the real clock, an hour on once the landing books
+            return real_utc(when or datetime.datetime.now(datetime.timezone.utc) + late[0])
+
+        def book(*a, **kw):
+            stamps['booking'] = utc()
+            late[0] = datetime.timedelta(hours=1)
+            stamps['booked'] = utc()
+            return real_book(*a, **kw)
+        lander = self.lander(BRANCH, self.main, tip, book=book)
+        with mock.patch.object(gate_ok, 'utc', utc):
+            out = lander.run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        rec, why = result.read(self.repo.root, BRANCH, 'land')
+        self.assertIsNotNone(rec, why)
+        self.assertLessEqual(rec['started_at'], stamps['booking'], (rec, stamps))
+        self.assertGreaterEqual(rec['finished_at'], stamps['booked'], (rec, stamps))
 
 
 class TakeTurns(LandCase):
@@ -334,6 +396,7 @@ class TakeTurns(LandCase):
         self.assertIsNone(self.lock().read())
 
     def child(self, branch, tip, **extra):
+        self.gate_tips(tip)
         spec = dict(repo=self.repo.root, branch=branch, expect_main=self.main, expect_tip=tip,
                     logs=self.logs, store={'root': self.root, 'kinds_path': self.kinds_path,
                                            'hw': self.HW}, **extra)
@@ -375,7 +438,7 @@ class TakeTurns(LandCase):
 
     def test_a_branch_gate_does_not_wait_for_the_landing_lock(self):
         wt, tip = self.branch('feature', {'a.py': 'a\n'})
-        rec = self.lock().take('full', ['kit/someone'], pid=os.getpid())
+        rec = self.lock().take(['kit/someone'], pid=os.getpid())
         self.addCleanup(self.lock().release, rec['token'])
         out = runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs)
         self.assertEqual(out.code, G.OK, out.lines)

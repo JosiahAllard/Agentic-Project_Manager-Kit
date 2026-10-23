@@ -208,7 +208,7 @@ class NoRemote(MigrateCase):
         self.assertEqual(self.local_tip(), tip)
 
     def test_a_killed_read_of_the_local_store_refuses_and_is_never_read_as_no_store(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the
+        """A git ended from outside exits 1 having printed nothing, the
         shape `rev-parse --verify --quiet` gave for "no such ref"; it skipped the refusal."""
         src = self.commit_records(self.md(priced('FOO')), push=False)
         tip = self.run_migrate(src).tip

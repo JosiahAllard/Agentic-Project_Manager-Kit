@@ -5,14 +5,20 @@
             in a live process or once a branch landed at its tip (blocked); write each branch's
             `running` land record (one run_id for the batch, no pid yet), start the tool again,
             detached, with `--submitted <payload>`, wait for it to record itself (claim), and
-            give the one line `SUBMITTED <branch>[+<branch>...] tip <sha>[,<sha>] wait: python
-            <kit>/tools/gate.py wait-result <branch> --tip <sha> --kind land -C <main checkout>`
-            (wait_line)
+            give a `REVIEW <branch> <tip>: ...` line for each branch with a verdict queued at
+            its tip (review_lines), then the last line `SUBMITTED <branch>[+<branch>...] tip
+            <sha>[,<sha>] wait: python <kit>/tools/gate.py wait-result <branch> --tip <sha>
+            --kind land -C <main checkout>` (wait_line; a batch's last branch and tip), and
+            prune old submissions' files (prune)
+  prune     delete the payload and output files of submissions older than KEEP_S whose run no
+            land record has running
   restore   the payload, read back by the detached tool: the result.Run of each branch (the same
             run_id and started_at), the output file and the land records those runs replaced,
-            for kitlib.gate.land.Lander(submitted=...); it writes its own pid into the records
-  abandon   the detached tool that cannot read its payload finishes the submission's records
-            `refused`, found by the run_id in the payload's name
+            for kitlib.gate.land.Lander(submitted=...); it writes its own pid into the records.
+            Only the payload submit wrote for this landing, read with the token submit gave the
+            detached tool (else Untrusted, with nothing written: Trust, below)
+  abandon   the detached tool that cannot read its payload (at the path submit names it)
+            finishes the submission's records `refused`, found by the run_id in the payload's name
   redirect_output  the detached tool's stdout and stderr, appended to the output file
 
 The detached tool is started the way `machine_lock.py run --detach` starts its wrapper
@@ -41,8 +47,28 @@ records itself, `error` here (claim); one that dies later, `error` by the first 
 sees it gone. Files, in the result folder (<git common dir>/kit-gate-result): <stem>.land.json
 per branch (the record), and, named by the batch's first branch and the run_id,
 <stem>.<run_id>.land.submit (the payload) and <stem>.<run_id>.land.log (the detached tool's
-output, the records' `log` until a merged gate names its own). Nothing here prints or exits.
+output, the records' `log` until a merged gate names its own); each submission deletes the old
+ones (prune). Nothing here prints or exits.
+
+Trust: `--submitted <payload>` is a flag any caller can pass, and the landing it runs writes the
+records and the output the payload names, so restore runs only a payload submit itself wrote for
+this landing. submit draws a token (secrets), writes its sha256 into the payload and gives the
+token to the detached tool alone, in its environment (TOKEN_ENV; never on a command line or on
+disk); restore takes it out of this process's environment first, so nothing the landing runs
+inherits it. It then needs the payload at the path files() names for the landing's branches and
+the run_id in the payload's name, and a token, before it opens the payload; then (untrusted_why)
+the token matching the payload's hash, the payload's runs being the landing's own arguments in
+order (branch, tip, --expect-main as base, the run_id of its name), its output files()'s, and each
+branch's land record still running for that run_id, unclaimed or claimed by this process or its
+parent (the carrier: claim's pid when the landing was not found). A payload that fails any of
+these is Untrusted: no record is written and nothing is abandoned; the tool refuses on stderr
+(untrusted_line), and when the payload is at the path submit names that line is also appended to
+the submission's output (untrusted_refusal), which the records name as their log, so a detached
+landing's reason outlives its hidden console. One at the path submit names, read with a token,
+that cannot be read or has an older kit's schema is a SubmitError: abandon finishes its records.
 """
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -53,14 +79,17 @@ import time
 from kitlib import gate as G
 from kitlib import pluginsource
 from kitlib.gate import pin
-from kitlib.gate import result
+from kitlib.gate import result, verdicts
 from kitlib.git import repo
 from kitlib.lock import detach as lockdetach
 from kitlib.lock import run as lockrun
 from kitlib.proc import process, spawn
 
 FLAG = '--submitted'
-SCHEMA = 1
+# 2: the token's hash (token_sha256) and restore's checks (Trust, above). A schema-1 payload, an
+# older kit's, is a SubmitError: its records are finished refused, and it is submitted again.
+SCHEMA = 2
+TOKEN_ENV = 'KIT_LAND_SUBMIT_TOKEN'
 START_TIMEOUT_S = 60
 PAYLOAD_EXT = '.land.submit'
 OUTPUT_EXT = '.land.log'
@@ -69,10 +98,43 @@ RUN_ID = re.compile(r'[0-9a-f]{16}')
 CLAIM_WAIT_S = 15.0
 CLAIM_POLL_S = 0.25
 LANDED = ('pass', 'landed-ungated')    # landed-ungated: an old record's (exit 9 is retired)
+# How old a finished submission's payload and output are before prune deletes them: 14 days, 14
+# times the longest a landing may wait for its turn ("landing".wait_s at most 86400 s,
+# kitlib/config/schema.py), so the age alone never reaches a landing still queued; prune also
+# keeps every run a land record has running whatever its age.
+KEEP_S = 14 * 86400
 
 
 class SubmitError(Exception):
-    """A payload that cannot be read back."""
+    """A payload, at the path submit names it, that cannot be read back."""
+
+
+class Untrusted(Exception):
+    """A payload restore does not run (Trust, in the module docstring): nothing was written. Not
+    a SubmitError, which abandon answers by finishing the records the payload's name points at.
+    `log`: the submission's output when the payload is at the path submit names, else None."""
+
+    def __init__(self, why, log=None):
+        super().__init__(why)
+        self.log = log
+
+
+def untrusted_line(payload, why):
+    """The tools' refusal of an Untrusted payload, written to stderr."""
+    return 'REFUSED: %s %s: %s; nothing was changed' % (FLAG, payload, why)
+
+
+def untrusted_refusal(payload, e):
+    """untrusted_line for the Untrusted `e`, appended to its `log` too when it has one (the
+    detached landing's stderr is a hidden console): the tools write it to stderr."""
+    line = untrusted_line(payload, e)
+    if e.log:
+        _note(e.log, line)
+    return line
+
+
+def token_digest(token):
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
 def files(root, branches, run_id):
@@ -92,6 +154,50 @@ def run_id_of(payload):
         return None
     rid = name[:-len(PAYLOAD_EXT)].rsplit('.', 1)[-1]
     return rid if RUN_ID.fullmatch(rid) else None
+
+
+def prune(root, now=None, keep_s=KEEP_S):
+    """Delete the payload and output files (files()) in the result folder modified more than
+    `keep_s` seconds before `now` (default: the time now) whose run_id no land record names with
+    a verdict that is not final (running: a submitted landing's records are running from the
+    submission, through its wait in the queue, until it ends; a record with no verdict counts as
+    running). A land record that cannot be read may be such a run, so then nothing is deleted. A
+    file that cannot be deleted (in use: the detached landing holds its output open) is left.
+    The paths deleted; never raises."""
+    try:
+        folder = result.result_dir(root)
+        names = os.listdir(folder)
+    except (OSError, result.ResultError):
+        return []
+    running = set()
+    for name in names:
+        if not name.endswith('.land.json'):
+            continue
+        rec, why = result.read_path(os.path.join(folder, name))
+        if rec is None:
+            if why == 'none':       # replaced or removed since the listing
+                continue
+            return []
+        if rec.get('verdict') in (None, result.RUNNING):
+            running.add(rec.get('run_id'))
+    now = time.time() if now is None else now
+    gone = []
+    for name in names:
+        ext = next((e for e in (PAYLOAD_EXT, OUTPUT_EXT) if name.endswith(e)), None)
+        if ext is None:
+            continue
+        rid = name[:-len(ext)].rsplit('.', 1)[-1]
+        if not RUN_ID.fullmatch(rid) or rid in running:
+            continue
+        path = os.path.join(folder, name)
+        try:
+            if now - os.path.getmtime(path) <= keep_s:
+                continue
+            os.remove(path)
+        except OSError:
+            continue
+        gone.append(path)
+    return gone
 
 
 def command(tool_file, args, python=None):
@@ -117,11 +223,15 @@ def detach(argv, cwd, env, run=None, timeout=START_TIMEOUT_S):
     return pid, None
 
 
-def child_env(environ=None):
+def child_env(environ=None, token=None):
     """The detached tool's environment: this one, without MACHINE_LOCK_RUN, with this process's
-    ancestry in MACHINE_LOCK_ORIGIN and its output in UTF-8."""
+    ancestry in MACHINE_LOCK_ORIGIN, its output in UTF-8, and the submission's `token` in
+    TOKEN_ENV (never one inherited)."""
     env = dict(os.environ if environ is None else environ)
     env.pop(lockrun.NEST_ENV, None)
+    env.pop(TOKEN_ENV, None)
+    if token is not None:
+        env[TOKEN_ENV] = token
     try:
         env[lockrun.ORIGIN_ENV] = ';'.join('%d:%d' % pc for pc in sorted(process.own_ancestors()))
     except Exception:       # noqa: BLE001 - the slot then has the detached process's own role
@@ -136,15 +246,17 @@ def _arg(path):
 
 
 def wait_line(branches, tips, root, kit=None):
-    """The SUBMITTED line. Its wait command names the repository with -C: the main checkout of
-    `root` (where the landing runs, and a checkout no cleanup removes), or `root` itself when git
-    cannot place it. The record is in the git common dir, so any checkout of the repository reads
-    the same one."""
+    """The SUBMITTED line. Its wait command waits on the batch's last branch: each branch has its
+    own land record, but a batch has one outcome, which Lander.run writes into the records in the
+    batch's order, so the last branch's record is final only once every branch's is. The command
+    names the repository with -C: the main checkout of `root` (where the landing runs, and a
+    checkout no cleanup removes), or `root` itself when git cannot place it. The record is in the
+    git common dir, so any checkout of the repository reads the same one."""
     kit = kit or pluginsource.live_root()
     main = repo.main_checkout_toplevel(root) or root
     return 'SUBMITTED %s tip %s wait: python %s wait-result %s --tip %s --kind land -C %s' % (
         '+'.join(branches), ','.join(tips), _arg(os.path.join(kit, 'tools', 'gate.py')),
-        branches[0], tips[0], _arg(main))
+        branches[-1], tips[-1], _arg(main))
 
 
 def _write_json(path, data):
@@ -189,7 +301,8 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
            clock=time.monotonic, sleep=time.sleep, landing_of=None):
     """Start the landing of `branches` at `tips` detached: `tool_file` (tools/land.py or
     tools/gate.py) again with `child_args` (the landing's own arguments, -C absolute) and
-    `--submitted <payload>`. An Outcome: OK with the SUBMITTED line, USAGE for arguments the
+    `--submitted <payload>`. An Outcome: OK with the REVIEW lines (review_lines) and the
+    SUBMITTED line last, once old submissions' files are pruned (prune), USAGE for arguments the
     landing would refuse as usage (nothing written), REFUSED with nothing written when a
     branch's landing is running or it landed at its tip already (blocked), REFUSED when the
     records or the payload cannot be written or the start fails (records written are finished
@@ -226,8 +339,10 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
         if path is None:
             return _refused(runs, 'the submission: %s' % line)
         runs.append(rr)
+    token = secrets.token_hex(16)
     try:
         _write_json(payload, {'schema': SCHEMA, 'output': output, 'replaced': replaced,
+                              'token_sha256': token_digest(token),
                               'runs': [{'branch': rr.branch, 'tip': rr.tip, 'base': rr.base,
                                         'run_id': rr.run_id, 'started_at': rr.started_at}
                                        for rr in runs]})
@@ -237,7 +352,7 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     except OSError as e:
         return _refused(runs, 'the submission could not write %s: %s' % (payload, e))
     argv = command(tool_file, list(child_args) + [FLAG, payload])
-    env = child_env(environ)
+    env = child_env(environ, token)
     pid, why = (detach_fn or detach)(argv, root, env)
     if pid is None:
         return _refused(runs, 'the landing could not be started: %s' % why)
@@ -253,8 +368,39 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     if died:
         return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed; its output: %s' % (
             died, output)], pid=pid, payload=payload, output=output)
-    return G.Outcome(G.OK, [wait_line(branches, tips, root, kit)], pid=pid, payload=payload,
-                     output=output)
+    try:
+        prune(root, now=now)
+    except Exception:   # noqa: BLE001 - the landing is submitted whatever the prune meets
+        pass
+    return G.Outcome(G.OK, review_lines(root, branches, tips) + [wait_line(branches, tips, root, kit)],
+                     pid=pid, payload=payload, output=output)
+
+
+def review_lines(root, branches, tips):
+    """`REVIEW <branch> <tip>: <verdict> by <reviewer>/<model> (<id>)[, carried from <sha> over N
+    main merge(s)]` for each branch with a verdict queued at the tip submitted
+    (kitlib.gate.verdicts), so the submission shows the review on record. Read only, and only for
+    the reader: a branch with no entry at its tip, or a queue that cannot be read, has no line
+    (the landing's own checks decide; this decides nothing)."""
+    common, _ = repo.common_dir(root)
+    if not common:
+        return []
+    lines = []
+    for b, t in zip(branches, tips):
+        try:
+            e = verdicts._load(verdicts.entry_path(common, b), b)
+        except verdicts.VerdictError:
+            continue
+        if e is None or e['state'] != verdicts.QUEUED or e['tip'].lower() != t.lower():
+            continue
+        c = e.get(verdicts.CARRIED)
+        more = ''
+        if c:
+            n = len(c['merges'])
+            more = ', carried from %s over %d main merge%s' % (c['from'], n, '' if n == 1 else 's')
+        lines.append('REVIEW %s %s: %s by %s/%s (%s)%s' % (
+            b, e['tip'], e['verdict'], e['reviewer'], e['reviewer_model'], e['reviewer_id'], more))
+    return lines
 
 
 def _landing(carrier, landing_of=None):
@@ -274,7 +420,9 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
     (restore writes its pid into them). Once every record is claimed, or finished: None. When
     the process died first: its unclaimed records are finished `error` and the reason is
     returned. When the wait ends with the process alive: its pid (and creation time) is written
-    into the records still unclaimed, so a death after this is seen by result.wait."""
+    into the records still unclaimed, each read again under its lock (result.write's `when`), so
+    one the landing claimed or finished meanwhile, even between that read and the write, is
+    kept, and a death after this is seen by result.wait."""
     alive = alive or process.alive
     try:
         ctime = process.proc_ctime(pid)
@@ -284,9 +432,8 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
     while True:
         open_ = []
         for rr in runs:
-            rec, _ = result.read(root, rr.branch, 'land')
-            if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
-                    and rec.get('run_id') == rr.run_id and rec.get('pid') is None):
+            rec = _unclaimed(root, rr)
+            if rec:
                 open_.append((rr, rec))
         if not open_:
             return None
@@ -305,9 +452,23 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
         if clock() >= end:
             for rr, _rec in open_:
                 rr.pid, rr.ctime = pid, ctime
-                rr.start(log=output)
+                path, _line = rr.start(log=output, when=lambda now, rr=rr: _open(now, rr))
+                if path is None:
+                    rr.pid = rr.ctime = None
             return None
         sleep(max(0.0, min(poll_s, end - clock())))
+
+
+def _open(rec, rr):
+    """True when the land record `rec` is still `rr`'s run, running and with no pid."""
+    return (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
+            and rec.get('run_id') == rr.run_id and rec.get('pid') is None)
+
+
+def _unclaimed(root, rr):
+    """The land record of `rr` when it is still `rr`'s run, running and with no pid; else None."""
+    rec, _ = result.read(root, rr.branch, 'land')
+    return rec if _open(rec, rr) else None
 
 
 def _note(path, line):
@@ -318,14 +479,39 @@ def _note(path, line):
         pass
 
 
-def restore(root, payload):
-    """The `submitted` dict for Lander from the payload file: runs (result.Run with the
-    submission's run_id and started_at, and this process's pid), output, replaced. Each record
-    still running for its run is claimed: written again with this process's pid, so a death from
-    here on is seen (result.wait). SubmitError when the payload cannot be read."""
+def restore(root, payload, branches, tips, expect_main=None, environ=None):
+    """The `submitted` dict for Lander from the payload file of the landing of `branches` at
+    `tips` with `expect_main` (the landing's own arguments): runs (result.Run with the
+    submission's run_id and started_at, and this process's pid), output, replaced. Each record is
+    claimed: written again with this process's pid, so a death from here on is seen
+    (result.wait). The token is taken out of `environ` (default os.environ) first. Untrusted,
+    with nothing written, unless the payload is the one submit wrote for this landing (Trust, in
+    the module docstring): with no token, before the payload is opened; its `log` is the
+    submission's output once the payload is at the path submit names. SubmitError when that
+    payload, read with a token, cannot be read or has another schema."""
+    env = os.environ if environ is None else environ
+    token = env.pop(TOKEN_ENV, None)
+    branches, tips = list(branches), list(tips)
+    rid = run_id_of(payload)
+    if rid is None or not branches:
+        raise Untrusted('not a submission\'s payload (<stem>.<run_id>%s)' % PAYLOAD_EXT)
+    try:
+        want, want_output = files(root, branches, rid)
+    except result.ResultError as e:
+        raise Untrusted('no result folder: %s' % e)
+    if not _same_path(payload, want):
+        raise Untrusted('not the payload a submission of %s wrote (%s)' % (
+            '+'.join(branches), want))
+    if not token:       # before the payload is opened: no SubmitError, so no abandon, without one
+        raise Untrusted('no submission token (%s): only the landing a submission started runs '
+                        'its payload' % TOKEN_ENV, log=want_output)
     try:
         with open(payload, encoding='utf-8') as f:
             data = json.loads(f.read())
+        if data.get('schema') != SCHEMA:
+            raise SubmitError('the submission %s has schema %r, not %d: another kit version '
+                              'submitted it; submit the landing again' % (
+                                  payload, data.get('schema'), SCHEMA))
         runs = []
         for item in data['runs']:
             rr = result.Run(root, 'land', item['branch'], item['tip'], base=item.get('base'))
@@ -333,20 +519,68 @@ def restore(root, payload):
             runs.append(rr)
         output = data.get('output')
         replaced = [r for r in data.get('replaced') or [] if isinstance(r, dict)]
+        digest = data.get('token_sha256')
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise SubmitError('cannot read the submission %s: %s' % (payload, e))
+    why = untrusted_why(root, runs, output, digest, token, branches, tips, expect_main, rid,
+                        want_output)
+    if why:
+        raise Untrusted(why, log=want_output)
     for rr in runs:
-        rec, _ = result.read(root, rr.branch, 'land')
-        if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
-                and rec.get('run_id') == rr.run_id):
-            rr.start(log=output)
+        rr.start(log=output)
     return {'runs': runs, 'output': output, 'replaced': replaced}
+
+
+def untrusted_why(root, runs, output, digest, token, branches, tips, expect_main, rid,
+                  want_output):
+    """Why restore does not run a payload it read at the path submit names (Trust, in the module
+    docstring), or None. Read only."""
+    if not token:
+        return 'no submission token (%s): only the landing a submission started runs its ' \
+               'payload' % TOKEN_ENV
+    if not isinstance(digest, str) or not hmac.compare_digest(
+            token_digest(token).encode('utf-8'), digest.encode('utf-8', 'replace')):
+        return 'the submission token does not match the payload'
+    got = [(rr.branch, rr.tip, rr.base, rr.run_id) for rr in runs]
+    want = [(b, t, expect_main, rid) for b, t in zip(branches, tips)]
+    if len(branches) != len(tips) or got != want:
+        return 'the payload names the landing %s, not this one\'s %s' % (
+            _runs_text(got), _runs_text(want))
+    if not isinstance(output, str) or not _same_path(output, want_output):
+        return 'the payload\'s output %r is not the submission\'s %s' % (output, want_output)
+    mine = (None, os.getpid(), os.getppid())
+    for rr in runs:
+        rec, why = result.read(root, rr.branch, 'land')
+        if not isinstance(rec, dict):
+            return 'the land record of %s cannot be read: %s' % (rr.branch, why)
+        if rec.get('verdict') != result.RUNNING or rec.get('run_id') != rid:
+            return 'the land record of %s is not this submission\'s running one (run %s, %s)' % (
+                rr.branch, rec.get('run_id'), rec.get('verdict'))
+        pid = rec.get('pid')
+        if isinstance(pid, bool) or pid not in mine:
+            return 'the land record of %s is claimed by pid %s, not by this landing' % (
+                rr.branch, pid)
+    return None
+
+
+def _runs_text(runs):
+    return '+'.join('%s at %s base %s run %s' % (b, str(t)[:10], str(base)[:10], r)
+                    for b, t, base, r in runs) or 'none'
+
+
+def _same_path(a, b):
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def abandon(root, payload, why):
     """The detached landing could not read its payload: finish the running land records of the
     submission (every branch's record with the run_id the payload is named by, run_id_of) as
-    `refused`, note it in the submission's output file, and return the REFUSED Outcome."""
+    `refused`, note it in the submission's output file, and return the REFUSED Outcome. Each
+    record is finished only while it is still that run's and running, judged under its lock
+    (result.write's `when`): one finished meanwhile is left as it is."""
     out = G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
     lines = []
     rid = run_id_of(payload)
@@ -354,7 +588,9 @@ def abandon(root, payload, why):
         for rec in result.running_records(root, 'land', rid):
             rr = result.Run(root, 'land', rec.get('branch'), rec.get('tip'), base=rec.get('base'))
             rr.run_id, rr.started_at = rid, rec.get('started_at')
-            lines.append(rr.finish(out, log=rec.get('log'))[1])
+            lines.append(rr.finish(out, log=rec.get('log'), when=lambda now: (
+                isinstance(now, dict) and now.get('verdict') == result.RUNNING
+                and now.get('run_id') == rid))[1])
         _note(payload[:-len(PAYLOAD_EXT)] + OUTPUT_EXT, out.lines[-1])
     return G.Outcome(G.REFUSED, lines + out.lines)
 

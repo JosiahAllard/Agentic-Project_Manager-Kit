@@ -103,7 +103,7 @@ def own_start_time():
     return (ticks - _EPOCH_AS_FILETIME) / 1e7
 
 
-POLL_SLEEP = 30       # seconds between passes
+POLL_SLEEP = 60       # seconds between passes; well inside kitlib.pmstart BEAT_STALE
 
 
 def run(w, clock, sleep, save, emit, beat, once=False, stream=False):
@@ -335,6 +335,7 @@ def preload(modules=()):
     import kitlib.launcher.usage
     import kitlib.machinesetup.extras
     import kitlib.pluginsource
+    import kitlib.pmstart.consoletasks      # kitlib.pluginsource's in-use reads (_processes, _tasks)
     for name in modules:
         importlib.import_module(name)
 

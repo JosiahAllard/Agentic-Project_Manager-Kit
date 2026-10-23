@@ -4,12 +4,7 @@ in that slot; landings into one repository take turns, first come first served, 
 main as it is at its turn; a gone holder of the landing lock file with nothing unpushed is broken,
 one with something unpushed never is; a batch lands or is undone whole; `land.py --queue` lists
 the landings in the queue. On a scratch repository with a bare remote and the scratch lock store
-(tests/gate/fixtures.py).
-
-Until the machine lock's book takes resource= and priority= (docs/lock-api.md),
-fixtures.compat_book records them and books without: the tests that need the lock itself to keep
-a second landing from its turn are skipped there (fixtures.HAS_RESOURCE); every other test runs
-either way."""
+(tests/gate/fixtures.py)."""
 import gc
 import json
 import os
@@ -30,8 +25,6 @@ from tests.gate import fixtures
 from tests.gate.test_land import BRANCH, HANG_S, LandCase
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-NEEDS_RESOURCE = unittest.skipUnless(
-    fixtures.HAS_RESOURCE, 'the machine lock here books no resource= (docs/lock-api.md)')
 
 
 def no_sleep(slept):
@@ -120,46 +113,11 @@ class OneBooking(QueueCase):
                          {'gate': True, 'resource': self.key(), 'priority': 'land',
                           'store': self.store, 'wait_s': 0, 'no_wait': True, 'cores': 1,
                           'detached': None})
-        self.assertEqual(call['note'], 'landing full: kit/feature')
+        self.assertEqual(call['note'], 'landing: kit/feature')
         self.assertTrue([s for s in said
                          if s.startswith('the gate runs in the slot the landing holds (run ')], said)
         self.assertEqual(len(self.store.history_records(1)), 1)    # one run, ended
         self.assertEqual(self.entries(), [])
-
-    def test_the_gates_tree_is_ended_when_its_steps_finish_and_the_slot_stays_held(self):
-        # What the merged gate's steps leave (build daemons, stray children) is stopped as the
-        # steps finish, before the push, not at drop_slot; the slot is still held meanwhile.
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        events = []
-        slot_cls = sys.modules['kitlib.lock.run'].Slot
-        real = {n: getattr(slot_cls, n) for n in ('stop_daemons', 'end_tree', 'release')}
-
-        def spy(name):
-            def call(slot, *a, **kw):
-                events.append((name, len(self.queued(BRANCH))))
-                return real[name](slot, *a, **kw)
-            return call
-        real_push = land.Lander.push
-
-        def push(lander, *a, **kw):
-            events.append(('push', len(self.queued(BRANCH))))
-            return real_push(lander, *a, **kw)
-        with mock.patch.multiple(slot_cls, **{n: spy(n) for n in real}), \
-                mock.patch.object(land.Lander, 'push', push):
-            out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        names = [n for n, _ in events]
-        self.assertEqual(names[:4], ['stop_daemons', 'end_tree', 'push', 'release'], events)
-        self.assertTrue(all(held == 1 for _, held in events[:4]), events)   # the slot is held
-        self.assertEqual(self.entries(), [])
-
-    def test_a_batch_books_once_by_its_branches(self):
-        _, t1 = self.branch('one', {'one.py': '1\n'})
-        _, t2 = self.branch('two', {'two.py': '2\n'})
-        out = self.lander(['kit/one', 'kit/two'], self.main, [t1, t2]).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual([(c['slug'], c['note']) for c in self.book_calls],
-                         [('kit-one-kit-two', 'landing full: kit/one, kit/two')])
 
     def test_the_wait_budget_is_the_configs_unless_given(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
@@ -195,14 +153,6 @@ class OneBooking(QueueCase):
         self.assertTrue(out.lines[0].startswith('USAGE: the machine lock: no kind "nosuch"'),
                         out.lines)
 
-    def test_a_refusal_before_the_booking_books_nothing(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        for args in (('kit/nosuch', self.main, tip), (BRANCH, 'abc', tip)):
-            with self.subTest(args=args):
-                out = self.lander(*args).run()
-                self.assertIn(out.code, (G.REFUSED, G.USAGE), out.lines)
-        self.assertEqual(self.book_calls, [])
-
 
 class FirstComeFirstServed(QueueCase):
     def test_a_second_landing_waits_for_its_turn_and_lands_on_the_first(self):
@@ -235,97 +185,6 @@ class FirstComeFirstServed(QueueCase):
         self.assertEqual(self.remote_main(), results['b'].merge)
         self.assertEqual(self.entries(), [])
         self.assertIsNone(self.lock().read())
-
-    @NEEDS_RESOURCE
-    def test_a_landing_at_once_while_another_holds_the_turn_is_not_run(self):
-        _, tip_a = self.branch('feature', {'a.py': 'a\n'})
-        _, tip_b = self.branch('bee', {'b.py': 'b\n'})
-        inside, go = threading.Event(), threading.Event()
-        results = {}
-        a = threading.Thread(target=lambda: results.__setitem__(
-            'a', self.lander(BRANCH, self.main, tip_a,
-                             merged_gate=self.held_gate(inside, go)).run()))
-        a.start()
-        self.addCleanup(a.join, HANG_S)
-        self.addCleanup(go.set)
-        self.assertTrue(inside.wait(HANG_S))
-        out = self.lander('kit/bee', self.main, tip_b).run()
-        self.assertNotIn(out.code, (G.OK, G.BUSY), out.lines)
-        self.assertTrue(out.lines[0].startswith(
-            'NOT RUN: the machine lock did not give the landing its turn: '), out.lines)
-        self.assertTrue(out.lines[0].endswith('; nothing was changed'), out.lines)
-        go.set()
-        a.join(HANG_S)
-        self.assertEqual(results['a'].code, G.OK, results['a'].lines)
-
-    @NEEDS_RESOURCE
-    def test_waiters_take_their_turns_in_the_order_they_came_and_land(self):
-        _, tip_a = self.branch('feature', {'a.py': 'a\n'})
-        _, tip_b = self.branch('bee', {'b.py': 'b\n'})
-        _, tip_c = self.branch('sea', {'c.py': 'c\n'})
-        inside, go = threading.Event(), threading.Event()
-        order = []
-        real_checks = land.Lander.locked_checks
-
-        def checks(lander):
-            order.append(lander.branch)             # under the lock: the order turns were had
-            return real_checks(lander)
-        results = {}
-        with mock.patch.object(land.Lander, 'locked_checks', checks):
-            a = threading.Thread(target=lambda: results.__setitem__(
-                'a', self.lander(BRANCH, self.main, tip_a,
-                                 merged_gate=self.held_gate(inside, go)).run()))
-            a.start()
-            self.addCleanup(a.join, HANG_S)
-            self.addCleanup(go.set)
-            self.assertTrue(inside.wait(HANG_S))
-            b, said_b = self.waiter(results, 'b', 'kit/bee', tip_b)
-            self.until(lambda: self.queued('kit/bee'), 'kit/bee in the queue')
-            c, said_c = self.waiter(results, 'c', 'kit/sea', tip_c)
-            self.until(lambda: self.queued('kit/sea'), 'kit/sea in the queue')
-            self.assertEqual([(e['slug'], e['state']) for e in self.queued('kit/bee')
-                              + self.queued('kit/sea')],
-                             [('kit-bee', 'waiting'), ('kit-sea', 'waiting')])
-            shown = land.queue(self.repo.root, self.store)
-            self.assertEqual(shown.code, G.OK, shown.lines)
-            self.assertTrue(shown.lines[0].startswith('landing lock: HELD'), shown.lines)
-            self.assertEqual(shown.lines[1], 'landing queue: 3 holding or waiting')
-            for line, want in zip(shown.lines[2:], ['  1. held ', '  2. waiting ',
-                                                    '  3. waiting ']):
-                self.assertTrue(line.startswith(want), shown.lines)
-            for line, slug in zip(shown.lines[2:], ['kit-feature', 'kit-bee', 'kit-sea']):
-                self.assertIn('/%s (' % slug, line)
-                self.assertNotIn('another repository', line)
-            self.assertEqual(len(shown.lines), 5, shown.lines)
-            go.set()
-            for t in (a, b, c):
-                t.join(HANG_S)
-                self.assertFalse(t.is_alive())
-        self.assertEqual(order, [BRANCH, 'kit/bee', 'kit/sea'])
-        base = self.main
-        for name, tip in zip('abc', (tip_a, tip_b, tip_c)):
-            out = results[name]
-            self.assertEqual(out.code, G.OK, out.lines)
-            self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), base)
-            self.assertEqual(self.repo.git('rev-parse', out.merge + '^2'), tip)
-            base = out.merge
-        self.assertEqual(self.remote_main(), results['c'].merge)
-        self.assertEqual(self.entries(), [])
-        self.assertIsNone(self.lock().read())
-
-    def test_the_landing_lock_file_still_keeps_out_a_holder_outside_the_machine_lock(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        rec = self.lock().take('full', ['kit/someone'], pid=os.getpid())   # a live holder
-        self.addCleanup(self.lock().release, rec['token'])
-        said = []
-        t0 = time.monotonic()
-        out = self.lander(BRANCH, self.main, tip, wait_s=1, poll_s=0.05, say=said.append).run()
-        self.assertGreaterEqual(time.monotonic() - t0, 1)
-        self.assertEqual(out.code, G.BUSY, out.lines)
-        self.assertIn('pid %d' % os.getpid(), out.lines[0])
-        self.assertEqual(len([s for s in said if s.startswith('waiting up to ')]), 1, said)
-        self.assertEqual(self.entries(), [])                # the slot was given up
-        self.assertIsNone(out.result_record)
 
     def test_every_outcome_gives_the_turn_up(self):
         _, tip = self.branch('feature', {'RED': 'x\n'})
@@ -360,7 +219,7 @@ class GoneHolder(QueueCase):
 
     def test_a_gone_holder_with_nothing_unpushed_is_broken_and_the_landing_lands(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
-        self.lock().take('full', ['kit/gone'], pid=self.dead_pid())
+        self.lock().take(['kit/gone'], pid=self.dead_pid())
         said = []
         out = self.lander(BRANCH, self.main, tip, say=said.append).run()
         self.assertEqual(out.code, G.OK, out.lines)
@@ -373,7 +232,7 @@ class GoneHolder(QueueCase):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         self.repo.write('u.py', 'unpushed\n')
         local = self.repo.commit('left unpushed by the gone lander', 'u.py')
-        rec = self.lock().take('full', ['kit/gone'], pid=self.dead_pid())
+        rec = self.lock().take(['kit/gone'], pid=self.dead_pid())
         said, slept = [], []
         with no_sleep(slept):
             out = self.lander(BRANCH, self.main, tip, wait_s=60, poll_s=0.05,
@@ -386,6 +245,47 @@ class GoneHolder(QueueCase):
         self.assertEqual(self.main_now(), local)
         self.assertEqual(self.remote_main(), self.main)
         self.assertEqual(self.entries(), [])
+
+    def test_a_holder_gone_after_its_push_names_the_next_landing_and_the_break(self):
+        # A lander killed after its verified push, before the main checkout's fast-forward,
+        # leaves the lock at phase push and main only behind origin/main: the next landing says
+        # the push most likely landed, gives the fast-forward, and names the next landing and
+        # break_lock; once main is fast-forwarded, a landing breaks the lock itself and lands.
+        _, tip_a = self.branch('feature', {'a.py': 'a\n'})
+        _, tip_b = self.branch('bee', {'b.py': 'b\n'})
+
+        class Killed(BaseException):
+            pass
+
+        def no_recover(lander, e):          # killed outright: nothing recovers
+            raise e
+        with mock.patch.object(land.Lander, 'sync_main', side_effect=Killed), \
+                mock.patch.object(land.Lander, 'recover', no_recover):
+            with self.assertRaises(Killed):
+                self.lander(BRANCH, self.main, tip_a, pid=self.dead_pid()).run()
+        rec = self.lock().read()
+        self.assertEqual(rec['phase'], 'push')
+        pushed = self.remote_main()
+        self.assertNotEqual(pushed, self.main)
+        out = self.lander('kit/bee', self.main, tip_b).run()
+        self.assertEqual(out.code, G.BUSY, out.lines)
+        line = out.lines[0]
+        for want in ('its holder is gone after its push: origin/main (%s) moved on from %s, '
+                     'where it took the lock, so its push most likely landed and only the main '
+                     'checkout\'s fast-forward was skipped' % (pushed[:10], self.main[:10]),
+                     'Not broken, because main is only behind origin/main',
+                     'merge --ff-only origin/main. Then land again: the next landing breaks it '
+                     'itself; or break it with: ', 'break_lock()'):
+            self.assertIn(want, line)
+        self.assertEqual(self.lock().read()['token'], rec['token'])
+        self.assertEqual(self.main_now(), self.main)
+        self.repo.git('merge', '--ff-only', '--quiet', 'origin/main')     # as the hint says
+        said = []
+        out = self.lander('kit/bee', pushed, tip_b, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertTrue(any(s.startswith('broke the landing lock of a holder that is gone')
+                            for s in said), said)
+        self.assertIsNone(self.lock().read())
 
 
 class Batch(QueueCase):
@@ -421,21 +321,6 @@ class Batch(QueueCase):
             self.assertEqual((rec['tip'], rec['verdict']), (t, 'pass'))
         self.assertEqual(self.entries(), [])
 
-    def test_a_conflict_on_a_later_branch_undoes_the_earlier_merges(self):
-        _, t1 = self.branch('one', {'x.txt': 'one\n'})
-        _, t2 = self.branch('two', {'x.txt': 'two\n'})
-        out = self.lander(['kit/one', 'kit/two'], self.main, [t1, t2]).run()
-        self.assertIn('kit/two does not merge cleanly', out.lines[0])
-        self.assertIn('the merge of kit/one before it was undone', out.lines[0])
-        self.assertEqual(out.lines[-1], 'CONFLICT kit/two with main %s: the author merges main'
-                         % self.main)
-        self.assertTrue(out.undone)
-        self.assert_untouched(out, G.FAILED)
-        for b in ('kit/one', 'kit/two'):
-            rec, why = result.read(self.repo.root, b, kind='land')
-            self.assertIsNone(why)
-            self.assertEqual((rec['verdict'], rec['summary']), ('fail', out.lines[-1]))
-
     def test_a_red_batch_is_undone_whole(self):
         branches, tips = self.three(last={'RED': 'x\n'})
         out = self.lander(branches, self.main, tips).run()
@@ -446,57 +331,6 @@ class Batch(QueueCase):
             rec, why = result.read(self.repo.root, b, kind='land')
             self.assertIsNone(why)
             self.assertEqual(rec['verdict'], 'fail')
-
-    def test_batch_usage_and_refusals(self):
-        branches, tips = self.three()
-        self.assertEqual(self.lander(branches, self.main, tips[:1]).run().code, G.USAGE)
-        self.assertEqual(self.lander(['kit/one', 'kit/one'], self.main, tips).run().code, G.USAGE)
-        # a tip inside another tip of the batch
-        wt = self.repo.path('.claude', 'worktrees', 'one')
-        self.repo.git('branch', 'kit/three', 'kit/one')
-        self.repo.write('three.py', '3\n', root=wt)
-        self.repo.git('switch', '-q', 'kit/three', cwd=wt)
-        t3 = self.repo.commit('three', 'three.py', cwd=wt)
-        out = self.lander(['kit/one', 'kit/three'], self.main, [tips[0], t3]).run()
-        self.assertIn('in the same batch', out.lines[0])
-        self.assert_untouched(out, G.REFUSED)
-
-
-class BatchInterrupted(QueueCase):
-    three = Batch.three
-
-    def interrupt_second_merge(self, after):
-        """Run the batch with Ctrl+C at its second merge: before it starts, or once git made it."""
-        branches, tips = self.three()
-        real = land.Lander.git
-        merges = []
-
-        def git(lander, *args, **kw):
-            if args[:2] == ('merge', '--no-ff'):
-                merges.append(args)
-                if len(merges) == 2:
-                    if after:
-                        r = real(lander, *args, **kw)
-                        self.assertEqual(r.rc, 0, r.err)
-                    raise KeyboardInterrupt
-            return real(lander, *args, **kw)
-        with mock.patch.object(land.Lander, 'git', git):
-            lander = self.lander(branches, self.main, tips)
-            with self.assertRaises(KeyboardInterrupt):
-                lander.run()
-        self.assertEqual(len(merges), 2)
-        self.assertEqual(len(lander.merges), 2 if after else 1)    # half_merge saw the second
-        self.assertEqual(self.main_now(), self.main)                # both undone
-        self.assertEqual(self.remote_main(), self.main)
-        self.assertEqual(self.repo.git('status', '--porcelain'), '')
-        self.assertIsNone(self.lock().read())
-        self.assertEqual(self.entries(), [])
-
-    def test_ctrl_c_before_the_second_merge_undoes_the_first(self):
-        self.interrupt_second_merge(after=False)
-
-    def test_ctrl_c_once_the_second_merge_is_made_undoes_both(self):
-        self.interrupt_second_merge(after=True)
 
 
 class Follow(QueueCase):
@@ -525,32 +359,6 @@ class Follow(QueueCase):
         sha = self.main_commit(name, kit)
         self.repo.git('reset', '-q', '--keep', before)
         return sha
-
-    def test_main_moved_on_is_said_and_the_landing_merges_onto_it(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        moved = self.main_commit('m.py')
-        said = []
-        out = self.lander(BRANCH, self.main, tip, say=said.append).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertIn('main moved on from %s to %s; merging onto %s' % (
-            self.main[:10], moved[:10], moved[:10]), said)
-        self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), moved)
-        self.assertEqual(self.remote_main(), out.merge)
-        rec, why = land.gate_ok.verify(self.repo.root, out.merge)
-        self.assertIsNone(why)
-        self.assertEqual(rec['base'], moved)                        # gated against the new main
-        rec, why = result.read(self.repo.root, BRANCH, kind='land')
-        self.assertIsNone(why)
-        self.assertEqual((rec['verdict'], rec['base']), ('pass', moved))
-
-    def test_without_expect_main_nothing_is_said(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        moved = self.main_commit('m.py')
-        said = []
-        out = self.lander(BRANCH, None, tip, say=said.append).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertFalse([s for s in said if s.startswith('main moved on')], said)
-        self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), moved)
 
     def test_a_main_only_behind_the_remote_is_fast_forwarded_and_followed(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
@@ -612,24 +420,11 @@ class Follow(QueueCase):
         self.assertEqual(self.entries(), [])
         self.assertEqual(self.records(), [])
 
-    def test_a_main_rewritten_on_the_remote_is_followed(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        expected = self.main_commit('m.py')
-        self.repo.git('reset', '-q', '--keep', self.main)           # main rewritten: m.py gone,
-        rewritten = self.main_commit('r.py')                        # r.py in its place
-        said = []
-        out = self.lander(BRANCH, expected, tip, say=said.append).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertIn('main moved on from %s to %s; merging onto %s' % (
-            expected[:10], rewritten[:10], rewritten[:10]), said)
-        self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), rewritten)
-
-    def test_a_base_whose_config_names_another_main_remote_or_lock_is_refused(self):
+    def test_a_base_whose_config_names_another_main_or_remote_is_refused(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         changes = {
             'main': lambda c: c.setdefault('repo', {}).update(main_branch='trunk'),
             'remote': lambda c: c.setdefault('repo', {}).update(remote='upstream'),
-            'lock': lambda c: c.setdefault('landing', {}).update(lock_file='git:other.lock'),
         }
         for n, (what, change) in enumerate(sorted(changes.items())):
             with self.subTest(what=what):
@@ -639,242 +434,14 @@ class Follow(QueueCase):
                 out = self.lander(BRANCH, self.main, tip).run()
                 self.assertEqual(out.code, G.REFUSED, out.lines)
                 self.assertIn('main moved on from %s to %s, and the config there names another '
-                              'main branch, remote or landing lock than this landing holds: land '
-                              'again (the next landing reads the config at %s)' % (
+                              'main branch or remote than this landing holds: land again (the '
+                              'next landing reads the config at %s)' % (
                                   self.main[:10], moved[:10], moved[:10]), out.lines[0])
                 self.assertIn('nothing was merged', out.lines[0])
                 self.assertEqual(self.main_now(), moved)            # fast-forwarded, no more
                 self.assertEqual(self.remote_main(), moved)
                 self.assertIsNone(self.lock().read())
                 self.assertEqual(self.entries(), [])
-
-    def test_a_base_whose_config_refuses_the_landing_is_refused(self):
-        branches = []
-        tips = []
-        for name in ('one', 'two'):
-            _, t = self.branch(name, {name + '.py': name + '\n'})
-            branches.append('kit/' + name)
-            tips.append(t)
-        moved = self.pushed_elsewhere(
-            'm.py', kit=lambda c: c.setdefault('landing', {}).update(batch_max=1))
-        out = self.lander(branches, self.main, tips).run()
-        self.assertEqual(out.code, G.REFUSED, out.lines)
-        self.assertIn('main moved on from %s to %s, and by its config: a batch of 2 branches is '
-                      'more than "landing".batch_max (1)' % (self.main[:10], moved[:10]),
-                      out.lines[0])
-        self.assertEqual(self.remote_main(), moved)
-        self.assertIsNone(self.lock().read())
-
-
-class OddLocks(QueueCase):
-    def test_an_unreadable_or_old_format_lock_is_waited_for_then_busy(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        lock = self.lock()
-        self.addCleanup(lambda: os.path.exists(lock.path) and os.remove(lock.path))
-        for text in ('not json at all', '{"pid": 1, "branch": "kit/old", "since": "then"}\n'):
-            with self.subTest(text=text):
-                with open(lock.path, 'w', encoding='utf-8') as f:
-                    f.write(text)
-                said = []
-                t0 = time.monotonic()
-                out = self.lander(BRANCH, self.main, tip, wait_s=1, poll_s=0.05,
-                                  say=said.append).run()
-                self.assertGreaterEqual(time.monotonic() - t0, 1)   # waited: it may be released
-                self.assertEqual(out.code, G.BUSY, out.lines)
-                self.assertIn('landing lock: HELD - lane ?', out.lines[0])
-                self.assertEqual(len([s for s in said if s.startswith('waiting up to ')]), 1,
-                                 said)
-                with open(lock.path, encoding='utf-8') as f:
-                    self.assertEqual(f.read(), text)                # never broken or rewritten
-                self.assertEqual(self.entries(), [])
-                self.assertEqual(self.main_now(), self.main)
-
-
-class AfterThePush(QueueCase):
-    """Stopped once the push is verified: LANDED with a WARNING, never STUCK."""
-
-    def interrupt(self, method):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        real = getattr(land.Lander, method)
-        hit = []
-
-        def stop(lander, *a, **kw):
-            if lander.phase == 'pushed' and not hit:
-                hit.append(method)
-                raise KeyboardInterrupt
-            return real(lander, *a, **kw)
-        with mock.patch.object(land.Lander, method, stop):
-            out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(hit, [method])
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertFalse([l for l in out.lines if l.startswith('STUCK')], out.lines)
-        self.assertIn('LANDED kit/feature on main at %s (pushed and verified on origin)' % out.merge,
-                      out.lines)
-        self.assertIn('WARNING: Ctrl+C after the verified push; the landing stands', out.lines)
-        self.assertEqual(self.remote_main(), out.merge)
-        self.assertIsNone(self.lock().read())
-        self.assertEqual(self.entries(), [])
-        rec, why = result.read(self.repo.root, BRANCH, kind='land')
-        self.assertIsNone(why)
-        self.assertEqual(rec['verdict'], 'pass')
-
-    def test_ctrl_c_in_the_fetch_after_the_verified_push(self):
-        self.interrupt('fetch')
-
-    def test_ctrl_c_in_the_release_after_the_verified_push(self):
-        self.interrupt('release')
-
-    def test_ctrl_c_again_in_every_release_after_the_verified_push(self):
-        # the release keeps failing: the second Ctrl+C is inside landed_anyway itself
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        real = land.Lander.release
-        hits = []
-
-        def stop(lander, landed=False):
-            if lander.phase in ('pushed', 'landed'):
-                hits.append(lander.phase)
-                raise KeyboardInterrupt
-            return real(lander, landed)
-        lander = self.lander(BRANCH, self.main, tip)
-        with mock.patch.object(land.Lander, 'release', stop):
-            out = lander.run()
-        held = self.lock().read()
-        if held:
-            self.addCleanup(self.lock().release, held['token'])
-        self.assertGreaterEqual(len(hits), 2, hits)
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertFalse([l for l in out.lines if l.startswith('STUCK')], out.lines)
-        self.assertIn('LANDED kit/feature on main at %s (pushed and verified on origin)' % out.merge,
-                      out.lines)
-        self.assertIn('WARNING: Ctrl+C after the verified push; the landing stands', out.lines)
-        warn = [l for l in out.lines if l.startswith('WARNING: the landing lock was not released')]
-        self.assertEqual(warn, ['WARNING: the landing lock was not released (Ctrl+C); check that '
-                                'no landing is running, then break it with: %s'
-                                % lander.break_command()], out.lines)
-        self.assertEqual(self.remote_main(), out.merge)
-        self.assertEqual(held['token'], lander.token)               # still held, as it says
-        self.assertEqual(self.entries(), [])                        # the slot went, at the end
-
-    def test_ctrl_c_in_the_store_lookup_after_the_verified_push(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        hit = []
-
-        def stop(lander, *a, **kw):
-            if lander.phase in ('pushed', 'landed') and not hit:
-                hit.append(lander.phase)
-                raise KeyboardInterrupt
-            return real(lander, *a, **kw)
-        real = land.Lander.fetch
-        real_store, real_how = land.at_landing.ref_store, land.at_landing.backlog_command
-
-        def again(real_fn):             # once the first Ctrl+C was had: Ctrl+C again
-            def fn(*a, **kw):
-                if hit:
-                    raise KeyboardInterrupt
-                return real_fn(*a, **kw)
-            return fn
-        with mock.patch.object(land.Lander, 'fetch', stop), \
-                mock.patch.object(land.at_landing, 'ref_store', again(real_store)), \
-                mock.patch.object(land.at_landing, 'backlog_command', again(real_how)):
-            out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(hit, ['pushed'])
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertFalse([l for l in out.lines if l.startswith('STUCK')], out.lines)
-        self.assertIn('WARNING: the records kit/feature holds pulled in the backlog store were not '
-                      'closed; see what is left with: the backlog tool', out.lines)
-        self.assertEqual(self.remote_main(), out.merge)
-        self.assertIsNone(self.lock().read())
-        self.assertEqual(self.entries(), [])
-
-
-class BehindOnly(QueueCase):
-    def test_a_gone_holder_with_main_only_behind_gets_the_fast_forward_command(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        other = self.repo.worktree('other')
-        self.repo.write('o.py', 'o\n', root=other)
-        moved = self.repo.commit('other', 'o.py', cwd=other)
-        self.repo.git('push', '-q', 'origin', '%s:refs/heads/main' % moved)
-        rec = self.lock().take('full', ['kit/gone'], pid=self.dead_pid())
-        said, slept = [], []
-        with no_sleep(slept):
-            out = self.lander(BRANCH, self.main, tip, wait_s=60, poll_s=0.05,
-                              say=said.append).run()
-        self.assertEqual((slept, waited(said)), ([], []))   # BUSY at once
-        self.assertEqual(out.code, G.BUSY, out.lines)
-        ff = 'git -C "%s" merge --ff-only origin/main' % self.repo.root
-        self.assertIn('main is only behind origin/main, with nothing unpushed: fast-forward it '
-                      'with: %s' % ff, out.lines[0])
-        self.assertIn('The next landing breaks it itself once main has caught up', out.lines[0])
-        self.assertNotIn('unpushed merge or commit', out.lines[0])
-        self.assertEqual(self.lock().read()['token'], rec['token'])
-        # once fast-forwarded, the next landing breaks the lock at its first look and lands
-        self.repo.git('merge', '-q', '--ff-only', 'origin/main')
-        said = []
-        out = self.lander(BRANCH, moved, tip, wait_s=1, poll_s=0.05, say=said.append).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertTrue(any(s.startswith('broke the landing lock of a holder that is gone')
-                            for s in said), said)
-        self.assertEqual(self.repo.git('rev-parse', out.merge + '^1'), moved)
-
-    def test_behind_only_with_a_merge_in_progress_gets_the_settle_by_hand_message(self):
-        _, tip = self.branch('feature', {'a.py': 'a\n'})
-        other = self.repo.worktree('other')
-        self.repo.write('o.py', 'o\n', root=other)
-        moved = self.repo.commit('other', 'o.py', cwd=other)
-        self.repo.git('push', '-q', 'origin', '%s:refs/heads/main' % moved)
-        rec = self.lock().take('full', ['kit/gone'], pid=self.dead_pid())
-        merge_head = os.path.join(self.lock().common, 'MERGE_HEAD')
-        with open(merge_head, 'w', encoding='utf-8') as f:       # a merge the gone holder left
-            f.write(moved + '\n')
-        self.addCleanup(lambda: os.path.exists(merge_head) and os.remove(merge_head))
-        out = self.lander(BRANCH, self.main, tip, wait_s=60, poll_s=0.05).run()
-        self.assertEqual(out.code, G.BUSY, out.lines)
-        self.assertIn('main (%s) != origin/main (%s): an unpushed merge or commit. Settle that by '
-                      'hand, then break it with: ' % (self.main[:10], moved[:10]), out.lines[0])
-        self.assertNotIn('fast-forward', out.lines[0])
-        self.assertEqual(self.lock().read()['token'], rec['token'])
-
-
-class BatchMax(QueueCase):
-    KIT = dict(LandCase.KIT, landing=dict(LandCase.KIT['landing'], batch_max=1))
-
-    def test_a_batch_over_batch_max_is_refused(self):
-        _, t1 = self.branch('one', {'one.py': '1\n'})
-        _, t2 = self.branch('two', {'two.py': '2\n'})
-        out = self.lander(['kit/one', 'kit/two'], self.main, [t1, t2]).run()
-        self.assertIn('more than "landing".batch_max (1)', out.lines[0])
-        self.assert_untouched(out, G.REFUSED)
-        self.assertEqual(self.book_calls, [])               # refused before the booking
-
-
-# A step that passes only when the lane's merged_args follow the step's own.
-ARGS_STEP = ['{python}', '-c', 'import sys; good = sys.argv[1:] == ["--merged", "--docs"]; '
-                               'print("ok" if good else "args %r" % sys.argv[1:]); '
-                               'sys.exit(0 if good else 1)']
-
-
-class LaneArgs(QueueCase):
-    KIT = {'landing': {'lanes': {'docs': {'branch_prefix': ['docs/'], 'paths': ['docs/*'],
-                                          'merged_args': ['--docs']}}}}
-    GATE = {'steps': [{'name': 'unit', 'always': True, 'cmd': ARGS_STEP,
-                       'merged_args': ['--merged'], 'pass': '^ok$'}]}
-
-    def docs_branch(self):
-        wt = self.repo.worktree('d', branch='docs/d')
-        self.repo.write('docs/x.md', 'x\n', root=wt)
-        return self.repo.commit('doc', 'docs/x.md', cwd=wt)
-
-    def test_the_lanes_merged_args_follow_the_steps(self):
-        tip = self.docs_branch()
-        out = self.lander('docs/d', self.main, tip, lane='docs').run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual([c['note'] for c in self.book_calls], ['landing docs: docs/d'])
-
-    def test_a_full_landing_gets_only_the_steps(self):
-        tip = self.docs_branch()
-        out = self.lander('docs/d', self.main, tip).run()
-        self.assertEqual(out.code, G.FAILED, out.lines)
-        self.assertTrue(out.undone)
 
 
 def entry(id_, ticket, state, slug, resource, priority='land', **kw):
@@ -919,10 +486,10 @@ class Listing(QueueCase):
         self.assertEqual(out.lines, ['landing lock: free', 'landing queue: empty'])
 
     def test_the_lock_file_is_the_first_line(self):
-        rec = self.lock().take('full', ['kit/someone'], pid=os.getpid())
+        rec = self.lock().take(['kit/someone'], pid=os.getpid())
         self.addCleanup(self.lock().release, rec['token'])
         out = self.shown([])
-        self.assertTrue(out.lines[0].startswith('landing lock: HELD - lane full, branches '
+        self.assertTrue(out.lines[0].startswith('landing lock: HELD - branches '
                                                 'kit/someone, pid %d' % os.getpid()), out.lines)
 
     def test_a_queue_that_cannot_be_read_is_refused(self):

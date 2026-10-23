@@ -8,17 +8,23 @@
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
               [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
-          block ID --on M... [--reason T] [--owner-ask Q] [--ruling R]
+          block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
           unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
+          delete ID --why T [--ruling R]                     clear-review ID --reason T
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
   start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
   repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
                                           run lists them, --apply commits the paths it names)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.backlog, prints and exits.
+Every write first meets the session's role (kitlib.backlog.policy: the session mark, unmarked is
+the owner, against kitlib/backlog/roles.py; docs/backlog.md "Roles"): a row it may not take is
+REFUSED before the write plans. A published write of a MEDIUM or HIGH row appends its line to the
+audit log, <pm_data>/audit/backlog.jsonl (kitlib.backlog.audit; docs/backlog.md "Audit log"); no
+pm_data is a NOTE and a log that cannot be written a WARNING, on standard error, after the write.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
 REFUSED / NOT LANDABLE.
 """
@@ -29,11 +35,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import kitroot                                         # noqa: E402
+from kitlib.backlog import audit                                    # noqa: E402
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
+from kitlib.backlog import policy                                   # noqa: E402
 from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
@@ -44,6 +52,20 @@ from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_repo, open_store, p
 
 def say(line=''):
     print(line, flush=True)
+
+
+def audit_line(verb, rid, rows, tip, session):
+    """After a published write: its audit line (kitlib.backlog.audit), and on standard error the
+    note or warning when there is none. Never a refusal: the write stands, so any failure here,
+    one after_write does not catch too, is a warning and the exit code is the write's."""
+    try:
+        said = audit.after_write(verb, rid, rows, tip, session)
+    except Exception as exc:                    # noqa: BLE001 - the write is published; say, never fail it
+        said = (audit.WARNING, 'the write stands, but its audit line was not written: %s: %s'
+                % (type(exc).__name__, ' '.join(str(exc).split())))
+    if said:
+        sys.stderr.write('%s: %s\n' % said)
+        sys.stderr.flush()
 
 
 class Parser(argparse.ArgumentParser):
@@ -107,7 +129,7 @@ def build_parser():
     v.add_argument('--on', action='append', default=[])
     v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
-    v.add_argument('--ruling', default=None)
+    v.add_argument('--ruling', default=None)    # refused (plan_block): the message names unblock
     v = sub.add_parser('retarget')
     v.add_argument('old')
     v.add_argument('new')
@@ -134,6 +156,14 @@ def build_parser():
     v.add_argument('--why', required=True)
     v.add_argument('--ruling', default=None)
     v.add_argument('--owner-said', default=None)           # refused: kept so the message names --ruling
+    v = sub.add_parser('delete')
+    v.add_argument('id')
+    v.add_argument('--why', required=True)
+    v.add_argument('--ruling', default=None)
+    v.add_argument('--owner-said', default=None)           # refused, as on retire
+    v = sub.add_parser('clear-review')
+    v.add_argument('id')
+    v.add_argument('--reason', required=True)
     v = sub.add_parser('set-status')
     v.add_argument('id')
     v.add_argument('status')
@@ -184,11 +214,14 @@ def do_next(args, ctx, snap):
                  if rec.get('session') else '')
         say('DEAD PULL %s (pulled_by %s has no branch): %s`release %s --reason ...`'
             % (rec.id, rec.get('pulled_by'), taker, rec.id))
-    result, refusals, ranks = omod.next_offer(snap, holding, cap=cap, seeds=args.seeds,
-                                              session=ctx.session, unmet=ctx.unmet(snap))
-    if refusals:
-        raise Failure('cannot compute an offer: %s' % '; '.join(refusals))
-    offers, passed = result
+    # The offer `pull` checks against (plan.offer_for): the branch's own pulls take no scope.
+    offers, passed, _holding, own = pmod.offer_for(snap, ctx, cap=cap, seeds=args.seeds,
+                                                   holding=holding)
+    mine = [r.id for r in holding if own and r.get('pulled_by') == own]
+    if mine:
+        say('as branch %s: its own pulls (%s) take no scope here, so a record overlapping only '
+            'them is offered to bundle onto it' % (own, ', '.join(mine)))
+    ranks = omod.ranked(snap)
     say('')
     say('NEXT (%d offered%s%s)' % (len(offers), ', session %s' % ctx.session if ctx.session else '',
                                    ', --all: no cap' if cap is None else ''))
@@ -223,8 +256,12 @@ def do_list(args, ctx, snap):
     if args.area:
         recs = [r for r in recs if r.get('area') == args.area]
     if args.needs_priority:
+        # A record marked for review at `-` or `-1` still wants its price (the pricing pass).
         recs = sorted((r for r in recs if omod.classify(r)[0] in
-                       (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED)), key=lambda r: r.id)
+                       (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED) or
+                       omod.classify(r)[0] == omod.REVIEW and
+                       r.get('priority') in ('-', rmod.OWNER_PRIORITY)),
+                      key=lambda r: r.id)
     elif args.blocked:
         recs = [r for r in recs if omod.classify(r)[0] == omod.HELD]
         if args.on:
@@ -245,6 +282,8 @@ def do_list(args, ctx, snap):
             days = rmod.parked_days(r, ctx.date())
             age = '?' if days is None else '%dd' % days
             line += '  [q %s, parked %s]' % (r.get('q') or '?', age)
+        if r.has('review'):
+            line += '  [review %s]' % r.get('review')
         say(line)
     say('%d record(s)' % len(recs))
     return 0
@@ -263,7 +302,7 @@ def do_stale(args, ctx, snap):
 def do_check(args, ctx, snap):
     say('CHECK %s (%s)' % (snap.head_label(), snap.where))
     red = False
-    for res in checkmod.check_store(snap):
+    for res in checkmod.check_store(snap, implicit=getattr(ctx.store.backend, 'implicit', False)):
         say(res.line())
         for f in res.findings:
             say('    FAIL %s:%s %s' % (f.path, f.line, f.message))
@@ -275,23 +314,11 @@ def do_check(args, ctx, snap):
 
 
 def do_landable(args, ctx, snap, backend):
-    worst = 0
-    for v in landmod.check(backend, snap, ctx.root, args.branches):
-        if v.verdict == landmod.LANDABLE:
-            say('LANDABLE %s: no record is pulled by it (%s)' % (v.branch, v.detail))
-        elif v.verdict == landmod.CANNOT_TELL:
-            say('CANNOT TELL %s: %s' % (v.branch, v.detail))
-            worst = max(worst, 1)
-        else:
-            worst = 2
-            for rid in v.held:
-                say('NOT LANDABLE %s: %s is still pulled by it; landing deletes the branch and '
-                    'would leave the pull dead.' % (v.branch, rid))
-                say('  Done:     %s -C <worktree> close %s --reason "<what was done>"'
-                    % (kitroot.command('backlog'), rid))
-                say('  Not done: %s -C <worktree> --as %s release %s --reason "<why>"'
-                    % (kitroot.command('backlog'), v.branch, rid))
-    return worst
+    verdicts = landmod.check(backend, snap, ctx.root, args.branches, base=landmod.code_base(ctx))
+    for v in verdicts:
+        for line in landmod.lines(v, kitroot.command('backlog')):
+            say(line)
+    return landmod.exit_code(verdicts)
 
 
 # --- writes ---------------------------------------------------------------------------------------
@@ -303,9 +330,10 @@ def index_stale(exc):
 
 
 def do_write(args, ctx, store):
-    made = []
+    made, rows = [], []
 
     def plan(snap):                              # the change, kept for an IndexStale report
+        rows[:] = policy.check(args, ctx, snap)  # the session's role may take it (roles.py)
         made[:] = [planner(args, ctx)(snap)]
         return made[0]
     stale = None
@@ -325,13 +353,14 @@ def do_write(args, ctx, store):
     say('  %s' % change.subject)
     if stale is not None:
         index_stale(stale)
+    audit_line(args.verb, getattr(args, 'id', None), rows, tip, args.session)
     return 0
 
 
-def do_retarget_dry(args, store):
+def do_retarget_dry(args, ctx):
     """`retarget` without `--apply`: prints the change it would write (kitlib/backlog/opener.py
     `retarget_dry`); nothing is published."""
-    change = retarget_dry(args, store)
+    change = retarget_dry(args, ctx)
     for line in change.lines:
         say(line)
     say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
@@ -404,17 +433,26 @@ def do_migrate(args, top, cfg, rules):
         say('DRY RUN: nothing was written')
     else:
         say('MIGRATED -> %s at %s' % (backend.describe(), res.tip[:10]))
+        audit_line(args.verb, None, policy.sort(args.verb, policy.given_of(args)), res.tip,
+                   args.session)
     return 0
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.verb == 'retire' and args.owner_said is not None:
+        if args.verb in ('retire', 'delete') and args.owner_said is not None:
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        'Retiring an owner-held record takes `--ruling R-nnnn`')
+                        '%s an owner- or PM-priced record takes `--ruling R-nnnn`'
+                        % ('Retiring' if args.verb == 'retire' else 'Deleting'))
+        if args.verb == 'block':
+            err = rmod.block_citation_error(args.on, args.reason, args.owner_ask)
+            if err:
+                raise Usage(err)
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
+            if not args.dry_run:
+                policy.check(args, None, None)
             top, cfg, rules = open_repo(root)
             return do_migrate(args, top, cfg, rules)
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
@@ -422,10 +460,17 @@ def main(argv=None):
         if args.verb in WRITES or (args.verb == 'retarget' and args.apply):
             return do_write(args, ctx, store)
         if args.verb == 'retarget':
-            return do_retarget_dry(args, store)
+            return do_retarget_dry(args, ctx)
         if args.verb == 'catch-up':
+            if args.apply is not None:
+                policy.check(args, ctx, None)    # the commit takes the `catch-up` row (roles.py)
             return do_catch_up(args, store)
-        snap = store.load()
+        if args.verb == 'check':
+            snap, note = checkmod.load_for_check(store)
+            if note:
+                say('NOTE: %s' % note)
+        else:
+            snap = store.load()
         if args.verb == 'landable':
             return do_landable(args, ctx, snap, store.backend)
         return {'next': do_next, 'show': do_show, 'list': do_list,

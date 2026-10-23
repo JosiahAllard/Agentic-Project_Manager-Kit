@@ -1,4 +1,4 @@
-"""A per-process memo of git object answers, on in test processes only (KIT-SPAWN-CACHE).
+"""A per-process memo of git object answers, on in test processes only.
 
 Starting a process is the dear part of a git read on Windows (a kernel token-index walk per
 CreateProcess), and a test asks some questions more than once. This memo keeps only what a

@@ -32,19 +32,19 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 
 ## The brief
 
-- Holds: role; the owner's words verbatim where they matter; verified facts; **exact files and sections
-  to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate;
+- Holds: role; the owner's decisions where they matter, as a paraphrase, no ruling id; verified facts; **exact files and sections
+  to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: `gate.py --full` on the exact tip);
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
   to look up, never a pasted rule. Where the repo has a brief template (`--find brief`), follow it.
 - Every agent starts with `python <kit>/tools/preflight.py -C <worktree>`. Briefs point at `python <kit>/tools/codemap.py -C <worktree>`
   and `python <kit>/tools/doc_index.py -C <worktree> --section "<heading>"` before any search; agents use their search
-  and file-read tools, not shell grep, cat or sed. Reviewer and lander briefs name
+  and file-read tools, not shell grep, cat or sed. Review (analyst) and lander briefs name
   `python <kit>/tools/review_pack.py -C <repo> <branch>` as their first call.
 - In a large file the brief names the sections or line ranges to read; the agent reads ranges (codemap or a search first), never the whole file, unless it is rewriting all of it.
 - Every coding brief states its risk level and why (path in the risk map, or the reason it is
   higher); unlisted is not a reason - list routine paths at their real level.
-- Briefs to the records and spec-writer roles give facts as keyword lines in the entry format
+- Briefs to the docs-writer role give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
   logs split into more per-area files as they fill.
 
@@ -52,16 +52,24 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 
 Read `roster.md` in this skill's folder (beside this file): the roles and what each is for, the
 cheap/strong split, the coding ladder, tier and effort rules, deep-worker requests, the
-consultant, researcher and pass/fail-check routing. The kit's roster table (each role's tier, and
+consultant, research and pass/fail-check routing. The kit's roster table (each role's tier, and
 each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
+
+A task matching a specialty skill (a `specialty-*` folder in `<kit>/content/skills/`): the brief names the skill
+("Load skill `specialty-sound` first") and the role, at least the minimum tier the skill's
+`Dispatch:` line gives. The skill carries the know-how; the role still sets model, effort and
+permissions.
 
 ## Creative dispatches
 
-- The tech-artist (art that is code), asset-smith (scripted 3D) and sound-smith (sound; it cannot
-  hear, so its report ends in a question you put to the owner) roles: via the owner's local models,
-  against an art direction the owner has decided or, where none exists, the tech-artist proposes
-  strongly different looks for the owner to pick; none hand-sculpts, rigs or animates. An asset
-  generation cannot supply -> the owner, not another agent.
+- Art that is code (skill `specialty-tech-art`), scripted 3D props (skill `specialty-3d-assets`)
+  and scripted character rigs (skill `specialty-rigging`) go to senior-worker at least; sound
+  (skill `specialty-sound`; the agent cannot hear, so its report ends in a question you put to the
+  owner) to worker at least, senior-worker for design; never weak-worker. They work via the
+  owner's local models, against an art direction the owner has decided or, where none exists, by
+  proposing strongly different looks for the owner to pick; none hand-sculpts; rigs and their test
+  animations are scripted (skill `specialty-rigging`). An asset generation cannot supply -> the
+  owner, not another agent.
 - Every creative brief carries this block, filled in:
 
   > FEEL: one sentence. REFERENCES: one to three (a game and what specifically, or an image path,
@@ -85,18 +93,17 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
   everyone, run, release. Design, arms and decision rule written before the first run; counts
   reported with sample size; the rule applied literally; any after-the-fact reading stated
   separately.
-- GPU generation never overlaps an engine, network or render run.
 - Private scratch folder per agent - shared file names get overwritten.
 - Before trusting "nothing is running", look at the actual processes.
 
 ## While agents run
 
-- Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. A message
+- Continue an agent a few rounds per artefact (the profile may set the count), then reseed from a short written summary. A message
   queued to a busy agent may never be read: if a report shows something was missed, resend in full.
 - Review a hand-back at once and continue the same agent while its prompt cache is warm (the
   host's cache window; `<kit>/docs/ROSTER.md` names the role that asks for a longer one); later,
-  continue anyway unless its context is above about 150k tokens (strong- and deep-tier coders) or
-  it is a reviewer, then start fresh from a short written summary; never park a large-context
+  continue anyway unless its context is long (the profile may set the size; strong- and deep-tier coders) or
+  it is an analyst on a review, then start fresh from a short written summary; never park a large-context
   agent to resume later for a small fix.
 - A background run dies with its agent: tell its replacement to check logs first.
 - Few long-running agents: each notification costs a turn over your whole context.
@@ -109,11 +116,17 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
 ## Upkeep
 
 - **Prune daily.** Start each day with `python <kit>/tools/doc_index.py -C <repo> --stale`: confirm (touch it),
-  rewrite or delete each line, in ONE records-role commit. A new `.md`, shard or section adds its
+  rewrite or delete each line, in ONE docs-writer commit. A new `.md`, shard or section adds its
   index line in the same commit, or the doc-budget check refuses the branch.
 - Durable facts -> the repo's docs, landed like any docs change, never in the host's config
-  folder; session state -> `docs/ops/state.local.md`. Worktrees are created and removed as the
+  folder; session state -> your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`). Worktrees are created and removed as the
   profile says.
+- **Stale worktrees.** A B or C tree in `--classify` whose work is stale (superseded, ruled out, its
+  record closed): mark it, `python <kit>/tools/worktree_remove.py -C <repo> <branch> --mark-stale
+  "<why>"` (only a clean, unlanded, unclaimed tree; `--classify` offers the line for those and
+  notes why the others take none). The nightly sweep then abandons it under `archive/<slug>` once it is idle 24 h, unless
+  it changes first; `<branch> --unmark-stale` clears the mark. A branch with no worktree is
+  abandoned by hand, `<branch> --branch --abandon "<why>"`, on the PM's word.
 - **Grow the tool set.** Weekly, run the repetition report on the repo
   (`<kit>/optional/usage/repetition_report.py`): repeated shell shapes, or a scratch script
   written twice, become lines in the repo's `docs/ops/tool-requests.md`; build the top one as

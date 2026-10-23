@@ -14,11 +14,16 @@ SessionStart hook to ctx.pm_settings alone.
 Every path in a hook's `command` and `args` and in statusLine.command is read; one that resolves
 into the old kit clone is either in REMOVE (its hook goes; a group or event left empty goes too),
 in REPOINT (rewritten to this kit's file, forward slashes, quotes kept; a retired hook script to
-ENTRY and its words) or refused, named. A path
-through `<config>/tools/<link>` is left: the links step points it at this kit, and it is refused
-only if this kit has no such file. The JSON is edited as data and written back in the layout it
-was read in (indent, ASCII escaping, line ends, BOM, final newline), so a dry run's diff shows
+ENTRY and its words) or refused, named. The JSON is edited as data and written back in the layout
+it was read in (indent, ASCII escaping, line ends, BOM, final newline), so a dry run's diff shows
 only the changed lines.
+
+Paths through a tools link (repoint_links): machine setup makes no link (kitlib.machinesetup.links
+reports the ones left), so a hook or statusLine path through `<config>/tools/<name>/...`, a name in
+links.TOOL_LINKS, is re-pointed to the kit file that link reached: `.../tools/usage/x.ps1` becomes
+`<kit>/optional/usage/x.ps1`. `<config>` is any config folder of the run or of the home. It runs in
+every mode and in the PM settings, so a status line keeps working once the link goes; a kit with no
+such file is refused, named.
 
 Moved hook paths (docs/machine-setup.md "Moved hook paths"): a hook path to one of this kit's
 RETIRED hook scripts, in HOOKS (`<kit>/hosts/claude/shell/hooks/`, plan steps 7 to 13) or in
@@ -88,6 +93,7 @@ def survey(plan, d, ctx):
         return
     try:
         ed.did.extend(repoint_moved(data, ctx))
+        ed.did.extend(repoint_links(data, ctx))
     except ValueError as e:
         plan.refuse('%s: %s' % (path, e))
         return
@@ -116,8 +122,7 @@ def survey(plan, d, ctx):
     if isinstance(sl, dict) and isinstance(sl.get('command'), str):
         sl['command'] = ed.rewrite(sl['command'], 'statusLine.command', removable=False)[0]
     _note_plugin_twins(plan, path, data, ctx)
-    guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
-    if not any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
+    if _wants_guard(plan, path, data, ctx):
         try:
             entry = ed.guard_entry()
         except (OSError, RuntimeError, ValueError) as e:
@@ -133,9 +138,24 @@ def survey(plan, d, ctx):
     _plan_write(plan, ctx, path, raw, layout, data, ed.did)
 
 
-def _note_plugin_twins(plan, path, data, ctx):
+def _wants_guard(plan, path, data, ctx):
+    """True when the settings.json at `path` (`data`) should gain the guard's entry: it has none,
+    and the managed settings file (ctx.managed_data, read by managed.survey_live) runs no kit's
+    guard. One that has it while the managed file does too is noted: the guard runs twice."""
+    from . import managed
+    guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
+    here = any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home))
+    data_m = getattr(ctx, 'managed_data', None)
+    where = managed.guard_where(data_m, ctx.kit, ctx.home) if data_m is not None else []
+    if here and where == 'kit':
+        plan.note('settings', '%s: the guard\'s entry is also in the managed settings file %s, so it '
+                              'runs twice; remove it from this file by hand' % (path, ctx.managed_file))
+    return not here and not where
+
+
+def _note_plugin_twins(plan, path, data, ctx, skip=()):
     rel, plugin = plugin_hooks(ctx.kit, ctx.home)
-    for event in sorted(plugin):
+    for event in sorted(e for e in plugin if e not in skip):
         seen = set()
         for sig in _signatures(data, event, ctx.home):
             if sig in plugin[event] and sig not in seen:
@@ -176,7 +196,9 @@ def _plan_write(plan, ctx, path, raw, layout, data, did):
 
 # Fresh mode (--fresh): append only. No entry is removed, re-pointed or reshaped, except a hook path
 # the hosts/ move changed (repoint_moved); a missing file is created in NEW_LAYOUT; the PM
-# SessionStart hook goes to --pm-settings alone.
+# SessionStart hook goes to --pm-settings alone. The kit SessionStart entries the kit plugin also
+# runs are the plugin step's (plugin.py, plugin_edit), not this one's: in a folder that step owns
+# they get no twin note here.
 NEW_LAYOUT = {'bom': False, 'crlf': False, 'final': True, 'indent': 2, 'ascii': False, 'exact': True}
 PM_HOOK = ENTRY
 PM_MATCHER = 'startup|resume|compact'
@@ -188,13 +210,14 @@ def _survey_fresh(plan, path, ctx):
         return
     raw, layout, data = got
     try:
-        did = repoint_moved(data, ctx)
+        did = repoint_moved(data, ctx) + repoint_links(data, ctx)
     except ValueError as e:
         plan.refuse('%s: %s' % (path, e))
         return
-    _note_plugin_twins(plan, path, data, ctx)
-    guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
-    if not any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
+    from . import plugin                                             # it reads this module
+    owned = plugin.owns_settings(os.path.dirname(path), path, ctx)
+    _note_plugin_twins(plan, path, data, ctx, skip=(REPLACED_EVENT,) if owned else ())
+    if _wants_guard(plan, path, data, ctx):
         try:
             entry = ctx.host.guard_entry(ctx.kit)
         except (OSError, RuntimeError, ValueError) as e:
@@ -282,6 +305,82 @@ def repoint_moved(data, ctx):
     return did
 
 
+def _link_dirs(ctx):
+    """The config folders whose `tools` links a settings path may run through: the run's, then
+    every one under the home (a status line may name another account's folder)."""
+    from . import default_config_dirs                                # the package imports this module
+    out, seen = [], set()
+    for d in list(ctx.config_dirs) + default_config_dirs(ctx.home):
+        if norm(d) not in seen:
+            seen.add(norm(d))
+            out.append(d)
+    return out
+
+
+def _through_link(p, dirs, kit):
+    """(the TOOL_LINKS name, the kit file) when the absolute path `p` runs through
+    `<dir>/tools/<name>` for one of `dirs`; else None. The rest of the path keeps its spelling."""
+    for d in dirs:
+        for name, rel in links.TOOL_LINKS:
+            link = os.path.join(d, 'tools', name)
+            if under(p, link):
+                rest = os.path.relpath(os.path.normpath(p), os.path.normpath(link))
+                after = kit_file(kit, rel)
+                return name, (after if rest == '.' else os.path.join(after, rest))
+    return None
+
+
+def _sub_links(s, ctx, dirs, where, did, whole):
+    """`s` with each path through a tools link (_through_link) replaced by the kit file, forward
+    slashes, its quotes kept; an unquoted path that gains a space is quoted (a whole argument is
+    never quoted). ValueError when the kit has no such file."""
+    spans = [(0, len(s), s)] if whole else [(m.start(), m.end(), m.group()) for m in TOKEN.finditer(s)]
+    out, last = [], 0
+    for a, b, tok in spans:
+        q = tok[0] if tok[:1] in '"\'' and len(tok) > 1 and tok[-1] == tok[0] else ''
+        bare = tok[1:-1] if q else tok
+        p = expand(bare, ctx.home)
+        hit = _through_link(p, dirs, ctx.kit) if p else None
+        if hit is None:
+            continue
+        name, new = hit
+        if not os.path.exists(new):
+            raise ValueError('%s runs %s through the tools link %s, and the kit has no %s for it to reach'
+                             % (where, bare, name, new))
+        fwd = new.replace('\\', '/')
+        if not q and not whole and ' ' in fwd:
+            q = '"'
+        out.append(s[last:a] + q + fwd + q)
+        last = b
+        did.append('re-point the %s path %s (through the tools link %s) to %s' % (where, bare, name, fwd))
+    out.append(s[last:])
+    return ''.join(out)
+
+
+def repoint_links(data, ctx):
+    """Re-point, in place, every hook path in `data` (any event; `command` and `args`) and the
+    statusLine.command path that runs through `<config>/tools/<name>` (links.TOOL_LINKS) to the kit
+    file that link reached; [what it did, one line per path]. ValueError when the kit has no such
+    file. Runs in every mode: machine setup makes no link, so the path must name the kit's file
+    before the owner removes the leftover link."""
+    if not isinstance(data, dict):
+        return []
+    did, dirs = [], _link_dirs(ctx)
+    hooks = data.get('hooks')
+    for event in sorted(hooks) if isinstance(hooks, dict) else []:
+        where = '%s hook' % event
+        for h in _hooks(data, event):
+            if isinstance(h.get('command'), str):
+                h['command'] = _sub_links(h['command'], ctx, dirs, where, did, False)
+            if isinstance(h.get('args'), list):
+                h['args'] = [_sub_links(a, ctx, dirs, where, did, True) if isinstance(a, str) else a
+                             for a in h['args']]
+    sl = data.get('statusLine')
+    if isinstance(sl, dict) and isinstance(sl.get('command'), str):
+        sl['command'] = _sub_links(sl['command'], ctx, dirs, 'statusLine.command', did, False)
+    return did
+
+
 def survey_pm(plan, ctx):
     """The PM SessionStart hook (docs/pm-start.md "Hook (settings.json)"), written to
     ctx.pm_settings and nowhere else; a note when there is none."""
@@ -306,7 +405,7 @@ def survey_pm(plan, ctx):
         return
     raw, layout, data = got
     try:
-        did = repoint_moved(data, ctx)
+        did = repoint_moved(data, ctx) + repoint_links(data, ctx)
     except ValueError as e:
         plan.refuse('%s: %s' % (path, e))
         return
@@ -584,20 +683,9 @@ class _Editor(object):
         return ''.join(out), False, words
 
     def classify(self, p):
-        """None (not the old kit's, or kept as is), 'remove' or 'repoint'; refuses the rest."""
+        """None (not the old kit's, or kept as is), 'remove' or 'repoint'; refuses the rest. A path
+        through a tools link is the kit's file by now (repoint_links ran first)."""
         ctx = self.ctx
-        for d in ctx.config_dirs:
-            for name, rel in links.TOOL_LINKS:
-                link = os.path.join(d, 'tools', name)
-                if under(p, link):
-                    rest = os.path.relpath(norm(p), norm(link))
-                    after = os.path.join(ctx.kit, *rel.split('/'))
-                    if rest != '.':
-                        after = os.path.join(after, rest)
-                    if not os.path.exists(after):
-                        self.plan.refuse('%s: %s goes through the tools link %s, and the kit has '
-                                         'no %s for it to reach' % (self.path, p, name, after))
-                    return None
         real = os.path.realpath(p)
         old = under(p, ctx.old_kit) or under(real, ctx.old_kit) \
             or under(real, os.path.join(ctx.kit, 'hooks')) \
@@ -683,10 +771,9 @@ def _hook_paths(data, event, home):
                     yield p
 
 
-def plugin_hooks(kit, home):
-    """(the hooks file the kit's plugin manifest names, {event: the _signature of each of its hooks}),
-    with ${CLAUDE_PLUGIN_ROOT} read as `kit`; ('', {}) when the manifest names no hooks file this can
-    read."""
+def _plugin_data(kit):
+    """(the hooks file the kit's plugin manifest names, its parsed JSON with ${CLAUDE_PLUGIN_ROOT}
+    read as `kit`); ('', None) when the manifest names no hooks file this can read."""
     try:
         with open(os.path.join(kit, *PLUGIN_MANIFEST.split('/')), encoding='utf-8-sig') as f:
             manifest = json.load(f)
@@ -696,9 +783,9 @@ def plugin_hooks(kit, home):
         with open(os.path.join(kit, os.path.normpath(rel)), encoding='utf-8-sig') as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return '', {}
+        return '', None
     if not isinstance(data, dict):
-        return '', {}
+        return '', None
     root = kit.replace('\\', '/')
 
     def sub(v):
@@ -709,14 +796,141 @@ def plugin_hooks(kit, home):
         if isinstance(v, dict):
             return dict((k, sub(x)) for k, x in v.items())
         return v
-    data = sub(data)
+    return (rel[2:] if rel.startswith('./') else rel), sub(data)
+
+
+def plugin_hooks(kit, home):
+    """(the hooks file the kit's plugin manifest names, {event: the _signature of each of its hooks}),
+    with ${CLAUDE_PLUGIN_ROOT} read as `kit`; ('', {}) when the manifest names no hooks file this can
+    read."""
+    rel, data = _plugin_data(kit)
+    if data is None:
+        return '', {}
     hooks = data.get('hooks')
     out = {}
     for event in hooks if isinstance(hooks, dict) else []:
         sigs = set(_signatures(data, event, home))
         if sigs:
             out[event] = sigs
-    return (rel[2:] if rel.startswith('./') else rel), out
+    return rel, out
+
+
+# The sources a SessionStart hook group's matcher picks from. A matcher that is absent, empty or `*`
+# is all of them; plain words joined by `|` are those words; anything else (a regular expression)
+# is unknown, so nothing is ever assumed covered.
+SESSION_SOURCES = frozenset(('startup', 'resume', 'clear', 'compact'))
+
+
+def matcher_sources(matcher):
+    """The sources a hook group's `matcher` covers (SESSION_SOURCES when absent, empty or `*`), or None
+    when it is not a plain `a|b` list of words."""
+    if matcher is None or (isinstance(matcher, str) and matcher.strip() in ('', '*')):
+        return SESSION_SOURCES
+    if not isinstance(matcher, str):
+        return None
+    words = [w.strip() for w in matcher.split('|')]
+    if not all(re.match(r'^\w+$', w) for w in words):
+        return None
+    return frozenset(words)
+
+
+def _group_signatures(data, event, home):
+    """(the group's matcher, the _signature) of each `type: command` hook of `event` that runs a file."""
+    hooks = data.get('hooks')
+    groups = hooks.get(event) if isinstance(hooks, dict) else None
+    for g in groups if isinstance(groups, list) else []:
+        for h in (g.get('hooks') or []) if isinstance(g, dict) else []:
+            if isinstance(h, dict) and h.get('type') == 'command':
+                sig = _signature(h, home)
+                if sig is not None:
+                    yield g.get('matcher'), sig
+
+
+def plugin_sources(kit, home, event):
+    """{the _signature of each of the kit plugin's `event` hooks: the sources its groups' matchers
+    cover, joined}; a matcher that is not a plain list (matcher_sources None) adds none."""
+    out = {}
+    data = _plugin_data(kit)[1]
+    for matcher, sig in _group_signatures(data, event, home) if data is not None else ():
+        out[sig] = out.get(sig, frozenset()) | (matcher_sources(matcher) or frozenset())
+    return out
+
+
+# The kit plugin's machine-lock tools an account's settings allow once the plugin is enabled
+# (plugin.edit_settings): exactly these three; lock_wait_change and lock_stats stay out. Only the owner
+# widens a permissions grant.
+LOCK_ALLOW = ('mcp__plugin_pm-kit_machine-lock__lock_snapshot', 'mcp__plugin_pm-kit_machine-lock__lock_run',
+              'mcp__plugin_pm-kit_machine-lock__lock_hold')
+REPLACED_EVENT = 'SessionStart'
+
+
+def plugin_edit(data, kit, home):
+    """(a copy of the settings `data` with the plugin's changes, [the allow rules added], [the hooks
+    removed, each as describe() names it], [(the name of a hook kept for its matcher, that matcher as
+    written or None when absent, [the sources it covers that the plugin's does not, sorted] or None
+    when the matcher is not a plain list)]); `data` itself is not changed.
+
+    Allow rules: each LOCK_ALLOW rule not already an exact string in permissions.allow is appended
+    (permissions and allow are made when absent). ValueError when permissions is not an object or
+    allow not a list.
+
+    Hooks: only under hooks.SessionStart, only a `type: command` entry whose _signature (the script
+    it runs, normalised, and the words after it) is the signature of one of the kit plugin's own
+    SessionStart hooks (plugin_hooks: ${CLAUDE_PLUGIN_ROOT} read as `kit`) and whose script is this
+    kit's ENTRY. Today that is `boot/hook.py claude SessionStart` and `... SessionStart coordinator`;
+    the PM hook (`... SessionStart pm`, not in the plugin), another kit's hook and every other event
+    stay. Such an entry goes only when the plugin's matchers for that hook cover every source its own
+    group's matcher does (matcher_sources: absent or empty is every source); otherwise it is kept, so
+    a session source the plugin does not run it on (the coordinator hook on `clear`) still runs it.
+    A group's hooks list emptied by this step goes, and SessionStart when this step emptied it;
+    `hooks` stays."""
+    new = json.loads(json.dumps(data))
+    added = []
+    perms = new.get('permissions')
+    if perms is None:
+        perms = new['permissions'] = {}
+    if not isinstance(perms, dict):
+        raise ValueError('"permissions" is not a JSON object')
+    allow = perms.get('allow')
+    if allow is None:
+        allow = perms['allow'] = []
+    if not isinstance(allow, list):
+        raise ValueError('"permissions.allow" is not a list')
+    for rule in LOCK_ALLOW:
+        if rule not in allow:
+            allow.append(rule)
+            added.append(rule)
+    dropped, kept = [], []
+    entry = norm(kit_file(kit, ENTRY))
+    sigs = dict((s, c) for s, c in plugin_sources(kit, home, REPLACED_EVENT).items() if s[0] == entry)
+    hooks = new.get('hooks')
+    groups = hooks.get(REPLACED_EVENT) if isinstance(hooks, dict) else None
+    if not sigs or not isinstance(groups, list):
+        return new, added, dropped, kept
+    emptied = 0
+    for g in list(groups):
+        hs = g.get('hooks') if isinstance(g, dict) else None
+        if not isinstance(hs, list):
+            continue
+        gone = 0
+        wants = matcher_sources(g.get('matcher'))
+        for h in list(hs):
+            sig = _signature(h, home) if isinstance(h, dict) and h.get('type') == 'command' else None
+            if sig is None or sig not in sigs:
+                continue
+            if wants is None or not wants <= sigs[sig]:
+                kept.append((describe(sig), g.get('matcher'),
+                             None if wants is None else sorted(wants - sigs[sig])))
+            else:
+                hs.remove(h)
+                dropped.append(describe(sig))
+                gone += 1
+        if gone and not hs:                                          # only a group this step emptied
+            groups.remove(g)
+            emptied += 1
+    if emptied and not groups:                                       # only an event this step emptied
+        del hooks[REPLACED_EVENT]
+    return new, added, dropped, kept
 
 
 def read(raw):

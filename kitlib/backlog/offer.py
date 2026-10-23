@@ -17,11 +17,12 @@ HELD = 'held'
 PARKED = 'parked'
 IN_FLIGHT = 'in flight'
 UNPRIORITISED_OPEN = 'unprioritised+open'
+REVIEW = 'to review'
 OWNER_PRIORITISED = 'owner to prioritise'
 UNCLASSIFIED = 'unclassifiable'
 NOT_READ = 'unreadable'
-BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, OWNER_PRIORITISED, UNCLASSIFIED,
-           NOT_READ)
+BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, REVIEW, OWNER_PRIORITISED,
+           UNCLASSIFIED, NOT_READ)
 EFFORT_ORDER = {'s': 0, 'm': 1, 'l': 2, '-': 3}
 PROBE_TIMEOUT = 60
 DEFAULT_CAP = 5
@@ -46,6 +47,9 @@ def classify(rec):
         return IN_FLIGHT, None
     if state != 'open':
         return UNCLASSIFIED, '`state: %s` parses but has no bucket' % state
+    if rec.has('review'):
+        # Marked by the Action Hub's add: never offered, priced or not, until `clear-review`.
+        return REVIEW, None
     priority = rec.get('priority')
     if priority is None or rmod._priority(priority) is not None:
         return UNCLASSIFIED, 'no readable `priority`'
@@ -104,13 +108,17 @@ class Banner(object):
                  '%d pullable' % self.count(PULLABLE),
                  '%d held' % self.count(HELD),
                  '%d unprioritised+open' % self.count(UNPRIORITISED_OPEN)]
+        if self.count(REVIEW):
+            parts.append('%d %s' % (self.count(REVIEW), REVIEW))
         for bucket in (PARKED, IN_FLIGHT, OWNER_PRIORITISED, NOT_READ, UNCLASSIFIED):
             if self.count(bucket):
                 parts.append('%d %s' % (self.count(bucket), bucket))
         minus_one = sum(1 for r in self.snap.readable if r.get('priority') == rmod.OWNER_PRIORITY)
-        if minus_one != self.count(OWNER_PRIORITISED):
-            parts.append('%d at priority -1 (%d of them open)'
-                         % (minus_one, self.count(OWNER_PRIORITISED)))
+        # An open `-1` record marked for review sits in REVIEW, not OWNER_PRIORITISED: still open.
+        open_minus_one = self.count(OWNER_PRIORITISED) + sum(
+            1 for r in self.buckets[REVIEW] if r.get('priority') == rmod.OWNER_PRIORITY)
+        if minus_one != open_minus_one:
+            parts.append('%d at priority -1 (%d of them open)' % (minus_one, open_minus_one))
         out = [' | '.join(parts)]
         groups, multi = self.held_groups()
         if self.count(HELD):
@@ -218,7 +226,7 @@ def unmet_requires(rec, snap, history, root, main_branch):
                 continue
             last = history(target)
             if last is None or not re.match(r'^\S+ closes ', last):
-                out.append((member, 'retired, so it will never land' if last else
+                out.append((member, 'retired or deleted, so it will never land' if last else
                             'no record has that id and none was closed'))
         elif kind == 'commit' and target:
             ok, why = refs.is_ancestor(target, 'refs/heads/%s' % main_branch, root)
@@ -242,7 +250,8 @@ class PassedOver(object):
         self.rec, self.rank, self.why, self.blocker = rec, rank, why, blocker
 
 
-def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=None):
+def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=None,
+               folded=None):
     """`((offers, passed), refusals, ranks)`. `holding` are the live pulls whose scopes are taken
     first. `cap` None offers every startable record (`next --all`), with the same pass-overs. `unmet(rec)` -> `[(member, why)]` gates `requires:`. Only records whose `session:`
     equals `session` are offered; another session's record takes its scope silently. A record
@@ -250,7 +259,10 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     record by id and session, a record already in this offer as `(offered above)`. Scopes are each record's current `scope:` lines, so a pulled record
     narrowed with `set --scope` frees what it gave up. A seed (`next --with`) goes first and is
     not passed over for the rest of the offer, but one that collides with a live pull is passed
-    over like any record: only `pull --reason --ruling` takes scope a live pull holds."""
+    over like any record: only `pull --reason --ruling` takes scope a live pull holds.
+    `folded(rec)` -> a reason or None: a record of `session` it gives a reason for (its scope
+    folds into another live pull's branch, or git cannot tell) is passed over with that reason
+    and takes no scope; it is asked only of a record that would otherwise be offered."""
     ranks = ranked(snap)
     occupied = []
     for rec in holding:
@@ -313,6 +325,11 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), 'requires %s, which is unmet: '
                                          '%s' % missing[0]))
                 continue
+        if own(rec) and folded is not None:
+            why = folded(rec)
+            if why:
+                passed.append(PassedOver(rec, ranks.get(rid, '-'), why))
+                continue
         occupied.extend(scopes)
         if not own(rec):
             for m in scopes:
@@ -350,6 +367,9 @@ def not_offered_why(rec, passed, session=None):
         return 'it is held on %s' % ', '.join(rec.all('blocked_on'))
     if bucket == PARKED:
         return 'it is parked'
+    if bucket == REVIEW:
+        return ('it is marked for review (review: %s): `clear-review %s --reason T` first'
+                % (rec.get('review'), rec.id))
     if bucket == UNPRIORITISED_OPEN:
         return 'it is unprioritised, so it has no rank and is never offered'
     if bucket == OWNER_PRIORITISED:

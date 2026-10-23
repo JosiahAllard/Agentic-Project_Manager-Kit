@@ -9,7 +9,9 @@ from kitlib.config import ConfigError
 from kitlib.git import cmd
 
 SECTION = 'preflight'
-DEFAULT_TRAPS = 'docs/ops/gotchas.md (read once per task; add yours)'
+DEFAULT_TRAPS_FILE = 'docs/ops/gotchas.md'
+# Printed only when the checkout has DEFAULT_TRAPS_FILE (report.py): many repos, the kit among them, do not.
+DEFAULT_TRAPS = DEFAULT_TRAPS_FILE + ' (read once per task; add yours)'
 
 
 def is_hook(text):
@@ -81,7 +83,7 @@ def base_pair(top, cfg, explicit=None):
     ob = refs.get('refs/remotes/%s/%s' % (cfg.remote, base), '')
     if explicit and not b:
         # No --quiet: its "no such rev" is exit 1 with no output, a killed git's shape
-        # (kitlib.git.refs.KILLED_SHAPE, KIT-GIT-EXIT1-ANSWERS-2). Without it any failure is
+        # (kitlib.git.refs.KILLED_SHAPE). Without it any failure is
         # just a failed read; missing and unread both show as '?' on the base line.
         b = cmd.run_text(['rev-parse', '--short', '--verify', explicit], top)[0] or ''
     return base, b, ob

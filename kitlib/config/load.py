@@ -285,6 +285,11 @@ def _build(root, where, reader, home=None, machine=None):
     hook = raw.get('hook')
     if isinstance(hook, dict) and hook.get('options') and not hook.get('module'):
         errs.append('"hook".options needs a "hook".module')
+    owner = raw.get('owner')
+    if isinstance(owner, dict) and isinstance(owner.get('trailer'), str):
+        why = ownermod.trailer_problem(owner['trailer'])
+        if why:
+            errs.append(why)
     if isinstance(raw.get('gate'), dict) and not errs:     # cross-field rules walk checked types only
         _gate_rules(raw['gate'], errs)
         hooked = isinstance(hook, dict) and hook.get('module')

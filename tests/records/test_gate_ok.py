@@ -205,6 +205,81 @@ class VerifyTest(GateOkCase):
             self.assertIn('is not a gate-OK record', why)
 
 
+class FullTest(GateOkCase):
+    """The `full` key: true only from a `gate.py --full` pass; verify_full takes nothing else."""
+
+    def test_full_is_written_false_by_default_and_true_when_asked(self):
+        _, rec = self.passed()
+        self.assertIs(rec['full'], False)
+        self.assertFalse(gate_ok.full_of(rec))
+        _, rec = self.passed(full=True)
+        self.assertIs(rec['full'], True)
+        self.assertTrue(gate_ok.full_of(rec))
+        got, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(why)
+        self.assertEqual(got['commit'], self.head)
+
+    def test_a_default_mode_record_is_refused(self):
+        self.passed()
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertIn('without --full', why)
+
+    def test_a_record_from_before_the_key_does_not_count(self):
+        path, _ = self.passed(full=True)
+        self.rewrite(path, full=gate_ok)                # written before records carried the key
+        rec, why = gate_ok.verify(self.repo.root, self.head)
+        self.assertIsNone(why)                          # still a record for everything else
+        self.assertFalse(gate_ok.full_of(rec))
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertIn('does not say whether the gate ran --full', why)
+        for odd in ('true', 1, None):                   # only the JSON true counts
+            self.rewrite(path, full=odd)
+            self.assertIsNone(gate_ok.verify_full(self.repo.root, self.head)[0], odd)
+
+    def test_verify_reasons_come_first(self):
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertEqual(why, 'no gate-OK record for %s' % self.head)
+        path, _ = self.passed(full=True)
+        self.rewrite(path, tree='0' * 40)
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertIn('names tree %s' % ('0' * 40), why)
+
+
+class ModeTest(GateOkCase):
+    """The `mode` key: full, select or docs; mode_of reads an older record by its `full`."""
+
+    def test_mode_follows_full_by_default_and_docs_is_written_when_asked(self):
+        _, rec = self.passed()
+        self.assertEqual((rec['mode'], gate_ok.mode_of(rec)), ('select', 'select'))
+        _, rec = self.passed(full=True)
+        self.assertEqual((rec['mode'], gate_ok.mode_of(rec)), ('full', 'full'))
+        _, rec = self.passed(mode='docs')
+        self.assertEqual((rec['mode'], gate_ok.mode_of(rec), rec['full']), ('docs', 'docs', False))
+
+    def test_a_mode_that_disagrees_with_full_is_never_written(self):
+        for kw in ({'mode': 'full'}, {'full': True, 'mode': 'select'}, {'full': True, 'mode': 'docs'},
+                   {'mode': 'partial'}):
+            with self.assertRaises(gate_ok.RecordError, msg=kw):
+                self.passed(**kw)
+
+    def test_a_record_without_the_key_is_full_only_when_full_says_so(self):
+        path, _ = self.passed(full=True)
+        self.rewrite(path, mode=gate_ok)                # written before records carried the key
+        self.assertEqual(gate_ok.mode_of(gate_ok.verify(self.repo.root, self.head)[0]), 'full')
+        self.rewrite(path, full=False)
+        self.assertIsNone(gate_ok.mode_of(gate_ok.verify(self.repo.root, self.head)[0]))
+
+    def test_an_odd_or_contradicting_mode_is_unknown(self):
+        self.assertIsNone(gate_ok.mode_of({'mode': 'partial', 'full': False}))
+        self.assertIsNone(gate_ok.mode_of({'mode': 'full', 'full': False}))
+        self.assertIsNone(gate_ok.mode_of({'mode': 'select', 'full': True}))
+        self.assertIsNone(gate_ok.mode_of({'mode': 'full', 'full': 'true'}))  # only JSON true is full
+
+
 class HashTest(unittest.TestCase):
 
     def test_the_config_hash_is_sha256_of_sorted_compact_utf8_json(self):

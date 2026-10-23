@@ -33,6 +33,13 @@ class KitHosts(unittest.TestCase):
         self.assertIsNone(attribution.session_trailer({}))
         self.assertEqual(attribution.session_keys(), ('Claude-Session',))
 
+    def test_a_lower_case_model_id_maps_in_every_trailer_path(self):
+        from kitlib import syncbase
+        want = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
+        self.assertEqual(attribution.coauthor('claude-opus-5-5'), want)
+        self.assertEqual(syncbase.trailer('claude-opus-5-5'), want)
+        self.assertEqual(attribution.display_name('Claude-Opus-5-5'), 'Claude-Opus-5-5')
+
     def test_trailers_are_exactly_as_before(self):
         self.assertEqual(attribution.coauthor('Opus 5.5'),
                          'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>')

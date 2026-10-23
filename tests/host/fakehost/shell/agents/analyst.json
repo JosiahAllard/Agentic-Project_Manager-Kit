@@ -1,0 +1,5 @@
+{
+  "model": "fake-small",
+  "name": "analyst",
+  "sandbox": "read-only"
+}

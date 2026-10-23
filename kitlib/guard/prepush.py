@@ -8,6 +8,10 @@ First, when the repository's git common dir holds kit-pm-data.json (kitlib.pmdat
 branch, its history and its objects go only to the recorded private remote, and that remote gets
 nothing else. A record that cannot be read, or a recorded root this clone lacks, refuses every push.
 
+Next, secrets_refusal judges every line too, for every remote: a commit the push sends that adds or
+changes a file in a top .pm-kit/hub/ folder or .pm-kit/local.json (case ignored) is refused, even
+when a later commit deletes it (docs/guard.md "Pre-push", "Owner machine setup").
+
 Then, for a push that updates the remote's main branch, whoever pushes (the owner, an agent, a
 lander):
 - a push that deletes main is refused;
@@ -112,12 +116,9 @@ def _get_urls(root, name, env, push):
     return {_norm_url(u) for u in cmd.text(r.out).splitlines() if u.strip()}, None
 
 
-def _remote_urls(root):
-    """`({remote name: {'push': its push URLs, 'all': every URL it has}}, None)`, normalised, or
-    `(None, why)`. Read with _config_env(), so only the repository's own configuration counts.
-    'push' is git's answer (`remote get-url --push --all`); 'all' adds the fetch URLs as git
-    rewrites them and the raw `url` and `pushurl` values. No remote is `({}, None)`."""
-    env = _config_env()
+def _remote_config(root, env):
+    """`({remote name: its raw url and pushurl values, normalised}, None)` from the repository's
+    configuration as `env` reads it, or `(None, why)`. No remote is `({}, None)`."""
     r = cmd.call(['config', '-z', '--get-regexp', r'^remote\..*\.(url|pushurl)$'], root, env=env)
     if r.rc == 1 and not r.err:
         return {}, None
@@ -132,6 +133,25 @@ def _remote_urls(root):
             if key.startswith('remote.') and key.endswith(suffix) and len(key) > len('remote.' + suffix):
                 raw.setdefault(key[len('remote.'):-len(suffix)], set()).add(_norm_url(value))
                 break
+    return raw, None
+
+
+def _remote_names(root):
+    """`(set of the repository's remote names, None)` (those with a url or pushurl, read as
+    _remote_urls reads them), or `(None, why)`."""
+    raw, why = _remote_config(root, _config_env())
+    return (None, why) if raw is None else (set(raw), None)
+
+
+def _remote_urls(root):
+    """`({remote name: {'push': its push URLs, 'all': every URL it has}}, None)`, normalised, or
+    `(None, why)`. Read with _config_env(), so only the repository's own configuration counts.
+    'push' is git's answer (`remote get-url --push --all`); 'all' adds the fetch URLs as git
+    rewrites them and the raw `url` and `pushurl` values. No remote is `({}, None)`."""
+    env = _config_env()
+    raw, why = _remote_config(root, env)
+    if raw is None:
+        return None, why
     out = {}
     for name, urls in raw.items():
         push, why = _get_urls(root, name, env, True)
@@ -215,13 +235,99 @@ def _pushed_objects(root, local_sha, remote_sha, name, remotes):
     args = ['rev-list', '--objects', '--no-object-names', local_sha, '--not']
     if remote_sha.strip('0') and _have(root, remote_sha):
         args.append(remote_sha)
-    nested = any(other.startswith(name + '/') for other in remotes)
-    if name in remotes and not nested and not refs.bad_rev(name) and not set('*?[\\') & set(name):
+    if _tracking_counts(name, remotes):
         args.append('--remotes=%s' % name)
     out, why = cmd.run_text(args + ['--'], root)
     if out is None:
         return None, why
     return {s for s in out.split() if refs.is_sha(s)}, None
+
+
+def _tracking_counts(name, remotes):
+    """True when the remote `name` (its name, or a URL) is one of `remotes` and its tracking refs,
+    refs/remotes/<name>/, hold only its own: left out (nothing subtracted) as _pushed_objects says."""
+    nested = any(other.startswith(name + '/') for other in remotes)
+    return name in remotes and not nested and not refs.bad_rev(name) and not set('*?[\\') & set(name)
+
+
+MAX_TRACKING_ARGS = 500                 # more tracking tips than this: `--remotes=<name>` instead
+
+
+def _remote_has(root, remote_sha, name, remotes):
+    """`(revisions, None)` a push to the remote `name` (its name, or a URL) does not send, as git
+    arguments after `--not`, or `(None, why)`: the remote sha it replaces when this clone has it,
+    and the tips of the remote's tracking refs when they count (_tracking_counts). The tips are
+    named one by one (for-each-ref) up to MAX_TRACKING_ARGS, past that by `--remotes=<name>`, which
+    git reads the same way, so a long list never outgrows the command line."""
+    out = []
+    if remote_sha.strip('0') and _have(root, remote_sha):
+        out.append(remote_sha)
+    if not _tracking_counts(name, remotes):
+        return out, None
+    tips, why = cmd.run_text(['for-each-ref', '--format=%(objectname)', 'refs/remotes/%s/' % name], root)
+    if tips is None:
+        return None, why
+    tips = sorted({t for t in tips.split() if refs.is_sha(t)})
+    return out + (tips if len(tips) <= MAX_TRACKING_ARGS else ['--remotes=%s' % name]), None
+
+
+# ---------------------------------------------------------------- machine secrets
+
+SECRET_FILE = '.pm-kit/local.json'      # a checkout's machine settings (docs/guard.md "Owner machine setup")
+SECRET_FOLDER = '.pm-kit/hub/'          # the hub's token folder there (docs/guard.md "Hub secrets")
+
+
+def is_secret_path(path):
+    """True when the repository path `path` (as git log prints it, from the top) is the machine
+    config folder's local.json or lies in its hub token folder, the case ignored."""
+    p = path.strip()
+    if p.startswith('"'):
+        p = p[1:]                       # a quoted name (core.quotepath): its start is plain text
+    p = p.replace('\\', '/').casefold()
+    return p == SECRET_FILE or p.startswith(SECRET_FOLDER)
+
+
+def secrets_refusal(root, lines, name):
+    """Why this push is refused because a commit it sends adds or changes a file of a top
+    .pm-kit/hub/ folder or .pm-kit/local.json (is_secret_path), or None. Every pushed ref counts,
+    whatever its remote; a commit the remote already has (_remote_has) does not. A file a later
+    commit deletes still counts: its content is in the commit that added it. `name` is git's first
+    hook argument (the remote's name, or the URL for a push by URL). A deletion, and a local sha
+    this clone lacks, send nothing; when git cannot list the commits, the push is refused."""
+    remotes = None
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        local_ref, local_sha, remote_ref, remote_sha = parts
+        if not local_sha.strip('0') or not _have(root, local_sha):
+            continue                                # a deletion, or a commit this clone lacks, sends nothing
+        if remotes is None:
+            remotes, why = _remote_names(root)
+            if remotes is None:
+                return ('pre-push: refused, cannot read the remotes to check what %s sends for this '
+                        'machine\'s secrets (%s).' % (local_ref, why))
+        what = '%s (%s)' % (local_ref, local_sha[:12])
+        has, why = _remote_has(root, remote_sha, name, remotes)
+        out = None
+        if has is not None:
+            out, why = cmd.run_text(['-c', 'core.quotepath=off', 'log', '-m', '--no-renames', '--name-only',
+                                     '--diff-filter=ACMRT', '--format=commit %H', local_sha, '--not'] +
+                                    has + ['--'], root)
+        if out is None:
+            return ('pre-push: refused, cannot list the files %s sends to check them for this '
+                    'machine\'s secrets (%s).' % (what, why))
+        commit = ''
+        for row in out.splitlines():
+            if row.startswith('commit '):
+                commit = row[len('commit '):].strip()
+            elif row.strip() and is_secret_path(row):
+                return ('pre-push: refused, %s sends %s, added or changed in commit %s: a checkout\'s '
+                        '.pm-kit/hub/ folder (the Action Hub\'s tokens) and .pm-kit/local.json (this '
+                        'machine\'s settings) never leave this machine (docs/guard.md "Pre-push"). '
+                        'Take the file out of those commits, then push again.'
+                        % (what, row.strip(), commit[:12]))
+    return None
 
 
 def leak_refusal(root, lines, name, url=None):
@@ -396,7 +502,7 @@ def not_fast_forward(root, local_sha, remote_sha, main):
 
 def check(root, lines, gate_ok=None, remote='origin', url=None):
     gate_ok = gate_ok or verify_record
-    why = leak_refusal(root, lines, remote, url)
+    why = leak_refusal(root, lines, remote, url) or secrets_refusal(root, lines, remote)
     if why:
         return False, why
     for line in lines:

@@ -13,7 +13,8 @@ This adapter does not expose process/spawn, shellCommand, stdin writes or permis
                         payload parsed as a hook's (events.parse), held by Codex's screen and
                         kitlib.guard as an agent of the BOUND role (its identity is native metadata
                         the broker verified, not a hook payload's), the role policy on for it
-                        whatever .kit.json says (PolicyOn); None for an allow, else Codex's deny JSON
+                        whatever .kit.json says (PolicyOn); None for an allow, else Codex's deny JSON,
+                        logged first (kitlib.guard.refusal_log)
   KitOperationExecutor, BoundKitHost, KitToolBroker   run one kit tool for a fresh-checked binding
   RuntimeAppServer      an owned app-server connection
 """
@@ -116,7 +117,8 @@ class _PolicyConfig(object):
 
 def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
     """In-process broker guard. Only the freshly resolved native binding supplies the role: every
-    Action is judged as an agent of the bound role (agent the binding's thread, root or child), with
+    Action is judged as an agent of the bound role (agent the child's thread, or UNIDENTIFIED for a
+    root, a marked session), with
     the role policy on for it (PolicyOn). While the main checkout's .kit.json fails to load, every
     call is refused (host-runtime-error)."""
     try:
@@ -139,17 +141,40 @@ def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
             raise ValueError("the main checkout's .kit.json does not load: fix it (%s)"
                              % base.config_error(binding.cwd))
         held = PolicyOn(base)
+        # A root is a marked session, judged as an agent of its mark as a hook here judges one
+        # (hookmain.UNIDENTIFIED), so the backlog's role check stays the tool's own under that mark.
+        from kitlib.host.hookmain import UNIDENTIFIED
+        agent = binding.thread if getattr(binding, 'parent', None) else UNIDENTIFIED
         for action in parsed if isinstance(parsed, tuple) else (parsed,):
-            action = replace(action, role=binding.role, agent=binding.thread, agent_role=binding.role)
+            action = replace(action, role=binding.role, agent=agent, agent_role=binding.role)
             d = policy.screen(action, env)
             if d is None or d.verdict == 'allow':
                 d = guard.decide(action, held)
             if d.verdict != 'allow':        # Codex has no ask: an ask is refused with its reason
+                _log(d, action, env)
                 return _deny(d.reason)
         return None
     except Exception as error:
+        _log(None, None, environ)
         return _deny('The Codex kit broker cannot clear this call (%s: %s). Report the event and error to '
                      'the PM. [kit guard: rule=host-runtime-error role=subagent]' % (type(error).__name__, error))
+
+
+def _log(decision, action, environ):
+    """The refusal log's line for a broker deny (kitlib.guard.refusal_log; docs/guard-v2.md
+    "Refusal log"): `decision` refused `action` (an ask too: Codex refuses it), or None for the
+    broker's own error (rule host-runtime-error, no Action). The role tag is 'subagent', as the
+    deny's reason tags it: every bound call is judged as an agent. Never raises."""
+    try:
+        from kitlib.guard import refusal_log
+        from kitlib.host import Decision
+        if decision is None:
+            decision = Decision('deny', 'host-runtime-error', '')
+        elif decision.verdict != 'deny':
+            decision = Decision('deny', decision.rule, decision.reason, decision.instead)
+        refusal_log.record(decision, action, HOST, 'subagent', environ)
+    except Exception:
+        pass
 
 
 def _parent(thread):

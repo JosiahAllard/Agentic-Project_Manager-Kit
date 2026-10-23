@@ -31,6 +31,7 @@ TEST_MUL = ('import unittest\nfrom calc import mul\n\n\nclass T(unittest.TestCas
             '    def test_mul(self):\n        self.assertEqual(mul(2, 3), 6)\n')
 TEST_ADD = ('import unittest\nfrom calc import add\n\n\nclass T(unittest.TestCase):\n'
             '    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n')
+SUMMARY = 'summary.txt'                         # the file a run writes in its log folder
 CONFIG = {'redfirst': {'runners': [{'glob': 'tests/test_*.py', 'kind': 'python',
                                     'pythonpath': 'tests'},
                                    {'glob': 'src/test_*.py', 'kind': 'python', 'pythonpath': 'src'}]}}
@@ -260,7 +261,7 @@ class Arguments(unittest.TestCase):
 
 
 class AKilledGitIsNoAnswer(Case):
-    """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such commit" as exit 1 with
+    """`rev-parse --verify --quiet` said "no such commit" as exit 1 with
     no output, which a git ended from outside also leaves. Both ways git is started here are
     stubbed (cmd._run, and cmd.subprocess_run, which rev() used), so the old code meets the kill
     too and fails on what it says, not because real git answered."""
@@ -311,7 +312,7 @@ class Runs(Case):
         self.assertEqual(self.fx.git('for-each-ref', '--format=%(refname)', 'refs/remotes').strip(),
                          'refs/remotes/origin/main', 'only main is pushed, not the branch under test')
         lock = landing.LandingLock.for_config(self.fx.root, load(self.fx.root))
-        lock.take('full', ['feat/landing'])
+        lock.take(['feat/landing'])
         self.assertIsNotNone(lock.read())
         rc, out = self.run_tool('--tests', 'tests/test_mul.py')
         self.assertEqual(rc, V.EXIT_RED, out)
@@ -323,6 +324,13 @@ class Runs(Case):
         rc, out = self.run_tool('--tests', 'src/test_add.py')
         self.assertEqual(rc, V.EXIT_GREEN, out)
         self.assertIn('GREEN  src/test_add.py', out)
+        self.assertEqual(self.throwaways(), [])
+
+    def test_a_selector_ending_in_a_carriage_return_runs_as_written_without_it(self):
+        """A CRLF list left a CR on the filter: the test never loaded and counted as RED."""
+        self.commit({'src/test_add.py': TEST_ADD})
+        rc, out = self.run_tool('--tests', 'src/test_add.py::T.test_add\r')
+        self.assertEqual(rc, V.EXIT_GREEN, out)
         self.assertEqual(self.throwaways(), [])
 
     def test_filter_naming_nothing_is_undecided(self):
@@ -367,6 +375,62 @@ class Runs(Case):
         tw = os.path.join(self.home, left[0])
         os.remove(os.path.join(tw, 'stray.txt'))
         self.fx.git('worktree', 'remove', tw)       # the test's own throwaway, in its temp repo
+
+
+class SummaryFile(Case):
+    """Two runs that redirect into one shared file interleave there: every line a run says is
+    also in its own log folder's summary.txt, and the last line names that file."""
+
+    def run_into(self, logs, *args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc = tool.main(['-C', self.wt, '--log-dir', logs] + list(args), cleanup=self.here)
+        return rc, out.getvalue().splitlines()
+
+    def summary(self, logs):
+        with open(os.path.join(logs, SUMMARY), encoding='utf-8') as f:
+            return f.read().splitlines()
+
+    def test_the_summary_holds_every_line_said_and_the_last_line_names_it(self):
+        self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL})
+        rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
+        self.assertEqual(rc, V.EXIT_RED, lines)
+        path = os.path.join(self.logs, SUMMARY)
+        self.assertEqual(lines[-1], 'summary   %s' % path)
+        self.assertEqual(self.summary(self.logs), lines[:-1])
+        self.assertTrue(lines[-2].startswith('REDFIRST OK'), lines)
+        self.assertIn('logs      %s' % self.logs, lines)
+
+    def test_two_runs_with_two_log_folders_write_two_summaries(self):
+        self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL,
+                     'src/test_add.py': TEST_ADD})
+        one, two = os.path.join(self.logs, 'one'), os.path.join(self.logs, 'two')
+        rc1, lines1 = self.run_into(one, '--tests', 'tests/test_mul.py')
+        rc2, lines2 = self.run_into(two, '--tests', 'src/test_add.py')
+        self.assertEqual((rc1, rc2), (V.EXIT_RED, V.EXIT_GREEN), (lines1, lines2))
+        self.assertEqual(lines1[-1], 'summary   %s' % os.path.join(one, SUMMARY))
+        self.assertEqual(lines2[-1], 'summary   %s' % os.path.join(two, SUMMARY))
+        s1, s2 = self.summary(one), self.summary(two)
+        self.assertEqual((s1, s2), (lines1[:-1], lines2[:-1]))
+        self.assertIn('logs      %s' % one, s1)
+        self.assertNotIn('logs      %s' % two, s1)
+        self.assertTrue(any(l.startswith('GREEN  src/test_add.py') for l in s2), s2)
+        self.assertFalse(any('src/test_add.py' in l for l in s1), s1)
+
+    def test_a_failure_after_the_log_folder_still_writes_the_summary(self):
+        self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL})
+        with mock.patch.object(R, 'make_tree', return_value=(None, 'no tree today')):
+            rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
+        self.assertEqual(rc, V.EXIT_UNDECIDED, lines)
+        self.assertEqual(lines[-1], 'summary   %s' % os.path.join(self.logs, SUMMARY))
+        self.assertEqual(self.summary(self.logs), lines[:-1])
+        self.assertIn('failed    no tree today', lines)
+
+    def test_a_refusal_before_the_log_folder_writes_none(self):
+        rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
+        self.assertEqual(rc, V.EXIT_USAGE, lines)
+        self.assertFalse(any(l.startswith('summary ') for l in lines), lines)
+        self.assertFalse(os.path.exists(self.logs))
 
 
 if __name__ == '__main__':

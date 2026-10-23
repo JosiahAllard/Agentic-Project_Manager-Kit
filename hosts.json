@@ -38,7 +38,7 @@
     "hook": {
       "tool_event": "PreToolUse",
       "tool_field": "tool_name",
-      "guarded_tools": ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "mcp__*"],
+      "guarded_tools": ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "Read", "Grep", "mcp__*"],
       "fast_path": "all"
     },
     "tiers": {"light": "haiku", "standard": "sonnet", "strong": "opus", "deep": "opus"}

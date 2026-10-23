@@ -21,9 +21,10 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
-# `other`: a tool call no guard rule judges (a read, a search); the adapter still parses it, so a
-# hook never has to guess a payload's kind before it knows the host.
-KINDS = ('edit', 'shell', 'mcp', 'session_start', 'subagent_start', 'other')
+# `read`: a file tool that reads or searches (only hub-secrets judges it: the hub's token folder).
+# `other`: a tool call no guard rule judges; the adapter still parses it, so a hook never has to
+# guess a payload's kind before it knows the host.
+KINDS = ('edit', 'shell', 'mcp', 'read', 'session_start', 'subagent_start', 'other')
 SHELLS = ('bash', 'powershell')
 VERDICTS = ('allow', 'deny', 'ask')
 
@@ -32,8 +33,9 @@ VERDICTS = ('allow', 'deny', 'ask')
 class Action:
     """One event a hook judges, with every host's field names gone. `tool` is the host's own tool
     name (an MCP tool's full name, matched against HostProfile.mcp_tool_format), kept for messages;
-    `path` an edit's target, `command` a shell's text, `cwd` where the session runs (None: the
-    hook's own folder). `role` is PM_KIT_ROLE's value when the host hands it over (None: the guard
+    `path` an edit's target or a read's (the file read, or the folder a search starts from, None
+    for `cwd`), `command` a shell's text, `cwd` where the session runs (None: the hook's own
+    folder). `role` is PM_KIT_ROLE's value when the host hands it over (None: the guard
     reads its own environment). `agent` is an opaque subagent identity, None for the main session
     and for a host whose hooks carry none (HostCapabilities).
 
@@ -48,7 +50,9 @@ class Action:
       retarget     the same edit aimed elsewhere, as the host's call text with `{path}` for the
                    path (an Instead line); '' when the host has no such form
       params       an MCP call's input object as the host passed it (None: not an MCP call, or a
-                   host that does not pass it); the hub-browser rule reads its strings. It takes
+                   host that does not pass it); the hub-browser rule reads its strings. For a
+                   'read': None for a one-file read, else a search's terms: {'search': 'contents',
+                   'filter': a file-name glob limiting the files it reads, None for all}. It takes
                    no part in equality or hashing
     """
     kind: str
@@ -201,6 +205,9 @@ class HostAdapter(Protocol):
     content()                    an object whose renderer() is the host's ContentRenderer
                                  (kitlib.host.content: rendered agents, skills, manifests)
     launcher(), plugin_installer()   None where the host has none
+    push(settings)               optional: the Action Hub's push-notification delivery over the
+                                 launcher's settings (kitlib.hubsite.push: deliver, is_pm); without
+                                 it the hub serves with none (docs/action-hub.md "Push notifications")
     """
     name: str
     profile: HostProfile

@@ -12,6 +12,16 @@ run_id and started_at. Each write is a temp file in the same folder, then os.rep
 sees one whole record or the other. Who writes when (kitlib.gate.runner.branch_gate,
 kitlib.gate.land.Lander.run) is in docs/gate.md "Result record".
 
+A record has several writers (a landing's own run, its submitter's claim, a waiter's finish_dead),
+so every write takes the record's lock first: an OS lock (kitlib.fs.treelock.TreeLock) on
+`.<record file name>.lock` beside it, held from the re-read a conditional write decides on to its
+os.replace, so no writer replaces a record another wrote after that re-read. write(when=...) and
+finish_dead re-read under it; an unconditional write (a run writing its own outcome) only waits
+its turn. The lock file stays (TreeLock never removes one), and its leading dot keeps it out of
+every scan of the folder. A lock not had within LOCK_WAIT_S is a ResultError, like any write that
+fails. kitlib.fs.writelock is not used: it places its lock files by asking git which checkout the
+file is in, and the common dir is in none.
+
 The record (SCHEMA 1), every key always present:
 
   schema          1
@@ -20,8 +30,9 @@ The record (SCHEMA 1), every key always present:
   tip             the full hash gated (the branch gate: HEAD; a landing: --expect-tip)
   base            the base commit: the merge base gated against, or --expect-main; or null
   run_id          one run's id: the running record and its final record share it
-  started_at      when the run started; finished_at when it ended, or null while running
-                  (UTC, YYYY-MM-DDTHH:MM:SSZ)
+  started_at      when the run started (a landing: when it joined the landing queue, before the
+                  machine lock gave it its turn, whether run directly or submitted); finished_at
+                  when it ended, or null while running (UTC, YYYY-MM-DDTHH:MM:SSZ)
   verdict         running; or final: pass, fail, refused, stuck, busy, usage, landed-ungated (an
                   old record's only: exit LANDED_UNGATED is retired, no landing writes it),
                   not-run (a machine lock refusal), error (an exception or Ctrl+C ended the run)
@@ -48,6 +59,7 @@ record at that tip whose process has died (running_state 'dead') is finished `er
 <landing|gate> process died: ..." (finish_dead), so a killed run is never waited for forever.
 """
 import calendar
+import contextlib
 import hashlib
 import json
 import math
@@ -56,6 +68,7 @@ import secrets
 import time
 
 from kitlib import gate as G
+from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError
 from kitlib.records import gate_ok
 from kitlib.git import refs, repo
 from kitlib.proc import process
@@ -69,6 +82,8 @@ TIMEOUT = 7         # gate.py wait-result: no final record at that tip within --
 POLL_S = 2.0
 RETRIES = 5
 RETRY_SLEEP = 0.2
+LOCK_WAIT_S = 10.0  # a record's lock is held for one read and one replace; past this, ResultError
+LOCK_PAUSE = 0.02
 MAX_STEM = 120      # longer stems are cut and given a hash, so the file name stays short
 # A running record with no pid this young is taken as live: a submitted landing's, whose detached
 # process has not recorded itself yet (kitlib.gate.submit). An older one is 'unknown'.
@@ -154,12 +169,45 @@ def _retry(fn, *args):
             time.sleep(RETRY_SLEEP)
 
 
-def write(root, record):
-    """Write `record` (from build()) atomically; returns its path."""
-    path = result_path(root, record['branch'], record['kind'])
+def lock_path(path):
+    """The lock file of the record at `path`: `.<its file name>.lock` beside it."""
+    folder, name = os.path.split(path)
+    return os.path.join(folder, '.%s.lock' % name)
+
+
+@contextlib.contextmanager
+def _held(path):
+    """Hold the lock of the record at `path` (lock_path) for the block, waiting up to LOCK_WAIT_S
+    for another writer to let it go. ResultError when it cannot be had. One writer holds it at a
+    time, a thread of this process included (a TreeLock is per handle)."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError as e:
+        raise ResultError('cannot write %s: %s' % (path, e))
+    lock = TreeLock(lock_path(path), what='result record %s' % os.path.basename(path))
+    end = time.monotonic() + LOCK_WAIT_S
+    while True:
+        try:
+            lock.acquire()
+            break
+        except TreeBusy as e:
+            if time.monotonic() >= end:
+                raise ResultError('cannot write %s: its lock %s is still %s after %ss'
+                                  % (path, lock.path, e, LOCK_WAIT_S))
+            time.sleep(LOCK_PAUSE)
+        except TreeLockError as e:
+            raise ResultError('cannot write %s: %s' % (path, e))
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def _put(path, record):
+    """Replace the record at `path` with `record`: a temp file, then os.replace. The caller
+    holds the record's lock."""
     folder = os.path.dirname(path)
     try:
-        os.makedirs(folder, exist_ok=True)
         tmp = os.path.join(folder, '.%s.tmp' % secrets.token_hex(6))
         try:
             with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
@@ -170,6 +218,17 @@ def write(root, record):
                 os.remove(tmp)
     except OSError as e:
         raise ResultError('cannot write %s: %s' % (path, e))
+
+
+def write(root, record, when=None):
+    """Write `record` (from build()) atomically under the record's lock; returns its path.
+    `when(current)`, given: the record on disk now (None when there is none or it cannot be read)
+    is read under the lock, and a false answer leaves it as it is and returns None."""
+    path = result_path(root, record['branch'], record['kind'])
+    with _held(path):
+        if when is not None and not when(read_path(path)[0]):
+            return None
+        _put(path, record)
     return path
 
 
@@ -202,21 +261,25 @@ class Run(object):
             return None
         return cls(root, kind, branch, tip, base)
 
-    def _write(self, **kw):
+    def _write(self, when=None, **kw):
         try:
             rec = build(self.branch, self.tip, kw.pop('base', self.base), self.kind,
                         kw.pop('code', None), run_id=self.run_id, started_at=self.started_at,
                         pid=self.pid, ctime=self.ctime, **kw)
-            path = write(self.root, rec)
+            path = write(self.root, rec, when=when)
         except Exception as e:      # noqa: BLE001 - the run's outcome stands whatever happens here
             return None, 'WARNING: the result record could not be written: %s' % e
+        if path is None:
+            return None, 'result record of %s %s left as it is: it changed before this write' % (
+                self.kind, self.branch)
         return path, 'result record: %s' % path
 
-    def start(self, log=None):
-        return self._write(verdict=RUNNING, log=log, summary='%s %s at %s started' % (
-            self.kind, self.branch, self.tip[:10]))
+    def start(self, log=None, when=None):
+        """`when`: write only if when(the record on disk) is true, read under the record's lock."""
+        return self._write(when=when, verdict=RUNNING, log=log,
+                           summary='%s %s at %s started' % (self.kind, self.branch, self.tip[:10]))
 
-    def finish(self, outcome, base=None, log=None, source=None):
+    def finish(self, outcome, base=None, log=None, source=None, when=None):
         try:
             facts = outcome.facts
             kw = dict(code=outcome.code, base=base or facts.get('base') or self.base,
@@ -226,7 +289,7 @@ class Run(object):
                       source=source or facts.get('source'))
         except Exception as e:      # noqa: BLE001
             return None, 'WARNING: the result record could not be written: %s' % e
-        return self._write(**kw)
+        return self._write(when=when, **kw)
 
     def error(self, exc):
         return self._write(verdict=ERROR, summary='the %s stopped: %s: %s' % (
@@ -291,26 +354,28 @@ def finish_dead(root, rec, why=None, unclaimed=False):
     now, or None when it cannot be read. Only when the record on disk is still `rec`'s run and
     running (`unclaimed`: and has no pid yet); anything else (finished, or a newer run's) is
     returned untouched. The final record keeps the run's run_id, started_at, tip, base, log, pid
-    and ctime."""
+    and ctime. The record is read, judged and replaced under its lock, so a record another writer
+    put there meanwhile is judged, never overwritten unread."""
     try:
         path = result_path(root, rec['branch'], rec['kind'])
     except (KeyError, ResultError):
         return None
-    now, _ = read_path(path)
-    if (not isinstance(now, dict) or now.get('verdict') != RUNNING
-            or now.get('run_id') != rec.get('run_id')
-            or (unclaimed and now.get('pid') is not None)):
-        return now
-    why = why or 'the %s process died: pid %s ended without finishing its record' % (
-        WHAT.get(now.get('kind'), now.get('kind')), now.get('pid'))
-    final = build(now['branch'], now.get('tip'), now.get('base'), now['kind'], None,
-                  log=now.get('log'), summary=why, run_id=now.get('run_id'),
-                  started_at=now.get('started_at'), verdict=ERROR, pid=now.get('pid'),
-                  ctime=now.get('ctime'))
     try:
-        write(root, final)
+        with _held(path):
+            now, _ = read_path(path)
+            if (not isinstance(now, dict) or now.get('verdict') != RUNNING
+                    or now.get('run_id') != rec.get('run_id')
+                    or (unclaimed and now.get('pid') is not None)):
+                return now
+            why = why or 'the %s process died: pid %s ended without finishing its record' % (
+                WHAT.get(now.get('kind'), now.get('kind')), now.get('pid'))
+            final = build(now['branch'], now.get('tip'), now.get('base'), now['kind'], None,
+                          log=now.get('log'), summary=why, run_id=now.get('run_id'),
+                          started_at=now.get('started_at'), verdict=ERROR, pid=now.get('pid'),
+                          ctime=now.get('ctime'))
+            _put(path, final)
     except ResultError:
-        return now
+        return read_path(path)[0]
     return final
 
 

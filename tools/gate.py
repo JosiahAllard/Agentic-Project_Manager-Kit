@@ -10,20 +10,24 @@
       python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout").
       Refused (4), with --plan and as `land` too, while the repository's stash stack holds an
       entry, whichever checkout made it (kitlib.gate.stash; docs/gate.md "The stash guard")
-  gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--lane L] [--summary TEXT]
+  gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--summary TEXT]
                       [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch] [--submit]
       land BRANCH from the main checkout, as tools/land.py does: merge onto <remote>/<main> as it
       is at the landing's turn, gate the merged tree, push, verify, then delete the landed branch
       (remote and local) and remove its worktree, never forced, unless --keep-branch (docs/gate.md
       "Branch cleanup"); --fresh or --full runs every step of the merged gate: nothing is read
       from or stored in the gate cache (docs/gate.md "Gate reuse"). --submit: started detached;
-      prints the one SUBMITTED line with its wait-result command and exits 0
+      prints a REVIEW line for each branch whose queued verdict is at the tip submitted, then the
+      one SUBMITTED line with its wait-result command, and exits 0
   gate.py --measure --out PATH [--days N]
       write a proposed kinds table from the lock's run history (never the live table)
   gate.py wait-result BRANCH --tip SHA [--kind gate|land] [--timeout S] [-C DIR]
       wait for BRANCH's result record at SHA, print it; 0 pass, 1 any other verdict, 7 no record
       at that tip within S seconds. Its one write: a running record at SHA whose process died is
       finished `error` (kitlib.gate.result.finish_dead)
+  gate.py allow BRANCH --runs N --why TEXT [-C DIR]
+      allow BRANCH N gate runs in all, past the branch gate budget (kitlib.gate.budget; a branch
+      gate is refused (4) before booking one more): the coordinator's call, never the builder's
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
 Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY; 9 LANDED_UNGATED
@@ -52,7 +56,7 @@ from kitlib import gate as G                                       # noqa: E402
 from kitlib import pluginsource                                    # noqa: E402
 from kitlib.config import policy                                  # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
-from kitlib.gate import caller, measure, runner                    # noqa: E402
+from kitlib.gate import budget, caller, measure, runner            # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
 from kitlib.gate import submit as submitmod                        # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
@@ -102,7 +106,6 @@ def land_parser():
                         'never refused')
     p.add_argument('--expect-tip', required=True, metavar='SHA')
     p.add_argument('-C', dest='root', default='.', help='the main checkout (default: here)')
-    p.add_argument('--lane', default='full')
     p.add_argument('--summary', help='the merge title after "Merge <branch>: "')
     p.add_argument('--full', action='store_true', help='gate every non-manual step')
     p.add_argument('--fresh', action='store_true',
@@ -122,7 +125,7 @@ def land_parser():
 def land_child_args(a, root):
     """The arguments of the detached landing `gate.py land --submit` starts: `land`, then this
     landing's, -C and --log-dir absolute."""
-    args = ['land', a.branch, '-C', root, '--lane', a.lane, '--expect-tip', a.expect_tip]
+    args = ['land', a.branch, '-C', root, '--expect-tip', a.expect_tip]
     if a.expect_main:
         args += ['--expect-main', a.expect_main]
     if a.summary:
@@ -149,7 +152,11 @@ def do_land(argv):
     submitted = None
     if a.submitted:
         try:
-            submitted = submitmod.restore(root, a.submitted)
+            submitted = submitmod.restore(root, a.submitted, [a.branch], [a.expect_tip],
+                                          expect_main=a.expect_main)
+        except submitmod.Untrusted as e:       # no record written; the line also in its log
+            sys.stderr.write(submitmod.untrusted_refusal(a.submitted, e) + '\n')
+            return G.REFUSED
         except submitmod.SubmitError as e:     # its records are finished, never left running
             return emit(submitmod.abandon(root, a.submitted, str(e)))
         if submitted.get('output'):
@@ -159,7 +166,7 @@ def do_land(argv):
                 print('WARNING: the output stays on the hidden console: %s' % e, flush=True)
     # A detached landing waits the configured "landing".wait_s for its turn; one run here, 0.
     wait_s = a.wait if a.wait is not None or submitted is not None else 0
-    return emit(guarded(landmod.land, root, a.branch, a.expect_main, a.expect_tip, lane=a.lane,
+    return emit(guarded(landmod.land, root, a.branch, a.expect_main, a.expect_tip,
                         summary=a.summary, full=a.full, wait_s=wait_s, say=say,
                         book_kw={'store': Store(say=say)}, log_dir=a.log_dir,
                         keep_branch=a.keep_branch, fresh=a.fresh, submitted=submitted))
@@ -205,6 +212,33 @@ def do_wait(argv):
                                              rec.get('log')))
     print(json.dumps(rec, sort_keys=True))
     return G.OK if rec.get('verdict') == 'pass' else G.FAILED
+
+
+def allow_parser():
+    p = Parser(prog='gate.py allow',
+               description='Allow BRANCH more gate runs than the branch gate budget gives '
+                           '(docs/gate.md "The branch gate budget"). Its coordinator runs it.')
+    p.add_argument('branch')
+    p.add_argument('--runs', required=True, type=int, metavar='N',
+                   help='the new total of gate runs, a whole number above %d' % budget.RUNS)
+    p.add_argument('--why', required=True, help='what the runs found and why more are needed')
+    p.add_argument('-C', dest='root', default='.', help='any checkout of the repository')
+    return p
+
+
+def do_allow(argv):
+    a = allow_parser().parse_args(argv)
+    root = os.path.abspath(a.root)
+    try:
+        path, used = budget.allow(root, a.branch, a.runs, a.why, Store(say=say))
+    except ValueError as e:
+        print('USAGE: %s' % e, file=sys.stderr)
+        return G.USAGE
+    except budget.BudgetError as e:
+        print('REFUSED: %s; nothing written' % e)
+        return G.REFUSED
+    print('ALLOWED %s: %d gate runs (%d used); %s' % (a.branch, a.runs, used, path))
+    return G.OK
 
 
 def emit(outcome):
@@ -277,6 +311,8 @@ def main(argv):
             return do_wait(argv[1:])
         if argv[:1] == ['land']:
             return do_land(argv[1:])
+        if argv[:1] == ['allow']:
+            return do_allow(argv[1:])
         a = gate_parser().parse_args(argv)
         if a.measure:
             if a.only or a.full or a.plan or a.base:

@@ -93,7 +93,7 @@ def _config_list(cwd, *scope):
     '--local'), in git's order, keys as git prints them (section and variable name lower-cased,
     a subsection as written), a key with no value as ''; or `(None, why)`.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `config --get`/`--get-regexp` say "no such key" as exit 1
+    GOTCHA: `config --get`/`--get-regexp` say "no such key" as exit 1
     with no output, which is also what a git ended from outside leaves (refs.KILLED_SHAPE), so a
     kill read as "not set". `config --list` exits 0 whether or not a key is set, so anything but
     exit 0 is no answer."""
@@ -501,7 +501,7 @@ def _empty_tree(top):
     exist (an empty index) in a folder of its own, so the repository's own index is never read or
     written. The same id as EMPTY_TREE (the literal docs/pm-data-branch.md names), and stored, so
     nothing depends on git knowing it without an object."""
-    folder = tempfile.mkdtemp(prefix='kit-pmdata-')
+    folder = user.mkdtemp('kit-pmdata-')
     try:
         env = cmd.scrubbed_env()
         env['GIT_INDEX_FILE'] = os.path.join(folder, 'index')

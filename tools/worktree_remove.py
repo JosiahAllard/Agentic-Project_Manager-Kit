@@ -5,33 +5,55 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] <path or slug> --keep-branch       the same; the branch stays
   worktree_remove.py [-C DIR] <path or slug> --abandon "<why>" [--keep-branch]
                                                                  UNLANDED work: tag archive/<slug>,
-                                                                 then remove
+                                                                 then remove; LANDED but with
+                                                                 uncommitted work: save that work
+                                                                 under archive/<slug>, then remove
   worktree_remove.py [-C DIR] <branch> --branch                  LANDED local branch with NO worktree:
                                                                  `git branch -d` it
   worktree_remove.py [-C DIR] <branch> --branch --abandon "<why>"
                                                                  UNLANDED local branch with NO worktree:
                                                                  tag archive/<name>, then delete it
+  ... --abandon "<why>" --tag archive/<name>                     either abandon, under the tag a
+                                                                 ruling names: made when absent,
+                                                                 reused on the tip, else refused
   worktree_remove.py [-C DIR] <path> --scratch                   a DETACHED tree under a temp folder
                                                                  whose dirt git already holds: restore,
                                                                  then remove
+  worktree_remove.py [-C DIR] <branch> --mark-stale "<why>"      mark the UNLANDED worktree on
+                                                                 <branch> stale: the nightly sweep
+                                                                 abandons it (tag archive/<slug>)
+                                                                 once it is idle, unless it changes
+  worktree_remove.py [-C DIR] <branch> --unmark-stale            clear that mark
   worktree_remove.py [-C DIR] --check                           leftovers; exit 1 if any
   worktree_remove.py [-C DIR] --sweep-merged                     DRY RUN of the nightly sweep
   worktree_remove.py [-C DIR] --sweep-merged --apply             the nightly sweep
+  worktree_remove.py [-C DIR] --classify [--json]               read-only: every worktree's class
+                                                                 (A landed, B finished, C half-done,
+                                                                 E evidence, L live or kept, O orphan)
+  worktree_remove.py [-C DIR] --classify [--json] --apply       the same, then remove each A and E
+                                                                 tree by its own remove path and
+                                                                 drop each O tree's stale
+                                                                 registration (its branch kept); B,
+                                                                 C and L are never touched
 
 -C names the repository by any of its work trees (default: here); the worktrees acted on are always
 the MAIN checkout's, and the sweep takes only the main checkout. A relative path argument means
-the caller's directory. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
-kitlib.worktree.remove, .scratch or .sweep, prints and exits. Exit codes: 0 done (or nothing to do); 1
-refused, a leftover, git failed, or the sweep deferred; 2 usage, or the kit configuration was
-refused; 130 Ctrl+C.
+the caller's directory. A registered DETACHED worktree outside the worktree folders is named by
+its path, never its slug. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
+kitlib.worktree.remove, .scratch, .sweep, .classify or .marks, prints and exits. Exit codes: 0 done (or
+nothing to do); 1 refused, a leftover, git failed, the sweep deferred, --classify found a tree of
+class A, B, C, E or O, or --classify --apply left a B or C tree or did not remove an A, E or O
+one; 2
+usage, or the kit configuration was refused; 130 Ctrl+C.
 """
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.git import repo as gitrepo                              # noqa: E402
-from kitlib.worktree import remove, scratch, sweep                  # noqa: E402
+from kitlib.worktree import classify, marks, remove, scratch, sweep  # noqa: E402
 
 USAGE = 2
 
@@ -61,9 +83,75 @@ def split_root(argv):
     return (root or '.'), rest
 
 
+def split_tag(args):
+    """`(tag or None, rest)`, or `(False, why)` when --tag is repeated or has no name."""
+    tag, rest, i = None, [], 0
+    while i < len(args):
+        a = args[i]
+        if a == '--tag' or a.startswith('--tag='):
+            if tag is not None:
+                return False, '--tag is given twice'
+            value = a[len('--tag='):] if a != '--tag' else (
+                args[i + 1] if i + 1 < len(args) else None)
+            if not value or value.startswith('-'):
+                return False, '--tag needs a tag name, archive/<name>'
+            tag = value
+            i += 1 if a != '--tag' else 2
+            continue
+        rest.append(a)
+        i += 1
+    return tag, rest
+
+
+def parse_mark(args):
+    """`--mark-stale "<why>"` or `--unmark-stale` with one <branch>: the parse() tuple, or a usage
+    message (str)."""
+    marks = [a for a in args if a == '--mark-stale' or a.startswith('--mark-stale=')]
+    if marks and '--unmark-stale' in args:
+        return '--mark-stale and --unmark-stale do not go together'
+    if '--unmark-stale' in args:
+        rest = [a for a in args if a != '--unmark-stale']
+        if args.count('--unmark-stale') != 1 or len(rest) != 1 or rest[0].startswith('-'):
+            return '--unmark-stale takes exactly one <branch> and no other option'
+        return 'unmark-stale', rest[0], None, False, False
+    if len(marks) != 1:
+        return '--mark-stale is given twice'
+    rest, why, i = [], None, 0
+    while i < len(args):
+        a = args[i]
+        if a == '--mark-stale':
+            value = args[i + 1] if i + 1 < len(args) else None
+            if value is not None and not value.startswith('--'):
+                why = value
+                i += 1
+        elif a.startswith('--mark-stale='):
+            value = a[len('--mark-stale='):]
+            why = None if value.startswith('--') else value
+        else:
+            rest.append(a)
+        i += 1
+    if len(rest) != 1 or rest[0].startswith('-'):
+        return '--mark-stale "<why>" takes exactly one <branch> and no other option'
+    why = (why or '').strip()
+    if not why:
+        return '--mark-stale needs a reason: say why this work is stale (it becomes the tag message)'
+    return 'mark-stale', rest[0], why, False, False
+
+
 def parse(args):
     """`(verb, target, why, keep, apply)` or a usage message (str). Verbs: sweep, check, abandon,
-    abandon-branch, remove-branch, remove, scratch. A why that starts with `--` is a flag typed where the why belongs, never a reason."""
+    abandon-branch, remove-branch, remove, scratch, mark-stale, unmark-stale, classify and
+    classify-apply (`apply` then means --json). A why that starts with `--` is a flag typed where
+    the why belongs, never a reason."""
+    if '--unmark-stale' in args or any(a == '--mark-stale' or a.startswith('--mark-stale=')
+                                       for a in args):
+        return parse_mark(args)
+    if '--classify' in args or '--json' in args:
+        if sorted(args) not in (['--classify'], ['--classify', '--json'], ['--apply', '--classify'],
+                                ['--apply', '--classify', '--json']):
+            return '--classify takes only --json and --apply (and -C)'
+        return ('classify-apply' if '--apply' in args else 'classify'), None, None, False, \
+            '--json' in args
     if '--sweep-merged' in args or '--apply' in args:
         if sorted(args) not in (['--sweep-merged'], ['--apply', '--sweep-merged']):
             return '--sweep-merged takes only --apply (and -C)'
@@ -114,26 +202,41 @@ def main(argv=None):
     root, rest = split_root(argv)
     if root is None:
         return usage(rest)
+    tag, rest = split_tag(rest)
+    if tag is False:
+        return usage(rest)
     got = parse(rest)
     if isinstance(got, str):
         return usage(got)
     verb, target, why, keep, apply = got
+    if tag is not None and verb not in ('abandon', 'abandon-branch'):
+        return usage('--tag goes only with --abandon "<why>" (the tag the abandon keeps the work'
+                     ' under)')
     top, err = gitrepo.toplevel(root)
     if top is None:
         return usage('-C: %s' % err)
     try:
-        if verb == 'sweep':
+        if verb in ('classify', 'classify-apply'):
+            outcome = classify.classify(top, apply=verb == 'classify-apply')
+            if apply:
+                print(json.dumps(outcome.data, indent=2, sort_keys=True), flush=True)
+                return outcome.code
+        elif verb == 'sweep':
             outcome = sweep.sweep(top, apply=apply)
         elif verb == 'check':
             outcome = remove.check(top)
+        elif verb == 'mark-stale':
+            outcome = marks.mark(top, target, why)
+        elif verb == 'unmark-stale':
+            outcome = marks.unmark(top, target)
         elif verb == 'scratch':
             outcome = scratch.remove_scratch(top, target)
         elif verb == 'abandon-branch':
-            outcome = remove.abandon_branch(top, target, why)
+            outcome = remove.abandon_branch(top, target, why, tag=tag)
         elif verb == 'remove-branch':
             outcome = remove.remove_branch(top, target)
         elif verb == 'abandon':
-            outcome = remove.abandon(top, target, why, keep_branch=keep)
+            outcome = remove.abandon(top, target, why, keep_branch=keep, tag=tag)
         else:
             outcome = remove.remove(top, target, keep_branch=keep)
     except KeyboardInterrupt:

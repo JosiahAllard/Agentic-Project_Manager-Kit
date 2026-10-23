@@ -13,8 +13,11 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
 
 - `gender`: the masculine subject, object, possessive and reflexive pronouns as whole words in
   any case, `\bh(?:e|is|im|imself)\b` (GENDER), and nothing else; the kit writes "the owner".
-- `record-id`: a backlog record id. STOP_IDS lists the acronyms and markers that only look like
-  one, and an invented id in a fixture starts with `EX-` (MADE_UP_ID_PREFIX).
+- `record-id`: a backlog record id, and also an owner question or ruling id: a one-letter `Q` or
+  `R`, a dash, then digits (written `Q-nnnn` here). Files where that shape is the hub's own data
+  are allowlisted in ID_SHAPE_FOLDERS (`tests/scrub/test_builtin.py`). STOP_IDS lists the acronyms
+  and markers that only look like one, and an invented id in a fixture starts with `EX-`
+  (MADE_UP_ID_PREFIX).
 - `provenance`: the kit this one replaced, called old, earlier, previous or legacy, or one of its
   files named; the bare title "PM kit" (AGENTS.md) passes.
 - `pinned-hash`: a commit hash, outside tests/ only; git's empty tree and the hex alphabet pass
@@ -47,10 +50,12 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 - **Agents** (`hosts/claude/shell/agents/`): the agent definitions; docs/ROSTER.md says which model and
   effort each runs at and what it is for.
 - **Skills** (`content/skills/<name>/SKILL.md`, the plugin's skills folder itself, never copied:
-  docs/content.md): backlog-ops, branch-review, branch-sync,
-  coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch (uses
+  docs/content.md): backlog-ops, branch-review, branch-sync, builder,
+  coordinator-dispatch, doc-claims-discipline, flaky-test-triage, hub-ops, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
-  shell-and-worktree-traps, subagent-dispatch. branch-review and coordinator-dispatch hold the
+  shell-and-worktree-traps, subagent-dispatch, specialty-3d-assets, specialty-rigging,
+  specialty-tech-art, specialty-sound, specialty-review, specialty-research, specialty-records, specialty-spec.
+  branch-review and coordinator-dispatch hold the
   coordinator's procedure, loaded only when needed. Skills name kit tools by path
   (`tests/skills` checks each exists); `tools/doc_index.py`, `tools/doc_budget.py` and
   `tools/gate.json` are each repository's own.
@@ -85,14 +90,15 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   input, and an output that is not .html/.htm, is one of the images, or is an existing non-HTML
   file.
 - `procwatch`: a process watcher. It spares ComfyUI; add patterns with env `PROCWATCH_PROTECT`
-  (`;`-separated regexes).
+  (`;`-separated regexes). It labels a process by its nearest known ancestor; add ancestor apps
+  (exe names) with env `PROCWATCH_ORIGINS` (`;`-separated).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
 - `bridge`: agent-to-agent messaging between open host chats, an optional install that no host
   shell mentions until the owner registers it (`optional/bridge/README.md`; what works:
   `optional/bridge/STATUS.md`). Tests in `tests/bridge`.
 - `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder and its
   session folders, set by `agent_temp_sweep` in the machine config (docs/kit-json.md). It never
-  removes a `*-coordinator` or `*-consultant` folder, whatever `keep` says (`BUILT_IN_KEEP`; they
+  removes a `*-coordinator`, `*-consultant` or `shared` folder, whatever `keep` says (`BUILT_IN_KEEP`; the first two
   hold a coordinator's state note and a consultant's notes, docs/launcher.md "Start").
 
 ## Knowledge (`knowledge/asset-generation`)

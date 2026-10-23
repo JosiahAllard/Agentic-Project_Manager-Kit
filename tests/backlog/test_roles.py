@@ -11,9 +11,9 @@ from kitlib.backlog import record
 from kitlib.backlog import roles as R
 from kitlib.config import schema
 
-BUILDERS = ('worker', 'senior-worker', 'opus-worker', 'strong-worker', 'tech-artist', 'asset-smith', 'sound-smith')
-READ_ONLY = ('reviewer', 'test-runner', 'researcher', 'consultant')
-ROLES = ('owner', 'pm', 'coordinator', 'deep-worker', 'lander', 'records', 'spec-writer') + \
+BUILDERS = ('weak-worker', 'worker', 'senior-worker', 'opus-worker', 'strong-worker', 'helper')
+READ_ONLY = ('analyst', 'test-runner', 'consultant')
+ROLES = ('owner', 'pm', 'coordinator', 'deep-worker', 'lander', 'docs-writer') + \
     BUILDERS + READ_ONLY
 CPO = ('coordinator', 'pm', 'owner')
 TOP = ('owner', 'pm')
@@ -38,18 +38,22 @@ DESIGN = {
     'close': ('medium', CPO, {'lander': 'via-land'}),
     'close-held': ('high', TOP, {}),
     'retire': ('medium', CPO, {}),
+    'delete': ('medium', CPO, {}),
+    'clear-review': ('medium', CPO, {}),
     'retarget': ('high', TOP, {}),
+    'catch-up': ('medium', CPO, {}),
     'raw-write': ('high', (), {}),
 }
 VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'add', 'set', 'block', 'unblock',
-         'pull', 'release', 'close', 'retire', 'set-status', 'unpark', 'retarget', 'migrate'}
+         'pull', 'release', 'close', 'retire', 'delete', 'clear-review', 'set-status', 'unpark',
+         'retarget', 'migrate', 'catch-up'}
 
 
 class RolesTest(unittest.TestCase):
     def test_every_role_in_the_design_is_a_role(self):
         self.assertEqual(sorted(R.ROLES), sorted(ROLES))
         self.assertEqual((sorted(R.BUILDERS), sorted(R.READ_ONLY), sorted(R.DOCS), R.LANDERS),
-                         (sorted(BUILDERS + ('deep-worker',)), sorted(READ_ONLY), ['records', 'spec-writer'],
+                         (sorted(BUILDERS + ('deep-worker',)), sorted(READ_ONLY), ['docs-writer'],
                           ('lander',)))
         self.assertEqual(sorted(R.LEADS), sorted(CPO))
         self.assertEqual(sorted(R.SESSION_ONLY), ['consultant', 'coordinator', 'deep-worker', 'owner', 'pm'])
@@ -129,11 +133,24 @@ class RolesTest(unittest.TestCase):
         self.assertLessEqual(set(R.SESSION_ONLY), set(R.ROLES))
 
     def test_builders_never_close_and_only_the_leads_set_other_fields(self):
-        for action in ('close', 'close-held'):
+        for action in ('close', 'close-held', 'delete'):
             for role in R.BUILDERS:
                 self.assertFalse(R.allows(action, role, R.FACTS), (action, role))
         for role in R.ROLES:
             self.assertEqual(R.allows('set-other', role, R.FACTS), role in CPO, role)
+
+    def test_a_lead_deletes_and_clears_a_review_and_a_held_record_takes_the_top_gate(self):
+        """Delete and clear-review are the leads' (medium, audited); deleting a held record
+        takes close-held, the TOP gate that closing and retiring one take."""
+        held = R.ACTIONS['close-held']
+        self.assertEqual((set(held.verbs), set(held.over)), ({'close', 'retire', 'delete'},) * 2)
+        self.assertIn(held.risk, R.AUDITED)
+        for action in ('delete', 'clear-review'):
+            self.assertIn(R.ACTIONS[action].risk, R.AUDITED, action)
+            for role in R.ROLES:
+                self.assertEqual(R.allows(action, role, R.FACTS), role in CPO, (action, role))
+        for role in R.ROLES:
+            self.assertEqual(R.allows('close-held', role, R.FACTS), role in TOP, role)
 
     def test_the_owner_takes_every_action_but_a_held_pull_or_a_raw_write(self):
         for action in R.ACTIONS:

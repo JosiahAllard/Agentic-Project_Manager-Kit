@@ -5,7 +5,7 @@ End to end through Store.write on a no-remote ref store."""
 import unittest
 
 from kitlib.backlog import plan as pmod
-from kitlib.backlog.errors import Refusal, Usage
+from kitlib.backlog.errors import Failure, Refusal, Usage
 
 from tests.backlog.helpers import BRANCH, TODAY, StoreCase, parse, priced, rec
 
@@ -70,28 +70,178 @@ class PullCollision(StoreCase):
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', 'needed before the others'))
 
-    def test_one_ruling_covers_a_minus_one_record_that_also_collides(self):
+    def test_a_minus_one_record_that_also_collides_is_never_pulled(self):
+        # pull-held refuses every role: no ruling releases the hold by pulling it; the owner or
+        # the PM releases it with `set` first (docs/backlog.md "Owner gates")
         self.seed(hold(), rec('MIN', priority='-1', owner_ask='which?',
                               scope='kitlib/backlog/scope.py'))
-        with self.assertRaises(Refusal):
-            self.verb('pull', 'MIN', reason='the owner said go')
-        change = self.verb('pull', 'MIN', reason='the owner said go', ruling='R-9001')
-        r = self.get('MIN')
-        self.assertEqual((r.get('state'), r.get('hold_ruling'), r.get('preempt')),
-                         ('pulled', 'R-9001', 'the owner said go (PM R-9001)'))
-        self.assertEqual(change.ruling, 'R-9001')
+        for ruling in (None, 'R-9001'):
+            with self.assertRaises(Refusal) as cm:
+                self.verb('pull', 'MIN', reason='the owner said go', ruling=ruling)
+            self.assertIn('set MIN --priority', str(cm.exception))
+            r = self.get('MIN')
+            self.assertEqual((r.get('state'), r.get('priority'), r.get('hold_ruling')),
+                             ('open', '-1', None))
 
-    def test_a_pull_that_overlaps_a_record_on_the_callers_own_branch_takes_a_reason_alone(self):
-        # Bundling overlapping records onto one branch is not a collision: the branch already
-        # holds that scope. It is still out of `next`'s offer, so it takes `--reason`.
+    def test_a_pull_that_overlaps_a_record_on_the_callers_own_branch_pulls_plainly(self):
+        # Bundling overlapping records onto one branch is not a
+        # collision, in the offer either: the branch already holds that scope, so its own pulls
+        # are left out of the offer `pull` checks against. It once took `--reason` ("passed over
+        # ... already taken by MINE (in flight on <the caller's branch>)").
+        self.seed(mine('kitlib/backlog/**'), priced('FOO', scope='kitlib/backlog/scope.py'))
+        change = self.verb('pull', 'FOO')
+        r = self.get('FOO')
+        self.assertEqual((r.get('state'), r.get('pulled_by'), r.get('preempt')),
+                         ('pulled', BRANCH, None))
+        self.assertIsNone(change.ruling)
+        self.assertEqual(change.subject, 'backlog: pull FOO onto %s' % BRANCH)
+
+    def test_a_second_bundled_pull_onto_the_same_branch_pulls_plainly_too(self):
+        self.seed(mine('kitlib/backlog/**'), priced('FOO', scope='kitlib/backlog/record.py'),
+                  priced('BAR', scope='kitlib/backlog/plan.py'))
+        self.verb('pull', 'FOO')
+        self.verb('pull', 'BAR')
+        self.assertEqual(self.get('BAR').get('pulled_by'), BRANCH)
+        self.assertIsNone(self.get('BAR').get('preempt'))
+
+    def test_own_branch_overlap_does_not_excuse_a_collision_with_another_branch(self):
+        self.seed(mine('kitlib/backlog/**'), hold(scope='kitlib/backlog/scope.py'),
+                  priced('FOO', scope='kitlib/backlog/scope.py'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn('HOLD (in flight on %s)' % HOLDER, str(cm.exception))
+        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        self.assertEqual(self.get('FOO').get('state'), 'open')
+
+    def test_the_offer_still_ranks_records_the_branch_does_not_hold(self):
+        # Only the caller's own pulls are left out: a higher-ranked open record still comes first.
+        self.seed(mine('kitlib/backlog/plan.py'), priced('TOP', priority='1', scope='docs/**'),
+                  priced('FOO', priority='5', scope='docs/x.md'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn('TOP (offered above)', str(cm.exception))
+
+    def seed_x_y(self):
+        # The branch holds a/**. X (rank 1) overlaps it and docs/y.md; Y (rank 2) is docs/y.md.
+        # `next` without the branch passes X over (a/x.py is taken) and offers Y; `next` as the
+        # branch offers X and passes Y over (X is offered above).
+        self.seed(mine('a/**'), priced('X', priority='1', scope=['a/x.py', 'docs/y.md']),
+                  priced('Y', priority='2', scope='docs/y.md'))
+
+    def test_a_record_next_offers_without_the_branch_pulls_plainly(self):
+        # Y is in `next`'s offer as the coordinator in the main checkout reads it, so pulling it
+        # onto the branch must not count X, which that `next` passed over, as offered above.
+        self.seed_x_y()
+        change = self.verb('pull', 'Y')
+        r = self.get('Y')
+        self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', None))
+        self.assertIsNone(change.ruling)
+
+    def test_a_record_next_offers_as_the_branch_pulls_plainly(self):
+        self.seed_x_y()
+        self.verb('pull', 'X')
+        self.assertEqual((self.get('X').get('state'), self.get('X').get('preempt')),
+                         ('pulled', None))
+
+    def test_the_offer_next_prints_as_the_branch_leaves_its_own_pulls_out(self):
+        self.seed_x_y()
+        snap = self.store.load()
+        offers, passed, _holding, own = pmod.offer_for(snap, self.ctx)
+        self.assertEqual(own, BRANCH)
+        self.assertEqual([o.rec.id for o in offers], ['X'])
+        self.assertEqual([p.rec.id for p in passed], ['Y'])
+        self.ctx.branch = 'main'                      # a main never bundles: its pulls hold scope
+        offers, passed, _holding, own = pmod.offer_for(snap, self.ctx)
+        self.assertIsNone(own)
+        self.assertEqual([o.rec.id for o in offers], ['Y'])
+
+    def assert_still_collides(self, by):
+        if by != BRANCH:
+            self.repo.git('branch', by)
+        self.seed(hold(scope='kitlib/backlog/**', by=by),
+                  priced('FOO', scope='kitlib/backlog/scope.py'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn('HOLD (in flight on %s)' % by, str(cm.exception))
+        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        self.assertEqual(self.get('FOO').get('state'), 'open')
+
+    def test_a_branch_that_shares_the_callers_prefix_still_collides(self):
+        self.assert_still_collides(BRANCH + '-two')
+
+    def test_a_branch_the_caller_names_by_its_prefix_still_collides(self):
+        self.ctx.branch = 'tools/some'
+        self.assert_still_collides(BRANCH)
+
+    def test_the_callers_branch_in_another_letter_case_still_collides(self):
+        # pulled_by is compared exactly: the branch upper-cased is not the branch that pulled.
+        self.ctx.branch = BRANCH.upper()
         self.seed(mine('kitlib/backlog/**'), priced('FOO', scope='kitlib/backlog/scope.py'))
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'FOO')
-        self.assertNotIn('--ruling', str(cm.exception))
-        change = self.verb('pull', 'FOO', reason='bundled with MINE')
-        r = self.get('FOO')
-        self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', 'bundled with MINE'))
+        self.assertIn('MINE (in flight on %s)' % BRANCH, str(cm.exception))
+        self.assertEqual(self.get('FOO').get('state'), 'open')
+
+    def test_the_callers_branch_spelt_as_a_ref_still_collides(self):
+        self.ctx.branch = 'refs/heads/' + BRANCH
+        self.seed(mine('kitlib/backlog/**'), priced('FOO', scope='kitlib/backlog/scope.py'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn('MINE (in flight on %s)' % BRANCH, str(cm.exception))
+        self.assertEqual(self.get('FOO').get('state'), 'open')
+
+    def test_the_offer_leaves_out_only_the_branch_spelt_exactly(self):
+        # Direct, so a refusal from another check cannot pass it: as BRANCH, X is offered (its
+        # a/x.py overlaps only the branch's own MINE); as any other spelling, MINE holds a/** and
+        # X is passed over, so a case-insensitive or prefix match would offer X here.
+        self.seed_x_y()
+        snap = self.store.load()
+        for name in (BRANCH.upper(), 'tools/some', BRANCH + '-two', 'refs/heads/' + BRANCH):
+            self.ctx.branch = name
+            offers, passed, _holding, own = pmod.offer_for(snap, self.ctx)
+            self.assertEqual(own, name)
+            self.assertEqual([o.rec.id for o in offers], ['Y'], name)
+            self.assertEqual([p.rec.id for p in passed], ['X'], name)
+
+    def test_a_detached_head_names_no_branch_of_its_own(self):
+        self.repo.git('checkout', '-b', 'tools/other')
+        self.ctx.branch = None
+        self.assertEqual(pmod.own_branch(self.ctx), 'tools/other')   # the control: HEAD is read
+        self.repo.git('checkout', '--detach')
+        self.assertIsNone(pmod.own_branch(self.ctx))
+        self.assertEqual(pmod.own_branch(self.ctx, 'tools/named'), 'tools/named')
+
+    def test_a_pull_takes_what_next_offers_as_the_branch_when_its_own_pull_has_a_bad_scope(self):
+        # `next` as the branch leaves its own pulls out, so their scopes are never read there; the
+        # plain offer `pull` also consults reads them all. A scope that cannot be compared must
+        # not make `pull` refuse a record `next` offered.
+        self.seed(mine('a/*.py'), priced('Y', scope='docs/y.md'))
+        snap = self.store.load()
+        offers, _passed, _holding, own = pmod.offer_for(snap, self.ctx)
+        self.assertEqual((own, [o.rec.id for o in offers]), (BRANCH, ['Y']))
+        change = self.verb('pull', 'Y')
+        self.assertEqual((self.get('Y').get('state'), self.get('Y').get('preempt')),
+                         ('pulled', None))
         self.assertIsNone(change.ruling)
+        note = [ln for ln in change.lines if ln.startswith('NOTE: the offer without branch')]
+        self.assertEqual(len(note), 1, change.lines)
+        self.assertIn(BRANCH, note[0])
+        self.assertIn('`scope: a/*.py`', note[0])
+
+    def test_a_plain_pull_onto_the_branch_prints_no_offer_note(self):
+        self.seed(mine('a/**'), priced('Y', scope='docs/y.md'))
+        change = self.verb('pull', 'Y')
+        self.assertFalse([ln for ln in change.lines if 'offer without branch' in ln],
+                         change.lines)
+
+    def test_a_bad_scope_on_another_branchs_pull_fails_the_pull(self):
+        self.seed(hold(scope='a/*.py'), priced('Y', scope='docs/y.md'))
+        with self.assertRaises(Failure) as cm:
+            self.verb('pull', 'Y')
+        msg = str(cm.exception)
+        self.assertTrue(msg.startswith('`next` cannot compute an offer: '), msg)
+        self.assertIn('`scope: a/*.py`', msg)
+        self.assertEqual(self.get('Y').get('state'), 'open')
 
 
 class SetScopeWidening(StoreCase):
@@ -122,10 +272,56 @@ class SetScopeWidening(StoreCase):
         self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md'])])
         self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py', 'docs/backlog.md'])
 
-    def test_a_ruling_on_a_widening_that_collides_with_nothing_is_usage(self):
+    def test_the_widen_refusal_names_the_repeatable_scope_form(self):
         self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
-        with self.assertRaises(Usage):
-            self.verb('set', 'MINE', [('scope', ['docs/backlog.md'])], ruling='R-9001')
+        with self.assertRaises(Refusal) as cm:
+            self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'kitlib/backlog/**'])])
+        self.assertIn('`set MINE --scope <path> [--scope <path> ...] --ruling R-nnnn`',
+                      str(cm.exception))
+
+    def test_a_ruling_on_a_free_widening_of_a_pulled_record_is_recorded(self):
+        # The collision a refusal named can clear before the retry with `--ruling` (the holder
+        # landed, or the refused member was malformed): the retry is written, not USAGE.
+        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
+        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md'])],
+                           ruling='R-9001')
+        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py', 'docs/backlog.md'])
+        self.assertEqual(change.ruling, 'R-9001')
+        self.assertTrue(any('widened on R-9001' in line and 'no live pull collides' in line
+                            and 'docs/backlog.md' in line for line in change.lines), change.lines)
+
+    def test_a_ruling_with_a_free_widening_and_a_price_move_records_the_price(self):
+        # Free scope needs no ruling, so the one given stays the price's, as before.
+        self.seed(mine('kitlib/backlog/plan.py'))
+        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md']),
+                                           ('priority', ['1']), ('priority_by', ['pm'])],
+                           ruling='R-9001')
+        r = self.get('MINE')
+        self.assertEqual((r.get('priority'), r.get('priority_ruling')), ('1', 'R-9001'))
+        self.assertFalse(any('widened on' in line for line in change.lines), change.lines)
+
+    def test_a_ruling_on_a_narrowing_or_an_unchanged_scope_is_usage_naming_the_form(self):
+        self.seed(mine('kitlib/backlog/**'))
+        for new in (['kitlib/backlog/plan.py'], ['kitlib/backlog/**']):
+            with self.subTest(scope=new):
+                with self.assertRaises(Usage) as cm:
+                    self.verb('set', 'MINE', [('scope', new)], ruling='R-9001')
+                msg = str(cm.exception)
+                self.assertIn('there is nothing for it to record', msg)
+                self.assertIn('`set MINE --scope <path> [--scope <path> ...] --ruling R-nnnn`', msg)
+                self.assertIn('narrowing is free', msg)
+                self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/**'])
+
+    def test_a_comma_joined_scope_is_usage_naming_one_scope_per_path(self):
+        # Not a collision with every live pull: a malformed member is the caller's mistake.
+        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
+        with self.assertRaises(Usage) as cm:
+            self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py,docs/backlog.md'])])
+        msg = str(cm.exception)
+        self.assertIn('bad `--scope kitlib/backlog/plan.py,docs/backlog.md`', msg)
+        self.assertIn('one `--scope <path>` per path', msg)
+        self.assertNotIn('live pull', msg)
+        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py'])
 
     def test_narrowing_stays_free_even_when_the_old_scope_collides(self):
         self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/**'))

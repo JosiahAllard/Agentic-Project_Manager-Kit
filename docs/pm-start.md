@@ -73,7 +73,11 @@ no git config and never rebases, resets or forces. The checks are a point in tim
 
 ## Plugin export (`plugin_current`)
 
-Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead (`<kit>` the kit's absolute path, `kitlib.pluginsource` `refresh_cmd`: the PM's session runs in another folder); an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings"). Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
+Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead (`<kit>` the kit's absolute path, `kitlib.pluginsource` `refresh_cmd`: the PM's session runs in another folder); an unreadable export state is a `could not check the pm-kit plugin` line. The refresh checks read the export root only (docs/plugin-source.md "Behind warnings"). The marketplace path check (`kitlib.pluginsource` `marketplace_mismatches`) also reads each migrated account folder's `plugins/known_marketplaces.json` `installLocation` and the machine's managed settings `extraKnownMarketplaces` source path, and prints one `pm-kit marketplace ... is <path>, not the export <root>` line per place that points elsewhere; an unreadable or wrong-shaped file is a `could not check the pm-kit marketplace path` line, a missing file or entry prints nothing, and it never writes or raises. Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
+
+## Plugin enabled (`plugin_enabled`)
+
+Right after `plugin_current`, the `plugin_enabled` check prints one line naming every account folder (`kitlib.pluginsource.claude.account_folders`) whose `settings.json` has no `enabledPlugins["pm-kit@pm-kit"]`: `pm-kit plugin: not enabled in <folders>: python "<kit>/tools/machine_setup.py" --apply (docs/machine-setup.md "Default mode")`. `false` is the owner's choice and prints nothing; a `settings.json` that is not a JSON object is its own `could not check the pm-kit plugin in <folder>` line; a machine config whose plugin settings cannot be read is the checklist's `could not check plugin_enabled` line. Code: `kitlib/pmstart` `plugin_enabled`; tests: `tests/pmstart/test_plugin_enabled_check.py`.
 
 ## Stubs (`stubs`)
 
@@ -110,13 +114,36 @@ aside), or one line says what to set it to. Claude Code ignores the key without 
 `blockReadsOutsideWorkingDirectories` is set or the workspace is not trusted. Code:
 `kitlib/pmstart` `memory`; tests: `tests/pmstart/test_pmstart.py` `MemoryTest`.
 
+## Allow rules (`allow_rules`)
+
+After `memory`, the `allow_rules` check reads the same two settings files of each repository in
+`launcher.repos` and of the PM repository. It looks for permission rules (`allow`, `deny`, `ask`)
+whose path names a folder under the plugin export root (`plugin.export_dir`, any case, either slash)
+other than the current export. Each file and state gets one line:
+
+`allow rules (<repo>): <file> names plugin export <folder> (gone|not current) in <n> rule(s); the
+current export is <folder>: python "<kit>/tools/allow_rules.py" -C "<repo>" prints the land lines to paste; any other rule naming the old export needs its hash
+changed by hand (owner)`
+
+`allow_rules.py` prints only the land lines. The check flags any rule that names an old export, so
+the owner edits the folder name in the others (a rule for another kit tool, say) by hand.
+
+- `gone`: the folder holds no export marker.
+- `not current`: an older export that is still there, so the allow runs an old `land.py`.
+- A file it cannot read gives `could not check allow_rules (<repo>): <file>: ...`.
+- A missing file prints nothing.
+- With no repository, nothing is read.
+
+The settings are the owner's, so the line names the command and writes nothing (docs/allow-rules.md).
+Code: `kitlib/pmstart` `allow_rules`; tests: `tests/pmstart/test_allow_rules_check.py`.
+
 ## Repo prep (`repo_prep`)
 
-After `memory`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
+After `allow_rules`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
 
 ## Agent temp (`agent_temp`)
 
-After `memory`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
+After `repo_prep`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
 (docs/machine-setup.md "Extras") that is missing: "AGENT_TEMP is not set (machine_setup.py plans
 it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
 set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
@@ -142,10 +169,12 @@ task is one with a name the kit registers (the launcher's sign-in task, `agent-t
 ending `-worktree-sweep` or `-daily-full`) or an action with a word (its program, or an argument,
 quoted or not, with a leading `&`, quotes and an option's `-opt:` / `--opt=` taken off, `words`)
 that is an absolute path inside a kit folder (`is_kit`, `kit_roots`): this kit; the
-live checkout an export runs for (`KIT_LIVE_ROOT`); and, when this kit is a plugin export, the
-folder that holds every export. A file named like a kit tool in another folder, another
+live checkout an export runs for (`KIT_LIVE_ROOT`, else the main checkout the export's marker
+records when that holds `kit.json` and a `tools` folder); and, when this kit is a plugin export,
+the folder that holds every export. A file named like a kit tool in another folder, another
 repository's `<repo>\tools\gate.py`, is not the kit's. A task that names the kit's checkout while
-the session start runs from the plugin export is matched by its name only. A `pythonw.exe` program
+the session start runs from a plugin export whose marker names no usable checkout is matched by
+its name only. A `pythonw.exe` program
 is never flagged, with or without the carrier. `schtasks` writes bytes: UTF-16 output (a byte order
 mark, or NULs) goes to the XML parser as bytes, which reads the declaration itself; single-byte
 output is read in the OEM code page, its declaration dropped unless it names a single-byte encoding,

@@ -10,7 +10,8 @@ that are never written down (kitlib/forbidden's hashing; empty until the owner f
 Classes (CLASSES, each `(name, regex, in_tests)`):
 - `gender`: a gendered pronoun. The kit names one person, the owner, and writes "the owner".
 - `record-id`: a backlog record id (an uppercase prefix, then hyphenated uppercase or digit
-  parts), except the STOP_IDS acronyms and invented ids that start with MADE_UP_ID_PREFIX.
+  parts), or an owner question or ruling id (`Q` or `R`, a dash, digits), except the STOP_IDS acronyms and invented ids that
+  start with MADE_UP_ID_PREFIX.
 - `provenance`: a note that a file came over from the kit this one replaced, or which of its
   files it copies, which a reader of the public kit cannot follow. The kit's own name alone passes.
 - `pinned-hash`: a commit hash, 7 to 40 hex digits with a digit and a letter, outside tests/
@@ -41,7 +42,8 @@ import re
 from kitlib import forbidden
 
 GENDER = re.compile(r'\bh(?:e|is|im|imself)\b', re.I)
-RECORD_ID = re.compile(r'(?<![A-Za-z0-9_-])[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+(?![A-Za-z0-9_])')
+RECORD_ID = re.compile(r'(?<![A-Za-z0-9_-])(?:[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+|[QR]-[0-9]+)'
+                       r'(?![A-Za-z0-9_])')
 # Words, acronyms, markers and date shapes that look like a record id and are not one.
 STOP_IDS = frozenset((
     # dates, encodings, standards, licences, time zones
@@ -53,7 +55,7 @@ STOP_IDS = frozenset((
     'SHA-224', 'SHA-384', 'SHA-512', 'EMSA-PKCS1', 'RSASSA-PKCS1',
     # hyphenated English and marker words written in capitals
     'OWNER-ONLY', 'SELF-TEST', 'ROW-ID', 'FOLLOW-UP', 'AUTO-GENERATED', 'UP-TO-DATE',
-    'WORKING-RULES', 'CLAUDE-SPECIFIC', 'GATE-EXPECT-BEGIN', 'GATE-EXPECT-END'))
+    'WORKING-RULES', 'CLAUDE-SPECIFIC', 'GATE-EXPECT-BEGIN', 'GATE-EXPECT-END', 'FIX-HERE'))
 # Invented ids in fixtures and examples start with this, as ruling fixtures use R-9nnn.
 MADE_UP_ID_PREFIX = 'EX-'
 # "PM kit" alone is this kit's own name (AGENTS.md); what counts is the replaced one called

@@ -5,7 +5,8 @@ An agent session writes only inside its roots:
   its checkout     the git top of the folder the session runs in (a linked worktree: that
                    worktree alone; a main checkout: the whole checkout). Outside git, the folder
                    it runs in, unless that is a drive root or the home folder. None when it is
-                   on, over or inside either machine config folder (config_dirs).
+                   on, over or inside either home machine config folder, or on or inside the
+                   PM repository's (config_dirs, touches_config).
   its worktrees    every linked worktree of the same repository under its main checkout
                    (sibling), so a session in one worktree reaches the others as a session in the
                    main checkout does. The main checkout itself stays outside. Not a listed
@@ -21,9 +22,11 @@ An agent session writes only inside its roots:
   mark roots       the machine config's guard_mark_roots for a main session's launcher mark
                    ({mark: [{path, mode, why}]}, `~/` read as the home folder); a subagent gets
                    none
-A root of any kind on, over or inside either machine config folder is dropped unless it is
-read-only (roots, touches_config): a data root, TMP or AGENT_TEMP at the home folder would
-otherwise open the machine config. A root's mode holds wherever it nests: a target inside a read-only data root is denied though
+A root of any kind on, over or inside either home machine config folder, or on or inside the PM
+repository's <pointer>/.pm-kit, is dropped unless it is read-only (roots, touches_config): a data
+root, TMP or AGENT_TEMP at the home folder would otherwise open the machine config. A root that
+only holds <pointer>/.pm-kit (the PM repository's own checkout) is kept; rules.machine_config
+refuses the writes inside that folder. A root's mode holds wherever it nests: a target inside a read-only data root is denied though
 it also lies in the checkout or temp, and one inside an add-only root may only be new.
 
 Paths compare after kitlib.guard.paths.norm(real=True): os.path.realpath (symlinks and junctions
@@ -72,9 +75,9 @@ def fwd(p):
 
 def own_root(ctx, cwd, is_root):
     """The session's own write root: the git top of `cwd`, else `cwd` itself outside git when
-    is_root(cwd) is false (a drive root or the home folder is never one). None when that root is
-    on, over or inside either machine config folder (config_dirs): a session run there would
-    otherwise write the machine config, its own guard settings and ledger_path among them."""
+    is_root(cwd) is false (a drive root or the home folder is never one). None when that root
+    touches a machine config folder (touches_config): a session run there would otherwise write
+    the machine config, its own guard settings and ledger_path among them."""
     if not cwd:
         return None
     place = ctx.place(cwd)
@@ -93,7 +96,7 @@ def sibling(ctx, target, cwd):
     root, given to a session in a linked worktree too. Never the main checkout itself, the PM data
     worktree (Ctx.place answers it as MAIN; none at all while the guard cannot tell which it is,
     Ctx.pm_data_error), another repository's worktree, a target a link carries out of its
-    worktree, or a worktree on, over or inside a machine config folder."""
+    worktree, or a worktree that touches a machine config folder (touches_config)."""
     if not target or not cwd or ctx.pm_data_error(target):
         return False
     here, there = ctx.place(cwd), ctx.place(target)
@@ -109,9 +112,15 @@ def sibling(ctx, target, cwd):
 
 
 def touches_config(ctx, path):
-    """True when `path` is, holds or lies inside either machine config folder (config_dirs)."""
+    """True when `path` is, holds or lies inside either home machine config folder, or is or lies
+    inside the PM repository's (pointer_config_dir). Holding the PM repository's folder does not
+    count: that is the PM repository's own checkout, a root its sessions write in, and
+    rules.machine_config refuses the writes inside the folder."""
     p = real(path)
-    return any(inside(p, c) or inside(c, p) for c in (real(d) for d in config_dirs(ctx)))
+    if any(inside(p, c) or inside(c, p) for c in (real(d) for d in home_config_dirs(ctx))):
+        return True
+    d = pointer_config_dir(ctx)
+    return d is not None and inside(p, real(d))
 
 
 AGENT_TEMP = 'AGENT_TEMP'     # the agents' temp folder (optional/comfy and the temp sweep use it too)
@@ -144,6 +153,13 @@ def data_roots(ctx, cwd):
 
 
 def config_dirs(ctx):
+    """Every machine config folder: the PM repository's (pointer_config_dir) when the pointer
+    names one, then both under ctx.home (home_config_dirs)."""
+    d = pointer_config_dir(ctx)
+    return ([d] if d else []) + home_config_dirs(ctx)
+
+
+def home_config_dirs(ctx):
     """Both machine config folders under ctx.home, the current (kitlib.config.user.DIR_NAME) and
     the retired one (kitlib.config.migration.OLD_DIR_NAME), whichever kitlib.config.user.locate
     reads: no root that may write (roots) may be on, hold or lie in either. A root on the
@@ -152,10 +168,21 @@ def config_dirs(ctx):
     return [os.path.join(ctx.home, kuser.DIR_NAME), os.path.join(ctx.home, OLD_DIR_NAME)]
 
 
+def pointer_config_dir(ctx):
+    """The PM repository's machine config folder, <pointer>/.pm-kit (kitlib.config.user.DIR_NAME
+    under the PM-repo pointer's value as stored, Ctx.pm_repo_pointer), or None when there is no
+    pointer or its value is no absolute path (a relative one names no folder the guard can
+    place; rules.machine_config still reads a .pm-kit folder at a checkout's top by name)."""
+    pointer = ctx.pm_repo_pointer()
+    if not isinstance(pointer, str) or not os.path.isabs(pointer):
+        return None
+    return os.path.join(pointer, kuser.DIR_NAME)
+
+
 def mark_roots(ctx, mark):
     """[(path, mode)] from the machine config's guard_mark_roots for the session mark `mark`
-    (case ignored; None: none). `~/` reads as ctx.home. roots drops one that is either machine
-    config folder (config_dirs), holds it or lies inside it, unless it is read-only, so no session
+    (case ignored; None: none). `~/` reads as ctx.home. roots drops one that touches a machine
+    config folder (touches_config), unless it is read-only, so no session
     can be given its own guard settings. A config the strict reader refuses has no mark roots
     (Ctx.user reads it tolerantly, and a map is not kept)."""
     table = ctx.user().get('guard_mark_roots') if mark else None
@@ -178,9 +205,8 @@ def mark_roots(ctx, mark):
 
 def roots(ctx, cwd, is_root, mark=None):
     """[Root] for a session running in `cwd`, its own checkout first; `mark` (a main session's
-    launcher mark, None for a subagent) adds its guard_mark_roots. A root of any kind that is on,
-    holds or lies inside either machine config folder (touches_config) is dropped unless it is
-    read-only: a data root, TMP or AGENT_TEMP at the home folder or above would otherwise let the
+    launcher mark, None for a subagent) adds its guard_mark_roots. A root of any kind that touches
+    a machine config folder (touches_config) is dropped unless it is read-only: a data root, TMP or AGENT_TEMP at the home folder or above would otherwise let the
     session write the machine config. A read-only root only denies, so it is kept."""
     out = []
     own = own_root(ctx, cwd, is_root)

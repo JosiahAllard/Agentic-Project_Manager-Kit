@@ -64,6 +64,8 @@ STANDALONE = ('a standalone optional tool that imports nothing of the kit: it st
 
 STUB = 'kitlib/stubs/__init__.py TEMPLATE'      # the name the stub's text is read under
 STUB_TOOL = 'gate'                              # any name: the template's start is the same
+STUB_KIT = r'C:\kit'                            # a fixed kit path: the checkout's own folder name
+                                                # (a worktree slug like guard-start-process-args) is no start
 
 EXEMPT = {
     ('kitlib/proc/spawn.py', 'run', 'subprocess.run'): (1, HELPER),
@@ -119,17 +121,23 @@ GUARD_TEST = ('a guard test hands the guard a command line that holds this text 
               'command is parsed, never run')
 FLAG_PASSES = ('a test of how a caller\'s console choice is passed on: the flag goes to a stand-in '
                'for CreateProcess, nothing is started with it')
-BRIDGE_TEXT = ('a bridge startup test reads the launcher text startup.render writes; this line '
-               'asserts that text and runs nothing')
 OPEN = ' OPEN (reported, not fixed here): '
 
 HAZARD_EXEMPT = {
-    ('kitlib/guard/commands.py', '_ps_env_unsafe', 'Start-Process'): (1, GUARD_READS),
-    ('kitlib/guard/commands.py', '_start_process', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/commands.py', '_start_process', 'Start-Process'): (3, GUARD_READS),
+    ('kitlib/guard/commands.py', '_sp_unreadable', 'Start-Process'): (4, GUARD_READS),
     ('kitlib/guard/commands.py', 'invocation', 'Start-Process'): (2, GUARD_READS),
-    ('kitlib/guard/rules.py', '_python', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/commands.py', '_nested_text', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/commands.py', '_sp_shell_text', 'Start-Process'): (2, GUARD_READS),
+    ('kitlib/guard/rules.py', '<module>', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/rules.py', 'python_unread', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'plain_run', 'Start-Process'): (1, GUARD_READS),
-    ('kitlib/guard/rules.py', 'runs_reserve_ui', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/rules.py', 'kit_script', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/rules.py', 'tool_run', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/commands.py', 'run_dir', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/rules.py', 'shell_writes', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/rules.py', 'write_place', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/rules.py', 'bare_wrapper', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/pluginsource/__init__.py', '<module>', 'DETACHED_PROCESS'): (
         1, '_DETACHED (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) is used by one start only, '
            'Popen([pythonw(), plugin_refresh.py, ...]): pythonw is a GUI program that never gets '
@@ -164,22 +172,10 @@ HAZARD_EXEMPT = {
            'sys.executable and CREATE_NO_WINDOW | DETACHED_PROCESS.' + OPEN + 'python.exe '
            'detached has no console, so any console program it starts opens a window (two '
            'finds: the getattr string and the `flags` name it is bound to, used in the start)'),
-    ('tests/bridge/test_startup.py',
-     'StartupTests.test_actual_hidden_launcher_preserves_path_arguments_and_child_exit_code',
-     '-WindowStyle Hidden'): (
-        1, 'runs the rendered start-bridge.ps1 under powershell started with CREATE_NO_WINDOW in a '
-           'kill-on-close job, to prove the launcher keeps its arguments.' + OPEN + 'the script\'s '
-           'own Start-Process -WindowStyle Hidden starts python.exe in a console of its own'),
-    ('tests/bridge/test_startup.py',
-     'StartupTests.test_native_scheduler_validates_xml_without_registering_a_task',
-     '-WindowStyle Hidden'): (1, BRIDGE_TEXT),
-    ('tests/bridge/test_startup.py',
-     'StartupTests.test_task_uses_current_interactive_user_and_hidden_explicit_python_launcher',
-     '-WindowStyle Hidden'): (2, BRIDGE_TEXT),
-    ('tests/guard/extra_rows.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
-    ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (6, GUARD_TEST),
+    ('tests/guard/extra_rows.py', '<module>', 'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (122, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'cmd /c start'): (2, GUARD_TEST),
-    ('tests/guard/test_jail.py', 'UnplacedGit.test_each_env_changer_held_for_every_jailed_role',
+    ('tests/guard/test_jail.py', 'UnplacedGit.test_each_env_changer_unread_passes_for_every_jailed_role',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_provider_paths.py', 'NativePrograms.test_native_writers_in_the_main_checkout',
      'Start-Process'): (1, GUARD_TEST),
@@ -187,15 +183,57 @@ HAZARD_EXEMPT = {
      'Start-Process'): (3, GUARD_TEST),
     ('tests/guard/test_rolepolicy.py', 'LockVerbs.test_every_real_lock_call_is_still_read',
      'start ""'): (1, GUARD_TEST),
-    ('tests/guard/test_rolepolicy.py', 'LockVerbs.test_a_launcher_or_script_given_the_lock_cli_runs_it',
-     'Start-Process'): (2, GUARD_TEST),
-    ('tests/guard/test_rolepolicy.py',
-     'LockVerbs.test_a_captured_reader_or_a_namesake_of_an_exempt_tool_runs_it',
-     'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rolepolicy.py',
      'LockVerbs.test_a_read_or_a_lock_call_whose_output_stays_still_passes',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', '<module>', 'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_start_process_workdir.py',
+     'GrantedLander.test_a_start_process_workdir_it_cannot_place_is_refused', 'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_start_process_workdir.py', 'LockedMain.sp', 'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_start_process_workdir.py', 'LockedMain.test_a_bare_drive_is_no_place',
+     'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_start_process_workdir.py', 'LockedMain.test_a_computed_folder_is_no_place',
+     'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_unknown_dir_jail.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py', 'RunDir.test_the_workdir_is_where_the_program_runs',
+     'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py', 'RunDir.test_no_workdir_is_the_command_s_directory',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py', 'RunDir.test_a_computed_or_unplaceable_workdir_is_none',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py',
+     'StartProcessWorkdir.test_git_writes_in_the_main_checkout_it_starts_in', 'Start-Process'): (4, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py',
+     'StartProcessWorkdir.test_git_in_the_worktree_it_starts_in_passes', 'Start-Process'): (3, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py',
+     'StartProcessWorkdir.test_python_writes_the_main_checkout_it_starts_in', 'Start-Process'): (5, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py',
+     'StartProcessWorkdir.test_the_alternative_aims_the_workdir_at_the_worktree', 'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py',
+     'StartProcessWorkdir.test_a_worktree_workdir_does_not_free_a_writer_in_the_main_checkout',
+     'Start-Process'): (3, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py',
+     'StartProcessWorkdir.test_a_redirect_is_placed_from_the_outer_location', 'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_advice_workdir.py',
+     'UnreadPython.test_a_start_process_python_says_its_command_line_is_unread', 'Start-Process'): (3, GUARD_TEST),
+    ('tests/guard/test_rules.py', 'PythonCodeCountsAsWrite.test_python_stdin_counts_as_write_of_cwd',
+     'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_kit_tool_forms.py',
+     'KitToolChecked.test_where_the_c_may_not_be_python_s_the_working_directory_is_judged',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_kit_tool_forms.py',
+     'LookalikeWrappers.test_a_start_process_script_is_read_from_its_working_directory',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_kit_tool_forms.py', 'LookalikeWrappers.test_a_start_process_script_elsewhere_is_not_the_kit_s',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_kit_tool_forms.py',
+     'LookalikeWrappers.test_a_drive_less_script_in_a_computed_working_directory_is_not_the_kit_s',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_backlog_role.py', 'Spellings.test_start_process', 'Start-Process'): (4, GUARD_TEST),
+    ('tests/guard/test_backlog_role.py',
+     'AsFromItsWorktree.test_a_start_process_runs_where_its_working_directory_says.sp',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_gaterole.py', 'GateAllow.ps_spellings', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_launchers', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_review_rows_for_owner_verbs', 'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', 'OwnerLockTools', 'Start-Process'): (3, GUARD_TEST),
@@ -262,7 +300,7 @@ def scan_tree(root):
 
 def scan_stub():
     """The findings in the text of a stub, under the name STUB."""
-    return scan_source(stubs.stub_text(STUB_TOOL, kit=ROOT), STUB)
+    return scan_source(stubs.stub_text(STUB_TOOL, kit=STUB_KIT), STUB)
 
 
 def check(found, exempt):
@@ -304,7 +342,7 @@ def scan_hazards(root, stub=True):
         else:
             found.extend(windowscan.scan_python(text, rel))
     if stub:
-        found.extend(windowscan.scan_python(stubs.stub_text(STUB_TOOL, kit=ROOT), STUB))
+        found.extend(windowscan.scan_python(stubs.stub_text(STUB_TOOL, kit=STUB_KIT), STUB))
     return [f for f in found if RULE_HOMES.get(f[2]) != f[0]]
 
 
@@ -395,7 +433,7 @@ class Scanner(unittest.TestCase):
     def test_the_stub_text_is_read(self):
         """The start a stub makes is in a string in kitlib/stubs: it is read from the stub's text."""
         self.assertEqual([f[:3] for f in scan_stub()], [(STUB, 'main', 'subprocess.call')])
-        self.assertIn(stubs.MARK, stubs.stub_text(STUB_TOOL, kit=ROOT))
+        self.assertIn(stubs.MARK, stubs.stub_text(STUB_TOOL, kit=STUB_KIT))
 
     def test_the_hooks_with_no_extension_are_read(self):
         files = python_files(ROOT)

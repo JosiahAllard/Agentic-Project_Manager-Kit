@@ -5,7 +5,7 @@ snapshot()) and anything later (a web page, an MCP server) call these and
 nothing else. docs/lock-api.md is the contract; SCHEMA_VERSION changes when a key's meaning
 changes or a key goes (added keys do not change it).
 
-Reads:  snapshot(), wait_change(revision, timeout_s), stats(...), history(...).
+Reads:  snapshot(), revision(), wait_change(revision, timeout_s), stats(...), history(...).
 Writes: set_division, hold_create, hold_edit, hold_end, set_games, set_game_mode, end_run,
         move_to_top.
 Each write takes `actor` and returns
@@ -26,6 +26,7 @@ from kitlib.lock import holds as hl
 from kitlib.lock import kinds as kinds_mod
 from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
+from kitlib.lock import status as st
 from kitlib.lock.run import expected_end, request_stop
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_USAGE,
                                ID_RE, LockError, Store, actor_host, caller, iso, owns, parse_iso,
@@ -191,7 +192,8 @@ def _layout(store, lf, hw, runs):
             "wanted_division": want["division"], "wanted_key": want["key"],
             "owner_division": lay.read_division(store)[0] or {},
             "source": lf["source"], "warning": lf["warning"],
-            "hardware_change": {"pending": lf["pending"], "changed": want["key"] != L["key"]},
+            "hardware_change": {"pending": lf["pending"], "reason": st.pending_reason(lf["pending"]),
+                                "changed": want["key"] != L["key"]},
             "other_labels": lay.other_labels(runs, L)}
 
 
@@ -367,6 +369,12 @@ def history(store=None, days=7, since=None, until=None):
     return store.history_records(since=t0, until=t1)
 
 
+def revision(store=None):
+    """The store's revision alone (snapshot()'s `revision`, which every write moves on): what a
+    client that polls for a change reads, without building a snapshot."""
+    return _store(store).revision()
+
+
 def wait_change(revision, timeout_s=30.0, store=None, **snapshot_kw):
     """The snapshot once the store's revision differs from `revision`, or after timeout_s (its
     revision then equal: nothing was written; live use may still have moved)."""
@@ -446,7 +454,7 @@ def set_division(actor, division, store=None):
     layout.hardware_change says which). Keys starting with _ (notes such as _comment) are not
     division keys: those already in machine.json are kept (one the division also names takes the
     division's value), and machine.json is removed only when it would hold neither division keys
-    nor notes. result: {applied, pending}."""
+    nor notes. result: {applied, pending, reason} (reason: kitlib.lock.status.pending_reason)."""
     def go(store):
         me = who(actor, store)
         _check(me, "set_division")
@@ -464,7 +472,8 @@ def set_division(actor, division, store=None):
         else:
             store.drop("machine.json")
         lf = lay.in_force(store)
-        return {"applied": lf["layout"]["key"] == lf["wanted"]["key"], "pending": lf["pending"]}
+        return {"applied": lf["layout"]["key"] == lf["wanted"]["key"], "pending": lf["pending"],
+                "reason": st.pending_reason(lf["pending"])}
     return _write(store, go)
 
 
@@ -605,7 +614,7 @@ def end_run(actor, rid, store=None):
             raise ApiError("not_found", "no live run %s" % rid, "id")
         _check(me, "end_run", d)
         by = "owner" if is_owner(me) else me.get("name") or me.get("session")
-        if not request_stop(store, rid, by):
+        if not request_stop(store, rid, by, me.get("session")):
             raise ApiError("not_found", "no live run %s" % rid, "id")
         return {"id": rid, "requested": True}
     return _write(store, go)

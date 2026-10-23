@@ -6,9 +6,12 @@ from pathlib import Path
 from tests.shipped import scan
 
 AGENTS = Path(__file__).resolve().parents[2] / "hosts" / "claude" / "shell" / "agents"
-EXPECTED = {"pm", "coordinator", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
-            "lander", "records", "researcher", "spec-writer", "test-runner", "asset-smith",
-            "sound-smith", "tech-artist"}
+EXPECTED = {"pm", "coordinator", "weak-worker", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant",
+            "analyst", "lander", "docs-writer", "test-runner", "helper"}
+# the seven role files the specialty skills replaced (docs/specialty-skills.md): no host ships them
+RETIRED = ("asset-smith", "tech-artist", "sound-smith", "researcher", "reviewer", "records", "spec-writer")
+BULK_RULE = "Bulk work to the helper"
+BULK_PARENTS = ("worker", "strong-worker", "senior-worker", "deep-worker")
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
                   (re.compile(r"[A-Za-z]:[\/]+Users[\/]", re.I), "Windows user path")]
 
@@ -142,7 +145,7 @@ class AgentFilesTest(unittest.TestCase):
                 fm = frontmatter("---\nname: x\ntools: Read\nx:\n%stools: Skill\n---\nbody\n" % indent)
                 self.assertEqual(fm, {"name": "x", "tools": "Read", "x": ""})
 
-    def test_only_senior_worker_asks_for_the_one_hour_prompt_cache(self):
+    def test_only_strong_worker_asks_for_the_one_hour_prompt_cache(self):
         """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The one-hour prompt
         cache"); the client reads `cacheTtl` only inside the `experimental` map of a subagent file."""
         for p in sorted(AGENTS.glob("*.md")):
@@ -150,7 +153,7 @@ class AgentFilesTest(unittest.TestCase):
                 text = p.read_text(encoding="utf-8")
                 fm, _ = strict_frontmatter(text)
                 head = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S).group(1)
-                if p.stem == "senior-worker":
+                if p.stem == "strong-worker":
                     self.assertEqual(fm.get("experimental"), {"cacheTtl": "1h"})
                     self.assertEqual(head.count("cacheTtl"), 1)
                 else:
@@ -159,6 +162,57 @@ class AgentFilesTest(unittest.TestCase):
 
     def test_set_is_complete(self):
         self.assertEqual({p.stem for p in AGENTS.glob("*.md")}, EXPECTED)
+
+    def test_the_two_types_load_skills_and_the_read_type_cannot_write(self):
+        """The analyst (read) and the docs-writer (docs) take their procedure from a specialty
+        skill, so both can load one; the analyst has no file-writing tool. No host ships a file
+        for a retired role name."""
+        tools = {}
+        for name in ("analyst", "docs-writer"):
+            path = AGENTS / (name + ".md")
+            self.assertTrue(path.exists(), name)
+            tools[name] = [t.strip() for t in frontmatter(path.read_text(encoding="utf-8")).get("tools", "").split(",")]
+        self.assertIn("Skill", tools["analyst"])
+        self.assertNotIn("Write", tools["analyst"])
+        self.assertNotIn("Edit", tools["analyst"])
+        self.assertIn("Skill", tools["docs-writer"])
+        codex = AGENTS.parents[2] / "codex" / "shell" / "agents"
+        self.assertTrue(codex.is_dir())
+        for name in RETIRED:
+            with self.subTest(role=name):
+                self.assertFalse((AGENTS / (name + ".md")).exists())
+                self.assertFalse((codex / ("kit-%s.toml" % name)).exists())
+
+    def test_every_specialty_skill_dispatches_to_a_role(self):
+        """A specialty skill's `Dispatch:` line opens with the role the coordinator sends it to;
+        that role has a file, and the line names no retired role."""
+        root = AGENTS.parents[3]
+        roles = {p.stem for p in (root / "content" / "roles").glob("*.md")}
+        skills = sorted((root / "content" / "skills").glob("specialty-*/SKILL.md"))
+        self.assertTrue(skills)
+        for p in skills:
+            with self.subTest(skill=p.parent.name):
+                lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("Dispatch: ")]
+                self.assertEqual(len(lines), 1)
+                self.assertIn(re.match(r"Dispatch: ([\w-]+)", lines[0]).group(1), roles)
+                for name in RETIRED:
+                    self.assertIsNone(re.search(r"(?<![\w-])%s(?![\w-])" % name, lines[0]), name)
+
+    def test_helper_is_light_and_has_no_shell(self):
+        """The helper runs on the light tier's model with read and edit tools only: no shell, so it
+        cannot commit, gate, land, pull or run a kit tool, and no dispatch."""
+        fm = frontmatter((AGENTS / "helper.md").read_text(encoding="utf-8"))
+        self.assertEqual(fm.get("model"), "haiku")
+        self.assertEqual([t.strip() for t in fm.get("tools", "").split(",")],
+                         ["Read", "Edit", "Write", "Grep", "Glob"])
+
+    def test_builder_roles_point_to_the_bulk_helper_rule(self):
+        """Each role that may hand bulk work to the helper names the rule, and the rule exists."""
+        skill = AGENTS.parents[3] / "content" / "skills" / "subagent-dispatch" / "SKILL.md"
+        self.assertIn("## " + BULK_RULE, skill.read_text(encoding="utf-8").splitlines())
+        for name in BULK_PARENTS:
+            with self.subTest(agent=name):
+                self.assertIn('"%s"' % BULK_RULE, (AGENTS / (name + ".md")).read_text(encoding="utf-8"))
 
     def test_no_chatgpt_fallback_in_agents_or_knowledge(self):
         """A generator outage stops the run; an external-prompt fallback is a repo choice, not the kit's."""

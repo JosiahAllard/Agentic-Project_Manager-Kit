@@ -3,7 +3,9 @@ for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
 
   secret_folder(config_path)   the hub's token folder beside the machine config file
   stores(hub, pm_data_path)    the folders the hub store may be in
-  glob_reaches(pattern, folder) True when a wildcard path can name the folder or a path in it
+  expand_braces(text)          a glob's {a,b} forms written out, or None
+  filter_reaches(flt, rel, names)  True when a content search's file filter can take in a file
+                               of the token folder below the search's root
   ports(hub)                   the hub's listener ports: the defaults and the configured ones
   owner_verb(words)            the owner verb a tools/hub.py command line runs, or None
   split_mcp(tool, sep)         (server, tool) of a host's MCP tool name
@@ -15,23 +17,15 @@ every tool call and stays free of the hub site's imports. tests/guard/test_rules
 they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_ONLY, imported:
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
 
-owner_verb judges only the one command shape kitlib.guard.rules.hub_shape reads in full. The
-other text naming the hub tool that passes is the path family (kitlib.guard.rules.hub_path_family,
-from the owner's ruling on reading and committing the hub tool): one simple command of a reader
-(cat, Get-Content, type, grep, rg, Select-String), git's add, diff, log, show, blame, status or
-restore --staged, commit.py or backlog.py, naming hub.py only as a path word, or anyhow in
-commit.py's -m/-b or backlog.py's message options. Inside it the options that run a program are
-denied: git's -c and --exec-path (only -C, --no-pager and -P precede the subcommand), --ext-diff,
---textconv, add's editor and prompts, restore's work-tree writes, and rg's --pre, --pre-glob and
---hostname-bin.
-Any other text naming the hub tool is refused. Known limit: a name built at run time (string
-concatenation, an encoding, an escape a program expands, Unicode compatibility characters Python
-folds to hub, a variable, a script the agent wrote) is not read. The hub rules guard against
+owner_verb judges the arguments of a parsed hub tool run (kitlib.guard.rules.hub_run_args:
+python with tools/hub.py as its script or -m tools.hub, tools/hub.py run as the program, or
+python -m runpy tools.hub; hub-owner-verb). Other text that names
+the hub tool is not read. Known limit: a name built at run time (string concatenation, an
+encoding, a variable, a script the agent wrote) is not read. The hub rules guard against
 accidents and are not an adversary boundary.
 """
 import fnmatch
 import ipaddress
-import ntpath
 import os
 import re
 import urllib.parse
@@ -57,16 +51,10 @@ OWNER_MCP_TOOLS = OWNER_ONLY
 OWNER_MCP_WORDS = ('decide', 'approve')
 HUB_SERVER = 'hub'
 
-# the token folder named in a command's text: `.pm-kit` then `hub` with only separators and
-# quotes between (`.pm-kit/hub`, `'.pm-kit', 'hub'`); hub.json beside it is not it
-FOLDER_RE = re.compile(r'(?i)\.pm-kit\W{1,8}hub(?![\w.-])')
-# code that reads a token: a file name, kitlib.hubsite.auth's names, the hub site or the hub tool
-INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|hubsite|(?<![\w-])hub\.py\b|'
-                       r'\.pm-kit\W{1,8}hub(?![\w.-])|'
-                       r'\b(?:OWNER_FILE|AGENT_FILE|TOKEN_FILES|APPROVAL_FILE|read_token|ensure_tokens)\b')
-# programs whose literal words often name the files without touching them: a search pattern, a
-# commit message. Their words that are not literal are still read.
-NAME_ONLY_PROGRAMS = frozenset(('grep', 'egrep', 'fgrep', 'rg', 'findstr', 'select-string', 'sls', 'git'))
+# python or node code that names a token file or the token folder literally (`.pm-kit` then
+# `hub` with only separators and quotes between; hub.json beside it is not it); a name the code
+# builds or reaches through a library is not read
+INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|\.pm-kit\W{1,8}hub(?![\w.-])')
 
 # the browser and computer-use MCP servers: a page they open or a key they type reaches the hub
 BROWSER_SERVER_RE = re.compile(r'(?i)chrome|browser|playwright|puppeteer|computer[-_]?use')
@@ -100,25 +88,80 @@ def has_glob(text):
     return any(c in GLOB_CHARS for c in text)
 
 
-def _parts(path):
-    drive, rest = ntpath.splitdrive(ntpath.normpath(path.replace('/', '\\')))
-    return [drive.lower()] + [p for p in rest.lower().split('\\') if p]
+BRACE_LIMIT = 256
 
 
-def glob_reaches(pattern, folder):
-    """True when the absolute wildcard path `pattern` can name `folder` or a path inside it:
-    each of the folder's parts is matched by the pattern's part in its place (fnmatch, case
-    ignored; `**` matches the rest). A pattern shorter than the folder names a parent, which
-    this does not count (docs/guard.md "Hub secrets": a recursive read of a parent)."""
-    pat, fol = _parts(pattern), _parts(folder)
-    for k, f in enumerate(fol):
-        if k >= len(pat):
-            return False
-        if pat[k] == '**':
+def expand_braces(text):
+    """`text` with each {a,b} alternative written out (ripgrep's glob braces), as a list, or None
+    when its braces do not pair, nest, or give more than BRACE_LIMIT forms: the caller then
+    reads the text as reaching anything."""
+    out = ['']
+    k = 0
+    while k < len(text):
+        c = text[k]
+        if c == '}':
+            return None
+        if c != '{':
+            out = [o + c for o in out]
+            k += 1
+            continue
+        end = text.find('}', k)
+        if end < 0 or '{' in text[k + 1:end]:
+            return None
+        out = [o + alt for o in out for alt in text[k + 1:end].split(',')]
+        if len(out) > BRACE_LIMIT:
+            return None
+        k = end + 1
+    return out
+
+
+def filter_reaches(flt, rel, names):
+    """True when a content search's file filter `flt` (a ripgrep glob, as a search tool passes
+    it) can let the search read a file in the folder `rel` below its root (`rel`: the folder's
+    parts from the root, ['.pm-kit', 'hub'] for a search of home), whose files are `names`.
+    Read the safe way: no filter, a negation (`!`) or braces expand_braces cannot write out
+    reach; each part a space or comma splits off is judged alone; a backslash is dropped; case is
+    ignored. A part with no slash matches anywhere below the root, so it reaches when it matches
+    a name in `names` or a folder on the way (a folder it names may take its files in); a part
+    with a slash is matched part by part against the way down from the root and from every folder
+    on it (anchored or not), `**` and a part that stops on the way counting as reaching."""
+    if not isinstance(flt, str) or '!' in flt:
+        return True
+    forms = expand_braces(flt)
+    if forms is None:
+        return True
+    pieces = [p for form in forms for p in re.split(r'[\s,]+', form.replace('\\', '').lower())
+              if p.strip('/')]
+    if not pieces:
+        return True
+    rel = [r.lower() for r in rel]
+    names = [n.lower() for n in names]
+    for piece in pieces:
+        pp = [p for p in piece.strip('/').split('/') if p]
+        if len(pp) == 1:
+            if any(fnmatch.fnmatchcase(n, pp[0]) for n in names + rel):
+                return True
+            continue
+        for start in range(len(rel)):
+            if _way_reaches(pp, rel[start:], names):
+                return True
+    return False
+
+
+def _way_reaches(pp, way, names):
+    """filter_reaches for one slashed part `pp` (its parts) laid on the folders `way` down to the
+    secret folder, whose files are `names`."""
+    for k, part in enumerate(pp):
+        if part == '**':
             return True
-        if not fnmatch.fnmatchcase(f, pat[k]):
-            return False
-    return True
+        if k < len(way):
+            if not fnmatch.fnmatchcase(way[k], part):
+                return False
+            continue
+        if k == len(pp) - 1:                    # a name in the secret folder
+            return any(fnmatch.fnmatchcase(n, part) for n in names)
+        return True                             # a path below a folder in it
+    return True                                 # it stops on the way: a folder it may take in
 
 
 def ports(hub):

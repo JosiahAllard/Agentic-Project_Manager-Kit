@@ -22,17 +22,19 @@ Server(port, tokens, ask, marked, load_settings).handle(message) -> the response
 notification); serve(server, rfile, wfile) runs it over two binary streams until rfile ends.
 """
 import json
+import os
 import traceback
 
-from kitlib import mcpwire
+from kitlib import hubapprove, mcpwire
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import OWNER_ONLY, SERVER_NAME
 from kitlib.hubsite import api as hubapi
+from kitlib.hubsite import approvals as hubapprovals
 from kitlib.hubsite import auth as hubauth
 from kitlib.hubsite import client as hubclient
+from kitlib.hubsite import pagecheck
 from kitlib.hubsite import serve as hubserve
 from kitlib.hubsite import settings as hubsettings
-from kitlib.hubsite import todosteps
 
 SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")    # newest first
@@ -41,17 +43,29 @@ WAIT_DEFAULT_S = 30
 LISTS = ("questions", "todos", "stories", "to_pm")
 VIEWS = ("notices", "repos", "usage", "agents")
 ANY, AGENT = hubclient.ANY, hubclient.AGENT
+PAGE_SUFFIXES = (".html", ".htm")                           # the files hub_page_publish reads
 GUARD_WAIT = ("the guard already denies them to agents by name, but the tools themselves are not "
               "shipped yet")
 INSTRUCTIONS = ("The Action Hub on this machine (docs/hub-mcp.md): read tools for its questions, "
-                "to-dos, stories, notes to the PM, inbox and views, and the agent's writes. The "
-                "owner's writes (answering, marking done, submitting, sending) are not tools here.")
+                "to-dos, stories, notes to the PM, inbox, pages and views, and the agent's "
+                "writes. The owner's writes (answering, marking done, submitting, sending, "
+                "deleting a page) are not tools here.")
 
 _ID = {"type": "string", "description": "The document's id, as the hub gave it (Q-12, T-3, ...)."}
 _PIN = {"type": "integer", "description": "The version of the document you read: the write is "
                                           "refused (conflict) when it has changed since."}
 _REPO = {"type": "string", "description": "A repository's name."}
 _FROM = {"type": "string", "description": "Who is writing: a session or agent name."}
+_ASK_FROM = {"type": "string", "description": "The session the answer goes back to: a launcher "
+                                              "session key, or pm (the default when absent or "
+                                              "blank). The hub refuses any other value "
+                                              "(invalid)."}
+_FOR = {"type": "string", "description": "Only the pending items for this session key: your own "
+                                         "launcher session key, or pm (the PM's items and every "
+                                         "answered question). Absent: every pending item."}
+_CREATOR = {"type": "string", "description": "The from the item was added with (pm when it was "
+                                             "added without one). All agents share one token, "
+                                             "so this is a check against mistakes."}
 _REFS = {"type": "array", "items": {"type": "string"},
          "description": "Ids of other hub documents this one names."}
 _URGENT = {"type": "boolean"}
@@ -66,21 +80,24 @@ def _one_of(values, what):
     return {"type": "string", "enum": list(values), "description": what}
 
 
-# name -> (description, input schema, HTTP method, path below hubapi.BASE, the route's role in
-# hubapi.ROUTES). AgentClient carries the agent's token whatever the role says.
+# name -> (description, input schema, HTTP method, path below hubapi.BASE, the role the tool
+# calls as: ANY for a read, AGENT for a write, the route's role in hubapi.ROUTES being AGENT or
+# ANY). AgentClient carries the agent's token whatever the role says.
 # A `{name}` in the path is filled from the argument of that name; every other argument is the
 # query of a GET or the body of a POST.
 TOOLS = {
     "hub_pending": (
-        "The owner input the PM has not handled (GET /pending), as {ok, items}.",
-        _obj({}), "GET", "/pending", ANY),
+        "The owner input not yet handled (GET /pending), as {ok, items}; with `for`, only the "
+        "items for that session key.",
+        _obj({"for": _FOR}), "GET", "/pending", ANY),
     "hub_wait": (
         "Waits for the hub to change (GET /wait): returns {revision, reset, timed_out, changes, "
         "pending} once the store's revision moves past `since`, or after timeout_s (default 30, "
-        "at most 55) with timed_out true. pending: also return at once while items wait.",
+        "at most 55) with timed_out true. pending: also return at once while items wait. for "
+        "(with pending true): wait for that session key's pending items only.",
         _obj({"since": {"type": "integer", "description": "The revision you last saw."},
               "timeout_s": {"type": "number", "description": "Seconds to wait, at most 55."},
-              "pending": {"type": "boolean"}}), "GET", "/wait", ANY),
+              "pending": {"type": "boolean"}, "for": _FOR}), "GET", "/wait", ANY),
     "hub_list": (
         "The documents of one collection (GET /<collection>): questions, todos, stories or to_pm, "
         "as {ok, items}; each item carries its id and version.",
@@ -113,7 +130,7 @@ TOOLS = {
                           "description": "The choices: [{label, description}]."},
               "recommended": {"type": "integer", "description": "The index of the option you "
                                                                 "recommend."},
-              "repo": _REPO, "from": _FROM, "refs": _REFS, "urgent": _URGENT,
+              "repo": _REPO, "from": _ASK_FROM, "refs": _REFS, "urgent": _URGENT,
               "story": {"type": "string", "description": "The story this question is about."}},
              ["title"]), "POST", "/questions", AGENT),
     "hub_question_log": (
@@ -139,6 +156,38 @@ TOOLS = {
     "hub_todo_ack": (
         "Marks an owner's to-do as read by the PM (POST /todos/<id>/ack).",
         _obj({"id": _ID, "if_version": _PIN}, ["id"]), "POST", "/todos/{id}/ack", AGENT),
+    "hub_question_edit": (
+        "Changes an open question you asked (POST /questions/<id>/edit): the fields given "
+        "replace the old ones (options as a whole list). Refused (forbidden) unless from is the "
+        "question's own (pm when it has none); refused (conflict) once it is answered.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN, "title": {"type": "string"},
+              "context": {"type": "string"},
+              "options": {"type": "array", "items": {"type": "object"},
+                          "description": "The choices: [{label, description}]."},
+              "recommended": {"type": "integer", "description": "The index of the option you "
+                                                                "recommend."},
+              "refs": _REFS, "urgent": _URGENT}, ["id", "from", "if_version"]),
+        "POST", "/questions/{id}/edit", AGENT),
+    "hub_question_withdraw": (
+        "Removes an open question you asked (POST /questions/<id>/delete): it leaves the Action "
+        "Hub and the store. Refused as hub_question_edit is.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN}, ["id", "from", "if_version"]),
+        "POST", "/questions/{id}/delete", AGENT),
+    "hub_todo_edit": (
+        "Changes an open to-do you added (POST /todos/<id>/edit): the fields given replace the "
+        "old ones (commands as a whole list) and are judged by hub_todo_add's rules. Refused "
+        "(forbidden) unless from is the to-do's own (pm when it has none); refused (conflict) "
+        "once it is done.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN, "title": {"type": "string"},
+              "detail": {"type": "string"}, "commands": {"type": "array",
+                                                         "items": {"type": "string"}},
+              "repo": _REPO, "refs": _REFS, "urgent": _URGENT}, ["id", "from", "if_version"]),
+        "POST", "/todos/{id}/edit", AGENT),
+    "hub_todo_withdraw": (
+        "Removes an open to-do you added (POST /todos/<id>/delete): it leaves the Action Hub and "
+        "the store. Refused as hub_todo_edit is.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN}, ["id", "from", "if_version"]),
+        "POST", "/todos/{id}/delete", AGENT),
     "hub_story_set": (
         "Moves an owner's story on (POST /stories/<id>): status review, questions, added or "
         "declined, with the reviewer, a note, the backlog id or a closing note.",
@@ -159,8 +208,55 @@ TOOLS = {
               "ref": {"type": "string", "description": "The id it answers."},
               "asked": {"type": "string", "description": "What the owner asked."},
               "repo": _REPO, "from": _FROM, "refs": _REFS}, ["text"]), "POST", "/inbox", AGENT),
+    "hub_page": (
+        "A published page's HTML (GET /pages/<id>), as {ok, id, html, version}; not_found when "
+        "it has no body.",
+        _obj({"id": {"type": "string", "description": "The page's id."}}, ["id"]),
+        "GET", "/pages/{id}", ANY),
+    "hub_page_publish": (
+        "Publishes an HTML page to the Action Hub (POST /pages), read from html_file. The page is "
+        "checked here first as the hub checks it (kitlib.hubsite.pagecheck): at most %d bytes of "
+        "UTF-8; a whole document is fine; no script, iframe, object, embed, form, link or base, "
+        "a meta only charset utf-8 or name (%s) with content, a title only plain text; no on* "
+        "handler, no URL that leaves the page (links are #fragments, images data: URIs, CSS "
+        "url() data: or #); Mermaid must be rendered to inline svg first. Over a page already "
+        "published, give its version as if_version."
+        % (pagecheck.MAX_BYTES, ', '.join(pagecheck.META_NAMES)),
+        _obj({"id": {"type": "string", "description": "The page's id: letters, digits, . _ -; "
+                                                      "never shaped like a hub item or a ruling "
+                                                      "(Q-1, R-12)."},
+              "title": {"type": "string"},
+              "html_file": {"type": "string", "description": "The absolute path of a UTF-8 HTML "
+                                                             "file: the page's body."},
+              "summary": {"type": "string"}, "repo": _REPO, "from": _FROM, "refs": _REFS,
+              "if_version": {"type": "integer", "description": "The version of the page you "
+                                                               "are publishing over (absent for "
+                                                               "a new page)."}},
+             ["id", "title", "html_file"]), "POST", "/pages", AGENT),
+    "hub_approval_request": (
+        "Asks the owner to approve a change to files (POST /approvals), built here from a git "
+        "checkout (kitlib.hubapprove): each file's base is its blob at head (none for a new "
+        "file), its new text the exact UTF-8 bytes of its content_file. Once approved, "
+        "tools/commit.py --owner-approval hub:A-<n> writes and commits it. It only asks: it never "
+        "approves, and it cannot ask for a delete. At most %d files, %d bytes each."
+        % (hubapprovals.MAX_FILES, hubapprovals.MAX_CONTENT_BYTES),
+        _obj({"checkout": {"type": "string", "description": "The absolute path of the git "
+                                                            "checkout the change is for."},
+              "title": {"type": "string"},
+              "files": {"type": "array", "items": {"type": "object"},
+                        "description": "The files: [{path, content_file}], path relative to the "
+                                       "repository top with /, content_file the absolute path of "
+                                       "the UTF-8 file holding its new text."},
+              "repo": {"type": "string", "description": "The repository's remote URL or id "
+                                                        "(default: the checkout's origin)."},
+              "head": {"type": "string", "description": "The base commit, 40 hex digits "
+                                                        "(default: the checkout's HEAD)."},
+              "reason": {"type": "string"}},
+             ["checkout", "title", "files"]), "POST", "/approvals", AGENT),
 }
 assert not set(TOOLS) & set(OWNER_ONLY)
+# a POST below no {id} that can still replace a document: publishing over a page
+REPLACES = frozenset({"hub_page_publish"})
 
 
 class NoAgentToken(hubserve.ServeError):
@@ -223,6 +319,15 @@ def _query(v):
     return v if isinstance(v, str) else str(v)
 
 
+def _inside(path, folder):
+    """True when the real path `path` is `folder` or under it (both compared normcased)."""
+    p, f = os.path.normcase(path), os.path.normcase(folder)
+    try:
+        return os.path.commonpath([p, f]) == f
+    except ValueError:                          # two drives: never inside
+        return False
+
+
 def _error(code, message, field=None, **more):
     return dict({"ok": False, "error": {"code": code, "message": message, "field": field}},
                 **more), True
@@ -250,7 +355,8 @@ class Server:
     # ---------------------------------------------------------------- tools
     def tool_list(self):
         return [{"name": n, "description": d, "inputSchema": s,
-                 "annotations": {"readOnlyHint": m == "GET", "destructiveHint": m != "GET" and "{" in p}}
+                 "annotations": {"readOnlyHint": m == "GET",
+                                 "destructiveHint": m != "GET" and ("{" in p or n in REPLACES)}}
                 for n, (d, s, m, p, _) in TOOLS.items()]
 
     def call(self, name, args):
@@ -302,26 +408,111 @@ class Server:
 
     def _t_hub_wait(self, a):
         t = min(max(float(a.get("timeout_s", WAIT_DEFAULT_S)), 0.0), float(WAIT_MAX_S))
-        return self.client().wait(a.get("since"), timeout=t, pending=a.get("pending", False))
+        return self.client().wait(a.get("since"), timeout=t, pending=a.get("pending", False),
+                                  for_key=a.get("for"))
 
     def _t_hub_inbox(self, a):
         return {"ok": True, "items": self.client().inbox()}
 
     def _t_hub_todo_add(self, a):
-        """Steps become commands, after the given ones, and their summary ends the detail; the
-        owner's to-do rules (todosteps.check) refuse the agent's text before any call."""
-        a = dict(a)
-        steps = a.pop("steps", None)
+        """The hub makes the steps into commands and detail (kitlib.hubsite.api.todo_steps), so
+        they go to it as given. The same check runs here first, so a to-do it refuses (a bad
+        step, a lone surrogate in a command, text the owner's to-do rules forbid) is refused
+        with the hub's own words and never reaches the hub."""
         try:
-            todosteps.check(dict(a, steps=steps))
-            if steps is not None:
-                a["commands"] = list(a.get("commands") or []) + todosteps.render(steps)
-                lines = "\n".join(todosteps.summary(steps))
-                a["detail"] = (a["detail"].rstrip() + "\n\n" + lines) if a.get("detail") \
-                    else lines
-        except (todosteps.StepError, todosteps.Refused) as e:
-            raise ToolError("invalid", str(e), e.field)
+            hubapi.todo_steps(a)
+        except hubapi.HubError as e:
+            raise ToolError(e.code, e.message, e.field)
         return self._route("hub_todo_add", a)
+
+    def _t_hub_todo_edit(self, a):
+        """The changed text is judged here first as the hub judges it (api.todos_edit), so an
+        edit it refuses never reaches the hub."""
+        try:
+            hubapi.todo_steps({k: v for k, v in a.items()
+                               if k not in ("id", "from", "if_version")}, judge=True)
+        except hubapi.HubError as e:
+            raise ToolError(e.code, e.message, e.field)
+        return self._route("hub_todo_edit", a)
+
+    def _page_file(self, path):
+        """html_file as the real path to read, or ToolError (invalid, html_file). This process
+        reads it outside the guard, so it reads only an .html or .htm file, judged by its real
+        path (links and junctions followed), and never one inside the hub's token folder or its
+        store: a token published as a page could be read back with hub_page."""
+        def suffix(real):
+            for p in (path, real):
+                if os.path.splitext(p)[1].lower() not in PAGE_SUFFIXES:
+                    return "must be an %s file (its real path is %s)" % (
+                        " or ".join(PAGE_SUFFIXES), real)
+            return None
+        return self._readable(path, "html_file", "a page", suffix)
+
+    def _readable(self, path, field, what, first=None):
+        """The real path of the file `path` (argument `field`) this process may read for `what`,
+        or ToolError (invalid, field): absolute, `first(real)` (a why or None) passed, and never
+        inside the hub's token folder or its store, judged by its real path (links and
+        junctions followed)."""
+        def refuse(why):
+            raise ToolError("invalid", "%s %s: %s" % (field, path, why), field)
+        if not isinstance(path, str) or not os.path.isabs(path):
+            refuse("must be an absolute path")
+        real = os.path.realpath(path)
+        why = first(real) if first else None
+        if why:
+            refuse(why)
+        try:
+            closed = [("the hub's token folder", self.tokens or hubauth.folder()),
+                      ("the hub store", getattr(self.load_settings(), "store", None))]
+        except (ConfigError, OSError, ValueError) as e:
+            refuse("cannot tell where the hub keeps its tokens and store (%s), so it is not read"
+                   % type(e).__name__)
+        for name, folder in closed:
+            if folder and _inside(real, os.path.realpath(folder)):
+                refuse("is inside %s, which %s is never read from" % (name, what))
+        return real
+
+    def _t_hub_page_publish(self, a):
+        """The body goes to the hub as text, read here from html_file (absolute: this process's
+        working folder is not the caller's; which files it may name: _page_file). It is read
+        with newline="" so its bytes are the file's. The hub's page check runs here first, so a
+        page it refuses, too big or unsafe, is refused with the hub's words and never reaches it."""
+        path = self._page_file(a["html_file"])
+        try:
+            with open(path, encoding="utf-8", newline="") as f:
+                # a character is a byte at least: one past the cap is enough for the check to
+                # refuse, and a huge file is never read whole
+                html = f.read(pagecheck.MAX_BYTES + 1)
+        except (OSError, ValueError) as e:
+            raise ToolError("invalid", "cannot read html_file %s: %s" % (path, type(e).__name__),
+                            "html_file")
+        why = pagecheck.check(html)
+        if why:
+            raise ToolError("invalid", why, "html")
+        body = {k: v for k, v in a.items() if k != "html_file"}
+        body["html"] = html
+        return self.client().post("/pages", AGENT, body)
+
+    def _t_hub_approval_request(self, a):
+        """The request is built here from the checkout (kitlib.hubapprove.build: its defaults,
+        its refusals and the approvals module's limits), so one it refuses never reaches the
+        hub. This process reads each content_file outside the guard, so the checkout and every
+        content_file are absolute and judged as html_file is (_readable): never inside the hub's
+        token folder or its store, or a token could be read back from the request."""
+        checkout = self._readable(a["checkout"], "checkout", "an approval")
+        files = []
+        for f in a["files"]:
+            if (not isinstance(f, dict) or set(f) != {"path", "content_file"}
+                    or not all(isinstance(v, str) for v in f.values())):
+                raise ToolError("invalid", "each file is {path, content_file}, both strings",
+                                "files")
+            files.append((f["path"], self._readable(f["content_file"], "files", "an approval")))
+        try:
+            body = hubapprove.build(checkout, a["title"], files, repo=a.get("repo"),
+                                    head=a.get("head"), reason=a.get("reason"))
+        except hubapprove.RequestError as e:
+            raise ToolError("invalid", e.message, e.field)
+        return hubapprove.request(self.client(), body)
 
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg):

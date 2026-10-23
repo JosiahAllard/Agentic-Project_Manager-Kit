@@ -173,6 +173,15 @@ class WaitChange(ApiCase):
         self.assertNotEqual(s["revision"], rev)
 
 
+class Revision(ApiCase):
+    def test_revision_is_the_store_revision_with_no_snapshot(self):
+        self.assertEqual(api.revision(self.store), self.store.revision())
+        rev = api.revision(self.store)
+        self.store.bump()
+        self.assertEqual(api.revision(self.store), rev + 1)
+        self.assertEqual(api.snapshot(self.store)["revision"], rev + 1)
+
+
 class OwnerHook(ApiCase):
     def test_default_check(self):
         self.assertTrue(api.default_owner_check(OWNER))
@@ -214,7 +223,8 @@ class Division(ApiCase):
 
     def test_applies_at_once_with_nothing_live_and_none_restores(self):
         r = self.ok(api.set_division(OWNER, {"cpu_slots": 6}, self.store))
-        self.assertEqual(r, {"applied": True, "pending": None})
+        self.assertEqual(r, {"applied": True, "pending": None, "reason": None})
+        self.assertIsNone(self.snap()["layout"]["hardware_change"]["reason"])
         self.assertEqual(self.snap()["layout"]["cpu_slots"], 6)
         self.assertEqual(self.snap()["layout"]["source"], "config")
         r = self.ok(api.set_division(OWNER, None, self.store))
@@ -239,12 +249,29 @@ class Division(ApiCase):
         r = self.ok(res)
         self.assertFalse(r["applied"])
         self.assertTrue(r["pending"])
+        self.assertEqual(r["reason"], st.IDLE)
         lay_ = res["snapshot"]["layout"]
         self.assertEqual(lay_["cpu_slots"], 12)
         self.assertEqual(lay_["wanted_division"]["cpu_slots"], 6)
         self.assertTrue(lay_["hardware_change"]["changed"])
         self.assertTrue(lay_["hardware_change"]["pending"])
+        self.assertEqual(lay_["hardware_change"]["reason"], st.IDLE)
         self.assertTrue(any("hardware or division changed" in x for x in st.render(res["snapshot"])))
+
+    def test_status_says_why_a_failed_look_is_not_adopted(self):
+        """A look that could not read the gpus is never adopted, idle or not: status gives the
+        reason, not the line that the new layout applies once nothing is live or queued."""
+        self.layout()
+        self.hw = dict(self.hw, gpus=[], source=dict(self.hw["source"], gpu="none"),
+                       failed=["gpus"], problems=["Win32_VideoController: exit 1"])
+        self.store = self.make_store()
+        s = self.snap()
+        self.assertTrue(s["layout"]["hardware_change"]["changed"])
+        self.assertEqual(s["layout"]["hardware_change"]["reason"], st.FAILED_LOOK)
+        lines = st.render(s)
+        self.assertTrue(any("the gpus could not be read (Win32_VideoController: exit 1)" in x
+                            for x in lines), lines)
+        self.assertFalse(any("applies once nothing is live" in x for x in lines), lines)
 
 
 class Holds(ApiCase):

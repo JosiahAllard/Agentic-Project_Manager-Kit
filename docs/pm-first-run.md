@@ -23,11 +23,11 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    Success: `ListSkills` shows each skill named in docs/shipping.md once.
 
 4. **Write the user config.** Create `<config-dir>/config.json` (docs/kit-json.md "Machine config keys") holding a JSON object,
-   with `ledger_path` set to the file for the owner's rulings (docs/ledger.md). It must be an
-   absolute path; in JSON write Windows paths with `/` or `\\`.
+   with `ledger_dir` (the folder for the owner's rulings) and `ledger_repos` set, or `ledger_path` for one file (docs/ledger.md "Configuration"). Paths must be
+   absolute; in JSON write Windows paths with `/` or `\\`.
    Success: `python -c "from kitlib.config import user;user.user_config()"`, run in `<kit>`,
-   prints nothing. When the owner gives the first ruling, `python <kit>/tools/ledger.py add`
-   creates the ledger and prints the new ruling's id.
+   prints nothing. When the owner gives the first ruling, `python <kit>/tools/ledger.py add --repo <name>`
+   creates that repository's file (with `ledger_path` alone, the one ledger file) and prints the new ruling's id. From an existing one-file ledger: docs/ledger.md "A new ledger".
 
 5. **Check the machine lock.** No setup. Run `python <kit>/tools/machine_lock.py status`.
    Success: it prints the layout (threads, cpu and gpu slots) and what holds each slot. Never run

@@ -27,6 +27,7 @@ import tempfile
 import time
 
 from kitlib import pmdata
+from kitlib.config import user as kuser
 from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
@@ -201,12 +202,13 @@ def parse_blob(stem, data, path):
     return rmod.parse(path, text, stem)
 
 
-def records_in_tree(root, rev, rel):
-    """`(records, raw, None)`, or `(None, None, why)`: every `*.md` directly under `rel` in the
-    tree of `rev`, parsed, with `raw` mapping each stem to its bytes."""
+def record_entries(root, rev, rel):
+    """`([(stem, path, blob sha)], None)`, or `(None, why)`: every `*.md` directly under `rel` in
+    the tree of `rev`, one `git ls-tree` and no blob read (preflight counts the default store
+    with it: kitlib/preflight/defaultstore.py)."""
     out, why = cmd.run(['ls-tree', '-z', '--full-tree', rev, '--', rel + '/'], root)
     if out is None:
-        return None, None, '`git ls-tree` failed: %s' % why
+        return None, '`git ls-tree` failed: %s' % why
     entries = []
     for item in out.split(b'\0'):
         meta, _, path = item.partition(b'\t')
@@ -215,6 +217,15 @@ def records_in_tree(root, rev, rel):
         name = path[len(rel) + 1:]
         if len(parts) == 3 and parts[1] == 'blob' and '/' not in name and name.endswith('.md'):
             entries.append((name[:-3], path, parts[2]))
+    return entries, None
+
+
+def records_in_tree(root, rev, rel):
+    """`(records, raw, None)`, or `(None, None, why)`: every `*.md` directly under `rel` in the
+    tree of `rev` (record_entries), parsed, with `raw` mapping each stem to its bytes."""
+    entries, why = record_entries(root, rev, rel)
+    if entries is None:
+        return None, None, why
     blobs, why = batch.cat_file([sha for _, _, sha in entries], root)
     if blobs is None:
         return None, None, why
@@ -340,7 +351,7 @@ class RefBackend(object):
     def build(self, snap, writes, message):
         """The commit holding `writes` ({stem: text or None}) on top of snap.tip, or None when the
         tree would not change. No working tree or real index is touched."""
-        tmp = tempfile.mkdtemp(prefix='kit-backlog-')
+        tmp = kuser.mkdtemp('kit-backlog-')
         try:
             env = dict(cmd.scrubbed_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
             self._git(['read-tree', snap.tip] if snap.tip else ['read-tree', '--empty'], env=env)
@@ -447,7 +458,8 @@ class RefBackend(object):
         cmd.call(['update-ref', self.local_ref, new, cur or '0' * len(new)], self.root)
 
     def history(self, rid, snap):
-        """`<short sha> <subject>` of the last commit that closed or retired `rid`, or None."""
+        """`<short sha> <subject>` of the last commit that closed, retired or deleted `rid`, or
+        None."""
         if not snap.tip:
             return None
         return _last_closing(self.root, rid, snap.tip)
@@ -474,7 +486,7 @@ class RefBackend(object):
 
 
 def _last_closing(root, rid, rev):
-    pattern = '^(closes|retires) %s: ' % re.escape(rid)
+    pattern = '^(closes|retires|deletes) %s: ' % re.escape(rid)
     out, why = cmd.run_text(['log', '-1', '--format=%h %s', '-E', '--grep', pattern, rev, '--'],
                             root)
     if out is None:
@@ -686,7 +698,7 @@ class MainBackend(object):
     files stay written); an index left stale after the commit is IndexStale. Its git calls drop an
     inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
     (_store_env). Elsewhere it commits nothing. With `clean` (a landing's close,
-    at_landing._pm_data_store) a write there first requires every path it writes to match HEAD in
+    at_landing.pm_data_store) a write there first requires every path it writes to match HEAD in
     the worktree and the index (_require_clean): else Dirty, and nothing is written, so it never
     deletes or commits a change another session made there and did not commit."""
 
@@ -801,9 +813,11 @@ class MainBackend(object):
         if not took:
             raise Busy('%s not written in %s, and nothing was written: git\'s index lock %s '
                        'stayed held for %g s (another git command is writing that index; if none '
-                       'runs there, one that was stopped left it behind: remove it only then). '
+                       'runs there, a writer that was killed left a stale lock behind: once no '
+                       'git command or store write is running, delete %s). '
                        'Repeat the write once it is gone'
-                       % (', '.join(paths), self.root, held.path, INDEX_WAIT), held.path)
+                       % (', '.join(paths), self.root, held.path, INDEX_WAIT, held.path),
+                       held.path)
         return held
 
     def _publish(self, snap, writes, message, branch, held):
@@ -1068,7 +1082,7 @@ class MainBackend(object):
     def _tree(self, head, lines, paths):
         """The tree of `head` with `lines` (`update-index --index-info` input) applied, built in a
         temporary index."""
-        tmp = tempfile.mkdtemp(prefix='kit-backlog-')
+        tmp = kuser.mkdtemp('kit-backlog-')
         try:
             env = dict(_store_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
             self._git(['read-tree', head], paths, env=env)
@@ -1247,7 +1261,8 @@ class MainBackend(object):
 
     def uncommitted_removal(self, rid):
         """True when HEAD tracks `<dir>/<rid>.md` and the worktree no longer holds it: a write
-        here deleted it (`close`, `retire`, which commit nothing outside the PM data worktree)
+        here deleted it (`close`, `retire`, `delete`, which commit nothing outside the PM data
+        worktree)
         or a hand removed it. False on
         an unborn HEAD. Failure when git did not answer (killed, timed out): fail closed."""
         if not PLAIN_ID.match(rid):
@@ -1290,30 +1305,56 @@ def catch_up(backend, paths, session):
                                                    session or '-'))
 
 
-def default_store_refusal(root):
-    """Why a write to the implicit `ref` store is refused, and where to write instead: the PM data
-    worktree and its store when the repository has one (at_landing.pm_data_root), else the
-    `.kit.json` setting that opts in. Records written there by default were lost to the live
-    store once, so a ref store is written only when named."""
+def pm_data_live_store(root):
+    """`(pm_root, named, None)`: the PM data worktree of `root`'s repository
+    (at_landing.pm_data_root) and the "backlog".store its `.kit.json` writes, `named` None when it
+    writes none (it then reads the same implicit ref as `root`, refs being shared by every
+    worktree). `(None, None, None)` when the repository has no PM data record or `root` is that
+    worktree; `(None, None, why)` when the worktree cannot be found; `(pm_root, None, why)` when it
+    was found and its `.kit.json` cannot be read (`why` the error). Shared by default_store_refusal and preflight's backlog line (kitlib/preflight/defaultstore.py)."""
     from . import at_landing                         # at_landing imports this module
-    head = ('%s is the default backlog store: this repository\'s .kit.json names no '
-            '"backlog".store, so nothing was written' % STORE_REF)
-    opt_in = 'or set "backlog": {"store": "ref"} in .kit.json to write this store'
-    try:
-        pm_root, why = at_landing.pm_data_root(root)
-    except Exception as exc:                         # noqa: BLE001 - the advice is best effort
-        pm_root, why = None, str(exc)
+    pm_root, why = at_landing.pm_data_root(root)
     if pm_root is None:
-        where = '; the PM data worktree was not found (%s)' % why if why else ''
-        return '%s%s; %s' % (head, where, opt_in.replace('or set', 'set', 1))
+        return None, None, why
+    if os.path.normcase(os.path.normpath(pm_root)) == os.path.normcase(os.path.normpath(root)):
+        return None, None, None
     from kitlib.config import ConfigError, load as load_config
     try:
-        live = load_config(pm_root).section('backlog')['store']
-    except (ConfigError, OSError):
-        live = None
-    store = ' (store %s)' % live if live else ''
-    return ('%s; write to the live store in the PM data worktree%s with -C "%s", %s'
-            % (head, store, pm_root.replace('\\', '/'), opt_in))
+        named = load_config(pm_root).written('backlog', 'store')
+    except (ConfigError, OSError) as exc:
+        return pm_root, None, str(exc) or type(exc).__name__
+    return pm_root, named, None
+
+
+def unreadable_kit_json(pm_root, why):
+    """The clause naming a PM data worktree whose `.kit.json` cannot be read (pm_data_live_store)."""
+    return 'the .kit.json of the PM data worktree %s cannot be read: %s' % (
+        pm_root.replace('\\', '/'), why)
+
+
+def default_store_refusal(root):
+    """Why a write to the implicit `ref` store is refused, and where to write instead: the PM data
+    worktree and its store when the repository has one that names a store (pm_data_live_store),
+    else the `.kit.json` setting that opts in. A PM data worktree naming no store reads the same
+    implicit ref, so a write there is refused too and it is not offered. Records written there by
+    default were lost to the live store once, so a ref store is written only when named."""
+    head = ('%s is the default backlog store: this repository\'s .kit.json names no '
+            '"backlog".store, so nothing was written' % STORE_REF)
+    opt_in = 'set "backlog": {"store": "ref"} in .kit.json to write this store'
+    try:
+        pm_root, named, why = pm_data_live_store(root)
+    except Exception as exc:                         # noqa: BLE001 - the advice is best effort
+        pm_root, named, why = None, None, str(exc)
+    if pm_root is None:
+        where = '; the PM data worktree was not found (%s)' % why if why else ''
+        return '%s%s; %s' % (head, where, opt_in)
+    if why:
+        return '%s; %s; %s' % (head, unreadable_kit_json(pm_root, why), opt_in)
+    if named is None:
+        return ('%s; the PM data worktree "%s" names no "backlog".store either, so a write there '
+                'is refused too; %s' % (head, pm_root.replace('\\', '/'), opt_in))
+    return ('%s; write to the live store in the PM data worktree (store %s) with -C "%s", or %s'
+            % (head, named, pm_root.replace('\\', '/'), opt_in))
 
 
 def open_backend(root, cfg, fetch=True, store=None, clean=False):

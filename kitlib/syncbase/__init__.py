@@ -15,8 +15,10 @@ PM kit's tools/sync_base.py; docs/sync-base.md).
   a root or config override); neither is a usage error in the entry point.
 - The base defaults to `.kit.json` "repo".main_branch; the remote is "repo".remote.
 - Fetches <remote> <base> first, then refuses unless <target> is on the FETCHED
-  refs/remotes/<remote>/<base> (refusal-log P27): a commit on local <base> alone may be
-  a lander's unpushed merge that is later undone. The refusal names the hash to use instead: the
+  refs/remotes/<remote>/<base> (refusal-log P27): a commit on local <base> alone is one the
+  remote may never get (someone's unpushed commit, a local <base> ahead of the remote; a
+  landing merges in its own landing tree and moves local <base> only after its push is
+  verified, kitlib.gate.land). The refusal names the hash to use instead: the
   fetched <remote>/<base> (`git ls-remote <remote> <base>`), never local <base>. A dirty tree is
   refused; a <target> that is not a commit here is NOT FOUND.
 - With `.kit.json` "landing".in_flight set (kitlib.records.inflight), a landing in flight is
@@ -228,15 +230,14 @@ def not_on_remote(target, upstream, remote, base, tip):
 def in_flight_reader(top, cfg):
     """kitlib.records.inflight's reader for the repository `top` is in, or None when `.kit.json`
     "landing".in_flight is unset. Its command runs in the main checkout. Raises ConfigError or
-    kitlib.records.landing.LockError for a lock_file or a git common dir that cannot be used."""
+    kitlib.records.landing.LockError for a git common dir that cannot be used."""
     if cfg.section('landing').get('in_flight') is None:
         return None
     common, why = gitrepo.common_dir(top)
     if not common:
         raise landing.LockError('no git common dir for %s: %s' % (top, why))
     main = os.path.realpath(os.path.abspath(os.path.dirname(common)))
-    lanes = tuple(cfg.section('landing').get('lanes') or ())
-    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg, lanes=lanes))
+    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg))
 
 
 def _size(cat, rev, path):
@@ -278,9 +279,10 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
     if model_source not in (None, '--model'):
         lines.append('model     %s (from %s)' % (model, model_source))
     # The fetch comes first, so a hash pushed since the last fetch is found. Only a PUSHED base
-    # commit, judged against that fresh fetch (P27). A hash on the local base
-    # branch alone may be an unpushed lander merge that is later undone; merged in
-    # here, it stays in this branch as a base commit the remote never gets - a trailerless
+    # commit, judged against that fresh fetch (P27). A hash on the local base branch alone
+    # (someone's unpushed commit, a local base ahead of the remote; a landing never leaves one,
+    # as it moves local base only after its push is verified) may never reach the remote; merged
+    # in here, it stays in this branch as a base commit the remote never gets - a trailerless
     # "branch commit" a gate's trailer check then fails for good.
     for name in (remote, base):
         if gitrefs.bad_rev(name):
@@ -349,7 +351,7 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
         lines.append('CONFLICTS (%d), merge left in progress:' % len(conflicted))
         lines.extend('  ' + f for f in conflicted)
         return done(FAILED, conflict_advice(base, full, model, arm_merge_msg(top, model, provider), provider))
-    # GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet MERGE_HEAD`, whose
+    # GOTCHA: this asked `rev-parse --verify --quiet MERGE_HEAD`, whose
     # "no MERGE_HEAD" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill
     # read as a fast-forward, so the merge was left uncommitted and reported merged.
     merging, why = gitrefs.merge_in_progress(top)

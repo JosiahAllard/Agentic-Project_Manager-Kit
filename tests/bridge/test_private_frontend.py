@@ -17,6 +17,7 @@ from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.win.service import BrokerService
 from kitlib.proc.job import Job
 from kitlib.proc.process import close,handle_ctime,open_process,own_ctime
+from tests.bridge.test_claude_runtime import long_hook_context
 from tests.bridge.test_pairing import chat
 
 FRONTEND_SOURCE='optional/bridge/mcp_frontend.py'
@@ -119,7 +120,7 @@ class PrivateFrontendTests(unittest.TestCase):
         from optional.bridge.win.transport import run_worker
         for packet in (b'{\n',b'[]\n',b'\xff\n',b'{"x":1,"x":2}\n'):
             header=encode_frame({'pipe':self.leader.endpoint,'pid':os.getpid(),
-                'creation':own_ctime(),'length':len(packet)},max_frame_bytes=2048)
+                'creation':own_ctime(),'length':len(packet),'wait':2500},max_frame_bytes=2048)
             run_worker('bridge_rpc_worker.py',header+packet,limit=1024*1024+2048,timeout=5)
             self.assertTrue(self.thread.is_alive())
         self.initialize()
@@ -129,8 +130,9 @@ class PrivateFrontendTests(unittest.TestCase):
         from optional.bridge.win.rpc import request
         from optional.bridge.win.transport import PipeTarget
         with mock.patch.object(self.leader.listener,'verify_client',side_effect=ProcError('pipe-client-process-mismatch')):
-            request(PipeTarget(self.leader.endpoint,os.getpid(),own_ctime()),{
+            result=request(PipeTarget(self.leader.endpoint,os.getpid(),own_ctime()),{
                 'protocol':1,'request':{'jsonrpc':'2.0','id':8,'method':'ping'}})
+        self.assertEqual(result,{'error':{'code':'private-client-unavailable'}})
         self.assertTrue(self.thread.is_alive())
         self.initialize()
 
@@ -241,6 +243,7 @@ class PrivateFrontendTests(unittest.TestCase):
         self.assertFalse(self.service.frontends)
 
     def test_executable_claude_hook_and_frontend_share_private_native_context(self):
+        long_hook_context(self)  # a real hook then a call under load; expiry is unit-tested in test_claude_terminal: test_expired_hook_context_never_admits_a_later_request, test_hook_tool_use_replay_and_expired_capture_are_rejected
         from optional.bridge.hosts.claude.sessions import ClaudeDirectory
         from optional.bridge.hosts.claude.terminal import ClaudeTerminal,TerminalCalls
         from optional.bridge.hosts.claude.hook import entry_command
@@ -291,6 +294,7 @@ class PrivateFrontendTests(unittest.TestCase):
             self.assertEqual((child.returncode,stdout,stderr),(0,b'',b''))
             result=self.call({'jsonrpc':'2.0','id':2,'method':'tools/call','params':{
                 'name':'bridge_send','arguments':arguments,'_meta':{'sender':'fabricated'}}})
+            self.assertIn('result',result,result)
             self.assertFalse(result['result']['isError'],result)
             message=self.controller.outbox.message('native-hook-send')
             self.assertEqual(message.sender.identity.native_session_id,session)

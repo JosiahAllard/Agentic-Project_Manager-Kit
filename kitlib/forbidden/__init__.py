@@ -212,7 +212,7 @@ def default_base(root, cfg=None):
     if 'main_branch' in cfg.raw('repo'):
         name = cfg.main_branch
     else:
-        # known=True: a git ended from outside is no answer (KIT-GIT-EXIT1-ANSWERS-2), never "no
+        # known=True: a git ended from outside is no answer, never "no
         # main", which measured against master.
         sha, why = gitrefs.resolve('refs/heads/main', root, known=True)
         if sha is None:
@@ -247,7 +247,7 @@ def changed_paths(root, base, worktree=False):
     mb, why = gitrefs.merge_base(base, 'HEAD', root)
     if not mb:
         raise ForbiddenError('cannot find the merge base with %s: %s' % (base, why or 'none'))
-    head, _why = gitrefs.resolve('HEAD', root)
+    head, _why = gitrefs.resolve('HEAD', root, known=True)
     if head == mb:
         return sorted(set(tree_paths(root) if worktree else tracked_paths(root))), True
     args = ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=d', mb]

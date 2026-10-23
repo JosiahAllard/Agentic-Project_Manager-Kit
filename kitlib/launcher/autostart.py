@@ -20,10 +20,6 @@ TASK_NAME = 'Claude coordinators after reboot'
 OLD_TASK_NAME = 'Claude conductors after reboot'   # unregistered by install (removed after the switch, W2b)
 
 
-def pythonw_beside(python):
-    """The pythonw.exe in the folder of `python`: the task's program."""
-    return os.path.join(os.path.dirname(python), 'pythonw.exe')
-
 
 def task_script(python, launch_py):
     """The PowerShell that registers the task to run `python launch_py after-reboot` with no
@@ -33,7 +29,7 @@ def task_script(python, launch_py):
     opens are its own, as before. `python` may be either of the two; neither is checked to exist
     here (install refuses a pythonw.exe that is not a file)."""
     folder = os.path.dirname(python)
-    pythonw = pythonw_beside(python)
+    pythonw = spawn.pythonw_beside(python)
     console = (os.path.join(folder, 'python.exe')
                if os.path.basename(python).lower() == 'pythonw.exe' else python)
     carrier = os.path.join(os.path.dirname(launch_py), spawn.CARRIER)
@@ -72,14 +68,15 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
     interpreter's base install (kitlib.launcher.pythonw.base_pythonw; `base_prefix` stands in for
     sys.base_prefix in tests), never a PATH lookup. Refused, with nothing registered, when that
     pythonw.exe is under WindowsApps (the Store alias) or is not a file: the task would register
-    and then not start at sign-in. whatif says so in a third line."""
+    and then not start at sign-in. whatif refuses the same way, its lines (the script and an
+    `install-autostart would refuse:` line) on the LaunchError."""
     if in_worktree(launch_py):
         raise LaunchError('install-autostart from the main kit checkout, not a worktree: %s' % launch_py)
     given = python is not None
     python = python or pythonw_mod.base_pythonw(base_prefix)
     text = task_script(python, launch_py)
     test = 'python "%s" after-reboot --test' % launch_py
-    pythonw = pythonw_beside(python)
+    pythonw = spawn.pythonw_beside(python)
     if pythonw_mod.under_windows_apps(pythonw):
         missing = '%s; nothing registered' % pythonw_mod.refusal(pythonw, isfile)
     elif not isfile(pythonw):
@@ -88,11 +85,12 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
                    'sign-in; nothing registered' % where)
     else:
         missing = None
+    said = ['Would run in PowerShell:', '  ' + text]
+    if missing:          # what-if predicts the real outcome: the same refusal, the script said first
+        raise LaunchError(missing, lines=said + ['install-autostart would refuse: %s' % missing]
+                          if whatif else None)
     if whatif:
-        return ['Would run in PowerShell:', '  ' + text] + (
-            ['install-autostart would refuse: %s' % missing] if missing else [])
-    if missing:
-        raise LaunchError(missing)
+        return said
     r = run(['powershell', '-NoProfile', '-NonInteractive', '-Command', text], capture_output=True, text=True,
             timeout=120)
     if r.returncode != 0:

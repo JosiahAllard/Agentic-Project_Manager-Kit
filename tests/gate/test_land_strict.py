@@ -1,8 +1,8 @@
 """kitlib.gate.land and strict paths (docs/gate.md "Strict paths"): a branch that changes a path
 matching the list in kitlib/gate/strict_defaults.py, read from the base and never from the branch,
 lands only alone, with a queued verdict (kitlib.gate.verdicts) at its tip from a strong-tier
-reviewer who is not its author; its merged gate then runs --full --fresh whatever the caller
-passed. Anything unreadable refuses (fail closed)."""
+reviewer who is not its author, whoever built it; its merged gate then runs --full --fresh
+whatever the caller passed. Anything unreadable refuses (fail closed)."""
 import json
 import os
 import unittest
@@ -23,6 +23,8 @@ REVIEWER = {'verdict': 'LAND', 'risk': 'High', 'reviewer': 'pm-kit:reviewer',
 
 
 class StrictCase(test_land.LandCase):
+    REVIEW_TIPS = False     # every verdict here is queued (or not) by the test itself
+
     def common(self):
         common, why = repomod.common_dir(self.repo.root)
         self.assertIsNotNone(common, why)
@@ -137,8 +139,9 @@ class LandsAloneFullFresh(StrictCase):
                       'claude-opus-5-5 (agent-r1); the merged gate runs --full --fresh'
                       % (BRANCH, STRICT), said)
 
-    def test_a_plain_branch_needs_no_verdict_and_is_not_escalated(self):
+    def test_a_reviewed_plain_branch_is_not_escalated(self):
         _, tip = self.branch('feature', {'src/a.py': 'a\n'})
+        self.queue(BRANCH, tip)
         lander, out, said = self.land_it(BRANCH, tip)
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertFalse(lander.full or lander.fresh)
@@ -151,6 +154,122 @@ class LandsAloneFullFresh(StrictCase):
         _, out, _ = self.land_it([BRANCH, 'kit/strict'], [plain_tip, strict_tip])
         self.assert_refused(out, 'kit/strict changes strict path %s' % STRICT,
                             'lands alone, never in a batch')
+
+
+class ReviewerTierByAuthor(StrictCase):
+    """A strict branch needs a strong-tier review whoever built it: a haiku review counts for
+    none, a worker or weak-worker build included. A plain branch built by worker lands on a haiku
+    review (no tier rule off the strict paths)."""
+    GATE = LandsAloneFullFresh.GATE
+
+    def lands(self, model, author):
+        _, tip = self.branch('feature', {STRICT: 'x = 1\n'})
+        self.queue(BRANCH, tip, reviewer_model=model, author=author)
+        lander, out, said = self.land_it(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertTrue(lander.full and lander.fresh)
+        self.assertIn('STRICT: %s changes strict path %s: reviewed by pm-kit:reviewer on %s '
+                      '(agent-r1); the merged gate runs --full --fresh' % (BRANCH, STRICT, model),
+                      said)
+
+    def refused(self, model, author):
+        _, tip = self.branch('feature', {STRICT: 'x = 1\n'})
+        self.queue(BRANCH, tip, reviewer_model=model, author=author)
+        _, out, _ = self.land_it(BRANCH, tip)
+        self.assert_refused(out, 'the reviewer ran on %s, not a strong-tier model' % model,
+                            'a branch that changes a strict path lands only on a strong-tier '
+                            'review, whoever built it')
+
+    def test_a_haiku_verdict_for_a_worker_build_is_refused(self):
+        self.refused('haiku', 'Kit Test / worker')
+
+    def test_a_haiku_model_id_for_a_weak_worker_build_is_refused(self):
+        self.refused('claude-haiku-4-5', 'Kit Test / pm-kit:weak-worker')
+
+    def test_a_haiku_verdict_lands_a_plain_worker_build(self):
+        _, tip = self.branch('feature', {'src/a.py': 'a\n'})
+        self.queue(BRANCH, tip, reviewer_model='haiku', author='Kit Test / worker')
+        lander, out, said = self.land_it(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertIsNone(lander.strict_review)
+        self.assertEqual([l for l in said if l.startswith('STRICT')], [])
+
+    def test_a_haiku_verdict_for_a_strong_worker_build_is_refused(self):
+        self.refused('haiku', 'Kit Test / strong-worker')
+
+    def test_a_haiku_verdict_for_a_senior_worker_build_is_refused(self):
+        self.refused('haiku', 'Kit Test / senior-worker')
+
+    def test_a_haiku_verdict_with_no_author_type_is_refused(self):
+        self.refused('haiku', 'Kit Test')
+
+    def test_an_opus_verdict_still_lands_for_a_worker_build(self):
+        self.lands('opus', 'Kit Test / worker')
+
+    def test_an_opus_verdict_still_lands_for_a_senior_worker_build(self):
+        self.lands('opus', 'Kit Test / senior-worker')
+
+
+class CarriedVerdict(StrictCase):
+    """A verdict carried over main merges (tools/verdict.py carry; docs/gate.md "Carrying a
+    verdict forward") lets the merge land, and only when kitlib.gate.carry passes it again here
+    against the base, never on the facts stored."""
+    GATE = LandsAloneFullFresh.GATE
+
+    def synced(self):
+        """kit/feature reviewed and queued at a strict change, then main moved and was merged in:
+        (wt, reviewed, the merge)."""
+        wt, reviewed = self.branch('feature', {STRICT: 'x = 1\n'})
+        self.queue(BRANCH, reviewed)
+        self.on_main({'m.py': 'm\n'})
+        self.repo.git('merge', '-q', '--no-edit', 'main', cwd=wt)
+        return wt, reviewed, self.repo.head(wt)
+
+    def test_the_merge_of_a_reviewed_branch_needs_a_carry(self):
+        _, reviewed, tip = self.synced()
+        _, out, _ = self.land_it(BRANCH, tip)
+        self.assert_refused(out, 'the verdict was given at %s, and the branch is at %s: review and '
+                            'queue the tip, or carry the verdict (tools/verdict.py carry)'
+                            % (reviewed[:10], tip[:10]))
+
+    def test_a_carried_verdict_lands_with_a_full_fresh_merged_gate(self):
+        _, reviewed, tip = self.synced()
+        verdicts.carry(self.common(), self.repo.root, BRANCH, self.main)
+        lander, out, said = self.land_it(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertTrue(lander.full and lander.fresh)
+        self.assertEqual(lander.strict_carry['from'], reviewed)
+        self.assertIn('STRICT: %s changes strict path %s: reviewed by pm-kit:reviewer on opus '
+                      '(agent-r1) at %s, carried over 1 main merge; the merged gate runs --full '
+                      '--fresh' % (BRANCH, STRICT, reviewed[:10]), said)
+
+    def test_the_carry_is_checked_against_the_base_landed_on(self):
+        _, reviewed, tip = self.synced()
+        carried = self.main
+        verdicts.carry(self.common(), self.repo.root, BRANCH, carried)
+        self.on_main({'n.py': 'n\n'})          # main moves on after the carry: it still holds
+        lander, out, _ = self.land_it(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual((lander.strict_carry['from'], lander.strict_carry['main']),
+                         (reviewed, self.main))
+        self.assertNotEqual(self.main, carried)
+
+    def test_a_stored_carry_that_does_not_hold_is_refused(self):
+        wt, reviewed, _ = self.synced()
+        self.repo.write('b.py', 'b\n', root=wt)
+        tip = self.repo.commit('own work after the sync', 'b.py', cwd=wt)
+        # facts no check would give: a carry record written past kitlib.gate.carry
+        fake = {'from': reviewed, 'merges': [tip], 'main': self.main, 'diff': '0' * 64}
+        verdicts.carry(self.common(), self.repo.root, BRANCH, self.main,
+                       checker=lambda *a: (dict(fake), None))
+        _, out, _ = self.land_it(BRANCH, tip)
+        self.assert_refused(out, 'the verdict was given at %s and carried to %s, but the carry '
+                            'does not hold against main %s' % (reviewed[:10], tip[:10],
+                                                               self.main[:10]),
+                            'not a merge', 'review and queue the tip')
 
 
 class ReadFromTheBase(StrictCase):
@@ -176,6 +295,7 @@ class ReadFromTheBase(StrictCase):
     def test_a_plain_branch_lands_beside_the_bases_list(self):
         self.on_main({LIST_FILE: self.LIST})
         _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
         _, out, _ = self.land_it(BRANCH, tip)
         self.assertEqual(out.code, G.OK, out.lines)
 
@@ -238,6 +358,41 @@ class Pure(unittest.TestCase):
                                                     author=author)))
         self.assertFalse(land.is_author(dict(REVIEWER, author='Kit Test (agent), strong-worker')))
 
+    def test_is_author_finds_the_reviewer_type_as_a_word_anywhere_in_the_author(self):
+        for author in ('Kit Test (agent) (pm-kit:strong-worker)', 'Kit Test | strong-worker',
+                       'Kit Test & strong-worker', 'Kit Test strong-worker',
+                       'Kit Test (agent) other-plugin:Strong-Worker.', 'strong-worker'):
+            with self.subTest(author=author):
+                self.assertTrue(land.is_author(dict(REVIEWER, reviewer='pm-kit:strong-worker',
+                                                    author=author)))
+
+    def test_is_author_matches_each_id_of_a_reviewer_id_list(self):
+        for rid, author in (('a169fe6a70777751b,a85bb01f9175819d1', 'a85bb01f9175819d1'),
+                            ('a169fe6a70777751b,a85bb01f9175819d1',
+                             'Kit Test / a85bb01f9175819d1'),
+                            ('agent-r9/agent-r1', 'Kit Test / worker agent-r1'),
+                            ('agent-r9 agent-r1', 'Kit Test / worker (agent-r1)')):
+            with self.subTest(reviewer_id=rid, author=author):
+                self.assertTrue(land.is_author(dict(REVIEWER, reviewer_id=rid, author=author)))
+
+    def test_is_author_never_matches_part_of_a_longer_type(self):
+        for reviewer, author in (('pm-kit:worker', 'Kit Test | strong-worker'),
+                                 ('pm-kit:worker', 'Kit Test (agent) (pm-kit:strong-worker)'),
+                                 ('worker', 'Kit Test & weak-worker'),
+                                 ('pm-kit:worker', 'Kit Test workers'),
+                                 ('pm-kit:strong-worker', 'Kit Test | worker'),
+                                 ('pm-kit:strong-worker', 'Kit Test (pm-kit:worker)'),
+                                 ('pm-kit:strong-worker', 'Kit Test strong-worker-2'),
+                                 ('pm-kit:strong-worker', 'Kit Test strong-worker_x'),
+                                 ('pm-kit:reviewer', 'Kit Test | strong-worker')):
+            with self.subTest(reviewer=reviewer, author=author):
+                self.assertFalse(land.is_author(dict(REVIEWER, reviewer=reviewer,
+                                                     author=author)))
+        for rid in ('agent-r9,agent-r1', 'agent-r9 / agent-r1', 'agent-r9 agent-r1'):
+            with self.subTest(reviewer_id=rid):
+                self.assertFalse(land.is_author(dict(REVIEWER, reviewer_id=rid,
+                                                     author='Kit Test / worker agent-r12')))
+
     def test_strong_alias_maps_a_full_model_id_and_refuses_the_rest(self):
         strong, weak = {'opus'}, {'haiku', 'sonnet', 'account-default'}
         for model, alias in (('opus', 'opus'), (' Opus ', 'opus'),
@@ -252,6 +407,7 @@ class Pure(unittest.TestCase):
         # a model in a strong and a weak tier (Codex's account-default) never counts
         self.assertIsNone(land.strong_alias('account-default', {'opus', 'account-default'},
                                             {'account-default'}))
+
 
 
 if __name__ == '__main__':

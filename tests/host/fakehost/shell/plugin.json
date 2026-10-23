@@ -1,20 +1,17 @@
 {
   "agents": [
-    "asset-smith",
+    "analyst",
     "consultant",
     "coordinator",
     "deep-worker",
+    "docs-writer",
+    "helper",
     "lander",
     "pm",
-    "records",
-    "researcher",
-    "reviewer",
     "senior-worker",
-    "sound-smith",
-    "spec-writer",
     "strong-worker",
-    "tech-artist",
     "test-runner",
+    "weak-worker",
     "worker"
   ],
   "hooks": {

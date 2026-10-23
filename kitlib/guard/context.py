@@ -25,7 +25,6 @@ a constructor argument, and the defaults read this machine.
   pm_root()          the root commit in the record of the machine config's pm_data repository
                      ((None, None) when it names none or that repository has no record;
                      (None, why) when either cannot be read)
-  gitread            kitlib.guard.gitread (alias, has_commit, is_shallow), or a test's fake
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
                      an agent cannot loosen the rules from its branch; the PM data worktree,
                      answered as MAIN, is the one worktree whose own .kit.json is read); a
@@ -75,7 +74,6 @@ from kitlib import pmdata
 from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
-from kitlib.guard import gitread as fsgitread
 from kitlib.guard import paths
 from kitlib.guard import place as fsplace
 
@@ -132,6 +130,13 @@ def _machine_pm_data(home, location=None):
         return pmdata.check_settings(data.get(pmdata.KEY), '%s key %s' % (path, pmdata.KEY))
 
 
+def _pointer_value():
+    """The PM-repo pointer's value (kitlib.config.pointer.read_raw), or None."""
+    from kitlib.config import pointer
+    value, _why = pointer.read_raw()
+    return value
+
+
 def _same_dir(a, b):
     return repo.real(a) == repo.real(b) or repo.same_path(a, b)
 
@@ -139,8 +144,10 @@ def _same_dir(a, b):
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
                  gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
-                 pm_data=None, gitread=None, kit=None, profile=None):
+                 pm_data=None, kit=None, profile=None, pointer=None):
         self.environ = dict(os.environ if environ is None else environ)
+        self._pointer_read = pointer or _pointer_value
+        self._pointer = None
         self.home = home or kuser.home_dir()
         self.kit = kit or kitroot.root()
         self.store = store
@@ -148,7 +155,6 @@ class Ctx(object):
         self._load = load or (lambda top: kconfig.load(top, home=self.home, machine=self.user))
         self._gate_ok = gate_ok
         self.git = git or refs
-        self.gitread = gitread or fsgitread
         self._lock_held = lock_held
         self._role = role_resolver or default_session_role
         self._profile = profile
@@ -219,6 +225,14 @@ class Ctx(object):
         """The machine config's pm_data.path, or None (none named, or it cannot be read)."""
         settings, _why = self._pm_machine()
         return settings['path'] if settings else None
+
+    def pm_repo_pointer(self):
+        """The PM-repo pointer's value as stored (kitlib.config.pointer.read_raw), read once, or
+        None when there is none or it cannot be read. It is not checked: a rule that protects a
+        file under it holds whatever folder it names."""
+        if self._pointer is None:
+            self._pointer = (self._pointer_read() or '',)
+        return self._pointer[0] or None
 
     def pm_root(self):
         """The machine's PM data record as (root sha, None); (None, None) when the machine config

@@ -8,19 +8,27 @@
 #   powershell -NoProfile -File installer\machine-setup.ps1 -OldKit <old kit clone> [-OwnerEmail <email>]
 #                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
 #                                [-NoSweepTask] [-Apply]
+#   powershell -NoProfile -File installer\machine-setup.ps1 -ManagedSettings [-Apply]
+#
+# -ManagedSettings writes Claude Code's machine-wide managed settings file (under Program Files)
+# from the kit's template instead, and nothing else; -Apply then needs an elevated terminal. It
+# takes no other parameter but -HomeDir and -Python (docs/machine-setup.md "Managed settings").
 #
 # The default (no -OldKit; -Fresh is its old name and still accepted): the guard's entry in each
 # account's settings.json, the kit plugin through the claude CLI per account, the owner's email in
 # the machine config (-OwnerEmail, else the machine config's; with neither, -Apply asks in the
 # console, offering `git config user.email`, never stored unconfirmed), and the agents' temp folder. -PmSettings writes the PM SessionStart hook
 # to that file; -Shortcut makes the machine schedule shortcut. -OldKit switches the config folders
-# from an older kit clone instead: links, settings, the owner's email, the extras.
+# from an older kit clone instead: settings, the owner's email, the extras. Neither mode makes a
+# link: each link an earlier setup left is reported with the command that removes the link only.
 # -Procwatch registers (or updates) the "Claude procwatch" scheduled task, report only; -ProcwatchKill
 # also lets it end the SAFE rules' processes (docs/machine-setup.md "Procwatch task").
 # -Apply registers the agent-temp-sweep scheduled task by default, after one dry run of the sweep
 # that prints what it would remove; -NoSweepTask leaves it unregistered (the plan prints the line
 # that registers it). A task already registered is left as is. -RegisterSweepTask, the old opt-in,
 # is still accepted and changes nothing.
+# Once the kit plugin is enabled in an account, its settings.json gets the 3 machine-lock tools'
+# allow rules and loses the kit SessionStart hooks the plugin runs (docs/machine-setup.md "Default mode").
 #
 # Dry run by default: prints every change it would make. -Apply makes them, writing a .bak beside
 # each settings.json and renaming any real folder aside (never deleting one). A second run reports
@@ -35,7 +43,7 @@
 # on PATH.
 #
 # Exit: 0 dry run printed, changes made or nothing to do; 1 refused or stopped; 2 usage (both -OldKit
-# and -Fresh, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
+# and -Fresh, -ManagedSettings with -OldKit or -Fresh (the tool refuses its other options), both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
 # file, no python on PATH, no tools\machine_setup.py).
 param(
     [string]$OldKit = '',
@@ -52,6 +60,7 @@ param(
     [switch]$Shortcut,
     [switch]$Procwatch,
     [switch]$ProcwatchKill,
+    [switch]$ManagedSettings,
     [switch]$Apply
 )
 
@@ -64,6 +73,9 @@ foreach ($v in @($OldKit, $OwnerEmail, $PmSettings, $AgentTemp, $HomeDir, $Deskt
 }
 if ($OldKit -and $Fresh) {
     Write-Host 'machine-setup: usage - give -OldKit <old kit clone> or -Fresh, not both'; exit 2
+}
+if ($ManagedSettings -and ($OldKit -or $Fresh)) {
+    Write-Host 'machine-setup: usage - -ManagedSettings is a mode of its own: not with -OldKit or -Fresh'; exit 2
 }
 if ($NoSweepTask -and $RegisterSweepTask) { Write-Host 'machine-setup: usage - give -NoSweepTask or -RegisterSweepTask, not both'; exit 2 }
 if ($PmSettings -and $OldKit) { Write-Host 'machine-setup: usage - -PmSettings goes with the default mode only, not -OldKit'; exit 2 }
@@ -81,6 +93,7 @@ if ($Python) {
 }
 
 $argv = @($tool, '--kit', $kit)
+if ($ManagedSettings) { $argv += '--managed-settings' }
 if ($OldKit) { $argv += @('--old-kit', $OldKit) }
 if ($OwnerEmail) { $argv += @('--owner-email', $OwnerEmail) }
 if ($PmSettings) { $argv += @('--pm-settings', $PmSettings) }

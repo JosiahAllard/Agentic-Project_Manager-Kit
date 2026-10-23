@@ -23,20 +23,22 @@ folder (the kit keeps that folder out of git locally). Commit by explicit path w
 `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`, never `git add -A` or
 `commit -a`. Remove only your own worktree, once its work has landed:
 `python <kit>/tools/worktree_remove.py -C <repo> <worktree>`. For a sync (skill branch-sync): no
-untracked generated file may be deleted first; a merge git refuses is reported.
+untracked generated file may be deleted first; a merge git refuses is reported. Started in a home
+worktree (a linked worktree of the repository), write nothing there: your task worktree is where you work.
 
 ## Build and test
-The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>` (`--full` for every step). It
+The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>`; the gate before review and landing, on the exact tip, is `--full` (every step) for a branch that changes a strict path (`STRICT_DEFAULTS` in `<kit>/kitlib/gate/strict_defaults.py`: it lands alone after a strong-tier review by someone other than its author, and its merged gate runs `--full --fresh`), and for any other branch the optimized default gate (no flag: diff selection and the smoke steps, plus reuse for a step whose config asks for it) once the repo's gate config names smoke steps, `--full` until then (`<kit>/docs/gate.md` "Smoke steps"); `--only <step>` is for interim runs. It
 reads the repository's `"gate"` section in `.kit.json` when there is one, and otherwise detects the
 stack from the files (Python, Node, Rust, Go, .NET) and runs its usual test and lint steps; its
 verdict line then says "auto-detected" (`<kit>/docs/gate.md` "Auto-detected gate"). Read that line:
 an auto-detected gate may run the wrong checks, and a gate that found no stack ran none. A faster
 command for one area: the one the README names, else the test runner the gate detected, on that
-area only. Red-first: make the new test fail on the old code before the fix, and say how in the
+area only. Red-first: commit the new test, then `python <kit>/tools/redfirst.py -C <worktree> --tests FILE[::FILTER]` runs it at the
+base in a throwaway worktree and must say RED (`<kit>/docs/redfirst.md`); never overwrite tracked files in your own worktree. Say so in the
 report. Docs gate: the same gate; the repository has no separate one unless its README names it.
 
 ### Known flakes
-None recorded. A failure is real until the same tip passes a rerun; report both runs.
+None recorded. Only a flake on this list gets one rerun; any other failing run is real.
 
 ## Test runner
 The tiers are the gate's steps: the whole gate, or one step by name with `--only <step>`. Pass is
@@ -45,8 +47,8 @@ the failing lines from the log the gate names, not the whole log.
 
 ## Landing
 Only the coordinator or the project manager submits a landing to the land queue; no other role merges or pushes to the main branch.
-There is no standing landing approval here: each landing needs the owner's go for that branch,
-relayed by the coordinator or project manager with the reviewer's verdict. Missing either: do not
+There is no standing landing approval here: each landing needs the owner's go for that branch
+(a ruling in the ledger or typed in that session), with the reviewer's verdict. Missing either: do not
 land; say what is missing. From the main checkout, on the main branch:
 `python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (with `--submit` it queues the
 landing and prints the `gate.py wait-result ... -C <repo>` command to wait with; its `RESULT` line
@@ -72,8 +74,7 @@ Low: docs and additive content.
 ## Moves and renames
 Behaviour-preserving only. Every changed line in the diff is one of the old -> new substitutions
 the brief lists, a moved block left unchanged, or a stub at an old path; report any other changed
-line as a finding. Run the full gate on the base and on the tip: the test count must match and no
-test may be gone. Grep the old name across the tree afterwards: no hits, or each one explained.
+line as a finding.
 
 ## Records
 The backlog, if the repository keeps one through the kit (`python <kit>/tools/backlog.py -C

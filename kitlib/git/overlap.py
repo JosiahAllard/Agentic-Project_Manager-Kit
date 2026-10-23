@@ -75,7 +75,7 @@ def work_tree(root):
     kind 'usage' (not a directory, or in no git work tree: the caller's to fix) or 'cannot' (git
     could not name the work tree: no answer)."""
     if not os.path.isdir(root):
-        return None, 'usage', '-C: %s is not a directory' % root
+        return None, 'usage', '-C: %s' % gitrepo.not_a_directory(root)
     place = gitrepo.classify(root)
     if place.kind == gitrepo.NONE:
         return None, 'usage', '-C: %s is in no git work tree (%s)' % (root, place.detail)

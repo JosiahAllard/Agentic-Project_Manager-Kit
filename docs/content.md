@@ -16,7 +16,8 @@ a test fails when they differ from what the renderer writes now (tests/content/t
   it has retired: `retired()`, Claude's old `hosts/claude/shell/skills/`). Exit 1 if any.
 - `python tools/render_content.py --write` writes them and removes the stale ones. `--host <name>`
   limits either to one host. Exit 2: usage, or a content file of the wrong shape (the line names
-  the file and the problem).
+  the file and the problem), or `--write` into an installed plugin export, a folder with the
+  `.pm-kit-export` marker in it or above it (kitlib.content.write refuses it; name the checkout with `-C <checkout>`).
 
 The renderer also writes each host's plugin manifests from `kit.json` (the kit's one name and
 version, ARCHITECTURE.md "Packaging"; see "Manifests" below), and the two tables in
@@ -41,7 +42,7 @@ renderer).
 | `model.<host>` | optional: that host runs the role on this model instead of the tier's. None is in use. |
 | `mode` | optional: the role policy mode, `controller`, `write`, `read`, `test` or `lander` (`kitlib.host.content.MODES`). Every kit role names one. The guard reads it (`kitlib.content.role_modes`) where a repository sets `guard.role_policy` (docs/guard.md "Role policy"); no host's file carries it, so a change to it renders nothing |
 | `writes` | optional: `[path, ...]`, repo-relative posix paths or globs (no `..`, no drive, no `\`) a `read`, `test` or `lander` role may still edit in its checkout (docs/guard.md "Role policy"). The consultant names its notes file. Not rendered either |
-| `group` | optional: the role's group in the backlog policy (`kitlib/backlog/roles.py`) where its `mode` alone does not give it. Without it the group is the mode's: `controller` lead, `write` builder, `read` and `test` read-only, `lander` lander. The one value in use is `docs` (records, spec-writer: `write` roles that add records but never pull them), and it needs mode `write` (`kitlib.host.content.GROUP_MODES`). Not rendered |
+| `group` | optional: the role's group in the backlog policy (`kitlib/backlog/roles.py`) where its `mode` alone does not give it. Without it the group is the mode's: `controller` lead, `write` builder, `read` and `test` read-only, `lander` lander. The one value in use is `docs` (docs-writer: a `write` role that adds records but never pulls them), and it needs mode `write` (`kitlib.host.content.GROUP_MODES`). Not rendered |
 | `run` | optional: `session`, a role started only as its own launched session, never dispatched as a subagent (pm, coordinator, deep-worker, consultant). The backlog policy holds such a role only from a launcher session mark (`SESSION_ONLY`); pm, which the policy names for its owner-level rows, is held so whatever its file says. Role files are not owner paths, so a `mode`, `group` or `run` change moves a role between backlog groups once it lands. Not rendered |
 | `summary` | optional: one line, the role's "use for" cell in docs/ROSTER.md (its description when absent). Not in any host's file |
 
@@ -66,7 +67,7 @@ code that names no role file.
 
 A skill is not rendered, so it has no tokens and says nothing only one host understands
 (docs/multi-host-plan.md section 5, form C): a numbered checklist, one line per step with its
-command, a "Never" list, then "Details:" pointers. It names a role bare (the reviewer role), the
+command, a "Never" list, then "Details:" pointers. It names a role bare (the analyst role), the
 kit's folder as `<kit>` (`<kit>/docs/gate.md`), and an edit as "your file-edit tool"; commits go
 through `python <kit>/tools/commit.py -C <worktree>`, which takes the host from `PM_KIT_HOST`. The
 coordinator, PM and worker role files say what a bare role name and `<kit>` are on their host.
@@ -217,11 +218,18 @@ The coordinator's SessionStart hook stays a separate entry: hooks.json runs both
 joins their context. Keeping it apart keeps its path, which settings re-pointed by machine setup
 still name (docs/machine-setup.md "Settings"), and its role check.
 
-Open: the Claude Code docs show SubagentStart's `additionalContext` reaching the subagent only for
-a hook in settings.json. Whether a plugin's hooks.json may register SubagentStart needs a live
-check on the owner's machine: start a subagent with the plugin enabled and ask it for the kit
-folder. If it cannot, only the main session gets the header, and a brief must name the kit folder
-for a subagent.
+A plugin's SubagentStart reaches the subagent: on 2026-10-16 a subagent dispatched on the owner's
+machine with the plugin enabled opened with "SubagentStart hook additional context: PM kit header"
+and the plugin's kit folder, from the plugin's hooks.json entry (hosts/claude/adapter/content.py
+HOOKS). So a dispatched agent gets the header without its brief naming the kit folder.
+
+At SubagentStart a dispatched kit role also gets the agent-start block after the header
+(kitlib.agentstart; docs/preflight.md "Agent start block"): `start_text` adds it when the payload's
+`agent_type` names a kit role that is not `run: session` (hosts/claude/adapter/host.py
+`_agent_start`, its one call site). A host's own agent (Explore) and a session role get the header
+alone. With no `agent_id` (tools/agent_view.py asking for a role) the session mark names the role,
+so the "At start" section shows the block. On Codex every child gets it after the child note
+(hosts/codex/adapter/start.py): its hooks carry no child identity.
 
 ## Agent view
 

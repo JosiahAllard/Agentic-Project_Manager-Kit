@@ -17,7 +17,7 @@ from optional.bridge.core.dispatch import CoreBroker
 from optional.bridge.core.messages import DeliveryError
 from optional.bridge.core.mcp import Server
 from optional.bridge.core.outbox import Outbox,MAX_MESSAGES,MAX_PENDING
-from optional.bridge.core.owner import OwnerControls,OwnerDecisions
+from optional.bridge.core.owner import OwnerControls,OwnerDecisions,WriterLeases
 from optional.bridge.core.pairing import ChatBinding,PairingStore
 
 
@@ -32,7 +32,7 @@ class Controller:
         self._peers,self._sources,self._lock={},[],threading.RLock()
         self._closed=False
         self._pending_cursor=None
-        self.pairs=self.outbox=None
+        self.pairs=self.outbox=self.leases=None
         try:
             for name in ('pairings.sqlite','outbox.sqlite'):
                 path=self.root/name
@@ -47,7 +47,9 @@ class Controller:
             self.outbox.claim()
             self.core=CoreBroker(self.pairs,self.outbox,{},authorize=self._authorize,
                 dispatch_check=lambda message:self._live(message.sender) and self._live(message.recipient))
-            self.owner=OwnerControls(self.pairs,self.decisions,describe=self._describe)
+            # Writer leases live only in this process: a restart drops every one.
+            self.leases=WriterLeases(owner_check=self.decisions.authorize)
+            self.owner=OwnerControls(self.pairs,self.decisions,describe=self._describe,leases=self.leases)
         except Exception:
             self.close()
             raise
@@ -132,6 +134,7 @@ class Controller:
     def close(self):
         if self._closed: return
         self._closed=True
+        if self.leases is not None: self.leases.clear()
         for storage in (self.outbox,self.pairs):
             if storage is not None: storage.close()
         with self._lock:
