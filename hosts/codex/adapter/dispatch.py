@@ -10,7 +10,7 @@ plan inside the native sandbox).
       an owner flag, a checkout other than cwd or an abbreviated option, or a lock verb an agent
       does not run. A commit, a sync or a ledger or pending write needs an explicit --model, the actual
       model id (Codex's attribution has no fallback: hosts.json). The host is not inserted: the
-      run's environment carries PM_KIT_HOST=codex, which every shared tool reads; a --host or
+      run's environment carries PM_KIT_HOST=codex (a ledger call's own --repo and --prov pass through), which every shared tool reads; a --host or
       --provider naming another host is refused.
   execute(plan)              runs it here, in this session's environment (lock token kept)
   execute_in_host(plan, host)   runs it through a CommandHost (runtime.SandboxCommandHost)
