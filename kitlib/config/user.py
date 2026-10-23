@@ -180,7 +180,7 @@ POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path', 'sta
                'guard_mcp_tools', 'guard_mcp_prefix', 'pm_start', 'coordinator_start', 'pm_watch',
                'backlog_lint', 'machine_lock', 'temp_dir', 'agent_temp_sweep',
                'machine_path_folders', 'plugin')
-LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub')
+LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
 # Never in the PM repository's files: a ConfigError there (`pm_data` is derived: locate).
 DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data')
 # POLICY_KEYS paths that may be written relative to the PM repository (resolved).

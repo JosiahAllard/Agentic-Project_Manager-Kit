@@ -14,6 +14,7 @@ USERS = (
     'kitlib/machinesetup/__init__.py',  # not a Claude account folder
     'kitlib/guard/jail.py',           # no mark root on either config folder
     'kitlib/delegations/schema.py',   # E2: neither config folder may be a delegated write's target
+    'kitlib/delegations/place.py',    # no hub-approved run may touch either config folder
     'docs/kit-json.md',               # "Moving the machine config folder" names it
     'docs/machine-setup.md',          # the folders machine_setup skips
 )
