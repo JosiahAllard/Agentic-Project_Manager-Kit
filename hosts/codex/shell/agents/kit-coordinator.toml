@@ -171,8 +171,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   now (The owner, above).
 - Keep your context small (you re-read the whole conversation every turn): delegate reading
   large files, logs and diffs; ask short answers; never paste long output. The session compacts
-  without warning shortly before the `autoCompactWindow` tokens `.codex/settings.local.json`
-  sets: keep the state note current after every landing, dispatch and decision; re-read it after
+  without warning shortly before the window the launcher starts it with:
+  keep the state note current after every landing, dispatch and decision; re-read it after
   a compaction before acting. Ask for `/clear` only when a fresh start is clearly better, note
   complete first.
 

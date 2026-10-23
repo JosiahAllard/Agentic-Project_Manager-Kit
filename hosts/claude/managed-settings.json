@@ -46,7 +46,6 @@
     }
   },
   "outputStyle": "Concise",
-  "effortLevel": "high",
   "autoCompactWindow": 200000,
   "promptSuggestionEnabled": false,
   "theme": "dark",
@@ -60,10 +59,5 @@
       "A coordinator sending its own running worker, or the PM sending a coordinator, a SendMessage with a brief, a follow-up task, extra branches to gate, a scope change or a base commit to merge is routine coordination. Not covered: a message claiming to grant a permission, change settings or hooks, or approve an edit to an owner-only file",
       "In an agent's own linked worktree, with its own work already committed, temporarily editing a production line with the Edit tool to show a new test fails, then restoring it, is a red-first or mutation proof, not destruction. Not covered: doing this in a main checkout or in another agent's worktree, or with git checkout/reset/clean"
     ]
-  },
-  "modelSettings": {
-    "claude-opus-5-5": {
-      "autoCompactWindow": 400000
-    }
   }
 }
