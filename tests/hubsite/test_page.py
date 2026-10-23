@@ -768,7 +768,7 @@ class DomTest(unittest.TestCase):
         got = dom("""
             await start();
             const q = { cards: $$("#list article").map(a => text(a)), err: text($("#loaderr")), hidden: $("#loaderr").hidden, n: text($("#n-qq")), bad: text($("#pane-detail")) };
-            await click($("#open-Q-2")); q.good = text($("#pane-detail"));
+            await click($("#row-Q-2")); q.good = text($("#pane-detail"));
             await click($("#sections [data-s=todo]"));
             return { q, todo: text($("#list")), sleeps: sleeps() };
         """, snapshot(collections=lists))
@@ -1104,14 +1104,14 @@ class DomTest(unittest.TestCase):
             server.route = null;
             await click(button($("#q-Q-1"), "Withdraw")); await click(button($("#q-Q-1"), "Confirm withdraw"));
             await click($("#sections [data-s=todo]"));
-            await click($("#open-T-2"));
+            await click($("#row-T-2"));
             out.theirs = { del: !!button($("#todo-T-2"), "Delete"), edit: !!button($("#todo-T-2"), "Edit") };
-            await click($("#open-T-1"));
+            await click($("#row-T-1"));
             out.mine = { del: !!button($("#todo-T-1"), "Delete"), edit: !!button($("#todo-T-1"), "Edit") };
-            await click($("#open-T-2"));
+            await click($("#row-T-2"));
             await click(button($("#todo-T-2"), "Delete")); await click(button($("#todo-T-2"), "Confirm delete"));
             await click($("#ttabs [data-tf=done]"));
-            await click($("#open-T-3"));
+            await click($("#row-T-3"));
             out.done = { del: !!button($("#todo-T-3"), "Delete"), edit: !!button($("#todo-T-3"), "Edit") };
             out.sent = calls.filter(c => c.path.endsWith("/delete")).map(c => c.method + " " + c.path + " " + JSON.stringify(c.body));
             return out;
@@ -1933,6 +1933,21 @@ class DocsTest(unittest.TestCase):
         self.assertEqual(got["esc"], {"hidden": True, "focus": "dr-research-2", "stopped": True})
         self.assertEqual(got["sinks"], [])
 
+    def test_the_page_under_the_reader_is_locked_while_it_is_open(self):
+        """openDoc puts .reading on the body (body.reading{overflow:hidden}, test_the_reader_body_clips_and_the_frame_fills_it)
+        and every way out takes it off, so the one scrollbar in sight is the document's own."""
+        got = dom(READS + """
+            await start();
+            const cls = () => document.body.classList.contains("reading");
+            const before = cls();
+            await click($("#dr-plan-1")); const open = cls();
+            await click($("#reader-close")); const closed = cls();
+            await click($("#dr-research-2")); const again = cls();
+            for (const f of $("#reader").listeners.keydown) f({ key: "Escape", preventDefault(){} });
+            return [before, open, closed, again, cls()];
+        """, docs_snap(), hash="#docs")
+        self.assertEqual(got, [False, True, False, True, False])
+
     def test_a_whole_document_is_framed_with_the_policy_still_first(self):
         """A body that is a whole document (its own doctype, head, metas and title, which the page check
         accepts) is framed like any other: the policy meta comes before its doctype and its <head>. That a
@@ -2099,7 +2114,8 @@ class ShellTest(unittest.TestCase):
             const steps = [];
             const press = async (k, node, mods) => { const ev = await key(k, node, mods); steps.push([k, at(), ev.defaultPrevented]); };
             await press("j"); await press("j"); await press("j"); await press("k");
-            $("#list article button").focus(); await press("j");                  // from inside a card: the next card
+            const inner = document.createElement("button"); $("#list article").append(inner);
+            inner.focus(); await press("j");                                       // from inside a card: the next card
             const editable = document.createElement("div"); editable.setAttribute("contenteditable", ""); body.append(editable);
             const urgent = $("#add-urgent");
             const kept = [];
@@ -2384,7 +2400,7 @@ class TriageListTest(unittest.TestCase):
             const rows = () => $$("#list article").map(a => a.id);
             const first = { rows: rows(), detail: $("#pane-detail").hidden, card: !!$("#pane-detail #q-Q-1"), inList: !!$("#list #q-Q-1"),
                             cur: $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id) };
-            await click($("#open-Q-2"));
+            await click($("#row-Q-2"));
             const second = { card: !!$("#pane-detail #q-Q-2"), gone: !$("#q-Q-1"), focus: document.activeElement.id };
             await click($("#detail-close"));
             const closed = { hidden: $("#pane-detail").hidden, focus: document.activeElement.id };
@@ -2392,13 +2408,13 @@ class TriageListTest(unittest.TestCase):
         """, snapshot(collections=lists), hash="#questions")
         self.assertEqual(got["first"], {"rows": ["row-Q-1", "row-Q-2"], "detail": False, "card": True, "inList": False, "cur": ["row-Q-1"]})
         self.assertEqual(got["second"], {"card": True, "gone": True, "focus": "q-Q-2"})
-        self.assertEqual(got["closed"], {"hidden": True, "focus": "open-Q-2"})
+        self.assertEqual(got["closed"], {"hidden": True, "focus": "row-Q-2"})        # close gives the focus back to the row
 
     def test_on_a_phone_nothing_opens_by_itself_and_the_detail_replaces_the_list(self):
         got = dom(self.PHONE + """
             await start();
             const before = { hidden: $("#pane-detail").hidden, rows: $$("#list article").length };
-            await click($("#open-T-2"));
+            await click($("#row-T-2"));
             return { before, hidden: $("#pane-detail").hidden, card: !!$("#pane-detail #todo-T-2"), focus: document.activeElement.id };
         """, snapshot(collections=LISTS), hash="#todo")
         self.assertEqual(got["before"], {"hidden": True, "rows": 2})
@@ -2408,7 +2424,7 @@ class TriageListTest(unittest.TestCase):
         got = dom("""
             await start();
             const rows = $$("#list article").map(a => a.id);
-            await click($("#open-A-1"));
+            await click($("#row-A-1"));
             return { rows, card: !!$("#pane-detail #approval-A-1"), inList: !!$("#list #approval-A-1") };
         """, snapshot(strong=True, collections=NEEDS), hash="#questions")
         self.assertEqual(got["rows"][:2], ["row-A-1", "row-Q-3"])
@@ -2417,14 +2433,14 @@ class TriageListTest(unittest.TestCase):
     def test_an_action_in_the_detail_pane_sends_the_same_request_as_before(self):
         got = dom("""
             await start();
-            await click($("#open-Q-1"));
+            await click($("#row-Q-1"));
             const pick = $("#q-Q-1-1"); pick.checked = true; await fire(pick, "change");
             await click(button($("#pane-detail #q-Q-1"), "Send answer"));
             await click($("#sections [data-s=todo]"));
-            await click($("#open-T-2"));
+            await click($("#row-T-2"));
             const box = $("#t-T-2"); box.checked = true; await fire(box, "change");
             await click($("#sections [data-s=questions]"));
-            await click($("#open-A-1"));
+            await click($("#row-A-1"));
             await click(button($("#approval-A-1"), "Approve"));
             return calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
         """, snapshot(strong=True, collections=dict(LISTS, approvals={"A-1": APPROVAL})), hash="#questions")
@@ -2436,7 +2452,7 @@ class TriageListTest(unittest.TestCase):
     def test_focus_and_what_was_typed_survive_a_redraw_in_the_list_and_in_the_detail(self):
         got = dom("""
             await start();
-            const open = $("#open-Q-2");
+            const open = $("#row-Q-2");
             open.focus();
             server.snap.collections.questions["Q-1"].title = "changed by an agent"; server.snap.revision++;
             await wake();
@@ -2448,14 +2464,14 @@ class TriageListTest(unittest.TestCase):
             return { list, detail: { focus: document.activeElement === n2 && n2.isConnected, value: n2.value, caret: n2.selectionStart } };
         """, snapshot(collections=dict(LISTS, questions=dict(LISTS["questions"], **{
             "Q-2": {"status": "open", "title": "second", "version": 1, "asked_at": NOW, "options": [{"label": "x"}]}}))), hash="#questions")
-        self.assertEqual(got["list"]["focus"], "open-Q-2")
+        self.assertEqual(got["list"]["focus"], "row-Q-2")
         self.assertIn("changed by an agent", got["list"]["row"])
         self.assertEqual(got["detail"], {"focus": True, "value": "half written", "caret": 4})
 
     def test_the_hash_routes_and_back_still_move_between_the_sections(self):
         got = dom("""
             await start();
-            await click($("#open-Q-1"));
+            await click($("#row-Q-1"));
             const q = [location.hash, $("#sections .sec[aria-selected=true]").dataset.s, !!$("#pane-detail #q-Q-1")];
             await click($("#sections [data-s=todo]"));
             const t = [location.hash, $("#sections .sec[aria-selected=true]").dataset.s, $$("#list article").map(a => a.id)];
@@ -2475,7 +2491,7 @@ class TriageListTest(unittest.TestCase):
         got = dom("""
             await start();
             const v = $("#pane-detail .dview");
-            await click($("#open-Q-2"));
+            await click($("#row-Q-2"));
             const row = $("#pane-detail .dview") === v && !!$("#pane-detail .dview #q-Q-2");
             await click($("#sections [data-s=todo]"));
             const section = $("#pane-detail .dview") === v && !!$("#pane-detail .dview #todo-T-1");
@@ -2489,7 +2505,7 @@ class TriageListTest(unittest.TestCase):
         got = dom("""
             await start();
             const rows = $$("#list article").map(a => a.id);
-            await click($("#open-T-1"));
+            await click($("#row-T-1"));
             await click(button($("#todo-T-1"), "Edit"));
             await type($("#todo-T-1 input[type=text]"), "half written");
             await click($("#sections [data-s=questions]"));
@@ -2504,13 +2520,13 @@ class TriageListTest(unittest.TestCase):
     def test_on_a_phone_the_detail_says_a_lost_edit_is_in_the_list(self):
         got = dom(self.PHONE + """
             await start();
-            await click($("#open-T-1"));
+            await click($("#row-T-1"));
             await click(button($("#todo-T-1"), "Edit"));
             await type($("#todo-T-1 input[type=text]"), "half");
             delete server.snap.collections.todos["T-1"]; server.snap.revision++;
             await wake();
             const lost = !!$("#list #lost-todo-T-1");
-            await click($("#open-T-2"));
+            await click($("#row-T-2"));
             return { lost, note: text($("#pane-detail #lost-note")), card: !!$("#pane-detail #todo-T-2") };
         """, snapshot(collections=LISTS), hash="#todo")
         self.assertEqual(got, {"lost": True, "card": True,
@@ -2525,12 +2541,53 @@ class TriageListTest(unittest.TestCase):
         """, snapshot(collections=LISTS), hash="#todo")
         self.assertEqual(wide, [True, False])                                    # beside the list, the lost card is in sight
 
-    def test_each_row_button_is_named_after_its_item(self):
+    def test_each_row_is_a_named_control_in_the_tab_order_with_no_open_button(self):
         got = dom("""
             await start();
-            return $$("#list article button").map(b => [b.id, text(b), b.getAttribute("aria-label")]);
+            return { rows: $$("#list article").map(a => [a.id, a.getAttribute("role"), a.getAttribute("tabindex"), a.getAttribute("aria-label")]),
+                     buttons: $$("#list article button").length, open: all().filter(n => /^open-/.test(n.id)).length };
         """, snapshot(collections=LISTS), hash="#todo")
-        self.assertEqual(got, [["open-T-1", "Open T-1", "Open T-1: mine"], ["open-T-2", "Open T-2", "Open T-2: theirs"]])
+        self.assertEqual(got["rows"], [["row-T-1", "button", "0", "T-1: mine"], ["row-T-2", "button", "0", "T-2: theirs"]])
+        self.assertEqual((got["buttons"], got["open"]), (0, 0))
+
+    def test_a_click_anywhere_on_a_row_opens_its_card(self):
+        got = dom("""
+            await start();
+            const cur = () => $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id);
+            const before = cur();
+            await click($("#row-T-2 h2"));                       // on the title, not the row itself: the click comes up to it
+            return { before, after: cur(), card: !!$("#pane-detail #todo-T-2"), focus: document.activeElement.id };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, {"before": ["row-T-1"], "after": ["row-T-2"], "card": True, "focus": "todo-T-2"})
+
+    def test_enter_or_space_on_a_focused_row_opens_its_card(self):
+        got = dom("""
+            await start();
+            $("#row-T-2").focus();
+            const enter = await key("Enter");
+            const one = [!!$("#pane-detail #todo-T-2"), enter.defaultPrevented];
+            $("#row-T-1").focus();
+            const space = await key(" ");
+            return { one, two: [!!$("#pane-detail #todo-T-1"), space.defaultPrevented] };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, {"one": [True, True], "two": [True, True]})
+
+    def test_a_click_on_a_control_inside_a_row_is_left_to_it(self):
+        got = dom("""
+            await start();
+            const b = document.createElement("button"); $("#row-T-2").append(b);
+            await click(b);
+            return { card: !!$("#pane-detail #todo-T-2"), first: !!$("#pane-detail #todo-T-1") };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, {"card": False, "first": True})
+
+    def test_j_and_k_keep_a_row_in_the_tab_order(self):
+        got = dom("""
+            await start();
+            await key("j"); await key("j");
+            return [document.activeElement.id, $("#row-T-2").getAttribute("tabindex"), $("#row-T-2").tabIndex === undefined];
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, ["row-T-2", "0", True])
 
 
 def schedules(items=None, last=NOW, running=True):
@@ -2871,7 +2928,7 @@ class AutoTasksTest(unittest.TestCase):
         got = self.run_page(TriageListTest.PHONE + """
             await start();
             const before = $("#pane-detail").hidden;
-            await click($("#open-worktree-sweep-alpha"));
+            await click($("#row-worktree-sweep-alpha"));
             return [before, $("#pane-detail").hidden, !!$("#pane-detail #sched-worktree-sweep-alpha"), $("#s-worktree-sweep-alpha-Thu").checked];
         """)
         self.assertEqual(got, [True, False, True, True])
@@ -2992,7 +3049,7 @@ class AutoTasksTest(unittest.TestCase):
             await start();
             await click($("#sched-new"));
             const repo = $("#s-new-repo"); repo.value = "beta"; await fire(repo, "change");
-            await editWhile(isRead, button($("#pane-detail #sched-new"), "Save"), () => click($("#open-worktree-sweep-alpha")));
+            await editWhile(isRead, button($("#pane-detail #sched-new"), "Save"), () => click($("#row-worktree-sweep-alpha")));
             return $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id);
         """.replace("SCHED0", json.dumps(schedules(items=[sweep]))).replace("SCHED1", json.dumps(schedules(items=[
             {"id": "maint-lint-beta", "task": "maint-lint", "repo": "beta", "cadence": "daily", "at": "03:00", "set_at": NOW, "via": "web",
@@ -3003,7 +3060,7 @@ class AutoTasksTest(unittest.TestCase):
         got = self.run_page(self.EDIT_WHILE + """
             await start();
             await click($("#sched-new"));
-            await editWhile(isRead, button($("#pane-detail #sched-new"), "Save"), () => click($("#open-worktree-sweep-alpha")));
+            await editWhile(isRead, button($("#pane-detail #sched-new"), "Save"), () => click($("#row-worktree-sweep-alpha")));
             const cur = $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id);
             await click($("#sched-new"));
             return { cur, said: text($("#s-new-status")) };
@@ -3105,9 +3162,9 @@ class FindingsTest(unittest.TestCase):
             await start();
             const acts = id => { const c = $("#pane-detail #finding-" + id); return [...c.querySelectorAll("button")].map(b => text(b)); };
             const one = acts("fp1");
-            await click($("#open-fp2")); const two = acts("fp2");
-            await click($("#open-fp3")); const three = acts("fp3");
-            await click($("#open-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
+            await click($("#row-fp2")); const two = acts("fp2");
+            await click($("#row-fp3")); const three = acts("fp3");
+            await click($("#row-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
             return { one, two, three, read: calls.filter(c => /^\\/records\\//.test(c.path)).map(c => c.path), sec: $("#sections .sec[aria-selected=true]").dataset.s };
         """)
         self.assertEqual(got["one"], ["Set priority R-1", "Pass on", "Dismiss"])
@@ -3169,7 +3226,7 @@ class FindingsTest(unittest.TestCase):
     def test_dismiss_marks_it_dismissed(self):
         got = self.run_page("""
             await start();
-            await click($("#open-fp3"));
+            await click($("#row-fp3"));
             await click(button($("#pane-detail #finding-fp3"), "Dismiss")); await settle();
             return { posts: posts(), said: text($("#f-fp3-status")), chips: $$("#row-fp3 .chip").map(text) };
         """)
@@ -3238,7 +3295,7 @@ class FindingsTest(unittest.TestCase):
         got = self.run_page("""
             await start();
             const a = text($("#list")) + text($("#pane-detail"));
-            await click($("#open-fp9"));
+            await click($("#row-fp9"));
             return { shown: a + text($("#pane-detail")), sinks, tags: [...new Set(created)] };
         """, found=found, marks=marks, runs=runs)
         self.assertIn(m, got["shown"])
@@ -3304,6 +3361,38 @@ class PageTextTest(unittest.TestCase):
         self.assertRegex(self.markup, r'<div class="tabbar" role="tablist" id="tabbar"')
         with open(os.path.join(WEB, "hub.css"), encoding="utf-8") as f:
             self.assertIn("--side-w:236px", f.read())
+
+    def test_above_a_phone_the_page_does_not_scroll_and_each_pane_scrolls_on_its_own(self):
+        """The stand-in DOM has no CSS: the wide block that keeps the page still and gives the list and the detail
+        pane their own scrollbars is read here, and the phone block still lets the page scroll."""
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        wide = re.search(r"@media \(min-width:761px\)\{(.*?)\n\}", style, re.S)
+        self.assertTrue(wide, "the wide media block")
+        rules = dict(re.findall(r"^\s*([^{\n]+)\{([^}]*)\}", wide.group(1), re.M))
+        self.assertIn("overflow:hidden", rules["body"])                                 # the page itself does not scroll
+        self.assertIn("height:100vh;height:100dvh", rules[".wrap"])                     # the shell is the window
+        self.assertIn("grid-template-rows:minmax(0,1fr)", rules[".wrap"])
+        self.assertIn("overflow-y:auto", rules[".listpane"])
+        self.assertIn("min-height:0", rules[".listpane"])
+        self.assertIn("min-height:0", rules[".side,.detailpane"])
+        self.assertRegex(style, r"(?m)^\.detailpane\{[^}]*overflow-y:auto")              # its own scrollbar, at its own edge
+        phone = re.search(r"@media \(max-width:760px\)\{(.*?)\n\}", style, re.S).group(1)
+        self.assertNotIn("overflow:hidden", phone)
+        # One look for the open row: no solid focus ring beside the aria-current one, only a keyboard's dashed one.
+        self.assertIn("#list article:focus{outline:none}", style)
+        self.assertIn("#list article:focus-visible{outline:2px dashed var(--accent)", style)
+
+    def test_the_reader_body_clips_and_the_frame_fills_it(self):
+        """One scrollbar, the document's own: the reader is a fixed column, its body clips and the frame fills it,
+        and the page under it is held still while it is open."""
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        rule = lambda sel: re.search(r"(?m)^%s\{([^}]*)\}" % re.escape(sel), style).group(1)
+        self.assertIn("position:fixed;inset:0", rule(".reader"))
+        self.assertIn("display:flex;flex-direction:column", rule(".reader"))
+        self.assertEqual(rule(".reader .rbody"), "flex:1;min-height:0;overflow:hidden;display:flex")
+        self.assertIn("flex:1;width:100%;height:100%", rule(".docframe"))
+        self.assertEqual(rule("body.reading"), "overflow:hidden")
+        self.assertRegex(self.markup, r'<div class="rbody" id="reader-body"></div>')
 
     def test_no_artifact_store_call(self):
         for gone in ("window.claude", "onSnapshot", ".collection(", "sendToClaude", "db.", "user.can("):
