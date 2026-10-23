@@ -508,7 +508,7 @@ button.stop{border-color:var(--warn);color:var(--warn)}
   }
   // History: the view's finished runs (strip items of type hist), newest first, narrowed by the repository, kind
   // and result chosen. Each filter row offers "All" and the values the history has; a chosen value that is gone is dropped.
-  const HIST_FILTERS = [["repo", "#frepo", "Repository"], ["kind", "#fkind", "Kind"], ["result", "#fresult", "Result"]];
+  const HIST_FILTERS = [["repo", "#frepo", "repos"], ["kind", "#fkind", "kinds"], ["result", "#fresult", "results"]];
   const histItems = () => ((state.view && state.view.strip) || []).filter(it => it.type === "hist").sort((a, b) => (ms(b.end) || 0) - (ms(a.end) || 0));
   function drawHistory(){
     const all = histItems();
@@ -516,7 +516,7 @@ button.stop{border-color:var(--warn);color:var(--warn)}
       const have = [...new Set(all.map(it => it[key]).filter(x => typeof x === "string" && x))].sort();
       if (state.hist[key] && !have.includes(state.hist[key])) state.hist[key] = "";
       $(sel).replaceChildren(...[""].concat(have).map(x => el("button", {type: "button", class: "chip", "data-key": key, "data-val": x,
-        "aria-pressed": String(state.hist[key] === x), text: x || "All " + label.toLowerCase()})));
+        "aria-pressed": String(state.hist[key] === x), text: x || "All " + label})));
     }
     const rows = all.filter(it => HIST_FILTERS.every(([key]) => !state.hist[key] || it[key] === state.hist[key]));
     say($("#histcount"), all.length ? "Showing " + rows.length + " of " + all.length + " finished runs." : "");

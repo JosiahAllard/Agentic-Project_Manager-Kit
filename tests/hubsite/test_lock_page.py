@@ -697,9 +697,9 @@ class ScheduleTest(unittest.TestCase):
             return r;
         """, answer(view(strip=HISTORY)))
         self.assertEqual(out["all"], ["r-4", "r-3", "r-2", "r-1"])           # newest first
-        self.assertEqual(out["repos"], ["All repository", "alpha", "beta"])
-        self.assertEqual(out["kinds"], ["All kind", "build", "engine-test"])
-        self.assertEqual(out["results"], ["All result", "cancelled", "failed", "ok"])
+        self.assertEqual(out["repos"], ["All repos", "alpha", "beta"])
+        self.assertEqual(out["kinds"], ["All kinds", "build", "engine-test"])
+        self.assertEqual(out["results"], ["All results", "cancelled", "failed", "ok"])
         self.assertEqual(out["count"], "Showing 4 of 4 finished runs.")
         self.assertEqual((out["repo"], out["pressed"]), (["r-4", "r-3"], "true"))
         self.assertEqual(out["repoKind"], ["r-3"])
@@ -707,6 +707,32 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(out["kindResult"], ["r-1"])
         self.assertEqual(out["result"], ["r-4", "r-1"])
         self.assertEqual(out["reset"], ["r-4", "r-3", "r-2", "r-1"])
+
+    def test_a_filter_value_that_vanishes_is_dropped(self):
+        nxt = answer(view(strip=[HISTORY[0], HISTORY[2], HISTORY[3]]), rev=8, changed=True)     # no failed run left
+        out = dom("""
+            await start();
+            await click($$("#fresult button").find(b => b.dataset.val === "failed"));
+            const r = { before: $$("#hist tr[data-hist]").map(t => t.dataset.hist) };
+            await answerWait(200, NEXT);
+            r.rows = $$("#hist tr[data-hist]").map(t => t.dataset.hist);
+            r.pressed = $$("#fresult button").map(b => [b.dataset.val, b.getAttribute("aria-pressed")]);
+            return r;
+        """.replace("NEXT", json.dumps(nxt)), answer(view(strip=HISTORY)))
+        self.assertEqual(out["before"], ["r-2"])
+        self.assertEqual(out["rows"], ["r-4", "r-3", "r-1"])
+        self.assertEqual(out["pressed"], [["", "true"], ["cancelled", "false"], ["ok", "false"]])
+
+    def test_history_text_from_the_server_stays_text(self):
+        evil = '<img src=x onerror=1>'
+        out = dom("""
+            await start();
+            return { shown: text($("#hist")), repo: text($("#frepo")), tags: [...new Set(created)], sinks };
+        """, answer(view(strip=[hist("r-5", evil, "build", "ok", "2026-10-19T14:00:00-04:00")])))
+        self.assertIn(evil, out["shown"])
+        self.assertIn(evil, out["repo"])
+        self.assertNotIn("img", out["tags"])
+        self.assertEqual(out["sinks"], [])
 
     def test_a_filter_survives_a_redraw_of_the_lock(self):
         nxt = answer(view(strip=HISTORY[:3]), rev=8, changed=True)
@@ -785,6 +811,8 @@ class PageTextTest(unittest.TestCase):
         self.assertEqual(self.script.count("fetch("), 1)
         self.assertIn('base: "/api/v1",', self.script)
         self.assertIn('headers: { Accept: "application/json", "X-Hub-Via": "web" }', self.script)
+        self.assertIn('credentials: "same-origin"', self.script)
+
     def test_every_write_is_still_wired_to_its_route_and_body(self):
         wired = ['write("/lock/runs/" + seg(id) + "/top", {}',
                  'write("/lock/holds/" + seg(id) + "/end", {}',
@@ -808,8 +836,6 @@ class PageTextTest(unittest.TestCase):
         order = [self.markup.index('id="%s"' % h) for h in ("h-running", "h-next", "h-holds", "h-history")]
         self.assertEqual(order, sorted(order))
         self.assertNotRegex(self.markup, r"<details[^>]*\sopen")
-
-        self.assertIn('credentials: "same-origin"', self.script)
 
 
 if __name__ == "__main__":
