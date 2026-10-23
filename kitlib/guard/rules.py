@@ -5408,6 +5408,29 @@ def _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role):
                   '--no-deref:' % (text, name, why), 'git -C %s update-ref --no-deref -d %s' % (at, name))
 
 
+SHARED_REFS = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
+SHARED_REF_ALLOWED = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs ' \
+                     '(refs/bisect/, refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD ' \
+                     'and the branch checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, ' \
+                     'refs/stash and refs/backlog in its own repository; any other ref is the PM\'s.'
+
+
+def _shared_scene(ctx, gc, cwd):
+    """(place, top, at, why) of a ref write by git `gc`: the Place git runs in (None when the text
+    does not name it), its main checkout, the checkout a refusal's Instead names (the session's own
+    worktree of it when it has one), and why the guard cannot judge that place (None when it can)."""
+    why = None
+    if gc.blind or gc.unknown or not gc.dir:
+        why = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
+    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    if not why and place.kind not in (repo.MAIN, repo.LINKED):
+        why = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
+    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
+    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
+    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
+    return place, top, at, why
+
+
 def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
     repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
@@ -5429,21 +5452,11 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         if after and (w.dyn or w.alt is not None or w.synth):
             delete = True                       # a word only the shell knows may be -d
         after = after or (bool(pos) and w is pos[0])
-    if not unread and (gc.blind or gc.unknown or not gc.dir):
-        unread = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
-    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    place, top, at, where = _shared_scene(ctx, gc, cwd)
     if _scratch_repo(ctx, place):
         return None
-    if not unread and place.kind not in (repo.MAIN, repo.LINKED):
-        unread = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
-    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
-    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
-    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
-    shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
-    allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
-              'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
-              'checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, refs/stash and ' \
-              'refs/backlog in its own repository; any other ref is the PM\'s.'
+    unread = unread or where
+    shared, allowed = SHARED_REFS, SHARED_REF_ALLOWED
     cleanup = cleanup_session(event, ctx)
     if unread:
         hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
