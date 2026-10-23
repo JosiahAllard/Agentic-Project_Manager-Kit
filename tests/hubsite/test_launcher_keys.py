@@ -10,6 +10,7 @@ from unittest import mock
 from kitlib.hubsite import api
 from kitlib.hubsite.api import AGENT, BASE
 from kitlib.hubsite.store import Store
+from kitlib.launcher import settings as lsettings, state as lstate
 
 NOW = '2026-01-02T03:04:05+00:00'
 CLOCK = lambda: NOW      # noqa: E731
@@ -37,8 +38,8 @@ class LauncherKeysCase(unittest.TestCase):
             {'title': 't', 'options': OPTIONS, 'from': who})
 
     def test_the_keys_are_read_when_the_launcher_can_no_longer_be_imported(self):
-        with mock.patch.object(api.lsettings, 'load', lambda home=None: object()), \
-                mock.patch.object(api.lstate, 'read_sessions', lambda s: SESSIONS), \
+        with mock.patch.object(lsettings, 'load', lambda home=None: object()), \
+                mock.patch.object(lstate, 'read_sessions', lambda s: SESSIONS), \
                 mock.patch.dict(sys.modules, _unimportable()):
             self.assertEqual(api.launcher_keys(), {'kit', 'zeta'})
             status, obj = self.ask('kit')
@@ -47,7 +48,7 @@ class LauncherKeysCase(unittest.TestCase):
     def test_a_failing_launcher_read_raises_and_is_not_an_empty_set(self):
         def refusing(home=None):
             raise OSError(r'C:\secret\config.json is locked')
-        with mock.patch.object(api.lsettings, 'load', refusing):
+        with mock.patch.object(lsettings, 'load', refusing):
             with self.assertRaises(OSError):
                 api.launcher_keys()
             a = api.Api(self.store, clock=CLOCK, session_keys=api.launcher_keys)
@@ -57,7 +58,7 @@ class LauncherKeysCase(unittest.TestCase):
     def test_a_question_refused_on_a_failing_read_says_the_read_failed(self):
         def refusing(home=None):
             raise OSError(r'C:\secret\config.json is locked')
-        with mock.patch.object(api.lsettings, 'load', refusing):
+        with mock.patch.object(lsettings, 'load', refusing):
             status, obj = self.ask('kit')
         self.assertEqual((status, obj['error']['code'], obj['error']['field']),
                          (400, 'invalid', 'from'), obj)
@@ -67,8 +68,8 @@ class LauncherKeysCase(unittest.TestCase):
         self.assertNotIn('\\', said)
 
     def test_a_readable_launcher_adds_nothing_to_the_refusal(self):
-        with mock.patch.object(api.lsettings, 'load', lambda home=None: object()), \
-                mock.patch.object(api.lstate, 'read_sessions', lambda s: SESSIONS):
+        with mock.patch.object(lsettings, 'load', lambda home=None: object()), \
+                mock.patch.object(lstate, 'read_sessions', lambda s: SESSIONS):
             status, obj = self.ask('gone')
         self.assertEqual(status, 400, obj)
         self.assertIn('known: kit, pm, zeta)', obj['error']['message'])
