@@ -323,8 +323,9 @@ def _store_read(ctx, path):
 def is_store_ref(name, store, short=False):
     """True when the ref `name` is the store's: under refs/backlog/ always, and with a `branch`
     store the backlog branch (refs/heads/backlog, refs/remotes/<remote>/backlog; `short`: its
-    bare name too, as push and branch read one). A wildcard matches when it would take one."""
-    name = name.lstrip('+')
+    bare name too, as push and branch read one). A wildcard matches when it would take one. Case
+    is not compared: on this machine's file system refs/Backlog/x is the file refs/backlog/x."""
+    name = name.lstrip('+').lower()
     if '*' in name:
         import fnmatch
         samples = [REF_DIR + 'main'] + (['refs/heads/' + BRANCH] if store == 'branch' else [])
@@ -399,7 +400,8 @@ def _written_refs(gc, store, unsure=None):
         out = []
         for spec in texts[1:]:
             _src, colon, dst = spec.lstrip('+').partition(':')
-            if colon and dst and is_store_ref(dst, store, short=False):
+            # a short destination is a branch (or under refs/) as git's fetch reads it
+            if colon and dst and is_store_ref(rules.fetch_dst_ref(dst), store, short=False):
                 out.append(spec)
         return out, None
     if sub == 'branch' and store == 'branch':
