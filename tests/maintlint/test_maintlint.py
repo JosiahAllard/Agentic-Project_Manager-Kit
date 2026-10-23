@@ -7,7 +7,7 @@ import os
 import re
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from unittest import mock
 
 from kitlib import maintlint
@@ -398,7 +398,9 @@ class Cli(StoreCase):
 
     def main(self, *argv):
         out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        # A plain run books the machine lock (kitlib.maintlint.slot): stubbed here, never booked.
+        with redirect_stdout(out), redirect_stderr(err), \
+                mock.patch.object(maint_lint.slot, 'take', return_value=nullcontext()):
             code = maint_lint.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 

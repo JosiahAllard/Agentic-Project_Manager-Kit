@@ -8,7 +8,21 @@ runs that command.
     python tools/maint_lint.py [-C DIR] [--dry-run] [--result FILE] [--out FILE]
 
 Exit codes: 0 no finding, 1 findings, 2 USAGE (`--dry-run` without `--out`, or no `--result` and
-no `pm_data` to put it under).
+no `pm_data` to put it under), 3 SKIPPED (the machine lock stayed busy; see "Schedule"), else the
+lock's own exit code when it refuses the run for another reason.
+
+## Schedule
+
+The run comes from the auto-tasks tick (`tools/auto_tasks.py`): its task `maint-lint`
+(`kitlib/autotasks/tick.py` `TASKS`) runs `tools/maint_lint.py -C <main checkout>` when the
+owner's hub schedule for task `maint-lint` is due (cadence `weekly`, its days and time;
+docs/action-hub.md "schedules/<task>-<repo>").
+
+A plain run holds the machine lock's `maint-lint` kind (`kitlib/lock/kinds.json`: 1 cpu slot, no
+gpu) for the whole run (`kitlib/maintlint/slot.py`, through `kitlib.lock.run.book`). It waits at
+most the kind's `warn_min` (15 min). When the lock stays busy that long, or an owner quiet-hours
+hold refuses it, the run is skipped: one `SKIPPED:` line, exit 3, nothing linted, and the previous
+`result.json` and page left as they were. `--dry-run` takes no slot.
 
 ## Evidence, never age
 
@@ -118,4 +132,4 @@ new.
 A check that cannot run gives a NOT CHECKED note, never a finding. Notes cover a store that cannot
 be opened, no `pm_data`, no ledger configured, a hub that cannot be asked, or a git failure.
 
-This slice does not post to the Action Hub and has no schedule.
+This slice does not post to the Action Hub.
