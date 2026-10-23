@@ -58,7 +58,6 @@ ALPHA_SHAPE = {
                   {'glob': 'docs/backlog/*.md', 'line': '^(?![a-z_]+: )', 'why': 'temporary',
                    'temporary': True}],
         'fixtures': [{'glob': 'tools/test_deploy_scripts.py', 'hits': ['[C]:\\\\Users\\\\x']}],
-        'piece_fixtures': [{'piece': 'worker', 'path': 'src/test/X.java', 'hits': ['[C]:/Users/x']}],
         'known_binary': {'gradle/wrapper/gradle-wrapper.jar': 'a jar Gradle ships'}},
     'tool_tests': 'tools/tool_tests.json',
     'pieces': 'tools/pieces.json',
