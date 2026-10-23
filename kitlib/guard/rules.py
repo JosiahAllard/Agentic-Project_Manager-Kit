@@ -68,7 +68,10 @@ Rules, in the order they are checked:
                    worktree its HEAD and the branch checked out there (never a guarded main); a
                    ref or a repository the text does not name is refused too. A coordinator's
                    main session may also delete a stray ref (refs/ outside refs/heads, refs/tags,
-                   refs/stash and refs/backlog) in its own repository
+                   refs/stash and refs/backlog) in its own repository. The same allowance
+                   judges a push into the repository itself, a fetch or pull refspec's
+                   destination (a remote's own tracking ref passes), symbolic-ref with two
+                   names or -d, replace and a notes write
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   git-stash-shared git stash in a linked worktree by an agent session that adds an untagged
@@ -93,6 +96,7 @@ from kitlib import config as kconfig
 from kitlib.config import user as kuser
 from kitlib import kitroot
 from kitlib import pmdata
+from kitlib.git import defaults as gitdefaults
 from kitlib.git import repo
 from kitlib import lockmcp as lockmcp_names
 from kitlib.host import Decision
@@ -4066,7 +4070,12 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if sub == 'worktree':
         return git_worktree_remove(ctx, gc, role, text)     # from any place: it removes another tree
     if sub == 'push':
-        return git_push(event, ctx, gc, role)
+        # git_push's refusal first, so git-shared-ref in warn mode never hides it
+        return git_push(event, ctx, gc, role) or git_shared_push(event, ctx, cmd, gc, cwd, role)
+    if sub in SHARED_REF_FORMS:
+        d = git_shared_ref_forms(event, ctx, cmd, gc, cwd, role)    # from any place, as update-ref
+        if d:
+            return d
     if sub == 'branch':
         d = git_branch_delete(ctx, gc, role)
         if d:
@@ -5408,6 +5417,29 @@ def _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role):
                   '--no-deref:' % (text, name, why), 'git -C %s update-ref --no-deref -d %s' % (at, name))
 
 
+SHARED_REFS = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
+SHARED_REF_ALLOWED = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs ' \
+                     '(refs/bisect/, refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD ' \
+                     'and the branch checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, ' \
+                     'refs/stash and refs/backlog in its own repository; any other ref is the PM\'s.'
+
+
+def _shared_scene(ctx, gc, cwd):
+    """(place, top, at, why) of a ref write by git `gc`: the Place git runs in (None when the text
+    does not name it), its main checkout, the checkout a refusal's Instead names (the session's own
+    worktree of it when it has one), and why the guard cannot judge that place (None when it can)."""
+    why = None
+    if gc.blind or gc.unknown or not gc.dir:
+        why = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
+    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    if not why and place.kind not in (repo.MAIN, repo.LINKED):
+        why = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
+    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
+    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
+    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
+    return place, top, at, why
+
+
 def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
     repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
@@ -5429,21 +5461,11 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         if after and (w.dyn or w.alt is not None or w.synth):
             delete = True                       # a word only the shell knows may be -d
         after = after or (bool(pos) and w is pos[0])
-    if not unread and (gc.blind or gc.unknown or not gc.dir):
-        unread = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
-    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    place, top, at, where = _shared_scene(ctx, gc, cwd)
     if _scratch_repo(ctx, place):
         return None
-    if not unread and place.kind not in (repo.MAIN, repo.LINKED):
-        unread = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
-    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
-    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
-    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
-    shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
-    allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
-              'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
-              'checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, refs/stash and ' \
-              'refs/backlog in its own repository; any other ref is the PM\'s.'
+    unread = unread or where
+    shared, allowed = SHARED_REFS, SHARED_REF_ALLOWED
     cleanup = cleanup_session(event, ctx)
     if unread:
         hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
@@ -5476,6 +5498,388 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         return refuse('git-shared-ref', role, '`%s` deletes %s: %s. %s' % (text, name, why, hint[0]), hint[1])
     return refuse('git-shared-ref', role, '`%s` %s %s: %s; %s. %s To show it:' % (
         text, 'deletes' if delete else 'moves', name, why, shared, allowed), 'git -C %s show-ref %s' % (quote(at), name))
+
+
+# ---------------------------------------------------------------- other git forms that write refs
+# git-shared-ref judges these as it judges update-ref (_judge_refs): a push into the repository
+# itself (git_shared_push), a fetch or pull refspec's destination, symbolic-ref with two names or
+# -d, replace and a notes write (git_shared_ref_forms). Known limits (docs/guard.md "Known
+# limits"): refspecs and remotes git takes from its config files, a named remote whose URL is this
+# repository, a fetch or pull refspec the shell computes whole, a push into another local repository.
+SHARED_REF_FORMS = ('fetch', 'pull', 'symbolic-ref', 'replace', 'notes')
+# per form: (long flags, long options that take a value, short flags, short options that take a
+# value, short options whose value may only be attached)
+FETCH_FLAGS = ('all', 'append', 'atomic', 'dry-run', 'write-fetch-head', 'force', 'keep', 'multiple',
+               'auto-maintenance', 'auto-gc', 'write-commit-graph', 'prefetch', 'prune', 'prune-tags', 'tags',
+               'recurse-submodules', 'quiet', 'verbose', 'progress', 'update-head-ok', 'update-shallow',
+               'unshallow', 'ipv4', 'ipv6', 'show-forced-updates', 'set-upstream', 'stdin', 'porcelain',
+               'negotiate-only')
+FETCH_VALUES = ('upload-pack', 'jobs', 'depth', 'deepen', 'shallow-since', 'shallow-exclude', 'refmap',
+                'server-option', 'negotiation-tip', 'filter', 'submodule-prefix', 'recurse-submodules-default')
+PULL_FLAGS = FETCH_FLAGS + ('commit', 'edit', 'ff', 'ff-only', 'squash', 'stat', 'summary', 'compact-summary',
+                            'verify', 'verify-signatures', 'autostash', 'allow-unrelated-histories', 'rebase',
+                            'signoff', 'log', 'gpg-sign')
+PULL_VALUES = FETCH_VALUES + ('strategy', 'strategy-option', 'cleanup')
+REF_FORM_OPTS = {'fetch': (FETCH_FLAGS, FETCH_VALUES, 'afkmnPpqtuv46', 'jo', ''),
+                 'pull': (PULL_FLAGS, PULL_VALUES, 'aefknpqrtuv46', 'joXs', 'S'),
+                 'symbolic-ref': (('quiet', 'delete', 'short', 'recurse', 'no-recurse'), (), 'qd', 'm', '')}
+# git replace that only lists: these options (and --format=<f>), with a pattern only after -l
+REPLACE_LIST_OPTS = ('-l', '--list')
+NOTES_READ_VERBS = (None, 'list', 'show', 'get-ref')
+REMOTE_FETCH_KEY_RE = re.compile(r'^remote\.(.+)\.fetch$')
+PRUNE_TAGS_KEY_RE = re.compile(r'^(?:fetch|remote\..+)\.prunetags$')
+FALSE_WORDS = ('false', 'no', 'off', '0')
+
+
+def _computed(w):
+    """True for a Word whose text is not what git gets: computed, an alias's, or one bash changes."""
+    return bool(w.dyn or w.alt is not None or w.synth)
+
+
+def _form_words(sub, args):
+    """(short flags, {long name: [(value text, computed)]}, positional Words, unread option texts)
+    of git `sub`'s arguments by REF_FORM_OPTS: a long option is its exact name, a `no-` one, or the
+    one name it abbreviates; one the table does not name, or an ambiguous prefix, is unread."""
+    flags, values, s_flags, s_values, s_attached = REF_FORM_OPTS[sub]
+    known = set(flags) | set(values)
+    shorts, longs, pos, unread = set(), {}, [], []
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        k += 1
+        if t == '--':
+            pos.extend(args[k:])
+            break
+        if t.startswith('--'):
+            body, eq, v = t[2:].partition('=')
+            neg = body.startswith('no-') and body not in known
+            stem = body[3:] if neg else body
+            hits = [stem] if stem in known else [n for n in known if n.startswith(stem)] if stem else []
+            if len(hits) != 1:
+                unread.append(t)
+                continue
+            name = hits[0]
+            if name in values and not neg:
+                if not eq and k < len(args):
+                    v, computed = args[k].text, _computed(args[k])
+                    k += 1
+                else:
+                    computed = _computed(w)
+                longs.setdefault(name, []).append((v, computed))
+            else:
+                longs.setdefault('no-' + name if neg else name, []).append((v, _computed(w)))
+            continue
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            for j, c in enumerate(body):
+                if c in s_values:
+                    if not body[j + 1:] and k < len(args):
+                        longs.setdefault('-' + c, []).append((args[k].text, _computed(args[k])))
+                        k += 1
+                    else:
+                        longs.setdefault('-' + c, []).append((body[j + 1:], _computed(w)))
+                    break
+                if c in s_attached:
+                    break
+                if c in s_flags:
+                    shorts.add(c)
+                else:
+                    unread.append('-' + c)
+            continue
+        pos.append(w)
+    return shorts, longs, pos, unread
+
+
+def fetch_dst_ref(dst):
+    """The local ref a fetch refspec's destination names (git's get_local_ref): a refs/ name as
+    it is, heads/, tags/ and remotes/ under refs/, any other name a branch."""
+    if dst.startswith('refs/'):
+        return dst
+    if dst.startswith(('heads/', 'tags/', 'remotes/')):
+        return 'refs/' + dst
+    return 'refs/heads/' + dst
+
+
+def _tracking_ref(src, dst, remote):
+    """True for the remote-tracking map a fetch makes: `dst` refs/remotes/<remote>/<x> (remote and
+    folder compared without case) from `src` <x> or refs/heads/<x>, one `*` in both allowed; <x>
+    never HEAD."""
+    if not remote or not ref_name_ok(remote):
+        return False
+    prefix = 'refs/remotes/%s/' % remote
+    if dst[:len(prefix)].lower() != prefix.lower():
+        return False
+    x = dst[len(prefix):]
+    if not x or x == 'HEAD' or x.count('*') > 1 or not ref_name_ok(x.replace('*', 'x')):
+        return False
+    return src in (x, 'refs/heads/' + x)
+
+
+def fetch_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None): the refs git fetch or pull `gc` writes
+    beyond FETCH_HEAD and the remote-tracking map (_tracking_ref): each refspec destination after
+    the remote (fetch_dst_ref; a `^` exclusion and an empty destination write nothing), each
+    --refmap and inline -c remote.<name>.fetch mapping, local tags under --prune-tags (or an inline
+    *.pruneTags) and a forced --tags. Unread: --stdin, a refspec the shell computes with a literal
+    `:` or `+`, an option the guard does not read on a line with a `:` word."""
+    shorts, longs, pos, unknown = _form_words(gc.sub, gc.rest)
+    remote = pos[0] if pos else None
+    rname = remote.text if remote is not None and not _computed(remote) else None
+    # with --multiple every word names a remote (and --all takes none)
+    many = 'm' in shorts or 'multiple' in longs
+    specs = [] if many else [(w.text, _computed(w), rname) for w in pos[1:]]
+    specs += [(v, c, rname) for v, c in longs.get('refmap', ())]
+    if gc.inv is not None:
+        for key, val, first, last in git_prefix_configs(gc):
+            # --config-env names a variable that holds the value: the text is not the value
+            computed = _computed(last) or first.text.startswith('--config-env')
+            m = REMOTE_FETCH_KEY_RE.match(key)
+            if m:
+                specs.append((val, computed, m.group(1)))
+            elif PRUNE_TAGS_KEY_RE.match(key) and (computed or val.strip().lower() not in FALSE_WORDS):
+                longs.setdefault('prune-tags', []).append((val, computed))
+    if 'stdin' in longs:
+        return [], 'it reads refspecs from its input'
+    if unknown and (any(':' in w.text for w in pos) or any(':' in t for t in unknown)):
+        return [], 'it gives an option the guard does not read (%s)' % unknown[0]
+    instead = 'Fetch into a remote-tracking ref (refs/remotes/<remote>/<branch>) or your scratch space:'
+    out = []
+    for text, computed, rem in specs:
+        spec = text.strip('"\'') if computed else text
+        if computed and (':' in spec or spec.startswith('+')):
+            return [], 'a refspec holds something only the shell knows (%s)' % text
+        if computed:
+            continue                            # a refspec computed whole: a known limit
+        spec = spec[1:] if spec.startswith('+') else spec
+        src, colon, dst = spec.partition(':')
+        if spec.startswith('^') or not colon or not dst:
+            continue
+        ref = fetch_dst_ref(dst)
+        if _tracking_ref(src, ref, rem):
+            continue
+        out.append((ref, False, None, (instead, 'git -C <at> fetch %s %s:refs/tmp/<name>' % (rem or '<remote>',
+                                                                                             src or 'HEAD'))))
+    tags = ('without --prune-tags or a forced --tags (a fetch never moves a tag you have):',
+            'git -C <at> fetch %s' % (rname or '<remote>'))
+    if 'P' in shorts or 'prune-tags' in longs:
+        out.append(('refs/tags/*', True, 'deletes every tag the remote does not have', ('Fetch ' + tags[0], tags[1])))
+    if ('t' in shorts or 'tags' in longs) and ('f' in shorts or 'force' in longs):
+        out.append(('refs/tags/*', False, 'moves every tag to the remote\'s', ('Fetch ' + tags[0], tags[1])))
+    return out, None
+
+
+def symbolic_ref_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git symbolic-ref `gc`: none for a
+    read (one name, no -d); with -d the name, deleted; with two names the name, written (HEAD
+    itself: symbolic-ref does not follow it), and the ref it then points at, since later writes go
+    through it. A computed word or an option the guard does not read is unread."""
+    shorts, longs, pos, unknown = _form_words('symbolic-ref', gc.rest)
+    delete = 'd' in shorts or 'delete' in longs
+    if any(_computed(w) for w in gc.rest):
+        return [], 'a word holds something only the shell knows (%s)' % next(w.text for w in gc.rest if _computed(w))
+    if unknown:
+        return [], 'it gives an option the guard does not read (%s)' % unknown[0]
+    if not pos or (len(pos) < 2 and not delete):
+        return [], None
+    name = pos[0].text
+    switch = ('To put your worktree on another branch:', 'git -C <at> switch <branch>') if name == 'HEAD' else None
+    if delete:
+        return [(name, True, None, switch)], None
+    target = pos[1].text
+    return [(name, False, None, switch), (target, False, 'points %s at %s, so later writes through it move it' % (
+        name, target), switch)], None
+
+
+def replace_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git replace `gc`: none when it only
+    lists (no word, or REPLACE_LIST_OPTS and --format=<f> with a pattern only after -l); else the
+    refs/replace/<object> ref it writes or deletes (-d)."""
+    words = [w.text for w in gc.rest]
+    if any(_computed(w) for w in gc.rest):
+        return [], 'a word holds something only the shell knows (%s)' % next(w.text for w in gc.rest if _computed(w))
+    opts = [t for t in words if t.startswith('-')]
+    objs = [t for t in words if not t.startswith('-')]
+    if all(t in REPLACE_LIST_OPTS or t.startswith('--format=') for t in opts) and \
+            (not objs or any(t in REPLACE_LIST_OPTS for t in opts)):
+        return [], None
+    delete = '-d' in opts or any(len(t) > 2 and '--delete'.startswith(t) for t in opts)
+    ref = 'refs/replace/%s' % (objs[0] if objs else '<object>')
+    return [(ref, delete, None, ('To list the replace refs:', 'git -C <at> replace -l'))], None
+
+
+def notes_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git notes `gc`: none for a verb in
+    NOTES_READ_VERBS; any other writes the notes ref (--ref <ref> under refs/notes/, else
+    refs/notes/commits). A computed verb, or an option before it other than --ref, is unread."""
+    args, k, ref = gc.rest, 0, 'refs/notes/commits'
+    while k < len(args) and args[k].text.startswith('-'):
+        w = args[k]
+        body, eq, v = w.text[2:].partition('=')
+        if w.text == '--' or not w.text.startswith('--') or not body or not 'ref'.startswith(body):
+            return [], 'it gives an option the guard does not read (%s)' % w.text
+        if not eq:
+            k += 1
+            v = args[k].text if k < len(args) else ''
+        ref = v if v.startswith('refs/notes/') else 'refs/' + v if v.startswith('notes/') else 'refs/notes/' + v
+        k += 1
+    verb = args[k] if k < len(args) else None
+    if verb is not None and _computed(verb):
+        return [], 'its verb holds something only the shell knows (%s)' % verb.text
+    if (verb.text if verb is not None else None) in NOTES_READ_VERBS:
+        return [], None
+    return [(ref, verb.text == 'remove', None, ('To show the notes:', 'git -C <at> notes list'))], None
+
+
+REF_FORM_READERS = {'fetch': fetch_refs, 'pull': fetch_refs, 'symbolic-ref': symbolic_ref_refs,
+                    'replace': replace_refs, 'notes': notes_refs}
+
+
+def _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread):
+    """git-shared-ref for a git form other than update-ref: `refs` [(ref, delete, what, instead)]
+    the refs it writes or deletes (`what` a phrase for the refusal, None for "writes/deletes
+    <ref>"; `instead` (sentence, command with <at>), None for show-ref), `unread` why the guard
+    cannot tell them (None when it can). As git_shared_ref: only a held session
+    (shared_ref_held), not in a scratch repository (_scratch_repo), each ref by _ref_ok; no form
+    here writes through HEAD."""
+    if (not refs and not unread) or not shared_ref_held(event, ctx):
+        return None
+    place, _top, at, where = _shared_scene(ctx, gc, cwd)
+    if _scratch_repo(ctx, place):
+        return None
+    text = bare(cmd)
+    unread = unread or where
+    if unread:
+        return refuse('git-shared-ref', role, '`%s`: the guard cannot tell which refs it writes: %s; %s. Name each '
+                      'ref literally. %s To keep a commit in your scratch space:' % (
+                          text, unread, SHARED_REFS, SHARED_REF_ALLOWED),
+                      'git -C %s update-ref refs/tmp/<name> <new-oid>' % quote(at))
+    linked = place.kind == repo.LINKED and not ctx.pm_data_error(gc.dir)
+    own = _own_branch(ctx, place, gc.dir)
+    for name, delete, what, instead in refs:
+        if _ref_ok(name, delete, linked, own):
+            continue
+        what = what or '%s %s' % ('deletes' if delete else 'writes', name)
+        how, command = instead or ('To show it:', 'git -C <at> show-ref %s' % name)
+        return refuse('git-shared-ref', role, '`%s` %s: %s is not one it may %s; %s. %s %s' % (
+            text, what, name, 'delete' if delete else 'write', SHARED_REFS, SHARED_REF_ALLOWED, how),
+            command.replace('<at>', quote(at)))
+    return None
+
+
+def git_shared_ref_forms(event, ctx, cmd, gc, cwd, role):
+    """git-shared-ref for fetch, pull, symbolic-ref, replace and notes (SHARED_REF_FORMS)."""
+    if not shared_ref_held(event, ctx):
+        return None
+    refs, unread = REF_FORM_READERS[gc.sub](gc)
+    return _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread)
+
+
+def _repo_common(path):
+    """The git common dir of the repository git opens at `path` (a work tree, its .git, a git dir,
+    or <path>.git, as git's enter_repo tries them), or None."""
+    for p in (path, path + '.git'):
+        common = gitdefaults.common_dir(p)
+        if common:
+            return common
+        if os.path.isfile(os.path.join(p, 'HEAD')):
+            named = gitdefaults._read(os.path.join(p, 'commondir'), 4096)
+            return paths.norm(os.path.join(p, named.strip()), fold=False) if named and named.strip() else p
+    return None
+
+
+def _push_self(gc, place, t, computed):
+    """True when git push's repository `word` is the repository git runs in: `.`, or a local path
+    or file:// URL (resolved against where git runs and its work tree's top) that opens this
+    repository's common dir; False for a URL, scp-like host:path, or a name that opens no such
+    repository; None when the guard cannot tell (a computed word, or a path with no place to
+    compare). A named remote is taken as a remote, whatever its URL (a known limit)."""
+    if computed:
+        return None
+    if t == '.':
+        return True
+    if t.lower().startswith('file://'):
+        t = t[len('file://'):]
+        t = t[1:] if re.match(r'^/[A-Za-z]:', t) else t
+    elif '://' in t or (not re.match(r'^[A-Za-z]:', t) and re.match(r'^[^/\\]*:', t)):
+        return False
+    absolute = os.path.isabs(t) or bool(re.match(r'^[A-Za-z]:[\\/]', t))
+    if place is None or not place.common:
+        return None if absolute or '/' in t or '\\' in t or t.startswith('.') else False
+    bases = [t] if absolute else [os.path.join(b, t) for b in (gc.dir, place.top) if b]
+    mine = paths.norm(jail.real(place.common))
+    for p in bases:
+        common = _repo_common(paths.norm(p, fold=False))
+        if common and paths.norm(jail.real(common)) == mine:
+            return True
+    return False
+
+
+def _long_value(sub, args, name):
+    """(value text, computed) of git `sub`'s long option `name` (or an abbreviation of it), the
+    last one given, or None."""
+    out, k = None, 0
+    while k < len(args):
+        t = args[k].text
+        if t == '--':
+            break
+        if t.startswith('--'):
+            body, eq, v = t[2:].partition('=')
+            if _canon_long(sub, body) == [name]:
+                if eq:
+                    out = (v, _computed(args[k]))
+                elif k + 1 < len(args):
+                    out = (args[k + 1].text, _computed(args[k + 1]))
+                    k += 1
+        k += 1
+    return out
+
+
+def git_shared_push(event, ctx, cmd, gc, cwd, role):
+    """git-shared-ref for a push into the repository itself (_push_self): it writes this
+    repository's refs, so each refspec destination is judged as update-ref's ref. A destination
+    must be a full refs/ name (push matches a short one against the refs there); `:dst` and -d
+    delete; a refspec with no `:` is a no-op. --all, --mirror, --branches, --tags, --prune, no
+    refspec, a computed refspec, or a repository the guard cannot tell with a refspec that writes,
+    are unread."""
+    if not shared_ref_held(event, ctx):
+        return None
+    short, longs, pos = _opts('push', gc.rest)
+    remote = (pos[0].text, _computed(pos[0])) if pos else _long_value('push', gc.rest, 'repo')
+    if remote is None:
+        return None
+    specs = pos[1:]
+    delete = 'd' in short or 'delete' in longs
+    every = sorted({'all', 'mirror', 'branches', 'tags', 'prune'} & longs)
+    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    self_ = _push_self(gc, place, *remote)
+    if self_ is False:
+        return None
+    writes = delete or every or any(':' in w.text or _computed(w) for w in specs)
+    if self_ is None:
+        why = 'the guard cannot tell whether %s is this repository' % remote[0]
+        return _judge_refs(event, ctx, cmd, gc, cwd, role, [], why) if writes else None
+    refs, unread = [], None
+    if every:
+        unread = 'with --%s it pushes refs it does not name into this repository' % every[0]
+    elif not specs:
+        unread = 'it names no refspec, so git takes them from its config'
+    for w in specs:
+        if unread:
+            break
+        if _computed(w):
+            unread = 'a refspec holds something only the shell knows (%s)' % w.text
+            break
+        spec = w.text[1:] if w.text.startswith('+') else w.text
+        src, colon, dst = spec.partition(':')
+        if spec.startswith('^') or (not colon and not delete):
+            continue                            # an exclusion, or a ref pushed onto itself
+        dst = dst if colon else src
+        if not dst or not dst.startswith('refs/'):
+            unread = '%r names no full ref (refs/...); push into this repository names it in full' % spec
+            break
+        refs.append((dst, delete or not src, None, None))
+    return _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread)
 
 
 SAFE_WORD_RE = re.compile(r'^[\w@%+=:,./-]+$')

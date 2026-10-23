@@ -27,9 +27,12 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   `test_rules.py:47`); `lander.md:57` and the land-branch skill show `[--lane]`. Regenerate and
   fix in one change. Done: lanes, `--lane` and the lane-keyed lock are gone, the allow lines are
   the plain submit only, and `landing.lanes` is a retired key that loads and is ignored.
-- **Candidate 4, REMOVE** (kitlib/gate, config schema). Gate keys `python_tests=='pytests'`,
+- **Candidate 4, DONE** (kitlib/gate, config schema). Gate keys `python_tests=='pytests'`,
   `python_tests_floor`, `trailers` (`schema.py:220-221`), and `steps.py:84-100` `unsupported()`.
   Why: they exist only to be refused; no `.kit.json` sets them. Size: ~25 lines + tests. Risk: L.
+  Done: the three keys are gone from the schema (`python_tests` whole, as `discover` ran
+  nothing), so a config that sets one fails to load as an unknown key; `unsupported()` keeps
+  only its `--pid-hold` refusal, which lines 84-100 also held.
 - **Candidate 5, REMOVE** (kitlib/machinepaths, schema). `machine_paths.piece_fixtures`. Why:
   refuses any non-empty value; nothing sets it. Size: ~15 lines, 4 test hits. Risk: L.
 - **Candidate 6, REMOVE** (kitlib/hubsite). `settings.py` relay (44, 57, 105-107, 142, 152) and

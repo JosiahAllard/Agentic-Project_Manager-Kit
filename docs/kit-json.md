@@ -88,9 +88,6 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `forbidden`: a table the kit passes through unchecked (a file path or an object)
 - `gate.steps` (list of step object, default []): the repo gate steps
 - `gate.setup` (list of string): argv run before the steps
-- `gate.python_tests` (discover|pytests, default "discover"): how the Python tests run
-- `gate.python_tests_floor` (int >= 0): fewest tests a full run may report
-- `gate.trailers` (bool): check commit trailers
 - `gate.worktree_guard` (bool): refuse to gate in a main checkout
 - `gate.warn_untracked` (bool): warn about untracked files
 - `gate.fail` (regex or list of regex): log patterns that fail every step

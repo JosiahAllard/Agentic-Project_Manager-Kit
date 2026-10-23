@@ -29,11 +29,11 @@ pattern), and the gate's `errors` policy finds no unexplained error line. Patter
 multi-line regexes (re.M). `zero_count_passes` lists the `pass` patterns that would also match a
 zero-test run (a warning: judge's zero rules are then the only backstop).
 
-Gate keys this gate does not implement refuse (GateConfigError) when set, rather than being
-ignored: `python_tests` "pytests", `python_tests_floor` and `trailers` true (a step's
-`kill_retry` is no key at all: kitlib.config refuses it). docs/gate.md "Not ported" says why. A
-`--pid-hold` argument in `setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args`
-refuses too: the pid hold of tools/pytests.py and tools/kit_tests.py is opt-in for agent runs,
+The old gate keys this gate does not implement (`python_tests`, `python_tests_floor`, `trailers`,
+a step's `kill_retry`) are no keys at all: kitlib.config refuses each as an unknown key, so a
+config that sets one never loads. docs/gate.md "Not ported" says why. A `--pid-hold` argument in
+`setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args` refuses (GateConfigError,
+`unsupported`): the pid hold of tools/pytests.py and tools/kit_tests.py is opt-in for agent runs,
 never in the gate.
 """
 import collections
@@ -82,14 +82,9 @@ def _list(v):
 
 
 def unsupported(gate):
-    """The settings of `gate` (the "gate" section over its defaults) this gate refuses."""
+    """The settings of `gate` (the "gate" section over its defaults) this gate refuses: a
+    `--pid-hold` argument wherever a gate could pass one."""
     out = []
-    if gate.get('python_tests') == 'pytests':
-        out.append('"python_tests": "pytests" (write the test run as a step)')
-    if gate.get('python_tests_floor') is not None:
-        out.append('"python_tests_floor" (put a floor in the step\'s "pass" pattern)')
-    if gate.get('trailers'):
-        out.append('"trailers": true (add the trailers.py step, docs/repo-checks.md)')
     if PID_HOLD_FLAG in (gate.get('setup') or []):
         out.append('"setup" %s (%s)' % (PID_HOLD_FLAG, PID_HOLD_WHY))
     for s in gate.get('steps') or []:
