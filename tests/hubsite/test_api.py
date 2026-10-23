@@ -2846,6 +2846,16 @@ class ScheduleTest(ApiCase):
         obj = self.refused('invalid', 'repo', 'POST', '/schedules', OWNER, self.body())
         self.assertIn('launcher.repos is not a table', obj['error']['message'])
 
+    def test_a_launcher_config_that_cannot_be_opened_is_refused(self):
+        # the tick takes an OSError as an unreadable list too (kitlib/autotasks/tick.py), so the
+        # POST answers invalid on repo, not a 500
+        def broken():
+            raise PermissionError(13, 'Access is denied', 'config.json')
+        self.api.schedule_repos = broken
+        obj = self.refused('invalid', 'repo', 'POST', '/schedules', OWNER, self.body())
+        self.assertIn('Access is denied', obj['error']['message'])
+        self.assertEqual(self.store.docs('schedules'), {})
+
     def test_the_answer_says_the_first_run(self):
         # set at Monday 10:00 local: the first slot strictly after it (kitlib.autotasks.due)
         self.api.clock = lambda: '2026-01-05T10:00:00'

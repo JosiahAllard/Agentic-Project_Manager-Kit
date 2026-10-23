@@ -1796,7 +1796,7 @@ def _one_checkout(api, task, cadence, repo):
         return
     try:
         repos = api.schedule_repos()
-    except ConfigError as e:
+    except (ConfigError, OSError) as e:      # what the tick takes as an unreadable list
         raise _invalid("the machine config's launcher.repos cannot be read: %s" % e, 'repo')
     if tick.find_repo(repo, repos) is None:
         raise _invalid("repo %r is not exactly one checkout in the machine config's "
