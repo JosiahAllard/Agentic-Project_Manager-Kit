@@ -44,8 +44,21 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+def safe_stdio():
+    """tools/gate.py's safe_stdio: a character the console's encoding has no byte for (cp1252 on
+    a redirected Windows stream: a branch name, a merged gate's step reason or a console window's
+    title) is written as a \\u escape, never raised: a landing never ends `error` over printing."""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(errors='backslashreplace')
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
-    from kitlib.gate import pin                                     # noqa: E402
+    safe_stdio()
+    from kitlib.gate import pin                                    # noqa: E402
     _code, _said = pin.run(__file__, sys.argv[1:])
     if _said:
         sys.stderr.write(_said + '\n')
@@ -152,6 +165,7 @@ def emit(outcome):
 
 
 def main(argv):
+    safe_stdio()
     p = parser()
     a = p.parse_args(argv)
     root = os.path.abspath(a.root)
