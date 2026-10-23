@@ -390,6 +390,30 @@ class FromExport(ManagedBase):
         self.assertIn('this is an export; pass --kit', out)
         self.assertFalse(os.path.lexists(self.target))
 
+    def test_a_checkout_without_the_guard_script_is_refused(self):
+        os.remove(os.path.join(self.kit, 'boot', 'hook.py'))
+        code, lines = M.run_managed(self.export_ctx(), apply=True)
+        out = '\n'.join(lines)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('%s is not a kit checkout' % self.kit, out)
+        self.assertFalse(os.path.lexists(self.target))
+
+    def test_a_tools_link_is_repointed_into_the_checkout(self):
+        dump(self.source, dict(TEMPLATE, statusLine={'type': 'command', 'command':
+                                                     'powershell -File %USERPROFILE%/.claude/tools/usage/statusline-usage.ps1'}))
+        code, lines = M.run_managed(self.export_ctx(), apply=True)
+        self.assertEqual(code, M.EXIT_OK, '\n'.join(lines))
+        self.assertEqual(load(self.target)['statusLine']['command'],
+                         'powershell -File %s/optional/usage/statusline-usage.ps1' % T.fwd(self.kit))
+
+    def test_the_not_elevated_refusal_names_the_checkouts_command(self):
+        self.host.admin = False
+        code, lines = M.run_managed(self.export_ctx(), apply=True)
+        out = '\n'.join(lines)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn(managed.command(self.kit), out)
+        self.assertNotIn(T.fwd(self.exp), out)
+
     def tool(self, argv, kit):
         sys.path.insert(0, os.path.dirname(T.TOOL))
         self.addCleanup(sys.path.remove, os.path.dirname(T.TOOL))

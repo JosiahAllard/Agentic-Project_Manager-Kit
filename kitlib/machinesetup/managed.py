@@ -291,8 +291,13 @@ def survey(ctx, apply=False):
     """The --managed-settings plan: one write of the rendered template (in the existing file's key
     order), or nothing."""
     plan = Plan((SECTION,))
-    if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
-        plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
+    try:
+        kit = stable_kit(ctx.kit)                                    # the folder the hook will name
+    except ManagedError as e:
+        plan.refuse(str(e))
+        return plan
+    if not os.path.isfile(kit_file(kit, settings.GUARD)):
+        plan.refuse('%s is not a kit checkout (no %s)' % (kit, settings.GUARD))
         return plan
     path = ctx.host.managed_path()
     if not path:
@@ -308,11 +313,11 @@ def survey(ctx, apply=False):
         return plan
     if guard_where(data, ctx.kit, ctx.home) != 'kit':
         plan.note(SECTION, 'the template carries no guard entry for this kit (%s): each account '
-                           'settings.json keeps its own' % kit_file(ctx.kit, settings.GUARD))
+                           'settings.json keeps its own' % kit_file(kit, settings.GUARD))
     if not ctx.host.is_admin():
         if apply:
             plan.refuse('not elevated: %s is under Program Files; run %s from an administrator '
-                        'terminal' % (path, command(ctx.kit)))
+                        'terminal' % (path, command(kit)))
             return plan
         plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
     got = _target(plan, path, data)
@@ -371,7 +376,8 @@ def note_sync(plan, ctx, section='settings'):
     else:
         plan.note(section, 'managed settings: %s %s the kit template; from an administrator '
                            'terminal: %s (a dry run first without --apply)'
-                  % (path, 'differs from' if raw is not None else 'is missing; it is made from', command(ctx.kit)))
+                  % (path, 'differs from' if raw is not None else 'is missing; it is made from',
+                     command(_same_kit(ctx.kit))))
 
 
 def survey_live(plan, ctx):
