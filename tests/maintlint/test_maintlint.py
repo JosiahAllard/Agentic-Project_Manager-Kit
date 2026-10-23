@@ -48,6 +48,12 @@ class BacklogChecks(unittest.TestCase):
         self.assertEqual([(f.check, f.key) for f in got], [('duplicate', 'AAA BBB')])
         self.assertEqual(got[0].fix, CMD + ' retire BBB --why "duplicate of AAA"')
 
+    def test_a_duplicate_target_is_the_sorted_ids_whatever_order_the_store_gives(self):
+        s = snap(rec('ZZZ', summary='same'), rec('AAA', summary='same'))
+        s.readable.sort(key=lambda r: r.stem, reverse=True)
+        got, _ = backlog.duplicates(s, CMD)
+        self.assertEqual([f.key for f in got], ['AAA ZZZ'])
+
     def test_a_blocker_naming_no_live_record_is_a_finding_and_a_live_one_is_not(self):
         got, _ = backlog.dead_blockers(snap(
             rec('AAA', state='blocked', blocked_on='item:GONE'),
@@ -73,13 +79,83 @@ class BacklogChecks(unittest.TestCase):
 
         def run(root, days, fetch, home, now):
             calls.append((days, fetch))
-            return audit_check.FINDINGS, ['UNAUDITED abc1234 set FOO', 'covered x']
-        got, _ = backlog.audit('r', CMD, run=run)
+            return audit_check.FINDINGS, ['AUDIT CHECK 7 days', 'NOTE: the log has a bad line',
+                                          'UNAUDITED abc1234 set FOO --why "see SECRET-9"',
+                                          'UNAUDITED def5678 close BAR', 'UNMAPPED x y',
+                                          'FINDINGS 3']
+        got, notes = backlog.audit('r', CMD, run=run)
         self.assertEqual(calls, [(7, False)])
-        self.assertEqual([f.key for f in got], ['UNAUDITED abc1234 set FOO'])
+        self.assertEqual([(f.key, f.text) for f in got],
+                         [('UNAUDITED', '2 store change(s) in 7 days with no audit line'),
+                          ('UNMAPPED', '1 audit line(s) in 7 days whose role the role map does'
+                                       ' not list')])
+        self.assertIn('backlog_audit', got[0].fix)
+        self.assertEqual(notes, ['audit: the log has a bad line'])
+        for f in got:
+            for text in (f.key, f.text, f.fix):
+                self.assertNotIn('SECRET', text)
+                self.assertNotIn('abc1234', text)
         got, notes = backlog.audit('r', CMD, run=lambda *a, **k: (audit_check.NOT_CHECKED,
                                                                   ['NOT CHECKED: no pm_data']))
         self.assertEqual((got, notes), ([], ['audit NOT CHECKED: no pm_data']))
+
+
+QID = '-'.join(('Q', '901'))            # an invented question id, built at run time
+
+
+class AnsweredQuestions(unittest.TestCase):
+
+    def parked(self, stem, q):
+        return priced(stem, state='parked', q=q, parked_at='2026-10-01')
+
+    def test_a_parked_record_whose_question_is_answered_or_logged_is_a_finding(self):
+        other = '-'.join(('Q', '902'))
+        third = '-'.join(('Q', '903'))
+        s = snap(self.parked('AAA', QID), self.parked('BBB', other), self.parked('CCC', third),
+                 priced('DDD'))
+        docs = [{'id': QID, 'status': 'answered'}, {'id': other, 'status': 'logged',
+                                                     'ruling': 'SECRET-RULING'},
+                {'id': third, 'status': 'open'}]
+        got, notes = backlog.answered(s, CMD, questions=lambda: docs)
+        self.assertEqual(notes, [])
+        self.assertEqual([(f.check, f.key) for f in got],
+                         [('answered-question', 'AAA'), ('answered-question', 'BBB')])
+        self.assertIn('questions log %s' % QID, got[0].fix)
+        self.assertIn(CMD + ' unpark AAA --ruling', got[0].fix)
+        self.assertTrue(got[1].fix.startswith(CMD + ' unpark BBB --ruling'))
+        self.assertEqual(got[0].age, 'parked_at 2026-10-01')
+        for f in got:
+            self.assertNotIn('SECRET', f.text + f.fix)
+
+    def test_a_hub_that_cannot_be_asked_is_a_not_checked_note(self):
+        from kitlib.hubsite import serve
+
+        def down():
+            raise serve.NotRunning(4321)
+        got, notes = backlog.answered(snap(self.parked('AAA', QID)), CMD, questions=down)
+        self.assertEqual((got, notes), ([], ['answered questions NOT CHECKED: no hub server is'
+                                             ' listening on port 4321']))
+
+    def test_with_no_parked_record_the_hub_is_not_asked(self):
+        def never():
+            raise AssertionError('asked the hub')
+        self.assertEqual(backlog.answered(snap(priced('AAA')), CMD, questions=never), ([], []))
+
+    def test_the_hub_is_read_with_the_agent_token_and_every_status(self):
+        from kitlib.hubsite import client
+        seen = []
+
+        class Fake(object):
+            def __init__(self, port):
+                seen.append(port)
+
+            def listing(self, collection, status=None, repo=None, role=client.ANY):
+                seen.append((collection, status, role))
+                return []
+        with mock.patch.object(client, 'Client', Fake), \
+                mock.patch('kitlib.hubsite.settings.load', return_value=mock.Mock(port=4321)):
+            self.assertEqual(backlog.hub_questions(), [])
+        self.assertEqual(seen, [4321, ('questions', 'all', client.AGENT)])
 
 
 class ScopeChecks(unittest.TestCase):
@@ -120,18 +196,48 @@ class ScopeChecks(unittest.TestCase):
 
 
 class WorktreeChecks(unittest.TestCase):
+    """Only what the nightly sweep (kitlib.worktree.sweep) leaves is reported."""
 
-    def test_reported_classes_and_a_landed_tree_still_holding_a_pull(self):
-        rows = [{'class': 'L', 'path': 'w/live', 'branch': 'b1', 'claims': []},
-                {'class': 'A', 'path': 'w/done', 'branch': 'b2', 'claims': ['AAA']},
-                {'class': 'O', 'path': 'w/orphan', 'branch': None, 'claims': 'unknown: x'}]
-        res = mock.Mock(data={'trees': rows}, lines=[])
+    def found(self, *rows):
+        res = mock.Mock(data={'trees': list(rows)}, lines=[])
         with mock.patch.object(worktrees.remove, 'open_ctx', return_value=(None, None)):
             got, _ = worktrees.findings('top', classify=lambda top: res)
+        return got
+
+    def test_reported_classes_and_a_landed_tree_still_holding_a_pull(self):
+        got = self.found({'class': 'L', 'path': 'w/live', 'branch': 'b1', 'claims': []},
+                         {'class': 'A', 'path': 'w/done', 'branch': 'b2', 'claims': ['AAA'],
+                          'idle_s': 3 * 86400},
+                         {'class': 'O', 'path': 'w/orphan', 'branch': None,
+                          'claims': 'unknown: x'},
+                         {'class': 'E', 'path': 'w/ev', 'branch': 'b5', 'claims': []})
         self.assertEqual([(f.check, f.key) for f in got],
                          [('worktree-A', 'w/done'), ('landed-still-pulled', 'AAA'),
-                          ('worktree-O', 'w/orphan')])
+                          ('worktree-O', 'w/orphan'), ('worktree-E', 'w/ev')])
         self.assertIn('release AAA --reason "landed"', got[1].fix)
+        self.assertEqual(got[0].age, 'idle 3d')
+
+    def test_an_a_tree_no_record_claims_is_the_sweeps_to_remove(self):
+        got = self.found({'class': 'A', 'path': 'w/a1', 'branch': 'b1', 'claims': []},
+                         {'class': 'A', 'path': 'w/a2', 'branch': 'b2', 'claims': None},
+                         {'class': 'A', 'path': 'w/a3', 'branch': 'b3',
+                          'claims': 'unknown: store unreadable'})
+        self.assertEqual(got, [])
+
+    def test_a_b_or_c_tree_whose_stale_mark_holds_is_the_sweeps_to_abandon(self):
+        mark = {'at': 't', 'why': 'w', 'by': 'pm', 'tip': 'abc', 'void': None}
+        got = self.found({'class': 'B', 'path': 'w/b', 'branch': 'b1', 'claims': [],
+                          'mark': mark},
+                         {'class': 'C', 'path': 'w/c', 'branch': 'b2', 'claims': [],
+                          'mark': dict(mark, void='')})
+        self.assertEqual(got, [])
+
+    def test_a_b_or_c_tree_with_a_void_mark_or_none_is_reported(self):
+        mark = {'at': 't', 'why': 'w', 'by': 'pm', 'tip': 'abc', 'void': 'its tip moved'}
+        got = self.found({'class': 'B', 'path': 'w/b', 'branch': 'b1', 'claims': [],
+                          'mark': mark},
+                         {'class': 'C', 'path': 'w/c', 'branch': 'b2', 'claims': []})
+        self.assertEqual([f.check for f in got], ['worktree-B', 'worktree-C'])
 
 
 class LedgerCounts(unittest.TestCase):
@@ -164,7 +270,7 @@ class LedgerCounts(unittest.TestCase):
 class PageAndResult(unittest.TestCase):
 
     def result(self, findings):
-        rows = [dict(f._asdict(), fingerprint=maintlint.fingerprint(f), new=True)
+        rows = [dict(f._asdict(), fingerprint=maintlint.fingerprint('demo', f), new=True)
                 for f in findings]
         return {'version': 1, 'repo': 'demo', 'started': '2026-10-22T08:00:00Z', 'elapsed_s': 1.5,
                 'counts': {'duplicate': len(rows)}, 'ledger': None, 'notes': ['a <b> note'],
@@ -185,12 +291,47 @@ class PageAndResult(unittest.TestCase):
         self.assertIsNone(pagecheck.check(doc))
         self.assertIn('more not shown', doc)
 
+    def test_notes_are_capped_like_the_rows(self):
+        res = self.result([])
+        res['notes'] = ['note %d %s' % (i, 'y' * 3000) for i in range(400)]
+        doc = page.render(res)
+        self.assertIsNone(pagecheck.check(doc))
+        self.assertIn('<h2>Notes (400)</h2>', doc)
+        self.assertIn('more not shown', doc)
+
+    def test_a_lone_surrogate_is_dropped_and_the_page_still_passes(self):
+        bad = Finding('body-path-gone', 'AAA x', 'AAA names a/\udcff b.py', 'fix \ud800')
+        res = self.result([bad])
+        res['notes'] = ['note \udc80 here']
+        doc = page.render(res)
+        doc.encode('utf-8')
+        self.assertIsNone(pagecheck.check(doc))
+        self.assertIn('a/ b.py', doc)
+        self.assertIn('note  here', doc)
+
+    def test_the_fingerprint_is_repo_check_and_target_never_the_text(self):
+        f = Finding('scope-path-gone', 'AAA gone/**', 'AAA scope gone/** (deleted in abc1234)', 'x')
+        reworded = f._replace(text='AAA: gone/** was removed in def5678', fix='y', age='idle 9d')
+        self.assertEqual(maintlint.fingerprint('demo', f), maintlint.fingerprint('demo', reworded))
+        self.assertNotEqual(maintlint.fingerprint('demo', f), maintlint.fingerprint('other', f))
+        self.assertNotEqual(maintlint.fingerprint('demo', f),
+                            maintlint.fingerprint('demo', f._replace(key='BBB gone/**')))
+
+    def test_the_default_result_folder_is_under_pm_data_beside_the_audit_folder(self):
+        with mock.patch.object(result.audit, 'pm_data_path', return_value=('Z:/pmd', None)):
+            self.assertEqual(result.default_dir('demo'),
+                             (os.path.join('Z:/pmd', 'maint-lint', 'demo'), None))
+        with mock.patch.object(result.audit, 'pm_data_path', return_value=(None, 'bad config')):
+            self.assertEqual(result.default_dir('demo'), (None, 'bad config'))
+        with mock.patch.object(result.audit, 'pm_data_path', return_value=(None, None)):
+            self.assertIsNone(result.default_dir('demo')[0])
+
     def test_result_round_trip_and_a_finding_seen_last_run_is_not_new(self):
         f = Finding('duplicate', 'AAA BBB', 'same', 'fix')
         path = os.path.join(temp_dir(self), 'sub', result.NAME)
         result.write(path, self.result([f]))
         back = result.read(path)
-        self.assertEqual(result.previous_fingerprints(back), {maintlint.fingerprint(f)})
+        self.assertEqual(result.previous_fingerprints(back), {maintlint.fingerprint('demo', f)})
         self.assertIsNone(result.read(path + '.missing'))
 
 
@@ -236,6 +377,11 @@ class WholeRun(StoreCase):
         self.assertEqual(sorted(f['check'] for f in first['findings']),
                          ['dead-blocker', 'duplicate'])
         self.assertFalse(any(f['new'] for f in first['findings']))     # no previous run
+        repo = maintlint.repo_name(self.repo.root)
+        self.assertEqual(first['repo'], repo)
+        dup_row = [f for f in first['findings'] if f['check'] == 'duplicate'][0]
+        self.assertEqual((dup_row['repo'], dup_row['target']), (repo, 'BBB CCC'))
+        self.assertIn('age', dup_row)
         again = self.run_lint(previous=first)
         self.assertFalse(any(f['new'] for f in again['findings']))
         self.assertEqual(again['counts']['duplicate'], 1)
@@ -253,16 +399,40 @@ class Cli(StoreCase):
             code = maint_lint.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
-    def test_dry_run_prints_each_fix_and_writes_nothing(self):
+    def test_dry_run_writes_only_the_page_to_out_and_prints_the_counts(self):
         kit_json_ref(self.repo)
         self.seed(priced('AAA', state='blocked', blocked_on='item:GONE'))
         folder = temp_dir(self)
         res = os.path.join(folder, 'result.json')
-        code, out, _ = self.main('-C', self.repo.root, '--dry-run', '--result', res)
+        out_page = os.path.join(folder, 'pages', 'lint.html')
+        code, out, _ = self.main('-C', self.repo.root, '--dry-run', '--result', res,
+                                 '--out', out_page)
         self.assertEqual(code, 1)
-        self.assertIn('dead-blocker: AAA is blocked on item:GONE', out)
-        self.assertIn('    fix: ', out)
+        self.assertEqual(os.listdir(folder), ['pages'])
+        self.assertEqual(os.listdir(os.path.join(folder, 'pages')), ['lint.html'])
+        with open(out_page, encoding='utf-8') as fh:
+            doc = fh.read()
+        self.assertIsNone(pagecheck.check(doc))
+        self.assertIn('AAA is blocked on item:GONE', doc)
+        self.assertIn('page: %s' % os.path.abspath(out_page), out)
+        self.assertIn('dead-blocker', out)
+        self.assertNotIn('result: ', out)
+
+    def test_dry_run_without_out_is_usage(self):
+        kit_json_ref(self.repo)
+        folder = temp_dir(self)
+        code, _, err = self.main('-C', self.repo.root, '--dry-run', '--result',
+                                 os.path.join(folder, 'result.json'))
+        self.assertEqual(code, 2)
+        self.assertIn('--out', err)
         self.assertEqual(os.listdir(folder), [])
+
+    def test_no_result_and_no_pm_data_is_usage(self):
+        kit_json_ref(self.repo)
+        with mock.patch.object(result.audit, 'pm_data_path', return_value=(None, None)):
+            code, _, err = self.main('-C', self.repo.root)
+        self.assertEqual(code, 2)
+        self.assertIn('pm_data', err)
 
     def test_a_clean_run_writes_the_result_and_the_page_and_exits_0(self):
         kit_json_ref(self.repo)

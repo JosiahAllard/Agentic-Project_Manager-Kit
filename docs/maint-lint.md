@@ -7,7 +7,8 @@ runs that command.
 
     python tools/maint_lint.py [-C DIR] [--dry-run] [--result FILE] [--out FILE]
 
-Exit codes: 0 no finding, 1 findings, 2 USAGE.
+Exit codes: 0 no finding, 1 findings, 2 USAGE (`--dry-run` without `--out`, or no `--result` and
+no `pm_data` to put it under).
 
 ## Evidence, never age
 
@@ -21,6 +22,9 @@ Left out for that reason:
   works out no age);
 - a hold flagged only for how long it has been held (`parked_at`, `pulled_at`);
 - a worktree flagged only for idle time: an L (live or kept) tree is never a finding.
+
+Each finding carries an age as context only: the record's `pulled_at` or `parked_at`, or a tree's
+idle time. No check reads it to decide a finding.
 
 The 7-day audit window is the range of the log that is read, not a trigger. A worktree's class is
 `kitlib.worktree.classify.classify`'s own, and its 24 h bar between L and B, C or E is part of that
@@ -39,9 +43,16 @@ class.
 - `dead-blocker`: an `item:X` blocker that names no live record (`store.dangling_items`). Closing
   or retiring a record deletes it.
 - `duplicate`: live records whose summaries are the same words in the same order. A near match is
-  not flagged.
-- `audit`: `kitlib.backlog.audit_check.run` over 7 days, with no fetch. Its UNAUDITED, UNKNOWN and
-  UNMAPPED lines become findings.
+  not flagged. Its target is the sorted record ids.
+- `answered-question`: a parked record whose question (`q`) the owner has answered on the Action
+  Hub (status answered or logged). The hub's questions are read, read-only, with the agent token
+  through `kitlib.hubsite.client`, as `tools/hub.py` reads them, and only when a record is parked.
+  The fix is `unpark <ID> --ruling <the ruling it was logged as>`, after the PM logs the answer when
+  it is not logged yet. No ruling id is shown. A hub that cannot be asked gives a NOT CHECKED note.
+- `audit`: `kitlib.backlog.audit_check.run` over 7 days, with no fetch. It gives one count finding
+  per kind (UNAUDITED, UNKNOWN, UNMAPPED), for example "12 store change(s) in 7 days with no audit
+  line", whose fix is the `backlog_audit.py` command that lists them. The lines themselves are not
+  shown: they carry commit subjects. audit_check's NOTE lines become notes.
 
 ## Path checks
 
@@ -55,9 +66,16 @@ there they are read in the code repository's main checkout, against its code mai
 
 ## Worktree checks
 
-`kitlib/maintlint/worktrees.py` reports one finding per A, B, C, E and O tree from `classify`, read
-without apply. Each finding carries its `worktree_remove.py` form. An A tree whose branch still
-holds a pulled record also gives `landed-still-pulled`, whose fix is a `release`.
+`kitlib/maintlint/worktrees.py` reads `classify` without apply and reports what the nightly sweep
+(`kitlib.worktree.sweep`) leaves, never a tree that sweep removes or abandons on its own:
+- an A tree only when a pulled record claims its branch (`claims` is a non-empty list). It also
+  gives `landed-still-pulled` per claim, whose fix is a `release`. An A tree no record claims is
+  the sweep's to remove.
+- a B or C tree only when no stale mark holds on its branch. A tree whose mark holds is the sweep's
+  to abandon; one whose mark is void is reported.
+- every E and O tree.
+
+Each finding carries its `worktree_remove.py` form.
 
 ## Ledger counts
 
@@ -71,21 +89,26 @@ else.
 
 ## Output
 
-`--dry-run` writes nothing. It prints each finding with its fix, the notes, the counts and the
-time taken.
-
-Without `--dry-run`, the tool writes two files:
+The plain run writes two files and prints their paths, the notes, the counts and the time taken:
 - `result.json` (`kitlib/maintlint/result.py`). The default is
-  `<kit temp>/<repo>-maint-lint/result.json`, where the kit temp is `kitlib.config.user.work_temp`
-  of the checkout, outside every repository.
-- `page.html` beside it (`--out`), from `kitlib/maintlint/page.py`. It passes
-  `kitlib.hubsite.pagecheck.check`: everything is escaped, with no script and no link. When the
-  page would be over pagecheck's size cap, it shows fewer rows per check.
+  `<pm_data>/maint-lint/<repo>/result.json`, a stable folder beside the backlog's `audit/` folder
+  under the machine config's `pm_data.path`, left untracked like it.
+- `page.html` beside it, or `--out`, from `kitlib/maintlint/page.py`. It passes
+  `kitlib.hubsite.pagecheck.check`: everything is escaped, with no script and no link, and a lone
+  surrogate is dropped. When the page would be over pagecheck's size cap, it shows fewer rows per
+  check and fewer notes.
 
-The result file holds the last run only, written whole. A finding whose fingerprint (its check, key
-and text) was not in the previous result is marked new.
+`--dry-run` needs `--out`. It writes only the page there, never `result.json`, and prints the same
+counts.
+
+The result file holds the last run only, written whole. Each finding row holds its `repo`, `check`,
+`target`, `text`, `fix`, `age`, `fingerprint` and `new`. The fingerprint hashes the repo, the check
+and the target, never the text, so a reworded finding keeps it. A target names the thing itself:
+a record id, a record and a scope member, the sorted ids of duplicates, a worktree path, an audit
+kind; never a sha or a count. A finding whose fingerprint was not in the previous result is marked
+new.
 
 A check that cannot run gives a NOT CHECKED note, never a finding. Notes cover a store that cannot
-be opened, no `pm_data`, no ledger configured, or a git failure.
+be opened, no `pm_data`, no ledger configured, a hub that cannot be asked, or a git failure.
 
 This slice does not post to the Action Hub and has no schedule.

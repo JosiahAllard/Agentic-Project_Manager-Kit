@@ -6,7 +6,7 @@ passes (docs/maint-lint.md "Output"): no script, no link, no url(); every value 
 Record text is the repository's, not the kit's, so beyond html.escape the two words pagecheck
 refuses anywhere in the text (`javascript:` and `http-equiv`) are written with a character
 reference, which a reader sees unchanged. A page that would pass pagecheck's size cap shows the
-first findings of each check and says how many it left out.
+first findings of each check, and the first notes, and says how many it left out.
 """
 import html
 import re
@@ -25,8 +25,13 @@ _DEFANG = [(re.compile('javascript:', re.I), lambda m: m.group(0)[:-1] + '&#58;'
 ROW_STEPS = (None, 200, 50, 10)
 
 
+_SURROGATE = re.compile('[\ud800-\udfff]')
+
+
 def esc(value):
-    out = html.escape('' if value is None else str(value), quote=True)
+    """The value escaped for the page. A lone surrogate (a path read with errors='surrogateescape',
+    say) is dropped: it cannot be written as UTF-8."""
+    out = html.escape(_SURROGATE.sub('', '' if value is None else str(value)), quote=True)
     for rx, sub in _DEFANG:
         out = rx.sub(sub, out)
     return out
@@ -75,7 +80,12 @@ def _document(result, limit):
         body += _section(check, group, limit)
     notes = result.get('notes') or []
     if notes:
-        body.append('<h2>Notes</h2><ul>%s</ul>' % ''.join('<li>%s</li>' % esc(n) for n in notes))
+        shown = notes if limit is None else notes[:limit]
+        body.append('<h2>Notes (%d)</h2><ul>%s</ul>'
+                    % (len(notes), ''.join('<li>%s</li>' % esc(n) for n in shown)))
+        if len(shown) < len(notes):
+            body.append('<p>%d more not shown: result.json has them all.</p>'
+                        % (len(notes) - len(shown)))
     return ('<!doctype html><html><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             '<title>%s</title><style>%s</style></head><body>%s</body></html>\n'

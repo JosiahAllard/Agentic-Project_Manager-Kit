@@ -2,8 +2,10 @@
 file, written whole (a temp file, then os.replace), the last run only (docs/maint-lint.md
 "Output").
 
-  default_dir(root, name, home)   `<kit temp>/<name>-maint-lint` (kitlib.config.user.work_temp of
-                                  `root`: on the checkout's drive, outside every repository)
+  default_dir(name, home)         `(<pm_data>/maint-lint/<name>, None)`: a stable folder beside
+                                  the backlog's audit/ folder (the machine config's pm_data.path,
+                                  kitlib.backlog.audit.pm_data_path), left untracked like it; or
+                                  `(None, why)` when there is no pm_data
   read(path)                      the previous result as a dict, or None (missing or unreadable)
   write(path, result)             the absolute path written
   previous_fingerprints(result)   the fingerprints a result holds (empty for None)
@@ -11,19 +13,18 @@ file, written whole (a temp file, then os.replace), the last run only (docs/main
 import json
 import os
 
-from kitlib.config import ConfigError
-from kitlib.config import user as kuser
+from kitlib.backlog import audit
 
 NAME = 'result.json'
 PAGE = 'page.html'
+FOLDER = 'maint-lint'
 
 
-def default_dir(root, name, home=None):
-    try:
-        base = kuser.work_temp(root, home=home)
-    except ConfigError:
-        base = kuser.system_temp()
-    return os.path.join(base, '%s-maint-lint' % name)
+def default_dir(name, home=None):
+    pm_data, why = audit.pm_data_path(home)
+    if not pm_data:
+        return None, why or 'no pm_data.path in the machine config'
+    return os.path.join(pm_data, FOLDER, name), None
 
 
 def read(path):
