@@ -3,9 +3,11 @@ a fetch or pull refspec's destination, symbolic-ref, replace and a notes write m
 worktree shares as update-ref does, so each is judged by the same allowance: refs/tmp/<name>, the
 per-worktree refs, and in a linked worktree its HEAD and the branch checked out there."""
 import os
+import re
+import time
 import unittest
 
-from kitlib.guard import rules
+from kitlib.guard import fallback, rules
 
 from . import test_jail as tj
 from .test_shared_ref import RULE, SharedRefBase
@@ -61,6 +63,12 @@ class PushIntoItself(SharedRefBase):
                 d = self.worker(text)
                 self.assertTrue(d is None or d.rule != RULE, d and d.reason)
 
+    def test_a_linked_worktrees_git_dir_opens_this_repository(self):
+        # git opens a git dir with a commondir file as the repository that common dir is
+        with open(os.path.join(self.wt_git, 'commondir'), 'w', encoding='utf-8') as f:
+            f.write('../..\n')
+        self.each_refused(['git push "%s" HEAD:refs/heads/kit/sib' % self.wt_git.replace('\\', '/')])
+
     def test_from_the_main_checkout_its_branch_is_not_its_own(self):
         self.each_refused(['git push . HEAD:refs/heads/kit/wt'], cwd=self.w.main)
         self.each_allowed(['git push . HEAD:refs/tmp/x'], cwd=self.w.main)
@@ -82,6 +90,7 @@ class FetchRefspecs(SharedRefBase):
                            'git fetch --refmap=+refs/heads/*:refs/heads/* origin main',
                            'git -c remote.origin.fetch=+refs/heads/*:refs/heads/* fetch origin',
                            'git -c fetch.pruneTags=true fetch origin',
+                           'git -c remote.origin.pruneTags=true fetch origin',
                            'git fetch -P origin', 'git fetch --prune-tags origin',
                            'git fetch --tags --force origin', 'git fetch -tf origin',
                            'git pull origin main:main', 'git pull --rebase origin main:main',
@@ -206,7 +215,8 @@ class Fallback(SharedRefBase):
 
     def test_a_symbolic_ref_write(self):
         self.each_unclean_refused(['git symbolic-ref HEAD refs/heads/main', 'git symbolic-ref -m why HEAD refs/heads/main',
-                                   'git symbolic-ref -d HEAD', 'git symbolic-ref --delete refs/heads/kit/wt'])
+                                   'git symbolic-ref -d HEAD', 'git symbolic-ref -dq HEAD',
+                                   'git symbolic-ref --delete refs/heads/kit/wt'])
 
     def test_a_replace(self):
         self.each_unclean_refused(['git replace 0123abc 4567def', 'git replace -d 0123abc'])
@@ -222,6 +232,13 @@ class Fallback(SharedRefBase):
             with self.subTest(text):
                 d = self.worker(self.UNCLEAN + text)
                 self.assertTrue(d is None or d.rule != RULE, d and d.reason)
+
+    def test_a_line_of_options_does_not_hang_the_pattern(self):
+        text = 'git symbolic-ref' + ' -mx' * 24 + ' |'   # 24: about 5 s with the old pattern, doubling per word
+        for pat in fallback.SHARED_REF_PATTERNS:
+            start = time.perf_counter()
+            re.search(pat, text)
+            self.assertLess(time.perf_counter() - start, 0.25, pat)
 
     def test_the_owner_is_not_held(self):
         for text in ('git push . HEAD:refs/heads/kit/sib', 'git fetch origin main:main', 'git notes add -m x'):

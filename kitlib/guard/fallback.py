@@ -83,8 +83,10 @@ SHARED_REF_PATTERNS = (
     G + r'(?:fetch|pull)\b' + REST + r'(?::(?!//)|\s--(?:prune-t|tags\b|update-head|stdin\b)|\s-[a-zA-Z0-9]*[Ptu])',
     # git -c remote.<name>.fetch=... or fetch.pruneTags (config keys ignore case)
     r'\bgit(?:\.exe)?\s' + REST + r'(?i:\bremote\.\S+\.fetch|\bfetch\.prunetags)\s*=',
-    # symbolic-ref -d, or with two names (a write); one name alone reads
-    G + r'symbolic-ref\b(?:' + REST + r'\s(?:-[a-zA-Z]*d\b|--d)|(?:\s+(?:-m\s*(?:"[^"]*"|\'[^\']*\'|\S+)|-\S+))*'
+    # symbolic-ref -d (in a cluster too, -dq), or with two names (a write); one name alone reads. An
+    # option word is -m and its value or another option, never both (`-mx` either way would
+    # backtrack exponentially on a line of them)
+    G + r'symbolic-ref\b(?:' + REST + r'\s(?:-[a-zA-Z]*d|--d)|(?:\s+(?:-m\s*(?:"[^"]*"|\'[^\']*\'|\S+)|-(?!m)\S+))*'
         r'\s+[^\s|;&-]\S*\s+[^\s|;&])',
     # replace with a word, unless it lists
     G + r'replace\b(?!' + REST + r'\s(?:-l\b|--l))(?=' + REST + r'\s\S)',
