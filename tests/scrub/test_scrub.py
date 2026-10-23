@@ -2,8 +2,8 @@
 written out in words instead).
 
 Every file `git ls-files` lists is read. A ruling-id-shaped token (`R-` or `r-` and three or more digits,
-whatever follows them) fails the test, with file:line, unless the file is under one of the ALLOWED fixture folders, and
-even there only a made-up `R-9nnn` id may appear. Placeholders such as `R-nnnn` hold no digits and
+whatever follows them; likewise `H-<repo>-` and three or more digits) fails the test, with file:line, unless the file is under one of the ALLOWED fixture folders, and
+even there only a made-up `R-9nnn` or `H-<repo>-9nnn` id may appear. Placeholders such as `R-nnnn` hold no digits and
 pass everywhere.
 """
 import os
@@ -13,8 +13,9 @@ from kitlib.git import cmd as gitcmd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Not a machine-lock run id (r-20261008T175145Z-f9cf22): eight digits, then T and a digit.
-RULING = re.compile(r'\bR-(?![0-9]{8}T[0-9])[0-9]{3,}', re.I)
-MADE_UP = re.compile('R' + r'-9[0-9]{3}')    # built, so this file holds no id itself
+# A per-repo ledger id (H-<repo>-nnnn, kitlib/ledger/fmt.py ID) is a ruling id too.
+RULING = re.compile(r'\b(?:R-(?![0-9]{8}T[0-9])|H-(?![0-9]{8}T[0-9])[a-z0-9][a-z0-9-]*-)[0-9]{3,}', re.I)
+MADE_UP = re.compile('R' + r'-9[0-9]{3}|H-[a-z0-9][a-z0-9-]*-9[0-9]{3}')    # built, so this file holds no id itself
 
 # The one list of folders whose tests need id-shaped strings in their fixtures: the tools that
 # parse ruling ids. test_no_cites and test_builtin read it too.
@@ -24,6 +25,23 @@ FIXTURE_FOLDERS = (
     ('tests/ledger/', 'kitlib/ledger parses ledger headers'),
 )
 ALLOWED = tuple(p for p, _ in FIXTURE_FOLDERS)
+
+# The named files whose tests build ledger-id fixtures (any H-<repo>-nnnn, not only a made-up
+# 9nnn one). Only an H-id is allowed there: every R-id check still applies to these files.
+H_FIXTURE_FILES = (
+    ('tests/delegations/test_cli.py', 'delegation records carry ledger-id fixtures'),
+    ('tests/delegations/test_run.py', 'delegation runs carry ledger-id fixtures'),
+    ('tests/ledger/test_ledger.py', 'the ledger parser reads ledger-id fixtures'),
+    ('tests/ledger/test_split.py', 'the ledger split moves ledger-id fixtures'),
+)
+H_ID = re.compile(r'\bH-(?![0-9]{8}T[0-9])[a-z0-9][a-z0-9-]*-[0-9]{3,}', re.I)
+
+
+def without_h_ids(rel, line):
+    """The line with its H-ids blanked when rel is an H fixture file, else the line as it is."""
+    if rel in tuple(p for p, _ in H_FIXTURE_FILES):
+        return H_ID.sub(' ', line)
+    return line
 
 
 def tracked_files():
@@ -41,7 +59,7 @@ def findings(files, read):
             continue
         fixture = rel.startswith(ALLOWED)
         for n, line in enumerate(text.splitlines(), 1):
-            for m in RULING.finditer(line):
+            for m in RULING.finditer(without_h_ids(rel, line)):
                 if not (fixture and MADE_UP.fullmatch(m.group(0))):
                     found.append('%s:%d: %s' % (rel, n, m.group(0)))
     return found
@@ -67,16 +85,40 @@ class Scrub(unittest.TestCase):
     def test_the_check_reports_file_and_line(self):
         def rid(digits):       # built, so this file holds no id itself
             return 'R-' + digits
+        def hid(repo, digits):
+            return 'H-' + repo + '-' + digits
         files = {'docs/a.md': 'fine\nsee %s for why\n' % rid('0123'),
                  'tests/ledger/x.py': '%s %s\n' % (rid('9001'), rid('0001')),
                  'kitlib/b.py': 'R-nnnn and %s pass\n' % rid('12'),
                  'tests/other/y.py': '%s\n' % rid('9001'),
                  'tests/z.py': '%sa %s_x %s\n' % (rid('1234'), rid('1234'), rid('1234').lower()),
+                 'tests/h.py': '%s %s %s %s pass\n' % (hid('kit', '0001'), hid('a-b', '9001'),
+                                                      hid('kit', '12'), hid('x', 'nnnn')),
+                 'tests/ledger/h.py': '%s %s\n' % (hid('kit', '9001'), hid('kit', '0001')),
+                 'tests/ledger/test_split.py': '%s %s\n' % (hid('kit', '0001'), rid('0001')),
+                 'tests/delegations/test_run.py': '%s %s\n' % (hid('kit', '0042'), rid('9001')),
                  'tests/run.py': 'r-20261008T175145Z-f9cf22 is a lock run id\n'}
         self.assertEqual(findings(sorted(files), files.get),
-                         ['docs/a.md:2: ' + rid('0123'), 'tests/ledger/x.py:1: ' + rid('0001'),
+                         ['docs/a.md:2: ' + rid('0123'), 'tests/delegations/test_run.py:1: ' + rid('9001'),
+                          'tests/h.py:1: ' + hid('kit', '0001'), 'tests/h.py:1: ' + hid('a-b', '9001'),
+                          'tests/ledger/h.py:1: ' + hid('kit', '0001'),
+                          'tests/ledger/test_split.py:1: ' + rid('0001'), 'tests/ledger/x.py:1: ' + rid('0001'),
                           'tests/other/y.py:1: ' + rid('9001'), 'tests/z.py:1: ' + rid('1234'),
                           'tests/z.py:1: ' + rid('1234'), 'tests/z.py:1: ' + rid('1234').lower()])
+
+    def test_the_h_allowance_is_only_for_the_named_files_and_only_for_h_ids(self):
+        h = 'H-' + 'kit-0001'
+        r = 'R-' + '0001'
+        named = [p for p, _ in H_FIXTURE_FILES]
+        files = {p: '%s and %s\n' % (h, r) for p in named}
+        files['tests/delegations/test_other.py'] = h + '\n'     # beside a named file, not named
+        files['tests/ledger/test_ledger_x.py'] = h + '\n'
+        files['kitlib/x.py'] = h + '\n'
+        want = {p: r for p in named}
+        want.update({'kitlib/x.py': h, 'tests/delegations/test_other.py': h,
+                     'tests/ledger/test_ledger_x.py': h})
+        self.assertEqual(findings(sorted(files), files.get),
+                         ['%s:1: %s' % (p, want[p]) for p in sorted(want)])
 
 
 if __name__ == '__main__':
