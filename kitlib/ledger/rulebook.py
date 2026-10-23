@@ -247,7 +247,7 @@ def lines(book, over, sources=False, topic=None):
 
 
 # The write side (docs/ledger.md "Rulebooks"): kitlib.ledger.write pairs each change below with a
-# log entry under the log's one write lock; these functions only build the new Book.
+# log entry under the log's write lock and the rulebook's; these functions only build the new Book.
 
 def target(books, repo):
     """The name of the rulebook a rule for `repo` goes in: `all` is the shared book; else the book
@@ -312,42 +312,62 @@ def set_header(book, repos=None, budget=None, title=None):
 # The tag a paired log entry's Decides ends with, so `applied` finds a logged change that never
 # reached its rulebook (a crash between the two writes).
 TAG_RE = re.compile(r'\[(?:rule ([a-z0-9][a-z0-9._-]*)\.md ([a-z0-9][a-z0-9.-]*) (set|dropped)'
-                    r'|rulebook ([a-z0-9][a-z0-9._-]*)\.md header)\]\s*$')
+                    r'|rulebook ([a-z0-9][a-z0-9._-]*)\.md header ([0-9a-f]{12}))\]\s*$')
 
 
-def tag(op, name, key=None):
-    """The tag of a change: op 'set' or 'dropped' of rule `key` in book `name`, or 'header'."""
+def header_digest(book):
+    """12 hex of sha256 over `book`'s header (repos, budget, title): the header tag records the
+    header a change left, so `applied` can tell whether it is the one in force."""
+    data = '\n'.join(['\t'.join(book.repos), str(book.budget), book.title])
+    return hashlib.sha256(data.encode('utf-8')).hexdigest()[:12]
+
+
+def tag(op, name, key=None, head=None):
+    """The tag of a change: op 'set' or 'dropped' of rule `key` in book `name`, or 'header' with
+    `head`, the header_digest of the header it set."""
     if op == 'header':
-        return '[rulebook %s header]' % file_name(name)
+        return '[rulebook %s header %s]' % (file_name(name), head)
     return '[rule %s %s %s]' % (file_name(name), key, op)
 
 
 def applied(books, texts):
     """Error lines for each logged rule change its rulebook does not show. Per rule, the last live
     tagged entry (by its time, then file and log order; `texts` are the log files' texts) must be
-    in force: a `set` as a rule citing it, a `dropped` as no rule. A `header` needs its book.
-    Tombstones are skipped."""
-    last, heads = {}, {}
+    in force: a `set` as a rule citing it, a `dropped` as no rule, a `header` as the book's header
+    having the digest its tag records.
+    A tombstone keeps no Decides, so which change it was is unknown: a rule citing a retired id,
+    or a rule or header with a retired entry of a repo routed to its book (`target`) newer than its
+    last live change, is not judged (the retired one may have been the last change)."""
+    last, heads, retired = {}, {}, []
     for f, text in enumerate(texts):
         for n, (rid, block) in enumerate(split_entries(text)[1]):
             e, _ = parse_block(block)
-            if not e or e.get('retired') or not rid:
+            if not e or not rid:
+                continue
+            order = (e.get('when', ''), f, n)
+            if e.get('retired'):
+                retired.append((order, rid, e.get('repo', '')))
                 continue
             m = TAG_RE.search(e.get('Decides', ''))
             if not m:
                 continue
-            order = (e.get('when', ''), f, n)
             if m.group(4):
                 if m.group(4) not in heads or heads[m.group(4)][0] < order:
-                    heads[m.group(4)] = (order, rid)
+                    heads[m.group(4)] = (order, rid, m.group(5))
             else:
                 k = (m.group(1), m.group(2))
                 if k not in last or last[k][0] < order:
                     last[k] = (order, rid, m.group(3))
+    dead = {rid for _, rid, _ in retired}
+
+    def overtaken(name, order):
+        return any(o > order and target(books, repo) == name for o, _, repo in retired)
     errs = []
-    for (name, key), (_, rid, op) in sorted(last.items()):
+    for (name, key), (order, rid, op) in sorted(last.items()):
         book = books.get(name)
         rule = next((r for r in book.rules if r.key == key), None) if book else None
+        if overtaken(name, order) or (rule is not None and dead & set(rule.sources)):
+            continue
         if op == 'set' and (rule is None or rid not in rule.sources):
             why = ('there is no %s' % file_name(name) if book is None else
                    'it has no such rule' if rule is None else 'the rule does not cite it')
@@ -356,10 +376,15 @@ def applied(books, texts):
         elif op == 'dropped' and rule is not None:
             errs.append('logged rule change not applied: %s drops %s %s, which is still there; '
                         'redo it with ledger.py rule-drop' % (rid, file_name(name), key))
-    for name, (_, rid) in sorted(heads.items()):
+    for name, (order, rid, head) in sorted(heads.items()):
+        if overtaken(name, order):
+            continue
         if name not in books:
             errs.append('logged rule change not applied: %s sets the header of %s, which is not '
                         'there; redo it with ledger.py rule-set' % (rid, file_name(name)))
+        elif header_digest(books[name]) != head:
+            errs.append('logged rule change not applied: %s sets the header of %s, which is not '
+                        'the header there; redo it with ledger.py rule-set' % (rid, file_name(name)))
     return errs
 
 

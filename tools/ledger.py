@@ -14,7 +14,7 @@ R-nnnn ledger: read by show, grep, list and check, never written. Without `ledge
       branch to `repo.remote` (origin by default).
       --rule KEY --topic T [--rule-text TEXT] --checked HASH also sets rule KEY under heading T in
       REPO's rulebook (`all`: the shared one), citing the new entry, under the same write lock;
-      HASH is the `checked:` line of `conflicts` for the same rule, refused when missing or stale.
+      HASH is the `checked:` line of `conflicts` for the same rule: missing is a usage error, stale is refused.
       With --commit the rulebook goes in the same commit.
   ledger.py conflicts --repo REPO --topic T --key KEY --text TEXT
       the rules a proposed rule clashes with (same key, same topic, shared words), docs to search,
@@ -52,6 +52,7 @@ Exit codes: 0 ok; 1 no ledger configured or unreadable, a refused write, a faile
 text not found, or a commit or push that failed after the entry was written; 2 usage error.
 """
 import argparse
+import contextlib
 import os
 import sys
 
@@ -228,6 +229,10 @@ def do_add(a, found, repos):
     else:
         if not (a.topic or '').strip():
             raise Usage("--rule needs --topic, the rule's heading")
+        if not (a.checked or '').strip():
+            raise Usage('--rule needs --checked HASH: run `ledger.py conflicts --repo %s --topic ... '
+                        '--key %s --text ...`, read what it lists, then pass the checked hash it prints'
+                        % (a.repo, a.rule))
         rule = write.RuleChange(found.rules, 'set', a.rule, a.topic, a.rule_text, a.checked)
     return write_entry(a, found, repos, a.q, a.a, a.decides, a.supersedes, rule)
 
@@ -239,10 +244,14 @@ def write_entry(a, found, repos, q, ans, decides, supersedes='-', rule=None):
     plan = None
     provider = host_of(a) if (a.commit or a.push) else None
     # One write lock over prepare, add and commit (docs/ledger.md "Write lock"): no other writer's
-    # entry lands between this add and its commit. The push waits for no one.
-    with write.locked(path):
+    # entry lands between this add and its commit; with a rule, the rulebook's lock too, so no
+    # other log's writer changes the book before this commit. The push waits for no one.
+    with write.locked(path), contextlib.ExitStack() as stack:
+        book = write.rule_target(found.rules, a.repo)[1] if rule is not None else None
+        if book is not None:
+            stack.enter_context(write.locked(book))
         if a.commit or a.push:
-            extra = [write.rule_target(found.rules, a.repo)[1]] if rule is not None else []
+            extra = [book] if book is not None else []
             plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, provider=provider,
                                extra=extra)
         got = write.add(path, a.repo, a.prov, q, ans, decides, a.source, supersedes,

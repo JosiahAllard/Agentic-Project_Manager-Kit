@@ -3,13 +3,16 @@ set_rule, drop_rule and applied; kitlib.ledger.write.add with a RuleChange (one 
 write and the rulebook write); vcs.prepare's extra files (one commit); and tools/ledger.py's
 conflicts, add --rule, rule-drop and rule-set. Ids are placeholders built by rid(n)."""
 import os
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
 from kitlib.ledger import rulebook, vcs, write
 from kitlib.ledger.errors import Refused, Usage
 from tests.gitfixture import TempRepo, fixture_env
-from tests.ledger.test_rulebook import ALL, KIT, R1, R2, R3, Base, log_text, rid
+from tests.home import machine_config
+from tests.ledger.test_rulebook import ALL, KIT, R1, R2, R3, TOOL, Base, log_text, rid
 
 MODEL = 'Test Model 1'
 WHEN = '2026-10-07 09:00Z'
@@ -157,7 +160,7 @@ class WriteTest(WriteBase):
 
     def test_missing_or_stale_checked_is_refused_and_nothing_written(self):
         log, kit = self.read(self.log), self.read(self.kit_path())
-        with self.assertRaises(Refused) as e:
+        with self.assertRaises(Usage) as e:
             self.set(checked='')
         self.assertIn('--rule needs --checked', str(e.exception))
         stale = self.checked('landing.fast', 'Landing', 'Small branches land fast.')
@@ -205,11 +208,13 @@ class WriteTest(WriteBase):
         real, seen = write.write_atomic, []
 
         def spy(path, text):
-            seen.append((os.path.basename(path), write.held(self.log)))
+            seen.append((os.path.basename(path), write.held(self.log), write.held(self.kit_path())))
             real(path, text)
         with mock.patch.object(write, 'write_atomic', spy):
             self.set()
-        self.assertEqual(seen, [('LEDGER.md', True), ('kit.md', True)])
+        # Both locks at both writes: the log's, and the book's (two log files can route to one book).
+        self.assertEqual(seen, [('LEDGER.md', True, True), ('kit.md', True, True)])
+        self.assertFalse(write.held(self.kit_path()))
 
     def test_a_crash_between_the_two_writes_is_reported_by_check(self):
         real, calls = write.write_atomic, []
@@ -227,6 +232,66 @@ class WriteTest(WriteBase):
         r = self.run_tool('check')
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn('FAIL logged rule change not applied: %s sets kit.md landing.fast' % rid(4), r.stdout)
+
+    def test_a_crash_between_the_writes_of_a_header_change_is_reported_by_check(self):
+        real, calls = write.write_atomic, []
+
+        def crash(path, text):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError('simulated crash')
+            real(path, text)
+        with mock.patch.object(write, 'write_atomic', crash):
+            with self.assertRaises(OSError):
+                write.add(self.log, 'kit', 'selected', 'q', 'a', 'rulebook kit.md header: Budget 12', 's',
+                          when=WHEN, rule=write.RuleChange(self.rules, 'header', budget=12))
+        self.assertNotIn('Budget: 12', self.read(self.kit_path()))
+        r = self.run_tool('check')
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('FAIL logged rule change not applied: %s sets the header of kit.md, which is not '
+                      'the header there' % rid(4), r.stdout)
+
+    def retire(self, n):
+        write.retire(self.log, rid(n), 'spent', 'undone')
+
+    def assert_check_ok(self):
+        books = write.load_books(self.rules)
+        self.assertEqual(rulebook.applied(books, [self.read(self.log)]), [])
+        r = self.run_tool('check')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_set_then_set_then_retire_the_second_is_not_judged(self):
+        self.set()
+        self.set(text='Small branches land first.', decides='Small branches land first.')
+        self.retire(5)      # the rule now cites only the retired entry
+        self.assert_check_ok()
+
+    def test_set_then_drop_then_retire_the_drop_is_not_judged(self):
+        self.set()
+        write.add(self.log, 'kit', 'selected', 'q', 'a', 'dropped landing.fast: no', 's', when=WHEN,
+                  rule=write.RuleChange(self.rules, 'dropped', 'landing.fast'))
+        self.retire(5)
+        self.assert_check_ok()
+
+    def test_an_older_retired_entry_of_the_book_hides_no_later_crash(self):
+        write.add(self.log, 'kit', 'selected', 'q', 'a', 'Plain.', 's', when=WHEN)
+        self.retire(4)
+        real, calls = write.write_atomic, []
+
+        def crash(path, text):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError('simulated crash')
+            real(path, text)
+        with mock.patch.object(write, 'write_atomic', crash), mock.patch.object(write, 'now_utc',
+                                                                                 return_value='2026-10-08 09:00Z'):
+            with self.assertRaises(OSError):
+                change = write.RuleChange(self.rules, 'set', 'landing.fast', 'Landing', 'Fast.',
+                                          self.checked('landing.fast', 'Landing', 'Fast.'))
+                write.add(self.log, 'kit', 'selected', 'q', 'a', 'Fast.', 's', rule=change)
+        errs = rulebook.applied(write.load_books(self.rules), [self.read(self.log)])
+        self.assertEqual(len(errs), 1, errs)
+        self.assertIn('%s sets kit.md landing.fast' % rid(5), errs[0])
 
 
 class AppliedTest(unittest.TestCase):
@@ -281,8 +346,9 @@ class CliTest(WriteBase):
             self.assertEqual(r.returncode, 2, more)
             self.assertIn('USAGE', r.stderr)
         r = self.run_tool(*(base + ['--rule', 'landing.fast', '--topic', 'Landing']))
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn('--rule needs --checked', r.stderr)
+        self.assertIn('ledger.py conflicts', r.stderr)
         r = self.run_tool(*(base + ['--rule', 'landing.fast', '--topic', 'Landing', '--checked', '0' * 16]))
         self.assertEqual(r.returncode, 1)
         self.assertIn('is stale', r.stderr)
@@ -300,7 +366,9 @@ class CliTest(WriteBase):
                           '--why', 'room', '--source', 's')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('Budget: 12', self.read(self.kit_path()))
-        self.assertIn('[rulebook kit.md header]', write.show(self.read(self.log), rid(5)))
+        kit = rulebook.parse(self.read(self.kit_path()), 'kit')[0]
+        self.assertIn('[rulebook kit.md header %s]' % rulebook.header_digest(kit),
+                      write.show(self.read(self.log), rid(5)))
         self.assertEqual(self.run_tool('rule-set', '--repo', 'kit', '--prov', 'selected', '--why', 'x',
                                        '--source', 's').returncode, 2)
         self.assertEqual(self.run_tool('check').returncode, 0)
@@ -335,6 +403,43 @@ class OneCommitTest(unittest.TestCase):
         with self.assertRaises(Refused) as e:
             vcs.prepare(self.path, model=MODEL, env=self.env, extra=[self.repo.path('rulings', 'rules', 'kit.md')])
         self.assertIn('rulings/rules/kit.md has uncommitted changes', str(e.exception))
+
+
+class CliCommitTest(unittest.TestCase):
+    """`ledger.py add --rule ... --commit`: one commit of exactly the log and the rulebook."""
+
+    def setUp(self):
+        self.repo = TempRepo(bare_remote=True)
+        self.addCleanup(self.repo.cleanup)
+        self.repo.write('rulings/rules/kit.md', KIT.replace('Alpha_Checkout', 'kit'))
+        self.repo.write('rulings/LEDGER.md', log_text())
+        self.repo.commit('seed', 'rulings/rules/kit.md', 'rulings/LEDGER.md')
+        self.home = os.path.join(self.repo.base, 'home')
+        os.makedirs(self.home)
+        machine_config(self.home, {'ledger_path': self.repo.path('rulings', 'LEDGER.md')}, case=self)
+        self.env = dict(fixture_env(), USERPROFILE=self.home, HOME=self.home)
+
+    def run_tool(self, *args):
+        return subprocess.run([sys.executable, TOOL] + list(args), capture_output=True, text=True,
+                              env=self.env, timeout=120, cwd=self.repo.root)
+
+    def test_add_rule_commit_commits_the_log_and_the_rulebook_alone(self):
+        rule = ['--repo', 'kit', '--topic', 'Landing', '--key', 'landing.fast', '--text', 'Fast.']
+        r = self.run_tool('conflicts', *rule)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        checked = r.stdout.splitlines()[-1].split('checked: ', 1)[1]
+        before = int(self.repo.git('rev-list', '--count', 'HEAD'))
+        r = self.run_tool('add', '--repo', 'kit', '--prov', 'selected', '--q', 'q', '--a', 'a',
+                          '--decides', 'Fast.', '--source', 's', '--rule', 'landing.fast', '--topic', 'Landing',
+                          '--checked', checked, '--commit', '--model', MODEL)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines()[0], rid(4))
+        names = self.repo.git('show', '--name-only', '--format=', 'HEAD').split()
+        self.assertEqual(sorted(names), ['rulings/LEDGER.md', 'rulings/rules/kit.md'])
+        self.assertEqual(int(self.repo.git('rev-list', '--count', 'HEAD')), before + 1)
+        self.assertEqual(self.repo.git('status', '--porcelain'), '')
+        self.assertIn('- landing.fast: Fast. (from %s)' % rid(4),
+                      self.repo.git('show', 'HEAD:rulings/rules/kit.md'))
 
 
 if __name__ == '__main__':

@@ -18,7 +18,8 @@ is waited on for LOCK_WAIT seconds, then refused with nothing written. It nests 
 replace retries a PermissionError (a reader holding the file open) for kitlib.fs.replace.WAIT s.
 
 A rule change (`add(..., rule=RuleChange)`, docs/ledger.md "Rulebooks") writes a rulebook too,
-under the same lock: the log entry first, then the rulebook. A crash between the two leaves an
+under the log's lock and the rulebook's own (two log files can route to one rulebook): the log
+entry first, then the rulebook. A crash between the two leaves an
 entry whose rule is missing, which kitlib.ledger.rulebook `applied` reports.
 """
 import collections
@@ -150,9 +151,9 @@ def add(path, repo, prov, q, a, decides, source, supersedes='-', when=None, repo
     default now. `split`: `path` is `repo`'s per-repo file, numbered H-<repo>-nnnn; `repo` must be
     one of `repos` and never `all`, and `others` (the other files' texts) are where a delegated
     entry's `under <id>` may also point. `rule` (a RuleChange): the entry also changes the
-    rulebook of `repo` (rulebook.target), its Decides ending with the change's tag; under the one
-    write lock both are checked, then the log is written, then the rulebook. A `set` refuses a
-    missing or stale `checked` hash, and its rule text defaults to `decides`."""
+    rulebook of `repo` (rulebook.target), its Decides ending with the change's tag; under the log's
+    write lock and the rulebook's both are checked, then the log is written, then the rulebook. A
+    `set` with no `checked` hash is a Usage error, a stale one is refused, and its rule text defaults to `decides`."""
     for name, value in (('q', q), ('a', a), ('decides', decides), ('source', source)):
         if not (value or '').strip():
             raise Usage('--%s is empty' % name)
@@ -165,7 +166,12 @@ def add(path, repo, prov, q, a, decides, source, supersedes='-', when=None, repo
         raise Usage("--when must be UTC 'YYYY-MM-DD HH:MMZ', not %r" % when)
     mine = repo if split else None
     warnings = []
-    with locked(path):
+    with locked(path), contextlib.ExitStack() as stack:
+        if rule is not None:
+            # The book's own lock too: in split mode two log files (two log locks) can route to
+            # one book. Taken after the log's, as every writer does, so no two wait on each other.
+            name, book_path = rule_target(rule.folder, repo)
+            stack.enter_context(locked(book_path))
         text = read_text(path)
         _valid_or_refuse(text, repos, 'the ledger is already invalid', mine, others)
         _, blocks = E.split_entries(text)
@@ -173,6 +179,10 @@ def add(path, repo, prov, q, a, decides, source, supersedes='-', when=None, repo
         logged, book = decides, None
         if rule is not None:
             book, logged = _rule_change(rule, repo, rid, decides, warnings)
+            if book.name != name:
+                raise Refused('the rulebook for %s changed from %s to %s while waiting for its lock; '
+                              'nothing was written. Try again.' % (repo, rulebook.file_name(name),
+                                                                   rulebook.file_name(book.name)))
         block = E.render(rid, when or now_utc(), repo, prov, q, a, logged, source, supersedes)
         new = text.rstrip('\n') + '\n\n' + block
         _valid_or_refuse(new, repos, 'the new entry is invalid', mine, others)
@@ -220,7 +230,7 @@ def _rule_change(rule, repo, rid, decides, warnings):
     if rule.op == 'set':
         text = rule.text if (rule.text or '').strip() else decides
         if not (rule.checked or '').strip():
-            raise Refused('--rule needs --checked: %s; nothing was written' % fix)
+            raise Usage('--rule needs --checked: %s; nothing was written' % fix)
         now = rulebook.digest(books, name, rule.topic, rule.key, text)
         if rule.checked.strip() != now:
             raise Refused('--checked %s is stale: %s or the rule changed since it was printed; %s; '
@@ -246,7 +256,8 @@ def _rule_change(rule, repo, rid, decides, warnings):
                                    rule.budget, rule.title)
     else:
         raise Usage('unknown rule change %r' % (rule.op,))
-    return book, '%s %s' % (decides.rstrip(), rulebook.tag(rule.op, name, rule.key))
+    head = rulebook.header_digest(book) if rule.op == 'header' else None
+    return book, '%s %s' % (decides.rstrip(), rulebook.tag(rule.op, name, rule.key, head))
 
 
 def _books_or_refuse(folder, book, texts):
