@@ -1327,7 +1327,7 @@ button.danger{color:var(--warn)}
       el("div", {class:"meta"}, el("span", {class: n.urgent ? "chip need" : "chip", text: n.kind === "approval" ? "Approval" : n.kind === "question" ? "Question" : "To do"}),
         el("span", {class:"id", text: String(n.id)}), n.at ? el("span", {text: "since " + when(n.at)}) : null),
       el("h2", {text: n.title ? String(n.title) : "(untitled)"}),
-      el("div", {class:"act"}, el("button", {class:"primary", type:"button", text:"Open", onclick: () => goNeed(n)})));
+      el("div", {class:"act"}, el("button", {class:"primary", type:"button", id: "need-open-" + n.id, text:"Open", onclick: () => goNeed(n)})));
   }
   // The machine lock, read from the owner routes GET /lock/view and GET /lock/wait (the same two calls the lock page
   // makes) while Home is shown. A failed read keeps the last good line and says so; with none, it says why.
@@ -1337,38 +1337,46 @@ button.danger{color:var(--warn)}
     mach.view = j.view; mach.rev = j.lock_revision; mach.err = "";
   }
   const lockCall = (path, ms) => hub.call("GET", "/lock/" + path, null, ms);
+  // A wait that timed out with nothing changed redraws nothing: a redraw rebuilds the cards, and the focus would
+  // have to be found again every 30 s.
   async function machineWatch(){
     if (mach.on) return;
     mach.on = true;
-    let again = true, fails = 0;
-    while (state.section === "home") {
-      try {
-        takeMachine(await (again ? lockCall("view") : lockCall("wait?since=" + encodeURIComponent(String(mach.rev)) + "&timeout=30", 90000)));
-        again = false; fails = 0;
-      } catch (e) {
-        fails++; again = true;
-        mach.err = e && e.unpaired ? "this browser is not paired with the hub" : (e && e.message) || "no reason given";
-        if (state.section === "home") render();
-        await sleep(hubRetryMs(fails, e && e.retryAfter, e && e.unpaired));
-        continue;
+    try {
+      let again = true, fails = 0;
+      while (state.section === "home") {
+        const before = machineText();
+        try {
+          const j = await (again ? lockCall("view") : lockCall("wait?since=" + encodeURIComponent(String(mach.rev)) + "&timeout=30", 90000));
+          takeMachine(j);
+          again = false; fails = 0;
+          if (state.section === "home" && (j.changed === true || machineText() !== before)) render();
+        } catch (e) {
+          fails++; again = true;
+          mach.err = e && e.unpaired ? "this browser is not paired with the hub" : (e && e.message) || "no reason given";
+          if (state.section === "home" && machineText() !== before) render();
+          await sleep(hubRetryMs(fails, e && e.retryAfter, e && e.unpaired));
+        }
       }
-      if (state.section === "home") render();
-    }
-    mach.on = false;
+    } finally { mach.on = false; }
   }
-  function machineLine(){
+  function machineText(){
     const v = mach.view, bad = mach.err ? "The machine lock could not be read (" + mach.err + ")." : "";
-    if (!v) return el("p", {class: bad ? "gone" : "status", id:"machine", role:"status", text: bad || "Reading the machine lock…"});
+    if (!v) return bad || "Reading the machine lock…";
     const head = v.cores && v.cores.head ? String(v.cores.head) : "";
     const run = (Array.isArray(v.strip) ? v.strip : []).map(it => String(it && it.text || "")).filter(Boolean);
     const warn = Array.isArray(v.warnings) ? v.warnings.length : 0;
-    const text = ["Machine", head, run.length ? "running: " + run.slice(0, 3).join("; ") + (run.length > 3 ? "; and " + (run.length - 3) + " more" : "") : "nothing running",
+    return ["Machine", head, run.length ? "running: " + run.slice(0, 3).join("; ") + (run.length > 3 ? "; and " + (run.length - 3) + " more" : "") : "nothing running",
       warn ? warn + (warn === 1 ? " warning" : " warnings") : ""].filter(Boolean).join(" · ") + "." + (bad ? " Out of date: " + bad : "");
-    return el("p", {class: bad ? "gone" : "status machine", id:"machine", role:"status", text});
+  }
+  function machineLine(){
+    const v = mach.view, bad = mach.err ? "The machine lock could not be read (" + mach.err + ")." : "";
+    if (!v) return el("p", {class: bad ? "gone" : "status", id:"machine", role:"status", text: machineText()});
+    return el("p", {class: bad ? "gone" : "status machine", id:"machine", role:"status", text: machineText()});
   }
   function renderHome(){
     const items = ready ? needsYou() : [];
-    machineWatch();
+    machineWatch().catch(() => {});
     show([], machineLine(), ready ? el("h2", {id:"need-head", text: items.length ? "Waiting on you (" + items.length + ")" : "Waiting on you"}) : null,
       items.length ? items.map(n => drawn(needCard, n))
         : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing waits on you" : NOT_READY}), ready ? "Approvals, open questions and open to-dos appear here." : NOT_READY_WHY));

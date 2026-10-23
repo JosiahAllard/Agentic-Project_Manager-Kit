@@ -2181,6 +2181,17 @@ def lock_view(rev, head="12 cpu slots, 2 gpu slots", strip=(), warnings=()):
                      "warnings": list(warnings)}}
 
 
+# Holds each GET /lock/wait the page makes until the test answers it (`held.shift()(answer(...))`), as the machine lock does.
+HOLD_LOCK_WAIT = """
+    const held = [], realFetch = globalThis.fetch;
+    globalThis.fetch = (url, init) => {
+      if (!/\\/lock\\/wait/.test(url)) return realFetch(url, init);
+      calls.push({ method: init.method, path: url.replace(/^\\/api\\/v1/, ""), body: null });
+      return new Promise(done => held.push(done));
+    };
+"""
+
+
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class HomeTest(unittest.TestCase):
     """The Home view: what waits on the owner, and the machine line read from the lock's owner routes."""
@@ -2300,6 +2311,46 @@ class HomeTest(unittest.TestCase):
                 self.assertEqual(got["attrs"], ["a href"])               # the header's own link to the lock page
                 self.assertNotIn("script", got["tags"])
                 self.assertNotIn("img", got["tags"])
+
+    def test_opening_an_approval_from_the_needs_you_list_shows_it_in_the_questions_section(self):
+        got = dom("""
+            await start();
+            await click($("#need-open-A-1"));
+            return { sec: $("#sections .sec[aria-selected=true]").dataset.s, hash: location.hash, card: !!$("#approval-A-1") };
+        """, snapshot(strong=True, collections=NEEDS), hash="#home")
+        self.assertEqual(got, {"sec": "questions", "hash": "#questions", "card": True})
+
+    def test_a_wait_that_changed_nothing_leaves_the_focus_on_the_open_button(self):
+        got = dom(HOLD_LOCK_WAIT + """
+            server.route = c => c.path === "/lock/view" ? { status: 200, body: V5 } : undefined;
+            await start();
+            const open = $("#need-open-Q-1"); open.focus();
+            held.shift()(answer(200, Object.assign({}, V5, { changed: false }))); await settle();
+            const quiet = { focus: document.activeElement.id, same: $("#need-open-Q-1") === open, waits: held.length };
+            held.shift()(answer(200, V6)); await settle();
+            return { quiet, loud: { focus: document.activeElement.id, line: text($("#machine")) } };
+        """.replace("V5", json.dumps(lock_view(5))).replace("V6", json.dumps(dict(lock_view(6, head="12 cpu slots"), changed=True))),
+            snapshot(collections=NEEDS), hash="#home")
+        # nothing changed: the cards are the same nodes and the focus is where it was; a change redraws and the focus is found again
+        self.assertEqual(got["quiet"], {"focus": "need-open-Q-1", "same": True, "waits": 1})
+        self.assertEqual(got["loud"], {"focus": "need-open-Q-1", "line": "Machine · 12 cpu slots · nothing running."})
+
+    def test_the_watcher_stops_when_home_is_left_and_starts_again_on_return(self):
+        got = dom(HOLD_LOCK_WAIT + """
+            server.route = c => c.path === "/lock/view" ? { status: 200, body: V5 } : undefined;
+            await start();
+            const lock = () => calls.filter(c => c.path.startsWith("/lock/")).map(c => c.path.split("?")[0]);
+            const onHome = lock();
+            await click($("#sections [data-s=todo]"));
+            held.shift()(answer(200, V6)); await settle();
+            const left = lock();
+            await click($("#sections [data-s=home]"));
+            return { onHome, left, back: lock() };
+        """.replace("V5", json.dumps(lock_view(5))).replace("V6", json.dumps(dict(lock_view(6), changed=True))),
+            snapshot(collections=NEEDS), hash="#home")
+        self.assertEqual(got["onHome"], ["/lock/view", "/lock/wait"])
+        self.assertEqual(got["left"], ["/lock/view", "/lock/wait"])              # the answer that came after leaving asks for nothing more
+        self.assertEqual(got["back"], ["/lock/view", "/lock/wait", "/lock/view", "/lock/wait"])
 
     def test_the_sidebar_foot_says_when_the_hub_was_read(self):
         got = dom("const before = text($('#sidefoot')); await start(); return [before, text($('#sidefoot'))];", snapshot())
