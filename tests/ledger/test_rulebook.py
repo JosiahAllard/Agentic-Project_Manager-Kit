@@ -14,28 +14,31 @@ TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.absp
                     'tools', 'ledger.py')
 WHEN = '2026-10-06 08:00Z'
 
-KIT = '''# Kit rules
-Repos: Agentic-Project_Manager-Kit
+def rid(n):
+    return 'R-%04d' % n
+
+
+R1, R2, R3, R99 = (rid(n) for n in (1, 2, 3, 99))
+
+
+KIT = f'''# Kit rules
+Repos: Alpha_Checkout
 Budget: 2
 
 ## Landing
-- landing.batch: Landers batch up to three branches. (from R-0001, R-0002)
-- landing.alone: A high-risk branch lands alone. (from R-0002)
+- landing.batch: Landers batch up to three branches. (from {R1}, {R2})
+- landing.alone: A high-risk branch lands alone. (from {R2})
 
 ## Machine
-- machine.lock: Heavy runs take the machine lock. (from R-0003)
+- machine.lock: Heavy runs take the machine lock. (from {R3})
 '''
-ALL = '''# Shared rules
+ALL = f'''# Shared rules
 Repos: all
 
 ## Process
-- process.refusal: A refusal is final; report it verbatim. (from R-0001)
-- machine.lock: Heavy runs wait in the queue. (from R-0002)
+- process.refusal: A refusal is final; report it verbatim. (from {R1})
+- machine.lock: Heavy runs wait in the queue. (from {R2})
 '''
-
-
-def rid(n):
-    return 'R-%04d' % n
 
 
 def log_text(count=3):
@@ -50,7 +53,7 @@ class ParseTest(unittest.TestCase):
         book, errs = rulebook.parse(KIT, 'kit')
         self.assertEqual(errs, [])
         self.assertEqual(book.title, 'Kit rules')
-        self.assertEqual(book.repos, ('Agentic-Project_Manager-Kit',))
+        self.assertEqual(book.repos, ('Alpha_Checkout',))
         self.assertEqual(book.budget, 2)
         self.assertEqual([r.key for r in book.rules], ['landing.batch', 'landing.alone', 'machine.lock'])
         self.assertEqual(book.rules[0].sources, (rid(1), rid(2)))
@@ -68,7 +71,7 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(book.budget, rulebook.DEFAULT_BUDGET)
 
     def test_duplicate_key(self):
-        _, errs = rulebook.parse(KIT + '- machine.lock: Again. (from R-0001)\n', 'kit')
+        _, errs = rulebook.parse(KIT + f'- machine.lock: Again. (from {R1})\n', 'kit')
         self.assertEqual(len(errs), 1)
         self.assertIn('duplicate key machine.lock', errs[0])
         self.assertIn('kit.md:', errs[0])
@@ -89,17 +92,17 @@ class ParseTest(unittest.TestCase):
         self.assertIn("unknown line 'stray prose'", errs[0])
 
     def test_header_problems(self):
-        _, errs = rulebook.parse('# T\n\n## A\n- a.b: x (from R-0001)\n', 'kit')
+        _, errs = rulebook.parse(f'# T\n\n## A\n- a.b: x (from {R1})\n', 'kit')
         self.assertEqual(errs, ['kit.md: no `Repos:` header line'])
         _, errs = rulebook.parse('# T\nRepos: x\nBudget: many\n', 'kit')
         self.assertIn('Budget needs a positive number', errs[0])
-        _, errs = rulebook.parse('# T\nRepos: x\n- a.b: x (from R-0001)\n', 'kit')
+        _, errs = rulebook.parse(f'# T\nRepos: x\n- a.b: x (from {R1})\n', 'kit')
         self.assertIn('before any `## topic` heading', errs[0])
         _, errs = rulebook.parse('# T\nRepos: x\n## A\nRepos: y\n', 'kit')
         self.assertIn('unknown line', errs[0])
 
     def test_a_bad_key(self):
-        _, errs = rulebook.parse('# T\nRepos: x\n## A\n- Landing: x (from R-0001)\n', 'kit')
+        _, errs = rulebook.parse(f'# T\nRepos: x\n## A\n- Landing: x (from {R1})\n', 'kit')
         self.assertEqual(len(errs), 1)
         self.assertIn('not <topic-slug>.<slug>', errs[0])
 
@@ -123,43 +126,43 @@ class CheckTest(unittest.TestCase):
 
     def test_a_cited_id_missing_from_the_log(self):
         got = rulebook.check(self.books(), self.ids(2))
-        self.assertEqual(got.errors, ['kit.md:10: rule machine.lock cites R-0003, which is not in the log'])
+        self.assertEqual(got.errors, [f'kit.md:10: rule machine.lock cites {R3}, which is not in the log'])
 
 
 class ForRepoTest(unittest.TestCase):
 
     def books(self):
         out = {}
-        for name, repos in (('kit', 'Agentic-Project_Manager-Kit'), ('pm', 'project-manager, Pm_Tools'),
-                            ('all', 'all'), ('griffball', 'GriffBall')):
+        for name, repos in (('kit', 'Alpha_Checkout'), ('pm', 'pm-main, Pm_Tools'),
+                            ('all', 'all'), ('gamma', 'Gamma')):
             out[name] = rulebook.parse('# T\nRepos: %s\n' % repos, name)[0]
-        out['retribution'] = rulebook.parse('# T\nRepos: elsewhere\n', 'retribution')[0]
+        out['beta'] = rulebook.parse('# T\nRepos: elsewhere\n', 'beta')[0]
         return out
 
     def test_repos_line_maps_a_folder(self):
         books = self.books()
-        self.assertEqual(rulebook.for_repo(books, 'Agentic-Project_Manager-Kit'), 'kit')
-        self.assertEqual(rulebook.for_repo(books, 'agentic-project-manager-kit'), 'kit')
-        self.assertEqual(rulebook.for_repo(books, 'griffball'), 'griffball')
-        self.assertEqual(rulebook.for_repo(books, 'project-manager'), 'pm')
+        self.assertEqual(rulebook.for_repo(books, 'Alpha_Checkout'), 'kit')
+        self.assertEqual(rulebook.for_repo(books, 'alpha-checkout'), 'kit')
+        self.assertEqual(rulebook.for_repo(books, 'gamma'), 'gamma')
+        self.assertEqual(rulebook.for_repo(books, 'pm-main'), 'pm')
         self.assertEqual(rulebook.for_repo(books, 'Pm_Tools'), 'pm')
 
     def test_the_file_stem_is_the_fallback_and_shared_is_never_a_repo(self):
         books = self.books()
-        self.assertEqual(rulebook.for_repo(books, 'Retribution'), 'retribution')
+        self.assertEqual(rulebook.for_repo(books, 'Beta'), 'beta')
         self.assertIsNone(rulebook.for_repo(books, 'unknown'))
         self.assertIsNone(rulebook.for_repo(books, 'all'))
 
     def test_view_marks_an_override_and_drops_the_shared_copy(self):
         kit, _ = rulebook.parse(KIT, 'kit')
         shared, _ = rulebook.parse(ALL, 'all')
-        views = rulebook.view({'kit': kit, 'all': shared}, 'Agentic-Project_Manager-Kit')
+        views = rulebook.view({'kit': kit, 'all': shared}, 'Alpha_Checkout')
         self.assertEqual([b.name for b, _ in views], ['all', 'kit'])
         shared_lines, n = rulebook.lines(*views[0])
         self.assertEqual(n, 1)
         self.assertNotIn('machine.lock', '\n'.join(shared_lines))
         kit_lines, _ = rulebook.lines(*views[1], sources=True)
-        self.assertIn('- machine.lock: Heavy runs take the machine lock. [overrides shared] (from R-0003)',
+        self.assertIn(f'- machine.lock: Heavy runs take the machine lock. [overrides shared] (from {R3})',
                       kit_lines)
         self.assertEqual(kit_lines[0], '# kit (3 rules, over its budget of 2)')
 
@@ -204,11 +207,24 @@ class FilesTest(Base):
         f = files.of_config({'ledger_path': self.log, 'ledger_dir': self.dir, 'ledger_repos': ['pm']})
         self.assertEqual(f.rules, os.path.join(self.dir, 'rules'))
 
-    def test_the_precommit_targets_list_every_rulebook(self):
+    def test_the_books_are_the_lower_case_md_files_with_the_shared_one_last(self):
+        for name in ('kit', 'all', 'beta'):
+            self.book(name, KIT)
+        self.book('Upper', KIT)
+        self.put(os.path.join(self.dir, 'rules', 'notes.txt'), 'x')
+        os.makedirs(os.path.join(self.dir, 'rules', 'folder.md'))
+        got = rulebook.paths(os.path.join(self.dir, 'rules'))
+        self.assertEqual(list(got), ['beta', 'kit', 'all'])
+        self.assertEqual(rulebook.paths(os.path.join(self.dir, 'missing')), {})
+
+    def test_the_precommit_targets_list_each_rulebook_present(self):
+        self.assertEqual(precommit.targets(self.home), (self.log, os.path.join(self.dir, 'STANDING.md')))
+        for name in ('kit', 'all', 'beta'):
+            self.book(name, KIT)
         got = precommit.targets(self.home)
         self.assertEqual(got[:2], (self.log, os.path.join(self.dir, 'STANDING.md')))
         self.assertEqual(got[2:], tuple(os.path.join(self.dir, 'rules', n + '.md')
-                                        for n in ('kit', 'retribution', 'griffball', 'pm', 'all')))
+                                        for n in ('beta', 'kit', 'all')))
 
 
 class CliTest(Base):
@@ -219,7 +235,7 @@ class CliTest(Base):
         self.book('all', ALL)
 
     def test_repo_prints_shared_then_its_own(self):
-        r = self.run_tool('rules', '--repo', 'Agentic-Project_Manager-Kit')
+        r = self.run_tool('rules', '--repo', 'Alpha_Checkout')
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.splitlines()
         self.assertEqual(lines[0], '# shared (2 rules)')
@@ -230,9 +246,9 @@ class CliTest(Base):
         self.assertNotIn('(from', r.stdout)
 
     def test_sources_and_topic(self):
-        r = self.run_tool('rules', '--repo', 'Agentic-Project_Manager-Kit', '--sources', '--topic', 'landing')
+        r = self.run_tool('rules', '--repo', 'Alpha_Checkout', '--sources', '--topic', 'landing')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('(from R-0001, R-0002)', r.stdout)
+        self.assertIn(f'(from {R1}, {R2})', r.stdout)
         self.assertNotIn('process.refusal', r.stdout)
 
     def test_all_prints_every_book(self):
@@ -268,11 +284,11 @@ class CliTest(Base):
         self.assertIn('rulebooks: 5 rules in 2 files', r.stdout)
 
     def test_check_fails_on_a_bad_rulebook(self):
-        self.book('pm', '# T\nRepos: p\n## A\n- a.b: no source\n- a.c: x (from R-0099)\njunk\n')
+        self.book('pm', f'# T\nRepos: p\n## A\n- a.b: no source\n- a.c: x (from {R99})\njunk\n')
         r = self.run_tool('check', '--base', 'HEAD')
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn('FAIL pm.md:4: rule a.b has no source', r.stdout)
-        self.assertIn('FAIL pm.md:5: rule a.c cites R-0099, which is not in the log', r.stdout)
+        self.assertIn(f'FAIL pm.md:5: rule a.c cites {R99}, which is not in the log', r.stdout)
         self.assertIn('unknown line', r.stdout)
         self.assertIn('3 problem(s)', r.stdout)
 

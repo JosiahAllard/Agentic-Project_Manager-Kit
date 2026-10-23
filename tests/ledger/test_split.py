@@ -272,22 +272,18 @@ class PrecommitTargetsTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, True)
         self.dir = os.path.join(self.home, 'rulings')
 
-    def rulebooks(self):
-        return tuple(os.path.join(self.dir, 'rules', n + '.md')
-                     for n in ('kit', 'retribution', 'griffball', 'pm', 'all'))
-
     def test_every_file_the_frozen_one_and_the_digest(self):
         frozen = os.path.join(self.dir, 'LEDGER.md')
         machine_config(self.home, {'ledger_dir': self.dir, 'ledger_repos': ['alpha', 'pm'], 'ledger_path': frozen},
                        case=self)
         self.assertEqual(precommit.targets(self.home),
                          (os.path.join(self.dir, 'alpha.md'), os.path.join(self.dir, 'pm.md'), frozen,
-                          os.path.join(self.dir, standing.NAME)) + self.rulebooks())
+                          os.path.join(self.dir, standing.NAME)))
 
     def test_without_the_frozen_file(self):
         machine_config(self.home, {'ledger_dir': self.dir, 'ledger_repos': ['alpha']}, case=self)
         self.assertEqual(precommit.targets(self.home),
-                         (os.path.join(self.dir, 'alpha.md'), os.path.join(self.dir, standing.NAME)) + self.rulebooks())
+                         (os.path.join(self.dir, 'alpha.md'), os.path.join(self.dir, standing.NAME)))
 
 
 if __name__ == '__main__':

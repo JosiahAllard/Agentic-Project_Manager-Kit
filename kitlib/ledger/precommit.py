@@ -65,8 +65,8 @@ def command(root):
 def targets(home=None):
     """The ledger files, the standing digest and the rulebooks, from the machine config: `(ledger
     path, digest path)` for the one-file ledger; with `ledger_dir`, every repo's file, then the
-    frozen `ledger_path` when set, then the digest; then the fixed rulebook files
-    (kitlib.ledger.rulebook `NAMES`), present or not. Raises ConfigError when the config cannot be read or
+    frozen `ledger_path` when set, then the digest; then the rulebook files
+    (kitlib.ledger.rulebook `paths`) present when it is called. Raises ConfigError when the config cannot be read or
     sets neither `ledger_path` nor `ledger_dir`."""
     found = files.of_config(config.user_config(home))
     if found is None:

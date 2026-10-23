@@ -2,12 +2,12 @@
 "Rulebooks"), in `<folder of the log>/rules/` (kitlib.ledger.files `Files.rules`).
 
 ```
-# Kit rules
-Repos: Agentic-Project_Manager-Kit
+# Alpha rules
+Repos: alpha-checkout
 Budget: 40
 
 ## Landing
-- landing.batch: Landers batch up to three branches; a high-risk branch lands alone. (from R-0012, R-0031)
+- landing.batch: Landers batch up to three branches; a high-risk branch lands alone. (from <log id>, <log id>)
 ```
 
 The header has a `# title`, a `Repos:` line (checkout folder names, comma-separated) and an optional
@@ -27,7 +27,6 @@ from . import read
 from .fmt import ID
 
 SHARED = 'all'
-NAMES = ('kit', 'retribution', 'griffball', 'pm', SHARED)
 FOLDER = 'rules'
 DEFAULT_BUDGET = 40
 
@@ -49,8 +48,17 @@ def file_name(name):
 
 
 def paths(folder):
-    """`{name: path}` of the fixed rulebooks in `folder`, in NAMES order (the files may not exist)."""
-    return {n: os.path.join(folder, file_name(n)) for n in NAMES}
+    """`{name: path}` of the rulebooks present in `folder` (every `<name>.md` with a lower-case
+    name), sorted by name with the shared one last."""
+    try:
+        found = os.listdir(folder)
+    except OSError:
+        return {}
+    names = sorted(f[:-3] for f in found
+                   if f.endswith('.md') and NAME_RE.match(f[:-3]) and f[:-3] == f[:-3].lower()
+                   and os.path.isfile(os.path.join(folder, f)))
+    names.sort(key=lambda n: n == SHARED)
+    return {n: os.path.join(folder, file_name(n)) for n in names}
 
 
 def normal(folder_name):
@@ -133,12 +141,10 @@ def render(book):
 
 
 def load(folder):
-    """`({name: Book}, [error lines])` of the rulebooks present in `folder`; a missing file is no
-    book and no error, an unreadable one is an error."""
+    """`({name: Book}, [error lines])` of the rulebooks present in `folder`; no file is no book and
+    no error, an unreadable one is an error."""
     books, errs = {}, []
     for name, path in paths(folder).items():
-        if not os.path.exists(path):
-            continue
         text, why = read.read_file(path)
         if text is None:
             errs.append(why)

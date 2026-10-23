@@ -154,11 +154,11 @@ Logic: `kitlib/ledger/standing.py`.
 
 Logic: `kitlib/ledger/rulebook.py` (`parse`, `render`, `load`, `check`, `for_repo`, `view`, `lines`); the folder from `kitlib/ledger/files.py` `of_config` (`Files.rules`); tests `tests/ledger/test_rulebook.py`.
 
-The standing rules of the machine live in rulebooks beside the log, in a `rules` folder: `<ledger_dir>/rules/` with `ledger_dir` set, else `rules/` in the folder of the `ledger_path` file. No config key names it. The files are fixed: `kit.md`, `retribution.md`, `griffball.md`, `pm.md`, and `all.md`, the shared one (printed as "shared"). A file that does not exist is no rulebook and no error. This slice reads and checks them; nothing writes them yet.
+The standing rules of the machine live in rulebooks beside the log, in a `rules` folder: `<ledger_dir>/rules/` with `ledger_dir` set, else `rules/` in the folder of the `ledger_path` file. No config key names it. The books are the lower-case `<name>.md` files there: one per repository, named by a short name, and `all.md`, the shared one (printed as "shared"). No file is no rulebook and no error. This slice reads and checks them; nothing writes them yet.
 
 ```
-# Kit rules
-Repos: Agentic-Project_Manager-Kit
+# Alpha rules
+Repos: alpha-checkout
 Budget: 40
 
 ## Landing
@@ -176,7 +176,7 @@ Budget: 40
 
 Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py` and `tests/githooks/test_precommit.py`.
 
-Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes a ledger file or the standing digest (`precommit.targets`: every repository's file, the `ledger_path` file, the digest and the five rulebook files): it runs `tools/ledger.py check --base HEAD` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of all of them, so such a commit is refused before it runs when any of them has unstaged changes, whichever of them is staged.
+Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes a ledger file or the standing digest (`precommit.targets`: every repository's file, the `ledger_path` file, the digest and each rulebook file present): it runs `tools/ledger.py check --base HEAD` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of all of them, so such a commit is refused before it runs when any of them has unstaged changes, whichever of them is staged.
 
 `githooks/pre-commit.py` makes one call, `kitlib.githooks.precommit.main`, which runs the kit's checks (`CHECKS`: the render step, `kitlib.githooks.render`, which acts only in a kit checkout with a render source staged (docs/content.md "Render on commit"), then the ledger step) in order and stops at the first refusal. Nothing there runs a repository's own `hooks/pre-commit`; a later step would be one more entry in `CHECKS` (docs/pm-data-branch.md "Decided by the owner").
 
