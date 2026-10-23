@@ -123,7 +123,7 @@ The owner can approve one run of an operation on the hub, as a card that shows t
 
 An agent asks with `delegated.py request D-nnn [--arg NAME=VALUE]... --title T [--reason R]`. It checks the arguments, the program and the scope below as `run` does, then posts the request with the run line and prints its id. Nothing is asked when a check fails.
 
-The scope: an approved run acts only on the Dev Drive, the machine config's `dev_drive` (docs/kit-json.md). `place.check` judges each argument value holding `/`, `\` or `:`, and each token of the filled command after the program; an option token (`/MIR`, `-o`, `/LOG:<path>`, `--out=<path>`) only by its value part. Each path judged must:
+The scope: an approved run acts only on the Dev Drive, the machine config's `dev_drive` (docs/kit-json.md). `place.check` judges each argument value holding `/`, `\` or `:`, and each token of the filled command after the program; an option token (`/MIR`, `-o`, `/LOG:<path>`, `--out=<path>`) only by its value part. A text that is `.` or `..`, or ends in `=.` or `=..` (`dest=..`), is judged as a path too. Each path judged must:
 
 - be absolute with a drive; a relative, drive-relative or UNC path is refused;
 - lie under the Dev Drive, as given and with its nearest existing folder's links resolved, and not be its root;
@@ -152,6 +152,7 @@ How `commit.py --owner-approval` uses an approval is different: it writes no led
 ## Known limits
 
 - An approved run's scope covers only the paths named on its command line. Where the program writes by default (an installer's own folder, a tool's cache or log) is not judged.
+- Owner-written command tokens such as `-C..` or `...` are not judged as paths. An agent's argument values cannot take these forms: `schema.check_arg` refuses `..` and a leading `-`.
 - The scope is checked before the order, the preconditions and the claim, and the run starts after them. A checkout or a link made inside a judged folder in between is not seen.
 - The scope check does not see everything: a bare repository (a folder that is a repository without `.git`), a hard link, and a junction made after the check are not found.
 - An approval is consumed on the hub before its entry is written. If the ledger then refuses it (the lock is busy, the file cannot be written), the approval is used up and nothing ran: the agent asks for a new one.
