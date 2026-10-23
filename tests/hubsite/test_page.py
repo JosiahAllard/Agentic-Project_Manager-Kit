@@ -2022,6 +2022,115 @@ class DocsTest(unittest.TestCase):
         self.assertEqual(got["d2"], "Delete")
 
 
+# What a test reads off the shell: the section the sidebar and the tab bar mark, the tab marked inside the Inbox,
+# the Backlog and Info, the address's hash and how many history entries the tab has.
+SHELL_NOW = """
+    const marked = q => $$(q).filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s || b.dataset.qt || b.dataset.sf || b.dataset.nf);
+    const now = () => ({ sec: marked("#sections .sec"), tb: marked("#tabbar .tb"), qt: marked("#qtabs .tab"), sf: marked("#stabs .tab"),
+                         nf: marked("#ftabs .tab"), hash: location.hash, len: history.length });
+"""
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ShellTest(unittest.TestCase):
+    """The Triage shell: the sidebar and the phone's tab bar, the hash routes, Back, and the J and K keys."""
+
+    def test_every_hash_route_opens_its_section_and_tab(self):
+        cases = {"": ("questions", "questions", None, None, "#questions"),
+                 "#questions": ("questions", "questions", None, None, "#questions"),
+                 "#inbox": ("questions", "inbox", None, None, "#inbox"),
+                 "#todo": ("todo", None, None, None, "#todo"),
+                 "#topm": ("topm", None, None, None, "#topm"),
+                 "#backlog": ("backlog", None, "current", None, "#backlog"),
+                 "#stories": ("backlog", None, "current", None, "#stories"),
+                 "#parked": ("backlog", None, "parked", None, "#parked"),
+                 "#docs": ("docs", None, None, None, "#docs"),
+                 "#info": ("info", None, None, "usage", "#info"),
+                 "#usage": ("info", None, None, "usage", "#usage"),
+                 "#agents": ("info", None, None, "agents", "#agents"),
+                 "#nowhere": ("questions", "questions", None, None, "#questions")}
+        for hash_, (sec, qt, sf, nf, shown) in cases.items():
+            got = dom(SHELL_NOW + "await start(); return now();", snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash=hash_)
+            with self.subTest(hash=hash_):
+                self.assertEqual(got["sec"], [sec])
+                self.assertEqual(got["tb"], [sec])                 # the tab bar marks the same section
+                if qt: self.assertEqual(got["qt"], [qt])
+                if sf: self.assertEqual(got["sf"], [sf])
+                if nf: self.assertEqual(got["nf"], [nf])
+                self.assertEqual(got["hash"], shown)               # a missing or unknown hash is corrected in place,
+                self.assertEqual(got["len"], 1)                    # with no history entry of its own
+
+    def test_back_returns_to_each_section_and_tab_the_owner_picked(self):
+        got = dom(SHELL_NOW + """
+            await start();
+            const seen = [now()];
+            await click($("#sections [data-s=todo]")); seen.push(now());
+            await click($("#sections [data-s=todo]")); seen.push(now());      // the section already shown: no new entry
+            await click($("#sections [data-s=backlog]")); seen.push(now());
+            await click($("#stabs [data-sf=parked]")); seen.push(now());
+            for (let i = 0; i < 3; i++) { await back(); seen.push(now()); }
+            await navigate("#agents"); seen.push(now());
+            await back(); seen.push(now());
+            return seen;
+        """, snapshot(collections=LISTS, views={"backlog": BACKLOG}))
+        self.assertEqual([(s["sec"], s["hash"], s["len"]) for s in got], [
+            (["questions"], "#questions", 1), (["todo"], "#todo", 2), (["todo"], "#todo", 2), (["backlog"], "#backlog", 3),
+            (["backlog"], "#parked", 4), (["backlog"], "#backlog", 4), (["todo"], "#todo", 4), (["questions"], "#questions", 4),
+            (["info"], "#agents", 2), (["questions"], "#questions", 2)])
+        self.assertEqual(got[4]["sf"], ["parked"])
+        self.assertEqual(got[5]["sf"], ["current"])                    # Back from Parked is the Backlog's current list
+        self.assertEqual(got[8]["nf"], ["agents"])
+        self.assertTrue(all(s["tb"] == s["sec"] for s in got))
+
+    def test_j_and_k_move_through_the_cards_and_never_while_typing(self):
+        got = dom("""
+            await start();
+            const at = () => document.activeElement.id;
+            const steps = [];
+            const press = async (k, node, mods) => { const ev = await key(k, node, mods); steps.push([k, at(), ev.defaultPrevented]); };
+            await press("j"); await press("j"); await press("j"); await press("k");
+            $("#list article button").focus(); await press("j");                  // from inside a card: the next card
+            const editable = document.createElement("div"); editable.setAttribute("contenteditable", ""); body.append(editable);
+            const urgent = $("#add-urgent");
+            const kept = [];
+            for (const field of [$("#add-title"), $("#add-detail"), $("#repo"), urgent, editable]) {
+              field.focus(); const ev = await key("j", field); kept.push([document.activeElement === field, ev.defaultPrevented]);
+            }
+            $("#list article").focus();
+            const ctrl = await key("j", null, { ctrlKey: true });
+            $("#reader").hidden = false;
+            const reading = await key("j");
+            return { steps, kept, ctrl: [at(), ctrl.defaultPrevented], reading: [at(), reading.defaultPrevented],
+                     cards: $$("#list article").map(c => c.id) };
+        """, snapshot(collections=LISTS), hash="#todo")
+        first, second = got["cards"][0], got["cards"][1]
+        self.assertEqual(len(got["cards"]), 2)
+        self.assertEqual(got["steps"], [["j", first, True], ["j", second, True], ["j", second, True], ["k", first, True],
+                                        ["j", second, True]])
+        self.assertEqual(got["kept"], [[True, False]] * 5)              # a text field, a select, a checkbox, an editable
+        self.assertEqual(got["ctrl"], [first, False])
+        self.assertEqual(got["reading"], [first, False])
+
+    def test_the_tab_bar_is_the_sidebar_on_a_phone(self):
+        got = dom("""
+            await start();
+            const tabs = $$("#tabbar .tb").map(b => [b.dataset.s, b.getAttribute("role")]);
+            const secs = $$("#sections .sec").map(b => [b.dataset.s, b.getAttribute("role")]);
+            const counts = $$("#tabbar [data-of]").map(n => [n.dataset.of, text(n), n.className, text(document.getElementById(n.dataset.of)),
+                                                               document.getElementById(n.dataset.of).className]);
+            await click($("#tabbar [data-s=todo] .n"));
+            return { tabs, secs, counts, after: { sec: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
+                     tb: $$("#tabbar .tb").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s), hash: location.hash,
+                     section: localStorage.getItem("oq.section") } };
+        """, snapshot(collections=LISTS))
+        self.assertEqual(got["tabs"], got["secs"])
+        self.assertEqual([c[0] for c in got["counts"]], ["n-q", "n-pm", "n-t", "n-s", "n-d"])
+        for of, shown, cls, src, src_cls in got["counts"]:
+            self.assertEqual((shown, cls), (src, src_cls), of)
+        self.assertEqual(dict((c[0], c[1]) for c in got["counts"])["n-t"], "2")
+        self.assertEqual(got["after"], {"sec": ["todo"], "tb": ["todo"], "hash": "#todo", "section": "todo"})
+
+
 class PageTextTest(unittest.TestCase):
     def setUp(self):
         self.p = page()
@@ -2038,6 +2147,19 @@ class PageTextTest(unittest.TestCase):
         self.assertRegex(style, r"(?m)^form\.add\{display:grid")
         self.assertRegex(self.markup, r'<div class="tabs"[^>]*\shidden>')
         self.assertRegex(self.markup, r'<form class="add"[^>]*\shidden[ >]')
+
+    def test_the_shell_is_a_sidebar_and_on_a_phone_a_tab_bar(self):
+        """The stand-in DOM has no CSS: the rules that swap the sidebar for the tab bar at a phone's width are read here."""
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        self.assertIn(".tabbar{display:none}", style)
+        phone = re.search(r"@media \(max-width:760px\)\{(.*?)\n\}", style, re.S)
+        self.assertTrue(phone, "the phone's media block")
+        self.assertIn(".side{display:none}", phone.group(1))
+        self.assertIn(".tabbar{display:grid", phone.group(1))
+        self.assertRegex(self.markup, r'<nav class="side"[^>]*>\s*<div class="sections" role="tablist" id="sections"')
+        self.assertRegex(self.markup, r'<div class="tabbar" role="tablist" id="tabbar"')
+        with open(os.path.join(WEB, "hub.css"), encoding="utf-8") as f:
+            self.assertIn("--side-w:236px", f.read())
 
     def test_no_artifact_store_call(self):
         for gone in ("window.claude", "onSnapshot", ".collection(", "sendToClaude", "db.", "user.can("):

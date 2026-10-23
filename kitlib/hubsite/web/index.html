@@ -6,7 +6,9 @@
 <title>Action Hub</title>
 <link rel="stylesheet" href="hub.css">
 <style>
-/* Layout: one hub column — summary strip, filter tabs, question cards stacked newest-open first.
+/* Layout, the Triage shell: the sections in a sidebar, then the list pane (summary strip, filter tabs, cards stacked
+   newest-open first), then a detail pane whenever one is open. At phone width a tab bar along the bottom takes the
+   sidebar's place, and an open detail pane takes the list's.
    Nothing here is loaded from the network: the fonts named below are used only where the machine has them. */
 [hidden]{display:none !important}
 :root{
@@ -16,7 +18,26 @@
   --accent-soft:#1c3346; --rec-soft:#3a2d14;}}
 :root[data-theme="dark"]{
   --accent-soft:#1c3346; --rec-soft:#3a2d14;}
-.wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px}
+.wrap{display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);min-height:100vh}
+.wrap:has(> #pane-detail:not([hidden])){grid-template-columns:var(--side-w) minmax(320px,440px) minmax(0,1fr)}
+.side{background:var(--side);border-right:1px solid var(--line);padding:18px 10px;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
+.listpane{width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px;align-content:start}
+.detailpane{background:var(--surface);border-left:1px solid var(--line);padding:24px 28px;min-width:0;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
+.tabbar{display:none}
+.tb{font:500 .72rem var(--f-body);background:none;border:0;color:var(--muted);padding:6px 2px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0}
+.tb[aria-selected="true"]{color:var(--accent);font-weight:700}
+.tb .n{font:600 .68rem var(--f-mono);font-variant-numeric:tabular-nums;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:0 6px}
+.tb .n.hot{background:var(--warn-soft);color:var(--warn)}
+.tb:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#list article:focus{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:760px){
+  .wrap,.wrap:has(> #pane-detail:not([hidden])){grid-template-columns:minmax(0,1fr)}
+  .side{display:none}
+  .listpane{padding-block:16px 88px}
+  .wrap:has(> #pane-detail:not([hidden])) > .listpane{display:none}
+  .detailpane{position:static;height:auto;border-left:0;padding:16px 16px 88px}
+  .tabbar{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
+}
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
 .sub{color:var(--muted);margin:0;max-width:62ch}
 .links{margin:0;font-size:.9rem}.links a{color:var(--accent)}
@@ -32,7 +53,7 @@ h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:bal
 .tab:focus-visible,button:focus-visible,textarea:focus-visible,label.opt:focus-within{outline:2px solid var(--accent);outline-offset:2px}
 select{font:500 .85rem var(--f-body);padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
 .list{display:grid;gap:14px}
-.wrap>*,.list>*{min-width:0}
+.listpane>*,.list>*{min-width:0}
 .usage{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
 .acct{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
 .acct h3{margin:0;font:600 1rem var(--f-body);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
@@ -92,10 +113,11 @@ button:disabled{opacity:.5;cursor:default}
 .ans{background:var(--bg);border-radius:8px;padding:10px 12px;display:grid;gap:4px;font-size:.9rem}
 .ans b{font-weight:600}
 .empty{background:var(--surface);border:1px dashed var(--line);border-radius:10px;padding:28px 20px;text-align:center;color:var(--muted)}
-.sections{display:flex;flex-wrap:wrap;gap:0 4px;border-bottom:1px solid var(--line)}
-@media (max-width:560px){.sec{padding:8px 8px 10px;font-size:.92rem}}
-.sec{font:600 1rem var(--f-body);background:none;border:0;border-bottom:3px solid transparent;color:var(--muted);padding:8px 12px 10px;cursor:pointer;display:inline-flex;gap:8px;align-items:center}
-.sec[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.sections{display:flex;flex-direction:column;gap:2px}
+.sec{font:600 .95rem var(--f-body);background:none;border:0;border-radius:7px;color:var(--muted);padding:7px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;text-align:left;width:100%}
+.sec>.n:first-of-type{margin-left:auto}
+.sec:hover{color:var(--fg)}
+.sec[aria-selected="true"]{color:var(--fg);background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
 .sec .n{font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
 .sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .t{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
@@ -156,6 +178,18 @@ button.danger{color:var(--warn)}
 </head>
 <body>
 <div class="wrap">
+  <nav class="side" aria-label="Sections">
+  <div class="sections" role="tablist" id="sections" aria-orientation="vertical">
+    <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
+    <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
+    <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
+    <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
+    <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
+    <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
+  </div>
+  </nav>
+
+  <main class="listpane" id="pane-list">
   <header>
     <h1>Action Hub</h1>
     <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
@@ -164,15 +198,6 @@ button.danger{color:var(--warn)}
     <div class="status" id="pushseen" role="status"></div>
     <div class="status err" id="loaderr" role="alert" hidden></div>
   </header>
-
-  <div class="sections" role="tablist" id="sections">
-    <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
-    <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
-    <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
-    <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
-    <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
-    <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
-  </div>
 
   <div class="bar" id="qbar">
     <div class="tabs" role="tablist" id="qtabs" data-for="inbox">
@@ -232,6 +257,18 @@ button.danger{color:var(--warn)}
   <div class="list" id="list">
     <div class="empty"><strong>Loading questions…</strong>The PM posts each question here with its context, options and recommendation.</div>
   </div>
+  </main>
+
+  <section class="detailpane" id="pane-detail" aria-label="Detail" hidden></section>
+
+  <div class="tabbar" role="tablist" id="tabbar" aria-label="Sections">
+    <button class="tb" role="tab" data-s="questions" aria-selected="true" id="tb-questions">Inbox <span class="n" data-of="n-q">0</span></button>
+    <button class="tb" role="tab" data-s="topm" aria-selected="false" id="tb-topm">To PM <span class="n" data-of="n-pm">0</span></button>
+    <button class="tb" role="tab" data-s="todo" aria-selected="false" id="tb-todo">To do <span class="n" data-of="n-t">0</span></button>
+    <button class="tb" role="tab" data-s="backlog" aria-selected="false" id="tb-backlog">Backlog <span class="n" data-of="n-s">0</span></button>
+    <button class="tb" role="tab" data-s="docs" aria-selected="false" id="tb-docs">Docs <span class="n" data-of="n-d">0</span></button>
+    <button class="tb" role="tab" data-s="info" aria-selected="false" id="tb-info">Info</button>
+  </div>
 </div>
 
 <div class="reader" id="reader" role="dialog" aria-modal="true" aria-labelledby="reader-title" tabindex="-1" hidden>
@@ -243,15 +280,15 @@ button.danger{color:var(--warn)}
 (function(){
   const $ = s => document.querySelector(s);
   const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
-  if (location.hash === "#inbox") state.section = "inbox";
-  if (location.hash === "#todo") state.section = "todo";
-  if (location.hash === "#topm") state.section = "topm";
-  if (location.hash === "#backlog" || location.hash === "#stories") state.section = "backlog";
+  // The address's hash names a section (and, for some, the tab inside it): what each route sets in state. The
+  // page opens on the route it is given, Back and Forward return to the section before, and a hash it does not
+  // know leaves the page where it is.
+  const ROUTES = { "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"},
+    "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
+    "#docs": {section:"docs"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"} };
+  const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
-  if (location.hash === "#info") state.section = "info";
-  if (location.hash === "#docs") state.section = "docs";
-  if (location.hash === "#usage" || location.hash === "#agents") { state.section = "info"; state.infotab = location.hash.slice(1); }
-  if (location.hash === "#parked") { state.section = "backlog"; state.sfilter = "parked"; }
+  Object.assign(state, route(location.hash));
   // ready: the server has answered once, so the lists are real and the owner's controls are shown.
   let ready = false;
 
@@ -367,12 +404,33 @@ button.danger{color:var(--warn)}
     draw();
     const b = a && a !== document.body ? (a.isConnected ? a : id ? document.getElementById(id) : null) : null;
     if (b && b !== document.activeElement) { b.focus(); if (caret) try { b.setSelectionRange(caret[0], caret[1]); } catch (e) {} }
+    syncRoute();
   }
+  // The route of what is shown. The first draw only corrects the address (no history entry); each later change
+  // of section or tab adds one, so Back returns to it. A redraw that changes nothing adds nothing.
+  const sameRoute = h => { const r = route(h); return !!r && Object.keys(r).every(k => state[k] === r[k]) && !(h === "#backlog" && state.sfilter === "parked"); };
+  const routeOf = () => state.section === "backlog" ? (state.sfilter === "parked" ? "#parked" : "#backlog") : state.section === "info" ? "#" + state.infotab : "#" + state.section;
+  let routed = false;
+  function syncRoute(){
+    const first = !routed; routed = true;
+    if (sameRoute(location.hash)) return;
+    try { history[first ? "replaceState" : "pushState"](null, "", routeOf()); } catch (e) {}
+  }
+  // Back, Forward or a typed hash: show the route the address now names.
+  function goRoute(){
+    const r = route(location.hash); if (!r || sameRoute(location.hash)) return;
+    if (r.sfilter && r.sfilter !== state.sfilter) state.rec = null;
+    if (location.hash === "#backlog" && state.sfilter === "parked") { state.sfilter = "current"; state.rec = null; }
+    Object.assign(state, r);
+    render();
+  }
+  window.addEventListener("popstate", goRoute);
+  window.addEventListener("hashchange", goRoute);
   function draw(){
     seenLine();
     const sc = state.section, q = sc === "questions";
     const inb = q || sc === "inbox";
-    document.querySelectorAll(".sec").forEach(b => b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === sc)));
+    document.querySelectorAll(".sec, .tb").forEach(b =>b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === sc)));
     document.querySelectorAll("#qtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.qt === sc)));
     $("#qbar").hidden = !inb; if (inb) state.inboxtab = sc;
     const oq = state.docs.filter(d => d.status === "open"), ot = state.todos.filter(t => t.status !== "done");
@@ -394,6 +452,8 @@ button.danger{color:var(--warn)}
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
     $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
     $("#n-d").textContent = state.pages.length;
+    // The phone's tab bar shows the sidebar's counts: each copies the one it names.
+    document.querySelectorAll("#tabbar [data-of]").forEach(n => { const o = document.getElementById(n.dataset.of); n.textContent = o.textContent; n.className = o.className; });
     $("#idq").hidden = !(q || sc === "todo" || sc === "docs");
     $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
@@ -1432,11 +1492,29 @@ button.danger{color:var(--warn)}
     state.filter = t.dataset.f; try { localStorage.setItem("oq.filter", state.filter); } catch(e){}
     render();
   });
-  $("#sections").addEventListener("click", e => {
-    const b = e.target.closest(".sec"); if (!b) return;
-    state.section = b.dataset.s === "questions" && (state.section === "questions" || state.section === "inbox") ? state.section : b.dataset.s === "questions" ? state.inboxtab : b.dataset.s;
+  // The sidebar and the phone's tab bar pick a section the same way.
+  function pickSection(s){
+    state.section = s === "questions" && (state.section === "questions" || state.section === "inbox") ? state.section : s === "questions" ? state.inboxtab : s;
     try { localStorage.setItem("oq.section", state.section); } catch(e){}
     render();
+  }
+  $("#sections").addEventListener("click", e => { const b = e.target.closest(".sec"); if (b) pickSection(b.dataset.s); });
+  $("#tabbar").addEventListener("click", e => { const b = e.target.closest(".tb"); if (b) pickSection(b.dataset.s); });
+  // J and K move the focus to the next and the previous card of the list. Never while the owner types in a
+  // field, with a modifier held, or while the reader is open.
+  const FIELD = "input, textarea, select, [contenteditable]:not([contenteditable=false])";
+  const inField = n => !!n && typeof n.closest === "function" && (!!n.closest(FIELD) || n.isContentEditable === true);
+  document.addEventListener("keydown", e => {
+    const k = e.key === "j" || e.key === "J" ? 1 : e.key === "k" || e.key === "K" ? -1 : 0;
+    if (!k || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || !$("#reader").hidden) return;
+    if (inField(e.target) || inField(document.activeElement)) return;
+    const cards = [...document.querySelectorAll("#list article")].filter(c => !c.parentNode.closest("#list article"));
+    if (!cards.length) return;
+    const at = cards.findIndex(c => c === document.activeElement || c.contains(document.activeElement));
+    const n = cards[at < 0 ? 0 : Math.max(0, Math.min(cards.length - 1, at + k))];
+    e.preventDefault();
+    n.tabIndex = -1; n.focus();
+    if (n.scrollIntoView) n.scrollIntoView({block: "nearest"});
   });
   $("#qtabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
