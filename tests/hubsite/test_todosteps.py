@@ -235,9 +235,9 @@ class Check(unittest.TestCase):
         self.passes(detail='Reopen the hub, then apply nothing.')
 
     def test_coordinator_work_is_refused(self):
-        for cmd in ('git worktree add ../x -b y', 'git -C Z:/r worktree remove --force x',
+        for cmd in ('git worktree add ../x -b y', 'git -C Q:/r worktree remove --force x',
                     'git worktree prune', 'git worktree move a b',
-                    'python tools/gate.py --full', 'python Z:/k/tools/land.py --submit x',
+                    'python tools/gate.py --full', 'python Q:/k/tools/land.py --submit x',
                     'python tools/new_worktree.py kit/x', 'python tools/worktree_remove.py x',
                     'python tools/sync_base.py', 'git branch -D kit/x', 'git branch -rd o/x',
                     'git branch --delete x', 'git tag -d v1', 'git update-ref -d refs/heads/x',
@@ -246,7 +246,7 @@ class Check(unittest.TestCase):
                     'git push -fu origin x', 'git push -uf origin x', 'git push -f origin x',
                     'git push --force-if-includes origin x',
                     'git push --force-with-lease --force-if-includes origin x',
-                    'cd Z:/r; git worktree add a'):
+                    'cd Q:/r; git worktree add a'):
             with self.subTest(cmd=cmd):
                 self.assertIn('coordinator', self.refused('commands', commands=[cmd]))
                 self.refused('steps', steps=[{'run': cmd}])
@@ -258,7 +258,7 @@ class Check(unittest.TestCase):
 
     def test_a_raw_git_delete_is_refused_naming_abandon_as_the_route(self):
         """No carve-out for a raw delete; the refusal names the route."""
-        for cmd in ('git worktree remove "Z:/r/.claude/worktrees/x"', 'git branch -D api/x',
+        for cmd in ('git worktree remove "Q:/r/.claude/worktrees/x"', 'git branch -D api/x',
                     'git tag -d archive/x', 'git update-ref -d refs/heads/x'):
             with self.subTest(cmd=cmd):
                 why = self.refused('commands', commands=[cmd])
@@ -281,8 +281,8 @@ class Check(unittest.TestCase):
 
     def test_a_worktree_add_move_or_prune_is_refused_without_the_abandon_route(self):
         """Still coordinator work, but nothing is being abandoned there: no --abandon advice."""
-        for cmd in ('git worktree add "Z:/r/.claude/worktrees/x" -b api/x',
-                    'git worktree move "Z:/r/.claude/worktrees/x" "Z:/r/y"', 'git worktree prune'):
+        for cmd in ('git worktree add "Q:/r/.claude/worktrees/x" -b api/x',
+                    'git worktree move "Q:/r/.claude/worktrees/x" "Q:/r/y"', 'git worktree prune'):
             with self.subTest(cmd=cmd):
                 why = self.refused('commands', commands=[cmd])
                 self.assertIn('is coordinator work (git worktree add/remove)', why)

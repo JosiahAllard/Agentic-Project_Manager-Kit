@@ -267,7 +267,7 @@ class ToJson(unittest.TestCase):
     """to_json: the view as the hub's GET lock/view sends it. One allow-list for every listener;
     over the tunnel (remote) a warning that can name a file is a fixed phrase."""
 
-    SECRET = "Z:\\made-up\\store"          # a path the snapshot may carry and no answer may
+    SECRET = "Q:\\made-up\\store"          # a path the snapshot may carry and no answer may
 
     def full(self, **over):
         s = snap(store=self.SECRET, **over)

@@ -63,7 +63,7 @@ class StartProcessWorkdir(unittest.TestCase):
                 ("Start-Process git -ArgumentList 'checkout','main' -WorkingDirectory %s" % main, 'git-checkout'),
                 # a workdir the guard cannot place: unplaced
                 ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory $d", 'unplaced'),
-                ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory Z:", 'unplaced')):
+                ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory Q:", 'unplaced')):
             with self.subTest(text):
                 self.assertEqual(verdict(self.judge(text, self.w.wt)), ('deny', rule))
 

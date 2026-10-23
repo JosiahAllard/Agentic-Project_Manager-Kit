@@ -18,7 +18,7 @@ class AgentIdCheck(unittest.TestCase):
     def setUp(self):
         self.projects = tempfile.mkdtemp(prefix='kit-selftest-')
         self.addCleanup(shutil.rmtree, self.projects, True)
-        self.dir = os.path.join(self.projects, 'Z--repo', 'sess-1', 'subagents')
+        self.dir = os.path.join(self.projects, 'Q--repo', 'sess-1', 'subagents')
         os.makedirs(self.dir)
 
     def transcript(self, *entries, name='agent-a1.jsonl'):

@@ -169,7 +169,7 @@ class Tools(McpCase):
     def test_the_snapshot_shows_a_runs_resource_and_priority_and_no_tool_sets_them(self):
         from kitlib.lock.store import iso
         from kitlib.proc import process
-        land = "landing:z:\\repo\\.git"
+        land = "landing:q:\\repo\\.git"
         held, waiting = "r-20261006T120000Z-a1a1a1", "r-20261006T120000Z-b1b1b1"
         for rid in (held, waiting):
             m = self.store.run_mutex(rid)
