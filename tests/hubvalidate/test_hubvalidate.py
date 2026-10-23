@@ -206,7 +206,7 @@ class PluginPathTest(unittest.TestCase):
         self.assertEqual(codes(f), [('todos/T-1', 'plugin-path')])
 
     def test_the_main_checkout_and_near_misses_are_not_warned(self):
-        for cmd in ('python Z:/GitHub/Agentic-Project_Manager-Kit/tools/hub.py todos list',
+        for cmd in ('python Z:/GitHub/kit/tools/hub.py todos list',
                     'python Z:/pm-kit/plugin/c1c8fa5e5d5/tools/x.py',        # 11 hex
                     'python Z:/pm-kit/plugin/c1c8fa5e5d54ff/tools/x.py',     # 14 hex
                     'python Z:/pm-kit/plugin/state.json',
