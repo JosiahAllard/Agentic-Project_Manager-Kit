@@ -1542,12 +1542,24 @@ button.danger{color:var(--warn)}
     // A refused save keeps what was picked. A conflict reads the list again, so the next Save is made on what the
     // server holds now; for a new form it means the task and repo already have a schedule (the refusal names its id),
     // and that one is opened with what was picked on it, unsaved, unless the owner has unsaved changes there already.
+    // The form is not let go by a later read either: until is what a save that wrote answered, and this one did not.
+    // An existing schedule changed by another writer: the next Save is pinned to the server's version only with what
+    // that version holds on the line, so the Save that then writes over it is one made knowing what it replaces.
     async function refused(err, body){
+      f.until = null;
       st.className = "status err"; st.textContent = "Not saved: " + why(err) + ". What you picked is kept.";
       if (err.status !== 409) return;
       await readSchedules();
-      // the version to pin the next Save to: what the server holds, whatever the form shows
-      if (!isNew) { const cur = sched.items.find(x => String(x.id) === String(d.id)); if (cur) f.version = cur.version; return; }
+      if (!isNew) {
+        const cur = sched.items.find(x => String(x.id) === String(d.id));
+        if (cur && cur.version !== f.version) {
+          st.textContent = "Not saved: " + why(err) + ". It was changed meanwhile: it is now " + cadenceText(cur) +
+            (cur.set_at ? ", set " + when(cur.set_at) + (cur.via ? " via " + cur.via : "") : "") +
+            ". What you picked is kept; Save sets it over that.";
+          f.version = cur.version;
+        }
+        return;
+      }
       // A new form the owner changed the task or repo of meanwhile, or that is gone or saving again: the refusal no
       // longer says anything about it, so it is left as it is.
       if (sched.forms.get(d.id) !== f || f.saving || task.value !== body.task || repo.value !== body.repo) return;

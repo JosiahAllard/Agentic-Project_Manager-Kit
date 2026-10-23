@@ -2824,6 +2824,57 @@ class AutoTasksTest(unittest.TestCase):
         self.assertTrue(got["open"])
         self.assertEqual((got["posts"], got["gets"]), (1, 2))                     # no second try: one post, one read again
 
+    # GET /schedules answers SCHED0 (maint-lint-alpha at version 2) until FLIP posts were made, then SCHED4: another
+    # writer set it to 07:30 as version 4. Each POST /schedules answers the next of ANSWERS.
+    OTHER_WRITER = """
+            let posted = 0; const answers = ANSWERS, before = SCHED0, later = SCHED4;
+            server.route = c => c.path !== "/schedules" ? undefined : c.method === "POST"
+              ? answers[Math.min(posted++, answers.length - 1)] : { status: 200, body: posted >= FLIP ? later : before };
+    """
+    SAVED_3 = {"status": 200, "body": {"ok": True, "id": "maint-lint-alpha", "version": 3, "first_run": "2026-10-24T03:00"}}
+    STALE_PIN = {"status": 409, "body": {"ok": False, "error": {"code": "conflict", "field": "if_version",
+                 "message": "schedules/maint-lint-alpha is at version 4, not 2"}}}
+
+    def other_writer(self, body, answers, flip):
+        return self.run_page((self.OTHER_WRITER + body).replace("ANSWERS", json.dumps(answers)).replace("FLIP", str(flip))
+                             .replace("SCHED0", json.dumps(schedules())).replace("SCHED4", json.dumps(schedules(items=[
+                                 {"id": "maint-lint-alpha", "task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "07:30",
+                                  "set_at": NOW, "via": "cli", "version": 4}]))))
+
+    def test_a_save_refused_as_stale_shows_the_other_writers_values_before_the_next_save_writes_over_them(self):
+        got = self.other_writer("""
+            await start();
+            await type($("#s-maint-lint-alpha-at"), "06:00");
+            await click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
+            const st = $("#pane-detail #s-maint-lint-alpha-status"), said = text(st), cls = st.className, at = $("#pane-detail #s-maint-lint-alpha-at").value;
+            await click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
+            return { said, cls, at, posts: calls.filter(c => c.method === "POST").map(c => c.body) };
+        """, [self.STALE_PIN, self.SAVED_3], 1)
+        self.assertTrue(got["said"].startswith("Not saved: schedules/maint-lint-alpha is at version 4, not 2. It was changed meanwhile: "
+                                               "it is now Daily at 07:30, set "), got["said"])
+        self.assertTrue(got["said"].endswith(" via cli. What you picked is kept; Save sets it over that."), got["said"])
+        self.assertEqual((got["cls"], got["at"]), ("status err", "06:00"))
+        self.assertEqual(got["posts"], [{"task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "06:00", "if_version": 2},
+                                        {"task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "06:00", "if_version": 4}])
+
+    def test_a_refused_save_after_one_that_wrote_keeps_its_not_saved_line(self):
+        # The first Save writes version 3, but the read after it still shows 2, so the form is kept waiting for 3. The
+        # second Save, with no edits, is refused: the read after the refusal shows version 4, which must not let the form
+        # go as though it were the one saved.
+        got = self.other_writer("""
+            await start();
+            const form = $("#pane-detail #sched-maint-lint-alpha");
+            await click(button(form, "Save"));
+            await click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
+            const st = $("#pane-detail #s-maint-lint-alpha-status");
+            return { said: text(st), cls: st.className, same: $("#pane-detail #sched-maint-lint-alpha") === form,
+                     posts: calls.filter(c => c.method === "POST").map(c => c.body.if_version) };
+        """, [self.SAVED_3, self.STALE_PIN], 2)
+        self.assertEqual(got["posts"], [2, 3])
+        self.assertTrue(got["said"].startswith("Not saved: schedules/maint-lint-alpha is at version 4"), got["said"])
+        self.assertEqual(got["cls"], "status err")
+        self.assertTrue(got["same"])
+
     # GET /schedules held, once `holding` is set, until the test lets each one go (queue.shift()()).
     HOLD_READS = """
             let holding = false; const queue = []; const realFetch = globalThis.fetch;
@@ -2986,7 +3037,7 @@ class AutoTasksTest(unittest.TestCase):
               const h = holds.splice(i, 1)[0]; let go; const gate = new Promise(r => { go = r; }); h.asked(go);
               return gate.then(() => realFetch1(url, init));
             };
-            const isPost = (u, i) => /\/schedules$/.test(u) && i.method === "POST", isRead = (u, i) => /\/schedules$/.test(u) && i.method === "GET";
+            const isPost = (u, i) => /\\/schedules$/.test(u) && i.method === "POST", isRead = (u, i) => /\\/schedules$/.test(u) && i.method === "GET";
             async function editWhile(test, btn, edit){ const asked = held(test); const saving = click(btn); const go = await asked; await edit(); go(); await saving; await settle(); }
             const posts = () => calls.filter(c => c.method === "POST").map(c => c.body);
     """
