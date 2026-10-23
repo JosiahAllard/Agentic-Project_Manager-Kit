@@ -121,7 +121,8 @@ printable ASCII (0x21 to 0x7E, single spaces inside it, the ends trimmed); anyth
 `invalid`, and so is any spelling of `you`. A question's `from` is the session its answer goes
 back to: a key of the launcher's sessions.json, read on each add (Api's session_keys), or `pm`,
 which is also what an absent one is; any other is `invalid`, and the refusal names the known
-keys, never the file. A new to-do's `steps` are made into its commands and detail here and are
+keys, never the file; when sessions.json or the launcher's settings cannot be read, only `pm` is
+known and the refusal says the read failed, with the exception's class name. A new to-do's `steps` are made into its commands and detail here and are
 not kept (todo_steps); an agent's to-do is judged by the owner's to-do rules (kitlib.hubsite.
 todosteps.check) for every client. On the edit routes a null `repo` (and a to-do's
 null `detail`) clears the field exactly as "" does; any other null field is read as absent.
@@ -285,6 +286,8 @@ import re
 import time
 
 from kitlib import hubvalidate
+# at load, not on each read: a kit refresh can remove the folder this process imported from
+from kitlib.launcher import settings as lsettings, state as lstate
 
 from . import pagecheck
 from . import schema
@@ -503,14 +506,10 @@ def _reason(e):
 
 
 def launcher_keys():
-    """The session keys of the launcher's sessions.json (kitlib.launcher), read now; an empty
-    set when the launcher's settings or that file cannot be read. HomeFenced (a test that
-    reached for the real home) is not caught: a test gives Api its own session_keys."""
-    try:
-        from kitlib.launcher import settings as lsettings, state as lstate
-        return {k for k, _ in lstate.entries(lstate.read_sessions(lsettings.load()))}
-    except Exception:               # noqa: BLE001 - unreadable: only the PM's key is known
-        return set()
+    """The session keys of the launcher's sessions.json (kitlib.launcher, imported when this
+    module loads), read now. A launcher whose settings or that file cannot be read raises: the
+    caller says so (Api.read_session_keys), never an empty set that reads as "no sessions"."""
+    return {k for k, _ in lstate.entries(lstate.read_sessions(lsettings.load()))}
 
 
 def _for(d, for_key):
@@ -723,11 +722,15 @@ class Api(object):
     def session_keys(self):
         """The keys a question may come from: the launcher's session keys, read now, and
         AGENT_FROM (the PM's), which is known even when they cannot be read."""
+        return self.read_session_keys()[0]
+
+    def read_session_keys(self):
+        """(session_keys(), why they could not be read or None): the reason is _reason's short
+        one (an exception's class name, never its message or a path)."""
         try:
-            keys = {k for k in self._session_keys() if isinstance(k, str)}
-        except Exception:           # noqa: BLE001 - unreadable: only the PM's key is known
-            keys = set()
-        return keys | {AGENT_FROM}
+            return {k for k in self._session_keys() if isinstance(k, str)} | {AGENT_FROM}, None
+        except Exception as e:      # noqa: BLE001 - unreadable: only the PM's key is known
+            return {AGENT_FROM}, _reason(e)
 
     def repo_key(self, repo):
         """The session key of the coordinator of the repository whose remote is the repo_id
@@ -887,11 +890,13 @@ def questions_add(api, req):
     # the session the answer goes back to: a launcher session key, read now, or the PM's
     who = (b.get('from') or '').strip() or AGENT_FROM
     if who != AGENT_FROM:
-        keys = api.session_keys()
+        keys, why = api.read_session_keys()
         if who not in keys:
+            unread = ('; the launcher\'s session keys could not be read (%s), so only %s is '
+                      'known' % (why, AGENT_FROM)) if why else ''
             raise _invalid('from %s is not a session the hub knows: a question comes from a '
-                           'launcher session key (known: %s)'
-                           % (ascii(who), ', '.join(sorted(keys))), 'from')
+                           'launcher session key (known: %s)%s'
+                           % (ascii(who), ', '.join(sorted(keys)), unread), 'from')
     b['from'] = who
     _typed(b, 'options', (list,), 'a list of {label, description}')
     b.setdefault('options', [])
