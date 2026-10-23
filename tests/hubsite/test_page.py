@@ -689,7 +689,7 @@ class DomTest(unittest.TestCase):
             await type($("#todo-T-1 input[type=text]"), "a new title, half");
             server.snap.collections.todos["T-2"].title = "changed too"; server.snap.revision++;
             await wake();
-            const todo = { kept: $("#todo-T-1 input[type=text]") && $("#todo-T-1 input[type=text]").value, t2: text($("#todo-T-2")) };
+            const todo = { kept: $("#todo-T-1 input[type=text]") && $("#todo-T-1 input[type=text]").value, t2: text($("#row-T-2")) };
             await click($("#sections [data-s=topm]"));
             return { other, moved, focused, todo, back: pm().kept, err: text($("#loaderr")) };
         """, snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash="#topm")
@@ -763,16 +763,18 @@ class DomTest(unittest.TestCase):
                  "todos": {"T-1": {"status": "open", "title": "a step", "from": "pm"}}}
         got = dom("""
             await start();
-            const q = { cards: $$("#list article").map(a => text(a)), err: text($("#loaderr")), hidden: $("#loaderr").hidden, n: text($("#n-qq")) };
+            const q = { cards: $$("#list article").map(a => text(a)), err: text($("#loaderr")), hidden: $("#loaderr").hidden, n: text($("#n-qq")), bad: text($("#pane-detail")) };
+            await click($("#open-Q-2")); q.good = text($("#pane-detail"));
             await click($("#sections [data-s=todo]"));
             return { q, todo: text($("#list")), sleeps: sleeps() };
         """, snapshot(collections=lists))
         self.assertEqual(len(got["q"]["cards"]), 2)
         bad, good = got["q"]["cards"]
         self.assertTrue(bad.startswith("Q-1"), bad)
-        self.assertIn("cannot be shown", bad)
+        self.assertIn("cannot be shown", got["q"]["bad"])                       # the broken question fails in its detail card only
         self.assertIn("whole", good)
-        self.assertIn("b", good)
+        self.assertIn("whole", got["q"]["good"])
+        self.assertIn("b", got["q"]["good"])
         self.assertEqual((got["q"]["err"], got["q"]["hidden"], got["q"]["n"]), ("", True, "2"))
         self.assertIn("a step", got["todo"])
         self.assertEqual(got["sleeps"], [])                                      # nothing failed, so nothing is retried
@@ -1048,7 +1050,7 @@ class DomTest(unittest.TestCase):
             return { ids, found, none, noneQ };
         """, snap)
         self.assertEqual(got["ids"], {"questions": ["Q-1"], "todos": ["T-1", "T-2"], "stories": ["S-1"]})
-        self.assertEqual(got["found"], ["todo-T-2"])
+        self.assertEqual(got["found"], ["row-T-2"])
         self.assertIn('No match for "zzz"', got["none"])
         self.assertNotIn("Nothing to do", got["none"])
         self.assertIn('No match for "zzz"', got["noneQ"])
@@ -1098,10 +1100,14 @@ class DomTest(unittest.TestCase):
             server.route = null;
             await click(button($("#q-Q-1"), "Withdraw")); await click(button($("#q-Q-1"), "Confirm withdraw"));
             await click($("#sections [data-s=todo]"));
+            await click($("#open-T-2"));
             out.theirs = { del: !!button($("#todo-T-2"), "Delete"), edit: !!button($("#todo-T-2"), "Edit") };
+            await click($("#open-T-1"));
             out.mine = { del: !!button($("#todo-T-1"), "Delete"), edit: !!button($("#todo-T-1"), "Edit") };
+            await click($("#open-T-2"));
             await click(button($("#todo-T-2"), "Delete")); await click(button($("#todo-T-2"), "Confirm delete"));
             await click($("#ttabs [data-tf=done]"));
+            await click($("#open-T-3"));
             out.done = { del: !!button($("#todo-T-3"), "Delete"), edit: !!button($("#todo-T-3"), "Edit") };
             out.sent = calls.filter(c => c.path.endsWith("/delete")).map(c => c.method + " " + c.path + " " + JSON.stringify(c.body));
             return out;
@@ -1138,12 +1144,12 @@ class DomTest(unittest.TestCase):
             await start();
             await click(button($("#todo-T-1"), "Edit"));
             await type($("#todo-T-1 input[type=text]"), "half");
-            const box = () => { const b = $("#list article input.chk"); return { id: b.id, label: b.getAttribute("aria-label"), off: b.disabled }; };
-            const before = box();
+            const box = sel => { const b = $(sel + " input.chk"); return { id: b.id, label: b.getAttribute("aria-label"), off: b.disabled }; };
+            const before = box("#pane-detail article");
             delete server.snap.collections.todos["T-1"]; server.snap.revision++;
             await wake();
             const c = $("#lost-todo-T-1");
-            return { before, after: box(), boxes: c.querySelectorAll("input.chk").length, kept: c.querySelector("input[type=text]").value };
+            return { before, after: box("#lost-todo-T-1"), boxes: c.querySelectorAll("input.chk").length, kept: c.querySelector("input[type=text]").value };
         """, snapshot(collections=LISTS), hash="#todo")
         self.assertEqual(got["before"], {"id": "t-T-1", "label": "Save or cancel the edit before ticking this", "off": True})
         self.assertEqual(got["after"], {"id": "", "label": "This to-do is gone", "off": True})
@@ -1157,7 +1163,7 @@ class DomTest(unittest.TestCase):
             await start();
             await click(button($("#todo-T-1"), "Edit"));
             await type($("#todo-T-1 input[type=text]"), "half written");
-            const see = () => ({ kept: $("#todo-T-1 input[type=text]") ? $("#todo-T-1 input[type=text]").value : null, other: !!$("#todo-T-2"), lost: !!$("#lost-todo-T-1") });
+            const see = () => ({ kept: $("#todo-T-1 input[type=text]") ? $("#todo-T-1 input[type=text]").value : null, other: !!$("#row-T-2"), lost: !!$("#lost-todo-T-1") });
             // Another repository is chosen in the filter.
             $("#repo").value = "beta"; await fire($("#repo"), "change");
             const filtered = see();
@@ -1595,7 +1601,7 @@ class DomTest(unittest.TestCase):
             await start();
             const c = $("#approval-A-1");
             const before = { card: text(c), diff: text(c.querySelector("pre")), approve: button(c, "Approve").disabled,
-                             deny: button(c, "Deny").disabled, decided: !!$("#approval-A-2"), n: text($("#n-qq")), q: !!$("#q-Q-1") };
+                             deny: button(c, "Deny").disabled, decided: !!$("#approval-A-2"), n: text($("#n-qq")), q: !!$("#row-Q-1") };
             server.route = r => {
               if (r.path !== "/approvals/A-1/decide") return undefined;
               const d = server.snap.collections.approvals["A-1"]; d.status = "approved"; d.version = 3; server.snap.revision++;
@@ -2356,6 +2362,107 @@ class HomeTest(unittest.TestCase):
         got = dom("const before = text($('#sidefoot')); await start(); return [before, text($('#sidefoot'))];", snapshot())
         self.assertEqual(got[0], "")
         self.assertTrue(got[1].startswith("Read from the hub server "), got)
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class TriageListTest(unittest.TestCase):
+    """Questions, To-dos and Approvals as rows in the list pane and one full card in the detail pane."""
+
+    PHONE = "globalThis.matchMedia = q => ({ matches: true, media: q });"
+
+    def test_questions_are_rows_in_the_list_and_the_open_one_is_a_card_in_the_detail_pane(self):
+        lists = dict(LISTS, questions=dict(LISTS["questions"], **{
+            "Q-2": {"status": "open", "title": "second", "version": 1, "asked_at": NOW, "options": [{"label": "x"}]}}))
+        got = dom("""
+            await start();
+            const rows = () => $$("#list article").map(a => a.id);
+            const first = { rows: rows(), detail: $("#pane-detail").hidden, card: !!$("#pane-detail #q-Q-1"), inList: !!$("#list #q-Q-1"),
+                            cur: $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id) };
+            await click($("#open-Q-2"));
+            const second = { card: !!$("#pane-detail #q-Q-2"), gone: !$("#q-Q-1"), focus: document.activeElement.id };
+            await click($("#detail-close"));
+            const closed = { hidden: $("#pane-detail").hidden, focus: document.activeElement.id };
+            return { first, second, closed };
+        """, snapshot(collections=lists), hash="#questions")
+        self.assertEqual(got["first"], {"rows": ["row-Q-1", "row-Q-2"], "detail": False, "card": True, "inList": False, "cur": ["row-Q-1"]})
+        self.assertEqual(got["second"], {"card": True, "gone": True, "focus": "q-Q-2"})
+        self.assertEqual(got["closed"], {"hidden": True, "focus": "open-Q-2"})
+
+    def test_on_a_phone_nothing_opens_by_itself_and_the_detail_replaces_the_list(self):
+        got = dom(self.PHONE + """
+            await start();
+            const before = { hidden: $("#pane-detail").hidden, rows: $$("#list article").length };
+            await click($("#open-T-2"));
+            return { before, hidden: $("#pane-detail").hidden, card: !!$("#pane-detail #todo-T-2"), focus: document.activeElement.id };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got["before"], {"hidden": True, "rows": 2})
+        self.assertEqual((got["hidden"], got["card"], got["focus"]), (False, True, "todo-T-2"))
+
+    def test_an_approval_is_a_row_with_its_card_in_the_detail_pane(self):
+        got = dom("""
+            await start();
+            const rows = $$("#list article").map(a => a.id);
+            await click($("#open-A-1"));
+            return { rows, card: !!$("#pane-detail #approval-A-1"), inList: !!$("#list #approval-A-1") };
+        """, snapshot(strong=True, collections=NEEDS), hash="#questions")
+        self.assertEqual(got["rows"][:2], ["row-A-1", "row-Q-3"])
+        self.assertEqual((got["card"], got["inList"]), (True, False))
+
+    def test_an_action_in_the_detail_pane_sends_the_same_request_as_before(self):
+        got = dom("""
+            await start();
+            await click($("#open-Q-1"));
+            const pick = $("#q-Q-1-1"); pick.checked = true; await fire(pick, "change");
+            await click(button($("#pane-detail #q-Q-1"), "Send answer"));
+            await click($("#sections [data-s=todo]"));
+            await click($("#open-T-2"));
+            const box = $("#t-T-2"); box.checked = true; await fire(box, "change");
+            await click($("#sections [data-s=questions]"));
+            await click($("#open-A-1"));
+            await click(button($("#approval-A-1"), "Approve"));
+            return calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
+        """, snapshot(strong=True, collections=dict(LISTS, approvals={"A-1": APPROVAL})), hash="#questions")
+        sent = dict((p, b) for p, b in got)
+        self.assertEqual(sent["/questions/Q-1/answer"]["choice"], 1)
+        self.assertEqual(sent["/questions/Q-1/answer"]["if_version"], 1)
+        self.assertEqual(sent["/todos/T-2/done"], {"done": True})
+        self.assertEqual(sent["/approvals/A-1/decide"], {"decision": "approve", "if_version": 2})
+
+    def test_focus_and_what_was_typed_survive_a_redraw_in_the_list_and_in_the_detail(self):
+        got = dom("""
+            await start();
+            const open = $("#open-Q-2");
+            open.focus();
+            server.snap.collections.questions["Q-1"].title = "changed by an agent"; server.snap.revision++;
+            await wake();
+            const list = { focus: document.activeElement.id, row: text($("#row-Q-1")) };
+            const note = $("#q-Q-1-note"); await type(note, "half written"); note.focus(); note.setSelectionRange(4, 4);
+            server.snap.collections.questions["Q-2"].title = "changed too"; server.snap.revision++;
+            await wake();
+            const n2 = $("#q-Q-1-note");
+            return { list, detail: { focus: document.activeElement === n2 && n2.isConnected, value: n2.value, caret: n2.selectionStart } };
+        """, snapshot(collections=dict(LISTS, questions=dict(LISTS["questions"], **{
+            "Q-2": {"status": "open", "title": "second", "version": 1, "asked_at": NOW, "options": [{"label": "x"}]}}))), hash="#questions")
+        self.assertEqual(got["list"]["focus"], "open-Q-2")
+        self.assertIn("changed by an agent", got["list"]["row"])
+        self.assertEqual(got["detail"], {"focus": True, "value": "half written", "caret": 4})
+
+    def test_the_hash_routes_and_back_still_move_between_the_sections(self):
+        got = dom("""
+            await start();
+            await click($("#open-Q-1"));
+            const q = [location.hash, $("#sections .sec[aria-selected=true]").dataset.s, !!$("#pane-detail #q-Q-1")];
+            await click($("#sections [data-s=todo]"));
+            const t = [location.hash, $("#sections .sec[aria-selected=true]").dataset.s, $$("#list article").map(a => a.id)];
+            await back();
+            const b = [location.hash, $("#sections .sec[aria-selected=true]").dataset.s, !!$("#row-Q-1")];
+            await navigate("#todo");
+            return { q, t, b, again: $$("#list article").map(a => a.id) };
+        """, snapshot(collections=LISTS), hash="#questions")
+        self.assertEqual(got["q"], ["#questions", "questions", True])
+        self.assertEqual(got["t"], ["#todo", "todo", ["row-T-1", "row-T-2"]])
+        self.assertEqual(got["b"], ["#questions", "questions", True])
+        self.assertEqual(got["again"], ["row-T-1", "row-T-2"])
 
 
 class PageTextTest(unittest.TestCase):
