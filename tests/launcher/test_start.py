@@ -58,6 +58,11 @@ class Deep(Base):
         self.assertEqual(self.host.opened, [])
         return c.exception
 
+    def test_the_fallback_names_the_pm_by_both_live_names(self):
+        out = self.deep()
+        self.assertIn("ListAgents shows its session as ''Project Manager'' in the desktop app, or "
+                      "''pm-session'' when the launcher resumed it", out)
+
     def test_command_has_agent_model_effort_window_and_name(self):
         out = self.deep()
         self.assertIn('Would open a new window running:', out)
@@ -274,6 +279,11 @@ class Consultant(Base):
         self.signed_out('3')
         self.refused('Account 3 is not signed in', account='3')
 
+    def test_the_consultant_logs_calls_to_the_pm_by_both_live_names(self):
+        out = self.cons()
+        self.assertIn("ListAgents shows its session as ''Project Manager'' in the desktop app, or "
+                      "''pm-session'' when the launcher resumed it", out)
+
     def test_one_consultant_per_repo_unless_replace(self):
         self.live()
         e = self.refused("A session named 'consultant-myrepo' is already running (PID 4242): one consultant per repo")
@@ -377,11 +387,11 @@ class Start(Base):
         self.assertIn("'You succeed old-a1, which has checkpointed", out)
         self.assertTrue(out.rstrip().endswith("go'\""), out[-40:])      # the what-if line closes its quote
 
-    def test_every_prompt_names_the_pm_by_its_live_session_name(self):
+    def test_every_prompt_names_the_pm_by_both_live_session_names(self):
         for out in (self.go(), self.go(brief='b.md')):
-            self.assertIn('(the session named pm-session)', out)
-            self.assertNotIn('Project Manager', out)
-        self.assertEqual(start.PM_NAME, 'pm-session')
+            self.assertIn("ListAgents shows its session as ''Project Manager'' in the desktop app, or "
+                          "''pm-session'' when the launcher resumed it", out)
+        self.assertEqual((start.PM_DESKTOP_NAME, start.PM_NAME), ('Project Manager', 'pm-session'))
 
     def test_the_predecessor_text_serialises_no_landing(self):
         text = start.predecessor_text('x')

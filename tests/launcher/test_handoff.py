@@ -25,20 +25,18 @@ class SuccessorPrompt(unittest.TestCase):
 
 
 class PmName(unittest.TestCase):
-    def test_the_successor_is_told_to_check_in_with_the_pm_session_by_its_live_name(self):
+    def test_the_successor_is_told_to_check_in_with_the_pm_session_by_both_live_names(self):
         for entry in (AGENT, PLAIN):
             text = handoff.successor_prompt(entry, 'old-a1', 'new-a2')
-            self.assertIn('pm-session', text)
-            self.assertNotIn('Project Manager', text)
+            self.assertIn("'Project Manager' in the desktop app, or 'pm-session' when the launcher resumed it", text)
 
-    def test_an_entry_started_without_a_prompt_names_it_too(self):
+    def test_an_entry_started_without_a_prompt_names_both_too(self):
         h = Home(self, accounts=('1', '2'))
         h.write_state('sessions.json', {'alpha': dict(AGENT)})
         host = FakeHost(h.root)
         start.start_entry(h.settings, host, 'alpha', account='2')
         text, = host.opened
-        self.assertIn('(the session named pm-session)', text)
-        self.assertNotIn('Project Manager', text)
+        self.assertIn("''Project Manager'' in the desktop app, or ''pm-session'' when the launcher resumed it", text)
 
 
 class HandoffState(unittest.TestCase):

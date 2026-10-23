@@ -76,8 +76,7 @@ class Briefs(unittest.TestCase):
         host = FakeHost(h.root)
         reboot.run(h.settings, host)
         text, = host.opened
-        self.assertIn('(the session named pm-session)', text)
-        self.assertNotIn('session named Project Manager', text)
+        self.assertIn("''Project Manager'' in the desktop app, or ''pm-session'' when the launcher resumed it", text)
         self.assertIn('this pm-session must be stopped', reboot.PM_PROMPT)
 
     def test_entry_start_args_keeps_the_hand_off_rule_unless_any_brief(self):

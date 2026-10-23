@@ -22,12 +22,16 @@ from kitlib.git import repo as gitrepo
 from kitlib.launcher import home, lookup, pipes, state, stop, window
 from kitlib.launcher.settings import LaunchError
 
-# the PM session's name, as every first message names it: the --remote-control name reboot resumes it under
-# and stop refuses (stop.PM_RC_NAME), which a SendMessage to the session must match. sessions.json holds
-# no PM entry (the PM is coordinators.json's pm_session_id), so there is no recorded name to read
+# the PM session's live name depends on how it was started: 'Project Manager' in the desktop app, and the
+# --remote-control name reboot resumes it under (stop.PM_RC_NAME) when the launcher ran it; a SendMessage must
+# match one of them. sessions.json holds no PM entry (the PM is coordinators.json's pm_session_id), so every
+# first message names both (hosts/claude/adapter/peer.py PM_NAMES is the same pair)
 PM_NAME = stop.PM_RC_NAME
-DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with the PM '
-                  '(the session named %s), then continue the queue in the state note.' % PM_NAME)
+PM_DESKTOP_NAME = 'Project Manager'
+PM_REF = ("the PM (ListAgents shows its session as '%s' in the desktop app, or '%s' when the launcher resumed it)"
+          % (PM_DESKTOP_NAME, PM_NAME))
+DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with %s, '
+                  'then continue the queue in the state note.' % PM_REF)
 HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
              'it: do not write there; your branch work goes in your own worktree, and the main checkout, by '
              'absolute path, is read-only to you.')
@@ -158,7 +162,7 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
     config_dir, label, tag = account_folder(settings, account, org)
     if not prompt:
         prompt = ('Start up now: read your standing brief %s first, then run your start-up routine, check in '
-                  'with the PM (the session named %s), and begin.' % (brief, PM_NAME)) if brief else default_prompt
+                  'with %s, and begin.' % (brief, PM_REF)) if brief else default_prompt
     elif brief:
         prompt = 'Read your standing brief %s first. ' % brief + prompt
     if predecessor:
@@ -283,8 +287,8 @@ def start_entry(settings, host, key, account=None, prompt=None, whatif=False, ho
     same = not account or str(account) == str(entry.get('account'))
     account = account or entry.get('account')
     if prompt is None and entry.get('state'):
-        prompt = ('Start up now: run your start-up routine, read %s, check in with the PM (the session named '
-                  '%s), then continue the queue in the state note.' % (entry['state'], PM_NAME))
+        prompt = ('Start up now: run your start-up routine, read %s, check in with %s, '
+                  'then continue the queue in the state note.' % (entry['state'], PM_REF))
     name = entry.get('name') if same and entry.get('name') else None
     return out + start(settings, host, whatif=whatif, home_worktree=home_worktree,
                        **entry_start_args(settings, key, entry, str(account), prompt, name=name))
@@ -349,9 +353,9 @@ def deep(settings, host, repo_path, requester, slug, brief=None, brief_text=None
               "work only from it. Before changing anything, make your own git worktree and branch with the repo's "
               "worktree tool (EnterWorktree if it has none); never edit the main checkout, and never merge, land or "
               "push. When the work is done, or you are blocked on something only the requester can settle, "
-              "SendMessage your report to '%s' (ListAgents finds it; if it is gone, send it to the session named "
+              "SendMessage your report to '%s' (ListAgents finds it; if it is gone, send it to "
               "%s), then stay idle: the requester or the PM closes this window."
-              % (name, requester, brief_path, requester, PM_NAME))
+              % (name, requester, brief_path, requester, PM_REF))
     wrote = False
     if brief_text:
         if plan:
@@ -443,9 +447,9 @@ def consultant(settings, host, repo_path, repo=None, account='auto', autocompact
               "docs/conventions-digest.md, then your notes file %s (create it on your first call if it is missing), "
               "reply 'ready', and stay idle until asked: no crons, monitors, wake-ups or polling. Answer engineering "
               "questions by SendMessage to whoever asked; record every call and durable fact in your notes file, and "
-              "SendMessage each call to the session named %s as 'engineering call for delegated logging' with the "
+              "SendMessage each call to %s as 'engineering call for delegated logging' with the "
               "question, answer and reason. Never edit code, commit, land or dispatch builds. After a compaction, "
-              "reread the digest and the notes file." % (name, repo_path, notes, PM_NAME))
+              "reread the digest and the notes file." % (name, repo_path, notes, PM_REF))
     old = os.path.join(repo_path, OLD_NOTES)
     copied = _copy_old_notes(old, notes, plan, out) if default and os.path.isfile(old) else False
     if copied is not False and live:
