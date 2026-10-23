@@ -1000,8 +1000,9 @@ class LanderMainCheckout(MainGit):
         # the main-checkout history rule refuses the commit first; the jail refuses the rest
         self.each_denied(['git -C "$M" commit -m x', 'git -C "$(git rev-parse --show-toplevel)" commit -m x'])
         self.each_denied(['git -C "$M" commit -m x'], tool='PowerShell')
-        # a computed -C is a checkout the guard cannot place (unplaced); GIT_DIR re-points git on purpose
-        for text, rule in (('git -C "$M" symbolic-ref HEAD refs/heads/x', 'unplaced'),
+        # a computed -C is a checkout the guard cannot place (unplaced); GIT_DIR re-points git on purpose;
+        # a symbolic-ref write moves a ref every worktree shares (git-shared-ref), from any place
+        for text, rule in (('git -C "$M" symbolic-ref HEAD refs/heads/x', 'git-shared-ref'),
                            ('git -C "$M" branch -m main old', 'unplaced'),
                            ('GIT_DIR="%s/.git" git tag v9' % self.main, 'write-jail')):
             with self.subTest(text):
@@ -1072,12 +1073,13 @@ class UnplacedGit(MainGit):
 
     def test_a_worker_may_not_repoint_main_through_git_dir(self):
         m = self.main
-        for text in ('git --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % m,
-                     'git --git-dir="%s/.git" branch -m main old' % m,
-                     'GIT_DIR="%s/.git" git symbolic-ref HEAD refs/heads/x' % m,
-                     'GIT_DIR="%s/.git" git branch -m main old' % m):
+        # a symbolic-ref write is git-shared-ref's: it moves a ref every worktree shares
+        for text, rule in (('git --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % m, 'git-shared-ref'),
+                           ('git --git-dir="%s/.git" branch -m main old' % m, 'write-jail'),
+                           ('GIT_DIR="%s/.git" git symbolic-ref HEAD refs/heads/x' % m, 'git-shared-ref'),
+                           ('GIT_DIR="%s/.git" git branch -m main old' % m, 'write-jail')):
             with self.subTest(text):
-                self.jailed(self.git(text, 'worker'))
+                self.jailed(self.git(text, 'worker'), rule)
         self.jailed(self.git('$env:GIT_DIR = "%s/.git"; git branch -m main old' % m, 'worker', tool='PowerShell'))
 
     def test_a_worker_writes_no_checkout_it_cannot_place(self):
@@ -1085,10 +1087,11 @@ class UnplacedGit(MainGit):
         for text in ('git --git-dir="%s/.git" tag v9' % m, 'git --git-dir="%s/.git" config user.name x' % m,
                      'git --git-dir="%s/.git" --work-tree="%s" update-index --assume-unchanged a.py' % (m, m),
                      'git --git-dir="%s/.git" --work-tree="%s" add a.py' % (m, m), 'git --git-dir="%s/.git" gc' % m,
-                     'git --git-dir="%s/.git" fetch origin x:refs/heads/y' % m,
                      'GIT_WORK_TREE="%s" git add a.py' % m, 'git -c core.worktree="%s" add a.py' % m):
             with self.subTest(text):
                 self.jailed(self.git(text, 'worker'))
+        # a fetch into refs/heads writes a ref every worktree shares: git-shared-ref's
+        self.jailed(self.git('git --git-dir="%s/.git" fetch origin x:refs/heads/y' % m, 'worker'), 'git-shared-ref')
         self.jailed(self.git('git -C "$M" tag v9', 'worker'), 'unplaced')     # a computed -C
 
     def worker_denied(self, texts, rule='write-jail', tool='Bash'):
@@ -1100,8 +1103,10 @@ class UnplacedGit(MainGit):
         # -C after --git-dir, --work-tree, core.worktree or GIT_DIR names the cwd, not the git dir
         m, wt = self.main, W.fwd(self.w.wt)
         for text in ('git --git-dir="%s/.git" -C "%s" symbolic-ref HEAD refs/heads/x' % (m, wt),
-                     'git -C "%s" --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % (wt, m),
-                     'GIT_DIR="%s/.git" git -C "%s" branch -m main old' % (m, wt),
+                     'git -C "%s" --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % (wt, m)):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'), 'git-shared-ref')     # it moves a shared ref
+        for text in ('GIT_DIR="%s/.git" git -C "%s" branch -m main old' % (m, wt),
                      'git -c core.worktree="%s" -C "%s" add a.py' % (m, wt),
                      'git --work-tree="%s" -C "%s" add a.py' % (m, wt)):
             with self.subTest(text):

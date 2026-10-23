@@ -509,6 +509,13 @@ class Refs(Base):
     def test_a_mirror_push_writes_it(self):
         self.denied(self.git('push --mirror origin'))
 
+    def test_the_store_ref_in_another_case_is_the_store_ref(self):
+        # on this machine's file system refs/Backlog/main is the file refs/backlog/main
+        for args in ('update-ref refs/Backlog/main %s' % OID, 'update-ref REFS/BACKLOG/main %s' % OID,
+                     'push origin HEAD:refs/BackLog/main', 'fetch origin +refs/heads/x:refs/BACKLOG/main'):
+            with self.subTest(args):
+                self.refused(self.git(args), 'backlog-raw-write')
+
     UNREAD_UPDATE_REFS = (
         # (command, host tool, a word the refusal names before Instead:)
         ('echo "update refs/backlog/main %s" | git -C "{wt}" update-ref --stdin' % OID, 'Bash', 'input'),
@@ -660,6 +667,12 @@ class BranchStoreRefs(Base):
             with self.subTest(args):
                 self.refused(self.cmd('git -C "%s" %s' % (self.wt, args), sub=False, env=PM),
                              'backlog-raw-write')
+
+    def test_a_fetch_into_the_backlog_branch_by_its_short_name(self):
+        # git's fetch reads a destination with no refs/ as a branch: backlog is refs/heads/backlog
+        for args in ('fetch origin x:backlog', 'fetch origin +x:heads/backlog', 'fetch origin x:Backlog'):
+            with self.subTest(args):
+                self.refused(self.cmd('git -C "%s" %s' % (self.wt, args), sub=False, env=PM), 'backlog-raw-write')
 
     def test_other_branches(self):
         self.allowed(self.cmd('git -C "%s" push origin kit/wt' % self.wt, sub=False, env=PM))
