@@ -165,6 +165,10 @@ form.add select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid
 .pmf{display:grid;gap:8px;min-width:0}
 .pmf .row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
 .pmbar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.row{cursor:pointer;gap:8px}
+.row[aria-current="true"]{box-shadow:inset 0 0 0 2px var(--accent)}
+.row h2{font-size:1rem}
+.dview{display:grid;gap:14px;align-content:start}
 .q.queued{border-left:4px solid var(--line)}
 .q.sent{border-left:4px solid var(--accent)}
 .q.done{border-left:4px solid var(--ok)}
@@ -284,7 +288,7 @@ button.danger{color:var(--warn)}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null };
   // The address's hash names a section (and, for some, the tab inside it): what each route sets in state. The
   // page opens on the route it is given, Back and Forward return to the section before, and a hash it does not
   // know leaves the page where it is.
@@ -432,7 +436,10 @@ button.danger{color:var(--warn)}
   }
   window.addEventListener("popstate", goRoute);
   window.addEventListener("hashchange", goRoute);
+  // The detail pane: the view being drawn names what goes in it (setDetail), and draw puts it there once, in place.
+  let detailKids = [];
   function draw(){
+    detailKids = [];
     seenLine();
     const sc = state.section, q = sc === "questions";
     const inb = q || sc === "inbox";
@@ -466,6 +473,7 @@ button.danger{color:var(--warn)}
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
     sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : renderBacklog();
+    place($("#pane-detail"), detailKids); $("#pane-detail").hidden = !detailKids.length;
   }
 
   // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
@@ -900,7 +908,9 @@ button.danger{color:var(--warn)}
       show([], el("div", {class:"empty"}, el("strong", {text: ready ? m[0] : NOT_READY}), ready ? m[1] : NOT_READY_WHY));
       return;
     }
-    show([], lost, rows.map(t => drawn(todoCard, t)));
+    const at = settle(rows.map(t => ["todo", t]));
+    show([], lost, rows.map(t => drawn(todoRow, t)));
+    pickDetail(at);
   }
 
   // A to-do the owner wrote (from "you") is the owner's to mark urgent, edit and delete; an agent's open one the owner
@@ -978,7 +988,7 @@ button.danger{color:var(--warn)}
 
   function goQuestion(qid){
     const d = state.docs.find(x => x.id === qid);
-    state.section = "questions"; if (d) state.filter = pmQBucket(d); state.repo = ""; $("#repo").value = "";
+    state.section = "questions"; if (d) state.filter = pmQBucket(d); state.repo = ""; $("#repo").value = ""; state.sel = { kind: "q", id: qid };
     render();
     const n = document.getElementById("q-" + qid); if (n) n.scrollIntoView({block:"start"});
   }
@@ -1281,7 +1291,7 @@ button.danger{color:var(--warn)}
     document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
     fillRepos(state.docs);
 
-    const aps = state.filter === "open" ? state.approvals.map(d => drawn(approvalCard, d)) : [];
+    const apps = state.filter === "open" ? state.approvals : [];
     let rows = state.docs.filter(d => pmQBucket(d) === state.filter && inR(d) && inId(d));
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.filter === "open"
       ? String(a.asked_at||"").localeCompare(String(b.asked_at||""))
@@ -1295,10 +1305,58 @@ button.danger{color:var(--warn)}
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
       if (ready && state.idq.trim()) { msg[0] = "No match for \"" + state.idq.trim() + "\""; msg[1] = "Clear the id box to see every question in this tab."; }
-      show(["repos"], aps, el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
+      const at = settle([...apps.map(d => ["approval", d]), ...rows.map(d => ["q", d])]);
+      show(["repos"], apps.map(d => drawn(approvalRow, d)), el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
+      pickDetail(at);
       return;
     }
-    show(["repos"], aps, rows.map(d => drawn(card, d)));
+    const at = settle([...apps.map(d => ["approval", d]), ...rows.map(d => ["q", d])]);
+    show(["repos"], apps.map(d => drawn(approvalRow, d)), rows.map(d => drawn(questionRow, d)));
+    pickDetail(at);
+  }
+
+  // ---- List and detail. A question, a to-do or an approval is one short row in the list; the card the row opens (the
+  // same card, with the same ids and the same requests) is in the detail pane. state.sel is the one open: null until
+  // the owner picks, then {kind, id}; false once the owner closed the detail. With nothing picked the first row opens
+  // on a wide screen, and on a phone none does (the detail would take the list's place).
+  const phone = () => typeof matchMedia === "function" && !!matchMedia("(max-width: 760px)").matches;
+  function pickRow(kind, id){
+    state.sel = { kind, id }; render();
+    const c = $("#pane-detail article"); if (c) { c.tabIndex = -1; c.focus(); }
+  }
+  function closeDetail(id){
+    state.sel = false; render();
+    const b = document.getElementById("open-" + id); if (b) b.focus();
+  }
+  function rowCard(kind, d, chips, since){
+    const on = !!state.sel && state.sel.kind === kind && state.sel.id === d.id, open = () => pickRow(kind, d.id);
+    const row = el("article", {class: "q row" + (d.urgent || kind === "approval" ? " urgent" : ""), id: "row-" + d.id, tabindex: "-1", "aria-current": on ? "true" : null},
+      el("div", {class:"meta"}, ...chips, el("span", {class:"id", text: String(d.id)}), since ? el("span", {text: since}) : null),
+      el("h2", {text: d.title ? String(d.title) : "(untitled)"}),
+      el("div", {class:"act"}, el("button", {class:"link", type:"button", id: "open-" + d.id, text: "Open", onclick: open})));
+    row.addEventListener("keydown", e => { if (e.key === "Enter" && e.target === row) { e.preventDefault(); open(); } });
+    return row;
+  }
+  const approvalRow = d => rowCard("approval", d, [el("span", {class:"chip need", text: d.kind === "op" ? "Run approval" : "Approval"})], d.created_at ? "asked " + when(d.created_at) : "");
+  const questionRow = d => rowCard("q", d, [d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
+    d.status !== "open" ? el("span", {class:"chip " + (d.status === "logged" ? "ok" : ""), text: d.status === "answered" ? "Submitted" : String(d.status)}) : null], d.asked_at ? "asked " + when(d.asked_at) : "");
+  const todoRow = t => rowCard("todo", t, [t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: String(t.repo)}) : null,
+    t.status === "done" ? el("span", {class:"chip ok", text:"Done"}) : null, t.from === "you" && state.todoEdit.has(t.id) ? el("span", {class:"chip need", text:"Editing"}) : null], t.added_at ? "added " + when(t.added_at) : "");
+  // Settles what is open among the rows the view offers ([kind, item] pairs, in list order), before the rows are drawn
+  // so the open one is marked; pickDetail then puts its card in the detail pane under a button that closes it.
+  function settle(offered){
+    const s = state.sel;
+    let at = s ? offered.find(([k, d]) => k === s.kind && d.id === s.id) : null;
+    if (!at && s !== false && !phone()) at = offered[0] || null;
+    state.sel = at ? { kind: at[0], id: at[1].id } : s === false ? false : null;
+    return at;
+  }
+  function pickDetail(at){
+    if (!at) return;
+    const [kind, d] = at;
+    detailKids = [el("div", {class:"dview"}, el("div", {class:"links"}, el("button", {class:"link", type:"button", id:"detail-close", text:"Back to the list", onclick: () => closeDetail(d.id)})),
+      drawn(kind === "approval" ? approvalCard : kind === "todo" ? todoCard : card, d))];
+    detailKids[0].querySelector("article").tabIndex = -1;
   }
 
   const sleep = ms => new Promise(done => setTimeout(done, ms));
@@ -1318,7 +1376,7 @@ button.danger{color:var(--warn)}
   function goNeed(n){
     state.repo = ""; $("#repo").value = "";
     if (n.kind === "question") return goQuestion(n.id);
-    state.section = n.kind === "todo" ? "todo" : "questions"; state.filter = "open"; state.tfilter = "open";
+    state.section = n.kind === "todo" ? "todo" : "questions"; state.filter = "open"; state.tfilter = "open"; state.sel = { kind: n.kind === "todo" ? "todo" : "approval", id: n.id };
     render();
     const x = document.getElementById((n.kind === "todo" ? "todo-" : "approval-") + n.id); if (x) x.scrollIntoView({block:"start"});
   }
@@ -1581,6 +1639,7 @@ button.danger{color:var(--warn)}
   });
   // The sidebar and the phone's tab bar pick a section the same way.
   function pickSection(s){
+    state.sel = null;
     state.section = s === "questions" && (state.section === "questions" || state.section === "inbox") ? state.section : s === "questions" ? state.inboxtab : s;
     try { localStorage.setItem("oq.section", state.section); } catch(e){}
     render();
@@ -1605,7 +1664,7 @@ button.danger{color:var(--warn)}
   });
   $("#qtabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
-    state.section = state.inboxtab = t.dataset.qt; try { localStorage.setItem("oq.section", state.section); } catch(err){}
+    state.sel = null; state.section = state.inboxtab = t.dataset.qt; try { localStorage.setItem("oq.section", state.section); } catch(err){}
     render();
   });
   $("#ftabs").addEventListener("click", e => {
