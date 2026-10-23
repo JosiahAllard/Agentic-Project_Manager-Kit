@@ -44,7 +44,20 @@ import sys
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, KIT)
 
+
+def safe_stdio():
+    """A character the console's encoding has no byte for (cp1252 on a redirected Windows
+    stream: a child's log line or a console window's title) is written as a \\u escape, never
+    raised: a gate that ran its steps never ends `error` over printing (KIT-GATE-OUTPUT-ENCODING)."""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(errors='backslashreplace')
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
+    safe_stdio()
     from kitlib.gate import pin                                     # noqa: E402
     _code, _said = pin.run(__file__, sys.argv[1:])
     if _said:
@@ -304,6 +317,7 @@ def do_measure(a):
 
 
 def main(argv):
+    safe_stdio()
     book_kw = None
     here, why = caller.take()       # every subcommand: no child inherits the stub's variable
     try:

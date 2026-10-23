@@ -620,19 +620,21 @@ def branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, l
                 say=None, book_kw=None):
     """_branch_gate() between the two result records of the branch at HEAD (kitlib.gate.result):
     `running` before it, the outcome's after it, or `error` when an exception, SystemExit or
-    Ctrl+C escapes it (raised again, unchanged). None with `plan` or on a detached HEAD. The
-    record lines are said as progress, never added to the outcome's lines."""
+    Ctrl+C escapes it (raised again, unchanged); the `error` record names the run's log folder
+    once it was made, else none. None with `plan` or on a detached HEAD. The record lines are
+    said as progress, never added to the outcome's lines."""
     say = say or _quiet
     run = None if plan else _result_run(root)
     if run is not None:
         say(run.start()[1])
+    known = {}                      # _gate_checkout: 'log_dir', once the run's folder is made
     try:
         out = _branch_gate(root, base=base, full=full, only=only, plan=plan, slug=slug,
-                           log_dir=log_dir, say=say, book_kw=book_kw)
+                           log_dir=log_dir, say=say, book_kw=book_kw, known=known)
     except BaseException as e:
         if run is not None:
             try:
-                say(run.error(e)[1])
+                say(run.error(e, log=known.get('log_dir'))[1])
             except Exception:       # noqa: BLE001 - never replace the exception being raised
                 pass
         raise
@@ -657,7 +659,7 @@ def _result_run(root):
 
 
 def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, log_dir=None,
-                 say=None, book_kw=None):
+                 say=None, book_kw=None, known=None):
     """Gate the checkout `root` is in against `base` (default `<remote>/<main>`, else `<main>`; the
     merge base with HEAD is what is compared). Outcome codes: OK, FAILED, USAGE (an --only name
     no step has, a --base that does not resolve), REFUSED, or a machine lock code. Facts:
@@ -666,7 +668,8 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
     dicts; None when no step ran), source (kitlib.gate.detect: `gate.json` or `auto`, once the
     config is read). The last line, once the config is read, is the source line (detect.label).
     An auto-detected gate that found no stack runs nothing and passes, its verdict line saying
-    so (NO_CHECKS)."""
+    so (NO_CHECKS). `known`, a dict: its 'log_dir' is set as soon as the run's log folder is
+    made, so a caller still has it when an exception ends the run."""
     say = say or _quiet
     top, why = repo.toplevel(root)
     if not top:
@@ -677,7 +680,7 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     seen = [detect.effective(cfg, top)]
     out = _gate_checkout(top, cfg, seen, base=base, full=full, only=only, plan=plan, slug=slug,
-                         log_dir=log_dir, say=say, book_kw=book_kw)
+                         log_dir=log_dir, say=say, book_kw=book_kw, known=known)
     out.facts['source'] = seen[0].source
     out.lines.append(detect.label(seen[0]))
     return out
@@ -695,7 +698,7 @@ def zero_count_warnings(gate):
 
 
 def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False, slug=None,
-                   log_dir=None, say=None, book_kw=None):
+                   log_dir=None, say=None, book_kw=None, known=None):
     """_branch_gate() once the config is read. seen[0]: the gate it runs (detect.effective),
     first from the checkout alone; an auto-detected one is detected again once the merge base is
     known, with the steps the merge base owes, and set back in seen[0]."""
@@ -772,6 +775,8 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     name = repo_name(cfg, top)
     started = gate_ok.utc()
     logs = new_log_dir(cfg, top, name, branch or head[:10], log_dir)
+    if known is not None:
+        known['log_dir'] = logs
     say('gate %s at %s, base %s: %s' % (branch or '(detached)', head[:10], base_text,
                                         ', '.join(s.name for s in chosen) or 'no step'))
     plan = None if empty else reuse.branch_plan(top, cfg, chosen, mb, changed, full=full,
