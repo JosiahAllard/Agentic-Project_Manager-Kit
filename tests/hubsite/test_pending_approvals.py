@@ -3,15 +3,20 @@ coordinator of its repository (by its `repo`), and the push tells both, once at 
 once more 20 h after it while it is still approved (docs/action-hub.md "Who handles a pending
 item" and "Push notifications")."""
 import datetime
+import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import api, approvals, push, serve, store as store_mod
+from kitlib.git import cmd as gitcmd
+from kitlib.hubsite import api, approvals, backlog, push, serve, store as store_mod
 from kitlib.hubsite.api import AGENT, BASE
 from kitlib.hubsite.store import Store
+from tests.gitfixture import own_git
 
 REPO = 'example.org/team/kit'
 T0 = 1800000000.0       # the decision, epoch seconds
@@ -103,6 +108,20 @@ class ApiPendingCase(Clocked):
         self.decide()
         self.store.update('approvals', 'A-001', {'status': 'consumed', 'consumed_at': iso(T0 + 5)})
         self.assertEqual(self.pending('pm'), [])
+
+    def test_each_repository_is_named_once_per_read(self):
+        asked = []
+
+        def repo_name(repo):
+            asked.append(repo)
+            return self.names.get(repo)
+        self.api.repo_name = repo_name
+        self.decide()
+        for n in (2, 3):
+            self.store.put('approvals', 'A-00%d' % n, decided())
+        self.store.put('approvals', 'A-004', dict(decided(), repo='example.org/team/other'))
+        self.assertEqual(len(self.pending('pm')), 4)
+        self.assertEqual(sorted(asked), sorted([REPO, 'example.org/team/other']))
 
 
 class FakePush(object):
@@ -212,6 +231,191 @@ class RepoNameCase(unittest.TestCase):
             def broken():
                 raise OSError('unreadable')
             self.assertEqual(serve._repo_name(views, broken)(REPO), 'Folder-Kit')
+
+    def test_a_name_with_no_checkout_is_never_asked_of_git(self):
+        views = mock.Mock()
+        views.repos.return_value = [('gone', None), ('kit', 'root-kit')]
+        asked = []
+        found = serve._configured(views, REPO, lambda root: asked.append(root) or (REPO, None))
+        self.assertEqual(found, [('kit', 'root-kit')])
+        self.assertEqual(asked, ['root-kit'])
+
+
+class GitCount(object):
+    """Counts the git children the code under test starts: kitlib.git.cmd.call's (through its
+    `_run`) and the ones started with kitlib.git.cmd.subprocess_run (pmstart._toplevel)."""
+
+    def __init__(self, case):
+        self.n = 0
+        real_run, real_sub = gitcmd.spawner(), gitcmd.subprocess_run
+
+        def run(argv, cwd=None, input=None, timeout=None, env=None):
+            self.n += 1
+            return real_run(argv, cwd=cwd, input=input, timeout=timeout, env=env)
+
+        def sub(argv, **kw):
+            if gitcmd._is_git(argv):
+                self.n += 1
+            return real_sub(argv, **kw)
+        for p in (mock.patch.object(gitcmd, '_run', run),
+                  mock.patch.object(gitcmd, 'subprocess_run', sub)):
+            p.start()
+            case.addCleanup(p.stop)
+
+
+def git_repo(path, url):
+    os.makedirs(path)
+    for args in (['init', '-q', '-b', 'main'], ['remote', 'add', 'origin', url]):
+        r = own_git(args, path)
+        assert r.returncode == 0, r
+
+
+class RoutingGitCase(unittest.TestCase):
+    """Decided approvals routed on real checkouts (serve._repo_pairs, serve._repo_name): once
+    each folder's top level and each root's remote are known, pending reads and the waits that
+    writes wake start no git (KIT-HUB-CLICK-LAG), and a changed remote still routes anew."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='kit-hubroute-')
+        self.addCleanup(shutil.rmtree, self.root, True)
+        pm = os.path.join(self.root, 'pm')
+        git_repo(pm, 'https://example.org/team/pm')
+        git_repo(os.path.join(self.root, 'kit'), 'https://' + REPO)
+        git_repo(os.path.join(self.root, 'other'), 'https://example.org/team/other')
+        sessions = os.path.join(pm, 's.json')
+        with open(sessions, 'w', encoding='utf-8') as f:
+            json.dump({'k': {'repo': 'kit'}, 'o': {'repo': 'other'}}, f)
+        self.now = 0.0
+        self.views = backlog.Views(serve._repo_pairs({'sessions_file': sessions}))
+        self.store = Store.open(os.path.join(self.root, 'store'))
+        self.addCleanup(self.store.close)
+        self.api = api.Api(self.store, session_keys=lambda: {'kit', 'other'},
+                           repo_name=serve._repo_name(
+                               self.views, remote_ids=serve._RemoteIds(clock=lambda: self.now)))
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        for n in range(1, 4):
+            self.store.put('approvals', 'A-00%d' % n, decided(when=now - 60))
+        self.git = GitCount(self)
+
+    def froms(self):
+        return sorted({d['from'] for d in self.api.pending() if d['kind'] == 'approval'})
+
+    def test_git_stays_flat_across_pending_reads_and_woken_waits(self):
+        self.assertEqual(self.froms(), ['kit'])
+        warm = self.git.n
+        self.assertGreater(warm, 0)
+        for _ in range(3):
+            self.assertEqual(self.froms(), ['kit'])
+        replies = []
+        waiter = threading.Thread(target=lambda: replies.append(self.api.call(
+            'GET', BASE + '/wait', AGENT, None, {'pending': '1', 'for': 'zeta', 'timeout': '3'})))
+        waiter.start()
+        for n in range(3):          # each write wakes the wait, which reads pending again
+            time.sleep(0.05)
+            self.store.put('approvals', 'B-00%d' % n, request(T0))
+        waiter.join(15)
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(replies[0][0], 200, replies)
+        self.assertEqual(self.git.n, warm, 'a warm read started git')
+
+    def test_a_changed_remote_routes_anew(self):
+        self.assertEqual(self.froms(), ['kit'])
+        for folder, url in (('kit', 'https://example.org/team/moved-elsewhere'),
+                            ('other', 'https://' + REPO)):
+            r = own_git(['remote', 'set-url', 'origin', url], os.path.join(self.root, folder))
+            self.assertEqual(r.returncode, 0, r)
+        self.assertEqual(self.froms(), ['other'])
+        warm = self.git.n
+        self.assertEqual(self.froms(), ['other'])
+        self.assertEqual(self.git.n, warm)
+
+
+class RemoteIdsCase(unittest.TestCase):
+    """serve._RemoteIds: a remembered remote serves while the repository's config (a linked
+    worktree's: the common dir's) is unchanged, and for at most REMOTE_TTL_S; a failure for at
+    most REMOTE_MISS_TTL_S."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='kit-hubremote-')
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.now = 0.0
+        self.asked = []
+        p = mock.patch.object(approvals, 'remote_id',
+                              lambda root: self.asked.append(root) or (REPO, None))
+        p.start()
+        self.addCleanup(p.stop)
+        self.ids = serve._RemoteIds(clock=lambda: self.now)
+
+    def config(self, text):
+        os.makedirs(os.path.join(self.root, '.git'), exist_ok=True)
+        with open(os.path.join(self.root, '.git', 'config'), 'w', encoding='utf-8') as f:
+            f.write(text)
+
+    def test_a_rewritten_config_is_read_again(self):
+        self.config('[remote "origin"]\n\turl = a\n')
+        for _ in range(3):
+            self.assertEqual(self.ids(self.root), (REPO, None))
+        self.assertEqual(len(self.asked), 1)
+        self.config('[remote "origin"]\n\turl = a longer one\n')
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 2)
+
+    def test_the_ttl_ends_a_remembered_remote(self):
+        self.config('[remote "origin"]\n\turl = a\n')
+        self.ids(self.root)
+        self.now = serve.REMOTE_TTL_S - 1
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 1)
+        self.now = serve.REMOTE_TTL_S
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 2)
+
+    def test_with_a_git_file_it_cannot_follow_only_the_ttl_sees_a_change(self):
+        # a .git file naming no git dir there: no config to stat
+        with open(os.path.join(self.root, '.git'), 'w', encoding='utf-8') as f:
+            f.write('gitdir: elsewhere\n')
+        self.ids(self.root)
+        self.now = serve.REMOTE_TTL_S - 1
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 1)
+        self.now = serve.REMOTE_TTL_S
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 2)
+
+    def test_a_linked_worktree_sees_its_common_config_change_within_the_ttl(self):
+        main = os.path.join(self.root, 'main')
+        self.root = os.path.join(self.root, 'wt')
+        own = os.path.join(main, '.git', 'worktrees', 'wt')
+        os.makedirs(own)
+        os.makedirs(self.root)
+        with open(os.path.join(own, 'commondir'), 'w', encoding='utf-8') as f:
+            f.write('../..\n')
+        with open(os.path.join(self.root, '.git'), 'w', encoding='utf-8') as f:
+            f.write('gitdir: ../main/.git/worktrees/wt\n')
+        common = os.path.join(main, '.git', 'config')
+        with open(common, 'w', encoding='utf-8') as f:
+            f.write('[remote "origin"]\n\turl = a\n')
+        self.ids(self.root)
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 1)
+        with open(common, 'w', encoding='utf-8') as f:
+            f.write('[remote "origin"]\n\turl = a longer one\n')
+        self.now = 1.0
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 2)
+
+    def test_a_failure_is_remembered_for_a_short_while_only(self):
+        self.config('[core]\n')
+        with mock.patch.object(approvals, 'remote_id',
+                               lambda root: self.asked.append(root) or (None, 'no origin')):
+            self.assertEqual(self.ids(self.root), (None, 'no origin'))
+            self.now = serve.REMOTE_MISS_TTL_S - 0.1
+            self.assertEqual(self.ids(self.root), (None, 'no origin'))
+            self.assertEqual(len(self.asked), 1)
+            self.now = serve.REMOTE_MISS_TTL_S
+            self.ids(self.root)
+            self.assertEqual(len(self.asked), 2)
+        self.assertLess(serve.REMOTE_MISS_TTL_S, serve.REMOTE_TTL_S)
 
 
 if __name__ == '__main__':

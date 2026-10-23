@@ -305,6 +305,27 @@ class BuildCase(ServeCase):
         # no backlog at all: no checkout
         self.assertIsNone(self.build().api.checkout('github.com/team/beta'))
 
+    def test_the_api_names_an_approvals_repo_by_the_launchers_session_keys(self):
+        """build() hands _repo_name the launcher's session keys: of two names on one checkout
+        the coordinator's key wins over the folder name that sorts first, and the root's remote
+        is asked of git once, not on every read."""
+        from kitlib.hubsite import approvals
+
+        class Repos(FakeBacklog):
+            def repos(self):
+                return [('Folder-Kit', 'X:\\kit'), ('kit', 'X:\\kit')]
+        asked = []
+        for p in (mock.patch.object(approvals, 'remote_id', lambda root: asked.append(root) or (
+                      'github.com/team/kit', None)),
+                  mock.patch.object(serve._api, 'launcher_keys', lambda: {'kit'})):
+            p.start()
+            self.addCleanup(p.stop)
+        hub = self.build(backlog=lambda refresh_s: Repos(self.calls))
+        for _ in range(3):
+            self.assertEqual(hub.api.repo_name('github.com/team/kit'), 'kit')
+        self.assertEqual(asked, ['X:\\kit'])
+        hub.close()
+
     def test_health_answers_on_the_bound_port_and_a_foreign_host_is_refused(self):
         hub = self.build()
         self.assertIsInstance(hub.listeners, list)
@@ -1829,7 +1850,7 @@ class MachineCase(unittest.TestCase):
             return [(n, None) for n in names]
 
         with mock.patch.object(serve.hubbacklog, 'git', git), \
-                mock.patch.object(serve.pmstart, 'known_repos', lambda c: ['a', 'b']), \
+                mock.patch.object(serve.pmstart, 'known_repos', lambda c, **kw: ['a', 'b']), \
                 mock.patch.object(serve.backlog, 'repo_list', repo_list):
             pairs = serve._repo_pairs(cfg)
             self.assertEqual(asked, [])
@@ -1883,6 +1904,8 @@ class MachineCase(unittest.TestCase):
             r = store.add('questions', question(repo='ghost'))
             self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
             self.assertEqual(src.known_repos(), want)
+            for _ in range(3):                      # the repos view, on every snapshot
+                self.assertEqual([r['name'] for r in src.repos([])], want)
         self.assertEqual(len(asked), 2, asked)      # the two folders, once each, for every call
         self.assertEqual(asked[0], os.path.dirname(path))
 
@@ -1924,6 +1947,24 @@ class MachineCase(unittest.TestCase):
             self.assertEqual(self.store(src).add('questions', question(repo='gamerepo')).warnings,
                              [])
         self.assertEqual(len(ran), 2, ran)          # git was tried, for both folders
+
+    def test_a_found_top_level_is_kept_and_a_miss_is_asked_again_after_a_while(self):
+        now, answers, asked = [0.0], {'pm': 'pmrepo', 'gone': None}, []
+
+        def toplevel(folder):
+            asked.append(folder)
+            return answers[folder]
+        with mock.patch.object(serve.pmstart, '_toplevel', toplevel):
+            tops = serve._toplevels(clock=lambda: now[0])
+            for _ in range(3):
+                self.assertEqual((tops('pm'), tops('gone')), ('pmrepo', None))
+            self.assertEqual(asked, ['pm', 'gone'])
+            now[0] = serve.TOPLEVEL_MISS_S
+            answers['gone'] = 'found-later'
+            self.assertEqual((tops('pm'), tops('gone')), ('pmrepo', 'found-later'))
+            now[0] = 10 * serve.TOPLEVEL_MISS_S
+            self.assertEqual((tops('pm'), tops('gone')), ('pmrepo', 'found-later'))
+        self.assertEqual(asked, ['pm', 'gone', 'gone'])
 
     def test_a_pm_data_key_in_the_machine_config_is_never_the_sources_pm_data(self):
         # pm_data is derived from the PM-repo pointer (kitlib.pmdata.machine_settings), so a key
