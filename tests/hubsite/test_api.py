@@ -2666,5 +2666,124 @@ class PushStatusTest(ApiCase):
         self.assertEqual(self.status(), {'state': 'down', 'last': 'RuntimeError', 'undelivered': None})
 
 
+class ScheduleTest(ApiCase):
+    """POST schedules (the owner's) and GET schedules (anybody's): docs/action-hub.md
+    "schedules/<task>-<repo>"."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.store.put('repos', 'kit', {'name': 'Kit', 'aliases': ['old-kit']})
+
+    def body(self, **kw):
+        b = {'task': 'maint-lint', 'repo': 'Kit', 'cadence': 'daily', 'at': '04:00'}
+        b.update(kw)
+        return {k: v for k, v in b.items() if v is not None}
+
+    def test_the_owner_sets_a_schedule_and_both_roles_read_it(self):
+        got = self.ok('POST', '/schedules', OWNER, self.body(), via='web')
+        self.assertEqual((got['id'], got['version']), ('maint-lint-Kit', 1))
+        d = self.store.get('schedules', 'maint-lint-Kit')
+        self.assertEqual({k: d.get(k) for k in ('task', 'repo', 'cadence', 'at', 'days', 'set_at',
+                                                'via')},
+                         {'task': 'maint-lint', 'repo': 'Kit', 'cadence': 'daily', 'at': '04:00',
+                          'days': None, 'set_at': NOW, 'via': 'web'})
+        for role in (OWNER, AGENT):
+            items = self.ok('GET', '/schedules', role)['items']
+            self.assertEqual([(i['id'], i['cadence']) for i in items],
+                             [('maint-lint-Kit', 'daily')])
+        mine = self.ok('GET', '/schedules', AGENT, query={'repo': 'kit'})['items']
+        self.assertEqual([i['id'] for i in mine], ['maint-lint-Kit'])
+        self.assertEqual(self.ok('GET', '/schedules', AGENT, query={'repo': 'other'})['items'], [])
+
+    def test_every_task_and_cadence_of_the_table(self):
+        self.assertEqual(api.SCHEDULE_TASKS, ('maint-lint', 'worktree-sweep', 'agent-temp-sweep'))
+        self.assertEqual(api.CADENCES, ('off', 'daily', 'weekly'))
+        for task in api.SCHEDULE_TASKS:
+            self.ok('POST', '/schedules', OWNER, self.body(task=task, cadence='off', at='00:00'))
+        self.assertEqual(sorted(self.store.docs('schedules')),
+                         ['agent-temp-sweep-Kit', 'maint-lint-Kit', 'worktree-sweep-Kit'])
+
+    def test_weekly_days_are_stored_once_each_in_week_order(self):
+        self.ok('POST', '/schedules', OWNER,
+                self.body(cadence='weekly', days=['Sun', 'Mon', 'Sun', 'Wed'], at='23:59'))
+        d = self.store.get('schedules', 'maint-lint-Kit')
+        self.assertEqual((d['cadence'], d['days'], d['at']),
+                         ('weekly', ['Mon', 'Wed', 'Sun'], '23:59'))
+
+    def test_the_repo_is_stored_as_the_name_the_hub_knows(self):
+        for given in ('kit', 'KIT', 'old-kit', ' Kit '):
+            with self.subTest(repo=given):
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                got = self.ok('POST', '/schedules', OWNER, self.body(repo=given))
+                self.assertEqual(got['id'], 'maint-lint-Kit')
+                self.assertEqual(self.store.get('schedules', got['id'])['repo'], 'Kit')
+
+    def test_a_repo_the_store_knows_from_the_config_counts(self):
+        self.store.known_repos = lambda: ('Alpha',)
+        got = self.ok('POST', '/schedules', OWNER, self.body(repo='alpha'))
+        self.assertEqual((got['id'], self.store.get('schedules', got['id'])['repo']),
+                         ('maint-lint-Alpha', 'Alpha'))
+
+    def test_each_field_is_judged_and_nothing_is_written(self):
+        bad = [
+            ({'task': 'format-disk'}, 'task'), ({'task': 3}, 'task'),
+            ({'task': 'Maint-Lint'}, 'task'),
+            ({'cadence': 'hourly'}, 'cadence'), ({'cadence': ['daily']}, 'cadence'),
+            ({'at': '4:00'}, 'at'), ({'at': '24:00'}, 'at'), ({'at': '12:60'}, 'at'),
+            ({'at': '04:00:00'}, 'at'), ({'at': '04:00\n'}, 'at'), ({'at': 400}, 'at'),
+            ({'repo': 'nobody'}, 'repo'), ({'repo': 'all'}, 'repo'), ({'repo': 'pm'}, 'repo'),
+            ({'repo': ['Kit']}, 'repo'),
+            ({'cadence': 'weekly'}, 'days'), ({'cadence': 'weekly', 'days': []}, 'days'),
+            ({'cadence': 'weekly', 'days': ['Funday']}, 'days'),
+            ({'cadence': 'weekly', 'days': ['mon']}, 'days'),
+            ({'cadence': 'weekly', 'days': 'Mon'}, 'days'),
+            ({'cadence': 'weekly', 'days': [1]}, 'days'),
+            ({'cadence': 'daily', 'days': ['Mon']}, 'days'),
+            ({'cadence': 'off', 'days': ['Mon']}, 'days'),
+            ({'if_version': -1}, 'if_version'), ({'if_version': '1'}, 'if_version'),
+            ({'if_version': True}, 'if_version'),
+            ({'id': 'x'}, 'id'), ({'via': 'tunnel'}, 'via'), ({'set_at': NOW}, 'set_at'),
+            ({'enabled': True}, 'enabled'),
+        ]
+        for change, field in bad:
+            with self.subTest(change=change):
+                self.refused('invalid', field, 'POST', '/schedules', OWNER, self.body(**change))
+        for missing in ('task', 'repo', 'cadence', 'at'):
+            for empty in (None, '', ' '):
+                with self.subTest(missing=missing, empty=empty):
+                    self.refused('invalid', missing, 'POST', '/schedules', OWNER,
+                                 self.body(**{missing: empty}))
+        self.refused('invalid', 'body', 'POST', '/schedules', OWNER, ['task'])
+        self.assertEqual(self.store.docs('schedules'), {})
+
+    def test_a_repo_whose_name_cannot_be_an_id_is_refused(self):
+        self.store.known_repos = lambda: ('my repo',)
+        self.refused('invalid', 'repo', 'POST', '/schedules', OWNER, self.body(repo='my repo'))
+
+    def test_setting_it_again_is_pinned_to_the_version_read(self):
+        self.ok('POST', '/schedules', OWNER, self.body())
+        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
+                     self.body(cadence='off'))
+        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
+                     self.body(cadence='off', if_version=2))
+        got = self.ok('POST', '/schedules', OWNER,
+                      self.body(cadence='weekly', days=['Fri'], at='03:30', if_version=1))
+        self.assertEqual(got['version'], 2)
+        d = self.store.get('schedules', 'maint-lint-Kit')
+        self.assertEqual((d['cadence'], d['days'], d['at']), ('weekly', ['Fri'], '03:30'))
+        # back to daily: the put replaces the document, so the days go with it
+        self.ok('POST', '/schedules', OWNER, self.body(if_version=2))
+        self.assertNotIn('days', self.store.get('schedules', 'maint-lint-Kit'))
+        # a pin on a schedule that is not there
+        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
+                     self.body(task='worktree-sweep', if_version=1))
+
+    def test_an_agent_is_refused_the_write(self):
+        self.refused('forbidden', 'role', 'POST', '/schedules', AGENT, self.body())
+        self.refused('forbidden', 'role', 'POST', '/schedules', AGENT, self.body(),
+                     agent_words=True)
+        self.assertEqual(self.store.docs('schedules'), {})
+
 if __name__ == '__main__':
     unittest.main()

@@ -162,6 +162,12 @@ def seed_approval(store, decision=None):
     return doc_id
 
 
+def seed_repo(store):
+    store.put('repos', 'r', {'name': 'r'})      # the repo a schedule names must be known
+    return 'X-1'
+
+
+SCHEDULE_BODY = {'task': 'maint-lint', 'repo': 'r', 'cadence': 'daily', 'at': '04:00'}
 ADD_BODY = {'repo': URL, 'title': 't', 'head': None,        # head: setUpModule
             'files': [{'path': 'new.md', 'base_blob': None, 'content': 'x\n'}]}
 
@@ -206,6 +212,8 @@ ROWS = {
     ('POST', '/pages'): (None, {'id': 'plan-1', 'title': 't', 'html': '<p>x</p>'}, None),
     ('GET', '/pages/{id}'): (seed_page, None, None),
     ('POST', '/pages/{id}/delete'): (seed_page, None, None),
+    ('GET', '/schedules'): (None, None, None),
+    ('POST', '/schedules'): (seed_repo, SCHEDULE_BODY, None),
     ('POST', '/approvals'): (None, ADD_BODY, None),
     ('POST', '/approvals/{id}/decide'): (seed_approval, {'decision': 'approve', 'if_version': 1},
                                          None),
@@ -324,6 +332,8 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/to_pm/{id}/edit'): OWNER, ('POST', '/to_pm/{id}/delete'): OWNER,
                 ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER,
                 ('POST', '/pages'): AGENT, ('POST', '/pages/{id}/delete'): OWNER,
+                # the owner sets the kit's automatic tasks; an agent only reads them
+                ('GET', '/schedules'): ANY, ('POST', '/schedules'): OWNER,
                 ('POST', '/records/{repo}'): OWNER, ('POST', '/records/{repo}/{id}/edit'): OWNER,
                 ('POST', '/records/{repo}/{id}/delete'): OWNER,
                 ('POST', '/approvals'): AGENT, ('POST', '/approvals/{id}/decide'): APPROVER,
@@ -353,6 +363,23 @@ class RolesCase(unittest.TestCase):
                     self.assertEqual(role, ANY)
             else:
                 self.assertIn(k, want, 'a write route the role table does not pin')
+
+    def test_an_agent_cannot_set_a_schedule(self):
+        # a good body for a known repo, by any listener, strong or not: the role alone decides
+        for via, strong in (('', False), ('cli', False), (api.TUNNEL_VIA, False),
+                            (api.TUNNEL_VIA, True)):
+            with self.subTest(via=via, strong=strong):
+                store, a, _ = self.fresh(seed_repo)
+                before = store.snapshot()
+                status, obj = a.call('POST', BASE + '/schedules', AGENT, dict(SCHEDULE_BODY),
+                                     via=via, strong=strong)
+                self.assertEqual((status, obj['error']['code'], obj['error']['field']),
+                                 (403, 'forbidden', 'role'))
+                self.assertEqual(store.snapshot(), before, 'a refused call wrote')
+                self.assertEqual(store.docs('schedules'), {})
+                # and it reads them
+                status, obj = a.call('GET', BASE + '/schedules', AGENT)
+                self.assertEqual((status, obj['items']), (200, []))
 
     def test_a_route_with_no_role_is_closed_to_everybody(self):
         calls = []

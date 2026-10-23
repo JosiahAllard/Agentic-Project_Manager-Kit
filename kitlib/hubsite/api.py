@@ -69,6 +69,16 @@ opened. POST pages/{id}/delete (OWNER, if_version optional) deletes the card, th
 body delete that fails leaves the card deleted and the body an orphan, as above. One process
 lock is enough: Store.open lets one process write a store (`_store.lock`).
 
+Schedules. POST schedules (OWNER) sets when one of the kit's automatic tasks runs for one repo:
+{task, repo, cadence, at, days?, if_version?} into `schedules/<task>-<repo>`. task is one of
+SCHEDULE_TASKS; cadence one of CADENCES (`off` keeps the document and runs nothing); at is HH:MM,
+24-hour; days, a list from DAYS, is required for `weekly` and refused for the others, and is
+stored once each in DAYS order. repo must be a repository the hub knows (its repos/ documents'
+names and aliases, and the store's known_repos), case ignored, and is stored as that repo's name.
+A refusal is `invalid` naming the field, with nothing written. Writing over a schedule takes its
+`if_version`; without it, or with another, it is `conflict`, as for a page. GET schedules (ANY)
+lists them. Nothing here runs a task: a tick outside the hub reads the list.
+
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
 cannot post its answer). status, the time stamps and a to-do's `from: you` are set here from the
@@ -1569,6 +1579,90 @@ def pages_delete(api, req):
     return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
 
 
+# ---- the owner's schedules for the kit's automatic tasks ("Schedules")
+# The tasks a schedule may name, a fixed table: maint-lint (the maintenance lint, being built),
+# worktree-sweep (kitlib.worktree.task) and agent-temp-sweep (kitlib.machinesetup.agenttemp).
+# Nothing here runs one.
+SCHEDULE_TASKS = ('maint-lint', 'worktree-sweep', 'agent-temp-sweep')
+CADENCES = ('off', 'daily', 'weekly')
+DAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+_AT = re.compile(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z')
+
+
+def _one_of(b, name, allowed):
+    v = _text(b, name)
+    if v not in allowed:
+        raise _invalid('%s is one of %s, not %r' % (name, ', '.join(allowed), v), name)
+    return v
+
+
+def _schedule_repo(api, name):
+    """The name of the repository the hub knows as `name` (case ignored): one the store's
+    known_repos gives, a repos/ document's name (its id when it has none), or one of its aliases.
+    `invalid`, field repo, for any other."""
+    names, aliases = {}, {}
+    for n in api.store.known_repos() or ():
+        if isinstance(n, str) and n.strip():
+            names.setdefault(n.strip().lower(), n.strip())
+    for doc_id, d in sorted(api.store.docs('repos').items()):
+        own = d.get('name') if isinstance(d.get('name'), str) and d['name'].strip() else doc_id
+        own = names.setdefault(own.strip().lower(), own.strip())
+        for a in d.get('aliases') if isinstance(d.get('aliases'), list) else ():
+            if isinstance(a, str) and a.strip():
+                aliases.setdefault(a.strip().lower(), own)
+    want = name.strip().lower()
+    found = names.get(want) or aliases.get(want)
+    if found is None:
+        raise _invalid('repo %r is not a repository the hub knows (GET repos lists them)' % name,
+                       'repo')
+    return found
+
+
+def schedules_list(api, req):
+    return {'items': api.items('schedules', req)}
+
+
+def schedules_set(api, req):
+    b = _fields(req, ('task', 'repo', 'cadence', 'days', 'at', 'if_version'),
+                required=('task', 'repo', 'cadence', 'at'))
+    task = _one_of(b, 'task', SCHEDULE_TASKS)
+    cadence = _one_of(b, 'cadence', CADENCES)
+    at = _text(b, 'at')
+    if not _AT.match(at):
+        raise _invalid('at is a time of day as HH:MM, 24-hour (00:00 to 23:59), not %r' % at, 'at')
+    days = _typed(b, 'days', (list,), 'a list of days') or []
+    if not all(isinstance(d, str) and d in DAYS for d in days):
+        raise _invalid('days is a list of %s' % ', '.join(DAYS), 'days')
+    if cadence == 'weekly' and not days:
+        raise _invalid('a weekly schedule needs days: one or more of %s' % ', '.join(DAYS), 'days')
+    if cadence != 'weekly' and days:
+        raise _invalid('days is for a weekly schedule, not a %s one' % cadence, 'days')
+    pin = _pin(b)
+    repo = _schedule_repo(api, _text(b, 'repo'))
+    doc_id = '%s-%s' % (task, repo)
+    why = schema.check_id(doc_id)
+    if why:
+        raise _invalid(why, 'repo')
+    fields = {'task': task, 'repo': repo, 'cadence': cadence, 'at': at, 'set_at': api.clock(),
+              'via': _via(req)}
+    if cadence == 'weekly':
+        fields['days'] = [d for d in DAYS if d in days]
+    have = api.store.get('schedules', doc_id)
+    if have is not None and pin is None:
+        raise HubError('conflict', 'schedules/%s is at version %d: give it as if_version to set it '
+                       'again' % (doc_id, _version(have)), 'if_version')
+    if have is not None and pin != _version(have):
+        raise HubError('conflict', 'schedules/%s is at version %d, not %d'
+                       % (doc_id, _version(have), pin), 'if_version')
+    if have is None and pin:
+        raise HubError('conflict', 'there is no schedules/%s at version %d: it is not there'
+                       % (doc_id, pin), 'if_version')
+    # pinned to the version read (0: not there yet), so a second writer with the same pin loses
+    r = api.store.put('schedules', doc_id, fields,
+                      if_version=_version(have) if have is not None else 0)
+    return api.written(r)
+
+
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
     docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
@@ -1790,6 +1884,8 @@ ROUTES = (
     _r('POST', '/pages', AGENT, pages_publish),
     _r('GET', '/pages/{id}', ANY, pages_get),
     _r('POST', '/pages/{id}/delete', OWNER, pages_delete),
+    _r('GET', '/schedules', ANY, schedules_list),
+    _r('POST', '/schedules', OWNER, schedules_set),
     _r('POST', '/approvals', AGENT, approvals_add),
     _r('POST', '/approvals/{id}/decide', APPROVER, approvals_decide),
     _r('POST', '/approvals/{id}/consume', AGENT, approvals_consume),

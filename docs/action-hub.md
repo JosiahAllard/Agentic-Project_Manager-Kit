@@ -520,6 +520,25 @@ repo list (`GET /api/v1/repos`, `kitlib.hubsite.derived.repos`) is every reposit
 kit's repository and the optional `pm_start.repos`) with the aliases the store holds. An item whose
 repo is `all` is for every repo and shows under each one.
 
+## schedules/<task>-<repo>
+When one of the kit's automatic tasks runs for one repo, set by the owner. The hub only stores
+and serves it: nothing in the hub runs a task, registers one or starts a process.
+
+| Field | Meaning |
+|---|---|
+| task | `maint-lint`, `worktree-sweep` or `agent-temp-sweep` (`kitlib.hubsite.api.SCHEDULE_TASKS`, a fixed table) |
+| repo | a repo the hub knows (a repos/ name or alias, or the PM's configured repos), stored as its name |
+| cadence | `off` (kept, runs nothing), `daily` or `weekly` |
+| days | weekly only, required: one or more of `Mon` to `Sun`, stored once each in week order |
+| at | the time of day as HH:MM, 24-hour |
+| set_at, via | server: when and by which path it was last set |
+
+`POST /api/v1/schedules` (owner) takes {task, repo, cadence, at, days?, if_version?} and puts the
+whole document; an agent is refused `forbidden`. Any other field, or a bad value, is `invalid`
+naming the field, with nothing written. Setting an existing schedule again takes its
+`if_version`; without it, or with another, it is `conflict`. `GET /api/v1/schedules` (anyone)
+lists them, filtered by `repo` like every list (`kitlib.hubsite.api` "Schedules").
+
 ## pages/<id> and page_html/<id>
 An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
 `kitlib/hubsite/schema.py` requires only `title` (a string); the page also reads `repo`, `from`,
