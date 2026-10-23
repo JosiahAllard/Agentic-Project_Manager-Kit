@@ -6,10 +6,11 @@ docs/backlog.md).
                        cannot be read
   open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store, its
                        `liveness` probe the worktree classifier's (liveness)
-  planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, or `retarget`);
-                       Usage for any other verb, raised before a plan exists
+  planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, `retarget` or
+                       `uncite`); Usage for any other verb, raised before a plan exists
   retarget_dry(args, ctx) -> the Change `retarget` would write, checked as a write would be;
                        nothing is published
+  uncite_dry(ctx)    -> the same for `uncite` (plan.plan_uncite)
 
 `planner` and `retarget_dry` take an object with tools/backlog.py's argument names (`verb`, `id`,
 `f_<field>`, `old`, `new`...).
@@ -92,6 +93,8 @@ def planner(args, ctx):
                                          reason=args.reason)
     if v == 'retarget':
         return lambda s: retmod.plan_retarget(s, ctx, args.old, args.new)
+    if v == 'uncite':
+        return lambda s: pmod.plan_uncite(s, ctx)
     if v == 'unblock':
         return lambda s: pmod.plan_unblock(s, ctx, args.id, args.on, args.reason,
                                            role_checked=True)
@@ -114,16 +117,27 @@ def planner(args, ctx):
     if v == 'clear-review':
         return lambda s: pmod.plan_clear_review(s, ctx, args.id, args.reason)
     # The caller's mistake, so Usage (errors.py); raised here, before any plan could run.
-    raise Usage('`%s` is not a write verb: `planner` plans %s' % (v, ', '.join(WRITES + ('retarget',))))
+    raise Usage('`%s` is not a write verb: `planner` plans %s'
+                % (v, ', '.join(WRITES + ('retarget', 'uncite'))))
 
 
 def retarget_dry(args, ctx):
     """`retarget` without `--apply`: the change it would write, planned against a fresh read and
     checked as a write would be; nothing is published."""
+    return _dry(ctx, lambda snap: retmod.plan_retarget(snap, ctx, args.old, args.new))
+
+
+def uncite_dry(ctx):
+    """`uncite` without `--apply`: the change it would write (its CHECK WORDING list included),
+    planned and checked as `retarget_dry`'s is; nothing is published."""
+    return _dry(ctx, lambda snap: pmod.plan_uncite(snap, ctx))
+
+
+def _dry(ctx, plan):
     snap = ctx.store.load()
     smod.require_readable(snap)
     with smod.plan_notes() as notes, smod.notes_on_refusal(notes):
-        change = retmod.plan_retarget(snap, ctx, args.old, args.new)
+        change = plan(snap)
     change = smod.with_plan_notes(change, notes)
     if change.writes:
         with smod.notes_on_refusal(notes):

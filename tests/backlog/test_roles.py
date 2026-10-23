@@ -50,6 +50,11 @@ DESIGN = {
 VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'add', 'set', 'block', 'unblock',
          'pull', 'release', 'close', 'retire', 'delete', 'clear-review', 'set-status', 'unpark',
          'retarget', 'migrate', 'catch-up'}
+# `uncite --apply` takes the retarget row once the owner approves roles.py naming it (an owner path):
+# until then no row names it, so its --apply is refused for every role (fails closed).
+UNCITE_ROW = 'uncite' in R.ACTIONS['retarget'].verbs
+if UNCITE_ROW:
+    VERBS.add('uncite')
 
 
 class RolesTest(unittest.TestCase):
@@ -125,6 +130,11 @@ class RolesTest(unittest.TestCase):
                 row = R.ACTIONS[action]
                 self.assertEqual((row.risk, sorted(row.allowed)), (risk, sorted(allowed)))
                 self.assertEqual(sorted(row.when), sorted(when.items()))
+
+    @unittest.skipUnless(UNCITE_ROW, "roles.py's retarget row does not name uncite yet (owner approval)")
+    def test_uncite_is_the_retarget_rows_and_no_other(self):
+        self.assertEqual(R.ACTIONS['retarget'].verbs, ('retarget', 'migrate', 'uncite'))
+        self.assertEqual([n for n, row in R.ACTIONS.items() if 'uncite' in row.verbs], ['retarget'])
 
     def test_no_unknown_role_fact_risk_or_row_is_named(self):
         for action, row in R.ACTIONS.items():

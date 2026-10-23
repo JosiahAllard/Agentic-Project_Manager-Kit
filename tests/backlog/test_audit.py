@@ -301,8 +301,15 @@ class Check(unittest.TestCase):
     def test_a_subject_no_verb_wrote_is_unknown(self):
         self.assertIsNone(audit_check.verb_of('records'))
         for subject, verb in (('closes X: landed 1', 'close'), ('backlog: park X on Q-1', 'set-status'),
-                              ('backlog: pull X onto b', 'pull'), ('migrate: docs/backlog/*.md', 'migrate')):
+                              ('backlog: pull X onto b', 'pull'), ('migrate: docs/backlog/*.md', 'migrate'),
+                              ('backlog: park X', 'set-status'),
+                              ('backlog: re-park X with no question (was Q-1)', 'set-status'),
+                              ('backlog: uncite 3 cite(s) in 2 record(s)', 'uncite')):
             self.assertEqual(audit_check.verb_of(subject), verb)
+
+    def test_an_uncite_change_is_read_as_its_apply(self):
+        # an uncite commit is the --apply, never the dry run (which writes nothing)
+        self.assertEqual(audit_check._given('uncite', None, None, None), {'apply': True})
 
     def run_check(self, *args):
         return inproc.run_main(AUDIT.main, ['-C', self.repo.root, '--no-fetch'] + list(args),

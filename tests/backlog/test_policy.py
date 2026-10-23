@@ -1,6 +1,7 @@
 """kitlib.backlog.policy: a backlog command sorted into kitlib/backlog/roles.py's rows, the refusal for
 a role that may not take one, the guard's reader of a backlog.py command line (pinned to the tool's
 own parser), and tools/backlog.py's own check of its session's mark (docs/backlog.md "Roles")."""
+import os
 import tempfile
 import unittest
 
@@ -28,6 +29,23 @@ class Sort(unittest.TestCase):
         self.assertEqual(policy.sort('retarget', {'apply': True}), ['retarget'])
         self.assertEqual(policy.sort('migrate', {'dry_run': True}), ['read'])
         self.assertEqual(policy.sort('migrate', {}), ['retarget'])
+        self.assertEqual(policy.sort('uncite', {}), ['read'])
+        self.assertEqual(policy.sort('uncite', {'apply': False}), ['read'])
+
+    @unittest.skipUnless('uncite' in roles.ACTIONS['retarget'].verbs,
+                         "roles.py's retarget row does not name uncite yet (owner approval)")
+    def test_uncite_apply_is_the_retarget_row(self):
+        self.assertEqual(policy.sort('uncite', {'apply': True}), ['retarget'])
+        self.assertEqual(policy.sort('uncite', {'unknown': True}), ['retarget'])
+
+    def test_clearing_resume_is_the_owners_and_the_ruling_keys_are_set_other(self):
+        priced = record(priority='3', priority_by='agent')
+        for key, row in (('resume', 'set-price-owner'), ('hold_ruling', 'set-other'),
+                         ('priority_ruling', 'set-other')):
+            given = policy.read_argv(words('set', 'FOO', '--unset', key)).given
+            self.assertEqual(given['fields'], [key], key)
+            self.assertEqual(policy.sort('set', given, priced), [row], key)
+            self.assertEqual(policy.sort('set', given, None), [row], key)
 
     def test_a_set_sorts_by_its_fields_and_the_record(self):
         self.assertEqual(policy.sort('set', {'fields': ['scope', 'summary']}), ['set-text'])
@@ -159,6 +177,9 @@ class ReadArgv(unittest.TestCase):
         self.assertEqual((a.given['fields'], a.given['priority']), (['priority', 'body'], ['-']))
         self.assertTrue(policy.read_argv(words('pull', 'FOO', '--ruling', 'x')).given['unknown'])
         self.assertTrue(policy.read_argv(words('retarget', 'A', 'B', '--apply')).given['apply'])
+        a = policy.read_argv(words('uncite', '--apply'))
+        self.assertEqual((a.verb, a.rid, a.given['apply']), ('uncite', None, True))
+        self.assertFalse(policy.read_argv(words('uncite')).given.get('apply'))
 
     def test_help_runs_nothing(self):
         self.assertTrue(policy.read_argv(words('set', 'FOO', '--help')).help)
@@ -252,6 +273,14 @@ class CliRole(unittest.TestCase):
         self.assertIn('(kitlib/backlog/roles.py); ask a session whose role may', out)
         return out
 
+    def body_file(self, text):
+        folder = tempfile.mkdtemp(prefix='kit-body-')
+        self.addCleanup(rmtree, folder)
+        path = os.path.join(folder, 'body.md')
+        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(text + '\n')
+        return path
+
     def seed(self):
         self.ok(None, 'add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok(None, 'set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
@@ -260,6 +289,29 @@ class CliRole(unittest.TestCase):
         self.seed()
         self.refused('coordinator', 'retarget', 'FOO', 'BAR', '--apply')
         self.ok(None, 'set', 'FOO', '--priority', '1', '--priority-by', 'owner')
+
+    def test_the_uncite_dry_run_is_a_read_and_its_apply_is_top_only(self):
+        self.seed()
+        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-2033, keep it.'))
+        before = self.ok(None, 'show', 'FOO')
+        out = self.ok('plain', 'uncite')
+        self.assertIn('UNCITE: 1 cite(s) in 1 record(s)', out)
+        self.assertIn("    + Per the owner's ruling, keep it.", out)
+        self.assertEqual(self.ok(None, 'show', 'FOO'), before)          # a dry run writes nothing
+        for mark in ('coordinator', 'worker'):
+            rc, out = self.run_tool(mark, 'uncite', '--apply')
+            self.assertEqual(rc, 2, out)
+            self.assertIn('REFUSED: ', out)
+        self.assertEqual(self.ok(None, 'show', 'FOO'), before)
+
+    @unittest.skipUnless('uncite' in roles.ACTIONS['retarget'].verbs,
+                         "roles.py's retarget row does not name uncite yet (owner approval)")
+    def test_the_owner_applies_uncite(self):
+        self.seed()
+        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-2033, keep it.'))
+        self.ok(None, 'uncite', '--apply')
+        self.assertIn("Per the owner's ruling, keep it.", self.ok(None, 'show', 'FOO'))
+        self.assertIn('nothing to rewrite', self.ok('plain', 'uncite'))
 
     def test_a_role_may_not_take_a_row_roles_py_does_not_give_it(self):
         self.seed()

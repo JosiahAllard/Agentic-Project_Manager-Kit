@@ -78,6 +78,10 @@ def _price_rows(values, rec):
 
 # The price fields beside `priority`: on an owner- or PM-priced record they are the owner's price.
 PRICE_FIELDS = ('priority_by', 'priority_per')
+# Fields a `set` may only clear (kitlib/backlog/plan.py UNWRITTEN) whose clearing is the owner's
+# and the PM's: `resume` ranks the record in the offer. Clearing `priority_ruling` or
+# `hold_ruling` changes no rank, so it is set-other.
+OWNER_CLEARS = ('resume',)
 
 
 def _price_field_row(key, given, rec):
@@ -115,8 +119,8 @@ def _narrow(names):
 def sort(verb, given=None, rec=None):
     """The ACTIONS rows (names) the command `verb` with `given` takes on the record `rec` (None: not
     read, so the strictest the record could make it), narrowed by `over`. A verb no row names takes
-    none, and refusal() refuses that for every role; a dry run (retarget without --apply,
-    migrate --dry-run, catch-up without --apply) is a read, but not with a word unread
+    none, and refusal() refuses that for every role; a dry run (retarget or uncite without
+    --apply, migrate --dry-run, catch-up without --apply) is a read, but not with a word unread
     (`given` UNKNOWN), which could be the --apply."""
     given = given or {}
     if verb is None:
@@ -125,7 +129,7 @@ def sort(verb, given=None, rec=None):
         return ['read']
     if given.get(UNKNOWN):                      # an unread word may be the --apply a dry run lacks
         return _verb_rows(verb)
-    if (verb == 'retarget' and not given.get('apply')) or \
+    if (verb in ('retarget', 'uncite') and not given.get('apply')) or \
             (verb == 'migrate' and given.get('dry_run')) or \
             (verb == 'catch-up' and not given.get('apply')):
         return ['read']
@@ -137,6 +141,8 @@ def sort(verb, given=None, rec=None):
                 rows.add('set-text')
             elif key in PRICE_FIELDS:
                 rows.add(_price_field_row(key, given, rec))
+            elif key in OWNER_CLEARS:
+                rows.add('set-price-owner')
             elif key != 'priority':
                 rows.add('set-other')
             if key == 'blocked_on' and _owner_blocked(rec) and \
@@ -316,7 +322,8 @@ OPTIONS = {
     'block': {'--on': True, '--reason': True, '--owner-ask': True},
     'unblock': {'--on': True, '--reason': True},
     'retarget': {'--apply': False},
-    'pull': {'--reason': True, '--blocker': True},
+    'uncite': {'--apply': False},
+    'pull':{'--reason': True, '--blocker': True},
     'release': {'--reason': True},
     'close': {'--reason': True},
     'retire': {'--why': True},
