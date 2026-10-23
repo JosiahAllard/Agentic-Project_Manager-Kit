@@ -139,7 +139,7 @@ class ClaudeContent:
         if role.effort:
             out.append(('effort', role.effort))
         if role.compact:
-            out.append(('autoCompactWindow', role.compact))
+            out.append(('autoCompactWindow', str(role.compact)))
         if role.cache:
             out.append(('cacheTtl', CACHE_TTL[role.cache]))
         return out
