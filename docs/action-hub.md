@@ -80,9 +80,10 @@ are off on this hub server." when the server runs no push worker. The page reads
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs` or `#info` open that
+Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
-repository; Questions, To do and Docs also by id or title.
+repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
+("schedules/") with the tick's last run, and sets, edits or turns one off.
 
 ## Serving it
 
@@ -537,8 +538,13 @@ and serves it: nothing in the hub runs a task, registers one or starts a process
 `POST /api/v1/schedules` (owner) takes {task, repo, cadence, at, days?, if_version?} and puts the
 whole document; an agent is refused `forbidden`. Any other field, or a bad value, is `invalid`
 naming the field, with nothing written. Setting an existing schedule again takes its
-`if_version`; without it, or with another, it is `conflict`. `GET /api/v1/schedules` (anyone)
-lists them, filtered by `repo` like every list (`kitlib.hubsite.api` "Schedules").
+`if_version`; without it, or with another, it is `conflict`. A daily or weekly per-repo task
+whose repo is not exactly one checkout in the machine config's `launcher.repos` is `invalid`
+naming `repo`, since the tick could not run it. The answer carries `first_run`, the next local
+run as YYYY-MM-DDTHH:MM, or null when it is off. `GET /api/v1/schedules` (anyone) lists them,
+filtered by `repo` like every list, with `tick`: {last, running, every_s}: when the tick was last
+seen, whether that is recent enough to call it running, and its period in seconds
+(`kitlib.hubsite.api` "Schedules").
 
 ## finding_marks/<fingerprint>
 The owner's mark on one maintenance-lint finding (docs/maint-lint.md), so it stops showing:
