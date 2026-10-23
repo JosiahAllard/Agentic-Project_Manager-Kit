@@ -2,6 +2,7 @@
 rule that the gate-OK record is written only for the commit whose clean tree passed."""
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -280,8 +281,9 @@ class GateConfigHash(unittest.TestCase):
             return dict(self.gate)
 
     def test_unset_new_keys_are_left_out_and_set_ones_are_hashed(self):
-        older = {'steps': [], 'kind': 'engine-test', 'fail': None}
-        now = dict(older, smoke_steps=None, docs_only=None)
+        section = {'steps': [], 'kind': 'engine-test', 'fail': None}
+        older = dict(section, python_tests='discover', python_tests_floor=None, trailers=None)
+        now = dict(section, smoke_steps=None, docs_only=None)
         self.assertEqual(runner.gate_config(self.Cfg(now)), older)
         self.assertEqual(gate_ok.config_hash(runner.gate_config(self.Cfg(now))),
                          gate_ok.config_hash(older))
@@ -294,6 +296,19 @@ class GateConfigHash(unittest.TestCase):
         defaults = schema.defaults('gate')
         self.assertEqual({k: defaults[k] for k in runner.HASH_IF_SET},
                          dict.fromkeys(runner.HASH_IF_SET))
+
+    def test_a_removed_key_is_no_gate_key_and_stays_out_of_the_section(self):
+        from kitlib.config import schema
+        self.assertFalse(set(runner.HASH_REMOVED) & set(schema.defaults('gate')))
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(set(runner.HASH_REMOVED) & set(kconfig.load(root).section('gate')))
+
+    def test_a_default_config_hashes_as_it_did_before_the_keys_were_removed(self):
+        # The hash a repo with no gate config had at 19f5763e0, while python_tests,
+        # python_tests_floor and trailers were gate keys: a record from either side verifies.
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(gate_ok.config_hash(runner.gate_config(kconfig.load(root))),
+                             'fe96461f7c0adde1d0e99dd14663dd5352ed730909ba5fcfa68415cb5e237b6f')
 
 
 def mode_step(word):

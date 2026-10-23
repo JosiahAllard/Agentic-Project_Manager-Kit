@@ -90,13 +90,21 @@ def gate_config(cfg):
     commit's tree (which the record names), its base's tree (`base`) and the kit (its `kit`), so
     the hash still names what decides the steps. A key of HASH_IF_SET that is unset is left out,
     so a config that sets none of them hashes as it did before the key existed: a record a kit
-    without the key wrote still verifies."""
+    without the key wrote still verifies. Each key of HASH_REMOVED is put in with the default it
+    hashed as, so a record a kit that still had the key wrote verifies too."""
     gate = cfg.section('gate')
-    return {k: v for k, v in gate.items() if not (k in HASH_IF_SET and v is None)}
+    hashed = {k: v for k, v in gate.items() if not (k in HASH_IF_SET and v is None)}
+    hashed.update((k, v) for k, v in HASH_REMOVED.items() if k not in hashed)
+    return hashed
 
 
 # "gate" keys added after records were first written; unset, they are not in gate_config().
 HASH_IF_SET = ('smoke_steps', 'docs_only')
+# "gate" keys the schema no longer has (a config that sets one fails to load), with the default
+# every config hashed them as while they were keys. Only the hash keeps them, never section() or
+# the steps: dropping one would change every repo's hash, so every gate-OK record written on the
+# other side of that kit change would fail verify_record (docs/gate.md "Gate-OK record").
+HASH_REMOVED = {'python_tests': 'discover', 'python_tests_floor': None, 'trailers': None}
 
 
 def gate_config_at(root, rev):
