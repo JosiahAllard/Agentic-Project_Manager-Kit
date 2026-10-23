@@ -29,14 +29,9 @@ ALLOWED = (
     ('tests/scrub/test_no_cites.py', SELF),
     # Going with the backlog and ledger branches.
     ('kitlib/backlog/', GOING),
-    ('tools/backlog.py', GOING),
-    ('hosts/codex/shell/skills/backlog-ops/SKILL.md', GOING),
-    ('content/skills/backlog-ops/SKILL.md', GOING),   # the source the line above is copied from
     ('docs/backlog.md', GOING),
-    ('docs/backlog-store.md', GOING),
     ('docs/kit-json.md', GOING),
     ('kitlib/config/user.py', GOING),
-    ('tests/gate/test_land_store.py', GOING),
 )
 
 RID = 'R-' + '1234'     # built, so this file holds no id for test_scrub to flag

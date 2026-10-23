@@ -55,12 +55,14 @@ class Set(VerbCase):
         self.verb('set', 'FOO', [('priority', ['3']), ('priority_by', ['agent'])])
         self.assertEqual(self.get('FOO').get('priority'), '3')
 
-    def test_a_pm_price_needs_a_ruling_and_records_it(self):
+    def test_a_pm_price_needs_the_role_check_and_records_no_ruling(self):
         self.seed(rec('FOO'))
-        with self.assertRaises(Refusal):
+        with self.assertRaises(Refusal) as cm:
             self.verb('set', 'FOO', [('priority', ['2']), ('priority_by', ['pm'])])
-        self.verb('set', 'FOO', [('priority', ['2']), ('priority_by', ['pm'])], ruling='R-9001')
-        self.assertEqual(self.get('FOO').get('priority_ruling'), 'R-9001')
+        self.assertIn('`set-price-owner`', str(cm.exception))
+        self.verb('set', 'FOO', [('priority', ['2']), ('priority_by', ['pm'])], role_checked=True)
+        foo = self.get('FOO')
+        self.assertEqual((foo.get('priority_by'), foo.get('priority_ruling')), ('pm', None))
 
     def test_an_owner_price_is_not_repriced_on_an_agents_word(self):
         self.seed(rec('FOO', **OWNER_PRICED))
@@ -69,7 +71,7 @@ class Set(VerbCase):
 
     def test_agent_priority_drops_the_ruling(self):
         self.seed(rec('FOO', priority='2', priority_by='pm', priority_ruling='R-9001'))
-        self.verb('set', 'FOO', [('priority_by', ['agent'])], ruling='R-9002')
+        self.verb('set', 'FOO', [('priority_by', ['agent'])], role_checked=True)
         self.assertIsNone(self.get('FOO').get('priority_ruling'))
 
     def test_keys_only_a_verb_writes_are_refused(self):
@@ -84,15 +86,6 @@ class Set(VerbCase):
             self.verb('set', 'FOO', [('state', ['pulled'])])
         with self.assertRaises(Refusal):
             self.verb('set', 'BAR', [('state', ['open'])])
-
-    def test_hold_ruling_re_cites_and_changes_nothing_else(self):
-        self.seed(rec('FOO', hold_ruling='R-9001'))
-        with self.assertRaises(Usage):
-            self.verb('set', 'FOO', [('effort', ['s'])], hold_ruling='R-9002')
-        self.verb('set', 'FOO', [], hold_ruling='R-9002')
-        self.assertEqual(self.get('FOO').get('hold_ruling'), 'R-9002')
-        with self.assertRaises(Refusal):
-            self.verb('set', 'FOO', [], hold_ruling='R-9002')
 
     def test_set_scope_replaces_the_list_and_names_what_it_removed(self):
         self.seed(rec('FOO', scope=['a/one.py', 'a/two.py', 'a/three.py']))
@@ -120,41 +113,24 @@ class Set(VerbCase):
             self.verb('set', 'NOPE', [('effort', ['s'])])
 
 
-class RulingShapeOnly(VerbCase):
-    """A ruling id is taken on its word: only its shape and the record's own cites are checked."""
+class OwnerGates(VerbCase):
+    """An owner gate is a roles.py row the role check decides (tests/backlog/test_top_uncited.py):
+    no verb takes or records a cited id."""
 
-    def owner_price(self, ruling, rid='FOO'):
-        return self.verb('set', rid, [('priority', ['1']), ('priority_by', ['owner'])],
-                         ruling=ruling)
-
-    def test_any_well_shaped_id_prices_a_record(self):
-        self.seed(rec('FOO'))
-        self.owner_price('R-9999')
-        self.assertEqual(self.get('FOO').get('priority_ruling'), 'R-9999')
-
-    def test_a_bad_shape_is_usage_and_one_ruling_is_one_change(self):
-        self.seed(rec('FOO', **OWNER_PRICED))
-        with self.assertRaises(Usage):
-            self.owner_price('R-12')
-        with self.assertRaises(Refusal) as cm:
-            self.owner_price('R-9001')
-        self.assertIn('One ruling, one change', str(cm.exception))
-        self.assertEqual(self.get('FOO').get('priority'), '2')
-
-    def test_retiring_an_owner_held_record_takes_a_ruling(self):
+    def test_retiring_an_owner_held_record_takes_the_role_check(self):
         self.seed(rec('FOO', **OWNER_BLOCKED))
-        change = self.verb('retire', 'FOO', 'no longer wanted at all', ruling='R-9001')
+        change = self.verb('retire', 'FOO', 'no longer wanted at all', role_checked=True)
         self.assertIsNone(self.get('FOO'))
-        self.assertEqual(change.ruling, 'R-9001')
+        self.assertIsNone(change.ruling)
         self.assertEqual(change.subject, 'retires FOO: no longer wanted at all')
         self.assertNotIn('Owner said', ' '.join(change.lines))
 
-    def test_any_well_shaped_id_releases_an_owner_hold(self):
+    def test_unblock_releases_an_owner_hold_and_records_no_ruling(self):
         self.seed(rec('FOO', **OWNER_BLOCKED))
-        self.verb('unblock', 'FOO', ruling='R-9004')
+        self.verb('unblock', 'FOO', role_checked=True)
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('hold_ruling'), r.get('owner_ask')),
-                         ('open', 'R-9004', None))
+                         ('open', None, None))
 
 
 class BlockUnblock(VerbCase):
@@ -194,20 +170,19 @@ class BlockUnblock(VerbCase):
             self.verb('block', 'BAR', ['live-client'])
         self.assertIn('needs `--reason T`', str(cm.exception))
 
-    def test_the_owners_hold_is_released_only_by_unblock_with_a_ruling(self):
-        # `block` only adds, so it never releases the owner's hold and takes no `--ruling`.
+    def test_the_owners_hold_is_released_only_by_unblock_with_the_role_check(self):
+        # `block` only adds, so it never releases the owner's hold.
         self.seed(rec('FOO', **OWNER_BLOCKED))
-        with self.assertRaises(Refusal):
+        with self.assertRaises(Refusal) as cm:
             self.verb('unblock', 'FOO')
-        with self.assertRaises(Usage):
-            self.verb('block', 'FOO', ['live-client'], ruling='R-9001')
+        self.assertIn('`unblock-owner`', str(cm.exception))
         self.verb('block', 'FOO', ['live-client'])
         r = self.get('FOO')
         self.assertEqual((r.all('blocked_on'), r.get('hold_ruling'), r.get('owner_ask')),
                          (['owner', 'live-client'], None, 'which one?'))
-        self.verb('unblock', 'FOO', on='owner', reason='the owner answered it', ruling='R-9001')
+        self.verb('unblock', 'FOO', on='owner', reason='the owner answered it', role_checked=True)
         r = self.get('FOO')
-        self.assertEqual((r.all('blocked_on'), r.get('hold_ruling')), (['live-client'], 'R-9001'))
+        self.assertEqual((r.all('blocked_on'), r.get('hold_ruling')), (['live-client'], None))
 
 
 class PullRelease(VerbCase):
@@ -240,10 +215,10 @@ class PullRelease(VerbCase):
         for rid in ('UNP', 'BLK', 'MIN', 'REQ'):
             with self.assertRaises(Refusal, msg=rid):
                 self.verb('pull', rid)
-        # pull-held refuses every role, so a ruling never releases a -1 by pulling it
+        # pull-held refuses every role, so no role releases a -1 by pulling it
         # (Owner gates): the owner or the PM releases the hold with `set` first
         with self.assertRaises(Refusal) as cm:
-            self.verb('pull', 'MIN', reason='the owner said go', ruling='R-9001')
+            self.verb('pull', 'MIN', reason='the owner said go', may_collide=True)
         self.assertIn('set MIN --priority', str(cm.exception))
         r = self.get('MIN')
         self.assertEqual((r.get('priority'), r.get('hold_ruling'), r.get('owner_ask')),
@@ -289,20 +264,20 @@ class CloseRetire(VerbCase):
         self.assertRegex(self.store.history('FOO', self.store.load()),
                          r'^[0-9a-f]{7,} closes FOO: the work is finished$')
 
-    def test_close_of_an_owner_held_record_needs_a_ruling(self):
+    def test_close_of_an_owner_held_record_needs_the_role_check(self):
         self.seed(rec('FOO', **OWNER_BLOCKED))
-        with self.assertRaises(Refusal):
+        with self.assertRaises(Refusal) as cm:
             self.verb('close', 'FOO', 'the work is finished')
-        self.verb('close', 'FOO', 'the work is finished', ruling='R-9001')
+        self.assertIn('`close-held`', str(cm.exception))
+        self.verb('close', 'FOO', 'the work is finished', role_checked=True)
         self.assertIsNone(self.get('FOO'))
 
-    def test_retire_of_an_owner_priced_record_needs_a_ruling(self):
+    def test_retire_of_an_owner_priced_record_needs_the_role_check(self):
         self.seed(rec('FOO', **OWNER_PRICED), rec('BAR'))
-        with self.assertRaises(Refusal):
+        with self.assertRaises(Refusal) as cm:
             self.verb('retire', 'FOO', 'no longer wanted at all')
-        with self.assertRaises(Usage):
-            self.verb('retire', 'BAR', 'no longer wanted at all', ruling='R-9002')
-        self.verb('retire', 'FOO', 'no longer wanted at all', ruling='R-9002')
+        self.assertIn('`retire-priced`', str(cm.exception))
+        self.verb('retire', 'FOO', 'no longer wanted at all', role_checked=True)
         self.verb('retire', 'BAR', 'no longer wanted at all')
         self.assertEqual(self.store.load().file_count, 0)
 

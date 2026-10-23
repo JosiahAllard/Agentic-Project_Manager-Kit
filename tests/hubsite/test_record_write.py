@@ -10,12 +10,12 @@ from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.hubsite import backlog, recordwrite
 from kitlib.hubsite.store import HubError
-from tests.backlog.helpers import kit_json_ref, record_text
+from tests.backlog.helpers import kit_json_ref, rec, record_text
 from tests.gitfixture import TempRepo, fixture_env, rmtree
 
 SUMMARY = 'the hub page lists nothing when the store is empty'
 # Built, so this file holds no ruling id or flag for tests/scrub to flag.
-FIRST, SECOND, ASKS = 'R-' + '9001', 'R-' + '9002', '--' + 'ruling'
+FIRST, ASKS = 'R-' + '9001', '--' + 'ruling'
 
 
 class Case(unittest.TestCase):
@@ -121,26 +121,32 @@ class Edit(Case):
                                                   [('pulled_by', ['kit/x'])]), 'invalid')
         self.assertIn('`pulled_by` is written only by', e.message)
 
-    def test_the_owner_reprices_an_owner_priced_record_with_no_ruling(self):
-        # an OWNER route: the store's set-price-owner row is the owner's, so no ruling is asked
-        # for; the old one, which named the old price, is dropped
+    def test_the_owner_prices_and_reprices_and_a_ruling_given_is_never_written(self):
+        # an OWNER route: the store's set-price-owner row is the owner's and the role check ran
+        # (role_checked), so no ruling is asked for; `ruling` is accepted and ignored
         recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
                          [('priority', ['2']), ('priority_by', ['owner'])], ruling=FIRST)
-        out = recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
-                               [('priority', ['3'])])
+        self.assertEqual(self.field('FOO', 'priority_by'), ['owner'])
+        self.assertEqual(self.field('FOO', 'priority_ruling'), [])
+        recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
+                         [('priority', ['3'])])
         self.assertEqual(self.field('FOO', 'priority'), ['3'])
         self.assertEqual(self.field('FOO', 'priority_ruling'), [])
-        self.assertTrue(any(FIRST + ' dropped' in line for line in out['lines']), out['lines'])
-        recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
-                         [('priority', ['4'])], ruling=SECOND)
-        self.assertEqual(self.field('FOO', 'priority'), ['4'])
-        self.assertEqual(self.field('FOO', 'priority_ruling'), [SECOND])
 
-    def test_a_pm_price_still_takes_the_ruling_the_store_asks_for(self):
-        e = self.refused(lambda: recordwrite.edit(
-            self.repo.root, 'FOO', self.read('FOO')['version'],
-            [('priority', ['2']), ('priority_by', ['pm'])]), 'invalid')
-        self.assertIn(ASKS, e.message)
+    def test_a_reprice_drops_the_old_priority_ruling_and_says_so(self):
+        self.seed(**rec('OLD', priority='2', priority_by='owner', priority_ruling=FIRST))
+        out = recordwrite.edit(self.repo.root, 'OLD', self.read('OLD')['version'],
+                               [('priority', ['3'])])
+        self.assertEqual(self.field('OLD', 'priority'), ['3'])
+        self.assertEqual(self.field('OLD', 'priority_ruling'), [])
+        self.assertTrue(any(FIRST + ' dropped' in line for line in out['lines']), out['lines'])
+
+    def test_a_pm_price_is_written_with_no_ruling(self):
+        out = recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
+                               [('priority', ['2']), ('priority_by', ['pm'])])
+        self.assertEqual(self.field('FOO', 'priority_by'), ['pm'])
+        self.assertEqual(self.field('FOO', 'priority_ruling'), [])
+        self.assertFalse(any(ASKS in line for line in out['lines']), out['lines'])
 
     def test_a_record_not_there_is_not_found(self):
         self.refused(lambda: recordwrite.edit(self.repo.root, 'BAR', 'x:y', [('effort', ['m'])]),

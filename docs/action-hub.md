@@ -901,9 +901,10 @@ comes from the caller.
 - `POST /api/v1/records/{repo}/{id}/unblock` (owner only), body `on`, `reason`, `ruling`: the
   backlog library's unblock (`recordwrite.unblock`). One blocker opens the record; with several,
   `on` names the one to clear and `reason` is required, and a call with no `on` is `invalid` on
-  field `on`. Clearing an owner blocker takes `ruling`.
-- `ruling` is sent only when the store's refusal asks for one (an owner-priced or owner-held
-  record); the store checks it as it checks a ruling given to `tools/backlog.py`.
+  field `on`. Clearing an owner blocker takes nothing more.
+- These routes are the owner's, so they meet the store's owner gates (docs/backlog.md "Owner
+  gates"; recordwrite passes `role_checked`). `ruling` is still accepted and ignored: no ruling
+  is checked or written into a record.
 - Each write answers `lines`, what the store printed (its notes included), and an add or edit
   also answers the record as it reads now. A store refusal is `invalid` in the store's words; a
   record not there is `not_found`. A repository whose `.kit.json` names no backlog store, or whose

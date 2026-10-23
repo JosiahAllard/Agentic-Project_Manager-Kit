@@ -126,7 +126,7 @@ class Schema(unittest.TestCase):
 
     def test_cross_field_rules(self):
         self.assertTrue(messages(priority='2'))                       # band with priority_by -
-        self.assertTrue(messages(priority='2', priority_by='pm'))      # pm without its ruling
+        self.assertEqual(messages(priority='2', priority_by='pm'), [])  # a PM price cites nothing
         self.assertTrue(messages(state='blocked'))                    # blocked on nothing
         self.assertTrue(messages(state='pulled'))                     # no pulled_at / pulled_by
         self.assertTrue(messages(blocked_on='owner', state='blocked'))  # no owner_ask

@@ -69,8 +69,10 @@ class Cli(unittest.TestCase):
         self.add_marked('FOO')
         with mock.patch.dict(os.environ, self.env, clear=True):
             ctx = opener.open_store(self.repo.root, session='owner-hub')
+            # the hub's owner route: a hold is the owner's and the PM's, so the role check ran
             ctx.store.write(lambda s: pmod.plan_set(s, ctx, 'FOO', [('priority', ['-1']),
-                                                                    ('owner_ask', ['which one?'])]))
+                                                                    ('owner_ask', ['which one?'])],
+                                                    role_checked=True))
         out = self.ok('list', '--needs-priority')
         self.assertIn('FOO', out)
         self.assertIn('1 record(s)', out)
@@ -80,10 +82,10 @@ class Cli(unittest.TestCase):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         rc, out = self.run_tool('delete', 'FOO')
         self.assertEqual(rc, 2, out)                     # --why is required
-        rc, out = self.run_tool('delete', 'FOO', '--why', 'the owner said', '--owner-said', 'x')
-        self.assertEqual(rc, 2, out)
-        self.assertRegex(out, r'^USAGE: ')
-        self.assertIn('Deleting an owner- or PM-priced record takes `--ruling R-nnnn`', out)
+        for flag in ('--owner-said', '--ruling'):
+            rc, out = self.run_tool('delete', 'FOO', '--why', 'the owner said', flag, 'x')
+            self.assertEqual(rc, 2, out)
+            self.assertIn('USAGE: unrecognized arguments: %s' % flag, out)
         out = self.ok('delete', 'FOO', '--why', 'the owner says this should not exist')
         self.assertIn('DELETED FOO', out)
         log = self.repo.git('log', '--format=%s', smod.STORE_REF)

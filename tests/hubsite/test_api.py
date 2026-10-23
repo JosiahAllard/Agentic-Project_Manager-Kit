@@ -3440,9 +3440,10 @@ class UnblockStoreTest(trw.Case):
         self.assertTrue(out['lines'])
         e = self.refused(lambda: recordwrite.unblock(self.repo.root, 'OPEN'), 'invalid')
         self.assertIn('nothing to unblock', e.message)
-        e = self.refused(lambda: recordwrite.unblock(self.repo.root, 'OWN'), 'invalid')
-        self.assertIn('ruling', e.message)
-        self.assertEqual(self.field('OWN', 'state'), ['blocked'])
+        # an OWNER route: the unblock-owner row is the owner's and the role check ran, so the
+        # owner's own hold clears with no ruling
+        recordwrite.unblock(self.repo.root, 'OWN')
+        self.assertEqual(self.field('OWN', 'state'), ['open'])
         self.refused(lambda: recordwrite.unblock(self.repo.root, 'NOPE'), 'not_found')
 
     def test_site_views_unblock_then_read_the_repository_again(self):
