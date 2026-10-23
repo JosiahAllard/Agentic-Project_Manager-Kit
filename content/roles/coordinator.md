@@ -100,7 +100,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   command is yours to keep running (skill `land-branch`). A gate whose
   process is gone with no report -> fresh agent re-gates the branch (`--full` for a strict path, else the default gate, `--full` until the base's gate config names smoke steps). Nothing
   re-wakes you later.
-- Nothing startable left in the set and 2 or fewer items being built -> wind down (skill
+- Nothing startable left in the set and 1 or 2 items being built -> wind down (skill
   session-handoff): review what you have, then write into the state note every LAND verdict
   you hold (branch, tip, reviewer, range) and every branch whose agent is still running, and
   {{tool:message}} the PM `ready to restart: <state note path>`;
@@ -110,9 +110,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   new while one of yours sits stopped without a block. Your successor never waits for workers'
   reports: it re-dispatches from the branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
   queues every LAND verdict in the note at once, and the PM stops you once it has checked in.
-- Nothing startable, nothing being built and the landing queue clear -> write the state note and
-  {{tool:message}} the PM `ready to stop: <state note path>`. The PM stops you with no successor and
-  restarts you when your repo gets startable work, an owner answer or an approval.
+- `next` offers nothing startable, every LAND verdict has landed, the landing queue is clear and no
+  agent is in flight (builders or reviewers) -> write the state note and {{tool:message}} the PM
+  `ready to stop: <state note path>`. The PM stops you with no successor and restarts you when your
+  repo gets startable work, an owner answer or an approval. A spent set with work still in `next`
+  is a restart, not a stop.
 - `next` empty only because finished branches still wait to land is no reason to restart: their
   open records and scopes still block the items behind them. Queue them at once, rerun
   `next`, refill the set; wind down only when `next` offers nothing startable with the landing
