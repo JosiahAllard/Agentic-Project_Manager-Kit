@@ -71,8 +71,12 @@ or after an unpair or a session that ran out) is told so on the page and to run
   (`tests/hubsite/test_lock_page.py`, `WriteTest`).
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
-`wait` open, else when one last asked; another session's wait `--for` its own key does not
-count (`Api.seen` in `kitlib/hubsite/api.py`). A second line gives the push notifications'
+`wait` open, else "Push delivery reaches the PM." while the snapshot's `push` state is `up`, else
+when one last asked; another session's wait `--for` its own key does not count (`Api.seen` in
+`kitlib/hubsite/api.py`). With a push worker running, the line ends with the PM watcher's
+heartbeat from the snapshot's `watcher` field ("Push notifications"): "The PM's watcher is
+running.", "The PM's watcher has stopped: its last heartbeat is <age> old." or "No PM watcher
+heartbeat is found." (`pmSeenText` in `kitlib/hubsite/web/index.html`). A second line gives the push notifications'
 status from the snapshot's `push` field ("Push notifications"): "Push delivery is up" or "is
 down" (with the state of the latest try to the PM), and how many items are undelivered, or "Push notifications
 are off on this hub server." when the server runs no push worker. The page reads everything at once
@@ -290,8 +294,11 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
 `kitlib/hubsite/api.py` docstring):
 - An item for `pm` is the PM's.
 - An item for a session key, before it is handed over, is that key's while the key can be reached:
-  a `wait --pending --for <key>` is open now, or one started or ended within `REACH_GRACE_S` (the
-  55-second wait limit plus 30 seconds). Otherwise it is the PM's.
+  a `wait --pending --for <key>` is open now, one started or ended within `REACH_GRACE_S` (the
+  55-second wait limit plus 30 seconds), or a push was written to it within `ACK_WINDOW_S`
+  (`Api.pushed`, which the push worker calls for each written try to a key other than `pm`,
+  "Push notifications"), so a session told by push with no wait open keeps its items. Otherwise
+  it is the PM's.
 - A `pending` or `wait` `--for <key>` that returns one of the key's items hands it over. The item
   is then the key's for `ACK_WINDOW_S` (30 minutes) from the first hand-over, and the PM's after
   that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
@@ -319,11 +326,13 @@ It is not the store's git push (the `push` setting).
   with one note line: `push notifications off: <why>`. A worker that fails to start leaves the
   server serving (`push notifications did not start: ...`).
 - What fires: a question answered (or answered again), a to-do done (or done again), a done to-do
-  reopened, a to-do the owner added (to the PM only), an approval the owner approved or denied
+  reopened, a to-do the owner added (to the PM only), a story the owner submitted (`submitted`,
+  to the PM only), a note to the PM the owner sent (`sent`, to the PM only), an approval the owner approved or denied
   (`decided`), and an approval still approved and not consumed 20 hours after the decision
   (`expiring`, `push.EXPIRING_S`), the one reminder before it expires at 24 hours, so a missed
   first push cannot lose the owner's approval. Each item has a fingerprint (a question's status,
-  `answer.at` and a digest of the answer; a to-do's status and `done_at`; an approval's status,
+  `answer.at` and a digest of the answer; a to-do's status and `done_at`; a story's status and
+  `submitted_at`; a note's status and `sent_at`; an approval's status,
   `decided_at` and phase, `decided` then `expiring`, read at the worker's clock each round), and
   only a changed fingerprint fires, so `pm_ack` alone never does. An approval's phase ending
   (consumed, expired, a denial's 24 hours past) drops what was still owed and sends nothing.
@@ -339,7 +348,8 @@ It is not the store's git push (the `push` setting).
 - Until when: each recipient is sent each item until it is acknowledged. The asking session
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
-  `questions log` for a question. An approval's push is sent once to each: the first written
+  `questions log` for a question; for a story, any change of its status (`stories set`), and for a
+  note to the PM, its reply (`to-pm reply`). An approval's push is sent once to each: the first written
   try acknowledges it. An item withdrawn, reopened or answered again replaces or
   ends its push. A session that picked up a first answer or done mark before the worker saw it
   is not sent it. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
@@ -358,11 +368,23 @@ It is not the store's git push (the `push` setting).
   `written` means the bytes reached the pipe, not that the session read them. Two live sessions
   of one name: the one `pipes.json` names, else the newest, logged `ambiguous`. Whether a desktop
   session wakes on a push is unproven; the PM's own `wait --pending --for pm` stays its path.
+- Routing: each written try to a session key other than `pm` calls `Api.pushed`, so that key keeps
+  its items for `ACK_WINDOW_S` with no wait open ("Who handles a pending item").
+- The PM watcher: every `push.WATCHER_POLL_S` (30 s) the worker's thread reads the heartbeat
+  pm_watch writes beside its state file (`kitlib.pmwatch.heartbeat_file`; the state file is the
+  `pm_watch` config's `state_file`, else `kitlib.pmwatch.default_state_file`). A heartbeat at most
+  `push.WATCHER_STALE_S` (300 s) old is `up`, an older one `down`, none readable `none`. When a
+  heartbeat this worker saw fresh goes stale or missing, it pushes the PM once `[hub push] watcher
+  down age:<seconds|none> route:pm attempt:<k>` and a line to start pm_watch again
+  (docs/pm-watch.md); a fresh heartbeat acknowledges it, a written try ends it, and a try not
+  written is retried on the same schedule. It fires again only after the heartbeat was fresh
+  again, and never on a server that has not seen a fresh one (it is not kept across a restart).
+  A pm_watch run with its own `--state` path is not seen.
 - Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each
   round that changed it, so a server ended without a clean close loses at most that round; read
   again at start: an entry whose item changed while the server was down fires afresh, one whose
   item is gone is dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous`
-  pick and per give-up; never a token or any item text; rotated once to `.1` past 1 MiB,
+  pick and per give-up, a `watcher down` try as kind `watcher`, id `down`; never a token or any item text; rotated once to `.1` past 1 MiB,
   `push.LOG_MAX`).
 - Status: `GET /api/v1/snapshot` carries `push`, null when the server runs no worker, else
   `PushWorker.status()`: `last` (the state of the latest delivery to the PM, null before the
@@ -374,7 +396,10 @@ It is not the store's git push (the `push` setting).
   shows the last state indefinitely, and an item given up appears only in
   `push-undelivered.jsonl`. The page shows it under the PM line ("Using the hub"). It is read
   again with each snapshot, so a retry's outcome shows at the next change or wait timeout, not
-  at once.
+  at once. The snapshot and `GET /api/v1/health` also carry `watcher`: null with no worker, else
+  `PushWorker.watcher_status()`, `{"state": "up"|"down"|"none", "age": <seconds or null>}` at the
+  worker's latest read (a status that raises is `down` with a null age). The health answer
+  through the tunnel leaves it out ("Serving it").
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
   joins it after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take
   (Claude: `peer.WRITE_TIMEOUT_S` plus the helper's reap and pump joins), so the last outbox

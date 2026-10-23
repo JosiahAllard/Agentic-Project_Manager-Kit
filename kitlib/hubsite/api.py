@@ -246,6 +246,12 @@ else {"state", "last", "undelivered"} from PushWorker.status (kitlib.hubsite.pus
 undelivered the number of items some recipient has not yet had a written try of. The worker
 sets Api.push_status when it is made; the snapshot reads it on the request's thread.
 
+Watcher. GET snapshot and GET health carry `watcher`: null when this hub runs no push worker,
+else {"state", "age"} from PushWorker.watcher_status (kitlib.hubsite.push docstring "Watcher"):
+the PM's pm_watch heartbeat at the worker's latest read, state 'up', 'down' (older than
+WATCHER_STALE_S) or 'none' (no heartbeat readable), age its seconds (null with none). A status
+that raises is 'down' with a null age.
+
 Pending for one session. Every pending item carries `from`, the session key it is for
 (Api.pending). GET pending and GET wait (with pending=1) take `for=<key>`: only that key's
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
@@ -262,7 +268,9 @@ gone. An item whose `from` is `pm` is the PM's. Otherwise, once a GET pending or
 its key has handed the item to that key (an agent call), the route is the key for
 ACK_WINDOW_S after that first hand-over and `pm` from then on while it is still pending (the
 creator clears a to-do with its ack). Before any hand-over the route is the key while the key is
-reachable: a wait `for` it is blocked now, or one started or ended within REACH_GRACE_S. `for=pm`
+reachable: a wait `for` it is blocked now, one started or ended within REACH_GRACE_S, or a push
+written to it within ACK_WINDOW_S (Api.pushed, which the push worker calls for each written try
+to a key other than `pm`), so a session told by push with no wait open keeps its items. `for=pm`
 lists the items routed to `pm`, every answered question, whoever it is from (the PM logs each
 ruling), and every decided approval. An approval has no `from`: it is for the coordinator of its
 repository, the session key named as the configured repository whose origin remote is the
@@ -579,6 +587,8 @@ class Api(object):
         self._listening = {}        # session key -> {wait token: True} for its blocked waits
         self._heard = {}            # session key -> `now` its last wait started or ended
         self._handed = {}           # (kind, id) -> (session key, `now` of the first hand-over)
+        self._pushed = {}           # session key -> `now` of the latest push written to it
+        self.watcher_status = None  # PushWorker.watcher_status, set by the worker ("Watcher")
 
     def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False,
              agent_words=False, strong=False):
@@ -799,10 +809,18 @@ class Api(object):
             return (key, until) if now < until else (AGENT_FROM, None)
         if self._listening.get(key):
             return key, None
-        heard = self._heard.get(key)
-        if heard is not None and now < heard + self.reach_grace_s:
-            return key, heard + self.reach_grace_s
+        heard, pushed = self._heard.get(key), self._pushed.get(key)
+        until = max(heard + self.reach_grace_s if heard is not None else -math.inf,
+                    pushed + self.ack_window_s if pushed is not None else -math.inf)
+        if now < until:
+            return key, until
         return AGENT_FROM, None
+
+    def pushed(self, key):
+        """Note that a push to session key `key` was written: its items route to it for
+        ack_window_s (module docstring "Routes"). One dict step; the push worker's thread."""
+        if isinstance(key, str) and key not in ('', AGENT_FROM):
+            self._pushed[key] = self.now()
 
     def listen(self, req, opened=None, closed=None):
         """Note that a wait `for` a session key other than AGENT_FROM started (`opened`, a
@@ -874,6 +892,18 @@ class Api(object):
             got = fn()
         except Exception as e:      # noqa: BLE001 - the snapshot answers whatever the worker does
             return {'state': 'down', 'last': type(e).__name__, 'undelivered': None}
+        return got if isinstance(got, dict) else None
+
+    def watcher_seen(self):
+        """The PM watcher's state as the push worker last read it, or None when this hub runs
+        no push worker (module docstring "Watcher"). A status that raises is 'down'."""
+        fn = self.watcher_status
+        if fn is None:
+            return None
+        try:
+            got = fn()
+        except Exception:           # noqa: BLE001 - the snapshot answers whatever the worker does
+            return {'state': 'down', 'age': None}
         return got if isinstance(got, dict) else None
 
 
@@ -2034,7 +2064,7 @@ def snapshot(api, req):
     return {'revision': revision, 'collections': docs,
             'pending': _unpath_pending(api, api.pending(), req),
             'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
-            'push': api.push_seen(),
+            'push': api.push_seen(), 'watcher': api.watcher_seen(),
             'strong': req.strong is True}
 
 
@@ -2047,7 +2077,8 @@ def health(api, req):
     if isinstance(extra, dict):
         out.update(extra)
     out.pop('store', None)
-    out.update(ok=True, version=API_VERSION, revision=api.store.revision, unavailable=missing)
+    out.update(ok=True, version=API_VERSION, revision=api.store.revision, unavailable=missing,
+               watcher=api.watcher_seen())
     if req.role == OWNER:           # where the store is on this machine is the owner's to know
         out['store'] = api.store.root
     return out
