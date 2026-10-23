@@ -1303,7 +1303,7 @@ class DomTest(unittest.TestCase):
             out.none = on(); out.empty = text($("#list"));
             return out;
         """, snapshot(views=views))
-        self.assertEqual(got["sections"], ["home", "questions", "topm", "todo", "backlog", "docs", "info"])
+        self.assertEqual(got["sections"], ["home", "questions", "topm", "todo", "backlog", "docs", "autotasks", "info"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -2206,8 +2206,10 @@ class HomeTest(unittest.TestCase):
         got = dom("""
             await start();
             const first = $$("#list article").map(a => a.id), head = text($("#need-head")), chips = $$("#list .chip").map(text);
-            await click(button($("#need-T-3"), "Open"));
-            const todo = [$("#sections .sec[aria-selected=true]").dataset.s, location.hash];
+            // Not the first to-do of the list (T-3, urgent, is): the one picked is the one opened, not the list's first row.
+            await click(button($("#need-T-1"), "Open"));
+            const todo = [$("#sections .sec[aria-selected=true]").dataset.s, location.hash,
+                          $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id), !!$("#pane-detail #todo-T-1")];
             await click($("#sections [data-s=home]"));
             await click(button($("#need-Q-1"), "Open"));
             const q = [$("#sections .sec[aria-selected=true]").dataset.s, location.hash, !!$("#q-Q-1")];
@@ -2218,7 +2220,7 @@ class HomeTest(unittest.TestCase):
         self.assertEqual([i[len("need-"):] for i in got["first"]], ["A-1", "Q-3", "T-3", "Q-2", "Q-1", "T-1"])
         self.assertEqual(got["head"], "Waiting on you (6)")
         self.assertEqual(got["chips"], ["Approval", "Question", "To do", "Question", "Question", "To do"])
-        self.assertEqual(got["todo"], ["todo", "#todo"])
+        self.assertEqual(got["todo"], ["todo", "#todo", ["row-T-1"], True])
         self.assertEqual(got["q"], ["questions", "#questions", True])
 
     def test_an_empty_list_says_so_and_before_the_first_read_says_waiting(self):
@@ -2423,8 +2425,7 @@ class TriageListTest(unittest.TestCase):
             return calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
         """, snapshot(strong=True, collections=dict(LISTS, approvals={"A-1": APPROVAL})), hash="#questions")
         sent = dict((p, b) for p, b in got)
-        self.assertEqual(sent["/questions/Q-1/answer"]["choice"], 1)
-        self.assertEqual(sent["/questions/Q-1/answer"]["if_version"], 1)
+        self.assertEqual(sent["/questions/Q-1/answer"], {"choice": 1, "note": "", "if_version": 1})
         self.assertEqual(sent["/todos/T-2/done"], {"done": True})
         self.assertEqual(sent["/approvals/A-1/decide"], {"decision": "approve", "if_version": 2})
 
@@ -2463,6 +2464,241 @@ class TriageListTest(unittest.TestCase):
         self.assertEqual(got["t"], ["#todo", "todo", ["row-T-1", "row-T-2"]])
         self.assertEqual(got["b"], ["#questions", "questions", True])
         self.assertEqual(got["again"], ["row-T-1", "row-T-2"])
+
+    def test_the_detail_pane_keeps_one_view_node_across_rows_and_sections(self):
+        lists = dict(LISTS, questions=dict(LISTS["questions"], **{
+            "Q-2": {"status": "open", "title": "second", "version": 1, "asked_at": NOW, "options": [{"label": "x"}]}}))
+        got = dom("""
+            await start();
+            const v = $("#pane-detail .dview");
+            await click($("#open-Q-2"));
+            const row = $("#pane-detail .dview") === v && !!$("#pane-detail .dview #q-Q-2");
+            await click($("#sections [data-s=todo]"));
+            const section = $("#pane-detail .dview") === v && !!$("#pane-detail .dview #todo-T-1");
+            return { v: !!v, row, section, views: $$("#pane-detail .dview").length };
+        """, snapshot(collections=lists), hash="#questions")
+        self.assertEqual(got, {"v": True, "row": True, "section": True, "views": 1})
+
+    def test_a_to_do_being_edited_is_open_again_when_the_owner_comes_back_to_the_section(self):
+        lists = {"todos": {"T-0": {"status": "open", "title": "first", "from": "pm", "version": 1, "added_at": "2026-09-01T00:00:00Z"},
+                           "T-1": {"status": "open", "title": "mine", "from": "you", "version": 1, "added_at": NOW}}}
+        got = dom("""
+            await start();
+            const rows = $$("#list article").map(a => a.id);
+            await click($("#open-T-1"));
+            await click(button($("#todo-T-1"), "Edit"));
+            await type($("#todo-T-1 input[type=text]"), "half written");
+            await click($("#sections [data-s=questions]"));
+            await click($("#sections [data-s=todo]"));
+            const f = $("#pane-detail #todo-T-1 input[type=text]");
+            return { rows, cur: $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id), kept: f ? f.value : null };
+        """, snapshot(collections=lists), hash="#todo")
+        self.assertEqual(got["rows"], ["row-T-0", "row-T-1"])                 # the edited to-do is not the list's first row
+        self.assertEqual(got["cur"], ["row-T-1"])
+        self.assertEqual(got["kept"], "half written")
+
+    def test_on_a_phone_the_detail_says_a_lost_edit_is_in_the_list(self):
+        got = dom(self.PHONE + """
+            await start();
+            await click($("#open-T-1"));
+            await click(button($("#todo-T-1"), "Edit"));
+            await type($("#todo-T-1 input[type=text]"), "half");
+            delete server.snap.collections.todos["T-1"]; server.snap.revision++;
+            await wake();
+            const lost = !!$("#list #lost-todo-T-1");
+            await click($("#open-T-2"));
+            return { lost, note: text($("#pane-detail #lost-note")), card: !!$("#pane-detail #todo-T-2") };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, {"lost": True, "card": True,
+                               "note": "An edit of a to-do that is gone is in the list, with your text. Back to the list to copy it."})
+        wide = dom("""
+            await start();
+            await click(button($("#todo-T-1"), "Edit"));
+            await type($("#todo-T-1 input[type=text]"), "half");
+            delete server.snap.collections.todos["T-1"]; server.snap.revision++;
+            await wake();
+            return [!!$("#lost-todo-T-1"), !!$("#lost-note")];
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(wide, [True, False])                                    # beside the list, the lost card is in sight
+
+    def test_each_row_button_is_named_after_its_item(self):
+        got = dom("""
+            await start();
+            return $$("#list article button").map(b => [b.id, text(b), b.getAttribute("aria-label")]);
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, [["open-T-1", "Open T-1", "Open T-1: mine"], ["open-T-2", "Open T-2", "Open T-2: theirs"]])
+
+
+def schedules(items=None, last=NOW, running=True):
+    """What GET /schedules answers (api.schedules_list)."""
+    if items is None:
+        items = [{"id": "maint-lint-alpha", "task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "03:00",
+                  "set_at": NOW, "via": "web", "version": 2},
+                 {"id": "worktree-sweep-alpha", "task": "worktree-sweep", "repo": "alpha", "cadence": "weekly", "at": "04:00",
+                  "days": ["Mon", "Thu"], "set_at": NOW, "via": "cli", "version": 1}]
+    return {"ok": True, "items": items, "tick": {"last": last, "running": running, "every_s": 900}}
+
+
+# GET /schedules answers SCHED (a JSON text); each POST /schedules answers POST (a JSON text: {status, body}).
+SCHED_ROUTE = """
+    const listed = SCHED;
+    server.route = c => c.path === "/schedules" ? (c.method === "GET" ? { status: 200, body: listed } : POST) : undefined;
+"""
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class AutoTasksTest(unittest.TestCase):
+    """The Automatic tasks section: the schedules of GET /schedules as rows, one edited in the detail pane, POST /schedules."""
+
+    def run_page(self, body, sched=None, post=None, hash="#autotasks", snap=None):
+        post = post or {"status": 200, "body": {"ok": True, "id": "maint-lint-alpha", "version": 3, "first_run": "2026-10-24T04:30"}}
+        src = SCHED_ROUTE.replace("SCHED", json.dumps(sched or schedules())).replace("POST", json.dumps(post)) + body
+        return dom(src, snap or snapshot(views={"repos": [{"name": "alpha"}, {"name": "beta"}]}), hash=hash)
+
+    def test_the_schedules_are_rows_and_the_tick_line_says_it_runs(self):
+        got = self.run_page("""
+            await start();
+            return { sec: $("#sections .sec[aria-selected=true]").dataset.s, rows: $$("#list article").map(a => [a.id, text(a.querySelector("h2")), text(a.querySelector(".chip"))]),
+                     tick: text($("#tick-line")), cls: $("#tick-line").className, card: !!$("#pane-detail #sched-maint-lint-alpha"),
+                     gets: calls.filter(c => c.path === "/schedules").map(c => c.method) };
+        """)
+        self.assertEqual(got["sec"], "autotasks")
+        self.assertEqual(got["rows"], [["row-maint-lint-alpha", "Maintenance lint for alpha", "Daily at 03:00"],
+                                       ["row-worktree-sweep-alpha", "Worktree sweep for alpha", "Mon, Thu at 04:00"]])
+        self.assertTrue(got["tick"].startswith("The tick that starts these tasks was last seen "), got["tick"])
+        self.assertTrue(got["tick"].endswith("; it runs every 15 min."), got["tick"])
+        self.assertEqual(got["cls"], "status")
+        self.assertTrue(got["card"])
+        self.assertEqual(got["gets"], ["GET"])
+
+    def test_a_tick_not_seen_recently_is_said(self):
+        for last, said in ((None, "it has never been seen on this machine"), (NOW, "it was last seen ")):
+            got = self.run_page("await start(); return [text($('#tick-line')), $('#tick-line').className];",
+                                sched=schedules(last=last, running=False))
+            with self.subTest(last=last):
+                self.assertTrue(got[0].startswith("Tick not running / not registered: " + said), got[0])
+                self.assertIn("the machine-setup extra kit-automatic-tasks runs it every 15 min.", got[0])
+                self.assertEqual(got[1], "gone")
+
+    def test_save_sends_the_schedule_with_its_version_and_shows_the_first_run(self):
+        got = self.run_page("""
+            await start();
+            const c = $("#sched-maint-lint-alpha"), cad = $("#s-maint-lint-alpha-how-often");
+            const hiddenBefore = $("#sched-maint-lint-alpha fieldset.days").hidden;
+            cad.value = "weekly"; await fire(cad, "change");
+            const hiddenAfter = $("#sched-maint-lint-alpha fieldset.days").hidden;
+            for (const d of ["Wed", "Mon"]) { const b = $("#s-maint-lint-alpha-" + d); b.checked = true; await fire(b, "change"); }
+            await type($("#s-maint-lint-alpha-at"), "04:30");
+            await click(button(c, "Save"));
+            const expect = new Date("2026-10-24T04:30").toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
+            return { hiddenBefore, hiddenAfter, posts: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]),
+                     said: text($("#s-maint-lint-alpha-status")), expect, gets: calls.filter(c => c.method === "GET" && c.path === "/schedules").length };
+        """)
+        self.assertEqual((got["hiddenBefore"], got["hiddenAfter"]), (True, False))
+        self.assertEqual(got["posts"], [["/schedules", {"task": "maint-lint", "repo": "alpha", "cadence": "weekly", "at": "04:30",
+                                                        "days": ["Mon", "Wed"], "if_version": 2}]])
+        self.assertEqual(got["said"], "Saved. first run: " + got["expect"])
+        self.assertEqual(got["gets"], 2)                                       # read again after the save
+
+    def test_a_schedule_set_off_says_it_does_not_run(self):
+        got = self.run_page("""
+            await start();
+            const cad = $("#s-maint-lint-alpha-how-often"); cad.value = "off"; await fire(cad, "change");
+            await click(button($("#sched-maint-lint-alpha"), "Save"));
+            return [calls.filter(c => c.method === "POST").map(c => c.body), text($("#s-maint-lint-alpha-status"))];
+        """, post={"status": 200, "body": {"ok": True, "id": "maint-lint-alpha", "version": 3, "first_run": None}})
+        self.assertEqual(got[0], [{"task": "maint-lint", "repo": "alpha", "cadence": "off", "at": "03:00", "if_version": 2}])
+        self.assertEqual(got[1], "Saved. It is off, so it does not run.")
+
+    def test_a_refused_repo_shows_the_servers_words_and_keeps_the_form(self):
+        refusal = ("repo 'beta' is not exactly one checkout in the machine config's launcher.repos, so the automatic task "
+                   "could not run for it: add it there once (launcher.repos), then set the schedule again")
+        got = self.run_page("""
+            await start();
+            await click($("#sched-new"));
+            const c = $("#pane-detail #sched-new");
+            const task = $("#s-new-task"), repo = $("#s-new-repo");
+            const menus = [[...task.options].map(o => o.value), [...repo.options].map(o => o.value)];
+            task.value = "worktree-sweep"; await fire(task, "change");
+            repo.value = "beta"; await fire(repo, "change");
+            await click(button(c, "Save"));
+            return { menus, posts: calls.filter(c => c.method === "POST").map(c => c.body), said: text($("#s-new-status")),
+                     cls: $("#s-new-status").className, kept: [$("#s-new-task").value, $("#s-new-repo").value], same: $("#pane-detail #sched-new") === c, sinks };
+        """, post={"status": 400, "body": {"ok": False, "error": {"code": "invalid", "message": refusal, "field": "repo"}}})
+        self.assertEqual(got["menus"], [["maint-lint", "worktree-sweep", "agent-temp-sweep"], ["alpha", "beta"]])
+        self.assertEqual(got["posts"], [{"task": "worktree-sweep", "repo": "beta", "cadence": "daily", "at": "03:00"}])   # new: no version
+        self.assertEqual(got["said"], "Not saved: " + refusal + ". What you picked is kept.")
+        self.assertEqual(got["cls"], "status err")
+        self.assertEqual(got["kept"], ["worktree-sweep", "beta"])
+        self.assertTrue(got["same"])
+        self.assertEqual(got["sinks"], [])
+
+    def test_a_new_schedule_saved_is_opened_as_its_row(self):
+        got = self.run_page("""
+            let saved = false;
+            const one = SCHED1;
+            server.route = c => c.path !== "/schedules" ? undefined : c.method === "POST" ? (saved = true, { status: 200, body: { ok: true, id: "maint-lint-beta", version: 1, first_run: "2026-10-24T03:00" } })
+              : { status: 200, body: saved ? one : { ok: true, items: [], tick: one.tick } };
+            await start();
+            const empty = text($("#list"));
+            await click($("#sched-new"));
+            const repo = $("#s-new-repo"); repo.value = "beta"; await fire(repo, "change");
+            await click(button($("#pane-detail #sched-new"), "Save"));
+            return { empty, cur: $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id),
+                     said: text($("#s-maint-lint-beta-status")) };
+        """.replace("SCHED1", json.dumps(schedules(items=[{"id": "maint-lint-beta", "task": "maint-lint", "repo": "beta", "cadence": "daily",
+                                                           "at": "03:00", "set_at": NOW, "via": "web", "version": 1}]))))
+        self.assertIn("No automatic tasks scheduled", got["empty"])
+        self.assertEqual(got["cur"], ["row-maint-lint-beta"])
+        self.assertTrue(got["said"].startswith("Saved. first run: "), got["said"])
+
+    def test_on_a_phone_nothing_opens_by_itself(self):
+        got = self.run_page(TriageListTest.PHONE + """
+            await start();
+            const before = $("#pane-detail").hidden;
+            await click($("#open-worktree-sweep-alpha"));
+            return [before, $("#pane-detail").hidden, !!$("#pane-detail #sched-worktree-sweep-alpha"), $("#s-worktree-sweep-alpha-Thu").checked];
+        """)
+        self.assertEqual(got, [True, False, True, True])
+
+    def test_the_section_has_its_route_and_reads_the_schedules_each_time_it_is_shown(self):
+        got = self.run_page("""
+            await start();
+            const gets = () => calls.filter(c => c.path === "/schedules").length;
+            const off = gets();
+            await click($("#sections [data-s=autotasks]"));
+            const on = [location.hash, gets()];
+            await click($("#sections [data-s=todo]"));
+            await back();
+            const back1 = [location.hash, $("#sections .sec[aria-selected=true]").dataset.s, gets()];
+            await click($("#tabbar [data-s=todo]"));
+            await click($("#tabbar [data-s=autotasks]"));
+            return { off, on, back1, again: gets(), repo: $("#repo").hidden };
+        """, hash="#todo")
+        self.assertEqual(got["off"], 0)                                            # not read off the section
+        self.assertEqual(got["on"], ["#autotasks", 1])
+        self.assertEqual(got["back1"], ["#autotasks", "autotasks", 2])
+        self.assertEqual(got["again"], 3)
+        self.assertTrue(got["repo"])
+
+    def test_a_read_that_fails_is_said(self):
+        got = self.run_page("""
+            server.route = c => c.path === "/schedules" ? { status: 500, body: { ok: false, error: { message: "store gone" } } } : undefined;
+            await start();
+            return text($("#list"));
+        """)
+        self.assertIn("The schedules could not be read: store gone", got)
+
+    def test_server_text_on_the_section_is_drawn_as_text(self):
+        m = mark("repo")
+        got = self.run_page("""
+            await start();
+            return { shown: text($("#list")) + text($("#pane-detail")), sinks, tags: [...new Set(created)] };
+        """, sched=schedules(items=[{"id": "x", "task": "maint-lint", "repo": m, "cadence": "daily", "at": m, "set_at": NOW, "via": m, "version": 1}]))
+        self.assertIn(m, got["shown"])
+        self.assertEqual(got["sinks"], [])
+        self.assertNotIn("script", got["tags"])
+        self.assertNotIn("img", got["tags"])
 
 
 class PageTextTest(unittest.TestCase):
@@ -2558,9 +2794,9 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/lock", "/pages", "/records", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/lock", "/pages", "/records", "/schedules", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|hub\.post|delButton)\("(/[a-z_]+)', self.script))
-        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages"})
+        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules"})
         self.assertEqual(re.findall(r'"/approvals/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/decide"])
         # A page is read (GET /pages/<id>) and deleted, never written: publishing is the agents'.
         self.assertEqual(re.findall(r'"/pages/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/delete"])
@@ -2569,6 +2805,20 @@ class PageTextTest(unittest.TestCase):
                       "/health", "/notices"):
             self.assertNotIn('"%s' % route, self.script, route)
         self.assertEqual(re.findall(r'"/inbox[^"]*"[^;]*?"(/[a-z]+)"', self.script), ["/read"])
+
+    def test_a_row_is_not_a_pointer_target_and_no_stale_name_is_left(self):
+        """The row's button opens it, not the row: no rule gives every `.row` (the filters' and forms' too) a pointer."""
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        self.assertNotRegex(style, r"(?m)^\.row\{")
+        self.assertIn(".q.row{gap:8px}", style)
+        self.assertNotIn("setDetail", self.p)
+
+    def test_the_automatic_tasks_section_is_in_the_sidebar_and_the_tab_bar(self):
+        self.assertIn('<button class="sec" role="tab" data-s="autotasks" aria-selected="false" id="sec-autotasks">Automatic tasks</button>', self.markup)
+        self.assertIn('<button class="tb" role="tab" data-s="autotasks" aria-selected="false" id="tb-autotasks">', self.markup)
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        n = len(re.findall(r'<button class="tb" ', self.markup))
+        self.assertIn("repeat(%d,minmax(0,1fr))" % n, style)
 
 
 if __name__ == "__main__":
