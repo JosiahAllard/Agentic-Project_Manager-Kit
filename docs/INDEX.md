@@ -45,6 +45,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-api.md` | machine lock API | heavy runs | kw: lock, machine-lock
 - `docs/lock-mcp.md` | lock MCP server | lock from an agent | kw: lock-mcp, mcp
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
+- `docs/maint-lint.md` | maintenance lint: read-only upkeep findings (holds, dead pulls and blockers, duplicates, paths gone, worktrees, ledger counts), each with its fix | linting a repository's upkeep | kw: maint-lint, maint_lint, maintenance, upkeep
 - `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup, leftover links
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
 - `docs/multi-host-plan.md` | multi-host architecture plan (proposal) | changing host adapters, plugins or the bridge | kw: multi-host, codex, host, plugin, bridge
@@ -104,6 +105,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/backlog.py` | backlog store (`docs/backlog.md`) | kw: backlog
 - `tools/backlog_audit.py` | backlog audit check (`docs/backlog.md` "Audit log") | kw: backlog_audit
 - `tools/backlog_lint.py` | backlog lint (`docs/backlog-lint.md`) | kw: backlog_lint
+- `tools/maint_lint.py` | maintenance lint, read-only (`docs/maint-lint.md`) | kw: maint_lint
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
 - `tools/allow_rules.py` | print the land permission rules for a repository (`docs/allow-rules.md`) | kw: allow_rules, permissions
