@@ -31,7 +31,7 @@ class Move(unittest.TestCase):
         patch = mock.patch.dict(os.environ, {pointer.FENCE_ENV: self.pm})
         patch.start()
         self.addCleanup(patch.stop)
-        loc = user.locate(self.home)
+        loc = user.home_location(self.home)
         self.new_dir, self.old_dir = os.path.dirname(loc.new), os.path.dirname(loc.old)
 
     def config(self, body, folder=None):

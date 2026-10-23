@@ -58,7 +58,7 @@ def proc(pid, ppid, name, cmd="", image=None, age=HOUR, cpu=0.0, ws=10 * 2**20, 
 
 
 NO_TTY = "?"
-AGENT_TAIL = "tail.exe -n +1 -F Z:/AgentTemp/claude/Z--repo/1234/tasks/b1.output"    # a Monitor's tail
+AGENT_TAIL = "tail.exe -n +1 -F Q:/AgentTemp/claude/Q--repo/1234/tasks/b1.output"    # a Monitor's tail
 
 
 def gitp(pid, ppid, name, cmd, age, msys):
@@ -152,10 +152,10 @@ class Classify(unittest.TestCase):
     def test_orphaned_agent_follow_is_kill_ok_for_every_agent_path_form(self):
         self._with_agent_temp(lambda: r"Q:\odd-agent-temp")
         for cmd in (AGENT_TAIL,
-                    r"tail.exe -F Z:\AgentTemp\claude\p\s\tasks\b1.output",
+                    r"tail.exe -F Q:\AgentTemp\claude\p\s\tasks\b1.output",
                     "tail.exe -F /z/agenttemp/claude/p/s/tasks/b1.output",
                     r"tail.exe -f D:\local\Temp\claude\p\s\tasks\b1.output",   # <TEMP>\claude\
-                    "tail.exe -F Z:/GitHub/repo/.claude/worktrees/x/gate.log",
+                    "tail.exe -F Q:/GitHub/repo/.claude/worktrees/x/gate.log",
                     r"tail.exe -F Q:\odd-agent-temp\claude\p\x.log",           # the resolved agent temp
                     "tail.exe -F /q/odd-agent-temp/claude/p/x.log",            # ... in MSYS form
                     "tail.exe -F q:/Odd-Agent-Temp/claude/p/x.log"):

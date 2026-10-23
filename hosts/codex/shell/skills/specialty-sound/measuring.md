@@ -15,7 +15,8 @@ Go down only when the step above genuinely cannot, and say why.
 4. **Local music generation** - music only (menu, match and victory themes, stingers over a few
    seconds), never sound effects. ACE-Step via `python <kit>/optional/comfy/comfy_gen.py music`
    (MIT; `<kit>/knowledge/asset-generation/MODELS.md`). It re-runs itself under the machine lock
-   (kind local-ai) and keeps a private GPU self-lock per run. Short runs while exploring; ask for
+   (kind local-ai): a kit lock wrapper, run directly (skill machine-lock-run), with no lock of
+   your own around it. Short runs while exploring; ask for
    `[Instrumental]`. `check` fails: start and install nothing, say so. Record every session,
    failures included, in the repo's `docs/ops/assets.md`: tags, seconds, seed, what you measured,
    the owner's verdict once you have it.

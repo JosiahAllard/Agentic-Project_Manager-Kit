@@ -58,6 +58,11 @@ class Deep(Base):
         self.assertEqual(self.host.opened, [])
         return c.exception
 
+    def test_the_fallback_names_the_pm_by_both_live_names(self):
+        out = self.deep()
+        self.assertIn("ListAgents shows its session as ''Project Manager'' in the desktop app, or "
+                      "''pm-session'' when the launcher resumed it", out)
+
     def test_command_has_agent_model_effort_window_and_name(self):
         out = self.deep()
         self.assertIn('Would open a new window running:', out)
@@ -274,6 +279,11 @@ class Consultant(Base):
         self.signed_out('3')
         self.refused('Account 3 is not signed in', account='3')
 
+    def test_the_consultant_logs_calls_to_the_pm_by_both_live_names(self):
+        out = self.cons()
+        self.assertIn("ListAgents shows its session as ''Project Manager'' in the desktop app, or "
+                      "''pm-session'' when the launcher resumed it", out)
+
     def test_one_consultant_per_repo_unless_replace(self):
         self.live()
         e = self.refused("A session named 'consultant-myrepo' is already running (PID 4242): one consultant per repo")
@@ -341,7 +351,7 @@ class Start(Base):
 
     def test_coordinator_command_carries_only_the_default_compact_window(self):
         out = self.go(name='x-coordinator-a1', prompt='go')
-        self.assertIn("claude --agent pm-kit:coordinator --autocompact 170000 --permission-mode auto "
+        self.assertIn("claude --agent pm-kit:coordinator --autocompact 200000 --permission-mode auto "
                       "--remote-control 'x-coordinator-a1' -n 'x-coordinator-a1' 'go'", out)
         for flag in ('--model', '--effort'):
             self.assertNotIn(flag, out)
@@ -376,6 +386,12 @@ class Start(Base):
         out = self.go(prompt='go', predecessor='old-a1')
         self.assertIn("'You succeed old-a1, which has checkpointed", out)
         self.assertTrue(out.rstrip().endswith("go'\""), out[-40:])      # the what-if line closes its quote
+
+    def test_every_prompt_names_the_pm_by_both_live_session_names(self):
+        for out in (self.go(), self.go(brief='b.md')):
+            self.assertIn("ListAgents shows its session as ''Project Manager'' in the desktop app, or "
+                          "''pm-session'' when the launcher resumed it", out)
+        self.assertEqual((start.PM_DESKTOP_NAME, start.PM_NAME), ('Project Manager', 'pm-session'))
 
     def test_the_predecessor_text_serialises_no_landing(self):
         text = start.predecessor_text('x')
@@ -420,21 +436,21 @@ class Start(Base):
         self.assertLess(out.index('$env:TMP'), out.index('Set-Location'))
 
     def test_the_compact_window_defaults_per_kind(self):
-        self.assertIn('--autocompact 170000 ', self.go(no_agent=True))
-        self.assertIn('--autocompact 170000 ', self.go(agent='analyst'))
+        self.assertIn('--autocompact 200000 ', self.go(no_agent=True))
+        self.assertIn('--autocompact 200000 ', self.go(agent='analyst'))
         self.assertIn('--autocompact 300000 ', self.go(autocompact=300000))
         self.assertNotIn('--autocompact', self.go(autocompact=0))
         self.assertEqual((start.DEFAULT_AUTOCOMPACT, start.CONSULTANT_DEFAULT_AUTOCOMPACT, start.DEEP_AUTOCOMPACT),
-                         (170000, 350000, 500000))
+                         (200000, 350000, 500000))
 
     def test_a_hand_off_or_reboot_start_gets_the_default_too(self):
         self.h.write_state('sessions.json', {'rev': {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord',
                                                      'state': 's.md', 'account': 2, 'name': 'alpha-coord-a2'}})
         out = '\n'.join(start.start_entry(self.h.settings, self.host, 'rev', whatif=True))
-        self.assertIn('--autocompact 170000 ', out)
+        self.assertIn('--autocompact 200000 ', out)
 
     def test_an_entry_of_a_long_role_gets_that_roles_window(self):
-        for agent, window_ in (('consultant', 350000), ('deep-worker', 500000), ('analyst', 170000)):
+        for agent, window_ in (('consultant', 350000), ('deep-worker', 500000), ('analyst', 200000)):
             self.h.write_state('sessions.json', {'k': {'repo': 'alpha', 'agent': agent, 'stem': 'alpha-x',
                                                        'state': 's.md', 'account': 2}})
             out = '\n'.join(start.start_entry(self.h.settings, self.host, 'k', whatif=True))
@@ -445,8 +461,8 @@ class Start(Base):
         out = self.go(agent=p + 'deep-worker')
         self.assertIn('--agent %sdeep-worker ' % p, out)
         self.assertIn("-n 'alpha-deep-worker-a1'", out)
-        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'analyst', 170000),
-                               ('other:consultant', 170000)):
+        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'analyst', 200000),
+                               ('other:consultant', 200000)):
             with self.subTest(agent):
                 args = start.entry_start_args(self.h.settings, 'k', {'repo': 'alpha', 'agent': agent,
                                                                      'stem': 'alpha-x'}, '2', None)

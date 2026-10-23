@@ -72,14 +72,38 @@ or after an unpair or a session that ran out) is told so on the page and to run
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
 `wait` open, else when one last asked; another session's wait `--for` its own key does not
-count (`Api.seen` in `kitlib/hubsite/api.py`). The page reads everything at once
+count (`Api.seen` in `kitlib/hubsite/api.py`). A second line gives the push notifications'
+status from the snapshot's `push` field ("Push notifications"): "Push delivery is up" or "is
+down" (with the state of the latest try to the PM), and how many items are undelivered, or "Push notifications
+are off on this hub server." when the server runs no push worker. The page reads everything at once
 (`GET /api/v1/snapshot`), then waits for the next change (`GET /api/v1/wait`, about 55 seconds on
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs` or `#info` open that
+Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
-repository; Questions, To do and Docs also by id or title.
+repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
+("schedules/") with the tick's last run, and sets, edits or turns one off.
+
+Findings (Lint in the phone tab bar) lists the maintenance lint's findings, read from `GET
+/api/v1/findings` and `GET /api/v1/finding_marks` each time the section is shown and after each
+mark (`renderFindings` and `findingCard` in `kitlib/hubsite/web/index.html`). A row gives the check,
+the repo, the target and the finding's text, with its age as context; a marked one stays listed with
+a Passed on, Dismissed or Done tag. Above the rows, each repo's last run gives its ledger as counts,
+and "last run skipped: <reason>, <time>" only when the server names a skip later than that run
+("finding_marks/<fingerprint>"). The card of an unmarked finding offers:
+
+- for a check that names a record, a button that opens that record's page, named for what is done
+  there: Set priority (`unpriced`), Unblock (`keyword-hold`, `dead-blocker`, `answered-question`),
+  Edit scope (`scope-path-gone`, `body-path-gone`, `file-moved`) or Retire (`duplicate`, one per
+  record, `dead-pull`, `landed-still-pulled`) (`FINDING_ACTS`);
+- Pass on: an act note to the PM with the note field's text (prefilled as the server would write
+  it; unchanged, the server writes it), queued in To PM like any note, then the mark `passed_on`. A
+  mark that fails after the note was taken is retried by Pass on without a second note;
+- Dismiss: the mark `dismissed`.
+
+A target or fix shows as the server gives it; the page never rebuilds a path. In To PM an act note
+shows as Act, its edit offers no kind, and the server's refusal shows in its own words.
 
 ## Serving it
 
@@ -228,15 +252,20 @@ Notes on the table:
 - `questions add --story` is the story a follow-up belongs to; `stories set`, `questions log` and
   every `edit` and `withdraw` require `--if-version`.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
-  stories submitted, To PM items sent, and to-dos done or added by the owner without `pm_ack`
-  (`kitlib.hubsite.store.pending_items`). Each item carries `from`, the session key it is for, and
+  stories submitted, To PM items sent, to-dos done or added by the owner without `pm_ack`, and
+  approvals the owner decided that are not consumed (`kitlib.hubsite.store.pending_items`; an
+  approved one until it is consumed or expires 24 hours after the decision, a denied one for 24
+  hours after it). Each item carries `from`, the session key it is for, and
   `route`, the key that is to handle it now (the line's `from=` and `to=`). A question or to-do is
   for the launcher session key it was posted `--from` while that key is still in sessions.json;
   everything else (a to-do's free-text `from`, the owner's own items, stories, To PM items, and a
-  question whose session has gone) is for `pm` (`kitlib.hubsite.api.Api.pending`). `pending --for
-  KEY` lists only KEY's items, and `pending --for pm` the items routed to `pm` and every answered
-  question; reading it marks nothing, so the item stays pending for every reader until it is
-  logged or acknowledged.
+  question whose session has gone) is for `pm` (`kitlib.hubsite.api.Api.pending`). An approval has
+  no `from`: it is for the coordinator of its repository, the configured repository whose origin
+  remote is the approval's `repo`, keyed by that repository's name while the name is in
+  sessions.json, and for `pm` otherwise. `pending --for KEY` lists only KEY's items, and
+  `pending --for pm` the items routed to `pm`, every answered question and every decided
+  approval; reading it marks nothing, so the item stays pending for every reader until it is
+  logged, acknowledged, consumed or past its window.
 - `hub.py wait --pending` waits until an item is pending (one already pending ends it at once) and
   prints `HUB <rev> <kind> <id> to=<route> from=<key> <title>` for each; with `--for KEY` it waits
   until an item for KEY is pending and other sessions' items do not end it. `--except ID ...`
@@ -268,7 +297,11 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
   that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
   an answered question stays pending until the PM logs it.
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
-  logs each ruling. A PM wait is also woken when an item turns to the PM with no write.
+  logs each ruling, and every decided approval. A PM wait is also woken when an item turns to the
+  PM with no write.
+- A decided approval is for its repository's coordinator (`hub.py pending` above) and listed for
+  the PM too. It stops being pending with no write: once consumed, at its expiry, or 24 hours
+  after a denial.
 - This state lives in the server's memory only: after a restart every item is the PM's until
   its creator waits again. Older to-dos whose `from` is a free-text name are the PM's.
 
@@ -286,11 +319,17 @@ It is not the store's git push (the `push` setting).
   with one note line: `push notifications off: <why>`. A worker that fails to start leaves the
   server serving (`push notifications did not start: ...`).
 - What fires: a question answered (or answered again), a to-do done (or done again), a done to-do
-  reopened, and a to-do the owner added (to the PM only). Each item has a fingerprint (a
-  question's status, `answer.at` and a digest of the answer; a to-do's status and `done_at`), and
-  only a changed fingerprint fires, so `pm_ack` alone never does.
+  reopened, a to-do the owner added (to the PM only), an approval the owner approved or denied
+  (`decided`), and an approval still approved and not consumed 20 hours after the decision
+  (`expiring`, `push.EXPIRING_S`), the one reminder before it expires at 24 hours, so a missed
+  first push cannot lose the owner's approval. Each item has a fingerprint (a question's status,
+  `answer.at` and a digest of the answer; a to-do's status and `done_at`; an approval's status,
+  `decided_at` and phase, `decided` then `expiring`, read at the worker's clock each round), and
+  only a changed fingerprint fires, so `pm_ack` alone never does. An approval's phase ending
+  (consumed, expired, a denial's 24 hours past) drops what was still owed and sends nothing.
 - Who hears: the item's `from`, unless that is the PM's own (`pm`, the owner, empty), and the
-  PM, once. A launcher key is resolved through sessions.json; `pm` through coordinators.json's
+  PM, once; for an approval, the coordinator key its `repo` names ("Who handles a pending item")
+  and the PM. A launcher key is resolved through sessions.json; `pm` through coordinators.json's
   `pm_session_id`, then the names `Project Manager` and `pm-session`.
 - What it says: a fixed header, `[hub push] <kind> <id> <status> repo:<repo> from:<from>
   route:<recipient> attempt:<k>`, and one line of what to do; never a title, a note or an
@@ -300,7 +339,8 @@ It is not the store's git push (the `push` setting).
 - Until when: each recipient is sent each item until it is acknowledged. The asking session
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
-  `questions log` for a question. An item withdrawn, reopened or answered again replaces or
+  `questions log` for a question. An approval's push is sent once to each: the first written
+  try acknowledges it. An item withdrawn, reopened or answered again replaces or
   ends its push. A session that picked up a first answer or done mark before the worker saw it
   is not sent it. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
   the rest wait for the next slot. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
@@ -324,6 +364,17 @@ It is not the store's git push (the `push` setting).
   item is gone is dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous`
   pick and per give-up; never a token or any item text; rotated once to `.1` past 1 MiB,
   `push.LOG_MAX`).
+- Status: `GET /api/v1/snapshot` carries `push`, null when the server runs no worker, else
+  `PushWorker.status()`: `last` (the state of the latest delivery to the PM, null before the
+  first), `state` (`down` until the worker's start has finished, once its thread has ended, or
+  when `last` is not `written`; else `up`) and `undelivered` (outbox items some recipient has not
+  yet had a written try of). Only the PM's result sets `last`: an asking session that has ended
+  (`no-live-session`, routine) counts in `undelivered` but never makes delivery `down`. `last`
+  and `state` change only when a delivery to the PM is tried, so with an empty outbox the line
+  shows the last state indefinitely, and an item given up appears only in
+  `push-undelivered.jsonl`. The page shows it under the PM line ("Using the hub"). It is read
+  again with each snapshot, so a retry's outcome shows at the next change or wait timeout, not
+  at once.
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
   joins it after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take
   (Claude: `peer.WRITE_TIMEOUT_S` plus the helper's reap and pump joins), so the last outbox
@@ -331,9 +382,12 @@ It is not the store's git push (the `push` setting).
 - Known limit: an answer made in the moments before the server closes that the worker had not
   yet seen is not pushed after a restart: the outbox holds only what the worker saw. The PM's
   wait still shows it.
+- Known limit: an approval's 20-hour reminder (`expiring`) is not sent when the server is down
+  across the 20-hour mark after its `decided` push was delivered. The approval stays pending
+  for its coordinator and the PM ("Who handles a pending item") until it is consumed or expires.
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py,
-tests/hubsite/test_hub_cli.py `PushCase`.
+tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.py.
 
 ## questions/Q-NNN
 | Field | Written by | Meaning |
@@ -399,10 +453,11 @@ to To PM items do not go to inbox/.
 | Field | Written by | Meaning |
 |---|---|---|
 | (doc id) | server | `P-001`, `P-002`, ...: the document's id, not a field |
-| kind | owner | `question` or `fyi` |
+| kind | owner | `question`, `fyi` or `act` (pass a maintenance finding on: below) |
 | repo | owner | a repo name, `pm`, `all`, or empty |
 | urgent | owner | true marks it Urgent and makes the badge hot |
 | text | owner | the message, as written |
+| refs, finding | owner | ids the note names; `finding`, an `act` note's only, is the finding's fingerprint |
 | status | owner, PM | `queued`, `sent` (Send all), `done` (PM) |
 | created_at, sent_at | server | ISO times; sent_at is null until sent |
 | reply, ruling | PM | the answer, complete on its own (null or empty shows as "noted"); the ruling it was filed as |
@@ -431,7 +486,9 @@ a UTF-8 JSON file. The server refuses, as `invalid` naming the field: a bad step
 text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit described in
 prose, coordinator work). The owner's own to-dos are not judged by those rules. A raw worktree,
 branch, tag or ref delete has no carve-out: its refusal names `worktree_remove.py <slug> --abandon
-"<why>"`, which the coordinator runs on a ruling (docs/worktree-remove.md "Tools").
+"<why>"`, which the coordinator runs on a ruling (docs/worktree-remove.md "Tools"); a ref delete's
+also says a ref outside `refs/heads`, `refs/tags`, `refs/stash` and `refs/backlog` the
+coordinator deletes itself, in its own repository (docs/guard.md "Rules", `git-shared-ref`).
 
 While a to-do is open its creator may change it (`POST /api/v1/todos/{id}/edit` with the agent's
 token: `hub.py todos edit`, the MCP tool `hub_todo_edit`) or withdraw it (`POST
@@ -484,6 +541,56 @@ repo list (`GET /api/v1/repos`, `kitlib.hubsite.derived.repos`) is every reposit
 (`kitlib.pmstart.known_repos`: each session's repo in `sessions_file`, the PM's repository, this
 kit's repository and the optional `pm_start.repos`) with the aliases the store holds. An item whose
 repo is `all` is for every repo and shows under each one.
+
+## schedules/<task>-<repo>
+When one of the kit's automatic tasks runs for one repo, set by the owner. The hub only stores
+and serves it: nothing in the hub runs a task, registers one or starts a process.
+
+| Field | Meaning |
+|---|---|
+| task | `maint-lint`, `worktree-sweep` or `agent-temp-sweep` (`kitlib.hubsite.api.SCHEDULE_TASKS`, a fixed table) |
+| repo | a repo the hub knows (a repos/ name or alias, or the PM's configured repos), stored as its name |
+| cadence | `off` (kept, runs nothing), `daily` or `weekly` |
+| days | weekly only, required: one or more of `Mon` to `Sun`, stored once each in week order |
+| at | the time of day as HH:MM, 24-hour |
+| set_at, via | server: when and by which path it was last set |
+
+`POST /api/v1/schedules` (owner) takes {task, repo, cadence, at, days?, if_version?} and puts the
+whole document; an agent is refused `forbidden`. Any other field, or a bad value, is `invalid`
+naming the field, with nothing written. Setting an existing schedule again takes its
+`if_version`; without it, or with another, it is `conflict`, whose error names the schedule's
+`id`: the page opens that one, with what was picked on the new form carried onto it unsaved
+(unless it holds unsaved changes of its own), so one Save sets it. A daily or weekly per-repo task
+whose repo is not exactly one checkout in the machine config's `launcher.repos` is `invalid`
+naming `repo`, since the tick could not run it; so is one set while the machine config's
+launcher list cannot be read. The answer carries `first_run`, the first slot
+as YYYY-MM-DDTHH:MM in the hub machine's local time with no zone (null when off); the task
+starts at the first tick at or after it, up to about 15 minutes later. `tick.last` is UTC with
+its offset; the page shows `first_run` as it is and says it is the hub machine's time. `GET /api/v1/schedules` (anyone) lists them,
+filtered by `repo` like every list, with `tick`: {last, running, every_s}: when the tick was last
+seen, whether that is recent enough to call it running, and its period in seconds
+(`kitlib.hubsite.api` "Schedules").
+
+## finding_marks/<fingerprint>
+The owner's mark on one maintenance-lint finding (docs/maint-lint.md), so it stops showing:
+{status, repo, check, target, text, note?, marked_at, via}. status is `dismissed`, `passed_on`
+or `done` (`kitlib.hubvalidate.STATUSES`); repo, check, target and text are copied from the
+finding when it is marked. `GET /api/v1/findings` (anyone) lists the lint's last findings, every
+repo (`kitlib.hubsite.derived.findings` over `<pm_data>/maint-lint/<repo>/result.json`),
+filtered by `repo`, less every marked one, with `runs`: each repo's last run as {repo, started,
+ledger, skipped}, ledger its whole-number counts `stale_cites`, `superseded` and
+`superseded_live` or null, skipped the skip marker's {reason, at} only when `at` is later than
+`started` and both parse, else null (`_lint_runs`; from the server's optional `lint_runs` view,
+an empty list without one). `POST /api/v1/finding_marks` (owner) takes
+{fingerprint, status, note?, if_version?}; a fingerprint the lint does not show is `not_found`,
+and marking again takes the mark's `if_version`, as for a schedule. `POST
+/api/v1/finding_marks/{fingerprint}/delete` (owner) takes the mark back; `GET
+/api/v1/finding_marks` (anyone) lists the marks. `POST /api/v1/to_pm` with kind `act` and
+`finding` passes one on: repo, refs (the fingerprint and the finding's target first) and, when
+none is given, text are filled from the finding; an edit never changes a kind to or from `act`.
+Only the local owner sees a target or fix whole: any other caller, the tunnel included, gets
+each absolute path cut to `.../<its last part>`, and no act note's refs carry one. An agent is
+refused `forbidden` on each write (`kitlib.hubsite.api` "Findings").
 
 ## pages/<id> and page_html/<id>
 An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
@@ -611,11 +718,75 @@ Routes, below `/api/v1`:
   optional `commit`; answers `{ok, valid, why}`, never the key or the sig. With `commit`, only an
   approval consumed by that commit is valid.
 
+An approval of kind `op` approves one run of a delegated operation (docs/delegations.md "Hub
+approvals"), not a change. It has no `head`, `files` or `diff`, and holds instead:
+
+| Field | Written by | Meaning |
+|---|---|---|
+| kind | agent | `op`; a document with no kind is a change |
+| op, repo | agent | the operation's id `D-nnn` and its repo name, or `*` |
+| line | agent | the run line `run D-nnn NAME=VALUE ...`, names sorted, each once (`approvals.new_op_doc`) |
+| what | agent | the operation's `what`, shown above the line as the agent's note, not signed; optional |
+| args_sha256 | server | the SHA-256 of `line`, computed by the server (`approvals.line_sha256`) |
+| consumed_at | server | once the runner consumes it; an op approval has no `commit` |
+
+Its signature covers the id, kind, op, repo, `args_sha256`, the decision and `decided_at`; the line
+is bound through `args_sha256`. A pending op request expires after 24 hours
+(`approvals.PENDING_OP_TTL_S`). Its routes:
+
+- POST `/approvals` (agent): body `kind` `op`, `op`, `repo`, `line`, `title`, optional `reason`
+  and `what`. No checkout is read. Any other `kind` is `invalid`, field `kind`.
+- POST `/approvals/{id}/consume` (agent): body `args_sha256` (in place of `commit`) and
+  `if_version`. Both `commit` and `args_sha256` is `invalid`.
+- GET `/approvals/{id}/verify` (agent): query `kind=op`, `op`, `repo` and `args` (the line's
+  SHA-256); answers `{ok, valid, why, version}`. The version pins the consume that follows. Only
+  `approved` verifies: a consumed op approval was used once.
+
+The change checks (`check`, `consume_fields`) refuse an op approval, and the op checks (`check_op`, `consume_op_fields`) a change approval. The
+page draws an op card with the operation, its `what` labelled as the agent's unsigned note, and its
+exact line, `run D-nnn` and then one `NAME=VALUE` a line; no head or diff. The signature does not
+cover `what`, `title` or `reason`: what the owner approves is the operation id, the repo and the line.
+`delegated.py request` asks for one, and `delegated.py run --approval` verifies and consumes it.
+
 The agent's side of an approval is `commit.py --owner-approval hub:A-<n>` (docs/commit.md "Owner
 approval"): it verifies, writes and commits the approved files, then consumes the approval for that
 commit and verifies it with the commit; `gate land` and the pre-push hook verify it again
 (`kitlib.guard.ownercommits`). An approval verifies for 24 hours after the decision, consumed or
 not (`approvals.APPROVED_TTL_S`).
+
+A decided approval that is not consumed is pending owner input ("Who handles a pending item"):
+for the coordinator of its repository and for the PM, until it is consumed or expires, and a
+denied one for 24 hours after the decision. The server pushes it to both at the decision and, if
+it is still approved and not consumed, once more 20 hours after it ("Push notifications").
+
+An agent asks for one with `hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...]
+[--checkout DIR] [--repo R] [--head SHA] [--reason TEXT]`, or the MCP tool `hub_approval_request`
+(docs/hub-mcp.md); both build the body with `kitlib.hubapprove` and post it to POST `/approvals`,
+and neither decides or consumes a request. Each PATH (relative to the repository top, with `/`)
+gets CONTENT_FILE's exact bytes as its content, read as UTF-8 with its line endings kept, so the
+blob is the one `commit.py --owner-approval` writes; the work tree is never read for it, since the
+consumer needs the file still at its base. The base is PATH's blob at `--head` (default: the
+checkout's HEAD), none for a file absent there; `--repo` defaults to the checkout's origin.
+Refused before anything is posted, in the builder's or `approvals.new_doc`'s words: a head that is
+not 40 hex digits or not a commit of the checkout, a path an owner approval may not carry (a render
+source in a kit checkout, or a path the repository's owner rules do not lock, as `commit.py` reads
+them: `hubapprove.owner_paths_error`, whose refusal says where each named file is committed
+instead), a path at head that is not a file, a new file
+the work tree already has, a file at head whose work tree copy git does not hash to its base (the
+consumer's prewrite check refuses both), a content file that cannot be read, is not UTF-8 or is
+over `approvals.MAX_CONTENT_BYTES`, content that is the file at head, content git would store as
+another blob (`git hash-object --path=PATH --stdin` differs from its blob: core.autocrlf or a
+text, eol or filter attribute changes it on staging, which the consumer's staged check refuses),
+and what `new_doc` refuses (its
+`MAX_FILES`, `MAX_PATH`, `MAX_TITLE` and `MAX_REASON` included). What the hub refuses comes back
+as the hub said it (`REFUSED <code>: <message>`).
+
+Known limits:
+
+- `approvals add` (and `hub_approval_request`) cannot request a file delete: every file it names
+  gets content. A delete is asked for by a direct POST `/approvals` with a null `content`.
+- A request has no `from`: the document has no field for the session key that asked, and adding
+  one is a change to the document's schema, so neither the verb nor the tool takes `--from`.
 
 `GET /api/v1/snapshot` carries the collection whole, and `strong`: true only on the strong owner's
 call (`test_the_snapshot_says_strong_to_the_strong_owner_alone` in `tests/hubsite/test_api.py`).
@@ -704,6 +875,8 @@ Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite
   timer (`backlog_refresh_s` unset) the snapshot reads as the routes do.
 - usage: `launch.py usage` (docs/launcher.md "Usage").
 - agents: the agent definitions in `claude/agents`.
+- findings: the maintenance lint's last result of each repo, never in the snapshot
+  ("finding_marks/<fingerprint>" above).
 
 ## The record page
 One backlog record, read live and never part of the snapshot (`kitlib/hubsite/api.py` `record`,
@@ -725,8 +898,13 @@ comes from the caller.
 - `POST /api/v1/records/{repo}/{id}/delete` (owner only), body `why`, `confirm`, `ruling`:
   `confirm` must repeat the id, or the call is `invalid` on field `confirm` and nothing is
   written. The store's delete rules apply unchanged: a live pull is refused until it is released.
-- `ruling` is sent only when the store's refusal asks for one (an owner-priced or owner-held
-  record); the store checks it as it checks a ruling given to `tools/backlog.py`.
+- `POST /api/v1/records/{repo}/{id}/unblock` (owner only), body `on`, `reason`, `ruling`: the
+  backlog library's unblock (`recordwrite.unblock`). One blocker opens the record; with several,
+  `on` names the one to clear and `reason` is required, and a call with no `on` is `invalid` on
+  field `on`. Clearing an owner blocker takes nothing more.
+- These routes are the owner's, so they meet the store's owner gates (docs/backlog.md "Owner
+  gates"; recordwrite passes `role_checked`). `ruling` is still accepted and ignored: no ruling
+  is checked or written into a record.
 - Each write answers `lines`, what the store printed (its notes included), and an add or edit
   also answers the record as it reads now. A store refusal is `invalid` in the store's words; a
   record not there is `not_found`. A repository whose `.kit.json` names no backlog store, or whose

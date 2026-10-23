@@ -1,17 +1,23 @@
-"""The machine's own kit settings: the machine config, FILE_NAME in the folder DIR_NAME of the
-home folder (config_file).
+"""The machine's own kit settings: the machine config, read from the PM repository the PM-repo
+pointer names (kitlib.config.pointer; docs/kit-json.md "Machine config").
 
-The ledger path is read from this file only: no `.kit.json` key, no ledger environment variable
-and no command-line flag sets it, so a repository cannot point the ledger somewhere else. `~` is
-os.path.expanduser's: USERPROFILE on Windows, HOME elsewhere, so an environment that changes that
-variable changes which machine config is read. An absent file is an empty config; a present file that cannot be read, or that
-holds an unknown key or a bad value, is a ConfigError (never silently "no ledger").
+With a good pointer (locate OK) the config is two files in `<PM repo>/.pm-kit`: FILE_NAME, tracked,
+holds the policy keys (POLICY_KEYS), and LOCAL_FILE_NAME, git-ignored, the machine-local and
+personal keys (LOCAL_KEYS); a key in the other file, or one the move drops (DROPPED_KEYS), is a
+ConfigError. `pm_data` is never read from a file: it is derived from the pointer and its
+repository's kit-pm-data.json record. RELATIVE_KEYS paths written relative are read against the PM
+repository. Either file absent is empty.
 
-The folder moved (docs/kit-json.md "Moving the machine config folder"): locate() picks the file
-read. It is DIR_NAME's file when that exists, else the retired folder's
-(kitlib.config.migration.OLD_DIR_NAME) while that one exists; the two are never merged. A new
-folder or file that cannot be told apart from absent is BAD, a ConfigError, never a fallback.
-Writers write DIR_NAME's file only (writable_file).
+The ledger path is read from this config only: no `.kit.json` key, no ledger environment variable
+and no command-line flag sets it, so a repository cannot point the ledger somewhere else. A
+present file that cannot be read, or that holds an unknown key or a bad value, is a ConfigError
+(never silently "no ledger").
+
+No pointer and no machine config left in the home folder (NONE) is an empty config. A machine
+config still in the home folder (DIR_NAME's, or the retired kitlib.config.migration.OLD_DIR_NAME's)
+while the PM repository has none is UNMOVED, and a pointer that is BAD, or a PM folder or file that
+cannot be told apart from absent, is BAD: both a ConfigError, never a fallback. home_location()
+still reads the home folder's file, for the move (kitlib.config.move) alone.
 """
 import collections
 import os
@@ -19,7 +25,7 @@ import stat
 import sys
 import tempfile
 
-from .migration import MOVE_STEPS, OLD_DIR_NAME
+from .migration import OLD_DIR_NAME
 from .types import ConfigError, Email, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
@@ -30,12 +36,20 @@ FILE_NAME = 'config.json'
 # How help text names the machine config file; display() names the file actually read.
 DISPLAY = '~/%s/%s' % (DIR_NAME, FILE_NAME)
 
-# locate() states: which file is read.
+# The PM repository's git-ignored machine config file, beside FILE_NAME (LOCAL_KEYS there).
+LOCAL_FILE_NAME = 'local.json'
+
+# locate() states: which machine config is read.
+OK = 'ok'            # the PM-repo pointer is good: <PM repo>/.pm-kit's FILE_NAME and LOCAL_FILE_NAME
+NONE = 'none'        # no pointer and no machine config in the home folder: an empty config
+UNMOVED = 'unmoved'  # a machine config still in the home folder, none in the PM repository: a ConfigError
+BAD = 'bad'          # the pointer is BAD, or a PM folder or file cannot be read as present or absent
+# kitlib.config.pointer's states, repeated (that module imports this one).
+OK_POINTER, BAD_POINTER = 'OK', 'BAD'
+# home_location() states, the move's source (kitlib.config.move), with NONE and BAD above.
 NEW = 'new'      # DIR_NAME's file; the old folder has none
-OLD = 'old'      # the old folder's file: DIR_NAME has none (the fallback)
+OLD = 'old'      # the old folder's file: DIR_NAME has none
 BOTH = 'both'    # both have one: DIR_NAME's is read, the old one ignored
-NONE = 'none'    # neither: an empty config, named at DIR_NAME
-BAD = 'bad'      # DIR_NAME's folder or file cannot be read as present or absent: a ConfigError
 # The kit's temp folder at the root of a checkout's drive (work_temp): the kit's default, which
 # the machine config's `temp_dir` overrides.
 TEMP_DIR_NAME = 'kit-temp'
@@ -139,7 +153,7 @@ SCHEMA = {
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
     'guard_mcp_tools': Field(ListOf(Str()), None, 'more full tool names the guard treats as the lock MCP\'s owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")'),
-    'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json and write-jail rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor (removed after the switch), deep-worker, consultant and pm (docs/guard.md "Session mark")'),
+    'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json, write-jail and git-stash-shared rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor (removed after the switch), deep-worker, consultant and pm (docs/guard.md "Session mark")'),
     'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")'),
     'guard_rules': Field(MapOf(Enum('deny', 'warn', 'off'), what='rule'), None, 'the guard\'s rule modes, {rule: deny|warn|off}, over the kit defaults (kitlib.guard.modes.DEFAULTS); set here only, never in .kit.json (docs/guard.md "Rule modes"); older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
@@ -154,8 +168,23 @@ SCHEMA = {
     'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs), and the shared temp folder (gate fallback logs, the worktree sweep log, private index folders, comfy_gen's GPU self-lock and state) while its drive is there, made if missing; on Windows, as the test and gate folder, it is skipped when it is, holds or sits inside a session temp (`agent_temp_sweep` `dir`, or the user environment's AGENT_TEMP, TEMP or TMP); unset or skipped: the first of these clear of every session temp: `kit-temp`, then `kit-work`, at the root of the checkout's drive (not the system temp folder's drive), the system temp folder (%LOCALAPPDATA%\\Temp), `kit-work` beside it (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
     'machine_path_folders': Field(ListOf(Str(pattern=r'[^\\/:*?"<>|\s]+', what='a folder name')), None, 'the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, "the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3), the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`) and whether it also sweeps the session folders under the user's own temp, HKCU\\Environment TEMP, else TMP (`user_temp`, true or false, default false; older sweeps refuse the key); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md \"Extras\")"),
+    'dev_drive': Field(AbsPath(), None, 'the Dev Drive\'s root folder: `delegated.py run --approval` runs an operation, and `delegated.py request` asks for one, only on paths under it and outside every checkout (docs/delegations.md "Hub approvals"); unset: every approval run and request refuses; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'plugin': Field(Owned('kitlib.pluginsource'), None, 'where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated'),
 }
+
+# Which of the PM repository's two files holds each key (kitlib.config.move writes them so;
+# tests/config/test_read_pm_repo.py keeps these equal to move's POLICY, LOCAL, DROPPED and
+# RELATIVE_KEYS: this module does not import move, which imports kitlib.coordinatorstart).
+POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path', 'standing_delegation',
+               'daily_red_ruling', 'guard_rules', 'guard_mark_roots', 'guard_agent_marks',
+               'guard_mcp_tools', 'guard_mcp_prefix', 'pm_start', 'coordinator_start', 'pm_watch',
+               'backlog_lint', 'machine_lock', 'temp_dir', 'agent_temp_sweep',
+               'machine_path_folders', 'plugin')
+LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
+# Never in the PM repository's files: a ConfigError there (`pm_data` is derived: locate).
+DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data')
+# POLICY_KEYS paths that may be written relative to the PM repository (resolved).
+RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
 
 class HomeFenced(BaseException):
@@ -546,15 +575,49 @@ def make_temp(near, prefix, home=None):
     return folder, '%s is in %s: %s' % (folder, where, why)
 
 
-class Location(collections.namedtuple('Location', 'state path new old error home')):
-    """Which machine config file is read (locate): `state` one of NEW, OLD, BOTH, NONE, BAD;
-    `path` the file read (DIR_NAME's for NONE and BAD); `new` and `old` the two candidate files;
-    `error` why a BAD location cannot be read, else None; `home` the home folder."""
+class Location(collections.namedtuple('Location', 'state path local folder pm pm_data leftover error home new')):
+    """Which machine config is read (locate).
+
+    `state` OK, NONE, UNMOVED or BAD. `path` the policy file: `<PM repo>/.pm-kit/config.json` for
+    OK, the known-absent home file `~/.pm-kit/config.json` for NONE, the home folder's leftover
+    file for UNMOVED, and for BAD the PM repository's file when the pointer named one, else the
+    home file. `local` LOCAL_FILE_NAME beside `path` for OK, else None. `folder` the PM
+    repository's `.pm-kit` for OK, else None. `pm` the PM repository (the pointer's value,
+    normalised) for OK, else None. `pm_data` the derived {path, branch, remote} for OK when the
+    repository's kit-pm-data.json record is there, else None. `leftover` a machine config file
+    still in the home folder (either folder name), else None. `error` why the config cannot be
+    read (UNMOVED, BAD), else None. `home` the home folder.
+
+    `new` exists only for kitlib.hubsite.auth.folder (its line 121, the hub's credential folder
+    beside it) and the guard's matching hold on that folder (kitlib.guard.rules.hub_secret_folders);
+    the hub session removes it: `path` for OK, else the home file."""
+
+    def display(self, path=None):
+        """`path` (default the policy file) as messages name it: `~/<path>` under the home
+        folder, else the full path."""
+        return _shown(path or self.path, self.home)
+
+
+class HomeLocation(collections.namedtuple('HomeLocation', 'state path new old error home')):
+    """The machine config file in the home folder (home_location), the move's source
+    (kitlib.config.move): `state` one of NEW, OLD, BOTH, NONE, BAD; `path` the file read
+    (DIR_NAME's for NONE and BAD); `new` and `old` the two candidate files; `error` why a BAD
+    location cannot be read, else None; `home` the home folder."""
 
     def display(self, path=None):
         """`path` (default the file read) as ~/<folder>/<file>."""
         p = path or self.path
         return '~/%s/%s' % (os.path.basename(os.path.dirname(p)), os.path.basename(p))
+
+
+def _shown(path, home):
+    try:
+        rel = os.path.relpath(path, home)
+    except ValueError:                       # another drive
+        return path
+    if rel == os.curdir or rel.startswith(os.pardir) or os.path.isabs(rel):
+        return path
+    return '~/' + rel.replace('\\', '/')
 
 
 def _kind(path):
@@ -573,16 +636,18 @@ def _kind(path):
     return 'file' if stat.S_ISREG(st.st_mode) else 'other'
 
 
-def locate(home=None):
-    """The Location of the machine config under `home` (default the user's). It decides on
-    DIR_NAME's config file, never on its folder alone, so another writer making the folder first
-    does not hide the old file. It reads nothing but the file system's answers and never raises."""
+def home_location(home=None):
+    """The HomeLocation of the machine config file in the home folder `home` (default the
+    user's): the move's source (kitlib.config.move), never what the kit reads (locate). It
+    decides on DIR_NAME's config file, never on its folder alone, so another writer making the
+    folder first does not hide the old file. It reads nothing but the file system's answers and
+    never raises."""
     h = home or home_dir()
     new_dir, old_dir = os.path.join(h, DIR_NAME), os.path.join(h, OLD_DIR_NAME)
     new, old = os.path.join(new_dir, FILE_NAME), os.path.join(old_dir, FILE_NAME)
 
     def bad(why):
-        return Location(BAD, new, new, old, why, h)
+        return HomeLocation(BAD, new, new, old, why, h)
     try:
         d = _kind(new_dir)
         if d not in ('absent', 'dir'):
@@ -596,29 +661,128 @@ def locate(home=None):
         o = _kind(old)
     except OSError as e:
         if n == 'file':
-            return Location(NEW, new, new, old, None, h)
+            return HomeLocation(NEW, new, new, old, None, h)
         return bad('cannot tell whether the machine config %s exists: %s' % (old, e))
     if n == 'file':
-        return Location(NEW if o == 'absent' else BOTH, new, new, old, None, h)
+        return HomeLocation(NEW if o == 'absent' else BOTH, new, new, old, None, h)
     if o == 'absent':
-        return Location(NONE, new, new, old, None, h)
-    return Location(OLD, old, new, old, None, h)
+        return HomeLocation(NONE, new, new, old, None, h)
+    return HomeLocation(OLD, old, new, old, None, h)
+
+
+# The pointer's answer, once per process for each raw registry answer
+# (kitlib.config.pointer.read_raw): checking it starts git, and one tool reads the machine config
+# many times.
+_POINTERS = {}
+
+
+def _pointer():
+    from . import pointer                    # pointer imports this module
+    raw = pointer.read_raw()
+    if raw not in _POINTERS:
+        _POINTERS[raw] = pointer.read(raw=raw)
+    return _POINTERS[raw]
+
+
+def forget():
+    """Drop the remembered pointer answers (_pointer): for a test that changes the PM repository
+    a pointer value names, or the pointer, inside one process."""
+    _POINTERS.clear()
+
+
+def _leftover(h):
+    """(the first machine config file still in the home folder `h`, DIR_NAME's then the retired
+    folder's, or None; why the home folder cannot be examined, or None)."""
+    for name in (DIR_NAME, OLD_DIR_NAME):
+        path = os.path.join(h, name, FILE_NAME)
+        try:
+            if _kind(path) != 'absent':
+                return path, None
+        except OSError as e:
+            return None, 'cannot tell whether the machine config %s exists: %s' % (path, e)
+    return None, None
+
+
+MOVE_DOC = 'docs/kit-json.md "Moving the machine config into the PM repo"'
+POINTER_DOC = 'docs/machine-setup.md "PM repo pointer"'
+
+
+def locate(home=None, ptr=None):
+    """The Location of the machine config: the PM repository's when the PM-repo pointer is good
+    (`ptr`, a kitlib.config.pointer.Pointer already taken, else this process's, read once per
+    registry answer), under the home folder `home` (default the user's) for the leftover check.
+    It reads the pointer and the file system's answers only and never raises."""
+    h = home or home_dir()
+    home_file = os.path.join(h, DIR_NAME, FILE_NAME)
+    p = ptr if ptr is not None else _pointer()
+
+    def make(state, path, error=None, local=None, folder=None, pm=None, pm_data=None, leftover=None):
+        return Location(state, path, local, folder, pm, pm_data, leftover, error, h,
+                        path if state == OK else home_file)
+
+    def unmoved(leftover, pm_file):
+        if pm_file:
+            why = ('the machine config is still in the home folder (%s) and the PM repository has '
+                   'none (%s): move it with tools/config_move.py (%s)' % (leftover, pm_file, MOVE_DOC))
+        else:
+            why = ('the machine config is still in the home folder (%s), and the kit reads it from '
+                   'the PM repository now: set the PM repo pointer (tools/machine_setup.py '
+                   '--pm-repo, %s), then move it with tools/config_move.py (%s)'
+                   % (leftover, POINTER_DOC, MOVE_DOC))
+        return make(UNMOVED, leftover, why, leftover=leftover)
+
+    if p.state == BAD_POINTER:
+        return make(BAD, home_file, 'the PM repo pointer cannot be used, so the machine config '
+                    'cannot be read: %s (%s)' % (p.error, POINTER_DOC))
+    if p.state != OK_POINTER:
+        leftover, why = _leftover(h)
+        if why:
+            return make(BAD, home_file, why)
+        if leftover:
+            return unmoved(leftover, None)
+        return make(NONE, home_file)
+    pm = os.path.normpath(p.path)
+    folder = os.path.join(pm, DIR_NAME)
+    path, local = os.path.join(folder, FILE_NAME), os.path.join(folder, LOCAL_FILE_NAME)
+    try:
+        d = _kind(folder)
+        if d not in ('absent', 'dir'):
+            return make(BAD, path, '%s is not a folder: the machine config cannot be read' % folder)
+        kinds = [(f, _kind(f) if d == 'dir' else 'absent') for f in (path, local)]
+    except OSError as e:
+        return make(BAD, path, 'cannot tell whether the machine config in %s exists: %s' % (folder, e))
+    for f, k in kinds:
+        if k not in ('absent', 'file'):
+            return make(BAD, path, '%s is not a file: the machine config cannot be read' % f)
+    leftover, why = _leftover(h)
+    if all(k == 'absent' for _f, k in kinds):
+        if why:
+            return make(BAD, path, why)
+        if leftover:
+            return unmoved(leftover, path)
+    record = getattr(p, 'record', None)
+    pm_data = None
+    if record is not None:
+        pm_data = {'path': pm, 'branch': record.branch, 'remote': record.remote}
+    return make(OK, path, local=local, folder=folder, pm=pm, pm_data=pm_data, leftover=leftover)
 
 
 def config_dir(home=None):
-    """The folder of the machine config file read under `home` (default the user's): locate()."""
+    """The folder of the machine config file locate() names (the PM repository's `.pm-kit` for
+    OK). Never raises."""
     return os.path.dirname(locate(home).path)
 
 
 def config_file(home=None):
-    """The machine config file read (locate()); for a BAD location the new file. Never raises."""
+    """The machine config's policy file locate() names, even for UNMOVED and BAD. Never raises."""
     return locate(home).path
 
 
 def readable_file(home=None):
-    """The machine config file a reader opens (locate()). ConfigError when the location is BAD:
-    a reader that opens the file itself (pmstart, pmwatch, backloglint, ...) must not take a new
-    file it cannot examine for an absent one."""
+    """The machine config's policy file a reader opens (locate()): the PM repository's
+    config.json for OK, the known-absent home file for NONE. ConfigError when the config cannot
+    be read (UNMOVED, BAD): a reader that opens the file itself (pmstart, pmwatch, backloglint,
+    ...) must not take a file it cannot use for an absent one."""
     loc = locate(home)
     if loc.error:
         raise ConfigError(loc.error)
@@ -626,49 +790,131 @@ def readable_file(home=None):
 
 
 def display(home=None):
-    """The machine config file read, as messages name it: ~/<folder>/config.json."""
+    """The machine config's policy file, as messages name it (Location.display)."""
     return locate(home).display()
 
 
-def writable_file(home=None):
-    """The file a writer of the machine config writes: DIR_NAME's, always. ConfigError when the
-    location is BAD, or when only the old folder has a config (OLD): a new file holding one key
-    would hide every other key, so the owner moves the file first (migration.MOVE_STEPS)."""
+def key_file(home=None, key=None):
+    """The machine config file that holds `key`, as messages name it: for OK the PM repository's
+    LOCAL_FILE_NAME for a LOCAL_KEYS key, else locate()'s policy file. Never raises."""
+    loc = locate(home)
+    return loc.local if loc.state == OK and key in LOCAL_KEYS else loc.path
+
+
+def writable_file(home=None, key=None):
+    """The file a writer of the machine config key `key` writes: for OK the PM repository's
+    LOCAL_FILE_NAME when `key` is a LOCAL_KEYS key, else its FILE_NAME. ConfigError when the
+    config cannot be read (UNMOVED, BAD), for OK when `key` is one the PM repository's config
+    never holds (DROPPED_KEYS: `pm_data` is derived), and for NONE: with no pointer there is no
+    file to write, and the home file is never made again (it would be a leftover, UNMOVED)."""
     loc = locate(home)
     if loc.error:
         raise ConfigError(loc.error)
-    if loc.state == OLD:
-        raise ConfigError(MOVE_STEPS % (loc.old, loc.new))
-    return loc.new
+    if loc.state == OK:
+        if key in DROPPED_KEYS:
+            raise ConfigError(_dropped(key, loc.folder))
+        return loc.local if key in LOCAL_KEYS else loc.path
+    raise ConfigError('no PM repo pointer is set, so the machine config has no file to write%s '
+                      'to: set the pointer first (tools/machine_setup.py --pm-repo <PM repository>, '
+                      'an elevated owner step, %s)' % (' ' + key if key else '', POINTER_DOC))
 
 
-def user_config(home=None, location=None):
-    """The checked machine config, every schema key present (None where unset). `location` is a
-    Location already taken (the guard takes one per call), else locate(home)."""
-    loc = location or locate(home)
-    if loc.error:
-        raise ConfigError(loc.error)
-    path = loc.path
+def _dropped(key, where):
+    if key == 'pm_data':
+        return ("%s: pm_data is derived from the PM repo pointer and its repository's "
+                "kit-pm-data.json record; the machine config never holds it" % where)
+    return '%s: %s is a key the move drops (%s); nothing reads it here' % (where, key, MOVE_DOC)
+
+
+def _read_object(path):
+    """The JSON value of the file `path`, or None when it is absent. ConfigError when it cannot
+    be read or parsed."""
     try:
         with open(path, encoding='utf-8-sig') as f:
             text = f.read()
     except FileNotFoundError:
-        text = None
+        return None
     except (OSError, UnicodeDecodeError, ValueError) as e:
         raise ConfigError('cannot read %s: %s' % (path, e))
-    data = {}
-    if text is not None:
-        data = parse_json(text, path)
-        if isinstance(data, dict):
-            data = {k: v for k, v in data.items() if k not in RETIRED}
-        errs = []
-        Obj(SCHEMA, what='machine config').check(data, path, errs)
-        if not errs:
-            errs = ['%s: %s' % (path, why) for why in ledger_errors(data)]
-        if errs:
-            raise ConfigError('; '.join(errs))
+    return parse_json(text, path)
+
+
+def _read_home(path):
+    data = _read_object(path)
+    if data is None:
+        return {}
+    if isinstance(data, dict):
+        data = {k: v for k, v in data.items() if k not in RETIRED}
+    errs = []
+    Obj(SCHEMA, what='machine config').check(data, path, errs)
+    if not errs:
+        errs = ['%s: %s' % (path, why) for why in ledger_errors(data)]
+    if errs:
+        raise ConfigError('; '.join(errs))
+    return data
+
+
+def _read_pm(loc):
+    """The PM repository's two files merged, each key from its own file, RELATIVE_KEYS read
+    against the PM repository. ConfigError naming every problem."""
+    merged, errs = {}, []
+    files = ((loc.path, POLICY_KEYS, loc.local, LOCAL_KEYS), (loc.local, LOCAL_KEYS, loc.path, POLICY_KEYS))
+    for path, own, other, other_keys in files:
+        data = _read_object(path)
+        if data is None:
+            continue
+        if not isinstance(data, dict):
+            errs.append('%s must be an object' % path)
+            continue
+        kept = {}
+        for k, v in data.items():
+            if is_note(k):
+                continue
+            if k in DROPPED_KEYS:
+                errs.append(_dropped(k, path))
+            elif k in other_keys:
+                errs.append('%s: %s belongs in %s, not here' % (path, k, other))
+            else:
+                kept[k] = v
+        if own is POLICY_KEYS:
+            kept = resolved(kept, loc.pm)
+        Obj({k: SCHEMA[k] for k in own}, what='machine config').check(kept, path, errs)
+        merged.update(kept)
+    if not errs:
+        errs = ['%s: %s' % (loc.path, why) for why in ledger_errors(merged)]
+    if errs:
+        raise ConfigError('; '.join(errs))
+    return merged
+
+
+def resolved(policy, pm):
+    """`policy` with its relative RELATIVE_KEYS paths read against the PM repository `pm`."""
+    out = dict(policy)
+    for k in RELATIVE_KEYS:
+        v = out.get(k)
+        if isinstance(v, str) and v.strip() and not os.path.isabs(v):
+            out[k] = os.path.normpath(os.path.join(pm, v))
+    return out
+
+
+def user_config(home=None, location=None):
+    """The checked machine config, every schema key present (None where unset). `location` is a
+    Location already taken (the guard takes one per call), else locate(home); a HomeLocation
+    (home_location) reads the home folder's one file, as the move does. `pm_data` is the
+    Location's derived one."""
+    loc = location or locate(home)
+    if loc.error:
+        raise ConfigError(loc.error)
+    if isinstance(loc, HomeLocation):
+        data = _read_home(loc.path)
+    elif loc.state == OK:
+        data = _read_pm(loc)
+    else:
+        data = {}
     out = {k: f.default for k, f in SCHEMA.items()}
     out.update({k: v for k, v in data.items() if k in SCHEMA})
+    if isinstance(loc, Location):
+        out['pm_data'] = loc.pm_data
     return out
 
 
@@ -773,6 +1019,13 @@ def machine_path_folders(home=None):
     tuple: the machine config's `machine_path_folders`, else () (the kit codes no folder names).
     A machine config that cannot be read raises ConfigError."""
     return tuple(user_config(home)['machine_path_folders'] or ())
+
+
+def dev_drive(cfg):
+    """The Dev Drive's root folder from a config user_config returned, or None when it sets none
+    (kitlib.delegations.place refuses every approval run then)."""
+    value = cfg.get('dev_drive')
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def doc_lines():

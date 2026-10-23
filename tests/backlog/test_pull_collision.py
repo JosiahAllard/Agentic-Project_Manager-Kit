@@ -1,10 +1,15 @@
-"""A pull whose scope collides with a live pull needs `--ruling R-nnnn`; `--reason` alone is not
-enough. `set --scope` on a pulled record runs the same check when it
-widens the scope, and narrowing stays free, so `set` is not a second door around the pull check.
-End to end through Store.write on a no-remote ref store."""
+"""A pull whose scope collides with a live pull is the `pull-collision` row
+(kitlib/backlog/roles.py): refused unless the caller's role may take it (`may_collide`), and
+`--reason` alone is never enough. `set --scope` on a pulled record runs the same check when it
+widens the scope (`set-widen-collision`), and narrowing stays free, so `set` is not a second door
+around the pull check. A taken collision names its row on the Change and marks its subject
+(policy.COLLISION_MARK). End to end through Store.write on a no-remote ref store."""
 import unittest
 
+from kitlib.backlog import audit_check
 from kitlib.backlog import plan as pmod
+from kitlib.backlog import policy
+from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Failure, Refusal, Usage
 
 from tests.backlog.helpers import BRANCH, TODAY, StoreCase, parse, priced, rec
@@ -18,6 +23,17 @@ def hold(scope='kitlib/backlog/**', rid='HOLD', by=HOLDER):
 
 def mine(scope, rid='MINE'):
     return priced(rid, state='pulled', pulled_at=TODAY, pulled_by=BRANCH, scope=scope)
+
+
+def took(case, change, row):
+    """`change` took the collision row `row`: named on it, and marked on its subject."""
+    case.assertEqual(getattr(change, 'rows', None), [row])
+    case.assertTrue(change.subject.endswith(policy.COLLISION_MARK), change.subject)
+
+
+def took_none(case, change):
+    case.assertFalse(getattr(change, 'rows', None))
+    case.assertNotIn(policy.COLLISION_MARK, change.subject)
 
 
 class PullCollision(StoreCase):
@@ -34,34 +50,35 @@ class PullCollision(StoreCase):
         msg = str(cm.exception)
         self.assertIn('kitlib/backlog/scope.py collides with kitlib/backlog/**', msg)
         self.assertIn('HOLD (in flight on %s)' % HOLDER, msg)
-        self.assertIn('--ruling R-nnnn', msg)
+        self.assertIn('`pull-collision`', msg)
+        self.assertNotIn('--ruling', msg)
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
-    def test_a_colliding_pull_with_no_reason_names_the_ruling_too(self):
+    def test_a_colliding_pull_with_no_reason_names_the_row_too(self):
         self.seed(hold(), priced('FOO', scope='kitlib/backlog/scope.py'))
-        with self.assertRaises(Refusal) as cm:
-            self.verb('pull', 'FOO')
-        self.assertIn('already taken by HOLD (in flight on %s)' % HOLDER, str(cm.exception))
-        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        for may in (False, True):
+            with self.subTest(may_collide=may):
+                with self.assertRaises(Refusal) as cm:
+                    self.verb('pull', 'FOO', may_collide=may)
+                self.assertIn('already taken by HOLD (in flight on %s)' % HOLDER,
+                              str(cm.exception))
+                self.assertIn('`pull-collision`', str(cm.exception))
+                self.assertEqual(self.get('FOO').get('state'), 'open')
 
-    def test_a_colliding_pull_with_a_ruling_is_written_and_cites_it(self):
+    def test_a_colliding_pull_the_role_may_take_is_written_and_names_the_row(self):
         self.seed(hold(), priced('FOO', scope='kitlib/backlog/scope.py'))
-        change = self.verb('pull', 'FOO', reason='the owner wants it today', ruling='R-9001')
+        change = self.verb('pull', 'FOO', reason='the owner wants it today', may_collide=True)
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('preempt')),
-                         ('pulled', 'the owner wants it today (PM R-9001)'))
-        self.assertEqual(change.ruling, 'R-9001')
+                         ('pulled', 'the owner wants it today'))
+        took(self, change, 'pull-collision')
+        self.assertIsNone(change.ruling)
 
-    def test_a_colliding_pull_with_a_bad_ruling_shape_is_usage(self):
-        self.seed(hold(), priced('FOO', scope='kitlib/backlog/scope.py'))
-        with self.assertRaises(Usage):
-            self.verb('pull', 'FOO', reason='the owner wants it today', ruling='9001')
-        self.assertEqual(self.get('FOO').get('state'), 'open')
-
-    def test_a_collision_with_a_dead_pull_needs_no_ruling(self):
+    def test_a_collision_with_a_dead_pull_takes_no_row(self):
         self.seed(hold(by='kit/gone'), priced('FOO', scope='kitlib/backlog/scope.py'))
-        self.verb('pull', 'FOO')
+        change = self.verb('pull', 'FOO')
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
+        took_none(self, change)
 
     def test_an_out_of_order_pull_with_no_collision_still_takes_a_reason_alone(self):
         self.seed(hold(), priced('TOP', priority='1', scope='docs/**'),
@@ -71,13 +88,14 @@ class PullCollision(StoreCase):
         self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', 'needed before the others'))
 
     def test_a_minus_one_record_that_also_collides_is_never_pulled(self):
-        # pull-held refuses every role: no ruling releases the hold by pulling it; the owner or
-        # the PM releases it with `set` first (docs/backlog.md "Owner gates")
+        # pull-held refuses every role: a role that may collide does not release the hold by
+        # pulling it; the owner or the PM releases it with `set` first (docs/backlog.md "Owner
+        # gates")
         self.seed(hold(), rec('MIN', priority='-1', owner_ask='which?',
                               scope='kitlib/backlog/scope.py'))
-        for ruling in (None, 'R-9001'):
+        for may in (False, True):
             with self.assertRaises(Refusal) as cm:
-                self.verb('pull', 'MIN', reason='the owner said go', ruling=ruling)
+                self.verb('pull', 'MIN', reason='the owner said go', may_collide=may)
             self.assertIn('set MIN --priority', str(cm.exception))
             r = self.get('MIN')
             self.assertEqual((r.get('state'), r.get('priority'), r.get('hold_ruling')),
@@ -93,7 +111,7 @@ class PullCollision(StoreCase):
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('pulled_by'), r.get('preempt')),
                          ('pulled', BRANCH, None))
-        self.assertIsNone(change.ruling)
+        took_none(self, change)
         self.assertEqual(change.subject, 'backlog: pull FOO onto %s' % BRANCH)
 
     def test_a_second_bundled_pull_onto_the_same_branch_pulls_plainly_too(self):
@@ -110,7 +128,7 @@ class PullCollision(StoreCase):
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'FOO')
         self.assertIn('HOLD (in flight on %s)' % HOLDER, str(cm.exception))
-        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        self.assertIn('`pull-collision`', str(cm.exception))
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
     def test_the_offer_still_ranks_records_the_branch_does_not_hold(self):
@@ -135,7 +153,7 @@ class PullCollision(StoreCase):
         change = self.verb('pull', 'Y')
         r = self.get('Y')
         self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', None))
-        self.assertIsNone(change.ruling)
+        took_none(self, change)
 
     def test_a_record_next_offers_as_the_branch_pulls_plainly(self):
         self.seed_x_y()
@@ -163,7 +181,7 @@ class PullCollision(StoreCase):
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'FOO')
         self.assertIn('HOLD (in flight on %s)' % by, str(cm.exception))
-        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        self.assertIn('`pull-collision`', str(cm.exception))
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
     def test_a_branch_that_shares_the_callers_prefix_still_collides(self):
@@ -222,7 +240,7 @@ class PullCollision(StoreCase):
         change = self.verb('pull', 'Y')
         self.assertEqual((self.get('Y').get('state'), self.get('Y').get('preempt')),
                          ('pulled', None))
-        self.assertIsNone(change.ruling)
+        took_none(self, change)
         note = [ln for ln in change.lines if ln.startswith('NOTE: the offer without branch')]
         self.assertEqual(len(note), 1, change.lines)
         self.assertIn(BRANCH, note[0])
@@ -258,59 +276,43 @@ class SetScopeWidening(StoreCase):
         msg = str(cm.exception)
         self.assertIn('kitlib/backlog/** collides with kitlib/backlog/offer.py', msg)
         self.assertIn('HOLD (in flight on %s)' % HOLDER, msg)
-        self.assertIn('--ruling R-nnnn', msg)
+        self.assertIn('`set-widen-collision`', msg)
+        self.assertNotIn('--ruling', msg)
         self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py'])
 
-    def test_widening_into_a_live_pull_with_a_ruling_is_written(self):
+    def test_widening_into_a_live_pull_the_role_may_take_is_written_and_names_the_row(self):
         self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
-        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**'])], ruling='R-9001')
+        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**'])], may_collide=True)
         self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/**'])
-        self.assertEqual(change.ruling, 'R-9001')
+        took(self, change, 'set-widen-collision')
+        self.assertIsNone(change.ruling)
 
     def test_widening_into_free_space_is_free(self):
         self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
-        self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md'])])
-        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py', 'docs/backlog.md'])
+        for may in (False, True):
+            with self.subTest(may_collide=may):
+                change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py',
+                                                              'docs/backlog.md'])],
+                                   may_collide=may)
+                self.assertEqual(self.get('MINE').all('scope'),
+                                 ['kitlib/backlog/plan.py', 'docs/backlog.md'])
+                took_none(self, change)
+                self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py'])])
 
     def test_the_widen_refusal_names_the_repeatable_scope_form(self):
         self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
         with self.assertRaises(Refusal) as cm:
             self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'kitlib/backlog/**'])])
-        self.assertIn('`set MINE --scope <path> [--scope <path> ...] --ruling R-nnnn`',
+        self.assertIn('`set MINE --scope <path> [--scope <path> ...]` (the whole new list)',
                       str(cm.exception))
 
-    def test_a_ruling_on_a_free_widening_of_a_pulled_record_is_recorded(self):
-        # The collision a refusal named can clear before the retry with `--ruling` (the holder
-        # landed, or the refused member was malformed): the retry is written, not USAGE.
-        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
-        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md'])],
-                           ruling='R-9001')
-        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py', 'docs/backlog.md'])
-        self.assertEqual(change.ruling, 'R-9001')
-        self.assertTrue(any('widened on R-9001' in line and 'no live pull collides' in line
-                            and 'docs/backlog.md' in line for line in change.lines), change.lines)
-
-    def test_a_ruling_with_a_free_widening_and_a_price_move_records_the_price(self):
-        # Free scope needs no ruling, so the one given stays the price's, as before.
-        self.seed(mine('kitlib/backlog/plan.py'))
-        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md']),
-                                           ('priority', ['1']), ('priority_by', ['pm'])],
-                           ruling='R-9001')
-        r = self.get('MINE')
-        self.assertEqual((r.get('priority'), r.get('priority_ruling')), ('1', 'R-9001'))
-        self.assertFalse(any('widened on' in line for line in change.lines), change.lines)
-
-    def test_a_ruling_on_a_narrowing_or_an_unchanged_scope_is_usage_naming_the_form(self):
-        self.seed(mine('kitlib/backlog/**'))
-        for new in (['kitlib/backlog/plan.py'], ['kitlib/backlog/**']):
+    def test_a_narrowing_or_an_unchanged_scope_takes_no_row(self):
+        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/**'))
+        for new in (['kitlib/backlog/**'], ['kitlib/backlog/plan.py']):
             with self.subTest(scope=new):
-                with self.assertRaises(Usage) as cm:
-                    self.verb('set', 'MINE', [('scope', new)], ruling='R-9001')
-                msg = str(cm.exception)
-                self.assertIn('there is nothing for it to record', msg)
-                self.assertIn('`set MINE --scope <path> [--scope <path> ...] --ruling R-nnnn`', msg)
-                self.assertIn('narrowing is free', msg)
-                self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/**'])
+                change = self.verb('set', 'MINE', [('scope', new)], may_collide=True)
+                self.assertEqual(self.get('MINE').all('scope'), new)
+                took_none(self, change)
 
     def test_a_comma_joined_scope_is_usage_naming_one_scope_per_path(self):
         # Not a collision with every live pull: a malformed member is the caller's mistake.
@@ -333,25 +335,6 @@ class SetScopeWidening(StoreCase):
         self.verb('set', 'FOO', [('scope', ['kitlib/backlog/**'])])
         self.assertEqual(self.get('FOO').all('scope'), ['kitlib/backlog/**'])
 
-    def test_a_widening_with_a_ruling_and_a_price_change_is_usage(self):
-        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
-        with self.assertRaises(Usage) as cm:
-            self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**']), ('priority', ['1']),
-                                      ('priority_by', ['pm'])], ruling='R-9001')
-        self.assertIn('one ruling, one change', str(cm.exception).lower())
-        self.assertIn('a price move', str(cm.exception))
-
-    def test_a_widening_with_a_ruling_and_an_owner_hold_release_is_usage(self):
-        self.seed(hold(scope='kitlib/backlog/offer.py'),
-                  priced('MINE', state='pulled', pulled_at=TODAY, pulled_by=BRANCH,
-                         scope='kitlib/backlog/plan.py', blocked_on='owner'))
-        with self.assertRaises(Usage) as cm:
-            self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**']), ('blocked_on', ['-'])],
-                      ruling='R-9001')
-        self.assertIn('one ruling, one change', str(cm.exception).lower())
-        self.assertIn('an owner-hold release', str(cm.exception))
-        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py'])
-
     def test_widening_never_collides_with_the_record_itself(self):
         # MINE is a live pull too; its own old scope is under the new one.
         self.seed(mine('kitlib/backlog/plan.py'))
@@ -362,7 +345,7 @@ class SetScopeWidening(StoreCase):
         self.seed(mine('kitlib/backlog/offer.py', rid='SIB'), mine('kitlib/backlog/plan.py'))
         change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**'])])
         self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/**'])
-        self.assertIsNone(change.ruling)
+        took_none(self, change)
 
     def test_the_branch_that_counts_is_the_records_not_the_callers(self):
         # A coordinator on another branch widens MINE into SIB: both are pulled by BRANCH, so it
@@ -421,8 +404,8 @@ class Widened(unittest.TestCase):
 
 
 class TakeoverCollision(StoreCase):
-    """The dead-pull takeover is the same door: a takeover that collides with a live pull needs
-    `--ruling`."""
+    """The dead-pull takeover is the same door: a takeover that collides with a live pull is the
+    `pull-collision` row."""
     remote = False
 
     def setUp(self):
@@ -434,34 +417,64 @@ class TakeoverCollision(StoreCase):
         return priced(rid, state='pulled', pulled_at='2026-10-01', pulled_by=by, scope=scope,
                       session=session)
 
-    def test_a_colliding_takeover_is_refused_without_a_ruling(self):
+    def test_a_colliding_takeover_is_refused_unless_the_role_may_collide(self):
         self.seed(self.pulled('DEAD', 'kit/gone', 'area/shared/**'),
                   self.pulled('LIVE', 'kit/live-one', 'area/shared/x.py', session='other'))
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'DEAD')
         self.assertIn('LIVE (in flight on kit/live-one)', str(cm.exception))
-        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        self.assertIn('`pull-collision`', str(cm.exception))
         self.assertEqual(self.get('DEAD').get('pulled_by'), 'kit/gone')
 
-    def test_a_colliding_takeover_with_a_ruling_is_written(self):
+    def test_a_colliding_takeover_the_role_may_take_is_written_and_names_the_row(self):
         self.seed(self.pulled('DEAD', 'kit/gone', 'area/shared/**'),
                   self.pulled('LIVE', 'kit/live-one', 'area/shared/x.py', session='other'))
-        change = self.verb('pull', 'DEAD', ruling='R-9001')
+        change = self.verb('pull', 'DEAD', may_collide=True)
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
-        self.assertEqual(change.ruling, 'R-9001')
+        took(self, change, 'pull-collision')
 
-    def test_a_colliding_takeover_with_a_bad_ruling_shape_is_usage(self):
-        self.seed(self.pulled('DEAD', 'kit/gone', 'area/shared/**'),
-                  self.pulled('LIVE', 'kit/live-one', 'area/shared/x.py', session='other'))
-        with self.assertRaises(Usage):
-            self.verb('pull', 'DEAD', ruling='9001')
-
-    def test_a_takeover_that_overlaps_a_pull_on_the_callers_own_branch_needs_no_ruling(self):
+    def test_a_takeover_that_overlaps_a_pull_on_the_callers_own_branch_takes_no_row(self):
         self.seed(self.pulled('DEAD', 'kit/gone', 'area/shared/**'),
                   self.pulled('SIB', BRANCH, 'area/shared/x.py'))
         change = self.verb('pull', 'DEAD')
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
-        self.assertIsNone(change.ruling)
+        took_none(self, change)
+
+
+class AuditInference(StoreCase):
+    """kitlib/backlog/audit_check.py reads the collision row back from a published store commit:
+    no flag names it, so the subject's policy.COLLISION_MARK is the only trace an audit has."""
+    remote = False
+
+    def setUp(self):
+        super().setUp()
+        self.repo.git('branch', HOLDER)
+
+    def rows(self, verb):
+        """audit_check's rows for the store's newest commit, as the audit reads them."""
+        newest = audit_check.history(self.repo.root, smod.STORE_REF, smod.STORE_DIR, 0)[0]
+        return audit_check.rows_of(self.repo.root, verb, newest)
+
+    def test_a_taken_pull_collision_is_read_back(self):
+        self.seed(hold(), priced('FOO', scope='kitlib/backlog/scope.py'))
+        self.verb('pull', 'FOO', reason='the owner wants it today', may_collide=True)
+        self.assertIn('pull-collision', self.rows('pull'))
+
+    def test_a_plain_pull_reads_back_no_collision(self):
+        self.seed(hold(), priced('FOO', scope='docs/other.md'))
+        self.verb('pull', 'FOO', may_collide=True)
+        self.assertEqual(self.rows('pull'), ['pull'])
+
+    def test_a_taken_widen_collision_is_read_back(self):
+        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
+        self.verb('set', 'MINE', [('scope', ['kitlib/backlog/**'])], may_collide=True)
+        self.assertIn('set-widen-collision', self.rows('set'))
+
+    def test_a_free_widen_reads_back_no_collision(self):
+        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
+        self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md'])],
+                  may_collide=True)
+        self.assertNotIn('set-widen-collision', self.rows('set'))
 
 
 if __name__ == '__main__':

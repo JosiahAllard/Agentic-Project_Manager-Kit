@@ -2,7 +2,6 @@
 scratch home (its own machine config) and a scratch folder to sweep, never the real ones. Entries
 are aged by moving the clock forward (`now`), since a file's creation time cannot be set back."""
 import io
-import json
 import os
 import shutil
 import stat
@@ -17,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'optional', 'agenttemp'))
 import agent_temp_sweep as S  # noqa: E402
 from kitlib.config import user as kuser  # noqa: E402
+from tests.home import machine_config  # noqa: E402
 
 LATER = time.time() + 10 * S.DAY        # every entry made now is 10 days old then
 
@@ -37,7 +37,8 @@ class Case(unittest.TestCase):
         os.makedirs(self.dir)
 
     def config(self, cfg):
-        put(kuser.config_file(self.home), json.dumps(cfg))
+        """The machine config, in a fenced PM repository the pointer names (tests.home)."""
+        machine_config(self.home, cfg, case=self)
 
     def young(self, path):
         """Makes path written 1 day before LATER."""

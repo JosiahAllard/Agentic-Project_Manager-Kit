@@ -55,9 +55,12 @@ def found(ctx):
 
 def needs_prompt(ctx):
     """True when the run has no email to store: none given, none stored, and the machine config
-    can be read. tools/machine_setup.py then asks for one (offering suggestion())."""
+    can be read and written (no PM repo pointer: nothing to write it to, so nothing is asked).
+    tools/machine_setup.py then asks for one (offering suggestion())."""
     have, err = stored(ctx.home)
-    return not err and not have and not getattr(ctx, 'owner_email', None)
+    if err or have or getattr(ctx, 'owner_email', None):
+        return False
+    return machineconfig.snapshot(ctx, KEY)[0] is not None
 
 
 def suggestion(ctx):
@@ -99,7 +102,7 @@ def survey(plan, ctx):
                   % ('git config user.email is not an email address (%r)' % git if git
                      else 'git config user.email is unset'))
         return
-    snap, why = machineconfig.snapshot(ctx)
+    snap, why = machineconfig.snapshot(ctx, KEY)
     if snap is None:
         plan.refuse('cannot write %s to the machine config: %s' % (KEY, why))
         return
@@ -114,12 +117,16 @@ def survey(plan, ctx):
 
 def write_owner_email(home, snap, email, replace=False):
     """Set owner_email to `email` in the machine config file snap.path (a Snapshot; None: read the
-    writable machine config now). RuntimeError when it cannot (machineconfig.set_key)."""
+    writable machine config now). RuntimeError when it cannot (machineconfig.set_key; with no
+    PM repo pointer, kitlib.config.user.writable_file)."""
     bad = valid(email)
     if bad:
         raise ValueError(bad)
     if snap is None:
-        path = kuser.writable_file(home)
+        try:
+            path = kuser.writable_file(home, KEY)
+        except ConfigError as e:
+            raise RuntimeError('cannot write %s to the machine config: %s' % (KEY, e))
         try:
             with open(path, 'rb') as f:
                 raw = f.read()

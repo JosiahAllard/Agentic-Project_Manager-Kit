@@ -5,6 +5,7 @@ description: Optional wrapper that lands one reviewed branch (or a batch) - subm
 tools: PowerShell, Bash, Read, Grep, Glob, Agent
 model: haiku
 effort: medium
+autoCompactWindow: 170000
 ---
 
 You land branches: a careful operator, not a developer. Never edit code, scenes,
@@ -52,7 +53,7 @@ Missing any: say what you need, do nothing.
    gate itself, and a lock you still hold deadlocks it or fails looking like a
    timeout or a test failure, not like a lock mistake.
 5. Submit the landing from the main checkout, as one bare call:
-   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--lane <lane>] [--summary <text>]`
+   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`
    (the repo's stub; `<kit>/tools/land.py` where the repo has none).
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
@@ -117,7 +118,7 @@ marks high-risk.
 
 One short block: branch; old and new main hash; fast-forward or merge commit; test
 counts; extra gate result; pushed yes/no with the two hashes; worktree removed
-yes/no; any line you had to judge. No narrative.
+yes/no; any line you had to judge. No narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 

@@ -19,7 +19,7 @@ Supersedes: <id> | -
 
 - **Ids** are `H-<repo>-nnnn` in a repository's file and `R-nnnn` in the one-file ledger (`fmt.ID`). The number has four or more digits, from 1 in file order, one apart, per file. The time is UTC.
 - **Repo column:** in a repository's file, that repository. In the one-file ledger, `all` or a name from `ledger_repos` (unset: any lower-case name; "Configuration").
-- **Provenance:** `typed`, `selected`, `relayed-from-terminal` (the owner's own answer) or `delegated`. A delegated entry's Source says `under <id>`, naming an owner entry: an earlier one of its own file, or one of any other ledger file, the frozen one included.
+- **Provenance:** `typed`, `selected`, `relayed-from-terminal` (the owner's own answer) or `delegated`. A delegated entry's Source says `under <id>`, naming an owner entry: an earlier one of its own file, or one of any other ledger file, the frozen one included; or `under hub:A-nnn`, with the hub approval as its anchor (`fmt.HUB_ANCHOR`), which needs no owner entry.
 - **Supersedes** names an earlier entry of the same file.
 - **Values:** a value's continuation lines start with two spaces. An older entry may end with an `Items: A, B` line. It is still read and validated; `add` no longer writes one.
 - **Tombstone:** keeps its header, and its body is one line: `Retired: spent|superseded|duplicate - <why> (see <id>|-)`.
@@ -94,7 +94,11 @@ The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
 ## A new ledger
 
-Set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file); the first `add` for a repository creates its file from `templates/common/LEDGER.md`. To commit the ledger, put its folder inside a git work tree whose `.kit.json` names the main branch.
+Set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file); the first `add` for a repository creates its file from `templates/common/LEDGER.md`.
+
+**Moving from one file.** First retire, or supersede in the one file, each R-nnnn entry the owner means to end: after the split `retire R-nnnn` is refused, and `--supersedes` names only an earlier entry of the same file. Then the owner edits the machine config: add `ledger_dir` and `ledger_repos` (including `pm`, since `--repo all` is refused once `ledger_dir` is set), and keep `ledger_path`, which is then the frozen file ("Files"). Older kit copies reject `ledger_dir`, so set it only after every folder runs a kit that knows it. No entry is copied, but the standing digest moves: STANDING.md, beside the `ledger_path` file without `ledger_dir`, is read from `ledger_dir` with it, so move it there, with one `## <repo>` section per repository. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable in the frozen file for one release. The guard's ledger rule protects only the `ledger_path` file, so the files under `ledger_dir` are not guarded yet.
+
+To commit the ledger, put its folder inside a git work tree whose `.kit.json` names the main branch.
 
 ## Commit and push
 

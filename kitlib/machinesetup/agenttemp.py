@@ -249,7 +249,7 @@ def _key(plan, ctx, folder):
             plan.note('extras', 'the machine config\'s %s.dir is %s, not %s; left as is (the sweep '
                                 'sweeps the configured folder)' % (KEY, d, folder))
         return
-    snap, why = machineconfig.snapshot(ctx)
+    snap, why = machineconfig.snapshot(ctx, KEY)
     if snap is None:
         plan.refuse('cannot write %s to the machine config: %s' % (KEY, why))
         return

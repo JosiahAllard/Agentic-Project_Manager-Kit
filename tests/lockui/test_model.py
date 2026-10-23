@@ -267,7 +267,7 @@ class ToJson(unittest.TestCase):
     """to_json: the view as the hub's GET lock/view sends it. One allow-list for every listener;
     over the tunnel (remote) a warning that can name a file is a fixed phrase."""
 
-    SECRET = "Z:\\made-up\\store"          # a path the snapshot may carry and no answer may
+    SECRET = "Q:\\made-up\\store"          # a path the snapshot may carry and no answer may
 
     def full(self, **over):
         s = snap(store=self.SECRET, **over)
@@ -294,6 +294,45 @@ class ToJson(unittest.TestCase):
         s = self.full(**over)
         out = m.to_json(m.build(s, HISTORY, now=NOW), s, remote=remote)
         return out, json.dumps(out)     # it is plain JSON: dumps raises on a datetime
+
+    def hist_items(self, rows):
+        s = snap()
+        out = m.to_json(m.build(s, rows, now=NOW), s)
+        return [it for it in out["strip"] if it["type"] == "hist"]
+
+    def line(self, i, **over):
+        d = {"id": "r-%d" % i, "repo": "kit", "slug": "gate", "kind": "engine-test",
+             "since": at(-200), "held_since": at(-190), "ended": at(-150), "code": 0}
+        d.update(over)
+        return d
+
+    def test_history_items_carry_repo_kind_and_result(self):
+        rows = [self.line(1), self.line(2, code=3, how="done", repo="game", kind="measure"),
+                self.line(3, how="cancelled", code=1), self.line(4, how="interrupted", code=130)]
+        got = {it["id"]: (it["repo"], it["kind"], it["result"]) for it in self.hist_items(rows)}
+        self.assertEqual(got, {"r-1": ("kit", "engine-test", "ok"), "r-2": ("game", "measure", "failed"),
+                               "r-3": ("kit", "engine-test", "cancelled"),
+                               "r-4": ("kit", "engine-test", "interrupted")})
+
+    def test_history_fields_are_null_when_not_derivable(self):
+        it, = self.hist_items([self.line(1, repo=None, kind="", code=None)])
+        self.assertEqual((it["repo"], it["kind"], it["result"]), (None, None, None))
+        it, = self.hist_items([{k: v for k, v in self.line(2).items() if k not in ("repo", "kind", "code")}])
+        self.assertEqual((it["repo"], it["kind"], it["result"]), (None, None, None))
+
+    def test_history_items_keep_their_existing_keys(self):
+        it, = self.hist_items([self.line(1)])
+        for k in ("type", "id", "open", "late", "text", "start", "end", "expect_end", "lane"):
+            self.assertIn(k, it)
+        self.assertEqual((it["type"], it["id"], it["open"]), ("hist", "r-1", False))
+        self.assertIn("ran kit/gate (engine-test", it["text"])
+
+    def test_other_strip_items_gain_no_history_fields(self):
+        s = snap()
+        out = m.to_json(m.build(s, HISTORY, now=NOW), s)
+        for it in out["strip"]:
+            if it["type"] != "hist":
+                self.assertFalse({"repo", "kind", "result"} & set(it))
 
     def test_the_view_is_plain_json_with_local_times(self):
         out, _ = self.json_of(False)

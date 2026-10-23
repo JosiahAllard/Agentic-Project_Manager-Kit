@@ -23,6 +23,7 @@ from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
 from kitlib.proc import process
+from tests.home import machine_config
 from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
@@ -1785,10 +1786,8 @@ class MachineCase(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def config(self, obj):
-        folder = os.path.join(self.home, '.pm-kit')
-        os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, 'config.json'), 'w', encoding='utf-8') as f:
-            json.dump(obj, f)
+        """The machine config `obj`, in the fenced PM repository's two files: their folder."""
+        return machine_config(self.home, obj, case=self)
 
     def test_a_machine_with_no_config_serves_on_defaults(self):
         src = serve.machine_sources(self.home)
@@ -1926,10 +1925,17 @@ class MachineCase(unittest.TestCase):
                              [])
         self.assertEqual(len(ran), 2, ran)          # git was tried, for both folders
 
-    def test_a_pm_data_object_that_cannot_be_used_is_a_config_error(self):
-        self.config({'pm_data': 5})
-        with self.assertRaises(ConfigError):
-            serve.machine_sources(self.home)
+    def test_a_pm_data_key_in_the_machine_config_is_never_the_sources_pm_data(self):
+        # pm_data is derived from the PM-repo pointer (kitlib.pmdata.machine_settings), so a key
+        # planted in the file cannot change it; the file itself is refused by hub_settings.load,
+        # which `hub.py serve` reads before machine_sources.
+        pm = os.path.dirname(self.config({'pm_data': {'path': os.path.join(self.home, 'pm')}}))
+        self.config('{"pm_data": 5}')
+        self.assertEqual(serve.machine_sources(self.home).pm_data,
+                         {'path': pm, 'branch': 'main', 'remote': 'origin'})
+        with self.assertRaises(ConfigError) as cm:
+            hub_settings.load(home=self.home)
+        self.assertIn('pm_data is derived', str(cm.exception))
 
 
 class ClientCase(ServeCase):

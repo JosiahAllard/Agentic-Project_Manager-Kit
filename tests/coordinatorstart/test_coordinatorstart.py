@@ -9,9 +9,9 @@ from unittest import mock
 
 from kitlib import coordinatorstart
 from kitlib.config import ConfigError
-from kitlib.config import user as kuser
 from kitlib.lockmcp import PLUGIN_NAME
 from kitlib.lock import api
+from tests.home import machine_config
 from tests.lock.helpers import OWNER, StoreCase
 
 # the coordinator rules hook as the plugin's hooks.json runs it (boot/hook.py, its coordinator part)
@@ -221,7 +221,7 @@ class MachineTest(StatusCase):
         (gf, gn), (cf, cn) = self.free(snap, "gpu"), self.free(snap, "cpu")
         self.assertLess(cf, cn)             # the half hold covers cpu slots, so they are not free
         self.assertEqual(out[1], "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (gf, gn, cf, cn))
-        self.assertIn("HELD - lane full, branches b1, a token holder, phase gate", out[2])
+        self.assertIn("HELD - branches b1, a token holder, phase gate", out[2])
         self.assertEqual(calls[0][-2:], ["status", "--json"])
         self.assertEqual(calls[0][1].replace("\\", "/"), "H/tools/machine_lock.py")
 
@@ -556,8 +556,7 @@ class StubsLineTest(unittest.TestCase):
 class HookTest(unittest.TestCase):
     def run_hook(self, role, config):
         with tempfile.TemporaryDirectory() as d:
-            os.makedirs(kuser.config_dir(d))
-            write(kuser.config_file(d), config)
+            machine_config(d, config, case=self)        # the fenced pointer's PM repo, which the child inherits
             env = {k: v for k, v in os.environ.items() if k != "PM_KIT_ROLE"}
             env.update(USERPROFILE=d, HOME=d)
             if role:

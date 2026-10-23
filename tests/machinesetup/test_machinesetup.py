@@ -17,7 +17,7 @@ from unittest import mock
 from kitlib import machinesetup as M
 from kitlib.machinesetup import common, extras, settings
 from kitlib.config import user as kuser
-from tests.home import fence_decoy, temp_home
+from tests.home import fence_decoy, pm_repo, temp_home
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_setup.py')
@@ -183,7 +183,10 @@ class Base(unittest.TestCase):
         touch(os.path.join(self.c2, 'tools', 'comfy', 'local-notes.txt'), 'keep me\n')
         junction(os.path.join(self.c2, 'tools', 'oldthing'), os.path.join(self.old, 'tools', 'usage'))
         junction(os.path.join(self.c2, 'skills'), os.path.join(self.c1, 'skills'))
-        os.makedirs(kuser.config_dir(self.home))
+        # the PM repository the fenced pointer names: the machine config is its .pm-kit
+        self.pm = pm_repo(self, path=os.path.join(self.root, 'pm-repo'))
+        self.cfg_dir = os.path.join(self.pm, kuser.DIR_NAME)
+        os.makedirs(self.cfg_dir)
         self.s1 = os.path.join(self.c1, 'settings.json')
         self.s2 = os.path.join(self.c2, 'settings.json')
         self.write_settings(self.s1, self.settings_doc(), crlf=True)
@@ -237,6 +240,10 @@ class Base(unittest.TestCase):
 
     def snapshot(self):
         out = {}
+        for dirpath, _, files in os.walk(self.cfg_dir):
+            for n in files:
+                with open(os.path.join(dirpath, n), 'rb') as f:
+                    out[os.path.join(dirpath, n)] = f.read()
         for dirpath, dirnames, files in os.walk(self.home):
             for n in list(dirnames):
                 p = os.path.join(dirpath, n)

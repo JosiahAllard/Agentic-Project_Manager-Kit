@@ -96,6 +96,16 @@ class KitAdapter(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 plan("ledger", args, ROOT, role="pm")
 
+    def test_ledger_calls_carry_their_repo_and_prov_to_the_tool(self):
+        add = ["add", "--repo", "kit", "--prov", "owner", "--commit", "--model", "gpt-6.1-sol"]
+        self.assertEqual(plan("ledger", add, ROOT, role="pm").argv[2:], tuple(add))
+        listing = ["list", "--prov", "delegated", "--since", "2026-01-01", "--repo=kit"]
+        self.assertEqual(plan("ledger", listing, ROOT, role="analyst").argv[2:], tuple(listing))
+        for args in (["add", "--repo", "kit", "--prov", "owner", "--provider", "claude"],
+                     ["list", "--pro", "owner"]):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                plan("ledger", args, ROOT, role="pm")
+
     def test_lander_and_test_runner_cannot_mutate_backlog(self):
         for role in ("lander", "test-runner"):
             with self.subTest(role=role), self.assertRaises(ValueError):

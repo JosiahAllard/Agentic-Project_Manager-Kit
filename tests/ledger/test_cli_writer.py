@@ -1,13 +1,12 @@
 """tools/ledger.py add/show/grep/check/retire: arguments and exit codes only (the logic is
 tests/ledger/test_writer.py's). Ids are built by rid(n) (tests/scrub)."""
-import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from kitlib.config import user as kuser
+from tests.home import machine_config
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger.py')
@@ -28,9 +27,7 @@ class CliBase(unittest.TestCase):
         self.config({'ledger_path': self.ledger, 'ledger_repos': ['alpha']})
 
     def config(self, data):
-        os.makedirs(kuser.config_dir(self.home), exist_ok=True)
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
+        machine_config(self.home, data, case=self)
 
     def run_tool(self, *args):
         env = dict(os.environ, USERPROFILE=self.home, HOME=self.home, CLAUDE_AGENT_MODEL='')

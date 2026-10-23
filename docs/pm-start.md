@@ -10,7 +10,9 @@ with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/look
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
 launches every coordinator, the kit's included, from whatever account it started on; when that
 account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
-`tests/pmstart/test_pmstart.py` `LivenessTest`.
+`tests/pmstart/test_pmstart.py` `LivenessTest`. A coordinator the PM stopped on its `ready to stop:`
+reply (skill session-handoff) is listed too; the PM starts it only when its repo gets startable
+work, an owner answer or an approval, adding a `--prompt` that names the reply's note.
 
 Hub (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`; docs/action-hub.md): the
 lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)
@@ -73,7 +75,7 @@ no git config and never rebases, resets or forces. The checks are a point in tim
 
 ## Plugin export (`plugin_current`)
 
-Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead (`<kit>` the kit's absolute path, `kitlib.pluginsource` `refresh_cmd`: the PM's session runs in another folder); an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings"). Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
+Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead (`<kit>` the kit's absolute path, `kitlib.pluginsource` `refresh_cmd`: the PM's session runs in another folder); an unreadable export state is a `could not check the pm-kit plugin` line. The refresh checks read the export root only (docs/plugin-source.md "Behind warnings"). The marketplace path check (`kitlib.pluginsource` `marketplace_mismatches`) also reads each migrated account folder's `plugins/known_marketplaces.json` `installLocation` and the machine's managed settings `extraKnownMarketplaces` source path, and prints one `pm-kit marketplace ... is <path>, not the export <root>` line per place that points elsewhere; an unreadable or wrong-shaped file is a `could not check the pm-kit marketplace path` line, a missing file or entry prints nothing, and it never writes or raises. Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
 
 ## Plugin enabled (`plugin_enabled`)
 

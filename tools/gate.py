@@ -10,7 +10,7 @@
       python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout").
       Refused (4), with --plan and as `land` too, while the repository's stash stack holds an
       entry, whichever checkout made it (kitlib.gate.stash; docs/gate.md "The stash guard")
-  gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--lane L] [--summary TEXT]
+  gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--summary TEXT]
                       [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch] [--submit]
       land BRANCH from the main checkout, as tools/land.py does: merge onto <remote>/<main> as it
       is at the landing's turn, gate the merged tree, push, verify, then delete the landed branch
@@ -44,7 +44,20 @@ import sys
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, KIT)
 
+
+def safe_stdio():
+    """A character the console's encoding has no byte for (cp1252 on a redirected Windows
+    stream: a child's log line or a console window's title) is written as a \\u escape, never
+    raised: a gate that ran its steps never ends `error` over printing."""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(errors='backslashreplace')
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
+    safe_stdio()
     from kitlib.gate import pin                                     # noqa: E402
     _code, _said = pin.run(__file__, sys.argv[1:])
     if _said:
@@ -106,7 +119,6 @@ def land_parser():
                         'never refused')
     p.add_argument('--expect-tip', required=True, metavar='SHA')
     p.add_argument('-C', dest='root', default='.', help='the main checkout (default: here)')
-    p.add_argument('--lane', default='full')
     p.add_argument('--summary', help='the merge title after "Merge <branch>: "')
     p.add_argument('--full', action='store_true', help='gate every non-manual step')
     p.add_argument('--fresh', action='store_true',
@@ -126,7 +138,7 @@ def land_parser():
 def land_child_args(a, root):
     """The arguments of the detached landing `gate.py land --submit` starts: `land`, then this
     landing's, -C and --log-dir absolute."""
-    args = ['land', a.branch, '-C', root, '--lane', a.lane, '--expect-tip', a.expect_tip]
+    args = ['land', a.branch, '-C', root, '--expect-tip', a.expect_tip]
     if a.expect_main:
         args += ['--expect-main', a.expect_main]
     if a.summary:
@@ -167,7 +179,7 @@ def do_land(argv):
                 print('WARNING: the output stays on the hidden console: %s' % e, flush=True)
     # A detached landing waits the configured "landing".wait_s for its turn; one run here, 0.
     wait_s = a.wait if a.wait is not None or submitted is not None else 0
-    return emit(guarded(landmod.land, root, a.branch, a.expect_main, a.expect_tip, lane=a.lane,
+    return emit(guarded(landmod.land, root, a.branch, a.expect_main, a.expect_tip,
                         summary=a.summary, full=a.full, wait_s=wait_s, say=say,
                         book_kw={'store': Store(say=say)}, log_dir=a.log_dir,
                         keep_branch=a.keep_branch, fresh=a.fresh, submitted=submitted))
@@ -305,6 +317,7 @@ def do_measure(a):
 
 
 def main(argv):
+    safe_stdio()
     book_kw = None
     here, why = caller.take()       # every subcommand: no child inherits the stub's variable
     try:

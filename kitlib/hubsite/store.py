@@ -59,8 +59,9 @@ restarts the revision from what it holds, 0 when it is missing), so the caller r
 instead.
 
 pending(): the owner input nobody has handled yet (design section 4): answered questions,
-submitted stories, sent to_pm items, and to-dos that are done or added by the owner without
-pm_ack.
+submitted stories, sent to_pm items, to-dos that are done or added by the owner without
+pm_ack, and approvals the owner decided that are not consumed (approval_decided), read at the
+store's clock.
 
 Nothing here prints, parses arguments or exits.
 """
@@ -93,8 +94,11 @@ ID_FLOOR = {'Q': 1000}
 Result = collections.namedtuple('Result', 'id version revision warnings')
 Event = collections.namedtuple('Event', 'rev collection id op status')
 Changes = collections.namedtuple('Changes', 'revision events reset')
-# sender: the document's own `from` as stored ('' when it has none); the api routes on it
-Pending = collections.namedtuple('Pending', 'kind id title repo at sender', defaults=('',))
+# sender: the document's own `from` as stored ('' when it has none); the api routes on it.
+# note: a to_pm note's own `kind` as stored ('' for the rest); the api cuts an act note's title
+# on it, and no caller is sent it
+Pending = collections.namedtuple('Pending', 'kind id title repo at sender note',
+                                 defaults=('', ''))
 
 
 class HubError(Exception):
@@ -329,7 +333,9 @@ class Store(object):
     def pending(self):
         with self._mutex:
             self._check_open()
-            return pending_items(self._docs)
+            # the clock is read only when an approval can need it (a test clock counts calls)
+            now = _aware(self.clock()) if self._docs.get('approvals') else None
+            return pending_items(self._docs, now)
 
     def changes_since(self, since):
         with self._mutex:
@@ -474,11 +480,48 @@ def _s(v):
     return v if isinstance(v, str) else ''
 
 
-def pending_items(docs):
+def _aware(text):
+    """The store clock's ISO time as an aware datetime; the current time when it is not one."""
+    try:
+        t = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        t = None
+    if t is None or t.tzinfo is None:
+        return datetime.datetime.now(datetime.timezone.utc)
+    return t
+
+
+def approval_decided(doc, now):
+    """The status ('approved' or 'denied') of an approval document the owner decided and nobody
+    consumed, while it still counts at `now` (an aware datetime); else None. An approval counts
+    until approvals.status_at expires it (APPROVED_TTL_S after decided_at); a denial, which never
+    expires there, for the same APPROVED_TTL_S after decided_at (the PM's ruling). A consumed,
+    pending or expired one, a bad time and a naive `now` give None."""
+    from . import approvals as ap   # approvals imports api, which imports this module
+    status = ap.status_at(doc, now)
+    if status == ap.APPROVED:
+        return status
+    if status != ap.DENIED:
+        return None
+    try:
+        at = datetime.datetime.fromisoformat(doc.get('decided_at'))
+        if at.tzinfo is not None and at <= now < at + datetime.timedelta(
+                seconds=ap.APPROVED_TTL_S):
+            return status
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def pending_items(docs, now=None):
     """[Pending] of owner input not yet handled in docs ({collection: {id: document}}), oldest
-    first: questions answered and not logged, stories submitted, to_pm items sent, and to-dos
-    done or added by the owner (`from: you`) with no pm_ack. Inbox reads are not pending. A
-    question's and a to-do's `sender` is its stored `from`; a story's and a note's is ''."""
+    first: questions answered and not logged, stories submitted, to_pm items sent, to-dos done
+    or added by the owner (`from: you`) with no pm_ack, and approvals decided and not consumed
+    (approval_decided at `now`, an aware datetime; the current time when None). Inbox reads are
+    not pending. A question's and a to-do's `sender` is its stored `from`; a story's, a note's
+    and an approval's is '' (the api routes an approval by its repo)."""
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
     out = []
     for doc_id, d in docs.get('questions', {}).items():
         if d.get('status') == 'answered':
@@ -493,10 +536,15 @@ def pending_items(docs):
         if d.get('status') == 'sent':
             text = _s(d.get('text')).strip()
             out.append(Pending('to_pm', doc_id, text.splitlines()[0] if text else '',
-                               _s(d.get('repo')), _s(d.get('sent_at'))))
+                               _s(d.get('repo')), _s(d.get('sent_at')),
+                               note=_s(d.get('kind'))))
     for doc_id, d in docs.get('todos', {}).items():
         if not d.get('pm_ack') and (d.get('status') == 'done' or d.get('from') == 'you'):
             out.append(Pending('todo', doc_id, _s(d.get('title')), _s(d.get('repo')),
                                _s(d.get('done_at')) or _s(d.get('added_at')),
                                _s(d.get('from'))))
+    for doc_id, d in docs.get('approvals', {}).items():
+        if approval_decided(d, now):
+            out.append(Pending('approval', doc_id, _s(d.get('title')), _s(d.get('repo')),
+                               _s(d.get('decided_at'))))
     return sorted(out, key=lambda p: (p.at, p.kind, p.id))

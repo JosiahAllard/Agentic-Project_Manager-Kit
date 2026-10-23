@@ -4,28 +4,53 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Action Hub</title>
+<link rel="stylesheet" href="hub.css">
 <style>
-/* Layout: one hub column — summary strip, filter tabs, question cards stacked newest-open first.
+/* Layout, the Triage shell: the sections in a sidebar, then the list pane (summary strip, filter tabs, cards stacked
+   newest-open first), then a detail pane whenever one is open. At phone width a tab bar along the bottom takes the
+   sidebar's place, and an open detail pane takes the list's.
    Nothing here is loaded from the network: the fonts named below are used only where the machine has them. */
 [hidden]{display:none !important}
 :root{
-  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d9dfe6;
-  --accent:#1f5f8b; --accent-soft:#e3eef6; --rec:#8a5a00; --rec-soft:#fbf0d9;
-  --ok:#2c7a4b; --ok-soft:#e2f2e8; --warn:#a33b2b; --warn-soft:#f9e3df;
-  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --f-mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  --accent-soft:#e3eef6; --rec-soft:#fbf0d9;
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
-  --accent:#6fb0de; --accent-soft:#1c3346; --rec:#e9b55a; --rec-soft:#3a2d14;
-  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; color-scheme:dark}}
+  --accent-soft:#1c3346; --rec-soft:#3a2d14;}}
 :root[data-theme="dark"]{
-  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
-  --accent:#6fb0de; --accent-soft:#1c3346; --rec:#e9b55a; --rec-soft:#3a2d14;
-  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; color-scheme:dark}
-body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--f-body);margin:0}
-.wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px}
-header{display:grid;gap:4px}
+  --accent-soft:#1c3346; --rec-soft:#3a2d14;}
+.wrap{display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);min-height:100vh}
+.wrap:has(> #pane-detail:not([hidden])){grid-template-columns:var(--side-w) minmax(320px,440px) minmax(0,1fr)}
+.side{background:var(--side);border-right:1px solid var(--line);padding:18px 10px;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
+.listpane{width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px;align-content:start}
+.detailpane{background:var(--surface);border-left:1px solid var(--line);padding:24px 28px;min-width:0;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
+.tabbar{display:none}
+.tb{font:500 .72rem var(--f-body);background:none;border:0;color:var(--muted);padding:6px 2px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0}
+.tb[aria-selected="true"]{color:var(--accent);font-weight:700}
+.tb .n{font:600 .68rem var(--f-mono);font-variant-numeric:tabular-nums;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:0 6px}
+.tb .n.hot{background:var(--warn-soft);color:var(--warn)}
+.tb:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#list article:focus{outline:none}
+#list article:focus-visible{outline:2px dashed var(--accent);outline-offset:2px}
+#list article.row[role="button"]{cursor:pointer}
+/* Above a phone's width the page itself does not scroll: the shell fills the window and the list and the detail
+   pane each scroll on their own, each with its scrollbar at its own right edge. The list's content keeps its
+   760px column through its padding, so its scrollbar is at the pane's edge and not beside the column. */
+@media (min-width:761px){
+  body{overflow:hidden}
+  .wrap{height:100vh;height:100dvh;min-height:0;grid-template-rows:minmax(0,1fr)}
+  .side,.detailpane{position:static;height:auto;min-height:0}
+  .listpane{max-width:none;margin:0;padding-inline:max(16px,calc((100% - 760px) / 2 + 16px));min-height:0;overflow-y:auto}
+}
+/* The reader holds the window: nothing under it scrolls (openDoc puts .reading on the body, closeDoc takes it off). */
+body.reading{overflow:hidden}
+@media (max-width:760px){
+  .wrap,.wrap:has(> #pane-detail:not([hidden])){grid-template-columns:minmax(0,1fr)}
+  .side{display:none}
+  .listpane{padding-block:16px 88px}
+  .wrap:has(> #pane-detail:not([hidden])) > .listpane{display:none}
+  .detailpane{position:static;height:auto;border-left:0;padding:16px 16px 88px}
+  .tabbar{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
+}
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
 .sub{color:var(--muted);margin:0;max-width:62ch}
 .links{margin:0;font-size:.9rem}.links a{color:var(--accent)}
@@ -40,9 +65,8 @@ h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:bal
 .sw .tab+.tab::before{content:"\00b7";display:inline-block;margin:0 8px;color:var(--muted)}
 .tab:focus-visible,button:focus-visible,textarea:focus-visible,label.opt:focus-within{outline:2px solid var(--accent);outline-offset:2px}
 select{font:500 .85rem var(--f-body);padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
-.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
 .list{display:grid;gap:14px}
-.wrap>*,.list>*{min-width:0}
+.listpane>*,.list>*{min-width:0}
 .usage{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
 .acct{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
 .acct h3{margin:0;font:600 1rem var(--f-body);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
@@ -102,11 +126,14 @@ button:disabled{opacity:.5;cursor:default}
 .ans{background:var(--bg);border-radius:8px;padding:10px 12px;display:grid;gap:4px;font-size:.9rem}
 .ans b{font-weight:600}
 .empty{background:var(--surface);border:1px dashed var(--line);border-radius:10px;padding:28px 20px;text-align:center;color:var(--muted)}
-.sections{display:flex;flex-wrap:wrap;gap:0 4px;border-bottom:1px solid var(--line)}
-@media (max-width:560px){.sec{padding:8px 8px 10px;font-size:.92rem}}
-.sec{font:600 1rem var(--f-body);background:none;border:0;border-bottom:3px solid transparent;color:var(--muted);padding:8px 12px 10px;cursor:pointer;display:inline-flex;gap:8px;align-items:center}
-.sec[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.sections{display:flex;flex-direction:column;gap:2px}
+.sec{font:600 .95rem var(--f-body);background:none;border:0;border-radius:7px;color:var(--muted);padding:7px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;text-align:left;width:100%}
+.sec>.n:first-of-type{margin-left:auto}
+.sec:hover{color:var(--fg)}
+.sec[aria-selected="true"]{color:var(--fg);background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
 .sec .n{font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
+.sidefoot{margin-top:18px;padding:8px 10px;font-size:.75rem;color:var(--muted);overflow-wrap:anywhere}
+.machine{margin:0}
 .sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .t{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
 .t.done{opacity:.72}
@@ -151,37 +178,52 @@ form.add select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid
 .pmf{display:grid;gap:8px;min-width:0}
 .pmf .row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
 .pmbar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.q.row{gap:8px}
+.row[aria-current="true"]{box-shadow:inset 0 0 0 2px var(--accent)}
+.row h2{font-size:1rem}
+.dview{display:grid;gap:14px;align-content:start}
+fieldset.days{display:flex;flex-wrap:wrap;gap:6px 14px}
+.sched label.fld{display:grid;gap:4px;font-size:.85rem;color:var(--muted)}
+.sched input[type=time]{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:max-content}
 .q.queued{border-left:4px solid var(--line)}
 .q.sent{border-left:4px solid var(--accent)}
 .q.done{border-left:4px solid var(--ok)}
 button.danger{color:var(--warn)}
 .empty strong{display:block;color:var(--fg);font-size:1rem;margin-bottom:4px}
-.reader{position:fixed;inset:0;z-index:20;background:var(--bg);display:grid;grid-template-rows:auto 1fr}
+.reader{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column}
 .reader .rbar{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
 .reader h2{margin:0;font-size:1rem;line-height:1.35;overflow-wrap:anywhere;min-width:0}
-.reader .rbody{min-height:0}
-.docframe{display:block;width:100%;height:100%;border:0;background:#fff}
+.reader .rbody{flex:1;min-height:0;overflow:hidden;display:flex}
+.docframe{display:block;flex:1;width:100%;height:100%;border:0;background:#fff}
 @media (prefers-reduced-motion:no-preference){.q{transition:border-color .15s}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>Action Hub</h1>
-    <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
-    <p class="links"><a href="/lock.html">Machine schedule</a>: who holds this PC's slots, the week ahead and what ran.</p>
-    <div class="status" id="pmseen" role="status"></div>
-    <div class="status err" id="loaderr" role="alert" hidden></div>
-  </header>
-
-  <div class="sections" role="tablist" id="sections">
+  <nav class="side" aria-label="Sections">
+  <div class="sections" role="tablist" id="sections" aria-orientation="vertical">
+    <button class="sec" role="tab" data-s="home" aria-selected="false" id="sec-home">Home</button>
     <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
     <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
     <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
+    <button class="sec" role="tab" data-s="autotasks" aria-selected="false" id="sec-autotasks">Automatic tasks</button>
+    <button class="sec" role="tab" data-s="findings" aria-selected="false" id="sec-findings">Findings</button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
   </div>
+  <div class="sidefoot" id="sidefoot" role="status"></div>
+  </nav>
+
+  <main class="listpane" id="pane-list">
+  <header>
+    <h1>Action Hub</h1>
+    <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
+    <p class="links"><a href="/lock.html">Machine schedule</a>: who holds this PC's slots, the week ahead and what ran.</p>
+    <div class="status" id="pmseen" role="status"></div>
+    <div class="status" id="pushseen" role="status"></div>
+    <div class="status err" id="loaderr" role="alert" hidden></div>
+  </header>
 
   <div class="bar" id="qbar">
     <div class="tabs" role="tablist" id="qtabs" data-for="inbox">
@@ -241,6 +283,21 @@ button.danger{color:var(--warn)}
   <div class="list" id="list">
     <div class="empty"><strong>Loading questions…</strong>The PM posts each question here with its context, options and recommendation.</div>
   </div>
+  </main>
+
+  <section class="detailpane" id="pane-detail" aria-label="Detail" hidden></section>
+
+  <div class="tabbar" role="tablist" id="tabbar" aria-label="Sections">
+    <button class="tb" role="tab" data-s="home" aria-selected="false" id="tb-home">Home</button>
+    <button class="tb" role="tab" data-s="questions" aria-selected="true" id="tb-questions">Inbox <span class="n" data-of="n-q">0</span></button>
+    <button class="tb" role="tab" data-s="topm" aria-selected="false" id="tb-topm">To PM <span class="n" data-of="n-pm">0</span></button>
+    <button class="tb" role="tab" data-s="todo" aria-selected="false" id="tb-todo">To do <span class="n" data-of="n-t">0</span></button>
+    <button class="tb" role="tab" data-s="backlog" aria-selected="false" id="tb-backlog">Backlog <span class="n" data-of="n-s">0</span></button>
+    <button class="tb" role="tab" data-s="docs" aria-selected="false" id="tb-docs">Docs <span class="n" data-of="n-d">0</span></button>
+    <button class="tb" role="tab" data-s="autotasks" aria-selected="false" id="tb-autotasks">Auto</button>
+    <button class="tb" role="tab" data-s="findings" aria-selected="false" id="tb-findings">Lint</button>
+    <button class="tb" role="tab" data-s="info" aria-selected="false" id="tb-info">Info</button>
+  </div>
 </div>
 
 <div class="reader" id="reader" role="dialog" aria-modal="true" aria-labelledby="reader-title" tabindex="-1" hidden>
@@ -251,18 +308,18 @@ button.danger{color:var(--warn)}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
-  if (location.hash === "#inbox") state.section = "inbox";
-  if (location.hash === "#todo") state.section = "todo";
-  if (location.hash === "#topm") state.section = "topm";
-  if (location.hash === "#backlog" || location.hash === "#stories") state.section = "backlog";
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null };
+  // The address's hash names a section (and, for some, the tab inside it): what each route sets in state. The
+  // page opens on the route it is given, Back and Forward return to the section before, and a hash it does not
+  // know leaves the page where it is.
+  const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"},
+    "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
+    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"} };
+  const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
-  if (location.hash === "#info") state.section = "info";
-  if (location.hash === "#docs") state.section = "docs";
-  if (location.hash === "#usage" || location.hash === "#agents") { state.section = "info"; state.infotab = location.hash.slice(1); }
-  if (location.hash === "#parked") { state.section = "backlog"; state.sfilter = "parked"; }
+  Object.assign(state, route(location.hash));
   // ready: the server has answered once, so the lists are real and the owner's controls are shown.
-  let ready = false;
+  let ready = false, lastRead = 0;
 
   // The one transport: every call the page makes to the hub server goes through this object, so another
   // transport (the same four methods) can replace it. The session cookie the pairing link set is the page's
@@ -297,6 +354,7 @@ button.danger{color:var(--warn)}
       const unpaired = r.status === 401 || (r.status === 403 && er.field !== "access" && (method === "GET" || er.field === "role"));
       const err = new Error(unpaired ? PAIR_AGAIN : er.message || "the hub server answered " + r.status);
       err.status = r.status; err.code = er.code || ""; err.field = er.field || ""; err.retryAfter = Number(r.headers.get("Retry-After")) || 0; err.unpaired = unpaired; err.said = er.message || "";
+      err.id = er.id != null ? String(er.id) : "";                // a refusal that names its document (a schedule's 409)
       throw err;
     },
     snapshot(){ return this.call("GET", "/snapshot"); },
@@ -310,7 +368,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks", "#findings"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -368,7 +426,7 @@ button.danger{color:var(--warn)}
   }
 
   // What the server last knew of the PM, as information only: nothing here is a control.
-  const seenLine = () => { $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now()) : ""; };
+  const seenLine = () => { $("#sidefoot").textContent = ready && lastRead ? "Read from the hub server " + when(new Date(lastRead).toISOString()) + "." : ""; $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now()) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; };
   // A redraw gives the focus and the caret back to a field it rebuilt (a question's note, found by its id)
   // or moved.
   function render(){
@@ -376,12 +434,40 @@ button.danger{color:var(--warn)}
     draw();
     const b = a && a !== document.body ? (a.isConnected ? a : id ? document.getElementById(id) : null) : null;
     if (b && b !== document.activeElement) { b.focus(); if (caret) try { b.setSelectionRange(caret[0], caret[1]); } catch (e) {} }
+    syncRoute();
   }
+  // The route of what is shown. The first draw only corrects the address (no history entry); each later change
+  // of section or tab adds one, so Back returns to it. A redraw that changes nothing adds nothing.
+  const sameRoute = h => { const r = route(h); return !!r && Object.keys(r).every(k => state[k] === r[k]) && !(r.section === "backlog" && h !== "#parked" && state.sfilter === "parked"); };
+  const routeOf = () => state.section === "backlog" ? (state.sfilter === "parked" ? "#parked" : "#backlog") : state.section === "info" ? "#" + state.infotab : "#" + state.section;
+  let routed = false;
+  function syncRoute(){
+    const first = !routed; routed = true;
+    if (sameRoute(location.hash)) return;
+    try { history[first ? "replaceState" : "pushState"](null, "", routeOf()); } catch (e) {}
+  }
+  // Back, Forward or a typed hash: show the route the address now names.
+  function goRoute(){
+    if (!$("#reader").hidden) return;                // the reader holds the page: the address is not followed under it
+    const r = route(location.hash); if (!r || sameRoute(location.hash)) return;
+    if (r.sfilter && r.sfilter !== state.sfilter) state.rec = null;
+    if (r.section === "backlog" && location.hash !== "#parked" && state.sfilter === "parked") { state.sfilter = "current"; state.rec = null; }
+    Object.assign(state, r);
+    render();
+  }
+  window.addEventListener("popstate", goRoute);
+  window.addEventListener("hashchange", goRoute);
+  // The detail pane: what the view being drawn opened (pickDetail), put there once, in place.
+  let detailKids = [], drewSection = null;
   function draw(){
+    detailKids = [];
     seenLine();
     const sc = state.section, q = sc === "questions";
+    if (sc === "autotasks" && drewSection !== "autotasks") sched.read = false;     // the schedules are read again each time the section is shown
+    if (sc === "findings" && drewSection !== "findings") lint.read = false;        // and so are the findings
+    drewSection = sc;
     const inb = q || sc === "inbox";
-    document.querySelectorAll(".sec").forEach(b => b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === sc)));
+    document.querySelectorAll(".sec, .tb").forEach(b =>b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === sc)));
     document.querySelectorAll("#qtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.qt === sc)));
     $("#qbar").hidden = !inb; if (inb) state.inboxtab = sc;
     const oq = state.docs.filter(d => d.status === "open"), ot = state.todos.filter(t => t.status !== "done");
@@ -401,14 +487,17 @@ button.danger{color:var(--warn)}
     $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
-    $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
+    $("#repo").hidden = sc === "home" || sc === "info" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings";
     $("#n-d").textContent = state.pages.length;
+    // The phone's tab bar shows the sidebar's counts: each copies the one it names.
+    document.querySelectorAll("#tabbar [data-of]").forEach(n => { const o = document.getElementById(n.dataset.of); n.textContent = o.textContent; n.className = o.className; });
     $("#idq").hidden = !(q || sc === "todo" || sc === "docs");
     $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
-    q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : renderBacklog();
+    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
+    place($("#pane-detail"), detailKids); $("#pane-detail").hidden = !detailKids.length;
   }
 
   // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
@@ -561,12 +650,14 @@ button.danger{color:var(--warn)}
   const pmSendAll = (items, iso) => items.filter(x => x.status === "queued").map(x => ({ id: x.id, patch: { status: "sent", sent_at: iso } }));
   // Refs may be question ids (Q-nnn); entries shaped like a ledger id are never shown.
   const keptRefs = a => Array.isArray(a) ? a.filter(r => !/^R-\d+$/.test(String(r))) : [];
+  // A note's kind as the page names it: an act note (a lint finding passed on, docs/action-hub.md) is its own kind.
+  const pmKindText = k => k === "fyi" ? "FYI" : k === "act" ? "Act" : "Question";
   // The sent items, one line each with its id.
   function pmAlertLines(items){
     const sent = items.filter(x => x.status === "sent");
     if (!sent.length) return [];
     const L = ["", "To PM (owner's questions and FYIs; reply in to_pm/ and set status done, with reply):"];
-    for (const x of sent) L.push("- " + x.id + " [" + (x.kind === "fyi" ? "FYI" : "Question") + (x.repo ? ", " + x.repo : "") + "]" + (x.urgent ? " (urgent)" : "") + ": " + String(x.text || "").replace(/\s+/g, " ").slice(0, 300));
+    for (const x of sent) L.push("- " + x.id + " [" + pmKindText(x.kind) + (x.repo ? ", " + x.repo : "") + "]" + (x.urgent ? " (urgent)" : "") + ": " + String(x.text || "").replace(/\s+/g, " ").slice(0, 300));
     return L;
   }
   // A todo's commands as a list: an array, a lone string, or the older `command`.
@@ -588,6 +679,15 @@ button.danger{color:var(--warn)}
     if (Number(seen.waiting) > 0) return "A PM is listening.";
     const last = [seen.waited, seen.pulled].map(v => new Date(v || NaN).getTime()).filter(t => !isNaN(t)).sort((a, b) => a - b).pop();
     return last == null ? "No PM is listening, and none has asked since the hub server started." : "No PM is listening; one last asked " + pmAgo(now - last) + " ago.";
+  }
+  // The snapshot's push (null: this hub server sends no push notifications) as one line: delivery up or down, and
+  // how many items still wait for a written delivery.
+  function pushText(p){
+    if (!p || typeof p !== "object") return "Push notifications are off on this hub server.";
+    const n = Number.isInteger(p.undelivered) ? p.undelivered : null;
+    const owed = n == null ? "" : n === 0 ? "; nothing undelivered." : "; " + n + (n === 1 ? " item" : " items") + " undelivered.";
+    if (p.state === "down") return "Push delivery is down" + (p.last ? " (last try: " + String(p.last) + ")" : "") + (owed || ".");
+    return "Push delivery is up" + (owed || ".");
   }
   // A parked item is amber once it has been parked for more than 2 days. A bare day (2026-01-02) counts from its start.
   const PARKED_OLD_DAYS = 2;
@@ -640,6 +740,7 @@ button.danger{color:var(--warn)}
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
     const pages = pageRows(col);
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
+      push: s.push && typeof s.push === "object" ? s.push : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents,
@@ -655,10 +756,13 @@ button.danger{color:var(--warn)}
   };
   // pm-pure:end
 
+  // An act note keeps its kind (the server refuses a change to or from act): its form offers no kind and its Save
+  // sends none.
   function pmFields(init){
+    const act = init.kind === "act";
     const f = { kind: init.kind === "fyi" ? "fyi" : "question", repo: init.repo || "", urgent: !!init.urgent };
-    const kinds = el("div", {class:"row", role:"radiogroup", "aria-label":"Type"});
-    const drawKinds = () => kinds.replaceChildren(...[["question", "Question"], ["fyi", "FYI"]].map(([v, t]) => el("button", {type:"button", class:"fchip", role:"radio", "aria-checked": String(f.kind === v), text: t, onclick: () => { f.kind = v; drawKinds(); }})));
+    const kinds = act ? el("span", {class:"chip", text:"Act: a finding passed on"}) : el("div", {class:"row", role:"radiogroup", "aria-label":"Type"});
+    const drawKinds = () => act ? null : kinds.replaceChildren(...[["question", "Question"], ["fyi", "FYI"]].map(([v, t]) => el("button", {type:"button", class:"fchip", role:"radio", "aria-checked": String(f.kind === v), text: t, onclick: () => { f.kind = v; drawKinds(); }})));
     drawKinds();
     // The repos load after the compose form is built, so the menu refills when it is opened;
     // an old tag maps to its repo (canonRepo) once the repos are known.
@@ -674,7 +778,7 @@ button.danger{color:var(--warn)}
     const urg = el("input", {type:"checkbox"}); urg.checked = f.urgent; urg.addEventListener("change", () => { f.urgent = urg.checked; });
     const ta = el("textarea", {placeholder:"What you want to ask or tell the PM", "aria-label":"Message to the PM"}); ta.value = init.text || "";
     const node = el("div", {class:"pmf"}, el("div", {class:"row"}, kinds, sel, el("label", {class:"urg"}, urg, " Urgent")), ta);
-    return { node, ta, fill, get: () => ({ kind: f.kind, repo: f.repo, urgent: f.urgent, text: ta.value.trim() }),
+    return { node, ta, fill, get: () => ({ ...(act ? {} : { kind: f.kind }), repo: f.repo, urgent: f.urgent, text: ta.value.trim() }),
       reset: () => { f.kind = "question"; f.repo = ""; f.urgent = false; sel.value = ""; urg.checked = false; ta.value = ""; drawKinds(); } };
   }
   const pmCompose = pmFields({});
@@ -762,7 +866,7 @@ button.danger{color:var(--warn)}
     });
     return del;
   }
-  const pmMeta = (x, tab) => el("div", {class:"meta"}, x.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: x.id}), el("span", {class:"chip", text: x.kind === "fyi" ? "FYI" : "Question"}), x.repo ? el("span", {class:"chip", text: x.repo}) : null,
+  const pmMeta = (x, tab) => el("div", {class:"meta"}, x.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: x.id}), el("span", {class:"chip", text: pmKindText(x.kind)}), x.repo ? el("span", {class:"chip", text: x.repo}) : null,
     x.created_at ? el("span", {text: "written " + when(x.created_at)}) : null, x.sent_at && tab !== "queued" ? el("span", {text: "sent " + when(x.sent_at)}) : null, tab === "done" && x.done_at ? el("span", {class:"chip ok", text: "done " + when(x.done_at)}) : null);
   // The card of a queued item being edited, built once for the edit `ed`.
   function pmEditCard(x, ed){
@@ -833,7 +937,10 @@ button.danger{color:var(--warn)}
       show([], el("div", {class:"empty"}, el("strong", {text: ready ? m[0] : NOT_READY}), ready ? m[1] : NOT_READY_WHY));
       return;
     }
-    show([], lost, rows.map(t => drawn(todoCard, t)));
+    const at = settle(rows.map(t => ["todo", t]));
+    show([], lost, rows.map(t => drawn(todoRow, t)));
+    // On a phone an open detail takes the list's place, and with it the cards of lost edits: the detail says they are there.
+    pickDetail(at, at && lost.length && phone() ? [el("p", {class:"gone", role:"status", id:"lost-note", text: (lost.length === 1 ? "An edit of a to-do that is gone is" : lost.length + " edits of to-dos that are gone are") + " in the list, with your text. Back to the list to copy it."})] : []);
   }
 
   // A to-do the owner wrote (from "you") is the owner's to mark urgent, edit and delete; an agent's open one the owner
@@ -911,7 +1018,7 @@ button.danger{color:var(--warn)}
 
   function goQuestion(qid){
     const d = state.docs.find(x => x.id === qid);
-    state.section = "questions"; if (d) state.filter = pmQBucket(d); state.repo = ""; $("#repo").value = "";
+    state.section = "questions"; if (d) state.filter = pmQBucket(d); state.repo = ""; $("#repo").value = ""; state.sel = { kind: "q", id: qid };
     render();
     const n = document.getElementById("q-" + qid); if (n) n.scrollIntoView({block:"start"});
   }
@@ -1214,7 +1321,7 @@ button.danger{color:var(--warn)}
     document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
     fillRepos(state.docs);
 
-    const aps = state.filter === "open" ? state.approvals.map(d => drawn(approvalCard, d)) : [];
+    const apps = state.filter === "open" ? state.approvals : [];
     let rows = state.docs.filter(d => pmQBucket(d) === state.filter && inR(d) && inId(d));
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.filter === "open"
       ? String(a.asked_at||"").localeCompare(String(b.asked_at||""))
@@ -1228,18 +1335,519 @@ button.danger{color:var(--warn)}
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
       if (ready && state.idq.trim()) { msg[0] = "No match for \"" + state.idq.trim() + "\""; msg[1] = "Clear the id box to see every question in this tab."; }
-      show(["repos"], aps, el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
+      const at = settle([...apps.map(d => ["approval", d]), ...rows.map(d => ["q", d])]);
+      show(["repos"], apps.map(d => drawn(approvalRow, d)), el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
+      pickDetail(at);
       return;
     }
-    show(["repos"], aps, rows.map(d => drawn(card, d)));
+    const at = settle([...apps.map(d => ["approval", d]), ...rows.map(d => ["q", d])]);
+    show(["repos"], apps.map(d => drawn(approvalRow, d)), rows.map(d => drawn(questionRow, d)));
+    pickDetail(at);
+  }
+
+  // ---- List and detail. A question, a to-do or an approval is one short row in the list; the card the row opens (the
+  // same card, with the same ids and the same requests) is in the detail pane. state.sel is the one open: null until
+  // the owner picks, then {kind, id}; false once the owner closed the detail. With nothing picked the first row opens
+  // on a wide screen, and on a phone none does (the detail would take the list's place).
+  const phone = () => typeof matchMedia === "function" && !!matchMedia("(max-width: 760px)").matches;
+  function pickRow(kind, id){
+    state.sel = { kind, id }; render();
+    const c = $("#pane-detail article"); if (c) { c.tabIndex = -1; c.focus(); }
+  }
+  function closeDetail(id){
+    state.sel = false; render();
+    const r = document.getElementById("row-" + id); if (r) r.focus();
+  }
+  // The row itself opens its card: a click anywhere on it (but on a link or a control inside it), or Enter or Space
+  // with the focus on it. It is in the Tab order and named after its item (its id and its title for a screen reader).
+  const ROW_CONTROL = "a, button, input, select, textarea, label, summary";
+  function rowCard(kind, d, chips, since){
+    const on = !!state.sel && state.sel.kind === kind && state.sel.id === d.id, open = () => pickRow(kind, d.id);
+    const title = d.title ? String(d.title) : "(untitled)";
+    const row = el("article", {class: "q row" + (d.urgent || kind === "approval" ? " urgent" : ""), id: "row-" + d.id, tabindex: "0", role: "button",
+        "aria-label": d.id + ": " + title, "aria-current": on ? "true" : null},
+      el("div", {class:"meta"}, ...chips, el("span", {class:"id", text: String(d.id)}), since ? el("span", {text: since}) : null),
+      el("h2", {text: title}));
+    row.addEventListener("click", e => { const c = e.target && e.target.closest ? e.target.closest(ROW_CONTROL) : null; if (c && c !== row && row.contains(c)) return; open(); });
+    row.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target === row) { e.preventDefault(); open(); } });
+    return row;
+  }
+  const approvalRow = d => rowCard("approval", d, [el("span", {class:"chip need", text: d.kind === "op" ? "Run approval" : "Approval"})], d.created_at ? "asked " + when(d.created_at) : "");
+  const questionRow = d => rowCard("q", d, [d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
+    d.status !== "open" ? el("span", {class:"chip " + (d.status === "logged" ? "ok" : ""), text: d.status === "answered" ? "Submitted" : String(d.status)}) : null], d.asked_at ? "asked " + when(d.asked_at) : "");
+  const todoRow = t => rowCard("todo", t, [t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: String(t.repo)}) : null,
+    t.status === "done" ? el("span", {class:"chip ok", text:"Done"}) : null, t.from === "you" && state.todoEdit.has(t.id) ? el("span", {class:"chip need", text:"Editing"}) : null], t.added_at ? "added " + when(t.added_at) : "");
+  // Settles what is open among the rows the view offers ([kind, item] pairs, in list order), before the rows are drawn
+  // so the open one is marked; pickDetail then puts its card in the detail pane under a button that closes it.
+  // With nothing picked (a section just shown), a to-do the owner is editing opens before the first row, so the edit
+  // itself is in sight and not only its row's Editing chip.
+  const editingRow = ([k, d]) => k === "todo" && d.from === "you" && state.todoEdit.has(d.id) && !state.todoEdit.get(d.id).gone;
+  function settle(offered){
+    const s = state.sel;
+    let at = s ? offered.find(([k, d]) => k === s.kind && d.id === s.id) : null;
+    if (!at && s !== false) at = offered.find(editingRow) || null;
+    if (!at && s !== false && !phone()) at = offered[0] || null;
+    state.sel = at ? { kind: at[0], id: at[1].id } : s === false ? false : null;
+    return at;
+  }
+  // The detail pane holds one view, built once: what it shows is brought into it in place, so the pane keeps its scroll
+  // and the close button its focus across redraws. `notes` go above the card.
+  let openId = null;
+  const dclose = el("button", {class:"link", type:"button", id:"detail-close", text:"Back to the list", onclick: () => closeDetail(openId)});
+  const dview = el("div", {class:"dview"}), dlinks = el("div", {class:"links"}, dclose);
+  function pickDetail(at, notes){
+    if (!at) return;
+    const [kind, d] = at;
+    openId = d.id;
+    const c = drawn(kind === "approval" ? approvalCard : kind === "todo" ? todoCard : kind === "schedule" ? scheduleCard : kind === "finding" ? findingCard : card, d);
+    c.tabIndex = -1;
+    place(dview, [dlinks, ...(notes || []), c]);
+    detailKids = [dview];
+  }
+
+  // ---- Automatic tasks: when each of the kit's automatic tasks runs for a repo (docs/action-hub.md, api.py "Schedules").
+  // The schedules are not in the snapshot: GET /schedules reads them, with when the tick that starts them was last seen,
+  // each time the section is shown and after each save. POST /schedules, the owner's route, sets one; the server checks
+  // it (a repo needs exactly one checkout in the machine config's launcher.repos), its refusal is shown in its own
+  // words, and what it takes it answers with the first run, worked out on the server.
+  const TASKS = [["maint-lint", "Maintenance lint"], ["worktree-sweep", "Worktree sweep"], ["agent-temp-sweep", "Agent temp sweep"]];
+  const WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const taskName = t => (TASKS.find(x => x[0] === t) || [t, String(t)])[1];
+  // forms: the open form of each schedule by id ({node, save, st, version, dirty, ready, saving, until, edits}), kept
+  // across redraws once the owner touched it. said: what the last save of a schedule answered, by id, as {text, version}:
+  // shown only on a form drawn at that version, so a form drawn later from a newer one does not show an old answer.
+  // Every step after an await (a save's post, the read after it, the read after a refusal) changes a form, drops it or
+  // moves the selection only when nothing changed meanwhile: the form is still the one drawn, its edits count is the
+  // one read before the await, no save of it is in flight, and the owner is still on it.
+  // reading: the read in flight. A read asked for meanwhile is not dropped: it makes that read go round once more, and
+  // the caller waits for the round, so what it then sees was read after it asked (a save's own row and first run).
+  // carry: what the owner picked on a new form that was refused because the schedule exists, by that schedule's id; its
+  // form is drawn with it, unsaved, so one Save sets it.
+  // The promise a caller waits on is the read alone: the redraw after it is its own step, so a redraw that throws
+  // never turns a save that succeeded into one said to have failed.
+  const sched = { items: [], tick: null, err: "", read: false, busy: false, again: false, reading: null, forms: new Map(), said: new Map(), carry: new Map() };
+  function readSchedules(){
+    if (sched.reading) { sched.again = true; return sched.reading; }
+    sched.busy = true;
+    sched.reading = (async () => {
+      try {
+        do {
+          sched.again = false;
+          try {
+            const j = await hub.call("GET", "/schedules");
+            sched.items = Array.isArray(j.items) ? j.items.filter(x => x && typeof x === "object" && x.id != null) : [];
+            sched.tick = j.tick && typeof j.tick === "object" ? j.tick : null; sched.err = "";
+          } catch (e) { sched.err = (e && e.message) || "no reason given"; }
+        } while (sched.again);
+      } finally { sched.busy = false; sched.read = true; sched.reading = null; }
+    })();
+    const read = sched.reading;
+    read.then(schedRedraw);
+    return read;
+  }
+  function schedRedraw(){
+    try { if (state.section === "autotasks") render(); }
+    catch (e) { loadSay("This page could not show the schedules it read (" + ((e && e.message) || "no reason given") + "). Open the section again to redraw it."); }
+  }
+  const tickMinutes = () => sched.tick && Number(sched.tick.every_s) > 0 ? Math.round(Number(sched.tick.every_s) / 60) : 15;
+  // first_run is the hub machine's local time with no zone (api.py _first_run), so it is shown as it is, and said so;
+  // the task starts at the first tick at or after it.
+  const firstRunText = fr => "Saved. First run: the first tick at or after " + when(fr) + " (the hub machine's time), up to about " +
+    tickMinutes() + " min later.";
+  function tickText(t){
+    if (!t) return "";
+    const every = Number(t.every_s) > 0 ? " every " + Math.round(Number(t.every_s) / 60) + " min" : "";
+    if (t.running) return "The tick that starts these tasks was last seen " + when(t.last) + "; it runs" + every + ".";
+    return "Tick not running / not registered: " + (t.last ? "it was last seen " + when(t.last) : "it has never been seen on this machine") +
+      ". No automatic task starts until it runs again: the machine-setup extra kit-automatic-tasks runs it" + every + ".";
+  }
+  const cadenceText = s => s.cadence === "off" ? "Off" : s.cadence === "weekly" ? (Array.isArray(s.days) ? s.days.join(", ") : "Weekly") + " at " + s.at : s.cadence === "daily" ? "Daily at " + s.at : String(s.cadence || "?");
+  const scheduleRow = s => rowCard("schedule", { ...s, title: taskName(s.task) + " for " + String(s.repo || "?") },
+    [el("span", {class: "chip" + (s.cadence === "off" ? "" : " ok"), text: cadenceText(s)})], s.set_at ? "set " + when(s.set_at) : "");
+  function renderAutotasks(){
+    if (!sched.read && !sched.busy) readSchedules();
+    const t = sched.tick;
+    const head = [
+      sched.err ? el("p", {class:"gone", role:"status", text: "The schedules could not be read: " + sched.err}) : null,
+      el("p", {class: t && !t.running ? "gone" : "status", role:"status", id:"tick-line", text: tickText(t)}),
+      el("div", {class:"act"}, el("button", {class:"primary", type:"button", id:"sched-new", text:"New schedule", disabled: !ready, onclick: () => pickRow("schedule", "new")}))];
+    const offered = sched.items.map(s => ["schedule", s]);
+    if (state.sel && state.sel.kind === "schedule" && state.sel.id === "new") offered.push(["schedule", { id: "new" }]);
+    const at = settle(offered);
+    show([], head, sched.items.length ? sched.items.map(s => drawn(scheduleRow, s))
+      : el("div", {class:"empty"}, el("strong", {text: !sched.read ? "Reading the schedules…" : "No automatic tasks scheduled"}), "Each schedule runs one of the kit's tasks for one repo, daily or on the days you pick."));
+    pickDetail(at);
+  }
+  // A schedule's form. Task and repo name the schedule, so they are picked only for a new one.
+  function scheduleCard(d){
+    // A form drawn before the snapshot came (GET /schedules can answer first) has no repos and a disabled Save, so it is
+    // drawn again once the page is ready, unless the owner already touched it; a kept form's Save follows `ready`.
+    // until: the version a save of this form wrote. The form is kept until the list read holds that version, so a
+    // redraw before the read after the save lands shows what was saved, not the row as it stood before.
+    const isNew = d.id === "new";
+    const told = sched.said.get(d.id);
+    if (told && told.version != null && d.version != null && Number(d.version) !== told.version) sched.said.delete(d.id);
+    let old = sched.forms.get(d.id);
+    if (old && old.until != null && !old.saving && Number(d.version) >= old.until) { sched.forms.delete(d.id); old = null; }
+    if (old && (old.dirty || (old.version === d.version && old.ready === ready))) {
+      if (!old.saving) old.save.disabled = !ready;
+      return old.node;
+    }
+    // what the owner picked on a new form refused because this schedule exists: drawn here, unsaved, at this version
+    const carried = sched.carry.get(d.id); sched.carry.delete(d.id);
+    const v0 = carried || d;
+    const f = { version: d.version, dirty: !!carried, ready, saving: false, until: null, edits: 0 }; sched.forms.set(d.id, f);
+    const touch = () => { f.dirty = true; f.until = null; f.edits++; };
+    // nothing changed on this form since `edits` was read: still the form drawn, not touched, no save of it in flight
+    const still = edits => sched.forms.get(d.id) === f && f.edits === edits && !f.saving;
+    // the owner is still on this form: the section shown and this schedule picked
+    const onIt = () => state.section === "autotasks" && !!state.sel && state.sel.kind === "schedule" && String(state.sel.id) === String(d.id);
+    const pick = (label, opts, v) => { const s = el("select", {"aria-label": label, id: "s-" + d.id + "-" + label.toLowerCase().replace(/ /g, "-"), onchange: touch}, opts.map(([val, txt]) => el("option", {value: val, text: txt}))); s.value = v; return s; };
+    const repos = knownRepos();
+    const task = isNew ? pick("Task", TASKS, TASKS[0][0]) : null, repo = isNew ? pick("Repo", repos.map(r => [r, r]), repos[0] || "") : null;
+    const cad = pick("How often", [["daily", "Every day"], ["weekly", "On the days picked"], ["off", "Off"]], v0.cadence || "daily");
+    const at = el("input", {type:"time", id: "s-" + d.id + "-at", "aria-label":"At", oninput: touch, onchange: touch}); at.value = v0.at || "03:00";
+    const boxes = WEEK.map(w => { const b = el("input", {type:"checkbox", id: "s-" + d.id + "-" + w, onchange: touch}); b.checked = Array.isArray(v0.days) && v0.days.includes(w); return [w, b]; });
+    const days = el("fieldset", {class:"days", hidden: cad.value !== "weekly"}, el("legend", {text:"Days"}), boxes.map(([w, b]) => el("label", {class:"urg", for: b.id}, b, " " + w)));
+    cad.addEventListener("change", () => { days.hidden = cad.value !== "weekly"; });
+    const st = el("span", {class:"status", role:"status", id: "s-" + d.id + "-status", text: (sched.said.get(d.id) || {}).text || ""}); f.st = st;
+    const save = el("button", {class:"primary", type:"button", text:"Save", disabled: !ready}); f.save = save;
+    save.addEventListener("click", async () => {
+      if (!ready || f.saving) return;
+      const body = { task: isNew ? task.value : d.task, repo: isNew ? repo.value : d.repo, cadence: cad.value, at: at.value };
+      if (cad.value === "weekly") body.days = boxes.filter(([, b]) => b.checked).map(([w]) => w);
+      f.dirty = true; f.saving = true; save.disabled = true; st.className = "status"; st.textContent = "Saving…";
+      const sent = f.edits;
+      let r;
+      try { r = await hub.post("/schedules", { ...body, ...(isNew ? {} : pinAt(f.version)) }); }
+      catch (err) { f.saving = false; save.disabled = !ready; await refused(err, body); return; }
+      // Saved. Only the post decides that: the read and the redraw after it never turn it into "Not saved".
+      const id = r && r.id != null ? String(r.id) : d.id, v = r && Number(r.version) > 0 ? Number(r.version) : null;
+      const said = r && r.first_run ? firstRunText(r.first_run) : "Saved. It is off, so it does not run.";
+      sched.said.delete(d.id); sched.said.set(id, { text: said, version: v });
+      st.className = "status"; st.textContent = said;
+      f.saving = false; save.disabled = !ready;
+      // The server is at v now, so the next Save is pinned to it; the form is let go once the list holds v only when
+      // what it shows is what was saved: an edit made while the post was out keeps it.
+      if (v != null) { f.version = v; if (f.edits === sent) f.until = v; }
+      await readSchedules();
+      const now = sched.items.find(x => String(x.id) === id);
+      if (now && (v == null || Number(now.version) >= v) && still(sent) && (v == null || f.until === v)) {
+        const mine = onIt();
+        sched.forms.delete(d.id); if (id !== d.id) sched.forms.delete(id);
+        if (mine) state.sel = { kind: "schedule", id };
+        schedRedraw();
+      }
+    });
+    // A refused save keeps what was picked. A conflict reads the list again, so the next Save is made on what the
+    // server holds now; for a new form it means the task and repo already have a schedule (the refusal names its id),
+    // and that one is opened with what was picked on it, unsaved, unless the owner has unsaved changes there already.
+    // The form is not let go by a later read either: until is what a save that wrote answered, and this one did not.
+    // An existing schedule changed by another writer: the next Save is pinned to the server's version only with what
+    // that version holds on the line, so the Save that then writes over it is one made knowing what it replaces.
+    async function refused(err, body){
+      f.until = null;
+      st.className = "status err"; st.textContent = "Not saved: " + why(err) + ". What you picked is kept.";
+      if (err.status !== 409) return;
+      await readSchedules();
+      if (!isNew) {
+        const cur = sched.items.find(x => String(x.id) === String(d.id));
+        if (cur && cur.version !== f.version) {
+          st.textContent = "Not saved: " + why(err) + ". It was changed meanwhile: it is now " + cadenceText(cur) +
+            (cur.set_at ? ", set " + when(cur.set_at) + (cur.via ? " via " + cur.via : "") : "") +
+            ". What you picked is kept; Save sets it over that.";
+          f.version = cur.version;
+        }
+        return;
+      }
+      // A new form the owner changed the task or repo of meanwhile, or that is gone or saving again: the refusal no
+      // longer says anything about it, so it is left as it is.
+      if (sched.forms.get(d.id) !== f || f.saving || task.value !== body.task || repo.value !== body.repo) return;
+      const named = err.id || "", lower = s => String(s == null ? "" : s).toLowerCase();
+      const cur = (named && sched.items.find(x => String(x.id) === named))
+        || sched.items.find(x => x.task === body.task && lower(x.repo) === lower(body.repo));
+      if (!cur) {
+        st.textContent = "Not saved: " + taskName(body.task) + " already has a schedule for " + body.repo + (named ? " (" + named + ")" : "") +
+          ", but the list read now does not show it. What you picked is kept; open the section again to see it.";
+        return;
+      }
+      const cid = String(cur.id), have = sched.forms.get(cid), keep = !!(have && (have.dirty || have.saving));
+      // the owner moved on meanwhile (another schedule, another section): nothing is opened under them, the form stays
+      if (!onIt()) {
+        st.textContent = "Not saved: " + taskName(body.task) + " already has a schedule for " + String(cur.repo || body.repo) + " (" + cid +
+          "): open it to change it. What you picked is kept.";
+        return;
+      }
+      const line = keep ? "This task and repo already has a schedule: it is open here, with the changes you had not saved on it. Save sets them."
+        : "This task and repo already has a schedule: it is open here, with what you picked, not saved yet. Save sets it.";
+      // carried from the controls as they are now, so an edit made while the list was read goes with it
+      const picked = { cadence: cad.value, at: at.value, days: cad.value === "weekly" ? boxes.filter(([, b]) => b.checked).map(([w]) => w) : [] };
+      if (keep) { have.st.className = "status"; have.st.textContent = line; }
+      else { sched.forms.delete(cid); sched.carry.set(cid, picked); }
+      sched.said.set(cid, { text: line, version: Number(cur.version) > 0 ? Number(cur.version) : null });
+      sched.forms.delete(d.id);
+      state.sel = { kind: "schedule", id: cid };
+      schedRedraw();
+    }
+    const fld = (label, c) => el("label", {class:"fld", for: c.id}, label, c);
+    f.node = el("article", {class:"q sched", id: "sched-" + d.id},
+      el("div", {class:"meta"}, el("span", {class:"id", text: isNew ? "New schedule" : String(d.id)}), d.set_at ? el("span", {text: "set " + when(d.set_at) + (d.via ? " via " + d.via : "")}) : null),
+      el("h2", {text: isNew ? "A new automatic task" : taskName(d.task) + " for " + String(d.repo || "?")}),
+      isNew ? fld("Task", task) : null, isNew ? fld("Repo", repo) : null, fld("How often", cad), fld("At (24-hour)", at), days,
+      el("div", {class:"act"}, save, st));
+    return f.node;
+  }
+
+  // ---- Findings: the maintenance lint's last findings (docs/maint-lint.md), each with what can be done about it
+  // (docs/action-hub.md "finding_marks/<fingerprint>"). They are not in the snapshot: GET /findings (the unmarked ones,
+  // with each repo's last run) and GET /finding_marks (the marked ones, which stay listed with their mark) are read each
+  // time the section is shown and after each mark. A target or fix is shown as the server gives it: the server cuts its
+  // paths for every caller but the local owner, and the page never puts a path together itself.
+  // forms: the open form of each unmarked finding by fingerprint ({node, ta, st, btns, shape, edits, saving, passed}),
+  // kept while the owner works on it; said: what the last write of a finding answered, by fingerprint. As for a
+  // schedule, a step after an await (a post, the read after it) drops a form only when nothing changed meanwhile: the
+  // form is still the one drawn, its edits count is the one read before the await and no write of it is in flight.
+  const lint = { items: [], marks: [], runs: [], err: "", read: false, busy: false, again: false, reading: null, forms: new Map(), said: new Map() };
+  const lintRows = (j, key) => j && Array.isArray(j[key]) ? j[key].filter(x => x && typeof x === "object") : [];
+  function readFindings(){
+    if (lint.reading) { lint.again = true; return lint.reading; }
+    lint.busy = true;
+    lint.reading = (async () => {
+      try {
+        do {
+          lint.again = false;
+          const errs = [], got = (what, p) => p.catch(e => { errs.push("the " + what + " (" + ((e && e.message) || "no reason given") + ")"); return null; });
+          const [f, m] = await Promise.all([got("findings", hub.call("GET", "/findings")), got("marks", hub.call("GET", "/finding_marks"))]);
+          if (f) { lint.items = lintRows(f, "items").filter(x => typeof x.fingerprint === "string"); lint.runs = lintRows(f, "runs").filter(r => typeof r.repo === "string"); }
+          if (m) lint.marks = lintRows(m, "items").filter(x => x.id != null);
+          lint.err = errs.join(" and ");
+        } while (lint.again);
+      } finally { lint.busy = false; lint.read = true; lint.reading = null; }
+    })();
+    const read = lint.reading;
+    read.then(lintRedraw);
+    return read;
+  }
+  function lintRedraw(){
+    try { if (state.section === "findings") render(); }
+    catch (e) { loadSay("This page could not show the findings it read (" + ((e && e.message) || "no reason given") + "). Open the section again to redraw it."); }
+  }
+  // What the owner can do about a finding of each check, besides Pass on and Dismiss: the record it names opens on
+  // its record page, where its priority, scope, blocker or hold is edited, or it is deleted.
+  const FINDING_ACTS = { "unpriced": "Set priority", "keyword-hold": "Unblock", "dead-blocker": "Unblock", "answered-question": "Unblock",
+    "scope-path-gone": "Edit scope", "body-path-gone": "Edit scope", "file-moved": "Edit scope", "duplicate": "Retire", "dead-pull": "Retire", "landed-still-pulled": "Retire" };
+  const MARKED = { passed_on: "Passed on", dismissed: "Dismissed", done: "Done" };
+  // A record check's target starts with the record's id; a duplicate's is the ids, each one a record to retire.
+  function findingRecords(d){
+    if (!FINDING_ACTS[d.check] || typeof d.target !== "string") return [];
+    const ids = d.target.trim().split(/\s+/).filter(t => /^[A-Za-z][A-Za-z0-9_.-]*$/.test(t));
+    return d.check === "duplicate" ? ids : ids.slice(0, 1);
+  }
+  const ageText = a => a == null || a === "" ? "" : "age " + String(a);
+  // The note the server writes for a finding passed on with none (api.py _act_note), from the finding as shown here.
+  const actText = d => { const s = v => typeof v === "string" ? v : "-"; return "Act on maintenance finding " + s(d.check) + " " + s(d.target) + ": " + s(d.text) + " (fix: " + s(d.fix) + ")"; };
+  function findingChips(d){
+    return [el("span", {class:"chip need", text: String(d.check || "?")}), d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
+      d.new === true ? el("span", {class:"chip urgent", text:"New"}) : null,
+      d.status != null ? el("span", {class: "chip" + (d.status === "dismissed" ? "" : " ok"), text: MARKED[d.status] || String(d.status)}) : null];
+  }
+  function findingRow(d){
+    const row = rowCard("finding", { id: d.id, title: d.target || "(no target)" }, findingChips(d),
+      d.status != null ? (d.marked_at ? "marked " + when(d.marked_at) : "") : ageText(d.age));
+    row.append(el("p", {class:"ctx", text: String(d.text || "")}));
+    return row;
+  }
+  // Each repo's last run, as context: its ledger as counts only, and a skip only when the skip marker is later than
+  // the run (the server says so; the page checks both times parse and leaves the line out when one does not).
+  function runLines(){
+    const out = [];
+    for (const r of lint.runs) {
+      const led = r.ledger && typeof r.ledger === "object" ? r.ledger : null;
+      const n = led ? [["stale_cites", "stale cites"], ["superseded", "superseded"], ["superseded_live", "superseded and still live"]].filter(([k]) => Number.isInteger(led[k])).map(([k, t]) => led[k] + " " + t) : [];
+      if (n.length) out.push(el("p", {class:"status", text: r.repo + " ledger: " + n.join(", ") + "."}));
+      const sk = r.skipped && typeof r.skipped === "object" ? r.skipped : null;
+      const at = sk && typeof sk.at === "string" ? Date.parse(sk.at) : NaN, ran = typeof r.started === "string" ? Date.parse(r.started) : NaN;
+      if (sk && typeof sk.reason === "string" && isFinite(at) && isFinite(ran) && at > ran)
+        out.push(el("p", {class:"gone", role:"status", text: r.repo + ": last run skipped: " + sk.reason + ", " + when(sk.at) + "."}));
+    }
+    return out;
+  }
+  function renderFindings(){
+    if (!lint.read && !lint.busy) readFindings();
+    const open = lint.items.map(f => ({ ...f, id: f.fingerprint }));
+    for (const [id, f] of [...lint.forms]) if (!f.saving && !f.reading && !open.some(x => x.id === id)) lint.forms.delete(id);
+    const all = [...open, ...lint.marks];
+    const at = settle(all.map(d => ["finding", d]));
+    const head = [lint.err ? el("p", {class:"gone", role:"status", text: "Could not read " + lint.err + "."}) : null, ...runLines()];
+    show([], head, all.length ? all.map(d => drawn(findingRow, d))
+      : el("div", {class:"empty"}, el("strong", {text: !lint.read ? "Reading the findings…" : "No findings"}), "What the maintenance lint's last run of each repo found shows here, with what can be done about it."));
+    pickDetail(at);
+  }
+  function goRecord(repo, id){ state.section = "backlog"; state.sfilter = "current"; state.repo = ""; $("#repo").value = ""; openRecord(canonRepo(repo) || String(repo || ""), id); }
+  function findingCard(d){
+    const told = lint.said.get(d.id);
+    const say = told ? el("p", {class:"status", role:"status", id: "f-" + d.id + "-status", text: told.text}) : null;
+    const kept = told && told.kept ? el("div", {class:"ans"}, el("b", {text:"What you typed after pressing Pass on (it is not in the note):"}), el("p", {class:"reply", text: told.kept})) : null;
+    const facts = [el("div", {class:"meta"}, ...findingChips(d), el("span", {class:"id", text: String(d.id)}), d.status == null && d.age != null ? el("span", {text: ageText(d.age)}) : null),
+      el("h2", {text: d.target || "(no target)"}), el("p", {class:"ctx", text: String(d.text || "")}), d.fix ? el("p", {class:"ctx", text: "Fix: " + d.fix}) : null];
+    if (d.status != null)
+      return el("article", {class:"q", id: "finding-" + d.id}, ...facts, d.note ? el("p", {class:"ctx", text: "Note: " + d.note}) : null,
+        el("p", {class:"status", text: (MARKED[d.status] || String(d.status)) + (d.marked_at ? " " + when(d.marked_at) : "") + (d.via ? " via " + d.via : "") + "."}), say, kept);
+    const shape = JSON.stringify([d.repo, d.check, d.target, d.text, d.fix, d.age, d.new]);
+    const old = lint.forms.get(d.id);
+    if (old && (old.edits || old.saving || old.passed || (old.shape === shape && old.ready === ready))) { if (!old.saving) old.btns.forEach(b => { b.disabled = !ready; }); return old.node; }
+    const f = { shape, ready, edits: 0, saving: false, passed: null }; lint.forms.set(d.id, f);
+    const prefill = actText(d);
+    const ta = el("textarea", {id: "f-" + d.id + "-note", "aria-label":"Note to the PM", oninput: () => { f.edits++; }}); ta.value = prefill;
+    const st = el("span", {class:"status", role:"status", id: "f-" + d.id + "-status", text: told ? told.text : ""});
+    // nothing changed on this form since `edits` was read: still the form drawn, not typed in, no write of it in flight
+    const still = edits => lint.forms.get(d.id) === f && f.edits === edits && !f.saving;
+    const pass = el("button", {class:"primary", type:"button", text:"Pass on", disabled: !ready});
+    const dismiss = el("button", {class:"link", type:"button", text:"Dismiss", disabled: !ready});
+    f.btns = [pass, dismiss];
+    const busy = on => { f.saving = on; f.btns.forEach(b => { b.disabled = on || !ready; }); };
+    const tell = (cls, t) => { st.className = cls; st.textContent = t; };
+    // Pass on: an act note to the PM (queued in To PM, like any note), then the finding is marked passed on. A note the
+    // server took is not sent twice: when the mark is what failed, Pass on again only marks.
+    pass.addEventListener("click", async () => {
+      if (!ready || f.saving) return;
+      const sent = f.edits, txt = ta.value.trim();
+      busy(true); tell("status", "Passing on…");
+      if (!f.passed) {
+        let r;
+        try { r = await write("/to_pm", { kind: "act", finding: d.id, ...(txt && txt !== prefill ? { text: txt } : {}) }); }
+        catch (e) { busy(false); tell("status err", "Not passed on: " + why(e) + ". Your note is kept."); return; }
+        f.passed = r && r.id != null ? String(r.id) : "a note";
+      }
+      await markIt("passed_on", "Passed on as " + f.passed, sent,
+        "Passed on as " + f.passed + ": it is queued in To PM, so press Send all there to send it.",
+        e => "Passed on as " + f.passed + ", but not marked: " + why(e) + ". Pass on again marks it, without a second note.");
+    });
+    dismiss.addEventListener("click", async () => {
+      if (!ready || f.saving) return;
+      busy(true); tell("status", "Dismissing…");
+      await markIt("dismissed", null, f.edits, "Dismissed.", e => "Not dismissed: " + why(e) + ".");
+    });
+    async function markIt(status, note, sent, ok, bad){
+      try { await hub.post("/finding_marks", { fingerprint: d.id, status, ...(note ? { note } : {}) }); }
+      catch (e) { busy(false); tell("status err", bad(e)); return; }
+      busy(false); tell("status", ok);
+      lint.said.set(d.id, { text: ok, kept: null });
+      f.reading = true;
+      try { await readFindings(); } finally { f.reading = false; }
+      // The form goes once the list read shows the finding marked (a read that failed keeps it, and what it holds).
+      // A note typed in after the press is not in the note sent: it is kept under the mark, to copy.
+      if (lint.forms.get(d.id) !== f || lint.items.some(x => x.fingerprint === d.id)) return lintRedraw();
+      if (!still(sent) && status === "passed_on") lint.said.set(d.id, { text: ok, kept: ta.value });
+      lint.forms.delete(d.id);
+      lintRedraw();
+    }
+    const recs = findingRecords(d).map(id => el("button", {class:"link", type:"button", text: FINDING_ACTS[d.check] + " " + id,
+      "aria-label": FINDING_ACTS[d.check] + " " + id + ": opens its record page", onclick: () => goRecord(d.repo, id)}));
+    f.ta = ta; f.st = st;
+    f.node = el("article", {class:"q", id: "finding-" + d.id}, ...facts, recs.length ? el("div", {class:"act"}, ...recs) : null,
+      el("label", {class:"fld", for: ta.id}, "Note to the PM", ta), el("div", {class:"act"}, pass, dismiss, st));
+    return f.node;
+  }
+
+  const sleep = ms => new Promise(done => setTimeout(done, ms));
+  // ---- Home: what waits on the owner, then the machine in one line.
+  // The needs-you list merges the pending approvals, the open questions and the open to-dos (each as the other
+  // sections count them), urgent first, then approvals before questions before to-dos, then the oldest first;
+  // an item with no time comes last of its kind.
+  const NEED_RANK = { approval: 0, question: 1, todo: 2 };
+  function needsYou(){
+    const out = [];
+    for (const a of state.approvals) out.push({ kind: "approval", id: a.id, title: a.title, at: a.created_at, urgent: true });
+    for (const d of state.docs) if (d.status === "open") out.push({ kind: "question", id: d.id, title: d.title, at: d.asked_at, urgent: !!d.urgent });
+    for (const t of state.todos) if (t.status !== "done") out.push({ kind: "todo", id: t.id, title: t.title, at: t.added_at, urgent: !!t.urgent });
+    const key = n => n.at ? String(n.at) : "\uffff";
+    return out.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || NEED_RANK[a.kind] - NEED_RANK[b.kind] || key(a).localeCompare(key(b)));
+  }
+  function goNeed(n){
+    state.repo = ""; $("#repo").value = "";
+    if (n.kind === "question") return goQuestion(n.id);
+    state.section = n.kind === "todo" ? "todo" : "questions"; state.filter = "open"; state.tfilter = "open"; state.sel = { kind: n.kind === "todo" ? "todo" : "approval", id: n.id };
+    render();
+    const x = document.getElementById((n.kind === "todo" ? "todo-" : "approval-") + n.id); if (x) x.scrollIntoView({block:"start"});
+  }
+  function needCard(n){
+    return el("article", {class: n.urgent ? "q urgent" : "q", id: "need-" + n.id},
+      el("div", {class:"meta"}, el("span", {class: n.urgent ? "chip need" : "chip", text: n.kind === "approval" ? "Approval" : n.kind === "question" ? "Question" : "To do"}),
+        el("span", {class:"id", text: String(n.id)}), n.at ? el("span", {text: "since " + when(n.at)}) : null),
+      el("h2", {text: n.title ? String(n.title) : "(untitled)"}),
+      el("div", {class:"act"}, el("button", {class:"primary", type:"button", id: "need-open-" + n.id, text:"Open", onclick: () => goNeed(n)})));
+  }
+  // The machine lock, read from the owner routes GET /lock/view and GET /lock/wait (the same two calls the lock page
+  // makes) while Home is shown. A failed read keeps the last good line and says so; with none, it says why.
+  const mach = { view: null, rev: null, err: "", on: false };
+  function takeMachine(j){
+    if (!j || typeof j !== "object" || !j.view || typeof j.view !== "object") throw new Error("the hub server sent no lock view");
+    mach.view = j.view; mach.rev = j.lock_revision; mach.err = "";
+  }
+  const lockCall = (path, ms) => hub.call("GET", "/lock/" + path, null, ms);
+  // A wait that timed out with nothing changed redraws nothing: a redraw rebuilds the cards, and the focus would
+  // have to be found again every 30 s.
+  async function machineWatch(){
+    if (mach.on) return;
+    mach.on = true;
+    try {
+      let again = true, fails = 0;
+      while (state.section === "home") {
+        const before = machineText();
+        try {
+          const j = await (again ? lockCall("view") : lockCall("wait?since=" + encodeURIComponent(String(mach.rev)) + "&timeout=30", 90000));
+          takeMachine(j);
+          again = false; fails = 0;
+          if (state.section === "home" && (j.changed === true || machineText() !== before)) render();
+        } catch (e) {
+          fails++; again = true;
+          mach.err = e && e.unpaired ? "this browser is not paired with the hub" : (e && e.message) || "no reason given";
+          if (state.section === "home" && machineText() !== before) render();
+          await sleep(hubRetryMs(fails, e && e.retryAfter, e && e.unpaired));
+        }
+      }
+    } finally { mach.on = false; }
+  }
+  function machineText(){
+    const v = mach.view, bad = mach.err ? "The machine lock could not be read (" + mach.err + ")." : "";
+    if (!v) return bad || "Reading the machine lock…";
+    const head = v.cores && v.cores.head ? String(v.cores.head) : "";
+    const run = (Array.isArray(v.strip) ? v.strip : []).map(it => String(it && it.text || "")).filter(Boolean);
+    const warn = Array.isArray(v.warnings) ? v.warnings.length : 0;
+    return ["Machine", head, run.length ? "running: " + run.slice(0, 3).join("; ") + (run.length > 3 ? "; and " + (run.length - 3) + " more" : "") : "nothing running",
+      warn ? warn + (warn === 1 ? " warning" : " warnings") : ""].filter(Boolean).join(" · ") + "." + (bad ? " Out of date: " + bad : "");
+  }
+  function machineLine(){
+    const v = mach.view, bad = mach.err ? "The machine lock could not be read (" + mach.err + ")." : "";
+    if (!v) return el("p", {class: bad ? "gone" : "status", id:"machine", role:"status", text: machineText()});
+    return el("p", {class: bad ? "gone" : "status machine", id:"machine", role:"status", text: machineText()});
+  }
+  function renderHome(){
+    const items = ready ? needsYou() : [];
+    machineWatch().catch(() => {});
+    show([], machineLine(), ready ? el("h2", {id:"need-head", text: items.length ? "Waiting on you (" + items.length + ")" : "Waiting on you"}) : null,
+      items.length ? items.map(n => drawn(needCard, n))
+        : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing waits on you" : NOT_READY}), ready ? "Approvals, open questions and open to-dos appear here." : NOT_READY_WHY));
   }
 
   // ---- A pending approval (docs/action-hub.md "approvals/A-NNN"): the change an agent asks to make, as the diff the
-  // server stored, and the owner's Approve and Deny. They are usable only in a strong session (snapshot `strong`); the
-  // decide route checks that itself, and its refusal is shown in the server's words.
+  // server stored, or for kind "op" the one run of a delegated operation it asks for: the operation, what it does and the
+  // exact line it runs, `run D-nnn` and then one NAME=VALUE a line, with no base commit and no diff (docs/delegations.md
+  // "Hub approvals"); its `what` is the agent's note, which no signature covers, and is labelled so; and the owner's Approve
+  // and Deny. They are usable only in a strong session (snapshot `strong`); the decide route checks that itself, and its
+  // refusal is shown in the server's words.
   function approvalCard(d){
     const status = el("span", {class:"status", role:"status", text: state.strong ? "" : "Approve and Deny need a strong session: log in through Cloudflare Access and open its pairing link in this browser."});
+    const op = d.kind === "op";
     const diff = (Array.isArray(d.diff) ? d.diff : []).map(l => String(l).replace(/\r?\n$/, "")).join("\n");
+    const words = typeof d.line === "string" && d.line ? d.line.split(" ") : [];
+    const body = op
+      ? [el("div", {class:"refs", text: "runs " + String(d.op || "?")}),
+         d.what ? el("p", {class:"ctx", text: "The agent's note, not signed: " + String(d.what)}) : null,
+         el("div", {class:"cmd"}, el("pre", {class:"diff", text: words.length ? [words.slice(0, 2).join(" "), ...words.slice(2)].join("\n") : "(no line stored)"}))]
+      : [el("div", {class:"refs", text: "on " + String(d.head || "?")}),
+         el("div", {class:"cmd"}, el("pre", {class:"diff", text: diff || "(no diff stored)"}))];
     const decide = decision => async () => {
       for (const b of btns) b.disabled = true;
       try { await write("/approvals/" + seg(d.id) + "/decide", { decision, if_version: d.version }); }
@@ -1248,12 +1856,11 @@ button.danger{color:var(--warn)}
     const btns = [el("button", {class:"primary", type:"button", text:"Approve", disabled: !state.strong, onclick: decide("approve")}),
                   el("button", {class:"link", type:"button", text:"Deny", disabled: !state.strong, onclick: decide("deny")})];
     return el("article", {class:"q urgent", id: "approval-" + d.id},
-      el("div", {class:"meta"}, el("span", {class:"chip need", text:"Approval"}), el("span", {class:"id", text: d.id}),
-        d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null, d.created_at ? el("span", {text: "asked " + when(d.created_at)}) : null),
+      el("div", {class:"meta"}, el("span", {class:"chip need", text: op ? "Run approval" : "Approval"}), el("span", {class:"id", text: d.id}),
+        d.repo ? el("span", {class:"chip", text: op && d.repo === "*" ? "any repository" : String(d.repo)}) : null, d.created_at ? el("span", {text: "asked " + when(d.created_at)}) : null),
       el("h2", {text: d.title ? String(d.title) : "(untitled)"}),
       d.reason ? el("p", {class:"ctx", text: String(d.reason)}) : null,
-      el("div", {class:"refs", text: "on " + String(d.head || "?")}),
-      el("div", {class:"cmd"}, el("pre", {class:"diff", text: diff || "(no diff stored)"})),
+      ...body,
       el("div", {class:"act"}, ...btns, status));
   }
 
@@ -1389,6 +1996,7 @@ button.danger{color:var(--warn)}
     $("#reader-title").textContent = title;
     readerSays("Reading the document from the hub server…");
     $(".wrap").inert = true;
+    document.body.classList.add("reading");
     $("#reader").hidden = false;
     docOpen = id; docFrom = from || null;
     $("#reader-close").focus();
@@ -1409,6 +2017,7 @@ button.danger{color:var(--warn)}
     $("#reader").hidden = true;
     $("#reader-body").replaceChildren();
     $(".wrap").inert = false;
+    document.body.classList.remove("reading");
     const back = docFrom && docFrom.isConnected ? docFrom : docOpen != null ? document.getElementById("dr-" + docOpen) : null;
     docOpen = null; docFrom = null;
     if (back) back.focus();
@@ -1421,15 +2030,36 @@ button.danger{color:var(--warn)}
     state.filter = t.dataset.f; try { localStorage.setItem("oq.filter", state.filter); } catch(e){}
     render();
   });
-  $("#sections").addEventListener("click", e => {
-    const b = e.target.closest(".sec"); if (!b) return;
-    state.section = b.dataset.s === "questions" && (state.section === "questions" || state.section === "inbox") ? state.section : b.dataset.s === "questions" ? state.inboxtab : b.dataset.s;
+  // The sidebar and the phone's tab bar pick a section the same way.
+  function pickSection(s){
+    state.sel = null;
+    state.section = s === "questions" && (state.section === "questions" || state.section === "inbox") ? state.section : s === "questions" ? state.inboxtab : s;
     try { localStorage.setItem("oq.section", state.section); } catch(e){}
     render();
+    const r = state.sel && document.getElementById("row-" + state.sel.id); if (r && r.scrollIntoView) r.scrollIntoView({block: "nearest"});
+  }
+  $("#sections").addEventListener("click", e => { const b = e.target.closest(".sec"); if (b) pickSection(b.dataset.s); });
+  $("#tabbar").addEventListener("click", e => { const b = e.target.closest(".tb"); if (b) pickSection(b.dataset.s); });
+  // J and K move the focus to the next and the previous card of the list. Never while the owner types in a
+  // field, with a modifier held, or while the reader is open.
+  const FIELD = "input, textarea, select, [contenteditable]:not([contenteditable=false])";
+  const inField = n => !!n && typeof n.closest === "function" && (!!n.closest(FIELD) || n.isContentEditable === true);
+  document.addEventListener("keydown", e => {
+    const k = e.key === "j" || e.key === "J" ? 1 : e.key === "k" || e.key === "K" ? -1 : 0;
+    if (!k || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || !$("#reader").hidden) return;
+    if (inField(e.target) || inField(document.activeElement)) return;
+    const cards = [...document.querySelectorAll("#list article")].filter(c => !c.parentNode.closest("#list article"));
+    if (!cards.length) return;
+    const at = cards.findIndex(c => c === document.activeElement || c.contains(document.activeElement));
+    const n = cards[at < 0 ? 0 : Math.max(0, Math.min(cards.length - 1, at + k))];
+    e.preventDefault();
+    if (n.getAttribute("tabindex") == null) n.tabIndex = -1;    // a row already in the Tab order stays in it
+    n.focus();
+    if (n.scrollIntoView) n.scrollIntoView({block: "nearest"});
   });
   $("#qtabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
-    state.section = state.inboxtab = t.dataset.qt; try { localStorage.setItem("oq.section", state.section); } catch(err){}
+    state.sel = null; state.section = state.inboxtab = t.dataset.qt; try { localStorage.setItem("oq.section", state.section); } catch(err){}
     render();
   });
   $("#ftabs").addEventListener("click", e => {
@@ -1479,8 +2109,8 @@ button.danger{color:var(--warn)}
     const next = hubState(await hub.snapshot());
     if (ready && next.revision < rev) return;         // an older answer that arrived late
     rev = next.revision;
-    const first = !ready; ready = true;
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "gone", "partial", "stale", "seen", "approvals", "strong"]) state[k] = next[k];
+    const first = !ready; ready = true; lastRead = Date.now();
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);
@@ -1488,7 +2118,7 @@ button.danger{color:var(--warn)}
     // of a backlog or of the usage): when only those moved and the owner is typing, the lists are left alone.
     const untimed = rows => rows.map(r => ({ ...r, posted_at: null }));
     const unsince = Object.fromEntries(Object.entries(next.stale).map(([v, rows]) => [v, rows.map(o => ({ ...o, since: null }))]));
-    const key = JSON.stringify({ ...next, revision: 0, seen: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
+    const key = JSON.stringify({ ...next, revision: 0, seen: null, push: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
     const same = key === lastKey; lastKey = key;
     // A list that cannot be drawn: the counts drawn before it stay, the page is left as ready as it was before
     // this read (not ready on a first read, so its controls stay hidden and the next snapshot is drawn whatever
@@ -1500,7 +2130,6 @@ button.danger{color:var(--warn)}
       throw e;
     }
   }
-  const sleep = ms => new Promise(done => setTimeout(done, ms));
   async function watch(){
     // After a failure the lists are read again before waiting: what was missed is shown, and the notice at
     // the top goes as soon as the server answers, not when the next change comes.

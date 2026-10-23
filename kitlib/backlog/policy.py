@@ -17,12 +17,20 @@ as the store holds it locally.
   check(args, ctx, snap, environ)
                                 tools/backlog.py's check: raises Refusal when its role may not
                                 take a row; else the rows it sorted
+  may(name, environ)            True when the session tools/backlog.py runs in may take the row
+                                `name`: a row the plan finds (pull-collision, set-widen-collision)
+  top_only(rows)                the rows of `rows` only the owner and the PM may take, which a
+                                plan run without the role check refuses (kitlib/backlog/plan.py)
 
 `given` is a dict: 'fields' (the set fields given or unset, `body` for --body-file), 'priority'
-(each priority value given; '-' for --unset priority), 'hold_ruling', 'ruling', 'owner_ask',
-'apply', 'dry_run' (each true when given), 'on' (the --on members), and 'unknown' (true when a
-word could not be read: every row the verb can take counts). A verb of None (not read) counts as
-every row but `read`.
+(each priority value given; '-' for --unset priority), 'priority_by' and 'blocked_on' (the values
+given), 'owner_ask', 'apply', 'dry_run' (each true when given), 'on' (the --on members), and
+'unknown' (true when a word could not be read: every row the verb can take counts). A verb of
+None (not read) counts as every row but `read`.
+
+A pull's collision with another branch's live pull, and a pulled record's scope widened into one,
+are found by the plan (they need the offer and git), not here: the plan refuses them unless the
+caller says the role may take the row (`may`), and the Change names the row for the audit log.
 """
 import collections
 import re
@@ -33,6 +41,13 @@ from .errors import Refusal
 
 READS = roles.ACTIONS['read'].verbs
 UNKNOWN = 'unknown'
+# read_argv's readable mark for a word the shell passes as one word whose text the line does not
+# show (a double-quoted variable): read only as the value of an option whose value sorts nothing
+# (not DECIDING), which then reads as UNREAD; anywhere else it is unreadable
+ONE = 'one'
+DECIDING = ('--priority', '--unset', '--on', '--priority-by', '--priority_by', '--blocked-on',
+            '--blocked_on')
+UNREAD = object()
 
 
 def _held(rec):
@@ -43,27 +58,46 @@ def _owner_priced(rec):
     return rec is not None and rec.get('priority_by') in roles.PRICED_BY_OWNER
 
 
+def _owner_blocked(rec):
+    """`rec` is blocked on the owner, or not read (None), so it could be."""
+    return rec is None or 'owner' in rec.all('blocked_on')
+
+
 def _price_rows(values, rec):
     """The rows a `set` of priority to each of `values` takes on `rec` (None: not read)."""
     out = set()
     for value in values:
         if value == roles.HOLD or rec is None or rec.get('priority') == roles.HOLD:
             out.add('set-hold')                 # a hold set, a hold released, or a record not read
-        elif value in roles.PRICE_TOP or _owner_priced(rec):
+        elif value in roles.PRICE_TOP or _owner_priced(rec) or _owner_blocked(rec):
             out.add('set-price-owner')
         else:
             out.add('set-price')
     return out
 
 
-TOP_PRICE_ROWS = ('set-price-owner', 'set-hold')
+# The price fields beside `priority`: on an owner- or PM-priced record they are the owner's price.
+PRICE_FIELDS = ('priority_by', 'priority_per')
 
 
-def price_is_top(values, rec):
-    """True when a `set` of priority to each of `values` on `rec` takes a row only the owner and
-    the PM may take (TOP_PRICE_ROWS): kitlib/backlog/plan.py plan_set then needs no `--ruling`
-    for it, once the role check ran. False for no values."""
-    return bool(set(_price_rows(values, rec)) & set(TOP_PRICE_ROWS))
+def _price_field_row(key, given, rec):
+    """The row a `set` of `key` (a PRICE_FIELDS one) takes: set-price-owner when it changes an
+    owner's or the PM's price (the record PRICED_BY_OWNER, or not read) or names one
+    (`priority_by` owner or pm, or a value not read), else set-other."""
+    if rec is None or _owner_priced(rec):
+        return 'set-price-owner'
+    if key == 'priority_by' and any(v is UNREAD or v in roles.PRICED_BY_OWNER
+                                    for v in given.get('priority_by') or ()):
+        return 'set-price-owner'
+    return 'set-other'
+
+
+def top_only(rows):
+    """The rows of `rows` (sort's names) only the owner and the PM may take (roles.TOP, with no
+    `when` grant), in order: a plan run without the role check refuses a write that takes one."""
+    top = set(roles.TOP)
+    return [n for n in rows if roles.ACTIONS[n].allowed and not roles.ACTIONS[n].when
+            and set(roles.ACTIONS[n].allowed) <= top]
 
 
 def _verb_rows(verb):
@@ -82,41 +116,55 @@ def sort(verb, given=None, rec=None):
     """The ACTIONS rows (names) the command `verb` with `given` takes on the record `rec` (None: not
     read, so the strictest the record could make it), narrowed by `over`. A verb no row names takes
     none, and refusal() refuses that for every role; a dry run (retarget without --apply,
-    migrate --dry-run, catch-up without --apply) is a read."""
+    migrate --dry-run, catch-up without --apply) is a read, but not with a word unread
+    (`given` UNKNOWN), which could be the --apply."""
     given = given or {}
     if verb is None:
         return [n for n in roles.ACTIONS if n != 'read']
-    if verb in READS or (verb == 'retarget' and not given.get('apply')) or \
+    if verb in READS:
+        return ['read']
+    if given.get(UNKNOWN):                      # an unread word may be the --apply a dry run lacks
+        return _verb_rows(verb)
+    if (verb == 'retarget' and not given.get('apply')) or \
             (verb == 'migrate' and given.get('dry_run')) or \
             (verb == 'catch-up' and not given.get('apply')):
         return ['read']
-    if given.get(UNKNOWN):
-        return _verb_rows(verb)
     rows = set()
     if verb == 'set':
         fields = list(given.get('fields') or ())
         for key in fields:
             if key in roles.TEXT_FIELDS:
                 rows.add('set-text')
+            elif key in PRICE_FIELDS:
+                rows.add(_price_field_row(key, given, rec))
             elif key != 'priority':
                 rows.add('set-other')
+            if key == 'blocked_on' and _owner_blocked(rec) and \
+                    'owner' not in (given.get('blocked_on') or ()):
+                rows.add('unblock-owner')       # the owner's blocker cleared, or it could be
         prices = list(given.get('priority') or ())
         if 'priority' in fields and not prices:
             prices = ['-']
         rows |= _price_rows(prices, rec)
-        if given.get('hold_ruling'):
-            rows.add('set-hold')
         if not rows:
             rows.add('set-other')               # nothing to set: the tool's usage error
     elif verb == 'pull':
-        rows.add('pull-held' if _held(rec) else 'pull-collision' if given.get('ruling') else 'pull')
-    elif verb in ('block', 'unblock'):
+        # a collision with another branch's live pull is the plan's to find (pull-collision)
+        rows.add('pull-held' if _held(rec) else 'pull')
+    elif verb == 'block':
         on = list(given.get('on') or ())
-        owner = given.get('owner_ask') or 'owner' in on or (
-            verb == 'unblock' and not on and (rec is None or 'owner' in rec.all('blocked_on')))
-        rows.add('block-owner' if owner else 'block')
+        rows.add('block-owner' if given.get('owner_ask') or 'owner' in on else 'block')
+    elif verb == 'unblock':
+        on = list(given.get('on') or ())
+        owner = 'owner' in on or UNREAD in on or (not on and _owner_blocked(rec))
+        rows.add('unblock-owner' if owner else 'block')
     elif verb in ('close', 'retire', 'delete'):
-        rows.add('close-held' if rec is None or _held(rec) else verb)
+        if rec is None or _held(rec):
+            rows.add('close-held')
+        elif verb != 'close' and _owner_priced(rec):
+            rows.add('retire-priced')           # the owner's or the PM's price
+        else:
+            rows.add(verb)
     else:
         rows.update(_verb_rows(verb))
     return _narrow(rows)
@@ -131,6 +179,12 @@ def own_pull(rec, branch):
 def _who(row):
     names = list(row.allowed) + ['%s (%s)' % (r, f) for r, f in row.when]
     return ', '.join(names) if names else 'nobody'
+
+
+def row_text(name):
+    """The row `name` in words, for a plan's refusal: the action, its risk and who may take it."""
+    row = roles.ACTIONS[name]
+    return 'the backlog action `%s` (risk %s), which is for %s' % (name, row.risk, _who(row))
 
 
 def refusal(role, rows, facts=()):
@@ -157,31 +211,38 @@ def cli_role(environ=None):
     return roles.OWNER if mark is None else roles.role_of(mark, False)
 
 
+def given_of_set(changes, unset=(), body=None):
+    """sort's `given` for a `set` of `changes` ([(key, [values])]), `unset` (keys) and a body
+    (None: not given): what kitlib/backlog/plan.py plan_set is asked to write."""
+    fields, values = [], {}
+    for key, vals in changes:
+        fields.append(key)
+        values.setdefault(key, []).extend(vals)
+    for key in unset:
+        fields.append(key)
+        if key == 'priority':
+            values.setdefault('priority', []).append('-')
+    if body is not None:
+        fields.append('body')
+    return {'fields': fields, 'priority': values.get('priority', []),
+            'priority_by': values.get('priority_by', []), 'blocked_on': values.get('blocked_on', [])}
+
+
 def given_of(args):
     """sort's `given` from tools/backlog.py's parsed arguments (an argparse Namespace)."""
     from .opener import FIELD_FLAGS
-    fields, prices = [], []
-    for key in FIELD_FLAGS:
-        values = getattr(args, 'f_' + key, None)
-        if values is not None:
-            fields.append(key)
-            if key == 'priority':
-                prices.extend(values)
-    unset = list(getattr(args, 'unset', None) or ())
-    fields.extend(unset)
-    if 'priority' in unset:
-        prices.append('-')
-    if getattr(args, 'body_file', None):
-        fields.append('body')
+    changes = [(key, getattr(args, 'f_' + key)) for key in FIELD_FLAGS
+               if getattr(args, 'f_' + key, None) is not None]
+    given = given_of_set(changes, list(getattr(args, 'unset', None) or ()),
+                         '' if getattr(args, 'body_file', None) else None)
     on = getattr(args, 'on', None)
-    return {'fields': fields, 'priority': prices,
-            'hold_ruling': getattr(args, 'hold_ruling', None) is not None,
-            'ruling': getattr(args, 'ruling', None) is not None,
-            'owner_ask': getattr(args, 'owner_ask', None) is not None,
-            'on': on if isinstance(on, list) else [on] if on else [],
-            'apply': (getattr(args, 'apply', None) is not None if args.verb == 'catch-up'
-                      else bool(getattr(args, 'apply', None))),     # `catch-up --apply` alone counts
-            'dry_run': bool(getattr(args, 'dry_run', None))}
+    given.update({
+        'owner_ask': getattr(args, 'owner_ask', None) is not None,
+        'on': on if isinstance(on, list) else [on] if on else [],
+        'apply': (getattr(args, 'apply', None) is not None if args.verb == 'catch-up'
+                  else bool(getattr(args, 'apply', None))),     # `catch-up --apply` alone counts
+        'dry_run': bool(getattr(args, 'dry_run', None))})
+    return given
 
 
 def check(args, ctx, snap, environ=None):
@@ -209,6 +270,19 @@ def check(args, ctx, snap, environ=None):
     return rows
 
 
+# The rows a plan finds (a collision with another branch's live pull), by verb, and the words a
+# plan that took one ends its commit subject with, so the audit check (audit_check.rows_of)
+# rebuilds the row from the store's history.
+COLLISION_ROWS = {'pull': 'pull-collision', 'set': 'set-widen-collision'}
+COLLISION_MARK = ' (over a live pull)'
+
+
+def may(name, environ=None):
+    """True when the session tools/backlog.py runs in (cli_role) may take the row `name`: a row
+    the plan finds rather than sort (pull-collision, set-widen-collision; no fact grants one)."""
+    return roles.allows(name, cli_role(environ))
+
+
 class _Absent(object):
     """A record the store does not hold, read as unheld and unpriced: the plan refuses the write
     by its own words (NOT FOUND), or `add` makes it."""
@@ -227,7 +301,7 @@ class _Absent(object):
 # take, a misspelling) reads as unknown.
 def _set_options():
     from .opener import FIELD_FLAGS
-    opts = {'--unset': True, '--ruling': True, '--body-file': True, '--hold-ruling': True}
+    opts = {'--unset': True, '--body-file': True}
     for key in FIELD_FLAGS:
         opts['--' + key] = True
         opts['--' + key.replace('_', '-')] = True
@@ -239,17 +313,17 @@ OPTIONS = {
     'add': {'--summary': True, '--scope': True, '--effort': True, '--ref': True, '--reopen': False,
             '--found-on': True, '--why-not-folded': True},
     'set': None,                                # _set_options(), read when asked
-    'block': {'--on': True, '--reason': True, '--owner-ask': True, '--ruling': True},
-    'unblock': {'--on': True, '--reason': True, '--ruling': True},
+    'block': {'--on': True, '--reason': True, '--owner-ask': True},
+    'unblock': {'--on': True, '--reason': True},
     'retarget': {'--apply': False},
-    'pull': {'--reason': True, '--ruling': True, '--blocker': True},
+    'pull': {'--reason': True, '--blocker': True},
     'release': {'--reason': True},
-    'close': {'--reason': True, '--ruling': True},
-    'retire': {'--why': True, '--ruling': True, '--owner-said': True},
-    'delete': {'--why': True, '--ruling': True, '--owner-said': True},
+    'close': {'--reason': True},
+    'retire': {'--why': True},
+    'delete': {'--why': True},
     'clear-review': {'--reason': True},
     'set-status': {'--q': True},
-    'unpark': {'--ruling': True},
+    'unpark': {},
     'migrate': {'--dry-run': False, '--to': True, '--dir': True},
     'catch-up': {'--apply': False},             # its paths are positionals here
 }
@@ -264,16 +338,24 @@ def verb_options(verb):
 
 
 def read_argv(words):
-    """What the backlog.py command line `words` (each (text, readable)) gives: Argv with -C's
-    folder, --as's branch, the verb (None: not read), the record id (None: none or not read),
-    sort's `given` and `help` (true: -h or --help, so nothing runs)."""
+    """What the backlog.py command line `words` (each (text, readable: True, False or ONE)) gives:
+    Argv with -C's folder, --as's branch (UNREAD: a ONE word), the verb (None: not read), the
+    record id (None: none or not read), sort's `given` and `help` (true: -h or --help, so nothing
+    runs)."""
     root = branch = verb = rid = None
-    given = {'fields': [], 'priority': [], 'on': []}
+    given = {'fields': [], 'priority': [], 'on': [], 'priority_by': [], 'blocked_on': []}
     k, n = 0, len(words)
     plain = False                               # after `--` past the verb: every word is an operand
+
+    def value_at(j, name):
+        """The value word `j` gives option `name`, or None when it gives none that reads."""
+        if j >= n or not (words[j][1] is True or (words[j][1] == ONE and name not in DECIDING)):
+            return None
+        return words[j][0] if words[j][1] is True else UNREAD
+
     while k < n:
         text, ok = words[k]
-        if not ok:
+        if ok is not True:
             if verb is None:
                 return Argv(root, branch, None, None, {UNKNOWN: True}, False)
             given[UNKNOWN] = True
@@ -294,9 +376,10 @@ def read_argv(words):
                 if name not in GLOBAL:
                     return Argv(root, branch, None, None, {UNKNOWN: True}, False)
                 if GLOBAL[name] and not eq:
-                    if k + 1 >= n or not words[k + 1][1]:
+                    value = value_at(k + 1, name)
+                    if value is None:
                         return Argv(root, branch, None, None, {UNKNOWN: True}, False)
-                    value, k = words[k + 1][0], k + 1
+                    k += 1
                 if name == '-C':
                     root = value
                 elif name == '--as':
@@ -320,11 +403,13 @@ def read_argv(words):
             k += 1
             continue
         if opts[name] and not eq:
-            if k + 1 >= n or not words[k + 1][1]:
+            value = value_at(k + 1, name)
+            if value is None:                   # the option counts, its value not read
                 given[UNKNOWN] = True
+                _given_add(given, verb, name, UNREAD)
                 k += 1
                 continue
-            value, k = words[k + 1][0], k + 1
+            k += 1
         _given_add(given, verb, name, value)
         k += 1
     return Argv(root, branch, verb, rid, given, False)
@@ -332,7 +417,7 @@ def read_argv(words):
 
 def _given_add(given, verb, name, value):
     key = name[2:].replace('-', '_')
-    if key in ('ruling', 'hold_ruling', 'owner_ask', 'apply', 'dry_run'):
+    if key in ('owner_ask', 'apply', 'dry_run'):
         given[key] = True
     elif key == 'on':
         given['on'].append(value)
@@ -344,5 +429,5 @@ def _given_add(given, verb, name, value):
         given['fields'].append('body')
     elif verb == 'set':
         given['fields'].append(key)
-        if key == 'priority':
-            given['priority'].append(value)
+        if key in ('priority', 'priority_by', 'blocked_on'):
+            given[key].append(value)

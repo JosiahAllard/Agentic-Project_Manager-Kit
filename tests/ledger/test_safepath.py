@@ -1,6 +1,5 @@
 """kitlib.ledger.safepath: the rulings ledger's path checks (docs/ledger.md "Path checks"), and
 every reader and writer of the ledger refusing through them."""
-import json
 import os
 import subprocess
 import sys
@@ -8,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib.config import user as kuser
+from tests.home import machine_config
 from kitlib.ledger import read, safepath, standing, write
 from kitlib.ledger.errors import Refused
 
@@ -206,9 +205,8 @@ class CliTest(Case):
 
     def run_tool(self, path, *args):
         home = os.path.join(self.d, 'home')
-        os.makedirs(kuser.config_dir(home), exist_ok=True)
-        with open(kuser.config_file(home), 'w', encoding='utf-8') as f:
-            f.write(json.dumps({'ledger_path': path}))
+        os.makedirs(home, exist_ok=True)
+        machine_config(home, {'ledger_path': path}, case=self)
         env = dict(os.environ, USERPROFILE=home, HOME=home, CLAUDE_AGENT_MODEL='')
         return subprocess.run([sys.executable, TOOL] + list(args), capture_output=True, text=True,
                               env=env, timeout=60)

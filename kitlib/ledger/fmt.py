@@ -34,7 +34,12 @@ HEAD_RE = re.compile(r'^## (%s) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}Z) \| ([a-z0-9-
 RETIRE_CLASSES = ('spent', 'superseded', 'duplicate')
 TOMBSTONE_RE = re.compile(r'^Retired: (spent|superseded|duplicate) - (.+) \(see (%s|-)\)$' % ID)
 RID_RE = re.compile(r'\b%s\b' % ID)
-UNDER_RE = re.compile(r'\bunder (%s)\b' % ID)
+# A hub approval as a delegated entry's anchor, `under hub:A-nnn` (docs/delegations.md "Hub
+# approvals"): the owner's signed approval on the hub is the anchor, so no owner entry is needed.
+# The id exactly as the hub issues it (kitlib.guard.ownercommits.APPROVAL_RE). No group.
+HUB_ANCHOR = r'hub:A-(?:(?!000)[0-9]{3}|[1-9][0-9]{3,})'
+# `under <ruling id>`, or `under hub:A-nnn` followed by no further id character.
+UNDER_RE = re.compile(r'\bunder (%s\b|%s(?![\w-]))' % (ID, HUB_ANCHOR))
 # A Decides longer than this draws a warning, never a refusal: one line is the aim.
 DECIDES_NUDGE = 400
 
@@ -169,7 +174,8 @@ def validate(text, repos=None, repo=None, others=()):
     """Every problem in the ledger text, as lines; [] when it is valid. `repos` None checks the repo
     column's shape only. `repo` set: the text is that repo's per-repo file (H-<repo>-nnnn ids, every
     repo column `repo`), and a delegated entry may be `under` an owner entry of `others` (the other
-    files' texts) as well as an earlier one of this file; None: the one-file ledger (R-nnnn)."""
+    files' texts) as well as an earlier one of this file; None: the one-file ledger (R-nnnn). A
+    delegated entry `under hub:A-nnn` (HUB_ANCHOR) needs no owner entry."""
     errs = []
     _, blocks = split_entries(text)
     parsed = {}
@@ -193,6 +199,8 @@ def validate(text, repos=None, repo=None, others=()):
             m = UNDER_RE.search(e.get('Source', ''))
             if not m:
                 errs.append("%s: a delegated entry's Source must say 'under <id>'" % rid)
+            elif m.group(1).startswith('hub:'):
+                pass                    # the hub approval is the anchor (HUB_ANCHOR)
             elif not _owner_before(m.group(1), rid, parsed, elsewhere):
                 errs.append('%s: delegated under %s, which is not an earlier owner entry' % (rid, m.group(1)))
         if e.get('Supersedes', '-') != '-':

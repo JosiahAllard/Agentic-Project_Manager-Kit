@@ -105,7 +105,7 @@ def hold_citations(rec):
 def block_citation_error(members, reason=None, owner_ask=None):
     """None, or why `block --on <members>` may not be written: a `deliberate` or `owner` member
     names nothing it waits on, so `--reason` or `--owner-ask` must cite an R-nnnn, Q-nnn, T-nnn
-    or item:<ID> (an uncited hold is void; `block` takes no `--ruling`, so the reason carries it)."""
+    or item:<ID> (an uncited hold is void; `block` takes no ruling flag, so the reason carries it)."""
     bare = [m for m in members if m in UNCITED_KINDS]
     if not bare or cites(reason) or cites(owner_ask):
         return None
@@ -424,9 +424,6 @@ def _cross_field(rec):
         if is_band(priority) and by == '-':
             add(Finding(SCHEMA, path, rec.line_of('priority_by'), '`priority: %s` was set by '
                         'somebody - `priority_by` is `owner`, `pm` or `agent`' % priority))
-        if by == 'pm' and not rec.has('priority_ruling'):
-            add(Finding(SCHEMA, path, rec.line_of('priority_by'), '`priority_by: pm` without '
-                        '`priority_ruling` - a PM price is written only with `--ruling R-nnnn`'))
     if rec.has('priority_per') and not is_band(priority):
         add(Finding(SCHEMA, path, rec.line_of('priority_per'), '`priority_per` cites the '
                     'decision a band was taken from, and this record carries no band'))

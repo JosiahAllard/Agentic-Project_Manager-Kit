@@ -11,33 +11,27 @@ ALLOWED, by path or by folder prefix (ending in `/`).
 import re
 import unittest
 
-from tests.scrub.test_scrub import read_text, tracked_files
+from tests.scrub.test_scrub import FIXTURE_FOLDERS, read_text, tracked_files
 
 PATTERN = re.compile(r'\bR-[0-9]{3,}\b|\bH-[a-z0-9][a-z0-9-]*-[0-9]{3,}\b|\bR-nnn|\bR-<id>|<PM_LEDGER_PATH>|\bPM R-|--ruling\b')
 
 PRIVATE = 'the ledger, the PM\'s private record'
 SELF = 'spells the pattern to test it'
 GOING = 'removed by another branch of the ruling-cite removal'
+FIXTURE = 'a fixture folder of tests/scrub/test_scrub.py FIXTURE_FOLDERS'
 
 ALLOWED = (
     ('docs/ledger.md', PRIVATE),
     ('kitlib/ledger/', PRIVATE),
-    ('tests/ledger/', PRIVATE),
     ('tools/ledger.py', PRIVATE),
+    *((p, FIXTURE) for p, _ in FIXTURE_FOLDERS),
     ('tests/scrub/test_scrub.py', SELF),
     ('tests/scrub/test_no_cites.py', SELF),
     # Going with the backlog and ledger branches.
     ('kitlib/backlog/', GOING),
-    ('tests/backlog/', GOING),
-    ('tests/backloglint/fixtures/', GOING),
-    ('tools/backlog.py', GOING),
-    ('hosts/codex/shell/skills/backlog-ops/SKILL.md', GOING),
-    ('content/skills/backlog-ops/SKILL.md', GOING),   # the source the line above is copied from
     ('docs/backlog.md', GOING),
-    ('docs/backlog-store.md', GOING),
     ('docs/kit-json.md', GOING),
     ('kitlib/config/user.py', GOING),
-    ('tests/gate/test_land_store.py', GOING),
 )
 
 RID = 'R-' + '1234'     # built, so this file holds no id for test_scrub to flag
@@ -71,7 +65,7 @@ class NoCitesTest(unittest.TestCase):
 
     def test_every_entry_has_a_reason(self):
         for path, why in ALLOWED:
-            self.assertIn(why, (PRIVATE, SELF, GOING), path)
+            self.assertIn(why, (PRIVATE, SELF, GOING, FIXTURE), path)
 
     def test_no_tracked_file_cites_a_ruling_outside_the_allowlist(self):
         bad, stale = findings(tracked_files(), read_text)

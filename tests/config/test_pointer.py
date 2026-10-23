@@ -187,7 +187,9 @@ class Check(Repo):
     def test_read_reports_ok_and_bad(self):
         self.record()
         with self.fenced_value(self.data):
-            self.assertEqual(pointer.read(), pointer.Pointer(pointer.OK, self.data, None))
+            got = pointer.read()
+        self.assertEqual(got[:3], (pointer.OK, self.data, None))
+        self.assertEqual(got.record.branch, 'pmdata')      # the record read, for pm_data
         with self.fenced_value(self.root):
             got = pointer.read()
         self.assertEqual((got.state, got.path), (pointer.BAD, self.root))

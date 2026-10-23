@@ -197,10 +197,17 @@ class ParseTest(unittest.TestCase):
                          (b'[read, search, bash]', b'[read, read]'), (b'[read, search, bash]', b'read'),
                          (b'name: alpha', b'name: Alpha'), (b'effort: low', b'colour: red'),
                          (b'tier: standard\n', b''), (b'effort: low', b'effort: low\neffort: high'),
-                         (b'---\n\n', b'\n\n'), (b'description: Builds', b'description: "Builds')):
+                         (b'---\n\n', b'\n\n'), (b'description: Builds', b'description: "Builds'),
+                         (b'effort: low', b'effort: low\ncompact: 99999'), (b'effort: low', b'effort: low\ncompact: 1000001'),
+                         (b'effort: low', b'effort: low\ncompact: 170k'), (b'effort: low', b'effort: low\ncompact: -1')):
             with self.subTest(new=new):
                 with self.assertRaises(hc.ContentError):
                     hc.parse_role(ROLE.replace(old, new, 1))
+
+    def test_a_compact_window(self):
+        self.assertIsNone(hc.parse_role(ROLE).compact)
+        for n in (100000, 170000, 1000000):
+            self.assertEqual(hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\ncompact: %d\n' % n)).compact, n)
 
     def test_a_mode(self):
         self.assertIsNone(hc.parse_role(ROLE).mode)
@@ -300,6 +307,11 @@ class ClaudeRendererTest(unittest.TestCase):
         self.assertEqual(got, b'---\r\n' + banner('beta') + b'\r\nname: beta\r\ndescription: "Two: parts"\r\nmodel: opus\r\n'
                               b'experimental:\r\n  cacheTtl: 1h\r\n---\r\nbody\r\n')
 
+    def test_a_compact_window_is_the_agents_auto_compact_window(self):
+        role = ROLE.replace(b'effort: low\n', b'effort: low\ncompact: 170000\n')
+        got = claude_content.renderer().render(self.content(role, BETA))['hosts/claude/shell/agents/alpha.md']
+        self.assertIn(b'\nmodel: sonnet\neffort: low\nautoCompactWindow: 170000\n---\n', got)
+
     def test_every_tier_and_capability_has_a_claude_value(self):
         self.assertEqual(sorted(claude_content.renderer().tier_models()), sorted(hc.TIERS))
         self.assertEqual(claude_content.renderer().tier_models(), dict(registry.host('claude').tiers))
@@ -380,7 +392,7 @@ class TempTreeTest(unittest.TestCase):
         from kitlib import pluginsource
         self.assertEqual(content.EXPORT_MARKER, pluginsource.MARKER)
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
-        write(self.path('.pm-kit-export'), b'Z:/somewhere\n')
+        write(self.path('.pm-kit-export'), b'Q:/somewhere\n')
         before = read(self.path('.claude-plugin', 'plugin.json'))
         with self.assertRaises(hc.ContentError):
             content.write(self.root, self.rs)
@@ -395,7 +407,7 @@ class TempTreeTest(unittest.TestCase):
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
         export = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, export, True)
-        write(os.path.join(export, '.pm-kit-export'), b'Z:/somewhere\n')
+        write(os.path.join(export, '.pm-kit-export'), b'Q:/somewhere\n')
         sub = os.path.join(export, 'nested', 'kit')               # a renderable tree two folders down
         shutil.copytree(self.root, sub)
         manifest = os.path.join(sub, '.claude-plugin', 'plugin.json')

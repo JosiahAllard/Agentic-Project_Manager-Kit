@@ -7,7 +7,7 @@ owner's own session:
     git-remote-rewrite and git-hooks-path;
   - cmd's `set HOME=...` before a push;
   - a computed git config word (git config $K, PowerShell @a) counts as a write;
-  - a machine record the guard cannot read names pm_data.py init --adopt;
+  - a machine record the guard cannot read names the owner's git re-add of the data worktree;
   - alias words split at CR (and VT, FF) too;
   - `& (<expr>)` makes no line unreadable;
   - an unknown directory is no ground to deny when the machine config names no pm_data.
@@ -17,7 +17,9 @@ builtin (read, printf -v, for, ...) once had were cut: the guard catches honest 
 evasion (honest mistakes only). Their allowed forms stay pinned."""
 import os
 import unittest
+from unittest import mock
 
+from kitlib.config import pointer as kpointer
 from kitlib.guard import rules
 
 from . import world as W
@@ -131,17 +133,32 @@ class ConfigComputed(Base):
 class MachineRecordUnreadable(Base):
     """Finding: Ctx.pm_root fails closed when pm_data.path cannot be placed (the data worktree
     folder deleted), so every push from a repository without a record is denied; the refusal
-    names pm_data.py init --adopt (docs/pm-data-branch.md "Failure modes")."""
+    names the owner's git re-add of the data worktree, since pm_data.py init refuses while the
+    PM-repo pointer is set (docs/pm-data-branch.md "Failure modes")."""
 
-    def test_a_push_while_the_data_worktree_is_gone_names_adopt(self):
+    def test_a_push_while_the_data_worktree_is_gone_names_the_git_re_add(self):
         os.remove(self.record)
         gone = os.path.join(self.w.base, 'gone')
         self.w.user_config({'pm_data': {'path': gone}})
         d = self.decide('git push origin kit/wt', environ=PM)
         self.assert_denied(d, 'git-push-pmdata')
-        self.assertIn('pm_data.py init --adopt', d.reason)
-        self.assertIn('--path "%s"' % W.fwd(gone), d.reason)
+        self.assertNotIn('init --adopt', d.reason)
+        g = '"%s"' % W.fwd(gone)
+        self.assertIn('worktree unlock %s, then worktree remove %s, worktree add %s <data branch>, '
+                      'worktree lock --reason "PM data" %s' % (g, g, g, g), d.instead)
         self.assertIsNone(self.decide('git push origin kit/wt'))
+
+    def test_a_pointer_naming_a_deleted_data_worktree_names_its_folder(self):
+        os.remove(self.record)
+        gone = os.path.join(self.w.base, 'gone')
+        # the real locate, under the test fence's pointer: one naming no folder is BAD, so the
+        # machine config cannot be read and pm_data names no path; the refusal takes the pointer's
+        with mock.patch.dict(os.environ, {kpointer.FENCE_ENV: gone}):
+            d = self.decide('git push origin kit/wt', environ=PM)
+            self.assert_denied(d, 'git-push-pmdata')
+            self.assertIn('no folder at', d.reason)
+            self.assertIn('worktree unlock "%s"' % W.fwd(gone), d.instead)
+            self.assertIsNone(self.decide('git push origin kit/wt'))
 
 
 class AliasSplit(unittest.TestCase):

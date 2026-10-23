@@ -4,39 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Machine schedule</title>
+<link rel="stylesheet" href="hub.css">
 <style>
 /* The machine lock's schedule: what holds the PC's slots now, the week, and what ran. Nothing here is loaded from
    the network: the fonts named below are used only where the machine has them. */
 [hidden]{display:none !important}
 :root{
-  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d9dfe6;
-  --accent:#1f5f8b; --accent-soft:#cfe1ef; --rec:#8a5a00; --rec-soft:#f3dfb3;
-  --ok:#2c7a4b; --ok-soft:#e2f2e8; --warn:#a33b2b; --warn-soft:#f9e3df; --agent:#8d99a6;
-  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --f-mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  --accent-soft:#cfe1ef; --rec-soft:#f3dfb3; --agent:#8d99a6;
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
-  --accent:#6fb0de; --accent-soft:#1f3a50; --rec:#e9b55a; --rec-soft:#4a3a18;
-  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; --agent:#5d6a78; color-scheme:dark}}
+  --accent-soft:#1f3a50; --rec-soft:#4a3a18; --agent:#5d6a78;}}
 :root[data-theme="dark"]{
-  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
-  --accent:#6fb0de; --accent-soft:#1f3a50; --rec:#e9b55a; --rec-soft:#4a3a18;
-  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; --agent:#5d6a78; color-scheme:dark}
-body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--f-body);margin:0}
+  --accent-soft:#1f3a50; --rec-soft:#4a3a18; --agent:#5d6a78;}
 .wrap{max-width:1100px;margin:0 auto;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px}
 .wrap>*{min-width:0}
-header{display:grid;gap:4px}
 .back{margin:0;font-size:.85rem}
 .back a{color:var(--accent)}
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em}
 h2{font-size:1.05rem;margin:0}
+h3{font-size:.9rem;margin:0;color:var(--muted)}
 .sub{color:var(--muted);margin:0;max-width:70ch}
 .status{font-size:.85rem;color:var(--muted)}
 .status.err{color:var(--warn);background:var(--warn-soft);border-radius:8px;padding:8px 12px}
 .status.ro{color:var(--rec);background:var(--rec-soft);border-radius:8px;padding:8px 12px}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
-.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
 .btns{display:flex;flex-wrap:wrap;gap:6px}
 button{font:600 .85rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:5px 12px;border-radius:8px;cursor:pointer}
 button[disabled]{opacity:.5;cursor:default}
@@ -92,6 +83,11 @@ button.stop{border-color:var(--warn);color:var(--warn)}
 .t td.acts button+button{margin-left:6px}
 .parts button{font-size:.75rem;padding:1px 8px;margin-right:6px}
 .status.ok{color:var(--ok);background:var(--ok-soft);border-radius:8px;padding:8px 12px}
+.hist{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.hist>summary{cursor:pointer}
+.hist>summary h2{display:inline}
+.histbody{display:grid;gap:12px;margin-top:12px;min-width:0}
+.filters{display:grid;gap:6px}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 14px;margin:0;font-size:.85rem}
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;font-family:var(--f-mono)}
@@ -110,14 +106,24 @@ button.stop{border-color:var(--warn);color:var(--warn)}
     <div class="status err" id="acterr" role="alert" hidden></div>
   </header>
 
-  <section class="panel" aria-labelledby="h-now">
-    <h2 id="h-now">Now</h2>
+  <section class="panel" aria-labelledby="h-running">
+    <h2 id="h-running">Running now</h2>
     <ul class="warnings" id="warnings" hidden></ul>
     <p class="head" id="slothead"></p>
     <div class="boxes" id="cpu" aria-label="CPU slots"></div>
     <div class="boxes" id="gpu" aria-label="GPU slots"></div>
     <p class="head" id="memory"></p>
     <ul class="strip" id="strip"></ul>
+    <div class="tablewrap" id="runs"></div>
+    <pre class="parts" id="details"></pre>
+  </section>
+
+  <section class="panel" aria-labelledby="h-next">
+    <h2 id="h-next">Next up</h2>
+    <h3>Queue</h3>
+    <pre class="parts" id="queue"></pre>
+    <h3>Agent bookings</h3>
+    <pre class="parts" id="bookings"></pre>
   </section>
 
   <section class="panel" aria-labelledby="h-week">
@@ -181,16 +187,6 @@ button.stop{border-color:var(--warn);color:var(--warn)}
     <div class="tablewrap" id="holds"></div>
   </section>
 
-  <section class="panel" aria-labelledby="h-runs">
-    <h2 id="h-runs">Runs</h2>
-    <div class="tablewrap" id="runs"></div>
-    <pre class="parts" id="details"></pre>
-    <h2>Queue</h2>
-    <pre class="parts" id="queue"></pre>
-    <h2>Agent bookings</h2>
-    <pre class="parts" id="bookings"></pre>
-  </section>
-
   <section class="panel" aria-labelledby="h-game">
     <div class="bar">
       <h2 id="h-game">Game mode</h2>
@@ -228,18 +224,28 @@ button.stop{border-color:var(--warn);color:var(--warn)}
     </div>
   </section>
 
-  <section class="panel" aria-labelledby="h-stats">
-    <div class="bar">
-      <h2 id="h-stats">What ran</h2>
-      <div class="btns" id="statdays">
-        <button type="button" class="chip" data-days="1" aria-pressed="false">1 day</button>
-        <button type="button" class="chip" data-days="7" aria-pressed="true">7 days</button>
-        <button type="button" class="chip" data-days="30" aria-pressed="false">30 days</button>
-        <button type="button" class="chip" data-days="90" aria-pressed="false">90 days</button>
+  <details class="hist" id="history">
+    <summary><h2 id="h-history">History</h2></summary>
+    <div class="histbody">
+      <p class="head" id="histcount"></p>
+      <div class="filters">
+        <div class="btns" id="frepo" role="group" aria-label="Repository"></div>
+        <div class="btns" id="fkind" role="group" aria-label="Kind"></div>
+        <div class="btns" id="fresult" role="group" aria-label="Result"></div>
       </div>
+      <div class="tablewrap" id="hist"></div>
+      <div class="bar">
+        <h3 id="h-stats">What ran</h3>
+        <div class="btns" id="statdays">
+          <button type="button" class="chip" data-days="1" aria-pressed="false">1 day</button>
+          <button type="button" class="chip" data-days="7" aria-pressed="true">7 days</button>
+          <button type="button" class="chip" data-days="30" aria-pressed="false">30 days</button>
+          <button type="button" class="chip" data-days="90" aria-pressed="false">90 days</button>
+        </div>
+      </div>
+      <div class="tablewrap" id="stats"></div>
     </div>
-    <div class="tablewrap" id="stats"></div>
-  </section>
+  </details>
 </div>
 <script>
 (function(){
@@ -252,7 +258,7 @@ button.stop{border-color:var(--warn);color:var(--warn)}
   const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const state = { view: null, rev: null, writer: null, writes: { lock: false, strong: false, why: "" }, shift: 0, days: 7, stats: null, statsWhy: "", statsRev: null,
-    pick: null, confirm: "", busy: false, scope: "whole", editing: "" };
+    pick: null, confirm: "", busy: false, scope: "whole", editing: "", hist: { repo: "", kind: "", result: "" } };
 
   // The one transport, as on the Action Hub page: the session cookie is the page's only credential. A refusal is an
   // Error with status, code, field, retryAfter and unpaired; a call that got no answer has status 0, code "network".
@@ -372,7 +378,7 @@ button.stop{border-color:var(--warn);color:var(--warn)}
     $("#gpu").replaceChildren(...(cores.gpu || []).map(box));
     const m = v.memory;
     say($("#memory"), !m ? "" : m.free_mb == null ? "Memory: " + mb(m.total_mb) + " in all; free not measured yet." : "Memory: " + mb(m.free_mb) + " free of " + mb(m.total_mb) + ".");
-    $("#strip").replaceChildren(...(v.strip || []).map(it => {
+    $("#strip").replaceChildren(...(v.strip || []).filter(it => it.type === "run").map(it => {
       const li = el("li", {class: it.late ? "late" : null, text: String(it.text || "")});
       if (colourOf(it.id)) li.style.borderLeftColor = colourOf(it.id);
       return li;
@@ -500,9 +506,27 @@ button.stop{border-color:var(--warn);color:var(--warn)}
           td([dur(h.median), dur(h.p90), dur(h.max)].join(" / "), "num"), td([dur(w.median), dur(w.max)].join(" / "), "num"), td(dur(r.cpu_s), "num"), td(num(r.peak_cpu_cores), "num"), td(mb(r.peak_mem_mb), "num")); }))
         : el("p", {class: "none", text: "No run in the last " + (state.days === 1 ? "day" : state.days + " days") + "."})].filter(Boolean));
   }
+  // History: the view's finished runs (strip items of type hist), newest first, narrowed by the repository, kind
+  // and result chosen. Each filter row offers "All" and the values the history has; a chosen value that is gone is dropped.
+  const HIST_FILTERS = [["repo", "#frepo", "repos"], ["kind", "#fkind", "kinds"], ["result", "#fresult", "results"]];
+  const histItems = () => ((state.view && state.view.strip) || []).filter(it => it.type === "hist").sort((a, b) => (ms(b.end) || 0) - (ms(a.end) || 0));
+  function drawHistory(){
+    const all = histItems();
+    for (const [key, sel, label] of HIST_FILTERS) {
+      const have = [...new Set(all.map(it => it[key]).filter(x => typeof x === "string" && x))].sort();
+      if (state.hist[key] && !have.includes(state.hist[key])) state.hist[key] = "";
+      $(sel).replaceChildren(...[""].concat(have).map(x => el("button", {type: "button", class: "chip", "data-key": key, "data-val": x,
+        "aria-pressed": String(state.hist[key] === x), text: x || "All " + label})));
+    }
+    const rows = all.filter(it => HIST_FILTERS.every(([key]) => !state.hist[key] || it[key] === state.hist[key]));
+    say($("#histcount"), all.length ? "Showing " + rows.length + " of " + all.length + " finished runs." : "");
+    $("#hist").replaceChildren(rows.length ? table(["Ended", "Repository", "Kind", "Result", "What"], rows.map(it =>
+      el("tr", {"data-hist": String(it.id || ""), class: it.late ? "late" : null}, td(when(it.end)), td(it.repo || ""), td(it.kind || ""), td(it.result || ""), td(it.text || ""))))
+      : el("p", {class: "none", text: all.length ? "No finished run matches." : "No finished runs in the lock's history."}));
+  }
   function render(){
     drawHeader();
-    if (state.view) { drawNow(); drawWeek(); drawHolds(); drawRuns(); drawGame(); drawDivision(); drawStats(); }
+    if (state.view) { drawNow(); drawWeek(); drawHolds(); drawRuns(); drawGame(); drawDivision(); drawHistory(); drawStats(); }
     gates();
   }
   // Every control that changes the lock names what it needs (data-need): "lock" (end a run, move one to the top,
@@ -628,6 +652,12 @@ button.stop{border-color:var(--warn);color:var(--warn)}
     const t = Number(c.dataset.t), p = state.pick;
     state.pick = !p || p.b != null ? { a: t, b: null } : { a: p.a, b: t };
     render();
+  });
+  $("#history").addEventListener("click", ev => {
+    const b = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+    if (!b || !b.dataset.key || !(b.dataset.key in state.hist)) return;
+    state.hist[b.dataset.key] = b.dataset.val || "";
+    drawHistory();
   });
   $("#pickclear").addEventListener("click", () => { state.pick = null; render(); });
   $("#reservewhole").addEventListener("click", () => reserve("whole"));

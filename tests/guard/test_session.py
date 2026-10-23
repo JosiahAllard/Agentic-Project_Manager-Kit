@@ -273,7 +273,12 @@ class OwnerIdentity(unittest.TestCase):
     def test_allowed(self):
         for shell, text in self.ALLOWED:
             with self.subTest(text):
-                self.assertIsNone(self.run_one(shell, text, sub=True))
+                d = self.run_one(shell, text, sub=True)
+                if ' commit ' in text:
+                    # owner-identity runs first: a plain commit then meets git-plain-commit alone
+                    self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                else:
+                    self.assertIsNone(d)
 
     def test_the_owner_session_may(self):
         for shell, text in self.DENIED:
@@ -283,7 +288,8 @@ class OwnerIdentity(unittest.TestCase):
     def test_no_owner_email_no_rule(self):
         w = W.World()
         self.addCleanup(w.cleanup)
-        self.assertIsNone(decide(bash(self.DENIED[0][1], w.wt, True), w.ctx()))
+        d = decide(bash(self.DENIED[0][1], w.wt, True), w.ctx())
+        self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,8 @@
   new_worktree.py [-C DIR] <area>/<slug>                   a NEW branch off the main branch
   new_worktree.py [-C DIR] --existing <area>/<slug>        an EXISTING branch, resumed
                   [--base BRANCH]                          another base than the main branch
+                  [--base COMMIT | --approval hub:A-<n>]   a NEW branch at that commit, or at
+                                                           the owner approval's base commit
                   [--no-wait]                              do not wait for a landing in flight
                   [--host NAME]                            that host's worktree folder
 
@@ -17,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from kitlib.commit import approval as ownerapproval                 # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
 from kitlib.host import registry                                    # noqa: E402
 from kitlib.worktree import new                                     # noqa: E402
@@ -38,7 +41,11 @@ def parser():
     p.add_argument('branch', help='<area>/<slug>')
     p.add_argument('-C', dest='root', default='.', help='any work tree of the repository (default: here)')
     p.add_argument('--existing', action='store_true', help='resume a branch that exists')
-    p.add_argument('--base', help='the base branch (default: "repo".main_branch)')
+    p.add_argument('--base', help='the base branch (default: "repo".main_branch), or a full commit '
+                                  'hash a new branch starts at')
+    p.add_argument('--approval', default=None, metavar='hub:A-<n>',
+                   help="a new branch at the owner approval's base commit (commit.py "
+                        '--owner-approval needs HEAD there)')
     p.add_argument('--host', default=None,
                    help='the agent host whose worktree folder to use (default: $PM_KIT_HOST, else '
                         'the hosts.json default, whose folder is "repo".worktrees_dir)')
@@ -56,7 +63,14 @@ def main(argv=None):
                                         'letter or digit (area lowercase)' if a.existing
                                         else 'lowercase letter or digit'))
     if a.base is not None and (not a.base.strip() or a.base.startswith('-')):
-        p.error('--base needs a branch name')
+        p.error('--base needs a branch name or a full commit hash')
+    if a.approval is not None and (a.base is not None or a.existing):
+        p.error('--approval starts a new branch at its own base: no --base, no --existing')
+    if a.approval is not None and not ownerapproval.doc_id(a.approval):
+        p.error('--approval takes hub:A-<n>, the approval id as the hub shows it (not %r)'
+                % a.approval)
+    if a.existing and new.base_commit(a.base):
+        p.error('--base COMMIT starts a new branch: --existing resumes one at its own tip')
     try:
         host = registry.choose(a.host)
     except registry.RegistryError as e:
@@ -66,7 +80,8 @@ def main(argv=None):
         p.error('-C: %s' % why)
     try:
         outcome = new.create(top, a.branch, existing=a.existing, base=a.base, wait=a.wait,
-                             say=lambda line: print(line, flush=True), host=host)
+                             say=lambda line: print(line, flush=True), host=host,
+                             approval=a.approval)
     except KeyboardInterrupt:
         return 130
     for line in outcome.lines:

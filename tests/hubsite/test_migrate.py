@@ -10,6 +10,7 @@ from unittest import mock
 from kitlib.hubsite import migrate
 from kitlib.hubsite.migrate import Busy, Conflict, Kept, Left, MigrateError, NotADocument
 from kitlib.hubsite.store import LOCK_NAME, META_NAME, HubError, Store, StoreBusy, normal_text
+from tests.home import machine_config
 from tests.hubsite import test_hub_cli as cli
 
 AT = '2026-01-02T03:04:05+00:00'
@@ -408,8 +409,7 @@ class KnownReposCase(Case):
         root = self.store_with('gamerepo', 'ghost')
         sessions = os.path.join(self.home, 'pm', 's.json')
         write(sessions, json.dumps({'g': {'repo': 'Gamerepo'}}))
-        write(os.path.join(self.home, '.pm-kit', 'config.json'),
-              json.dumps({'pm_start': {'sessions_file': sessions}}))
+        machine_config(self.home, {'pm_start': {'sessions_file': sessions}}, case=self)
         with mock.patch('kitlib.pmstart._toplevel', lambda folder: None):   # no git
             found = migrate.validate(root)
         self.assertEqual(self.codes(found), [('questions/Q-002', 'repo-alias')])

@@ -15,13 +15,24 @@ The fixtures in TheChecks are built from pieces, so this file holds none of the 
 import unittest
 
 from kitlib import forbidden, scrub
-from tests.scrub.test_scrub import read_text, tracked_files
+from tests.scrub.test_scrub import FIXTURE_FOLDERS, read_text, tracked_files
 
 # (path glob, class, text the line contains, why): permanent exceptions.
-ALLOWED = (
+# Where an owner question or ruling id's shape (`Q` or `R`, a dash, digits) is a data format the
+# code under test parses, not a citation: the hub's own ids, and the ledger and backlog fixtures.
+ID_SHAPE_FOLDERS = (
+    ('kitlib/hubsite/*', "the hub's store and API: question ids are its data"),
+    ('kitlib/hubmcp/*', "the hub's MCP tools: question ids are its data"),
+    ('tests/hubsite/*', "tests of the hub's store and API: question ids are its data"),
+    ('tests/hubmcp/*', "tests of the hub's MCP tools: question ids are its data"),
+    ('tests/hubvalidate/*', 'tests of the hub id validator, which checks the id shape'),
+    ('tests/guard/test_rules_hub*.py', "tests of the guard's hub rules, which match the id shape"),
+    ('tools/hub.py', "the hub CLI's help and examples show question ids"),
+    ('docs/action-hub.md', "the hub's doc: question ids are its data"),
+) + tuple((folder + '*', why) for folder, why in FIXTURE_FOLDERS)
+
+ALLOWED = tuple(('%s' % glob, 'record-id', '', why) for glob, why in ID_SHAPE_FOLDERS) + (
     ('kitlib/git/fake/wtcmds.py', 'pinned-hash', 'abc1234', 'an invented hash in the fake git'),
-    ('tests/hubvalidate/test_hubvalidate.py', 'record-id', "['repo'] = '",
-     "the kit's repo tag upper-cased to prove the alias match folds case"),
     ('tests/launcher/test_current_account.py', 'record-id', "HOME + '\\\\.",
      'an invented config folder upper-cased to prove Windows case folding'),
     ('tests/guard/test_config_move.py', 'record-id', "os.path.dirname(self.w.ledger), '",
@@ -142,13 +153,18 @@ PENDING_HISTORY = {
     ('provenance', 'tests/worktree/test_new_worktree.py'): 2,
     ('provenance', 'tests/worktree/test_worktree_remove.py'): 1,
     ('provenance', 'tools/machine_setup.py'): 1,
+    ('record-id', 'docs/guard.md'): 1,
     ('record-id', 'docs/install.md'): 1,
+    ('record-id', 'tests/delegations/test_cli.py'): 1,
+    ('record-id', 'tests/delegations/test_run.py'): 13,
     ('record-id', 'tests/docs/test_install_junctions.py'): 1,
+    ('record-id', 'tests/guard/test_backlog_role.py'): 1,
+    ('record-id', 'tests/guard/test_cheap.py'): 5,
+    ('record-id', 'tests/host/test_claude_peer.py'): 2,
 }
 # Owner-specific prose becomes generic: "the owner" for the pronouns, no one machine's parts.
 PENDING_OWNER_TEXT = {
-    ('gender', 'kitlib/backlog/at_landing.py'): 1,
-    ('gender', 'kitlib/backlog/plan.py'): 2,
+    ('gender', 'kitlib/backlog/plan.py'): 1,
     ('gender', 'kitlib/backlog/record.py'): 1,
     ('gender', 'kitlib/commit/__init__.py'): 2,
     ('gender', 'kitlib/config/owner.py'): 1,
@@ -244,12 +260,31 @@ class TheChecks(unittest.TestCase):
     def test_what_only_looks_like_a_hit_passes(self):
         files = {'docs/a.md': j('the ', 'the', 'me, ', 'hel', 'p and ', 'hist', 'ory; ', 'where',
                                 'as she shell\n'),
-                 'docs/b.md': j('YYYY', '-MM-DD, ', 'UTF', '-8, ', 'EX', '-WIDGET-1', ', ', 'R', '-1234',
-                                ', abc-def-1\n'),
+                 'docs/b.md': j('YYYY', '-MM-DD, ', 'UTF', '-8, ', 'EX', '-WIDGET-1', ', ', 'R', '-nnnn, x',
+                                'R', '-1234 and a ', 'Q', '-nnnn, abc-def-1\n'),
                  'docs/c.md': j('4b825dc642cb6eb9a06', '0e54bf8d69288fbee4904', ' ', '0123456789',
                                 'abcdef', ' deadbeef 1234567 ', 'a1b2c3', '\n'),
                  'docs/d.md': j('2', ' cores, ', '4', ' threads, the PM kit, ', 'sup', 'port from x\n')}
         self.assertEqual(self.found(files), [])
+
+    def test_a_one_letter_question_or_ruling_id_is_a_record_id(self):
+        # An id glued to a letter is another token; T, A, M, P and S ids are the hub's, and pass.
+        files = {'docs/a.md': j('see ', 'Q', '-123', ' and ', 'R', '-4\n'),
+                 'tests/x/test_y.py': j('"', 'Q', '-1', '"\n'),
+                 'docs/b.md': j('x', 'R', '-1234 ', 'T', '-1 ', 'A', '-001 ', 'S', '-1 ', 'Q', '-x ',
+                                'q', '-1\n')}
+        self.assertEqual(self.found(files), [
+            'docs/a.md:1: ' + j('Q', '-123') + ' (record-id)',
+            'docs/a.md:1: ' + j('R', '-4') + ' (record-id)',
+            'tests/x/test_y.py:1: ' + j('Q', '-1') + ' (record-id)'])
+
+    def test_the_id_shape_allowlist_covers_the_hub_but_not_other_files(self):
+        line = j('ask ', 'Q', '-123\n')
+        files = {'tests/hubsite/test_a.py': line, 'tools/hub.py': line,
+                 'tests/ledger/test_a.py': j('R', '-9001\n'), 'kitlib/other.py': line,
+                 'tests/guard/test_rules_hub_read.py': line, 'tests/guard/test_other.py': line}
+        hits, _ = scrub.scan(sorted(files), files.get, ALLOWED)
+        self.assertEqual([h.path for h in hits], ['kitlib/other.py', 'tests/guard/test_other.py'])
 
     def test_standard_crypto_names_are_no_record_ids(self):
         real = j('ABC', '-DEF-12')
@@ -369,10 +404,11 @@ class TheChecks(unittest.TestCase):
         from tests.scrub import test_builtin as me
         home = tempfile.mkdtemp(prefix='kit-scrub-home-')
         self.addCleanup(__import__('shutil').rmtree, home, True)
-        with mock.patch.object(tests, '_REAL_HOME', home):
+        with mock.patch.object(tests, '_REAL_HOME', home), \
+                mock.patch.object(tests, '_REAL_POINTER', (None, 'no pointer here')):
             self.assertEqual(me.configured_folders(), ())       # no machine config file
             os.makedirs(os.path.join(home, kuser.DIR_NAME))
-            with open(kuser.config_file(home), 'w', encoding='utf-8') as f:
+            with open(os.path.join(home, kuser.DIR_NAME, kuser.FILE_NAME), 'w', encoding='utf-8') as f:
                 json.dump({'machine_path_folders': ['Src']}, f)
             self.assertEqual(me.configured_folders(), ('Src',))
             extra = 'tests/zz_new.py'

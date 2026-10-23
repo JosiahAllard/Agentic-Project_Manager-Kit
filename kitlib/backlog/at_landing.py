@@ -513,8 +513,6 @@ class _Stranded(object):
         when no other store read holds the id."""
         act, rid = self.act, self.act.rid
         args = list(act.args)
-        if not act.release and rmod.is_owner_held(self.rec):
-            args += ['--ruling', 'R-nnnn']          # the owner's ruling ends it (plan_close)
         state = self.rec.get('state') or '?'
         if state == 'pulled':
             state = 'pulled by %s' % (self.rec.get('pulled_by') or '?')
@@ -614,11 +612,9 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
         seen.part_held.update(rid for rid in part.ids if rid in release)
 
     def close_args(rid):
-        args = ['close', rid, '--reason', '"%s"' % reason]
-        rec = snap.get(rid)
-        if rec is not None and rmod.is_owner_held(rec):
-            args += ['--ruling', 'R-nnnn']          # his ruling ends the hold (plan_close)
-        return args
+        # An owner-held record's close is `close-held` (kitlib/backlog/roles.py): the printed
+        # form is the same, and the role check of whoever runs it decides.
+        return ['close', rid, '--reason', '"%s"' % reason]
 
     def act_args(act, rid):
         return act.args if act.release else close_args(rid)

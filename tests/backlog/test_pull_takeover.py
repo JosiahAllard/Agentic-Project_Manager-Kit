@@ -5,6 +5,7 @@ import os
 from unittest import mock
 
 from kitlib.backlog import offer as omod
+from kitlib.backlog import policy
 from kitlib.backlog.errors import Failure, Refusal, Usage
 
 from tests.backlog.helpers import BRANCH, TODAY, StoreCase, priced
@@ -59,25 +60,28 @@ class PullTakeover(StoreCase):
             self.verb('pull', 'DEAD')
         self.assertIn('already in flight', str(cm.exception))
 
-    def test_a_takeover_takes_no_ruling_or_blocker(self):
+    def test_a_takeover_takes_no_blocker(self):
         self.seed(self.pulled('DEAD', GONE))
-        for flag, kw in (('--ruling', dict(ruling='R-9001')), ('--blocker', dict(blocker='OTHER'))):
-            with self.subTest(flag=flag):
-                with self.assertRaises(Usage) as cm:
-                    self.verb('pull', 'DEAD', **kw)
-                self.assertIn('with no %s' % flag, str(cm.exception))
-                self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+        with self.assertRaises(Usage) as cm:
+            self.verb('pull', 'DEAD', blocker='OTHER')
+        self.assertIn('with no --blocker', str(cm.exception))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
 
-    def test_a_takeover_whose_scope_collides_with_a_live_pull_needs_a_ruling(self):
+    def test_a_takeover_whose_scope_collides_with_a_live_pull_takes_the_collision_row(self):
+        """Refused unless the caller's role may collide; a taken collision names its row on the
+        Change and marks its subject (the audit check reads the mark back)."""
         self.repo.git('branch', 'kit/live-one')
         self.seed(self.pulled('DEAD', GONE, scope='area/shared/**'),
                   self.pulled('LIVE', 'kit/live-one', session='other', scope='area/shared/x.py'))
-        with self.assertRaises(Refusal):
+        with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'DEAD')
+        self.assertIn('pull-collision', str(cm.exception))
         self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
-        change = self.verb('pull', 'DEAD', ruling='R-9001')
+        change = self.verb('pull', 'DEAD', may_collide=True)
         self.assertIn('warning: scope collides with `LIVE`, in flight on kit/live-one',
                       change.lines)
+        self.assertEqual(change.rows, ['pull-collision'])
+        self.assertTrue(change.subject.endswith(policy.COLLISION_MARK), change.subject)
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
 
     def test_a_marked_dead_pull_is_refused_until_the_mark_is_cleared(self):

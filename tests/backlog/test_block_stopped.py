@@ -83,8 +83,21 @@ class Block(StoppedCase):
             self.verb('block', 'FOO', ['live-client'], reason=WHY)
         self.assertEqual(str(cm.exception),
                          '`FOO` is in flight (pulled by %s), and its tree is live: active 1.0 h '
-                         'ago. Its holder blocks or releases it, from that branch' % OTHER)
+                         'ago. Its holder blocks or releases it: from that branch, or as that '
+                         'branch from any checkout (backlog.py -C <store> --as %s block FOO --on '
+                         '<member> --reason "<why>")' % (OTHER, OTHER))
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
+
+    def test_the_refusal_names_the_records_session_in_the_as_form(self):
+        # A coordinator that pulled with `--as` is the holder; a worker on that branch is refused
+        # by the guard (own pulls only), so the refusal gives the coordinator its working form.
+        self.repo.git('branch', OTHER)
+        self.seed(priced('FOO', pulled_by=OTHER, session='kit', **PULLED))
+        self.ctx.liveness = lambda b: ('active 1.0 h ago', None)
+        with self.assertRaises(Refusal) as cm:
+            self.verb('block', 'FOO', ['live-client'], reason=WHY)
+        self.assertIn('(backlog.py -C <store> --session kit --as %s block FOO --on <member> '
+                      '--reason "<why>")' % OTHER, str(cm.exception))
 
     def test_no_probe_refuses_a_live_branch(self):
         self.repo.git('branch', OTHER)
@@ -155,7 +168,8 @@ class Release(StoppedCase):
         self.assertEqual(str(cm.exception),
                          'the pull of `FOO` by `%s` is live (a branch or worktree by that name '
                          'exists); its tree is live: machine lock: r/x run 7. Its holder releases '
-                         'it, from that branch' % OTHER)
+                         'it: from that branch, or as that branch from any checkout (backlog.py '
+                         '-C <store> --as %s release FOO --reason "<why>")' % (OTHER, OTHER))
 
     def test_a_dead_pull_releases_with_no_stopped_line(self):
         self.seed(priced('FOO', pulled_by='tools/gone', **PULLED))
@@ -216,8 +230,8 @@ class Opener(unittest.TestCase):
     def test_the_probe_is_the_classifiers_imported_when_asked(self):
         with mock.patch.object(classify, 'branch_liveness',
                                return_value=(None, 'abc')) as probe:
-            self.assertEqual(opener.liveness('Z:/repo', 'kit/x'), (None, 'abc'))
-        probe.assert_called_once_with('Z:/repo', 'kit/x')
+            self.assertEqual(opener.liveness('Q:/repo', 'kit/x'), (None, 'abc'))
+        probe.assert_called_once_with('Q:/repo', 'kit/x')
 
 
 if __name__ == '__main__':

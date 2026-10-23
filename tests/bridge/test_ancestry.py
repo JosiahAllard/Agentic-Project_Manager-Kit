@@ -7,6 +7,15 @@ from unittest.mock import patch
 
 from optional.bridge.win import ancestry
 from kitlib.proc import process
+from kitlib.proc.win32 import K32
+
+
+def _running(pid,creation):
+    """Whether (pid, creation) is a process that has not exited."""
+    handle=process.open_process(pid,process.PROCESS_QUERY_LIMITED_INFORMATION|process.SYNCHRONIZE)
+    if not handle: return False
+    try: return process.handle_ctime(handle)==creation and K32.WaitForSingleObject(handle,0)==process.WAIT_TIMEOUT
+    finally: process.close(handle)
 
 
 class _Process:
@@ -56,15 +65,46 @@ class AncestryTests(unittest.TestCase):
         self.addCleanup(lambda:(child.stdin.closed or child.stdin.close(),child.wait(timeout=5)))
         return child
 
+    def assert_walks_agree(self,pid,creation):
+        """The bridge's walk of pid, checked against the snapshot walk; returns it.
+
+        The snapshot walk opens each parent pid the snapshot records, so an ancestor that has
+        exited while a handle keeps it openable is its last hop (an exited process is in no
+        snapshot, so nothing above it is reached). The bridge walk takes running ancestors only
+        and stops before it. Every other hop is the same in both."""
+        expected=process.ancestors_of(pid,creation,limit=8)
+        with patch('kitlib.proc.process.snapshot',wraps=process.snapshot) as listings:
+            walked=ancestry.ancestors_of(pid,creation,limit=8)
+        self.assertEqual(listings.call_count,0)
+        if expected and walked==expected[:-1] and not _running(*expected[-1]): return walked
+        self.assertEqual(walked,expected)
+        return walked
+
     def test_walk_matches_the_snapshot_walk_without_listing_the_machine(self):
         child=self.child()
-        creation=process.proc_ctime(child.pid)
-        expected=process.ancestors_of(child.pid,creation,limit=8)
-        with patch('kitlib.proc.process.snapshot',wraps=process.snapshot) as listings:
-            walked=ancestry.ancestors_of(child.pid,creation,limit=8)
-        self.assertEqual(listings.call_count,0)
+        walked=self.assert_walks_agree(child.pid,process.proc_ctime(child.pid))
         self.assertEqual(walked[0],(os.getpid(),process.own_ctime()))
-        self.assertEqual(walked,expected)
+
+    def test_an_exited_ancestor_held_open_ends_both_walks(self):
+        # middle starts a grandchild that reads the stdin pipe middle was given, prints its pid
+        # and exits; this test keeps middle's handle, so middle stays openable but not running.
+        code=('import subprocess,sys;'
+            'g=subprocess.Popen([sys.executable,"-I","-c","import sys; sys.stdin.read()"],stdin=sys.stdin,'
+            'stdout=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW);print(g.pid,flush=True)')
+        middle=subprocess.Popen([sys.executable,'-I','-c',code],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        self.addCleanup(middle.stdout.close)
+        self.addCleanup(middle.stdin.close)  # the grandchild's stdin reaches end of file and it exits
+        grandchild=int(middle.stdout.readline())
+        middle.wait(timeout=10)
+        held=process.open_process(grandchild,process.SYNCHRONIZE)
+        self.assertTrue(held)
+        self.addCleanup(lambda:(middle.stdin.close(),K32.WaitForSingleObject(held,5000),process.close(held)))
+        creation=process.proc_ctime(grandchild)
+        # The snapshot walk opens middle (exited, still held) and ends there: the case under test.
+        self.assertEqual(process.ancestors_of(grandchild,creation,limit=8),
+            [(middle.pid,process.proc_ctime(middle.pid))])
+        self.assertEqual(self.assert_walks_agree(grandchild,creation),[])
 
     def test_an_exited_process_has_no_ancestry_while_a_handle_keeps_it_openable(self):
         child=self.child()

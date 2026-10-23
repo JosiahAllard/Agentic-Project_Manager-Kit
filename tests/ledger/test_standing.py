@@ -1,6 +1,5 @@
 """kitlib.ledger.standing and `ledger.py standing` / `ledger.py check` over STANDING.md beside the
 ledger (docs/ledger.md "Standing digest"). Ids are built by rid(n) (tests/scrub)."""
-import json
 import os
 import subprocess
 import sys
@@ -8,7 +7,7 @@ import tempfile
 import unittest
 
 from kitlib.ledger import standing
-from kitlib.config import user as kuser
+from tests.home import machine_config
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger.py')
@@ -78,9 +77,7 @@ class CliTest(unittest.TestCase):
         self.ledger = os.path.join(folder, 'LEDGER.md')
         self.digest = os.path.join(folder, 'STANDING.md')
         self.put(self.ledger, LEDGER)
-        os.makedirs(kuser.config_dir(self.home))
-        self.put(kuser.config_file(self.home),
-                 json.dumps({'ledger_path': self.ledger}))
+        machine_config(self.home, {'ledger_path': self.ledger}, case=self)
 
     def put(self, path, text):
         with open(path, 'w', encoding='utf-8', newline='\n') as f:

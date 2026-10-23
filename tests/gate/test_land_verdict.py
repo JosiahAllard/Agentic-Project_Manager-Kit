@@ -69,7 +69,7 @@ class EveryLandingNeedsAVerdict(VerdictCase):
 
 
 class AnyReviewerModel(VerdictCase):
-    """The tier rule (land.REVIEWER_MODELS_BY_AUTHOR) is the strict paths' alone: a plain branch
+    """The tier rule (a strong-tier reviewer) is the strict paths' alone: a plain branch
     lands with a review on any model by a reviewer who did not write it."""
 
     def lands_on(self, model):

@@ -613,15 +613,9 @@ class NetArgumentIndex(World):
 
 class MachineConfigKey(unittest.TestCase):
     def setUp(self):
-        import shutil
-        import tempfile
-        self.home = tempfile.mkdtemp(prefix='kit-home-')
-        self.addCleanup(shutil.rmtree, self.home, True)
-
-    def write(self, data):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        from tests import home as thome
+        self.home = thome.temp_home(self)
+        self.write = lambda data: thome.machine_config(self.home, data)
 
     def test_guard_rules_takes_deny_warn_or_off(self):
         self.write({'guard_rules': {'heavy': 'off', 'main-checkout': 'warn', 'ledger': 'deny'}})

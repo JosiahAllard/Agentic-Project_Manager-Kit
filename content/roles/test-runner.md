@@ -2,6 +2,7 @@
 name: test-runner
 description: Runs a repository's test tiers in a given worktree and reports only PASS/FAIL plus failing lines, keeping verbose output out of your context. Must be told the worktree, the tiers, and ports for anything networked; asks rather than guesses.
 tier: light
+compact: 170000
 sandbox: workspace-write
 mode: test
 summary: Runs test tiers in a given worktree and reports only PASS/FAIL plus failing lines.
@@ -47,7 +48,7 @@ Scan output for the profile's pass strings, failure strings and known-harmless n
 One line per tier: PASS or FAIL, with its time if known. On any FAIL, the specific
 failing line(s) only, plus a line of context where that is what names the failing
 test. Nothing else - no restating the request, no suggested fixes unless the
-caller asked for a diagnosis.
+caller asked for a diagnosis. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 
