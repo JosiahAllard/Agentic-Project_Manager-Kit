@@ -6,12 +6,13 @@ ALLOWED, by path or by folder prefix (ending in `/`).
 - PRIVATE: the ledger itself, which is the PM's record and may name its own ids.
 - SELF: tests that must spell a pattern to test it.
 - GOING: code and docs that the ruling-cite removal clears on other branches; each entry goes with its branch.
+- The files named in test_scrub.H_FIXTURE_FILES may hold H-ids (and only H-ids) in their fixtures.
 - An ALLOWED entry that no longer matches a hit fails too, so a cleaned file takes its entry with it.
 """
 import re
 import unittest
 
-from tests.scrub.test_scrub import FIXTURE_FOLDERS, read_text, tracked_files
+from tests.scrub.test_scrub import FIXTURE_FOLDERS, read_text, tracked_files, without_h_ids
 
 PATTERN = re.compile(r'\bR-[0-9]{3,}\b|\bH-[a-z0-9][a-z0-9-]*-[0-9]{3,}\b|\bR-nnn|\bR-<id>|<PM_LEDGER_PATH>|\bPM R-|--ruling\b')
 
@@ -49,7 +50,8 @@ def findings(files, read, allowed=ALLOWED):
         text = read(rel)
         if text is None:
             continue
-        hits = [n for n, line in enumerate(text.splitlines(), 1) if PATTERN.search(line)]
+        hits = [n for n, line in enumerate(text.splitlines(), 1)
+                if PATTERN.search(without_h_ids(rel, line))]
         if not hits:
             continue
         ok = allowed_by(rel, allowed)
