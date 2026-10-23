@@ -1708,7 +1708,9 @@ class Lander(object):
         """_run(), and the landing's result records (kitlib.gate.result, kind "land"), one per
         branch at its --expect-tip: `running` once the locked checks pass, just before the merge
         (_locked), then the outcome's, or `error` when an exception or Ctrl+C escapes _run (raised
-        again, unchanged). Their started_at is when the landing joined the landing queue: a direct
+        again, unchanged). The final and the `error` record name the same log: the merged gate's
+        log folder once the merged gate returned, else a submitted landing's output, else none.
+        Their started_at is when the landing joined the landing queue: a direct
         landing's just before book_turn, a submitted one's at the submission. A landing that ends
         before the locked checks pass (USAGE, REFUSED before the merge, BUSY, the machine lock's
         refusal: a retry or a duplicate) writes no record, so it never replaces a real result; a
@@ -1726,7 +1728,7 @@ class Lander(object):
                 pass
             for rr in self.result_runs:
                 try:
-                    self.say(rr.error(e)[1])
+                    self.say(rr.error(e, log=self.gate_logs or self.output_log)[1])
                 except Exception:   # noqa: BLE001 - never replace the exception being raised
                     pass
             raise

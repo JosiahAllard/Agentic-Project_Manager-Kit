@@ -1,13 +1,12 @@
 """tools/ledger.py with `ledger_dir` set (docs/ledger.md "Files"): arguments, routing and exit codes.
 The logic is tests/ledger/test_split.py's. Ids are built by rid(n) and hid(repo, n) (tests/scrub)."""
-import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from kitlib.config import user as kuser
+from tests.home import machine_config
 from kitlib.ledger import fmt
 from tests.gitfixture import TempRepo, fixture_env
 
@@ -48,9 +47,7 @@ class Base(unittest.TestCase):
         self.config({'ledger_dir': self.dir, 'ledger_repos': ['alpha', 'pm'], 'ledger_path': self.frozen})
 
     def config(self, data):
-        os.makedirs(kuser.config_dir(self.home), exist_ok=True)
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        machine_config(self.home, data, case=self)
 
     def run_tool(self, *args, env=None):
         env = dict(env or os.environ, USERPROFILE=self.home, HOME=self.home)
@@ -184,9 +181,9 @@ class CommitTest(unittest.TestCase):
         self.repo.write('rulings/README.md', 'rulings\n')
         self.repo.commit('rulings folder', 'rulings/README.md')
         self.home = os.path.join(self.repo.base, 'home')
-        os.makedirs(kuser.config_dir(self.home))
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump({'ledger_dir': self.repo.path('rulings'), 'ledger_repos': ['alpha', 'pm']}, f)
+        os.makedirs(self.home)
+        machine_config(self.home, {'ledger_dir': self.repo.path('rulings'), 'ledger_repos': ['alpha', 'pm']},
+                       case=self)
         self.env = dict(fixture_env(), USERPROFILE=self.home, HOME=self.home)
 
     def run_tool(self, *args):

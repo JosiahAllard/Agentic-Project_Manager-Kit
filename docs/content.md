@@ -39,6 +39,7 @@ renderer).
 | `sandbox` | `read-only` or `workspace-write` |
 | `capabilities` | `all` (no tool list), or the tools in order: `[read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch, message, list-agents, stop-task, monitor, tool-search, skill, ask-owner, cron-create, cron-list, cron-delete, web-search, web-fetch]` (`kitlib.host.content.CAPABILITIES`) |
 | `cache` | optional: `long`, the host's long prompt cache |
+| `compact` | optional: the role's auto-compact window in tokens, a whole number 100000..1000000 (`kitlib.host.content.COMPACT`). The light subagent roles (analyst, docs-writer, helper, lander, test-runner, weak-worker) set 170000, so they compact before a 200k parent would. Claude renders it; Codex does not ("Codex") |
 | `model.<host>` | optional: that host runs the role on this model instead of the tier's. None is in use. |
 | `mode` | optional: the role policy mode, `controller`, `write`, `read`, `test` or `lander` (`kitlib.host.content.MODES`). Every kit role names one. The guard reads it (`kitlib.content.role_modes`) where a repository sets `guard.role_policy` (docs/guard.md "Role policy"); no host's file carries it, so a change to it renders nothing |
 | `writes` | optional: `[path, ...]`, repo-relative posix paths or globs (no `..`, no drive, no `\`) a `read`, `test` or `lander` role may still edit in its checkout (docs/guard.md "Role policy"). The consultant names its notes file. Not rendered either |
@@ -115,8 +116,13 @@ fails a role that writes a Claude value bare, and tests/host/test_leaks a host n
 `hosts/claude/adapter/content.py` writes `hosts/claude/shell/agents/<name>.md` with `name`, `description` (quoted only
 when YAML needs it), `tools` (the capabilities as Claude tool names; none for `all`), `model` (hosts.json `tiers`, the
 one tier map),
-`effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`; the front matter
-opens with the generated-file line as a YAML comment. It owns that folder. It copies no skill: the
+`effort` when set, `autoCompactWindow` for `compact`, and for `cache: long` the `experimental` map with
+`cacheTtl: 1h`; the front matter opens with the generated-file line as a YAML comment.
+`autoCompactWindow` in agent front matter is a ceiling, read in Claude Code 2.1.309's own code (not tried
+live): the CLI's agent schema takes an integer 100000..1000000, a plugin agent keeps it, and a subagent
+runs on its parent's window unless that is larger, when it runs on the agent's; the
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable still beats both. So a 170000 agent under a
+200000 coordinator compacts at 170000, and under a 150000 session at 150000. It owns that folder. It copies no skill: the
 plugin manifest's `skills` is `./content/skills/` (decision 29 in docs/multi-host-plan.md section 7),
 and `hosts/claude/shell/skills/`, the copy it wrote before, is a retired folder: a file there is stale.
 
@@ -132,7 +138,8 @@ opening with the generated-file line,
 account's model runs; docs/ROSTER.md), `model_reasoning_effort` (the role's `effort`, else its tier's),
 `sandbox_mode` (the role's `sandbox`) and `developer_instructions`, the body with Codex's token values
 as a TOML multi-line string. A Codex agent file has no tool list, so `capabilities` and `cache` are not
-rendered. It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders; the
+rendered; nor is `compact`, because no per-agent compact key in a Codex agent file has been established
+(no Codex install here to check). It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders; the
 copy stays until a live Codex install shows it loads skills from outside its plugin folder
 (hosts/codex/README.md "Not verified"). Its
 manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),

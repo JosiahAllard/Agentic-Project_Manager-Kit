@@ -3,6 +3,7 @@ name: lander
 description: Optional wrapper that lands one reviewed branch (or a batch) - submits it, waits for the result, verifies the push, reports. Spawned fresh per landing. Needs the branch, reviewed tip, verdict and any extra gate. Never edits code.
 tier: light
 effort: medium
+compact: 170000
 sandbox: workspace-write
 mode: lander
 summary: Optional wrapper: submits one reviewed branch (or a batch) for landing, waits for the result, reports. Never edits code. Dispatched with no model override, and never overridden.

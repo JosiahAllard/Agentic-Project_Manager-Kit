@@ -273,7 +273,7 @@ def survey(home=None):
         return plan
     plan.pm = os.path.normpath(ptr.path)
     plan.folder = os.path.join(plan.pm, FOLDER)
-    loc = user.locate(home)
+    loc = user.home_location(home)
     if loc.error:
         plan.refusals.append(loc.error)
         return plan

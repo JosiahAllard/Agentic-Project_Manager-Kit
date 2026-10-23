@@ -80,10 +80,30 @@ are off on this hub server." when the server runs no push worker. The page reads
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks` or `#info` open that
+Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
 repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
 ("schedules/") with the tick's last run, and sets, edits or turns one off.
+
+Findings (Lint in the phone tab bar) lists the maintenance lint's findings, read from `GET
+/api/v1/findings` and `GET /api/v1/finding_marks` each time the section is shown and after each
+mark (`renderFindings` and `findingCard` in `kitlib/hubsite/web/index.html`). A row gives the check,
+the repo, the target and the finding's text, with its age as context; a marked one stays listed with
+a Passed on, Dismissed or Done tag. Above the rows, each repo's last run gives its ledger as counts,
+and "last run skipped: <reason>, <time>" only when the server names a skip later than that run
+("finding_marks/<fingerprint>"). The card of an unmarked finding offers:
+
+- for a check that names a record, a button that opens that record's page, named for what is done
+  there: Set priority (`unpriced`), Unblock (`keyword-hold`, `dead-blocker`, `answered-question`),
+  Edit scope (`scope-path-gone`, `body-path-gone`, `file-moved`) or Retire (`duplicate`, one per
+  record, `dead-pull`, `landed-still-pulled`) (`FINDING_ACTS`);
+- Pass on: an act note to the PM with the note field's text (prefilled as the server would write
+  it; unchanged, the server writes it), queued in To PM like any note, then the mark `passed_on`. A
+  mark that fails after the note was taken is retried by Pass on without a second note;
+- Dismiss: the mark `dismissed`.
+
+A target or fix shows as the server gives it; the page never rebuilds a path. In To PM an act note
+shows as Act, its edit offers no kind, and the server's refusal shows in its own words.
 
 ## Serving it
 
@@ -557,7 +577,11 @@ The owner's mark on one maintenance-lint finding (docs/maint-lint.md), so it sto
 or `done` (`kitlib.hubvalidate.STATUSES`); repo, check, target and text are copied from the
 finding when it is marked. `GET /api/v1/findings` (anyone) lists the lint's last findings, every
 repo (`kitlib.hubsite.derived.findings` over `<pm_data>/maint-lint/<repo>/result.json`),
-filtered by `repo`, less every marked one. `POST /api/v1/finding_marks` (owner) takes
+filtered by `repo`, less every marked one, with `runs`: each repo's last run as {repo, started,
+ledger, skipped}, ledger its whole-number counts `stale_cites`, `superseded` and
+`superseded_live` or null, skipped the skip marker's {reason, at} only when `at` is later than
+`started` and both parse, else null (`_lint_runs`; from the server's optional `lint_runs` view,
+an empty list without one). `POST /api/v1/finding_marks` (owner) takes
 {fingerprint, status, note?, if_version?}; a fingerprint the lint does not show is `not_found`,
 and marking again takes the mark's `if_version`, as for a schedule. `POST
 /api/v1/finding_marks/{fingerprint}/delete` (owner) takes the mark back; `GET

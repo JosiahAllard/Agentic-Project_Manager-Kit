@@ -14,8 +14,18 @@
                      the environment of a child that must run as a real run does, unfenced. Its
                      home is the caller's business: a temp folder, unless the child only computes
                      the home's path.
-  machine_config(home, body)  write the machine config under a temp home (a dict as JSON, or
-                     the file's text as it is).
+  pm_repo(case, path=None, record=True)  a fenced PM repository for the rest of the test: `path`
+                     (default a new temp folder) made a git main checkout on main, with a
+                     kit-pm-data.json record (branch main, remote origin) when `record`, that the
+                     PM-repo pointer names (kitlib.config.pointer FENCE_ENV, patched for the
+                     test). It returns the path.
+  machine_config(home, body, case=None)  write the machine config of a temp home: into the PM
+                     repository the fenced pointer names (pm_repo; a new one on the first call of
+                     the test), a dict split between its .pm-kit/config.json and local.json
+                     (kitlib.config.user POLICY_KEYS and LOCAL_KEYS), or config.json's text as it
+                     is. `pm_data` is derived from the pointer now: a body's pm_data.path becomes
+                     the PM repository itself (pm_repo of that folder). `case` defaults to the
+                     test temp_home made `home` for.
   child_home()       a temp folder to be the home of the processes tests start, for a helper that
                      builds a child's environment and has no test case to clean up with: one per
                      process, removed at exit.
@@ -32,6 +42,13 @@ from tests import gitfixture
 # The marker the fence's children read (kitlib.config.user.FENCE_ENV), spelled here so that a
 # renamed constant fails a test instead of following it.
 FENCE_ENV = 'KIT_HOME_FENCE'
+# The PM-repo pointer's value under the fence (kitlib.config.pointer.FENCE_ENV), spelled here too.
+PM_REPO_FENCE_ENV = 'KIT_PM_REPO_FENCE'
+# A record's root: any full commit id passes the record's check (kitlib.pmdata.check_fields).
+RECORD_ROOT = '0' * 40
+
+# {normcase home: the test case temp_home made it for}: machine_config's default case.
+_CASES = {}
 
 
 def unmarked_env(env=None):
@@ -48,6 +65,9 @@ def temp_home(case, prefix='kit-home-'):
     patch = mock.patch.dict(os.environ, dict(gitfixture.ps_cache_env(home), USERPROFILE=home, HOME=home))
     patch.start()
     case.addCleanup(patch.stop)
+    key = os.path.normcase(os.path.normpath(home))
+    _CASES[key] = case
+    case.addCleanup(_CASES.pop, key, None)
     return home
 
 
@@ -74,13 +94,68 @@ class TempHomeCase(unittest.TestCase):
         self.home = temp_home(self)
 
 
-def machine_config(home, body):
-    """Write the machine config under `home` (a temp home): `body` is a dict, written as JSON, or
-    the file's text as it is (to plant one the kit cannot read)."""
+def pm_repo(case, path=None, record=True):
+    """`path` (default a new temp folder, removed after the test `case`) made a PM repository
+    for the rest of the test: a git main checkout on main (git init, the fake git on the unit
+    tier), with a kit-pm-data.json record (branch main, remote origin) when `record`, that the
+    PM-repo pointer names (PM_REPO_FENCE_ENV, patched until the test ends). The remembered pointer
+    answers are dropped now and when the test ends (kitlib.config.user.forget). Returns the path."""
+    from kitlib import pmdata
+    if path is None:
+        path = tempfile.mkdtemp(prefix='kit-pm-repo-')
+        case.addCleanup(gitfixture.rmtree, path)
+    os.makedirs(path, exist_ok=True)
+    if not os.path.isdir(os.path.join(path, '.git')):
+        r = gitfixture.own_git(['init', '-q', '-b', 'main'], path)
+        if r.returncode != 0:
+            raise AssertionError('git init %s: %s' % (path, r.stderr))
+    if record:
+        pmdata.write(os.path.join(path, '.git'), 'main', 'origin', RECORD_ROOT)
+    patch = mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: path})
+    patch.start()
+    case.addCleanup(patch.stop)
+    kuser.forget()
+    case.addCleanup(kuser.forget)
+    case._kit_pm_repo = path
+    return path
+
+
+def machine_config(home, body, case=None):
+    """Write the machine config of the temp home `home` into the PM repository the fenced pointer
+    names: the one this test's pm_repo made, else a new one (pm_repo). `body` is a dict, split
+    between <PM repo>/.pm-kit/config.json (every key but LOCAL_KEYS) and local.json (LOCAL_KEYS,
+    removed when there are none), or config.json's text as it is (to plant one the kit cannot
+    read; local.json removed). A dict's `pm_data` is not written: its `path` becomes the PM
+    repository (pm_repo of that folder), since the kit derives pm_data from the pointer. `case`
+    (default the test temp_home made `home` for) holds the pointer's patch. Returns the PM
+    repository's .pm-kit folder."""
     import json
-    os.makedirs(os.path.join(home, kuser.DIR_NAME), exist_ok=True)
-    with open(kuser.config_file(home), 'w', encoding='utf-8') as fh:
-        fh.write(body if isinstance(body, str) else json.dumps(body))
+    if case is None:
+        case = _CASES.get(os.path.normcase(os.path.normpath(home)))
+        if case is None:
+            raise ValueError('machine_config(%r): pass case=, this home is not from temp_home' % home)
+    if isinstance(body, dict) and isinstance(body.get('pm_data'), dict) and body['pm_data'].get('path'):
+        body = dict(body)
+        pm = pm_repo(case, body.pop('pm_data')['path'])
+    else:
+        pm = getattr(case, '_kit_pm_repo', None) or pm_repo(case)
+    folder = os.path.join(pm, kuser.DIR_NAME)
+    os.makedirs(folder, exist_ok=True)
+    local = os.path.join(folder, kuser.LOCAL_FILE_NAME)
+    if isinstance(body, str):
+        policy, private = body, None
+    else:
+        policy = json.dumps({k: v for k, v in body.items() if k not in kuser.LOCAL_KEYS})
+        private = {k: v for k, v in body.items() if k in kuser.LOCAL_KEYS} or None
+    with open(os.path.join(folder, kuser.FILE_NAME), 'w', encoding='utf-8') as fh:
+        fh.write(policy)
+    if private is None:
+        if os.path.exists(local):
+            os.remove(local)
+    else:
+        with open(local, 'w', encoding='utf-8') as fh:
+            fh.write(json.dumps(private))
+    return folder
 
 
 def fence_decoy(case):

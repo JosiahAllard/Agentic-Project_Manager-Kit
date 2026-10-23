@@ -12,12 +12,12 @@ from unittest import mock
 
 from kitlib.launcher import autostart, handoff, reboot
 from kitlib.launcher import host as hostmod
+from tests.home import machine_config
 from tests.launcher.fakes import FakeHost, Home, role_of, session
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), 'tools'))
 import launch                                                       # noqa: E402
-from kitlib.config import user as kuser                             # noqa: E402
 
 ALPHA = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord', 'state': 's.md', 'account': 1,
          'name': 'alpha-coord-a1'}
@@ -199,9 +199,7 @@ class UserEnv(unittest.TestCase):
 class Cli(unittest.TestCase):
     def setUp(self):
         self.h = Home(self)
-        os.makedirs(kuser.config_dir(self.h.root))
-        with open(kuser.config_file(self.h.root), 'w', encoding='utf-8') as f:
-            json.dump({'launcher': self.h.obj}, f)
+        machine_config(self.h.root, {'launcher': self.h.obj}, case=self)
 
     def main(self, argv, procs=(), host=None):
         host = host or FakeHost(self.h.root, procs)
@@ -244,8 +242,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(len(out.splitlines()), 3)
 
     def test_a_bad_config_exits_1(self):
-        with open(kuser.config_file(self.h.root), 'w', encoding='utf-8') as f:
-            json.dump({'launcher': {'state_dir': 'relative'}}, f)
+        machine_config(self.h.root, {'launcher': {'state_dir': 'relative'}}, case=self)
         code, _, err, _ = self.main(['usage'])
         self.assertEqual(code, 1)
         self.assertIn('launcher.state_dir must be an absolute path', err)
@@ -266,11 +263,11 @@ class Cli(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('launch.py stop: JSONDecodeError:', err)
 
-    def test_start_defaults_to_a_170k_compact_window_and_takes_an_override(self):
+    def test_start_defaults_to_a_200k_compact_window_and_takes_an_override(self):
         _, out, _, _ = self.main(['start', '--repo', 'alpha', '--account', '1', '--what-if'])
-        self.assertIn('--autocompact 170000 ', out)
+        self.assertIn('--autocompact 200000 ', out)
         _, out, _, _ = self.main(['start', '--repo', 'alpha', '--account', '1', '--no-agent', '--what-if'])
-        self.assertIn('--autocompact 170000 ', out)
+        self.assertIn('--autocompact 200000 ', out)
         _, out, _, _ = self.main(['start', '--repo', 'alpha', '--account', '1', '--autocompact', '250000',
                                   '--what-if'])
         self.assertIn('--autocompact 250000 ', out)

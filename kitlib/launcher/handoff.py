@@ -47,12 +47,12 @@ def successor_prompt(entry, old, new, state=None):
     """The successor's first message. `state` names the hand-off note, overriding entry['state']."""
     state = state or entry.get('state')
     if entry.get('agent'):
-        return ("Start up now: run your start-up routine, read %s (the hand-off note from %s), check in with the PM "
-                "(the session named %s), then act on the note. Before re-dispatching work on any worktree, confirm "
+        return ("Start up now: run your start-up routine, read %s (the hand-off note from %s), check in with %s, "
+                "then act on the note. Before re-dispatching work on any worktree, confirm "
                 "the old session's agents there have stopped (no process with that worktree as cwd, no file changes "
-                "for 5 minutes); if one is still running, wait and tell the PM." % (state, old, S.PM_NAME))
-    return ('You are %s. Read your brief %s and %s, then check in with the PM (the session named %s).'
-            % (new, entry.get('brief'), state, S.PM_NAME))
+                "for 5 minutes); if one is still running, wait and tell the PM." % (state, old, S.PM_REF))
+    return ('You are %s. Read your brief %s and %s, then check in with %s.'
+            % (new, entry.get('brief'), state, S.PM_REF))
 
 
 def handoff(settings, host, session=None, account=None, all_=False, recycle=False, whatif=False, stem=None,

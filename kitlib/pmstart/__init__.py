@@ -85,14 +85,24 @@ BEAT_STALE = 300      # seconds: a heartbeat older than this is a watcher that s
 def machine_config(path=None):
     """The whole machine config as a dict ({} when the file is missing or is not a JSON object),
     read as load_config reads it: unchecked, so one bad key elsewhere does not stop the hub line.
-    ConfigError when its location cannot be told (kitlib.config.user.readable_file)."""
-    p = os.path.expanduser(path) if path else kuser.readable_file()
-    try:
-        with open(p, encoding="utf-8-sig") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    With no `path`, a PM repository's local.json is read too (its keys over config.json's: `hub`
+    and `launcher` live there, kitlib.config.user.LOCAL_KEYS). ConfigError when its location
+    cannot be told (kitlib.config.user.readable_file)."""
+    def read(p):
+        try:
+            with open(p, encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    if path:
+        return read(os.path.expanduser(path))
+    data = read(kuser.readable_file())
+    loc = kuser.locate()
+    if loc.state == kuser.OK and loc.local:
+        data.update(read(loc.local))
+    return data
 
 
 def current_account():

@@ -22,7 +22,7 @@ from kitlib.backlog import store as smod
 from tests import inproc
 from tests.backlog.helpers import ADD_FLAGS, kit_json_ref
 from tests.gitfixture import TempRepo, fixture_env, rmtree
-from tests.home import machine_config
+from tests.home import PM_REPO_FENCE_ENV, machine_config, pm_repo
 
 BACKLOG = inproc.load_tool('backlog')
 UTC = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z')
@@ -87,7 +87,7 @@ class Tool(unittest.TestCase):
         self.addCleanup(rmtree, self.home)
         self.data = tempfile.mkdtemp(prefix='kit-pmdata-')
         self.addCleanup(rmtree, self.data)
-        machine_config(self.home, {'pm_data': {'path': self.data}})
+        machine_config(self.home, {'pm_data': {'path': self.data}}, case=self)
         self.env = fixture_env({'USERPROFILE': self.home, 'HOME': self.home})
         for name in (sessionmark.ENV, sessionmark.SESSION_NAME_ENV):
             self.env.pop(name, None)
@@ -156,8 +156,12 @@ class Tool(unittest.TestCase):
         self.assertIn('nothing was written', out)
         self.assertEqual(len(self.lines()), 1)
 
+    def no_pm_data(self):
+        """The pointer names a PM repository with no kit-pm-data.json record: no pm_data."""
+        self.env[PM_REPO_FENCE_ENV] = pm_repo(self, record=False)
+
     def test_no_pm_data_is_a_note_and_no_line(self):
-        machine_config(self.home, {})
+        self.no_pm_data()
         self.add()
         out, err = self.ok('close', 'FOO', '--reason', 'the work is finished')
         self.assertIn('WROTE', out)
@@ -216,8 +220,8 @@ def kinds(report):
 class Check(unittest.TestCase):
     """kitlib.backlog.audit_check over a ref store the tool wrote, against its own audit log."""
 
-    setUp, run_tool, ok, lines, tip, add = (Tool.setUp, Tool.run_tool, Tool.ok, Tool.lines,
-                                            Tool.tip, Tool.add)
+    setUp, run_tool, ok, lines, tip, add, no_pm_data = (Tool.setUp, Tool.run_tool, Tool.ok, Tool.lines,
+                                            Tool.tip, Tool.add, Tool.no_pm_data)
 
     def report(self, entries=None, since=0):
         _top, cfg, rules = opener.open_repo(self.repo.root)
@@ -317,7 +321,7 @@ class Check(unittest.TestCase):
         self.assertIn('NOTE: no audit log', out)
         self.assertIn('UNAUDITED ', out)
         self.assertEqual(out.splitlines()[-1], 'FINDINGS 1')
-        machine_config(self.home, {})
+        self.no_pm_data()
         rc, out, _err = self.run_check()
         self.assertEqual(rc, 2, out)
         self.assertIn('NOT CHECKED: the machine config names no pm_data', out)

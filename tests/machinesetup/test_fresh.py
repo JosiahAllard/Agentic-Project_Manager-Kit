@@ -21,10 +21,9 @@ from unittest import mock
 from kitlib import machinesetup as M
 from kitlib import pluginsource
 from kitlib.machinesetup import extras, settings
-from kitlib.config import user as kuser
 from kitlib.pluginsource import claude as pclaude
 from tests import gitfixture
-from tests.home import temp_home
+from tests.home import machine_config, pm_repo, temp_home
 from tests.machinesetup import test_machinesetup as T
 
 PID = 'pm-kit@pm-kit'
@@ -121,7 +120,7 @@ class FreshBase(unittest.TestCase):
         self.c2 = os.path.join(self.home, '.claude-two')              # an account with its own hooks
         os.makedirs(self.c1)
         os.makedirs(self.c2)
-        os.makedirs(kuser.config_dir(self.home))
+        pm_repo(self, path=self.pmrepo)              # the fenced pointer's PM repository: the machine config is its .pm-kit
         cache = mock.patch.dict(os.environ, gitfixture.ps_cache_env(self.home))   # real powershell: no cache in the cwd
         cache.start()
         self.addCleanup(cache.stop)
@@ -145,8 +144,7 @@ class FreshBase(unittest.TestCase):
         self.host = FreshHost(self.kit, self.home)
 
     def machine_config(self, data):
-        with open(os.path.join(kuser.config_dir(self.home), kuser.FILE_NAME), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        machine_config(self.home, data, case=self)
 
     def ctx(self, **kw):
         return M.Context(self.home, self.kit, fresh=True, agent_temp=self.temp, desktop=self.desk,

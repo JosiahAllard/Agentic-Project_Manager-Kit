@@ -12,6 +12,7 @@ import unittest
 
 from kitlib.config import user as kuser
 from kitlib.delegations import place
+from tests.home import machine_config
 
 
 def _write(path, text=''):
@@ -45,8 +46,7 @@ class Base(unittest.TestCase):
 
 class DevDriveKeyTest(Base):
     def test_the_key_is_read_from_the_machine_config(self):
-        _write(os.path.join(self.home, kuser.DIR_NAME, kuser.FILE_NAME),
-               json.dumps({'dev_drive': self.dev}))
+        machine_config(self.home, {'dev_drive': self.dev}, case=self)
         self.assertEqual(kuser.dev_drive(kuser.user_config(self.home)), self.dev)
 
     def test_unset_or_blank_is_none(self):
@@ -56,8 +56,7 @@ class DevDriveKeyTest(Base):
         self.assertIsNone(kuser.dev_drive({}))
 
     def test_a_relative_key_is_a_config_error(self):
-        _write(os.path.join(self.home, kuser.DIR_NAME, kuser.FILE_NAME),
-               json.dumps({'dev_drive': 'dd'}))
+        machine_config(self.home, {'dev_drive': 'dd'}, case=self)
         with self.assertRaises(kuser.ConfigError):
             kuser.user_config(self.home)
 
@@ -219,11 +218,16 @@ class OwnerOnlyTest(Base):
 
     def test_the_retired_config_folder_is_refused_too(self):
         home = self.d('home')
-        loc = kuser.locate(home)
+        loc = kuser.home_location(home)
         text = os.path.dirname(loc.old)
         self.assertNotEqual(text, os.path.dirname(loc.new))
         self.assertEqual(self.check({'p': text}, home=home),
                          [place.WHY_OWNER % (text, 'the machine config folder', text)])
+
+    def test_the_pm_repos_config_folder_is_refused(self):
+        folder = machine_config(self.home, {'dev_drive': self.dev}, case=self)
+        places, _whys = place.owner_only(self.cfg, self.home, self.kit, {})
+        self.assertIn(('the machine config folder', folder), places)
 
     def test_the_kit_the_release_store_and_the_ledger_are_refused(self):
         kit, store = self.d('kit'), self.d('release')

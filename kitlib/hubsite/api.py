@@ -103,7 +103,13 @@ POST to_pm/{id}/edit refuses to make an act note another kind or another note an
 A finding's target and fix can name a path on this machine (a worktree's folder, a kit tool):
 only the local owner (Request.full: the owner, its error answers in its own words, not through
 the tunnel) sees them whole. Any other caller's findings, marks and act-note text have each
-absolute path cut to `.../<its last part>`, and no act note's refs carry one.
+absolute path cut to `.../<its last part>`, and no act note's refs carry one; GET to_pm and GET
+snapshot cut an act note's text and refs and a mark's target the same way (_unpath_act, _seen),
+and GET pending, GET wait and GET snapshot an act note's pending title (_unpath_pending).
+GET findings also answers `runs`: [{repo, started, ledger, skipped}], each repo's last run from
+the optional lint_runs view: ledger its three ledger counts (LEDGER_COUNTS) or null, skipped the
+skip marker's {reason, at} only where its `at` is later than the run's `started` and both parse,
+else null (_lint_runs); no view, or one that fails, is an empty list.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -157,6 +163,9 @@ is null and `unavailable` maps its name to that same reason:
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
   findings()                                the lint's rows (GET findings; not in GET snapshot)
+  lint_runs()                               [{repo, started, ledger, skip}]: each repo's last
+                                            result's started and ledger, and its skip marker
+                                            (kitlib.maintlint.slot.read_skip) or null
   health()                                  a dict merged into GET health (git, backlog, ...)
   record(repo, id)                          one record (GET records/{repo}/{id})
   record_template(repo)                     a new record's fields (GET records/{repo}/new)
@@ -1156,7 +1165,23 @@ def stories_withdraw(api, req):
 
 
 def to_pm_list(api, req):
-    return {'items': api.items('to_pm', req)}
+    """The notes; an act note's text and refs with no absolute path but for the local owner
+    (Request.full), as for its finding (_seen)."""
+    items = api.items('to_pm', req)
+    if not req.full:
+        for d in items:
+            _unpath_act(d)
+    return {'items': items}
+
+
+def _unpath_act(d):
+    """Note d (a copy) with an act note's text and refs cut as _unpathed; any other note as
+    it is: the owner's own words are the PM's to read whole."""
+    if isinstance(d, dict) and d.get('kind') == 'act':
+        if isinstance(d.get('text'), str):
+            d['text'] = _unpathed(d['text'])
+        if isinstance(d.get('refs'), list):
+            d['refs'] = [_unpathed(r) if isinstance(r, str) else r for r in d['refs']]
 
 
 def to_pm_add(api, req):
@@ -1478,7 +1503,20 @@ def pending(api, req):
     items = api.pending(_q(req, 'for'))
     api.seen(req, 'pulled')
     api.handed(req, items)
-    return {'items': items}
+    return {'items': _unpath_pending(api, items, req)}
+
+
+def _unpath_pending(api, items, req):
+    """Pending items (fresh dicts from api.pending) with an act note's title, its text's first
+    line, cut as _unpathed but for the local owner (Request.full), as GET to_pm cuts its text.
+    The note's kind is the one read with the item (its `note`, dropped here for every caller),
+    never read again: a note deleted since is still known for what it was."""
+    for d in items:
+        note = d.pop('note', '')
+        if (not req.full and d.get('kind') == 'to_pm' and note == 'act'
+                and isinstance(d.get('title'), str)):
+            d['title'] = _unpathed(d['title'])
+    return items
 
 
 def _timeout(req):
@@ -1542,7 +1580,7 @@ def wait(api, req):
             'timed_out': quiet,
             'changes': [{'collection': e.collection, 'id': e.id, 'op': e.op, 'status': e.status}
                         for e in ch.events],
-            'pending': items}
+            'pending': _unpath_pending(api, items, req)}
 
 
 def _wait_for(api, since, timeout, mine, routes=False):
@@ -1758,7 +1796,7 @@ def _one_checkout(api, task, cadence, repo):
         return
     try:
         repos = api.schedule_repos()
-    except ConfigError as e:
+    except (ConfigError, OSError) as e:      # what the tick takes as an unreadable list
         raise _invalid("the machine config's launcher.repos cannot be read: %s" % e, 'repo')
     if tick.find_repo(repo, repos) is None:
         raise _invalid("repo %r is not exactly one checkout in the machine config's "
@@ -1824,9 +1862,17 @@ def _put_pinned(api, coll, doc_id, fields, pin):
 _FINGERPRINT = re.compile(r'[0-9a-f]{16}\Z')
 FINDING_COPY = ('repo', 'check', 'target', 'text')   # what a mark keeps of its finding
 FINDING_PATHS = ('target', 'fix')   # a finding's fields that can name a path on this machine
-# an absolute Windows path (a drive's or a share's), quoted with its spaces or bare to a space
-_ABS_PATH = re.compile(r'"(?:[A-Za-z]:[\\/]|\\\\)[^"]*"'
-                       r'|(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)[^\s"\'`<>|]*')
+# an absolute Windows path: a drive's (a drive letter, a colon, then \ or /) or a share's,
+# \\host\ or //host/ (a host is needed: a lone doubled backslash is no path, and a URL's :// is
+# no share). Quoted, it runs to its quote; bare, on past each space whose next word holds a
+# separator and starts no new path, absolute or ./ ../ relative (<drive>\home\A B\x is one
+# path), so no folder after a space shows
+_PATH_HEAD = r'(?:[A-Za-z]:[\\/]|(?<![:\\/])[\\/]{2,}[^\s\\/"\'`<>|]+[\\/]+)'
+_PATH_WORD = r'[^\s"\'`<>|]*'
+_ABS_PATH = re.compile(r'"%s[^"]*"' % _PATH_HEAD
+                       + r'|(?<![A-Za-z0-9])%s%s' % (_PATH_HEAD, _PATH_WORD)
+                       + r'(?:[ \t]+(?![A-Za-z]:[\\/]|[\\/]{2}|\.{1,2}[\\/])[^\s"\'`<>|\\/]*[\\/]%s)*'
+                       % _PATH_WORD)
 
 
 def _unpathed(text):
@@ -1866,7 +1912,45 @@ def findings_list(api, req):
     marked = api.store.docs('finding_marks')
     return {'items': [_seen(f, req) for f in api.shown('findings')
                       if isinstance(f, dict) and f.get('fingerprint') not in marked
-                      and (not repo or str(f.get('repo') or '').lower() == repo)]}
+                      and (not repo or str(f.get('repo') or '').lower() == repo)],
+            'runs': [r for r in _lint_runs(api) if not repo or r['repo'].lower() == repo]}
+
+
+LEDGER_COUNTS = ('stale_cites', 'superseded', 'superseded_live')   # kitlib/maintlint/ledger.py
+
+
+def _utc(text):
+    """An ISO time (a trailing Z is UTC) as an aware datetime, or None when it does not parse."""
+    if not isinstance(text, str):
+        return None
+    return _when(text[:-1] + '+00:00' if text.endswith('Z') else text, '')
+
+
+def _lint_runs(api):
+    """Each repo's last lint run from the optional lint_runs view, as {repo, started, ledger,
+    skipped}: ledger the LEDGER_COUNTS (whole numbers) or None; skipped the skip marker's {reason,
+    at} only when its `at` is later than the run's `started` and both parse (a marker left beside
+    a newer result is no skip), else None. No view, a view that raises or a row that is not one:
+    nothing, never a failed GET findings."""
+    try:
+        rows = api.view('lint_runs')
+    except Exception:               # noqa: BLE001 - context only; the findings still show
+        return []
+    out = []
+    for r in rows if isinstance(rows, list) else ():
+        if not isinstance(r, dict) or not isinstance(r.get('repo'), str):
+            continue
+        led = r.get('ledger')
+        led = ({k: led[k] for k in LEDGER_COUNTS if type(led.get(k)) is int}
+               if isinstance(led, dict) else None)
+        skip, skipped = r.get('skip'), None
+        if isinstance(skip, dict) and isinstance(skip.get('reason'), str):
+            at, started = _utc(skip.get('at')), _utc(r.get('started'))
+            if at is not None and started is not None and at > started:
+                skipped = {'reason': skip['reason'], 'at': skip['at']}
+        out.append({'repo': r['repo'], 'started': r['started'] if isinstance(r.get('started'), str)
+                    else None, 'ledger': led, 'skipped': skipped})
+    return out
 
 
 def finding_marks_list(api, req):
@@ -1923,6 +2007,13 @@ def _act_note(api, b, req):
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
     docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
+    if not req.full:                # the paths as GET to_pm and GET finding_marks cut them
+        for d in (docs.get('to_pm') or {}).values():
+            _unpath_act(d)
+        marks = docs.get('finding_marks') or {}
+        for doc_id, m in list(marks.items()):
+            if isinstance(m, dict):
+                marks[doc_id] = _seen(m, req)
     views, missing = {}, {}
     for name in VIEWS:
         try:
@@ -1931,7 +2022,7 @@ def snapshot(api, req):
             views[name] = None
             missing[name] = _reason(e)
     return {'revision': revision, 'collections': docs,
-            'pending': api.pending(),
+            'pending': _unpath_pending(api, api.pending(), req),
             'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
             'push': api.push_seen(),
             'strong': req.strong is True}

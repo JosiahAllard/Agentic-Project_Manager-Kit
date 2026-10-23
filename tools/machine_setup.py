@@ -25,7 +25,9 @@ It writes nothing into any repository: a repository works with the kit with noth
                                                        write Claude Code's machine-wide managed
                                                        settings file (Program Files/ClaudeCode)
                                                        from the kit's template and the overlay
-                                                       ~/.pm-kit/managed-settings.json instead;
+                                                       managed-settings.json in the machine config
+                                                       folder (<PM repo>/.pm-kit; ~/.pm-kit with
+                                                       no PM-repo pointer) instead;
                                                        --apply needs an elevated terminal
                                                        (docs/machine-setup.md "Managed settings")
   machine_setup.py --pm-repo PATH [--kit DIR] [--apply]

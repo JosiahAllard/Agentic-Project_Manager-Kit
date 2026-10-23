@@ -13,7 +13,7 @@ from unittest import mock
 from kitlib.config import user
 from kitlib.lock import site
 from kitlib.lock import store as lockstore
-from tests.home import temp_home
+from tests.home import machine_config, pm_repo, temp_home
 
 
 def store(testing=False):
@@ -123,18 +123,25 @@ class Fenced(unittest.TestCase):
 
 
 class MachineHome(unittest.TestCase):
-    def config(self, home, policy):
-        path = user.writable_file(home)
+    def leftover(self, home, policy):
+        """A machine config left in `home`'s own folder, as before the move to the PM repository."""
+        path = os.path.join(home, user.DIR_NAME, user.FILE_NAME)
         os.makedirs(os.path.dirname(path))
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"machine_lock": {"daemons": policy}}, f)
 
     def test_the_config_is_read_under_the_stores_home_not_the_environments(self):
-        # create=True: where the store has no machine_home yet, the config under the environment's
-        # home is read, and the test fails on the policy, not on a missing name
+        # create=True: where the store has no machine_home yet, the environment's home is the one
+        # read, and the test fails on its leftover, not on a missing name. The pointer names a PM
+        # repository with no machine config, so a home's leftover is what decides: the environment's
+        # (USERPROFILE and HOME, another folder) would be refused as unmoved; the store's has none.
         mine = machine_home(self, create=True)
-        self.config(mine, "leave")
-        self.config(temp_home(self), "stop")        # USERPROFILE and HOME: another folder
+        pm_repo(self)
+        self.leftover(temp_home(self), "stop")
+        s = store()
+        self.assertEqual(site.daemon_policy(s), "gates")       # the default: no config, none refused
+        self.assertEqual(s.said, [])
+        machine_config(mine, {"machine_lock": {"daemons": "leave"}}, case=self)
         s = store()
         self.assertEqual(site.daemon_policy(s), "leave")
         self.assertEqual(s.said, [])

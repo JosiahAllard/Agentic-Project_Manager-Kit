@@ -5,7 +5,9 @@ Two things are read here, both pure data with no git writes:
 - `<git common dir>/kit-pm-data.json`, `{"branch", "remote", "root"}`: what `tools/pm_data.py init`
   recorded when the data branch was made. `read`, `write` and `locate` handle it. The root commit
   is recorded so the guard still knows it if the branch is renamed or deleted.
-- the machine config's `pm_data`, `{"path", "branch", "remote"}`: `machine_settings`.
+- the machine config's `pm_data`, `{"path", "branch", "remote"}`: `machine_settings`. It is
+  derived, never read from a file: the PM-repo pointer's repository and its record
+  (kitlib.config.user.locate).
 
 An absent record is "no PM-data branch" (None). A record that is present but cannot be read or
 fails its checks is a PmDataError that names the file: a guard fails closed on it, never treats it
@@ -144,14 +146,16 @@ def locate(path):
 
 
 def machine_settings(home=None, location=None):
-    """The machine config's `pm_data` as {"path", "branch", "remote"} (branch and remote defaulted
-    to DEFAULT_BRANCH and DEFAULT_REMOTE), or None when the key is unset. PmDataError for a missing
-    or relative path or an invalid name; a machine config that cannot be read is the config
-    package's ConfigError, unchanged. `location`: a kitlib.config.user.locate answer already
-    taken, else one is taken here."""
-    from kitlib.config import user
+    """The machine config's `pm_data` as {"path", "branch", "remote"}, or None when there is none:
+    derived from the PM-repo pointer's repository and its record (kitlib.config.user.locate's
+    Location.pm_data), so no other key of the machine config can hide it. A machine config that
+    cannot be read (UNMOVED, BAD) is the config package's ConfigError. `location`: a
+    kitlib.config.user.locate answer already taken, else one is taken here."""
+    from kitlib.config import ConfigError, user
     loc = location or user.locate(home)
-    return check_settings(user.user_config(home, location=loc)[KEY], '%s key %s' % (loc.path, KEY))
+    if loc.error:
+        raise ConfigError(loc.error)
+    return check_settings(getattr(loc, 'pm_data', None), 'the PM repository %s' % getattr(loc, 'pm', None))
 
 
 def check_settings(cfg, where):

@@ -10,9 +10,10 @@
   private remote name that is not the public remote's (`.kit.json` "repo".remote); a public
   remote that has a url; private urls that reach, in no form (compare_url, with insteadOf and
   pushInsteadOf applied), the url or pushurl of any other remote; a worktree path outside the
-  main checkout and every work tree, absent or empty; no data branch, no kit-pm-data.json, no
-  machine-config `pm_data` and no data branch on the private remote yet (else --adopt; a remote
-  that cannot be reached is not refused).
+  main checkout and every work tree, absent or empty; no data branch, no kit-pm-data.json and no
+  data branch on the private remote yet (else --adopt; a remote that cannot be reached is not
+  refused); and, with or without --adopt, no PM-repo pointer (`pm_data` is derived from it,
+  kitlib.config.user.locate) and a machine config that can be read.
 - --adopt takes an existing data branch with one root commit, which no main-branch history holds
   and which equals the recorded root when a record exists; its `.kit.json`, if it has one, must
   set "repo".main_branch to the data branch, "repo".remote to the private remote and a "backlog"
@@ -23,15 +24,17 @@
   by `git write-tree` of an empty index, the same id as the spec's literal) and `git branch`;
   kit-pm-data.json (before anything can be pushed, so the pre-push guard knows the root from the
   start); `git worktree add` and `git worktree lock`; `branch.<b>.remote`, `.pushRemote`, `.merge`
-  and `push.default=simple` when unset; `git remote add` when a url was given; the machine
-  config's `pm_data`; last the push to the private remote, with an explicit refspec.
+  and `push.default=simple` when unset; `git remote add` when a url was given; last the push to
+  the private remote, with an explicit refspec. The machine config is never written: the lines
+  end with the owner's step that makes `pm_data` (pointer_line: the PM-repo pointer set to the
+  data worktree, `tools/machine_setup.py --pm-repo`, elevated).
 - Nothing here edits `remote.<name>.fetch` or `remote.<name>.push` (docs/pm-data-branch.md
   "Never configure a refspec"); `git remote add` writes git's own default fetch line for the new
   remote only.
 
 Exit codes: OK 0; REFUSED 1 (nothing changed); CONFIG 2 (a kit or machine configuration that
 cannot be read); PUSH_FAILED 3 (all made locally, the push was tried and failed; the lines say
-how to recover); PARTIAL 4 (stopped part-way: the lines name what was made, and `--adopt`
+how to recover, then the pointer step); PARTIAL 4 (stopped part-way: the lines name what was made, and `--adopt`
 finishes it; a failure before anything was changed is REFUSED); INTERRUPTED 130 (Ctrl+C, with
 the lines made so far). An unexpected error (not a git failure this module names) in the writes or
 the push is caught like a failed write: PARTIAL once a write started, else REFUSED with its text;
@@ -42,13 +45,12 @@ import json
 import os
 import re
 import shutil
-import tempfile
 
 from kitlib import kitroot
 from kitlib import pmdata
 from kitlib.config import ConfigError, load, load_at
+from kitlib.config import pointer as cpointer
 from kitlib.config import user
-from kitlib.config.types import parse_json
 from kitlib.git import cmd, refs
 from kitlib.git import repo as gitrepo
 
@@ -420,8 +422,13 @@ def plan(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
     if common is None:
         raise _Refused('cannot find the git common dir: %s' % why)
     record = pmdata.read(common)
-    machine = pmdata.machine_settings(home)
-    user.writable_file(home)                     # a config still only in the old folder: refused now
+    loc = user.locate(home)
+    if loc.error:                                # UNMOVED or BAD: never written past
+        raise ConfigError(loc.error)
+    if loc.state == user.OK:
+        raise ConfigError('the PM repo pointer is set (%s): pm_data is derived from it and its '
+                          "repository's kit-pm-data.json record, and init never sets it (%s)"
+                          % (loc.pm, user.POINTER_DOC))
     remote_exists, _urls = _check_remote(top, cfg, remote, url)
     rc, out, err = _git(top, 'for-each-ref', '--format=%(refname)', 'refs/heads/%s' % branch)
     if rc != 0:
@@ -432,7 +439,7 @@ def plan(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
         raise _Refused('cannot list worktrees: %s' % why)
     p = _Plan(top=top, cfg=cfg, common=common, branch=branch, remote=remote, url=url,
               path=path, adopt=adopt,
-              home=home, record=record, machine=machine, remote_exists=remote_exists,
+              home=home, record=record, remote_exists=remote_exists,
               root=None, has_kit_json=False, action='add', registered=None, wrote=False,
               notes=[])
     if not adopt:
@@ -441,9 +448,6 @@ def plan(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
         if record is not None:
             raise _Refused('%s already records a data branch (%s, root %s); pass --adopt to '
                            're-link it' % (pmdata.record_path(common), record.branch, record.root))
-        if machine is not None:
-            raise _Refused('%s already sets %s (path %s); pass --adopt, or remove the key'
-                           % (user.config_file(home), pmdata.KEY, machine['path']))
         _check_path(top, p.path)
         note = _check_remote_branch(top, remote, branch,
                                     remote if remote_exists else url)
@@ -464,36 +468,12 @@ def plan(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
     return p
 
 
-def write_machine(home, settings):
-    """Set the machine config's `pm_data` to `settings`, keeping every other key; the file is
-    replaced whole. It writes the new folder's file only (kitlib.config.user.writable_file), so a
-    machine whose config is still only in the old folder is refused. ConfigError (from reading or
-    that refusal) or OSError."""
-    user.user_config(home)                       # a file that does not check is never rewritten
-    path = user.writable_file(home)
-    try:
-        with open(path, encoding='utf-8-sig') as f:
-            data = parse_json(f.read(), path)
-    except FileNotFoundError:
-        data = {}
-    data[pmdata.KEY] = settings
-    folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=user.FILE_NAME + '.', suffix='.tmp', dir=folder)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(json.dumps(data, indent=2) + '\n')
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-        tmp = None
-    finally:
-        if tmp is not None:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-    return path
+def pointer_line(path):
+    """The owner's step that makes `pm_data` for the data worktree `path`: the PM-repo pointer set
+    to it (kitlib.machinesetup.pointer; HKLM, so an elevated terminal). init never runs it."""
+    return ('pointer   owner step, in an elevated terminal: %s --pm-repo %s --apply sets the PM '
+            'repo pointer to the data worktree; pm_data is derived from it (%s)'
+            % (kitroot.command('machine_setup'), cpointer.quoted(path), user.POINTER_DOC))
 
 
 def _empty_tree(top):
@@ -582,12 +562,6 @@ def _apply(p, lines):
         _write(p, 'remote', 'add', r, p.url)
         p.remote_exists = True
         lines.append('remote    %s added (%s)' % (r, p.url))
-    try:
-        cfgpath = write_machine(p.home, {'path': p.path, 'branch': b, 'remote': r})
-    except (ConfigError, OSError) as e:
-        raise _Failed('cannot write the machine config: %s' % e)
-    p.wrote = True
-    lines.append('machine   %s: %s set' % (cfgpath, pmdata.KEY))
     if not p.has_kit_json:
         lines.append('kit.json  the data worktree has no .kit.json; add %s with: %s'
                      % (os.path.join(p.path, '.kit.json'), kit_json_line(b, r)))
@@ -596,10 +570,12 @@ def _apply(p, lines):
 def recover_steps(top, path, branch, remote, common):
     """The lines naming, for the owner to run (this tool runs none of them), how to drop the new
     local data branch and take the private remote's own instead, when the remote already holds a
-    different one."""
+    different one. They come before the owner's pointer step (pointer_line), which init refuses
+    after."""
     return [
         'recover   if %s holds the real %s, drop the new local one and adopt it (run these '
-        'yourself, in %s; the tool does not):' % (remote, branch, top),
+        'yourself, in %s; the tool does not; all of them before the pointer step, since init '
+        '--adopt refuses once a pointer is set):' % (remote, branch, top),
         '            1. git worktree unlock "%s"' % path,
         '            2. git worktree remove "%s"' % path,
         '            3. git branch -D %s' % branch,
@@ -645,11 +621,13 @@ def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
     if not p.remote_exists:
         lines.append('push      not done: there is no remote %s; add it (git remote add %s <url>), '
                      'then git push %s %s' % (p.remote, p.remote, p.remote, spec))
+        lines.append(pointer_line(p.path))
         return Outcome(OK, lines)
     try:
         rc, _out, err = _git(p.top, 'push', p.remote, spec, timeout=PUSH_TIMEOUT)
     except KeyboardInterrupt:
         lines.append('INTERRUPTED during git push %s %s; everything else is made' % (p.remote, spec))
+        lines.append(pointer_line(p.path))
         return Outcome(INTERRUPTED, lines)
     except Exception as e:      # everything else is made; whether the push went is not known
         lines.append('FAILED: unexpected %s during git push %s %s: %s; everything else is made'
@@ -666,6 +644,8 @@ def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
                      % (p.remote, spec, p.remote, p.branch, p.remote, p.branch, p.remote,
                         p.branch))
         lines.extend(recover_steps(p.top, p.path, p.branch, p.remote, p.common))
+        lines.append(pointer_line(p.path))
         return Outcome(PUSH_FAILED, lines)
     lines.append('push      %s to %s' % (spec, p.remote))
+    lines.append(pointer_line(p.path))
     return Outcome(OK, lines)

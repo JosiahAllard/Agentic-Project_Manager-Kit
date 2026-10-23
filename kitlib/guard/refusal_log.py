@@ -147,12 +147,33 @@ def append(pm_data, fields, wait=WAIT):
     return path
 
 
+def _location(home):
+    """kitlib.config.user.locate(home) with the PM-repo pointer checked from the filesystem only
+    (kitlib.guard.place and its HEAD-file read, no git child): a pointer the filesystem cannot
+    check reads as BAD, and record writes no line."""
+    from kitlib.config import pointer, user
+    from kitlib.git import repo
+    from kitlib.guard import place
+
+    def classify(path):
+        found = place.classify(path, fallback=_none)
+        if found is None:
+            return repo.Place(repo.UNKNOWN, None, 'the filesystem cannot tell', None, None)
+        return found
+
+    def branch(path):
+        found = classify(path)
+        answer = place.head_branch(found.git_dir) if found.git_dir else None
+        return answer if answer is not None else (None, 'its HEAD file cannot tell')
+    return user.locate(home, ptr=pointer.read(classify=classify, branch=branch))
+
+
 def record(decision, action, host, role, environ=None, home=None, now=None):
     try:
         if getattr(decision, 'verdict', None) != 'deny':
             return None
         from kitlib import pmdata
-        settings = pmdata.machine_settings(home)
+        settings = pmdata.machine_settings(home, location=_location(home))
         if not settings or not settings.get('path'):
             return None
         return append(settings['path'], entry(decision, action, host, role, environ, now), WAIT)

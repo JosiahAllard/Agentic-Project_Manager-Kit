@@ -212,6 +212,25 @@ class ReviewerTierByAuthor(StrictCase):
         self.lands('opus', 'Kit Test / senior-worker')
 
 
+class CommitRecordsLandGate(StrictCase):
+    """The commit and records code and the landing and gate entry points are strict paths of the
+    running kit's list (kitlib/commit/**, kitlib/records/**, tools/land.py, tools/gate.py): a
+    branch changing one is refused on a haiku review of a worker build, which lands a plain
+    branch (ReviewerTierByAuthor)."""
+    GATE = LandsAloneFullFresh.GATE
+
+    def test_each_is_a_strict_path(self):
+        for n, path in enumerate(('kitlib/commit/x.py', 'kitlib/records/x.py', 'tools/land.py',
+                                  'tools/gate.py')):
+            with self.subTest(path=path):
+                branch = 'kit/strict-%d' % n
+                _, tip = self.branch('strict-%d' % n, {path: 'x = 1\n'})
+                self.queue(branch, tip, reviewer_model='haiku', author='Kit Test / worker')
+                _, out, _ = self.land_it(branch, tip)
+                self.assert_refused(out, '%s changes strict path %s' % (branch, path),
+                                    'the reviewer ran on haiku, not a strong-tier model')
+
+
 class CarriedVerdict(StrictCase):
     """A verdict carried over main merges (tools/verdict.py carry; docs/gate.md "Carrying a
     verdict forward") lets the merge land, and only when kitlib.gate.carry passes it again here

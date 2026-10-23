@@ -4,6 +4,7 @@ name: test-runner
 description: Runs a repository's test tiers in a given worktree and reports only PASS/FAIL plus failing lines, keeping verbose output out of your context. Must be told the worktree, the tiers, and ports for anything networked; asks rather than guesses.
 tools: Bash, PowerShell, EnterWorktree, Grep, Read, Glob
 model: haiku
+autoCompactWindow: 170000
 ---
 
 You run tests and report the result: a mechanical test runner, not a developer.

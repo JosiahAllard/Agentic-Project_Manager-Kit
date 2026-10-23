@@ -55,7 +55,9 @@ class World(object):
     worktree, base/pmdata another linked worktree of it (the PM data worktree when the machine
     config or a kit-pm-data.json record says so; its own .kit.json names repo "data"),
     base/plain no checkout, base/unknown a place git cannot tell about. base/kit (kit_dir) stands
-    for the kit checkout the guard runs from (Ctx.kit): the folder its advised lock tool is under."""
+    for the kit checkout the guard runs from (Ctx.kit): the folder its advised lock tool is under.
+    base/pmrepo (pm_repo) holds the machine config user_config writes, in its .pm-kit folder
+    (config_dir), as the PM repository's two files."""
 
     def __init__(self, kit=None):
         self.base = tempfile.mkdtemp(prefix='kit-guard-')
@@ -66,6 +68,11 @@ class World(object):
         self.plain = os.path.join(self.base, 'plain')
         self.unknown = os.path.join(self.base, 'unknown')
         self.home = os.path.join(self.base, 'home')
+        self.pm_repo = os.path.join(self.base, 'pmrepo')
+        self.config_dir = os.path.join(self.pm_repo, user.DIR_NAME)
+        self.config_file = os.path.join(self.config_dir, user.FILE_NAME)
+        self.local_file = os.path.join(self.config_dir, user.LOCAL_FILE_NAME)
+        self.location = None                  # the Location user_config hands every ctx()
         self.temp = os.path.join(self.base, 'tmp')
         self.kit_dir = os.path.join(self.base, 'kit')
         for d in (self.wt, self.data, self.plain, self.unknown, self.home, self.temp, self.kit_dir):
@@ -84,10 +91,25 @@ class World(object):
         shutil.rmtree(self.base, True)
 
     def user_config(self, data):
-        d = user.config_dir(self.home)
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, 'config.json'), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        """The machine config `data` as the PM repository's files (kitlib.config.user.locate's
+        OK): kitlib.config.user LOCAL_KEYS in local.json (written only when it holds one), every
+        other key but pm_data in config.json. pm_data is the Location's derived one, taken from
+        `data` as given (none when it has none), so a test still pins how the guard takes a value
+        that fails kitlib.pmdata.check_settings. Every ctx() after it reads this Location."""
+        data = dict(data)
+        pm_data = data.pop('pm_data', None)
+        local = {k: v for k, v in data.items() if k in user.LOCAL_KEYS}
+        policy = {k: v for k, v in data.items() if k not in user.LOCAL_KEYS}
+        os.makedirs(self.config_dir, exist_ok=True)
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            json.dump(policy, f)
+        if local:
+            with open(self.local_file, 'w', encoding='utf-8') as f:
+                json.dump(local, f)
+        elif os.path.exists(self.local_file):
+            os.remove(self.local_file)
+        self.location = user.Location(user.OK, self.config_file, self.local_file, self.config_dir,
+                                      self.pm_repo, pm_data, None, None, self.home, self.config_file)
 
     def classify(self, path):
         p = os.path.normcase(os.path.abspath(path))
@@ -111,6 +133,8 @@ class World(object):
         args = dict(environ=self.environ, home=self.home, classify=self.classify, gate_ok=self.gate_ok,
                     git=self.git, lock_held=lambda: (self.held, None if self.held else 'MACHINE_LOCK_RUN is not set'),
                     tempdir=self.temp, kit=self.kit_dir)
+        if self.location is not None:
+            args['location'] = lambda: self.location
         args.update(kw)
         return context.Ctx(**args)
 

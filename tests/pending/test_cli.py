@@ -4,7 +4,6 @@
 import contextlib
 import importlib.util
 import io
-import json
 import os
 import subprocess
 import sys
@@ -14,6 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests.gitfixture import TempRepo, fixture_env
+from tests.home import machine_config
 from tests.realgit import real_git
 from kitlib.config import user as kuser
 from kitlib.git import repo as gitrepo
@@ -64,9 +64,7 @@ class Base(unittest.TestCase):
         self.config({'pending_path': self.path})
 
     def config(self, data):
-        os.makedirs(kuser.config_dir(self.home), exist_ok=True)
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        machine_config(self.home, data, case=self)
 
     def run_tool(self, *args, model=MODEL):
         env = fixture_env({'USERPROFILE': self.home, 'HOME': self.home, 'CLAUDE_AGENT_MODEL': model})
@@ -238,6 +236,7 @@ class WriteLockTest(Base):
         tool = self.load_tool()
         unknown = SimpleNamespace(kind=gitrepo.UNKNOWN, common=None,
                                   detail='fatal: detected dubious ownership in repository')
+        kuser.locate(self.home)       # the pointer's git check, remembered before classify is patched
         err = io.StringIO()
         with mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home}), \
                 mock.patch('kitlib.fs.writelock.gitrepo.classify', return_value=unknown), \

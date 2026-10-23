@@ -11,6 +11,9 @@ A role file, `content/roles/<name>.md`, is front matter between two `---` lines,
   sandbox: workspace-write           read-only | workspace-write
   capabilities: [read, edit, bash]   the tools the role gets, in order, or `all` for no list
   cache: long                        optional: the role asks for the host's long prompt cache
+  compact: 170000                    optional: the role's auto-compact window in tokens (COMPACT
+                                     bounds), a ceiling under the session's own; a host without a
+                                     per-agent window renders nothing
   mode: write                        optional: the role policy it is held to (MODES; docs/guard.md
                                      "Role policy"), where a repository turns that policy on.
                                      Read by the guard, never rendered into a host's file
@@ -50,6 +53,7 @@ TIERS = ('light', 'standard', 'strong', 'deep')
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
 SANDBOXES = ('read-only', 'workspace-write')
 CACHES = ('long',)
+COMPACT = (100000, 1000000)   # a role's `compact:` bounds, the Claude CLI's own --autocompact range
 # The role-policy modes (kitlib.guard.rolepolicy, which takes them from here).
 MODES = ('controller', 'write', 'read', 'test', 'lander')
 # A role's group (kitlib.backlog.roles reads them): its mode's (MODE_GROUP), or the `group:` it
@@ -86,7 +90,7 @@ TOKENS = ARG_TOKENS + ('profile_path', 'coordinator_profile_path', 'instructions
                        'owner_folder', 'user_folder', 'config_dir_env', 'long_context_model', 'coauthor_email',
                        'launch_agent')
 REQUIRED = ('name', 'description', 'tier', 'sandbox', 'capabilities')
-OPTIONAL = ('effort', 'cache', 'mode', 'writes', 'group', 'run', 'summary')
+OPTIONAL = ('effort', 'cache', 'compact', 'mode', 'writes', 'group', 'run', 'summary')
 MODEL_KEY = 'model.'
 
 _FM = re.compile(r'\A---(\r?\n)(.*?)\r?\n---\r?\n', re.S)
@@ -108,6 +112,7 @@ class Role:
     all_tools: bool              # `capabilities: all`: the host gives every tool, no list
     effort: str = None
     cache: str = None
+    compact: int = None          # COMPACT: the role's auto-compact window in tokens
     mode: str = None             # the role-policy mode (MODES); a host's file never carries it
     models: tuple = ()           # ((host, model), ...): per-host overrides of the tier's model
     writes: tuple = ()           # repo-relative posix paths or globs the role policy lets it write
@@ -284,12 +289,18 @@ def parse_role(data, source='role'):
     mode, group = fields.get('mode'), fields.get('group')
     if group is not None and mode not in GROUP_MODES[group]:
         raise ContentError('%s: group %s needs mode %s' % (source, group, ' or '.join(GROUP_MODES[group])))
+    compact = fields.get('compact')
+    if compact is not None:
+        if not re.match(r'^[0-9]+\Z', compact) or not COMPACT[0] <= int(compact) <= COMPACT[1]:
+            raise ContentError('%s: compact %r is not a whole number of tokens %d..%d'
+                               % ((source, compact) + COMPACT))
+        compact = int(compact)
     summary = unquote(fields['summary'], '%s: summary' % source) if 'summary' in fields else None
     if summary is not None and not summary:
         raise ContentError('%s: empty summary' % source)
     return Role(name=name, description=description, tier=fields['tier'], sandbox=fields['sandbox'],
                 capabilities=caps or (), all_tools=caps is None, effort=fields.get('effort'),
-                cache=fields.get('cache'), mode=mode, models=tuple(sorted(models.items())),
+                cache=fields.get('cache'), compact=compact, mode=mode, models=tuple(sorted(models.items())),
                 writes=writes, group=group or MODE_GROUP.get(mode), run=fields.get('run'), summary=summary,
                 body=text[m.end():], newline=newline)
 

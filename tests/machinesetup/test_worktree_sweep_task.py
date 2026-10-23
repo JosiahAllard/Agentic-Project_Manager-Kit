@@ -21,7 +21,7 @@ from kitlib.config import user as kuser
 from kitlib.machinesetup import agenttemp, extras, worktreesweep as W
 from kitlib.worktree import task as T
 from tests import gitfixture
-from tests.home import no_machine_owner, temp_home
+from tests.home import machine_config, no_machine_owner, temp_home
 from tests.machinesetup import test_machinesetup as MS
 from tests.pmstart import keep_off_launcher_repos
 
@@ -188,15 +188,16 @@ class StepBase(MS.Base):
         self.host.worktree_sweep_dry_run = dry_run
 
     def config(self, repos):
-        path = os.path.join(kuser.config_dir(self.home), kuser.FILE_NAME)
-        try:
-            with open(path, encoding='utf-8') as f:
-                cfg = json.load(f)
-        except OSError:
-            cfg = {}
+        cfg = {}
+        for name in (kuser.FILE_NAME, kuser.LOCAL_FILE_NAME):      # the PM repository's two files
+            try:
+                with open(os.path.join(self.cfg_dir, name), encoding='utf-8') as f:
+                    cfg.update(json.load(f))
+            except OSError:
+                pass
         cfg['launcher'] = {'repos': repos}
         cfg['plugin'] = {'export_dir': self.exports}
-        write_json(path, cfg)
+        machine_config(self.home, cfg, case=self)
 
     def go(self, apply=False, **kw):
         kw.setdefault('agent_temp', os.path.join(self.root, 'new-agent-temp'))

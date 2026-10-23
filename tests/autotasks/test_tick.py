@@ -15,7 +15,7 @@ from kitlib.autotasks import tick as T
 from kitlib.fs.treelock import TreeLock
 from kitlib.hubsite import serve
 from tests import gitfixture
-from tests.home import temp_home
+from tests.home import machine_config, pm_repo, temp_home
 
 D = datetime.datetime
 NOW = D(2026, 10, 21, 12, 0)
@@ -117,10 +117,22 @@ class State(Base):
         self.assertEqual(records, {})
         self.assertIn('could not be read', problem)
 
-    def test_the_state_lives_in_the_machine_config_folder(self):
+    def test_the_state_is_in_no_checkout_with_the_pointer_ok(self):
         from kitlib.config import user as kuser
-        self.assertEqual(self.folder, os.path.join(kuser.config_dir(self.home), 'auto-tasks'))
-        self.assertTrue(self.folder.startswith(self.home))
+        pm = os.path.normcase(os.path.realpath(pm_repo(self)))
+        machine_config(self.home, {'owner_email': 'owner@example.invalid'}, case=self)
+        self.assertEqual(kuser.locate(self.home).state, kuser.OK)
+        folder = T.state_dir(self.home)
+        self.assertEqual(folder, os.path.join(self.home, kuser.DIR_NAME, T.DIR_NAME))
+        real = os.path.normcase(os.path.realpath(folder))
+        self.assertFalse(real == pm or real.startswith(pm.rstrip(os.sep) + os.sep), folder)
+        p = folder
+        while True:
+            self.assertFalse(os.path.lexists(os.path.join(p, '.git')), 'state folder %s is in the checkout %s' % (folder, p))
+            parent = os.path.dirname(p)
+            if parent == p:
+                break
+            p = parent
 
 
 class Tick(Base):

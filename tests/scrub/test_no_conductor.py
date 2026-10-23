@@ -27,6 +27,7 @@ ALLOWED = (
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_KEY = "conductor_start"', W2B),
     ('kitlib/coordinatorstart/__init__.py', 'LEGACY_ROLE = "conductor"', W2B),
     ('kitlib/config/user.py', "'conductor_start': Field(", W2B),
+    ('kitlib/config/user.py', "DROPPED_KEYS = ('ledger_refs', 'conductor_start', ", W2B),
     ('kitlib/config/user.py', 'unset: coordinator, conductor (removed after the switch)', W2B),
     ('docs/kit-json.md', '- `conductor_start` (object', W2B),
     ('docs/kit-json.md', 'unset: coordinator, conductor (removed after the switch)', W2B),

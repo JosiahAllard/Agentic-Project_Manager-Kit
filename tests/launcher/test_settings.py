@@ -1,5 +1,4 @@
 """The `launcher` config object: checks, defaults, ~ expansion, and loading from the machine config."""
-import json
 import os
 import shutil
 import tempfile
@@ -7,8 +6,8 @@ import unittest
 
 from kitlib.config.types import ConfigError
 from kitlib.launcher import settings as S
-from kitlib.config import user as kuser
 from kitlib.lockmcp import PLUGIN_NAME
+from tests.home import machine_config
 
 
 class Check(unittest.TestCase):
@@ -84,9 +83,8 @@ class Defaults(unittest.TestCase):
     def test_load_reads_the_launcher_object_of_the_machine_config(self):
         state = os.path.join(self.home, 'state')
         repo = os.path.join(self.home, 'r')
-        os.makedirs(kuser.config_dir(self.home))
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump({'launcher': {'state_dir': state, 'repos': {'r': repo}, 'coordinator_agent': 'conductor'}}, f)
+        machine_config(self.home, {'launcher': {'state_dir': state, 'repos': {'r': repo},
+                                                'coordinator_agent': 'conductor'}}, case=self)
         s = S.load(self.home)
         self.assertEqual(s.state_dir(), state)
         self.assertEqual(s.repo_path('r'), repo)

@@ -320,16 +320,15 @@ class Ledger(unittest.TestCase):
         self.assertIn('error', self.w.ctx().user())
 
     def write_config(self, raw):
-        d = kuser.config_dir(self.w.home)
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, 'config.json'), 'wb') as f:
+        """`raw` as the PM repository's config.json (World.user_config's Location)."""
+        self.w.user_config({})
+        with open(self.w.config_file, 'wb') as f:
             f.write(raw)
 
     def test_a_broken_machine_config_denies_every_subagent_write(self):
         target = os.path.join(self.w.wt, 'a.py')
         for raw, why in ((b'{', 'not valid JSON'), (b'{"ledger_path": "' + bytes([0xff]) + b'"}', 'cannot read'),
-                         (b'[]', 'must be an object'), (b'{"ledger_path": "rulings.md"}', 'absolute'),
-                         (b'{"ledger_path": 5}', 'ledger_path')):
+                         (b'[]', 'must be an object'), (b'{"ledger_path": 5}', 'ledger_path')):
             with self.subTest(raw):
                 self.write_config(raw)
                 for ev in (event('Write', {'file_path': target, 'content': ''}, self.w.wt, sub=True),
@@ -338,12 +337,21 @@ class Ledger(unittest.TestCase):
                     d = decide(ev, self.w.ctx())
                     self.assertIsNotNone(d, ev['tool_name'])
                     self.assertEqual(d.rule, 'ledger', d.reason)
-                    self.assertIn('The owner or the PM session fixes it. Instead: python -m json.tool "%s/%s/config.json" '
-                                  % (W.fwd(self.w.home), kuser.DIR_NAME), d.reason)
+                    self.assertIn('The owner or the PM session fixes it. Instead: python -m json.tool "%s" '
+                                  % W.fwd(self.w.config_file), d.reason)
                     self.assertIn(why, d.reason)
                 # the main session and reads stay open
                 self.assertIsNone(decide(event('Write', {'file_path': target, 'content': ''}, self.w.wt), self.w.ctx()))
                 self.assertIsNone(decide(bash('git status', self.w.wt, sub=True), self.w.ctx()))
+
+    def test_a_relative_ledger_path_is_read_against_the_pm_repository(self):
+        self.write_config(b'{"ledger_path": "rulings/LEDGER.md"}')
+        ledger = os.path.join(self.w.pm_repo, 'rulings', 'LEDGER.md')
+        self.assertEqual(self.w.ctx().user()['ledger_path'], ledger)
+        self.assertNotIn('broken', self.w.ctx().user())
+        d = decide(event('Write', {'file_path': ledger, 'content': ''}, self.w.plain, sub=True), self.w.ctx())
+        self.assertIsNotNone(d)
+        self.assertEqual(d.rule, 'ledger', d.reason)
 
     def test_unknown_keys_alone_do_not_break_it(self):
         self.w.user_config({'ledger_path': self.w.ledger, 'pm_start': {}})

@@ -2,7 +2,6 @@
 kitlib/launcher/start.py homes, `launch.py homes`; docs/launcher.md "The home worktree"): what is
 listed, every refusal (nothing changed), and on real git a clean home removed and a dirty one kept."""
 import io
-import json
 import os
 import shutil
 import sys
@@ -17,6 +16,7 @@ from kitlib.git import repo as gitrepo
 from kitlib.host import registry
 from kitlib.launcher import home, start
 from kitlib.launcher.settings import LaunchError
+from tests.home import machine_config
 from tests.launcher.fakes import FakeHost, Home, session
 from tests.realgit import real_git
 from tests.worktree.test_worktree_sweep import SweepCase
@@ -272,10 +272,8 @@ class Verb(unittest.TestCase):
 
     def main(self, argv):
         """launch.main(argv) with this test's settings file, host and scripted git: (exit code, out, err)."""
-        cfg = kuser.config_file(self.h.root)
-        os.makedirs(os.path.dirname(cfg), exist_ok=True)
-        with open(cfg, 'w', encoding='utf-8') as f:
-            json.dump({'launcher': self.h.obj}, f)
+        machine_config(self.h.root, {'launcher': self.h.obj}, case=self)
+        kuser.locate(self.h.root)     # the pointer's git check, remembered before git is scripted
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(cmd, 'call', self.git), redirect_stdout(out), redirect_stderr(err):
             code = launch.main(argv, self.host)

@@ -5,6 +5,7 @@ description: "Bulk menial reads and mechanical bulk writes for the agent that di
 tools: Read, Edit, Write, Grep, Glob
 model: haiku
 effort: medium
+autoCompactWindow: 170000
 ---
 
 Your caller dispatched you for one bulk job it would rather not spend its own tokens on: a read

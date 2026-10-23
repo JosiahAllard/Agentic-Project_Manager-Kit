@@ -32,8 +32,10 @@ def _read(pid):
 
 def ancestors_of(pid,creation, *, limit):
     """[(pid, creation)] of a process's running ancestors, nearest first, as kitlib's
-    ancestors_of returns them. The walk stops at a process that is gone, is not the one
-    recorded (creation differs), or was created after its child (its pid was reused)."""
+    ancestors_of returns them, except that kitlib's walk takes an ancestor that has exited but
+    is still held open as its last hop, where this one stops before it. The walk stops at a
+    process that is gone or not running, is not the one recorded (creation differs), or was
+    created after its child (its pid was reused)."""
     found=_read(pid)
     if found is None or (creation is not None and found[0]!=creation): return []
     out,current,current_creation,parent=[],int(pid),found[0],found[1]

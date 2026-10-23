@@ -197,10 +197,17 @@ class ParseTest(unittest.TestCase):
                          (b'[read, search, bash]', b'[read, read]'), (b'[read, search, bash]', b'read'),
                          (b'name: alpha', b'name: Alpha'), (b'effort: low', b'colour: red'),
                          (b'tier: standard\n', b''), (b'effort: low', b'effort: low\neffort: high'),
-                         (b'---\n\n', b'\n\n'), (b'description: Builds', b'description: "Builds')):
+                         (b'---\n\n', b'\n\n'), (b'description: Builds', b'description: "Builds'),
+                         (b'effort: low', b'effort: low\ncompact: 99999'), (b'effort: low', b'effort: low\ncompact: 1000001'),
+                         (b'effort: low', b'effort: low\ncompact: 170k'), (b'effort: low', b'effort: low\ncompact: -1')):
             with self.subTest(new=new):
                 with self.assertRaises(hc.ContentError):
                     hc.parse_role(ROLE.replace(old, new, 1))
+
+    def test_a_compact_window(self):
+        self.assertIsNone(hc.parse_role(ROLE).compact)
+        for n in (100000, 170000, 1000000):
+            self.assertEqual(hc.parse_role(ROLE.replace(b'effort: low\n', b'effort: low\ncompact: %d\n' % n)).compact, n)
 
     def test_a_mode(self):
         self.assertIsNone(hc.parse_role(ROLE).mode)
@@ -299,6 +306,11 @@ class ClaudeRendererTest(unittest.TestCase):
         got = claude_content.renderer().render(self.content(role))['hosts/claude/shell/agents/beta.md']
         self.assertEqual(got, b'---\r\n' + banner('beta') + b'\r\nname: beta\r\ndescription: "Two: parts"\r\nmodel: opus\r\n'
                               b'experimental:\r\n  cacheTtl: 1h\r\n---\r\nbody\r\n')
+
+    def test_a_compact_window_is_the_agents_auto_compact_window(self):
+        role = ROLE.replace(b'effort: low\n', b'effort: low\ncompact: 170000\n')
+        got = claude_content.renderer().render(self.content(role, BETA))['hosts/claude/shell/agents/alpha.md']
+        self.assertIn(b'\nmodel: sonnet\neffort: low\nautoCompactWindow: 170000\n---\n', got)
 
     def test_every_tier_and_capability_has_a_claude_value(self):
         self.assertEqual(sorted(claude_content.renderer().tier_models()), sorted(hc.TIERS))
