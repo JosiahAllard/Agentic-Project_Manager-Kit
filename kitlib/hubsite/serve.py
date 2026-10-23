@@ -351,7 +351,9 @@ class Sources(object):
       pm_data      kitlib.pmdata's {path, branch, remote}, or None
       notices      the machine lock's notice folder
       findings     the maintenance lint's results folder, <pm_data>/maint-lint (one
-                   <repo>/result.json each: kitlib.maintlint.result); None: no findings
+                   <repo>/result.json each: kitlib.maintlint.result, and its skip marker);
+                   the findings view and the lint_runs view (GET findings' runs) read it;
+                   None: no findings and no runs
       repos        callable(the store's repos documents) -> [{name, aliases}]
       known_repos  callable() -> the PM's configured repo names, which the store's repo-alias
                    check accepts without a repos/ document; None: none
@@ -404,17 +406,43 @@ class Sources(object):
         self.access_now = access_now
 
 
-def _repo_pairs(cfg):
+TOPLEVEL_MISS_S = 60.0      # seconds a folder git found no top level for is not asked again
+
+
+def _toplevels(clock=time.monotonic):
+    """pmstart._toplevel with what it finds kept: a callable(folder) -> the basename of its git
+    top level, git asked once per folder for the process's life. A miss (no git, not a work
+    tree, a timeout) is kept for TOPLEVEL_MISS_S only, so a failed run neither starts git on
+    every read nor leaves the name out for good. Called from several threads (requests, the
+    backlog timer, waits): a dict get and set each, and two callers that both miss each run git
+    once, nothing worse."""
+    tops = {}
+
+    def toplevel(folder):
+        kept = tops.get(folder)
+        if kept is not None and (kept[0] or clock() - kept[1] < TOPLEVEL_MISS_S):
+            return kept[0]
+        name = pmstart._toplevel(folder)
+        tops[folder] = (name, clock())
+        return name
+    return toplevel
+
+
+def _repo_pairs(cfg, toplevel=None):
     """A callable giving backlog.Views its (name, root) pairs from the pm_start config `cfg`,
-    each root as kitlib.hubbacklog.repo_root finds it. The PM repository's root is asked of git once."""
+    each root as kitlib.hubbacklog.repo_root finds it. The PM repository's root is asked of git
+    once, and so is each folder pmstart.known_repos names a repository by (`toplevel`, a
+    _toplevels(); default a new one); sessions_file is read on each call."""
     found = []
+    toplevel = toplevel or _toplevels()
 
     def pairs():
         if not found:
             top = hubbacklog.git(os.path.dirname(os.path.abspath(cfg['sessions_file'])),
                                  'rev-parse', '--show-toplevel')
             found.append(top.decode('utf-8').strip())
-        return backlog.repo_list(pmstart.known_repos(cfg), found[0], cfg.get('repo_paths'))
+        return backlog.repo_list(pmstart.known_repos(cfg, toplevel=toplevel), found[0],
+                                 cfg.get('repo_paths'))
     return pairs
 
 
@@ -430,22 +458,18 @@ def agents_dir(environ=None):
     return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
 
 
-def _configured_repos(cfg):
+def _configured_repos(cfg, toplevel=None):
     """A callable giving pmstart.known_repos of the pm_start config `cfg`, the store's repo-alias
     check's names. As in _repo_pairs, git is asked once: each folder's git top level (the PM's
-    repository and the kit's, two git runs) is kept, while sessions_file is read on each call, so
+    repository and the kit's, two git runs) is kept (`toplevel`, a _toplevels(); default a new
+    one), while sessions_file is read on each call, so
     a new coordinator's repository counts at once, as on the repo menu (derived.repos). () when
     the names cannot be read, since a store write must never fail on them: KeyError no
     sessions_file, ValueError bad "repos" or bad JSON, OSError an unreadable sessions file,
     AttributeError a sessions file whose JSON is not an object, TypeError a sessions_file that is
     not a path. No git is not an error: pmstart._toplevel gives None and the name is left out.
     Anything else is a bug in this code and is left to raise."""
-    tops = {}
-
-    def toplevel(folder):
-        if folder not in tops:
-            tops[folder] = pmstart._toplevel(folder)
-        return tops[folder]
+    toplevel = toplevel or _toplevels()
 
     def names():
         try:
@@ -482,9 +506,10 @@ def machine_sources(home=None, sync=True):
             return launcher_usage.report(launcher_settings.load(home))
         src.usage = report
     if cfg and cfg.get('sessions_file'):
-        src.repos = lambda stored: derived.repos(cfg, stored)
-        src.known_repos = _configured_repos(cfg)
-        src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg), refresh_s)
+        tops = _toplevels()         # one memo: the repo menu, the alias check, the backlog
+        src.repos = lambda stored: derived.repos(cfg, stored, toplevel=tops)
+        src.known_repos = _configured_repos(cfg, tops)
+        src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg, tops), refresh_s)
     return src
 
 
@@ -518,9 +543,9 @@ class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
     exists: `backlog_views` for backlog, completed, record, record_template and the record
     writes (record_add, record_edit, record_delete, record_unblock), sources.repos and .agents
-    for theirs. notices, findings, usage and health are always there (kitlib.hubsite.derived
-    answers a missing notice or findings folder with none and a missing usage source with its
-    own phrase). `sync` is the git
+    for theirs. notices, findings, lint_runs, usage and health are always there
+    (kitlib.hubsite.derived answers a missing notice or findings folder with none and a missing
+    usage source with its own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
     text)`: where after_round says that a read of its own failed."""
 
@@ -536,6 +561,7 @@ class SiteViews(object):
         self._last = None           # what the last backlog answer said, for health
         self.notices = self._notices
         self.findings = self._findings
+        self.lint_runs = self._lint_runs
         self.usage = self._usage
         if backlog_views is not None:
             self.backlog = self._open
@@ -663,6 +689,9 @@ class SiteViews(object):
 
     def _findings(self):
         return derived.findings(self._sources.findings)
+
+    def _lint_runs(self):
+        return derived.lint_runs(self._sources.findings)
 
     def _repos(self):
         return self._sources.repos(list(self._store.docs('repos').values()))
@@ -886,14 +915,77 @@ def _checkout(backlog_views):
     return checkout
 
 
-def _repo_name(backlog_views, session_keys=None):
+REMOTE_TTL_S = 60.0     # the longest a remembered origin remote answers (_RemoteIds)
+REMOTE_MISS_TTL_S = 5.0     # the longest a remembered failure to read one answers
+
+
+class _RemoteIds(object):
+    """approvals.remote_id(root) with what git said remembered per root, for _repo_name: every
+    decided approval is routed on each pending read (each GET snapshot, each wait a write wakes),
+    and asking git each time cost one `git remote get-url` per configured repository per
+    approval (KIT-HUB-CLICK-LAG).
+
+    A remembered answer serves while both hold: the stat (mtime, size) of the repository's
+    config is the one it was read under, so `git remote set-url` (which rewrites that file) is
+    seen on the next read; and it is younger than REMOTE_TTL_S, or REMOTE_MISS_TTL_S for a failed
+    read (a git timeout under load must not send every decision to the PM for long). The config
+    is <root>/.git/config, or for a checkout whose .git is a file (a linked worktree) the common
+    dir's config, found from its `gitdir:` line and `commondir` file
+    (kitlib.git.defaults.common_dir).
+
+    Worst case, a stale answer: when that config cannot be found (an unreadable .git file, say)
+    or a remote is set where it is not (a worktree's own config.worktree), a changed remote is
+    seen only when the TTL runs out. For up to REMOTE_TTL_S a decided approval can then be routed
+    to the coordinator of the repository the remote used to name (the wrong repository), or to
+    the PM alone, and so can the decision's one-time push (kitlib.hubsite.push, which names the
+    coordinator through the same Api.repo_key). The approval's verify (Api checkout, _checkout)
+    is not cached: it reads git on each call.
+
+    `clock` gives monotonic seconds (tests). A lock guards the dict; git runs outside it, so two
+    callers that miss at once both run git and the later answer is kept."""
+
+    def __init__(self, clock=time.monotonic, ttl_s=REMOTE_TTL_S, miss_ttl_s=REMOTE_MISS_TTL_S):
+        self._clock = clock
+        self._ttl_s = ttl_s
+        self._miss_ttl_s = miss_ttl_s
+        self._got = {}              # root -> (stat key, clock when read, (repo_id, why))
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _stat(root):
+        from kitlib.git import defaults
+        try:
+            common = defaults.common_dir(root)
+            st = os.stat(os.path.join(common or os.path.join(root, '.git'), 'config'))
+        except (OSError, TypeError, ValueError):
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def __call__(self, root):
+        from . import approvals     # it imports kitlib.hubsite.client, which imports this module
+        key, now = self._stat(root), self._clock()
+        with self._lock:
+            got = self._got.get(root)
+        if got is not None and got[0] == key and now - got[1] < (
+                self._ttl_s if got[2][0] else self._miss_ttl_s):
+            return got[2]
+        answer = approvals.remote_id(root)
+        with self._lock:
+            self._got[root] = (key, now, answer)
+        return answer
+
+
+def _repo_name(backlog_views, session_keys=None, remote_ids=None):
     """Api's repo_name(repo_id) (kitlib.hubsite.api, "Routes"): the name of the configured
-    repository whose origin remote is that repo_id, found as _checkout finds its root; None when
+    repository whose origin remote is that repo_id, found as _checkout finds its root but with
+    each root's remote remembered (`remote_ids`, a _RemoteIds; default a new one); None when
     none is, so a decided approval is the PM's alone. When several configured names share that
     remote (the kit's folder name and its coordinator's key, say), the first that is one of
     session_keys() (the launcher's keys, read only then) is named, else the first."""
+    remote_ids = remote_ids or _RemoteIds()
+
     def repo_name(repo_id):
-        names = [name for name, _root in _configured(backlog_views, repo_id)]
+        names = [name for name, _root in _configured(backlog_views, repo_id, remote_ids)]
         if len(names) > 1 and session_keys is not None:
             try:
                 keys = session_keys()
@@ -904,16 +996,20 @@ def _repo_name(backlog_views, session_keys=None):
     return repo_name
 
 
-def _configured(backlog_views, repo_id):
+def _configured(backlog_views, repo_id, remote_id=None):
     """Every (name, root) of backlog_views.repos() whose origin remote is repo_id, in its order,
-    read with git; [] when none is, when there is no backlog, or when the repositories cannot be
-    listed."""
+    read with git (`remote_id`, default approvals.remote_id: on each call); [] when none is,
+    when there is no backlog, when the repositories cannot be listed, or for a name with no
+    checkout on this machine."""
     from . import approvals         # it imports kitlib.hubsite.client, which imports this module
+    remote_id = remote_id or approvals.remote_id
     try:
         pairs = backlog_views.repos() if backlog_views is not None else []
     except Exception:               # noqa: BLE001 - no list: no repository
         return []
-    return [(name, root) for name, root in pairs if approvals.remote_id(root)[0] == repo_id]
+    # a name with no checkout here has no remote: remote_id(None) would ask git in this
+    # process's own folder
+    return [(name, root) for name, root in pairs if root and remote_id(root)[0] == repo_id]
 
 
 def _push_line(log, text):
@@ -961,7 +1057,7 @@ def build(settings, sources, log=None):
         api = _api.Api(store, views,
                        approval_key=functools.partial(auth.read_approval_key, sources.tokens),
                        checkout=_checkout(views_b), lock=sources.lock,
-                       repo_name=_repo_name(views_b, _api.launcher_keys))
+                       repo_name=_repo_name(views_b, _api.launcher_keys, _RemoteIds()))
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

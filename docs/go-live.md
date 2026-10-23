@@ -96,7 +96,7 @@ On kit main, none live. Each repo reaches them as `python <kit>/tools/<x>.py -C 
 - pieces: a repo with a pieces table adds `"pieces": "tools/pieces.json"` to `.kit.json`; the file alone is not read.
 - forbidden: create the store (`{}` when `.kit.json` names one), add tokens with `forbidden.py -C <repo> --add` (token on stdin), then a gate step (docs/repo-checks.md).
 - trailers: add the `trailers.py` step with `merged_args` `--merged` and set `.kit.json` "owner".email in the same change (docs/repo-checks.md "trailers").
-- pytests, tool_deps, testlist and kitlib.proc.shield: a repo adopts pytests through a gate step, never `python_tests` (docs/test-tools.md).
+- pytests, tool_deps, testlist and kitlib.proc.shield: a repo adopts pytests through a gate step; `python_tests` is no gate key (docs/test-tools.md).
 - PM repo: its kit/tools copies of the ported tools are dropped (or become opt-in stubs).
 - PM record tools: the PM repo's `tools/pending.py`, its ledger tool's `standing` and `check`, and `hooks/pre-commit` retire once its callers point at the kit: set `pending_path` in the machine config (docs/pending.md), and for the hook set `"ledger": {"pre_commit_check": true}` in its `.kit.json` and its `core.hooksPath` to `<kit>/githooks` (docs/ledger.md "Pre-commit check"). A kit older than this port refuses a `.kit.json` holding a `ledger` section (unknown sections are refused), so add it only once every kit checkout that reads that repo has the port.
 - The nightly sweep: the owner registers it after joint review (`tools/worktree_sweep_task.py -C <repo main checkout> --register --owner-confirmed`); agents never type --owner-confirmed.
@@ -104,7 +104,7 @@ On kit main, none live. Each repo reaches them as `python <kit>/tools/<x>.py -C 
 
 ## Universal gate (tools/gate.py, kitlib/gate)
 
-- Switch a repo only after its .kit.json lists every check as a gate step (Python tests included); the python_tests key alone selects nothing.
+- Switch a repo only after its .kit.json lists every check as a gate step (Python tests included).
 - push_block goes on in a repo only after it has landed once through `gate.py land`.
 - Retire the repo's own gate and land wrappers when it switches (gate.py/land.py, a lander command).
 - Hook modules load from the landing's base, the main it merges onto (docs/gate.md "Landing", step 6), one file each; sibling imports are unsupported.

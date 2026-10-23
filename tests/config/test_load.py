@@ -174,6 +174,18 @@ class GateRulesTest(TreeCase):
         self.assertIn('"gate": unknown key(s) dependency_pin_check, python_tests_audit, python_tests_docs, '
                       'python_tests_docs_floor, python_tests_drops, python_tests_selected_floor', why)
 
+    def test_the_unported_gate_keys_refuse_as_unknown_whatever_their_value(self):
+        # The gate never implemented these, and none is a key, so a config setting one fails to
+        # load, whatever the value (once they loaded and the gate refused only some values).
+        for key, values in (('python_tests', ('pytests', 'discover')),
+                            ('python_tests_floor', (10, 0, None)), ('trailers', (True, False))):
+            for value in values:
+                why = self.refused({'gate': {key: value, 'steps': []}})
+                self.assertIn('"gate": unknown key(s) %s (allowed:' % key, why)
+                self.assertIn('unknown key(s) %s' % key,
+                              self.refused({'gate': 'tools/gate.json'},
+                                           {'tools/gate.json': {key: value}}))
+
     def test_a_step_runs_exactly_one_of_cmd_and_check(self):
         why = self.refused({'hook': {'module': 'gate_hook'},
                             'gate': {'steps': [{'name': 'a', 'always': True},
@@ -236,9 +248,9 @@ class SectionFileTest(TreeCase):
         self.assertEqual(cfg.section('gate')['steps'], [])
 
     def test_a_legacy_file_is_read_when_kit_json_names_it(self):
-        cfg = self.load({'gate': 'tools/gate.json'}, {'tools/gate.json': {'trailers': True}})
+        cfg = self.load({'gate': 'tools/gate.json'}, {'tools/gate.json': {'worktree_guard': True}})
         self.assertEqual(cfg.section_file('gate'), 'tools/gate.json')
-        self.assertIs(cfg.section('gate')['trailers'], True)
+        self.assertIs(cfg.section('gate')['worktree_guard'], True)
 
 
 class DuplicateKeyTest(TreeCase):

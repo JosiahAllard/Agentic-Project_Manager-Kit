@@ -10,6 +10,7 @@ each request (and may cache usage and agents for about a minute, which is the ca
   usage(report, clock)          -> {"available", "accounts"|"reason", "as_of"}
   agents(agents_dir)            -> {"available", "agents"|"reason"}
   findings(lint_dir)            -> [row]    the maintenance lint's last findings, every repo
+  lint_runs(lint_dir)           -> [run]    each repo's last lint run: started, ledger, skip
 """
 import os
 import re
@@ -151,4 +152,35 @@ def findings(lint_dir):
                         'fingerprint': f['fingerprint'], 'new': f.get('new') is True,
                         'started': _str(run.get('started'))})
     out.sort(key=lambda r: (r['repo'], r['check'] or '', r['target'] or '', r['fingerprint']))
+    return out
+
+
+def lint_runs(lint_dir):
+    """Each repository's last maintenance lint run, from <lint_dir>/<repo>/ (kitlib.maintlint:
+    result.json and the skip marker beside it, kitlib.maintlint.slot.read_skip), as {"repo",
+    "started", "ledger", "skip"} sorted by repo: started and ledger the result's (None when it has
+    none or cannot be read), skip the marker or None. A folder with neither a readable result nor
+    a marker is left out; a missing or unreadable lint folder, or no folder (None), is []. Never
+    raises for what is on disk: GET findings shows these as context (kitlib.hubsite.api
+    _lint_runs)."""
+    from kitlib.maintlint import slot     # here: only this view reads the skip marker
+    if not lint_dir:
+        return []
+    try:
+        names = sorted(os.listdir(lint_dir))
+    except (OSError, TypeError, ValueError):
+        return []
+    out = []
+    for name in names:
+        path = os.path.join(lint_dir, name, lint_result.NAME)
+        if not os.path.isdir(os.path.dirname(path)):
+            continue
+        run, skip = lint_result.read(path), slot.read_skip(path)
+        if run is None and skip is None:
+            continue
+        run = run or {}
+        out.append({'repo': _str(run.get('repo')) or name, 'started': _str(run.get('started')),
+                    'ledger': run.get('ledger') if isinstance(run.get('ledger'), dict) else None,
+                    'skip': skip})
+    out.sort(key=lambda r: r['repo'].lower())
     return out

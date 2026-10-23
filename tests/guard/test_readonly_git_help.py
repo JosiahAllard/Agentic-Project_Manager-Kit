@@ -142,11 +142,14 @@ class SymbolicRefAndProgramReads(Base):
         self.allowed_everywhere(text, self.run_ps)
 
     def test_symbolic_ref_writes_stay_unplaced(self):
+        # a write is git-shared-ref's now (it writes refs every worktree shares): refused even
+        # where the unplaced handling is off
         for text in ('git -C $p symbolic-ref HEAD refs/heads/x', 'git -C $p symbolic-ref -d HEAD',
                      'git -C $p symbolic-ref --delete HEAD', 'git -C $p symbolic-ref -m why HEAD refs/heads/x',
-                     'git -C $p symbolic-ref --d HEAD', 'git -C $p symbolic-ref'):
+                     'git -C $p symbolic-ref --d HEAD'):
             with self.subTest(text):
-                self.jailed(self.run_bash(text), 'unplaced')
+                self.jailed(self.run_bash(text), 'git-shared-ref')
+        self.jailed(self.run_bash('git -C $p symbolic-ref'), 'unplaced')
 
     def test_grep_o_and_archive_remote_read(self):
         self.allowed(self.run_bash('git -C $p grep -O foo'))
