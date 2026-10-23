@@ -1848,10 +1848,11 @@ def _put_pinned(api, coll, doc_id, fields, pin):
 _FINGERPRINT = re.compile(r'[0-9a-f]{16}\Z')
 FINDING_COPY = ('repo', 'check', 'target', 'text')   # what a mark keeps of its finding
 FINDING_PATHS = ('target', 'fix')   # a finding's fields that can name a path on this machine
-# an absolute Windows path: a drive's (C:\ or C:/) or a share's, \\host\ or //host/ (a host is
-# needed: a lone doubled backslash is no path, and a URL's :// is no share). Quoted, it runs to
-# its quote; bare, on past each space whose next word holds a separator and starts no new path,
-# absolute or ./ ../ relative (Q:\home\A B\x is one path), so no folder after a space shows
+# an absolute Windows path: a drive's (a drive letter, a colon, then \ or /) or a share's,
+# \\host\ or //host/ (a host is needed: a lone doubled backslash is no path, and a URL's :// is
+# no share). Quoted, it runs to its quote; bare, on past each space whose next word holds a
+# separator and starts no new path, absolute or ./ ../ relative (<drive>\home\A B\x is one
+# path), so no folder after a space shows
 _PATH_HEAD = r'(?:[A-Za-z]:[\\/]|(?<![:\\/])[\\/]{2,}[^\s\\/"\'`<>|]+[\\/]+)'
 _PATH_WORD = r'[^\s"\'`<>|]*'
 _ABS_PATH = re.compile(r'"%s[^"]*"' % _PATH_HEAD
