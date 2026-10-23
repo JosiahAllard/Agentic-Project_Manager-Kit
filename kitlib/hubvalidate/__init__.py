@@ -28,14 +28,15 @@ Finding = collections.namedtuple('Finding', 'level rel field code message')
 
 ERROR, WARN, NOTE = 'error', 'warn', 'note'
 
-# status values per collection (docs/action-hub.md: questions, stories, todos, to_pm; approvals:
-# kitlib.hubsite.approvals)
+# status values per collection (docs/action-hub.md: questions, stories, todos, to_pm, finding_marks;
+# approvals: kitlib.hubsite.approvals)
 STATUSES = {
     'questions': ('open', 'answered', 'logged'),
     'stories': ('submitted', 'review', 'questions', 'added', 'declined', 'withdrawn'),
     'todos': ('open', 'done'),
     'to_pm': ('queued', 'sent', 'done'),
     'approvals': ('pending', 'approved', 'denied', 'consumed', 'expired'),
+    'finding_marks': ('dismissed', 'passed_on', 'done'),
 }
 # the collection a Q-/M-/T-/P-/S-/A- id names (the store's id prefixes), and the fields that carry
 # such ids (an A- id is never a ref)

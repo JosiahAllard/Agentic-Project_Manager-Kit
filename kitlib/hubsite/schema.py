@@ -24,7 +24,7 @@ import re
 from kitlib import hubvalidate
 
 COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'pages', 'page_html', 'repos',
-               'approvals', 'schedules')
+               'approvals', 'schedules', 'finding_marks')
 ID_PREFIX = {coll: prefix for prefix, coll in hubvalidate.REF_COLLECTIONS.items()}
 STORE_KEYS = ('version', 'updated_at')
 CODE = 'schema-field'
@@ -45,7 +45,8 @@ FIELDS = {
         'pm_ack': (bool, str)}),
     'to_pm': (('status', 'kind', 'text'), {
         'status': _STR, 'kind': _STR, 'text': _STR, 'repo': _STR, 'urgent': _BOOL,
-        'created_at': _STR, 'sent_at': _STR, 'reply': _STR, 'ruling': _STR, 'done_at': _STR}),
+        'created_at': _STR, 'sent_at': _STR, 'reply': _STR, 'ruling': _STR, 'done_at': _STR,
+        'refs': _LIST, 'finding': _STR}),
     'stories': (('status', 'repo', 'title', 'story'), {
         'status': _STR, 'repo': _STR, 'title': _STR, 'story': _STR, 'urgent': _BOOL,
         'from': _STR, 'submitted_at': _STR, 'reviewer': _STR, 'review_note': _STR,
@@ -62,8 +63,13 @@ FIELDS = {
     # kitlib.hubsite.api, "Schedules": the owner's times for the kit's automatic tasks
     'schedules': (('task', 'repo', 'cadence', 'at'), {
         'task': _STR, 'repo': _STR, 'cadence': _STR, 'days': _LIST, 'at': _STR, 'set_at': _STR}),
+    # kitlib.hubsite.api, "Findings": the owner's mark on one maintenance-lint finding, by its
+    # fingerprint, with what the finding said when it was marked
+    'finding_marks': (('status',), {
+        'status': _STR, 'repo': _STR, 'check': _STR, 'target': _STR, 'text': _STR, 'note': _STR,
+        'marked_at': _STR}),
 }
-KINDS = {'to_pm': ('question', 'fyi')}
+KINDS = {'to_pm': ('question', 'fyi', 'act')}
 # {collection: {kind: more required fields}}: a document of such a collection needs its kind's
 # fields too, None standing for a document with no kind; any other kind is an error
 BY_KIND = {'approvals': {None: ('head', 'files'), 'op': ('op', 'line', 'args_sha256')}}
