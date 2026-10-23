@@ -209,9 +209,6 @@ SECTIONS = {
     'gate': {
         'steps': Field(ListOf(STEP), [], 'the repo gate steps'),
         'setup': Field(Argv, None, 'argv run before the steps'),
-        'python_tests': Field(Enum('discover', 'pytests'), 'discover', 'how the Python tests run'),
-        'python_tests_floor': Field(Int(0), None, 'fewest tests a full run may report'),
-        'trailers': Field(Bool(), None, 'check commit trailers'),
         'worktree_guard': Field(Bool(), None, 'refuse to gate in a main checkout'),
         'warn_untracked': Field(Bool(), None, 'warn about untracked files'),
         'fail': Field(Regexes, None, 'log patterns that fail every step'),
