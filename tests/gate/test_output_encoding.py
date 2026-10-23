@@ -1,6 +1,5 @@
 """The gate's console output on a console that cannot encode every character (cp1252), and the
-result record of a gate an exception stopped (KIT-GATE-OUTPUT-ENCODING; docs/gate.md "Result
-record"). Four `gate.py --full` runs of another repository ended `error`, "UnicodeEncodeError:
+result record of a gate an exception stopped (docs/gate.md "Result record"). Four `gate.py --full` runs of another repository ended `error`, "UnicodeEncodeError:
 'charmap' codec can't encode character '\\u2733'", their records' log null: a line the gate printed
 (a step's reason quoting its log, or a console window's title) had a character cp1252 has no byte
 for, and the exception reached the record before the run's log folder did."""

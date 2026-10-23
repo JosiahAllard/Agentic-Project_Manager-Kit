@@ -48,7 +48,7 @@ sys.path.insert(0, KIT)
 def safe_stdio():
     """A character the console's encoding has no byte for (cp1252 on a redirected Windows
     stream: a child's log line or a console window's title) is written as a \\u escape, never
-    raised: a gate that ran its steps never ends `error` over printing (KIT-GATE-OUTPUT-ENCODING)."""
+    raised: a gate that ran its steps never ends `error` over printing."""
     for s in (sys.stdout, sys.stderr):
         try:
             s.reconfigure(errors='backslashreplace')
