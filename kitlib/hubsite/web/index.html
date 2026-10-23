@@ -36,7 +36,7 @@
   .listpane{padding-block:16px 88px}
   .wrap:has(> #pane-detail:not([hidden])) > .listpane{display:none}
   .detailpane{position:static;height:auto;border-left:0;padding:16px 16px 88px}
-  .tabbar{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
+  .tabbar{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
 }
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
 .sub{color:var(--muted);margin:0;max-width:62ch}
@@ -119,6 +119,8 @@ button:disabled{opacity:.5;cursor:default}
 .sec:hover{color:var(--fg)}
 .sec[aria-selected="true"]{color:var(--fg);background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
 .sec .n{font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
+.sidefoot{margin-top:18px;padding:8px 10px;font-size:.75rem;color:var(--muted);overflow-wrap:anywhere}
+.machine{margin:0}
 .sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .t{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
 .t.done{opacity:.72}
@@ -180,6 +182,7 @@ button.danger{color:var(--warn)}
 <div class="wrap">
   <nav class="side" aria-label="Sections">
   <div class="sections" role="tablist" id="sections" aria-orientation="vertical">
+    <button class="sec" role="tab" data-s="home" aria-selected="false" id="sec-home">Home</button>
     <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
     <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
@@ -187,6 +190,7 @@ button.danger{color:var(--warn)}
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
   </div>
+  <div class="sidefoot" id="sidefoot" role="status"></div>
   </nav>
 
   <main class="listpane" id="pane-list">
@@ -262,6 +266,7 @@ button.danger{color:var(--warn)}
   <section class="detailpane" id="pane-detail" aria-label="Detail" hidden></section>
 
   <div class="tabbar" role="tablist" id="tabbar" aria-label="Sections">
+    <button class="tb" role="tab" data-s="home" aria-selected="false" id="tb-home">Home</button>
     <button class="tb" role="tab" data-s="questions" aria-selected="true" id="tb-questions">Inbox <span class="n" data-of="n-q">0</span></button>
     <button class="tb" role="tab" data-s="topm" aria-selected="false" id="tb-topm">To PM <span class="n" data-of="n-pm">0</span></button>
     <button class="tb" role="tab" data-s="todo" aria-selected="false" id="tb-todo">To do <span class="n" data-of="n-t">0</span></button>
@@ -283,14 +288,14 @@ button.danger{color:var(--warn)}
   // The address's hash names a section (and, for some, the tab inside it): what each route sets in state. The
   // page opens on the route it is given, Back and Forward return to the section before, and a hash it does not
   // know leaves the page where it is.
-  const ROUTES = { "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"},
+  const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"},
     "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
     "#docs": {section:"docs"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"} };
   const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
   Object.assign(state, route(location.hash));
   // ready: the server has answered once, so the lists are real and the owner's controls are shown.
-  let ready = false;
+  let ready = false, lastRead = 0;
 
   // The one transport: every call the page makes to the hub server goes through this object, so another
   // transport (the same four methods) can replace it. The session cookie the pairing link set is the page's
@@ -338,7 +343,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -396,7 +401,7 @@ button.danger{color:var(--warn)}
   }
 
   // What the server last knew of the PM, as information only: nothing here is a control.
-  const seenLine = () => { $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now()) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; };
+  const seenLine = () => { $("#sidefoot").textContent = ready && lastRead ? "Read from the hub server " + when(new Date(lastRead).toISOString()) + "." : ""; $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now()) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; };
   // A redraw gives the focus and the caret back to a field it rebuilt (a question's note, found by its id)
   // or moved.
   function render(){
@@ -408,7 +413,7 @@ button.danger{color:var(--warn)}
   }
   // The route of what is shown. The first draw only corrects the address (no history entry); each later change
   // of section or tab adds one, so Back returns to it. A redraw that changes nothing adds nothing.
-  const sameRoute = h => { const r = route(h); return !!r && Object.keys(r).every(k => state[k] === r[k]) && !(h === "#backlog" && state.sfilter === "parked"); };
+  const sameRoute = h => { const r = route(h); return !!r && Object.keys(r).every(k => state[k] === r[k]) && !(r.section === "backlog" && h !== "#parked" && state.sfilter === "parked"); };
   const routeOf = () => state.section === "backlog" ? (state.sfilter === "parked" ? "#parked" : "#backlog") : state.section === "info" ? "#" + state.infotab : "#" + state.section;
   let routed = false;
   function syncRoute(){
@@ -418,9 +423,10 @@ button.danger{color:var(--warn)}
   }
   // Back, Forward or a typed hash: show the route the address now names.
   function goRoute(){
+    if (!$("#reader").hidden) return;                // the reader holds the page: the address is not followed under it
     const r = route(location.hash); if (!r || sameRoute(location.hash)) return;
     if (r.sfilter && r.sfilter !== state.sfilter) state.rec = null;
-    if (location.hash === "#backlog" && state.sfilter === "parked") { state.sfilter = "current"; state.rec = null; }
+    if (r.section === "backlog" && location.hash !== "#parked" && state.sfilter === "parked") { state.sfilter = "current"; state.rec = null; }
     Object.assign(state, r);
     render();
   }
@@ -450,7 +456,7 @@ button.danger{color:var(--warn)}
     $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
-    $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
+    $("#repo").hidden = sc === "home" || sc === "info" || sc === "backlog" || sc === "topm";
     $("#n-d").textContent = state.pages.length;
     // The phone's tab bar shows the sidebar's counts: each copies the one it names.
     document.querySelectorAll("#tabbar [data-of]").forEach(n => { const o = document.getElementById(n.dataset.of); n.textContent = o.textContent; n.className = o.className; });
@@ -459,7 +465,7 @@ button.danger{color:var(--warn)}
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
-    q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : renderBacklog();
+    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : renderBacklog();
   }
 
   // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
@@ -1295,6 +1301,87 @@ button.danger{color:var(--warn)}
     show(["repos"], aps, rows.map(d => drawn(card, d)));
   }
 
+  const sleep = ms => new Promise(done => setTimeout(done, ms));
+  // ---- Home: what waits on the owner, then the machine in one line.
+  // The needs-you list merges the pending approvals, the open questions and the open to-dos (each as the other
+  // sections count them), urgent first, then approvals before questions before to-dos, then the oldest first;
+  // an item with no time comes last of its kind.
+  const NEED_RANK = { approval: 0, question: 1, todo: 2 };
+  function needsYou(){
+    const out = [];
+    for (const a of state.approvals) out.push({ kind: "approval", id: a.id, title: a.title, at: a.created_at, urgent: true });
+    for (const d of state.docs) if (d.status === "open") out.push({ kind: "question", id: d.id, title: d.title, at: d.asked_at, urgent: !!d.urgent });
+    for (const t of state.todos) if (t.status !== "done") out.push({ kind: "todo", id: t.id, title: t.title, at: t.added_at, urgent: !!t.urgent });
+    const key = n => n.at ? String(n.at) : "\uffff";
+    return out.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || NEED_RANK[a.kind] - NEED_RANK[b.kind] || key(a).localeCompare(key(b)));
+  }
+  function goNeed(n){
+    state.repo = ""; $("#repo").value = "";
+    if (n.kind === "question") return goQuestion(n.id);
+    state.section = n.kind === "todo" ? "todo" : "questions"; state.filter = "open"; state.tfilter = "open";
+    render();
+    const x = document.getElementById((n.kind === "todo" ? "todo-" : "approval-") + n.id); if (x) x.scrollIntoView({block:"start"});
+  }
+  function needCard(n){
+    return el("article", {class: n.urgent ? "q urgent" : "q", id: "need-" + n.id},
+      el("div", {class:"meta"}, el("span", {class: n.urgent ? "chip need" : "chip", text: n.kind === "approval" ? "Approval" : n.kind === "question" ? "Question" : "To do"}),
+        el("span", {class:"id", text: String(n.id)}), n.at ? el("span", {text: "since " + when(n.at)}) : null),
+      el("h2", {text: n.title ? String(n.title) : "(untitled)"}),
+      el("div", {class:"act"}, el("button", {class:"primary", type:"button", id: "need-open-" + n.id, text:"Open", onclick: () => goNeed(n)})));
+  }
+  // The machine lock, read from the owner routes GET /lock/view and GET /lock/wait (the same two calls the lock page
+  // makes) while Home is shown. A failed read keeps the last good line and says so; with none, it says why.
+  const mach = { view: null, rev: null, err: "", on: false };
+  function takeMachine(j){
+    if (!j || typeof j !== "object" || !j.view || typeof j.view !== "object") throw new Error("the hub server sent no lock view");
+    mach.view = j.view; mach.rev = j.lock_revision; mach.err = "";
+  }
+  const lockCall = (path, ms) => hub.call("GET", "/lock/" + path, null, ms);
+  // A wait that timed out with nothing changed redraws nothing: a redraw rebuilds the cards, and the focus would
+  // have to be found again every 30 s.
+  async function machineWatch(){
+    if (mach.on) return;
+    mach.on = true;
+    try {
+      let again = true, fails = 0;
+      while (state.section === "home") {
+        const before = machineText();
+        try {
+          const j = await (again ? lockCall("view") : lockCall("wait?since=" + encodeURIComponent(String(mach.rev)) + "&timeout=30", 90000));
+          takeMachine(j);
+          again = false; fails = 0;
+          if (state.section === "home" && (j.changed === true || machineText() !== before)) render();
+        } catch (e) {
+          fails++; again = true;
+          mach.err = e && e.unpaired ? "this browser is not paired with the hub" : (e && e.message) || "no reason given";
+          if (state.section === "home" && machineText() !== before) render();
+          await sleep(hubRetryMs(fails, e && e.retryAfter, e && e.unpaired));
+        }
+      }
+    } finally { mach.on = false; }
+  }
+  function machineText(){
+    const v = mach.view, bad = mach.err ? "The machine lock could not be read (" + mach.err + ")." : "";
+    if (!v) return bad || "Reading the machine lock…";
+    const head = v.cores && v.cores.head ? String(v.cores.head) : "";
+    const run = (Array.isArray(v.strip) ? v.strip : []).map(it => String(it && it.text || "")).filter(Boolean);
+    const warn = Array.isArray(v.warnings) ? v.warnings.length : 0;
+    return ["Machine", head, run.length ? "running: " + run.slice(0, 3).join("; ") + (run.length > 3 ? "; and " + (run.length - 3) + " more" : "") : "nothing running",
+      warn ? warn + (warn === 1 ? " warning" : " warnings") : ""].filter(Boolean).join(" · ") + "." + (bad ? " Out of date: " + bad : "");
+  }
+  function machineLine(){
+    const v = mach.view, bad = mach.err ? "The machine lock could not be read (" + mach.err + ")." : "";
+    if (!v) return el("p", {class: bad ? "gone" : "status", id:"machine", role:"status", text: machineText()});
+    return el("p", {class: bad ? "gone" : "status machine", id:"machine", role:"status", text: machineText()});
+  }
+  function renderHome(){
+    const items = ready ? needsYou() : [];
+    machineWatch().catch(() => {});
+    show([], machineLine(), ready ? el("h2", {id:"need-head", text: items.length ? "Waiting on you (" + items.length + ")" : "Waiting on you"}) : null,
+      items.length ? items.map(n => drawn(needCard, n))
+        : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing waits on you" : NOT_READY}), ready ? "Approvals, open questions and open to-dos appear here." : NOT_READY_WHY));
+  }
+
   // ---- A pending approval (docs/action-hub.md "approvals/A-NNN"): the change an agent asks to make, as the diff the
   // server stored, or for kind "op" the one run of a delegated operation it asks for: the operation, what it does and the
   // exact line it runs, `run D-nnn` and then one NAME=VALUE a line, with no base commit and no diff (docs/delegations.md
@@ -1568,7 +1655,7 @@ button.danger{color:var(--warn)}
     const next = hubState(await hub.snapshot());
     if (ready && next.revision < rev) return;         // an older answer that arrived late
     rev = next.revision;
-    const first = !ready; ready = true;
+    const first = !ready; ready = true; lastRead = Date.now();
     for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
@@ -1589,7 +1676,6 @@ button.danger{color:var(--warn)}
       throw e;
     }
   }
-  const sleep = ms => new Promise(done => setTimeout(done, ms));
   async function watch(){
     // After a failure the lists are read again before waiting: what was missed is shown, and the notice at
     // the top goes as soon as the server answers, not when the next change comes.
