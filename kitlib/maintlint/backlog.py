@@ -149,7 +149,7 @@ def answered(snap, cmd, questions=None):
         out.append(Finding('answered-question', rec.stem,
                            '%s is parked on %s, which the owner has answered (%s)'
                            % (rec.stem, q, got),
-                           '%s%s unpark %s --ruling <the ruling it was logged as>'
+                           '%s%s unpark %s, giving the ruling it was logged as'
                            % (first, cmd, rec.stem), age_of(rec)))
     return out, []
 

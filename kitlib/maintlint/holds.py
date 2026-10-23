@@ -1,5 +1,5 @@
 """kitlib.maintlint.holds: an offerable record whose own words say it waits on the owner or a live
-client, but which no hold keeps out of the offer (docs/maint-lint.md "Keyword holds").
+client, but which no hold keeps out of the offer (docs/maint-lint.md "Backlog checks").
 
   HOLD_MEMBERS   the blocked_on members a hit names, in the order they are tried
   KEYWORDS       {member: [regex text]}: the phrases that name each member

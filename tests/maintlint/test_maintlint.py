@@ -4,6 +4,7 @@ file, and the page that kitlib.hubsite.pagecheck passes."""
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -80,7 +81,7 @@ class BacklogChecks(unittest.TestCase):
         def run(root, days, fetch, home, now):
             calls.append((days, fetch))
             return audit_check.FINDINGS, ['AUDIT CHECK 7 days', 'NOTE: the log has a bad line',
-                                          'UNAUDITED abc1234 set FOO --why "see SECRET-9"',
+                                          'UNAUDITED abc1234 set FOO --why "see private words"',
                                           'UNAUDITED def5678 close BAR', 'UNMAPPED x y',
                                           'FINDINGS 3']
         got, notes = backlog.audit('r', CMD, run=run)
@@ -93,7 +94,7 @@ class BacklogChecks(unittest.TestCase):
         self.assertEqual(notes, ['audit: the log has a bad line'])
         for f in got:
             for text in (f.key, f.text, f.fix):
-                self.assertNotIn('SECRET', text)
+                self.assertNotIn('private', text)
                 self.assertNotIn('abc1234', text)
         got, notes = backlog.audit('r', CMD, run=lambda *a, **k: (audit_check.NOT_CHECKED,
                                                                   ['NOT CHECKED: no pm_data']))
@@ -114,18 +115,18 @@ class AnsweredQuestions(unittest.TestCase):
         s = snap(self.parked('AAA', QID), self.parked('BBB', other), self.parked('CCC', third),
                  priced('DDD'))
         docs = [{'id': QID, 'status': 'answered'}, {'id': other, 'status': 'logged',
-                                                     'ruling': 'SECRET-RULING'},
+                                                     'ruling': 'EX-2001'},
                 {'id': third, 'status': 'open'}]
         got, notes = backlog.answered(s, CMD, questions=lambda: docs)
         self.assertEqual(notes, [])
         self.assertEqual([(f.check, f.key) for f in got],
                          [('answered-question', 'AAA'), ('answered-question', 'BBB')])
         self.assertIn('questions log %s' % QID, got[0].fix)
-        self.assertIn(CMD + ' unpark AAA --ruling', got[0].fix)
-        self.assertTrue(got[1].fix.startswith(CMD + ' unpark BBB --ruling'))
+        self.assertIn(CMD + ' unpark AAA, giving the ruling', got[0].fix)
+        self.assertTrue(got[1].fix.startswith(CMD + ' unpark BBB, giving the ruling'))
         self.assertEqual(got[0].age, 'parked_at 2026-10-01')
         for f in got:
-            self.assertNotIn('SECRET', f.text + f.fix)
+            self.assertNotIn('EX-2001', f.text + f.fix)
 
     def test_a_hub_that_cannot_be_asked_is_a_not_checked_note(self):
         from kitlib.hubsite import serve
@@ -174,6 +175,8 @@ class ScopeChecks(unittest.TestCase):
             return ('abc1234', None) if path == 'gone' else ('', None)
         got, notes = verify.scopes(s, self.root, 'main', CMD, git=git)
         self.assertEqual([(f.check, f.key) for f in got], [('scope-path-gone', 'AAA gone/**')])
+        self.assertIn('which main held and the checkout no longer has', got[0].text)
+        self.assertIsNone(re.search(r'\b[0-9a-f]{7,40}\b', got[0].text + got[0].fix))
         self.assertEqual(sorted(asked), ['gone', 'planned/new.py'])
         self.assertEqual(notes, [])
 
@@ -310,8 +313,8 @@ class PageAndResult(unittest.TestCase):
         self.assertIn('note  here', doc)
 
     def test_the_fingerprint_is_repo_check_and_target_never_the_text(self):
-        f = Finding('scope-path-gone', 'AAA gone/**', 'AAA scope gone/** (deleted in abc1234)', 'x')
-        reworded = f._replace(text='AAA: gone/** was removed in def5678', fix='y', age='idle 9d')
+        f = Finding('scope-path-gone', 'AAA gone/**', 'AAA scope gone/** is gone', 'x')
+        reworded = f._replace(text='AAA: gone/** was removed', fix='y', age='idle 9d')
         self.assertEqual(maintlint.fingerprint('demo', f), maintlint.fingerprint('demo', reworded))
         self.assertNotEqual(maintlint.fingerprint('demo', f), maintlint.fingerprint('other', f))
         self.assertNotEqual(maintlint.fingerprint('demo', f),

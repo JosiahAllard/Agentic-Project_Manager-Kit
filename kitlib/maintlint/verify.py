@@ -75,8 +75,8 @@ def scopes(snap, root, rev, cmd, git=last_commit):
             elif sha:
                 out.append(Finding(
                     'scope-path-gone', '%s %s' % (rec.stem, member),
-                    '%s has scope `%s`, which %s held (last in %s) and the checkout no longer has'
-                    % (rec.stem, member, rev, sha),
+                    '%s has scope `%s`, which %s held and the checkout no longer has'
+                    % (rec.stem, member, rev),
                     '%s set %s --scope <path>   (or close or retire it if the work went with the'
                     ' path)' % (cmd, rec.stem)))
     notes = ['scope checks: %d path(s) NOT CHECKED (git failed)' % unchecked] if unchecked else []

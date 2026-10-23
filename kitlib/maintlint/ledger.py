@@ -1,4 +1,4 @@
-"""kitlib.maintlint.ledger: the decision ledger as two counts, and nothing else (docs/maint-lint.md
+"""kitlib.maintlint.ledger: the decision ledger as three counts, and nothing else (docs/maint-lint.md
 "Ledger counts"). The ledger is the PM's private record: no entry id and no entry text leaves this
 module, so the page and result.json carry numbers only. The module stands alone; dropping it drops
 the counts and nothing else.
