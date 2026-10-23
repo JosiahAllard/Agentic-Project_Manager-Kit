@@ -3059,7 +3059,8 @@ class UnblockStoreTest(trw.Case):
         e = self.refused(lambda: recordwrite.unblock(self.repo.root, 'FOO', on='item:BAR'),
                          'invalid')
         self.assertIn('reason', e.message)
-        out = recordwrite.unblock(self.repo.root, 'FOO', on='item:BAR', reason='BAR landed')
+        out = recordwrite.unblock(self.repo.root, 'FOO', on='item:BAR',
+                                  reason='BAR landed on main')
         self.assertEqual(self.field('FOO', 'blocked_on'), ['item:BAZ'])
         self.assertTrue(out['lines'])
         e = self.refused(lambda: recordwrite.unblock(self.repo.root, 'OPEN'), 'invalid')

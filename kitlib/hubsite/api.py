@@ -79,6 +79,17 @@ A refusal is `invalid` naming the field, with nothing written. Writing over a sc
 `if_version`; without it, or with another, it is `conflict`, as for a page. GET schedules (ANY)
 lists them. Nothing here runs a task: a tick outside the hub reads the list.
 
+Findings. GET findings (ANY) lists the maintenance lint's last findings (the `findings` view),
+filtered by `repo` (case ignored), less every one the owner has marked: a finding_marks/
+<fingerprint> document. POST finding_marks (OWNER) marks one, {fingerprint, status, note?,
+if_version?}: status is one of hubvalidate.STATUSES['finding_marks'], the fingerprint must be one
+the lint shows (`not_found` otherwise), and the mark keeps the finding's repo, check, target and
+text as they were. Writing over a mark takes its `if_version`, as for a schedule. POST
+finding_marks/{id}/delete (OWNER, if_version optional) takes a mark back; GET finding_marks (ANY)
+lists them. POST to_pm with kind `act` passes a finding on to the PM: `finding` (its
+fingerprint, required, and refused for any other kind) prefills repo, refs (the fingerprint and
+the finding's target first) and, when none is given, text; the page marks the finding itself.
+
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
 cannot post its answer). status, the time stamps and a to-do's `from: you` are set here from the
@@ -130,6 +141,7 @@ is null and `unavailable` maps its name to that same reason:
   backlog(repo='', state='', fresh=False)   [{repo, fetched_at, items}]
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
+  findings()                                the lint's rows (GET findings; not in GET snapshot)
   health()                                  a dict merged into GET health (git, backlog, ...)
   record(repo, id)                          one record (GET records/{repo}/{id})
   record_template(repo)                     a new record's fields (GET records/{repo}/new)
@@ -137,10 +149,10 @@ The two record views differ: what they raise as a HubError is the answer (a 404 
 repository that is not there, a 400 for a name that cannot be one), so their messages are fixed
 phrases with no path, no id and nothing the caller sent; only anything else is `unavailable`.
 Both are read now, never cached, and neither is part of GET snapshot.
-  record_add(repo, id, summary, scopes, effort, ref)               the owner's three writes to
+  record_add(repo, id, summary, scopes, effort, ref)               the owner's four writes to
   record_edit(repo, id, version, changes, unset, body, ruling)     a repository's backlog store
   record_delete(repo, id, why, ruling)                             (OWNER routes; kitlib.hubsite.
-                                                                   recordwrite)
+  record_unblock(repo, id, on, reason, ruling)                     recordwrite)
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
 
@@ -1120,10 +1132,21 @@ def to_pm_list(api, req):
 
 
 def to_pm_add(api, req):
-    b = _fields(req, ('kind', 'repo', 'urgent', 'text'), required=('text',))
+    b = _fields(req, ('kind', 'repo', 'urgent', 'text', 'refs', 'finding'))
     for name in ('kind', 'repo', 'text'):
         _text(b, name)
     b.setdefault('kind', 'question')
+    _one_of(b, 'kind', schema.KINDS['to_pm'])
+    refs = _typed(b, 'refs', (list,), 'a list of strings')
+    if refs is not None and not all(isinstance(r, str) and r.strip() for r in refs):
+        raise _invalid('refs is a list of non-empty strings', 'refs')
+    if b['kind'] == 'act':
+        _act_note(api, b)
+    elif 'finding' in b:
+        raise _invalid('finding is for an act note (kind act), not a %s one' % b['kind'],
+                       'finding')
+    elif not (b.get('text') or '').strip():
+        raise _invalid('text is required', 'text')
     b.update(status='queued', created_at=api.clock(), sent_at=None, reply=None, done_at=None)
     return api.add('to_pm', b, req, {'status': 'queued'})
 
@@ -1401,6 +1424,14 @@ def record_delete(api, req):
         raise _invalid('confirm must repeat the record id to delete it', 'confirm')
     out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'), _text(b, 'ruling'))
     return dict(out, ok=True)
+
+
+def record_unblock(api, req):
+    repo, rid = _segment(req, 'repo'), _segment(req, 'id')
+    b = _fields(req, ('on', 'reason', 'ruling'))
+    out = _record_view(api, 'record_unblock', repo, rid, _text(b, 'on'), _text(b, 'reason'),
+                       _text(b, 'ruling'))
+    return dict(out, ok=True)
 # ---- end of the owner's record writes
 
 
@@ -1647,20 +1678,102 @@ def schedules_set(api, req):
               'via': _via(req)}
     if cadence == 'weekly':
         fields['days'] = [d for d in DAYS if d in days]
-    have = api.store.get('schedules', doc_id)
+    return _put_pinned(api, 'schedules', doc_id, fields, pin)
+
+
+def _put_pinned(api, coll, doc_id, fields, pin):
+    """Put fields as coll/doc_id, pinned: writing over a document takes its version as `pin`
+    (None, or another, is `conflict`), and a pin for a document not there is `conflict` too."""
+    have = api.store.get(coll, doc_id)
     if have is not None and pin is None:
-        raise HubError('conflict', 'schedules/%s is at version %d: give it as if_version to set it '
-                       'again' % (doc_id, _version(have)), 'if_version')
+        raise HubError('conflict', '%s/%s is at version %d: give it as if_version to set it '
+                       'again' % (coll, doc_id, _version(have)), 'if_version')
     if have is not None and pin != _version(have):
-        raise HubError('conflict', 'schedules/%s is at version %d, not %d'
-                       % (doc_id, _version(have), pin), 'if_version')
+        raise HubError('conflict', '%s/%s is at version %d, not %d'
+                       % (coll, doc_id, _version(have), pin), 'if_version')
     if have is None and pin:
-        raise HubError('conflict', 'there is no schedules/%s at version %d: it is not there'
-                       % (doc_id, pin), 'if_version')
+        raise HubError('conflict', 'there is no %s/%s at version %d: it is not there'
+                       % (coll, doc_id, pin), 'if_version')
     # pinned to the version read (0: not there yet), so a second writer with the same pin loses
-    r = api.store.put('schedules', doc_id, fields,
-                      if_version=_version(have) if have is not None else 0)
+    r = api.store.put(coll, doc_id, fields, if_version=_version(have) if have is not None else 0)
     return api.written(r)
+
+
+# ---- the maintenance lint's findings and the owner's marks on them ("Findings")
+_FINGERPRINT = re.compile(r'[0-9a-f]{16}\Z')
+FINDING_COPY = ('repo', 'check', 'target', 'text')   # what a mark keeps of its finding
+
+
+def _fp_field(b, name):
+    v = b.get(name)
+    if not isinstance(v, str) or not _FINGERPRINT.match(v):
+        raise _invalid('%s is a finding\'s fingerprint, 16 hex digits (GET findings gives them)'
+                       % name, name)
+    return v
+
+
+def _finding(api, fp, field):
+    """The finding the lint shows with fingerprint fp, marked or not; not_found on `field`."""
+    for f in api.shown('findings'):
+        if isinstance(f, dict) and f.get('fingerprint') == fp:
+            return f
+    raise HubError('not_found', 'the maintenance lint shows no finding %s' % fp, field)
+
+
+def findings_list(api, req):
+    repo = _q(req, 'repo').lower()
+    marked = api.store.docs('finding_marks')
+    return {'items': [f for f in api.shown('findings')
+                      if isinstance(f, dict) and f.get('fingerprint') not in marked
+                      and (not repo or str(f.get('repo') or '').lower() == repo)]}
+
+
+def finding_marks_list(api, req):
+    return {'items': api.items('finding_marks', req)}
+
+
+def finding_marks_set(api, req):
+    b = _fields(req, ('fingerprint', 'status', 'note', 'if_version'),
+                required=('fingerprint', 'status'))
+    fp = _fp_field(b, 'fingerprint')
+    status = _one_of(b, 'status', hubvalidate.STATUSES['finding_marks'])
+    note = _text(b, 'note')
+    pin = _pin(b)
+    f = _finding(api, fp, 'fingerprint')
+    fields = {k: f[k] for k in FINDING_COPY if isinstance(f.get(k), str)}
+    fields.update(status=status, marked_at=api.clock(), via=_via(req))
+    if note is not None:
+        fields['note'] = note
+    return _put_pinned(api, 'finding_marks', fp, fields, pin)
+
+
+def finding_marks_delete(api, req):
+    b = _fields(req, ('if_version',))
+    _pin(b)
+    doc_id = req.params['id']
+    d = api.doc('finding_marks', doc_id, b)
+    r = api.store.delete('finding_marks', doc_id, if_version=_version(d))
+    return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
+
+
+def _act_note(api, b):
+    """An `act` note's fields prefilled from its finding: repo, refs (the fingerprint and the
+    finding's target first, each once) and a text naming the check, target, text and fix."""
+    fp = b.get('finding')
+    if fp is None:
+        raise _invalid('an act note names the finding it acts on (finding)', 'finding')
+    f = _finding(api, _fp_field(b, 'finding'), 'finding')
+    refs = []
+    for r in [fp, f.get('target')] + list(b.get('refs') or ()):
+        if isinstance(r, str) and r and r not in refs:
+            refs.append(r)
+    b['refs'] = refs
+    if isinstance(f.get('repo'), str):
+        b.setdefault('repo', f['repo'])
+    if not (b.get('text') or '').strip():
+        b['text'] = 'Act on maintenance finding %s %s: %s (fix: %s)' % tuple(
+            f.get(k) if isinstance(f.get(k), str) else '-' for k in ('check', 'target', 'text',
+                                                                      'fix'))
 
 
 def snapshot(api, req):
@@ -1897,6 +2010,11 @@ ROUTES = (
     _r('POST', '/records/{repo}', OWNER, record_add),
     _r('POST', '/records/{repo}/{id}/edit', OWNER, record_edit),
     _r('POST', '/records/{repo}/{id}/delete', OWNER, record_delete),
+    _r('POST', '/records/{repo}/{id}/unblock', OWNER, record_unblock),
+    _r('GET', '/findings', ANY, findings_list),
+    _r('GET', '/finding_marks', ANY, finding_marks_list),
+    _r('POST', '/finding_marks', OWNER, finding_marks_set),
+    _r('POST', '/finding_marks/{id}/delete', OWNER, finding_marks_delete),
     _r('GET', '/notices', ANY, _listing('notices')),
     _r('GET', '/repos', ANY, _listing('repos')),
     _r('GET', '/usage', ANY, _listing('usage')),

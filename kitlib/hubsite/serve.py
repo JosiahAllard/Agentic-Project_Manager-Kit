@@ -159,7 +159,8 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
       both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
       (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
-  notices() repos() usage() agents()      kitlib.hubsite.derived's answers
+  notices() repos() usage() agents() findings()
+                                          kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
       source, else [{repo, fetched_at, error}] as the last backlog read gave it (`backlog_at`:
@@ -343,6 +344,8 @@ class Sources(object):
       static_dir   the page's folder; a missing one answers 404
       pm_data      kitlib.pmdata's {path, branch, remote}, or None
       notices      the machine lock's notice folder
+      findings     the maintenance lint's results folder, <pm_data>/maint-lint (one
+                   <repo>/result.json each: kitlib.maintlint.result); None: no findings
       repos        callable(the store's repos documents) -> [{name, aliases}]
       known_repos  callable() -> the PM's configured repo names, which the store's repo-alias
                    check accepts without a repos/ document; None: none
@@ -375,7 +378,9 @@ class Sources(object):
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None, known_repos=None, push=None, push_dir=None, lock=None):
+                 access_now=None, known_repos=None, push=None, push_dir=None, lock=None,
+                 findings=None):
+        self.findings = findings
         self.lock = lock
         self.push = push
         self.push_dir = push_dir
@@ -459,6 +464,9 @@ def machine_sources(home=None, sync=True):
                   notices=pmwatch.configured_notice_dir(path),
                   agents=agents_dir(),
                   sync=gitsync.GitSync if sync else None)
+    if pm and pm.get('path'):
+        from kitlib.maintlint import result as lint_result
+        src.findings = os.path.join(pm['path'], lint_result.FOLDER)
     from . import lockdoor          # here: only the machine's server reads the machine lock
     src.lock = lockdoor.LockDoor()
     if pmwatch.launcher_configured(home):
@@ -503,9 +511,10 @@ def _record_call(fn, *args):
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
     exists: `backlog_views` for backlog, completed, record, record_template and the record
-    writes (record_add, record_edit, record_delete), sources.repos and .agents for theirs.
-    notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
-    folder with no notices and a missing usage source with its own phrase). `sync` is the git
+    writes (record_add, record_edit, record_delete, record_unblock), sources.repos and .agents
+    for theirs. notices, findings, usage and health are always there (kitlib.hubsite.derived
+    answers a missing notice or findings folder with none and a missing usage source with its
+    own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
     text)`: where after_round says that a read of its own failed."""
 
@@ -520,6 +529,7 @@ class SiteViews(object):
         self._sync_off = sync_off
         self._last = None           # what the last backlog answer said, for health
         self.notices = self._notices
+        self.findings = self._findings
         self.usage = self._usage
         if backlog_views is not None:
             self.backlog = self._open
@@ -529,6 +539,7 @@ class SiteViews(object):
             self.record_add = self._record_add
             self.record_edit = self._record_edit
             self.record_delete = self._record_delete
+            self.record_unblock = self._record_unblock
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
@@ -635,8 +646,17 @@ class SiteViews(object):
         self._backlog.reread(name, root)
         return out
 
+    def _record_unblock(self, repo, id, on, reason, ruling):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.unblock(root, id, on, reason, ruling)
+        self._backlog.reread(name, root)
+        return dict(out, record=self._record(name, id))
+
     def _notices(self):
         return derived.notices(self._sources.notices)
+
+    def _findings(self):
+        return derived.findings(self._sources.findings)
 
     def _repos(self):
         return self._sources.repos(list(self._store.docs('repos').values()))

@@ -432,10 +432,11 @@ to To PM items do not go to inbox/.
 | Field | Written by | Meaning |
 |---|---|---|
 | (doc id) | server | `P-001`, `P-002`, ...: the document's id, not a field |
-| kind | owner | `question` or `fyi` |
+| kind | owner | `question`, `fyi` or `act` (pass a maintenance finding on: below) |
 | repo | owner | a repo name, `pm`, `all`, or empty |
 | urgent | owner | true marks it Urgent and makes the badge hot |
 | text | owner | the message, as written |
+| refs, finding | owner | ids the note names; `finding`, an `act` note's only, is the finding's fingerprint |
 | status | owner, PM | `queued`, `sent` (Send all), `done` (PM) |
 | created_at, sent_at | server | ISO times; sent_at is null until sent |
 | reply, ruling | PM | the answer, complete on its own (null or empty shows as "noted"); the ruling it was filed as |
@@ -538,6 +539,21 @@ whole document; an agent is refused `forbidden`. Any other field, or a bad value
 naming the field, with nothing written. Setting an existing schedule again takes its
 `if_version`; without it, or with another, it is `conflict`. `GET /api/v1/schedules` (anyone)
 lists them, filtered by `repo` like every list (`kitlib.hubsite.api` "Schedules").
+
+## finding_marks/<fingerprint>
+The owner's mark on one maintenance-lint finding (docs/maint-lint.md), so it stops showing:
+{status, repo, check, target, text, note?, marked_at, via}. status is `dismissed`, `passed_on`
+or `done` (`kitlib.hubvalidate.STATUSES`); repo, check, target and text are copied from the
+finding when it is marked. `GET /api/v1/findings` (anyone) lists the lint's last findings, every
+repo (`kitlib.hubsite.derived.findings` over `<pm_data>/maint-lint/<repo>/result.json`),
+filtered by `repo`, less every marked one. `POST /api/v1/finding_marks` (owner) takes
+{fingerprint, status, note?, if_version?}; a fingerprint the lint does not show is `not_found`,
+and marking again takes the mark's `if_version`, as for a schedule. `POST
+/api/v1/finding_marks/{fingerprint}/delete` (owner) takes the mark back; `GET
+/api/v1/finding_marks` (anyone) lists the marks. `POST /api/v1/to_pm` with kind `act` and
+`finding` passes one on: repo, refs (the fingerprint and the finding's target first) and, when
+none is given, text are filled from the finding. An agent is refused `forbidden` on each write
+(`kitlib.hubsite.api` "Findings").
 
 ## pages/<id> and page_html/<id>
 An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
@@ -822,6 +838,8 @@ Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite
   timer (`backlog_refresh_s` unset) the snapshot reads as the routes do.
 - usage: `launch.py usage` (docs/launcher.md "Usage").
 - agents: the agent definitions in `claude/agents`.
+- findings: the maintenance lint's last result of each repo, never in the snapshot
+  ("finding_marks/<fingerprint>" above).
 
 ## The record page
 One backlog record, read live and never part of the snapshot (`kitlib/hubsite/api.py` `record`,
@@ -843,6 +861,10 @@ comes from the caller.
 - `POST /api/v1/records/{repo}/{id}/delete` (owner only), body `why`, `confirm`, `ruling`:
   `confirm` must repeat the id, or the call is `invalid` on field `confirm` and nothing is
   written. The store's delete rules apply unchanged: a live pull is refused until it is released.
+- `POST /api/v1/records/{repo}/{id}/unblock` (owner only), body `on`, `reason`, `ruling`: the
+  backlog library's unblock (`recordwrite.unblock`). One blocker opens the record; with several,
+  `on` names the one to clear and `reason` is required, and a call with no `on` is `invalid` on
+  field `on`. Clearing an owner blocker takes `ruling`.
 - `ruling` is sent only when the store's refusal asks for one (an owner-priced or owner-held
   record); the store checks it as it checks a ruling given to `tools/backlog.py`.
 - Each write answers `lines`, what the store printed (its notes included), and an add or edit
