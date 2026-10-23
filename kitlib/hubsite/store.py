@@ -94,8 +94,11 @@ ID_FLOOR = {'Q': 1000}
 Result = collections.namedtuple('Result', 'id version revision warnings')
 Event = collections.namedtuple('Event', 'rev collection id op status')
 Changes = collections.namedtuple('Changes', 'revision events reset')
-# sender: the document's own `from` as stored ('' when it has none); the api routes on it
-Pending = collections.namedtuple('Pending', 'kind id title repo at sender', defaults=('',))
+# sender: the document's own `from` as stored ('' when it has none); the api routes on it.
+# note: a to_pm note's own `kind` as stored ('' for the rest); the api cuts an act note's title
+# on it, and no caller is sent it
+Pending = collections.namedtuple('Pending', 'kind id title repo at sender note',
+                                 defaults=('', ''))
 
 
 class HubError(Exception):
@@ -533,7 +536,8 @@ def pending_items(docs, now=None):
         if d.get('status') == 'sent':
             text = _s(d.get('text')).strip()
             out.append(Pending('to_pm', doc_id, text.splitlines()[0] if text else '',
-                               _s(d.get('repo')), _s(d.get('sent_at'))))
+                               _s(d.get('repo')), _s(d.get('sent_at')),
+                               note=_s(d.get('kind'))))
     for doc_id, d in docs.get('todos', {}).items():
         if not d.get('pm_ack') and (d.get('status') == 'done' or d.get('from') == 'you'):
             out.append(Pending('todo', doc_id, _s(d.get('title')), _s(d.get('repo')),

@@ -3199,15 +3199,49 @@ class FindingsTest(ApiCase):
                 kw = dict(kw)
                 role = kw.pop('role')
                 for got in (titles(self.ok('GET', '/pending', role, **kw)['items']),
-                            titles(self.ok('GET', '/snapshot', role, **kw)['pending'])):
+                            titles(self.ok('GET', '/snapshot', role, **kw)['pending']),
+                            titles(self.ok('GET', '/wait', role, query=self.WAIT,
+                                           **kw)['pending'])):
                     self.assertNotIn('Q:', got[act])
                     self.assertIn('.../my-slug', got[act])
                     self.assertIn('.../x.py', got[act])
                     self.assertEqual(got[note], 'see Q:\\mine\\a.txt')   # the owner's words
         self.assertEqual(self.store.get('to_pm', act), made)   # nothing stored was cut
         for got in (titles(self.ok('GET', '/pending', OWNER)['items']),
-                    titles(self.ok('GET', '/snapshot', OWNER)['pending'])):
+                    titles(self.ok('GET', '/snapshot', OWNER)['pending']),
+                    titles(self.ok('GET', '/wait', OWNER, query=self.WAIT)['pending'])):
             self.assertEqual(got[act], whole)               # the local owner: whole
+
+    WAIT = {'pending': '1', 'timeout': '0'}
+
+    def test_an_act_note_deleted_mid_request_keeps_its_title_cut(self):
+        # the kind is read with the pending item: a note gone by the time its title is cut
+        # (a re-read would find None) is still cut, and no item carries the kind out
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        self.views.rows = [finding(target=wt, fix='python Q:/kit/tools/x.py')]
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})['id']
+        self.ok('POST', '/to_pm/send', OWNER)
+        real = self.store.get
+
+        def gone(collection, doc_id, *a, **k):
+            return None if (collection, doc_id) == ('to_pm', act) else real(
+                collection, doc_id, *a, **k)
+        with mock.patch.object(self.store, 'get', side_effect=gone):
+            for kw in self.REMOTE:
+                with self.subTest(caller=kw):
+                    kw = dict(kw)
+                    role = kw.pop('role')
+                    for items in (self.ok('GET', '/pending', role, **kw)['items'],
+                                  self.ok('GET', '/snapshot', role, **kw)['pending'],
+                                  self.ok('GET', '/wait', role, query=self.WAIT,
+                                          **kw)['pending']):
+                        got = {d['id']: d for d in items}[act]
+                        self.assertNotIn('Q:', got['title'])
+                        self.assertIn('.../my-slug', got['title'])
+                        self.assertNotIn('note', got)
+            for items in (self.ok('GET', '/pending', OWNER)['items'],
+                          self.ok('GET', '/wait', OWNER, query=self.WAIT)['pending']):
+                self.assertNotIn('note', {d['id']: d for d in items}[act])
 
     def test_a_json_escaped_share_is_cut(self):
         # a share path inside JSON text: each backslash doubled (\\\\nas\\share\\...)

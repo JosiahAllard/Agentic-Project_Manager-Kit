@@ -1508,14 +1508,14 @@ def pending(api, req):
 
 def _unpath_pending(api, items, req):
     """Pending items (fresh dicts from api.pending) with an act note's title, its text's first
-    line, cut as _unpathed but for the local owner (Request.full), as GET to_pm cuts its text."""
-    if req.full:
-        return items
+    line, cut as _unpathed but for the local owner (Request.full), as GET to_pm cuts its text.
+    The note's kind is the one read with the item (its `note`, dropped here for every caller),
+    never read again: a note deleted since is still known for what it was."""
     for d in items:
-        if d.get('kind') == 'to_pm' and isinstance(d.get('title'), str):
-            note = api.store.get('to_pm', d['id'])
-            if isinstance(note, dict) and note.get('kind') == 'act':
-                d['title'] = _unpathed(d['title'])
+        note = d.pop('note', '')
+        if (not req.full and d.get('kind') == 'to_pm' and note == 'act'
+                and isinstance(d.get('title'), str)):
+            d['title'] = _unpathed(d['title'])
     return items
 
 
