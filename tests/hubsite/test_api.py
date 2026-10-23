@@ -64,13 +64,14 @@ class ApiCase(unittest.TestCase):
         self.assertEqual((status, obj.get('error')), (200, None))
         return obj
 
-    def refused(self, code, field, method, path, role, body=None, query=None, **kw):
+    def refused(self, code, field, method, path, role, body=None, query=None, more=(), **kw):
+        # more: the error's own keys past code, field and message (a schedule conflict names its id)
         before = self.store.snapshot()
         status, obj = self.call(method, path, role, body, query, **kw)
         self.assertEqual(obj['error']['code'], code, obj)
         self.assertEqual(status, api.STATUS[code])
         self.assertIs(obj['ok'], False)
-        self.assertEqual(sorted(obj['error']), ['code', 'field', 'message'])
+        self.assertEqual(sorted(obj['error']), sorted(['code', 'field', 'message', *more]))
         if field is not None:
             self.assertEqual(obj['error']['field'], field, obj)
         self.assertEqual(self.store.snapshot(), before, 'a refused call wrote')
@@ -2785,10 +2786,11 @@ class ScheduleTest(ApiCase):
 
     def test_setting_it_again_is_pinned_to_the_version_read(self):
         self.ok('POST', '/schedules', OWNER, self.body())
-        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
-                     self.body(cadence='off'))
-        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
-                     self.body(cadence='off', if_version=2))
+        # the refusal names the schedule there, so the page can open it
+        for pin in (None, 2):
+            got = self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
+                               self.body(cadence='off', if_version=pin), more=('id',))
+            self.assertEqual(got['error']['id'], 'maint-lint-Kit')
         got = self.ok('POST', '/schedules', OWNER,
                       self.body(cadence='weekly', days=['Fri'], at='03:30', if_version=1))
         self.assertEqual(got['version'], 2)
@@ -2799,7 +2801,7 @@ class ScheduleTest(ApiCase):
         self.assertNotIn('days', self.store.get('schedules', 'maint-lint-Kit'))
         # a pin on a schedule that is not there
         self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
-                     self.body(task='worktree-sweep', if_version=1))
+                     self.body(task='worktree-sweep', if_version=1), more=('id',))
 
     def test_an_agent_is_refused_the_write(self):
         self.refused('forbidden', 'role', 'POST', '/schedules', AGENT, self.body())

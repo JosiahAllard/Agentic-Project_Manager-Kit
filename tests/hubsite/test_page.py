@@ -2688,7 +2688,154 @@ class AutoTasksTest(unittest.TestCase):
         self.assertEqual(got["posts"], [{"task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "03:00"}])
         self.assertEqual(got["cur"], ["row-maint-lint-alpha"])
         self.assertTrue(got["open"] and got["gone"], got)
-        self.assertEqual(got["said"], "This task and repo already has a schedule: it is open here. Change it and save.")
+        self.assertEqual(got["said"], "This task and repo already has a schedule: it is open here, with what you picked, not saved yet. "
+                                      "Save sets it.")
+
+    CONFLICT_ALPHA = {"status": 409, "body": {"ok": False, "error": {"code": "conflict", "id": "maint-lint-alpha", "field": "if_version",
+                      "message": "schedules/maint-lint-alpha is at version 2: give it as if_version to set it again"}}}
+
+    def test_what_was_picked_on_a_refused_new_form_is_kept_on_the_one_opened(self):
+        # The new form's cadence, time and days are carried onto the schedule opened, unsaved, its status line is the
+        # one drawn, and one Save sets them at that schedule's version.
+        got = self.run_page("""
+            await start();
+            await click($("#sched-new"));
+            const cad = $("#s-new-how-often"); cad.value = "weekly"; await fire(cad, "change");
+            const tue = $("#s-new-Tue"); tue.checked = true; await fire(tue, "change");
+            await type($("#s-new-at"), "05:15");
+            await click(button($("#pane-detail #sched-new"), "Save"));
+            const live = $("#pane-detail #sched-maint-lint-alpha");
+            const shown = { cad: $("#s-maint-lint-alpha-how-often").value, at: $("#s-maint-lint-alpha-at").value,
+                            days: ["Mon", "Tue"].map(w => $("#s-maint-lint-alpha-" + w).checked), hidden: $("#sched-maint-lint-alpha fieldset.days").hidden,
+                            said: text(live.querySelector("[role=status]")) };
+            server.route = c => c.path === "/schedules" && c.method === "POST" ? { status: 200, body: { ok: true, id: "maint-lint-alpha", version: 3, first_run: "2026-10-27T05:15" } }
+              : c.path === "/schedules" ? { status: 200, body: SCHED } : undefined;
+            await click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
+            return { shown, posts: calls.filter(c => c.method === "POST").map(c => c.body) };
+        """.replace("SCHED", json.dumps(schedules())), post=self.CONFLICT_ALPHA)
+        self.assertEqual(got["shown"], {"cad": "weekly", "at": "05:15", "days": [False, True], "hidden": False,
+                                        "said": "This task and repo already has a schedule: it is open here, with what you picked, "
+                                                "not saved yet. Save sets it."})
+        self.assertEqual(got["posts"], [{"task": "maint-lint", "repo": "alpha", "cadence": "weekly", "at": "05:15", "days": ["Tue"]},
+                                        {"task": "maint-lint", "repo": "alpha", "cadence": "weekly", "at": "05:15", "days": ["Tue"], "if_version": 2}])
+
+    def test_unsaved_changes_on_the_schedule_a_refused_new_form_opens_are_kept(self):
+        got = self.run_page("""
+            await start();
+            await type($("#s-maint-lint-alpha-at"), "06:45");                 // changed, not saved
+            await click($("#sched-new"));
+            await type($("#s-new-at"), "05:15");
+            await click(button($("#pane-detail #sched-new"), "Save"));
+            return { at: $("#pane-detail #s-maint-lint-alpha-at").value, said: text($("#pane-detail #s-maint-lint-alpha-status")),
+                     gone: !$("#pane-detail #sched-new") };
+        """, post=self.CONFLICT_ALPHA)
+        self.assertEqual(got["at"], "06:45")
+        self.assertEqual(got["said"], "This task and repo already has a schedule: it is open here, with the changes you had not saved on it. "
+                                      "Save sets them.")
+        self.assertTrue(got["gone"])
+
+    def test_the_schedule_a_conflict_names_is_opened_whatever_name_the_repo_was_picked_by(self):
+        # The server keeps the repo's own name (alpha-kit) where the menu offered another (alpha): the refusal's id finds it.
+        got = self.run_page("""
+            await start();
+            await click($("#sched-new"));
+            await click(button($("#pane-detail #sched-new"), "Save"));
+            return { cur: $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id),
+                     open: !!$("#pane-detail #sched-maint-lint-alpha-kit"), posts: calls.filter(c => c.method === "POST").length };
+        """, sched=schedules(items=[{"id": "maint-lint-alpha-kit", "task": "maint-lint", "repo": "alpha-kit", "cadence": "daily",
+                                     "at": "03:00", "set_at": NOW, "via": "web", "version": 4}]),
+            post={"status": 409, "body": {"ok": False, "error": {"code": "conflict", "id": "maint-lint-alpha-kit",
+                                                                 "message": "schedules/maint-lint-alpha-kit is at version 4"}}})
+        self.assertEqual(got, {"cur": ["row-maint-lint-alpha-kit"], "open": True, "posts": 1})
+
+    def test_a_conflict_on_a_new_form_whose_schedule_is_not_in_the_list_says_one_exists(self):
+        got = self.run_page("""
+            await start();
+            await click($("#sched-new"));
+            await click(button($("#pane-detail #sched-new"), "Save"));
+            await settle();
+            return { said: text($("#s-new-status")), open: !!$("#pane-detail #sched-new"), posts: calls.filter(c => c.method === "POST").length,
+                     gets: calls.filter(c => c.method === "GET" && c.path === "/schedules").length };
+        """, sched=schedules(items=[{"id": "worktree-sweep-alpha", "task": "worktree-sweep", "repo": "alpha", "cadence": "daily",
+                                     "at": "04:00", "set_at": NOW, "via": "cli", "version": 1}]), post=self.CONFLICT_ALPHA)
+        self.assertEqual(got["said"], "Not saved: Maintenance lint already has a schedule for alpha (maint-lint-alpha), but the list read "
+                                      "now does not show it. What you picked is kept; open the section again to see it.")
+        self.assertTrue(got["open"])
+        self.assertEqual((got["posts"], got["gets"]), (1, 2))                     # no second try: one post, one read again
+
+    # GET /schedules held, once `holding` is set, until the test lets each one go (queue.shift()()).
+    HOLD_READS = """
+            let holding = false; const queue = []; const realFetch = globalThis.fetch;
+            globalThis.fetch = (url, init) => { const p = realFetch(url, init); return holding && /\\/schedules$/.test(url) && init.method === "GET" ? new Promise(r => queue.push(() => r(p))) : p; };
+    """
+
+    def test_a_redraw_before_the_read_after_a_save_shows_what_was_saved(self):
+        got = self.run_page(self.HOLD_READS + """
+            let saved = false; const after = SCHED1;
+            server.route = c => c.path !== "/schedules" ? undefined : c.method === "POST"
+              ? (saved = true, { status: 200, body: { ok: true, id: "maint-lint-alpha", version: 3, first_run: "2026-10-24T05:00" } })
+              : { status: 200, body: saved ? after : SCHED0 };
+            await start();
+            await type($("#s-maint-lint-alpha-at"), "05:00");
+            holding = true;
+            const saving = click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
+            await settle();
+            await click($("#tabbar [data-s=todo]")); await click($("#tabbar [data-s=autotasks]"));   // redrawn, the read held
+            const meanwhile = [$("#pane-detail #s-maint-lint-alpha-at").value, text($("#pane-detail #s-maint-lint-alpha-status"))];
+            holding = false; while (queue.length) { queue.shift()(); await settle(); }
+            await saving; await settle();
+            return { meanwhile, at: $("#pane-detail #s-maint-lint-alpha-at").value, chip: text($("#row-maint-lint-alpha .chip")) };
+        """.replace("SCHED0", json.dumps(schedules())).replace("SCHED1", json.dumps(schedules(items=[
+            {"id": "maint-lint-alpha", "task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "05:00",
+             "set_at": NOW, "via": "web", "version": 3}]))))
+        self.assertEqual(got["meanwhile"][0], "05:00")
+        self.assertTrue(got["meanwhile"][1].startswith("Saved. First run: "), got["meanwhile"])
+        self.assertEqual((got["at"], got["chip"]), ("05:00", "Daily at 05:00"))
+
+    def test_a_redraw_that_fails_after_a_save_does_not_say_not_saved(self):
+        got = self.run_page("""
+            let armed = false;
+            const L = $("#list"), put = L.insertBefore.bind(L);
+            L.insertBefore = (n, r) => { if (armed) throw new Error("drawing failed"); return put(n, r); };
+            server.route = c => c.path !== "/schedules" ? undefined : c.method === "POST"
+              ? (armed = true, { status: 200, body: { ok: true, id: "maint-lint-alpha", version: 3, first_run: "2026-10-24T04:30" } })
+              : { status: 200, body: SCHED0 };
+            await start();
+            const st = $("#s-maint-lint-alpha-status");
+            await click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
+            await settle();
+            armed = false;
+            return { said: text(st), cls: st.className, err: text($("#loaderr")) };
+        """.replace("SCHED0", json.dumps(schedules())))
+        self.assertTrue(got["said"].startswith("Saved. First run: "), got["said"])
+        self.assertEqual(got["cls"], "status")
+        self.assertIn("could not show the schedules it read (drawing failed)", got["err"])
+
+    def test_a_kept_form_drawn_before_the_snapshot_can_save_once_it_comes(self):
+        got = self.run_page(self.HOLD_SNAPSHOT + """
+            await start();
+            await type($("#s-maint-lint-alpha-at"), "07:00");                  // touched before the page was ready
+            const before = button($("#sched-maint-lint-alpha"), "Save").disabled;
+            release(); await settle(); await settle();
+            return { before, after: button($("#pane-detail #sched-maint-lint-alpha"), "Save").disabled,
+                     at: $("#pane-detail #s-maint-lint-alpha-at").value };
+        """)
+        self.assertEqual(got, {"before": True, "after": False, "at": "07:00"})
+
+    def test_a_second_save_while_one_is_in_flight_sends_nothing(self):
+        got = self.run_page("""
+            let let_go; const held = new Promise(r => { let_go = r; }); const realFetch = globalThis.fetch;
+            globalThis.fetch = (url, init) => init && init.method === "POST" ? held.then(() => realFetch(url, init)) : realFetch(url, init);
+            await start();
+            const save = button($("#pane-detail #sched-maint-lint-alpha"), "Save");
+            const first = click(save);
+            await settle();
+            const off = save.disabled;
+            await click(save);                                                  // pagedom fires a disabled button
+            let_go(); await first; await settle();
+            return { off, posts: calls.filter(c => c.method === "POST").length };
+        """)
+        self.assertEqual(got, {"off": True, "posts": 1})
 
     def test_the_read_after_a_save_follows_one_already_in_flight(self):
         got = self.run_page("""

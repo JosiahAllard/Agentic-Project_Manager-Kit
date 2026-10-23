@@ -80,7 +80,9 @@ A task that runs for one repository (kitlib.autotasks.tick.TASKS per_repo), on a
 finds it (tick.find_repo over Api's schedule_repos, default launcher_checkouts: tick.launcher_repos);
 none, or two, is `invalid`, field repo, and so is a launcher config that cannot be read.
 A refusal is `invalid` naming the field, with nothing written. Writing over a schedule takes its
-`if_version`; without it, or with another, it is `conflict`, as for a page. The answer carries
+`if_version`; without it, or with another, it is `conflict`, as for a page, and that refusal's
+error names the schedule's `id` (so a new one for a task and repo that has one can open it,
+the repo matched as above). The answer carries
 `first_run`: the first slot strictly after set_at by kitlib.autotasks.due's rule, naive local
 time to the minute (None when off). GET schedules (ANY) lists them, with `tick`: {last, running,
 every_s}, last when the tick was last seen (Api's tick_seen, default tick_last_seen: the time of
@@ -592,6 +594,10 @@ class Api(object):
         except HubError as e:
             said = e.message if full else AGENT_SAYS.get(e.code, e.message)
             status, obj = STATUS.get(e.code, 500), error_body(e.code, said, e.field)
+            extra = getattr(e, 'extra', None)   # what a route adds to its refusal (schedules_set's id)
+            if isinstance(extra, dict):
+                obj['error'].update((k, v) for k, v in extra.items()
+                                    if k not in ('code', 'message', 'field'))
         except Exception as e:      # noqa: BLE001 - a transport gets an answer, never a traceback
             if raise_unexpected:
                 raise
@@ -1786,7 +1792,12 @@ def schedules_set(api, req):
               'via': _via(req)}
     if cadence == 'weekly':
         fields['days'] = [d for d in DAYS if d in days]
-    out = _put_pinned(api, 'schedules', doc_id, fields, pin)
+    try:
+        out = _put_pinned(api, 'schedules', doc_id, fields, pin)
+    except HubError as e:
+        if e.code == 'conflict':
+            e.extra = {'id': doc_id}    # the schedule there, so the page can open it
+        raise
     out['first_run'] = _first_run(fields)
     return out
 

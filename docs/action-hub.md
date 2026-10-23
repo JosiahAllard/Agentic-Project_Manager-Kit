@@ -538,7 +538,9 @@ and serves it: nothing in the hub runs a task, registers one or starts a process
 `POST /api/v1/schedules` (owner) takes {task, repo, cadence, at, days?, if_version?} and puts the
 whole document; an agent is refused `forbidden`. Any other field, or a bad value, is `invalid`
 naming the field, with nothing written. Setting an existing schedule again takes its
-`if_version`; without it, or with another, it is `conflict`. A daily or weekly per-repo task
+`if_version`; without it, or with another, it is `conflict`, whose error names the schedule's
+`id`: the page opens that one, with what was picked on the new form carried onto it unsaved
+(unless it holds unsaved changes of its own), so one Save sets it. A daily or weekly per-repo task
 whose repo is not exactly one checkout in the machine config's `launcher.repos` is `invalid`
 naming `repo`, since the tick could not run it. The answer carries `first_run`, the first slot
 as YYYY-MM-DDTHH:MM in the hub machine's local time with no zone (null when off); the task
