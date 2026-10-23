@@ -19,7 +19,9 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     rewritten).
     The location-dependent git patterns are checked when the call's directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
-    the owner's own. The update-ref pattern (git-shared-ref) is checked wherever the call runs, in a
+    the owner's own. The git-shared-ref patterns (SHARED_REF_PATTERNS: update-ref, a push into a
+    repository named by a path, a fetch or pull that may write a ref, symbolic-ref with two names
+    or -d, replace other than a listing, a notes write) are checked wherever the call runs, in a
     session rules.shared_ref_held holds. The push-to-main pattern in a repository that does not set
     repo.push_block (one with no .kit.json among them) gives only the re-read's own deny (a delete
     or a forced push of main); no deny lets the line run.
@@ -69,6 +71,27 @@ RUNNERS = cm.BASH_SHELLS | cm.PS_SHELLS | {'cmd', 'eval', 'iex', 'invoke-express
 # judged machine-wide, not by the record of the directory it runs in
 XARGS_BARE_GIT = r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?[ \t]*(?=[|;&\n]|$)'
 
+# every worktree shares the refs, so a held session's ref write is judged wherever it runs: the
+# forms git-shared-ref reads (rules.git_shared_ref, git_shared_push, git_shared_ref_forms). A match
+# is only a reason to read the part again; the re-read rules decide.
+REST = r'[^|;&\n]*'                                   # the rest of the command
+SHARED_REF_PATTERNS = (
+    G + r'update-ref\b',
+    # a push whose repository may be this one: `.`, a file: URL, a path, --repo
+    G + r'push\b' + REST + r'?\s(?:--repo\b|["\']?(?:\.(?=["\']?(?:\s|$|[|;&\n]))|\.\.?[\\/]|file:|[A-Za-z]:[\\/]|/))',
+    # a fetch or pull with a refspec (a `:` not of a URL), or an option that writes refs of its own
+    G + r'(?:fetch|pull)\b' + REST + r'(?::(?!//)|\s--(?:prune-t|tags\b|update-head|stdin\b)|\s-[a-zA-Z0-9]*[Ptu])',
+    # git -c remote.<name>.fetch=... or fetch.pruneTags (config keys ignore case)
+    r'\bgit(?:\.exe)?\s' + REST + r'(?i:\bremote\.\S+\.fetch|\bfetch\.prunetags)\s*=',
+    # symbolic-ref -d, or with two names (a write); one name alone reads
+    G + r'symbolic-ref\b(?:' + REST + r'\s(?:-[a-zA-Z]*d\b|--d)|(?:\s+(?:-m\s*(?:"[^"]*"|\'[^\']*\'|\S+)|-\S+))*'
+        r'\s+[^\s|;&-]\S*\s+[^\s|;&])',
+    # replace with a word, unless it lists
+    G + r'replace\b(?!' + REST + r'\s(?:-l\b|--l))(?=' + REST + r'\s\S)',
+    # a notes verb that writes
+    G + r'notes\b' + REST + r'?\s(?:add|append|copy|edit|merge|prune|remove)\b',
+)
+
 MAIN_ONLY = (
     ('git-bulk-add', G + r'(?:add|stage)\b[^|;&]*(\s-A\b|\s--all\b|\s-u\b|\s--update\b|\s\.(\s|$))'),
     ('git-commit-all', G + r'commit\b[^|;&]*\s(-a|-am|-a[a-zA-Z]+|--all)\b'),
@@ -85,8 +108,8 @@ SUBAGENT_MAIN = (
 ANYWHERE = (
     ('git-branch-force-delete', G + r'branch\s+[^|;&]*(-D|--delete\s+--force|-[a-zA-Z]*D[a-zA-Z]*)\b'),
     ('git-worktree-remove', G + r'worktree\s+remove\b'),
-    # every worktree shares the refs: a held session's update-ref is judged wherever it runs
-    ('git-shared-ref', G + r'update-ref\b'),
+    # every worktree shares the refs: a held session's ref write is judged wherever it runs
+    *(('git-shared-ref', p) for p in SHARED_REF_PATTERNS),
     ('git-push-main', G + r'push\b[^|;&]*(\s|:|/)(?:main|master)\b'),
     ('git-push-pmdata', G + r'push\b[^|;&]*\s--no(?:-v|-?(?![\w-]))'),
     ('git-push-pmdata', G + r'send-pack\b'),

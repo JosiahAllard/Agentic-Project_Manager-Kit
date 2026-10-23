@@ -179,5 +179,56 @@ class Sessions(SharedRefBase):
                     self.assertTrue(d is None or d.rule != RULE, d and d.reason)
 
 
+class Fallback(SharedRefBase):
+    """A line the parser cannot read cleanly (an unclosed quote) is read again where it names one of
+    these forms, as it is where it names update-ref (fallback.SHARED_REF_PATTERNS)."""
+    UNCLEAN = "echo 'x ; "
+
+    def each_unclean_refused(self, texts):
+        for text in texts:
+            for who, env in (('coordinator', tj.COORDINATOR), ('deep', tj.DEEP)):
+                with self.subTest(text, who=who):
+                    self.refused(self.session(self.UNCLEAN + text, env))
+            with self.subTest(text, who='worker'):
+                self.refused(self.worker(self.UNCLEAN + text))
+
+    def test_a_push_into_itself(self):
+        self.each_unclean_refused(['git push . HEAD:refs/heads/kit/sib', 'git push -d . refs/tags/v1',
+                                   'git push "%s" HEAD:refs/heads/kit/sib' % self.main,
+                                   'git push "file:///%s" HEAD:refs/tags/v1' % self.main,
+                                   'git push --repo=.'])       # alone: git takes a word after it as the repository
+
+    def test_a_fetch_or_pull_refspec(self):
+        self.each_unclean_refused(['git fetch origin main:main', 'git fetch origin +x:refs/heads/kit/sib',
+                                   'git pull origin main:main', 'git fetch -P origin',
+                                   'git fetch --prune-tags origin', 'git fetch --stdin origin',
+                                   'git -c remote.origin.fetch=+refs/heads/*:refs/heads/* fetch origin'])
+
+    def test_a_symbolic_ref_write(self):
+        self.each_unclean_refused(['git symbolic-ref HEAD refs/heads/main', 'git symbolic-ref -m why HEAD refs/heads/main',
+                                   'git symbolic-ref -d HEAD', 'git symbolic-ref --delete refs/heads/kit/wt'])
+
+    def test_a_replace(self):
+        self.each_unclean_refused(['git replace 0123abc 4567def', 'git replace -d 0123abc'])
+
+    def test_a_notes_write(self):
+        self.each_unclean_refused(['git notes add -m x', 'git notes --ref=x remove HEAD', 'git notes prune'])
+
+    def test_reads_and_allowed_writes_meet_no_shared_ref_refusal(self):
+        for text in ('git fetch origin', 'git fetch https://example.invalid/x.git', 'git fetch origin main',
+                     'git push origin HEAD:refs/heads/kit/x', 'git symbolic-ref HEAD', 'git symbolic-ref --short HEAD',
+                     'git notes show', 'git replace -l', 'git push . HEAD:refs/tmp/x',
+                     'git fetch origin main:refs/remotes/origin/main', 'git symbolic-ref HEAD refs/heads/kit/wt'):
+            with self.subTest(text):
+                d = self.worker(self.UNCLEAN + text)
+                self.assertTrue(d is None or d.rule != RULE, d and d.reason)
+
+    def test_the_owner_is_not_held(self):
+        for text in ('git push . HEAD:refs/heads/kit/sib', 'git fetch origin main:main', 'git notes add -m x'):
+            with self.subTest(text):
+                d = self.session(self.UNCLEAN + text, {})
+                self.assertTrue(d is None or d.rule != RULE, d and d.reason)
+
+
 if __name__ == '__main__':
     unittest.main()
