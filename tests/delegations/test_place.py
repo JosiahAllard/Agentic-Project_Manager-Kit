@@ -86,7 +86,13 @@ class AllowedTest(Base):
                                             '--out=' + self.d('logs')]), [])
 
     def test_a_value_with_no_path_character_is_not_judged(self):
-        self.assertEqual(self.check({'mode': 'mirror'}, ['mirror', '.']), [])
+        self.assertEqual(self.check({'mode': 'mirror'}, ['mirror']), [])
+
+    def test_a_value_merely_holding_dots_is_not_judged(self):
+        values = {'a': 'v1.2', 'b': 'a..b', 'c': '...x', 'd': 'x.'}
+        tokens = ['v1.2', 'a..b', 'dest=a..b', '--level=1.5', 'x.']
+        self.assertEqual(place.candidates(values, tokens), [])
+        self.assertEqual(self.check(values, tokens), [])
 
 
 class FormTest(Base):
@@ -96,6 +102,19 @@ class FormTest(Base):
             with self.subTest(text=text):
                 self.assertEqual(self.check({'p': text}),
                                  [place.WHY_RELATIVE % (text, self.dev)])
+
+    def test_a_dot_or_dot_dot_is_refused(self):
+        for text in ('..', '.', 'dest=..', 'dest=.'):
+            with self.subTest(form='token', text=text):
+                self.assertEqual(self.check(tokens=[text]),
+                                 [place.WHY_RELATIVE % (text, self.dev)])
+            with self.subTest(form='value', text=text):
+                self.assertEqual(self.check({'p': text}),
+                                 [place.WHY_RELATIVE % (text, self.dev)])
+        for tok, val in (('--dest=..', '..'), ('/LOG:..', '..'), ('--out=.', '.')):
+            with self.subTest(form='option', text=tok):
+                self.assertEqual(self.check(tokens=[tok]),
+                                 [place.WHY_RELATIVE % (val, self.dev)])
 
     def test_an_option_value_with_no_drive_is_refused(self):
         self.assertEqual(self.check(tokens=['--out=dd/x']),

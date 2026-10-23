@@ -4,7 +4,8 @@ check(values, tokens, cfg, kit_root, ...) -> the whys, empty when every path the
 acted on. It judges each filled argument value that holds `/`, `\\` or `:`, and each token of the
 filled command after the program: a token of an option's shape (`/MIR`, `-o`, `/LOG:<path>`,
 `--out=<path>`) only by its value part, and only when that holds `/`, `\\` or `:`; any other
-token holding one of them as a whole. Each path judged must:
+token holding one of them as a whole. A text that is `.` or `..`, or ends in `=.` or `=..`
+(`dest=..`), is judged too. Each path judged must:
 
   - be absolute with a drive (`<drive>:\\`): a relative, drive-relative, UNC or `\\\\?\\` path
     is refused;
@@ -31,7 +32,8 @@ SCAN_CAP = 20000
 # An option token: -x, --name, /NAME, each optionally with :value or =value.
 OPTION = re.compile(r'(?:--?|/)[A-Za-z][A-Za-z0-9_-]*(?:[:=](.*))?\Z', re.S)
 DRIVE_PATH = re.compile(r'[A-Za-z]:[\\/]')
-PATHY = re.compile(r'[\\/:]')
+# A path character, or a bare `.` or `..` (whole, or after `=` as in `dest=..`): a relative path.
+PATHY = re.compile(r'[\\/:]|(?:\A|=)\.\.?\Z')
 
 WHY_NO_DEV = 'the machine config sets no dev_drive (the Dev Drive\'s root folder): no path may be acted on'
 WHY_RELATIVE = '%s: not an absolute path with a drive; give it from the Dev Drive (%s)'
