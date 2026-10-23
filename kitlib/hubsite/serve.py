@@ -219,6 +219,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import threading
 import time
 
@@ -320,6 +321,11 @@ class NotRunning(ServeError):
     def __init__(self, port):
         ServeError.__init__(self, 'no hub server is listening on port %d' % port)
         self.port = port
+
+
+class NoAnswer(ServeError):
+    """The connection was made and the request sent, and no answer came in the call's time:
+    a long-poll (client.Client.wait) asks again; any other caller reads it as a ServeError."""
 
 
 class NoRepoList(Exception):
@@ -1339,8 +1345,9 @@ def ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S, via=VI
     """One request to the hub server on this machine's `port`: (status, the JSON object it
     answered). `token` is sent as a Bearer token; a POST carries `body` as JSON with the Origin
     and Content-Type the listener requires and names itself `via` (VIA_CLI by default; the hub
-    MCP server passes VIA_MCP). NotRunning when nothing listens there, ServeError when what
-    answers is not the hub."""
+    MCP server passes VIA_MCP). NotRunning when nothing listens there, NoAnswer (a ServeError)
+    when the connection was made and `timeout` passed with no answer, ServeError when what
+    answers is not the hub or the connection could not be made."""
     headers = {'Accept': httpd.JSON, 'User-Agent': USER_AGENT}
     if token:
         headers['Authorization'] = 'Bearer %s' % token
@@ -1350,14 +1357,20 @@ def ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S, via=VI
         headers.update({'Content-Type': httpd.JSON, httpd.VIA_HEADER: via,
                         'Origin': 'http://%s:%d' % (httpd.LOOPBACK, port)})
     conn = http.client.HTTPConnection(httpd.LOOPBACK, port, timeout=timeout)
+    connected = False
     try:
+        conn.connect()
+        connected = True
         conn.request(method, path, body=data, headers=headers)
         answer = conn.getresponse()
         status, raw = answer.status, answer.read(MAX_ANSWER + 1)
     except ConnectionRefusedError:
         raise NotRunning(port)
     except (OSError, http.client.HTTPException) as e:
-        raise ServeError('port %d did not answer as the hub does: %s' % (port, type(e).__name__))
+        why = 'port %d did not answer as the hub does: %s' % (port, type(e).__name__)
+        if connected and isinstance(e, socket.timeout):
+            raise NoAnswer(why)
+        raise ServeError(why)
     finally:
         conn.close()
     try:

@@ -29,7 +29,8 @@ Client(port, tokens, via=serve.VIA_CLI)
                                         most api.WAIT_MAX_S, until the server answers with a
                                         change, a pending item or a reset, or `timeout` seconds
                                         passed (None: no limit); with for_key, until a pending
-                                        item of that session key
+                                        item of that session key; a poll the server took and did
+                                        not answer in its time (serve.NoAnswer) is asked again
 """
 import time
 import urllib.parse
@@ -147,11 +148,18 @@ class Client(object):
         while True:
             left = _api.WAIT_MAX_S if end is None else end - self._clock()
             turn = max(0.0, min(float(left), float(_api.WAIT_MAX_S)))
-            got = self.get('/wait', ANY, {'since': since, 'timeout': '%g' % turn,
-                                          'pending': 1 if pending else None,
-                                          'for': for_key or None,
-                                          'except': ','.join(except_ids or ()) or None},
-                           timeout=turn + WAIT_MARGIN_S)
+            try:
+                got = self.get('/wait', ANY, {'since': since, 'timeout': '%g' % turn,
+                                              'pending': 1 if pending else None,
+                                              'for': for_key or None,
+                                              'except': ','.join(except_ids or ()) or None},
+                               timeout=turn + WAIT_MARGIN_S)
+            except serve.NoAnswer:
+                # the server took the poll and held it past the socket's time: ask again, from
+                # the same revision, until the wait's own time is spent (a turn begun past it)
+                if end is not None and left <= 0:
+                    raise
+                continue
             if not got.get('timed_out'):
                 return got
             if end is not None and self._clock() >= end:
