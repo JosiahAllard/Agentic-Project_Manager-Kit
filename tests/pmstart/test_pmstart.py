@@ -242,6 +242,22 @@ class LivenessTest(unittest.TestCase):
         sess = json.dumps({"Beta": {"name": "be-a2"}})
         self.assertEqual(pmstart.liveness(CFG, procs, read=lambda p: sess, account=never), [])
 
+    def test_a_repo_with_no_live_consultant_gets_one_line(self):
+        sess = json.dumps({"a": {"name": "a-1", "repo": "alpha"}, "b": {"name": "b-1", "repo": "alpha"},
+                           "c": {"name": "c-1", "repo": "beta"}})
+        procs = [proc("claude.exe", "claude --remote-control a-1", "C:/bin/claude.exe"),
+                 proc("claude.exe", "claude --remote-control b-1", "C:/bin/claude.exe"),
+                 proc("claude.exe", "claude --remote-control c-1", "C:/bin/claude.exe"),
+                 proc("claude.exe", "claude --remote-control consultant-beta", "C:/bin/claude.exe")]
+        self.assertEqual(pmstart.liveness(CFG, procs, read=lambda p: sess, account=lambda: "2"),
+                         ["consultant-alpha is not running: launch.py consultant --repo alpha "
+                          "--repo-path <its checkout>"])
+
+    def test_a_consultant_entry_is_left_to_the_coordinator_line(self):
+        sess = json.dumps({"k": {"name": "consultant-kit", "repo": "kit", "agent": "pm-kit:consultant"}})
+        (line,) = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "2")
+        self.assertTrue(line.startswith("coordinator k "), line)
+
 
 class ChecklistTest(unittest.TestCase):
     def test_all_pass(self):

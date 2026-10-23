@@ -395,6 +395,20 @@ def liveness(cfg, procs, read=None, account=None):
                 label = "auto" if label == accounts.DEFAULT_LABEL else label
             out.append("coordinator %s (%s) is not running: launch.py start --session %s --account %s"
                        % (key, e["name"], key, label))
+    return out + _consultants_missing(sessions, alive)
+
+
+def _consultants_missing(sessions, alive):
+    """One line per repository in sessions (an entry's "repo") with no live consultant-<repo> session
+    (launch.py consultant names it so, kitlib.launcher.start.consultant). A repository with a
+    consultant entry of its own is left to the coordinator lines above."""
+    entries = [e for k, e in sessions.items() if not k.startswith("_") and isinstance(e, dict)]
+    covered = {e.get("repo") for e in entries if str(e.get("agent") or "").endswith("consultant")}
+    out = []
+    for repo in sorted({e["repo"] for e in entries if isinstance(e.get("repo"), str) and e["repo"]}, key=str.lower):
+        if repo not in covered and "consultant-" + repo not in alive:
+            out.append("consultant-%s is not running: launch.py consultant --repo %s --repo-path <its checkout>"
+                       % (repo, repo))
     return out
 
 
