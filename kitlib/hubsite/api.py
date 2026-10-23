@@ -104,7 +104,8 @@ A finding's target and fix can name a path on this machine (a worktree's folder,
 only the local owner (Request.full: the owner, its error answers in its own words, not through
 the tunnel) sees them whole. Any other caller's findings, marks and act-note text have each
 absolute path cut to `.../<its last part>`, and no act note's refs carry one; GET to_pm and GET
-snapshot cut an act note's text and refs and a mark's target the same way (_unpath_act, _seen).
+snapshot cut an act note's text and refs and a mark's target the same way (_unpath_act, _seen),
+and GET pending, GET wait and GET snapshot an act note's pending title (_unpath_pending).
 GET findings also answers `runs`: [{repo, started, ledger, skipped}], each repo's last run from
 the optional lint_runs view: ledger its three ledger counts (LEDGER_COUNTS) or null, skipped the
 skip marker's {reason, at} only where its `at` is later than the run's `started` and both parse,
@@ -1502,7 +1503,20 @@ def pending(api, req):
     items = api.pending(_q(req, 'for'))
     api.seen(req, 'pulled')
     api.handed(req, items)
-    return {'items': items}
+    return {'items': _unpath_pending(api, items, req)}
+
+
+def _unpath_pending(api, items, req):
+    """Pending items (fresh dicts from api.pending) with an act note's title, its text's first
+    line, cut as _unpathed but for the local owner (Request.full), as GET to_pm cuts its text."""
+    if req.full:
+        return items
+    for d in items:
+        if d.get('kind') == 'to_pm' and isinstance(d.get('title'), str):
+            note = api.store.get('to_pm', d['id'])
+            if isinstance(note, dict) and note.get('kind') == 'act':
+                d['title'] = _unpathed(d['title'])
+    return items
 
 
 def _timeout(req):
@@ -1566,7 +1580,7 @@ def wait(api, req):
             'timed_out': quiet,
             'changes': [{'collection': e.collection, 'id': e.id, 'op': e.op, 'status': e.status}
                         for e in ch.events],
-            'pending': items}
+            'pending': _unpath_pending(api, items, req)}
 
 
 def _wait_for(api, since, timeout, mine, routes=False):
@@ -2008,7 +2022,7 @@ def snapshot(api, req):
             views[name] = None
             missing[name] = _reason(e)
     return {'revision': revision, 'collections': docs,
-            'pending': api.pending(),
+            'pending': _unpath_pending(api, api.pending(), req),
             'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
             'push': api.push_seen(),
             'strong': req.strong is True}

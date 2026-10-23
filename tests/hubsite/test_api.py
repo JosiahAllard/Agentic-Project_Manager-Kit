@@ -3182,6 +3182,33 @@ class FindingsTest(ApiCase):
         self.assertEqual(cols['to_pm'][act], made)
         self.assertEqual(cols['finding_marks'][FP]['target'], wt)
 
+    def test_a_sent_act_notes_pending_title_is_cut_for_all_but_the_local_owner(self):
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        self.views.rows = [finding(target=wt, fix='python Q:/kit/tools/x.py')]
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})['id']
+        note = self.ok('POST', '/to_pm', OWNER, {'text': 'see Q:\\mine\\a.txt'})['id']
+        self.assertEqual(self.ok('POST', '/to_pm/send', OWNER)['sent'], [act, note])
+        made = self.store.get('to_pm', act)
+        self.assertIn(wt, made['text'])                     # stored whole
+        whole = made['text'].splitlines()[0]
+
+        def titles(items):
+            return {d['id']: d['title'] for d in items if d['kind'] == 'to_pm'}
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                kw = dict(kw)
+                role = kw.pop('role')
+                for got in (titles(self.ok('GET', '/pending', role, **kw)['items']),
+                            titles(self.ok('GET', '/snapshot', role, **kw)['pending'])):
+                    self.assertNotIn('Q:', got[act])
+                    self.assertIn('.../my-slug', got[act])
+                    self.assertIn('.../x.py', got[act])
+                    self.assertEqual(got[note], 'see Q:\\mine\\a.txt')   # the owner's words
+        self.assertEqual(self.store.get('to_pm', act), made)   # nothing stored was cut
+        for got in (titles(self.ok('GET', '/pending', OWNER)['items']),
+                    titles(self.ok('GET', '/snapshot', OWNER)['pending'])):
+            self.assertEqual(got[act], whole)               # the local owner: whole
+
     def test_a_json_escaped_share_is_cut(self):
         # a share path inside JSON text: each backslash doubled (\\\\nas\\share\\...)
         fix = ('see {"p": "\\\\\\\\nas\\\\share\\\\jdoe\\\\out.txt"}, \\\\\\\\nas\\\\s\\\\a.log'
