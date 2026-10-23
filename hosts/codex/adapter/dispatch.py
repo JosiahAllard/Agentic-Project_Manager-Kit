@@ -34,7 +34,8 @@ READ_TOOLS = {"preflight", "board", "landed", "review_pack", "worktree_paths", "
               "doc_index", "codemap", "trailers", "machine_paths",
               "checkout_guard", "agent_roster", "testlist", "tool_deps"}
 READ_BACKLOG = {"next", "show", "list", "check", "landable", "stale"}
-READ_LEDGER = {"show", "grep", "check", "list", "standing"}
+READ_LEDGER = {"show", "grep", "check", "list", "standing", "rules", "conflicts", "migrate-report"}
+COMMIT_LEDGER = {"add", "rule-drop", "rule-set"}   # the PM's ledger writes that take --commit/--push
 OWNER_FLAGS = {"--owner-authored", "--owner-approved", "--owner-confirmed", "--owner-said"}
 
 
@@ -219,7 +220,7 @@ def _provider_args(tool, args):
         return args
     trailer(_flag(args, "--model"))  # the explicit active model; never an inherited identity
     if committing_ledger:
-        verbs = {"add"} if tool == "ledger" else {"add", "edit", "done"}
+        verbs = COMMIT_LEDGER if tool == "ledger" else {"add", "edit", "done"}
         if not args or args[0] not in verbs:
             raise ValueError("commit/push dispatch requires a documented write verb and full option names")
     return args
