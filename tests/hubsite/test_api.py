@@ -3191,33 +3191,47 @@ class FindingsTest(ApiCase):
                 self.assertEqual(self.seen_fix(fix, **kw),
                                  'see {"p": .../out.txt}, .../a.log and \\\\\\\\')
 
-    def skips(self, rows, **kw):
-        self.views.lint_skips = lambda: rows
-        return self.ok('GET', '/findings', OWNER, **kw)['skipped']
+    def runs(self, rows, **kw):
+        self.views.lint_runs = lambda: rows
+        return self.ok('GET', '/findings', OWNER, **kw)['runs']
 
     def test_findings_name_a_skipped_run_only_when_the_marker_is_newer(self):
-        self.assertEqual(self.ok('GET', '/findings', AGENT)['skipped'], [])     # no view
-        newer = {'repo': 'kit', 'reason': 'busy', 'at': '2026-01-09T03:00:00Z',
-                 'started': '2026-01-02T03:04:05Z', 'code': 3}
-        self.assertEqual(self.skips([newer]),
-                         [{'repo': 'kit', 'reason': 'busy', 'at': '2026-01-09T03:00:00Z'}])
-        self.assertEqual(self.skips([newer], query={'repo': 'OTHER'}), [])
-        self.assertEqual(len(self.skips([newer], query={'repo': 'KIT'})), 1)
-        for bad in (dict(newer, at='2026-01-01T00:00:00Z'),      # a result newer: no skip
-                    dict(newer, at=newer['started']),
-                    dict(newer, at='last tuesday'), dict(newer, at=None),
-                    dict(newer, at='2026-01-09T03:00:00'),      # no offset
-                    dict(newer, started='?'), dict(newer, started=None),
-                    dict(newer, reason=3), dict(newer, repo=None), 'kit', None):
+        self.assertEqual(self.ok('GET', '/findings', AGENT)['runs'], [])     # no view
+        skip = {'reason': 'busy', 'at': '2026-01-09T03:00:00Z', 'code': 3}
+        run = {'repo': 'kit', 'started': '2026-01-02T03:04:05Z', 'ledger': None, 'skip': skip}
+        self.assertEqual(self.runs([run]), [{'repo': 'kit', 'started': '2026-01-02T03:04:05Z',
+                                             'ledger': None, 'skipped': {
+                                                 'reason': 'busy', 'at': skip['at']}}])
+        self.assertEqual(self.runs([run], query={'repo': 'OTHER'}), [])
+        self.assertEqual(len(self.runs([run], query={'repo': 'KIT'})), 1)
+        for bad in (dict(skip, at='2026-01-01T00:00:00Z'),      # a result newer: no skip
+                    dict(skip, at=run['started']),
+                    dict(skip, at='last tuesday'), dict(skip, at=None),
+                    dict(skip, at='2026-01-09T03:00:00'),      # no offset
+                    dict(skip, reason=3), 'busy', None):
+            with self.subTest(skip=bad):
+                self.assertIsNone(self.runs([dict(run, skip=bad)])[0]['skipped'])
+        for started, shown in (('?', '?'), (None, None), (5, None)):
+            with self.subTest(started=started):
+                got = self.runs([dict(run, started=started)])[0]
+                self.assertEqual((got['started'], got['skipped']), (shown, None))
+        for bad in (dict(run, repo=None), 'kit', None):
             with self.subTest(row=bad):
-                self.assertEqual(self.skips([bad]), [])
-        self.assertEqual(self.skips('not a list'), [])
+                self.assertEqual(self.runs([bad]), [])
+        self.assertEqual(self.runs('not a list'), [])
 
         def broken():
             raise OSError('C:\\secret\\skipped.json')
-        self.views.lint_skips = broken
+        self.views.lint_runs = broken
         obj = self.ok('GET', '/findings', OWNER)
-        self.assertEqual((obj['skipped'], len(obj['items'])), ([], 2))
+        self.assertEqual((obj['runs'], len(obj['items'])), ([], 2))
+
+    def test_findings_give_the_ledger_as_whole_counts_only(self):
+        led = {'stale_cites': 2, 'superseded': 0, 'superseded_live': True, 'extra': 5,
+               'notes': ['Q:\\home\\x']}
+        got = self.runs([{'repo': 'kit', 'started': None, 'ledger': led, 'skip': None}])
+        self.assertEqual(got[0]['ledger'], {'stale_cites': 2, 'superseded': 0})
+        self.assertIsNone(self.runs([{'repo': 'kit', 'ledger': [1]}])[0]['ledger'])
 
     def test_the_local_owner_sees_every_path_whole(self):
         wt = 'Q:\\home\\Jane Doe\\repo'

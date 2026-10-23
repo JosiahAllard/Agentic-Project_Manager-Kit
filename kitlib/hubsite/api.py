@@ -105,9 +105,10 @@ only the local owner (Request.full: the owner, its error answers in its own word
 the tunnel) sees them whole. Any other caller's findings, marks and act-note text have each
 absolute path cut to `.../<its last part>`, and no act note's refs carry one; GET to_pm and GET
 snapshot cut an act note's text and refs and a mark's target the same way (_unpath_act, _seen).
-GET findings also answers `skipped`: [{repo, reason, at}], the repos whose last weekly run was
-skipped (the optional lint_skips view), only where the marker's `at` is later than the result's
-`started` and both parse (_lint_skips); no view, or one that fails, is an empty list.
+GET findings also answers `runs`: [{repo, started, ledger, skipped}], each repo's last run from
+the optional lint_runs view: ledger its three ledger counts (LEDGER_COUNTS) or null, skipped the
+skip marker's {reason, at} only where its `at` is later than the run's `started` and both parse,
+else null (_lint_runs); no view, or one that fails, is an empty list.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -161,8 +162,9 @@ is null and `unavailable` maps its name to that same reason:
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
   findings()                                the lint's rows (GET findings; not in GET snapshot)
-  lint_skips()                              [{repo, reason, at, started}]: each repo's skip
-                                            marker and its result's started (GET findings)
+  lint_runs()                               [{repo, started, ledger, skip}]: each repo's last
+                                            result's started and ledger, and its skip marker
+                                            (kitlib.maintlint.slot.read_skip) or null
   health()                                  a dict merged into GET health (git, backlog, ...)
   record(repo, id)                          one record (GET records/{repo}/{id})
   record_template(repo)                     a new record's fields (GET records/{repo}/new)
@@ -1896,8 +1898,10 @@ def findings_list(api, req):
     return {'items': [_seen(f, req) for f in api.shown('findings')
                       if isinstance(f, dict) and f.get('fingerprint') not in marked
                       and (not repo or str(f.get('repo') or '').lower() == repo)],
-            'skipped': [s for s in _lint_skips(api)
-                        if not repo or s['repo'].lower() == repo]}
+            'runs': [r for r in _lint_runs(api) if not repo or r['repo'].lower() == repo]}
+
+
+LEDGER_COUNTS = ('stale_cites', 'superseded', 'superseded_live')   # kitlib/maintlint/ledger.py
 
 
 def _utc(text):
@@ -1907,23 +1911,30 @@ def _utc(text):
     return _when(text[:-1] + '+00:00' if text.endswith('Z') else text, '')
 
 
-def _lint_skips(api):
-    """The repos whose last weekly lint run was skipped: {repo, reason, at} from the optional
-    lint_skips view, kept only when the marker's `at` is later than its result's `started`
-    (both must parse; a marker left beside a newer result is no skip). No view, a view that
-    raises or a row that is not one: nothing, never a failed GET findings."""
+def _lint_runs(api):
+    """Each repo's last lint run from the optional lint_runs view, as {repo, started, ledger,
+    skipped}: ledger the LEDGER_COUNTS (whole numbers) or None; skipped the skip marker's {reason,
+    at} only when its `at` is later than the run's `started` and both parse (a marker left beside
+    a newer result is no skip), else None. No view, a view that raises or a row that is not one:
+    nothing, never a failed GET findings."""
     try:
-        rows = api.view('lint_skips')
-    except Exception:               # noqa: BLE001 - the line is context; the rows still show
+        rows = api.view('lint_runs')
+    except Exception:               # noqa: BLE001 - context only; the findings still show
         return []
     out = []
-    for s in rows if isinstance(rows, list) else ():
-        if not isinstance(s, dict) or not all(isinstance(s.get(k), str)
-                                              for k in ('repo', 'reason')):
+    for r in rows if isinstance(rows, list) else ():
+        if not isinstance(r, dict) or not isinstance(r.get('repo'), str):
             continue
-        at, started = _utc(s.get('at')), _utc(s.get('started'))
-        if at is not None and started is not None and at > started:
-            out.append({'repo': s['repo'], 'reason': s['reason'], 'at': s['at']})
+        led = r.get('ledger')
+        led = ({k: led[k] for k in LEDGER_COUNTS if type(led.get(k)) is int}
+               if isinstance(led, dict) else None)
+        skip, skipped = r.get('skip'), None
+        if isinstance(skip, dict) and isinstance(skip.get('reason'), str):
+            at, started = _utc(skip.get('at')), _utc(r.get('started'))
+            if at is not None and started is not None and at > started:
+                skipped = {'reason': skip['reason'], 'at': skip['at']}
+        out.append({'repo': r['repo'], 'started': r['started'] if isinstance(r.get('started'), str)
+                    else None, 'ledger': led, 'skipped': skipped})
     return out
 
 
