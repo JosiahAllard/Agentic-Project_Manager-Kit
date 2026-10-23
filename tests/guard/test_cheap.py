@@ -356,18 +356,32 @@ class InlineAliasJudged(unittest.TestCase):
         # git -C <main checkout> from the worktree: the same command in the worktree, built from
         # the expanded words, never the whole line again
         main = W.fwd(self.w.main)
-        for text, cmd in (("git -C %s -c alias.x='commit -m \"a b\"' x --allow-empty" % main,
-                           "commit -m 'a b' --allow-empty"),
-                          ("git -C %s -c alias.x='commit -m y' x" % main, 'commit -m y')):
+        for text, cmd in (("git -C %s -c alias.x='rm --cached \"a b\"' x -q" % main, "rm --cached 'a b' -q"),
+                          ("git -C %s -c alias.x='rm -q y' x" % main, 'rm -q y')):
             with self.subTest(text):
                 d = self.decide(text)
                 self.assertEqual(d.verdict, 'deny', d.reason)
                 self.assertNotIn('alias.', d.instead)
                 self.assertEqual(d.instead, 'git -C "%s" %s' % (W.fwd(self.w.wt), cmd))
-        # a git the text cannot place (--git-dir): drop it, the same command in the worktree
+        # a commit the alias makes: in the worktree plain git is refused too (git-plain-commit), so
+        # the hint is the kit's commit tool there
+        for text in ("git -C %s -c alias.x='commit -m \"a b\"' x --allow-empty" % main,
+                     "git -C %s -c alias.x='commit -m y' x" % main):
+            with self.subTest(text):
+                d = self.decide(text)
+                self.assertEqual(d.verdict, 'deny', d.reason)
+                self.assertNotIn('alias.', d.instead)
+                self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" <each path you changed>'
+                                 % (rules.kit_tool(self.w.ctx(), 'commit'), W.fwd(self.w.wt)))
+        # a git the text cannot place (--git-dir): drop it, the same command in the worktree; a
+        # commit there is the kit's commit tool
+        d = self.decide("git --git-dir=../x -c alias.x='rm -q y' x")
+        self.assertEqual(d.verdict, 'deny', d.reason)
+        self.assertEqual(d.instead, 'git -C "%s" rm -q y' % W.fwd(self.w.wt))
         d = self.decide("git --git-dir=../x -c alias.x='commit -m y' x")
         self.assertEqual(d.verdict, 'deny', d.reason)
-        self.assertEqual(d.instead, 'git -C "%s" commit -m y' % W.fwd(self.w.wt))
+        self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" <each path you changed>'
+                         % (rules.kit_tool(self.w.ctx(), 'commit'), W.fwd(self.w.wt)))
 
     def test_a_hooks_path_setting_an_alias_gives_is_denied(self):
         # the alias is expanded, so git-hooks-path judges the clone it runs (the hint written out

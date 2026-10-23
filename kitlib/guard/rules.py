@@ -1436,22 +1436,27 @@ def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
     return jail_refusal(role, rs, verdict, root, what, target, rewrite, run)
 
 
+def jail_why(rs, verdict, root, what, target):
+    """The sentence a write-jail refusal of `target` opens with, for its verdict."""
+    if verdict == jail.ADD_ONLY:
+        return ('%s: %s already exists in %s, an add-only data folder: an agent session creates new files there and '
+                'never overwrites, moves or deletes one. %s' % (what, fwd(target), fwd(root.path), JAIL_ASK))
+    if verdict == jail.READ_ONLY:
+        return ('%s: %s is in %s, a data folder that is read-only for agent sessions (.kit.json guard.data_roots). %s'
+                % (what, fwd(target), fwd(root.path), JAIL_ASK))
+    return ('%s: %s is outside the folders an agent session may write: %s. %s'
+            % (what, fwd(target), jail.describe(rs), JAIL_ASK))
+
+
 def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None):
     dest = jail.destination(rs)
+    why = jail_why(rs, verdict, root, what, target)
     if verdict == jail.ADD_ONLY:
-        why = ('%s: %s already exists in %s, an add-only data folder: an agent session creates new files there and '
-               'never overwrites, moves or deletes one. %s' % (what, fwd(target), fwd(root.path), JAIL_ASK))
         if rewrite is not None:
             folder = target if os.path.isdir(target) else os.path.dirname(target)
             return refuse('write-jail', role, why + ' To write a new file:',
                           rewrite(fwd(folder) + '/<new file name>'))
         return refuse('write-jail', role, why + ' To see the folder\'s files:', 'ls %s' % quote(root.path))
-    if verdict == jail.READ_ONLY:
-        why = ('%s: %s is in %s, a data folder that is read-only for agent sessions (.kit.json guard.data_roots). %s'
-               % (what, fwd(target), fwd(root.path), JAIL_ASK))
-    else:
-        why = ('%s: %s is outside the folders an agent session may write: %s. %s'
-               % (what, fwd(target), jail.describe(rs), JAIL_ASK))
     if dest is None:
         return refuse('write-jail', role, why + ' To see where this session runs:', 'pwd')
     if rewrite is not None:
@@ -4002,15 +4007,37 @@ def _pos(args):
     return [w for w in args if not w.text.startswith('-')]
 
 
-def git_alias(cmd, gc, role):
+def git_alias(ctx, cmd, gc, cwd, role):
     name, val = gc.alias
     rest = ' '.join(w.text for w in gc.rest)
     if val.startswith('!'):
         how, instead = 'Run the command itself:', ('%s %s' % (val[1:], rest)).strip()
+        instead = alias_heavy_run(ctx, cmd, cwd, instead) or instead
     else:
         how, instead = 'Run the git command itself:', ('git %s %s' % (val if gc.sub == name else gc.sub, rest)).strip()
     return refuse('git-alias', role, '`%s` defines a git alias on the command line (alias.%s=%s), which hides '
                   'the command git runs. %s' % (bare(cmd), name, val, how), instead)
+
+
+def alias_heavy_run(ctx, cmd, cwd, text):
+    """The machine_lock run line for a shell alias's command `text` when it is one heavy program
+    (heavy) and the session holds no machine lock, so the alternative git_alias prints is not
+    refused as heavy in turn; else None."""
+    where = cmd.cwd or cwd
+    try:
+        parsed = cm.read(text, cmd.shell, where, home=getattr(ctx, 'home', None))
+    except Exception:  # noqa: BLE001 - an alternative's text only: the plain one stands
+        return None
+    if not parsed.clean or len(parsed.commands) != 1:
+        return None
+    inv = cm.invocation(parsed.commands[0])
+    if inv is None or inv.dyn:
+        return None
+    cfg = ctx.config(where) if where else None
+    entry = kconfig.heavy_match(inv.path, inv.argv, kconfig.heavy_programs(cfg))
+    if not entry or ctx.lock_held()[0]:
+        return None
+    return lock_alternative(ctx, cmd, entry, cwd, text)
 
 
 def inline_alias(gc):
@@ -4054,7 +4081,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if gc is None:
         return None
     if gc.alias:
-        d = git_alias(cmd, gc, role)
+        d = git_alias(ctx, cmd, gc, cwd, role)
         if d:
             return d                            # a warning by default: the command git runs is judged below
         gc = inline_alias(gc)
@@ -4266,14 +4293,26 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
     place = ctx.place(gc.dir)
     if place.kind != repo.LINKED or not place.top:
         return None
+    alt = commit_alternative(ctx, gc, place.top)
+    if alt is None:
+        return None
+    why = '`%s` makes a commit with plain git, which writes no Co-Authored-By trailer: the gate\'s trailer check ' \
+          'then fails the branch. ' % bare(cmd)
+    return refuse('git-plain-commit', role, why + alt[0], alt[1])
+
+
+def commit_alternative(ctx, gc, where):
+    """(advice, command) for git `gc` when it makes a commit (COMMIT_VERBS, commit_scan), run in
+    the linked worktree `where`: the kit tool that does the job with the trailer (git_plain_commit
+    names the forms); None when it makes no commit."""
+    if gc.sub not in COMMIT_VERBS:
+        return None
     sub = gc.sub
     makes, revs, mainline, kept = commit_scan(sub, gc.rest)
     if not makes:
         return None
-    top = quote(place.top)
+    top = quote(where)
     commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), top)
-    why = '`%s` makes a commit with plain git, which writes no Co-Authored-By trailer: the gate\'s trailer check ' \
-          'then fails the branch. ' % bare(cmd)
     words = {w.text for w in gc.rest}
     one = 'git -C %s apply --index <patch>' % top if sub == 'am' else \
         'git -C %s %s --no-commit <commit>' % (top, sub)
@@ -4284,34 +4323,31 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
         'names' % top
     note = ' --quit forgets what is left, so read it first: %s.' % left
     if sub in ('revert', 'cherry-pick', 'am') and '--skip' in words:
-        return refuse('git-plain-commit', role, why + '--skip drops the change in progress and goes on with the rest '
-                      'as plain commits.%s End the sequence here, then in their own calls drop the change in '
-                      'progress with git -C %s reset --merge and take each one left with %s, then %s:'
-                      % (note, top, one, commit),
-                      'git -C %s %s --quit' % (top, sub))
+        return ('--skip drops the change in progress and goes on with the rest as plain commits.%s End the sequence '
+                'here, then in their own calls drop the change in progress with git -C %s reset --merge and take '
+                'each one left with %s, then %s:' % (note, top, one, commit),
+                'git -C %s %s --quit' % (top, sub))
     if sub == 'commit' or words & set(COMMIT_STEPS) or (sub == 'am' and '-r' in words):
         rest = ''
         if sub in ('revert', 'cherry-pick', 'am'):
             rest = ' The kit tool commits only the change in progress: it does not go on with the rest of the ' \
                    'sequence. After it, end the sequence with git -C %s %s --quit and take each one left with %s, ' \
                    'then commit.py.%s' % (top, sub, one, note)
-        return refuse('git-plain-commit', role, why + 'Commit with the kit tool, which stages the paths you name '
-                      'and adds the trailer.%s The commit:' % rest, commit)
+        return 'Commit with the kit tool, which stages the paths you name and adds the trailer.%s The commit:' % rest, \
+            commit
     if sub in ('merge', 'pull'):
-        return refuse('git-plain-commit', role, why + 'Sync with the commit your coordinator named; the tool merges '
-                      'exactly it and adds the trailer (to merge anything else, run git -C %s merge --no-commit '
-                      '<rev>, then in its own call %s):' % (top, commit),
-                      'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), top))
+        return ('Sync with the commit your coordinator named; the tool merges exactly it and adds the trailer (to '
+                'merge anything else, run git -C %s merge --no-commit <rev>, then in its own call %s):' % (top, commit),
+                'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), top))
     if sub == 'am':
-        return refuse('git-plain-commit', role, why + 'Apply the patch to the index, then in its own call commit it '
-                      'with %s:' % commit, 'git -C %s apply --index <patch>' % top)
+        return ('Apply the patch to the index, then in its own call commit it with %s:' % commit,
+                'git -C %s apply --index <patch>' % top)
     keep = ''
     if mainline is not None:
         keep = ' -m %s' % (mainline if mainline.isdigit() else '<n>')
     keep += ''.join(' ' + kept_word(*w) for w in kept)
-    return refuse('git-plain-commit', role, why + 'Run it with --no-commit, then in its own call commit what it '
-                  'changed with %s:' % commit,
-                  'git -C %s %s --no-commit%s %s' % (top, sub, keep, ' '.join(revs or ()) or '<commit>'))
+    return ('Run it with --no-commit, then in its own call commit what it changed with %s:' % commit,
+            'git -C %s %s --no-commit%s %s' % (top, sub, keep, ' '.join(revs or ()) or '<commit>'))
 
 
 # git that python or node code given on the line runs (interpreter_git): the guard reads git only
@@ -4406,8 +4442,17 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
     git refuses (`git stash -q list`), so only the first word is taken as the verb. An entry or branch name the shell computes
     (`drop $E`) fails closed: empty, it leaves a bare drop of the top entry. A main checkout's
     stash is git-stash's (git_main_rules)."""
-    if not agent_session(event, ctx):
+    if not agent_session(event, ctx) or not stash_shared(gc):
         return None
+    how, instead = stash_alternative(ctx, place.top)
+    return refuse('git-stash-shared', role, '`%s` adds to or takes from the stash stack every worktree of this '
+                  'repository shares; while it holds an entry every gate and landing refuses (docs/gate.md "The '
+                  'stash guard"). %s' % (bare(cmd), how), instead)
+
+
+def stash_shared(gc):
+    """True when git stash `gc` adds an entry with no tag or takes one it does not name
+    (git_stash_shared)."""
     first = gc.rest[0] if gc.rest else None
     if first is not None and (first.dyn or not first.text.startswith('-')):
         verb, args = first, gc.rest[1:]
@@ -4418,16 +4463,19 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
         need = 2 if verb.text == 'branch' else 1
         named = len(pos) >= need and not any(w.dyn for w in pos[:need])
         if verb.text in STASH_READS or (verb.text in STASH_NAMED + ('branch',) and named):
-            return None
+            return False
     if (verb is None or (verb.text == 'push' and not verb.dyn)) and \
             ('m' in short or any(n and 'message'.startswith(n) for n in longs)):
-        return None                             # a tagged push: its owner finds it again by the tag
-    top = quote(place.top)
-    return refuse('git-stash-shared', role, '`%s` adds to or takes from the stash stack every worktree of this '
-                  'repository shares; while it holds an entry every gate and landing refuses (docs/gate.md "The '
-                  'stash guard"). Set the work aside as a WIP commit on your branch with the kit tool, which stages '
-                  'each path you name, a new file too, and adds the trailer:' % bare(cmd),
-                  'python %s -C %s -m "WIP: <what>" <each path you changed>' % (kit_tool(ctx, 'commit'), top))
+        return False                            # a tagged push: its owner finds it again by the tag
+    return True
+
+
+def stash_alternative(ctx, where):
+    """(advice, command): the WIP commit with the kit tool in the linked worktree `where` that
+    takes the place of a shared stash entry (git_stash_shared)."""
+    return ('Set the work aside as a WIP commit on your branch with the kit tool, which stages each path you name, '
+            'a new file too, and adds the trailer:',
+            'python %s -C %s -m "WIP: <what>" <each path you changed>' % (kit_tool(ctx, 'commit'), quote(where)))
 
 
 def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
@@ -4445,7 +4493,8 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
             why = lander_check(event, ctx, cmd, inv, gc)[1] if place.kind == repo.MAIN else None
             if why is not None:
                 return lander_refusal(ctx, cmd, gc, 'git-main-history', role, why)
-            how, instead = ref_delete_hint(ctx, gc, top, cwd, short, longs, pos) or git_in_worktree(ctx, cmd, gc, top, cwd)
+            how, instead = ref_delete_hint(ctx, gc, top, cwd, short, longs, pos) or \
+                git_in_worktree(ctx, cmd, gc, top, cwd, agent_session(event, ctx))
             return refuse('git-main-history', role, '`%s` writes history or files in %s; this role may not change a '
                           'main checkout. %s' % (text, where, how), instead)
     no_wt, wt = new_worktree(ctx, place.top)
@@ -4464,6 +4513,13 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
             refuse('git-checkout', role, '`%s` changes files in %s. %s' % (text, where, no_wt), wt)
     if sub == 'reset' and 'hard' in longs:
         rev = ' '.join(w.text for w in pos) or 'HEAD'
+        if place.kind == repo.MAIN and not kconfig.permissions(
+                event, kconfig.roles(ctx.config(place.top or gc.dir))).get('edit_main_checkout'):
+            # reset --keep changes the main checkout too, which git-main-history refuses this role
+            mine = own_worktree(ctx, cwd, place.top)
+            return refuse('git-reset-hard', role, '`%s` discards work in %s; this role may not change a main '
+                          'checkout. In your worktree, reset --keep refuses to drop uncommitted changes:'
+                          % (text, where), 'git -C %s reset --keep %s' % (quote(mine or '<worktree>'), rev))
         return refuse('git-reset-hard', role, '`%s` discards work in %s. Reset --keep refuses to drop uncommitted '
                       'changes:' % (text, where), 'git -C %s reset --keep %s' % (quote(top), rev))
     if sub == 'clean':
@@ -5080,7 +5136,7 @@ def git_jail_unknown(ctx, cmd, gc, cwd, role):
     if git_reads(gc, strict=True):
         return None
     if gc.blind:                                # a deliberate re-pointing: denied, not unplaced
-        how, instead = git_unplaced(ctx, cmd, gc, cwd)
+        how, instead = git_unplaced(ctx, cmd, gc, cwd, True)
         return refuse('write-jail', role, '`%s` writes a checkout the guard cannot place: %s can point git at a '
                       'git directory, work tree, index or config the text does not show, and a -C does not undo '
                       'it. %s' % (bare(cmd), gc.blind, how), instead)
@@ -5131,12 +5187,36 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         return lander_refusal(ctx, cmd, gc, 'write-jail', role, why)
     what = '`%s` changes the checkout %s' % (bare(cmd), fwd(gc.dir))
     dest = jail.destination(rs)
-    if verdict != jail.OUTSIDE or dest is None:
+    if dest is None:
         return jail_refusal(role, rs, verdict, root, what, gc.dir)
-    rest = git_rest_text(cmd, gc)
-    return refuse('write-jail', role, '%s: it is outside the folders an agent session may write: %s. %s The same command '
-                  'in %s:' % (what, jail.describe(rs), JAIL_ASK, fwd(dest.path)),
-                  ('git -C %s %s %s' % (quote(dest.path), gc.sub, rest)).rstrip())
+    if verdict == jail.OUTSIDE:
+        why = '%s: it is outside the folders an agent session may write: %s. %s' % (what, jail.describe(rs), JAIL_ASK)
+    else:
+        why = jail_why(rs, verdict, root, what, gc.dir)
+    note, instead = git_elsewhere(ctx, cmd, gc, dest.path, True)
+    return refuse('write-jail', role, why + (' In %s, %s' % (fwd(dest.path), note) if note else
+                                             ' The same command in %s:' % fwd(dest.path)), instead)
+
+
+def git_elsewhere(ctx, cmd, gc, where, agent):
+    """(note, command): git `gc` run again in the checkout `where`, `git -C <where> <sub> <rest>`
+    and no note. In a linked worktree an agent session's commit (commit_alternative) or shared
+    stash entry (stash_shared) is refused there too (git_plain_commit, git_stash_shared): the kit
+    tool's form, the note saying why."""
+    plain = ('', ('git -C %s %s %s' % (quote(where), gc.sub, git_rest_text(cmd, gc))).rstrip())
+    if not agent:
+        return plain
+    place = ctx.place(where)
+    if place.kind != repo.LINKED or not place.top:
+        return plain
+    alt = commit_alternative(ctx, gc, place.top)
+    if alt is not None:
+        return ('plain git writes no Co-Authored-By trailer, which the gate\'s trailer check fails. ' + alt[0],
+                alt[1])
+    if gc.sub == 'stash' and stash_shared(gc):
+        how, instead = stash_alternative(ctx, place.top)
+        return 'the stash stack is shared by every worktree of the repository. ' + how, instead
+    return plain
 
 
 def git_retarget(ctx, cmd, inv, gc, w, cwd):
@@ -5162,16 +5242,16 @@ def git_retarget(ctx, cmd, inv, gc, w, cwd):
     return rewrite
 
 
-def git_in_worktree(ctx, cmd, gc, main_top, cwd):
+def git_in_worktree(ctx, cmd, gc, main_top, cwd, agent=False):
     """(sentence, command): the same git command in the session's own worktree of this main
-    checkout, when it has one, else the worktree to make; git_unplaced when what hides the place
-    is in the text."""
+    checkout, when it has one (git_elsewhere: an agent session's commit there is the kit tool's),
+    else the worktree to make; git_unplaced when what hides the place is in the text."""
     if gc.blind:
-        return git_unplaced(ctx, cmd, gc, cwd)
-    rest = git_rest_text(cmd, gc)
+        return git_unplaced(ctx, cmd, gc, cwd, agent)
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
-        return 'Run it in your worktree:', ('git -C %s %s %s' % (quote(mine), gc.sub, rest)).rstrip()
+        note, instead = git_elsewhere(ctx, cmd, gc, mine, agent)
+        return 'Run it in your worktree:' + (' ' + note if note else ''), instead
     no_wt, instead = new_worktree(ctx, main_top)
     if no_wt:
         return no_wt, instead
@@ -5907,14 +5987,16 @@ def git_rest_text(cmd, gc):
     return ' '.join(words)
 
 
-def git_unplaced(ctx, cmd, gc, cwd):
+def git_unplaced(ctx, cmd, gc, cwd, agent=False):
     """(sentence, command) for git whose place `gc.blind` hides (GIT_DIR and the like, --git-dir,
     --work-tree, core.worktree, --config-env, a computed -c): drop it and run the same git
-    command in the session's own worktree, or where it runs when it is in none."""
-    rest = git_rest_text(cmd, gc)
+    command in the session's own worktree (git_elsewhere), or where it runs when it is in none."""
     mine = own_worktree(ctx, cwd)
-    git = 'git -C %s' % quote(mine) if mine else 'git'
-    return 'Drop %s and run it in your worktree:' % gc.blind, ('%s %s %s' % (git, gc.sub, rest)).rstrip()
+    if mine:
+        note, instead = git_elsewhere(ctx, cmd, gc, mine, agent)
+        return 'Drop %s and run it in your worktree:%s' % (gc.blind, ' ' + note if note else ''), instead
+    rest = git_rest_text(cmd, gc)
+    return 'Drop %s and run it in your worktree:' % gc.blind, ('git %s %s' % (gc.sub, rest)).rstrip()
 
 
 def git_branch_delete(ctx, gc, role):

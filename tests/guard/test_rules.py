@@ -121,7 +121,7 @@ ROWS = [
     ('subagent commit in main', lambda w: bash('git commit -m "two words"', w.main, sub=True), 'deny', 'git-main-history',
      'git -C "{main}" worktree add .claude/worktrees/<slug> -b <branch>'),
     ('subagent commit in main via -C from its worktree', lambda w: bash('git -C %s commit -m "two words"' % W.fwd(w.main), w.wt, sub=True),
-     'deny', 'git-main-history', 'git -C "{wt}" commit -m "two words"'),
+     'deny', 'git-main-history', 'python "{kit}/tools/commit.py" -C "{wt}" -m "<subject>" <each path you changed>'),
     ('subagent merge in main', lambda w: ps('git merge kit/wt', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent rebase in main', lambda w: bash('git rebase origin/main', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent cherry-pick in main', lambda w: bash('git cherry-pick abc123', w.main, sub=True), 'deny', 'git-main-history', None),
@@ -409,7 +409,10 @@ class PmDataPlace(unittest.TestCase):
         for sub in (False, True):
             d = decide(bash('git reset --hard', self.w.data, sub=sub), self.w.ctx())
             self.assertEqual(d.rule, 'git-reset-hard', d and d.reason)
-            self.assertIn('Instead: git -C "%s" reset --keep HEAD' % W.fwd(self.w.data), d.reason)
+            # a subagent may not change a main checkout, so reset --keep there is refused too
+            # (git-main-history): its worktree's form instead
+            self.assertIn('Instead: git -C "%s" reset --keep HEAD' % ('<worktree>' if sub else W.fwd(self.w.data)),
+                          d.reason)
         for cmd, rule in (('git clean -fdx', 'git-clean'), ('git stash', 'git-stash'), ('git add -A', 'git-bulk-add'),
                           ('git checkout main', 'git-checkout')):
             self.assertEqual(decide(bash(cmd, self.w.data, sub=True), self.w.ctx()).rule, rule, cmd)
