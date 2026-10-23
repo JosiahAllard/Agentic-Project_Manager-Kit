@@ -87,6 +87,8 @@ Refused before anything is written (exit 1, `Nothing was written or committed.`)
 
 A staged file the call does not name refuses first, as for any commit.
 
+The work tree stays at the approval's base: never copy the approved content in first, or the call refuses (`prewrite_error`: the file is not its `base_blob`). `commit.py` writes the approved content from the hub.
+
 Then the approved content is written (UTF-8; a null content deletes the file), the paths are staged, and each staged entry is checked against the approval: a git filter or `.gitattributes` that changed one on staging, or a staged mode other than a regular file's (100644 or 100755), refuses (`staged_error`). The other checks above (HEAD moved, machine paths) hold as for any commit; the owner-only refusal and `--owner-approved` do not apply. A refusal after the write and before the commit step puts every file back and unstages the paths (`The work tree is as it was, and nothing this call staged is staged.`). A refusal from the commit step itself (HEAD moved during the call; a commit made may stand or be undone, as for any commit) leaves the approved content in the work tree and the approval not consumed (`hub:A-<n> was not consumed; the approved content is left in the work tree.`).
 
 The message carries `Owner-Approval: hub:A-<n>` first in its trailer block, then `Co-Authored-By`: it is an agent's commit. After the commit, `consume_commit`:
