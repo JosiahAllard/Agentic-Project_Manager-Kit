@@ -5,7 +5,7 @@ hub site design, section 2 "HTTP API" and section 9).
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT, ANY, APPROVER or LOCK_WRITE: who may call it ("Roles", "Machine lock").
   Api(store, views=None, clock=None, session_keys=None, now=None, approval_key=None,
-      checkout=None, lock=None)
+      checkout=None, lock=None, repo_name=None, schedule_repos=None, tick_seen=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
                    agent_words=False, strong=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
@@ -41,6 +41,11 @@ approval consumed by a commit. Both take the `if_version` the caller read and ar
 and an ApprovalError is answered as a HubError of its code and field. GET approvals/{id}/verify
 (AGENT, query repo, head, files as JSON {path: blob} and an optional commit) answers
 {ok, valid, why} and never the key or the sig; an unknown id is valid false, approvals.WHY_UNKNOWN.
+An approval of kind `op` (one run of a delegated operation, docs/delegations.md "Hub approvals")
+is added with kind, op, repo, line, title and optional reason and what, and no checkout is read;
+any other kind is `invalid`, field kind. It is consumed with args_sha256 in place of commit, and
+verified with the query kind=op, op, repo and args (the line's sha256), which answers its version
+too, the pin of the consume that follows.
 GET snapshot carries `strong`: true only on the strong owner's call (Request.strong), so the page
 shows Approve and Deny as usable; the decide route checks the role itself all the same.
 
@@ -63,6 +68,42 @@ version} of the body. GET snapshot leaves `page_html` out: the Docs tab reads a 
 opened. POST pages/{id}/delete (OWNER, if_version optional) deletes the card, then the body; a
 body delete that fails leaves the card deleted and the body an orphan, as above. One process
 lock is enough: Store.open lets one process write a store (`_store.lock`).
+
+Schedules. POST schedules (OWNER) sets when one of the kit's automatic tasks runs for one repo:
+{task, repo, cadence, at, days?, if_version?} into `schedules/<task>-<repo>`. task is one of
+SCHEDULE_TASKS; cadence one of CADENCES (`off` keeps the document and runs nothing); at is HH:MM,
+24-hour; days, a list from DAYS, is required for `weekly` and refused for the others, and is
+stored once each in DAYS order. repo must be a repository the hub knows (its repos/ documents'
+names and aliases, and the store's known_repos), case ignored, and is stored as that repo's name.
+A task that runs for one repository (kitlib.autotasks.tick.TASKS per_repo), on any cadence but
+`off`, also needs exactly one checkout of it in the machine config's launcher.repos, as the tick
+finds it (tick.find_repo over Api's schedule_repos, default launcher_checkouts: tick.launcher_repos);
+none, or two, is `invalid`, field repo, and so is a launcher config that cannot be read.
+A refusal is `invalid` naming the field, with nothing written. Writing over a schedule takes its
+`if_version`; without it, or with another, it is `conflict`, as for a page, and that refusal's
+error names the schedule's `id` (so a new one for a task and repo that has one can open it,
+the repo matched as above). The answer carries
+`first_run`: the first slot strictly after set_at by kitlib.autotasks.due's rule, naive local
+time to the minute (None when off). GET schedules (ANY) lists them, with `tick`: {last, running,
+every_s}, last when the tick was last seen (Api's tick_seen, default tick_last_seen: the time of
+its state file) and running false when that is None or more than TICK_STALE_S before the clock.
+Nothing here runs a task: a tick outside the hub reads the list.
+
+Findings. GET findings (ANY) lists the maintenance lint's last findings (the `findings` view),
+filtered by `repo` (case ignored), less every one the owner has marked: a finding_marks/
+<fingerprint> document. POST finding_marks (OWNER) marks one, {fingerprint, status, note?,
+if_version?}: status is one of hubvalidate.STATUSES['finding_marks'], the fingerprint must be one
+the lint shows (`not_found` otherwise), and the mark keeps the finding's repo, check, target and
+text as they were. Writing over a mark takes its `if_version`, as for a schedule. POST
+finding_marks/{id}/delete (OWNER, if_version optional) takes a mark back; GET finding_marks (ANY)
+lists them. POST to_pm with kind `act` passes a finding on to the PM: `finding` (its
+fingerprint, required, and refused for any other kind) prefills repo, refs (the fingerprint and
+the finding's target first) and, when none is given, text; the page marks the finding itself.
+POST to_pm/{id}/edit refuses to make an act note another kind or another note an act note.
+A finding's target and fix can name a path on this machine (a worktree's folder, a kit tool):
+only the local owner (Request.full: the owner, its error answers in its own words, not through
+the tunnel) sees them whole. Any other caller's findings, marks and act-note text have each
+absolute path cut to `.../<its last part>`, and no act note's refs carry one.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -115,6 +156,7 @@ is null and `unavailable` maps its name to that same reason:
   backlog(repo='', state='', fresh=False)   [{repo, fetched_at, items}]
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
+  findings()                                the lint's rows (GET findings; not in GET snapshot)
   health()                                  a dict merged into GET health (git, backlog, ...)
   record(repo, id)                          one record (GET records/{repo}/{id})
   record_template(repo)                     a new record's fields (GET records/{repo}/new)
@@ -122,10 +164,10 @@ The two record views differ: what they raise as a HubError is the answer (a 404 
 repository that is not there, a 400 for a name that cannot be one), so their messages are fixed
 phrases with no path, no id and nothing the caller sent; only anything else is `unavailable`.
 Both are read now, never cached, and neither is part of GET snapshot.
-  record_add(repo, id, summary, scopes, effort, ref)               the owner's three writes to
+  record_add(repo, id, summary, scopes, effort, ref)               the owner's four writes to
   record_edit(repo, id, version, changes, unset, body, ruling)     a repository's backlog store
   record_delete(repo, id, why, ruling)                             (OWNER routes; kitlib.hubsite.
-                                                                   recordwrite)
+  record_unblock(repo, id, on, reason, ruling)                     recordwrite)
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
 
@@ -188,6 +230,12 @@ own calls never count, nor does a call with `for` a key other than `pm` (another
 wait for its own answers is not the PM listening). No lock is taken: each note is one assignment, and an open wait is one
 key put into and popped from a dict, which the interpreter does as one step each.
 
+Push status. GET snapshot carries `push`: null when this hub runs no push-notification worker,
+else {"state", "last", "undelivered"} from PushWorker.status (kitlib.hubsite.push docstring
+"Status"): state 'up' or 'down', last the latest delivery to the PM's state (null before the first),
+undelivered the number of items some recipient has not yet had a written try of. The worker
+sets Api.push_status when it is made; the snapshot reads it on the request's thread.
+
 Pending for one session. Every pending item carries `from`, the session key it is for
 (Api.pending). GET pending and GET wait (with pending=1) take `for=<key>`: only that key's
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
@@ -205,8 +253,11 @@ its key has handed the item to that key (an agent call), the route is the key fo
 ACK_WINDOW_S after that first hand-over and `pm` from then on while it is still pending (the
 creator clears a to-do with its ack). Before any hand-over the route is the key while the key is
 reachable: a wait `for` it is blocked now, or one started or ended within REACH_GRACE_S. `for=pm`
-lists the items routed to `pm` and every answered question, whoever it is from (the PM logs each
-ruling); a wait `for=pm` is also woken when an item's route turns to `pm` with no write. All of
+lists the items routed to `pm`, every answered question, whoever it is from (the PM logs each
+ruling), and every decided approval. An approval has no `from`: it is for the coordinator of its
+repository, the session key named as the configured repository whose origin remote is the
+approval's `repo` (Api's repo_name), while that key is in sessions.json, else for `pm`. A wait
+`for=pm` is also woken when an item's route turns to `pm` with no write. All of
 this lives in this Api object: a new Api (a server restart) routes every item to `pm` until its
 creator waits again. As for PM seen, no lock is taken: each note is one dict step, a dict is
 copied before it is walked, and a key's map of blocked waits is never removed, so a wait that
@@ -220,6 +271,7 @@ import collections
 import datetime
 import json
 import math
+import os
 import re
 import time
 
@@ -268,7 +320,8 @@ DAYS_MAX = 3650
 AGENT_SAYS = {'store': 'the hub store is not available: the owner sees why'}
 
 Route = collections.namedtuple('Route', 'method pattern role handler')
-Request = collections.namedtuple('Request', 'role params body query via strong')
+# full: the local owner, told the store's own words (agent_words False) and not through the tunnel
+Request = collections.namedtuple('Request', 'role params body query via strong full')
 
 _TRUE = ('1', 'true', 'yes', 'on')
 _FALSE = ('', '0', 'false', 'no', 'off')
@@ -453,12 +506,12 @@ def launcher_keys():
 
 def _for(d, for_key):
     """Whether pending item d (with `from` and `route`) is listed for for_key: every item with
-    none; for AGENT_FROM, the ones routed to it and every question (the PM logs each ruling);
-    for another key, its own."""
+    none; for AGENT_FROM, the ones routed to it, every question (the PM logs each ruling) and
+    every approval (the owner's decision); for another key, its own."""
     if not for_key:
         return True
     if for_key == AGENT_FROM:
-        return d['route'] == AGENT_FROM or d['kind'] == 'question'
+        return d['route'] == AGENT_FROM or d['kind'] in ('question', 'approval')
     return d['from'] == for_key
 
 
@@ -487,20 +540,30 @@ class Api(object):
     for the routes (default: time.monotonic). `approval_key()` gives the approval key or None,
     read on each decide and verify; `checkout(repo_id)` gives the root of this machine's checkout
     of that repository or None ("Approvals"); both default to None, which no approval passes.
-    `lock` is the machine lock's door or None ("Machine lock")."""
+    `repo_name(repo_id)` gives the name of this machine's configured repository with that remote,
+    or None (default), which routes a decided approval to the PM alone ("Routes").
+    `lock` is the machine lock's door or None ("Machine lock"). `schedule_repos()` gives the
+    machine config's launcher.repos as [(label, main checkout, name)] (default:
+    launcher_checkouts), `tick_seen()` the ISO time the automatic tasks' tick was last seen or
+    None (default: tick_last_seen); both are read on each use ("Schedules")."""
 
     def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
-                 approval_key=None, checkout=None, lock=None):
+                 approval_key=None, checkout=None, lock=None, repo_name=None,
+                 schedule_repos=None, tick_seen=None):
         self.store = store
+        self.schedule_repos = schedule_repos or launcher_checkouts
+        self.tick_seen = tick_seen or tick_last_seen
         self.views = views
         self.lock = lock
         self.lock_poll_s = LOCK_POLL_S
         self.clock = clock or store.clock
         self.approval_key = approval_key or (lambda: None)
         self.checkout = checkout or (lambda repo: None)
+        self.repo_name = repo_name or (lambda repo: None)
         self._session_keys = session_keys or launcher_keys
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
+        self.push_status = None     # PushWorker.status, set by the worker ("Push status")
         # routes (module docstring "Routes"): one dict step per note, no lock
         self.now = now or time.monotonic
         self.ack_window_s = ACK_WINDOW_S
@@ -526,10 +589,15 @@ class Api(object):
         full = role == OWNER and agent_words is False       # the error's own text: paths and all
         strong = strong is True and role == OWNER
         try:
-            status, obj = 200, self._call(method, path, role, body, query, via, strong)
+            status, obj = 200, self._call(method, path, role, body, query, via, strong,
+                                          full and via != TUNNEL_VIA)
         except HubError as e:
             said = e.message if full else AGENT_SAYS.get(e.code, e.message)
             status, obj = STATUS.get(e.code, 500), error_body(e.code, said, e.field)
+            extra = getattr(e, 'extra', None)   # what a route adds to its refusal (schedules_set's id)
+            if isinstance(extra, dict):
+                obj['error'].update((k, v) for k, v in extra.items()
+                                    if k not in ('code', 'message', 'field'))
         except Exception as e:      # noqa: BLE001 - a transport gets an answer, never a traceback
             if raise_unexpected:
                 raise
@@ -538,7 +606,7 @@ class Api(object):
         obj.setdefault('revision', revision)
         return status, obj
 
-    def _call(self, method, path, role, body, query, via, strong):
+    def _call(self, method, path, role, body, query, via, strong, full):
         if not isinstance(role, str) or role not in CALLERS:
             raise HubError('forbidden', 'this request carries no owner or agent credential',
                            'role')
@@ -562,7 +630,7 @@ class Api(object):
         if query is not None and not isinstance(query, dict):
             raise _invalid('the query is an object of names and values', 'query')
         out = route.handler(self, Request(role, params, body, query, via if isinstance(via, str)
-                                          else '', strong))
+                                          else '', strong, full is True))
         if not isinstance(out, dict):
             raise HubError('internal', 'the handler of %s gave no object' % route.pattern)
         return out
@@ -652,12 +720,24 @@ class Api(object):
             keys = set()
         return keys | {AGENT_FROM}
 
+    def repo_key(self, repo):
+        """The session key of the coordinator of the repository whose remote is the repo_id
+        `repo`: the configured repository's name (a repo's main coordinator is keyed by its name
+        in sessions.json), '' when none is or repo_name fails. Not checked against the session
+        keys: the caller does that."""
+        try:
+            name = self.repo_name(repo) if isinstance(repo, str) and repo else None
+        except Exception:           # noqa: BLE001 - no name, no coordinator: the PM hears it
+            name = None
+        return name if isinstance(name, str) else ''
+
     def pending(self, for_key=''):
         """The pending items, each with the session key it is for as `from`: a question's or a
         to-do's own `from` when that is a session key, else AGENT_FROM (so the owner's to-dos,
         free-text names, stories and notes are the PM's), and the key that is to handle it now
         as `route` (module docstring "Routes"). With for_key, only the items for that key; for
-        AGENT_FROM, the items routed to it and every question. Reading never changes an item:
+        AGENT_FROM, the items routed to it, every question and every approval. An approval's
+        `from` is its repository's coordinator key (repo_key). Reading never changes an item:
         what a filtered read leaves out stays pending for every other reader."""
         return [d for d in self._routed()[0] if _for(d, for_key)]
 
@@ -674,6 +754,8 @@ class Api(object):
         for p in found:
             d = p._asdict()
             sender = d.pop('sender')
+            if d['kind'] == 'approval':
+                sender = self.repo_key(d['repo'])   # no `from`: its repository's coordinator
             mine = sender and sender not in (AGENT_FROM, OWNER_FROM)
             if mine and keys is None:
                 keys = self.session_keys()          # read once, and only when it can matter
@@ -764,6 +846,18 @@ class Api(object):
     def pm_seen(self):
         return {'waited': self._seen['waited'], 'pulled': self._seen['pulled'],
                 'waiting': len(self._waits)}
+
+    def push_seen(self):
+        """The push worker's status, or None when this hub runs none (module docstring "Push
+        status"). A status that raises is 'down' with its class name as `last`."""
+        fn = self.push_status
+        if fn is None:
+            return None
+        try:
+            got = fn()
+        except Exception as e:      # noqa: BLE001 - the snapshot answers whatever the worker does
+            return {'state': 'down', 'last': type(e).__name__, 'undelivered': None}
+        return got if isinstance(got, dict) else None
 
 
 # ------------------------------------------------------------------ handlers
@@ -1066,10 +1160,21 @@ def to_pm_list(api, req):
 
 
 def to_pm_add(api, req):
-    b = _fields(req, ('kind', 'repo', 'urgent', 'text'), required=('text',))
+    b = _fields(req, ('kind', 'repo', 'urgent', 'text', 'refs', 'finding'))
     for name in ('kind', 'repo', 'text'):
         _text(b, name)
     b.setdefault('kind', 'question')
+    _one_of(b, 'kind', schema.KINDS['to_pm'])
+    refs = _typed(b, 'refs', (list,), 'a list of strings')
+    if refs is not None and not all(isinstance(r, str) and r.strip() for r in refs):
+        raise _invalid('refs is a list of non-empty strings', 'refs')
+    if b['kind'] == 'act':
+        _act_note(api, b, req)
+    elif 'finding' in b:
+        raise _invalid('finding is for an act note (kind act), not a %s one' % b['kind'],
+                       'finding')
+    elif not (b.get('text') or '').strip():
+        raise _invalid('text is required', 'text')
     b.update(status='queued', created_at=api.clock(), sent_at=None, reply=None, done_at=None)
     return api.add('to_pm', b, req, {'status': 'queued'})
 
@@ -1094,6 +1199,10 @@ def to_pm_edit(api, req):
     doc_id = req.params['id']
     d = api.doc('to_pm', doc_id, b)
     _queued(doc_id, d, 'edited')
+    kind = changes.get('kind', d.get('kind'))
+    if kind != d.get('kind') and 'act' in (kind, d.get('kind')):
+        raise _invalid('an act note stays an act note and no other note becomes one: %s is %s'
+                       % (doc_id, d.get('kind')), 'kind')
     return api.change('to_pm', doc_id, d, changes, req, {'status': 'queued'})
 
 
@@ -1190,6 +1299,14 @@ def _approval(make, *args):
 
 def approvals_add(api, req):
     from . import approvals as ap
+    kind = req.body.get('kind') if isinstance(req.body, dict) else None
+    if kind is not None:
+        if kind != ap.KIND_OP:
+            raise _invalid('kind is %r or absent, not %r' % (ap.KIND_OP, kind), 'kind')
+        b = _fields(req, ('kind', 'op', 'repo', 'line', 'title', 'reason', 'what'))
+        doc = _approval(ap.new_op_doc, b.get('op'), b.get('repo'), b.get('line'), b.get('title'),
+                        _when(api.clock(), ''), b.get('reason'), b.get('what'))
+        return api.add(ap.COLLECTION, doc, req)
     b = _fields(req, ('repo', 'title', 'head', 'files', 'reason'))
     doc = _approval(ap.new_doc, b.get('repo'), b.get('title'), b.get('head'), b.get('files'),
                     _when(api.clock(), ''), b.get('reason'))
@@ -1219,12 +1336,19 @@ def approvals_decide(api, req):
 
 def approvals_consume(api, req):
     from . import approvals as ap
-    b = _fields(req, ('commit', 'if_version'))
+    b = _fields(req, ('commit', 'args_sha256', 'if_version'))
     _pin(b, required=True)
+    if 'commit' in b and 'args_sha256' in b:
+        raise _invalid('give commit (a change) or args_sha256 (an operation), not both',
+                       'args_sha256')
     doc_id = req.params['id']
     d = api.doc(ap.COLLECTION, doc_id, b)
-    changes = _approval(ap.consume_fields, api.approval_key(), doc_id, d, b.get('commit'),
-                        _when(api.clock(), ''))
+    if 'args_sha256' in b:
+        changes = _approval(ap.consume_op_fields, api.approval_key(), doc_id, d,
+                            b['args_sha256'], _when(api.clock(), ''))
+    else:
+        changes = _approval(ap.consume_fields, api.approval_key(), doc_id, d, b.get('commit'),
+                            _when(api.clock(), ''))
     return api.change(ap.COLLECTION, doc_id, d, changes, req, {'status': changes['status']})
 
 
@@ -1234,6 +1358,10 @@ def approvals_verify(api, req):
     d = api.store.get(ap.COLLECTION, doc_id) if schema.check_id(doc_id) is None else None
     if d is None:
         return {'ok': True, 'valid': False, 'why': ap.WHY_UNKNOWN}
+    if _q(req, 'kind') == ap.KIND_OP:
+        valid, why = ap.check_op(api.approval_key(), doc_id, d, _q(req, 'op'), _q(req, 'repo'),
+                                 _q(req, 'args'), _when(api.clock(), ''))
+        return {'ok': True, 'valid': valid, 'why': why, 'version': _version(d)}
     try:
         blobs = json.loads(_q(req, 'files'))
     except ValueError:
@@ -1327,6 +1455,14 @@ def record_delete(api, req):
     if _text(b, 'confirm') != rid:
         raise _invalid('confirm must repeat the record id to delete it', 'confirm')
     out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'), _text(b, 'ruling'))
+    return dict(out, ok=True)
+
+
+def record_unblock(api, req):
+    repo, rid = _segment(req, 'repo'), _segment(req, 'id')
+    b = _fields(req, ('on', 'reason', 'ruling'))
+    out = _record_view(api, 'record_unblock', repo, rid, _text(b, 'on'), _text(b, 'reason'),
+                       _text(b, 'ruling'))
     return dict(out, ok=True)
 # ---- end of the owner's record writes
 
@@ -1506,6 +1642,284 @@ def pages_delete(api, req):
     return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
 
 
+# ---- the owner's schedules for the kit's automatic tasks ("Schedules")
+# The tasks a schedule may name, a fixed table: maint-lint (the maintenance lint, being built),
+# worktree-sweep (kitlib.worktree.task) and agent-temp-sweep (kitlib.machinesetup.agenttemp).
+# Nothing here runs one.
+SCHEDULE_TASKS = ('maint-lint', 'worktree-sweep', 'agent-temp-sweep')
+CADENCES = ('off', 'daily', 'weekly')
+DAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+_AT = re.compile(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z')
+
+
+def _one_of(b, name, allowed):
+    v = _text(b, name)
+    if v not in allowed:
+        raise _invalid('%s is one of %s, not %r' % (name, ', '.join(allowed), v), name)
+    return v
+
+
+def _schedule_repo(api, name):
+    """The name of the repository the hub knows as `name` (case ignored): one the store's
+    known_repos gives, a repos/ document's name (its id when it has none), or one of its aliases.
+    `invalid`, field repo, for any other."""
+    names, aliases = {}, {}
+    for n in api.store.known_repos() or ():
+        if isinstance(n, str) and n.strip():
+            names.setdefault(n.strip().lower(), n.strip())
+    for doc_id, d in sorted(api.store.docs('repos').items()):
+        own = d.get('name') if isinstance(d.get('name'), str) and d['name'].strip() else doc_id
+        own = names.setdefault(own.strip().lower(), own.strip())
+        for a in d.get('aliases') if isinstance(d.get('aliases'), list) else ():
+            if isinstance(a, str) and a.strip():
+                aliases.setdefault(a.strip().lower(), own)
+    want = name.strip().lower()
+    found = names.get(want) or aliases.get(want)
+    if found is None:
+        raise _invalid('repo %r is not a repository the hub knows (GET repos lists them)' % name,
+                       'repo')
+    return found
+
+
+def launcher_checkouts():
+    """Api's default schedule_repos: the machine config's launcher.repos as the tick reads them
+    (kitlib.autotasks.tick.launcher_repos)."""
+    from kitlib.autotasks import tick
+    return tick.launcher_repos()
+
+
+def tick_last_seen():
+    """Api's default tick_seen: when the tick last wrote its state file (it does on every tick
+    that reads the hub and takes its lock), an ISO time in UTC, or None when there is none."""
+    from kitlib.autotasks import tick
+    from kitlib.config import ConfigError
+    try:
+        mtime = os.path.getmtime(os.path.join(tick.state_dir(), tick.STATE_NAME))
+    except (OSError, ConfigError):
+        return None
+    return datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc).isoformat(
+        timespec='seconds')
+
+
+TICK_STALE_S = 40 * 60          # no tick seen for this long: it is not running
+
+
+def tick_every_s():
+    """The kit-automatic-tasks task's interval in seconds, the one machine setup registers
+    (kitlib.machinesetup.extras.AUTO_EVERY_MINUTES). Imported here, not at the top: the
+    machinesetup package costs about three times this module's own import."""
+    from kitlib.machinesetup.extras import AUTO_EVERY_MINUTES
+    return AUTO_EVERY_MINUTES * 60
+
+
+def _aware(text):
+    """The aware datetime an ISO text names (one with no offset is local), None for no time."""
+    try:
+        at = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    return at if at.tzinfo is not None else at.astimezone()
+
+
+def _tick_status(api):
+    last = api.tick_seen()
+    seen, now = _aware(last), _aware(api.clock())
+    running = (seen is not None and now is not None
+               and (now - seen).total_seconds() <= TICK_STALE_S)
+    return {'last': last, 'running': running, 'every_s': tick_every_s()}
+
+
+def schedules_list(api, req):
+    return {'items': api.items('schedules', req), 'tick': _tick_status(api)}
+
+
+def _first_run(fields):
+    """The first slot strictly after the schedule's set_at, as naive local HH:MM ISO text: the
+    first candidate slot kitlib.autotasks.due.decide calls due with no record. None when off."""
+    from kitlib.autotasks import due
+    start, at = due.local(fields.get('set_at')), due.parse_at(fields.get('at'))
+    if fields.get('cadence') == due.OFF or start is None or at is None:
+        return None
+    day = start.replace(hour=at[0], minute=at[1], second=0, microsecond=0)
+    for k in range(9):
+        slot = day + datetime.timedelta(days=k)
+        if due.decide(fields, None, slot) == (due.DUE, slot):
+            return slot.isoformat(timespec='minutes')
+    return None
+
+
+def _one_checkout(api, task, cadence, repo):
+    """`invalid`, field repo, unless the tick could run task for repo: exactly one checkout of
+    the machine config's launcher.repos matches it (kitlib.autotasks.tick.find_repo). Off, and a
+    task that runs for no repository, need none."""
+    from kitlib.autotasks import tick
+    from kitlib.config import ConfigError
+    if cadence == 'off' or not tick.TASKS[task].per_repo:
+        return
+    try:
+        repos = api.schedule_repos()
+    except ConfigError as e:
+        raise _invalid("the machine config's launcher.repos cannot be read: %s" % e, 'repo')
+    if tick.find_repo(repo, repos) is None:
+        raise _invalid("repo %r is not exactly one checkout in the machine config's "
+                       "launcher.repos, so the automatic task could not run for it: add it "
+                       "there once (launcher.repos), then set the schedule again" % repo, 'repo')
+
+
+def schedules_set(api, req):
+    b = _fields(req, ('task', 'repo', 'cadence', 'days', 'at', 'if_version'),
+                required=('task', 'repo', 'cadence', 'at'))
+    task = _one_of(b, 'task', SCHEDULE_TASKS)
+    cadence = _one_of(b, 'cadence', CADENCES)
+    at = _text(b, 'at')
+    if not _AT.match(at):
+        raise _invalid('at is a time of day as HH:MM, 24-hour (00:00 to 23:59), not %r' % at, 'at')
+    days = _typed(b, 'days', (list,), 'a list of days') or []
+    if not all(isinstance(d, str) and d in DAYS for d in days):
+        raise _invalid('days is a list of %s' % ', '.join(DAYS), 'days')
+    if cadence == 'weekly' and not days:
+        raise _invalid('a weekly schedule needs days: one or more of %s' % ', '.join(DAYS), 'days')
+    if cadence != 'weekly' and days:
+        raise _invalid('days is for a weekly schedule, not a %s one' % cadence, 'days')
+    pin = _pin(b)
+    repo = _schedule_repo(api, _text(b, 'repo'))
+    doc_id = '%s-%s' % (task, repo)
+    why = schema.check_id(doc_id)
+    if why:
+        raise _invalid(why, 'repo')
+    _one_checkout(api, task, cadence, repo)
+    fields = {'task': task, 'repo': repo, 'cadence': cadence, 'at': at, 'set_at': api.clock(),
+              'via': _via(req)}
+    if cadence == 'weekly':
+        fields['days'] = [d for d in DAYS if d in days]
+    try:
+        out = _put_pinned(api, 'schedules', doc_id, fields, pin)
+    except HubError as e:
+        if e.code == 'conflict':
+            e.extra = {'id': doc_id}    # the schedule there, so the page can open it
+        raise
+    out['first_run'] = _first_run(fields)
+    return out
+
+
+def _put_pinned(api, coll, doc_id, fields, pin):
+    """Put fields as coll/doc_id, pinned: writing over a document takes its version as `pin`
+    (None, or another, is `conflict`), and a pin for a document not there is `conflict` too."""
+    have = api.store.get(coll, doc_id)
+    if have is not None and pin is None:
+        raise HubError('conflict', '%s/%s is at version %d: give it as if_version to set it '
+                       'again' % (coll, doc_id, _version(have)), 'if_version')
+    if have is not None and pin != _version(have):
+        raise HubError('conflict', '%s/%s is at version %d, not %d'
+                       % (coll, doc_id, _version(have), pin), 'if_version')
+    if have is None and pin:
+        raise HubError('conflict', 'there is no %s/%s at version %d: it is not there'
+                       % (coll, doc_id, pin), 'if_version')
+    # pinned to the version read (0: not there yet), so a second writer with the same pin loses
+    r = api.store.put(coll, doc_id, fields, if_version=_version(have) if have is not None else 0)
+    return api.written(r)
+
+
+# ---- the maintenance lint's findings and the owner's marks on them ("Findings")
+_FINGERPRINT = re.compile(r'[0-9a-f]{16}\Z')
+FINDING_COPY = ('repo', 'check', 'target', 'text')   # what a mark keeps of its finding
+FINDING_PATHS = ('target', 'fix')   # a finding's fields that can name a path on this machine
+# an absolute Windows path (a drive's or a share's), quoted with its spaces or bare to a space
+_ABS_PATH = re.compile(r'"(?:[A-Za-z]:[\\/]|\\\\)[^"]*"'
+                       r'|(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)[^\s"\'`<>|]*')
+
+
+def _unpathed(text):
+    """text with each absolute path cut to `.../<its last part>`."""
+    def cut(m):
+        parts = [p for p in re.split(r'[\\/]+', m.group(0).strip('"')) if p]
+        return '.../' + parts[-1] if len(parts) > 1 else '...'
+    return _ABS_PATH.sub(cut, text)
+
+
+def _seen(f, req):
+    """Finding f as this caller sees it: whole for the local owner (Request.full), else with no
+    absolute path in FINDING_PATHS."""
+    if req.full:
+        return f
+    return dict(f, **{k: _unpathed(f[k]) for k in FINDING_PATHS if isinstance(f.get(k), str)})
+
+
+def _fp_field(b, name):
+    v = b.get(name)
+    if not isinstance(v, str) or not _FINGERPRINT.match(v):
+        raise _invalid('%s is a finding\'s fingerprint, 16 hex digits (GET findings gives them)'
+                       % name, name)
+    return v
+
+
+def _finding(api, fp, field):
+    """The finding the lint shows with fingerprint fp, marked or not; not_found on `field`."""
+    for f in api.shown('findings'):
+        if isinstance(f, dict) and f.get('fingerprint') == fp:
+            return f
+    raise HubError('not_found', 'the maintenance lint shows no finding %s' % fp, field)
+
+
+def findings_list(api, req):
+    repo = _q(req, 'repo').lower()
+    marked = api.store.docs('finding_marks')
+    return {'items': [_seen(f, req) for f in api.shown('findings')
+                      if isinstance(f, dict) and f.get('fingerprint') not in marked
+                      and (not repo or str(f.get('repo') or '').lower() == repo)]}
+
+
+def finding_marks_list(api, req):
+    return {'items': [_seen(m, req) for m in api.items('finding_marks', req)]}
+
+
+def finding_marks_set(api, req):
+    b = _fields(req, ('fingerprint', 'status', 'note', 'if_version'),
+                required=('fingerprint', 'status'))
+    fp = _fp_field(b, 'fingerprint')
+    status = _one_of(b, 'status', hubvalidate.STATUSES['finding_marks'])
+    note = _text(b, 'note')
+    pin = _pin(b)
+    f = _finding(api, fp, 'fingerprint')
+    fields = {k: f[k] for k in FINDING_COPY if isinstance(f.get(k), str)}
+    fields.update(status=status, marked_at=api.clock(), via=_via(req))
+    if note is not None:
+        fields['note'] = note
+    return _put_pinned(api, 'finding_marks', fp, fields, pin)
+
+
+def finding_marks_delete(api, req):
+    b = _fields(req, ('if_version',))
+    _pin(b)
+    doc_id = req.params['id']
+    d = api.doc('finding_marks', doc_id, b)
+    r = api.store.delete('finding_marks', doc_id, if_version=_version(d))
+    return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
+
+
+def _act_note(api, b, req):
+    """An `act` note's fields prefilled from its finding as the caller sees it (_seen): repo,
+    refs (the fingerprint and the finding's target first, each once; a target's absolute path is
+    never a ref) and a text naming the check, target, text and fix."""
+    fp = b.get('finding')
+    if fp is None:
+        raise _invalid('an act note names the finding it acts on (finding)', 'finding')
+    f = _seen(_finding(api, _fp_field(b, 'finding'), 'finding'), req)
+    target = f.get('target')
+    refs = []
+    for r in [fp, _unpathed(target) if isinstance(target, str) else None] + list(
+            b.get('refs') or ()):
+        if isinstance(r, str) and r and r not in refs:
+            refs.append(r)
+    b['refs'] = refs
+    if isinstance(f.get('repo'), str):
+        b.setdefault('repo', f['repo'])
+    if not (b.get('text') or '').strip():
+        b['text'] = 'Act on maintenance finding %s %s: %s (fix: %s)' % tuple(
+            f.get(k) if isinstance(f.get(k), str) else '-' for k in ('check', 'target', 'text',
+                                                                      'fix'))
+
+
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
     docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
@@ -1519,6 +1933,7 @@ def snapshot(api, req):
     return {'revision': revision, 'collections': docs,
             'pending': api.pending(),
             'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
+            'push': api.push_seen(),
             'strong': req.strong is True}
 
 
@@ -1726,6 +2141,8 @@ ROUTES = (
     _r('POST', '/pages', AGENT, pages_publish),
     _r('GET', '/pages/{id}', ANY, pages_get),
     _r('POST', '/pages/{id}/delete', OWNER, pages_delete),
+    _r('GET', '/schedules', ANY, schedules_list),
+    _r('POST', '/schedules', OWNER, schedules_set),
     _r('POST', '/approvals', AGENT, approvals_add),
     _r('POST', '/approvals/{id}/decide', APPROVER, approvals_decide),
     _r('POST', '/approvals/{id}/consume', AGENT, approvals_consume),
@@ -1737,6 +2154,11 @@ ROUTES = (
     _r('POST', '/records/{repo}', OWNER, record_add),
     _r('POST', '/records/{repo}/{id}/edit', OWNER, record_edit),
     _r('POST', '/records/{repo}/{id}/delete', OWNER, record_delete),
+    _r('POST', '/records/{repo}/{id}/unblock', OWNER, record_unblock),
+    _r('GET', '/findings', ANY, findings_list),
+    _r('GET', '/finding_marks', ANY, finding_marks_list),
+    _r('POST', '/finding_marks', OWNER, finding_marks_set),
+    _r('POST', '/finding_marks/{id}/delete', OWNER, finding_marks_delete),
     _r('GET', '/notices', ANY, _listing('notices')),
     _r('GET', '/repos', ANY, _listing('repos')),
     _r('GET', '/usage', ANY, _listing('usage')),

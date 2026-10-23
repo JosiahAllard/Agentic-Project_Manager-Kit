@@ -49,13 +49,13 @@ The kit gate prints these lines to stdout and writes none of them into its step 
 ## Keys read
 
 - `.kit.json` "repo": `main_branch`, `remote`, `name`.
-- "landing": `log_dir`, `lock_file`, `lanes`.
+- "landing": `log_dir`. The landing lock is always `kit-landing.lock` in the git common dir (kitlib.records.landing `LOCK_NAME`).
 
 ## Not ported
 
 - The `"landing".verdict_pattern` key, and its tests (a configured pattern, its `failed` group, its compile check). The kit's verdict lines are fixed, so `kitlib.config` now refuses the key as unknown.
 - `--root`: `-C` replaces it.
 - The source tests dropped with retired mechanisms:
-  - an absolute `lock_file` and a relative one under the shared temp: the lock is always `git:<name>` in the common dir;
+  - an absolute `lock_file` and a relative one under the shared temp: the lock is always `kit-landing.lock` in the common dir;
   - an absolute `log_dir`: `log_dir` is repo-relative (RelPath);
   - the flat-folder slash rule (`feat/x` -> `feat_x`): the kit's `log_folder` gives `feat-x`.

@@ -27,7 +27,7 @@ untracked generated file may be deleted first; a merge git refuses is reported. 
 worktree (a linked worktree of the repository), write nothing there: your task worktree is where you work.
 
 ## Build and test
-The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>`; the gate before review and landing is `--full` (every step) on the exact tip, which landing requires; `--only <step>` is for interim runs. It
+The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>`; the gate before review and landing, on the exact tip, is `--full` (every step) for a branch that changes a strict path (`STRICT_DEFAULTS` in `<kit>/kitlib/gate/strict_defaults.py`: it lands alone after a strong-tier review by someone other than its author, and its merged gate runs `--full --fresh`), and for any other branch the optimized default gate (no flag: diff selection and the smoke steps, plus reuse for a step whose config asks for it) once the repo's gate config names smoke steps, `--full` until then (`<kit>/docs/gate.md` "Smoke steps"); `--only <step>` is for interim runs. It
 reads the repository's `"gate"` section in `.kit.json` when there is one, and otherwise detects the
 stack from the files (Python, Node, Rust, Go, .NET) and runs its usual test and lint steps; its
 verdict line then says "auto-detected" (`<kit>/docs/gate.md` "Auto-detected gate"). Read that line:
@@ -74,8 +74,7 @@ Low: docs and additive content.
 ## Moves and renames
 Behaviour-preserving only. Every changed line in the diff is one of the old -> new substitutions
 the brief lists, a moved block left unchanged, or a stub at an old path; report any other changed
-line as a finding. Run the full gate on the base and on the tip: the test count must match and no
-test may be gone. Grep the old name across the tree afterwards: no hits, or each one explained.
+line as a finding.
 
 ## Records
 The backlog, if the repository keeps one through the kit (`python <kit>/tools/backlog.py -C

@@ -5,7 +5,7 @@ import unittest
 from kitlib import git
 from kitlib.git import overlap
 
-STRIPPED = 'Z:GitHubAgentic-Project_Manager-Kit'
+STRIPPED = 'Q:GitHubAgentic-Project_Manager-Kit'
 HINT = 'an unquoted backslash path in Git Bash loses its backslashes'
 
 
@@ -23,8 +23,8 @@ class StrippedPathHintTest(unittest.TestCase):
         self.assertIn(HINT, why)
 
     def test_a_normal_missing_path_has_no_hint(self):
-        for path in ('Z:/missing/place', 'Z:\\missing\\place', 'missing-place-x',
-                     '/missing/place', 'Z:missing/place'):
+        for path in ('Q:/missing/place', 'Q:\\missing\\place', 'missing-place-x',
+                     '/missing/place', 'Q:missing/place'):
             self.assertNotIn('backslash', git.toplevel(path)[1], path)
             self.assertNotIn('backslash', overlap.work_tree(path)[2], path)
             self.assertIn('is not a directory', git.toplevel(path)[1])

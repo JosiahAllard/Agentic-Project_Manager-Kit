@@ -15,7 +15,8 @@ Go down only when the step above genuinely cannot, and say why.
 4. **Local music generation** - music only (menu, match and victory themes, stingers over a few
    seconds), never sound effects. ACE-Step via `python <kit>/optional/comfy/comfy_gen.py music`
    (MIT; `<kit>/knowledge/asset-generation/MODELS.md`). It re-runs itself under the machine lock
-   (kind local-ai) and keeps a private GPU self-lock per run. Short runs while exploring; ask for
+   (kind local-ai): a kit lock wrapper, run directly (skill machine-lock-run), with no lock of
+   your own around it. Short runs while exploring; ask for
    `[Instrumental]`. `check` fails: start and install nothing, say so. Record every session,
    failures included, in the repo's `docs/ops/assets.md`: tags, seconds, seed, what you measured,
    the owner's verdict once you have it.
@@ -33,13 +34,9 @@ Go down only when the step above genuinely cannot, and say why.
 
 ## Preparing a clip
 
-Trim silence at both ends; remove DC offset; fade a couple of milliseconds in and out; resample to
-the game's rate; normalise to a peak target leaving headroom (the mixer pitch-shifts and overlaps
-these). Use the project's tool if it has one, and print what changed: a step that silently altered
-a clip looks identical to one that did nothing.
-
-Add no dependencies: a modelling tool's bundled audio library decodes compressed formats without
-an install.
+Prepare each clip the way the profile's **Audio** section says, with the project's tool if it has
+one, and print what changed: a step that silently altered a clip looks identical to one that did
+nothing.
 
 ## Measuring
 

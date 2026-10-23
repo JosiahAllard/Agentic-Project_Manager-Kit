@@ -14,10 +14,12 @@ from unittest import mock
 from kitlib import hubmcp
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import server as srv
-from kitlib.hubsite import api, auth, pagecheck, serve, todosteps
+from kitlib.hubsite import api, approvals, auth, pagecheck, serve, todosteps
+from tests.gitfixture import TempRepo
 from tests.hubsite import httpfix
 from tests.lock.helpers import REPO, clean_env
 from tests.lockmcp.test_server import Client as Process
+from tests.realgit import real_git
 
 ENTRY = os.path.join(REPO, "mcp", "hub_server.py")
 PINNED = ("hub_answer", "hub_todo_done", "hub_story_submit", "hub_to_pm_send")
@@ -25,7 +27,8 @@ READS = {"hub_pending", "hub_wait", "hub_list", "hub_inbox", "hub_backlog", "hub
          "hub_view", "hub_health", "hub_page"}
 CREATOR = {"hub_question_edit", "hub_question_withdraw", "hub_todo_edit", "hub_todo_withdraw"}
 WRITES = {"hub_ask", "hub_question_log", "hub_todo_add", "hub_todo_ack", "hub_story_set",
-          "hub_to_pm_reply", "hub_inbox_post", "hub_page_publish"} | CREATOR
+          "hub_to_pm_reply", "hub_inbox_post", "hub_page_publish",
+          "hub_approval_request"} | CREATOR
 
 
 class Settings(object):
@@ -94,7 +97,7 @@ class Pinned(Case):
         self.assertEqual(names, READS | WRITES)
 
     def test_destructive_hint_is_only_on_tools_that_change_an_existing_document(self):
-        additive = {"hub_ask", "hub_todo_add", "hub_inbox_post"}
+        additive = {"hub_ask", "hub_todo_add", "hub_inbox_post", "hub_approval_request"}
         changes = {"hub_question_log", "hub_todo_ack", "hub_story_set",
                    "hub_to_pm_reply", "hub_page_publish"} | CREATOR    # publish replaces a page
         self.assertEqual(additive | changes, WRITES)
@@ -441,6 +444,106 @@ class Pages(Case):
             self.assertFalse(path.startswith("/pages/") and method != "GET", name)
             self.assertNotIn("delete", name)
         self.assertNotIn("hub_page_delete", hubmcp.OWNER_ONLY)
+
+
+@real_git("kitlib.hubapprove.build hashes the content with hash-object --path --stdin: the "
+          "fake takes no --path")
+class Approvals(Case):
+    """hub_approval_request builds the request from a checkout (kitlib.hubapprove, whose own
+    tests are tests/hubapprove) and posts it; what it refuses never reaches the hub, and a
+    content_file in the token folder or the store is never read."""
+
+    URL = "https://git.example.invalid/owner/repo.git"
+
+    def setUp(self):
+        Case.setUp(self)
+        self.repo = TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        self.repo.git("remote", "add", "origin", self.URL)
+        with open(self.repo.path(".kit.json"), "w", encoding="utf-8") as f:
+            # an owner approval carries owner-only files only (kitlib.hubapprove)
+            json.dump({"owner": {"paths": ["README.md"]}}, f)
+        self.dir = tempfile.mkdtemp(prefix="kit-hubmcp-approval-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.ask.answer = (200, {"ok": True, "id": "A-001", "version": 1})
+
+    def content(self, data, folder=None, name="new.txt"):
+        path = os.path.join(folder or self.dir, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def args(self, **kw):
+        a = {"checkout": self.repo.root, "title": "Edit the readme"}
+        if "files" not in kw:
+            a["files"] = [{"path": "README.md", "content_file": self.content(b"a\r\nb\n")}]
+        a.update(kw)
+        return a
+
+    def refused(self, field, args, server=None):
+        payload, is_error = self.rpc(server or self.server(), "hub_approval_request", args)
+        self.assertTrue(is_error)
+        self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                         ("invalid", field), payload)
+        self.assertEqual(self.ask.calls, [])
+        return payload["error"]["message"]
+
+    def test_the_request_is_posted_with_the_files_exact_bytes(self):
+        payload, is_error = self.rpc(self.server(), "hub_approval_request",
+                                     self.args(reason="asked"))
+        self.assertFalse(is_error, payload)
+        self.assertEqual(payload["id"], "A-001")
+        call, = self.ask.calls
+        self.assertEqual((call["method"], call["path"], call["token"], call["via"]),
+                         ("POST", api.BASE + "/approvals", self.agent, serve.VIA_MCP))
+        self.assertEqual(call["body"], {
+            "repo": approvals.repo_id(self.URL), "title": "Edit the readme",
+            "head": self.repo.initial, "reason": "asked",
+            "files": [{"path": "README.md", "base_blob": approvals.blob_id("hello\n"),
+                       "content": "a\r\nb\n"}]})
+
+    def test_what_the_builder_refuses_never_reaches_the_hub(self):
+        said = self.refused("files", self.args(files=[
+            {"path": "README.md", "content_file": self.content(b"hello\n")}]))
+        self.assertIn("would change nothing", said)
+        self.refused("head", self.args(head="1" * 40))
+        self.refused("files", self.args(files=[]))
+        self.assertIn("not owner-only", self.refused("files", self.args(files=[
+            {"path": "src/app.py", "content_file": self.content(b"a\n")}])))
+
+    def test_a_relative_checkout_or_content_file_is_refused(self):
+        self.assertIn("absolute", self.refused("checkout", self.args(checkout="repo")))
+        self.assertIn("absolute", self.refused("files", self.args(files=[
+            {"path": "README.md", "content_file": "new.txt"}])))
+
+    def test_a_file_that_is_not_a_path_and_a_content_file_is_refused(self):
+        for f in ("README.md", {"path": "README.md"},
+                  {"path": "README.md", "content_file": 5},
+                  {"path": "README.md", "content_file": "C:\\x", "base_blob": None}):
+            with self.subTest(file=f):
+                self.refused("files", self.args(files=[f]))
+
+    def test_a_content_file_in_the_token_folder_or_the_store_is_never_read(self):
+        store = os.path.join(self.dir, "store")
+        os.makedirs(store)
+        server = self.server(load_settings=lambda: Settings(8790, store=store))
+        paths = [os.path.join(self.tokens, n) for n in sorted(os.listdir(self.tokens))]
+        paths.append(self.content(b"x\n", store, "x.txt"))
+        for path in paths:
+            with self.subTest(path=path):
+                args = self.args(files=[{"path": "README.md", "content_file": path}])
+                opened = mock.Mock(side_effect=AssertionError("opened %s" % path))
+                with mock.patch("builtins.open", opened):
+                    said = self.refused("files", args, server)
+                self.assertIn("never read from", said)
+                self.assertEqual(opened.call_count, 0)
+
+    def test_the_hubs_refusal_comes_back(self):
+        self.ask.answer = (400, api.error_body("invalid", "no checkout of it here", "repo"))
+        payload, is_error = self.rpc(self.server(), "hub_approval_request", self.args())
+        self.assertTrue(is_error)
+        self.assertEqual((payload["status"], payload["error"]["code"],
+                          payload["error"]["message"]), (400, "invalid", "no checkout of it here"))
 
 
 class Creator(Case):

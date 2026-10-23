@@ -1,11 +1,13 @@
 """Run one operation of the owner's delegation list (docs/delegations.md "Running").
 
 `run(op, pairs, trigger, cfg, ...)` -> Result(entry, argv, returncode, error), or RunRefused with
-nothing run and nothing written. In this order:
+nothing run and nothing written. `request(op, pairs, cfg, hub, title, ...)` asks the owner on the
+hub to approve one run: steps 2 and 3 and the hub approval's scope of step 4, then the request;
+the new approval's id. Run in this order:
 
-  1. the trigger: a hub question id (`Q-nnnn`, the op lists hub-answer and is reversible) or an
-     owner ledger id (the op lists owner-session). The literal `session` and the standing
-     triggers are refused.
+  1. the trigger: a hub question id (`Q-nnnn`, the op lists hub-answer and is reversible), an
+     owner ledger id (the op lists owner-session) or a hub approval `hub:A-nnn` (the op lists
+     hub-approval). The literal `session` and the standing triggers are refused.
   2. the arguments: exactly the declared ones, each passing schema.check_arg. They fill whole
      `{name}` tokens of the command and `{name}` inside precondition strings; `<kit>` becomes the
      kit folder. The filled command and precondition strings are checked again with
@@ -15,15 +17,24 @@ nothing run and nothing written. In this order:
      PATH. The working folder is never searched; nothing else (a .bat, a .cmd, a
      script) is started, so no shell ever runs.
   4. the order: the run line `run D-nnn k=v ...` (arguments sorted by name) must be what the owner
-     chose. A hub trigger: the logged question's chosen option label is the run line, chosen in
+     chose. A hub approval: kitlib.delegations.place.check passes every path the run names
+     (on the Dev Drive, outside checkouts and owner-only places), no ledger entry records the
+     approval, and the hub verifies it for this operation, its repo and the run line's SHA-256.
+     A hub trigger: the logged question's chosen option label is the run line, chosen in
      the last MAX_AGE, and its ruling is a live owner ledger entry whose Source names the
      question. An owner ledger id: a live owner entry, written in the last MAX_AGE, whose Decides
      is the run line.
-  5. the preconditions: file-exists, branch-landed, checklist-line.
+  5. the preconditions: file-exists, branch-landed, checklist-line. A hub approval is then
+     consumed on the hub, pinned to the version it verified at: of two racing runners one wins,
+     and one that cannot consume it runs nothing and logs nothing.
   6. the claim, under the runner lock: no live runner entry (Source `under <anchor>: D-nnn
      <trigger>`) has this anchor or this trigger, then one ledger entry, provenance delegated,
-     is added (not committed). Each trigger and each owner entry orders one run.
-  7. the child: the argv list with shell=False, stdin closed, in the kit folder. Its environment
+     is added (not committed). Each trigger and each owner entry orders one run. A hub approval
+     is the run entry's own anchor (Source `under hub:A-nnn: D-nnn hub:A-nnn`): the runner never
+     writes an owner-provenance entry.
+  7. the child: the argv list with shell=False, stdin closed, in the kit folder (a hub
+     approval's: in a new empty folder under the machine's temp folder, removed after if still
+     empty). Its environment
      is only the FROM_CALLER names of the caller's and the registry's PATH, PATHEXT,
      PSModulePath and FROM_SYSTEM names (the system and profile folders).
 
@@ -38,6 +49,7 @@ import subprocess
 
 from kitlib.config import user as kuser
 from kitlib.fs import writelock
+from kitlib.hubsite import approvals
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import serve as hubserve
 from kitlib.ledger import files as lfiles
@@ -48,16 +60,21 @@ from kitlib.ledger.errors import Refused as LedgerRefused
 from kitlib.ledger.errors import Usage as LedgerUsage
 from kitlib.proc import spawn as procspawn
 
-from . import schema
+from . import place, schema
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MAX_AGE = datetime.timedelta(hours=24)       # how old an owner's order may be
 SKEW = datetime.timedelta(minutes=5)         # how far in the future a stamp may be (clock drift)
-HUB, OWNER = 'hub', 'owner'
+HUB, OWNER, APPROVAL = 'hub', 'owner', 'approval'
 SESSION = 'session'
 Q_ID = re.compile(r'Q-[0-9]+')
-# The Source of an entry this runner wrote: under <anchor>: <operation> <trigger>.
-SOURCE_RE = re.compile(r'^under (%s): (%s) (\S+)$' % (fmt.ID, schema.ID))
+# A hub approval: kitlib.guard.ownercommits.APPROVAL_RE, copied (the guard is not imported here).
+APPROVAL_RE = re.compile(r'hub:(A-(?:(?!000)[0-9]{3}|[1-9][0-9]{3,}))\Z')
+APPROVAL_TRIGGER = 'hub-approval'
+CWD_PREFIX = 'kit-delegated-'
+# The Source of an entry this runner wrote: under <anchor>: <operation> <trigger>. The anchor is
+# an owner ledger id, or for a hub approval the approval itself (kitlib.ledger.fmt.HUB_ANCHOR).
+SOURCE_RE = re.compile(r'^under (%s|%s): (%s) (\S+)$' % (fmt.ID, fmt.HUB_ANCHOR, schema.ID))
 LOCK_NAME = 'delegated-runs'                 # the runner lock's file name, in the ledger folder
 LOCK_PREFIX = 'kit-delegated'
 LOCK_WAIT = 30.0
@@ -88,8 +105,13 @@ def find(operations, op_id):
 
 
 def trigger_kind(trigger):
-    """HUB for a question id, OWNER for a ledger id; RunRefused for anything else."""
+    """HUB for a question id, OWNER for a ledger id, APPROVAL for `hub:A-nnn`; RunRefused for
+    anything else."""
     t = trigger or ''
+    if APPROVAL_RE.match(t):
+        return APPROVAL
+    if t.startswith('hub:'):
+        raise RunRefused('--approval takes hub:A-nnn, not %r' % t)
     if t == SESSION:
         raise RunRefused('`session` is not a trigger the runner takes: give the owner ledger id '
                          'whose Decides is the run line')
@@ -403,13 +425,22 @@ def _age(at, now, what):
 
 
 def used(texts, anchor, trigger):
-    """The id of a live runner entry with this anchor or this trigger, or None."""
+    """The id of a live runner entry with this anchor or this trigger, or None. A hub approval
+    (`trigger` hub:A-nnn): also of any live entry whose Source is `under` that approval."""
+    approval = trigger if APPROVAL_RE.match(trigger or '') else None
     for _, text in texts:
         for rid, block in fmt.split_entries(text)[1]:
             e = fmt.parse_block(block)[0]
-            if not e or e.get('retired') or e.get('prov') != PROV:
+            if not e or e.get('retired'):
                 continue
-            m = SOURCE_RE.match((e.get('Source') or '').strip())
+            source = (e.get('Source') or '').strip()
+            if approval:
+                u = fmt.UNDER_RE.search(source)
+                if u and u.group(1) == approval:
+                    return rid
+            if e.get('prov') != PROV:
+                continue
+            m = SOURCE_RE.match(source)
             if m and (m.group(1) == anchor or m.group(3) == trigger):
                 return rid
     return None
@@ -476,6 +507,53 @@ def owner_order(op, rid, line, texts, now):
         raise RunRefused('%s: its time %r cannot be read' % (rid, e.get('when')))
     _age(at, now, rid)
     return Order(OWNER, rid, rid)
+
+
+def approval_scope(op, approval, values, tokens, cfg, kit_root, home, environ):
+    """RunRefused unless `op` lists hub-approval and place.check passes every path the run names
+    (`values` the filled arguments, `tokens` the filled command after its program)."""
+    if APPROVAL_TRIGGER not in op.trigger:
+        raise RunRefused('%s does not list %s among its triggers (its triggers: %s)'
+                         % (op.id, APPROVAL_TRIGGER, ', '.join(op.trigger)))
+    whys = place.check(values, tokens, cfg, kit_root, home=home, environ=environ)
+    if whys:
+        raise RunRefused('%s on %s would act where no approved run may: %s'
+                         % (op.id, approval, '; '.join(whys)))
+
+
+def approval_order(op, approval, line, hub, texts):
+    """(Order, version) of a hub approval `hub:A-nnn`, the anchor of its own run entry: no ledger
+    entry names it, and the hub verifies it for `op`, its repo and the run line's SHA-256 at that
+    version. Fails closed: no
+    hub, or one that cannot answer, refuses."""
+    prior = used(texts, None, approval)
+    if prior:
+        raise RunRefused('%s was used already by %s' % (approval, prior))
+    if hub is None:
+        raise RunRefused('no hub to verify %s on' % approval)
+    doc_id = APPROVAL_RE.match(approval).group(1)
+    ok, why, version = approvals.verify_op(hub, doc_id, op.id, op.repo,
+                                           approvals.line_sha256(line))
+    if not ok:
+        if why.startswith(approvals.WHY_SERVER.split('%')[0]):
+            raise RunRefused('the hub cannot be reached: %s; nothing was run' % why)
+        raise RunRefused('the hub refused %s: %s' % (approval, why))
+    return Order(APPROVAL, approval, approval), version
+
+
+def consume_approval(hub, order, line, version):
+    """Mark the approval used on the hub at the version it verified at; RunRefused when the hub
+    does not answer that it is consumed."""
+    doc_id = APPROVAL_RE.match(order.trigger).group(1)
+    try:
+        got = approvals.consume_op(hub, doc_id, approvals.line_sha256(line), version)
+    except Exception as e:      # fail closed: an unrecorded use runs nothing
+        raise RunRefused('the hub did not record the use of %s: %s; nothing was run'
+                         % (order.trigger, str(e) or type(e).__name__))
+    status = got.get('status') if isinstance(got, dict) else None
+    if status != approvals.CONSUMED:
+        raise RunRefused('the hub did not record the use of %s: it answered status %r; nothing '
+                         'was run' % (order.trigger, status))
 
 
 # --- The preconditions ------------------------------------------------------------------------
@@ -556,6 +634,10 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
     folder = os.path.dirname(os.path.abspath(path))      # every ledger file's folder: one lock
     if order.kind == HUB:
         answer = "the owner chose this run on %s, logged as %s" % (order.trigger, order.anchor)
+    elif order.kind == APPROVAL:
+        answer = ("the owner approved this run on the hub as %s: the hub verified the owner's "
+                  "signed approval for %s on %s and this run line, and recorded its use"
+                  % (order.trigger, op.id, op.repo))
     else:
         answer = "the owner's ruling %s orders this run" % order.anchor
     try:
@@ -564,7 +646,7 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
             prior = used(ledger_texts(found), order.anchor, order.trigger)
             if prior:
                 raise RunRefused('%s already ran on %s (%s): each order runs once'
-                                 % (order.trigger, order.anchor, prior))
+                                 % (order.trigger, order.anchor or order.trigger, prior))
             if pause:
                 pause()
             others = ()
@@ -572,10 +654,11 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
                 others, whys = lfiles.others(found, path)
                 if whys:
                     raise RunRefused('cannot read the other ledger files: %s' % '; '.join(whys))
-            added = lwrite.add(path, col, PROV, 'Run delegated operation %s (%s)?' % (op.id, op.what),
-                               answer, line, 'under %s: %s %s' % (order.anchor, op.id, order.trigger),
-                               when=now.strftime(LEDGER_WHEN), repos=cfg.get('ledger_repos'),
-                               split=split, others=others)
+            when, repos = now.strftime(LEDGER_WHEN), cfg.get('ledger_repos')
+            q = 'Run delegated operation %s (%s)?' % (op.id, op.what)
+            added = lwrite.add(path, col, PROV, q, answer, line,
+                               'under %s: %s %s' % (order.anchor, op.id, order.trigger),
+                               when=when, repos=repos, split=split, others=others)
     except writelock.WriteLockError as e:
         raise RunRefused('cannot take the runner lock: %s' % e)
     except (LedgerRefused, LedgerUsage) as e:
@@ -583,14 +666,56 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
     return added.id
 
 
+def _empty_cwd(make_cwd, home):
+    try:
+        return make_cwd() if make_cwd else kuser.mkdtemp(CWD_PREFIX, home=home)
+    except OSError as e:
+        raise RunRefused('cannot make the empty working folder: %s' % e)
+
+
+def _drop(folder):
+    """Remove `folder` when it is still empty."""
+    try:
+        os.rmdir(folder)
+    except OSError:
+        pass
+
+
+def request(op, pairs, cfg, hub, title, reason=None, environ=None, kit_root=KIT_ROOT,
+            registry=None, home=None):
+    """Ask the owner on `hub` to approve one run of `op` with `pairs`: the arguments, the
+    program and the approval's scope (approval_scope) are checked as `run` checks them, then the
+    request is added with the run line. The new approval's id, `A-nnn`; RunRefused with nothing
+    asked."""
+    environ = dict(os.environ if environ is None else environ)
+    values = fill_args(op, pairs)
+    line = run_line(op, values)
+    argv, _ = filled(op, values, kit_root)
+    program(argv[0], path_dirs(registry_env(registry)))
+    approval_scope(op, 'a request', values, argv[1:], cfg, kit_root, home, environ)
+    if hub is None:
+        raise RunRefused('no hub to ask on')
+    try:
+        got = approvals.request_op(hub, op.id, op.repo, line, title, reason=reason, what=op.what)
+    except (hubserve.ServeError, OSError, ValueError) as e:
+        raise RunRefused('the hub did not take the request: %s' % (str(e) or type(e).__name__))
+    rid = got.get('id') if isinstance(got, dict) else None
+    if not isinstance(rid, str) or not rid:
+        raise RunRefused('the hub answered without the new approval\'s id: %r' % (got,))
+    return rid
+
+
 def run(op, pairs, trigger, cfg, hub=None, now=None, spawn=procspawn.run, checks=None,
-        environ=None, kit_root=KIT_ROOT, pause=None, lock_wait=LOCK_WAIT, registry=None):
+        environ=None, kit_root=KIT_ROOT, pause=None, lock_wait=LOCK_WAIT, registry=None,
+        home=None, make_cwd=None):
     """Run the Operation `op` with the arguments `pairs` [(name, value)] on `trigger`; the module
     docstring gives the order. `cfg`: the machine config (kitlib.config.user.user_config). `hub`:
-    a kitlib.hubsite.client.Client for a question trigger. `spawn`, `checks` (the precondition
-    checks by kind, default CHECKS), `environ` (the caller's), `registry` (read_registry's
-    stand-in), `now` (aware UTC) and `pause` (called between the use-once scan and the ledger add)
-    are for tests. Result, or RunRefused with nothing done."""
+    a kitlib.hubsite.client.Client for a question trigger or a hub approval. `spawn`, `checks`
+    (the precondition checks by kind, default CHECKS), `environ` (the caller's), `registry`
+    (read_registry's stand-in), `now` (aware UTC), `pause` (called between the use-once scan and
+    the ledger add), `home` (the home folder place.check reads, default the user's) and
+    `make_cwd` (makes an approval run's empty working folder) are for tests. Result, or
+    RunRefused with nothing done."""
     now = _utc(now)
     environ = dict(os.environ if environ is None else environ)
     kind = trigger_kind(trigger)
@@ -599,21 +724,39 @@ def run(op, pairs, trigger, cfg, hub=None, now=None, spawn=procspawn.run, checks
     argv, pres = filled(op, values, kit_root)
     system = registry_env(registry)
     exe = program(argv[0], path_dirs(system))
+    if kind == APPROVAL:
+        approval_scope(op, trigger, values, argv[1:], cfg, kit_root, home, environ)
     found = lfiles.of_config(cfg)
     if found is None:
         raise RunRefused('no ledger_dir or ledger_path in the machine config: a run is logged first')
     target(found, op.repo)
     texts = ledger_texts(found)
-    if kind == HUB:
+    version = None
+    if kind == APPROVAL:
+        order, version = approval_order(op, trigger, line, hub, texts)
+    elif kind == HUB:
         order = hub_order(op, trigger, line, hub, texts, now)
     else:
         order = owner_order(op, trigger, line, texts, now)
     preconditions(pres, CHECKS if checks is None else checks)
-    rid = _claim(op, order, line, found, cfg, now, lock_wait, pause)
+    cwd = kit_root
+    if kind == APPROVAL:
+        cwd = _empty_cwd(make_cwd, home)
+        try:
+            consume_approval(hub, order, line, version)
+            rid = _claim(op, order, line, found, cfg, now, lock_wait, pause)
+        except BaseException:
+            _drop(cwd)
+            raise
+    else:
+        rid = _claim(op, order, line, found, cfg, now, lock_wait, pause)
     full = [exe] + argv[1:]
     try:
-        done = spawn(full, executable=exe, cwd=kit_root, env=child_env(environ, system),
+        done = spawn(full, executable=exe, cwd=cwd, env=child_env(environ, system),
                      shell=False, stdin=subprocess.DEVNULL)
     except OSError as e:
         return Result(rid, full, None, 'could not start %s: %s' % (exe, e))
+    finally:
+        if cwd != kit_root:
+            _drop(cwd)
     return Result(rid, full, done.returncode, None)

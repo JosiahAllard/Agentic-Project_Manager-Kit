@@ -27,12 +27,11 @@ from tests import gitfixture
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'new_worktree.py')
 REFUSAL = new.REFUSAL
-LOCK_NAME = 'test-landing.lock'
 # the red-first command a `route` line names: the kit's own tool, quoted in forward slashes
 # (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
 REDFIRST = '`python "%s/tools/redfirst.py" -C <your worktree> --tests <test file>`' % (
     KIT.replace('\\', '/'))
-MASTER_CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'lock_file': 'git:' + LOCK_NAME}}
+MASTER_CONFIG = {'repo': {'main_branch': 'master'}}
 
 
 def kill_reads_of(spec, after=0):
@@ -278,6 +277,123 @@ class BaseOption(WorktreeCase):
         self.assertFalse(os.path.exists(self.slug_path('on-dev')), out)
 
 
+class FakeHub(object):
+    """A hub client whose /snapshot holds `approvals` (kitlib.commit.approval.fetch reads it)."""
+
+    def __init__(self, approvals=None, error=None):
+        self.approvals, self.error, self.asked = approvals or {}, error, []
+
+    def get(self, route):
+        self.asked.append(route)
+        if self.error is not None:
+            raise self.error
+        return {'collections': {'approvals': self.approvals}}
+
+
+class BaseCommit(WorktreeCase):
+    """`--base <full hash>` and `--approval hub:A-<n>`: a new branch at a fixed commit, as
+    commit.py --owner-approval needs once the main branch has moved past the approval's base."""
+
+    def setUp(self):
+        super().setUp()
+        self.old = self.git('rev-parse', self.BASE)[1]
+        self.write('later.txt', 'main moved\n')
+        self.git('add', 'later.txt')
+        self.git('commit', '-q', '-m', 'main moves on')
+        self.git('push', '-q', 'origin', self.BASE)
+        self.tip = self.git('rev-parse', self.BASE)[1]
+        self.assertNotEqual(self.old, self.tip)
+
+    def approval(self, **doc):
+        full = {'status': 'approved', 'head': self.old, 'files': [{'path': '.kit.json'}]}
+        full.update(doc)
+        return FakeHub({'A-007': full})
+
+    def assert_at(self, got, branch, sha):
+        self.assertEqual(got.code, 0, got.lines)
+        self.assertEqual(self.git('rev-parse', branch)[1], sha)
+        self.assertIn('branch    %s from commit %s' % (branch, sha[:12]), got.lines)
+        self.assertTrue(os.path.isdir(self.slug_path(branch.split('/')[1])))
+
+    def assert_refused(self, got, slug, text):
+        self.assertEqual(got.code, 1, got.lines)
+        self.assertIn(text, '\n'.join(got.lines))
+        self.assertFalse(os.path.exists(self.slug_path(slug)))
+        self.assertFalse(new.branch_exists(self.repo, 'fix/' + slug))
+
+    def test_a_full_hash_starts_the_branch_at_that_commit_not_the_main_tip(self):
+        self.assert_at(new.create(self.repo, 'fix/at-old', base=self.old), 'fix/at-old', self.old)
+
+    def test_an_uppercase_hash_is_the_same_commit(self):
+        got = new.create(self.repo, 'fix/at-old', base=self.old.upper())
+        self.assert_at(got, 'fix/at-old', self.old)
+
+    def test_a_local_main_ahead_of_its_remote_does_not_matter(self):
+        """No remote comparison: the start point is fixed (the branch path would refuse here)."""
+        self.write('b.txt', 'local only\n')
+        self.git('add', 'b.txt')
+        self.git('commit', '-q', '-m', 'unpushed')
+        self.assert_at(new.create(self.repo, 'fix/at-old', base=self.old), 'fix/at-old', self.old)
+
+    def test_a_hash_the_repository_lacks_is_refused(self):
+        got = new.create(self.repo, 'fix/nowhere', base='0123456789abcdef' * 2 + '01234567')
+        self.assert_refused(got, 'nowhere', 'no commit 0123456789abcdef')
+
+    def test_a_short_hash_is_still_a_branch_name(self):
+        got = new.create(self.repo, 'fix/short', base=self.old[:12])
+        self.assert_refused(got, 'short', REFUSAL)
+
+    def test_existing_with_a_base_commit_is_refused(self):
+        self.make_branch_with_work('fix/resumed')
+        got = new.create(self.repo, 'fix/resumed', existing=True, base=self.old)
+        self.assertEqual(got.code, 1, got.lines)
+        self.assertIn('starts a NEW branch', '\n'.join(got.lines))
+
+    def test_an_approval_starts_the_branch_at_its_base(self):
+        hub = self.approval()
+        got = new.create(self.repo, 'fix/approved', approval='hub:A-007', hub=hub)
+        self.assert_at(got, 'fix/approved', self.old)
+        self.assertIn('approval  hub:A-007 is for base %s; this branch starts there'
+                      % self.old[:12], got.lines)
+        self.assertEqual(hub.asked, ['/snapshot'])
+
+    def test_a_consumed_approval_is_refused(self):
+        hub = self.approval(commit=self.tip)
+        got = new.create(self.repo, 'fix/approved', approval='hub:A-007', hub=hub)
+        self.assert_refused(got, 'approved', 'consumed already')
+
+    def test_an_undecided_approval_is_refused(self):
+        hub = self.approval(status='pending')
+        got = new.create(self.repo, 'fix/approved', approval='hub:A-007', hub=hub)
+        self.assert_refused(got, 'approved', 'hub:A-007 is pending')
+
+    def test_an_approval_the_hub_lacks_is_refused(self):
+        got = new.create(self.repo, 'fix/approved', approval='hub:A-008', hub=self.approval())
+        self.assert_refused(got, 'approved', 'the hub has no approval A-008')
+
+    def test_a_hub_that_cannot_be_asked_is_refused(self):
+        hub = FakeHub(error=OSError('connection refused'))
+        got = new.create(self.repo, 'fix/approved', approval='hub:A-007', hub=hub)
+        self.assert_refused(got, 'approved', 'the hub could not be asked for hub:A-007')
+
+    def test_an_approval_with_a_short_head_is_refused(self):
+        hub = self.approval(head=self.old[:12])
+        got = new.create(self.repo, 'fix/approved', approval='hub:A-007', hub=hub)
+        self.assert_refused(got, 'approved', 'names no full base commit')
+
+    def test_an_approval_is_asked_only_after_the_local_branch_checks(self):
+        self.git('branch', 'fix/approved')
+        hub = self.approval()
+        got = new.create(self.repo, 'fix/approved', approval='hub:A-007', hub=hub)
+        self.assertEqual(got.code, 1, got.lines)
+        self.assertEqual(hub.asked, [])
+
+    def test_a_full_hash_through_the_cli(self):
+        rc, out = self.cli('fix/cli-old', '--base', self.old)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.git('rev-parse', 'fix/cli-old')[1], self.old)
+
+
 class AJunctionAliasIsResolved(WorktreeCase):
     """Through a junction alias of the repository, the new worktree is registered under the one
     real path."""
@@ -510,7 +626,7 @@ class LandingCase(MasterRepo):
     def hold(self, text=None):
         """Take the lock as a lander would (a token holder), or write `text` in its place."""
         if text is None:
-            return self.lock().take('full', ['feat/landing'])
+            return self.lock().take(['feat/landing'])
         with open(self.lock_path(), 'w', encoding='utf-8', newline='\n') as fh:
             fh.write(text)
 
@@ -805,7 +921,7 @@ class LocalMainBehindOrigin(LandingCase):
 
 
 class TheDefaultLock(LandingCase):
-    """No "landing".lock_file: the kit's own lock file (kitlib.records.landing.LOCK_NAME) is read.
+    """No `.kit.json` at all: the kit's own lock file (kitlib.records.landing.LOCK_NAME) is read.
     (The old tool read no lock at all then; the kit always has one.)"""
 
     BASE = 'main'
@@ -845,7 +961,7 @@ class FakeTime(object):
 
 def in_flight_config(**in_flight):
     return {'repo': {'main_branch': 'master'},
-            'landing': {'lock_file': 'git:' + LOCK_NAME, 'in_flight': in_flight}}
+            'landing': {'in_flight': in_flight}}
 
 
 class InFlightCase(LandingCase):
@@ -1084,8 +1200,7 @@ class ALocalOnlyBaseNamesTheRoute(LandingCase):
     def test_the_route_names_the_kit_tool_not_the_configured_tools_dir(self):
         # no repository holds a copy of the kit's tools, so "repo".tools_dir does not spell the
         # route (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
-        self.configure({'repo': {'main_branch': 'master', 'tools_dir': 'devtools'},
-                        'landing': {'lock_file': 'git:' + LOCK_NAME}})
+        self.configure({'repo': {'main_branch': 'master', 'tools_dir': 'devtools'}})
         self.make_dev()
         self.hold()
         out = self.tool('fix/fresh', '--base', 'dev')[1]
@@ -1184,7 +1299,7 @@ class ChooseBase(unittest.TestCase):
 
 class ConfigKeys(WorktreeCase):
     """The `.kit.json` keys it reads: "repo".remote / worktrees_dir / tools_dir / main_branch and
-    "landing".lock_file / in_flight. "new_worktree" takes no key. A refused configuration exits 2, nothing made."""
+    "landing".in_flight. "new_worktree" takes no key. A refused configuration exits 2, nothing made."""
 
     def assert_config_refused(self, data, why):
         self.configure(data)
@@ -1197,13 +1312,6 @@ class ConfigKeys(WorktreeCase):
     def test_the_dropped_landing_stale_minutes_refuses(self):
         self.assert_config_refused({'new_worktree': {'landing_stale_minutes': 90}},
                                    'landing_stale_minutes')
-
-    def test_a_lock_file_outside_the_git_dir_refuses(self):
-        self.assert_config_refused({'landing': {'lock_file': 'git:../escape.lock'}},
-                                   'must name one file in the git common dir')
-
-    def test_a_lock_file_that_is_not_in_the_git_dir_refuses(self):
-        self.assert_config_refused({'landing': {'lock_file': 'landing.lock'}}, 'must be git:<name>')
 
     def test_an_unknown_key_refuses(self):
         self.assert_config_refused({'new_worktree': {'landing_minutes': 90}}, 'landing_minutes')
@@ -1290,6 +1398,12 @@ class UsageIsRejectedNotGuessed(unittest.TestCase):
     def test_base_with_no_branch(self):
         self.assert_usage('fix/x', '--base')
         self.assert_usage('fix/x', '--base', '')
+
+    def test_approval_shapes_that_do_not_go(self):
+        self.assert_usage('fix/x', '--approval', 'A-001')
+        self.assert_usage('fix/x', '--approval', 'hub:A-001', '--base', 'main')
+        self.assert_usage('--existing', 'fix/x', '--approval', 'hub:A-001')
+        self.assert_usage('--existing', 'fix/x', '--base', 'ab' * 20)
 
     def test_existing_still_refuses_unsafe_slugs(self):
         """Uppercase is the only widening: no leading dot or dash, no `..` walk, no third part."""

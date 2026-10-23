@@ -21,12 +21,19 @@ Store kinds: with `main` a write stages the record in your worktree (it rides in
 
 Exit 0 OK; 1 `NOT FOUND:`, `ERROR:` or a RED check; 2 `USAGE:` or `REFUSED:`. `USAGE:`, `NOT FOUND:` and `ERROR:` are your own mistake: fix the command once. Only `REFUSED:` is a policy guard.
 
+## Refusals
+
+The kit's one statement of the refusal rule; every other role and skill points here.
+
+- A classifier refusal or a permission denial is final: it ends that action. Send your caller the exact command, directory and verbatim message (a coordinator sends it to the PM, the PM to the owner) and continue other work. Never retry, reword, add a pre-emption flag, or route it through another tool, agent, shell or session.
+- A tool's `REFUSED:` on substance is final the same way. A refusal of the form only, whose message names the literal form, may be retried once, by a fresh agent, on the PM's word.
+- A kit-guard (hook) refusal is neither: fix the form its Instead: line gives, then retry.
+
 ## Never
 
 - Edit a record file or the store's git objects by hand.
 - Write a machine path in any field: use the placeholder the repo documents (for example `%REPO_DATA%/...`).
 - Invent a ruling id, or take a role or model label as an owner price or authorization.
 - Pass `--reason` to fill a free slot or to re-run a pull the tool just refused. `--reason` never overrides a collision with a live pull.
-- Retry, reword, add a pre-emption flag or switch shell after `REFUSED:`, a classifier refusal or a permission denial: it ends that action, so send your coordinator the exact command, directory and verbatim refusal, and continue other work. (Not a kit-guard (hook) refusal: fix the form its Instead: line gives, then retry.)
 
 Details: `<kit>/docs/backlog.md` ("Commands", "The fold-in guard", "Owner gates").

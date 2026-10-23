@@ -36,11 +36,11 @@ standard tier (Claude: `model: sonnet`).
 | docs-writer | standard | medium | The docs type - records (skill specialty-records) and specs (skill specialty-spec). Docs only. |
 | helper | light | medium | Bulk menial reads and mechanical bulk writes, dispatched by a builder into its own worktree; read and edit work only, runs no shell command. Never dispatched by a coordinator for a story. |
 | lander | light | medium | Optional wrapper: submits one reviewed branch (or a batch) for landing, waits for the result, reports. Never edits code. Dispatched with no model override, and never overridden. |
-| pm | strong | high | The project manager: the owner's one main session (the after-reboot resume starts it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
+| pm | strong | low | The project manager: the owner's one main session (the after-reboot resume starts it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
 | senior-worker | strong | high | High-risk changes: networking, concurrency, simulation or ordering, landing, gate or lock tools, build-cache and codegen design, migrations, CI config, known-area crash fixes. |
-| strong-worker | strong | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (worker). The one role with a one-hour prompt cache (see "The one-hour prompt cache" below). |
+| strong-worker | strong | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (worker). |
 | test-runner | light | - | Runs test tiers in a given worktree and reports only PASS/FAIL plus failing lines. |
-| weak-worker | light | high | Small, well-defined, low-risk changes expected under 100k tokens: named edits to named files, doc lines, small additive changes with their test. Escalates to worker when the task is bigger or less clear than briefed. |
+| weak-worker | light | high | Small, well-defined, low-risk changes the brief sizes by listing them (named files, named edits, a few files): doc lines, small additive changes with their test. Escalates to worker when the task is bigger or less clear than briefed. |
 | worker | standard | medium | Default coder for routine low and medium risk work: additive content, UI, pure logic with tests, small fixes with a known cause, behaviour-neutral moves and renames; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation). |
 <!-- end rendered -->
 

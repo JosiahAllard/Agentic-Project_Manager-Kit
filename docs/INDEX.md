@@ -37,6 +37,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/guard-v2.md` | guard v2 design: keep/cut list, target size, open guard records | planning guard cuts | kw: guard-v2, guard, cuts, refusals
 - `docs/kitboot.md` | boot/kitboot.py: which kit a host entry runs, the pinned release check before kitlib | a hook or the lock server will not load the kit | kw: kitboot, boot, PM_KIT_ROOT, PM_KIT_RELEASE_ID, release
 - `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer, junctions, plugin
+- `docs/jev-fit-audit.md` | Jev fit audit step 1: the kit's routing and labelling decisions, cost and fit findings (desk study, no trial) | weighing a structured-decision model for kit decisions | kw: jev, fit-audit, audit, cost
 - `docs/kit-json.md` | `.kit.json` keys, types and defaults | configuring | kw: kit-json, config
 - `docs/landed.md` | landed: has a branch landed | checking a branch | kw: landed
 - `docs/launcher.md` | launcher | starting sessions | kw: launcher, launch
@@ -45,6 +46,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-mcp.md` | lock MCP server | lock from an agent | kw: lock-mcp, mcp
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
 - `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup, leftover links
+- `docs/maint-lint.md` | maintenance lint: read-only upkeep findings (holds, dead pulls and blockers, duplicates, paths gone, worktrees, ledger counts), each with its fix; its weekly schedule and lock slot | linting a repository's upkeep | kw: maint-lint, maint_lint, maintenance, upkeep, schedule
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
 - `docs/multi-host-plan.md` | multi-host architecture plan (proposal) | changing host adapters, plugins or the bridge | kw: multi-host, codex, host, plugin, bridge
 - `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
@@ -64,6 +66,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/review-pack.md` | review_pack | preparing a review | kw: review-pack, review
 - `docs/shipping.md` | what ships | changing the shipped set | kw: shipping, ships
 - `docs/specialty-skills.md` | decided spec (not built): specialties as skills, merged read and docs agent types (analyst, docs-writer) | changing the roster or a specialty skill | kw: specialty, skills, roster, roles, merge
+- `docs/subtraction-audit.md` | kit subtraction audit: code, tools and config to remove or shrink, kept items, owner decisions | planning removals | kw: subtraction-audit, audit, removal
 - `docs/sync-base.md` | sync_base | main moved | kw: sync-base, merge
 - `docs/test-tools.md` | testlist, tool_deps, pytests | test selection | kw: testlist, tool_deps, pytests, tests
 - `docs/windows-token-leak.md` | Windows token leak: slow process launches | slow launches | kw: windows, token-leak
@@ -102,6 +105,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/backlog.py` | backlog store (`docs/backlog.md`) | kw: backlog
 - `tools/backlog_audit.py` | backlog audit check (`docs/backlog.md` "Audit log") | kw: backlog_audit
 - `tools/backlog_lint.py` | backlog lint (`docs/backlog-lint.md`) | kw: backlog_lint
+- `tools/maint_lint.py` | maintenance lint, read-only (`docs/maint-lint.md`) | kw: maint_lint
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
 - `tools/allow_rules.py` | print the land permission rules for a repository (`docs/allow-rules.md`) | kw: allow_rules, permissions
@@ -136,4 +140,5 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/trailers.py` | fail a commit with no agent trailer (`docs/repo-checks.md`) | kw: trailers
 - `tools/worktree_paths.py` | which path a worktree write may go to (`docs/worktree-paths.md`) | kw: worktree_paths
 - `tools/worktree_sweep_task.py` | nightly worktree sweep scheduled task (`docs/worktree-remove.md`) | kw: worktree_sweep_task, sweep
+- `tools/auto_tasks.py` | start the hub's due schedules, run every 15 minutes by the `kit-automatic-tasks` task (`docs/machine-setup.md` "Automatic tasks task") | kw: auto_tasks, tick, schedules, kit-automatic-tasks
 - `tools/no_window.py` | run a program with no console window, for a scheduled task (`docs/daily-full.md` "The schedule") | kw: no_window, console window, scheduled task

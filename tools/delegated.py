@@ -1,16 +1,22 @@
 """delegated.py: run one operation of the owner's delegation list (docs/delegations.md "Running").
 
-  delegated.py run ID [--arg NAME=VALUE]... --trigger Q-nnnn|<ruling id>
+  delegated.py run ID [--arg NAME=VALUE]... (--trigger Q-nnnn|<ruling id> | --approval hub:A-nnn)
       check the trigger, the arguments and the preconditions, log the run in the ledger
       (provenance delegated, not committed), then start the command as an argument list.
+  delegated.py request ID [--arg NAME=VALUE]... --title T [--reason R]
+      check the arguments, the program and where the run would act, then ask the owner on the
+      hub to approve that one run; prints the new approval's id.
 
 --trigger is a hub question the owner answered by choosing the run line `run ID NAME=VALUE ...`
 (the operation must list hub-answer and be reversible), or the owner's ledger entry whose Decides
-is that line (the operation must list owner-session). Each orders one run.
+is that line (the operation must list owner-session). --approval is the hub approval the owner
+gave to a request (the operation must list hub-approval; docs/delegations.md "Hub approvals");
+`--trigger hub:...` is refused, so an approval is only ever given as --approval. Each orders one
+run.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.delegations.run, prints and
-exits. Exit codes: 0 the command ran and exited 0; 1 refused, nothing run and nothing logged;
-2 usage error; 4 logged and started (or failed to start), and it failed.
+exits. Exit codes: 0 the command ran and exited 0, or the request was added; 1 refused, nothing
+run, logged or asked; 2 usage error; 4 logged and started (or failed to start), and it failed.
 
 Run it as `python -I`. Without -I (or -E) it refuses when any PYTHON* variable is set, before it
 imports anything but os and sys: PYTHONPATH can shadow argparse or subprocess before any check runs.
@@ -68,8 +74,17 @@ def parser():
     r.add_argument('id', help='the operation id, D-nnn')
     r.add_argument('--arg', action='append', default=[], metavar='NAME=VALUE',
                    help='one declared argument; give each once')
-    r.add_argument('--trigger', required=True,
-                   help='the hub question Q-nnnn the owner answered, or the owner ledger id')
+    on = r.add_mutually_exclusive_group(required=True)
+    on.add_argument('--trigger',
+                    help='the hub question Q-nnnn the owner answered, or the owner ledger id')
+    on.add_argument('--approval', metavar='hub:A-nnn',
+                    help='the hub approval the owner gave for this run')
+    q = sub.add_parser('request', help='ask the owner on the hub to approve one run')
+    q.add_argument('id', help='the operation id, D-nnn')
+    q.add_argument('--arg', action='append', default=[], metavar='NAME=VALUE',
+                   help='one declared argument; give each once')
+    q.add_argument('--title', required=True, help='the approval card\'s title')
+    q.add_argument('--reason', help='why the run is wanted, for the owner')
     return p
 
 
@@ -93,6 +108,22 @@ def hub_client():
     return client.Client(settings.load().port)
 
 
+def request(a, pairs, listed):
+    try:
+        cfg = user.user_config()
+        hub = hub_client()
+    except ConfigError as e:
+        return fail('refused: %s' % e)
+    try:
+        op = drun.find(listed.operations, a.id)
+        rid = drun.request(op, pairs, cfg, hub, a.title, reason=a.reason)
+    except drun.RunRefused as e:
+        return fail('refused: %s' % e)
+    print('requested hub:%s: the owner approves or denies it on the hub; then run it with '
+          'delegated.py run %s --approval hub:%s' % (rid, op.id, rid))
+    return 0
+
+
 def main(argv=None):
     p = parser()
     a = p.parse_args(argv)
@@ -103,14 +134,22 @@ def main(argv=None):
         return fail('refused: nothing is delegated: %s' % e)
     except delegations.DelegationError as e:
         return fail('refused: %s' % e)
+    if a.cmd == 'request':
+        return request(a, pairs, listed)
+    approval = getattr(a, 'approval', None)
+    if approval is not None and not drun.APPROVAL_RE.match(approval):
+        return fail('refused: --approval takes hub:A-nnn, not %r' % approval)
+    if approval is None and a.trigger.startswith('hub:'):
+        return fail('refused: a hub approval is given with --approval, not --trigger %r' % a.trigger)
+    trigger = approval if approval is not None else a.trigger
     try:
         cfg = user.user_config()
-        hub = hub_client() if drun.Q_ID.fullmatch(a.trigger) else None
+        hub = hub_client() if approval is not None or drun.Q_ID.fullmatch(trigger) else None
     except ConfigError as e:
         return fail('refused: %s' % e)
     try:
         op = drun.find(listed.operations, a.id)
-        res = drun.run(op, pairs, a.trigger, cfg, hub=hub)
+        res = drun.run(op, pairs, trigger, cfg, hub=hub)
     except drun.RunRefused as e:
         return fail('refused: %s' % e)
     print('logged %s; ran: %s' % (res.entry, ' '.join(res.argv)))

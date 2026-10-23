@@ -5,7 +5,7 @@ tier: strong
 effort: medium
 sandbox: workspace-write
 mode: write
-summary: "High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (worker). The one role with a one-hour prompt cache (see \"The one-hour prompt cache\" below)."
+summary: "High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (worker)."
 capabilities: all
 cache: long
 ---

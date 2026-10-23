@@ -313,7 +313,7 @@ class Sweep(CleanupCase):
 
     def test_the_sweep_waits_for_no_landing(self):
         lock = landing.LandingLock(self.repo.root)
-        held = lock.take('full', ['kit/someone'], pid=os.getpid())
+        held = lock.take(['kit/someone'], pid=os.getpid())
         self.addCleanup(lock.release, held['token'])
         before = self.state()
         out = sweep(self.repo.root, apply=True, git_env=self.env)

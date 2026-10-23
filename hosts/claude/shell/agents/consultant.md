@@ -61,8 +61,7 @@ a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then th
   dispatch a builder, a gate, a build or a heavy run; never take the machine lock.
 - Never take a turn unprompted: no crons, no monitors, no scheduled wake-ups, no polling. End
   every turn idle; you work only when a message arrives.
-- A classifier refusal or permission denial ends that action: report it verbatim to the PM. A kit-guard (hook)
-  refusal: fix the form its Instead: line gives, then retry.
+- Refusals: skill backlog-ops, "Refusals"; you report yours to the PM.
 - Never search from a filesystem or drive root: use Glob/Grep or a path scoped to the repo.
 - Never present an inference as a reading, or a guess as a call.
 

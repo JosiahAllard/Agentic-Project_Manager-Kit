@@ -1,7 +1,7 @@
 ---
 # Generated from content/roles/weak-worker.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: weak-worker
-description: "A coder for small, well-defined, low-risk changes whose expected effort is under 100k tokens - a named edit to named files, a doc line, a small additive change with its test, a mechanical fix with a known cause. Runs on haiku at high effort (worker is sonnet/medium). Escalate to `pm-kit:worker` when the task is bigger or less clear than briefed. Never for plans, designs, moves or renames, merges or syncs, networking, concurrency, CI config, crash hunts or anything the profile marks Medium or High risk: those go to `pm-kit:worker` or above. Repository specifics come from `.claude/agent-profile.md`."
+description: "A coder for small, well-defined, low-risk changes sized by what the brief lists (named files, named edits, a few files) - a doc line, a small additive change with its test, a mechanical fix with a known cause. Runs on haiku at high effort (worker is sonnet/medium). Escalate to `pm-kit:worker` when the task is bigger or less clear than briefed. Never for plans, designs, moves or renames, merges or syncs, networking, concurrency, CI config, crash hunts or anything the profile marks Medium or High risk: those go to `pm-kit:worker` or above. Repository specifics come from `.claude/agent-profile.md`."
 model: haiku
 effort: high
 ---
@@ -36,9 +36,11 @@ true; `pm-kit:worker` takes it from there, the intended path, not a failure:
   <path> ...`, which adds the trailer for your host and model. Subject says what and why. Unsure
   of your model, say so; never amend to change a trailer.
 - Base moved: merge the exact commit the coordinator named, never the local main, never rebase;
-  re-run the gate with `--full`. Any conflict, or any merge the coordinator did not name: stop and report.
+  re-run the gate (`--full` for a strict path, else the default gate, `--full` until the base's gate config names smoke steps). Any conflict, or any merge the coordinator did not name: stop and report.
 - Run your brief's gate to a log and read the log; never pipe it through grep, head or tail.
   Waiting on it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
+  Wait for your own gate run to finish before you report. If you cannot wait, report GATE PENDING
+  first, with the log path, never a result you have not read.
 - Tests you write bind port 0, never a fixed port.
 
 ## Never
@@ -56,8 +58,9 @@ true; `pm-kit:worker` takes it from there, the intended path, not a failure:
 
 ## Report
 
-Result first. Then branch and commit hashes; what you changed; the gate with the line proving
-each result; anything left inferred; anything noticed outside scope. No process narrative.
+Result first (GATE PENDING with the log path, if your gate has not finished). Then branch and
+commit hashes; what you changed; the gate with the line proving each result; anything left
+inferred; anything noticed outside scope. No process narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 

@@ -458,10 +458,10 @@ class TheLandingLock(Fixture):
 
     def test_a_held_lock_turns_a_failure_into_not_yet(self):
         self.log('topic/1/gate.log', 'GATE FAILED: x\n')
-        record = self.lock.take('full', ['topic'])
+        record = self.lock.take(['topic'])
         code, out = self.look()
         self.assertEqual(code, landed.NOT_YET, out)
-        self.assertIn('lock       landing lock: HELD - lane full, branches', out)
+        self.assertIn('lock       landing lock: HELD - branches topic', out)
         self.assertIn('NOT YET (a landing holds the lock)', out)
         self.lock.release(record['token'])
         code, out = self.look()
@@ -478,18 +478,18 @@ class TheLandingLock(Fixture):
 
     def test_the_lock_is_the_common_dirs_from_every_worktree(self):
         self.log('topic/1/gate.log', 'GATE FAILED: x\n')
-        self.config(landing={'log_dir': LOGS, 'lock_file': 'git:repo-landing.lock'})
+        self.config(landing={'log_dir': LOGS})
         lock = landing.LandingLock.for_config(self.root, load(self.root))
-        record = lock.take('full', ['topic'])
+        record = lock.take(['topic'])
         self.addCleanup(lock.release, record['token'])
         linked = os.path.join(self.tmp, 'linked')
         self.git('worktree', 'add', '-q', '--detach', linked)
         with open(os.path.join(linked, '.kit.json'), 'w', encoding='utf-8') as fh:
-            json.dump({'landing': {'log_dir': LOGS, 'lock_file': 'git:repo-landing.lock'}}, fh)
+            json.dump({'landing': {'log_dir': LOGS}}, fh)
         for root in (self.root, linked):
             code, out = self.look(root=root)
             self.assertEqual(code, landed.NOT_YET, out)
-            self.assertIn('landing lock: HELD - lane full', out)
+            self.assertIn('landing lock: HELD - branches topic', out)
 
 
 class TheGateOkRecord(Fixture):
@@ -520,16 +520,10 @@ class TheConfigRefusesWhatItCannotUse(Fixture):
 
     def test_a_non_string_value(self):
         self.assertIn('log_dir', self.refused(landing={'log_dir': 3}))
-        self.assertIn('lock_file', self.refused(landing={'lock_file': 3}))
 
     def test_a_log_dir_outside_the_repository(self):
         self.assertIn('log_dir', self.refused(landing={'log_dir': os.path.join(self.tmp, 'logs')}))
         self.assertIn('log_dir', self.refused(landing={'log_dir': '../logs'}))
-
-    def test_a_lock_file_that_is_not_one_file_in_the_git_dir(self):
-        self.assertIn('must be git:<name>', self.refused(landing={'lock_file': 'landing.lock'}))
-        for bad in ('git:', 'git:../escape.lock'):
-            self.assertIn('lock', self.refused(landing={'lock_file': bad}))
 
 
 class TheCommandLine(Fixture):

@@ -32,7 +32,7 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 
 ## The brief
 
-- Holds: role; the owner's decisions where they matter, as a paraphrase plus the ruling id; verified facts; **exact files and sections
+- Holds: role; the owner's decisions where they matter, as a paraphrase, no ruling id; verified facts; **exact files and sections
   to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: `gate.py --full` on the exact tip);
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
@@ -93,17 +93,16 @@ permissions.
   everyone, run, release. Design, arms and decision rule written before the first run; counts
   reported with sample size; the rule applied literally; any after-the-fact reading stated
   separately.
-- GPU generation never overlaps an engine, network or render run.
 - Private scratch folder per agent - shared file names get overwritten.
 - Before trusting "nothing is running", look at the actual processes.
 
 ## While agents run
 
-- Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. A message
+- Continue an agent a few rounds per artefact (the profile may set the count), then reseed from a short written summary. A message
   queued to a busy agent may never be read: if a report shows something was missed, resend in full.
 - Review a hand-back at once and continue the same agent while its prompt cache is warm (the
   host's cache window; `<kit>/docs/ROSTER.md` names the role that asks for a longer one); later,
-  continue anyway unless its context is above about 150k tokens (strong- and deep-tier coders) or
+  continue anyway unless its context is long (the profile may set the size; strong- and deep-tier coders) or
   it is an analyst on a review, then start fresh from a short written summary; never park a large-context
   agent to resume later for a small fix.
 - A background run dies with its agent: tell its replacement to check logs first.

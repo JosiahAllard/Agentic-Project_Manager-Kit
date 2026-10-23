@@ -284,6 +284,14 @@ class Schema(Home):
         self.assertIn('must be one of', self.refused_op(trigger=['cron']))
         self.assertIn('twice', self.refused_op(trigger=['owner-session', 'owner-session']))
 
+    def test_hub_approval_is_a_trigger_and_needs_no_reversible(self):
+        self.write({'schema': 1, 'operations': [
+            base_op(reversible=False, trigger=['hub-approval'])]})
+        op = self.load().operations[0]
+        self.assertEqual(op.trigger, ('hub-approval',))
+        self.assertFalse(op.reversible)
+        self.assertIn('twice', self.refused_op(trigger=['hub-approval', 'hub-approval']))
+
     def test_reversible_needs_undo_and_hub_answer_needs_reversible(self):
         o = base_op()
         del o['undo']

@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from kitlib import config
+from kitlib.config import schema
 from kitlib.records import landing
 from tests import gitfixture
 from tests.config.helpers import TempTree
@@ -23,7 +24,6 @@ class LockCase(unittest.TestCase):
     def lock(self, root=None, **kw):
         kw.setdefault('start_of', lambda pid: 1234)
         kw.setdefault('is_alive', ALIVE)
-        kw.setdefault('lanes', ('gamma',))
         return landing.LandingLock(root or self.repo.root, **kw)
 
     def write_raw(self, text):
@@ -40,7 +40,7 @@ class TakeReleaseTest(LockCase):
         self.assertTrue(os.path.samefile(os.path.dirname(here.path), self.repo.common_dir()))
 
     def test_take_writes_the_full_record(self):
-        rec = self.lock().take('full', ['kit/a'], pid=42)
+        rec = self.lock().take(['kit/a'], pid=42)
         with open(self.lock().path, encoding='utf-8') as f:
             on_disk = json.load(f)
         self.assertEqual(rec, on_disk)
@@ -51,17 +51,27 @@ class TakeReleaseTest(LockCase):
         self.assertRegex(rec['token'], r'^[0-9a-f]{16}$')
         self.assertRegex(rec['started_utc'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
 
+    def test_a_record_with_no_lane_or_another_lane_is_read_and_held(self):
+        for extra in ({}, {'lane': 'pvp'}):
+            with self.subTest(extra=extra):
+                rec = dict({'token': 'f' * 16, 'branches': ['kit/old'], 'pid': None, 'phase': 'gate'}, **extra)
+                self.write_raw(json.dumps(rec))
+                self.assertEqual(self.lock().read()['branches'], ['kit/old'])
+                with self.assertRaises(landing.Busy):
+                    self.lock().take(['kit/a'])
+
     def test_a_token_holder_records_no_process(self):
-        rec = self.lock().take('full', ['kit/a'])
+        rec = self.lock().take(['kit/a'])
         self.assertIsNone(rec['pid'])
         self.assertIsNone(rec['pid_start'])
 
     def test_a_second_take_from_any_checkout_is_busy_and_names_the_holder(self):
-        self.lock().take('gamma', ['kit/a'], pid=42)
+        self.lock().take(['kit/a'], pid=42)
         with self.assertRaises(landing.Busy) as cm:
-            self.lock(self.repo.worktree('b')).take('full', ['kit/b'])
-        self.assertEqual(cm.exception.record['lane'], 'gamma')
-        self.assertIn('lane gamma, branches kit/a, pid 42', str(cm.exception))
+            self.lock(self.repo.worktree('b')).take(['kit/b'])
+        self.assertEqual(cm.exception.record['branches'], ['kit/a'])
+        self.assertIn('HELD - branches kit/a, pid 42', str(cm.exception))
+        self.assertNotIn('lane', str(cm.exception))
 
     def test_of_many_racing_takers_exactly_one_wins(self):
         locks = [self.lock() for _ in range(8)]
@@ -71,7 +81,7 @@ class TakeReleaseTest(LockCase):
         def run(lk):
             gate.wait()
             try:
-                won.append(lk.take('full', ['kit/x']))
+                won.append(lk.take(['kit/x']))
             except landing.Busy:
                 busy.append(1)
 
@@ -82,16 +92,14 @@ class TakeReleaseTest(LockCase):
             t.join(30)
         self.assertEqual((len(won), len(busy)), (1, len(locks) - 1))
 
-    def test_an_undeclared_lane_or_no_branch_refuses(self):
+    def test_no_branch_refuses(self):
         with self.assertRaises(landing.LockError):
-            self.lock().take('pvp', ['kit/a'])
-        with self.assertRaises(landing.LockError):
-            self.lock().take('full', [])
+            self.lock().take([])
         self.assertFalse(os.path.exists(self.lock().path))
 
     def test_release_needs_the_holders_token(self):
         lk = self.lock()
-        rec = lk.take('full', ['kit/a'])
+        rec = lk.take(['kit/a'])
         for bad in ('0' * 16, '', None):
             with self.assertRaises(landing.NotHolder):
                 lk.release(bad)
@@ -102,7 +110,7 @@ class TakeReleaseTest(LockCase):
 
     def test_set_phase_needs_the_token_and_a_known_phase(self):
         lk = self.lock()
-        rec = lk.take('full', ['kit/a'])
+        rec = lk.take(['kit/a'])
         self.assertEqual(lk.set_phase(rec['token'], 'gate')['phase'], 'gate')
         self.assertEqual(lk.read()['phase'], 'gate')
         with self.assertRaises(landing.LockError):
@@ -116,7 +124,7 @@ class TakeReleaseTest(LockCase):
 
     def test_a_set_phase_whose_write_fails_leaves_no_tmp(self):
         lk = self.lock()
-        rec = lk.take('full', ['kit/a'])
+        rec = lk.take(['kit/a'])
         with mock.patch.object(landing.json, 'dumps', side_effect=ValueError('cannot encode')):
             with self.assertRaises(ValueError):
                 lk.set_phase(rec['token'], 'gate')
@@ -125,14 +133,14 @@ class TakeReleaseTest(LockCase):
 
     def test_a_holder_change_before_the_replace_refuses_the_phase(self):
         lk = self.lock()
-        rec = lk.take('full', ['kit/a'])
+        rec = lk.take(['kit/a'])
         real_dumps, other = json.dumps, {}
 
         def swap_holder(*a, **kw):        # the first call is set_phase writing its tmp
             if not other:
                 other['token'] = None
                 lk.release(rec['token'])
-                other.update(lk.take('full', ['kit/b']))
+                other.update(lk.take(['kit/b']))
             return real_dumps(*a, **kw)
         with mock.patch.object(landing.json, 'dumps', side_effect=swap_holder):
             with self.assertRaises(landing.NotHolder):
@@ -142,25 +150,25 @@ class TakeReleaseTest(LockCase):
         self.assertEqual(self.tmp_files(), [])
 
     def test_a_lock_that_is_not_a_record_is_held_by_nobody_we_can_name(self):
-        for text in ('', '{', '[]', '{"lane": "full"}', '{"lane": "pvp", "token": "t"}'):
+        for text in ('', '{', '[]', '{"lane": "full"}', '{"lane": "full", "token": ""}'):
             self.write_raw(text)
             with self.assertRaises(landing.LockError):
                 self.lock().read()
             with self.assertRaises(landing.Busy):
-                self.lock().take('full', ['kit/a'])
+                self.lock().take(['kit/a'])
 
     def test_a_take_whose_write_fails_leaves_no_lock(self):
         lk = self.lock()
         with mock.patch.object(landing.os, 'write', side_effect=OSError('disk full')):
             with self.assertRaises(landing.LockError) as cm:
-                lk.take('full', ['kit/a'])
+                lk.take(['kit/a'])
         self.assertIn('disk full', str(cm.exception))
         self.assertFalse(os.path.exists(lk.path))
-        self.assertIsNotNone(lk.take('full', ['kit/a']))
+        self.assertIsNotNone(lk.take(['kit/a']))
 
     def test_a_permission_error_is_retried_then_refused(self):
         lk = self.lock()
-        rec = lk.take('full', ['kit/a'])
+        rec = lk.take(['kit/a'])
         real_remove = os.remove
         calls = []
 
@@ -173,7 +181,7 @@ class TakeReleaseTest(LockCase):
         with mock.patch.object(landing.time, 'sleep'), mock.patch.object(landing.os, 'remove', flaky):
             lk.release(rec['token'])
         self.assertEqual(len(calls), 3)
-        rec = lk.take('full', ['kit/a'])
+        rec = lk.take(['kit/a'])
         with mock.patch.object(landing.time, 'sleep'), \
                 mock.patch.object(landing.os, 'remove', side_effect=PermissionError('held open')):
             with self.assertRaises(landing.LockError) as cm:
@@ -188,27 +196,27 @@ class BreakTest(LockCase):
         self.assertEqual(self.lock().break_lock(True), (False, 'nobody holds the landing lock: nothing to break'))
 
     def test_a_live_holder_is_never_broken_however_old(self):
-        self.lock().take('full', ['kit/a'], pid=42, now=landing.datetime.datetime(2001, 1, 1))
+        self.lock().take(['kit/a'], pid=42, now=landing.datetime.datetime(2001, 1, 1))
         ok, why = self.lock().break_lock(holder_gone=True)
         self.assertFalse(ok)
         self.assertIn('the holder is alive', why)
 
     def test_the_recorded_start_time_is_what_liveness_is_asked_about(self):
-        self.lock().take('full', ['kit/a'], pid=42)
+        self.lock().take(['kit/a'], pid=42)
         seen = []
         lk = self.lock(is_alive=lambda pid, start: seen.append((pid, start)) or False)
         self.assertTrue(lk.break_lock()[0])
         self.assertEqual(seen, [(42, 1234)])
 
     def test_a_dead_holder_with_nothing_unpushed_is_broken(self):
-        rec = self.lock().take('full', ['kit/a'], pid=42)
+        rec = self.lock().take(['kit/a'], pid=42)
         ok, removed = self.lock(is_alive=DEAD).break_lock()
         self.assertTrue(ok)
         self.assertEqual(removed['token'], rec['token'])
         self.assertIsNone(self.lock().read())
 
     def test_a_dead_holder_with_an_unpushed_commit_is_not_broken(self):
-        self.lock().take('full', ['kit/a'], pid=42)
+        self.lock().take(['kit/a'], pid=42)
         self.repo.write('x.txt', 'x\n')
         self.repo.commit('unpushed', 'x.txt')
         ok, why = self.lock(is_alive=DEAD).break_lock()
@@ -218,7 +226,7 @@ class BreakTest(LockCase):
 
     def test_a_merge_in_progress_in_the_main_checkout_blocks_a_break_from_a_worktree(self):
         wt = self.repo.worktree('a')
-        self.lock().take('full', ['kit/a'], pid=42)
+        self.lock().take(['kit/a'], pid=42)
         with open(os.path.join(self.repo.common_dir(), 'MERGE_HEAD'), 'w') as f:
             f.write(self.repo.initial + '\n')
         ok, why = self.lock(wt, is_alive=DEAD).break_lock()
@@ -226,7 +234,7 @@ class BreakTest(LockCase):
         self.assertIn('MERGE_HEAD', why)
 
     def test_a_token_holder_is_broken_only_when_declared_gone(self):
-        self.lock().take('full', ['kit/a'])
+        self.lock().take(['kit/a'])
         ok, why = self.lock().break_lock()
         self.assertFalse(ok)
         self.assertIn('token holder', why)
@@ -240,13 +248,13 @@ class BreakTest(LockCase):
         self.assertFalse(self.lock().break_lock(holder_gone=True)[0])
 
     def test_a_lock_taken_again_while_it_is_judged_is_not_broken(self):
-        self.lock().take('full', ['kit/a'], pid=42)
+        self.lock().take(['kit/a'], pid=42)
         holder = self.lock()
 
         def gone_and_replaced(pid, start):
             path = holder.path
             os.remove(path)
-            self.lock().take('full', ['kit/b'], pid=43)
+            self.lock().take(['kit/b'], pid=43)
             return False
 
         ok, why = self.lock(is_alive=gone_and_replaced).break_lock()
@@ -254,7 +262,7 @@ class BreakTest(LockCase):
         self.assertIn('changed while it was judged', why)
         self.assertEqual(self.lock().read()['branches'], ['kit/b'])
 
-    def test_an_undeclared_lane_still_names_a_process_that_is_checked(self):
+    def test_an_older_kits_lane_is_ignored_and_its_process_still_checked(self):
         self.write_raw(json.dumps({'lane': 'pvp', 'token': 't', 'pid': 42, 'pid_start': 7}))
         ok, why = self.lock().break_lock(holder_gone=True)
         self.assertFalse(ok)
@@ -265,19 +273,18 @@ class BreakTest(LockCase):
 
 class GateRefusalTest(LockCase):
 
-    def test_a_merged_gate_needs_the_lock_for_its_lane_with_origin_unmoved(self):
+    def test_a_merged_gate_needs_the_lock_held_with_origin_unmoved(self):
         lk = self.lock()
-        self.assertIn('nobody holds', lk.gate_refusal('full'))
-        rec = lk.take('gamma', ['kit/a'])
-        self.assertIn('held for lane gamma', lk.gate_refusal('full'))
-        self.assertIsNone(lk.gate_refusal('gamma'))
+        self.assertIn('nobody holds', lk.gate_refusal())
+        rec = lk.take(['kit/a'])
+        self.assertIsNone(lk.gate_refusal())
         lk.set_phase(rec['token'], 'stuck')
-        self.assertIn('stuck', lk.gate_refusal('gamma'))
+        self.assertIn('stuck', lk.gate_refusal())
         lk.set_phase(rec['token'], 'gate')
         self.repo.write('y.txt', 'y\n')
         self.repo.commit('moved', 'y.txt')
         self.repo.git('push', '-q', 'origin', 'main')
-        self.assertIn('moved under this landing', lk.gate_refusal('gamma'))
+        self.assertIn('moved under this landing', lk.gate_refusal())
 
 
 class ConfigAndProcTest(unittest.TestCase):
@@ -287,30 +294,28 @@ class ConfigAndProcTest(unittest.TestCase):
         self.addCleanup(t.cleanup)
         return config.load(t.root)
 
-    def test_lock_name_honours_a_legacy_git_lock_file(self):
-        self.assertEqual(landing.lock_name(None), 'kit-landing.lock')
-        self.assertEqual(landing.lock_name(self.cfg({})), 'kit-landing.lock')
-        self.assertEqual(landing.lock_name(self.cfg({'landing': {'lock_file': 'git:alpha-landing.lock'}})),
-                         'alpha-landing.lock')
-        with self.assertRaises(landing.LockError):
-            landing.lock_name(self.cfg({'landing': {'lock_file': 'git:../x.lock'}}))
-
-    def test_a_lock_file_that_is_not_git_name_refuses(self):
-        for value in ('tools/landing.lock', 'alpha-landing.lock', 'GIT:x.lock'):
+    def test_a_config_still_setting_the_retired_lock_file_loads_without_it(self):
+        # `landing.lock_file` is retired (schema.RETIRED): any value, the old git:<name> form or
+        # one that form refused, is dropped unchecked, and no lock name is read from the config
+        for value in ('git:alpha-landing.lock', 'git:../x.lock', 'tools/landing.lock', 3):
             with self.subTest(value=value):
-                with self.assertRaises(config.ConfigError) as cm:
-                    landing.lock_name(self.cfg({'landing': {'lock_file': value}}))
-                self.assertIn('must be git:<name>', str(cm.exception))
+                cfg = self.cfg({'landing': {'batch_max': 2, 'lock_file': value}})
+                self.assertEqual(cfg.section('landing')['batch_max'], 2)
+                self.assertNotIn('lock_file', cfg.section('landing'))
+        self.assertIn('lock_file', schema.RETIRED['landing'])
+        self.assertNotIn('lock_file', schema.SECTIONS['landing'])
+        self.assertFalse(hasattr(landing, 'lock_name'))
 
-    def test_for_config_takes_main_remote_and_name_from_the_config(self):
+    def test_for_config_takes_main_and_remote_from_the_config_and_the_kit_lock_name(self):
         repo = gitfixture.TempRepo(branch='master', bare_remote=True)
         self.addCleanup(repo.cleanup)
         repo.write('.kit.json', json.dumps({'repo': {'main_branch': 'master'},
                                             'landing': {'lock_file': 'git:alpha-landing.lock'}}))
-        lk = landing.LandingLock.for_config(repo.root, config.load(repo.root), lanes=('gamma',),
+        lk = landing.LandingLock.for_config(repo.root, config.load(repo.root),
                                             start_of=lambda pid: None, is_alive=ALIVE)
-        self.assertEqual(os.path.basename(lk.path), 'alpha-landing.lock')
-        rec = lk.take('gamma', ['kit/a'])
+        self.assertEqual(os.path.basename(lk.path), landing.LOCK_NAME)
+        self.assertEqual(landing.LOCK_NAME, 'kit-landing.lock')
+        rec = lk.take(['kit/a'])
         self.assertEqual(rec['main_at_take'], repo.git('rev-parse', 'master'))
         self.assertEqual(rec['origin_at_take'], rec['main_at_take'])
 

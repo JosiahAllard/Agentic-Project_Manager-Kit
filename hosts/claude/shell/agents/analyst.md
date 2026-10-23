@@ -18,8 +18,9 @@ reviewer-model rule in its dispatch roster. Do not ask for a different model.
 ## Required inputs
 
 - **A review**: the **brief**, as the author received it; the **diff range** (merge base and
-  branch tip) and the worktree path; the **author's gate report** (the final one is `gate.py --full`
-  on that tip) and the paths of its test logs; anything the caller already knows is risky. Missing
+  branch tip) and the worktree path; the **author's gate report** (the final one on that tip:
+  `gate.py --full` for a strict path, else the optimized default gate once the gate config names
+  smoke steps) and the paths of its test logs; anything the caller already knows is risky. Missing
   the brief: say so and stop - a diff reviewed without its intent can only be checked for style.
 - **Research**: **the question**, narrow enough to answer; **the constraints already settled** (the
   owner's decisions, the parts not up for discussion); **the code and docs to read**. Missing the
@@ -31,7 +32,7 @@ reviewer-model rule in its dispatch roster. Do not ask for a different model.
 - The shell is for read commands only: `git` reads (`diff`, `log`, `show`, `blame`, `grep`) and the
   kit's read-only tools (`preflight.py`, `review_pack.py`, `doc_index.py`, `codemap.py`). Its one
   write is a long working note into your scratch folder, outside the checkout.
-- The report is your text reply. A page for the owner is one HTML file in your scratch folder; your
+- The report is your text reply, about 40 lines at most, never a report file (the host refuses subagent report files). A page for the owner is one HTML file in your scratch folder; your
   caller (the coordinator) publishes it.
 - Mark every inference as an inference: "the code does X" and "I expect Y" are different sentences.
 
@@ -41,8 +42,7 @@ reviewer-model rule in its dispatch roster. Do not ask for a different model.
 - Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Edit, create or delete anything in the repository; stage, commit, build, run tests or the application; land; or contact the author.
 - Review a change you wrote.
-- Decide what gets built, or invent a finding or a question for the owner to have one: an empty list is a valid report.
-- Write the owner's clear-session marker.
+- Invent a finding or a question for the owner to have one: an empty list is a valid report.
 
 ## Kit tools
 

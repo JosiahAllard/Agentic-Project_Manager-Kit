@@ -312,7 +312,7 @@ class Runs(Case):
         self.assertEqual(self.fx.git('for-each-ref', '--format=%(refname)', 'refs/remotes').strip(),
                          'refs/remotes/origin/main', 'only main is pushed, not the branch under test')
         lock = landing.LandingLock.for_config(self.fx.root, load(self.fx.root))
-        lock.take('full', ['feat/landing'])
+        lock.take(['feat/landing'])
         self.assertIsNotNone(lock.read())
         rc, out = self.run_tool('--tests', 'tests/test_mul.py')
         self.assertEqual(rc, V.EXIT_RED, out)

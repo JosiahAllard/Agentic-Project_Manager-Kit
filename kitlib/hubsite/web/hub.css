@@ -1,0 +1,23 @@
+/* The Action Hub's shared look: the colour and font tokens (light, and dark by the system setting or data-theme) and the
+   shell rules index.html and lock.html both use. Each page's own rules, and the few tokens that differ between the
+   pages, stay in that page's <style>, which comes after this sheet. Nothing here is loaded from the network. */
+:root{
+  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d9dfe6;
+  --accent:#1f5f8b; --rec:#8a5a00;
+  --ok:#2c7a4b; --ok-soft:#e2f2e8; --warn:#a33b2b; --warn-soft:#f9e3df;
+  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  /* The Triage shell: the sidebar's width and its own background, a step off the page's. */
+  --side-w:236px; --side:#e8ecf0;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
+  --accent:#6fb0de; --rec:#e9b55a;
+  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; --side:#151c24; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
+  --accent:#6fb0de; --rec:#e9b55a;
+  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; --side:#151c24; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--f-body);margin:0}
+header{display:grid;gap:4px}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}

@@ -84,8 +84,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   the owner for work.
 - **Follow-ups.** File a follow-up record for a finding on a branch, a review or a worker's
   out-of-scope report note only if it is too large or out of scope for its branch and worth
-  doing. File only for an observed failure (a run, a probe, a log line); a reviewer's
-  hypothetical stays in the review report. Say in its summary that it is a follow-up, and of which branch or review. Leave it
+  doing. What a record needs: skill builder, step 11; a reviewer's hypothetical stays in the
+  review report. Say in its summary that it is a follow-up, and of which branch or review. Leave it
   unpriced. `next` never offers an unpriced record; its banner counts it under
   `unprioritised+open`, not under `held` (`held` = blocked). You or the PM promote a follow-up
   at any time it enters a work set: price it 2-5 (`--priority-by agent`); price before pull. A
@@ -98,9 +98,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   its own background gate is waiting, not in flight, and wakes when the gate exits (<kit>/docs/gate.md
   "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its `wait-result`
   command is yours to keep running (skill `land-branch`). A gate whose
-  process is gone with no report -> fresh agent re-gates the branch with `--full`. Nothing
+  process is gone with no report -> fresh agent re-gates the branch (`--full` for a strict path, else the default gate, `--full` until the base's gate config names smoke steps). Nothing
   re-wakes you later.
-- Nothing startable left in the set and 2 or fewer items being built -> wind down (skill
+- Nothing startable left in the set and 1 or 2 items being built -> wind down (skill
   session-handoff): review what you have, then write into the state note every LAND verdict
   you hold (branch, tip, reviewer, range) and every branch whose agent is still running, and
   {{tool:message}} the PM `ready to restart: <state note path>`;
@@ -110,6 +110,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   new while one of yours sits stopped without a block. Your successor never waits for workers'
   reports: it re-dispatches from the branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
   queues every LAND verdict in the note at once, and the PM stops you once it has checked in.
+- `next` offers nothing startable, every LAND verdict has landed, the landing queue is clear and no
+  agent is in flight (builders or reviewers) -> write the state note and {{tool:message}} the PM
+  `ready to stop: <state note path>`. The PM stops you with no successor and restarts you when your
+  repo gets startable work, an owner answer or an approval. A spent set with work still in `next`
+  is a restart, not a stop.
 - `next` empty only because finished branches still wait to land is no reason to restart: their
   open records and scopes still block the items behind them. Queue them at once, rerun
   `next`, refill the set; wind down only when `next` offers nothing startable with the landing
@@ -119,7 +124,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - Pick work from the plan; split it into workstreams touching different files; one
   self-contained brief each. Own the shared resources the profile names: who, when.
-- Review every branch before it lands; relay the owner's decisions as a paraphrase plus the ruling id.
+- Review every branch before it lands; relay the owner's decisions as a paraphrase, no ruling id.
 - Verify before relaying, whenever the check is cheap (a commit on the remote main, a claimed
   file existing, a count matching). Ask agents for the observable that would be absent without
   their change. An agent contradicting you: check before defending, correct yourself plainly.
@@ -148,7 +153,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   (skill `hub-ops`: questions, to-dos, the wait, pages). Anything else that needs the owner (a typed go, a
   step for another repo) goes to the PM by {{tool:message}} with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
-  in your window where one is required. Pass answers on as a paraphrase plus the ruling id.
+  in your window where one is required. Pass answers on as a paraphrase, no ruling id.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
   Owner decisions only for priority 1, a pre-emption, a schema change or `{{owner_folder}}`, plus the
@@ -159,10 +164,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - The owner's typed go is needed to remove, loosen, skip or make optional an existing check (a check,
   gate or landing step written in an indexed doc counts), and for CI triggers, permissions,
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
-- Tracked `{{owner_folder}}` files and {{instructions_file}} are owner-only: no session or agent edits them. Never
-  write an `Owner-Approved:` trailer unless the owner said so in your own session.
-- Message the PM only when you need a decision (owner or PM), main or CI is broken, a lock or
-  resource is stuck, you hit a usage limit, or you are ready to restart, besides the start check-in (step 3) and refusal reports (Never). When you start a work set,
+- Tracked `{{owner_folder}}` files and {{instructions_file}} are owner-only: no session or agent edits them.
+- Message the PM only for: a decision you need (owner or PM); a landing or a failed landing; a
+  refusal (Never); or something the owner must do or know (main or CI broken, a lock or resource
+  stuck, a usage limit); plus the start check-in (step 3) and the ready-to-restart message. No
+  acknowledgements. Small facts ride in the state note and your next real message. When you start a work set,
   post the owner questions it needs on the hub together (The owner, above).
 - **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
   (owner-held, owner-only paths, live systems, a pre-emption); post those questions on the hub
@@ -184,13 +190,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Let two measurements overlap. Let an agent review its own work. Grant a window you have not cleared.
 - Weaken a gate to get a branch through. Raise a doc cap, for any doc, even as a drafted script.
 - Say the work is finished while any dispatched workstream is still open.
-- Kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`): other
-  sessions' gates match too. End only a process you started, by its pid, while it still has the start
-  time you saw.
 - Chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one
   shell call.
-- Retry after a classifier refusal or permission denial: it ends that action; report it verbatim (not a kit-guard (hook)
-  refusal: fix the form its Instead: line gives, then retry). A refusal printed by a
-  repo tool (backlog.py, commit.py, sync_base.py, new_worktree/new_phase) may be fixed and retried ONCE
-  by the same agent; a denial of that retry goes to the PM. Log every refusal in `docs/ops/refusals.md` (date, agent, command, verbatim message, cause
-  class, fix) and send it to the PM. A repeat is a tool bug to fix, not a command for the owner.
+- Retry a refusal except as skill backlog-ops, "Refusals" allows. Send the PM, verbatim, only the
+  refusals the guard does not log itself (a classifier refusal, a permission denial, a repository
+  tool's `REFUSED:`); the guard's own refusals are already in `<pm_data>/audit/refusals.jsonl`.
+  A repeat is a tool bug to fix, not a command for the owner.

@@ -797,7 +797,7 @@ class MovedToTop(StoreCase):
         self.assertNotIn("moved", self.store.read("ended/%s.json" % b))
 
 
-LAND = "landing:z:\\repo\\.git"
+LAND = "landing:q:\\repo\\.git"
 
 
 class Resources(StoreCase):
@@ -839,7 +839,7 @@ class Resources(StoreCase):
             self.assertEqual(err.code, store_mod.EXIT_BUSY)
             self.assertIn("resource %s is held by" % LAND, err.message)
             self.assertIn(first.id, err.message)
-            other = self.book("other", resource="landing:z:\\other\\.git")
+            other = self.book("other", resource="landing:q:\\other\\.git")
             other.release()
             plain = self.book("plain")          # a run naming no resource is not kept out
             plain.release()

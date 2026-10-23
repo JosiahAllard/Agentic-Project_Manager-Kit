@@ -66,7 +66,9 @@ Rules, in the order they are checked:
   git-shared-ref   git update-ref by an agent session (a subagent or a jailed mark but pm) from any
                    checkout, of a ref other than refs/tmp/<name>, a per-worktree ref, or in a linked
                    worktree its HEAD and the branch checked out there (never a guarded main); a
-                   ref or a repository the text does not name is refused too
+                   ref or a repository the text does not name is refused too. A coordinator's
+                   main session may also delete a stray ref (refs/ outside refs/heads, refs/tags,
+                   refs/stash and refs/backlog) in its own repository
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   git-stash-shared git stash in a linked worktree by an agent session that adds an untagged
@@ -139,6 +141,25 @@ def fwd(path):
 
 def quote(path):
     return '"%s"' % fwd(path)
+
+
+def shell_word(text):
+    """`text` as one word bash and PowerShell both read as written: bare when it holds only
+    characters neither shell treats specially (no `,`, which PowerShell reads as an array, and no
+    leading `@`, its splat), else single-quoted (literal in both); one that holds a single quote
+    too has no such word, so it is `<value>` for the agent to fill in."""
+    if re.fullmatch(r'[A-Za-z0-9_=.:/%+-][A-Za-z0-9_=.:/@%+-]*', text):
+        return text
+    return "'%s'" % text if "'" not in text else '<value>'
+
+
+def kept_word(lead, sep, value, dyn):
+    """One kept option of a held form (commit_scan's `keep`) as words both shells read as
+    written: `lead` (`-X`, `--strategy`) and its `value`, joined (`sep` '') or as two words (' ');
+    a value the shell computes, or one holding a single quote, is `<value>` after its lead."""
+    if dyn or "'" in value:
+        return lead + sep + '<value>'
+    return shell_word(lead) + ' ' + shell_word(value) if sep else shell_word(lead + value)
 
 
 def literal_word(path):
@@ -276,7 +297,7 @@ def shell_command(event, ctx, text, shell, cwd, role):
         inv = cm.invocation(cmd)
         for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, wrapped_gate,
                      root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path, owner_identity,
-                     kill_by_name, shell_writes):
+                     kill_by_name, shell_writes, git_plain_commit, interpreter_git):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -603,7 +624,10 @@ def owner_tool(event, ctx, cmd, inv, cwd, role):
 # works. A name the shell or code builds at run time is not read: the rules catch mistakes, not
 # an adversary.
 HUB_SCRIPT = 'hub.py'
-NODE_EVAL = ('-e', '--eval', '-p', '--print')
+NODE_EVAL = ('-e', '--eval', '-p', '--print', '-pe')
+# node's options whose value is the next word (inline_code): a module it loads first, not a script
+NODE_VALUE_OPTS = ('-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions',
+                   '--input-type')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
                    'tool and its MCP server, which read agent.token themselves (docs/guard.md "Hub secrets").')
@@ -825,7 +849,7 @@ def inline_code(cmd, inv, skip_pipe=None):
     code, stdin, k = False, True, 0
     while k < len(args):
         t = args[k]
-        if py and t in cm.PY_VALUE_OPTS:
+        if (py and t in cm.PY_VALUE_OPTS) or (node and t in NODE_VALUE_OPTS):
             k += 2
             continue
         if (py and re.match(r'^-[A-Za-z]*c', t)) or (node and t.split('=', 1)[0] in NODE_EVAL):
@@ -1633,7 +1657,7 @@ PS_ALIASES = {'sc': 'set-content', 'ac': 'add-content', 'clc': 'clear-content', 
               'epal': 'export-alias', 'epsn': 'export-pssession',
               'gci': 'get-childitem', 'ls': 'get-childitem', 'dir': 'get-childitem', 'sp': 'set-itemproperty'}
 BASH_WRITERS = {'tee', 'touch', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'truncate', 'install', 'ln',
-                'unlink', 'shred'}
+                'unlink', 'shred', 'dos2unix', 'unix2dos', 'mac2unix', 'unix2mac', 'sponge'}
 CMD_WRITERS = {'copy', 'xcopy', 'robocopy', 'move', 'del', 'erase', 'md', 'mkdir', 'rd', 'rmdir',
                'ren', 'rename', 'type'}
 COPIERS = {'robocopy', 'xcopy'}                 # Windows programs every shell runs
@@ -2188,6 +2212,215 @@ def _perl(args, cmd_word=None):
     if not in_place:
         return [here(cmd_word)] if script else []     # perl -e: as python -c
     return pos if script else pos[1:]
+
+
+# gawk 5's options (its getopt list "+F:f:v:W;bcCd::D::e:E:ghi:l:L::nNo::Op::MPrSstVYZ:", options
+# ending at the first operand): the short ones that take a value, the ones whose value is only the
+# rest of their word, and the long names (a unique prefix names one) that take a value, take one
+# only after `=`, or take none
+AWK_VALUE_SHORTS = 'FfvieElZ'
+AWK_OPTIONAL_SHORTS = 'dDLop'
+AWK_LONGS = {'assign': 'v', 'exec': 'E', 'field-separator': 'F', 'file': 'f', 'include': 'i', 'load': 'l',
+             'source': 'e', 'locale': 'Z'}
+AWK_OPTIONAL_LONGS = {'dump-variables': 'd', 'debug': 'D', 'lint': 'L', 'pretty-print': 'o', 'profile': 'p'}
+AWK_FLAG_LONGS = ('bignum', 'characters-as-bytes', 'copyright', 'csv', 'gen-pot', 'help', 'lint-old',
+                  'no-optimize', 'non-decimal-data', 'optimize', 'parsedebug', 'persist', 'posix',
+                  're-interval', 'sandbox', 'trace', 'traditional', 'use-lc-numeric', 'version')
+AWK_ASSIGN_RE = re.compile(r'^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?=')   # an operand gawk reads as var=value
+
+
+def _awk_inplace_lib(w):
+    """True when the -i/-f/-l value Word `w` may load gawk's inplace library: its name, or a value
+    the line computes (fail closed)."""
+    if w is None or w.dyn:
+        return w is not None
+    base = re.split(r'[\\/]', w.text)[-1].lower()
+    return base in ('inplace', 'inplace.awk')
+
+
+def _awk_inplace_text(w):
+    """True when the program text Word `w` may @include the inplace library."""
+    return w is not None and not w.dyn and '@include' in w.text and 'inplace' in w.text
+
+
+def _awk_long(name):
+    """The letter the long option `name` (without its dashes) stands for, or None when gawk does
+    not know it or it is ambiguous (gawk then runs nothing)."""
+    names = list(AWK_LONGS) + list(AWK_OPTIONAL_LONGS) + list(AWK_FLAG_LONGS)
+    if name in names:
+        hits = [name]
+    else:
+        hits = [n for n in names if n.startswith(name)]
+    if len(hits) != 1:
+        return None
+    return AWK_LONGS.get(hits[0]) or AWK_OPTIONAL_LONGS.get(hits[0]) or ''
+
+
+def _awk(args, cmd_word):
+    """What awk/gawk writes: every file operand under the inplace library (`-i inplace` in any
+    spelling, `-f inplace`, `-l inplace`, `@include "inplace"` in the program text; counted even
+    with -v inplace::enable=0), and the file -d, -o or -p names (else the directory it runs in,
+    for awkvars.out or awkprof.out). A run that is neither writes nothing."""
+    in_place, program_given, dumps = False, False, []
+    k = 0
+
+    def take(letter, value):
+        nonlocal in_place, program_given
+        if letter in 'ifl' and _awk_inplace_lib(value):
+            in_place = True
+        if letter in 'feE':
+            program_given = True
+        if letter == 'e' and _awk_inplace_text(value):
+            in_place = True
+        if letter in 'dop':
+            dumps.append(value if value is not None and value.text else here(cmd_word))
+
+    def word(t, w):
+        return sh.Word(t, w.dyn, w.start, w.end)
+
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            k += 1
+            break
+        if not t.startswith('-') or len(t) < 2:
+            break
+        k += 1
+        if t.startswith('--'):
+            spec = t[2:]
+        else:
+            body, spec = t[1:], None
+            for j, c in enumerate(body):
+                rest = body[j + 1:]
+                if c == 'W':
+                    if rest:
+                        spec = rest
+                    elif k < len(args):
+                        spec = args[k].text
+                        w = args[k]
+                        k += 1
+                    break
+                if c in AWK_VALUE_SHORTS:
+                    if rest:
+                        value = word(rest, w)
+                    else:
+                        value = args[k] if k < len(args) else None
+                        k += 1
+                    take(c, value)
+                    break
+                if c in AWK_OPTIONAL_SHORTS:
+                    take(c, word(rest, w) if rest else None)
+                    break
+            if spec is None:
+                if c == 'E':
+                    break                       # -E file: the rest are the program's arguments
+                continue
+        name, eq, val = spec.partition('=')     # --name[=value], or -W name[=value]
+        letter = _awk_long(name)
+        if letter is None or letter == '':
+            continue
+        if eq:
+            value = word(val, w)
+        elif letter in AWK_OPTIONAL_SHORTS:
+            value = None
+        else:
+            value = args[k] if k < len(args) else None
+            k += 1
+        take(letter, value)
+        if letter == 'E':
+            break
+    rest = args[k:]
+    if not program_given and rest:
+        if _awk_inplace_text(rest[0]):
+            in_place = True
+        rest = rest[1:]
+    if not in_place:
+        return dumps
+    files = [w for w in rest if w.dyn or (w.text != '-' and not AWK_ASSIGN_RE.match(w.text))]
+    return dumps + files
+
+
+def _ruby(args, cmd_word):
+    """ruby -i[ext]: the files it edits, as perl -i (after the script unless -e gives the code),
+    placed under each -C or -x folder in turn; without -i, code on the line (_evals)."""
+    code = _evals('ruby', args, cmd_word)
+    in_place, script, pos, dirs = False, False, [], []
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            pos.extend(args[k + 1:])
+            break
+        if t.startswith('--') or t == '-':
+            if t == '-':
+                pos.append(w)
+            k += 1
+            continue                            # a long option: any value it takes is an operand (fail closed)
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            k += 1
+            for j, c in enumerate(body):
+                rest = body[j + 1:]
+                if c == 'i':
+                    in_place = True
+                    break                       # -i.bak: the rest is the suffix
+                if c in 'eIrCE':
+                    script = script or c == 'e'
+                    value = sh.Word(rest, w.dyn, w.start, w.end) if rest else (args[k] if k < len(args) else None)
+                    if not rest:
+                        k += 1
+                    if c == 'C' and value is not None:
+                        dirs.append(value)
+                    break
+                if c == 'x':
+                    if rest:
+                        dirs.append(sh.Word(rest, w.dyn, w.start, w.end))
+                    break
+                if c in 'FWT0K':
+                    break                       # their value is the rest of the word
+            continue
+        pos.append(w)
+        k += 1
+    if not in_place:
+        return code
+    files = pos if script else pos[1:]
+    for d in reversed(dirs):
+        files = [_under(d, f) for f in files]
+    return code + files
+
+
+# vi, vim, nvim, ex and ed: a scripted run writes the files it is given, so every file operand
+# counts, an operand-only read too; the options whose value is the next word (a short one last in
+# its word, as `-sc <cmd>`) are passed over, bar -w/-W's script output file, which is written
+EDITORS = {'vi', 'vim', 'nvim', 'ex', 'ed'}
+EDITOR_VALUE_SHORTS = 'cuUiTtwW'
+
+
+def _editor(name, args):
+    out, k = [], 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            out.extend(args[k + 1:])
+            break
+        if name != 'ed' and t.startswith('+'):
+            k += 1                              # +cmd
+            continue
+        if t.startswith('-') and len(t) > 1:
+            short = not t.startswith('--')
+            if (t == '-p') if name == 'ed' else (t == '--cmd' or (short and t[-1] in EDITOR_VALUE_SHORTS)):
+                if short and t[-1] in 'wW' and k + 1 < len(args):
+                    out.append(args[k + 1])     # the script output file
+                k += 2
+            else:
+                k += 1
+            continue
+        out.append(w)
+        k += 1
+    return [w for w in out if w.dyn or w.text != '-']
 
 
 def _curl(args, cmd_word):
@@ -2746,6 +2979,8 @@ def write_targets(cmd, inv):
         return out + _wget(args, word) + grouped
     if cm.PYTHON_RE.match(name):
         return out + _python(cmd, name, args, word, inv.via)
+    if name == 'ruby' and cmd.shell != sh.PS:
+        return out + _ruby(args, word)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
@@ -2756,6 +2991,10 @@ def write_targets(cmd, inv):
         return out + _sed(args)
     if name == 'perl':
         return out + _perl(args, word)
+    if name in ('awk', 'gawk'):
+        return out + _awk(args, word)
+    if name in EDITORS:
+        return out + _editor(name, args)
     if name == 'unzip':
         return out + _unzip(args, word)
     if name == 'dd':
@@ -3851,6 +4090,290 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     return d
 
 
+# git verbs that make a commit, each refused for an agent session in a linked worktree
+# (git_plain_commit): plain git writes no Co-Authored-By trailer, so the gate's trailer check fails
+# the branch. Known limits, none read here:
+# - a git alias from git's config files (an inline -c alias.<name> is expanded);
+# - a verb the shell computes or a script runs;
+# - commit-tree and rebase;
+# - a computed -C, --git-dir or --work-tree: no place is known, so the unplaced handling and
+#   git-main-history judge the line, not this rule;
+# - a --continue of a revert or cherry-pick sequence started with --no-commit makes no commit, but
+#   it is refused like any other: git keeps that mode in the sequence's state, which is not read;
+# - a word the shell computes after a hold (`git cherry-pick -n $X`) is read as a commit, though
+#   it may be an option that undoes the hold (`--commit`): a computed commit is the common case,
+#   so failing closed there would refuse honest lines;
+# - commit.py commits only the change in progress of a revert, cherry-pick or am sequence: it does
+#   not go on with the commits or patches left, so the refusal says to end the sequence (--quit).
+COMMIT_VERBS = ('commit', 'merge', 'revert', 'cherry-pick', 'am', 'pull')
+# the words after which a verb makes no commit, spelled exactly
+COMMIT_STOPS = {'commit': ('--dry-run',), 'merge': ('--abort', '--quit'), 'revert': ('--abort', '--quit'),
+                'cherry-pick': ('--abort', '--quit'),
+                'am': ('--abort', '--quit', '--show-current-patch', '--show-current-patch=diff',
+                       '--show-current-patch=raw')}
+# the options, spelled exactly, that leave the verb's change uncommitted; an abbreviation is none
+# (revert's and cherry-pick's -n is read as --no-commit)
+COMMIT_HOLDS = {'merge': ('--no-commit', '--squash', '--ff-only'), 'pull': ('--no-commit', '--squash', '--ff-only'),
+                'revert': ('--no-commit',), 'cherry-pick': ('--no-commit',)}
+# the long options that undo a hold (a prefix of one counts): the last of --commit and --no-commit
+# (or -n) wins, of --squash and --no-squash, and of --ff, --no-ff and --ff-only
+COMMIT_UNDOES = {'commit': '--no-commit', 'no-squash': '--squash', 'ff': '--ff-only', 'no-ff': '--ff-only'}
+# the words that go on with a sequence: the commit is made by commit.py, not by the verb again
+COMMIT_STEPS = ('--continue', '--skip', '--resolved')
+# the short options that take a value (attached, or the next word), per verb (git 2.5x)
+COMMIT_SHORT_VALUES = {'commit': 'mFcCt', 'merge': 'mFsX', 'pull': 'sXj', 'revert': 'mX', 'cherry-pick': 'mX',
+                       'am': 'pC'}
+# the short options whose value, if any, is attached only (-S<key>, commit's -u<mode>): each ends
+# its cluster and takes no next word
+COMMIT_SHORT_ATTACHED = {'commit': 'Su', 'merge': 'S', 'pull': 'S', 'revert': 'S', 'cherry-pick': 'S', 'am': 'S'}
+# the short options that take no value, per verb: any other letter may take the rest of its cluster
+# or the next word, so a hold after it is not counted (commit_scan)
+COMMIT_SHORT_FLAGS = {'commit': 'apsnevqzio', 'merge': 'nqve', 'pull': 'nqvrfkpa46t', 'revert': 'ens',
+                      'cherry-pick': 'enxs', 'am': 'skcq3imunrb'}
+# the long options that take a value in the next word when no `=` gives it
+COMMIT_LONG_VALUES = {'message', 'file', 'strategy', 'strategy-option', 'cleanup', 'into-name', 'mainline',
+                      'depth', 'deepen', 'shallow-since', 'shallow-exclude', 'upload-pack', 'jobs',
+                      'negotiation-tip', 'server-option', 'refmap', 'reuse-message', 'reedit-message',
+                      'fixup', 'squash', 'author', 'date', 'template', 'trailer', 'pathspec-from-file',
+                      'directory', 'exclude', 'include', 'patch-format', 'quoted-cr', 'whitespace', 'resolvemsg',
+                      'empty'}
+# the options of a revert or cherry-pick that its --no-commit form keeps (commit_scan's `keep`)
+COMMIT_KEPT_LONG = ('strategy', 'strategy-option')
+# the long options, spelled in full, that take no next word; any other long option without `=`
+# (one git does not know, or an abbreviation, which may be of one that takes a value) may take the
+# next word, so a hold after it is not counted (commit_scan)
+COMMIT_LONG_FLAGS = {
+    'commit', 'no-commit', 'squash', 'no-squash', 'ff', 'no-ff', 'ff-only', 'edit', 'no-edit', 'signoff',
+    'no-signoff', 'stat', 'no-stat', 'summary', 'no-summary', 'log', 'no-log', 'verbose', 'quiet', 'progress',
+    'no-progress', 'verify', 'no-verify', 'verify-signatures', 'no-verify-signatures', 'gpg-sign', 'no-gpg-sign',
+    'allow-unrelated-histories', 'autostash', 'no-autostash', 'rerere-autoupdate', 'no-rerere-autoupdate',
+    'overwrite-ignore', 'no-overwrite-ignore', 'rebase', 'no-rebase', 'all', 'append', 'force', 'keep', 'prune',
+    'tags', 'no-tags', 'unshallow', 'update-shallow', 'ipv4', 'ipv6', 'recurse-submodules',
+    'no-recurse-submodules', 'allow-empty', 'allow-empty-message', 'keep-redundant-commits', 'no-reference',
+    'amend', 'no-post-rewrite', 'reset-author', 'short', 'branch', 'porcelain', 'long', 'null', 'only',
+    'interactive', 'patch', 'status', 'no-status', '3way', 'no-3way', 'keep-cr', 'no-keep-cr', 'scissors',
+    'no-scissors', 'utf8', 'no-utf8', 'keep-non-patch', 'ignore-space-change', 'ignore-whitespace',
+    'committer-date-is-author-date', 'ignore-date', 'message-id', 'no-message-id', 'reject', 'retry', 'binary'}
+
+
+def commit_scan(sub, args):
+    """(makes, revs, mainline, keep): whether git `sub` (COMMIT_VERBS) with the Words `args` after
+    it makes a commit, the words that are neither options nor their values (a revert's or
+    cherry-pick's commits; None after an option the scan cannot place that may take a value, so a
+    word after it may be that value),
+    the -m/--mainline value given, or None, and the strategy options of a revert or cherry-pick
+    (-X, COMMIT_KEPT_LONG) its --no-commit form keeps, as kept_word's (lead, sep, value, dyn). Read left to right as git
+    reads them: a stop word (COMMIT_STOPS) makes none; a hold (COMMIT_HOLDS, or -n in a short
+    cluster of revert or cherry-pick; merge's and pull's -n is --no-stat) holds until a long option
+    that undoes it (COMMIT_UNDOES), or a prefix of one, comes after it; a sequence's next step
+    (COMMIT_STEPS) commits. Option values are skipped, so `-m --no-commit` is a message; `--` ends
+    the options. It fails closed: after a word it cannot place (a computed word, a long option
+    without `=` that COMMIT_LONG_FLAGS and COMMIT_LONG_VALUES do not name, or a short letter
+    COMMIT_SHORT_FLAGS does not), no later hold or stop word counts, since that word may have taken
+    it as its value."""
+    stops, holds = COMMIT_STOPS.get(sub, ()), COMMIT_HOLDS.get(sub, ())
+    values, attached = COMMIT_SHORT_VALUES.get(sub, ''), COMMIT_SHORT_ATTACHED.get(sub, '')
+    flags = COMMIT_SHORT_FLAGS.get(sub, '')
+    held, revs, mainline, unsure, keep, unplaced = set(), [], None, False, [], False
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        k += 1
+        if w.dyn or not t.startswith('-') or t == '-':
+            revs.append(t)
+            unsure = unsure or w.dyn
+            continue
+        if t == '--':
+            revs.extend(x.text for x in args[k:])
+            break
+        if t.startswith('--'):
+            body, eq, val = t[2:].partition('=')
+            if t in stops and not unsure:
+                return False, None if unplaced else revs, mainline, keep
+            if t in COMMIT_STEPS:
+                return True, None if unplaced else revs, mainline, keep
+            if t in holds:
+                if not unsure:
+                    held.add(t)
+                continue
+            if len(body) >= 2:
+                held -= {h for n, h in COMMIT_UNDOES.items() if n.startswith(body)}
+            kept = body in COMMIT_KEPT_LONG and sub in ('revert', 'cherry-pick')
+            if eq:
+                if body == 'mainline':
+                    mainline = val
+                if kept:
+                    keep.append(('--%s=' % body, '', val, False))
+                continue
+            if body in COMMIT_LONG_VALUES:
+                if body == 'mainline' and k < len(args):
+                    mainline = args[k].text
+                if kept and k < len(args):
+                    keep.append((t, ' ', args[k].text, args[k].dyn))
+                k += 1
+            elif body not in COMMIT_LONG_FLAGS:
+                unsure = True
+                # an abbreviation of flags alone takes no value, so the words after it stay commits
+                unplaced = unplaced or any(n.startswith(body) for n in COMMIT_LONG_VALUES) or \
+                    not any(n.startswith(body) for n in COMMIT_LONG_FLAGS)
+            continue
+        for j, c in enumerate(t[1:]):
+            if c in values:
+                rest, dyn = t[j + 2:], False
+                if not rest:
+                    rest, dyn = (args[k].text, args[k].dyn) if k < len(args) else ('', False)
+                    k += 1
+                if c == 'm' and sub in ('revert', 'cherry-pick'):
+                    mainline = rest
+                if c == 'X' and sub in ('revert', 'cherry-pick'):
+                    keep.append(('-X', '', rest, dyn))
+                break
+            if c in attached:
+                break
+            if c not in flags:
+                unsure = unplaced = True
+                break
+            if c == 'n' and sub in ('revert', 'cherry-pick') and not unsure:
+                held.add('--no-commit')
+    return sub in ('commit', 'am') or not held, None if unplaced else revs, mainline, keep
+
+
+def git_plain_commit(event, ctx, cmd, inv, cwd, role):
+    """A git verb that makes a commit (COMMIT_VERBS, commit_scan), run by an agent session
+    (agent_session) in a linked worktree: plain git writes no Co-Authored-By trailer, so the gate's
+    trailer check fails the branch. It runs after every other shell rule, so a refusal another
+    rule owns (owner-identity, write-jail and the rest) stands. The alternative is the kit tool
+    that does the job with the trailer: commit.py for a commit or a sequence's next step,
+    sync_base.py for a merge or pull, the verb's --no-commit form (its -m, -X and --strategy kept) and then commit.py
+    for a revert or cherry-pick, git apply --index and then commit.py for am. A --skip drops the
+    change in progress and goes on with plain commits: the alternative ends the sequence, drops the
+    change and takes what is left one at a time."""
+    gc = git_call_judged(inv)
+    if gc is None or gc.sub not in COMMIT_VERBS or not gc.dir or gc.unknown or gc.blind:
+        return None
+    if not agent_session(event, ctx):
+        return None
+    place = ctx.place(gc.dir)
+    if place.kind != repo.LINKED or not place.top:
+        return None
+    sub = gc.sub
+    makes, revs, mainline, kept = commit_scan(sub, gc.rest)
+    if not makes:
+        return None
+    top = quote(place.top)
+    commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), top)
+    why = '`%s` makes a commit with plain git, which writes no Co-Authored-By trailer: the gate\'s trailer check ' \
+          'then fails the branch. ' % bare(cmd)
+    words = {w.text for w in gc.rest}
+    one = 'git -C %s apply --index <patch>' % top if sub == 'am' else \
+        'git -C %s %s --no-commit <commit>' % (top, sub)
+    # --quit forgets the commits or patches still to come: the advice says where to read them first
+    left = 'the patches from the one in progress on are in the folder git -C %s rev-parse --git-path ' \
+        'rebase-apply names' % top if sub == 'am' else \
+        'the commits still to come are listed in the file git -C %s rev-parse --git-path sequencer/todo ' \
+        'names' % top
+    note = ' --quit forgets what is left, so read it first: %s.' % left
+    if sub in ('revert', 'cherry-pick', 'am') and '--skip' in words:
+        return refuse('git-plain-commit', role, why + '--skip drops the change in progress and goes on with the rest '
+                      'as plain commits.%s End the sequence here, then in their own calls drop the change in '
+                      'progress with git -C %s reset --merge and take each one left with %s, then %s:'
+                      % (note, top, one, commit),
+                      'git -C %s %s --quit' % (top, sub))
+    if sub == 'commit' or words & set(COMMIT_STEPS) or (sub == 'am' and '-r' in words):
+        rest = ''
+        if sub in ('revert', 'cherry-pick', 'am'):
+            rest = ' The kit tool commits only the change in progress: it does not go on with the rest of the ' \
+                   'sequence. After it, end the sequence with git -C %s %s --quit and take each one left with %s, ' \
+                   'then commit.py.%s' % (top, sub, one, note)
+        return refuse('git-plain-commit', role, why + 'Commit with the kit tool, which stages the paths you name '
+                      'and adds the trailer.%s The commit:' % rest, commit)
+    if sub in ('merge', 'pull'):
+        return refuse('git-plain-commit', role, why + 'Sync with the commit your coordinator named; the tool merges '
+                      'exactly it and adds the trailer (to merge anything else, run git -C %s merge --no-commit '
+                      '<rev>, then in its own call %s):' % (top, commit),
+                      'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), top))
+    if sub == 'am':
+        return refuse('git-plain-commit', role, why + 'Apply the patch to the index, then in its own call commit it '
+                      'with %s:' % commit, 'git -C %s apply --index <patch>' % top)
+    keep = ''
+    if mainline is not None:
+        keep = ' -m %s' % (mainline if mainline.isdigit() else '<n>')
+    keep += ''.join(' ' + kept_word(*w) for w in kept)
+    return refuse('git-plain-commit', role, why + 'Run it with --no-commit, then in its own call commit what it '
+                  'changed with %s:' % commit,
+                  'git -C %s %s --no-commit%s %s' % (top, sub, keep, ' '.join(revs or ()) or '<commit>'))
+
+
+# git that python or node code given on the line runs (interpreter_git): the guard reads git only
+# as a typed shell command, so every git rule (commit.py's trailer, the shared refs, the main
+# checkout) is blind to it. Known limits, none read here:
+# - a script file (one in a temp or scratch folder too) and python -m: only code on the line
+#   (-c, -e) or on standard input (a heredoc, a here-string, text piped in) is read;
+# - a program or a git name the code builds at run time ('g' + 'it', importlib, getattr);
+# - other interpreters (ruby, perl, deno) and compiled programs; PowerShell's Start-Process and
+#   .NET's Process;
+# - a library that writes the repository itself (dulwich, pygit2, open('.git/refs/...'));
+# - a line the parser cannot read: the fallback does not run this rule;
+# - a git command that is not at the start of its string ('cd x && git commit', shell=True);
+# - a git name the code is given from outside its text: an argument (python -c
+#   "...subprocess.run(sys.argv[1:])" git commit) or an environment variable (G=git python -c
+#   "...os.environ['G']...");
+# - python or node run by a launcher (uv run python -c ..., npx node -e ...): the line's program
+#   is the launcher, and its arguments are not read as code;
+# - an option that takes the next word as its value and is not named (python's
+#   --check-hash-based-pycs always, a node option outside NODE_VALUE_OPTS): its value is read as
+#   the script, so the code after it is not read.
+# It refuses honest code in two ways, both kept: a git read (rev-parse, log) is refused like a
+# write, since a read allowance would pass a verb the code computes; and a 'git ...' string in code
+# whose launch runs another program is read as git.
+# a call that starts a program: subprocess, os.system and its kin, asyncio's, node's child_process
+INTERPRETER_LAUNCH_RE = re.compile(r'\b(subprocess|os\.(system|popen|exec\w*|spawn\w*|posix_spawn\w*)|from os import'
+                                   r'|pty\.spawn|create_subprocess_\w+|child_process)\b')
+# git named as a program: a quoted string that is git or git.exe (a path before it allowed), or
+# starts with `git ` (a list's first element, a shell=True string, an f-string, shutil.which('git'))
+INTERPRETER_GIT_RE = re.compile(r'''(['"`])(?:[^'"`\s]*[\\/]|[A-Za-z]:[\\/][^'"`\n]*[\\/])?git(?:\.exe)?'''
+                                r'''(?:\1|\s)''', re.I)
+# a git verb near the git name, which only chooses the alternative's line
+INTERPRETER_VERB_RE = re.compile(r'''(?:['"`]|\bgit(?:\.exe)?\s+(?:-C\s+\S+\s+)?)'''
+                                 r'''(commit-tree|commit|revert|cherry-pick|am|merge|pull)(?=['"`\s])''')
+INTERPRETER_COMMITS = ('commit-tree', 'commit', 'revert', 'cherry-pick', 'am')
+
+
+def interpreter_git(event, ctx, cmd, inv, cwd, role):
+    """git run by python or node code given on the line (rules.inline_code: -c, -e, a heredoc, a
+    here-string, text piped in), in an agent session (agent_session), from any directory: one
+    text of that code that both starts a program (INTERPRETER_LAUNCH_RE) and names git as one
+    (INTERPRETER_GIT_RE). The guard reads git only as a typed shell command, so no git rule judges
+    git that code runs. It runs after every other shell rule, so a refusal another rule owns (the
+    main checkout's unplaced code, owner-identity and the rest) stands. The alternative is the git
+    command typed: commit.py for a commit the code makes, sync_base.py for a merge or pull, else
+    `git -C <worktree> <the git command your code ran>`; a git verb in the code only chooses it."""
+    if not agent_session(event, ctx):
+        return None
+    texts = [t for t in inline_code(cmd, inv, skip_pipe=lambda c: True)
+             if INTERPRETER_LAUNCH_RE.search(t) and INTERPRETER_GIT_RE.search(t)]
+    if not texts:
+        return None
+    verbs = {m.group(1) for t in texts for m in INTERPRETER_VERB_RE.finditer(t)}
+    top = own_worktree(ctx, cwd)
+    wt = quote(top) if top else '"<worktree>"'
+    commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), wt)
+    sync = 'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), wt)
+    which = 'node' if inv.name == 'node' else 'python'
+    why = ('`%s` runs git from %s code. The guard reads git only as a typed shell command, so none of its git '
+           'rules (the shared refs, the main checkout, the commit trailer) judge git that code runs. Type the git '
+           'command itself, one per call; a commit goes through the kit\'s commit.py and a sync through its '
+           'sync_base.py. If the guard refuses the typed git command, that refusal stands: do not route it through '
+           'a program or a script file.' % (hub_line(bare(cmd)), which))
+    if verbs & set(INTERPRETER_COMMITS):
+        return refuse('interpreter-git', role, why + ' The commit:', commit)
+    if verbs & {'merge', 'pull'}:
+        return refuse('interpreter-git', role, why + ' The sync:', sync)
+    return refuse('interpreter-git', role, why + ' The git command:',
+                  'git -C %s <the git command your code ran>' % wt)
+
+
 STASH_READS = ('list', 'show', 'create')        # no entry added or taken
 STASH_NAMED = ('apply', 'drop')                 # pass with the entry named: `apply <sha>`, `drop stash@{1}`
 
@@ -3893,10 +4416,9 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
     top = quote(place.top)
     return refuse('git-stash-shared', role, '`%s` adds to or takes from the stash stack every worktree of this '
                   'repository shares; while it holds an entry every gate and landing refuses (docs/gate.md "The '
-                  'stash guard"). Set the work aside as a WIP commit on your branch: stage each path you changed, '
-                  'a new file too, then commit them with git -C %s commit -m "WIP: <what>" -- <each path you '
-                  'changed>, each in its own call. To stage:' % (bare(cmd), top),
-                  'git -C %s add -- <each path you changed>' % top)
+                  'stash guard"). Set the work aside as a WIP commit on your branch with the kit tool, which stages '
+                  'each path you name, a new file too, and adds the trailer:' % bare(cmd),
+                  'python %s -C %s -m "WIP: <what>" <each path you changed>' % (kit_tool(ctx, 'commit'), top))
 
 
 def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
@@ -4647,13 +5169,15 @@ def git_in_worktree(ctx, cmd, gc, main_top, cwd):
     return 'Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub, instead
 
 
-def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
+def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos, cleanup=False):
     """(sentence, command) for `git update-ref -d <ref>`, or None. Every worktree of a repository
     shares its refs, so neither a worktree nor the lander carries a ref delete to main: a branch
-    goes with git branch -d, which refuses an unmerged one; any other ref is shown, and the PM
-    deletes it; a guarded main is never offered to branch -d. Both run in the session's own
-    worktree of this main checkout when it has one. None too for a ref git_shared_ref lets any
-    session delete (scratch_ref): only where it runs is wrong, and git_in_worktree says so."""
+    goes with git branch -d, which refuses an unmerged one; a stray ref (stray_ref) is shown, and
+    a coordinator deletes it in its own repository (`cleanup`: the session is one); any other ref
+    is shown, and the PM deletes it; a guarded main is never offered to branch -d. Both run in
+    the session's own worktree of this main checkout when it has one. None too for a ref
+    git_shared_ref lets any session delete (scratch_ref): only where it runs is wrong, and
+    git_in_worktree says so."""
     if gc.sub != 'update-ref' or 'd' not in short or 'stdin' in longs or gc.blind:
         return None
     ref = pos[0] if pos else None
@@ -4669,6 +5193,12 @@ def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
                     (shared, name), 'git -C %s show-ref %s' % (at, name))
         return ('%s Delete a branch with git branch -d, which refuses an unmerged one; unmerged work goes to '
                 'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, branch))
+    if name and stray_ref(name):
+        who = 'you delete it in your own repository, naming the ref literally' if cleanup else \
+            'your coordinator deletes it from its own session in its own repository, so send it the ref'
+        return ('%s A ref outside refs/heads, refs/tags, refs/stash and refs/backlog is a coordinator\'s '
+                'to delete: %s. To show it:' %
+                (shared, who), 'git -C %s show-ref %s' % (at, name))
     return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
             'git -C %s show-ref %s' % (at, name or '<ref>'))
 
@@ -4702,6 +5232,41 @@ def scratch_ref(name):
     """True for a ref any agent session may write or delete from any checkout: refs/tmp/<name>
     and the per-worktree refs but HEAD."""
     return ref_name_ok(name) and name != 'HEAD' and (name.startswith('refs/tmp/') or per_worktree_ref(name))
+
+
+# the main sessions that may delete a stray ref in their own repository (the coordinator and its
+# old mark: AGENT_MARKS's first two), and the refs that are no stray ref, compared without case:
+# NTFS reads refs/HEADS/main as the loose file of refs/heads/main
+REF_CLEANUP_MARKS = AGENT_MARKS[:2]
+NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash', 'refs/backlog')
+
+
+def stray_ref(name):
+    """True for a ref a coordinator may delete in its own repository: a ref_name_ok name under
+    refs/, outside refs/heads, refs/tags, refs/stash (every worktree's stash entries) and
+    refs/backlog (the backlog store, in any case)."""
+    low = (name or '').lower()
+    return ref_name_ok(name) and low.startswith('refs/') and not low.startswith(NOT_STRAY)
+
+
+def cleanup_session(event, ctx):
+    """True for a main session whose mark (session_mark: None for every subagent, a call a host
+    cannot tell apart included) is one of REF_CLEANUP_MARKS, case ignored."""
+    return str(session_mark(event, ctx) or '').lower() in REF_CLEANUP_MARKS
+
+
+def _deref_unsure(place, name):
+    """Why `git update-ref -d <name>` without --no-deref may delete another ref (git follows a
+    symbolic ref and deletes where it points), or None: a reftable repository, where the guard
+    reads no ref file, a loose ref file that does not read, or one that is a symbolic ref."""
+    if os.path.isdir(os.path.join(place.common, 'reftable')):
+        return 'its refs are in a reftable, where the guard cannot tell a symbolic ref'
+    text, why = _read_ref(os.path.join(place.common, *name.split('/')))
+    if text is None:
+        return why
+    if text.startswith('ref:'):
+        return 'it is a symbolic ref to %s, and git deletes that ref instead' % text[4:].strip()
+    return None
 
 
 def main_names(ctx, where):
@@ -4824,11 +5389,31 @@ def _update_ref_unread(gc, short, longs, pos):
     return None
 
 
+def _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role):
+    """A coordinator's `git update-ref -d <stray_ref>`: None (allowed) in its own repository (the
+    main checkout `top` of the place git runs in is the one of its session's folder `cwd`) when
+    git deletes that ref itself (--no-deref, or _deref_unsure finds no other ref it may reach);
+    else the refusal."""
+    mine = ctx.main_top(cwd) if cwd else None
+    at = quote(top or gc.dir)
+    if not top or not mine or paths.norm(mine) != paths.norm(top):
+        return refuse('git-shared-ref', role, '`%s` deletes %s in a repository other than the one your session '
+                      'runs in (%s): a coordinator deletes a stray ref only in its own repository, and that '
+                      'repository\'s coordinator deletes this one. To show it:' % (text, name, fwd(mine or cwd or '?')),
+                      'git -C %s show-ref %s' % (at, name))
+    why = None if 'no-deref' in longs else _deref_unsure(place, name)
+    if why is None:
+        return None
+    return refuse('git-shared-ref', role, '`%s` may delete another ref than %s: %s. Delete the ref itself with '
+                  '--no-deref:' % (text, name, why), 'git -C %s update-ref --no-deref -d %s' % (at, name))
+
+
 def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
     repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
     write scratch_ref names, and in a linked worktree its HEAD and the branch checked out there
-    (never a guarded main); it deletes only scratch_ref names. A ref is judged by its name; HEAD
+    (never a guarded main); it deletes only scratch_ref names, and a coordinator's main session
+    (cleanup_session) a stray_ref in its own repository too (_stray_delete). A ref is judged by its name; HEAD
     (unless --no-deref) by the branch it is on too, so a worktree on a guarded main does not move
     it. A scratch repository (_scratch_repo: in a temp root, no
     link out of its git directory) is not judged. Neither the PM data worktree nor, while the
@@ -4857,9 +5442,11 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
     allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
               'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
-              'checked out there; any other ref is the PM\'s.'
+              'checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, refs/stash and ' \
+              'refs/backlog in its own repository; any other ref is the PM\'s.'
+    cleanup = cleanup_session(event, ctx)
     if unread:
-        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
         if hint:
             return refuse('git-shared-ref', role, '`%s`: %s, and %s. %s' % (text, unread, shared, hint[0]), hint[1])
         return refuse('git-shared-ref', role, '`%s`: the guard cannot tell which ref it writes: %s; %s. Name one '
@@ -4880,9 +5467,11 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         bad = [r for r in chain if not _ref_ok(r, delete, linked, own)]
         if not bad:
             return None
+        if cleanup and 'd' in short and stray_ref(name):
+            return _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role)
         why = '%s is not one it may %s' % (bad[0] if bad[0] == name else '%s, where %s points,' % (bad[0], name),
                                            'delete' if delete else 'write')
-    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
     if hint:
         return refuse('git-shared-ref', role, '`%s` deletes %s: %s. %s' % (text, name, why, hint[0]), hint[1])
     return refuse('git-shared-ref', role, '`%s` %s %s: %s; %s. %s To show it:' % (

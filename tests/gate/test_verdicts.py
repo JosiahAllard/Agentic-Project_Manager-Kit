@@ -36,6 +36,36 @@ class Check(unittest.TestCase):
                 self.assertIsNone(V.check(given('kit/a', tip, reviewer=reviewer), stored=False))
 
 
+class SelfReviewWhy(unittest.TestCase):
+    """A High-risk verdict the queueing coordinator reviewed itself is refused (verdicts.
+    self_review_why); a Low or Medium self-read, or a High one by another reviewer, is not."""
+
+    def test_a_high_risk_coordinator_self_review_is_refused_with_the_instead_line(self):
+        tip = 'a' * 40
+        for over in ({'reviewer_id': 'coord-1'}, {'reviewer_id': ' Coord-1 '},
+                     {'reviewer_id': 'agent-x / coord-1'},
+                     {'session': ' Coord-1 ', 'reviewer_id': 'coord-1'},
+                     {'reviewer': 'pm-kit:coordinator'}, {'reviewer': 'Coordinator'},
+                     {'reviewer': 'kit-coordinator'}, {'reviewer': 'pm-kit:analyst / pm-kit:coordinator'},
+                     {'reviewer': 'pm-kit:coordinator', 'reviewer_id': 'coord-1'}):
+            with self.subTest(**over):
+                why = V.self_review_why(given('kit/a', tip, risk='High', **over))
+                self.assertIn('a High-risk verdict needs a reviewer other than the coordinator', why or '')
+                self.assertEqual(why.splitlines()[-1], V.SELF_REVIEW_INSTEAD)
+                self.assertIn('--reviewer pm-kit:analyst --reviewer-id <its agent id>', why)
+
+    def test_a_small_self_read_and_another_reviewer_stay_allowed(self):
+        tip = 'a' * 40
+        for risk in ('Low', 'Medium'):
+            for over in ({'reviewer_id': 'coord-1'}, {'reviewer': 'pm-kit:coordinator'}):
+                with self.subTest(risk=risk, **over):
+                    self.assertIsNone(V.self_review_why(given('kit/a', tip, risk=risk, **over)))
+        for over in ({}, {'reviewer': 'pm-kit:analyst', 'reviewer_id': 'agent-a7'},
+                     {'reviewer_id': 'coord-10'}, {'reviewer': 'pm-kit:coordinators-helper'}):
+            with self.subTest(**over):
+                self.assertIsNone(V.self_review_why(given('kit/a', tip, risk='High', **over)))
+
+
 class QueueCase(GateRepoCase):
     def setUp(self):
         GateRepoCase.setUp(self)
@@ -125,6 +155,16 @@ class Queue(QueueCase):
             with self.assertRaises(V.BadEntry, msg=e):
                 V.add(self.common, e)
         self.assertEqual(self.folder_names(), [])
+
+    def test_a_high_risk_self_review_is_refused_and_nothing_written(self):
+        _, tip = self.branch('a', {'a.txt': 'a\n'})
+        for over in ({'reviewer_id': 'coord-1'}, {'reviewer': 'pm-kit:coordinator'}):
+            with self.subTest(**over), self.assertRaises(V.SelfReview) as cm:
+                V.add(self.common, given('kit/a', tip, risk='High', **over))
+            self.assertIsInstance(cm.exception, V.BadEntry)
+        self.assertEqual(self.folder_names(), [])
+        _, stored = V.add(self.common, given('kit/a', tip, risk='Medium', reviewer_id='coord-1'))
+        self.assertEqual(stored['reviewer_id'], 'coord-1')       # a small self-read is queued
 
     def test_a_windows_device_name_is_refused(self):
         for name in ('con', 'NUL', 'com1', 'aux.x'):

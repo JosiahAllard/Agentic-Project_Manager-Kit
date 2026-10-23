@@ -38,6 +38,15 @@ class Window:
         self.disconnect=ttk.Button(controls,text='Disconnect chats',command=lambda:self._change(False))
         self.disconnect.pack(side='left')
         ttk.Button(controls,text='Refresh open chats',command=self.refresh).pack(side='right')
+        writers=ttk.Frame(frame)
+        writers.pack(fill='x',pady=(0,12))
+        # A writer lease: the first chat (a Codex app chat with an active turn) carries
+        # delivery to the second for a chat of another app. It lasts one hour.
+        self.lend=ttk.Button(writers,text='Let first chat deliver to second for other apps (1 hour)',
+            command=lambda:self._lease(True))
+        self.lend.pack(side='left')
+        self.unlend=ttk.Button(writers,text='Stop',command=lambda:self._lease(False))
+        self.unlend.pack(side='left',padx=8)
         self.selected=tk.StringVar(value='Select two chats to choose a connection.')
         ttk.Label(frame,textvariable=self.selected).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Current connections',font=('Segoe UI',11,'bold')).pack(anchor='w')
@@ -56,8 +65,7 @@ class Window:
             self.selected.set('First: '+titles[0]+'    Second: '+titles[1])
         else: self.selected.set('Select exactly two chats. The first selection is the sender for a one-way connection.')
         state='normal' if len(self._order)==2 and not self.preview else 'disabled'
-        self.connect.configure(state=state)
-        self.disconnect.configure(state=state)
+        for button in (self.connect,self.disconnect,self.lend,self.unlend): button.configure(state=state)
 
     def refresh(self):
         try:
@@ -72,18 +80,29 @@ class Window:
             self.routes.delete(0,tk.END)
             for source,target in self.owner.connections():
                 self.routes.insert(tk.END,self.choices[source].title+' → '+self.choices[target].title)
+            for writer,target in self.owner.writers():
+                self.routes.insert(tk.END,self.choices[writer].title+' delivers to '+self.choices[target].title+' for other apps')
             if not self.preview and not choices: self.status.set('No available chats yet. Open a supported chat with the bridge plugin enabled.')
             self._selection()
         except Exception:
             self.status.set('Chat discovery is unavailable. Existing connections are not changed by this refresh.')
-            self.connect.configure(state='disabled')
-            self.disconnect.configure(state='disabled')
+            for button in (self.connect,self.disconnect,self.lend,self.unlend): button.configure(state='disabled')
 
     def _change(self,enabled):
         if self.preview or len(self._order)!=2: return
         try:
             self.owner.change(*self._order,enabled=enabled,bidirectional=self.direction.get()=='Both directions')
             self.status.set('Chats connected. Each keeps its current permissions.' if enabled else 'Chats disconnected. The chats remain open.')
+        except Exception:
+            self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
+        self.refresh()
+
+    def _lease(self,enabled):
+        if self.preview or len(self._order)!=2: return
+        try:
+            self.owner.lease(*self._order,enabled=enabled)
+            self.status.set('The first chat now delivers to the second for other apps for one hour. '
+                'It must stay in an active turn.' if enabled else 'The first chat no longer delivers to the second.')
         except Exception:
             self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
         self.refresh()

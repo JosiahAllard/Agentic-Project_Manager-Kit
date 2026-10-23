@@ -525,8 +525,8 @@ class LockVerbs(Base):
         lock = 'tools/machine_lock.py'
         rows = (('bash', 'git log -- %s' % lock), ('bash', 'git log -p -- %s' % lock),
                 ('bash', 'git -C x show HEAD:%s' % lock), ('bash', 'git --no-pager diff -- %s' % lock),
-                ('bash', 'git commit -m "machine_lock.py: fix"'),
-                ('powershell', 'git commit -m "machine_lock.py: fix"'),
+                ('bash', 'git commit --dry-run -m "machine_lock.py: fix"'),
+                ('powershell', 'git commit --dry-run -m "machine_lock.py: fix"'),
                 ('bash', 'winpty python %s status' % lock), ('bash', 'bash -c "python %s status"' % lock),
                 ('bash', 'bash -c "cd tools && python machine_lock.py status"'),
                 ('bash', "bash <<'EOF'\npython %s status\nEOF" % lock),

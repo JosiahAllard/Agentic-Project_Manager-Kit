@@ -38,7 +38,8 @@ text is for the owner's console (it may name a folder):
      and GET health says so in a fixed phrase (the reason itself names folders).
   4. the Api over the store and a SiteViews (with approval_key reading the approval key from
      the token folder on each use, and checkout matching a repo_id to the backlog's configured
-     repositories by their origin remote: _checkout), then the local listener on
+     repositories by their origin remote: _checkout, and repo_name giving that repository's
+     name, the coordinator a decided approval is for: _repo_name), then the local listener on
      settings.port with httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
      the port that was really bound, httpd.stop_route (it sets Hub.stopping and answers this
      process's pid and creation time; the tunnel listener never has it) and health_route. The
@@ -158,7 +159,8 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
       both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
       (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
-  notices() repos() usage() agents()      kitlib.hubsite.derived's answers
+  notices() repos() usage() agents() findings()
+                                          kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
       source, else [{repo, fetched_at, error}] as the last backlog read gave it (`backlog_at`:
@@ -342,6 +344,8 @@ class Sources(object):
       static_dir   the page's folder; a missing one answers 404
       pm_data      kitlib.pmdata's {path, branch, remote}, or None
       notices      the machine lock's notice folder
+      findings     the maintenance lint's results folder, <pm_data>/maint-lint (one
+                   <repo>/result.json each: kitlib.maintlint.result); None: no findings
       repos        callable(the store's repos documents) -> [{name, aliases}]
       known_repos  callable() -> the PM's configured repo names, which the store's repo-alias
                    check accepts without a repos/ document; None: none
@@ -374,7 +378,9 @@ class Sources(object):
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None, known_repos=None, push=None, push_dir=None, lock=None):
+                 access_now=None, known_repos=None, push=None, push_dir=None, lock=None,
+                 findings=None):
+        self.findings = findings
         self.lock = lock
         self.push = push
         self.push_dir = push_dir
@@ -458,6 +464,9 @@ def machine_sources(home=None, sync=True):
                   notices=pmwatch.configured_notice_dir(path),
                   agents=agents_dir(),
                   sync=gitsync.GitSync if sync else None)
+    if pm and pm.get('path'):
+        from kitlib.maintlint import result as lint_result
+        src.findings = os.path.join(pm['path'], lint_result.FOLDER)
     from . import lockdoor          # here: only the machine's server reads the machine lock
     src.lock = lockdoor.LockDoor()
     if pmwatch.launcher_configured(home):
@@ -502,9 +511,10 @@ def _record_call(fn, *args):
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
     exists: `backlog_views` for backlog, completed, record, record_template and the record
-    writes (record_add, record_edit, record_delete), sources.repos and .agents for theirs.
-    notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
-    folder with no notices and a missing usage source with its own phrase). `sync` is the git
+    writes (record_add, record_edit, record_delete, record_unblock), sources.repos and .agents
+    for theirs. notices, findings, usage and health are always there (kitlib.hubsite.derived
+    answers a missing notice or findings folder with none and a missing usage source with its
+    own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
     text)`: where after_round says that a read of its own failed."""
 
@@ -519,6 +529,7 @@ class SiteViews(object):
         self._sync_off = sync_off
         self._last = None           # what the last backlog answer said, for health
         self.notices = self._notices
+        self.findings = self._findings
         self.usage = self._usage
         if backlog_views is not None:
             self.backlog = self._open
@@ -528,6 +539,7 @@ class SiteViews(object):
             self.record_add = self._record_add
             self.record_edit = self._record_edit
             self.record_delete = self._record_delete
+            self.record_unblock = self._record_unblock
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
@@ -634,8 +646,17 @@ class SiteViews(object):
         self._backlog.reread(name, root)
         return out
 
+    def _record_unblock(self, repo, id, on, reason, ruling):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.unblock(root, id, on, reason, ruling)
+        self._backlog.reread(name, root)
+        return dict(out, record=self._record(name, id))
+
     def _notices(self):
         return derived.notices(self._sources.notices)
+
+    def _findings(self):
+        return derived.findings(self._sources.findings)
 
     def _repos(self):
         return self._sources.repos(list(self._store.docs('repos').values()))
@@ -854,16 +875,39 @@ def _checkout(backlog_views):
     repo_id (approvals.remote_id), read with git on each call; None when none is, when there is
     no backlog, or when the repositories cannot be listed, so a request fails closed."""
     def checkout(repo_id):
-        from . import approvals     # it imports kitlib.hubsite.client, which imports this module
-        try:
-            pairs = backlog_views.repos() if backlog_views is not None else []
-        except Exception:           # noqa: BLE001 - no list, no checkout: the request is refused
-            return None
-        for _name, root in pairs:
-            if approvals.remote_id(root)[0] == repo_id:
-                return root
-        return None
+        found = _configured(backlog_views, repo_id)
+        return found[0][1] if found else None
     return checkout
+
+
+def _repo_name(backlog_views, session_keys=None):
+    """Api's repo_name(repo_id) (kitlib.hubsite.api, "Routes"): the name of the configured
+    repository whose origin remote is that repo_id, found as _checkout finds its root; None when
+    none is, so a decided approval is the PM's alone. When several configured names share that
+    remote (the kit's folder name and its coordinator's key, say), the first that is one of
+    session_keys() (the launcher's keys, read only then) is named, else the first."""
+    def repo_name(repo_id):
+        names = [name for name, _root in _configured(backlog_views, repo_id)]
+        if len(names) > 1 and session_keys is not None:
+            try:
+                keys = session_keys()
+            except Exception:       # noqa: BLE001 - no keys: the first name, as with one
+                keys = ()
+            names = [n for n in names if n in keys] + names
+        return names[0] if names else None
+    return repo_name
+
+
+def _configured(backlog_views, repo_id):
+    """Every (name, root) of backlog_views.repos() whose origin remote is repo_id, in its order,
+    read with git; [] when none is, when there is no backlog, or when the repositories cannot be
+    listed."""
+    from . import approvals         # it imports kitlib.hubsite.client, which imports this module
+    try:
+        pairs = backlog_views.repos() if backlog_views is not None else []
+    except Exception:               # noqa: BLE001 - no list: no repository
+        return []
+    return [(name, root) for name, root in pairs if approvals.remote_id(root)[0] == repo_id]
 
 
 def _push_line(log, text):
@@ -910,7 +954,8 @@ def build(settings, sources, log=None):
             _follow_rounds(views_b, views)
         api = _api.Api(store, views,
                        approval_key=functools.partial(auth.read_approval_key, sources.tokens),
-                       checkout=_checkout(views_b), lock=sources.lock)
+                       checkout=_checkout(views_b), lock=sources.lock,
+                       repo_name=_repo_name(views_b, _api.launcher_keys))
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

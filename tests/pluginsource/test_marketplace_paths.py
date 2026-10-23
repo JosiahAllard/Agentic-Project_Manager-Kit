@@ -88,7 +88,7 @@ class MismatchTest(MarketplaceCase):
         self.assertEqual(claude.marketplace_mismatches(self.export, [none], managed=None), [])
 
     def test_a_corrupt_or_odd_file_is_one_could_not_check_line(self):
-        cases = ['{not json', '[1, 2]', json.dumps({'pm-kit': 'Z:\\x'}),
+        cases = ['{not json', '[1, 2]', json.dumps({'pm-kit': 'Q:\\x'}),
                  json.dumps({'pm-kit': {'installLocation': 7}}),
                  json.dumps({'pm-kit': {'source': {}}})]
         for i, text in enumerate(cases):

@@ -52,7 +52,6 @@ ALPHA_SHAPE = {
     'review_pack': {'coauthor': True},
     'commit': {'coauthor_families': ['Codex']},
     'preflight': {'report_hooks': ['daily_full:summary_lines'], 'traps': 'comments tagged GOTCHA:'},
-    'landing': {'lock_file': 'git:alpha-landing.lock'},
     'machine_paths': {
         'allow': [{'glob': 'CLAUDE.md', 'line': 'rulings ledger, `', 'why': 'literal on purpose'},
                   {'glob': 'docs/backlog/*.md', 'line': '^(?![a-z_]+: )', 'why': 'temporary',

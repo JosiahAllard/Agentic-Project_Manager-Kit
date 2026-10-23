@@ -107,7 +107,8 @@ class NoKitJson(unittest.TestCase):
         self.assertIn('does not load', d.reason)
 
     def test_the_machine_owner_email_guards_the_owner_identity(self):
-        self.assertIsNone(self.decide('git commit --author="O <owner@example.com>" -m x', sub=True))
+        d = self.decide('git commit --author="O <owner@example.com>" -m x', sub=True)
+        self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)      # no owner-identity
         self.w.user_config({'owner_email': 'owner@example.com'})
         d = self.decide('git commit --author="O <owner@example.com>" -m x', sub=True)
         self.assertEqual(d and d.rule, 'owner-identity', d and d.reason)

@@ -21,7 +21,7 @@ Fail closed. Anything that raises means every step runs. Nothing is read or stor
   - for a step that runs no command, a check step, a step without `globs` or `content`.globs, a
     step whose globs match no file git shows (a mistyped glob, or one naming only ignored
     files, would key it on its command alone), a step whose cmd, full_cmd, daily_cmd or
-    merged_args names {base}, or whose argv holds the base commit (a lane's merged_args);
+    merged_args names {base}, or whose argv holds the base commit;
   - for an input that is not a plain file (a link, a folder: a nested repository or submodule);
   - in a --full run, a branch gate's --only, or when "landing".reuse_max_age_h is 0;
   - when the change touches `.kit.json`, a config section file, the hook module, a path matching

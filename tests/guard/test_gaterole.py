@@ -139,7 +139,7 @@ class GateAllow(unittest.TestCase):
                            ('Bash', 'echo python tools/gate.py allow kit/x'),
                            ('Bash', 'grep -n "gate.py allow" docs/gate.md'),
                            ('PowerShell', 'Select-String -Path docs/gate.md -Pattern "gate.py allow"'),
-                           ('Bash', 'git -C "%s" commit -m "gate.py allow is the coordinator\'s" -- x.py'
+                           ('Bash', 'git -C "%s" commit --dry-run -m "gate.py allow is the coordinator\'s" -- x.py'
                             % self.wt)):
             with self.subTest(text=text):
                 self.passed(self.cmd(text, tool=tool), text)

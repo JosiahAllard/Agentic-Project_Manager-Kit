@@ -37,16 +37,15 @@ another session's run.
 ## Keeping your context small
 
 Trust a runner's own PASS/FAIL summary; open full logs only when something failed.
-Run to a log file and read the log; never pipe a run through grep, head or tail. Tests bind port 0;
-a fixed port is a finding. Scan output for the profile's pass strings, failure strings and known-harmless
-noise rather than reading all of it. Never paste a full log into your report.
+Run to a log file and read the log; never pipe a run through grep, head or tail.
+Scan output for the profile's pass strings, failure strings and known-harmless noise rather than reading all of it. Never paste a full log into your report.
 
 ## Report
 
 One line per tier: PASS or FAIL, with its time if known. On any FAIL, the specific
 failing line(s) only, plus a line of context where that is what names the failing
 test. Nothing else - no restating the request, no suggested fixes unless the
-caller asked for a diagnosis.
+caller asked for a diagnosis. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 

@@ -11,8 +11,8 @@ any of this: no message has yet been delivered end to end between live chats.
 it (`registry.py`), and `hosts.json` registers both (plan step 9). A profile for a host that is not
 registered is refused with `native-provider-unavailable`. The refusal happens while the
 configuration is checked, before that half's `bridge-profile.json` is read. Being served does not
-make a direction work: STATUS.md has the per-direction limits. Claude to Codex is not deliverable,
-and the Codex terminal adapter is dead.
+make a direction work: STATUS.md has the per-direction limits. Claude to Codex needs an
+owner-granted writer lease (Contracts, "Writer leases"), and the Codex terminal adapter is dead.
 
 This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 (docs/multi-host-plan.md section 2.4). Its design history, the Phase 0 evidence and the
@@ -91,15 +91,33 @@ nominates no channel, and the other halves keep working.
   native id, adapter, account, workspace) and restored when it reopens. A queued message keeps its
   original full binding and is refused rather than moved onto a reopened process. Display titles
   grant nothing. No MCP tool writes owner policy.
+- **Writer leases** (`core/owner.py` `WriterLeases`, `hosts/codex/runtime.py`). A Codex chat is
+  written only by a Codex desktop chat in an active turn, which is the native executor. A sender
+  of another host has none, so the owner may lend one: in the window, select a Codex desktop chat
+  (the writer) and then the Codex recipient, and click the lease button. The lease:
+  - names one writer for one recipient, and a new grant for that recipient replaces the old one
+  - lasts one hour; clicking again renews it, and Stop ends it
+  - is granted with a one-use owner proof; a route choice's proof never grants a lease, and a
+    lease's proof never selects a route
+  - lives in the service's memory only, so a restart drops it; it is never written to disk
+  - is never an MCP tool, and no agent can grant, renew or read it
+  - selects no route: the sender's own route to the recipient must still be selected
+
+  At every write the writer must hold the lease, be live, be in an active turn, be on the
+  recipient's account and not be the recipient, or the send refuses before any byte. A reply
+  return from another host to a Codex chat uses the same lease. A Codex sender never uses a lease:
+  its path is unchanged. The window's lease buttons have no test.
 - **Caller proofs** (`core/callers.py`). For each call, the frontend's attestor turns private
   metadata into a sender and task root, bound to that exact intent. A proof is used once and lasts
   5 seconds. The sender and task root are never tool arguments.
 - **Durable outbox** (`core/outbox.py`, `core/dispatch.py`). Admission persists the whole body
   before any send. The operation id is deduplicated against its full original context. Dispatch
   re-attests both live bindings and the route, then writes inside a fenced transaction. A failure
-  after the write, or a malformed receipt, becomes `unknown`. `unknown`, `held` and dispatched
-  operations are never resent. After a restart, work that was in flight becomes `unknown`. A
-  correlated native refusal is kept for its task root and blocks its queued siblings and later ids.
+  after the write, or a malformed receipt, becomes `unknown`. A refusal before the write keeps
+  the adapter's code as its reason when the code is an identifier, and `native-before-write`
+  otherwise. `unknown`, `held` and dispatched operations are never resent. After a restart, work
+  that was in flight becomes `unknown`. A correlated native refusal is kept for its task root and
+  blocks its queued siblings and later ids.
 - **Replies** (`bridge_reply`, `CoreBroker.reply_to`). Only the operation's exact recipient may
   reply, and only over the reverse route the owner selected. A reply creates its own linked return
   delivery, so the original receipt still means only "reply recorded". Without a reverse route the
@@ -164,7 +182,8 @@ shells).
      above, with the marker's absolute path. The name and metadata come from the half's
      `install()`. Each entry includes `env_vars` only for that host's declared `channel_env`
      names; current environment values are never copied. This forwards a host-nominated channel
-     to its frontend; it does not establish a writer lease or prove live delivery readiness.
+     to its frontend. It grants no writer lease (only the owner's click in the window does) and
+     does not prove live delivery readiness.
    - each half's own files, such as `claude-hooks.json`
    - `start-bridge.ps1` and `startup-task.xml`: a per-user, least-privilege task, not registered
    - `manifest.json`: every file's hash, every dependency and every bound path, marked

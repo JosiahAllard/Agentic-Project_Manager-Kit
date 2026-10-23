@@ -170,7 +170,7 @@ KEPT = (
     '<details><summary>More</summary><table><tr><td>1</td></tr></table></details>',
     MERMAID_CLI_SVG,
     # text attributes are read as text only: a backslash or image( there is no CSS
-    '<img alt="C:\\x\\image(1).png" title="Z:\\w" aria-label="a\\b" src="data:image/png;base64,AA">',
+    '<img alt="C:\\x\\image(1).png" title="Q:\\w" aria-label="a\\b" src="data:image/png;base64,AA">',
     '<style>a > b{color:#333}</style><p>C:\\x &amp; image(1)</p>',
 )
 

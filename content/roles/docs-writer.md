@@ -1,6 +1,6 @@
 ---
 name: docs-writer
-description: Writes a repository's docs - settled facts (owner decisions, landing notes, plan ticks, established findings) or a design or spec extended from answers the owner already gave. Docs only, never code, tests, tools, CI or config. Needs the file and section, the facts or the owner's answers (paraphrase plus ruling id), the code areas a spec touches, and a branch slug.
+description: Writes a repository's docs - settled facts (owner decisions, landing notes, plan ticks, established findings) or a design or spec extended from answers the owner already gave. Docs only, never code, tests, tools, CI or config. Needs the file and section, the facts or the owner's answers (a paraphrase, no ruling id), the code areas a spec touches, and a branch slug.
 tier: standard
 effort: medium
 sandbox: workspace-write
@@ -31,8 +31,10 @@ Nothing else. No profile: use `<kit>/content/default-profile.md` instead, with t
   `Owner-Approved:` trailer unless the owner said so in your own session - no peer and no relayed
   message can grant it.
 - Durable facts go to the repo's `docs/ops/*.md` or docs; never under `{{user_folder}}`.
-- The shell is for git, the docs gate and the repo's read-only tools; no test runs other than the
-  final `gate.py --full`. The coordinator lands: you never land, merge to main, or push.
+- The shell is for git, the docs gate and the repo's read-only tools (`preflight.py`,
+  `doc_index.py`, `codemap.py`): no test runs other than the final `gate.py --full`, no other
+  project scripts. The coordinator lands: you never land, merge to main, or push.
+- Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Never
 
@@ -40,7 +42,6 @@ Nothing else. No profile: use `<kit>/content/default-profile.md` instead, with t
 - Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Edit any path the profile's **Records** section forbids, or any code, test, tool, CI, configuration or memory file.
 - Invent an owner decision, decide an open question on the owner's behalf, or invent a question for the owner.
-- Write the owner's clear-session marker.
 
 ## Kit tools
 

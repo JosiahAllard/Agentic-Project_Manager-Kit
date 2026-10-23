@@ -32,9 +32,9 @@ zero-test run (a warning: judge's zero rules are then the only backstop).
 Gate keys this gate does not implement refuse (GateConfigError) when set, rather than being
 ignored: `python_tests` "pytests", `python_tests_floor` and `trailers` true (a step's
 `kill_retry` is no key at all: kitlib.config refuses it). docs/gate.md "Not ported" says why. A
-`--pid-hold` argument in `setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args`, or a
-landing lane's merged_args refuses too: the pid hold of tools/pytests.py and tools/kit_tests.py
-is opt-in for agent runs, never in the gate.
+`--pid-hold` argument in `setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args`
+refuses too: the pid hold of tools/pytests.py and tools/kit_tests.py is opt-in for agent runs,
+never in the gate.
 """
 import collections
 import fnmatch
@@ -311,20 +311,17 @@ def argv_of(s, full=False, daily=False):
     return s['cmd']
 
 
-def build(gate, root, base, tools_dir, merged=False, extra=None, full=False, daily=False):
+def build(gate, root, base, tools_dir, merged=False, full=False, daily=False):
     """[Step] for every configured step, in config order, plus `setup` first when configured.
     `full`: a step's `full_cmd`, when it has one, is its argv instead of `cmd` (a full run: a
     step whose cmd selects by the change runs everything). `daily` (the daily full run): its
     `daily_cmd` first, then `full_cmd`, then `cmd` (argv_of). `merged`: a step's merged_args are
-    appended (the landing's merged-tree gate), then `extra` (a landing lane's merged_args),
-    substituted alike."""
+    appended (the landing's merged-tree gate), substituted alike."""
     bad = unsupported(gate)
     unknown = unknown_names(gate)
     if unknown:
         raise GateConfigError('%s (steps: %s)' % ('; '.join(unknown), ', '.join(
             s['name'] for s in gate.get('steps') or []) or 'none'))
-    if PID_HOLD_FLAG in (extra or []):
-        bad.append('a landing lane\'s merged_args %s (%s)' % (PID_HOLD_FLAG, PID_HOLD_WHY))
     if bad:
         raise GateConfigError('this gate does not implement %s' % '; '.join(bad))
     values = mapping(root, base, tools_dir)
@@ -339,8 +336,8 @@ def build(gate, root, base, tools_dir, merged=False, extra=None, full=False, dai
         cmd = None
         if s.get('cmd'):
             argv = argv_of(s, full, daily)
-            cmd = substitute(list(argv) + (list(s.get('merged_args') or []) + list(extra or [])
-                                               if merged else []), values)
+            cmd = substitute(list(argv) + (list(s.get('merged_args') or []) if merged else []),
+                             values)
         cwd = os.path.normpath(os.path.join(root, s['cwd'])) if s.get('cwd') else root
         requires = [r if isinstance(r, str) else substitute(r, values) for r in s.get('requires') or []]
         steps.append(Step(s['name'], cmd, s.get('check'), cwd, _list(s.get('pass')),
