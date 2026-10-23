@@ -1297,7 +1297,7 @@ class DomTest(unittest.TestCase):
             out.none = on(); out.empty = text($("#list"));
             return out;
         """, snapshot(views=views))
-        self.assertEqual(got["sections"], ["questions", "topm", "todo", "backlog", "docs", "info"])
+        self.assertEqual(got["sections"], ["home", "questions", "topm", "todo", "backlog", "docs", "info"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -2130,6 +2130,182 @@ class ShellTest(unittest.TestCase):
         self.assertEqual(dict((c[0], c[1]) for c in got["counts"])["n-t"], "2")
         self.assertEqual(got["after"], {"sec": ["todo"], "tb": ["todo"], "hash": "#todo", "section": "todo"})
 
+    def test_a_backlog_address_leaves_parked_whichever_backlog_hash_it_is(self):
+        """Back or a typed #stories from Parked shows the current list, as #backlog does."""
+        for h in ("#backlog", "#stories"):
+            got = dom(SHELL_NOW + """
+                await start();
+                await click($("#sections [data-s=backlog]")); await click($("#stabs [data-sf=parked]"));
+                const parked = now();
+                await navigate(%s);
+                return [parked, now()];
+            """ % json.dumps(h), snapshot(collections=LISTS, views={"backlog": BACKLOG}))
+            with self.subTest(hash=h):
+                self.assertEqual((got[0]["sf"], got[0]["hash"]), (["parked"], "#parked"))
+                self.assertEqual((got[1]["sec"], got[1]["sf"]), (["backlog"], ["current"]))
+
+    def test_an_address_change_is_not_followed_while_the_reader_is_open(self):
+        got = dom(SHELL_NOW + """
+            await start();
+            $("#reader").hidden = false;
+            await navigate("#todo");
+            const under = now();
+            $("#reader").hidden = true;
+            await navigate("#agents");
+            return [under, now()];
+        """, snapshot(collections=LISTS))
+        self.assertEqual(got[0]["sec"], ["questions"])
+        self.assertEqual((got[1]["sec"], got[1]["nf"]), (["info"], ["agents"]))      # followed once the reader is shut
+
+
+APPROVAL = {"status": "pending", "repo": "github.com/team/alpha", "title": "Raise the cap", "head": "a" * 40, "version": 2,
+            "created_at": "2026-10-04T00:00:00Z", "files": [], "diff": []}
+NEEDS = {
+    "approvals": {"A-1": APPROVAL, "A-2": dict(APPROVAL, status="approved", title="decided")},
+    "questions": {
+        "Q-1": {"status": "open", "title": "mid", "version": 1, "asked_at": "2026-10-02T00:00:00Z", "options": [{"label": "x"}]},
+        "Q-2": {"status": "open", "title": "old", "version": 1, "asked_at": "2026-10-01T00:00:00Z", "options": [{"label": "x"}]},
+        "Q-3": {"status": "open", "title": "hot", "urgent": True, "version": 1, "asked_at": "2026-10-05T00:00:00Z", "options": [{"label": "x"}]},
+        "Q-4": {"status": "answered", "title": "sent", "version": 1, "asked_at": "2026-09-01T00:00:00Z", "options": [{"label": "x"}],
+                "answer": {"choice": 0, "at": NOW}}},
+    "todos": {
+        "T-1": {"status": "open", "title": "plain", "from": "you", "version": 1, "added_at": "2026-09-01T00:00:00Z"},
+        "T-2": {"status": "done", "title": "finished", "from": "pm", "version": 1, "added_at": "2026-09-01T00:00:00Z"},
+        "T-3": {"status": "open", "title": "rush", "urgent": True, "from": "pm", "version": 1, "added_at": "2026-10-06T00:00:00Z"}}}
+
+
+def lock_view(rev, head="12 cpu slots, 2 gpu slots", strip=(), warnings=()):
+    """What GET /lock/view and GET /lock/wait answer: the view plus the lock's revision."""
+    return {"ok": True, "lock_revision": rev, "writer": "owner", "writes": {"lock": True, "strong": True, "why": ""},
+            "view": {"now": NOW, "cores": {"head": head, "cpu": [], "gpu": []}, "strip": [{"text": s} for s in strip],
+                     "warnings": list(warnings)}}
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class HomeTest(unittest.TestCase):
+    """The Home view: what waits on the owner, and the machine line read from the lock's owner routes."""
+
+    def test_the_needs_you_list_merges_approvals_questions_and_todos_in_order(self):
+        got = dom("""
+            await start();
+            const first = $$("#list article").map(a => a.id), head = text($("#need-head")), chips = $$("#list .chip").map(text);
+            await click(button($("#need-T-3"), "Open"));
+            const todo = [$("#sections .sec[aria-selected=true]").dataset.s, location.hash];
+            await click($("#sections [data-s=home]"));
+            await click(button($("#need-Q-1"), "Open"));
+            const q = [$("#sections .sec[aria-selected=true]").dataset.s, location.hash, !!$("#q-Q-1")];
+            return { first, head, chips, todo, q };
+        """, snapshot(strong=True, collections=NEEDS), hash="#home")
+        # urgent first (an approval is always urgent), approvals before questions before to-dos, then the oldest first;
+        # a decided approval, an answered question and a done to-do are not on the list
+        self.assertEqual([i[len("need-"):] for i in got["first"]], ["A-1", "Q-3", "T-3", "Q-2", "Q-1", "T-1"])
+        self.assertEqual(got["head"], "Waiting on you (6)")
+        self.assertEqual(got["chips"], ["Approval", "Question", "To do", "Question", "Question", "To do"])
+        self.assertEqual(got["todo"], ["todo", "#todo"])
+        self.assertEqual(got["q"], ["questions", "#questions", True])
+
+    def test_an_empty_list_says_so_and_before_the_first_read_says_waiting(self):
+        got = dom("""
+            server.route = c => c.path === "/snapshot" ? { status: 500, body: { ok: false, error: { message: "down" } } } : undefined;
+            await start();
+            return text($("#list"));
+        """, snapshot(), hash="#home")
+        self.assertIn("Waiting for the hub server", got)
+        self.assertIn("Nothing waits on you", dom("await start(); return text($('#list'));", snapshot(), hash="#home"))
+
+    def test_the_machine_line_follows_the_lock_view_and_wait(self):
+        got = dom("""
+            let waits = 0;
+            server.route = c => {
+              if (c.path === "/lock/view") return { status: 200, body: VIEW1 };
+              if (c.path.startsWith("/lock/wait")) return ++waits === 1 ? { status: 200, body: VIEW2 } : undefined;
+            };
+            await start();
+            return { line: text($("#machine")), cls: $("#machine").className,
+                     lock: calls.filter(c => c.path.startsWith("/lock/")).map(c => c.method + " " + c.path) };
+        """.replace("VIEW1", json.dumps(lock_view(5, strip=["alpha/s1 build"], warnings=["w"])))
+           .replace("VIEW2", json.dumps(lock_view(6, head="12 cpu slots", strip=["a", "b", "c", "d", "e"]))),
+            snapshot(collections=NEEDS), hash="#home")
+        self.assertEqual(got["lock"], ["GET /lock/view", "GET /lock/wait?since=5&timeout=30", "GET /lock/wait?since=6&timeout=30"])
+        self.assertEqual(got["line"], "Machine · 12 cpu slots · running: a; b; c; and 2 more.")
+        self.assertEqual(got["cls"], "status machine")
+        one = dom("""
+            server.route = c => c.path === "/lock/view" ? { status: 200, body: VIEW1 } : undefined;
+            await start();
+            return text($("#machine"));
+        """.replace("VIEW1", json.dumps(lock_view(5, strip=["alpha/s1 build"], warnings=["w", "x"]))), snapshot(), hash="#home")
+        self.assertEqual(one, "Machine · 12 cpu slots, 2 gpu slots · running: alpha/s1 build · 2 warnings.")
+        idle = dom("""
+            server.route = c => c.path === "/lock/view" ? { status: 200, body: VIEW1 } : undefined;
+            await start();
+            return text($("#machine"));
+        """.replace("VIEW1", json.dumps(lock_view(5))), snapshot(), hash="#home")
+        self.assertEqual(idle, "Machine · 12 cpu slots, 2 gpu slots · nothing running.")
+
+    def test_a_lock_route_that_errors_is_said_and_read_again(self):
+        got = dom("""
+            let broken = true;
+            server.route = c => c.path === "/lock/view" ? (broken ? { status: 500, body: { ok: false, error: { message: "lock store gone" } } } : { status: 200, body: GOOD }) : undefined;
+            await start();
+            const down = { line: text($("#machine")), cls: $("#machine").className, sleeps: sleeps(), list: $$("#list article").length };
+            broken = false;
+            const t = timers.find(x => x.ms === 2000); timers.splice(timers.indexOf(t), 1); t.fn(); await settle();
+            return { down, up: text($("#machine")), upcls: $("#machine").className };
+        """.replace("GOOD", json.dumps(lock_view(5))), snapshot(collections=NEEDS), hash="#home")
+        self.assertEqual(got["down"]["line"], "The machine lock could not be read (lock store gone).")
+        self.assertEqual(got["down"]["cls"], "gone")
+        self.assertEqual(got["down"]["sleeps"], [2000])
+        self.assertEqual(got["down"]["list"], 6)                    # the needs-you list does not wait on the lock
+        self.assertEqual(got["up"], "Machine · 12 cpu slots, 2 gpu slots · nothing running.")
+        self.assertEqual(got["upcls"], "status machine")
+
+    def test_a_failed_wait_keeps_the_last_line_and_says_it_is_out_of_date(self):
+        got = dom("""
+            server.route = c => c.path === "/lock/view" ? { status: 200, body: GOOD }
+              : c.path.startsWith("/lock/wait") ? { status: 503, body: { ok: false, error: { message: "busy" } } } : undefined;
+            await start();
+            return { line: text($("#machine")), cls: $("#machine").className };
+        """.replace("GOOD", json.dumps(lock_view(5))), snapshot(), hash="#home")
+        self.assertEqual(got["line"], "Machine · 12 cpu slots, 2 gpu slots · nothing running. Out of date: The machine lock could not be read (busy).")
+        self.assertEqual(got["cls"], "gone")
+
+    def test_no_lock_call_is_made_off_the_home_view(self):
+        got = dom("""
+            server.route = c => c.path === "/lock/view" ? { status: 200, body: GOOD } : undefined;
+            await start();
+            const off = calls.filter(c => c.path.startsWith("/lock/")).length;
+            await click($("#sections [data-s=home]"));
+            return { off, on: calls.filter(c => c.path.startsWith("/lock/")).length > 0 };
+        """.replace("GOOD", json.dumps(lock_view(5))), snapshot())
+        self.assertEqual(got, {"off": 0, "on": True})
+
+    def test_server_text_on_home_is_drawn_as_text(self):
+        m = {n: mark(n) for n in ("a-title", "q-title", "t-title", "head", "strip", "warn", "err")}
+        needs = {"approvals": {"A-1": dict(APPROVAL, title=m["a-title"])},
+                 "questions": {"Q-1": dict(NEEDS["questions"]["Q-1"], title=m["q-title"])},
+                 "todos": {"T-1": dict(NEEDS["todos"]["T-1"], title=m["t-title"])}}
+        view = lock_view(5, head=m["head"], strip=[m["strip"]], warnings=[m["warn"]])
+        for name, route in (("view", "{ status: 200, body: %s }" % json.dumps(view)),
+                            ("error", "{ status: 500, body: { ok: false, error: { message: %s } } }" % json.dumps(m["err"]))):
+            got = dom("""
+                server.route = c => c.path === "/lock/view" ? ROUTE : undefined;
+                await start();
+                const attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || ["href", "src", "srcdoc", "style"].includes(k)).map(k => e.tag + " " + k));
+                return { shown: text($("#list")), sinks, attrs, tags: [...new Set(created)] };
+            """.replace("ROUTE", route), snapshot(strong=True, collections=needs), hash="#home")
+            with self.subTest(route=name):
+                for n in ("a-title", "q-title", "t-title") + (("head", "strip") if name == "view" else ("err",)):
+                    self.assertIn(m[n], got["shown"], n)
+                self.assertEqual(got["sinks"], [])
+                self.assertEqual(got["attrs"], ["a href"])               # the header's own link to the lock page
+                self.assertNotIn("script", got["tags"])
+                self.assertNotIn("img", got["tags"])
+
+    def test_the_sidebar_foot_says_when_the_hub_was_read(self):
+        got = dom("const before = text($('#sidefoot')); await start(); return [before, text($('#sidefoot'))];", snapshot())
+        self.assertEqual(got[0], "")
+        self.assertTrue(got[1].startswith("Read from the hub server "), got)
+
 
 class PageTextTest(unittest.TestCase):
     def setUp(self):
@@ -2224,7 +2400,7 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/pages", "/records", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/lock", "/pages", "/records", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages"})
         self.assertEqual(re.findall(r'"/approvals/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/decide"])
