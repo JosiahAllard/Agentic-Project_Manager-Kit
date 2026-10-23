@@ -663,7 +663,8 @@ class PageTextTest(unittest.TestCase):
         self.assertEqual(re.findall(r'setAttribute\(\s*"%s"' % keys, self.script), [])
         self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys, self.script), [])
         # The markup's one link is the page's own text: back to the Action Hub.
-        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<a href="/">'])
+        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup),
+                         ['<link rel="stylesheet" href="hub.css">', '<a href="/">'])
         for gone in ("location", "window.open"):
             self.assertNotIn(gone, self.script, gone)
         names = re.findall(r"setAttribute\(([^,]*),", self.script)
@@ -672,7 +673,9 @@ class PageTextTest(unittest.TestCase):
     def test_nothing_outside_the_page_is_loaded(self):
         self.assertIsNone(re.search(r"https?:", self.p))
         self.assertIsNone(re.search(r"(?<![:\w])//[\w-]+\.[a-z]{2,}", self.markup))
-        for tag in ("<link", "<img", "<iframe", "<object", "<embed", "<base", "@import", "url("):
+        # The one stylesheet is the shared hub.css, served beside the page; any other link is refused.
+        self.assertEqual(re.findall(r"<link\b[^>]*>", self.p), ['<link rel="stylesheet" href="hub.css">'])
+        for tag in ("<img", "<iframe", "<object", "<embed", "<base", "@import", "url("):
             self.assertNotIn(tag, self.p, tag)
 
     def test_markup_fits_a_strict_content_policy(self):
