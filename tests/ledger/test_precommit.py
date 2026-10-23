@@ -166,6 +166,23 @@ class PreCommitTest(unittest.TestCase):
         self.assertIn('commit refused', out)
         self.assertEqual(self.last(), 'kit')
 
+    def test_opted_in_a_staged_rulebook_alone_is_checked(self):
+        self.opt_in()
+        book = 'rulings/rules/kit.md'
+        self.repo.write(book, '# T\nRepos: x\n## A\n- a.b: no source here\n')
+        self.repo.git('add', '--', book)
+        rc, out = self.hook_commit('-m', 'rules')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('rule a.b has no source', out)
+        self.assertIn('commit refused', out)
+        self.assertEqual(self.last(), 'kit')
+        self.repo.write(book, '# T\nRepos: x\n## A\n- a.b: with a source (from %s)\n' % rid(1))
+        self.repo.git('add', '--', book)
+        rc, out = self.hook_commit('-m', 'rules')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('rulebooks: 1 rules in 1 files', out)
+        self.assertEqual(self.last(), 'rules')
+
     def test_opted_in_a_staged_digest_with_an_unstaged_ledger_change_is_refused(self):
         """The check reads the working ledger too, so it must be what the commit holds."""
         self.opt_in()

@@ -32,7 +32,7 @@ DEFAULT_BUDGET = 40
 
 KEY_RE = re.compile(r'^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9.-]*$')
 NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
-RULE_RE = re.compile(r'^- ([^\s:]+): (.+?)(?: \(from ([^()]*)\))?$')
+RULE_RE = re.compile(r'^- ([^\s:]+): (.+?)(?: \(from ([^()]*)\))?\s*$')
 ID_ONLY = re.compile(r'^%s$' % ID)
 
 # key, text, sources (a tuple of log ids), topic (the heading text), line (1-based).
@@ -81,14 +81,16 @@ def parse(text, name):
         if topic is None and line.startswith('# ') and title is None:
             title = line[2:].strip()
         elif topic is None and line.startswith('Repos:'):
+            if repos is not None:
+                errs.append('%s: a second Repos line (the first is a book\'s only one)' % at)
             repos = tuple(r.strip() for r in line[len('Repos:'):].split(',') if r.strip())
-            bad = [r for r in repos if not NAME_RE.match(r)]
+            bad =[r for r in repos if not NAME_RE.match(r)]
             if not repos or bad:
                 errs.append('%s: Repos needs checkout folder names, comma-separated%s'
                             % (at, ' (bad: %s)' % ', '.join(bad) if bad else ''))
         elif topic is None and line.startswith('Budget:'):
             value = line[len('Budget:'):].strip()
-            if value.isdigit() and int(value) > 0:
+            if re.fullmatch(r'[0-9]+', value) and int(value) > 0:
                 budget = int(value)
             else:
                 errs.append('%s: Budget needs a positive number, not %r' % (at, value))
@@ -161,6 +163,16 @@ def check(books, log_ids):
     book over its budget is a note. Parse errors come from `parse`."""
     errors, notes = [], []
     shared = {r.key for r in books[SHARED].rules} if SHARED in books else set()
+    claimed = {}
+    for name, book in books.items():
+        if name == SHARED:
+            continue
+        for repo in sorted({normal(r) for r in book.repos}):
+            if repo in claimed:
+                errors.append('%s: Repos names %s, which %s already claims'
+                              % (file_name(name), repo, file_name(claimed[repo])))
+            else:
+                claimed[repo] = name
     for name, book in books.items():
         where = file_name(name)
         for r in book.rules:

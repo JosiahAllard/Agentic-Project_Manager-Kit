@@ -101,6 +101,24 @@ class ParseTest(unittest.TestCase):
         _, errs = rulebook.parse('# T\nRepos: x\n## A\nRepos: y\n', 'kit')
         self.assertIn('unknown line', errs[0])
 
+    def test_a_budget_of_non_ascii_digits_is_an_error_not_a_traceback(self):
+        for value in ('²', '٣', '0', '-3', '4.5'):
+            book, errs = rulebook.parse('# T\nRepos: x\nBudget: %s\n' % value, 'kit')
+            self.assertEqual(len(errs), 1, value)
+            self.assertIn('Budget needs a positive number', errs[0])
+            self.assertEqual(book.budget, rulebook.DEFAULT_BUDGET)
+
+    def test_trailing_whitespace_after_the_sources_is_tolerated(self):
+        book, errs = rulebook.parse(f'# T\nRepos: x\n## A\n- a.b: x (from {R1}, {R2})  \t\n', 'kit')
+        self.assertEqual(errs, [])
+        self.assertEqual(book.rules[0].sources, (R1, R2))
+        self.assertEqual(book.rules[0].text, 'x')
+
+    def test_a_second_repos_line_is_an_error(self):
+        book, errs = rulebook.parse('# T\nRepos: x\nRepos: y\n', 'kit')
+        self.assertEqual(len(errs), 1)
+        self.assertIn('kit.md:3: a second Repos line', errs[0])
+
     def test_a_bad_key(self):
         _, errs = rulebook.parse(f'# T\nRepos: x\n## A\n- Landing: x (from {R1})\n', 'kit')
         self.assertEqual(len(errs), 1)
@@ -123,6 +141,13 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(sorted(got.notes), sorted([
             'kit.md:10: rule machine.lock overrides the shared rule',
             'kit.md: 3 rules, over its budget of 2']))
+
+    def test_two_books_claiming_one_repo_is_an_error(self):
+        books = self.books()
+        books['beta'] = rulebook.parse('# T\nRepos: elsewhere, alpha-checkout\n', 'beta')[0]
+        books['all'] = rulebook.parse('# T\nRepos: alpha_checkout\n', 'all')[0]
+        got = rulebook.check(books, self.ids(3))
+        self.assertEqual(got.errors, ['beta.md: Repos names alpha-checkout, which kit.md already claims'])
 
     def test_a_cited_id_missing_from_the_log(self):
         got = rulebook.check(self.books(), self.ids(2))
@@ -282,6 +307,17 @@ class CliTest(Base):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn('note: kit.md:10: rule machine.lock overrides the shared rule', r.stdout)
         self.assertIn('rulebooks: 5 rules in 2 files', r.stdout)
+
+    def test_a_retired_id_may_be_cited_and_a_missing_one_may_not(self):
+        header = '## %s | %s | all | selected' % (R3, WHEN)
+        text = log_text(2) + '\n' + fmt.render_tombstone(header, 'spent', 'done', None)
+        self.put(self.log, text)
+        r = self.run_tool('check', '--base', 'none')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)      # the kit book cites the retired R3
+        self.put(self.log, log_text(2))
+        r = self.run_tool('check', '--base', 'none')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn('FAIL kit.md:10: rule machine.lock cites %s, which is not in the log' % R3, r.stdout)
 
     def test_check_fails_on_a_bad_rulebook(self):
         self.book('pm', f'# T\nRepos: p\n## A\n- a.b: no source\n- a.c: x (from {R99})\njunk\n')
