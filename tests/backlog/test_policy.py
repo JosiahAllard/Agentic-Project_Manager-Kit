@@ -140,7 +140,7 @@ class ReadArgv(unittest.TestCase):
         self.assertEqual((a.root, a.branch, a.verb, a.rid, a.help), ('Q:/pm', 'kit/wk', 'set', 'FOO', False))
         self.assertEqual(a.given['fields'], ['scope', 'priority'])
         self.assertEqual(a.given['priority'], ['2'])
-        self.assertEqual(policy.read_argv(words('-CZ:/pm', 'show', 'FOO')).root, 'Q:/pm')
+        self.assertEqual(policy.read_argv(words('-CQ:/pm', 'show', 'FOO')).root, 'Q:/pm')
         a = policy.read_argv(words('block', 'FOO', '--on', 'owner', '--reason', 'r'))
         self.assertEqual((a.verb, a.given['on']), ('block', ['owner']))
         a = policy.read_argv(words('set', 'FOO', '--unset', 'priority', '--body-file', 'b.md'))

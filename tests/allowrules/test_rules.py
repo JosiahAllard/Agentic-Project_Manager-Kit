@@ -145,7 +145,7 @@ class DeniedTest(unittest.TestCase):
         self.second_C('kit/a\t-C Q:/other')
 
     def test_any_later_C_text_denied(self):
-        self.second_C('kit/a,-CZ:/other')
+        self.second_C('kit/a,-CQ:/other')
 
     def test_log_dir_denied(self):
         for middle in ('kit/a --log-dir Q:/x', 'kit/a --log-dir=Q:/x', 'kit/a --lo Q:/x', 'kit/a --log Q:/x'):
@@ -250,7 +250,7 @@ class DeniedTest(unittest.TestCase):
             self.only_the_deny_closes('kit/a %s%slog-dir Q:/x' % (d, d))
 
     def test_glued_C_denied(self):
-        self.assertEqual(decide(submit(middle='kit/a -CZ:/other')), 'deny')
+        self.assertEqual(decide(submit(middle='kit/a -CQ:/other')), 'deny')
 
     def test_first_C_not_denied(self):
         deny_only = {'allow': [], 'deny': LINES['deny']}
