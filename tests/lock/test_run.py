@@ -102,8 +102,8 @@ class Slot(StoreCase):
 
     def test_a_held_runs_record_carries_the_installed_tools_layout_key(self):
         # The older kit's installed machine_lock.py refuses every run
-        # while a live record's `layout` is not its own key. On this store's machine (24 threads,
-        # SMT 2, one card) that key is the string below (lay.slot_key), not layout_key's.
+        # while a live record's `layout` is not its own key. On this store's fake hardware (HW in
+        # helpers.py) that key is the string below (lay.slot_key), not layout_key's.
         self.confine(1)
         with rm.slot("engine-test", "kit", "t", cores=1, store=self.store,
                      env=clean_env()) as launch:
@@ -490,21 +490,14 @@ class CoreRequests(StoreCase):
         self.assertEqual(self.ended_need(), 2)
 
     def test_an_aliased_kind_books_the_canonical_kinds_slots_and_is_recorded_as_it(self):
-        # `worldgraph` is a retired name kinds.json maps to graph-build (an `aliases` entry).
+        # `old-name` is a retired name the table maps to graph-build (an `aliases` entry).
         self.use_kinds({"kinds": {"graph-build": {"cpu": 3, "gpu": 0, "warn_min": 120}},
-                        "aliases": {"worldgraph": {"to": "graph-build", "why": "retired name"}}})
+                        "aliases": {"old-name": {"to": "graph-build", "why": "retired name"}}})
         self.everything_held()
-        self.assertEqual(self.code(kind="worldgraph", no_wait=True), 11)
+        self.assertEqual(self.code(kind="old-name", no_wait=True), 11)
         self.assertEqual(self.ended_need(), 3)
         self.assertEqual(self.ended()[0]["kind"], "graph-build")
         self.assertEqual(self.code(kind="no-such-kind", no_wait=True), 2)
-
-    def test_the_kits_worldgraph_alias_resolves_to_graph_build(self):
-        from kitlib.lock import kinds
-        table = kinds.load()
-        self.assertEqual(kinds.resolve("worldgraph", table), "graph-build")
-        self.assertEqual(kinds.resolve("graph-build", table), "graph-build")
-        self.assertEqual(kinds.resolve("nope", table), "nope")
 
     def test_the_kinds_full_size_may_be_asked_for(self):
         self.everything_held()

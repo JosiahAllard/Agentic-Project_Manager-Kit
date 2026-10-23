@@ -28,7 +28,7 @@ Hold keywords are matched only in the header fields `summary`, `requires` and `e
 
 In the example config the gamma and pm rules match by path and text as well as id, so a new record id is still caught: gamma by `scope:` under `artifacts/models/` or `research/gamma/`, pm by scope on `tools/new_worktree.py` or `tools/sync_base.py` or a summary saying "kit tool" or "the PM takes it". One incident record is caught only by its id:
 
-- EX-LINK-CYCLECOST (hold live-client). Its text never says it needs a live client ("dispatch margin unmeasured"), so no keyword matches. Its scope also covers unit-tested link code, and a path rule on `worker/link/.../link/client/` would claim other records that need no client (EX-LINK-ICON, EX-LINK-CHILD-SLOTS on the 10-07 store) while missing it, because its scope spans three trees.
+- EX-LINK-LOOKUP-COST (hold live-client). Its text never says it needs a live client ("dispatch margin unmeasured"), so no keyword matches. Its scope also covers unit-tested link code, and a path rule on `worker/link/.../link/client/` would claim other records that need no client (EX-LINK-ICON, EX-LINK-CHILD-SLOTS on a sample store) while missing it, because its scope spans three trees.
 
 ## Config
 

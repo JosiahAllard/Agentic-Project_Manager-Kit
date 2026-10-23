@@ -10,7 +10,7 @@
           {"name": "pm", "session": "pm",
            "paths": ["tools/new_worktree.py", "tools/sync_base.py"],
            "text": ["\\bthe PM takes it\\b", "\\bkit tool\\b"]},
-          {"name": "needs a live client", "hold": "live-client", "ids": ["EX-LINK-CYCLECOST"]}
+          {"name": "needs a live client", "hold": "live-client", "ids": ["EX-LINK-LOOKUP-COST"]}
         ]
       }
     }
