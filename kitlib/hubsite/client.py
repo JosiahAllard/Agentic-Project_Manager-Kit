@@ -30,7 +30,9 @@ Client(port, tokens, via=serve.VIA_CLI)
                                         change, a pending item or a reset, or `timeout` seconds
                                         passed (None: no limit); with for_key, until a pending
                                         item of that session key; a poll the server took and did
-                                        not answer in its time (serve.NoAnswer) is asked again
+                                        not answer in its time (serve.NoAnswer) is asked again,
+                                        up to NO_ANSWER_TURNS in a row, when it has a `since`
+                                        or waits for its own pending items only
 """
 import time
 import urllib.parse
@@ -41,6 +43,7 @@ from . import auth, serve
 OK, REFUSED, USAGE, NOT_RUNNING, TIMED_OUT = 0, 1, 2, 3, 4
 OWNER, AGENT, ANY = _api.OWNER, _api.AGENT, _api.ANY
 WAIT_MARGIN_S = 10              # the socket waits this much longer than the server was asked to
+NO_ANSWER_TURNS = 3             # unanswered polls in a row (serve.NoAnswer) that end a wait
 REFUSAL_UNKNOWN = 'not the expected answer'
 
 
@@ -145,6 +148,7 @@ class Client(object):
         (with pending) waits for that session key's pending items only; except_ids (with
         pending) leaves out the items with those ids, ones the caller has already acted on."""
         end = None if timeout is None else self._clock() + max(0.0, float(timeout))
+        silent = 0                  # polls in a row the server took and did not answer
         while True:
             left = _api.WAIT_MAX_S if end is None else end - self._clock()
             turn = max(0.0, min(float(left), float(_api.WAIT_MAX_S)))
@@ -155,11 +159,18 @@ class Client(object):
                                               'except': ','.join(except_ids or ()) or None},
                                timeout=turn + WAIT_MARGIN_S)
             except serve.NoAnswer:
-                # the server took the poll and held it past the socket's time: ask again, from
-                # the same revision, until the wait's own time is spent (a turn begun past it)
-                if end is not None and left <= 0:
+                # the server took the poll and held it past the socket's time: ask again with
+                # the same query, unless the wait's own time is spent (a turn begun past it),
+                # NO_ANSWER_TURNS polls in a row went unanswered, or a retry would lose writes:
+                # with no `since` the server starts from its revision now, which only a wait
+                # that ends on its own pending items alone (for_key or except_ids) can bear
+                silent += 1
+                if (end is not None and left <= 0) or silent >= NO_ANSWER_TURNS:
+                    raise
+                if since is None and not (pending and (for_key or except_ids)):
                     raise
                 continue
+            silent = 0
             if not got.get('timed_out'):
                 return got
             if end is not None and self._clock() >= end:

@@ -1,7 +1,9 @@
 """client.Client.wait against a stand-in hub on port 0 that takes a poll and holds it past the
 client's socket time (serve.NoAnswer): the wait asks again and ends on the item the next poll
-answers, until its own timeout; an answer that is not the hub's still ends it. api.WAIT_MAX_S
-and client.WAIT_MARGIN_S are made small so a held poll costs half a second."""
+answers, until its own timeout or client.NO_ANSWER_TURNS unanswered polls in a row, and only when
+asking again loses no write; an answer that is not the hub's still ends it. api.WAIT_MAX_S and
+client.WAIT_MARGIN_S are made small so a held poll costs about two seconds, and the margin is
+still wide enough that a prompt answer on a loaded machine is not read as no answer."""
 import json
 import socket
 import threading
@@ -12,15 +14,18 @@ from kitlib.hubsite import api, client, httpd, serve
 from tests.hubsite import httpfix
 
 TURN_S = 0.2
-MARGIN_S = 0.3                  # the client's socket gives up after TURN_S + MARGIN_S
+MARGIN_S = 2.0                  # the client's socket gives up after TURN_S + MARGIN_S
 HIT = {'ok': True, 'timed_out': False, 'revision': 3, 'reset': False, 'changes': [],
        'pending': [{'id': 'Q-1', 'kind': 'question'}]}
+IDLE = {'ok': True, 'timed_out': True, 'revision': 5, 'reset': False, 'changes': [],
+        'pending': []}
 
 
 class FakeHub(object):
     """Answers connection n by plan[n] (the last one repeats): 'hold' reads the request and
     sends nothing until the client has closed it, then sends HIT late; 'hit' answers HIT;
-    'junk' answers 200 with a body that is not JSON."""
+    'idle' answers IDLE (a turn with nothing to say); 'junk' answers 200 with a body that is
+    not JSON."""
 
     def __init__(self, plan):
         self.plan = list(plan)
@@ -61,8 +66,8 @@ class FakeHub(object):
                         gone = True
                     self.late.append(gone)
                     self.send(conn, json.dumps(HIT).encode('utf-8'))
-                elif how == 'hit':
-                    self.send(conn, json.dumps(HIT).encode('utf-8'))
+                elif how in ('hit', 'idle'):
+                    self.send(conn, json.dumps(HIT if how == 'hit' else IDLE).encode('utf-8'))
                 else:
                     self.send(conn, b'<html>not the hub</html>')
 
@@ -100,6 +105,35 @@ class NoAnswerCase(unittest.TestCase):
         poll = api.BASE + '/wait?for=pm&pending=1&since=2&timeout=%g' % TURN_S
         self.assertEqual(hub.paths, [poll, poll, poll])  # asked again from the same revision
 
+    def test_a_hub_that_takes_every_poll_and_never_answers_ends_a_wait_with_no_timeout(self):
+        hub, c = self.fake(['hold'])
+        with self.assertRaises(serve.NoAnswer):
+            c.wait(since=2, pending=True, for_key='pm')
+        self.assertEqual(client.NO_ANSWER_TURNS, 3)
+        self.assertEqual(len(hub.paths), client.NO_ANSWER_TURNS, hub.paths)
+
+    def test_any_answer_starts_the_count_of_unanswered_polls_again(self):
+        hub, c = self.fake(['hold', 'hold', 'idle', 'hold', 'hold', 'hit'])
+        got = c.wait(since=2, pending=True, for_key='pm')
+        self.assertEqual(got['pending'], HIT['pending'])
+        self.assertEqual(len(hub.late), 4)
+        # the idle turn's revision is where the next polls start
+        self.assertEqual([p.split('since=')[1].split('&')[0] for p in hub.paths],
+                         ['2', '2', '2', '5', '5', '5'])
+
+    def test_with_no_since_only_a_wait_for_its_own_items_asks_again(self):
+        # with no since the server starts from its revision now: a write made during the held
+        # poll would be lost, so a wait that ends on changes is not asked again
+        for kw in ({}, {'pending': True}):
+            hub, c = self.fake(['hold', 'hit'])
+            with self.assertRaises(serve.NoAnswer):
+                c.wait(**kw)
+            self.assertEqual(len(hub.paths), 1, (kw, hub.paths))
+        # one that ends on its own pending items only reads them again on the next poll
+        hub, c = self.fake(['hold', 'hit'])
+        self.assertEqual(c.wait(pending=True, for_key='pm')['pending'], HIT['pending'])
+        self.assertEqual(hub.paths, [api.BASE + '/wait?for=pm&pending=1&timeout=%g' % TURN_S] * 2)
+
     def test_a_held_poll_is_no_answer_a_serve_error_with_the_text_of_before(self):
         hub, c = self.fake(['hold'])
         with self.assertRaises(serve.NoAnswer) as e:
@@ -111,10 +145,10 @@ class NoAnswerCase(unittest.TestCase):
     def test_polls_that_are_never_answered_end_at_the_waits_own_timeout(self):
         hub, c = self.fake(['hold'])
         with self.assertRaises(serve.NoAnswer):
-            c.wait(timeout=0.1, pending=True)
+            c.wait(since=2, timeout=0.1, pending=True)
         # the turn of 0.1 s, then one of 0 s begun past the end: no third poll
         self.assertEqual(len(hub.paths), 2, hub.paths)
-        self.assertEqual(hub.paths[1], api.BASE + '/wait?pending=1&timeout=0')
+        self.assertEqual(hub.paths[1], api.BASE + '/wait?pending=1&since=2&timeout=0')
 
     def test_an_answer_that_is_not_the_hubs_still_ends_the_wait(self):
         hub, c = self.fake(['junk'])
