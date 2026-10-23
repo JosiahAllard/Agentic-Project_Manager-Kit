@@ -17,14 +17,20 @@ repo rulebook rule with the key of a shared rule overrides it. A source is a log
 nothing else. Unknown lines, a duplicate key, a rule with no source and a header with no `Repos:`
 are errors; going over budget is a note.
 
+The write side builds a changed Book (`set_rule`, `drop_rule`, `set_header`) and the reading list
+before an add (`conflicts`, with its `digest`); kitlib.ledger.write writes it beside a log entry
+whose Decides ends with a `tag`, and `applied` finds a logged change the rulebook does not show.
+
 Pure functions over text, except `load`, which reads files. Nothing here prints or exits.
 """
 import collections
+import hashlib
+import math
 import os
 import re
 
 from . import read
-from .fmt import ID
+from .fmt import ID, parse_block, split_entries
 
 SHARED = 'all'
 FOLDER = 'rules'
@@ -238,3 +244,194 @@ def lines(book, over, sources=False, topic=None):
         mark = ' [overrides shared]' if not shared and r.key in over else ''
         out.append('- %s: %s%s%s' % (r.key, r.text, mark, tail))
     return out, len(shown)
+
+
+# The write side (docs/ledger.md "Rulebooks"): kitlib.ledger.write pairs each change below with a
+# log entry under the log's one write lock; these functions only build the new Book.
+
+def target(books, repo):
+    """The name of the rulebook a rule for `repo` goes in: `all` is the shared book; else the book
+    `for_repo` maps (a checkout folder or a log repo name), else `normal(repo)`, a book not made
+    yet."""
+    if normal(repo) == SHARED:
+        return SHARED
+    return for_repo(books, repo) or normal(repo)
+
+
+def new_book(name, repos, budget=None, title=None):
+    """An empty Book: the header `rule-set` writes for a rulebook not made yet."""
+    return Book(name, one_line(title) or '%s rules' % name.capitalize(), tuple(repos),
+                budget or DEFAULT_BUDGET, ())
+
+
+def one_line(text):
+    """`text` with each whitespace run as one space."""
+    return ' '.join(str(text or '').split())
+
+
+def set_rule(book, key, topic, text, sources):
+    """`(the new Book, the Rule it replaced or None)`: rule `key` set to `text` under heading
+    `topic`, citing `sources`. A key already in the book is replaced, never doubled: in its place
+    when the topic stays, else moved. A new rule goes after the last rule of its topic, or under a
+    new heading at the end. ValueError on a malformed key, topic or text."""
+    topic, text = one_line(topic), one_line(text)
+    if not KEY_RE.match(key or ''):
+        raise ValueError('key %r is not <topic-slug>.<slug> (lower case, digits, - and .)' % (key,))
+    if not topic:
+        raise ValueError('the topic heading is empty')
+    if not text:
+        raise ValueError('the rule text is empty')
+    rule = Rule(key, text, tuple(sources), topic, 0)
+    rules = list(book.rules)
+    old = next((r for r in rules if r.key == key), None)
+    if old is not None and old.topic == topic:
+        rules[rules.index(old)] = rule
+    else:
+        if old is not None:
+            rules.remove(old)
+        last = max((i for i, r in enumerate(rules) if r.topic == topic), default=None)
+        rules.insert(len(rules) if last is None else last + 1, rule)
+    return book._replace(rules=tuple(rules)), old
+
+
+def drop_rule(book, key):
+    """`(the new Book, the Rule removed)`; KeyError when the book has no rule `key`."""
+    old = next((r for r in book.rules if r.key == key), None)
+    if old is None:
+        raise KeyError(key)
+    return book._replace(rules=tuple(r for r in book.rules if r.key != key)), old
+
+
+def set_header(book, repos=None, budget=None, title=None):
+    """`book` with each header field that is given replaced."""
+    return book._replace(repos=tuple(repos) if repos is not None else book.repos,
+                         budget=budget if budget is not None else book.budget,
+                         title=one_line(title) if title is not None else book.title)
+
+
+# The tag a paired log entry's Decides ends with, so `applied` finds a logged change that never
+# reached its rulebook (a crash between the two writes).
+TAG_RE = re.compile(r'\[(?:rule ([a-z0-9][a-z0-9._-]*)\.md ([a-z0-9][a-z0-9.-]*) (set|dropped)'
+                    r'|rulebook ([a-z0-9][a-z0-9._-]*)\.md header)\]\s*$')
+
+
+def tag(op, name, key=None):
+    """The tag of a change: op 'set' or 'dropped' of rule `key` in book `name`, or 'header'."""
+    if op == 'header':
+        return '[rulebook %s header]' % file_name(name)
+    return '[rule %s %s %s]' % (file_name(name), key, op)
+
+
+def applied(books, texts):
+    """Error lines for each logged rule change its rulebook does not show. Per rule, the last live
+    tagged entry (by its time, then file and log order; `texts` are the log files' texts) must be
+    in force: a `set` as a rule citing it, a `dropped` as no rule. A `header` needs its book.
+    Tombstones are skipped."""
+    last, heads = {}, {}
+    for f, text in enumerate(texts):
+        for n, (rid, block) in enumerate(split_entries(text)[1]):
+            e, _ = parse_block(block)
+            if not e or e.get('retired') or not rid:
+                continue
+            m = TAG_RE.search(e.get('Decides', ''))
+            if not m:
+                continue
+            order = (e.get('when', ''), f, n)
+            if m.group(4):
+                if m.group(4) not in heads or heads[m.group(4)][0] < order:
+                    heads[m.group(4)] = (order, rid)
+            else:
+                k = (m.group(1), m.group(2))
+                if k not in last or last[k][0] < order:
+                    last[k] = (order, rid, m.group(3))
+    errs = []
+    for (name, key), (_, rid, op) in sorted(last.items()):
+        book = books.get(name)
+        rule = next((r for r in book.rules if r.key == key), None) if book else None
+        if op == 'set' and (rule is None or rid not in rule.sources):
+            why = ('there is no %s' % file_name(name) if book is None else
+                   'it has no such rule' if rule is None else 'the rule does not cite it')
+            errs.append('logged rule change not applied: %s sets %s %s, but %s; redo it with '
+                        'ledger.py add --rule' % (rid, file_name(name), key, why))
+        elif op == 'dropped' and rule is not None:
+            errs.append('logged rule change not applied: %s drops %s %s, which is still there; '
+                        'redo it with ledger.py rule-drop' % (rid, file_name(name), key))
+    for name, (_, rid) in sorted(heads.items()):
+        if name not in books:
+            errs.append('logged rule change not applied: %s sets the header of %s, which is not '
+                        'there; redo it with ledger.py rule-set' % (rid, file_name(name)))
+    return errs
+
+
+# Conflicts: what `add --rule` must be read against first (docs/ledger.md "Rulebooks"). Kinds in
+# the order they print; a rule shows once, under its first kind.
+KINDS = ('same key', 'same key elsewhere', 'same topic', 'same topic slug', 'shared words')
+WORD_RE = re.compile(r'[a-z][a-z0-9-]{3,}')
+STOP = frozenset('''
+    about after also always before been being both could does each every from have into just more
+    most must never only other over same should some such than that their them then there these
+    they this those under when where which while will with would your
+'''.split())
+WORD_LIMIT = 8     # the shared-words hits shown at most
+
+Hit = collections.namedtuple('Hit', 'kind book rule words score')
+Conflicts = collections.namedtuple('Conflicts', 'name scope hits rare digest')
+
+
+def scope(books, name):
+    """The books a change to `name` is read against, in print order: the book itself, then the
+    shared one; for the shared book, it and then every repo book."""
+    if name == SHARED:
+        return [SHARED] + sorted(n for n in books if n != SHARED)
+    return [name, SHARED]
+
+
+def words(text):
+    """The content words of `text`: lower case, four or more letters, not in STOP."""
+    return {w for w in WORD_RE.findall(text.lower()) if w not in STOP}
+
+
+def digest(books, name, topic, key, text):
+    """The `checked` hash: the books of `scope` as `render` writes them (an absent one as empty)
+    and the proposed rule. A change to any of those books, or to the rule, gives another hash."""
+    parts = [name, one_line(topic), key or '', one_line(text)]
+    for n in scope(books, name):
+        parts += [n, render(books[n]) if n in books else '']
+    return hashlib.sha256('\0'.join(parts).encode('utf-8')).hexdigest()[:16]
+
+
+def conflicts(books, name, topic, key, text):
+    """`Conflicts` for a proposed rule `key` (`text` under `topic`) in book `name`. Hits, in KINDS
+    order, then `scope` order, then file order: the same key in the book (the add replaces it); the
+    same key in another book of the scope (an override, or one a shared rule would shadow); each
+    rule under the same heading (any case); the same topic slug (the key's part before the first
+    `.`); then up to WORD_LIMIT rules sharing content words, by a score that weighs each shared word
+    by its rarity over every rulebook. `rare`: the proposal's two rarest words, for a docs search."""
+    order = scope(books, name)
+    inside = [(n, r) for n in order if n in books for r in books[n].rules]
+    topic_low, slug = one_line(topic).lower(), (key or '').split('.', 1)[0]
+    tests = (lambda n, r: n == name and r.key == key,
+             lambda n, r: n != name and r.key == key,
+             lambda n, r: r.topic.lower() == topic_low,
+             lambda n, r: r.key.split('.', 1)[0] == slug)
+    hits, seen = [], set()
+    for kind, test in zip(KINDS, tests):
+        for n, r in inside:
+            if (n, r.key) not in seen and test(n, r):
+                seen.add((n, r.key))
+                hits.append(Hit(kind, n, r, (), 0.0))
+    every = [words(r.text + ' ' + r.topic) for b in books.values() for r in b.rules]
+    df = collections.Counter(w for ws in every for w in ws)
+    total = len(every) + 1
+    mine = words(text + ' ' + topic)
+    scored = []
+    for i, (n, r) in enumerate(inside):
+        if (n, r.key) in seen:
+            continue
+        common = mine & words(r.text + ' ' + r.topic)
+        if common:
+            score = sum(math.log(total / df[w]) + 1 for w in common)
+            scored.append((-score, i, Hit(KINDS[4], n, r, tuple(sorted(common)), round(score, 2))))
+    hits += [h for _, _, h in sorted(scored, key=lambda s: s[:2])[:WORD_LIMIT]]
+    rare = sorted(mine, key=lambda w: (df[w], w))[:2]
+    return Conflicts(name, order, hits, rare, digest(books, name, topic, key, text))
