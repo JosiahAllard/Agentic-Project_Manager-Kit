@@ -192,10 +192,13 @@ def _backlog_verb(args):
     return ""
 
 
-def _host_flags(args):
-    """Refuse a --host or --provider (or an abbreviation of one) naming another host."""
+def _host_flags(args, tool=None):
+    """Refuse a --host or --provider (or an abbreviation of one) naming another host. The ledger's
+    own `--prov` (the entry's provenance) is that tool's option, not an abbreviation."""
     for name in ("--host", "--provider"):
         keys = [arg.split("=", 1)[0] for arg in args if arg.startswith("--") and arg != "--"]
+        if tool == "ledger":
+            keys = [key for key in keys if key != "--prov"]
         if any(key != name and len(key) >= 4 and name.startswith(key) for key in keys):
             raise ValueError("use the full %s option name" % name)
         value = _flag(args, name)
@@ -211,7 +214,7 @@ def _provider_args(tool, args):
                     flag.startswith(key) and flag != key for flag in ("--commit", "--push")):
                 raise ValueError("use full ledger --commit/--push option names")
     committing_ledger = tool in {"ledger", "pending"} and any(a in {"--commit", "--push"} for a in args)
-    _host_flags(args)
+    _host_flags(args, tool)
     if tool not in {"commit", "sync_base"} and not committing_ledger:
         return args
     trailer(_flag(args, "--model"))  # the explicit active model; never an inherited identity
