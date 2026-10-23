@@ -1530,19 +1530,44 @@ def plan_delete(snap, ctx, rid, why, role_checked=False):
 # than four digits are not ones.
 CITE_ID = r'(?:R-[0-9]{4,}|Q-[0-9]{3,})(?![A-Za-z0-9_])'
 CITED = re.compile(r'(?<![A-Za-z0-9-])' + CITE_ID)
+# One glued to a word before it by a hyphen (`pre-R-nnnn`): no rule reads it, so its line is left
+# for a hand edit.
+GLUED = re.compile(r'(?<=[A-Za-z0-9]-)' + CITE_ID)
 # The header keys `uncite` drops: each holds only a cited id. `resume`, `q` and `priority_per`
 # are kept (offer ranking and the park read them).
 UNCITED_KEYS = ('priority_ruling', 'hold_ruling')
-_CITE = r'(?:PM )?' + CITE_ID + r'(?:\([a-z0-9]{1,3}\))?'
+# One cite as a sentence names it: a `PM ` or `owner ` before it and a `(c)` part after it are its.
+_CITE = r'(?:(?:PM|[Oo]wner) )?' + CITE_ID + r'(?:\([a-z0-9]{1,3}\))?'
+_RUN = r'(?:, | and |/|; | & )'
 # One cite or a run of them (`R-nnnn, R-nnnn and Q-nnn`), never glued to a word before it.
-_G = r'(?<![A-Za-z0-9-])' + _CITE + r'(?:(?:, | and |/|; | & )' + _CITE + r')*'
+_G = r'(?<![A-Za-z0-9-])' + _CITE + r'(?:' + _RUN + _CITE + r')*'
+# Inside a parenthesis a cite may name the part of it meant (`O2`, `Q2`, `b`).
+_PART = r'(?: (?:[A-Z][0-9]{1,2}[a-z]?|[a-z]))?'
+_GP = r'(?<![A-Za-z0-9-])' + _CITE + _PART + r'(?:' + _RUN + _CITE + _PART + r')*'
+# A key or lead word before a cite that goes with it (`value_ruling R-nnnn`, `ref: R-nnnn`).
+_KEY = r'(?:(?:[a-z][a-z0-9]*_[a-z0-9_]+|[Rr]ef|[Pp]er|[Ss]ee|PM|[Oo]wner):? )?'
 _BULLET = r'\s*(?:[-*] |[0-9]+\. )?'
-_SUBJECT_VERBS = (r'[a-z]+ed|says|said|made|makes|sets|set|put|puts|chose|keeps|kept|gave|gives|'
-                  r'wants|asks|asked|is|was|has|had|holds|defers|split|splits|took|takes')
-_NOT_QUALIFIED = r'(?:and|or|to|of|in|on|for|with|at|as|the|a|an|but|so|if|then)\b'
-# What a rewrite can leave that reads wrong: a line opening on punctuation, an empty or
-# space-led parenthesis, a space before punctuation, a doubled comma.
-_ODD = re.compile(r'^' + _BULLET + r'[,;.)]|\(\s*\)|\( |\s[,;.]|,,')
+# Where a cite can stand as a subject: the line's start (after a bullet), a sentence's start, an
+# opening parenthesis, or after `:` or `;`.
+_OPEN = r'(?:^' + _BULLET + r'|[.!?:;] |\()'
+# The words a cite can follow as their object (`per R-nnnn`, `answered by R-nnnn`).
+_PREP = (r'(?:\b(?:[Pp]er|[Uu]nder|[Ii]n|[Bb]y|[Ff]rom|[Ss]ince|[Aa]fter|[Bb]efore|[Uu]ntil|'
+         r'[Ff]ollowing|[Ss]ee|[Cc]iting|[Cc]ites|[Oo]n|[Oo]f|[Ww]ith|[Aa]gainst|[Bb]reaks?|'
+         r'[Oo]verrides?|[Rr]everses|[Cc]ontradicts|[Rr]espects|[Ff]ollows) )')
+# What may follow a cite as an object: punctuation, the line's end, a parenthesis, a joining word.
+_AFTER = (r'(?=[.,;:)!?]|$| \(| (?:and|or|but|so|then|which|that|to|for|when|while|because|as|'
+          r'until|unless|if|before|after)\b)')
+# The verbs a cite can be the subject of. `is`, `was` and the like are not: `R-nnnn is the plan`
+# names the ruling, which an owner ruling would not.
+_SUBJECT_VERBS = (r'[a-z]{2,}ed|says|sets|makes|puts|chooses|keeps|gives|wants|asks|holds|defers|'
+                  r'splits|takes|does|covers|names|lists|answers|settles|rules|moves|adds|drops|'
+                  r'replaces|allows|approves|requires|leaves|applies|stays|governs|decides|picks|'
+                  r'confirms|reverses|overrides|chose|gave|took|did|left|will|would|can|may|must|'
+                  r'should')
+_NOUN = r'(?:ruling|question|answer|decision)s?\b'
+# What a rewrite can leave that reads wrong: an empty or space-led parenthesis, one opened at the
+# line's end, a space before punctuation, a doubled comma or space.
+_ODD = re.compile(r'\(\s*\)|\( |\($|\s[,;.]|,,|\S  \S')
 
 
 def _opens_at(s, i, opens):
@@ -1554,131 +1579,206 @@ def _opens_at(s, i, opens):
     return re.search(r'[.!?]\s+$', before) is not None
 
 
-def _cap(text, s, i, opens):
-    return text[:1].upper() + text[1:] if _opens_at(s, i, opens) else text
+def _words(cites, alone):
+    """The words for the cite run `cites`: `an owner ruling` / `an owner question` for one (`an
+    owner` when `alone` is False: a noun follows), `owner rulings` / `owner questions` for more
+    of one kind (`owner`), None for a run that mixes rulings and questions."""
+    ids = CITED.findall(cites)
+    kinds = {i[0] for i in ids}
+    if len(kinds) != 1:
+        return None
+    noun = 'question' if kinds == {'Q'} else 'ruling'
+    if len(ids) == 1:
+        return 'an owner %s' % noun if alone else 'an owner'
+    return 'owner %ss' % noun if alone else 'owner'
 
 
-def _first_is_q(cites):
-    return CITED.search(cites).group(0).startswith('Q-')
+def _uncite_rules(opens, state):
+    """The rewrites in the order they run, each `(pattern, replacement)`. The first ones drop a
+    cite that is a tag on the sentence (in a parenthesis, after a comma, a label before a colon,
+    after the noun that already says it); the rest put `an owner ruling` / `an owner question`
+    where the cite is a word of the sentence: an object (`per R-nnnn`), a subject (`R-nnnn says`),
+    a possessive (`R-nnnn's`) or before a noun (`the R-nnnn ruling`). A cite no rule places, a run
+    a rule cannot word, or a word rule at the start of a line that continues a sentence, sets
+    state['hand']: uncite_line then leaves the line as it was. state['words'] counts the word
+    rules that ran."""
+    def hand(m):
+        state['hand'] = True
+        return m.group(0)
 
+    def continued(m):
+        # the line's first words continue the line before's sentence: no rule knows the word
+        # before the cite
+        return not opens and m.start('pre') == 0 and re.fullmatch(_BULLET, m.group('pre'))
 
-def _uncite_rules(opens):
-    """The rewrites in the order they run, each `(pattern, replacement)`; a replacement that
-    builds a phrase capitalises it where a sentence starts."""
     def prefix(m):
+        if not m.group(2) and not opens:
+            return hand(m)
         nxt = m.group(3)
-        if not m.group(2) and opens:
+        if not m.group(2):
             nxt = nxt.upper()
         return m.group(1) + m.group(2) + nxt
 
-    def per(m):
-        whose = "the owner's answer" if _first_is_q(m.group(2)) else "the owner's ruling"
-        return '%s %s' % (m.group(1), whose)
-
-    def phrase(text):
+    def word(alone=True, suffix='', subject=False):
         def rep(m):
-            the = m.group(1)
-            if the:
-                return text.replace('t', the, 1)
-            return _cap(text, m.string, m.start(), opens)
+            text = _words(m.group('c'), alone)
+            if text is None or continued(m) or (subject and len(CITED.findall(m.group('c'))) > 1):
+                return hand(m)
+            state['words'] += 1
+            start = m.end('pre')
+            if _opens_at(m.string, start, opens):
+                text = text[:1].upper() + text[1:]
+            return m.group('pre') + text + suffix
         return rep
 
+    place = r'(?P<pre>' + _OPEN + '|' + _PREP + r')'
     return [
-        # a parenthesis holding only cites (and a lead word): gone, with the space before it
-        (r'\s*\((?:(?:per|see|PM) )?' + _G + r'\)', ''),
+        # a parenthesis holding only cites (a lead word and parts with them): gone, with the
+        # space before it (never the line's indent)
+        (r'(?:(?<=\S)\s+)?\(' + _KEY + _GP + r'\)', ''),
+        # a sentence that only points at cites: `See R-nnnn.`
+        (r'^(' + _BULLET + r')[Ss]ee ' + _G + r'\.\s*', r'\1'),
+        (r'(?<=[.!?]) [Ss]ee ' + _G + r'\.', ''),
+        # `(CITES: rest`, `rest; CITES)`, `rest, CITES, more`
+        (r'\(' + _KEY + _GP + r'[:;,]\s+', '('),
+        (r'[,;]\s+' + _KEY + _GP + r'(?=\))', ''),
+        (r'[,;]\s+' + _KEY + _G + r'(?=[,;]\s)', ''),
+        # a trailing `, CITES` (or `, key CITES`) before the line's end, a full stop or a
+        # parenthesis
+        (r'\s*[,;|]\s*' + _KEY + _G + r'(?=\s*(?:\.|\(|$))', ''),
         # a leading `CITES: ` or `CITES, ` (after a bullet and a short `Note: ` style label)
         (r'^(' + _BULLET + r')((?:[A-Za-z][A-Za-z _-]{0,20}: )?)' + _G + r'[:,]\s+(\S?)', prefix),
-        # `(CITES: rest` and `rest, CITES)`
-        (r'\(' + _G + r'[:;,]\s+', '('),
-        (r'[,;]\s+' + _G + r'(?=\))', ''),
-        # `per CITES`, `under CITES`, `in CITES` (not `per CITES ruling`: the qualifier's)
-        (r'\b([Pp]er|[Uu]nder|[Ii]n) (' + _G + r')(?! (?:ruling|question|answer|decision)s?\b)',
-         per),
-        (r'\b([Bb]y|[Ff]rom) ' + _G, r'\1 the owner'),
-        # `ruling CITES`, `owner question CITES`: the noun already says it
-        (r"\b((?:(?:[Oo]wner|PM)(?:'s)? )?(?:[Qq]uestions?|[Rr]ulings?|[Aa]nswers?|"
-         r"[Dd]ecisions?)) " + _G, r'\1'),
-        # a trailing `, CITES` before the line's end, a full stop or a parenthesis
-        (r'\s*[,;|]\s*' + _G + r'(?=\s*(?:\.|\(|$))', ''),
-        # `CITES says`: the owner is the subject; `CITES wording`: the owner's
-        (r'(?:\b([Tt])h[e] )?' + _G + r'(?= (?:' + _SUBJECT_VERBS + r')\b)', phrase('the owner')),
-        (r'(?:\b([Tt])h[e] )?' + _G + r'(?= (?!' + _NOT_QUALIFIED + r')[a-z])',
-         phrase("the owner's")),
+        # `the ruling CITES`, `owner question CITES`: the noun already says it
+        (r"\b((?:[Oo]wner|PM|[Tt]he|[Aa]n?|[Tt]hat|[Tt]his|[Ii]ts)(?:'s)? (?:(?:[Oo]wner|PM)"
+         r"(?:'s)? )?" + _NOUN + r") " + _G, r'\1'),
+        # `R-nnnn (2026-10-07): ...` opening a line
+        (r'^(?P<pre>' + _BULLET + r')(?P<c>' + _G + r')(?= \([0-9]{4}-[0-9]{2}-[0-9]{2}\):)',
+         word()),
+        # `R-nnnn's split`; `under the R-nnnn ruling`
+        (place + r"(?P<c>" + _CITE + r")'s (?=[a-z])", word(suffix="'s ")),
+        (place + r'(?:[Tt]he )?(?P<c>' + _G + r') (?=' + _NOUN + r')', word(alone=False,
+                                                                           suffix=' ')),
+        # `per R-nnnn`, `answered by R-nnnn`
+        (r'(?P<pre>' + _PREP + r')(?P<c>' + _G + r')' + _AFTER, word()),
+        # `R-nnnn says`
+        (r'(?P<pre>' + _OPEN + r')(?P<c>' + _G + r')(?= (?:' + _SUBJECT_VERBS + r')\b)',
+         word(subject=True)),
     ]
 
 
 def uncite_line(line, opens=True):
-    """`(after, check)`: one body line with each owner ruling or question id (CITE_ID) rewritten
-    into plain words, and whether its wording wants a reader's eye before it is written: a cite no
-    rule placed became `an owner ruling` / `an owner question`, or the rewrite left odd
-    punctuation (_ODD) the line did not have. `opens`: the line starts a sentence (the line before
-    it is blank, absent, or ends a sentence). Idempotent: a line with no cite comes back as it
-    was."""
-    if line.startswith(rmod.BLOCK_NOTE) or not CITED.search(line):
+    """`(after, hand)`: one body line with each owner ruling or question id (CITE_ID) rewritten
+    into plain words (_uncite_rules), or the line as it was and `hand` True where no rule words it
+    cleanly: a cite no rule places, one glued to a word by a hyphen (GLUED), more than one cite
+    put into words in the line (distinct rulings would read as one), or odd punctuation (_ODD) or
+    indentation the rewrite left. Such a line is listed for a hand edit and never rewritten: no
+    rewrite says `the owner` or `the owner's`. `opens`: the line starts a sentence (the line before
+    it is blank, absent, or ends a sentence). A line left opening on a mark (`, then x`, after a
+    parenthesis went) is the body's to join (_uncite_body). Idempotent: a line with no cite comes
+    back as it was."""
+    if line.startswith(rmod.BLOCK_NOTE) or not (CITED.search(line) or GLUED.search(line)):
         return line, False
+    if GLUED.search(line):
+        return line, True
     opens = opens or re.match(r'\s*(?:[-*]|[0-9]+\.) ', line) is not None
+    state = {'hand': False, 'words': 0}
     after = line
-    for pattern, rep in _uncite_rules(opens):
+    for pattern, rep in _uncite_rules(opens, state):
         after = re.sub(pattern, rep, after)
-    check = False
-    if CITED.search(after):
-        def fallback(m):
-            text = 'an owner question' if _first_is_q(m.group(0)) else 'an owner ruling'
-            return _cap(text, m.string, m.start(), opens)
-        after = re.sub(_G, fallback, after)
-        check = True
-    if _ODD.search(after) and not _ODD.search(line):
-        check = True
-    return after, check
+    if re.fullmatch(r'\s*(?:[-*]|[0-9]+\.)?\s*', after):
+        return '', False                     # only cites (and a bullet): the line goes
+    lead = re.match(r'\s*', line).group(0)
+    joined = re.sub(r'^(\s*)[,;.:]\s*', r'\1', after)    # a leading mark is the body's to join
+    if (state['hand'] or state['words'] > 1 or CITED.search(after) or
+            len(_ODD.findall(joined)) > len(_ODD.findall(line)) or
+            (after.strip() and re.match(r'\s*', after).group(0) != lead)):
+        return line, True
+    return after, False
 
 
 def _uncite_body(body):
-    """`(new body, [(before, after, check)])` for the lines `uncite_line` changed."""
-    out, changed = [], []
+    """`(new body, rewritten, hand)`: `rewritten` the `[before, after]` of each line the rewrite
+    changed, in order (`after` None for a line that was only cites and goes); `hand` the
+    `(n, line)` of each line uncite_line left for a hand edit, `n` its 1-based place in the new
+    body. A rewritten line left opening on a stray mark (`, not this one.` once a parenthesis of
+    cites went) gives the mark to the line above it, or drops it where that line is blank, a
+    heading or already ends on a mark; it is left for a hand edit when the line above is one."""
+    out, rewritten, hand = [], [], []
+    at = {}                                  # out index -> its rewritten entry
     prev = ''
     for line in (body or '').split('\n'):
         opens = not prev.strip() or prev.rstrip()[-1:] in '.!?:'
-        after, check = uncite_line(line, opens)
-        if after != line:
-            changed.append((line, after, check))
-        out.append(after)
         prev = line
-    return '\n'.join(out), changed
+        after, needs = uncite_line(line, opens)
+        stray = re.match(r'(\s*)([,;.:])\s*', after)
+        if stray and not needs and after != line and not re.match(r'\s*[,;.:]', line):
+            above = out[-1] if out else ''
+            if hand and hand[-1][0] == len(out):
+                needs = True
+            else:
+                rest = after[stray.end():]
+                if above.strip() and above.rstrip()[-1:] not in '.,;:!?' and \
+                        not above.lstrip().startswith('#'):
+                    out[-1] = above.rstrip() + stray.group(2)
+                    if len(out) - 1 in at:
+                        at[len(out) - 1][1] = out[-1]
+                    else:
+                        at[len(out) - 1] = [above, out[-1]]
+                        rewritten.append(at[len(out) - 1])
+                elif not above.strip() or above.rstrip()[-1:] in '.!?':
+                    rest = rest[:1].upper() + rest[1:]
+                after = stray.group(1) + rest if rest else ''
+        if needs:
+            out.append(line)
+            hand.append((len(out), line))
+        elif after != line and not after.strip():
+            rewritten.append([line, None])
+        elif after != line:
+            out.append(after)
+            at[len(out) - 1] = [line, after]
+            rewritten.append(at[len(out) - 1])
+        else:
+            out.append(line)
+    return '\n'.join(out), rewritten, hand
 
 
 def plan_uncite(snap, ctx):
     """Rewrite every owner ruling and question id (CITE_ID) cited in the readable records' bodies
     into plain words (uncite_line), and drop the header keys that hold only one (UNCITED_KEYS),
     in one store commit. `summary`, `ref`, `owner_ask`, `q`, `resume`, `priority_per`,
-    `requires` and the `Blocked on` lines are kept as they are. The lines whose wording wants a
-    reader's eye are listed under CHECK WORDING, for the dry run's reader before `--apply`. A
-    second run finds nothing to write."""
-    writes, out, checks = {}, [], []
+    `requires` and the `Blocked on` lines are kept as they are. A line no rule words cleanly is
+    left as it was and listed under NEEDS HAND EDIT, with the store, the record and its line in
+    the written record, in the dry run and in the `--apply` output alike. A second run rewrites
+    nothing; it lists the lines still left for a hand edit."""
+    writes, out, hands = {}, [], []
     cites = body_lines = headers = 0
     for rec in snap.readable:
-        body, changed = _uncite_body(rec.body)
+        body, rewritten, hand = _uncite_body(rec.body)
         drop = [(k, rec.get(k)) for k in UNCITED_KEYS if rec.has(k)]
-        if not changed and not drop:
-            continue
         pairs = [(k, v) for k, v in rec.pairs() if k not in UNCITED_KEYS]
-        writes[rec.stem] = _text(pairs, body if changed else rec.body)
+        # the header, its blank line, then the body: line n of the body is line len(pairs)+1+n
+        hands += ['  %s %s line %d: %s' % (snap.where, rec.stem, len(pairs) + 1 + n, line.strip())
+                  for n, line in hand]
+        if not rewritten and not drop:
+            continue
+        writes[rec.stem] = _text(pairs, body if rewritten else rec.body)
         out.append('  %s' % rec.stem)
-        for before, after, check in changed:
+        for before, after in rewritten:
             cites += len(CITED.findall(before))
-            out += ['    - %s' % before.strip(), '    + %s' % after.strip()]
-            if check:
-                checks.append('  %s: %s' % (rec.stem, after.strip()))
+            out += ['    - %s' % before.strip(),
+                    '    + %s' % (after.strip() if after is not None else '(line removed)')]
         for key, val in drop:
             out.append('    dropped %s: %s' % (key, val))
-        body_lines += len(changed)
+        body_lines += len(rewritten)
         headers += len(drop)
+    tail = ['NEEDS HAND EDIT (%d line(s) left unchanged: no rule words their cites cleanly; edit '
+            'them by hand)' % len(hands)] + hands if hands else []
     if not writes:
-        return Change({}, 'backlog: uncite', ['UNCITE: no owner ruling or question id is cited '
-                                              'in %s: nothing to rewrite' % snap.where])
+        return Change({}, 'backlog: uncite', ['UNCITE: nothing to rewrite in %s%s' % (
+            snap.where, '; %d line(s) still cite one' % len(hands) if hands else
+            ': no owner ruling or question id is cited')] + tail)
     lines = ['UNCITE: %d cite(s) in %d record(s): %d body line(s) rewritten, %d header line(s) '
-             'dropped' % (cites, len(writes), body_lines, headers)] + out
-    if checks:
-        lines += ['CHECK WORDING (%d line(s) a rule did not place, or left odd punctuation; read '
-                  'them before --apply)' % len(checks)] + checks
+             'dropped, %d line(s) left for a hand edit' % (cites, len(writes), body_lines, headers,
+                                                          len(hands))] + out + tail
     return Change(writes, 'backlog: uncite %d cite(s) in %d record(s)' % (cites, len(writes)),
                   lines)

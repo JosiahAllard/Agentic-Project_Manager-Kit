@@ -323,7 +323,7 @@ OPTIONS = {
     'unblock': {'--on': True, '--reason': True},
     'retarget': {'--apply': False},
     'uncite': {'--apply': False},
-    'pull':{'--reason': True, '--blocker': True},
+    'pull': {'--reason': True, '--blocker': True},
     'release': {'--reason': True},
     'close': {'--reason': True},
     'retire': {'--why': True},

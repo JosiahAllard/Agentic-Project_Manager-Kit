@@ -128,7 +128,7 @@ def retarget_dry(args, ctx):
 
 
 def uncite_dry(ctx):
-    """`uncite` without `--apply`: the change it would write (its CHECK WORDING list included),
+    """`uncite` without `--apply`: the change it would write (its NEEDS HAND EDIT list included),
     planned and checked as `retarget_dry`'s is; nothing is published."""
     return _dry(ctx, lambda snap: pmod.plan_uncite(snap, ctx))
 

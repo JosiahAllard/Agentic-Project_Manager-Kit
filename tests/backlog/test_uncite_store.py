@@ -1,7 +1,7 @@
 """`uncite` (docs/backlog.md "Uncite"): every owner ruling or question id a record's body cites is
 rewritten into plain words, and the header keys that hold only one (`priority_ruling`,
-`hold_ruling`) are dropped, in one store commit; a dry run lists what it would write and the lines
-whose wording wants a reader. And the clear path for the keys no verb writes: `set ID --unset K`."""
+`hold_ruling`) are dropped, in one store commit; a line no rule words cleanly is left as it was and
+listed for a hand edit, in the dry run and the apply output alike. And the clear path for the keys no verb writes: `set ID --unset K`."""
 import unittest
 
 from kitlib.backlog import opener
@@ -16,48 +16,145 @@ BACKLOG = inproc.load_tool('backlog')
 
 
 class Line(unittest.TestCase):
-    """uncite_line: each rule, the fallback and its wording flag."""
+    """uncite_line: each rule, and the lines no rule words cleanly, which it leaves as they were
+    for a hand edit. No rewrite says `the owner` or `the owner's`."""
 
-    def check(self, before, after, flagged=False, opens=True):
-        self.assertEqual(pmod.uncite_line(before, opens), (after, flagged), before)
+    def check(self, before, after, opens=True):
+        self.assertEqual(pmod.uncite_line(before, opens), (after, False), before)
+        self.assertNotRegex(after, r'\b[Tt]he owner\b(?!_)', before)
         # idempotent: the rewrite cites nothing, so a second pass leaves it
         self.assertEqual(pmod.uncite_line(after, opens), (after, False), after)
 
+    def left(self, line, opens=True):
+        """The line comes back unchanged and listed for a hand edit."""
+        self.assertEqual(pmod.uncite_line(line, opens), (line, True), line)
+
     def test_each_rule_reads_as_words(self):
         for before, after in (
-                ('Per R-9033, x', "Per the owner's ruling, x"),
-                ('Done per Q-301.', "Done per the owner's answer."),
+                ('Per R-9033, x', 'Per an owner ruling, x'),
+                ('Done per Q-301.', 'Done per an owner question.'),
+                ('Waiting on Q-123.', 'Waiting on an owner question.'),
                 ('x (R-9033).', 'x.'),
                 ('x (see R-9033 and R-9034).', 'x.'),
-                ('(R-9033 added delete)', '(the owner added delete)'),
+                ('(R-9033 added delete)', '(an owner ruling added delete)'),
                 ('- R-9033: the hub', '- The hub'),
                 ('- Note: R-9033, keep it', '- Note: keep it'),
                 ('(R-9033: a split) it stays', '(a split) it stays'),
                 ('it stays (a split; R-9033)', 'it stays (a split)'),
-                ('R-9033 says x', 'The owner says x'),
+                ('R-9033 says x', 'An owner ruling says x'),
                 ('Owner ruling R-9033 says', 'Owner ruling says'),
-                ('answered by R-9033.', 'answered by the owner.'),
+                ('answered by R-9033.', 'answered by an owner ruling.'),
                 ('Settled, R-9033.', 'Settled.'),
-                ('The R-9033 wording holds.', "The owner's wording holds."),
-                ('under R-9033 ruling the hub moves', "under the owner's ruling the hub moves")):
+                ('under R-9033 ruling the hub moves', 'under an owner ruling the hub moves'),
+                ('would break PM R-9144)', 'would break an owner ruling)'),
+                ('See R-9033.', ''),
+                ('- See R-9001.', ''),
+                ('(R-9001)', '')):
             self.check(before, after)
 
-    def test_a_cite_mid_sentence_on_a_continued_line_is_not_capitalised(self):
-        self.check('R-9033 says x', 'the owner says x', opens=False)
-        self.check('done. R-9033 says x', 'done. The owner says x', opens=False)
+    def test_a_key_or_lead_word_goes_with_its_cite(self):
+        for before, after in (
+                ('Was: area fleet, value 1 (owner), effort -, value_ruling R-9189.',
+                 'Was: area fleet, value 1 (owner), effort -.'),
+                ('ref: EX-STATE11; priority_per: R-9499', 'ref: EX-STATE11'),
+                ('Found by the counter analysis (owner R-9264; research store, logs)',
+                 'Found by the counter analysis (research store, logs)'),
+                ('merge once the corrections question is ruled (PM R-9843)',
+                 'merge once the corrections question is ruled')):
+            self.check(before, after)
 
-    def test_a_cite_no_rule_places_falls_back_and_is_flagged(self):
-        self.check('See R-9033.', 'See an owner ruling.', flagged=True)
-        self.check('Waiting on Q-123.', 'Waiting on an owner question.', flagged=True)
-        self.check('R-9033 and R-9034 then x', 'An owner ruling then x', flagged=True)
+    def test_a_parenthesis_of_cites_with_a_part_goes(self):
+        for before, after in (
+                ('budget (PM R-9270; PM R-9246, PM R-9264 O2). The only figures',
+                 'budget. The only figures'),
+                ('a run (B2; PM R-9289 Q2)', 'a run (B2)'),
+                ('a census (R-9618 b) logs it', 'a census logs it'),
+                ('it refuses (R-9618(c)) and logs', 'it refuses and logs')):
+            self.check(before, after)
 
-    def test_odd_punctuation_left_behind_is_flagged(self):
-        self.check('(R-9033), then x', ', then x', flagged=True)
+    def test_a_dated_cite_and_a_possessive_read_as_words(self):
+        self.check('PM R-9482 (2026-10-07): the nightly',
+                   'An owner ruling (2026-10-07): the nightly')
+        self.check("R-9116's split holds.", "An owner ruling's split holds.")
+        self.check('An interrupt ends it. PM R-9144 does not settle this case.',
+                   'An interrupt ends it. An owner ruling does not settle this case.')
+
+    def test_a_cite_at_the_start_of_a_continued_line_is_left(self):
+        # the line continues the sentence before it: no rule knows the word before the cite
+        self.left('R-9033 says x', opens=False)
+        self.check('done. R-9033 says x', 'done. An owner ruling says x', opens=False)
+
+    def test_a_cite_that_is_a_word_no_rule_places_is_left(self):
+        for line in (
+                # a verb before it, or a verb lost after it
+                'Accept fallback ruled PM R-9129 (blind Accept after seeding); BUILT on',
+                '- A step in SKILL (PM R-9953, which supersedes R-9948 via R-9952; PM R-9954).',
+                '## Steps (PM R-9617 approved the API set; PM R-9618 the details; '
+                'PM R-9950, R-9951 the B3 answers)',
+                "Supersedes R-9116's plan",
+                # a subject or a possessive the old fallback made `the owner`
+                'The owner_ask cite of R-9775 is stale (R-9775 is the LOCKER plan); R-9164 does '
+                'not state it',
+                'The R-9033 wording holds.',
+                '(R-9250 kit backlog)',
+                'the drain and R-9775 are done',
+                'One R-9508 debug run',
+                '(checked R-9525; R-9524 holds only tools)',
+                'the next PM R-9296 rebuild',
+                'the risk (PM R-9704 phase 5a)',
+                # a run a subject rule cannot word as one, a mixed run, a cut-off parenthesis
+                'R-9033 and R-9034 then x',
+                'ref: PM R-9185; was priority 4 (owner, R-9265).',
+                'x (R-9950;'):
+            self.left(line)
+
+    def test_a_cite_glued_by_a_hyphen_is_left(self):
+        self.left('note: reverted to its pre-R-9102 priority')
+        self.left('note: reverted to its pre-R-9102 priority (PM R-9106)')
+
+    def test_a_leading_mark_is_the_bodys_to_join(self):
+        self.assertEqual(pmod.uncite_line('(R-9033), then x'), (', then x', False))
+        self.assertEqual(pmod.uncite_line('  (PM R-9818). It checks U1'),
+                         ('  . It checks U1', False))
 
     def test_what_is_not_an_owner_cite_is_untouched(self):
         for line in ('T-1234 and item:FOO and R-12 stay.', 'XR-9033 and R-9033x-1', '',
                      'Blocked on owner (2026-01-01): per R-9033'):
             self.assertEqual(pmod.uncite_line(line), (line, False), line)
+
+
+class Body(unittest.TestCase):
+    """_uncite_body: the stray mark a rewrite leaves at a line's start, and hand-edit lines."""
+
+    def test_a_stray_mark_rejoins_the_line_above(self):
+        body, rewritten, hand = pmod._uncite_body(
+            "the cap\n(PM R-9922), not this record's.\n- fallback (PM R-9823). No RSProx\n"
+            '  (PM R-9818). It checks U1, the\n  more')
+        self.assertEqual(body.split('\n'), ['the cap,', "not this record's.",
+                                            '- fallback. No RSProx.', '  It checks U1, the',
+                                            '  more'])
+        self.assertEqual(hand, [])
+        self.assertIn(['the cap', 'the cap,'], rewritten)
+
+    def test_a_stray_mark_after_a_finished_line_is_dropped(self):
+        body, _, hand = pmod._uncite_body('Done.\n(R-9001). it checks U1\n\n(R-9002), more')
+        self.assertEqual(body.split('\n'), ['Done.', 'It checks U1', '', 'More'])
+        self.assertEqual(hand, [])
+        body, _, _ = pmod._uncite_body('## Heading\n(R-9001), more')
+        self.assertEqual(body.split('\n'), ['## Heading', 'more'])
+
+    def test_a_line_of_only_cites_goes(self):
+        body, rewritten, _ = pmod._uncite_body('x\n(R-9001)\nSee R-9002.\ny')
+        self.assertEqual(body.split('\n'), ['x', 'y'])
+        self.assertEqual(rewritten, [['(R-9001)', None], ['See R-9002.', None]])
+
+    def test_a_hand_edit_line_is_kept_and_numbered(self):
+        body, rewritten, hand = pmod._uncite_body(
+            'x\n(R-9001)\nOne R-9508 debug run\n(R-9002). It checks')
+        self.assertEqual(body.split('\n'), ['x', 'One R-9508 debug run', '(R-9002). It checks'])
+        # the line after one left for a hand edit cannot give it its mark: left too
+        self.assertEqual(hand, [(2, 'One R-9508 debug run'), (3, '(R-9002). It checks')])
+        self.assertEqual(rewritten, [['(R-9001)', None]])
 
 
 BODY_A = 'Per R-9033, the hub moves.\n\nSee R-9034.\nBlocked on owner (2026-01-01): R-9035 says wait'
@@ -91,7 +188,7 @@ class Store(StoreCase):
         self.assertIsNone(a.get('priority_ruling'))
         self.assertIsNone(b.get('hold_ruling'))
         self.assertEqual(a.body.strip().split('\n'),
-                         ["Per the owner's ruling, the hub moves.", '', 'See an owner ruling.',
+                         ['Per an owner ruling, the hub moves.', '',
                           'Blocked on owner (2026-01-01): R-9035 says wait'])
         self.assertEqual(b.body.strip().split('\n'), ['- Which one?', '- T-1234 stays'])
         # what uncite keeps, byte for byte
@@ -101,17 +198,47 @@ class Store(StoreCase):
                 self.assertEqual(self.get(rid).all(key), before.get(rid).all(key), (rid, key))
         self.assertEqual(self.get('CCC').text, before.get('CCC').text)
 
-    def test_the_output_counts_and_lists_the_wording_to_check(self):
+    def test_the_output_counts_and_lists_each_change(self):
         self.seed_three()
         out = '\n'.join(self.verb('uncite').lines)
         self.assertIn('UNCITE: 3 cite(s) in 2 record(s): 3 body line(s) rewritten, '
-                      '2 header line(s) dropped', out)
+                      '2 header line(s) dropped, 0 line(s) left for a hand edit', out)
         self.assertIn('    - Per R-9033, the hub moves.', out)
-        self.assertIn("    + Per the owner's ruling, the hub moves.", out)
+        self.assertIn('    + Per an owner ruling, the hub moves.', out)
+        self.assertIn('    - See R-9034.\n    + (line removed)', out)
         self.assertIn('    dropped priority_ruling: R-9001', out)
         self.assertIn('    dropped hold_ruling: R-9002', out)
-        self.assertIn('CHECK WORDING (1 line(s)', out)
-        self.assertIn('  AAA: See an owner ruling.', out)
+        self.assertNotIn('NEEDS HAND EDIT', out)
+
+    def test_a_line_no_rule_words_is_left_and_listed_for_a_hand_edit(self):
+        self.seed(rec('AAA', body='Per R-9033, the hub moves.\nOne R-9508 debug run first.'),
+                  rec('BBB', body='the drain and R-9775 are done'))
+        dry = opener.uncite_dry(self.ctx)
+        self.assertEqual(sorted(dry.writes), ['AAA'])
+        change = self.verb('uncite')
+        self.assertEqual(change.lines, dry.lines)
+        where = self.store.load().where
+        a, b = self.get('AAA'), self.get('BBB')
+        self.assertEqual(a.body.strip().split('\n'),
+                         ['Per an owner ruling, the hub moves.', 'One R-9508 debug run first.'])
+        self.assertEqual(b.body.strip(), 'the drain and R-9775 are done')
+        self.assertIn('2 line(s) left for a hand edit', change.lines[0])
+        # listed in the dry run and the apply output alike, by store, record and file line
+        tail = change.lines[change.lines.index(next(
+            l for l in change.lines if l.startswith('NEEDS HAND EDIT (2 line(s)'))) + 1:]
+        lines_a, lines_b = a.text.split('\n'), b.text.split('\n')
+        n_a = lines_a.index('One R-9508 debug run first.') + 1
+        n_b = lines_b.index('the drain and R-9775 are done') + 1
+        self.assertEqual(tail, ['  %s AAA line %d: One R-9508 debug run first.' % (where, n_a),
+                                '  %s BBB line %d: the drain and R-9775 are done' % (where, n_b)])
+        # a second run writes nothing and still lists them
+        tip = self.remote_tip()
+        again = self.verb('uncite')
+        self.assertEqual(again.writes, {})
+        self.assertEqual(self.remote_tip(), tip)
+        self.assertIn('nothing to rewrite', again.lines[0])
+        self.assertIn('2 line(s) still cite one', again.lines[0])
+        self.assertEqual(again.lines[-2:], tail)
 
     def test_a_second_run_writes_nothing(self):
         self.seed_three()

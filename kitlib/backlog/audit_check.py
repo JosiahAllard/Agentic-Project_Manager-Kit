@@ -257,6 +257,10 @@ def check(backend, rules, entries, since):
             report.findings.append(Finding('UNKNOWN', '%s  %s' % (what, change.subject)))
             continue
         rows = rows_of(root, verb, change)
+        if not rows:                         # a write subject no roles.py row names yet
+            report.findings.append(Finding('UNKNOWN', '%s %s rows=none  %s' % (
+                what, verb, change.subject)))
+            continue
         if audit.audited(rows):
             report.audited += 1
             report.findings.append(Finding('UNAUDITED', '%s %s rows=%s  %s' % (
