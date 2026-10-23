@@ -978,7 +978,7 @@ class TunnelHealthTest(TunnelCase):
         self.assertEqual(status, 200)
         self.assertEqual(sorted(obj), ['backlog', 'backlog_at', 'backlog_error', 'backlog_timer',
                                        'git', 'ok', 'revision', 'store', 'unavailable',
-                                       'version'])
+                                       'version', 'watcher'])
         # byte for byte: the Api's own answer, git's reason for the owner, and `tunnel` last
         obj['git']['detail'] = GIT_WHY
         obj['tunnel'] = 'on'

@@ -105,8 +105,9 @@ class FromTest(DirectCase):
         qid = self.ask(**{'from': 'pm'})
         self.assertEqual(self.store.get('questions', qid)['from'], 'pm')
 
-    def test_the_default_reader_gives_nothing_when_the_launcher_cannot_be_read(self):
-        # the launcher's settings refuse (a ConfigError, an OSError): only the PM is known
+    def test_the_default_reader_reports_a_launcher_that_cannot_be_read(self):
+        # the launcher's settings refuse (a ConfigError, an OSError): the read raises, and the
+        # Api knows only the PM and says why (tests/hubsite/test_launcher_keys.py)
         from kitlib.launcher import settings as lsettings
         saved = lsettings.load
 
@@ -114,9 +115,11 @@ class FromTest(DirectCase):
             raise OSError('no config')
         lsettings.load = refusing
         try:
-            self.assertEqual(api.launcher_keys(), set())
+            with self.assertRaises(OSError):
+                api.launcher_keys()
             self.assertEqual(api.Api(self.store, clock=CLOCK,
-                                     session_keys=api.launcher_keys).session_keys(), {'pm'})
+                                     session_keys=api.launcher_keys).read_session_keys(),
+                             ({'pm'}, 'OSError'))
         finally:
             lsettings.load = saved
 

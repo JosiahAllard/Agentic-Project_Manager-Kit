@@ -360,6 +360,31 @@ class StateTest(unittest.TestCase):
                          "No PM is listening; one last asked 3 h ago.")
         self.assertEqual(say(None), "")
 
+    def test_the_pm_line_counts_push_delivery_and_says_the_watchers_heartbeat(self):
+        seen = {"waited": "2026-10-07T11:30:00Z", "pulled": None, "waiting": 0}
+        up, down = {"state": "up", "last": "written", "undelivered": 0}, {"state": "down", "last": "uncertain", "undelivered": 1}
+        say = lambda p, w: js("pmSeenText(items.seen, %s, items.push, items.watcher)" % NOW_MS,  # noqa: E731
+                              {"seen": seen, "push": p, "watcher": w})
+        self.assertEqual(say(up, None), "Push delivery reaches the PM.")
+        self.assertEqual(say(down, None), "No PM is listening; one last asked 30 min ago.")
+        self.assertEqual(say(None, None), "No PM is listening; one last asked 30 min ago.")
+        self.assertEqual(say(up, {"state": "up", "age": 40}), "Push delivery reaches the PM. The PM's watcher is running.")
+        self.assertEqual(say(up, {"state": "down", "age": 1800}),
+                         "Push delivery reaches the PM. The PM's watcher has stopped: its last heartbeat is 30 min old.")
+        self.assertEqual(say(down, {"state": "none", "age": None}),
+                         "No PM is listening; one last asked 30 min ago. No PM watcher heartbeat is found.")
+        got = js("hubState(items)", snapshot(watcher={"state": "down", "age": 400}))
+        self.assertEqual(got["watcher"], {"state": "down", "age": 400})
+        self.assertIsNone(js("hubState(items)", snapshot())["watcher"])
+
+    def test_push_up_before_any_try_to_the_pm_does_not_say_it_reaches_the_pm(self):
+        # PushWorker._summarize reports 'up' with `last` None before its first try to the PM
+        seen = {"waited": "2026-10-07T11:30:00Z", "pulled": None, "waiting": 0}
+        fresh = {"state": "up", "last": None, "undelivered": 0}
+        got = js("pmSeenText(items.seen, %s, items.push, items.watcher)" % NOW_MS,
+                 {"seen": seen, "push": fresh, "watcher": None})
+        self.assertEqual(got, "No PM is listening; one last asked 30 min ago.")
+
     def test_the_push_line_says_up_or_down_and_how_many_are_undelivered(self):
         say = lambda p: js("pushText(items)", p)        # noqa: E731
         self.assertEqual(say({"state": "up", "last": None, "undelivered": 0}), "Push delivery is up; nothing undelivered.")
