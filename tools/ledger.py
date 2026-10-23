@@ -20,14 +20,20 @@ R-nnnn ledger: read by show, grep, list and check, never written. Without `ledge
       ledger's entries for REPO or `all`.
   ledger.py check [--base REV]
       validate every ledger file and check each only grew since REV (default <repo.remote>/<main
-      branch> of the file's repository; origin unless set), and that the standing digest cites
-      only live entries.
+      branch> of the file's repository; origin unless set), that the standing digest cites
+      only live entries, and the rulebooks (format, sources in the log; overrides and a book over
+      its budget are notes, not failures).
   ledger.py list --prov PROV --since YYYY-MM-DD [--repo REPO]
       one line per ruling of that provenance dated on or after the day: `<id> | date | Decides`.
       `--prov delegated` feeds the PM's daily digest of delegated engineering rulings.
   ledger.py standing [WORD] [--repo REPO]
       the standing digest's rule lines for a topic word, under their headings; --repo: only the
       digest's `## REPO` section. WORD or --repo is needed.
+  ledger.py rules (--repo FOLDER | --all) [--sources] [--topic WORD]
+      the rulebooks in the `rules` folder beside the log (docs/ledger.md "Rulebooks"): --repo the
+      shared one then FOLDER's own; --all every one. Rules print under their topic headings;
+      --sources adds each rule's log ids; --topic keeps the rules whose heading, key or text holds
+      WORD.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.ledger, prints and exits.
 Exit codes: 0 ok; 1 no ledger configured or unreadable, a refused write, a failed check, an id or
@@ -43,7 +49,7 @@ from kitlib import ledger                                          # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.host import registry                                    # noqa: E402
-from kitlib.ledger import files, fmt, read, safepath, standing, vcs, write  # noqa: E402
+from kitlib.ledger import files, fmt, read, rulebook, safepath, standing, vcs, write  # noqa: E402
 from kitlib.ledger.errors import Refused, Usage                    # noqa: E402
 
 
@@ -101,6 +107,11 @@ def parser():
     st = sub.add_parser('standing', help="the standing digest's rule lines for a topic word")
     st.add_argument('word', nargs='?')
     st.add_argument('--repo', help="only the digest's `## REPO` section")
+    rl = sub.add_parser('rules', help="the rulebooks: shared and a repo's own, or all")
+    rl.add_argument('--repo', help="a checkout folder name (or rulebook name): the shared rulebook, then its own")
+    rl.add_argument('--all', action='store_true', help='every rulebook')
+    rl.add_argument('--sources', action='store_true', help="add each rule's log ids")
+    rl.add_argument('--topic', help='only rules whose heading, key or text holds this word')
     return p
 
 
@@ -211,6 +222,44 @@ def do_standing(a, p, found):
     return 0 if lines else 1
 
 
+def do_rules(a, found):
+    """Print the rulebooks `a` names; 1 when none exist or no rule matches."""
+    if bool(a.repo) == bool(a.all):
+        raise Usage('rules needs --repo FOLDER or --all')
+    books, errs = rulebook.load(found.rules)
+    for e in errs:
+        sys.stderr.write('ledger.py: %s\n' % e)
+    if not books:
+        return fail('no rulebooks in %s' % found.rules)
+    if a.all:
+        views = [(b, set()) for b in books.values()]
+    else:
+        views = rulebook.view(books, a.repo)
+        if rulebook.for_repo(books, a.repo) is None:
+            sys.stderr.write('ledger.py: no rulebook for %r (shared rules only); its Repos line is '
+                             'the mapping\n' % a.repo)
+    shown = 0
+    for book, over in views:
+        out, n = rulebook.lines(book, over, a.sources, a.topic)
+        shown += n
+        for line in out:
+            print(line)
+    return 0 if shown or not a.topic else 1
+
+
+def rulebook_findings(found, texts):
+    """`(lines for check to print, error count, rule count, book count)`: every rulebook present
+    parsed, then checked against the ids of the log `texts`."""
+    if not found.rules:
+        return [], 0, 0, 0
+    books, errs = rulebook.load(found.rules)
+    ids = {e.id for text in texts for e in read.parse(text)}
+    got = rulebook.check(books, ids)
+    errs = errs + got.errors
+    out = ['FAIL ' + e for e in errs] + ['note: ' + n for n in got.notes]
+    return out, len(errs), sum(len(b.rules) for b in books.values()), len(books)
+
+
 def check_one(label, text, old, repos, repo, others):
     """The check's findings for one file, each prefixed with `label` when it is set."""
     errs = write.check(text, old, repos, repo, others)
@@ -244,16 +293,22 @@ def do_check(a, found, repos):
         errs.append('cannot read the standing digest: %s' % dwhy)
     for e in errs:
         print('FAIL ' + e)
+    book_lines, book_errs, rules, books = rulebook_findings(found, texts)
+    for line in book_lines:
+        print(line)
     for path, base, why in unchecked:
         print('append-only NOT CHECKED: cannot read %s at %s (%s)'
               % (os.path.basename(path) if found.split else 'the ledger', base, ' '.join((why or '').split())))
     entries = sum(write.count(t) for t in texts)
-    verdict = 'OK' if not errs else '%d problem(s)' % len(errs)
+    problems = len(errs) + book_errs
+    verdict = 'OK' if not problems else '%d problem(s)' % problems
     if found.split:
         print('ledger: %d entries in %d files, %s' % (entries, len(texts), verdict))
     else:
         print('ledger: %d entries, %s' % (entries, verdict))
-    return 1 if errs else 0
+    if books:
+        print('rulebooks: %d rules in %d files' % (rules, books))
+    return 1 if problems else 0
 
 
 def run(a, p, found, repos):
@@ -270,6 +325,8 @@ def run(a, p, found, repos):
         return 0
     if a.cmd == 'standing':
         return do_standing(a, p, found)
+    if a.cmd == 'rules':
+        return do_rules(a, found)
     if a.cmd == 'add':
         return do_add(a, found, repos)
     if a.cmd == 'retire':
