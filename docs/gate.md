@@ -509,8 +509,8 @@ These are general behaviour the kit gate leaves out, or repo-specific behaviour,
 |---|---|---|
 | PM kit gate.py | `-C` hand-off | retired |
 | PM kit gate.py | `--hook-arg` / `gate_hook` | replaced by the hook module's `GATE_CHECKS` |
-| PM kit gate.py | `python_tests: pytests`, `python_tests_floor`, py-drops | refused if set; write the test run as a step with a `pass` floor (docs/test-tools.md) |
-| PM kit gate.py | trailer check (`trailers`) | ported as the `cmd` step over `{here}/trailers.py` (docs/repo-checks.md "trailers"); the `trailers` gate key is refused if set |
+| PM kit gate.py | `python_tests`, `python_tests_floor`, py-drops | no gate keys: a config that sets one fails to load (unknown key); write the test run as a step with a `pass` floor (docs/test-tools.md) |
+| PM kit gate.py | trailer check (`trailers`) | ported as the `cmd` step over `{here}/trailers.py` (docs/repo-checks.md "trailers"); `trailers` is no gate key: a config that sets it fails to load (unknown key) |
 | PM kit gate.py | `kill_retry`, pid shield | `kill_retry` is no step key: a config that sets it fails to load (unknown key). A stop, Ctrl+C or error ends a step's whole process tree through the slot's job, a subtree whose top already exited included (tests/lock/test_slot_treekill.py), but for a build daemon another job's client uses or may use (any MSBuild node or compiler server among them), which is spared with its tree ("Build daemons" above, `Slot.end_tree`). `--pid-hold` in `setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args` is refused too: the pid hold is opt-in for agent test runs (docs/test-tools.md "The pid shield") |
 | PM kit gate.py | pin-check / offline hatch, doc-budget, forbidden paths | repo checks: the doc budget is a `cmd` step over `{here}/doc_budget.py -C <root>` (docs/doc-tools.md); forbidden paths are a `cmd` step over `{here}/forbidden.py` (docs/repo-checks.md); machine paths over `tools/machine_paths.py -C <root>` (0 OK, 1 FAILED, 2 NOT CHECKED; docs/commit.md) |
 | PM kit gate.py | dotnet zero-test regexes | repo data: the gate's `zero_tests` |
@@ -524,7 +524,7 @@ These are general behaviour the kit gate leaves out, or repo-specific behaviour,
 
 ## Go-live notes
 
-- A repo's Python tests must be steps (`python_tests: discover` is the default and runs nothing by itself).
+- A repo's Python tests must be steps (no gate key runs them).
 - Turn on `push_block` only after the repo lands through `gate.py land`.
 - Once switched, delete the retired tools (ARCHITECTURE.md "Details").
 - In a landing, only the hook module's own file comes from the base (Landing, step 4); a hook module that imports sibling files from its tools folder is not supported there (kitlib/gate/hookrev.py). Its `__file__` is its path in the merged checkout, so a hook that reaches files beside itself through `__file__` reads the merged tree's copies, not the base's; its tracebacks and GATE_CHECKS errors name `<rev10>:<path>`.

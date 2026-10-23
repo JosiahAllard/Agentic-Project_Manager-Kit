@@ -119,13 +119,16 @@ class BranchGate(fixtures.GateRepoCase):
         self.assertEqual(self.gate(wt, only=['nosuch']).code, G.USAGE)
         self.assertEqual(self.gate(wt, base='no-such-ref').code, G.USAGE)
 
-    def test_unported_setting_is_refused(self):
+    def test_an_unported_gate_key_is_refused_as_an_unknown_key(self):
         wt = self.repo.worktree('feature')
-        self.repo.write('.kit.json', '{"gate": {"trailers": true, "steps": []}}\n', root=wt)
-        self.repo.commit('trailers', '.kit.json', cwd=wt)
-        out = self.gate(wt)
-        self.assertEqual(out.code, G.REFUSED)
-        self.assertIn('trailers', out.lines[0])
+        for key, value in (('python_tests', '"pytests"'), ('python_tests_floor', '10'),
+                           ('trailers', 'true')):
+            self.repo.write('.kit.json', '{"gate": {"%s": %s, "steps": []}}\n' % (key, value),
+                            root=wt)
+            self.repo.commit(key, '.kit.json', cwd=wt)
+            out = self.gate(wt)
+            self.assertEqual(out.code, G.REFUSED, (key, out.lines))
+            self.assertIn('"gate": unknown key(s) %s' % key, out.lines[0])
 
     def test_worktree_guard_refuses_the_main_checkout(self):
         self.repo.write('.kit.json', '{"gate": {"worktree_guard": true, "steps": []}}\n')

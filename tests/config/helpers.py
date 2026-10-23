@@ -33,8 +33,9 @@ class TempTree(object):
 # Synthetic copies of the shapes two real repositories' `.kit.json` files had (alpha and beta here)
 # (every section and key they use, values shortened, every address a fake one), migrated to the
 # kit's form: a section once read from its legacy tools/*.json is named (pattern 6), the hook
-# module moved from "gate".hook to `hook`, the owner keys from "doc_budget" to `owner`, and the
-# repo-specific gate keys (pin check, py-drops, pytests extras) to hook options and checks.
+# module moved from "gate".hook to `hook`, the owner keys from "doc_budget" to `owner`, the
+# repo-specific gate keys (pin check, py-drops, pytests extras) to hook options and checks, and
+# the gate keys the kit gate never implemented (python_tests, python_tests_floor, trailers) dropped.
 ALPHA_SHAPE = {
     'repo': {'name': 'alpha', 'main_branch': 'master'},
     'backlog': {'store': 'docs/backlog', 'phases': ['L0', 'L1', 'X'], 'id_grammar': 'upper',
@@ -63,7 +64,7 @@ ALPHA_SHAPE = {
     'pieces': 'tools/pieces.json',
     'gate': {
         'comment': 'notes are allowed',
-        'trailers': True, 'worktree_guard': True, 'python_tests': 'pytests',
+        'worktree_guard': True,
         'steps': [
             {'name': 'main-checkout-stray', 'stage': 'first', 'always': True, 'continue': True,
              'warn': True, 'cmd': ['{python}', '{here}/checkout_guard.py', '--main-stray'],
@@ -115,7 +116,6 @@ BETA_SHAPE = {
         'fallback_vars': ['DEV_ROOT', 'AGENT_TEMP']},
     'gate': {
         'comment': 'notes are allowed',
-        'python_tests': 'pytests', 'python_tests_floor': 1000,
         'warn_untracked': True,
         'fail': ['SCRIPT ERROR|error CS\\d+'], 'warn_lines': ['Node not found'],
         'zero_tests': ['\\bUNIT TESTS OK 0\\b'],
