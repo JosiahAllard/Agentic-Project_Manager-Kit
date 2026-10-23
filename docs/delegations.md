@@ -4,7 +4,7 @@
 
 ## Where it is
 
-`~/.pm-kit/owner-delegations.json`, beside the machine config (`kitlib.config.user.DIR_NAME`). Only the owner writes it. Nothing moves it: there is no setting and no environment variable, and the retired machine config folder that `kitlib.config.user.locate` falls back to is never read. Tests pass `home=` with a temp folder.
+`~/.pm-kit/owner-delegations.json`, in the home folder's `kitlib.config.user.DIR_NAME`, where the machine config used to be (the kit now reads that from the PM repository, docs/kit-json.md "Machine config keys"). Only the owner writes it. Nothing moves it: there is no setting and no environment variable, and the retired machine config folder is never read. Tests pass `home=` with a temp folder.
 
 `load(home=None)` returns `Delegations(path, schema, operations)`. It raises these errors:
 
