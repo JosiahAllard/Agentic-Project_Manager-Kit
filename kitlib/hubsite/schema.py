@@ -5,8 +5,9 @@ field tables), checked by the store before every write.
   ID_PREFIX              {collection: prefix} of the collections whose ids the store assigns
   STORE_KEYS             the keys the store itself sets on every document (version, updated_at)
   check(coll, fields)    [kitlib.hubvalidate.Finding]: an `error` per missing required field, per
-                         field of the wrong type, and per to_pm kind that is not known (an
-                         unknown status is kitlib.hubvalidate's status-unknown error)
+                         field of the wrong type, and per to_pm or approvals kind that is not
+                         known (an unknown status is kitlib.hubvalidate's status-unknown error);
+                         an approval's required fields depend on its kind (BY_KIND)
   check_id(doc_id)       an error message for a document id that cannot be a file name, else None
   whole_recommended(coll, fields)
                          (fields, old, label): a question whose `recommended` is text that
@@ -52,13 +53,17 @@ FIELDS = {
     'pages': (('title',), {'title': _STR}),
     'page_html': (('html',), {'html': _STR}),
     'repos': ((), {'name': _STR, 'added_at': _STR, 'aliases': _LIST}),
-    # kitlib.hubsite.approvals, "The document"
-    'approvals': (('status', 'repo', 'title', 'head', 'files', 'created_at'), {
+    # kitlib.hubsite.approvals, "The document"; BY_KIND adds the fields of each kind
+    'approvals': (('status', 'repo', 'title', 'created_at'), {
         'status': _STR, 'repo': _STR, 'title': _STR, 'head': _STR, 'files': _LIST,
         'created_at': _STR, 'reason': _STR, 'decision': _STR, 'decided_at': _STR, 'sig': _STR,
-        'commit': _STR, 'consumed_at': _STR, 'diff': _LIST}),
+        'commit': _STR, 'consumed_at': _STR, 'diff': _LIST, 'kind': _STR, 'op': _STR,
+        'line': _STR, 'args_sha256': _STR, 'what': _STR}),
 }
 KINDS = {'to_pm': ('question', 'fyi')}
+# {collection: {kind: more required fields}}: a document of such a collection needs its kind's
+# fields too, None standing for a document with no kind; any other kind is an error
+BY_KIND = {'approvals': {None: ('head', 'files'), 'op': ('op', 'line', 'args_sha256')}}
 
 _ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
 # Windows device names: a file named so (any extension) opens the device, not a file
@@ -86,6 +91,14 @@ def check(coll, fields, doc_id='?'):
         return [_err(coll, doc_id, '', 'the document is not an object')]
     required, types = FIELDS[coll]
     out = []
+    by_kind = BY_KIND.get(coll)
+    if by_kind is not None:
+        kind = fields.get('kind')
+        if kind is None or (isinstance(kind, str) and kind in by_kind):
+            required = required + by_kind[kind]
+        elif isinstance(kind, str):     # another type is the type check's error below
+            out.append(_err(coll, doc_id, 'kind', 'kind %r is not one of %s' % (
+                kind, ', '.join(k for k in by_kind if k is not None))))
     for field in required:
         v = fields.get(field)
         if v is None or (isinstance(v, str) and not v.strip()):

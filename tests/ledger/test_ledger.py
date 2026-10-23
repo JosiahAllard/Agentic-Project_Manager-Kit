@@ -1,4 +1,5 @@
-"""kitlib.ledger.listing and tools/ledger.py list: the delegated-rulings digest feed."""
+"""kitlib.ledger.listing and tools/ledger.py list: the delegated-rulings digest feed; and
+kitlib.ledger.fmt.validate's `under` anchor of a delegated entry."""
 import os
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import unittest
 
 from kitlib import ledger
 from kitlib.config import user as kuser
+from kitlib.ledger import fmt
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'ledger.py')
@@ -149,6 +151,71 @@ class HeaderEdgeTest(unittest.TestCase):
     def test_since_with_trailing_newline_is_refused(self):
         with self.assertRaises(ValueError):
             ledger.list_rulings('', 'delegated', '2026-10-06' + chr(10))
+
+
+class UnderAnchorTest(unittest.TestCase):
+    """kitlib.ledger.fmt.validate: a delegated entry's Source says `under <id>`, an earlier owner
+    entry, or `under hub:A-nnn`, a hub approval, which is its own anchor (docs/ledger.md). The
+    one-file ledger's ids are built by rid(n), so this file holds no ruling id of its own
+    (tests/scrub)."""
+
+    def text(self, *entries, repo=None):
+        out = '# Rulings ledger\n\n'
+        for n, (prov, source) in enumerate(entries, 1):
+            out += fmt.render(fmt.fmt_id(n, repo), '2026-10-20 12:00Z', repo or 'pm', prov,
+                              'q', 'a', 'run D-001 dest=x', source, '-')
+        return out
+
+    def test_a_delegated_entry_under_a_hub_approval_needs_no_owner_entry(self):
+        for source in ('under hub:A-001: D-001 hub:A-001', 'under hub:A-999',
+                       'under hub:A-1000: D-001 hub:A-1000', 'run under hub:A-042.'):
+            with self.subTest(source=source):
+                self.assertEqual(fmt.validate(self.text(('delegated', source))), [])
+                self.assertEqual(fmt.validate(self.text(('delegated', source), repo='pm'),
+                                              repo='pm'), [])
+
+    def test_a_malformed_hub_anchor_is_refused(self):
+        for source in ('under hub:A-01', 'under hub:A-1', 'under hub:A-000', 'under hub:A-0001',
+                       'under hub:A-0100', 'under A-001', 'under hub:a-001', 'under hub:B-001',
+                       'under hub: A-001', 'under hub:A-001x', 'under hub:A-001-2',
+                       'under hubA-001', 'hub:A-001'):
+            with self.subTest(source=source):
+                self.assertEqual(fmt.validate(self.text(('delegated', source))),
+                                 ["%s: a delegated entry's Source must say 'under <id>'" % rid(1)])
+
+    def test_the_ruling_id_forms_are_checked_as_before(self):
+        self.assertEqual(fmt.validate(self.text(('typed', 'owner'),
+                                                ('delegated', 'under %s' % rid(1)))), [])
+        self.assertEqual(fmt.validate(self.text(('selected', 'owner'),
+                                                ('delegated', 'x under %s.' % rid(1)))), [])
+        self.assertEqual(fmt.validate(self.text(('typed', 'owner'), ('delegated', 'under H-pm-0001'),
+                                                repo='pm'), repo='pm'), [])
+        other = self.text(('relayed-from-terminal', 'owner'), repo='alpha')
+        self.assertEqual(fmt.validate(self.text(('delegated', 'under H-alpha-0001'), repo='pm'),
+                                      repo='pm', others=[other]), [])
+        cases = (
+            ((('delegated', 'under %s' % rid(2)), ('typed', 'owner')),
+             '%s: delegated under %s, which is not an earlier owner entry' % (rid(1), rid(2))),
+            ((('typed', 'owner'), ('delegated', 'under %s' % rid(1)),
+              ('delegated', 'under %s' % rid(2))),
+             '%s: delegated under %s, which is not an earlier owner entry' % (rid(3), rid(2))),
+            ((('delegated', 'under %s' % rid(9)),),
+             '%s: delegated under %s, which is not an earlier owner entry' % (rid(1), rid(9))),
+            ((('typed', 'owner'), ('delegated', 'consultant')),
+             "%s: a delegated entry's Source must say 'under <id>'" % rid(2)),
+            ((('typed', 'owner'), ('delegated', 'under R-%03d' % 1)),   # three digits: no id
+             "%s: a delegated entry's Source must say 'under <id>'" % rid(2)),
+        )
+        for entries, err in cases:
+            with self.subTest(entries=entries):
+                self.assertEqual(fmt.validate(self.text(*entries)), [err])
+
+    def test_an_owner_entry_needs_no_anchor_and_names_a_hub_approval_freely(self):
+        self.assertEqual(fmt.validate(self.text(('selected', 'hub:A-001'))), [])
+
+
+def rid(n):
+    return 'R-%04d' % n
 
 
 if __name__ == '__main__':
