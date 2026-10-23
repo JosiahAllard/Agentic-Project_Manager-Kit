@@ -213,7 +213,22 @@ class WholeRun(StoreCase):
         self.assertFalse(any(n.startswith('backlog NOT CHECKED') for n in res['notes']),
                          res['notes'])
 
-    def test_evidence_is_flagged_and_marked_new_only_the_first_time(self):
+    def test_in_a_pm_data_worktree_paths_are_read_in_the_code_checkout(self):
+        kit_json_ref(self.repo)
+        self.seed(priced('AAA'))
+        code = temp_dir(self)
+        seen = []
+        with mock.patch.object(maintlint.pullmod, 'code_config', return_value=mock.Mock(root=code)), \
+                mock.patch.object(maintlint.verify, 'paths',
+                                  side_effect=lambda s, root, *a: (seen.append(root), ([], []))[1]), \
+                mock.patch.object(maintlint.verify, 'scopes',
+                                  side_effect=lambda s, root, rev, cmd: (seen.append(root),
+                                                                         ([], []))[1]):
+            self.run_lint()
+        self.assertEqual(seen, [code, code])
+        self.assertEqual(maintlint.code_checkout(self.repo.root), self.repo.root)
+
+    def test_evidence_is_flagged_and_new_marks_what_the_last_run_lacked(self):
         kit_json_ref(self.repo)
         self.seed(priced('AAA', state='blocked', blocked_on='item:GONE', summary='one'),
                   priced('BBB', summary='the same words'), priced('CCC', summary='The same words.'))
@@ -224,6 +239,10 @@ class WholeRun(StoreCase):
         again = self.run_lint(previous=first)
         self.assertFalse(any(f['new'] for f in again['findings']))
         self.assertEqual(again['counts']['duplicate'], 1)
+        dup = [f for f in first['findings'] if f['check'] == 'duplicate']
+        third = self.run_lint(previous={'findings': dup})
+        self.assertEqual(sorted((f['check'], f['new']) for f in third['findings']),
+                         [('dead-blocker', True), ('duplicate', False)])
 
 
 class Cli(StoreCase):

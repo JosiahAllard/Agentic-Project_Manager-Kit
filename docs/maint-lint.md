@@ -45,7 +45,9 @@ class.
 
 ## Path checks
 
-`kitlib/maintlint/verify.py`:
+`kitlib/maintlint/verify.py`. Paths are read in the checkout given, except in a PM data worktree:
+there they are read in the code repository's main checkout, against its code main
+(`kitlib.maintlint.code_checkout`), because the records name the code's files.
 - `body-path-gone` and `file-moved`: `stale.sweep`'s missing body paths, and `files` entries
   changed or moved since `files_at`.
 - `scope-path-gone`: a scope path that is missing from the checkout and that the main branch's

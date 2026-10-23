@@ -20,6 +20,7 @@ import time
 
 from kitlib import kitroot
 from kitlib.backlog.errors import Refusal
+from kitlib.backlog import pull_branch as pullmod
 from kitlib.backlog.opener import open_store
 
 Finding = collections.namedtuple('Finding', 'check key text fix')
@@ -40,6 +41,14 @@ def backlog_command(root):
     return kitroot.command('backlog', root)
 
 
+def code_checkout(root):
+    """The checkout a record's paths are read in: the code repository's main checkout when `root`
+    is its PM data worktree (whose records name the code's files, not the data branch's), else
+    `root` (kitlib.backlog.pull_branch.code_config)."""
+    code = pullmod.code_config(root)
+    return code.root if code is not None else root
+
+
 def _backlog_checks(root, home, now, notes):
     """Every check that reads the store; a store that cannot be opened is one note."""
     try:
@@ -51,14 +60,15 @@ def _backlog_checks(root, home, now, notes):
     cmd = backlog_command(ctx.root)
     if snap.unreadable:
         notes.append('backlog: %d record(s) could not be read' % len(snap.unreadable))
+    code_root = code_checkout(ctx.root)
     out = holds.findings(snap, cmd)
     for step in (lambda: backlog.unpriced(snap, cmd),
                  lambda: backlog.dead_pulls(snap, ctx, cmd),
                  lambda: backlog.dead_blockers(snap, cmd),
                  lambda: backlog.duplicates(snap, cmd),
                  lambda: backlog.audit(ctx.root, cmd, home=home, now=now),
-                 lambda: verify.paths(snap, ctx.root, cmd, ctx.date()),
-                 lambda: verify.scopes(snap, ctx.root, ctx.main_branch, cmd)):
+                 lambda: verify.paths(snap, code_root, cmd, ctx.date()),
+                 lambda: verify.scopes(snap, code_root, ctx.code_main, cmd)):
         found, more = step()
         out += found
         notes += more
