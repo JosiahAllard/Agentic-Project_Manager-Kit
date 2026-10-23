@@ -10,7 +10,9 @@ with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/look
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
 launches every coordinator, the kit's included, from whatever account it started on; when that
 account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
-`tests/pmstart/test_pmstart.py` `LivenessTest`.
+`tests/pmstart/test_pmstart.py` `LivenessTest`. A coordinator the PM stopped on its `ready to stop:`
+reply (skill session-handoff) is listed too; the PM starts it only when its repo gets startable
+work, an owner answer or an approval.
 
 Hub (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`; docs/action-hub.md): the
 lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)

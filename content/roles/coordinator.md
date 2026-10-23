@@ -110,6 +110,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   new while one of yours sits stopped without a block. Your successor never waits for workers'
   reports: it re-dispatches from the branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
   queues every LAND verdict in the note at once, and the PM stops you once it has checked in.
+- Nothing startable, nothing being built and the landing queue clear -> write the state note and
+  {{tool:message}} the PM `ready to stop: <state note path>`. The PM stops you with no successor and
+  restarts you when your repo gets startable work, an owner answer or an approval.
 - `next` empty only because finished branches still wait to land is no reason to restart: their
   open records and scopes still block the items behind them. Queue them at once, rerun
   `next`, refill the set; wind down only when `next` offers nothing startable with the landing

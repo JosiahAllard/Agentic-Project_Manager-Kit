@@ -61,6 +61,8 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
   (<kit>/docs/launcher.md): `start`, `handoff`, `stop`, `launch.py deep` for a deep-worker a coordinator
   asked for, `launch.py consultant` for a repository's consultant. Stop a session only by its name, after its
   successor has checked in.
+- A coordinator's `ready to stop: <note>`: stop it with no successor. Start it again
+  (`launch.py start`) only when its repo gets startable work, an owner answer or an approval.
 - Work reaches a repository through its coordinator ({{agent:coordinator}}): a brief, the
   owner's decisions that bind it, and the base it should merge. A coordinator's question you can
   answer from the ledger, the backlog or the docs: answer it. One only the owner can answer goes
