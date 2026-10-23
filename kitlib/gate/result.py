@@ -291,8 +291,9 @@ class Run(object):
             return None, 'WARNING: the result record could not be written: %s' % e
         return self._write(when=when, **kw)
 
-    def error(self, exc):
-        return self._write(verdict=ERROR, summary='the %s stopped: %s: %s' % (
+    def error(self, exc, log=None):
+        """`log`: the run's log folder, when it was made before `exc` ended the run."""
+        return self._write(verdict=ERROR, log=log, summary='the %s stopped: %s: %s' % (
             self.kind, type(exc).__name__, exc))
 
 
