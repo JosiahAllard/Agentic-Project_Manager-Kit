@@ -184,5 +184,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Say the work is finished while any dispatched workstream is still open.
 - Chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one
   shell call.
-- Retry a refusal except as skill backlog-ops, "Refusals" allows. Send every refusal to the PM, which keeps
-  the log. A repeat is a tool bug to fix, not a command for the owner.
+- Retry a refusal except as skill backlog-ops, "Refusals" allows. Send the PM, verbatim, only the
+  refusals the guard does not log itself (a classifier refusal, a permission denial, a repository
+  tool's `REFUSED:`); the guard's own refusals are already in `<pm_data>/audit/refusals.jsonl`.
+  A repeat is a tool bug to fix, not a command for the owner.
