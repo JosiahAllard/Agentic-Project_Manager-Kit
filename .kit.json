@@ -4,11 +4,12 @@
   "guard": {"role_policy": true},
   "commit": {"merge_fold": true},
   "doc_index": {"enabled": false},
-  "daily_full": {"enabled": true},
+  "daily_full": {"enabled": true, "bisect": {"max_probes": 5}},
   "preflight": {"report_hooks": ["daily_full:summary_lines"]},
   "worktree_remove": {"build_output": ["__pycache__"]},
   "gate": {
     "smoke_steps": ["kit-suite"],
+    "docs_only": {"globs": ["docs/*.md"], "steps": ["kit-suite"]},
     "steps": [
       {
         "name": "kit-suite",
