@@ -24,7 +24,7 @@ import re
 from kitlib import hubvalidate
 
 COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'pages', 'page_html', 'repos',
-               'approvals')
+               'approvals', 'schedules')
 ID_PREFIX = {coll: prefix for prefix, coll in hubvalidate.REF_COLLECTIONS.items()}
 STORE_KEYS = ('version', 'updated_at')
 CODE = 'schema-field'
@@ -59,6 +59,9 @@ FIELDS = {
         'created_at': _STR, 'reason': _STR, 'decision': _STR, 'decided_at': _STR, 'sig': _STR,
         'commit': _STR, 'consumed_at': _STR, 'diff': _LIST, 'kind': _STR, 'op': _STR,
         'line': _STR, 'args_sha256': _STR, 'what': _STR}),
+    # kitlib.hubsite.api, "Schedules": the owner's times for the kit's automatic tasks
+    'schedules': (('task', 'repo', 'cadence', 'at'), {
+        'task': _STR, 'repo': _STR, 'cadence': _STR, 'days': _LIST, 'at': _STR, 'set_at': _STR}),
 }
 KINDS = {'to_pm': ('question', 'fyi')}
 # {collection: {kind: more required fields}}: a document of such a collection needs its kind's
