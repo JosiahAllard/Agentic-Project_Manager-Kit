@@ -58,7 +58,8 @@ It writes nothing into any repository: a repository works with the kit with noth
                              report only, its log in the agents' temp folder
            --procwatch-kill  with --procwatch: the task also ends the SAFE rules' processes
            --desktop DIR (default: the user's Desktop)   --home DIR (default: the user's home)
-           --kit DIR (default: the checkout this file is in)
+           --kit DIR (default: the checkout this file is in; in a plugin export, the main
+                             checkout its marker records, refused when that is gone)
   repo options (--repo): --agent-email EMAIL (required) --main-branch NAME (default main)
            --repo-name NAME --stack NAME --stubs --pm-data DIR [--private-remote URL]
   --fresh is the default mode's old name, still accepted. Every mode re-points settings hooks that
@@ -76,6 +77,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import machinesetup                                     # noqa: E402
+from kitlib import pluginsource                                     # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
 from kitlib.machinesetup import owner as mowner                     # noqa: E402
 from kitlib.machinesetup import pointer as mpointer                 # noqa: E402
@@ -104,7 +106,7 @@ def parser():
                    '--repo, .kit.json "owner".email)')
     p.add_argument('--pm-settings', default=None,
                    help='default mode: the settings file the PM session loads, for its SessionStart hook')
-    p.add_argument('--kit', default=KIT)
+    p.add_argument('--kit', default=None)
     p.add_argument('--config-dir', action='append', default=None)
     p.add_argument('--home', default=None)
     p.add_argument('--agent-temp', default=None)
@@ -142,6 +144,11 @@ def main(argv=None):
     except SystemExit as e:
         return machinesetup.EXIT_USAGE if e.code else 0
     safe_stdout()
+    if a.kit is None:                                       # an export stands for its main checkout
+        a.kit, why = pluginsource.default_kit(KIT)
+        if a.kit is None:
+            sys.stderr.write('machine_setup.py: REFUSED: %s\n' % why)
+            return machinesetup.EXIT_REFUSED
     out = lambda line: print(line, flush=True)              # noqa: E731
     if a.managed_settings:
         given = [n for n in REPO_ONLY + MACHINE_ONLY + ('owner_email',)

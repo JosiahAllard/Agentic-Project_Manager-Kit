@@ -347,6 +347,72 @@ class ManagedMode(ManagedBase):
         self.assertFalse(os.path.lexists(self.target))
 
 
+class FromExport(ManagedBase):
+    """A run from a plugin export (Z:/pm-kit/plugin/<sha12>, replaced at every plugin refresh)
+    renders the main checkout its marker records, never the export folder (stable_kit)."""
+
+    def setUp(self):
+        super(FromExport, self).setUp()
+        os.makedirs(os.path.join(self.kit, '.git'))                  # a main checkout
+        self.exp = os.path.join(self.export, 'abcdef123456')
+        for rel in ('boot/hook.py', 'optional/usage/statusline-usage.ps1'):
+            T.touch(os.path.join(self.exp, *rel.split('/')))
+        dump(os.path.join(self.exp, *managed.source().split('/')), dict(TEMPLATE, model='from-the-export'))
+        dump(os.path.join(self.exp, '.pm-kit-export'), {'sha': 'abcdef123456' * 3, 'checkout': self.kit})
+
+    def export_ctx(self):
+        return M.ManagedContext(self.home, self.exp, host=self.host, today=T.TODAY)
+
+    def test_the_checkout_is_rendered_not_the_export(self):
+        code, lines = M.run_managed(self.export_ctx(), apply=True)
+        out = '\n'.join(lines)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(load(self.target), self.rendered())          # the checkout's template and paths
+        self.assertNotIn(T.fwd(self.exp), json.dumps(load(self.target)))
+        self.assertNotIn('carries no guard entry', out)
+
+    def test_a_file_rendered_from_the_export_is_ours_and_re_rendered(self):
+        self.assertEqual(managed.guard_where(guard_doc(self.exp), self.kit, self.home), 'kit')
+        self.assertEqual(managed.guard_where(guard_doc(self.kit), self.exp, self.home), 'kit')
+        self.assertEqual(managed.guard_where(guard_doc(os.path.join(self.root, 'other')), self.kit, self.home),
+                         [os.path.join(self.root, 'other', 'boot', 'hook.py')])
+        stale = json.loads(json.dumps(self.rendered()).replace(T.fwd(self.kit), T.fwd(self.exp)))
+        dump(self.target, stale)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(load(self.target), self.rendered())
+
+    def test_an_export_whose_checkout_is_gone_is_refused(self):
+        os.rmdir(os.path.join(self.kit, '.git'))
+        code, lines = M.run_managed(self.export_ctx(), apply=True)
+        out = '\n'.join(lines)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('this is an export; pass --kit', out)
+        self.assertFalse(os.path.lexists(self.target))
+
+    def tool(self, argv, kit):
+        sys.path.insert(0, os.path.dirname(T.TOOL))
+        self.addCleanup(sys.path.remove, os.path.dirname(T.TOOL))
+        import machine_setup
+        buf, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(extras, 'Host', lambda: self.host), mock.patch.object(machine_setup, 'KIT', kit), \
+                contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            code = machine_setup.main(argv)
+        return code, buf.getvalue() + err.getvalue()
+
+    def test_the_tool_run_from_an_export_defaults_kit_to_the_checkout(self):
+        code, out = self.tool(['--managed-settings', '--home', self.home, '--apply'], self.exp)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(load(self.target), self.rendered())
+
+    def test_the_tool_run_from_an_export_without_its_checkout_is_refused(self):
+        os.rmdir(os.path.join(self.kit, '.git'))
+        code, out = self.tool(['--managed-settings', '--home', self.home, '--apply'], self.exp)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('REFUSED: %s: this is an export; pass --kit' % self.exp, out)
+        self.assertFalse(os.path.lexists(self.target))
+
+
 class RealHost(unittest.TestCase):
     def test_the_template_is_the_default_hosts(self):
         from kitlib.host import registry
