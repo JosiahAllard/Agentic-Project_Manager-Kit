@@ -13,8 +13,9 @@ item itself is read through the hub. Nothing here imports a host: the delivery o
   is_pm(recipient)     the recipient is the PM's own session
 
 What fires (a fingerprint per item: a question's status, answer.at and a digest of its answer,
-a to-do's status and done_at, an approval's status, decided_at and phase; only a changed
-fingerprint fires, so a pm_ack, which leaves them alone, never does):
+a to-do's status and done_at, an approval's status, decided_at and phase, a story's status and
+submitted_at, a note to the PM's status and sent_at; only a changed fingerprint fires, so a
+pm_ack, which leaves them alone, never does):
   answered    a question answered or answered again
   done        a to-do marked done or done again
   reopened    a done to-do back to open: informational, acknowledged by the first written
@@ -23,6 +24,8 @@ fingerprint fires, so a pm_ack, which leaves them alone, never does):
   expiring    an approval still approved and not consumed EXPIRING_S after its decision: the
               one reminder before it expires (APPROVED_TTL_S), so a missed first push cannot
               lose it
+  submitted   a story the owner submitted (or submitted again): to the PM only
+  sent        a note the owner sent the PM (to_pm): to the PM only
 Recipients: the item's `from` (a launcher key, or a to-do's free name; for an approval, which has
 no `from`, Api.repo_key of its repo) unless it is the PM's (AGENT_FROM, OWNER_FROM, empty, or
 is_pm), and the PM (PM_KEY) always, once.
@@ -40,6 +43,7 @@ Each recipient is sent each item until it is acknowledged:
   from-session, to-do      the same, or pm_ack, or the to-do is no longer done
   PM, question             the question is no longer answered (logged)
   PM, to-do                pm_ack, or no longer done (an owner-added one: pm_ack)
+  PM, story or note        its status changed (hub stories set, hub to-pm reply)
   either                   the item is withdrawn, or a newer fingerprint replaces the push
 A recipient that already held the item when a first answer or done mark fired picked that one
 up before the worker saw it, and is not sent it. One that held it when a re-answer or a re-done
@@ -52,6 +56,18 @@ After a try the item is due again SCHEDULE_S later (2, 5, 15, 30, 60 min), then 
 outcome waits for the next slot; UNCERTAIN is never re-sent at once. A deliver that raises
 counts as UNCERTAIN.
 
+A try written to a session other than the PM's is told to the Api (Api.pushed): its items
+route to that key for a while with no wait open (kitlib.hubsite.api docstring "Routes").
+
+Watcher (the PM's pm_watch, docs/pm-watch.md): the thread reads its heartbeat (`watcher`, default
+watcher_heartbeat: kitlib.pmwatch's heartbeat file beside its state file) every WATCHER_POLL_S;
+poll() never does, watch() does once. A beat at most WATCHER_STALE_S old is 'up', an older one
+'down', none readable 'none'. When a watcher seen 'up' is no longer, one `watcher down` push goes
+to the PM alone, tried on the same schedule until a try is written or GIVE_UP_S passes; a fresh
+beat acknowledges one still owed, and only after a fresh beat can it fire again. Nothing fires
+for a watcher this worker never saw fresh. watcher_status() -> {"state", "age"} (age in whole
+seconds, None with no beat) is the snapshot's and GET health's `watcher` (Api.watcher_seen).
+
 Files, in `folder` (the launcher's state_dir):
   push-outbox.json         {"<kind>:<id>": {kind, id, event, fingerprint, status, repo, from,
                            first_at, recipients: {key: {attempt, next_at, last, once}}}}, times in
@@ -60,7 +76,8 @@ Files, in `folder` (the launcher's state_dir):
                            item is gone is dropped; nothing else already pending is sent again.
   push-undelivered.jsonl   one line per try that was not written, and per give-up:
                            {ts, kind, id, status, recipient, name, attempt, reason}; reason is the
-                           state, `ambiguous` (an extra line, written or not) or `gave-up`. Never
+                           state, `ambiguous` (an extra line, written or not) or `gave-up`;
+                           a `watcher down` try is kind watcher, id down. Never
                            a token or any item text. Rotated once to .1 at LOG_MAX.
 
 The text is fixed: a header `[hub push] <kind> <id> <status> repo:<repo> from:<from>
@@ -92,6 +109,7 @@ import re
 import threading
 import time
 
+from kitlib import pmwatch
 from kitlib.hubsite.api import AGENT_FROM, OWNER_FROM
 from kitlib.hubsite import store
 from kitlib.hubsite.store import HubError
@@ -108,8 +126,13 @@ MAX_ITEMS = 20                              # items in one message
 LOG_MAX = 1 << 20                           # push-undelivered.jsonl rotates past this
 OUTBOX = 'push-outbox.json'
 UNDELIVERED = 'push-undelivered.jsonl'
-COLLECTIONS = {'questions': 'question', 'todos': 'todo', 'approvals': 'approval'}
+COLLECTIONS = {'questions': 'question', 'todos': 'todo', 'approvals': 'approval',
+               'stories': 'story', 'to_pm': 'to_pm'}
+EVENTS = ('answered', 'done', 'reopened', 'added', 'decided', 'expiring', 'submitted', 'sent')
 EXPIRING_S = 20 * 3600                      # after decided_at: an approved one's reminder
+WATCHER_STALE_S = 300                       # a heartbeat older than this: the watcher is down
+                                            # (kitlib.pmstart BEAT_STALE, the same rule)
+WATCHER_POLL_S = 30                         # between heartbeat reads on the thread
 _FIELD = re.compile(r'[^A-Za-z0-9._:-]')
 
 Sent = collections.namedtuple('Sent', 'state name session ambiguous')
@@ -119,6 +142,13 @@ def field(value):
     """A header field: only [A-Za-z0-9._:-], at most 64 characters, '-' for nothing."""
     text = _FIELD.sub('_', value if isinstance(value, str) else str(value or ''))[:64]
     return text or '-'
+
+
+def watcher_heartbeat():
+    """The pm_watch heartbeat ({pid, beat, ...}) beside the state file pm_watch uses, or None
+    (kitlib.pmwatch.heartbeat_file, read_heartbeat)."""
+    state = pmwatch.load_config().get('state_file') or pmwatch.default_state_file()
+    return pmwatch.read_heartbeat(pmwatch.heartbeat_file(state))
 
 
 def approval_phase(doc, now):
@@ -153,6 +183,10 @@ def fingerprint(kind, doc, now=None):
         ans = doc.get('answer') if isinstance(doc.get('answer'), dict) else {}
         said = json.dumps(ans, sort_keys=True, default=str).encode('utf-8')
         return [doc.get('status'), ans.get('at'), hashlib.sha256(said).hexdigest()[:16]]
+    if kind == 'story':
+        return [doc.get('status'), doc.get('submitted_at')]
+    if kind == 'to_pm':
+        return [doc.get('status'), doc.get('sent_at')]
     return [doc.get('status'), doc.get('done_at')]
 
 
@@ -164,6 +198,10 @@ def trigger(kind, doc, old, now=None):
     status = doc.get('status')
     if kind == 'question':
         return 'answered' if status == 'answered' else None
+    if kind == 'story':
+        return 'submitted' if status == 'submitted' else None
+    if kind == 'to_pm':
+        return 'sent' if status == 'sent' else None
     if status == 'done':
         return 'done'
     if status == 'open' and old is not None and old[0] == 'done':
@@ -189,6 +227,12 @@ def guidance(kind, doc_id, event, recipient):
         return 'Reopened by the owner: for your information, no ack needed (hub view %s).' % doc_id
     if event == 'added':
         return 'The owner added it: hub view %s, then hub todo ack %s' % (doc_id, doc_id)
+    if event == 'submitted':
+        return ('The owner submitted a story: hub pending --for pm, then hub stories set %s '
+                '--status ... (setting its status acknowledges this push).' % doc_id)
+    if event == 'sent':
+        return ('The owner sent you a note: hub pending --for pm, then hub to-pm reply %s TEXT '
+                '(the reply acknowledges this push).' % doc_id)
     if kind == 'todo':
         return 'A done mark is not proof: verify each step on disk, then: hub todo ack %s' % doc_id
     return ('Read it: hub pending --for %s (or hub view %s). Picking it up acknowledges this push.'
@@ -196,9 +240,10 @@ def guidance(kind, doc_id, event, recipient):
 
 
 class PushWorker(object):
-    def __init__(self, store, api, push, folder, clock=None, log=None):
+    def __init__(self, store, api, push, folder, clock=None, log=None, watcher=None):
         self.store, self.api, self.push, self.folder = store, api, push, folder
         self.clock = clock or time.time
+        self.watcher = watcher          # None: watcher_heartbeat, looked up at each read
         self.log = log or (lambda text: None)
         self._stop = threading.Event()
         self._thread = None
@@ -209,8 +254,13 @@ class PushWorker(object):
         self._last = None               # the latest deliver's state to the PM
         self._started = False           # start() finished: until then status() is 'down'
         self._status = {'state': 'up', 'last': None, 'undelivered': 0}
+        self._beat = None               # the latest heartbeat's beat (epoch seconds) or None
+        self._watched = None            # the clock of the latest heartbeat read, None before
+        self._armed = False             # seen 'up' since the last `watcher down` fired
+        self._down = None               # the `watcher down` owed: {attempt, next_at, first_at}
         if api is not None:
             api.push_status = self.status   # the snapshot's `push` (Api.push_seen)
+            api.watcher_status = self.watcher_status    # its `watcher` (Api.watcher_seen)
 
     # ------------------------------------------------------------------ life
     def start(self):
@@ -255,6 +305,8 @@ class PushWorker(object):
                     if self._stop.is_set():
                         break
                     self._round(changes)
+                    if self._watched is None or self.clock() - self._watched >= WATCHER_POLL_S:
+                        self.watch()
                     self._save()                    # each round: an unclean exit loses no more
                     self._summarize()
                 except HubError as e:
@@ -281,6 +333,75 @@ class PushWorker(object):
         if not self._started or t is None or not t.is_alive():
             out['state'] = 'down'
         return out
+
+    def watcher_status(self):
+        """{"state", "age"} of the PM's watcher at its latest read (module docstring "Watcher");
+        any thread."""
+        beat = self._beat
+        if beat is None:
+            return {'state': 'none', 'age': None}
+        age = max(0, int(self.clock() - beat))
+        return {'state': 'up' if age <= WATCHER_STALE_S else 'down', 'age': age}
+
+    def watch(self):
+        """Read the watcher's heartbeat and send the `watcher down` push when it is due (module
+        docstring "Watcher"): the thread's step every WATCHER_POLL_S, and a test's."""
+        now = self.clock()
+        self._watched = now
+        try:
+            hb = (self.watcher or watcher_heartbeat)()
+            beat = hb.get('beat') if isinstance(hb, dict) else None
+            beat = beat if isinstance(beat, (int, float)) and not isinstance(beat, bool) else None
+        except Exception as e:          # noqa: BLE001 - an unreadable heartbeat is none
+            self.log('push: watcher heartbeat unreadable: %s' % type(e).__name__)
+            beat = None
+        self._beat = beat
+        if beat is not None and now - beat <= WATCHER_STALE_S:
+            self._armed, self._down = True, None    # fresh: acknowledges a push still owed
+        elif self._armed:
+            self._armed = False
+            self._down = {'attempt': 0, 'next_at': now, 'first_at': None}
+        down = self._down
+        if down is None or self._stop.is_set():
+            return
+        entry = {'kind': 'watcher', 'id': 'down', 'status': 'down'}
+        if down['first_at'] is not None and now - down['first_at'] >= GIVE_UP_S:
+            self._note(entry, PM_KEY, None, down['attempt'], GAVE_UP)
+            self._down = None
+            return
+        if down['next_at'] > now:
+            return
+        age = 'none' if beat is None else str(int(now - beat))
+        text = ('[hub push] watcher down age:%s route:%s attempt:%d\n'
+                'The PM watcher (pm_watch) has no fresh heartbeat: it stopped or hung. Start it '
+                'again (docs/pm-watch.md); a fresh heartbeat acknowledges this push.'
+                % (field(age), field(PM_KEY), down['attempt'] + 1))
+        sent = self._deliver(PM_KEY, text)
+        self._last = sent.state
+        down['attempt'] += 1
+        down['next_at'] = now + schedule(down['attempt'])
+        if down['first_at'] is None:
+            down['first_at'] = now
+        if sent.state != WRITTEN:
+            self._note(entry, PM_KEY, sent.name, down['attempt'], sent.state)
+        if sent.ambiguous:
+            self._note(entry, PM_KEY, sent.name, down['attempt'], AMBIGUOUS)
+        if sent.state == WRITTEN:
+            self._down = None
+        self._summarize()
+
+    def _deliver(self, recipient, text):
+        """Sent of one deliver: one that raises, or answers a state not known, is UNCERTAIN."""
+        try:
+            sent = self.push.deliver(recipient, text)
+            if not isinstance(sent, Sent):
+                sent = Sent(*sent)
+        except Exception as e:          # noqa: BLE001 - a host fault is an unknown outcome
+            self.log('push: deliver to %s failed: %s' % (field(recipient), type(e).__name__))
+            sent = Sent(UNCERTAIN, None, None, False)
+        if sent.state not in (WRITTEN, NOT_WRITTEN, UNCERTAIN, NO_SESSION):
+            sent = sent._replace(state=UNCERTAIN)
+        return sent
 
     def _summarize(self):
         owed = sum(1 for e in self._outbox.values()
@@ -362,6 +483,8 @@ class PushWorker(object):
             return
         if kind == 'approval':
             sender = self._repo_key(doc.get('repo'))    # no `from`: its repository's coordinator
+        elif kind in ('story', 'to_pm'):
+            sender = ''                 # the owner's own, for the PM
         else:
             sender = doc.get('from') if isinstance(doc.get('from'), str) else ''
         keys = [PM_KEY]
@@ -400,6 +523,15 @@ class PushWorker(object):
             got = ''
         return got if isinstance(got, str) else ''
 
+    def _pushed(self, key):
+        """Tell the Api a try to `key` was written (Api.pushed: its route)."""
+        fn = getattr(self.api, 'pushed', None)
+        try:
+            if fn is not None:
+                fn(key)
+        except Exception as e:          # noqa: BLE001 - the push stands; only the route misses it
+            self.log('push: pushed(%s) failed: %s' % (field(key), type(e).__name__))
+
     def _handed(self, kind, doc_id):
         fn = getattr(self.api, 'handed_to', None)
         return fn(kind, doc_id) if fn is not None else None
@@ -415,6 +547,8 @@ class PushWorker(object):
         if entry['event'] == 'reopened' or entry['kind'] == 'approval':
             return False                # only a written try acknowledges it
         kind = entry['kind']
+        if kind in ('story', 'to_pm'):
+            return False                # only its status changing (the fingerprint) does
         # a recipient that held the item when it fired (`once`) is acknowledged by a written try,
         # never by handed_to: that hand-over may be the old one (todos_done forgets it only after
         # the store change this worker may already have seen)
@@ -468,16 +602,12 @@ class PushWorker(object):
             lines.append(guidance(entry['kind'], field(entry['id']), entry['event'], field(recipient)))
         if rest:
             lines.append('+%d more: hub pending --for %s' % (len(rest), field(recipient)))
-        try:
-            sent = self.push.deliver(recipient, '\n'.join(lines))
-            if not isinstance(sent, Sent):
-                sent = Sent(*sent)
-        except Exception as e:          # noqa: BLE001 - a host fault is an unknown outcome
-            self.log('push: deliver to %s failed: %s' % (field(recipient), type(e).__name__))
-            sent = Sent(UNCERTAIN, None, None, False)
-        state = sent.state if sent.state in (WRITTEN, NOT_WRITTEN, UNCERTAIN, NO_SESSION) else UNCERTAIN
+        sent = self._deliver(recipient, '\n'.join(lines))
+        state = sent.state
         if recipient == PM_KEY:
             self._last = state
+        elif state == WRITTEN:
+            self._pushed(recipient)
         for key in shown:
             entry = self._outbox[key]
             st = entry['recipients'][recipient]
@@ -558,7 +688,8 @@ class PushWorker(object):
 
 
 def _coll(kind):
-    return {'question': 'questions', 'approval': 'approvals'}.get(kind, 'todos')
+    return {'question': 'questions', 'approval': 'approvals', 'story': 'stories',
+            'to_pm': 'to_pm'}.get(kind, 'todos')
 
 
 def _entry_ok(key, e):
@@ -570,7 +701,7 @@ def _entry_ok(key, e):
         return False
     if not isinstance(e.get('fingerprint'), list) or not isinstance(e.get('recipients'), dict):
         return False
-    if e.get('event') not in ('answered', 'done', 'reopened', 'added', 'decided', 'expiring'):
+    if e.get('event') not in EVENTS:
         return False
     for st in e['recipients'].values():
         if (not isinstance(st, dict) or type(st.get('attempt')) is not int

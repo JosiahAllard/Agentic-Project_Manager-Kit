@@ -426,7 +426,7 @@ button.danger{color:var(--warn)}
   }
 
   // What the server last knew of the PM, as information only: nothing here is a control.
-  const seenLine = () => { $("#sidefoot").textContent = ready && lastRead ? "Read from the hub server " + when(new Date(lastRead).toISOString()) + "." : ""; $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now()) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; };
+  const seenLine = () => { $("#sidefoot").textContent = ready && lastRead ? "Read from the hub server " + when(new Date(lastRead).toISOString()) + "." : ""; $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now(), state.push, state.watcher) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; };
   // A redraw gives the focus and the caret back to a field it rebuilt (a question's note, found by its id)
   // or moved.
   function render(){
@@ -673,12 +673,18 @@ button.danger{color:var(--warn)}
   }
   // The hub server's page. Everything below reads what GET /api/v1/snapshot answers.
   const pmAgo = ms => { const m = Math.max(0, Math.round(ms / 60000)); return m < 1 ? "under a minute" : m < 60 ? m + " min" : m < 1440 ? Math.floor(m / 60) + " h" : Math.floor(m / 1440) + " d"; };
-  // pm_seen as one line of information: whether a PM session is waiting on the hub now, else when one last asked.
-  function pmSeenText(seen, now){
+  // pm_seen as one line of information: whether a PM session is waiting on the hub now, else whether push delivery
+  // reaches the PM (the snapshot's push up) or when one last asked; then the PM watcher's heartbeat (the snapshot's
+  // watcher; null: no push worker, nothing said).
+  function pmSeenText(seen, now, push, watcher){
     if (!seen || typeof seen !== "object") return "";
-    if (Number(seen.waiting) > 0) return "A PM is listening.";
+    const w = !watcher || typeof watcher !== "object" ? "" : watcher.state === "up" ? " The PM's watcher is running."
+      : watcher.state === "down" ? " The PM's watcher has stopped: its last heartbeat is " + (Number.isFinite(watcher.age) ? pmAgo(watcher.age * 1000) + " old." : "old.")
+      : " No PM watcher heartbeat is found.";
+    if (Number(seen.waiting) > 0) return "A PM is listening." + w;
+    if (push && typeof push === "object" && push.state === "up" && push.last === "written") return "Push delivery reaches the PM." + w;
     const last = [seen.waited, seen.pulled].map(v => new Date(v || NaN).getTime()).filter(t => !isNaN(t)).sort((a, b) => a - b).pop();
-    return last == null ? "No PM is listening, and none has asked since the hub server started." : "No PM is listening; one last asked " + pmAgo(now - last) + " ago.";
+    return (last == null ? "No PM is listening, and none has asked since the hub server started." : "No PM is listening; one last asked " + pmAgo(now - last) + " ago.") + w;
   }
   // The snapshot's push (null: this hub server sends no push notifications) as one line: delivery up or down, and
   // how many items still wait for a written delivery.
@@ -740,7 +746,7 @@ button.danger{color:var(--warn)}
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
     const pages = pageRows(col);
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
-      push: s.push && typeof s.push === "object" ? s.push : null,
+      push: s.push && typeof s.push === "object" ? s.push : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents,
@@ -2118,7 +2124,7 @@ button.danger{color:var(--warn)}
     // of a backlog or of the usage): when only those moved and the owner is typing, the lists are left alone.
     const untimed = rows => rows.map(r => ({ ...r, posted_at: null }));
     const unsince = Object.fromEntries(Object.entries(next.stale).map(([v, rows]) => [v, rows.map(o => ({ ...o, since: null }))]));
-    const key = JSON.stringify({ ...next, revision: 0, seen: null, push: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
+    const key = JSON.stringify({ ...next, revision: 0, seen: null, push: null, watcher: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
     const same = key === lastKey; lastKey = key;
     // A list that cannot be drawn: the counts drawn before it stay, the page is left as ready as it was before
     // this read (not ready on a first read, so its controls stay hidden and the next snapshot is drawn whatever
