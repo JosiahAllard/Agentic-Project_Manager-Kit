@@ -12,6 +12,7 @@ from kitlib.hubsite import approvals as ap
 from kitlib.hubsite.api import AGENT, ANY, APPROVER, BASE, LOCK_WRITE, OWNER
 from kitlib.hubsite.store import Store
 from tests.gitfixture import TempRepo
+from tests.hubsite.httpfix import FINDING
 
 CLOCK = lambda: '2026-01-02T03:04:05+00:00'      # noqa: E731
 OPTIONS = [{'label': 'a', 'description': 'b'}]
@@ -66,6 +67,12 @@ class Views(object):
 
     def record_delete(self, repo, id, why, ruling):
         return {}
+
+    def record_unblock(self, repo, id, on, reason, ruling):
+        return {}
+
+    def findings(self):
+        return [dict(FINDING)]
 
 
 class LockDoor(object):
@@ -167,6 +174,13 @@ def seed_repo(store):
     return 'X-1'
 
 
+def seed_mark(store):
+    store.put('finding_marks', FINDING['fingerprint'], {'status': 'dismissed'})
+    return FINDING['fingerprint']
+
+
+MARK_BODY = {'fingerprint': FINDING['fingerprint'], 'status': 'dismissed'}
+ACT_BODY = {'kind': 'act', 'finding': FINDING['fingerprint']}
 SCHEDULE_BODY = {'task': 'maint-lint', 'repo': 'r', 'cadence': 'daily', 'at': '04:00'}
 ADD_BODY = {'repo': URL, 'title': 't', 'head': None,        # head: setUpModule
             'files': [{'path': 'new.md', 'base_blob': None, 'content': 'x\n'}]}
@@ -214,6 +228,10 @@ ROWS = {
     ('POST', '/pages/{id}/delete'): (seed_page, None, None),
     ('GET', '/schedules'): (None, None, None),
     ('POST', '/schedules'): (seed_repo, SCHEDULE_BODY, None),
+    ('GET', '/findings'): (None, None, None),
+    ('GET', '/finding_marks'): (None, None, None),
+    ('POST', '/finding_marks'): (None, MARK_BODY, None),
+    ('POST', '/finding_marks/{id}/delete'): (seed_mark, None, None),
     ('POST', '/approvals'): (None, ADD_BODY, None),
     ('POST', '/approvals/{id}/decide'): (seed_approval, {'decision': 'approve', 'if_version': 1},
                                          None),
@@ -229,6 +247,7 @@ ROWS = {
     ('POST', '/records/{repo}/{id}/edit'): (None, {'version': 'v', 'changes': {'effort': 's'}},
                                             None),
     ('POST', '/records/{repo}/{id}/delete'): (None, {'why': 'w', 'confirm': 'X-1'}, None),
+    ('POST', '/records/{repo}/{id}/unblock'): (None, {}, None),
     ('GET', '/notices'): (None, None, None),
     ('GET', '/repos'): (None, None, None),
     ('GET', '/usage'): (None, None, None),
@@ -336,6 +355,10 @@ class RolesCase(unittest.TestCase):
                 ('GET', '/schedules'): ANY, ('POST', '/schedules'): OWNER,
                 ('POST', '/records/{repo}'): OWNER, ('POST', '/records/{repo}/{id}/edit'): OWNER,
                 ('POST', '/records/{repo}/{id}/delete'): OWNER,
+                ('POST', '/records/{repo}/{id}/unblock'): OWNER,
+                # the maintenance lint's findings: anyone reads them; only the owner marks one
+                ('GET', '/findings'): ANY, ('GET', '/finding_marks'): ANY,
+                ('POST', '/finding_marks'): OWNER, ('POST', '/finding_marks/{id}/delete'): OWNER,
                 ('POST', '/approvals'): AGENT, ('POST', '/approvals/{id}/decide'): APPROVER,
                 ('POST', '/approvals/{id}/consume'): AGENT,
                 ('GET', '/approvals/{id}/verify'): AGENT,
@@ -380,6 +403,35 @@ class RolesCase(unittest.TestCase):
                 # and it reads them
                 status, obj = a.call('GET', BASE + '/schedules', AGENT)
                 self.assertEqual((status, obj['items']), (200, []))
+
+    def test_an_agent_cannot_mark_a_finding_unblock_a_record_or_pass_one_on(self):
+        # every write of the lint findings slice, by any listener, strong or not, with a body
+        # the owner's call takes: the role alone decides, and nothing is written
+        writes = (('/finding_marks', None, MARK_BODY),
+                  ('/finding_marks/%s/delete', seed_mark, None),
+                  ('/records/r/X-1/unblock', None, {'on': 'owner', 'reason': 'r'}),
+                  ('/to_pm', None, ACT_BODY))
+        for via, strong in (('', False), ('cli', False), (api.TUNNEL_VIA, False),
+                            (api.TUNNEL_VIA, True)):
+            for where, seed, body in writes:
+                with self.subTest(via=via, strong=strong, path=where):
+                    store, a, doc_id = self.fresh(seed)
+                    before = store.snapshot()
+                    path = BASE + (where % doc_id if '%s' in where else where)
+                    status, obj = a.call('POST', path, AGENT, dict(body or {}), via=via,
+                                         strong=strong)
+                    self.assertEqual((status, obj['error']['code'], obj['error']['field']),
+                                     (403, 'forbidden', 'role'))
+                    self.assertEqual(store.snapshot(), before, 'a refused call wrote')
+                    # the owner's same call is answered
+                    store, a, doc_id = self.fresh(seed)
+                    status, obj = a.call('POST', path, OWNER, dict(body or {}), via=via)
+                    self.assertEqual((status, obj.get('error')), (200, None))
+        # and an agent reads both lists
+        _, a, _ = self.fresh(seed_mark)
+        for where in ('/findings', '/finding_marks'):
+            status, obj = a.call('GET', BASE + where, AGENT)
+            self.assertEqual(status, 200, obj)
 
     def test_a_route_with_no_role_is_closed_to_everybody(self):
         calls = []
