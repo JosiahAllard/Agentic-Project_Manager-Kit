@@ -2958,8 +2958,12 @@ class FindingsTest(ApiCase):
         row = finding(text=HOSTILE, target='..\\..\\Windows\\x', fix='<b>%s</b>' % HOSTILE,
                       check='<i>c</i>', age='C:\\x')
         self.views.rows = [row]
-        obj = self.ok('GET', '/findings', AGENT)
+        obj = self.ok('GET', '/findings', OWNER)        # the local owner: the row as it is
         self.assertEqual(json.loads(json.dumps(obj))['items'], [row])
+        # anyone else: the same row, the fix's absolute path cut (test_a_path_is_the_local...)
+        obj = self.ok('GET', '/findings', AGENT)
+        self.assertEqual(json.loads(json.dumps(obj))['items'],
+                         [dict(row, fix=row['fix'].replace('D:\\data\\..\\y', '.../y'))])
         self.mark(note=HOSTILE)
         m = self.store.get('finding_marks', FP)
         self.assertEqual((m['text'], m['target'], m['check'], m['note']),
@@ -2970,6 +2974,59 @@ class FindingsTest(ApiCase):
         self.assertEqual(d['refs'], [FP, '..\\..\\Windows\\x'])
         self.assertEqual([f['text'] for f in self.ok('GET', '/to_pm', AGENT)['items']],
                          [d['text']])
+
+    def test_a_path_is_the_local_owners_to_see(self):
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        fix = 'python "Q:/kit plugin/tools/x.py" -C Q:/work/Repo drop; see \\\\share\\x\\y'
+        self.views.rows = [finding(target=wt, fix=fix, text='worktree my-slug is gone')]
+        cut = ('.../my-slug', 'python .../x.py -C .../Repo drop; see .../y')
+        local = {}
+        remote = ({'role': AGENT}, {'role': OWNER, 'via': 'tunnel', 'agent_words': True},
+                  {'role': OWNER, 'agent_words': True}, {'role': OWNER, 'via': 'tunnel'})
+
+        def get(path, role=OWNER, **kw):
+            return self.ok('GET', path, role, **kw)['items']
+
+        f = get('/findings', **local)[0]
+        self.assertEqual((f['target'], f['fix']), (wt, fix))
+        for kw in remote:
+            with self.subTest(caller=kw):
+                f = get('/findings', **kw)[0]
+                self.assertEqual((f['target'], f['fix']), cut)
+                self.assertNotIn('Q:', json.dumps(f))
+        # a mark keeps the target; only the local owner reads it whole
+        self.mark()
+        self.assertEqual(get('/finding_marks')[0]['target'], wt)
+        for kw in remote:
+            with self.subTest(caller=kw):
+                self.assertEqual(get('/finding_marks', **kw)[0]['target'], cut[0])
+        # an act note: the caller's view in its text, and never a path in its refs
+        obj = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})
+        d = self.store.get('to_pm', obj['id'])
+        self.assertEqual(d['refs'], [FP, '.../my-slug'])
+        self.assertIn(wt, d['text'])
+        obj = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP}, via='tunnel',
+                      agent_words=True)
+        d = self.store.get('to_pm', obj['id'])
+        self.assertEqual(d['refs'], [FP, '.../my-slug'])
+        self.assertNotIn('Q:', d['text'])
+        self.assertNotIn('\\\\share', d['text'])
+        self.assertIn(cut[1], d['text'])
+
+    def test_an_edit_never_makes_or_unmakes_an_act_note(self):
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})['id']
+        note = self.ok('POST', '/to_pm', OWNER, {'kind': 'question', 'text': 't'})['id']
+        for pid, kind in ((act, 'question'), (act, 'fyi'), (note, 'act')):
+            with self.subTest(id=pid, kind=kind):
+                self.refused('invalid', 'kind', 'POST', '/to_pm/%s/edit' % pid, OWNER,
+                             {'kind': kind})
+        self.assertEqual(self.store.get('to_pm', act)['kind'], 'act')
+        self.assertEqual(self.store.get('to_pm', note)['kind'], 'question')
+        # the same kind, or any other change, is still an edit
+        self.ok('POST', '/to_pm/%s/edit' % act, OWNER, {'kind': 'act', 'text': 'reworded'})
+        self.assertEqual(self.store.get('to_pm', act)['text'], 'reworded')
+        self.ok('POST', '/to_pm/%s/edit' % note, OWNER, {'kind': 'fyi'})
+        self.assertEqual(self.store.get('to_pm', note)['kind'], 'fyi')
 
 
 class FindingsSourceTest(unittest.TestCase):
@@ -3033,6 +3090,16 @@ class FindingsSourceTest(unittest.TestCase):
         self.assertEqual([f['fingerprint'] for f in obj['items']], [FP2])
         # a server with no findings folder (no pm_data) shows none
         self.assertEqual(serve.SiteViews(store, serve.Sources()).findings(), [])
+
+    def test_the_machine_sources_read_the_pm_data_lint_folder(self):
+        home = os.path.join(self.root, 'home')
+        os.makedirs(home)
+        pm = os.path.join(self.root, 'pm')
+        with mock.patch.object(serve.pmdata, 'machine_settings', lambda h: {'path': pm}):
+            src = serve.machine_sources(home, sync=False)
+        self.assertEqual(src.findings, os.path.join(pm, lint_result.FOLDER))
+        with mock.patch.object(serve.pmdata, 'machine_settings', lambda h: None):
+            self.assertIsNone(serve.machine_sources(home, sync=False).findings)
 
 
 class UnblockStoreTest(trw.Case):
