@@ -12,9 +12,9 @@ Layout under the store folder `root` (the caller resolves it; nothing here reads
     <root>/_store.lock              the single-writer lock (below); never a document
 
 Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
-alone. A question whose `recommended` is text that stands for a number (kitlib.hubsite.migrate's
-rule, schema.whole_recommended) is read as that number, so its next write stores the number; its
-file is not rewritten until then.
+alone. A question whose `recommended` is text that stands for a number (the rule is in
+schema.whole_recommended's docstring) is read as that number, so its next write stores the
+number; its file is not rewritten until then.
 
 One writer. Store.open takes kitlib.fs.treelock.TreeLock on `_store.lock` for the life of
 the Store: an msvcrt byte-range lock the system drops when the holder exits, however it exits. A
