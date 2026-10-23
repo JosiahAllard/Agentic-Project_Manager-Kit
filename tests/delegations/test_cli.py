@@ -39,7 +39,7 @@ class Cli(unittest.TestCase):
         with open(os.path.join(folder, 'owner-delegations.json'), 'w', encoding='utf-8') as fh:
             json.dump({'schema': 1, 'operations': list(ops)}, fh)
 
-    def main(self, *argv, result=None, refuse=None):
+    def main(self, *argv, result=None, refuse=None, asked='A-007'):
         out, err = io.StringIO(), io.StringIO()
         calls = []
 
@@ -48,8 +48,15 @@ class Cli(unittest.TestCase):
             if refuse:
                 raise drun.RunRefused(refuse)
             return result
+
+        def fake_request(op, pairs, cfg, hub, title, reason=None):
+            calls.append(('request', op.id, pairs, hub, title, reason))
+            if refuse:
+                raise drun.RunRefused(refuse)
+            return asked
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 mock.patch.object(drun, 'run', side_effect=fake), \
+                mock.patch.object(drun, 'request', side_effect=fake_request), \
                 mock.patch.object(kuser, 'user_config', return_value={}), \
                 mock.patch.object(delegated, 'hub_client', return_value='HUB'):
             try:
@@ -108,6 +115,79 @@ class Cli(unittest.TestCase):
         res = drun.Result('H-kit-0002', ['tool.exe'], 0, None)
         calls = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'Q-1001', result=res)[3]
         self.assertEqual(calls[0][3], 'HUB')
+
+    def test_an_approval_gets_the_hub_and_is_the_trigger(self):
+        self.write_list()
+        res = drun.Result('H-kit-0002', ['tool.exe'], 0, None)
+        code, _, _, calls = self.main('run', 'D-001', '--arg', 'name=alpha', '--approval',
+                                      'hub:A-001', result=res)
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [('D-001', [('name', 'alpha')], 'hub:A-001', 'HUB')])
+
+    def test_a_trigger_and_an_approval_together_are_a_usage_error(self):
+        self.write_list()
+        code, _, err, calls = self.main('run', 'D-001', '--trigger', 'H-kit-0001', '--approval',
+                                        'hub:A-001')
+        self.assertEqual(code, 2)
+        self.assertIn('not allowed with argument', err)
+        self.assertEqual(calls, [])
+
+    def test_an_abbreviated_approval_flag_is_a_usage_error(self):
+        self.write_list()
+        code, _, _, calls = self.main('run', 'D-001', '--appr', 'hub:A-001')
+        self.assertEqual(code, 2)
+        self.assertEqual(calls, [])
+
+    def test_an_approval_not_of_the_hub_form_is_refused(self):
+        self.write_list()
+        for bad in ('A-001', 'hub:A-000', 'hub:A-01', 'H-kit-0001', 'EX-1001'):
+            with self.subTest(bad=bad):
+                code, _, err, calls = self.main('run', 'D-001', '--approval', bad)
+                self.assertEqual(code, 1)
+                self.assertIn('--approval takes hub:A-nnn, not %r' % bad, err)
+                self.assertEqual(calls, [])
+
+    def test_an_approval_given_as_a_trigger_is_refused(self):
+        self.write_list()
+        for bad in ('hub:A-001', 'hub:A-01', 'hub:'):
+            with self.subTest(bad=bad):
+                code, out, err, calls = self.main('run', 'D-001', '--arg', 'name=alpha',
+                                                  '--trigger', bad)
+                self.assertEqual((code, out), (1, ''))
+                self.assertIn('a hub approval is given with --approval, not --trigger %r' % bad,
+                              err)
+                self.assertEqual(calls, [])
+
+    def test_a_request_prints_the_new_approval_and_how_to_run_it(self):
+        self.write_list()
+        code, out, _, calls = self.main('request', 'D-001', '--arg', 'name=alpha', '--title',
+                                        'Say alpha', '--reason', 'a demo')
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [('request', 'D-001', [('name', 'alpha')], 'HUB', 'Say alpha',
+                                  'a demo')])
+        self.assertIn('requested hub:A-007', out)
+        self.assertIn('delegated.py run D-001 --approval hub:A-007', out)
+
+    def test_a_refused_request_exits_1(self):
+        self.write_list()
+        code, out, err, _ = self.main('request', 'D-001', '--arg', 'name=alpha', '--title', 't',
+                                      refuse='D-001 does not list hub-approval')
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('refused: D-001 does not list hub-approval', err)
+
+    def test_a_request_needs_a_title_and_takes_no_trigger(self):
+        self.write_list()
+        self.assertEqual(self.main('request', 'D-001', '--arg', 'name=alpha')[0], 2)
+        self.assertEqual(self.main('request', 'D-001', '--title', 't', '--trigger',
+                                   'H-kit-0001')[0], 2)
+        self.assertEqual(self.main('request', 'D-001', '--tit', 't')[0], 2)
+
+    def test_a_request_for_an_operation_not_listed_is_refused(self):
+        self.write_list()
+        code, _, err, calls = self.main('request', 'D-007', '--title', 't')
+        self.assertEqual(code, 1)
+        self.assertIn('D-007 is not in the delegation list', err)
+        self.assertEqual(calls, [])
 
     def test_a_failed_command_exits_4(self):
         self.write_list()

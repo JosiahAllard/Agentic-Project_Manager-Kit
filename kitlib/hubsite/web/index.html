@@ -1246,11 +1246,22 @@ button.danger{color:var(--warn)}
   }
 
   // ---- A pending approval (docs/action-hub.md "approvals/A-NNN"): the change an agent asks to make, as the diff the
-  // server stored, and the owner's Approve and Deny. They are usable only in a strong session (snapshot `strong`); the
-  // decide route checks that itself, and its refusal is shown in the server's words.
+  // server stored, or for kind "op" the one run of a delegated operation it asks for: the operation, what it does and the
+  // exact line it runs, `run D-nnn` and then one NAME=VALUE a line, with no base commit and no diff (docs/delegations.md
+  // "Hub approvals"); its `what` is the agent's note, which no signature covers, and is labelled so; and the owner's Approve
+  // and Deny. They are usable only in a strong session (snapshot `strong`); the decide route checks that itself, and its
+  // refusal is shown in the server's words.
   function approvalCard(d){
     const status = el("span", {class:"status", role:"status", text: state.strong ? "" : "Approve and Deny need a strong session: log in through Cloudflare Access and open its pairing link in this browser."});
+    const op = d.kind === "op";
     const diff = (Array.isArray(d.diff) ? d.diff : []).map(l => String(l).replace(/\r?\n$/, "")).join("\n");
+    const words = typeof d.line === "string" && d.line ? d.line.split(" ") : [];
+    const body = op
+      ? [el("div", {class:"refs", text: "runs " + String(d.op || "?")}),
+         d.what ? el("p", {class:"ctx", text: "The agent's note, not signed: " + String(d.what)}) : null,
+         el("div", {class:"cmd"}, el("pre", {class:"diff", text: words.length ? [words.slice(0, 2).join(" "), ...words.slice(2)].join("\n") : "(no line stored)"}))]
+      : [el("div", {class:"refs", text: "on " + String(d.head || "?")}),
+         el("div", {class:"cmd"}, el("pre", {class:"diff", text: diff || "(no diff stored)"}))];
     const decide = decision => async () => {
       for (const b of btns) b.disabled = true;
       try { await write("/approvals/" + seg(d.id) + "/decide", { decision, if_version: d.version }); }
@@ -1259,12 +1270,11 @@ button.danger{color:var(--warn)}
     const btns = [el("button", {class:"primary", type:"button", text:"Approve", disabled: !state.strong, onclick: decide("approve")}),
                   el("button", {class:"link", type:"button", text:"Deny", disabled: !state.strong, onclick: decide("deny")})];
     return el("article", {class:"q urgent", id: "approval-" + d.id},
-      el("div", {class:"meta"}, el("span", {class:"chip need", text:"Approval"}), el("span", {class:"id", text: d.id}),
-        d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null, d.created_at ? el("span", {text: "asked " + when(d.created_at)}) : null),
+      el("div", {class:"meta"}, el("span", {class:"chip need", text: op ? "Run approval" : "Approval"}), el("span", {class:"id", text: d.id}),
+        d.repo ? el("span", {class:"chip", text: op && d.repo === "*" ? "any repository" : String(d.repo)}) : null, d.created_at ? el("span", {text: "asked " + when(d.created_at)}) : null),
       el("h2", {text: d.title ? String(d.title) : "(untitled)"}),
       d.reason ? el("p", {class:"ctx", text: String(d.reason)}) : null,
-      el("div", {class:"refs", text: "on " + String(d.head || "?")}),
-      el("div", {class:"cmd"}, el("pre", {class:"diff", text: diff || "(no diff stored)"})),
+      ...body,
       el("div", {class:"act"}, ...btns, status));
   }
 

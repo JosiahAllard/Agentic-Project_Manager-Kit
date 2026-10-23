@@ -556,6 +556,32 @@ class DomTest(unittest.TestCase):
         self.assertIn("drawn at last", got["list"])
         self.assertEqual((got["err"], got["hidden"], got["add"]), ("", True, False))
 
+    def test_a_later_list_that_cannot_be_drawn_is_drawn_again_even_while_the_owner_types(self):
+        # The page is ready; a later read's draw throws. The next read brings the same lists while the owner is
+        # in a field: a read whose lists did not change is normally not redrawn under a typing owner, but this
+        # one never was drawn, so it must be.
+        got = dom("""
+            let armed = false;
+            const L = $("#list"), put = L.insertBefore.bind(L);
+            L.insertBefore = (n, r) => { if (armed) throw new Error("drawing failed"); return put(n, r); };
+            await start();
+            const before = text($("#list"));
+            server.snap.collections.todos["T-1"].title = "the new title"; server.snap.revision++;
+            armed = true;
+            await wake();
+            const broken = { err: text($("#loaderr")), sleeps: sleeps() };
+            armed = false;
+            $("#idq").focus();
+            await fireTimers();
+            return { before, broken, typing: document.activeElement === $("#idq"), list: text($("#list")), err: text($("#loaderr")) };
+        """, snapshot(collections={"todos": {"T-1": {"status": "open", "title": "the old title", "from": "pm"}}}), hash="#todo")
+        self.assertIn("the old title", got["before"])
+        self.assertIn("could not show what the hub server sent (drawing failed)", got["broken"]["err"])
+        self.assertEqual(got["broken"]["sleeps"], [2000])
+        self.assertTrue(got["typing"])
+        self.assertIn("the new title", got["list"])
+        self.assertEqual(got["err"], "")
+
     def test_a_tunnel_access_refusal_is_not_unpaired_and_keeps_the_servers_words(self):
         # The tunnel listener refuses a call whose Cloudflare Access token it cannot accept with 403, field
         # `access` (kitlib.hubsite.tunnel.REFUSED): a read or a write, and pairing again cannot help it.
@@ -1597,6 +1623,32 @@ class DomTest(unittest.TestCase):
         self.assertFalse(got["approve"])                                        # the owner may try again
         self.assertEqual(got["sent"], [{"decision": "deny", "if_version": 2}])
         self.assertEqual(got["err"], "")
+
+    # A pending op approval as the add route stores it (kitlib.hubsite.approvals.new_op_doc): no head, files or diff.
+    OP_APPROVALS = {
+        "A-5": {"status": "pending", "kind": "op", "op": "D-004", "repo": "*", "title": "Copy the inputs",
+                "line": "run D-004 dest=dd/out src=dd/in", "args_sha256": "d" * 64,
+                "what": "copies a folder <img src=x>","reason": "asked for", "version": 1, "created_at": NOW}}
+
+    def test_a_pending_op_approval_shows_its_line_and_approve_posts_decide(self):
+        got = dom("""
+            await start();
+            const c = $("#approval-A-5");
+            const before = { card: text(c), line: text(c.querySelector("pre")) };
+            server.route = r => r.path === "/approvals/A-5/decide" ? { status: 200, body: { ok: true } } : undefined;
+            await click(button(c, "Approve"));
+            return { before, sent: calls.filter(r => r.method === "POST").map(r => [r.path, r.body]), tags: [...new Set(created)] };
+        """, snapshot(strong=True, collections={"approvals": self.OP_APPROVALS}))
+        b = got["before"]
+        for part in ("Run approval", "A-5", "any repository", "Copy the inputs", "asked for", "runs D-004",
+                     "The agent's note, not signed: copies a folder <img src=x>"):
+            self.assertIn(part, b["card"], part)
+        self.assertNotIn("runs D-004: copies", b["card"])                    # the note is never shown as part of the run
+        self.assertNotIn("on ?", b["card"])
+        self.assertNotIn("no diff stored", b["card"])
+        self.assertEqual(b["line"], "run D-004\ndest=dd/out\nsrc=dd/in")     # one NAME=VALUE a line
+        self.assertEqual(got["sent"], [["/approvals/A-5/decide", {"decision": "approve", "if_version": 1}]])
+        self.assertNotIn("img", got["tags"])
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")

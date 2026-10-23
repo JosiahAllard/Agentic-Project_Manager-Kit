@@ -24,7 +24,8 @@ SCHEMA_VERSION = 1
 ID = r'D-[0-9]{3,}'
 REPO = r'[a-z0-9][a-z0-9-]*|\*'
 ARG_NAME = r'[a-z][a-z0-9_]{0,30}'
-TRIGGERS = ('owner-session', 'hub-answer', 'standing:after-landing', 'standing:pm-start-checklist')
+TRIGGERS = ('owner-session', 'hub-answer', 'hub-approval', 'standing:after-landing',
+            'standing:pm-start-checklist')
 SHELLS = ('PowerShell', 'Bash')
 KIT_SIGIL = '<kit>'
 # Characters refused anywhere in a command: quotes, chaining, redirection, variables and
