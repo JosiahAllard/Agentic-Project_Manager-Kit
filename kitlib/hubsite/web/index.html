@@ -682,7 +682,7 @@ button.danger{color:var(--warn)}
       : watcher.state === "down" ? " The PM's watcher has stopped: its last heartbeat is " + (Number.isFinite(watcher.age) ? pmAgo(watcher.age * 1000) + " old." : "old.")
       : " No PM watcher heartbeat is found.";
     if (Number(seen.waiting) > 0) return "A PM is listening." + w;
-    if (push && typeof push === "object" && push.state === "up") return "Push delivery reaches the PM." + w;
+    if (push && typeof push === "object" && push.state === "up" && push.last === "written") return "Push delivery reaches the PM." + w;
     const last = [seen.waited, seen.pulled].map(v => new Date(v || NaN).getTime()).filter(t => !isNaN(t)).sort((a, b) => a - b).pop();
     return (last == null ? "No PM is listening, and none has asked since the hub server started." : "No PM is listening; one last asked " + pmAgo(now - last) + " ago.") + w;
   }

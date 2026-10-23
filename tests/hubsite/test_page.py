@@ -377,6 +377,14 @@ class StateTest(unittest.TestCase):
         self.assertEqual(got["watcher"], {"state": "down", "age": 400})
         self.assertIsNone(js("hubState(items)", snapshot())["watcher"])
 
+    def test_push_up_before_any_try_to_the_pm_does_not_say_it_reaches_the_pm(self):
+        # PushWorker._summarize reports 'up' with `last` None before its first try to the PM
+        seen = {"waited": "2026-10-07T11:30:00Z", "pulled": None, "waiting": 0}
+        fresh = {"state": "up", "last": None, "undelivered": 0}
+        got = js("pmSeenText(items.seen, %s, items.push, items.watcher)" % NOW_MS,
+                 {"seen": seen, "push": fresh, "watcher": None})
+        self.assertEqual(got, "No PM is listening; one last asked 30 min ago.")
+
     def test_the_push_line_says_up_or_down_and_how_many_are_undelivered(self):
         say = lambda p: js("pushText(items)", p)        # noqa: E731
         self.assertEqual(say({"state": "up", "last": None, "undelivered": 0}), "Push delivery is up; nothing undelivered.")

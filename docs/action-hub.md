@@ -71,8 +71,8 @@ or after an unpair or a session that ran out) is told so on the page and to run
   (`tests/hubsite/test_lock_page.py`, `WriteTest`).
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
-`wait` open, else "Push delivery reaches the PM." while the snapshot's `push` state is `up`, else
-when one last asked; another session's wait `--for` its own key does not count (`Api.seen` in
+`wait` open, else "Push delivery reaches the PM." while the snapshot's `push` state is `up` and
+its `last` is `written` (a try to the PM was written), else when one last asked; another session's wait `--for` its own key does not count (`Api.seen` in
 `kitlib/hubsite/api.py`). With a push worker running, the line ends with the PM watcher's
 heartbeat from the snapshot's `watcher` field ("Push notifications"): "The PM's watcher is
 running.", "The PM's watcher has stopped: its last heartbeat is <age> old." or "No PM watcher

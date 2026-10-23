@@ -2600,7 +2600,7 @@ class PushStatusTest(ApiCase):
         super().setUp()
         # a running worker reads the PM watcher's heartbeat; the default reader reads the
         # machine's config (the home fence)
-        patcher = mock.patch.object(push, 'watcher_heartbeat', lambda: None, create=True)
+        patcher = mock.patch.object(push, 'watcher_heartbeat', lambda: None)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit'})

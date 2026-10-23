@@ -21,7 +21,7 @@ from tests.hubsite import httpfix
 OPTIONS = [{'label': 'first', 'description': 'b'}, {'label': 'second', 'description': 'c'}]
 PLANTED = 'PUSHPROOF title text'
 NOTE = 'PUSHPROOF note text'
-REAL_HEARTBEAT = getattr(push, 'watcher_heartbeat', None)   # the default reader, before no_watcher patches it
+REAL_HEARTBEAT = push.watcher_heartbeat      # the default reader, before no_watcher patches it
 
 
 class Ticks(object):
@@ -62,7 +62,7 @@ class FakePush(object):
 def no_watcher(case):
     """Patch the default heartbeat reader for `case`: a running worker reads it, and the real
     one reads the machine's config (the home fence)."""
-    patcher = mock.patch.object(push, 'watcher_heartbeat', lambda: None, create=True)
+    patcher = mock.patch.object(push, 'watcher_heartbeat', lambda: None)
     patcher.start()
     case.addCleanup(patcher.stop)
 
