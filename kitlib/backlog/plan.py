@@ -1526,15 +1526,15 @@ def plan_delete(snap, ctx, rid, why, role_checked=False):
 # --- uncite ---------------------------------------------------------------------------------------
 
 # An owner ruling or question id as a record body cites it: `R-` and four or more digits, `Q-` and
-# three or more, not glued to a word after it. `T-` ids, `item:` members and a short `R-12` are
-# not ones.
+# three or more, not glued to a word after it. `T-` ids, `item:` members and an `R-` id of fewer
+# than four digits are not ones.
 CITE_ID = r'(?:R-[0-9]{4,}|Q-[0-9]{3,})(?![A-Za-z0-9_])'
 CITED = re.compile(r'(?<![A-Za-z0-9-])' + CITE_ID)
 # The header keys `uncite` drops: each holds only a cited id. `resume`, `q` and `priority_per`
 # are kept (offer ranking and the park read them).
 UNCITED_KEYS = ('priority_ruling', 'hold_ruling')
 _CITE = r'(?:PM )?' + CITE_ID + r'(?:\([a-z0-9]{1,3}\))?'
-# One cite or a run of them (`R-2001, R-2002 and Q-301`), never glued to a word before it.
+# One cite or a run of them (`R-nnnn, R-nnnn and Q-nnn`), never glued to a word before it.
 _G = r'(?<![A-Za-z0-9-])' + _CITE + r'(?:(?:, | and |/|; | & )' + _CITE + r')*'
 _BULLET = r'\s*(?:[-*] |[0-9]+\. )?'
 _SUBJECT_VERBS = (r'[a-z]+ed|says|said|made|makes|sets|set|put|puts|chose|keeps|kept|gave|gives|'
@@ -1601,8 +1601,8 @@ def _uncite_rules(opens):
         # a trailing `, CITES` before the line's end, a full stop or a parenthesis
         (r'\s*[,;|]\s*' + _G + r'(?=\s*(?:\.|\(|$))', ''),
         # `CITES says`: the owner is the subject; `CITES wording`: the owner's
-        (r'(?:\b([Tt])he )?' + _G + r'(?= (?:' + _SUBJECT_VERBS + r')\b)', phrase('the owner')),
-        (r'(?:\b([Tt])he )?' + _G + r'(?= (?!' + _NOT_QUALIFIED + r')[a-z])',
+        (r'(?:\b([Tt])h[e] )?' + _G + r'(?= (?:' + _SUBJECT_VERBS + r')\b)', phrase('the owner')),
+        (r'(?:\b([Tt])h[e] )?' + _G + r'(?= (?!' + _NOT_QUALIFIED + r')[a-z])',
          phrase("the owner's")),
     ]
 

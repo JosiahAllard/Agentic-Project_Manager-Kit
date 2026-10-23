@@ -25,42 +25,42 @@ class Line(unittest.TestCase):
 
     def test_each_rule_reads_as_words(self):
         for before, after in (
-                ('Per R-2033, x', "Per the owner's ruling, x"),
+                ('Per R-9033, x', "Per the owner's ruling, x"),
                 ('Done per Q-301.', "Done per the owner's answer."),
-                ('x (R-2033).', 'x.'),
-                ('x (see R-2033 and R-2034).', 'x.'),
-                ('(R-2033 added delete)', '(the owner added delete)'),
-                ('- R-2033: the hub', '- The hub'),
-                ('- Note: R-2033, keep it', '- Note: keep it'),
-                ('(R-2033: a split) it stays', '(a split) it stays'),
-                ('it stays (a split; R-2033)', 'it stays (a split)'),
-                ('R-2033 says x', 'The owner says x'),
-                ('Owner ruling R-2033 says', 'Owner ruling says'),
-                ('answered by R-2033.', 'answered by the owner.'),
-                ('Settled, R-2033.', 'Settled.'),
-                ('The R-2033 wording holds.', "The owner's wording holds."),
-                ('under R-2033 ruling the hub moves', "under the owner's ruling the hub moves")):
+                ('x (R-9033).', 'x.'),
+                ('x (see R-9033 and R-9034).', 'x.'),
+                ('(R-9033 added delete)', '(the owner added delete)'),
+                ('- R-9033: the hub', '- The hub'),
+                ('- Note: R-9033, keep it', '- Note: keep it'),
+                ('(R-9033: a split) it stays', '(a split) it stays'),
+                ('it stays (a split; R-9033)', 'it stays (a split)'),
+                ('R-9033 says x', 'The owner says x'),
+                ('Owner ruling R-9033 says', 'Owner ruling says'),
+                ('answered by R-9033.', 'answered by the owner.'),
+                ('Settled, R-9033.', 'Settled.'),
+                ('The R-9033 wording holds.', "The owner's wording holds."),
+                ('under R-9033 ruling the hub moves', "under the owner's ruling the hub moves")):
             self.check(before, after)
 
     def test_a_cite_mid_sentence_on_a_continued_line_is_not_capitalised(self):
-        self.check('R-2033 says x', 'the owner says x', opens=False)
-        self.check('done. R-2033 says x', 'done. The owner says x', opens=False)
+        self.check('R-9033 says x', 'the owner says x', opens=False)
+        self.check('done. R-9033 says x', 'done. The owner says x', opens=False)
 
     def test_a_cite_no_rule_places_falls_back_and_is_flagged(self):
-        self.check('See R-2033.', 'See an owner ruling.', flagged=True)
+        self.check('See R-9033.', 'See an owner ruling.', flagged=True)
         self.check('Waiting on Q-123.', 'Waiting on an owner question.', flagged=True)
-        self.check('R-2033 and R-2034 then x', 'An owner ruling then x', flagged=True)
+        self.check('R-9033 and R-9034 then x', 'An owner ruling then x', flagged=True)
 
     def test_odd_punctuation_left_behind_is_flagged(self):
-        self.check('(R-2033), then x', ', then x', flagged=True)
+        self.check('(R-9033), then x', ', then x', flagged=True)
 
     def test_what_is_not_an_owner_cite_is_untouched(self):
-        for line in ('T-1234 and item:FOO and R-123 stay.', 'XR-2033 and R-2033x-1', '',
-                     'Blocked on owner (2026-01-01): per R-2033'):
+        for line in ('T-1234 and item:FOO and R-12 stay.', 'XR-9033 and R-9033x-1', '',
+                     'Blocked on owner (2026-01-01): per R-9033'):
             self.assertEqual(pmod.uncite_line(line), (line, False), line)
 
 
-BODY_A = 'Per R-2033, the hub moves.\n\nSee R-2034.\nBlocked on owner (2026-01-01): R-2035 says wait'
+BODY_A = 'Per R-9033, the hub moves.\n\nSee R-9034.\nBlocked on owner (2026-01-01): R-9035 says wait'
 BODY_B = '- Q-301: which one?\n- T-1234 stays'
 
 
@@ -92,7 +92,7 @@ class Store(StoreCase):
         self.assertIsNone(b.get('hold_ruling'))
         self.assertEqual(a.body.strip().split('\n'),
                          ["Per the owner's ruling, the hub moves.", '', 'See an owner ruling.',
-                          'Blocked on owner (2026-01-01): R-2035 says wait'])
+                          'Blocked on owner (2026-01-01): R-9035 says wait'])
         self.assertEqual(b.body.strip().split('\n'), ['- Which one?', '- T-1234 stays'])
         # what uncite keeps, byte for byte
         for key in ('summary', 'ref', 'owner_ask', 'q', 'parked_at', 'resume', 'priority',
@@ -106,7 +106,7 @@ class Store(StoreCase):
         out = '\n'.join(self.verb('uncite').lines)
         self.assertIn('UNCITE: 3 cite(s) in 2 record(s): 3 body line(s) rewritten, '
                       '2 header line(s) dropped', out)
-        self.assertIn('    - Per R-2033, the hub moves.', out)
+        self.assertIn('    - Per R-9033, the hub moves.', out)
         self.assertIn("    + Per the owner's ruling, the hub moves.", out)
         self.assertIn('    dropped priority_ruling: R-9001', out)
         self.assertIn('    dropped hold_ruling: R-9002', out)

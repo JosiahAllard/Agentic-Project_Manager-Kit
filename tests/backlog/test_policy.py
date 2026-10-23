@@ -292,7 +292,7 @@ class CliRole(unittest.TestCase):
 
     def test_the_uncite_dry_run_is_a_read_and_its_apply_is_top_only(self):
         self.seed()
-        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-2033, keep it.'))
+        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-9033, keep it.'))
         before = self.ok(None, 'show', 'FOO')
         out = self.ok('plain', 'uncite')
         self.assertIn('UNCITE: 1 cite(s) in 1 record(s)', out)
@@ -308,7 +308,7 @@ class CliRole(unittest.TestCase):
                          "roles.py's retarget row does not name uncite yet (owner approval)")
     def test_the_owner_applies_uncite(self):
         self.seed()
-        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-2033, keep it.'))
+        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-9033, keep it.'))
         self.ok(None, 'uncite', '--apply')
         self.assertIn("Per the owner's ruling, keep it.", self.ok(None, 'show', 'FOO'))
         self.assertIn('nothing to rewrite', self.ok('plain', 'uncite'))
