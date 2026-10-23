@@ -2,6 +2,7 @@
 name: test-runner
 description: Runs a repository's test tiers in a given worktree and reports only PASS/FAIL plus failing lines, keeping verbose output out of your context. Must be told the worktree, the tiers, and ports for anything networked; asks rather than guesses.
 tier: light
+compact: 170000
 sandbox: workspace-write
 mode: test
 summary: Runs test tiers in a given worktree and reports only PASS/FAIL plus failing lines.

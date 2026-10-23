@@ -125,7 +125,8 @@ class ClaudeContent:
 
     def settings(self, role, tiers=None):
         """[(key, value)] of the front matter `role`'s agent file runs it with, in the file's order:
-        `tools` (no line for `capabilities: all`), `model`, `effort`, and `cacheTtl` (under
+        `tools` (no line for `capabilities: all`), `model`, `effort`, `autoCompactWindow` (the role's
+        `compact`; the CLI holds a subagent's window at or under it), and `cacheTtl` (under
         `experimental`)."""
         tiers = self.tier_models() if tiers is None else tiers
         out = []
@@ -137,6 +138,8 @@ class ClaudeContent:
         out.append(('model', role.model_for(HOST, tiers)))
         if role.effort:
             out.append(('effort', role.effort))
+        if role.compact:
+            out.append(('autoCompactWindow', role.compact))
         if role.cache:
             out.append(('cacheTtl', CACHE_TTL[role.cache]))
         return out

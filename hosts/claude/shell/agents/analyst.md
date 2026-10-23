@@ -5,6 +5,7 @@ description: Read-only analyst - reviews one branch against its author's brief a
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Skill
 model: haiku
 effort: high
+autoCompactWindow: 170000
 ---
 
 You read and report; you never change anything. Your brief names one of two jobs and the skill
