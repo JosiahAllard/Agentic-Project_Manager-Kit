@@ -26,6 +26,7 @@ import sys
 from kitlib import kitroot, pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
+from kitlib.pmstart import configcheck
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -300,8 +301,9 @@ def others(entry, procs, env, pid):
 
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
-            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check)."""
+            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None,
+            config_lines=None):
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -353,6 +355,7 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             return ledger_lines(m, entry_once()["repo"]) if m.get("ledger_dir") else []
 
         checks = [
+            ("machine_config", config_lines or configcheck.lines),
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
             ("machine state", lambda: machine(entry_once(), run, read, now, kit, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),
@@ -378,7 +381,12 @@ def render(env=None, path=None, **kw):
     try:
         cfg = load_config(path)
         if cfg is None:
-            return "Coordinator session start: no coordinator_start config in %s; skipped." % (path or kuser.display())
+            text = "Coordinator session start: no coordinator_start config in %s; skipped." % (path or kuser.display())
+            try:     # the machine config lines still show (kitlib.pmstart.configcheck)
+                extra = (kw.get("config_lines") or configcheck.lines)()
+            except Exception as e:
+                extra = ["could not check machine_config: %s: %s" % (type(e).__name__, e)]
+            return text + "".join("\n- " + l for l in extra)
         return context(cfg, env=env, **kw)
     except Exception as e:
         return "Coordinator session start: could not check config: %s: %s" % (type(e).__name__, e)

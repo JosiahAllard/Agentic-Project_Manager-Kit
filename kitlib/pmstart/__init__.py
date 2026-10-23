@@ -13,7 +13,7 @@ import time
 
 from kitlib.config import user as kuser
 from kitlib.host import registry
-from kitlib.pmstart import consoletasks, fglock
+from kitlib.pmstart import configcheck, consoletasks, fglock
 from kitlib.proc import spawn
 
 KEY = "pm_start"
@@ -885,6 +885,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
 
     checks = [
         ("standing", lambda: standing(cfg)),
+        ("machine_config", lambda: configcheck.lines(**fakes.get("machine_config", {}))),
         ("eng_review", lambda: eng_review(cfg)),
         ("hub", lambda: hub_site(procs_once, **fakes.get("hub_site", {}))),
         ("watcher", lambda: watcher(cfg, procs_once(), **fakes.get("watcher", {}))),

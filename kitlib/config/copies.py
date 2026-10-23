@@ -19,6 +19,10 @@ the last refresh may still run it; those decide nothing and are counted apart (R
 
 Only top-level keys are checked: a copy that knows a key may still refuse an inner key of it,
 which only that copy's owning module checks when it reads it.
+
+A copy whose user.py predates the PM repo pointer reader (it defines user_config but no
+module-level LOCAL_FILE_NAME, which came with the pointer reader; pre_pointer) reads the machine config from the home folder, not the PM repository's, so its keys
+decide nothing: it is HOME_READER, never checked by SCHEMA, and counts as a copy that is not ready.
 """
 import ast
 import collections
@@ -37,6 +41,7 @@ PIN = 'pin'
 INSTALL = 'installed in %s'
 
 KNOWS = '%s (%s): knows every key'
+HOME_READER = '%s (%s): reads the home folder: restart its sessions or prune it'
 REFUSES = '%s (%s): would refuse %s'
 UNKNOWN = '%s (%s): cannot tell: %s'
 MISSING = 'the folder is missing: refresh that account (%s)'
@@ -67,16 +72,7 @@ def schema_keys(folder):
     """(the keys `folder`'s SCHEMA names, the keys its RETIRED tuple names), both frozensets; a
     copy with no RETIRED retires nothing. CopyError when the file cannot be read or parsed, has
     no module-level SCHEMA dict literal, or a SCHEMA key is not a literal string."""
-    path = os.path.join(folder, *USER_PY)
-    try:
-        with open(path, encoding='utf-8-sig') as fh:
-            text = fh.read()
-    except (OSError, UnicodeDecodeError) as e:
-        raise CopyError('cannot read %s: %s' % (path, e.__class__.__name__))
-    try:
-        tree = ast.parse(text, path)
-    except (SyntaxError, ValueError):
-        raise CopyError('cannot parse %s' % path)
+    tree, path = _tree(folder)
     known = retired = None
     for node in tree.body:
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1
@@ -95,6 +91,37 @@ def schema_keys(folder):
     if known is None:
         raise CopyError('no SCHEMA dict in %s' % path)
     return known, retired or frozenset()
+
+
+def _tree(folder):
+    """(the parsed module of `folder`'s user.py, its path); CopyError when it cannot be read or
+    parsed."""
+    path = os.path.join(folder, *USER_PY)
+    try:
+        with open(path, encoding='utf-8-sig') as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as e:
+        raise CopyError('cannot read %s: %s' % (path, e.__class__.__name__))
+    try:
+        return ast.parse(text, path), path
+    except (SyntaxError, ValueError):
+        raise CopyError('cannot parse %s' % path)
+
+
+def pre_pointer(folder):
+    """True when `folder`'s user.py predates the PM repo pointer reader: it defines the reader
+    (a module-level `user_config` function, in every user.py since the first) but assigns no
+    module-level LOCAL_FILE_NAME (kitlib.config.user, added with the pointer reader). A file with
+    neither is not judged here (False): its SCHEMA is checked. CopyError as schema_keys."""
+    tree, _path = _tree(folder)
+    reader = local = False
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == 'user_config':
+            reader = True
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'LOCAL_FILE_NAME'):
+            local = True
+    return reader and not local
 
 
 def refused(folder, keys):
@@ -160,9 +187,10 @@ def find(root, current=None, installs=()):
 
 def check(found, keys, refresh='the plugin refresh'):
     """Report(ready, lines, stale) for the copies `found` and the machine config keys `keys`:
-    one line per copy (KNOWS, REFUSES or UNKNOWN; a folder that is not there says MISSING, naming
-    `refresh`, the refresh command); ready is True when there is a copy in use and every copy in
-    use knows every key; stale counts the copies not in use that refuse a key or cannot be read."""
+    one line per copy (KNOWS, REFUSES, HOME_READER for a pre_pointer copy, or UNKNOWN; a folder
+    that is not there says MISSING, naming `refresh`, the refresh command); ready is True when there is a copy in use and every copy in
+    use knows every key; stale counts the copies not in use that refuse a key, read the home
+    folder or cannot be read."""
     if not found:
         return Report(False, [NONE_FOUND], 0)
     lines, ready, stale = [], True, 0
@@ -170,13 +198,17 @@ def check(found, keys, refresh='the plugin refresh'):
         try:
             if not os.path.isdir(c.path):
                 raise CopyError(MISSING % refresh)
-            bad = refused(c.path, keys)
+            home = pre_pointer(c.path)
+            bad = None if home else refused(c.path, keys)
         except CopyError as e:
             lines.append(UNKNOWN % (c.path, c.role, e))
             bad = None
         else:
-            lines.append(REFUSES % (c.path, c.role, ', '.join(bad)) if bad
-                         else KNOWS % (c.path, c.role))
+            if home:
+                lines.append(HOME_READER % (c.path, c.role))
+            else:
+                lines.append(REFUSES % (c.path, c.role, ', '.join(bad)) if bad
+                             else KNOWS % (c.path, c.role))
         if bad is None or bad:
             if c.in_use:
                 ready = False

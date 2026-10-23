@@ -56,3 +56,25 @@ def keep_off_hub_site():
     p = mock.patch.object(pmstart, "hub_site", lambda procs=(), **kw: [HUB_KEPT_OFF])
     p.start()
     unittest.addModuleCleanup(p.stop)
+
+
+def _no_config_lines(loc=None, run=None, rules=None):
+    return []
+
+
+REAL_CONFIG_LINES = None
+
+
+def stub_config_lines():
+    """For a test package's __init__: the session-start machine config check
+    (kitlib.pmstart.configcheck.lines) gives no line, reading no home folder, pointer or PM
+    repository, in every test that does not put the real one back (REAL_CONFIG_LINES, as
+    tests/pmstart/test_config_check.py does). Once per process; never undone."""
+    global REAL_CONFIG_LINES
+    from kitlib.pmstart import configcheck
+    if configcheck.lines is not _no_config_lines:
+        REAL_CONFIG_LINES = configcheck.lines
+        configcheck.lines = _no_config_lines
+
+
+stub_config_lines()
