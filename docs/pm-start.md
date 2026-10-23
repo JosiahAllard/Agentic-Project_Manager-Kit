@@ -6,11 +6,11 @@ PM. It always exits 0; a failed check becomes one "could not check X: reason" li
 
 Checks: standing rules, eng_review flags, the hub, `pm_watch.py` running, the newest handoff file, reminders due, and coordinators not running (no `claude.exe`
 with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/lookup.py`); each such line names the
-`launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). `<n>` is the account
+`launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). A repository in sessions.json with no live `consultant-<repo>` session (and no consultant entry of its own) gets one `consultant-<repo> is not running: launch.py consultant --repo <repo> --repo-path <folder>` line, the folder from the machine config's `launcher.repos` or `<its checkout>` when it is not there (`kitlib.pmstart` `_consultants_missing`; no config switch). `<n>` is the account
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
 launches every coordinator, the kit's included, from whatever account it started on; when that
 account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
-`tests/pmstart/test_pmstart.py` `LivenessTest`. A coordinator the PM stopped on its `ready to stop:`
+`tests/pmstart/test_pmstart.py` `LivenessTest` (the consultant line too). A coordinator the PM stopped on its `ready to stop:`
 reply (skill session-handoff) is listed too; the PM starts it only when its repo gets startable
 work, an owner answer or an approval, adding a `--prompt` that names the reply's note.
 
