@@ -1,7 +1,7 @@
 """The hand-off note a successor is told to read (docs/launcher.md "Hand-off")."""
 import unittest
 
-from kitlib.launcher import handoff
+from kitlib.launcher import handoff, start
 from kitlib.launcher.settings import LaunchError
 from tests.launcher.fakes import FakeHost, Home
 
@@ -22,6 +22,23 @@ class SuccessorPrompt(unittest.TestCase):
         for entry in (AGENT, PLAIN):
             text = handoff.successor_prompt(entry, 'old-a1', 'new-a2')
             self.assertIn('entry-state.md', text)
+
+
+class PmName(unittest.TestCase):
+    def test_the_successor_is_told_to_check_in_with_the_pm_session_by_its_live_name(self):
+        for entry in (AGENT, PLAIN):
+            text = handoff.successor_prompt(entry, 'old-a1', 'new-a2')
+            self.assertIn('pm-session', text)
+            self.assertNotIn('Project Manager', text)
+
+    def test_an_entry_started_without_a_prompt_names_it_too(self):
+        h = Home(self, accounts=('1', '2'))
+        h.write_state('sessions.json', {'alpha': dict(AGENT)})
+        host = FakeHost(h.root)
+        start.start_entry(h.settings, host, 'alpha', account='2')
+        text, = host.opened
+        self.assertIn('(the session named pm-session)', text)
+        self.assertNotIn('Project Manager', text)
 
 
 class HandoffState(unittest.TestCase):

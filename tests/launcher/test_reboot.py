@@ -70,6 +70,16 @@ class Briefs(unittest.TestCase):
         self.assertIn('Read your standing brief b.md first. ', by_role['plain'])
         self.assertIn('Read your standing brief c.md first. ', by_role['coordinator'])
 
+    def test_the_prompts_name_the_pm_by_its_live_session_name(self):
+        h = Home(self)
+        h.write_state('sessions.json', {'alpha': dict(ALPHA)})
+        host = FakeHost(h.root)
+        reboot.run(h.settings, host)
+        text, = host.opened
+        self.assertIn('(the session named pm-session)', text)
+        self.assertNotIn('session named Project Manager', text)
+        self.assertIn('this pm-session must be stopped', reboot.PM_PROMPT)
+
     def test_entry_start_args_keeps_the_hand_off_rule_unless_any_brief(self):
         args = start.entry_start_args(None, 'helper', HELPER, '2', 'go')
         self.assertNotIn('brief', args)

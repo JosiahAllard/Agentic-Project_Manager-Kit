@@ -36,8 +36,8 @@ PROMPT = ('Start up now: the machine restarted and after-reboot launched you. Ru
 PM_PROMPT = ('The machine restarted and after-reboot relaunched the coordinators. Re-arm the usage watch and any '
              'dead-man checks, find the coordinators with ListAgents, and send each a sync (main state, what was in '
              'flight, anything from the owner). Then tell the owner briefly what came back and what did not, and that '
-             'this pm-session must be stopped before the %s is opened in the desktop app, so the conversation does '
-             'not fork.' % S.PM_NAME)
+             'this %s must be stopped before the Project Manager conversation is opened in the desktop app, so it '
+             'does not fork.' % S.PM_NAME)
 
 
 def why(e):

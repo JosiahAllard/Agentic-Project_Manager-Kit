@@ -377,6 +377,12 @@ class Start(Base):
         self.assertIn("'You succeed old-a1, which has checkpointed", out)
         self.assertTrue(out.rstrip().endswith("go'\""), out[-40:])      # the what-if line closes its quote
 
+    def test_every_prompt_names_the_pm_by_its_live_session_name(self):
+        for out in (self.go(), self.go(brief='b.md')):
+            self.assertIn('(the session named pm-session)', out)
+            self.assertNotIn('Project Manager', out)
+        self.assertEqual(start.PM_NAME, 'pm-session')
+
     def test_the_predecessor_text_serialises_no_landing(self):
         text = start.predecessor_text('x')
         for old in (r'leave .*landing slot', 'hands them over', r'(?<!never )wait'):

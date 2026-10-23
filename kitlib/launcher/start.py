@@ -19,10 +19,13 @@ from kitlib import content as kcontent
 from kitlib.launcher import accounts as A
 from kitlib.git import cmd
 from kitlib.git import repo as gitrepo
-from kitlib.launcher import home, lookup, pipes, state, window
+from kitlib.launcher import home, lookup, pipes, state, stop, window
 from kitlib.launcher.settings import LaunchError
 
-PM_NAME = 'Project Manager'      # the PM session's name, as every first message names it
+# the PM session's name, as every first message names it: the --remote-control name reboot resumes it under
+# and stop refuses (stop.PM_RC_NAME), which a SendMessage to the session must match. sessions.json holds
+# no PM entry (the PM is coordinators.json's pm_session_id), so there is no recorded name to read
+PM_NAME = stop.PM_RC_NAME
 DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with the PM '
                   '(the session named %s), then continue the queue in the state note.' % PM_NAME)
 HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
