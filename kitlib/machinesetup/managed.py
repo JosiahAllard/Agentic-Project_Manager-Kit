@@ -10,8 +10,10 @@ write that makes the managed file hold it. The file is under Program Files, so -
 unless the process is elevated; nothing elevates itself. The default mode never writes it:
 note_sync() notes whether it is in sync and names the command.
 
-Rendering: the template is a JSON object. In every string, {kit} becomes the kit folder (forward
-slashes), {pythonw} the guard entry's interpreter (extras.Host.guard_entry) and {plugin_export} the
+Rendering: the template is a JSON object. The kit is stable_kit(ctx.kit): a plugin export, which
+every plugin refresh replaces, stands for the main checkout its marker records, so the template is
+read there and the guard hook and status line name a path that outlives the refresh. In every
+string, {kit} becomes that folder (forward slashes), {pythonw} the guard entry's interpreter (extras.Host.guard_entry) and {plugin_export} the
 plugin export root (kitlib.pluginsource). Then the overlay, OVERLAY in the machine config folder
 (`~/.pm-kit/managed-settings.json`, absent by default), is merged over it: objects key by key,
 anything else replaced. The overlay holds what the committed template must not: the agents' git
@@ -102,6 +104,27 @@ def merge(base, over):
     return out
 
 
+def stable_kit(kit):
+    """The kit folder the managed file names for `kit`: `kit` itself, or, for a plugin export
+    (kitlib.pluginsource MARKER), the main checkout its marker records (pluginsource.default_kit),
+    since every plugin refresh replaces the export folder. ManagedError for an export whose
+    checkout has moved or gone."""
+    from kitlib import pluginsource as ps
+    got, why = ps.default_kit(kit)
+    if got is None:
+        raise ManagedError('%s (a plugin export is replaced at every plugin refresh, so the managed '
+                           'settings name the kit checkout)' % why)
+    return got
+
+
+def _same_kit(root):
+    """stable_kit(root), or `root` itself when it cannot be resolved (guard_where only compares)."""
+    try:
+        return stable_kit(root)
+    except ManagedError:
+        return root
+
+
 def _pythonw(ctx):
     entry = ctx.host.guard_entry(ctx.kit)
     for g in entry.get('PreToolUse') or []:
@@ -133,7 +156,8 @@ def render(ctx):
         rel = source()
     except (OSError, ValueError) as e:                               # registry.RegistryError
         raise ManagedError('cannot name the template: %s' % e)
-    path = kit_file(ctx.kit, rel)
+    kit = stable_kit(ctx.kit)
+    path = kit_file(kit, rel)
     if not os.path.lexists(path):
         return None
     data = _read_object(path, 'the template')
@@ -143,7 +167,7 @@ def render(ctx):
         if name not in got:
             try:
                 if name == 'kit':
-                    got[name] = ctx.kit.replace('\\', '/')
+                    got[name] = kit.replace('\\', '/')
                 elif name == 'pythonw':
                     got[name] = _pythonw(ctx)
                 else:
@@ -154,8 +178,12 @@ def render(ctx):
                 raise ManagedError('cannot fill {%s}: %s' % (name, e))
         return got[name]
     data = merge(_substitute(data, values), overlay(ctx.home))
+    here = ctx
+    if kit != ctx.kit:
+        here = copy.copy(ctx)                                        # links re-pointed into the checkout
+        here.kit = kit
     try:
-        settings.repoint_links(data, ctx)
+        settings.repoint_links(data, here)
     except ValueError as e:
         raise ManagedError(str(e))
     return data
@@ -163,14 +191,18 @@ def render(ctx):
 
 def guard_where(data, kit, home):
     """'kit' when `data` has a PreToolUse hook running this kit's boot/hook.py; else the paths of
-    another kit's boot/hook.py it runs (a list, maybe empty)."""
+    another kit's boot/hook.py it runs (a list, maybe empty). A plugin export and the checkout its
+    marker records are one kit (stable_kit): a file rendered from either is this kit's."""
     if not isinstance(data, dict):
         return []
-    guard = norm(kit_file(kit, settings.GUARD))
+    guard = norm(kit_file(_same_kit(kit), settings.GUARD))
     tail = os.sep + os.path.normcase(os.path.join('boot', 'hook.py'))
     others = []
     for p in settings._hook_paths(data, 'PreToolUse', home):
         if norm(p) == guard:
+            return 'kit'
+        if norm(p).endswith(tail) and norm(kit_file(_same_kit(os.path.dirname(os.path.dirname(p))),
+                                                    settings.GUARD)) == guard:
             return 'kit'
         if norm(p).endswith(tail) and p not in others:
             others.append(p)
@@ -259,8 +291,13 @@ def survey(ctx, apply=False):
     """The --managed-settings plan: one write of the rendered template (in the existing file's key
     order), or nothing."""
     plan = Plan((SECTION,))
-    if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
-        plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
+    try:
+        kit = stable_kit(ctx.kit)                                    # the folder the hook will name
+    except ManagedError as e:
+        plan.refuse(str(e))
+        return plan
+    if not os.path.isfile(kit_file(kit, settings.GUARD)):
+        plan.refuse('%s is not a kit checkout (no %s)' % (kit, settings.GUARD))
         return plan
     path = ctx.host.managed_path()
     if not path:
@@ -276,11 +313,11 @@ def survey(ctx, apply=False):
         return plan
     if guard_where(data, ctx.kit, ctx.home) != 'kit':
         plan.note(SECTION, 'the template carries no guard entry for this kit (%s): each account '
-                           'settings.json keeps its own' % kit_file(ctx.kit, settings.GUARD))
+                           'settings.json keeps its own' % kit_file(kit, settings.GUARD))
     if not ctx.host.is_admin():
         if apply:
             plan.refuse('not elevated: %s is under Program Files; run %s from an administrator '
-                        'terminal' % (path, command(ctx.kit)))
+                        'terminal' % (path, command(kit)))
             return plan
         plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
     got = _target(plan, path, data)
@@ -339,7 +376,8 @@ def note_sync(plan, ctx, section='settings'):
     else:
         plan.note(section, 'managed settings: %s %s the kit template; from an administrator '
                            'terminal: %s (a dry run first without --apply)'
-                  % (path, 'differs from' if raw is not None else 'is missing; it is made from', command(ctx.kit)))
+                  % (path, 'differs from' if raw is not None else 'is missing; it is made from',
+                     command(_same_kit(ctx.kit))))
 
 
 def survey_live(plan, ctx):

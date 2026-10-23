@@ -51,10 +51,10 @@ class Scan(unittest.TestCase):
         self.assertEqual(codemap.scan(self.root, 'no/such/file.py'), ([], [], 0))
 
     def test_gdscript_class_names_inner_classes_and_funcs(self):
-        self.write('game/ball.gd', 'extends Node\nclass_name Ball\n\nfunc _ready():\n\tpass\n'
+        self.write('src/widget.gd', 'extends Node\nclass_name Widget\n\nfunc _ready():\n\tpass\n'
                                    'static func make(x):\n\treturn x\nclass Inner:\n\tfunc go():\n\t\tpass\n')
-        types, members, n = codemap.scan(self.root, 'game/ball.gd')
-        self.assertEqual(types, [('Ball', 'class_name', 2), ('Inner', 'class', 8)])
+        types, members, n = codemap.scan(self.root, 'src/widget.gd')
+        self.assertEqual(types, [('Widget', 'class_name', 2), ('Inner', 'class', 8)])
         self.assertEqual(members, [('_ready', 4), ('make', 6), ('go', 9)])
         self.assertEqual(n, 10)
 

@@ -3399,6 +3399,25 @@ class FindingsSourceTest(unittest.TestCase):
         # a server with no findings folder (no pm_data) shows none
         self.assertEqual(serve.SiteViews(store, serve.Sources()).findings(), [])
 
+    def test_site_views_show_each_lint_run_in_the_findings_runs(self):
+        """KIT-HUB-FINDINGS-LINT-RUNS: the lint folder's runs reach GET findings' runs."""
+        self.result('kit', [self.row()])
+        from kitlib.maintlint import slot
+        slot.write_skip(os.path.join(self.root, 'kit', lint_result.NAME),
+                        slot.Skipped('busy', slot.EXIT_BUSY, 'busy'),
+                        now=datetime.datetime(2026, 1, 9, 3, 0, tzinfo=datetime.timezone.utc))
+        store = Store.open(os.path.join(self.root, 'store'), clock=CLOCK)
+        self.addCleanup(store.close)
+        a = api.Api(store, views=serve.SiteViews(store, serve.Sources(findings=self.root)),
+                    clock=CLOCK)
+        status, obj = a.call('GET', BASE + '/findings', AGENT)
+        self.assertEqual(status, 200, obj)
+        self.assertEqual(obj['runs'], [{'repo': 'kit', 'started': '2026-01-02T03:04:05Z',
+                                        'ledger': None, 'skipped': {
+                                            'reason': 'busy', 'at': '2026-01-09T03:00:00Z'}}])
+        bare = api.Api(store, views=serve.SiteViews(store, serve.Sources()), clock=CLOCK)
+        self.assertEqual(bare.call('GET', BASE + '/findings', AGENT)[1]['runs'], [])
+
     def test_the_machine_sources_read_the_pm_data_lint_folder(self):
         home = os.path.join(self.root, 'home')
         os.makedirs(home)

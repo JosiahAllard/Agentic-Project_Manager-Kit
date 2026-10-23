@@ -18,8 +18,8 @@ sys.path.append(os.path.join(KIT, "tools"))   # last: tools/gate.py must not sha
 import backlog_lint                                                 # noqa: E402
 
 EXAMPLE = os.path.join(KIT, "docs", "backlog-lint.example.json")
-INCIDENT = ["EX-SIM-BATCH-STATE", "EX-SIM-BUFF-DURATION", "EX-TOOLS-LANDING-INFLIGHT",
-            "EX-LINK-CYCLECOST", "EX-LINK-PRESENCE-LIVECHECK"]
+INCIDENT = ["EX-SIM-SHARED-STATE", "EX-SIM-TIMEOUT-DEFAULT", "EX-TOOLS-LANDING-INFLIGHT",
+            "EX-LINK-LOOKUP-COST", "EX-LINK-FEATURE-LIVECHECK"]
 
 
 def fixtures():
@@ -61,19 +61,19 @@ class IncidentTest(unittest.TestCase):
     def test_every_incident_item_has_its_fix(self):
         by = {f.id: f for f in bl.lint(self.records, self.cfg)}
         self.assertEqual(sorted(by), sorted(INCIDENT))
-        self.assertEqual(by["EX-SIM-BATCH-STATE"].kind, "session")
-        self.assertEqual(by["EX-SIM-BATCH-STATE"].fix,
-                         "python <kit>/tools/backlog.py -C <worktree> set EX-SIM-BATCH-STATE --session gamma")
+        self.assertEqual(by["EX-SIM-SHARED-STATE"].kind, "session")
+        self.assertEqual(by["EX-SIM-SHARED-STATE"].fix,
+                         "python <kit>/tools/backlog.py -C <worktree> set EX-SIM-SHARED-STATE --session gamma")
         self.assertTrue(bl.BACKLOG_CMD.startswith('python "%s/tools/backlog.py" -C '
                                                   % kitroot.root().replace('\\', '/')), bl.BACKLOG_CMD)
-        self.assertIn("--session gamma", by["EX-SIM-BUFF-DURATION"].fix)
+        self.assertIn("--session gamma", by["EX-SIM-TIMEOUT-DEFAULT"].fix)
         self.assertIn("--session pm", by["EX-TOOLS-LANDING-INFLIGHT"].fix)
         self.assertIn("scope under tools/new_worktree.py", by["EX-TOOLS-LANDING-INFLIGHT"].why)
-        self.assertEqual(by["EX-LINK-CYCLECOST"].kind, "hold")
-        self.assertIn("--on live-client", by["EX-LINK-CYCLECOST"].fix)
-        self.assertEqual(by["EX-LINK-PRESENCE-LIVECHECK"].kind, "hold")
-        self.assertIn("--on owner", by["EX-LINK-PRESENCE-LIVECHECK"].fix)
-        self.assertIn("owner's go", by["EX-LINK-PRESENCE-LIVECHECK"].why)
+        self.assertEqual(by["EX-LINK-LOOKUP-COST"].kind, "hold")
+        self.assertIn("--on live-client", by["EX-LINK-LOOKUP-COST"].fix)
+        self.assertEqual(by["EX-LINK-FEATURE-LIVECHECK"].kind, "hold")
+        self.assertIn("--on owner", by["EX-LINK-FEATURE-LIVECHECK"].fix)
+        self.assertIn("owner's go", by["EX-LINK-FEATURE-LIVECHECK"].why)
 
     def test_offer_to_the_untagged_session_lists_all_five(self):
         offered, found = bl.offer_findings(self.records, self.cfg, "none", cap=5)
@@ -84,9 +84,9 @@ class IncidentTest(unittest.TestCase):
     def test_offer_to_gamma_is_empty_until_tagged(self):
         self.assertEqual(bl.offer_findings(self.records, self.cfg, "gamma")[0], [])
 
-    def test_cyclecost_needs_a_rule_its_text_names_no_live_client(self):
+    def test_lookup_cost_needs_a_rule_its_text_names_no_live_client(self):
         no_rule = cfg([GAMMA])
-        self.assertNotIn("EX-LINK-CYCLECOST", [f.id for f in bl.lint(self.records, no_rule)])
+        self.assertNotIn("EX-LINK-LOOKUP-COST", [f.id for f in bl.lint(self.records, no_rule)])
 
     def test_cli_exit_and_lines(self):
         lines = []
@@ -95,7 +95,7 @@ class IncidentTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("would offer (approx.)", lines[0])
         self.assertEqual(lines[1], "alpha: 5 records, 5 findings; 5 offer")
-        self.assertEqual(sum(1 for ln in lines if "EX-LINK-CYCLECOST" in ln and "->" in ln), 1)
+        self.assertEqual(sum(1 for ln in lines if "EX-LINK-LOOKUP-COST" in ln and "->" in ln), 1)
 
 
 class _Fixed:
@@ -230,13 +230,13 @@ class OfferTest(unittest.TestCase):
 NEXT_PRINTOUT = """BACKLOG a1b2c3d4e | 120 records | 90 pullable | 30 held
 held 30: 6 owner, 24 item
 
-  rank 59  priority 3  EX-LINK-PRESENCE-LIVECHECK one worker run (owner's go) confirms ...
-      scope: worker/link/src/main/java/org/example/link/PresenceConfig.java
-  rank 67  priority 3  EX-SIM-BATCH-STATE SimBatch keeps process-wide state
+  rank 59  priority 3  EX-LINK-FEATURE-LIVECHECK one worker run (owner's go) confirms ...
+      scope: worker/link/src/main/java/org/example/link/FeatureConfig.java
+  rank 67  priority 3  EX-SIM-SHARED-STATE SimBatch keeps process-wide state
       scope: artifacts/models/env/batch.py, artifacts/models/env/batch_shim.c
-  rank 74  priority 3  EX-SIM-BUFF-DURATION Sim buff lasts 300 ticks
+  rank 74  priority 3  EX-SIM-TIMEOUT-DEFAULT Sim timeout defaults to 300 ticks
   rank 80  priority 3  EX-TOOLS-LANDING-INFLIGHT new_worktree/sync_base cut from pushed origin/master
-  rank 83  priority 3  EX-LINK-CYCLECOST      a marshalled member costs an engine cycle
+  rank 83  priority 3  EX-LINK-LOOKUP-COST      a wrapped member costs one extra call
   rank 96  priority 3  EX-NOT-IN-FIXTURES    skipped
 
 ON LIVE BRANCHES (12) - not offered, not counted against the cap:
@@ -251,8 +251,8 @@ class NextOutputTest(unittest.TestCase):
 
     def test_parse(self):
         self.assertEqual(bl.parse_next_output(NEXT_PRINTOUT), [
-            "EX-LINK-PRESENCE-LIVECHECK", "EX-SIM-BATCH-STATE", "EX-SIM-BUFF-DURATION",
-            "EX-TOOLS-LANDING-INFLIGHT", "EX-LINK-CYCLECOST", "EX-NOT-IN-FIXTURES"])
+            "EX-LINK-FEATURE-LIVECHECK", "EX-SIM-SHARED-STATE", "EX-SIM-TIMEOUT-DEFAULT",
+            "EX-TOOLS-LANDING-INFLIGHT", "EX-LINK-LOOKUP-COST", "EX-NOT-IN-FIXTURES"])
 
     def test_real_offer_flags_the_five(self):
         c = bl.load_config(EXAMPLE)["alpha"]
@@ -277,7 +277,7 @@ class NextOutputTest(unittest.TestCase):
 
     def test_decode_utf16_and_bom(self):
         for data in (NEXT_PRINTOUT.encode("utf-16"), NEXT_PRINTOUT.encode("utf-8-sig"), NEXT_PRINTOUT.encode()):
-            self.assertEqual(bl.parse_next_output(bl.decode_next_output(data))[0], "EX-LINK-PRESENCE-LIVECHECK")
+            self.assertEqual(bl.parse_next_output(bl.decode_next_output(data))[0], "EX-LINK-FEATURE-LIVECHECK")
 
 
 def git_store(root, files):
