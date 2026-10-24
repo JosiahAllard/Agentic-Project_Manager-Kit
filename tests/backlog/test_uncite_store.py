@@ -42,6 +42,8 @@ class Line(unittest.TestCase):
                 ('it stays (a split; R-9033)', 'it stays (a split)'),
                 ('The ruling R-9033 says', 'The ruling says'),
                 ("Its owner's ruling PM R-9033 holds", "Its owner's ruling holds"),
+                ("Owner's ruling R-9033 holds", "Owner's ruling holds"),
+                ("PM's question Q-301 is open", "PM's question is open"),
                 ('answered by R-9033.', 'answered by an owner ruling.'),
                 ('Settled, R-9033.', 'Settled.'),
                 ('under R-9033 ruling the hub moves', 'under an owner ruling the hub moves'),
@@ -74,6 +76,19 @@ class Line(unittest.TestCase):
     def test_a_dated_cite_reads_as_words(self):
         self.check('PM R-9482 (2026-10-07): the nightly',
                    'An owner ruling (2026-10-07): the nightly')
+
+    def test_a_dated_question_cite_is_left(self):
+        # the label names the answer, which `an owner question` would not say
+        self.left('Q-301 (2026-10-07): keep the cap')
+        self.left('- Q-301 (2026-10-07): keep the cap')
+
+    def test_a_noun_before_more_than_one_cite_is_left(self):
+        # dropping the run would leave the noun saying one where the line named several
+        self.left('the ruling R-9001 and Q-301 say')
+        self.left('the rulings R-9001 and R-9002 hold')
+
+    def test_a_leading_cite_before_a_semicolon_is_left(self):
+        self.left('- R-9033; keep it')
 
     def test_a_cite_at_the_start_of_a_continued_line_is_left(self):
         # the line continues the sentence before it: no rule knows the word before the cite

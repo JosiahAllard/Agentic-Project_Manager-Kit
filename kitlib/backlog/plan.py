@@ -1602,9 +1602,10 @@ def _words(cites, alone):
 def _uncite_rules(opens, state):
     """The rewrites in the order they run, each `(pattern, replacement)`. The first ones drop a
     cite that is a tag on the sentence (in a parenthesis, after a comma, a label before a colon,
-    after a noun with an article that already says it); the rest put `an owner ruling` / `an
-    owner question` where the cite is a word of the sentence: an object (`per R-nnnn`), before a
-    noun after a preposition (`under the R-nnnn ruling`), or a dated label opening a line. No rule
+    one cite after a noun with an article that already says it); the rest put `an owner ruling` /
+    `an owner question` where the cite is a word of the sentence: an object (`per R-nnnn`), before
+    a noun after a preposition (`under the R-nnnn ruling`), or a dated label of rulings opening a
+    line. No rule
     words a cite that is a subject (`R-nnnn says`) or a possessive (`R-nnnn's`): `an owner
     ruling` there would say some ruling where the line meant one. A tag rule whose mark follows a
     cite leaves the run (`by R-nnnn, R-nnnn`) for the object rule, which keeps it plural; one whose
@@ -1633,12 +1634,17 @@ def _uncite_rules(opens, state):
             nxt = nxt.upper()
         return m.group(1) + m.group(2) + nxt
 
-    def word(alone=True, suffix='', obj=False):
+    def noun(m):
+        # one cite after the noun: more (`the ruling R-nnnn and Q-nnn say`) would leave the
+        # noun saying one where the line named several
+        return hand(m) if len(CITED.findall(m.group(2))) > 1 else m.group(1)
+
+    def word(alone=True, suffix='', obj=False, rulings=False):
         def rep(m):
             text = _words(m.group('c'), alone)
-            q_word = obj and 'question' in (text or '')
-            if text is None or continued(m) or (
-                    q_word and m.group('pre').strip().lower() not in _Q_PREPS):
+            q_word = 'question' in (text or '')
+            if text is None or continued(m) or (rulings and q_word) or (
+                    obj and q_word and m.group('pre').strip().lower() not in _Q_PREPS):
                 return hand(m)
             state['words'] += 1
             start = m.end('pre')
@@ -1665,10 +1671,11 @@ def _uncite_rules(opens, state):
         (r'^(' + _BULLET + r')((?:[A-Za-z][A-Za-z _-]{0,20}: )?)' + _G + r'(?!;)' + _LIST_MARK +
          r'(\S?)', prefix),
         # `the ruling CITES`, `an owner question CITES`: the noun already says it
-        (r'\b(' + _DET + r" (?:(?:[Oo]wner|PM)(?:'s)? )?" + _NOUN + r') ' + _G, r'\1'),
-        # `R-nnnn (2026-10-07): ...` opening a line
+        (r'\b(' + _DET + r" (?:(?:[Oo]wner|PM)(?:'s)? )?" + _NOUN + r') (' + _G + r')', noun),
+        # `R-nnnn (2026-10-07): ...` opening a line; a `Q-nnn (date):` label names the answer,
+        # which `an owner question` would not say
         (r'^(?P<pre>' + _BULLET + r')(?P<c>' + _G + r')(?= \([0-9]{4}-[0-9]{2}-[0-9]{2}\):)',
-         word()),
+         word(rulings=True)),
         # `under the R-nnnn ruling`
         (r'(?P<pre>' + _PREP + r')(?:(?:The|the) )?(?P<c>' + _G + r') (?=' + _NOUN + r')',
          word(alone=False, suffix=' ')),
