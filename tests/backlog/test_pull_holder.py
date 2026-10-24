@@ -20,6 +20,8 @@ class PullHolder(StoreCase):
             self.verb('pull', 'FOO')
         self.assertIn('scope kitlib/backlog/scope.py collides with kitlib/backlog/** already taken '
                       'by HOLD (in flight on tools/holder)', str(cm.exception))
+        self.assertIn('a coordinator or the PM runs `pull FOO --reason', str(cm.exception))
+        self.assertIn('a worker stops and reports', str(cm.exception))
         self.verb('set', 'HOLD', [('scope', ['kitlib/backlog/offer.py'])])
         self.verb('pull', 'FOO')
         r = self.get('FOO')

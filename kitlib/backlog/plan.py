@@ -1210,10 +1210,11 @@ def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
     if folds and (not may_collide or reason is None):
         raise Refusal(_fold_message(rid, folds, override))
     if not offered and reason is None:
-        raise Refusal('`%s` is not in `next`\'s offer - %s. An out-of-order pull is allowed and '
-                      'recorded: `pull %s --reason "<why>"`%s'
+        raise Refusal('`%s` is not in `next`\'s offer - %s. An out-of-order pull is a pre-emption: '
+                      'a coordinator or the PM runs `pull %s --reason "<why>"` (recorded); a worker '
+                      'stops and reports%s'
                       % (rid, omod.not_offered_why(rec, passed, ctx.session), rid,
-                         '; its scope collides with a live pull, so it is %s' % override
+                         '. Its scope collides with a live pull, so it is %s' % override
                          if hits else ''))
     if hits and (not may_collide or reason is None):
         raise Refusal('`%s` collides with a live pull: %s. `--reason` alone never overrides it: '
