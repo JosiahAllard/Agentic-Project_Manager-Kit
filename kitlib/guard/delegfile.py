@@ -41,7 +41,8 @@ What counts as a change (the guard catches honest mistakes, not evasion):
 Two shell forms the edit rules cannot place are judged here for the machine config folder too
 (rules.machine_config, docs/guard.md "Owner machine setup"), each after the list's own check: a
 wildcard write target whose literal folder is or lies in a machine config folder
-(rules.machine_config_folder: <pointer>/.pm-kit, or a .pm-kit folder at a checkout's top), and
+(rules.machine_config_folder: <pointer>/.pm-kit, or a .pm-kit folder at a checkout's top), or
+whose wildcard parts match on disk a path that is or lies in one (glob_config_below), and
 git in the pointer's work tree whose pathspec lands in <pointer>/.pm-kit (rm, mv, restore,
 checkout-index, checkout with paths after --, clean).
 
@@ -138,8 +139,8 @@ def shell_paths(event, ctx, cmd, inv, role):
     a path, a wildcard path that can match the list or a folder above it (glob_reaches), the
     folder a program that writes there runs in (a stand-in, rules.here: tar -x, unzip, curl -O),
     and the paths the command before a | gives a writer that takes them from the pipeline or from
-    xargs (upstream). With none of those, a wildcard target that starts in a machine config
-    folder (glob_config) is refused as machine-config."""
+    xargs (upstream). With none of those, a wildcard target that starts in or can name a machine
+    config folder (glob_config) is refused as machine-config."""
     into = rules.copy_into(cmd, inv)
     where = cmd.cwd_home or cmd.cwd
     config = None                               # (Word, folder): a wildcard in a machine config folder
@@ -173,13 +174,61 @@ def shell_paths(event, ctx, cmd, inv, role):
 
 def glob_config(ctx, w, where, shell):
     """The machine config folder (rules.machine_config_folder) the wildcard write target Word `w`,
-    read from `where`, starts in: its literal folder is that folder or lies in it. None for a word
-    with no wildcard, or one the guard cannot place."""
+    read from `where`, starts in or can name: its literal folder is that folder or lies in it, or
+    a path its parts after that folder match on disk is or lies in it (glob_config_below). None
+    for a word with no wildcard, or one the guard cannot place."""
     text = sh.home_text(w.text, ctx.home, w.dyn)
     if not text or not hubg.has_glob(text):
         return None
-    base = glob_base(ctx, text, where, shell)[0]
-    return rules.machine_config_folder(ctx, base) if base else None
+    base, rest = glob_base(ctx, text, where, shell)
+    if not base:
+        return None
+    return rules.machine_config_folder(ctx, base) or glob_config_below(ctx, base, rest)
+
+
+def glob_config_below(ctx, base, rest):
+    """The machine config folder a path the wildcard parts `rest` match below the folder `base`
+    is or lies in, resolved as FindFirstFile resolves them: a wildcard part (a DOS one as `*`,
+    rules.DOS_WILDCARDS) against the names in each folder reached so far, long or 8.3 short
+    (rules.glob_part), case folded and a leading dot like any other character; a part with none
+    joined as written. Every part is matched, the last too (`rm -r .pm-k*` names the folder); a
+    folder part matches folders only. None when no path it matches is in one."""
+    parts = [x for x in re.split(r'[\\/]', rest) if x and x != '.']
+    level = [base]
+    for i, part in enumerate(parts):
+        found = []
+        pattern = part.lower().translate(rules.DOS_WILDCARDS)
+        wild = hubg.has_glob(pattern)
+        for folder in level:
+            if not wild:
+                found.append(os.path.normpath(os.path.join(folder, part)))
+                continue
+            try:
+                names = os.listdir(folder)
+            except OSError:
+                continue
+            for name in names:
+                path = os.path.join(folder, name)
+                long_name = name.lower()            # the short name is read only when the long one fails
+                if long_name == pattern or fnmatch.fnmatchcase(long_name, pattern) or rules.glob_part(
+                        long_name, rules.short_parts(path, 1)[0], pattern):
+                    found.append(path)
+        for path in found:
+            if config_named(path):
+                folder = rules.machine_config_folder(ctx, path)
+                if folder:
+                    return folder
+        if i < len(parts) - 1:
+            level = [p for p in found if os.path.isdir(p)]
+    return None
+
+
+def config_named(path):
+    """True when `path`, as written or as the filesystem reaches it (jail.real), passes through
+    a folder named as a machine config folder is (kitlib.config.user.DIR_NAME): the cheap test
+    before rules.machine_config_folder, which asks git where the path is."""
+    name = user.DIR_NAME.lower()
+    return any(name in re.split(r'[\\/]', p.lower()) for p in (path, jail.real(path)))
 
 
 def glob_readings(text):

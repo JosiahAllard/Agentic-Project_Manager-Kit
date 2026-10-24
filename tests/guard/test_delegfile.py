@@ -370,6 +370,81 @@ class OwnerDelegations(unittest.TestCase):
         self.assertEqual(d.instead, 'python -m json.tool %s' % rules.quote(self.pm_copy))
 
 
+class FolderWildcards(unittest.TestCase):
+    """A wildcard in a folder part of a write target (delegfile.glob_config) is resolved as
+    Windows would, against the folders on disk: one that can match a machine config folder names
+    it (rule machine-config), one that cannot stays open."""
+
+    CONFIG = 'machine-config'                   # rules.MACHINE_CONFIG
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        self.pointer = None
+        for top in (self.w.wt, self.w.plain):
+            for name in (os.path.join('.pm-kit', 'config.json'), os.path.join('.pm-kit', 'local.json'),
+                         os.path.join('.claude', 'settings.json')):
+                path = os.path.join(top, name)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as fh:
+                    fh.write('{}\n')
+
+    def decide(self, payload, environ):
+        return decide(payload, self.w.ctx(environ=environ, pointer=lambda: self.pointer))
+
+    def assert_config(self, payload_of, label):
+        for environ, sub in SESSIONS:
+            with self.subTest(label, environ=environ, sub=sub):
+                d = self.decide(payload_of(sub), environ)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual((d.verdict, d.rule), ('deny', self.CONFIG), d.reason)
+        d = self.decide(payload_of(False), OWNER[0])
+        self.assertTrue(d is None or d.rule != self.CONFIG, d and d.reason)
+
+    def assert_not_config(self, payload_of, label):
+        for environ, sub in SESSIONS + (OWNER,):
+            with self.subTest(label, environ=environ, sub=sub):
+                d = self.decide(payload_of(sub), environ)
+                self.assertTrue(d is None or d.rule != self.CONFIG, d and d.reason)
+
+    def test_a_star_in_a_folder_part_names_the_config_folder(self):
+        wt = W.fwd(self.w.wt)
+        for name, payload in (
+                ('rm fwd', lambda sub: bash('rm .pm-k*t/config.json', self.w.wt, sub)),
+                ('rm abs fwd', lambda sub: bash('rm %s/.p*/config.json' % wt, self.w.wt, sub)),
+                ('Remove-Item back', lambda sub: ps('Remove-Item .pm-k*t\\config.json', self.w.wt, sub)),
+                ('Remove-Item fwd', lambda sub: ps('Remove-Item .PM*/local.json', self.w.wt, sub))):
+            self.assert_config(payload, name)
+
+    def test_a_question_mark_in_a_folder_part_names_the_config_folder(self):
+        for name, payload in (
+                ('rm fwd', lambda sub: bash('rm .pm-k?t/local.json', self.w.wt, sub)),
+                ('rm back', lambda sub: bash("rm '.pm-?it\\local.json'", self.w.wt, sub)),
+                ('Remove-Item back', lambda sub: ps('Remove-Item .pm-k?t\\local.json', self.w.wt, sub)),
+                ('Set-Content fwd', lambda sub: ps("Set-Content .p?-kit/config.json '{}'", self.w.wt, sub))):
+            self.assert_config(payload, name)
+
+    def test_a_folder_wildcard_reaches_the_pointer_folder(self):
+        self.pointer = self.w.plain
+        plain = W.fwd(self.w.plain)
+        self.assert_config(lambda sub: bash('rm %s/.pm-k*/config.json' % plain, self.w.plain, sub), 'rm')
+        self.assert_config(lambda sub: ps('Remove-Item "%s\\.pm-?it\\config.json"' % self.w.plain,
+                                          self.w.plain, sub), 'Remove-Item')
+
+    def test_a_last_part_wildcard_that_matches_the_config_folder_names_it(self):
+        self.assert_config(lambda sub: bash('rm -rf .pm-k*', self.w.wt, sub), 'rm -rf')
+        self.assert_config(lambda sub: ps('Remove-Item -Recurse .pm-?it', self.w.wt, sub), 'Remove-Item')
+
+    def test_a_folder_wildcard_that_cannot_match_a_config_folder_stays_open(self):
+        for name, payload in (
+                ('other folder', lambda sub: bash('rm .cl*de/settings.json', self.w.wt, sub)),
+                ('other folder ?', lambda sub: ps('Remove-Item .cl?ude\\settings.json', self.w.wt, sub)),
+                ('no such folder', lambda sub: bash('rm .pm-x*/config.json', self.w.wt, sub)),
+                ('deeper', lambda sub: bash('rm sub*/.pm-kit/config.json', self.w.wt, sub)),
+                ('not the folder', lambda sub: bash('rm .pm-kit*.json', self.w.wt, sub))):
+            self.assert_not_config(payload, name)
+
+
 class Matchers(unittest.TestCase):
     """delegfile's inline-code pattern: what it reads as a write of a file."""
 
