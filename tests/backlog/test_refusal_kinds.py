@@ -156,17 +156,12 @@ class GuardSites(unittest.TestCase):
     def test_the_missing_id_guard_raises_not_found(self):
         self.assertEqual(raised_kinds(function(self.plan, 'require')), ['NotFound'])
 
-    def test_a_migrate_over_an_existing_store_raises_refusal(self):
-        fn = function(parse('kitlib/backlog/migrate.py'), '_refuse_existing')
-        self.assertEqual(sorted(set(raised_kinds(fn))), ['Failure', 'Refusal'])
-        self.assertEqual(raised_kinds(fn).count('Refusal'), 2)
-
     def test_a_bad_retarget_path_raises_usage(self):
         fn = function(parse('kitlib/backlog/retarget.py'), 'check_paths')
         self.assertEqual(sorted(set(raised_kinds(fn))), ['Usage'])
 
     def test_every_raise_in_the_verbs_is_one_of_the_four_kinds(self):
-        for rel in ('kitlib/backlog/plan.py', 'kitlib/backlog/migrate.py',
+        for rel in ('kitlib/backlog/plan.py',
                     'kitlib/backlog/retarget.py', 'kitlib/backlog/opener.py',
                     'kitlib/backlog/pull_branch.py'):
             kinds = raised_kinds(parse(rel))

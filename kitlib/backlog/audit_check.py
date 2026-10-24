@@ -50,8 +50,9 @@ OK, FINDINGS, NOT_CHECKED = 0, 1, 2
 # holds them equal).
 BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
 
-# (subject prefix, verb): kitlib.backlog.plan's (`uncite` among them), migrate's, retarget's and
-# store.catch_up's subjects.
+# (subject prefix, verb): kitlib.backlog.plan's (`uncite` among them), retarget's and
+# store.catch_up's subjects, and `migrate: `, the subject of a store's first commit in old store
+# history (the store migration's; kept so that history stays audited).
 SUBJECTS = (
     ('closes ', 'close'), ('retires ', 'retire'), ('deletes ', 'delete'),
     ('migrate: ', 'migrate'),

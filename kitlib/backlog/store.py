@@ -1357,15 +1357,14 @@ def default_store_refusal(root):
             % (head, named, pm_root.replace('\\', '/'), opt_in))
 
 
-def open_backend(root, cfg, fetch=True, store=None, clean=False):
-    """The backend `.kit.json` "backlog".store names (absent: the schema default, `ref`), or
-    `store` when given (`migrate --to`): `ref` the hidden ref, `branch` the `backlog` branch,
-    `main` docs/backlog in `root`, any other path that folder in `root`. `clean`: a folder
-    store's MainBackend writes over no uncommitted change (Dirty); a ref store ignores it.
-    The `ref` store reached by the default alone (neither `store` nor `.kit.json` names it) is
-    read-only: its publish refuses (default_store_refusal)."""
-    implicit = not store and cfg.written('backlog', 'store') is None
-    store = store or cfg.section('backlog')['store']
+def open_backend(root, cfg, fetch=True, clean=False):
+    """The backend `.kit.json` "backlog".store names (absent: the schema default, `ref`): `ref`
+    the hidden ref, `branch` the `backlog` branch, `main` docs/backlog in `root`, any other path
+    that folder in `root`. `clean`: a folder store's MainBackend writes over no uncommitted change
+    (Dirty); a ref store ignores it. The `ref` store reached by the default alone (`.kit.json`
+    does not name it) is read-only: its publish refuses (default_store_refusal)."""
+    implicit = cfg.written('backlog', 'store') is None
+    store = cfg.section('backlog')['store']
     remote = cfg.remote
     if store == 'ref':
         return RefBackend(root, remote, STORE_REF, STORE_REF, fetch=fetch, implicit=implicit)
