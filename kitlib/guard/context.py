@@ -511,7 +511,6 @@ class Ctx(object):
         pm = self.pm_repo_pointer()
         if not isinstance(pm, str) or not _placed(pm):
             return
-        pm = os.path.normpath(pm)
         data, why = _tolerant_read(os.path.join(pm, kuser.DIR_NAME, kuser.FILE_NAME))
         if not why:
             _ledger_keys(data, pm, out)
