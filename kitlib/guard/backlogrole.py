@@ -26,6 +26,7 @@ from kitlib.git import repo
 
 from . import commands as cm
 from . import jail
+from . import paths
 from . import rules
 
 ROLE_RULE = 'backlog-role'
@@ -309,7 +310,7 @@ def own_form(ctx, cmd, argv, who, root, here, pairs):
         at = wt
     stores = [root]
     pm = live_store(wt or root)
-    if pm and os.path.normcase(os.path.normpath(pm)) != os.path.normcase(os.path.normpath(root)):
+    if pm and paths.norm(pm) != paths.norm(root):
         stores.append(pm)
     for store in stores:
         try:
