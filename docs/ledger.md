@@ -96,9 +96,9 @@ Tests: `tests/ledger/test_safepath.py`.
 
 The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
-- `ledger_dir` (absolute): the folder of the per-repository files and the standing digest ("Files"). It needs `ledger_repos`.
+- `ledger_dir` (in the PM repo config, relative to the PM repo root or absolute): the folder of the per-repository files and the standing digest ("Files"). It needs `ledger_repos`.
 - `ledger_repos`: the repository names. With `ledger_dir`, each name's file; without it, the repo columns `add --repo` accepts besides `all`, and unset any lower-case name is accepted. A name outside the list is a usage error, and `check` reports an entry with one.
-- `ledger_path` (absolute): the one-file ledger, or with `ledger_dir` the frozen one.
+- `ledger_path` (in the PM repo config, relative to the PM repo root or absolute): the one-file ledger, or with `ledger_dir` the frozen one.
 
 ## A new ledger
 

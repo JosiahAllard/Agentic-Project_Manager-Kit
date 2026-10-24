@@ -151,7 +151,7 @@ def folders(home=None):
     except ConfigError:
         return DEFAULT_FOLDERS, ('WARNING: machine config %s could not be read, so only '
                                  'user-profile paths were searched - run tools/preflight.py to see '
-                                 'what it refuses' % kuser.DISPLAY)
+                                 'what it refuses' % '<PM repo>/.pm-kit/config.json')
 
 
 def load_config(root, home=None):
