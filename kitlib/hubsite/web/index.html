@@ -1074,14 +1074,15 @@ button.danger{color:var(--warn)}
     { const refs = refsLine(t.refs, "Refs: ", ", "); if (refs) body.append(refs); }
     if (mine) {
       const urg = el("button", {class:"link", type:"button", text: t.urgent ? "Not urgent" : "Mark urgent"});
-      // Painted at once. The button stays disabled only until its own POST answers, not while the lists reload: the edit
-      // is pinned to this card's version, so a second click before the answer would be refused (409) on its own.
+      // Painted at once. The button stays disabled once sent: the edit is pinned to this card's version, so a second click
+      // before the redraw would be refused (409) on its own. It is live again only if the write failed (the undo), and a
+      // saved write redraws the card with the new version.
       let flag = !!t.urgent;
       urg.addEventListener("click", () => {
         const on = !flag, card = urg.closest("article");
         const paint = v => { flag = v; urg.textContent = v ? "Not urgent" : "Mark urgent"; if (card) card.classList.toggle("urgent", v); };
         paint(on); urg.disabled = true; status.className = "status"; status.textContent = "";
-        writeQuick("/todos/" + seg(t.id) + "/edit", { urgent: on, ...pin(t) }, () => paint(!on), status).then(() => { urg.disabled = false; });
+        writeQuick("/todos/" + seg(t.id) + "/edit", { urgent: on, ...pin(t) }, () => { paint(!on); urg.disabled = false; }, status);
       });
       body.append(el("div", {class:"act"}, urg, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.todoEdit.set(t.id, { version: t.version }); render(); }}), delButton("/todos/" + seg(t.id) + "/delete", status, t.version)));
     } else if (t.status === "open") {

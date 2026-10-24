@@ -1794,6 +1794,16 @@ class QuickWriteTest(unittest.TestCase):
         self.assertEqual((got["back"], got["urgent"], got["off"]), (True, False, False))
         self.assertIn("Not saved: no space.", got["card"])
 
+    def test_mark_urgent_stays_disabled_after_its_post_answers_until_the_card_is_redrawn(self):
+        got = dom(HOLD % r"/\/todos\/T-1\/edit$/" + """
+            await start();
+            const b = button($("#todo-T-1"), "Mark urgent");
+            await click(b);
+            held[0](ok()); await settle();                       // answered, the lists not yet read with the new version
+            return { off: b.disabled };                          // a click now would be pinned to the old version
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, {"off": True})
+
     def test_mark_read_repaints_first_and_is_put_back_on_failure(self):
         lists = {"inbox": {"I-1": {"title": "a reply", "text": "body", "read": False, "at": NOW}}}
         got = dom(HOLD % r"/\/inbox\/I-1\/read$/" + """
