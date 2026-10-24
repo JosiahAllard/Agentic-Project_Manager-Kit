@@ -256,6 +256,17 @@ SECTIONS = {
         'scan': Field(Strs, ['*'], 'globs scanned'),
         'fallback_vars': Field(Strs, [], 'environment variables a machine path may fall back to'),
     },
+    # maint_lint.gate_time (kitlib.maintlint.gatetime, docs/maint-lint.md "Gate time").
+    'maint_lint': {
+        'gate_time': Field(Obj({
+            'prefix': Field(Str(pattern=r'[A-Z][A-Z0-9-]*', what='a record id prefix'), None,
+                            'a plain maint_lint run files <prefix>-GATE-TIME-<STEP>-<YYYYMMDD> for a gate step whose median time is over bound_s; unset: nothing is filed'),
+            'bound_s': Field(Int(1, 86400), 900, 'seconds a gate step\'s median time (full gates) may reach; unset: 900'),
+            'session': Field(Str(pattern=r'[a-z][a-z0-9-]*', what='a session name'), None,
+                             'the session the filed record carries'),
+        }, what='{prefix, bound_s, session}'), None,
+            'the gate-time check of tools/maint_lint.py (docs/maint-lint.md "Gate time"): bound_s (1 to 86400, default 900) the seconds a gate step\'s median time over full gates may reach; prefix the id prefix of the record a plain run files for a step over it (unset: none is filed); session the session that record carries; unset: the check runs at 900 s and files nothing'),
+    },
     'pieces': {},
     'preflight': {
         'engines': Field(Strs, [], 'process-name prefixes listed as running engines'),

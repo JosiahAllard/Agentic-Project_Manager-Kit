@@ -1,9 +1,10 @@
 # Maintenance lint
 
-`tools/maint_lint.py` lints one repository's upkeep, read-only: its backlog store, its worktrees
-and the machine's decision ledger. The logic is `kitlib/maintlint/`. It edits no record, no ledger
-entry, no worktree and no git ref. Every finding prints the command that fixes it, and nothing
-runs that command.
+`tools/maint_lint.py` lints one repository's upkeep: its backlog store, its worktrees, the
+machine's decision ledger and its gate's step times. The logic is `kitlib/maintlint/`. It writes
+only the gate-time record, in a plain run ("Gate time"); it edits no record, no ledger entry, no
+worktree and no git ref. Every finding prints the command that fixes it, and nothing runs that
+command.
 
     python tools/maint_lint.py [-C DIR] [--dry-run] [--result FILE] [--out FILE]
 
@@ -141,7 +142,34 @@ Their text carries the numbers only.
 No entry id and no entry text leave the module. Dropping the module drops the counts, their
 findings and nothing else.
 
+## Gate time
+
+`kitlib/maintlint/gatetime.py`, in the code checkout (as "Path checks"). The timings are the
+steps of the repository's gate-OK records (`kitlib/records/gate_ok.py`,
+`<git common dir>/kit-gate-ok/<commit>.json`) of full gates only (`mode_of` "full": `gate.py
+--full` and full landings); a selected or docs-only gate times only part of a step. A sample is
+a step whose result is pass or warn with seconds above 0. Per step, the newest 10 samples
+(`WINDOW`) that ended in the last 14 days (`DAYS`) are taken; with 5 or more (`MIN_SAMPLES`),
+a median over `.kit.json` `"maint_lint".gate_time.bound_s` (default 900, `BOUND_S`;
+docs/kit-json.md) is a `gate-time` finding whose target is the step name. Fewer samples is a
+note; no record folder, or no full record in 14 days, is a NOT CHECKED note.
+
+The one write in maint_lint: after the page is published, a plain run files a backlog record for
+each `gate-time` finding, through the store `kitlib.dailyfull.file.open_filing_store` opens (the
+repository's, or the PM data branch's when that is the implicit default). Its id is
+`<prefix>-GATE-TIME-<STEP>-<YYYYMMDD>`, its ref `maint-lint gate-time <step>`, its scope `none`,
+unpriced (the `unpriced` check then lists it). Nothing is filed while a live record of that step
+(that ref, or an id beginning `<prefix>-GATE-TIME-<STEP>-`) is in the store, in any state. The
+date in the id lets the next run over the bound file again once that record is closed: the store
+refuses an id it closed before. With no `"maint_lint".gate_time.prefix`, the finding shows and
+nothing is filed. Each outcome, and each store or config refusal, is one `gate time:` line, never
+an error. `--dry-run` files nothing.
+
 ## Known limits
+
+- Gate-OK records are written for passes only, so a slow gate that failed is not a sample.
+- After a fix lands, the window still holds the slower samples until newer full gates replace
+  them; a record closed before that may be filed again on the next run.
 
 - An A tree is reported only when it has non-empty claims. An empty A tree whose tip is on the
   base's first-parent chain is skipped by the nightly sweep as fresh
