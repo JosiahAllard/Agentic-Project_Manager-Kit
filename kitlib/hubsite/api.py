@@ -87,6 +87,10 @@ the repo matched as above). The answer carries
 time to the minute (None when off). GET schedules (ANY) lists them, with `tick`: {last, running,
 every_s}, last when the tick was last seen (Api's tick_seen, default tick_last_seen: the time of
 its state file) and running false when that is None or more than TICK_STALE_S before the clock.
+Each listed schedule also carries `last_outcome` (the tick's record for it: started, skipped, seen
+or failed; None for none), `last_run` (that record's `at` when it is `started`, else None) and
+`next_due` (the first slot after the clock by due's rule, naive local time to the minute; None when
+off), read from Api's tick_state, default tick_run_state; none is stored.
 Nothing here runs a task: a tick outside the hub reads the list.
 
 Findings. GET findings (ANY) lists the maintenance lint's last findings (the `findings` view),
@@ -217,7 +221,9 @@ this caller may change (lock: the LOCK_WRITE routes, strong: the APPROVER ones t
 one is false, why (WRITES_WHY); a hub the lock takes for an agent may change nothing.
 GET lock/view gives the view; `remote` is true only for the tunnel listener's calls (via
 TUNNEL_VIA), whose warnings and refusals that can name a file are fixed phrases
-(model.REMOTE_SAYS, lockdoor.REMOTE_SAYS); every listener gets the same allow-listed keys. GET
+(model.REMOTE_SAYS, lockdoor.REMOTE_SAYS); every listener gets the same allow-listed keys. The view
+carries `queue_items` (the line behind the runs, with each one's position and why it waits) and its
+finished runs carry `slug`; the action hub page's Schedule view (web/index.html) draws them. GET
 lock/stats takes days (1 to 366), since and until (ISO times with their offset). GET lock/wait
 takes since (a lock revision; default the one now) and timeout (seconds, at most WAIT_MAX_S) and
 answers the view plus `changed` once the lock's revision differs from since, or at the timeout
@@ -244,7 +250,8 @@ Push status. GET snapshot carries `push`: null when this hub runs no push-notifi
 else {"state", "last", "undelivered"} from PushWorker.status (kitlib.hubsite.push docstring
 "Status"): state 'up' or 'down', last the latest delivery to the PM's state (null before the first),
 undelivered the number of items some recipient has not yet had a written try of. The worker
-sets Api.push_status when it is made; the snapshot reads it on the request's thread.
+sets Api.push_status when it is made; the snapshot reads it on the request's thread. GET health
+carries the same `push` (Api.push_seen), so a hub with no worker or a dead one shows on health.
 
 Watcher. GET snapshot and GET health carry `watcher`: null when this hub runs no push worker,
 else {"state", "age"} from PushWorker.watcher_status (kitlib.hubsite.push docstring "Watcher"):
@@ -561,12 +568,14 @@ class Api(object):
     `lock` is the machine lock's door or None ("Machine lock"). `schedule_repos()` gives the
     machine config's launcher.repos as [(label, main checkout, name)] (default:
     launcher_checkouts), `tick_seen()` the ISO time the automatic tasks' tick was last seen or
-    None (default: tick_last_seen); both are read on each use ("Schedules")."""
+    None (default: tick_last_seen), `tick_state()` the tick's records by schedule key (default:
+    tick_run_state); all are read on each use ("Schedules")."""
 
     def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
                  approval_key=None, checkout=None, lock=None, repo_name=None,
-                 schedule_repos=None, tick_seen=None):
+                 schedule_repos=None, tick_seen=None, tick_state=None):
         self.store = store
+        self.tick_state = tick_state or tick_run_state
         self.schedule_repos = schedule_repos or launcher_checkouts
         self.tick_seen = tick_seen or tick_last_seen
         self.views = views
@@ -1807,8 +1816,51 @@ def _tick_status(api):
     return {'last': last, 'running': running, 'every_s': tick_every_s()}
 
 
+def tick_run_state():
+    """Api's default tick_state: the tick's records by schedule key (kitlib.autotasks.tick.
+    read_state), {} when there is none or the file cannot be read."""
+    from kitlib.autotasks import tick
+    from kitlib.config import ConfigError
+    try:
+        return tick.read_state(os.path.join(tick.state_dir(), tick.STATE_NAME))[0]
+    except (OSError, ConfigError):
+        return {}
+
+
+def _next_due(fields, now):
+    """The first slot strictly after `now` (naive local) of a schedule by kitlib.autotasks.due's
+    rule, as naive local ISO text to the minute. None when off or not a schedule due can place."""
+    from kitlib.autotasks import due
+    at = due.parse_at(fields.get('at'))
+    if fields.get('cadence') not in (due.DAILY, due.WEEKLY) or at is None or now is None:
+        return None
+    slot = due.last_slot(fields['cadence'], at, fields.get('days'), now)
+    if slot is None:
+        return None
+    for _ in range(9):
+        slot += datetime.timedelta(days=1)
+        if slot > now and due.last_slot(fields['cadence'], at, fields.get('days'), slot) == slot:
+            return slot.isoformat(timespec='minutes')
+    return None
+
+
 def schedules_list(api, req):
-    return {'items': api.items('schedules', req), 'tick': _tick_status(api)}
+    from kitlib.autotasks import due, tick
+    try:
+        state = api.tick_state()
+    except (OSError, ValueError):
+        state = {}
+    now = due.local(api.clock())
+    items = []
+    for d in api.items('schedules', req):
+        rec = state.get(tick.key(d))
+        rec = rec if isinstance(rec, dict) else {}
+        what = rec.get('what') if isinstance(rec.get('what'), str) else None
+        items.append(dict(d, last_outcome=what,
+                          last_run=rec.get('at') if what == tick.STARTED
+                          and isinstance(rec.get('at'), str) else None,
+                          next_due=_next_due(d, now)))
+    return {'items': items, 'tick': _tick_status(api)}
 
 
 def _first_run(fields):
@@ -2078,7 +2130,7 @@ def health(api, req):
         out.update(extra)
     out.pop('store', None)
     out.update(ok=True, version=API_VERSION, revision=api.store.revision, unavailable=missing,
-               watcher=api.watcher_seen())
+               watcher=api.watcher_seen(), push=api.push_seen())
     if req.role == OWNER:           # where the store is on this machine is the owner's to know
         out['store'] = api.store.root
     return out

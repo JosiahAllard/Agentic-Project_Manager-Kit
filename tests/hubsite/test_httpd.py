@@ -491,7 +491,7 @@ class ApiCase(httpfix.ListenerCase):
                                     approval_key=lambda: roles.KEY, checkout=lambda r: git.root,
                                     lock=roles.LockDoor(),
                                     schedule_repos=lambda: [('r', git.root, 'r')],
-                                    tick_seen=lambda: None))
+                                    tick_seen=lambda: None, tick_state=lambda: {}))
         for route in api.ROUTES:
             for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
                 seed, body, query = roles.row(route, role)
@@ -525,7 +525,8 @@ class ApiCase(httpfix.ListenerCase):
 
     def test_a_missing_view_is_unavailable_never_a_500(self):
         lis = self.listener(api.Api(self.store, views=None, clock=httpfix.CLOCK,
-                                    schedule_repos=lambda: [], tick_seen=lambda: None))
+                                    schedule_repos=lambda: [], tick_seen=lambda: None,
+                                    tick_state=lambda: {}))
         for name in api.VIEWS:
             with self.subTest(view=name):
                 r = get(lis.port, '%s/%s' % (BASE, name), self.agent)
@@ -544,7 +545,8 @@ class ApiCase(httpfix.ListenerCase):
             def backlog(self, repo='', state='', fresh=False):
                 raise OSError('cannot read D:\\secret\\place')
         lis = self.listener(api.Api(self.store, views=Raising(), clock=httpfix.CLOCK,
-                                    schedule_repos=lambda: [], tick_seen=lambda: None))
+                                    schedule_repos=lambda: [], tick_seen=lambda: None,
+                                    tick_state=lambda: {}))
         r = get(lis.port, BASE + '/backlog', self.owner)
         self.assertEqual((r.status, r.code()), (503, 'unavailable'))
         self.assertNotIn(b'secret', r.body)

@@ -31,7 +31,7 @@ Upkeep (Lint findings, Automatic tasks). A count sits at the right edge of its e
 for what waits on you: any pending approval, urgent question or to-do. Lint findings shows a dash until
 the page has read `GET /api/v1/findings` once (at the start and after each wait wake, without drawing the
 section), then the number of open findings. On a phone the sidebar becomes a bar of five tabs: Home,
-Questions, Approvals, Schedule (the link to the machine schedule) and More, a page of the other sections
+Questions, Approvals, Schedule and More, a page of the other sections
 with their counts (`#more`; a wider window opens Home instead). Between 761 and 1100 pixels the detail
 pane stacks under the list instead of beside it.
 
@@ -79,24 +79,30 @@ pane stacks under the list instead of beside it.
   effort) and Lock notices. Usage and Agents are rows (an account with its 5-hour and weekly
   percentages, an agent with its model and effort); a row opens the account's meters or the agent's
   definition in the detail pane. Lock notices stay a list.
-- **Schedule.** A link in the sidebar's Projects group (and the phone's Schedule tab) opens `/lock.html`, the machine lock's own page
-  ("Machine lock routes" below): what holds the PC's slots now, a week of half hours (back two
-  weeks, on four), the holds, runs and queue, game mode, the division, and what ran over 1, 7, 30
-  or 90 days. It follows the lock as it changes. Times are the PC's local time, labelled with its
-  zone, and times you type are read in that zone. The changes are:
-  - Pick a window on the grid (the half hour it starts in, then the one it ends in), then Reserve
-    the whole machine or half.
-  - New hold takes typed times (`18:00`, `2026-10-21 18:00`, `+2h`) for the whole machine, half or
-    named slots.
-  - A hold's Edit, and Release (asked twice).
-  - A run's End run (asked twice), and a waiting run's Move to top.
-  - Game mode on or off, and the games list.
-  - The division's fields, or its defaults. The fields hold only what the owner set; a blank one
-    is the default (shown as a hint) and stays blank on save, as in the lock window.
+- **Schedule.** A section of its own (the sidebar's Projects group and the phone's Schedule tab; the
+  hash `#schedule`), drawn from `GET /lock/view` ("Machine lock routes" below), with three tabs:
+  - Now lists the runs now (each with a progress line against the time expected, and a Late chip
+    past it), the line behind them (Next up, from `queue_items`), today's holds, and a closed
+    History row that opens the finished runs, filterable to those that failed or were stopped. A
+    run's detail has End run (asked twice) and a waiting run's has Move to top. The sidebar count
+    is the number of runs now.
+  - Week is the week of half hours (back two weeks, on four). Reserve time on a card opens it in
+    pick mode: the half hour a window starts in, then the one it ends in, then Reserve the whole
+    machine or half, with a note.
+  - Holds lists the owner's holds and the agents' holds.
 
-  A control this login may not use is disabled and says why: holds and the division need the
-  strong owner; a hub started under an agent session changes nothing
-  (`tests/hubsite/test_lock_page.py`, `WriteTest`).
+  One watcher reads the lock for every view (the Home machine line, the count, this section): it
+  waits on `GET /lock/wait`, stops while the browser tab is hidden and reads again when shown,
+  backing off like the other waits. Home's machine line links to `#schedule`. The Schedule view has
+  one link, "Machine settings (game mode, division, holds, stats)", to `/lock.html`, which stays served
+  with every other control (hold editing, game mode, the division, stats). Times are the PC's local
+  time and a reserved window is sent in UTC.
+
+  A control this login may not use is disabled and says why (a "Read only" line gives the reason):
+  holds and the division need the strong owner; a hub started under an agent session changes
+  nothing (`tests/hubsite/test_page.py`, `ScheduleTest`; `tests/hubsite/test_lock_page.py`,
+  `WriteTest`). The lock routes themselves stay the owner's: an agent is refused them
+  (`tests/hubsite/test_api_roles.py`, `tests/hubsite/test_lockdoor.py`).
 
 In the sidebar's foot (when the hub was read, then the PM line and the push line) a line says whether a PM is listening: "A PM is listening." while a PM holds a
 `wait` open, else "Push delivery reaches the PM." while the snapshot's `push` state is `up` and
@@ -115,20 +121,36 @@ at the top.
 Links ending `#inbox`, `#approvals`, `#more`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
 repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
-("schedules/") with the tick's last run, and sets, edits or turns one off.
+("schedules/") under "Schedules", and the two PC-set sweeps (`worktree-sweep`, `agent-temp-sweep`, which
+machine setup registers with Windows) under "Set on the PC": read-only, with a lock, and a plain row with no times
+where the hub holds no schedule doc for one. A schedule's card shows its last run and next due (`last_run`,
+`next_due`; a failed start is a chip, and a record of `skipped` reads "skipped", not "never"). It is edited with a segmented Off / Daily / Weekly control, seven day chips
+(weekly only) and a 24-hour time; the sweeps are not offered by the New schedule form.
 
 Lint findings (the Upkeep group, and the More page on a phone) lists the maintenance lint's findings, read from `GET
 /api/v1/findings` and `GET /api/v1/finding_marks` each time the section is shown and after each
 mark (`renderFindings` and `findingCard` in `kitlib/hubsite/web/index.html`). A row gives the check,
-the repo, the target and the finding's text, with its age as context; a marked one stays listed with
-a Passed on, Dismissed or Done tag. Above the rows, each repo's last run gives its ledger as counts,
+the repo, the target and the finding's text, with its age as context. The rows come in three groups,
+each headed with its count and left out when empty: New this run (the lint's `new` flag on the
+finding: its fingerprint was not in that repo's previous run, so it is false on a repo's first run
+and true again for a finding that went away and came back), Still open, and Handled (the marked
+ones, muted, each with a Passed on, Dismissed or Done tag). Above the rows, each repo's last run gives its ledger as counts,
 and "last run skipped: <reason>, <time>" only when the server names a skip later than that run
 ("finding_marks/<fingerprint>"). The card of an unmarked finding offers:
 
-- for a check that names a record, a button that opens that record's page, named for what is done
-  there: Set priority (`unpriced`), Unblock (`keyword-hold`, `dead-blocker`, `answered-question`),
-  Edit scope (`scope-path-gone`, `body-path-gone`, `file-moved`) or Retire (`duplicate`, one per
-  record, `dead-pull`, `landed-still-pulled`) (`FINDING_ACTS`);
+- for a check that names a record, a button named for what is done, which runs in the detail pane
+  without leaving the section: Set priority (`unpriced`), Unblock (`keyword-hold`, `dead-blocker`,
+  `answered-question`), Edit scope (`scope-path-gone`, `body-path-gone`, `file-moved`) or Retire
+  (`duplicate`, one per record, `dead-pull`, `landed-still-pulled`) (`FINDING_ACTS`, `findingAct`).
+  The panel reads `GET records/{repo}/{id}` for the fields and version, then calls the existing owner
+  routes (edit, unblock, delete): Set priority and Edit scope `POST .../edit` with the version read
+  (`changes` = `priority`, or `scope` one path per line); Unblock `POST .../unblock` with the
+  reason (and `on`, when the record has several blockers); Retire `POST .../delete` with the reason
+  and the record's id typed again (the button waits for both). Unblock and Retire take no version, so
+  the panel reads the record again first and refuses when its version moved. The ruling id is asked
+  for only when the store's refusal names one, and a refusal or conflict shows in the panel in the
+  store's words. A done action leaves the finding listed until the next lint run; an "Open <id>"
+  button beside it opens the record page;
 - Pass on: an act note to the PM with the note field's text (prefilled as the server would write
   it; unchanged, the server writes it), queued in To PM like any note, then the mark `passed_on`. A
   mark that fails after the note was taken is retried by Pass on without a second note;
@@ -427,7 +449,9 @@ It is not the store's git push (the `push` setting).
   at once. The snapshot and `GET /api/v1/health` also carry `watcher`: null with no worker, else
   `PushWorker.watcher_status()`, `{"state": "up"|"down"|"none", "age": <seconds or null>}` at the
   worker's latest read (a status that raises is `down` with a null age). The health answer
-  through the tunnel leaves it out ("Serving it").
+  through the tunnel leaves it out ("Serving it"). `GET /api/v1/health` also carries `push`, the
+  snapshot's value from `Api.push_seen`: null with no worker, else `{"state", "last", "undelivered"}`
+  (`state` `down` once the worker thread has ended or its status raises).
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
   joins it after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take
   (Claude: `peer.WRITE_TIMEOUT_S` plus the helper's reap and pump joins), so the last outbox
@@ -625,7 +649,12 @@ starts at the first tick at or after it, up to about 15 minutes later. `tick.las
 its offset; the page shows `first_run` as it is and says it is the hub machine's time. `GET /api/v1/schedules` (anyone) lists them,
 filtered by `repo` like every list, with `tick`: {last, running, every_s}: when the tick was last
 seen, whether that is recent enough to call it running, and its period in seconds
-(`kitlib.hubsite.api` "Schedules").
+(`kitlib.hubsite.api` "Schedules"). Each listed schedule also carries three derived fields,
+never stored: `last_outcome`, the tick's record for it (`started`, `skipped`, `seen` or `failed`,
+from the tick's state file through `Api.tick_state`, default `tick_run_state`; null for none);
+`last_run`, that record's time when it is `started` (null otherwise, so a `failed` record is no
+run); and `next_due`, the first slot after now by `kitlib.autotasks.due`'s rule, in the hub
+machine's local time like `first_run` (null when off).
 
 ## finding_marks/<fingerprint>
 The owner's mark on one maintenance-lint finding (docs/maint-lint.md), so it stops showing:
@@ -864,7 +893,9 @@ the source; the server's door to the lock is `kitlib/hubsite/lockdoor.py`, made 
   read. The lock MCP server keeps no write path, by the owner's decision.
 - `lock/view` answers `{lock_revision, view, writer, writes}`: the schedule window's view as JSON
   (`kitlib.lockui.model.to_json`): holds, runs, the strip, lanes, details, cores, memory,
-  warnings, the game slots and the CPU division. One allow-list of keys serves both
+  warnings, the game slots and the CPU division. `queue_items` is the line behind the runs (id,
+  position, repo, slug, kind, what it needs, estimated start, why it waits) and each finished run in
+  the strip carries its `slug`. One allow-list of keys serves both
   listeners: no pid, process tree, log path, session, store folder or run note is in it.
 - `lock/stats?days=N&since=T&until=T` is `kitlib.lock.api.stats`: `days` 1 to 366, the times ISO
   with their offset; a bad one is 400 `invalid` naming the field.

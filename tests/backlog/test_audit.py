@@ -18,6 +18,7 @@ from kitlib.backlog import audit_check
 from kitlib.backlog import opener
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
+from kitlib.backlog import roles
 from kitlib.backlog import store as smod
 from tests import inproc
 from tests.backlog.helpers import ADD_FLAGS, kit_json_ref
@@ -301,8 +302,29 @@ class Check(unittest.TestCase):
     def test_a_subject_no_verb_wrote_is_unknown(self):
         self.assertIsNone(audit_check.verb_of('records'))
         for subject, verb in (('closes X: landed 1', 'close'), ('backlog: park X on Q-1', 'set-status'),
-                              ('backlog: pull X onto b', 'pull'), ('migrate: docs/backlog/*.md', 'migrate')):
+                              ('backlog: pull X onto b', 'pull'), ('migrate: docs/backlog/*.md', 'migrate'),
+                              ('backlog: park X', 'set-status'),
+                              ('backlog: re-park X with no question (was Q-1)', 'set-status'),
+                              ('backlog: uncite 3 cite(s) in 2 record(s)', 'uncite')):
             self.assertEqual(audit_check.verb_of(subject), verb)
+
+    def test_an_uncite_change_is_read_as_its_apply(self):
+        # an uncite commit is the --apply, never the dry run (which writes nothing)
+        self.assertEqual(audit_check._given('uncite', None, None, None), {'apply': True})
+
+    def test_a_write_subject_no_row_names_is_unknown(self):
+        # a store commit whose subject reads as a verb roles.py has no row for sorts to no rows:
+        # a forged commit with that subject must not pass unflagged
+        self.add()
+        ctx = opener.open_store(self.repo.root, fetch=False)
+        ctx.store.write(lambda snap: smod.Change(
+            {'FOO': snap.get('FOO').text + '\nforged line\n'},
+            'backlog: uncite 1 cite(s) in 1 record(s)'))
+        rowless = {n: r for n, r in roles.ACTIONS.items() if 'uncite' not in r.verbs}
+        with mock.patch.object(roles, 'ACTIONS', rowless):
+            r = self.report(entries=[])
+        self.assertEqual(kinds(r), ['UNKNOWN'])
+        self.assertIn(' uncite rows=none ', r.findings[0].text)
 
     def run_check(self, *args):
         return inproc.run_main(AUDIT.main, ['-C', self.repo.root, '--no-fetch'] + list(args),

@@ -311,7 +311,7 @@ class RolesCase(unittest.TestCase):
         return store, api.Api(store, views=Views(), clock=CLOCK, approval_key=lambda: KEY,
                               checkout=lambda repo: GIT[0].root, lock=LockDoor(),
                               schedule_repos=lambda: [('r', root, 'r')],
-                              tick_seen=lambda: None), doc_id
+                              tick_seen=lambda: None, tick_state=lambda: {}), doc_id
 
     def test_every_route_has_a_role_and_a_row(self):
         self.assertTrue(api.ROUTES)

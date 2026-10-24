@@ -2720,6 +2720,22 @@ class PushStatusTest(ApiCase):
         down = {'state': 'down', 'age': None}
         self.assertEqual(self.seen(), (down, down))
 
+    # GET health carries the same push value as the snapshot
+    def test_health_push_is_null_with_no_worker(self):
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.assertIsNone(self.ok('GET', '/health', OWNER)['push'])
+
+    def test_health_push_is_up_with_a_running_worker(self):
+        self.run_worker()
+        want = {'state': 'up', 'last': None, 'undelivered': 0}
+        self.assertEqual(self.ok('GET', '/health', AGENT)['push'], want)
+        self.assertEqual(self.ok('GET', '/health', OWNER)['push'], self.status())
+
+    def test_health_push_is_down_when_the_worker_died(self):
+        self.run_worker()
+        self.assertTrue(self.worker.stop(5))
+        self.assertEqual(self.ok('GET', '/health', OWNER)['push']['state'], 'down')
+
 
 class PushedRouteTest(RouteCase):
     """A push written to a session keeps its items routed to it for the ack window, with no wait
@@ -2763,8 +2779,9 @@ class ScheduleTest(ApiCase):
         # the machine config's launcher.repos as kitlib.autotasks.tick.launcher_repos gives it
         self.launcher = [('kit', 'C:\\checkouts\\Kit', 'Kit'), ('alpha', 'C:\\checkouts\\Alpha', 'Alpha')]
         self.seen = None
+        self.state = {}         # the tick's records by schedule key, as tick.read_state gives them
         self.api = api.Api(self.store, clock=CLOCK, schedule_repos=lambda: list(self.launcher),
-                           tick_seen=lambda: self.seen)
+                           tick_seen=lambda: self.seen, tick_state=lambda: self.state)
 
     def body(self, **kw):
         b = {'task': 'maint-lint', 'repo': 'Kit', 'cadence': 'daily', 'at': '04:00'}
@@ -2973,6 +2990,65 @@ class ScheduleTest(ApiCase):
         with mock.patch.object(extras, 'AUTO_EVERY_MINUTES', 7):
             self.assertEqual(self.ok('GET', '/schedules', OWNER)['tick']['every_s'], 7 * 60)
         self.assertGreater(api.TICK_STALE_S, 2 * api.tick_every_s())
+
+    def test_get_gives_each_schedule_its_last_run_and_outcome_from_the_tick(self):
+        self.ok('POST', '/schedules', OWNER, self.body())
+        self.ok('POST', '/schedules', OWNER, self.body(task='worktree-sweep'))
+        self.ok('POST', '/schedules', OWNER, self.body(task='agent-temp-sweep'))
+        self.state = {
+            'maint-lint-Kit': {'at': '2026-01-04T04:00:09', 'what': 'started', 'slot': 'x'},
+            'worktree-sweep-Kit': {'at': '2026-01-04T05:00:00', 'what': 'failed', 'why': 'boom'},
+            'stray': {'at': '2026-01-04T05:00:00', 'what': 'started'}}
+        got = {i['id']: i for i in self.ok('GET', '/schedules', AGENT)['items']}
+        self.assertEqual((got['maint-lint-Kit']['last_run'], got['maint-lint-Kit']['last_outcome']),
+                         ('2026-01-04T04:00:09', 'started'))
+        # a failed record is no run: the outcome says why there is none
+        self.assertEqual((got['worktree-sweep-Kit']['last_run'],
+                          got['worktree-sweep-Kit']['last_outcome']), (None, 'failed'))
+        self.assertEqual((got['agent-temp-sweep-Kit']['last_run'],
+                          got['agent-temp-sweep-Kit']['last_outcome']), (None, None))
+        # derived, never stored
+        self.assertNotIn('last_run', self.store.get('schedules', 'maint-lint-Kit'))
+        self.assertNotIn('next_due', self.store.get('schedules', 'maint-lint-Kit'))
+
+    def test_get_gives_each_schedule_its_next_due_slot(self):
+        self.api.clock = lambda: '2026-01-05T10:00:00'      # a Monday
+        cases = [
+            ({'at': '11:00'}, '2026-01-05T11:00'),
+            ({'at': '09:00'}, '2026-01-06T09:00'),
+            ({'at': '10:00'}, '2026-01-06T10:00'),           # strictly after now
+            ({'cadence': 'weekly', 'days': ['Mon'], 'at': '10:00'}, '2026-01-12T10:00'),
+            ({'cadence': 'weekly', 'days': ['Wed', 'Sun'], 'at': '08:00'}, '2026-01-07T08:00'),
+            ({'cadence': 'weekly', 'days': ['Mon', 'Fri'], 'at': '10:01'}, '2026-01-05T10:01'),
+            ({'cadence': 'off'}, None),
+        ]
+        for change, due_at in cases:
+            with self.subTest(change=change):
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                self.ok('POST', '/schedules', OWNER, self.body(**change))
+                item = self.ok('GET', '/schedules', OWNER)['items'][0]
+                self.assertEqual(item['next_due'], due_at)
+        # a stored document due cannot place has none, and the list still answers
+        self.store.put('schedules', 'maint-lint-Kit', {'task': 'maint-lint', 'repo': 'Kit',
+                                                       'cadence': 'daily', 'at': 'noon'})
+        self.assertIsNone(self.ok('GET', '/schedules', OWNER)['items'][0]['next_due'])
+
+    def test_the_default_tick_state_is_the_state_files_records(self):
+        bare = api.Api(self.store)
+        self.assertIs(bare.tick_state, api.tick_run_state)
+        home = tempfile.mkdtemp(prefix='kit-hubapi-home-')
+        self.addCleanup(shutil.rmtree, home, True)
+        from kitlib.autotasks import tick
+        with mock.patch.object(tick, 'state_dir', lambda home_=None: os.path.join(home, 'auto-tasks')):
+            self.assertEqual(api.tick_run_state(), {})
+            os.makedirs(os.path.join(home, 'auto-tasks'))
+            path = os.path.join(home, 'auto-tasks', tick.STATE_NAME)
+            with open(path, 'w') as f:
+                f.write('not json')
+            self.assertEqual(api.tick_run_state(), {})      # unreadable: no records, no error
+            tick.write_state(path, {'maint-lint-Kit': {'at': 'T', 'what': 'started'}})
+            self.assertEqual(api.tick_run_state(), {'maint-lint-Kit': {'at': 'T', 'what': 'started'}})
 
     def test_the_default_tick_seen_is_the_state_file_time(self):
         # serve.py passes neither seam: the hub server reads the tick's own files
