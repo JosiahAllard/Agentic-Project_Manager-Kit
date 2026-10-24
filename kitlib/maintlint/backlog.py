@@ -29,7 +29,9 @@ AUDIT_DAYS = 7                  # the audit log window read; the findings are st
 AUDIT_KINDS = {'UNAUDITED': 'store change(s) in %d days with no audit line',
                'UNKNOWN': 'store change(s) in %d days whose subject names no backlog verb',
                'UNMAPPED': 'audit line(s) in %d days whose role the role map does not list'}
-ANSWERED = ('answered', 'logged')       # a hub question's status once the owner has answered it
+# a hub question's status once the owner has answered it; `done`: the PM marked it handled with
+# no ruling (hub.py questions done)
+ANSWERED = ('answered', 'logged', 'done')
 
 
 def age_of(rec):
@@ -143,14 +145,17 @@ def answered(snap, cmd, questions=None):
         got = status.get(q)
         if got not in ANSWERED:
             continue
-        first = ('' if got == 'logged' else
-                 'the PM logs the answer (hub.py questions log %s <ruling> --if-version V), then '
-                 % q)
+        if got == 'done':
+            fix = ('%s unpark %s; the question was marked done with no ruling, so there is none '
+                   'to cite' % (cmd, rec.stem))
+        else:
+            first = ('' if got == 'logged' else
+                     'the PM logs the answer (hub.py questions log %s <ruling> --if-version V), '
+                     'then ' % q)
+            fix = '%s%s unpark %s, giving the ruling it was logged as' % (first, cmd, rec.stem)
         out.append(Finding('answered-question', rec.stem,
                            '%s is parked on %s, which the owner has answered (%s)'
-                           % (rec.stem, q, got),
-                           '%s%s unpark %s, giving the ruling it was logged as'
-                           % (first, cmd, rec.stem), age_of(rec)))
+                           % (rec.stem, q, got), fix, age_of(rec)))
     return out, []
 
 

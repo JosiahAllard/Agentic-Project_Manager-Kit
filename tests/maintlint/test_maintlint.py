@@ -132,6 +132,18 @@ class AnsweredQuestions(unittest.TestCase):
         for f in got:
             self.assertNotIn('EX-2001', f.text + f.fix)
 
+    def test_a_parked_record_whose_question_is_done_is_a_finding_with_no_ruling_to_cite(self):
+        s = snap(self.parked('AAA', QID))
+        docs = [{'id': QID, 'status': 'done', 'done_why': 'a one-off go'}]
+        got, notes = backlog.answered(s, CMD, questions=lambda: docs)
+        self.assertEqual(notes, [])
+        self.assertEqual([(f.check, f.key) for f in got], [('answered-question', 'AAA')])
+        self.assertIn('(done)', got[0].text)
+        self.assertTrue(got[0].fix.startswith(CMD + ' unpark AAA; '), got[0].fix)
+        self.assertIn('no ruling', got[0].fix)
+        self.assertNotIn('questions log', got[0].fix)
+        self.assertNotIn('a one-off go', got[0].text + got[0].fix)
+
     def test_a_hub_that_cannot_be_asked_is_a_not_checked_note(self):
         from kitlib.hubsite import serve
 

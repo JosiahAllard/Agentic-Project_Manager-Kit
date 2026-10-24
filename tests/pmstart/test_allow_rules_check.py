@@ -9,7 +9,7 @@ import unittest
 
 from kitlib import kitroot, pluginsource, pmstart
 from kitlib.stubs import memory as kmemory
-from tests.pmstart import keep_off_hub_site, keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, keep_off_hub_site, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CUR, OLD, GONE = '0123456789ab', 'aaaaaaaaaaaa', 'bbbbbbbbbbbb'
@@ -116,7 +116,7 @@ class AllowRulesCheckTest(unittest.TestCase):
 
     def test_checklist_wiring(self):
         self.local({'permissions': {'allow': [self.rule(GONE)]}})
-        fakes = dict(pm_data=lambda: None, handoff={'globber': lambda p: []}, reminders={'read': lambda p: '[]'},
+        fakes = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={'read': lambda p: '[]'},
                      liveness={'read': lambda p: '{}'}, stubs={'repos': {}, 'check': lambda p: None},
                      memory={'repos': {}, 'pm_repo': lambda cfg: None, 'folder': lambda top: None},
                      allow_rules={'repos': {'alpha': self.repo}, 'pm_repo': lambda cfg: None,

@@ -26,7 +26,7 @@ or equivalent) load on top of this file and win any disagreement.
    reached; it falls to you when the coordinator is gone or has not acked within 30 minutes
    (<kit>/docs/action-hub.md "Who handles a pending item"). You log the ruling of every answer. A paired browser stays
    paired after a hub restart; `hub.py unpair` ends every browser's session.
-4. Read your newest hand-off note, then tell the owner in a few lines what is running, what
+4. Read the hand-off file (HANDOFF.md in the PM repo), then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
 
 First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
@@ -89,6 +89,7 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 
 ## Hand-off
 
-Before a compact, a recycle or the end of the day, write a hand-off note in your memory folder
-(outside every checkout): what is running and where, what waits on the owner, what was promised
-to whom, and the next step. The next session starts from it.
+Before a compact, a recycle or the end of the day, update the one hand-off file, HANDOFF.md in the
+PM repo, in place; never write a dated copy or a pm-handoff*.md. Put in it: what is running and
+where, what waits on the owner, what was promised to whom, and the next step. The next session
+starts from it. HANDOFF.md is git-ignored in the PM repo: a working note, never committed.
