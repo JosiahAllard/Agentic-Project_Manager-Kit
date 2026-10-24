@@ -254,6 +254,7 @@ button.danger{color:var(--warn)}
     <div class="tabs" role="tablist" id="ftabs" data-for="info" hidden>
       <button class="tab" role="tab" data-nf="usage" aria-selected="true" id="ftab-usage">Usage <span class="n" id="n-u">–</span></button>
       <button class="tab" role="tab" data-nf="agents" aria-selected="false" id="ftab-agents">Agents <span class="n" id="n-a">0</span></button>
+      <button class="tab" role="tab" data-nf="notices" aria-selected="false" id="ftab-notices">Lock notices <span class="n" id="n-n">0</span></button>
     </div>
     <div class="pmbar" id="pmtabs" hidden>
       <div class="tabs sw" role="tablist" data-for="topm">
@@ -308,15 +309,15 @@ button.danger{color:var(--warn)}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null };
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null };
   // The address's hash names a section (and, for some, the tab inside it): what each route sets in state. The
   // page opens on the route it is given, Back and Forward return to the section before, and a hash it does not
   // know leaves the page where it is.
   const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"},
     "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
-    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"} };
+    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"}, "#notices": {section:"info", infotab:"notices"} };
   const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
-  try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
+  try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents" || it === "notices") state.infotab = it; } catch(e){}
   Object.assign(state, route(location.hash));
   // ready: the server has answered once, so the lists are real and the owner's controls are shown.
   let ready = false, lastRead = 0;
@@ -482,6 +483,7 @@ button.danger{color:var(--warn)}
     const top = usagePeak(ua), peak = top.pct;
     $("#n-u").textContent = usageChip(top); $("#n-u").classList.toggle("hot", peak >= 90);
     $("#n-a").textContent = state.agents.length;
+    const runs = openRuns(state.notices).length; $("#n-n").textContent = runs; $("#n-n").classList.toggle("hot", runs > 0);
     $("#n-i").textContent = ui.length; $("#n-i").classList.toggle("hot", ui.length > 0);
     // Parked lives under Backlog: its count is on its tab, and on the Backlog section itself while something is parked.
     $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
@@ -536,7 +538,23 @@ button.danger{color:var(--warn)}
   // Info: reference material; agent defaults first, more blocks later.
   function renderInfo(){
     document.querySelectorAll("#ftabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.nf === state.infotab)));
-    state.infotab === "agents" ? renderAgents() : renderUsage();
+    state.infotab === "agents" ? renderAgents() : state.infotab === "notices" ? renderNotices() : renderUsage();
+  }
+  // Lock notices: the machine lock's start and end notice of each heavy run, newest first, the latest NOTICES_SHOWN.
+  const NOTICES_SHOWN = 100;
+  function renderNotices(){
+    const rows = state.notices;
+    if (!rows.length) { show(["notices"], state.gone.notices ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "No lock notices" : "Lock notices needs the hub server"}), "The machine lock writes a notice when a heavy run starts and when it ends.")); return; }
+    const open = openRuns(rows).length, older = rows.length - NOTICES_SHOWN;
+    const cards = rows.slice(0, NOTICES_SHOWN).map(row => drawn(n => el("article", {class:"q", id: "ln-" + n.id},
+      el("div", {class:"meta"}, el("span", {class:"id", text: n.id}),
+        el("span", {class:"chip", text: n.phase === "end" ? "ended" : n.phase === "start" ? "started" : n.phase || "?"}),
+        n.repo ? el("span", {class:"chip", text: n.repo}) : null,
+        n.at ? el("span", {text: when(n.at)}) : null),
+      el("h3", {text: n.title || n.id}),
+      n.text ? el("p", {text: n.text}) : null), row));
+    show(["notices"], el("p", {class:"unote", text: open ? open + (open === 1 ? " run" : " runs") + " started with no end notice yet." : "Every run that started has its end notice."}),
+      cards, older > 0 ? el("p", {class:"unote", text: older + (older === 1 ? " older notice is" : " older notices are") + " not shown."}) : null);
   }
   function renderAgents(){
     const tier = {opus: 0, sonnet: 1, haiku: 2};
@@ -717,6 +735,19 @@ button.danger{color:var(--warn)}
     rows.sort((a, b) => k(b).localeCompare(k(a)) || a.id.localeCompare(b.id));
     return rows;
   }
+  // The machine lock's notices (views.notices), newest first by at, then id; a notice needs a text id, and every
+  // other field is read as text.
+  function noticeRows(v){
+    const rows = (Array.isArray(v) ? v : []).filter(n => n && typeof n === "object" && typeof n.id === "string" && n.id)
+      .map(n => ({ id: n.id, title: pageStr(n.title), text: pageStr(n.text), repo: pageStr(n.repo), at: pageStr(n.at), run: pageStr(n.run), phase: pageStr(n.phase) }));
+    rows.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+    return rows;
+  }
+  // The runs that have a start notice and no end notice yet: the lock may still hold them.
+  function openRuns(rows){
+    const ended = new Set(rows.filter(n => n.phase === "end").map(n => n.run));
+    return [...new Set(rows.filter(n => n.phase === "start" && n.run && !ended.has(n.run)).map(n => n.run))];
+  }
   // The page's lists from one snapshot. gone is {view: reason} for a view the server could not give at all;
   // partial is {view: [text]} for a repository whose part of a view failed while the rest is shown; stale is
   // {view: [{repo, reason, since}]} for a repository whose items are those of an earlier read, the last one
@@ -749,7 +780,7 @@ button.danger{color:var(--warn)}
       push: s.push && typeof s.push === "object" ? s.push : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
-      repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents,
+      repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, notices: noticeRows(views.notices),
       approvals: col("approvals").filter(d => d.status === "pending").sort((x, y) => String(x.created_at || "").localeCompare(String(y.created_at || ""))), strong: s.strong === true };
   }
   // The wait before the next try after `fails` failures in a row: the server's Retry-After when it gave one (1 s to 300 s), else 2 s doubling to 60 s.
@@ -2116,7 +2147,7 @@ button.danger{color:var(--warn)}
     if (ready && next.revision < rev) return;         // an older answer that arrived late
     rev = next.revision;
     const first = !ready; ready = true; lastRead = Date.now();
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "strong"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);
