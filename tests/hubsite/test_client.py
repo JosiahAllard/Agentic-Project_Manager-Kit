@@ -175,8 +175,8 @@ class WaitCase(ClientCase):
         self.assertIs(self.hub.wait(timeout=0)['timed_out'], True)   # without --pending: nothing
 
 
-class LoopCase(unittest.TestCase):
-    """The long-poll loop, with a stand-in for the server and for the clock."""
+class StandIn(unittest.TestCase):
+    """A stand-in for the server, the clock and the pause."""
 
     def setUp(self):
         case = httpfix.ListenerCase('setUp')
@@ -186,11 +186,28 @@ class LoopCase(unittest.TestCase):
         self.asked, self.now = [], [0.0]
 
     def hub(self, answers, step):
+        """Each answer is the body of a 200, a (status, body) pair, or an exception to raise;
+        the last one repeats. A pause advances the stand-in clock by its length."""
+        self.slept = []
+
         def ask(port, method, path, token, body, timeout):
             self.asked.append((method, path, token, timeout))
             self.now[0] += step
-            return 200, answers.pop(0)
-        return client.Client(1, tokens=self.tokens, ask=ask, clock=lambda: self.now[0])
+            got = answers.pop(0) if len(answers) > 1 else answers[0]
+            if isinstance(got, Exception):
+                raise got
+            return got if isinstance(got, tuple) else (200, got)
+
+        def sleep(s):
+            self.slept.append(s)
+            self.now[0] += s
+        hub = client.Client(1, tokens=self.tokens, ask=ask, clock=lambda: self.now[0])
+        hub._sleep = sleep          # set after, not as sleep=: a client without it still runs
+        return hub
+
+
+class LoopCase(StandIn):
+    """The long-poll loop."""
 
     def test_a_long_wait_asks_again_from_the_revision_it_was_given(self):
         idle = {'timed_out': True, 'revision': 7, 'changes': [], 'pending': []}
@@ -227,6 +244,78 @@ class LoopCase(unittest.TestCase):
             api.BASE + '/wait?for=kit&pending=1&since=7&timeout=' + top,
             api.BASE + '/pending?for=kit',
             api.BASE + '/pending'])
+
+
+STORE_DOWN = (503, api.error_body('store', api.AGENT_SAYS['store'], 'store'))
+HIT = {'timed_out': False, 'revision': 9, 'changes': [], 'pending': [{'id': 'Q-1000'}]}
+IDLE = {'timed_out': True, 'revision': 7, 'changes': [], 'pending': []}
+
+
+class RestartCase(StandIn):
+    """A hub restart seen by a wait that has had an answered poll: the port closed
+    (serve.NotRunning) or the store not available (Refused `store`) is asked again; every other
+    refusal ends the wait, and so does either one on the wait's first poll."""
+
+    def test_a_wait_asks_a_restarting_hub_again_and_ends_on_its_answer(self):
+        hub = self.hub([IDLE, STORE_DOWN, serve.NotRunning(1), serve.NotRunning(1), HIT], 0)
+        self.assertEqual(hub.wait(since=5, pending=True, for_key='pm'), HIT)
+        self.assertEqual(self.slept, [client.RETRY_PAUSE_S] * 3)
+        poll = api.BASE + '/wait?for=pm&pending=1&since=%d&timeout=' + '%g' % api.WAIT_MAX_S
+        # from the revision the answered turn gave, the same one on every poll again
+        self.assertEqual([a[1] for a in self.asked], [poll % 5] + [poll % 7] * 4)
+
+    def test_a_hub_that_was_never_up_ends_the_wait_at_once(self):
+        for down in (serve.NotRunning(1), STORE_DOWN):
+            for kw in ({}, {'timeout': 60}):
+                self.asked = []
+                with self.assertRaises(serve.ServeError) as c:
+                    self.hub([down, HIT], 0).wait(since=5, pending=True, for_key='pm', **kw)
+                self.assertIsInstance(c.exception, type(down) if isinstance(down, Exception)
+                                      else client.Refused)
+                self.assertEqual((len(self.asked), self.slept), (1, []), (down, kw))
+
+    def test_a_hub_still_down_when_the_timeout_ends_raises_the_last_reason(self):
+        with self.assertRaises(client.Refused) as c:
+            self.hub([IDLE, serve.NotRunning(1), STORE_DOWN], 0).wait(since=5, timeout=2.5)
+        self.assertEqual((c.exception.code, c.exception.status), ('store', 503))
+        self.assertIn('not available', c.exception.message)
+        # pauses of 1, 1 and the 0.5 left, then one last poll of 0 s begun at the end
+        self.assertEqual(self.slept, [1.0, 1.0, 0.5])
+        self.assertEqual(self.asked[-1][1], api.BASE + '/wait?since=7&timeout=0')
+        self.assertEqual(len(self.asked), 5)
+        self.now[0], self.asked = 0.0, []
+        with self.assertRaises(serve.NotRunning):
+            self.hub([IDLE, STORE_DOWN, serve.NotRunning(1)], 0).wait(since=5, timeout=1)
+        self.assertEqual((len(self.asked), self.slept), (3, [1.0]))
+
+    def test_a_wait_with_no_timeout_ends_when_the_hub_stays_down_too_long(self):
+        with self.assertRaises(serve.NotRunning):
+            self.hub([IDLE, serve.NotRunning(1)], 0).wait(since=5, pending=True)
+        self.assertEqual(len(self.slept), client.RESTART_WAIT_S / client.RETRY_PAUSE_S)
+        self.assertEqual(self.now[0], client.RESTART_WAIT_S)
+        # an answer in between starts the count again
+        self.now[0], self.asked = 0.0, []
+        downs = [serve.NotRunning(1)] * int(client.RESTART_WAIT_S - 1)
+        hub = self.hub([IDLE] + downs + [dict(IDLE)] + downs + [HIT], 0)
+        self.assertEqual(hub.wait(since=5, pending=True), HIT)
+
+    def test_every_other_refusal_ends_the_wait_at_once(self):
+        for status, code in ((403, 'forbidden'), (400, 'invalid'), (409, 'conflict')):
+            self.asked = []
+            with self.assertRaises(client.Refused) as c:
+                self.hub([IDLE, (status, api.error_body(code, 'no', 'x')), HIT], 0).wait(
+                    since=5, timeout=60, pending=True, for_key='pm')
+            self.assertEqual(c.exception.code, code)
+            self.assertEqual((len(self.asked), self.slept), (2, []))
+
+    def test_a_wait_with_no_since_asks_again_from_the_revision_its_turn_gave(self):
+        # with no since the server would start from its revision at the next poll and lose a
+        # write made meanwhile; the answered turn gave one, so the retry starts there
+        for kw in ({}, {'pending': True}, {'pending': True, 'for_key': 'pm'}):
+            self.asked = []
+            self.assertEqual(self.hub([IDLE, serve.NotRunning(1), HIT], 0).wait(**kw), HIT)
+            self.assertNotIn('since=', self.asked[0][1])
+            self.assertEqual(['since=7' in a[1] for a in self.asked[1:]], [True, True], kw)
 
 
 class WireCase(unittest.TestCase):
