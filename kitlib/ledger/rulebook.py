@@ -249,10 +249,15 @@ def lines(book, over, sources=False, topic=None):
 # The write side (docs/ledger.md "Rulebooks"): kitlib.ledger.write pairs each change below with a
 # log entry under the log's write lock and the rulebook's; these functions only build the new Book.
 
-def target(books, repo):
+def target(books, repo, book=None):
     """The name of the rulebook a rule for `repo` goes in: `all` is the shared book; else the book
     `for_repo` maps (a checkout folder or a log repo name), else `normal(repo)`, a book not made
-    yet."""
+    yet. `book` (a name) overrides all that: it must be `all` or a book in `books`, else ValueError."""
+    if book is not None:
+        name = normal(book)
+        if name != SHARED and name not in books:
+            raise ValueError('no rulebook %r (the books: %s)' % (book, ', '.join(sorted(books)) or 'none'))
+        return name
     if normal(repo) == SHARED:
         return SHARED
     return for_repo(books, repo) or normal(repo)

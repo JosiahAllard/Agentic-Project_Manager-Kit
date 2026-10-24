@@ -12,7 +12,7 @@ R-nnnn ledger: read by show, grep, list and check, never written. Without `ledge
       machine config's `ledger_repos` (one file: also `all`; no ledger_repos: any lower-case name).
       --commit commits that file alone as `ledger: <id> <title>`; --push also pushes the current
       branch to `repo.remote` (origin by default).
-      --rule KEY --topic T [--rule-text TEXT] --checked HASH also sets rule KEY under heading T in
+      --rule KEY --topic T [--rule-text TEXT] [--book NAME] --checked HASH also sets rule KEY under heading T in
       REPO's rulebook (`all`: the shared one), citing the new entry, under the same write lock;
       HASH is the `checked:` line of `conflicts` for the same rule: missing is a usage error, stale is refused.
       With --commit the rulebook goes in the same commit.
@@ -111,6 +111,8 @@ def parser():
                     "repo's rulebook, citing this entry; needs --topic and --checked")
     ad.add_argument('--topic', help="the rule's `##` heading in the rulebook")
     ad.add_argument('--rule-text', help="the rule's text (default: --decides)")
+    ad.add_argument('--book', metavar='NAME', help="with --rule: write this rulebook (`all`: the shared one, or "
+                    "an existing book) instead of the one --repo maps to")
     ad.add_argument('--checked', metavar='HASH', help='the `checked:` hash `ledger.py conflicts` printed')
     commit_flags(ad)
     rd = sub.add_parser('rule-drop', help="drop one rule from a repo's rulebook, with a log entry")
@@ -248,7 +250,7 @@ def do_add(a, found, repos):
     rule = None
     if a.rule is None:
         given = [f for f, v in (('--topic', a.topic), ('--rule-text', a.rule_text),
-                                ('--checked', a.checked)) if v is not None]
+                                ('--checked', a.checked), ('--book', a.book)) if v is not None]
         if given:
             raise Usage('%s needs --rule KEY' % ', '.join(given))
     else:
@@ -258,7 +260,8 @@ def do_add(a, found, repos):
             raise Usage('--rule needs --checked HASH: run `ledger.py conflicts --repo %s --topic ... '
                         '--key %s --text ...`, read what it lists, then pass the checked hash it prints'
                         % (a.repo, a.rule))
-        rule = write.RuleChange(found.rules, 'set', a.rule, a.topic, a.rule_text, a.checked)
+        rule = write.RuleChange(found.rules, 'set', a.rule, a.topic, a.rule_text, a.checked,
+                                book=a.book)
     return write_entry(a, found, repos, a.q, a.a, a.decides, a.supersedes, rule)
 
 
@@ -272,7 +275,7 @@ def write_entry(a, found, repos, q, ans, decides, supersedes='-', rule=None):
     # entry lands between this add and its commit; with a rule, the rulebook's lock too, so no
     # other log's writer changes the book before this commit. The push waits for no one.
     with write.locked(path), contextlib.ExitStack() as stack:
-        book = write.rule_target(found.rules, a.repo)[1] if rule is not None else None
+        book = write.rule_target(found.rules, a.repo, rule.book)[1] if rule is not None else None
         if book is not None:
             stack.enter_context(write.locked(book))
         if a.commit or a.push:
