@@ -6,11 +6,13 @@ from TASKS alone (argv). A name TASKS does not hold is refused, never run. The t
 kit's own (`kit`: the folder holding tools/auto_tasks.py), with the python.exe beside the running
 interpreter, each detached with its output in logs/<schedule>.log of the state folder.
 
-The state folder is `auto-tasks` in the home folder's machine config folder (~/.pm-kit, the
-kitlib.config.user DIR_NAME): machine-local, the same whatever the PM-repo pointer's state, and never
-in a checkout (the machine config itself lives in the PM repository, which is tracked). state.json holds, per schedule, the last thing done for it ({'at', 'what', ...}; its `at` is the
-schedule's baseline), tick.lock is the guard, tick.log the tick's own lines (one file of LOG_MAX
-bytes and one older one).
+The state folder is `auto-tasks` in the PM repository's machine config folder (<PM repo>/.pm-kit,
+kitlib.config.user.locate's folder), which git ignores (kitlib.config.move GITIGNORE): the tick
+starts nothing when the PM-repo pointer is not good, when that folder is not ignored (unignored), or
+while a state is still in the retired home place, ~/.pm-kit/auto-tasks (home_problem names the
+command that moves or removes it; it is never read). state.json holds, per schedule, the last thing
+done for it ({'at', 'what', ...}; its `at` is the schedule's baseline), tick.lock is the guard,
+tick.log the tick's own lines (one file of LOG_MAX bytes and one older one).
 
 Two ticks that overlap never start one task twice. The tick takes tick.lock (kitlib.fs.treelock: an
 OS byte-range lock, which the OS lets go when the holder exits, so a crashed tick leaves no stale
@@ -83,10 +85,67 @@ def argv(name, kit, main=None, python=None):
     return out + list(task.args)
 
 
+NO_POINTER = ('no PM repo pointer is set, so the auto-tasks state has no folder: set it '
+              '(tools/machine_setup.py --pm-repo, %s)' % kuser.POINTER_DOC)
+# home_problem's lines: (the old folder, the new one, each with every ' doubled for PowerShell's
+# single-quoted string).
+HOME_MOVE = ("the auto-tasks state moved to the PM repository (%s); it is still in the home folder "
+             "(%s) and the tick starts nothing until it is moved: move it (Copy-Item -LiteralPath "
+             "'%s' -Destination '%s' -Recurse, then, once the copy is there, Remove-Item -LiteralPath "
+             "'%s' -Recurse)")
+HOME_BOTH = ("the auto-tasks state is in the PM repository (%s) and an old copy is still in the home "
+             "folder (%s); the tick starts nothing until it is gone: check it, then remove it "
+             "(Remove-Item -LiteralPath '%s' -Recurse)")
+UNIGNORED = ("git does not ignore the auto-tasks state folder in %s: add the line auto-tasks/ to %s "
+             "and commit it")
+
+
 def state_dir(home=None):
-    """<home>/.pm-kit/auto-tasks: machine-local state, never the PM repository's tracked .pm-kit
-    (kitlib.config.user.config_dir), so a tick never leaves files in a checkout."""
+    """<PM repo>/.pm-kit/auto-tasks: the PM repository's git-ignored machine config folder
+    (kitlib.config.user.locate). ConfigError (NO_POINTER) with no PM-repo pointer, and the
+    location's error when the machine config cannot be read."""
+    return _pm_state_dir(kuser.locate(home))
+
+
+def _pm_state_dir(loc):
+    """state_dir for the Location `loc`."""
+    if loc.state == kuser.NONE:
+        raise ConfigError(NO_POINTER)
+    if loc.error or not loc.folder:
+        raise ConfigError(loc.error or NO_POINTER)
+    return os.path.join(loc.folder, DIR_NAME)
+
+
+def home_state_dir(home=None):
+    """~/.pm-kit/auto-tasks: the state's retired place, never read; home_problem names its move."""
     return os.path.join(home or kuser.home_dir(), kuser.DIR_NAME, DIR_NAME)
+
+
+def _quoted(path):
+    return path.replace("'", "''")
+
+
+def home_problem(folder, home=None):
+    """None when the retired home state folder (home_state_dir) is not there; else the line that
+    names its move to `folder` (state_dir's) or, when `folder` is there too, its removal."""
+    old = home_state_dir(home)
+    if not os.path.lexists(old):
+        return None
+    if os.path.lexists(folder):
+        return HOME_BOTH % (folder, old, _quoted(old))
+    return HOME_MOVE % (folder, old, _quoted(old), _quoted(folder), _quoted(old))
+
+
+def unignored(pm):
+    """None when git ignores the state folder in the PM repository `pm`; else the problem: the
+    line its .pm-kit/.gitignore lacks, or why git could not tell."""
+    from kitlib.config import move
+    left, why = move.ignored(pm, [DIR_NAME + '/' + STATE_NAME])
+    if left is None:
+        return 'git could not tell whether the auto-tasks state folder is ignored in %s (%s)' % (pm, why)
+    if left:
+        return UNIGNORED % (pm, os.path.join(pm, kuser.DIR_NAME, '.gitignore'))
+    return None
 
 
 def read_state(path):
@@ -204,8 +263,9 @@ def tick(home=None, kit=None, now=None, fetch=None, start=None, repos=None, pyth
     launch); `repos` returns launcher_repos' list (default launcher_repos(home)); `python` the
     interpreter the tools run with. The seams are for tests.
 
-    The hub not reachable: EXIT_OK, one line, nothing started. A hub setting, an answer or the
-    lock that cannot be used: EXIT_FAILED, nothing started."""
+    The hub not reachable: EXIT_OK, one line, nothing started. A hub setting, an answer, the
+    state folder (state_dir, home_problem, unignored) or the lock that cannot be used: EXIT_FAILED,
+    nothing started."""
     from kitlib.hubsite import client, serve
     kit = os.path.normpath(kit or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     now = now or datetime.datetime.now()
@@ -217,7 +277,13 @@ def tick(home=None, kit=None, now=None, fetch=None, start=None, repos=None, pyth
         return EXIT_OK, ['hub not reachable (%s): nothing started' % e]
     except ConfigError as e:
         return EXIT_FAILED, ['hub settings could not be read (%s): nothing started' % e]
-    folder = state_dir(home)
+    try:
+        folder = state_dir(home)
+    except ConfigError as e:
+        return EXIT_FAILED, ['%s: nothing started' % e]
+    problem = home_problem(folder, home) or unignored(os.path.dirname(os.path.dirname(folder)))
+    if problem:
+        return EXIT_FAILED, ['%s: nothing started' % problem]
     try:
         os.makedirs(os.path.join(folder, LOGS), exist_ok=True)
     except OSError as e:

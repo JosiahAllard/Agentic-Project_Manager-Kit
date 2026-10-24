@@ -182,15 +182,15 @@ class LocateTest(_Home):
         self.assertEqual((loc.state, loc.path, loc.error), (user.OK, self.pm_file, None))
         self.assertIsNone(user.ledger_path(self.home))
 
-    def test_a_home_file_beside_the_pm_repositorys_is_a_leftover_and_ignored(self):
+    def test_a_home_file_beside_the_pm_repositorys_is_a_leftover_and_an_error(self):
         self.pointed()
         self.put(self.pm_file, {'ledger_path': self.ledger})
         self.put(self.new, {'ledger_path': self.other_ledger, 'pending_path': self.other_ledger})
         loc = user.locate(self.home)
-        self.assertEqual((loc.state, loc.leftover), (user.OK, self.new))
-        cfg = user.user_config(self.home)
-        self.assertEqual(cfg['ledger_path'], self.ledger)
-        self.assertIsNone(cfg['pending_path'])
+        self.assertEqual((loc.state, loc.leftover), (user.LEFTOVER, self.new))
+        self.assertIn(self.new, loc.error)
+        with self.assertRaises(ConfigError):
+            user.user_config(self.home)
 
     def test_a_home_file_and_no_pm_file_is_unmoved_naming_both(self):
         self.pointed()
@@ -276,7 +276,6 @@ class ReadersTest(_Home):
     def test_each_reader_reads_the_pm_repositorys_file(self):
         self.pointed()
         machine_config(self.home, dict(READER_KEYS, machine_lock={'notice': {'dir': self.home}}), case=self)
-        self.put(self.new, {'pm_start': {'hub_url': 'home'}})          # a leftover, ignored
         with self.env():
             self.assertEqual(pmstart.load_config(), {'hub_url': 'u'})
             self.assertEqual(coordinatorstart.load_config(), {'k': 1})

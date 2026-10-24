@@ -431,18 +431,15 @@ class TheLinesAfterTheWorktrees(Fixture):
         self.assertTrue(out.splitlines()[-1].startswith('lock      cpu free (0/4)'), out)
 
     def test_the_config_line_reads_the_home_it_is_given(self):
-        """kitlib.preflight.configline over the scratch home: the PM repository's file is read and
-        the home folder's copy is a leftover to retire."""
+        """kitlib.preflight.configline over the scratch home: a copy left in the home folder
+        beside the PM repository's file is BROKEN with the leftover error."""
         folder = machine_config(self.home, {'ledger_repos': ['alpha']}, case=self)
         os.makedirs(os.path.join(self.home, user.DIR_NAME))
         with open(os.path.join(self.home, user.DIR_NAME, user.FILE_NAME), 'w', encoding='utf-8') as fh:
             json.dump({'ledger_repos': ['beta']}, fh)
         out = self.run_preflight()[1]
-        self.assertEqual(self.line(out, 'config '),
-                         'config    WARN %s (config.json) is read; ~/%s/%s is still in the home folder and '
-                         'ignored - retire it once the move is checked (%s)'
-                         % (os.path.dirname(folder).replace('\\', '/') + '/' + user.DIR_NAME,
-                            user.DIR_NAME, user.FILE_NAME, user.MOVE_DOC))
+        self.assertEqual(self.line(out, 'config '), 'config    BROKEN ' + user.locate(self.home).error)
+        self.assertIn(os.path.join(folder, user.FILE_NAME), self.line(out, 'config '))
         self.assertLess(out.index('\nconfig '), out.index('\nindex '))
 
 

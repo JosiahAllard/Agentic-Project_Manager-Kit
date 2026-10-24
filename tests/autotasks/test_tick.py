@@ -15,7 +15,8 @@ from kitlib.autotasks import tick as T
 from kitlib.fs.treelock import TreeLock
 from kitlib.hubsite import serve
 from tests import gitfixture
-from tests.home import machine_config, pm_repo, temp_home
+from tests.home import machine_config, temp_home
+from tests.realgit import real_git
 
 D = datetime.datetime
 NOW = D(2026, 10, 21, 12, 0)
@@ -37,6 +38,11 @@ def sched(task='worktree-sweep', repo='demo', cadence='daily', at='09:00', **kw)
 class Base(unittest.TestCase):
     def setUp(self):
         self.home = temp_home(self)
+        self.pm_folder = machine_config(self.home, {}, case=self)   # the state's folder is the PM repo's
+        self.pm = os.path.dirname(self.pm_folder)
+        p = mock.patch.object(T, 'unignored', lambda pm: None)    # the fake git has no check-ignore
+        p.start()
+        self.addCleanup(p.stop)
         self.kit = tempfile.mkdtemp(prefix='autotasks-kit-')
         self.addCleanup(gitfixture.rmtree, self.kit)
         touch(os.path.join(self.kit, 'tools', 'worktree_remove.py'))
@@ -117,22 +123,95 @@ class State(Base):
         self.assertEqual(records, {})
         self.assertIn('could not be read', problem)
 
-    def test_the_state_is_in_no_checkout_with_the_pointer_ok(self):
+    def test_the_state_is_in_the_pm_repositorys_machine_config_folder(self):
         from kitlib.config import user as kuser
-        pm = os.path.normcase(os.path.realpath(pm_repo(self)))
-        machine_config(self.home, {'owner_email': 'owner@example.invalid'}, case=self)
         self.assertEqual(kuser.locate(self.home).state, kuser.OK)
-        folder = T.state_dir(self.home)
-        self.assertEqual(folder, os.path.join(self.home, kuser.DIR_NAME, T.DIR_NAME))
-        real = os.path.normcase(os.path.realpath(folder))
-        self.assertFalse(real == pm or real.startswith(pm.rstrip(os.sep) + os.sep), folder)
-        p = folder
-        while True:
-            self.assertFalse(os.path.lexists(os.path.join(p, '.git')), 'state folder %s is in the checkout %s' % (folder, p))
-            parent = os.path.dirname(p)
-            if parent == p:
-                break
-            p = parent
+        self.assertEqual(T.state_dir(self.home), os.path.join(self.pm, kuser.DIR_NAME, T.DIR_NAME))
+        self.assertNotEqual(os.path.normcase(T.state_dir(self.home)),
+                            os.path.normcase(T.home_state_dir(self.home)))
+
+
+class Place(Base):
+    """Where the state lives: the PM repository's git-ignored machine config folder, never the
+    home folder (KIT-CONFIG-HOME-RETIRE)."""
+
+    def home_state(self):
+        return os.path.join(self.home, '.pm-kit', 'auto-tasks')
+
+    def test_a_tick_writes_its_state_in_the_pm_repository_and_nothing_in_the_home_folder(self):
+        self.schedules = [sched()]
+        self.assertEqual(self.go()[0], T.EXIT_OK)
+        self.assertTrue(os.path.isfile(os.path.join(self.pm_folder, 'auto-tasks', T.STATE_NAME)))
+        self.assertFalse(os.path.lexists(os.path.join(self.home, '.pm-kit')))
+
+    def test_no_pointer_starts_nothing_and_writes_nothing(self):
+        from kitlib.config import ConfigError
+        with mock.patch.dict(os.environ, {'KIT_PM_REPO_FENCE': ''}):
+            from kitlib.config import user as kuser
+            kuser.forget()
+            self.addCleanup(kuser.forget)
+            with self.assertRaises(ConfigError):
+                T.state_dir(self.home)
+            self.schedules = [sched()]
+            code, lines = self.go()
+        self.assertEqual((code, self.started), (T.EXIT_FAILED, []))
+        self.assertIn('no PM repo pointer', lines[0])
+        self.assertIn('nothing started', lines[0])
+        self.assertFalse(os.path.lexists(os.path.join(self.home, '.pm-kit')))
+
+    def test_a_state_left_in_the_home_folder_is_refused_with_its_move_and_never_read(self):
+        old = self.home_state()
+        os.makedirs(old)
+        with open(os.path.join(old, T.STATE_NAME), 'w', encoding='utf-8') as fh:
+            fh.write('{"version": 1, "tasks": {}}')
+        self.schedules = [sched()]
+        code, lines = self.go()
+        self.assertEqual((code, self.started, len(lines)), (T.EXIT_FAILED, [], 1))
+        new = os.path.join(self.pm_folder, 'auto-tasks')
+        self.assertIn("Copy-Item -LiteralPath '%s' -Destination '%s' -Recurse" % (old, new), lines[0])
+        self.assertIn("Remove-Item -LiteralPath '%s' -Recurse" % old, lines[0])
+        self.assertIn('nothing started', lines[0])
+        self.assertFalse(os.path.lexists(new))
+        self.assertEqual(os.listdir(old), [T.STATE_NAME])
+
+    def test_a_state_in_both_places_names_the_home_ones_removal(self):
+        os.makedirs(self.home_state())
+        os.makedirs(os.path.join(self.pm_folder, 'auto-tasks'))
+        code, lines = self.go()
+        self.assertEqual(code, T.EXIT_FAILED)
+        self.assertNotIn('Copy-Item', lines[0])
+        self.assertIn("Remove-Item -LiteralPath '%s' -Recurse" % self.home_state(), lines[0])
+
+    def test_a_state_folder_git_does_not_ignore_is_refused_and_never_made(self):
+        with mock.patch.object(T, 'unignored', lambda pm: 'not ignored, add the line'):
+            code, lines = self.go()
+        self.assertEqual((code, self.started), (T.EXIT_FAILED, []))
+        self.assertEqual(lines, ['not ignored, add the line: nothing started'])
+        self.assertFalse(os.path.lexists(os.path.join(self.pm_folder, 'auto-tasks')))
+
+
+@real_git('git check-ignore on the PM repo: the fake lacks check-ignore')
+class Ignored(unittest.TestCase):
+    def setUp(self):
+        self.repo = gitfixture.TempRepo(branch='main')
+        self.addCleanup(self.repo.cleanup)
+        self.folder = os.path.join(self.repo.root, '.pm-kit')
+        os.makedirs(self.folder)
+
+    def ignore(self, text):
+        with open(os.path.join(self.folder, '.gitignore'), 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(text)
+
+    def test_the_moves_ignore_file_ignores_the_state_folder(self):
+        from kitlib.config import move
+        self.ignore(move.GITIGNORE)
+        self.assertIsNone(T.unignored(self.repo.root))
+
+    def test_an_ignore_file_without_the_line_is_a_problem_naming_it(self):
+        self.ignore('local.json\n')
+        why = T.unignored(self.repo.root)
+        self.assertIn('auto-tasks/', why)
+        self.assertIn(os.path.join(self.folder, '.gitignore'), why)
 
 
 class Tick(Base):

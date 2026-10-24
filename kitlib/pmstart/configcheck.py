@@ -3,24 +3,27 @@
 
   lines(loc, run, rules)   no line when all is well; otherwise what is wrong with the machine config
                            (kitlib.config.user.locate): no pointer, a pointer or file that cannot be
-                           read, a copy left in the home folder, or a policy file that is not
-                           committed by the owner and unchanged (the integrity line)
+                           read, a copy left in the home folder, the auto-tasks state left in the
+                           home folder, or a policy file that is not committed by the owner and
+                           unchanged (the integrity line)
 
-The leftover is the home folder's machine config FILE that locate() still finds while the PM repo's
-is read (Location.leftover): the kit ignores it, so it is reported, never read. The home folder
-itself stays (it holds the auto-task state). No line names an email address: the owner check
-compares the last author with the owner rules and says only whether they match.
+The leftover is the home folder's machine config FILE that locate() still finds beside the PM
+repo's (kitlib.config.user LEFTOVER): the machine config moved, so the kit stops reading it until
+the copy is gone, and the line names its remove command. The auto-tasks state still in the home
+folder (kitlib.autotasks.tick home_problem) stops the auto tasks the same way, and its line names
+the move. No line names an email address: the owner check compares the last author with the owner
+rules and says only whether they match.
 
-Every line is a warning: nothing here stops a session. A git call that fails is a "could not
-check machine_config" line after the leftover line.
+Nothing here stops a session itself. A git call that fails is a "could not check machine_config"
+line after the leftover lines.
 """
 import os
 
 from kitlib.config import user as kuser
 
 PREFIX = 'machine config: '
-LEFTOVER = PREFIX + ("a copy is still in the home folder (%s); the kit reads %s and ignores it: "
-                     "remove it (Remove-Item -LiteralPath '%s')")
+LEFTOVER = PREFIX + ("a copy is still in the home folder (%s); the kit reads only %s and stops "
+                     "until it is removed: remove it (Remove-Item -LiteralPath '%s')")
 UNREADABLE = PREFIX + 'cannot be read: %s'
 NO_POINTER = PREFIX + ('no PM repo pointer: set it (tools/machine_setup.py --pm-repo, %s)'
                        % kuser.POINTER_DOC)
@@ -45,8 +48,8 @@ def _rules(pm):
 
 
 def integrity(loc, run=None, rules=None):
-    """The integrity line for an OK Location `loc`, or None when its policy file is committed by
-    the owner and unchanged, or is not there and never was tracked (an empty config). `run(args, cwd)` gives a kitlib.git.cmd
+    """The integrity line for an OK or LEFTOVER Location `loc`, or None when its policy file is
+    committed by the owner and unchanged, or is not there and never was tracked (an empty config). `run(args, cwd)` gives a kitlib.git.cmd
     Result (default kitlib.git.cmd.call); `rules` the owner rules (default the PM repository's
     kitlib.config.load owner_rules). Raises when git cannot answer."""
     if run is None:
@@ -77,12 +80,16 @@ def lines(loc=None, run=None, rules=None):
     loc = loc if loc is not None else kuser.locate()
     if loc.state == kuser.NONE:
         return [NO_POINTER]
-    if loc.state != kuser.OK:
+    if loc.state not in (kuser.OK, kuser.LEFTOVER):
         return [UNREADABLE % loc.error]
     out = []
     if loc.leftover:
         # PowerShell's single-quoted string: a ' in the path is written ''
         out.append(LEFTOVER % (loc.leftover, loc.display(), loc.leftover.replace("'", "''")))
+    from kitlib.autotasks import tick
+    state = tick.home_problem(os.path.join(loc.folder, tick.DIR_NAME), loc.home)
+    if state:
+        out.append(PREFIX + state)
     try:
         line = integrity(loc, run, rules)
     except Exception as e:                      # the leftover line still shows
