@@ -213,9 +213,17 @@ def resolve_model(owner_authored, flag, env=None, provider=None):
     fallback = (env.get(model_env) or '').strip() if model_env else ''
     if fallback:
         return fallback, model_env, None
-    return None, None, ('--model is required: name the model you are running on, '
-                        '--model "<model name>" (or set %s for this session only). If you do '
-                        'not know it, say so and stop.' % (model_env or MODEL_ENV))
+    return None, None, missing_model(provider)
+
+
+def missing_model(provider=None):
+    """The one refusal commit.py and sync_base.py give when no model is named. It offers the
+    chosen host's own model variable, and none when that host has no fallback: never another
+    host's (hosts.json model_env)."""
+    model_env = attribution.model_environment(provider)
+    return ('--model is required: name the model you are running on, --model "<model name>"%s; '
+            'it goes in the commit\'s Co-Authored-By trailer. If you do not know it, say so and '
+            'stop.' % (' (or set %s for this session only)' % model_env if model_env else ''))
 
 
 def model_requirement_error(rules, owner_authored, owner_approved, paths):
