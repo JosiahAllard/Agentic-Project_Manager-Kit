@@ -178,7 +178,7 @@ Each kit copy on the machine reads this one file with its own key list, so a key
 - `conductor_start` (object, checked by kitlib.coordinatorstart): the old name of coordinator_start, read when coordinator_start is absent; removed after the switch
   Its install values (`kitlib.coordinatorstart`; nothing in the code supplies them):
   - `repos_root` (path): the folder whose top-level folders are the repositories; the session's cwd picks the repo under it. Unset: every check that needs the coordinator's repo prints "could not check ...: repos_root not configured".
-  - `landing_lock` ({repo: file name}): the landing lock's file in that repo's git common dir, shown as the landing-lock line. A repo not named here, or an unset key, gets no landing-lock line, and nothing says it was dropped.
+  - `landing_lock` (retired): the landing-lock line reads the kit's fixed `kit-landing.lock` in the git common dir (`LOCK_NAME` in `kitlib/records/landing.py`), shown for any repo under `repos_root`; a config still setting the key is ignored without a word.
 - `pm_watch` (object, checked by kitlib.pmwatch): the PM watcher settings
 - `launcher` (object, checked by kitlib.launcher): the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")
 - `backlog_lint` (object, checked by kitlib.backloglint): the backlog lint repositories

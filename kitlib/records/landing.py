@@ -120,14 +120,14 @@ class LandingLock(object):
     `start_of(pid)` and `is_alive(pid, start)` are kitlib.proc's by default; tests pass their
     own."""
 
-    def __init__(self, root, main='main', remote='origin', name=LOCK_NAME,
+    def __init__(self, root, main='main', remote='origin',
                  start_of=process_start, is_alive=process_alive):
         common, why = repo.common_dir(root)
         if not common:
             raise LockError('no git common dir for %s: %s' % (root, why))
         self.root = root
         self.common = common
-        self.path = os.path.join(common, name)
+        self.path = os.path.join(common, LOCK_NAME)
         self.main, self.remote = main, remote
         self.start_of, self.is_alive = start_of, is_alive
 
