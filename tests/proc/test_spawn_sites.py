@@ -135,6 +135,7 @@ HAZARD_EXEMPT = {
     ('kitlib/guard/rules.py', 'kit_script', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', '_tool_run', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/commands.py', 'run_dir', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/commands.py', 'bash_start', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'shell_writes', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'write_place', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'bare_wrapper', 'Start-Process'): (1, GUARD_READS),
