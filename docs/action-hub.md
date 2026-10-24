@@ -408,7 +408,7 @@ It is not the store's git push (the `push` setting).
 - Until when: each recipient is sent each item until it is acknowledged. The asking session
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
-  `questions log` for a question; for a story, any change of its status (`stories set`), and for a
+  `questions log` or `questions done` (no ruling) for a question; for a story, any change of its status (`stories set`), and for a
   note to the PM, its reply (`to-pm reply`). An approval's push is sent once to each: the first written
   try acknowledges it. An item withdrawn, reopened or answered again replaces or
   ends its push. A session that picked up a first answer or done mark before the worker saw it
@@ -479,7 +479,7 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 ## questions/Q-NNN
 | Field | Written by | Meaning |
 |---|---|---|
-| status | PM, owner | `open`, then `answered` (owner), then `logged` (PM) |
+| status | PM, owner | `open`, then `answered` (owner), then `logged` (PM), or `done` (PM: no ruling needed, `questions done`) |
 | repo, from, asked_at | PM, coordinator | where it came from; `from` is `pm` or the asking coordinator's launcher session key, the session its answer goes back to; asked_at is ISO time |
 | title | PM | the question itself |
 | context | PM | everything needed to answer; nothing is assumed from chat |
@@ -489,6 +489,7 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 | refs, story | PM | ids it refers to; the story a follow-up question belongs to |
 | answer | owner | `{choice: index or "other", label, note, at}` |
 | ruling | PM | the ruling id it was logged as |
+| done_why, done_at | PM | why the answer needed no ruling, and when it was marked done (ISO time) |
 
 The PM files each answer, then logs it (`questions log`), pinning `--if-version`; an answer to a
 coordinator's question too, which the coordinator has already acted on.
