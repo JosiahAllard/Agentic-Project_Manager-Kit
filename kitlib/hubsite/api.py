@@ -184,6 +184,13 @@ Both are read now, never cached, and neither is part of GET snapshot.
   record_unblock(repo, id, on, reason, ruling)                     recordwrite)
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
+  record_answer(repo, id, qid, at, title, label, note, via, other, waiting)
+                                            files a question's answer into the record it is
+                                            bound to (recordwrite answer; file_answer)
+An answer to a question bound to a record is filed by POST questions/{id}/answer as soon as it is
+stored, and again by POST questions/file (AGENT, optional {id}) and at hub start for every
+answered one not filed yet: file_answer. A filed question has status `filed`, which no pending
+list carries; one that failed stays `answered` with `filing`, for the PM.
 
 Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
 through `lock`: a door object (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this
@@ -992,8 +999,8 @@ def questions_answer(api, req):
     note = (_text(b, 'note') or '').strip()
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
-    if d.get('status') not in ('open', 'answered'):
-        raise _invalid('%s is %s: only an open or an answered question takes an answer'
+    if d.get('status') not in ('open', 'answered', 'filed'):
+        raise _invalid('%s is %s: only an open, an answered or a filed question takes an answer'
                        % (doc_id, d.get('status')), 'status')
     choice = b['choice']
     options = d.get('options') if isinstance(d.get('options'), list) else []
@@ -1009,8 +1016,112 @@ def questions_answer(api, req):
                        % (len(options), choice), 'choice')
     answer = {'choice': choice, 'label': label, 'note': note, 'at': api.clock(),
               'via': _via(req)}
-    return api.change('questions', doc_id, d, {'status': 'answered', 'answer': answer}, req,
-                      {'status': 'answered', 'answer': answer})
+    changes = {'status': 'answered', 'answer': answer}
+    if d.get('filing') is not None or d.get('filed_at') is not None:
+        changes.update(filing=None, filed_at=None)      # a re-answer is filed afresh
+    out = api.change('questions', doc_id, d, changes, req,
+                     {'status': 'answered', 'answer': answer})
+    if isinstance(d.get('record'), dict):
+        got = file_answer(api, doc_id, _via(req), full=req.full)
+        if got is not None:
+            out['filing'] = got
+            if 'version' in got:        # the mark is the last write: its version and revision
+                out.update(version=got['version'], revision=got['revision'])
+            if got.get('filed'):
+                out['status'] = 'filed'
+    return out
+
+
+# what a question's `filing` says, by the code its filing failed with: fixed phrases, since the
+# store's own text can name a path and the document goes over the tunnel (GET snapshot)
+FILING_SAYS = {
+    'not_found': 'the record is completed or gone: the PM handles this answer',
+    'invalid': 'the backlog store refused this answer: the PM handles it',
+    'store': 'the backlog store could not be written now: the hub tries again',
+    'unavailable': 'this hub cannot write a backlog store: the hub tries again',
+}
+
+
+def _waiting(api, doc_id, record):
+    """The other questions bound to `record` that are still open, in id order."""
+    return sorted((i for i, q in api.store.docs('questions').items()
+                   if i != doc_id and q.get('status') == 'open' and q.get('record') == record),
+                  key=_natural)
+
+
+def file_answer(api, doc_id, via='api', full=False):
+    """File the stored answer of question doc_id into the record it is bound to, through the
+    `record_answer` view, then mark the question (docs/action-hub.md "A question bound to a
+    record"): status `filed` with `filed_at`, or, when the view refused, status `answered` kept
+    with `filing` {at, code, message} (message a fixed phrase of FILING_SAYS), so the PM still
+    sees it pending. Both marks are pinned to the version read first: a question that moved
+    meanwhile (answered again, logged, done) is left as it is, and the answer that moved it is
+    filed by its own call. None for a question that is not answered or is bound to no record;
+    else {id, filed, version, revision} or {id, filed: false, code, message} (message the
+    view's own text when `full`) and the version and revision of each mark written, or {id,
+    filed: false, moved: true}. A mark the hub store refuses otherwise is given as a failure with
+    that code, nothing marked. The record write is
+    idempotent (kitlib.hubsite.recordwrite answer), so a crash anywhere in between is mended by
+    filing again."""
+    d = api.store.get('questions', doc_id)
+    if d is None or d.get('status') != 'answered':
+        return None
+    record, ans = d.get('record'), d.get('answer')
+    if not isinstance(record, dict) or not isinstance(ans, dict):
+        return None
+    version = _version(d)
+    try:
+        api._view('record_answer')(
+            record.get('repo'), record.get('id'), doc_id, ans.get('at'), d.get('title'),
+            ans.get('label'), ans.get('note'), ans.get('via'), ans.get('choice') == 'other',
+            _waiting(api, doc_id, record))
+    except HubError as e:
+        code, said = e.code, e.message
+    except Exception as e:          # noqa: BLE001 - a view is another module's code
+        code, said = 'internal', _reason(e)
+    else:
+        code = said = None
+    if code is None:
+        changes = {'status': 'filed', 'filed_at': api.clock(), 'filing': None}
+    else:
+        message = FILING_SAYS.get(code, 'the answer could not be filed (%s)' % code)
+        changes = {'filing': {'at': api.clock(), 'code': code, 'message': message}}
+    try:
+        r = api.store.update('questions', doc_id, dict(changes, via=via), if_version=version)
+    except HubError as e:
+        if e.code == 'conflict':
+            return {'id': doc_id, 'filed': False, 'moved': True}
+        return {'id': doc_id, 'filed': False, 'code': e.code,
+                'message': e.message if full else AGENT_SAYS.get(e.code, e.message)}
+    marked = {'id': doc_id, 'version': r.version, 'revision': r.revision}
+    if code is None:
+        return dict(marked, filed=True)
+    return dict(marked, filed=False, code=code,
+                message=said if full else changes['filing']['message'])
+
+
+def questions_file(api, req):
+    """File every answered question bound to a record (or only `id`) that is not filed yet:
+    {ok, filed: [ids], failed: [{id, code, message}]}; a question that moved meanwhile is in
+    neither. An unknown `id` is `not_found`; one that is not answered or has no record files
+    nothing."""
+    b = _fields(req, ('id',))
+    one = _text(b, 'id')
+    if one is not None:
+        api.doc('questions', one)
+        ids = [one]
+    else:
+        ids = sorted(api.store.docs('questions'), key=_natural)
+    filed, failed = [], []
+    for doc_id in ids:
+        got = file_answer(api, doc_id, _via(req), full=req.full)
+        if got is None or got.get('moved'):
+            continue
+        if got['filed']:
+            filed.append(doc_id)
+        else:
+            failed.append({'id': doc_id, 'code': got['code'], 'message': got['message']})
+    return {'ok': True, 'filed': filed, 'failed': failed}
 
 
 def questions_log(api, req):
@@ -2368,6 +2479,7 @@ ROUTES = (
     _r('GET', '/questions', ANY, questions_list),
     _r('POST', '/questions', AGENT, questions_add),
     _r('POST', '/questions/{id}/answer', OWNER, questions_answer),
+    _r('POST', '/questions/file', AGENT, questions_file),
     _r('POST', '/questions/{id}/log', AGENT, questions_log),
     _r('POST', '/questions/{id}/done', AGENT, questions_done),
     _r('POST', '/questions/{id}/edit', AGENT, questions_edit),

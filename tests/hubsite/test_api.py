@@ -3759,5 +3759,288 @@ class UnblockStoreTest(trw.Case):
         self.assertEqual(self.field('FOO', 'state'), ['open'])
 
 
+class Crash(BaseException):
+    """The process dies here: no Exception, so nothing in the hub catches it."""
+
+
+class FileViews(BindViews):
+    """BindViews with the record write a bound answer is filed by. Each call is kept in
+    `filed`; `lines` is what the record holds, {(record id, qid): at}, kept as plan_answer keeps
+    it (an older `at` changes nothing). `fail`: the HubError each call raises before it writes;
+    `crash`: raise Crash after the write; `during`: run once inside the next call, before its
+    write (a second caller racing it)."""
+
+    def __init__(self):
+        BindViews.__init__(self)
+        self.filed, self.lines = [], {}
+        self.fail, self.crash, self.during = None, False, None
+
+    def record_answer(self, repo, id, qid, at, title, label, note, via, other, waiting):
+        self.filed.append((repo, id, qid, at, title, label, note, via, other, waiting))
+        if self.fail is not None:
+            raise self.fail
+        during, self.during = self.during, None
+        if during is not None:
+            during()
+        held = self.lines.get((id, qid))
+        if held is None or held < at:
+            self.lines[(id, qid)] = at
+        if self.crash:
+            raise Crash()
+        return {'lines': ['ANSWERED %s on %s (%s)' % (id, qid, at)]}
+
+
+class FilingTest(ApiCase):
+    """An answer to a question bound to a record is filed into the record (record_answer) and
+    the question marked `filed`; a failure leaves it `answered`, with `filing`, for the PM; a
+    crash anywhere is mended by POST questions/file (docs/action-hub.md "A question bound to a
+    record")."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = FileViews()
+        self.times = iter('2026-01-02T03:04:%02d+00:00' % s for s in range(5, 60))
+        self.now = next(self.times)
+        self.api = api.Api(self.store, views=self.views, clock=lambda: self.now)
+
+    def tick(self):
+        self.now = next(self.times)
+
+    def doc(self, qid):
+        return self.store.get('questions', qid)
+
+    def bound(self, rid='EX-1'):
+        return self.question(record={'repo': 'kit', 'id': rid})
+
+    def answer(self, qid, choice=0, **kw):
+        body = dict({'choice': choice}, **kw)
+        return self.ok('POST', '/questions/%s/answer' % qid, OWNER, body)
+
+    def refile(self, body=None):
+        return self.ok('POST', '/questions/file', AGENT, body if body is not None else {})
+
+    def pending(self):
+        return [p['id'] for p in self.ok('GET', '/pending', AGENT)['items']]
+
+    def test_a_crash_after_the_answer_is_stored_is_filed_by_the_retry(self):
+        qid = self.bound()
+        with mock.patch.object(api, 'file_answer', side_effect=Crash):
+            with self.assertRaises(Crash):
+                self.api.call('POST', BASE + '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        self.assertEqual(self.doc(qid)['status'], 'answered')
+        self.assertEqual(self.views.filed, [])
+        self.assertEqual(self.pending(), [qid])
+        got = self.refile()
+        self.assertEqual((got['filed'], got['failed']), ([qid], []))
+        self.assertEqual(self.views.lines, {('EX-1', qid): self.doc(qid)['answer']['at']})
+        self.assertEqual(self.doc(qid)['status'], 'filed')
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.refile()['filed'], [], 'a filed question is not filed again')
+
+    def test_an_answer_is_filed_at_once_and_leaves_the_pending_list(self):
+        other = self.bound()
+        qid = self.bound()
+        self.tick()
+        got = self.answer(qid, note='  why  ')
+        d = self.doc(qid)
+        self.assertEqual((got['status'], d['status'], d['filed_at']), ('filed', 'filed', self.now))
+        self.assertIsNone(d['filing'])
+        self.assertEqual((got['version'], got['filing']['filed']), (d['version'], True))
+        self.assertEqual(got['revision'], self.store.revision)
+        self.assertEqual(self.views.filed, [('kit', 'EX-1', qid, self.now, 't', 'first', 'why',
+                                             'api', False, [other])])
+        self.assertEqual(self.pending(), [])
+        self.assertEqual([q['id'] for q in self.ok('GET', '/questions', AGENT,
+                                                   query={'status': 'filed'})['items']], [qid])
+        self.answer(other, 'other', note='neither')
+        self.assertEqual(self.views.filed[-1][5:], ('Other', 'neither', 'api', True, []))
+
+    def test_a_crash_after_the_record_write_is_mended_by_the_retry(self):
+        qid = self.bound()
+        self.views.crash = True
+        with self.assertRaises(Crash):
+            self.api.call('POST', BASE + '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        self.assertEqual(self.doc(qid)['status'], 'answered')
+        self.assertEqual(self.views.lines, {('EX-1', qid): self.now})
+        self.views.crash = False
+        self.assertEqual(self.refile({'id': qid})['filed'], [qid])
+        self.assertEqual(self.views.lines, {('EX-1', qid): self.now})
+        self.assertEqual(len(self.views.filed), 2)
+        self.assertEqual(self.doc(qid)['status'], 'filed')
+
+    def test_a_failure_stays_pending_with_why_and_the_retry_files_it(self):
+        qid = self.bound()
+        self.views.fail = HubError('store', 'C:\\work\\repo is busy', '')
+        got = self.answer(qid)
+        d = self.doc(qid)
+        self.assertEqual((got['status'], d['status']), ('answered', 'answered'))
+        self.assertEqual(d['filing'], {'at': self.now, 'code': 'store',
+                                       'message': api.FILING_SAYS['store']})
+        self.assertEqual(got['version'], d['version'])
+        # the local owner is told the store's own text; the document, which goes over the
+        # tunnel, and an agent's retry never carry it
+        self.assertEqual(got['filing']['message'], 'C:\\work\\repo is busy')
+        self.assertEqual(self.refile()['failed'], [{'id': qid, 'code': 'store',
+                                                    'message': api.FILING_SAYS['store']}])
+        self.assertEqual(self.pending(), [qid])
+        self.views.fail = None
+        self.tick()
+        self.assertEqual(self.refile()['filed'], [qid])
+        d = self.doc(qid)
+        self.assertEqual((d['status'], d['filing'], d['filed_at']), ('filed', None, self.now))
+
+    def test_a_record_closed_meanwhile_falls_back_to_the_pm(self):
+        qid = self.bound()
+        self.views.fail = HubError('not_found', 'no such record', 'id')
+        self.answer(qid)
+        d = self.doc(qid)
+        self.assertEqual((d['status'], d['filing']['code']), ('answered', 'not_found'))
+        self.assertIn('the PM handles this answer', d['filing']['message'])
+        self.assertEqual(self.pending(), [qid])
+        self.ok('POST', '/questions/%s/log' % qid, AGENT,
+                {'ruling': 'decision-7', 'if_version': d['version']})
+        self.assertEqual(self.doc(qid)['status'], 'logged')
+        self.assertEqual(self.refile(), {'ok': True, 'filed': [], 'failed': [],
+                                         'revision': self.store.revision})
+        self.assertEqual(len(self.views.filed), 1, 'a logged question is never filed')
+
+    def test_a_server_with_no_record_write_leaves_the_answer_to_the_pm(self):
+        self.api = api.Api(self.store, views=BindViews(), clock=lambda: self.now)
+        qid = self.bound()
+        got = self.answer(qid)
+        self.assertEqual((got['status'], got['filing']['code']), ('answered', 'unavailable'))
+        self.assertEqual(self.doc(qid)['filing']['code'], 'unavailable')
+        self.assertEqual(self.pending(), [qid])
+
+    def test_two_filers_racing_write_the_record_once_and_mark_it_once(self):
+        qid = self.bound()
+        raced = []
+        self.views.during = lambda: raced.append(self.refile())
+        got = self.answer(qid)
+        self.assertEqual(raced[0]['filed'], [qid])
+        self.assertEqual(got['filing'], {'id': qid, 'filed': False, 'moved': True})
+        d = self.doc(qid)
+        self.assertEqual((d['status'], d['version']), ('filed', 3), 'asked, answered, filed')
+        self.assertEqual(self.views.lines, {('EX-1', qid): self.now})
+
+    def test_a_re_answer_while_the_first_is_filed_is_filed_by_its_own_call(self):
+        qid = self.bound()
+        first = self.now
+
+        def again():
+            self.tick()
+            self.answer(qid, 1)
+        self.views.during = again
+        got = self.answer(qid)
+        self.assertTrue(got['filing']['moved'])
+        d = self.doc(qid)
+        self.assertEqual((d['status'], d['answer']['label']), ('filed', 'second'))
+        self.assertEqual([f[3] for f in self.views.filed], [first, self.now])
+        self.assertEqual(self.views.lines, {('EX-1', qid): self.now}, 'the older never wins')
+
+    def test_a_filed_question_answered_again_is_filed_again(self):
+        qid = self.bound()
+        self.answer(qid)
+        self.tick()
+        self.views.fail = HubError('store', 'busy', '')
+        got = self.answer(qid, 1)
+        d = self.doc(qid)
+        self.assertEqual((got['status'], d['status'], d['filed_at']), ('answered', 'answered', None))
+        self.assertEqual(d['filing']['code'], 'store')
+        self.views.fail = None
+        self.tick()
+        self.assertEqual(self.answer(qid, 0)['status'], 'filed')
+        d = self.doc(qid)
+        self.assertEqual((d['filing'], d['filed_at'], d['answer']['label']),
+                         (None, self.now, 'first'))
+        self.assertEqual(self.views.lines, {('EX-1', qid): self.now})
+
+    def test_an_unbound_question_is_never_filed(self):
+        qid = self.question()
+        got = self.answer(qid)
+        self.assertNotIn('filing', got)
+        self.assertEqual(self.doc(qid)['status'], 'answered')
+        self.assertNotIn('filing', self.doc(qid))
+        self.assertEqual(self.refile({'id': qid})['filed'], [])
+        self.assertEqual(self.views.filed, [])
+        self.refused('not_found', 'id', 'POST', '/questions/file', AGENT, {'id': 'Q-404'})
+        self.refused('invalid', 'why', 'POST', '/questions/file', AGENT, {'why': 'x'})
+
+    def test_the_hub_start_files_what_is_left_and_logs_each_failure(self):
+        qid = self.bound()
+        self.views.fail = HubError('store', 'C:\\work\\repo is busy', '')
+        self.answer(qid)
+        said = []
+
+        class Timer(object):
+            def start(self):
+                pass
+
+        hub = serve.Hub(None, self.store, self.api, self.views, None, [], None, Timer(), [],
+                        log=lambda level, text: said.append((level, text)))
+        hub._refile()
+        self.assertEqual(said, [('note', '%s not filed: %s' % (qid, api.FILING_SAYS['store']))])
+        self.views.fail = None
+        self.assertTrue(hub.start())
+        for t in threading.enumerate():
+            if t.name == 'hub-refile':
+                t.join(30)
+        self.assertEqual(self.doc(qid)['status'], 'filed')
+        self.assertEqual(len(said), 1)
+
+
+class AnswerStoreTest(trw.Case):
+    """The owner's answer filed through SiteViews' record_answer into a real ref store."""
+
+    def setUp(self):
+        trw.Case.setUp(self)
+        self.named()
+        self.seed(**rec('FOO', state='parked', q='Q-1000', parked_at='2026-10-01'))
+        root, self.reread = self.repo.root, []
+        reread = self.reread
+
+        class Backlog(object):
+            def _named(self, repo):
+                return 'r', root
+
+            def reread(self, name, at):
+                reread.append((name, at))
+
+            def record(self, repo, rid):
+                return {'repo': repo, 'id': rid, 'where': 'open'}
+
+        self.views = serve.SiteViews(None, serve.Sources(), backlog_views=Backlog())
+        hub = tempfile.mkdtemp(prefix='kit-hubapi-')
+        self.addCleanup(shutil.rmtree, hub, True)
+        self.store = Store.open(hub, clock=CLOCK)
+        self.addCleanup(self.store.close)
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def test_site_views_file_the_answer_then_read_the_repository_again(self):
+        out = self.views.record_answer('r', 'FOO', 'Q-1000', NOW, 'Which one?', 'first', '', 'web',
+                                       False, [])
+        self.assertTrue(any('UNPARKED' in line for line in out['lines']), out['lines'])
+        self.assertEqual(self.reread, [('r', self.repo.root)])
+        self.assertEqual(self.field('FOO', 'answer'), ['Q-1000 ' + NOW])
+
+    def test_the_owner_answer_route_files_into_the_record_and_marks_it_filed(self):
+        status, got = self.api.call('POST', BASE + '/questions', AGENT,
+                                    {'title': 'Which one?', 'options': OPTIONS,
+                                     'record': {'repo': 'r', 'id': 'FOO'}})
+        self.assertEqual((status, got['id']), (200, 'Q-1000'), got)
+        status, got = self.api.call('POST', BASE + '/questions/Q-1000/answer', OWNER,
+                                    {'choice': 1, 'note': 'go'}, via='web')
+        self.assertEqual((status, got['status']), (200, 'filed'), got)
+        self.assertEqual(self.store.get('questions', 'Q-1000')['status'], 'filed')
+        self.assertEqual(self.field('FOO', 'state'), ['open'])
+        self.assertEqual(self.field('FOO', 'answer'), ['Q-1000 ' + NOW])
+        body = self.read('FOO')['body']
+        self.assertIn('Answer: second', body)
+        self.assertIn('Via: web', body)
+        # the retry finds nothing left, and filing the record again would change nothing
+        self.assertEqual(self.api.call('POST', BASE + '/questions/file', AGENT, {})[1]['filed'],
+                         [])
+
+
 if __name__ == '__main__':
     unittest.main()

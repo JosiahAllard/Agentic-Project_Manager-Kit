@@ -175,5 +175,87 @@ class Delete(Case):
         self.assertEqual(self.read('FOO')['where'], 'open')
 
 
+AT, LATER, EARLIER = ('2026-10-02T09:00:%s+00:00' % s for s in ('10', '20', '05'))
+
+
+class Answer(Case):
+    """answer: a hub question's answer filed into the record it is bound to (plan_answer),
+    idempotent on the question and its `at`."""
+
+    def setUp(self):
+        Case.setUp(self)
+        self.named()
+        self.seed(**rec('FOO', state='parked', q='Q-101', parked_at='2026-10-01'))
+
+    def answer(self, at=AT, qid='Q-101', rid='FOO', **kw):
+        return recordwrite.answer(self.repo.root, rid, qid, at, 'Which one?', 'first', **kw)
+
+    def tip(self):
+        return self.repo.git('rev-parse', smod.STORE_REF).strip()
+
+    def test_the_last_answer_is_filed_and_unparks_the_record(self):
+        out = self.answer(note='the first, please', via='web')
+        self.assertTrue(any('UNPARKED' in line for line in out['lines']), out['lines'])
+        self.assertEqual(self.field('FOO', 'state'), ['open'])
+        self.assertEqual(self.field('FOO', 'answer'), ['Q-101 ' + AT])
+        body = self.read('FOO')['body']
+        self.assertIn('## Owner answer (Action Hub, %s)' % AT, body)
+        self.assertIn('Note: the first, please', body)
+        self.assertIn('Via: web', body)
+        log = self.repo.git('log', '-1', '--format=%B', smod.STORE_REF)
+        self.assertIn('Session: owner-hub', log)
+
+    def test_the_same_answer_again_and_an_older_one_change_nothing(self):
+        self.answer()
+        tip = self.tip()
+        for at in (AT, EARLIER):
+            with self.subTest(at=at):
+                out = self.answer(at)
+                self.assertTrue(any('no change' in line for line in out['lines']), out['lines'])
+                self.assertEqual(self.tip(), tip)
+        self.assertEqual(self.field('FOO', 'answer'), ['Q-101 ' + AT])
+
+    def test_a_newer_answer_replaces_its_line(self):
+        self.answer()
+        self.answer(LATER)
+        self.assertEqual(self.field('FOO', 'answer'), ['Q-101 ' + LATER])
+
+    def test_an_open_question_on_the_record_keeps_it_parked(self):
+        out = self.answer(waiting=['Q-102'])
+        self.assertTrue(any('still waits on Q-102' in line for line in out['lines']), out['lines'])
+        self.assertEqual(self.field('FOO', 'state'), ['parked'])
+
+    def test_an_other_answer_marks_the_record_for_review(self):
+        self.answer(other=True)
+        self.assertRegex(self.field('FOO', 'review')[0], r'^owner-answer \d{4}-\d{2}-\d{2}$')
+
+    def test_a_record_not_there_is_not_found_and_a_bad_answer_is_invalid(self):
+        self.refused(lambda: self.answer(rid='NOPE'), 'not_found')
+        self.refused(lambda: self.answer(qid='X-1'), 'invalid')
+        self.refused(lambda: self.answer(at='2026-10-02 09:00'), 'invalid')
+        self.assertEqual(self.field('FOO', 'answer'), [])
+
+    def test_a_lost_race_plans_again_on_the_record_the_winner_wrote(self):
+        # the other question's answer publishes between this write's plan and its publish: the
+        # write plans again, sees both answers and so ends the wait
+        real, attempts = recordwrite.opener.open_store, []
+
+        def opened(*a, **kw):
+            ctx = real(*a, **kw)
+            if not attempts:
+                def hook(attempt):
+                    attempts.append(attempt)
+                    if attempt == 0:
+                        self.answer(qid='Q-102', at=LATER)
+                ctx.store.before_publish = hook
+            return ctx
+        with mock.patch.object(recordwrite.opener, 'open_store', opened):
+            out = self.answer(waiting=['Q-102'])
+        self.assertEqual(attempts, [0, 1])
+        self.assertEqual(sorted(self.field('FOO', 'answer')), ['Q-101 ' + AT, 'Q-102 ' + LATER])
+        self.assertEqual(self.field('FOO', 'state'), ['open'])
+        self.assertTrue(any('UNPARKED' in line for line in out['lines']), out['lines'])
+
+
 if __name__ == '__main__':
     unittest.main()
