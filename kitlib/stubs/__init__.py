@@ -98,7 +98,7 @@ RETIRED = ('ruling_cites',)
 KIT_ONLY = (
     'agent_roster', 'agent_temp_init', 'agent_view', 'auto_tasks', 'allow_rules', 'backlog_audit', 'backlog_lint', 'maint_lint', 'branch_overlap', 'config_move', 'delegated', 'hub', 'kit_tests', 'launch',
     'lock_release_check', 'machine_lock', 'machine_setup', 'no_window', 'pending', 'pm_data', 'pm_watch',
-    'plugin_refresh', 'render_content', 'worktree_sweep_task', 'kit_release',
+    'plugin_refresh', 'render_content', 'worktree_sweep_task', 'kit_release', 'stray_restore',
 )
 
 Outcome = collections.namedtuple('Outcome', 'code lines')
