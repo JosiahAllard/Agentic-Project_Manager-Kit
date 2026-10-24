@@ -116,7 +116,7 @@ class CDriveCheck(unittest.TestCase):
     def test_each_item_alone_on_c_names_itself_and_its_variable(self):
         for var, label in (("TEMP", "TEMP"), ("TMP", "TMP"), ("PIP_CACHE_DIR", "pip cache"),
                            ("npm_config_cache", "npm cache"), ("NUGET_PACKAGES", "nuget packages"),
-                           ("DOTNET_CLI_HOME", "dotnet CLI home"), ("CLAUDE_CONFIG_DIR", "Claude transcripts"),
+                           ("DOTNET_CLI_HOME", "dotnet CLI home"), ("CLAUDE_CONFIG_DIR", "agent transcripts"),
                            ("NUGET_HTTP_CACHE_PATH", "nuget http cache"), ("GRADLE_USER_HOME", "gradle home"),
                            ("UV_CACHE_DIR", "uv cache")):
             with self.subTest(var=var):
@@ -124,7 +124,7 @@ class CDriveCheck(unittest.TestCase):
                 self.assertEqual(len(out), 1)
                 self.assertEqual(out[0].count(" (C:"), 1, out)
                 self.assertIn("%s (C:\\x" % label if var != "CLAUDE_CONFIG_DIR" else
-                              "Claude transcripts (C:\\x\\projects", out[0])
+                              "agent transcripts (C:\\x\\projects", out[0])
                 self.assertIn("set %s)" % var, out[0])
 
     def test_defaults_apply_when_the_overrides_are_unset(self):
@@ -133,7 +133,7 @@ class CDriveCheck(unittest.TestCase):
         self.assertEqual(len(out), 1)
         for part in ("pip cache (C:\\L\\pip\\Cache; set PIP_CACHE_DIR)", "npm cache (C:\\L\\npm-cache; set npm_config_cache)",
                      "nuget packages (C:\\U\\.nuget\\packages; set NUGET_PACKAGES)",
-                     "Claude transcripts (C:\\U\\.claude\\projects; set CLAUDE_CONFIG_DIR)",
+                     "agent transcripts (C:\\U\\.claude\\projects; set CLAUDE_CONFIG_DIR)",
                      "nuget http cache (C:\\L\\NuGet\\v3-cache; set NUGET_HTTP_CACHE_PATH)",
                      "gradle home (C:\\U\\.gradle; set GRADLE_USER_HOME)", "uv cache (C:\\L\\uv\\cache; set UV_CACHE_DIR)"):
             self.assertIn(part, out[0])
@@ -167,7 +167,7 @@ class CDriveCheck(unittest.TestCase):
 
     def test_a_claude_folder_linked_onto_c_is_a_hit(self):
         out = pmstart.cdrive_lines(environ=dict(D_ENV), realpath=lambda p: "C:\\real")
-        self.assertEqual(out, ["on the C: drive: Claude transcripts (C:\\real\\projects; set CLAUDE_CONFIG_DIR)"])
+        self.assertEqual(out, ["on the C: drive: agent transcripts (C:\\real\\projects; set CLAUDE_CONFIG_DIR)"])
 
     def test_the_machine_scope_environment_is_not_read(self):
         with mock.patch("kitlib.launcher.host._user_env", return_value="C:\\WINDOWS\\TEMP") as user_env, \

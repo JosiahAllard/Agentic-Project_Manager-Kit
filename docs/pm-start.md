@@ -165,7 +165,7 @@ nothing. Items: `TEMP`, `TMP`; the pip cache (`PIP_CACHE_DIR`, else `%LOCALAPPDA
 (`npm_config_cache`, else `%LOCALAPPDATA%\npm-cache`); the nuget packages (`NUGET_PACKAGES`, else
 `%USERPROFILE%\.nuget\packages`); the nuget http cache (`NUGET_HTTP_CACHE_PATH`, else `%LOCALAPPDATA%\NuGet\v3-cache`); the dotnet CLI home
 (`DOTNET_CLI_HOME`, checked only when set); the gradle home (`GRADLE_USER_HOME`, else `%USERPROFILE%\.gradle`);
-the uv cache (`UV_CACHE_DIR`, else `%LOCALAPPDATA%\uv\cache`); the Claude transcripts (`projects/` under
+the uv cache (`UV_CACHE_DIR`, else `%LOCALAPPDATA%\uv\cache`); the Claude transcripts, labelled "agent transcripts" (`projects/` under
 `CLAUDE_CONFIG_DIR`, else `%USERPROFILE%\.claude`, resolved through links with `os.path.realpath`, so a
 junction to another drive is not a hit). It reads this process's environment variables only (never the
 machine-scope TEMP of system services), runs no subprocess (no `npm config get`), and skips a relative path or a default whose base

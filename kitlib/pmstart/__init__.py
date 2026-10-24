@@ -827,12 +827,14 @@ def _cdrive_items(get, realpath):
     """(label, path or None, env var that moves it) for each folder the C: drive warning covers; `get`
     reads one environment variable, `realpath` resolves links (the Claude folder may be a junction to
     another drive). A default that needs an unset base variable is None."""
+    from kitlib.launcher.accounts import CONFIG_DIR_ENV     # the host's config folder variable and default
+    from kitlib.launcher.settings import DEFAULT_FOLDER
     local, home = get("LOCALAPPDATA"), get("USERPROFILE")
 
     def under(base, *parts):
         return os.path.join(base, *parts) if base else None
-    claude = get("CLAUDE_CONFIG_DIR") or under(home, ".claude")
-    claude = realpath(claude) if claude else None
+    config = get(CONFIG_DIR_ENV) or under(home, DEFAULT_FOLDER)
+    config = realpath(config) if config else None
     return [
         ("TEMP", get("TEMP"), "TEMP"),
         ("TMP", get("TMP"), "TMP"),
@@ -844,7 +846,7 @@ def _cdrive_items(get, realpath):
         ("dotnet CLI home", get("DOTNET_CLI_HOME"), "DOTNET_CLI_HOME"),
         ("gradle home", get("GRADLE_USER_HOME") or under(home, ".gradle"), "GRADLE_USER_HOME"),
         ("uv cache", get("UV_CACHE_DIR") or under(local, "uv", "cache"), "UV_CACHE_DIR"),
-        ("Claude transcripts", under(claude, "projects"), "CLAUDE_CONFIG_DIR"),
+        ("agent transcripts", under(config, "projects"), CONFIG_DIR_ENV),
     ]
 
 
