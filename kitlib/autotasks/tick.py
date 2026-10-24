@@ -146,9 +146,13 @@ def home_problem(folder, home=None):
 
 def unignored(pm):
     """None when git ignores the state folder in the PM repository `pm`; else the problem: the
-    line its .pm-kit/.gitignore lacks, or why git could not tell."""
+    line its .pm-kit/.gitignore lacks, or why git could not tell (a git that cannot run included:
+    the session-start lines call this too, and must never fail on it)."""
     from kitlib.config import move
-    left, why = move.ignored(pm, [DIR_NAME + '/' + STATE_NAME])
+    try:
+        left, why = move.ignored(pm, [DIR_NAME + '/' + STATE_NAME])
+    except Exception as e:
+        left, why = None, '%s: %s' % (type(e).__name__, e)
     if left is None:
         return 'git could not tell whether the auto-tasks state folder is ignored in %s (%s)' % (pm, why)
     if left:

@@ -217,6 +217,16 @@ class Place(Base):
         self.assertIn('git could not tell', why)
         self.assertIn('fatal: no repo', why)
 
+    def test_git_that_cannot_run_is_a_problem_saying_why_never_a_raise(self):
+        from kitlib.config import move
+
+        def boom(pm, rels):
+            raise OSError('git.exe not found')
+        with mock.patch.object(move, 'ignored', boom):
+            why = UNIGNORED(self.pm)
+        self.assertIn('git could not tell', why)
+        self.assertIn('OSError: git.exe not found', why)
+
 
 @real_git('git check-ignore on the PM repo: the fake lacks check-ignore')
 class Ignored(unittest.TestCase):
