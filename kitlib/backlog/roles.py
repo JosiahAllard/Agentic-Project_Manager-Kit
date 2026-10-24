@@ -108,7 +108,7 @@ ACTIONS = collections.OrderedDict([
     ('retire', Row(('retire',), MEDIUM, LEADS, (), ())),
     ('delete', Row(('delete',), MEDIUM, LEADS, (), ())),
     ('clear-review', Row(('clear-review',), MEDIUM, LEADS, (), ())),
-    ('retarget', Row(('retarget', 'migrate'), HIGH, TOP, (), ())),
+    ('retarget', Row(('retarget', 'migrate', 'uncite'), HIGH, TOP, (), ())),
     # `catch-up --apply PATH...` commits the PM data worktree's uncommitted record paths; the plain
     # `catch-up` lists them (a read). Coordinators, the PM and the owner use it.
     ('catch-up', Row(('catch-up',), MEDIUM, LEADS, (), ())),
