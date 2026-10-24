@@ -21,7 +21,7 @@ One rule runs through all three: a reading that failed is printed as `?`, `UNKNO
 - **stray lines**: from `kitlib.git.stray.check`.
 - **report hooks**.
 - **engines and ports**: only when configured.
-- **config**: which machine config file is read, from `kitlib.preflight.configline` (docs/kit-json.md "Moving the machine config folder"): the file, `FALLBACK`, `WARN both`, `none` or `BROKEN`; keys are named, values never.
+- **config**: which machine config file is read, from `kitlib.preflight.configline` (docs/kit-json.md "Moving the machine config folder"): the PM repository's `.pm-kit` folder with the files in it, `none` (no pointer and no config in the home folder) or `BROKEN` with the reason (a config left in the home folder, a bad pointer, a file the strict reader refuses); keys are named, values never.
 - **pointer**: the PM-repo pointer (`HKLM\SOFTWARE\pm-kit` value `pm_repo`), from `configline.pointer_line` over `kitlib.config.pointer` (docs/kit-json.md "The PM repo pointer"): the PM repository's path, `none`, or `BROKEN` with the reason. Under the kit's tests the registry is never read.
 - **traps**: `.kit.json` "preflight".traps when set; else `docs/ops/gotchas.md (read once per task; add yours)`, printed only when the checkout has that file (`kitlib/preflight/report.py`, `settings.DEFAULT_TRAPS_FILE`), so no line when it has neither.
 - **index**.

@@ -248,16 +248,18 @@ def run_managed(ctx, apply=False, out=None):
             if out:
                 out(l)
 
+    overlay = managed.overlay_path(ctx.home)
     emit('managed-settings: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
          '  kit:            %s' % ctx.kit,
          '  template:       %s' % kit_file(ctx.kit, managed.SOURCE),
-         '  overlay:        %s%s' % (managed.overlay_path(ctx.home),
-                                     '' if os.path.lexists(managed.overlay_path(ctx.home)) else ' (none)'),
+         '  overlay:        %s%s' % (overlay or '<PM repo>/.pm-kit/%s' % managed.OVERLAY,
+                                     '' if overlay and os.path.lexists(overlay) else ' (none)'),
          '  managed file:   %s' % ctx.host.managed_path())
-    if not os.path.lexists(managed.overlay_path(ctx.home)):
-        emit('WARNING: no overlay found at %s: the file is made from the template '
+    if not overlay or not os.path.lexists(overlay):
+        emit('WARNING: no overlay found at %s%s: the file is made from the template '
              'alone, without your own lines (the agents\' git identity, the auto-mode lines that name '
-             'you)' % managed.overlay_path(ctx.home))
+             'you)' % (overlay or '<PM repo>/.pm-kit/%s' % managed.OVERLAY,
+                       '' if overlay else ' (no usable PM-repo pointer yet: tools/machine_setup.py --pm-repo)'))
     return _carry_out('managed-settings', managed.survey(ctx, apply=apply), apply, emit, lines)
 
 
