@@ -16,7 +16,7 @@ description: Use before running shell commands on the Windows machine (Git Bash 
 9. One foreground gate per worktree, on its assigned ports; never background one with a stray `&` (two at once fought over the same build).
 10. Cleanup goes through the kit's tools (`python <kit>/tools/worktree_remove.py -C <main checkout> <worktree>`), only for a worktree that is yours to remove; otherwise report it to the lander or coordinator.
 11. Read a tool's usage with `<tool> --help` alone, or into a file you read with Read; never pipe it to `head`, `tail` or `grep`.
-12. Wait on a background run with its own wait verb (`gate.py wait-result --timeout`, under 5 minutes), never with a foreground `sleep` or poll loop.
+12. Wait on a background run as docs/gate.md "Waiting on a gate: who arms what" says (a run of your own: `run_in_background` and its exit notice), never with a foreground `sleep` or a poll loop.
 
 ## Never
 
