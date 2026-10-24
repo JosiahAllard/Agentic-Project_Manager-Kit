@@ -85,13 +85,16 @@ class BacklogChecks(unittest.TestCase):
             return audit_check.FINDINGS, ['AUDIT CHECK 7 days', 'NOTE: the log has a bad line',
                                           'UNAUDITED abc1234 set FOO --why "see private words"',
                                           'UNAUDITED def5678 close BAR', 'UNMAPPED x y',
-                                          'FINDINGS 3']
+                                          'UNVERIFIED abc1234 answer: x y (not written by z)',
+                                          'FINDINGS 4']
         got, notes = backlog.audit('r', CMD, run=run)
         self.assertEqual(calls, [(7, False)])
         self.assertEqual([(f.key, f.text) for f in got],
                          [('UNAUDITED', '2 store change(s) in 7 days with no audit line'),
                           ('UNMAPPED', '1 audit line(s) in 7 days whose role the role map does'
-                                       ' not list')])
+                                       ' not list'),
+                          ('UNVERIFIED', '1 answer line(s) in 7 days the hub did not file or'
+                                         ' does not hold')])
         self.assertIn('backlog_audit', got[0].fix)
         self.assertEqual(notes, ['audit: the log has a bad line'])
         for f in got:
