@@ -512,30 +512,38 @@ def python_script(inv):
 # is read as `python <kit>/tools/X.py ...` (docs/guard.md "The kit command")
 KIT = 'kit'
 KIT_SCRIPT = 'kit.py'
-KIT_NAME_END_RE = re.compile(r'[\s"]')
+KIT_NAME_SPLIT_RE = re.compile(r'[\s"]+')
 
 
 def kit_tool(words):
-    """(script, Words) for the kit command given the Words `words` after it: the tool its first
-    word names as a script name ('<name>.py') and the Words after that name. The name is the
-    word lower-cased and cut at its first blank or double quote, the rest of the word split at
-    its blanks into Words of their own, so a word Windows PowerShell 5.1 may split at its quote
-    (or one holding blanks) reads as its first token and the arguments after it (it fails
-    closed). Script '' when no
-    tool is named (no word, a literal option first: tools/kit.py runs no tool then), None when
-    the name is computed (read as python reads a computed script: not at all)."""
-    if not words:
-        return '', []
-    w = words[0]
-    if w.dyn:
-        return None, list(words[1:])
-    if w.text.startswith('-'):
-        return '', list(words)
-    parts = KIT_NAME_END_RE.split(w.text.lower(), 1)
-    if not parts[0]:
-        return '', list(words)
-    split = [sh.Word(t, w.dyn, w.start, w.end, synth=True) for t in parts[1].split()] if len(parts) > 1 else []
-    return parts[0] + '.py', split + list(words[1:])
+    """(script, Words) for the kit command given the Words `words` after it (_kit_name)."""
+    script, rest, _k = _kit_name(words)
+    return script, rest
+
+
+def _kit_name(words):
+    """(script, Words, k) for the kit command given the Words `words` after it: the tool its first
+    token names as a script name ('<name>.py'), the Words after that token, and the index in
+    `words` of the word holding it. The words are split at blanks and double quotes, empty tokens
+    skipped: Windows PowerShell 5.1 may pass a word holding a double quote on unescaped (so the
+    program splits it there or keeps the quote) and drops an empty word, so `kit '""hub' x`,
+    `kit 'hub" x'` and `kit '' hub x` all read as hub with x after it. A word that may hand on
+    more than one argument reads as its first token, the rest of the word split into Words of its
+    own: the guard reads every token the program may see as a tool or an argument, so it fails
+    closed. Script '' when no tool is named (no token, or a literal option first: tools/kit.py
+    runs no tool then) with `words` as given, None when the first word that holds a token is
+    computed (read as python reads a computed script: not at all)."""
+    for k, w in enumerate(words):
+        if w.dyn:
+            return None, list(words[k + 1:]), k
+        tokens = [t for t in KIT_NAME_SPLIT_RE.split(w.text) if t]
+        if not tokens:
+            continue
+        if tokens[0].startswith('-'):
+            return '', list(words), k
+        split = [sh.Word(t, w.dyn, w.start, w.end, synth=True) for t in tokens[1:]]
+        return tokens[0].lower() + '.py', split + list(words[k + 1:]), k
+    return '', list(words), len(words)
 
 
 def tool_at(inv):
@@ -564,8 +572,8 @@ def tool_at(inv):
 
 
 def _kit_at(args, i):
-    script, rest = kit_tool(args[i:])
-    return (i, script, rest) if script else None
+    script, rest, k = _kit_name(args[i:])
+    return (i + k, script, rest) if script else None
 
 
 def wrapper(inv):

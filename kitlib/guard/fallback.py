@@ -76,11 +76,14 @@ XARGS_BARE_GIT = r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?[ \t]*(?=[|;&\n]|$)'
 # forms git-shared-ref reads (rules.git_shared_ref, git_shared_push, git_shared_ref_forms). A match
 # is only a reason to read the part again; the re-read rules decide.
 REST = r'[^|;&\n]*'                                   # the rest of the command
-# the kit command before the name of the tool it runs (kit, kit.cmd, tools/kit.py, -m tools.kit;
-# docs/guard.md "The kit command"), the name maybe quoted
-KIT_WORD = r'(?:(?<![\w.-])kit(?:\.py|\.cmd|\.exe|\.bat)?|\btools\.kit)["\']?\s+["\']?'
-# the ANYWHERE rules re-read from the start of the part of the line holding the match, not the
-# match itself, so the words before the tool's name are read too
+# the kit command before the name of the tool it runs (kit, tools/kit.py, -m tools.kit, and kit
+# with each suffix commands.base_name takes off a program: kit.cmd, kit.com; docs/guard.md "The
+# kit command"), the name maybe quoted, after quotes or empty words (commands.kit_tool skips them)
+KIT_WORD = (r'(?:(?<![\w.-])kit(?:\.py|%s)?|\btools\.kit)["\']*(?:\s+["\']+)*\s+["\']*'
+            % '|'.join(re.escape(s) for s in cm.EXE_SUFFIXES))
+# the ANYWHERE rules re-read from the start of the part of the line holding the match, so the
+# words before the tool's name are read too, and then from the match itself when that gave
+# nothing: a computed program or an open quote at the part's start leaves the run unreadable there
 SEGMENT_RULES = ('owner-tool', 'wrapped-gate')
 SHARED_REF_PATTERNS = (
     G + r'update-ref\b',
@@ -132,7 +135,8 @@ ANYWHERE = (
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-(?:send-pack|http-push|remote-[\w-]+)(?:\.exe)?\b'),
     # machine setup run to act (rules.owner_tool): any session but the owner's own. This and
     # wrapped-gate re-read from the start of the part of the line holding the match (SEGMENT_RULES),
-    # so the kit command before the tool's name (`kit machine_setup --apply`) is read too
+    # so the kit command before the tool's name (`kit machine_setup --apply`) is read too, and then
+    # from the match (`$PY tools/machine_setup.py --apply`)
     ('owner-tool', r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup(?:\.py|\.ps1)?|new-repo\.ps1)(?![A-Za-z0-9_])'
                    r'[^|;&\n]*\s-{1,2}a'),
     ('wrapped-gate', r'(?:\bgate\.py\b|\bmachine_lock\.py\s+run\b|' + KIT_WORD
@@ -331,7 +335,11 @@ def check(event, ctx, text, cwd, role, parsed):
         if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
                 pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):
             continue
-        d = reread(segment_start(text, m.start()) if rule in SEGMENT_RULES else m.start(), where or cwd)
+        d, first = None, segment_start(text, m.start()) if rule in SEGMENT_RULES else m.start()
+        if first != m.start():                  # the words before the name too (a kit command's)
+            d = reread(first, where or cwd)
+        if d is None:                           # from the match too: an unreadable start may hide the run
+            d = reread(m.start(), where or cwd)
         if ungated and d is None:
             continue                            # no push_block: only a delete or a forced push of main is refused
         d = answer(d, rule)

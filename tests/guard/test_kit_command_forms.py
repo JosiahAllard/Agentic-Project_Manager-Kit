@@ -139,7 +139,11 @@ class Unreadable(unittest.TestCase):
             for text in ('python "%s/tools/%s.py" %s' % (kit, tool, args),
                          'python "%s/tools/kit.py" %s %s' % (kit, tool, args),
                          'kit %s %s' % (tool, args),
-                         'kit.cmd %s %s' % (tool, args)):
+                         'kit.cmd %s %s' % (tool, args),
+                         'kit.com %s %s' % (tool, args),
+                         'KIT.COM %s %s' % (tool, args),
+                         "kit '' %s %s" % (tool, args),
+                         'kit \'""%s\' %s' % (tool, args)):
                 with self.subTest(text):
                     d = decide(bash(text, self.w.wt, True), self.w.ctx())
                     self.assertIsNotNone(d, 'allowed')
@@ -157,6 +161,20 @@ class Unreadable(unittest.TestCase):
                 self.assertIsNotNone(d, 'allowed')
                 self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
                 self.assertIn('could not read this command', d.reason)
+
+    def test_a_part_whose_start_is_unreadable_is_read_from_the_tool_s_name_too(self):
+        # a computed program or an open quote before the name in the same part: read from the
+        # part's start the run is unreadable, read from the name it is the owner's tool
+        for shell, text in (('bash', '$PY tools/machine_setup.py --apply'),
+                            ('bash', '"$PY" tools/machine_setup.py --owner-email a@example.invalid --apply'),
+                            ('bash', "echo 'x python tools/machine_setup.py --apply"),
+                            ('ps', '& $py C:\\k\\tools\\machine_setup.py --apply'),
+                            ('ps', "echo 'x python C:\\k\\tools\\machine_setup.py --apply")):
+            with self.subTest(text):
+                ev = (bash if shell == 'bash' else ps)(text, self.w.wt, True)
+                d = decide(ev, self.w.ctx())
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
 
     def test_a_hidden_piped_gate_is_judged_the_same_in_every_form(self):
         W.deny_softened()                       # wrapped-gate is off by default (test_cheap.py)
@@ -181,7 +199,11 @@ class PowerShellSplit(unittest.TestCase):
         self.addCleanup(self.w.cleanup)
 
     def test_an_owner_verb_after_the_quote_is_refused(self):
-        for text in ('kit \'hub" answer EX-1 --label yes\'', '& kit \'hub" todos done T-1\''):
+        for text in ('kit \'hub" answer EX-1 --label yes\'', '& kit \'hub" todos done T-1\'',
+                     # a double quote before the name, or an empty word (5.1 drops it) before it
+                     'kit \'""hub\' answer EX-1 --label yes', 'kit \'"hub"\' answer EX-1 --label yes',
+                     'kit \'"\' hub answer EX-1 --label yes', "kit '' hub answer EX-1 --label yes",
+                     'kit "" hub answer EX-1 --label yes', "& kit '' '\"hub' todos done T-1"):
             with self.subTest(text):
                 d = decide(ps(text, self.w.wt, True), self.w.ctx())
                 self.assertIsNotNone(d, 'allowed')
@@ -211,6 +233,20 @@ class ToolRun(unittest.TestCase):
     def test_a_split_or_quoted_name_reads_its_first_token(self):
         self.assertEqual(self.named("Start-Process kit -ArgumentList 'backlog close X-1'", sh.PS)[0], 'backlog.py')
         self.assertEqual(self.named('kit \'backlog" x\' close', sh.PS)[0], 'backlog.py')
+        # the name is the first token of any word, a double quote before it and empty words skipped
+        for text, want in (('kit \'""backlog\' close X-1', ('backlog.py', ['close', 'X-1'])),
+                           ('kit \'"backlog"\' close X-1', ('backlog.py', ['close', 'X-1'])),
+                           ('kit \'" backlog close\' X-1', ('backlog.py', ['close', 'X-1'])),
+                           ("kit '' backlog close X-1", ('backlog.py', ['close', 'X-1'])),
+                           ('kit \'"\' \'\' backlog close X-1', ('backlog.py', ['close', 'X-1'])),
+                           ("kit '' $t close", None), ("kit '' -h", ('kit', ['', '-h']))):
+            with self.subTest(text):
+                self.assertEqual(self.named(text, sh.PS), want)
+
+    def test_tool_at_names_the_word_holding_the_name(self):
+        parsed = cm.read("kit '' gate --full", sh.PS, 'C:\\w')
+        got = cm.tool_at(cm.invocation(parsed.commands[0]))
+        self.assertEqual((got[0], got[1], [w.text for w in got[2]]), (1, 'gate.py', ['--full']))
 
     def test_no_tool(self):
         self.assertEqual(self.named('kit -h'), ('kit', ['-h']))
