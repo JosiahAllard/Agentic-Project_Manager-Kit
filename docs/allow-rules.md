@@ -135,7 +135,11 @@ with a prefix of it, unless the tool sets `allow_abbrev=False`.
 The allows name the export folder under `%LOCALAPPDATA%`. If an agent could write that folder, an
 allow would run code the agent wrote. Whether the guard refuses agent writes there is not checked
 here. The `kit land` allow names no folder at all: it runs whichever `kit` the shell finds first on
-the PATH, so the same holds for every folder on the PATH before the kit's own.
+the PATH, so the same holds for every folder on the PATH before the kit's own. The kit command
+then picks the folder whose `tools/land.py` it runs (`kitcmd.resolve`) from the machine config's
+`plugin.export_dir` and the export that `<export_dir>/.claude-plugin/marketplace.json` names, so
+the allow also trusts the machine config file and that marketplace file: whoever can write either
+can point the allowed `kit land` at another folder's tools.
 
 ## Session start
 
