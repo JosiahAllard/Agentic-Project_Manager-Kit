@@ -157,6 +157,18 @@ agent-temp-sweep: ...", after the other two lines, never "not registered"
 config reader is one `could not check agent_temp: ...` line. Code: `kitlib/pmstart` `agent_temp_lines`; tests:
 `tests/pmstart/test_agent_temp_check.py`.
 
+## C: drive (`cdrive`)
+
+After `agent_temp`, the `cdrive` check prints one line, "on the C: drive: <item> (<path>; set <VAR>), ...",
+naming each folder that resolves to the C: drive and the variable that would move it; nothing on C: prints
+nothing. Items: `TEMP`, `TMP`; the pip cache (`PIP_CACHE_DIR`, else `%LOCALAPPDATA%\pip\Cache`); the npm cache
+(`npm_config_cache`, else `%LOCALAPPDATA%\npm-cache`); the nuget packages (`NUGET_PACKAGES`, else
+`%USERPROFILE%\.nuget\packages`); the dotnet CLI home (`DOTNET_CLI_HOME`, checked only when set); the Claude
+transcripts (`projects/` under `CLAUDE_CONFIG_DIR`, else `%USERPROFILE%\.claude`). It reads environment
+variables only, runs no subprocess (no `npm config get`), and skips a relative path or a default whose base
+variable is unset. It changes nothing. Code: `kitlib/pmstart` `cdrive_lines`; tests:
+`tests/pmstart/test_agent_temp_check.py` (`CDriveCheck`).
+
 ## Console tasks (`console_tasks`)
 
 After `agent_temp` and before the foreground lock check, always on and with no config key, the
