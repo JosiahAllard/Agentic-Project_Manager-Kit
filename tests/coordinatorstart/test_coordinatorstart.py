@@ -14,6 +14,7 @@ from kitlib.lock import api
 from kitlib.records import landing
 from tests.home import machine_config
 from tests.lock.helpers import OWNER, StoreCase
+from tests.realgit import real_git
 
 # the coordinator rules hook as the plugin's hooks.json runs it (boot/hook.py, its coordinator part)
 HOOK = [os.path.join(os.path.dirname(__file__), "..", "..", "boot", "hook.py"), "claude", "SessionStart", "coordinator"]
@@ -564,6 +565,7 @@ class StubsLineTest(unittest.TestCase):
             self.assertIn("could not check stubs: OSError: disk gone", text)
 
 
+@real_git('the hook child runs git check-ignore (the auto-tasks check): the fake lacks check-ignore')
 class HookTest(unittest.TestCase):
     def run_hook(self, role, config):
         with tempfile.TemporaryDirectory() as d:

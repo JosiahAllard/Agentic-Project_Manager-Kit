@@ -592,7 +592,6 @@ class ProxyCheckBlame(ProxyCheckCase):
         self.write('docs/STATE.md', '# State\n\n- row | on main |\n- row | side only |\n')
         self.commit('side row')
         self.r.git('checkout', '-q', 'main')
-        # Called directly for days=0: run()'s `days or stale_days` turns 0 into 14.
         out = self.stale({'state_docs': ['docs/STATE.md']}, 0, ref='side')
         self.assertIn('side only', out)                 # a line only the side branch has
         self.assertNotIn('NOT swept', out)
@@ -600,6 +599,12 @@ class ProxyCheckBlame(ProxyCheckCase):
         code, out = self.capture(stale=True, head='side')
         self.assertEqual(code, 0, out)
         self.assertTrue(out.splitlines()[-1].startswith('STALE REPORT (side as committed): '), out)
+
+    def test_days_zero_lists_a_doc_touched_today(self):
+        # `--stale --days 0` is an age of 0 days, not unset: the row committed a moment ago is listed.
+        code, out = self.capture(stale=True, days=0)
+        self.assertEqual(code, 0, out)
+        self.assertIn('docs/STATE.md:3 0 days | - row | on main |', out)
 
     def test_a_path_on_one_state_doc_does_not_change_the_ref_the_next_is_blamed_at(self):
         self.write('docs/A.md', '- row | names `tools/gone.py` |\n')

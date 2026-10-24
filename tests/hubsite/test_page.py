@@ -14,11 +14,13 @@ import re
 import shutil
 import unittest
 
-from kitlib.hubsite import httpd, pagecheck, serve
+from kitlib.hubsite import httpd, lockdoor, pagecheck, serve
 from kitlib.hubsite.api import BASE
+from kitlib.lock import api as lock_api
 from kitlib.proc import spawn
 from tests.hubsite import httpfix, pagedom
 from tests.hubsite.httpfix import get, post
+from tests.lock import helpers as lh
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WEB = os.path.join(ROOT, "kitlib", "hubsite", "web")
@@ -95,8 +97,16 @@ class ServedTest(httpfix.ListenerCase):
             self.assertEqual(r.header(name), [value])
         self.assertEqual(self.errors(), [])
 
+    def test_the_old_lock_page_is_gone_and_answers_not_found_without_a_redirect(self):
+        lis = self.listener(static_dir=serve.STATIC_DIR)
+        r = get(lis.port, "/lock.html")
+        self.assertEqual(r.status, 404)
+        self.assertEqual(r.header("Location"), [])
+        self.assertFalse(os.path.exists(os.path.join(WEB, "lock.html")))
+        self.assertEqual(self.errors(), [])
+
     def test_the_shared_stylesheet_is_served_as_css_and_loads_nothing(self):
-        """Both pages link hub.css (the tokens and shell rules they share); it is a static file of the page's folder."""
+        """The page links hub.css (the tokens and shell rules); it is a static file of the page's folder."""
         lis = self.listener(static_dir=serve.STATIC_DIR)
         r = get(lis.port, "/hub.css")
         self.assertEqual(r.status, 200)
@@ -2920,9 +2930,9 @@ class ScheduleTest(unittest.TestCase):
         self.assertTrue(got["text"].startswith("Machine"), got)
         self.assertEqual((got["sec"], got["hash"]), ("schedule", "#schedule"))
 
-    def test_the_settings_link_is_the_one_way_to_the_old_page(self):
-        got = self.sch("""const a = $("#sch-settings"); return [a.getAttribute("href"), text(a), $$("a").length];""", sch_view())
-        self.assertEqual(got, ["/lock.html", "Machine settings (game mode, division, holds, stats)", 1])
+    def test_the_schedule_has_no_link_to_the_old_lock_page(self):
+        got = self.sch("""return [$$("a").length, $("#sch-settings") === null, $("#sctab-settings").textContent];""", sch_view())
+        self.assertEqual(got, [0, True, "Settings"])
 
     def test_one_watcher_serves_every_view_and_a_change_moves_the_view_that_is_open(self):
         got = self.sch("""
@@ -2953,9 +2963,460 @@ class ScheduleTest(unittest.TestCase):
                                 strip=[dict(HIST_OK, repo=bad)]))
         self.assertIn(bad, got["shown"])
         self.assertEqual(got["sinks"], [])
-        self.assertEqual(got["attrs"], ["a href"])                                    # the settings link only
+        self.assertEqual(got["attrs"], [])                                            # the page sets no link, source or style
         self.assertNotIn("script", got["tags"])
         self.assertNotIn("img", got["tags"])
+
+
+STATS = {"range": {"days": 7}, "rows": [{"kind": "engine-test", "repo": "alpha", "runs": 3, "done": 2, "failed": 1,
+                                         "interrupted": 0, "held_s": {"median": 300, "p90": 600, "max": 900},
+                                         "wait_s": {"median": 5, "max": 60}, "cpu_s": 1200, "peak_cpu_cores": 3.5,
+                                         "peak_mem_mb": 2048}]}
+GAMES = [{"exe": "alpha.exe", "name": "Alpha Strike", "anti_cheat": False, "pin": True},
+         {"exe": "beta.exe", "name": "beta.exe", "anti_cheat": True, "pin": False}]
+DIV = {"threads": 24, "cpu_slot_threads": 2, "cpu_slots": 12, "gpu_share": [1, 1], "half_cpu_slots": 6,
+       "half_gpu_slots": 1, "agent_cap": 4, "medium_cores": 2}
+
+
+def division(**own):
+    return {"division": DIV, "default_division": DIV, "owner_division": own, "wanted_division": DIV,
+            "cpu_slots": 12, "gpu_slots": 2, "agent_cap": 4, "changed": False, "reason": ""}
+
+
+def game(**kw):
+    return dict({"enabled": False, "hold": None, "slots": [], "would_take": [4, 5], "games": GAMES, "running": None}, **kw)
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ScheduleChangesTest(unittest.TestCase):
+    """The Schedule's New hold, hold Edit and Release, Game mode, Division and run stats: each change is one POST to its
+    lock route with the body the lock door reads, the answer's view drawn at once, a refusal said in the owner's words
+    with the form kept. (Taken over from the old /lock.html page's tests, onto the Schedule's own ids.)"""
+
+    PRE = """
+        let VIEW = %s, RESULT = {};
+        let REPLY = c => ({ status: 200, body: Object.assign({ ok: true, result: RESULT }, VIEW) });
+        server.route = c => c.method === "POST" ? REPLY(c) : c.path.startsWith("/lock/stats") ? { status: 200, body: %s } : undefined;
+        const posts = () => calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
+        const refuse = (status, code, message, field) => () => ({ status, body: { ok: false, error: { code, message, field: field || "lock" } } });
+        const status = () => ({ say: text($("#sch-status")), err: $("#sch-status").classList.contains("err") });
+        const withView = patch => { VIEW = Object.assign({}, VIEW, { view: Object.assign({}, VIEW.view, patch) }); };
+    """
+
+    def run_(self, body, view, hash="#schedule"):
+        pre = self.PRE % (json.dumps(view), json.dumps(STATS))
+        return dom("%s server.lock = %s; await start(); await visible(true);\n%s" % (pre, json.dumps(view), body), snapshot(strong=True), hash=hash)
+
+    def test_a_typed_hold_is_sent_as_typed_and_a_refusal_keeps_the_form(self):
+        got = self.run_("""
+            await click($("#sctab-holds"));
+            const r = { before: [!!$("#sch-newhold"), !!$("#sch-holdform")] };
+            await click($("#sch-newhold"));
+            r.shown = { form: !!$("#sch-holdform"), cpu: !!$("#sch-hcpu"), focus: document.activeElement === $("#sch-hend") };
+            await click($("#sch-holdform [data-scope=slots]"));
+            r.slots = { cpu: !!$("#sch-hcpu"), gpu: !!$("#sch-hgpu"), pressed: $$("#sch-holdform [data-scope]").map(b => b.getAttribute("aria-pressed")) };
+            await type($("#sch-hstart"), "18:00"); await type($("#sch-hend"), "+2h"); await type($("#sch-hnote"), "render");
+            await type($("#sch-hcpu"), "0-3"); await type($("#sch-hgpu"), "0");
+            REPLY = refuse(400, "invalid", "the machine lock refused: cpu slot 40 is not on this machine", "cpu");
+            await click($("#sch-holdgo"));
+            r.refused = Object.assign(status(), { form: !!$("#sch-holdform"), end: $("#sch-hend").value, go: $("#sch-holdgo").disabled });
+            REPLY = c => ({ status: 200, body: Object.assign({ ok: true, result: { hold: { scope: "slots", end: "2026-10-05T19:00:00Z" } } }, VIEW) });
+            await click($("#sch-holdgo"));
+            r.made = Object.assign(status(), { form: !!$("#sch-holdform"), posts: posts() });
+            await click($("#sch-newhold"));
+            await click($("#sch-holdform [data-scope=half]"));
+            await type($("#sch-hend"), "20:00");
+            await click($("#sch-holdgo"));
+            r.half = posts()[2];
+            return r;""", sch_view(holds=[HOLD1]))
+        self.assertEqual(got["before"], [True, False])
+        self.assertEqual(got["shown"], {"form": True, "cpu": False, "focus": True})
+        self.assertEqual(got["slots"], {"cpu": True, "gpu": True, "pressed": ["false", "false", "true"]})
+        self.assertEqual(got["refused"], {"say": "Not changed: the machine lock refused: cpu slot 40 is not on this machine.", "err": True,
+                                          "form": True, "end": "+2h", "go": False})
+        body = {"kind": "hold", "scope": "slots", "start": "18:00", "end": "+2h", "note": "render", "cpu": "0-3", "gpu": "0"}
+        self.assertEqual(got["made"]["posts"], [["/lock/holds", body], ["/lock/holds", body]])
+        self.assertEqual((got["made"]["say"], got["made"]["err"], got["made"]["form"]), ("Held slots to Mon 5 Oct 19:00.", False, False))
+        self.assertEqual(got["half"], ["/lock/holds", {"kind": "hold", "scope": "half", "start": "", "end": "20:00",
+                                                       "note": "", "cpu": "", "gpu": ""}])
+
+    def test_a_hold_is_edited_and_released_after_a_second_click_whoever_made_it(self):
+        agent = dict(HOLD1, id="a-1", owner="agent", repo="alpha", slug="s1")
+        got = self.run_("""
+            await click($("#sctab-holds"));
+            const card = id => $("#list [data-hold=" + id + "]");
+            const acts = id => card(id).querySelectorAll("[data-act=edit],[data-act=release],[data-act=release-go],[data-act=release-keep]").map(text);
+            const r = { start: acts("h-1") };
+            await click(card("h-1").querySelector("[data-act=edit]"));
+            r.edit = { what: text($("[data-form=edit] .sch-line")), note: $("#sch-enote").value, from: $("#sch-estart").value };
+            await type($("#sch-eend"), "21:00");
+            REPLY = refuse(409, "conflict", "the machine lock is busy, try again: another change is being written");
+            await click($("[data-act=edit-go]"));
+            r.busy = Object.assign(status(), { form: !!$("[data-form=edit]"), kept: $("#sch-eend").value });
+            RESULT = { hold: { id: "h-1", start: "2026-10-05T18:00:00Z", end: "2026-10-05T21:00:00Z" } };
+            REPLY = c => ({ status: 200, body: Object.assign({ ok: true, result: RESULT }, VIEW) });
+            await click($("[data-act=edit-go]"));
+            r.edited = Object.assign(status(), { form: !!$("[data-form=edit]") });
+            const n = posts().length;
+            await click(card("a-1").querySelector("[data-act=release]"));
+            r.ask = { sent: posts().length - n, acts: acts("a-1") };
+            await click(card("a-1").querySelector("[data-act=release-keep]"));
+            r.kept = { sent: posts().length - n, acts: acts("a-1") };
+            await click(card("a-1").querySelector("[data-act=release]"));
+            await click(card("a-1").querySelector("[data-act=release-go]"));
+            r.released = Object.assign(status(), { acts: acts("a-1") });
+            r.posts = posts();
+            return r;""", sch_view(holds=[HOLD1], agent_holds=[agent]))
+        self.assertEqual(got["start"], ["Edit", "Release"])
+        self.assertEqual(got["edit"], {"what": "Hold h-1, you whole: Mon 5 Oct 18:00 to Mon 5 Oct 20:00. "
+                                               "Type times as for New hold; leave a field blank to keep it.",
+                                       "note": "game night", "from": ""})
+        self.assertEqual(got["busy"], {"say": "Not changed: the machine lock is busy, try again: another change is being written.",
+                                       "err": True, "form": True, "kept": "21:00"})
+        self.assertEqual(got["edited"], {"say": "Changed hold h-1: Mon 5 Oct 18:00 to Mon 5 Oct 21:00.", "err": False, "form": False})
+        self.assertEqual(got["ask"], {"sent": 0, "acts": ["Release it", "Keep it"]})
+        self.assertEqual(got["kept"], {"sent": 0, "acts": ["Edit", "Release"]})
+        self.assertEqual(got["released"], {"say": "Released hold a-1.", "err": False, "acts": ["Edit", "Release"]})
+        edit = ["/lock/holds/h-1/edit", {"start": "", "end": "21:00", "note": "game night"}]
+        self.assertEqual(got["posts"], [edit, edit, ["/lock/holds/a-1/end", {}]])
+
+    def test_a_hold_in_the_now_tab_has_the_same_edit_and_release(self):
+        got = self.run_("""
+            await click(document.getElementById("row-hold:h-1"));
+            const r = { acts: $$("#sch-card [data-act=edit],#sch-card [data-act=release]").map(text) };
+            await click($("#sch-card [data-act=release]")); await click($("#sch-card [data-act=release-go]"));
+            r.posts = posts(); r.say = text($("#sch-status"));
+            return r;""", sch_view(holds=[HOLD1]))
+        self.assertEqual(got, {"acts": ["Edit", "Release"], "posts": [["/lock/holds/h-1/end", {}]], "say": "Released hold h-1."})
+
+    def test_game_mode_and_the_games_list(self):
+        got = self.run_("""
+            await click($("#sctab-settings"));
+            const r = { label: text($("#sch-gametoggle")), shown: $$("#sch-games li").map(text), says: text($("#sch-game h2")),
+                        take: text($$("#sch-game .sch-line")[0]) };
+            RESULT = { enabled: true };
+            withView({ game: Object.assign({}, VIEW.view.game, { enabled: true }) });
+            await click($("#sch-gametoggle"));
+            r.on = Object.assign(status(), { label: text($("#sch-gametoggle")), says: text($("#sch-game h2")) });
+            await click($("#sch-gamesedit"));
+            r.text = $("#sch-gamestext").value;
+            await type($("#sch-gamestext"), "gamma.exe pin Gamma\\n");
+            RESULT = { games: [{ exe: "gamma.exe", name: "Gamma", pin: true }] };
+            await click($("#sch-gamesgo"));
+            r.saved = Object.assign(status(), { form: !!$("#sch-gamestext") });
+            r.posts = posts();
+            return r;""", sch_view(game=game()))
+        self.assertEqual(got["label"], "Turn game mode on")
+        self.assertEqual(got["says"], "Game mode is off")
+        self.assertEqual(got["take"], "Turned on, it would take cpu slots 4-5.")
+        self.assertEqual(len(got["shown"]), 2)
+        self.assertIn("Alpha Strike", got["shown"][0])
+        self.assertEqual(got["on"], {"say": "Game mode is on.", "err": False, "label": "Turn game mode off", "says": "Game mode is on"})
+        self.assertEqual(got["text"], "alpha.exe  pin  Alpha Strike\nbeta.exe  nopin\n")
+        self.assertEqual(got["saved"], {"say": "The games list has 1 game.", "err": False, "form": False})
+        self.assertEqual(got["posts"], [["/lock/game_mode", {"enabled": True}], ["/lock/games", {"text": "gamma.exe pin Gamma\n"}]])
+
+    def test_the_division_fields_and_the_defaults(self):
+        got = self.run_("""
+            await click($("#sctab-settings"));
+            const field = k => $("#sch-division input[data-key=" + k + "]");
+            const r = { summary: text($("#sch-division h2")), list: text($("#sch-divlist li")), closed: !$("#sch-divgo") };
+            await click($("#sch-divedit"));
+            r.keys = $$("#sch-division input").map(f => f.dataset.key);
+            r.share = field("gpu_share").value; r.cap = field("agent_cap").value; r.hint = field("gpu_share").getAttribute("placeholder");
+            await type(field("agent_cap"), "3");
+            RESULT = { applied: false, reason: "runs hold the slots" };
+            await click($("#sch-divgo"));
+            r.saved = Object.assign(status(), { form: !!$("#sch-divgo") });
+            RESULT = { applied: true, reason: null };
+            await click($("#sch-divdefaults"));
+            r.defaults = status();
+            r.posts = posts();
+            return r;""", sch_view(division=division()))
+        self.assertEqual(got["summary"], "12 cpu slots, 2 gpu slots")
+        self.assertEqual(got["list"], "threadsin force 24 · yours - · default 24")
+        self.assertTrue(got["closed"])
+        self.assertEqual(got["keys"], ["threads", "cpu_slot_threads", "cpu_slots", "gpu_share", "half_cpu_slots", "half_gpu_slots",
+                                       "agent_cap", "medium_cores"])
+        # A fresh machine (the owner set nothing): the fields are blank, the default only a hint.
+        self.assertEqual((got["share"], got["cap"], got["hint"]), ("", "", "1, 1"))
+        self.assertEqual(got["saved"], {"say": "The new division waits: runs hold the slots.", "err": False, "form": False})
+        self.assertEqual(got["defaults"], {"say": "The new division is in force.", "err": False})
+        self.assertEqual(got["posts"], [["/lock/division", {"fields": {"agent_cap": "3"}}], ["/lock/division", {"defaults": True}]])
+
+    def test_the_division_form_keeps_only_what_the_owner_set(self):
+        got = self.run_("""
+            await click($("#sctab-settings")); await click($("#sch-divedit"));
+            const field = k => $("#sch-division input[data-key=" + k + "]");
+            const r = { filled: $$("#sch-division input").filter(f => f.value).map(f => [f.dataset.key, f.value]) };
+            await type(field("gpu_share"), "");
+            await type(field("medium_cores"), "3");
+            RESULT = { applied: true, reason: null };
+            await click($("#sch-divgo"));
+            r.posts = posts();
+            return r;""", sch_view(division=division(agent_cap=6, gpu_share=[2, 1])))
+        self.assertEqual(got["filled"], [["gpu_share", "2, 1"], ["agent_cap", "6"]])
+        self.assertEqual(got["posts"], [["/lock/division", {"fields": {"agent_cap": "6", "medium_cores": "3"}}]])
+
+    def test_what_ran_is_read_for_the_days_chosen(self):
+        got = self.run_("""
+            await click($("#row-hist"));
+            const days = () => $$("#sch-history [data-days]").map(b => b.getAttribute("aria-pressed"));
+            const r = { first: $$("#sch-statslist li").map(li => [text(li.querySelector("strong")), ...li.querySelectorAll(".sch-line").map(text)]),
+                        pressed: days(), machine: text($("#sch-stats")) };
+            await click($("#sch-history [data-days=30]"));
+            r.asked = calls.filter(c => c.path.startsWith("/lock/stats")).map(c => c.path);
+            r.pressed30 = days(); r.machine30 = text($("#sch-stats"));
+            server.route = c => c.path.startsWith("/lock/stats") ? { status: 400, body: { ok: false, error: { code: "invalid", message: "days is out of range", field: "days" } } } : undefined;
+            await click($("#sch-history [data-days=90]"));
+            r.why = text($("#sch-history [role=status]"));
+            return r;""", sch_view(strip=[HIST_OK]))
+        self.assertEqual(got["first"], [["engine-test · alpha", "3 runs: 2 done, 1 failed, 0 stopped",
+                                         "Held (median, p90, max) 5 min / 10 min / 15 min · waited (median, max) 5 s / 60 s",
+                                         "CPU time 20 min · peak 3.5 cores · 2.0 GB"]])
+        self.assertEqual(got["pressed"], ["false", "true", "false", "false"])
+        self.assertEqual(got["machine"], "Last 7 days: 3 runs, 2 done, 1 failed or stopped.")
+        self.assertEqual(got["asked"], ["/lock/stats?days=7", "/lock/stats?days=30"])
+        self.assertEqual(got["pressed30"], ["false", "false", "true", "false"])
+        self.assertEqual(got["machine30"], "Last 30 days: 3 runs, 2 done, 1 failed or stopped.")
+        self.assertEqual(got["why"], "The run history could not be read: days is out of range")
+
+    GATED = """
+        const r = {};
+        for (const tab of ["holds", "settings"]) {
+          await click($("#sctab-" + tab));
+          r[tab] = $$("[data-need]").map(b => [b.dataset.need, b.disabled, b.getAttribute("title") || ""]);
+        }
+        r.writer = text($("#sch-writer"));
+        return r;"""
+
+    def test_what_this_login_may_not_change_is_disabled_and_says_why(self):
+        why = "the holds and the division need the owner's own sign-in"
+        got = self.run_(self.GATED, sch_view(holds=[HOLD1], game=game(), division=division(),
+                                             writes={"lock": True, "strong": False, "why": why}))
+        self.assertEqual(got["holds"], [["strong", True, why]] * 3)                  # New hold, and the hold's Edit and Release
+        self.assertEqual(got["settings"], [["lock", False, ""]] * 2 + [["strong", True, why]] * 2)
+        self.assertEqual(got["writer"], "Some changes are closed: " + why)
+
+    def test_a_hub_the_lock_takes_for_an_agent_changes_nothing(self):
+        why = "the machine lock takes this hub for an agent"
+        got = self.run_(self.GATED, sch_view(holds=[HOLD1], game=game(), division=division(), writer="agent",
+                                             writes={"lock": False, "strong": False, "why": why}))
+        self.assertEqual(got["holds"], [["strong", True, why]] * 3)
+        self.assertEqual(got["settings"], [["lock", True, why]] * 2 + [["strong", True, why]] * 2)
+        self.assertEqual(got["writer"], "Read only: " + why)
+
+    def test_the_owner_may_change_everything(self):
+        got = self.run_(self.GATED, sch_view(holds=[HOLD1], game=game(), division=division()))
+        self.assertEqual(got["holds"], [["strong", False, ""]] * 3)
+        self.assertEqual(got["settings"], [["lock", False, ""]] * 2 + [["strong", False, ""]] * 2)
+        self.assertEqual(got["writer"], "")
+
+    def test_a_form_left_open_when_the_login_loses_the_right_is_closed_with_the_reason(self):
+        why = "the holds and the division need the owner's own sign-in"
+        lost = json.dumps(dict(sch_view(rev=6, holds=[HOLD1], game=game(), division=division(),
+                                        writes={"lock": True, "strong": False, "why": why}), changed=True))
+        got = self.run_("""
+            await click($("#sctab-holds")); await click($("#sch-newhold"));
+            await click($("#sctab-settings")); await click($("#sch-divedit"));
+            const r = { open: [$("#sch-divgo").disabled] };
+            await answerLock(200, LOST);
+            r.division = [$("#sch-divgo").disabled, $("#sch-divgo").getAttribute("title")];
+            await click($("#sctab-holds"));
+            r.hold = [$("#sch-holdgo").disabled, $("#sch-holdgo").getAttribute("title")];
+            return r;""".replace("LOST", lost), sch_view(holds=[HOLD1], game=game(), division=division()))
+        self.assertEqual(got["open"], [False])
+        self.assertEqual(got["division"], [True, why])                               # Save the division
+        self.assertEqual(got["hold"], [True, why])                                   # Make the hold
+
+    def test_server_text_in_the_new_cards_is_drawn_as_text(self):
+        bad = mark("note")
+        got = self.run_("""
+            await click($("#sctab-holds")); await click($("#list [data-hold=h-1] [data-act=edit]"));
+            const holds = text($("#list"));
+            await click($("#sctab-settings"));
+            const settings = text($("#list"));
+            const attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || ["href", "src", "srcdoc", "style"].includes(k)).map(k => e.tag + " " + k));
+            return { holds, settings, sinks, attrs, tags: [...new Set(created)] };""",
+                        sch_view(holds=[dict(HOLD1, note=bad)], game=game(games=[{"exe": "x.exe", "name": bad, "pin": False}], running={"name": bad}),
+                                 division=division(), strip=[HIST_OK]))
+        self.assertIn(bad, got["holds"])
+        self.assertIn(bad, got["settings"])
+        self.assertEqual(got["sinks"], [])
+        self.assertEqual(got["attrs"], [])
+        self.assertNotIn("script", got["tags"])
+        self.assertNotIn("img", got["tags"])
+
+
+def hist_run(id, repo, kind, result, end):
+    return dict(HIST_OK, id=id, repo=repo, kind=kind, result=result, start=end, end=end)
+
+
+HISTORY = [hist_run("r-1", "alpha", "build", "ok", "2026-10-05T10:00:00+00:00"),
+           hist_run("r-2", "alpha", "engine-test", "failed", "2026-10-05T11:00:00+00:00"),
+           hist_run("r-3", "beta", "build", "cancelled", "2026-10-05T12:00:00+00:00"),
+           hist_run("r-4", "beta", "engine-test", "ok", "2026-10-05T13:00:00+00:00")]
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ScheduleRealViewTest(lh.StoreCase):
+    """The Schedule against what the hub's lock door gives from a real lock store, so a renamed field in the lock's view
+    (holds, agent_holds, the division, the games, the stats rows) is caught here and not only by hand-built views."""
+
+    def test_the_real_view_is_drawn_in_every_tab_and_server_text_stays_text(self):
+        now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        iso = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        made = lock_api.hold_create(lh.OWNER, {"owner": "owner", "scope": "whole", "start": iso(now + datetime.timedelta(hours=2)),
+                                               "end": iso(now + datetime.timedelta(hours=3)), "note": mark("note")}, store=self.store)
+        self.assertTrue(made.get("ok"), made)
+        games = lock_api.set_games(lh.OWNER, [{"name": "Chess", "exe": "chess.exe", "pin": True}], store=self.store)
+        self.assertTrue(games.get("ok"), games)
+        self.live_record("kit-1", slug=mark("slug"), cores=[0, 1])
+        got = lockdoor.LockDoor(make_store=lambda: self.store, actor=lh.OWNER).view()
+        got["writes"] = {"lock": True, "strong": True, "why": ""}
+        out = dom("""
+            server.lock = %s;
+            server.route = c => c.path.startsWith("/lock/stats") ? { status: 200, body: %s } : undefined;
+            await start(); await visible(true);
+            const r = { now: { err: text($("#sch-wait")), rows: $$("#list article").map(a => a.id), shown: text($("#list")) } };
+            await click($("#sctab-week"));
+            r.cells = $$("#sch-grid td").length;
+            await click($("#sctab-holds"));
+            r.holds = { rows: $$("#list [data-hold]").length, shown: text($("#list")) };
+            await click($("#sctab-settings"));
+            r.settings = { division: text($("#sch-division")), games: text($("#sch-game")), listed: $$("#sch-games li").map(text),
+                           gated: $$("[data-need]").map(b => b.disabled) };
+            r.sinks = sinks;
+            r.attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || ["href", "src", "srcdoc", "style"].includes(k)).map(k => e.tag + " " + k));
+            r.tags = [...new Set(created)];
+            return r;""" % (json.dumps(got), json.dumps(STATS)), snapshot(strong=True), hash="#schedule")
+        self.assertEqual(out["now"]["err"], "")
+        self.assertEqual([i for i in out["now"]["rows"] if i.startswith("row-run:")], ["row-run:kit-1"])
+        self.assertIn(mark("slug"), out["now"]["shown"])
+        self.assertEqual(out["cells"], 7 * 48)
+        self.assertEqual(out["holds"]["rows"], 1)
+        self.assertIn(mark("note"), out["holds"]["shown"])
+        self.assertIn("Chess", out["settings"]["games"])
+        self.assertEqual(len(out["settings"]["listed"]), 1)
+        self.assertIn("cpu_slotsin force 12", out["settings"]["division"])
+        self.assertNotIn(True, out["settings"]["gated"])
+        self.assertEqual(out["sinks"], [])
+        self.assertEqual(out["attrs"], [])
+        self.assertNotIn("script", out["tags"])
+        self.assertNotIn("img", out["tags"])
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ScheduleHistoryFilterTest(unittest.TestCase):
+    """The Schedule's History card: narrowed in the client by repository, kind and result. (Taken over from the old /lock.html page's tests.)"""
+
+    def run_(self, body, view, hash="#schedule"):
+        return dom("server.lock = %s; await start(); await visible(true); await click($('#row-hist'));\n%s" % (json.dumps(view), body),
+                   snapshot(strong=True), hash=hash)
+
+    def test_the_filters_narrow_the_rows_by_repo_kind_and_result(self):
+        got = self.run_("""
+            const rows = () => $$("#sch-history li[data-hist]").map(r => r.dataset.hist);
+            const chip = (key, val) => $$("#sch-history [data-key=" + key + "]").find(b => b.dataset.val === val);
+            const r = { all: rows(), repos: $$("#sch-history [data-key=repo]").map(text), kinds: $$("#sch-history [data-key=kind]").map(text),
+                        count: text($("#sch-history p.sch-line")) };
+            await click(chip("repo", "beta"));
+            r.repo = rows(); r.pressed = chip("repo", "beta").getAttribute("aria-pressed");
+            await click(chip("kind", "build"));
+            r.repoKind = rows();
+            await click(chip("result", "ok"));
+            r.none = [rows(), text($$("#sch-history p.sch-line")[0]), text($$("#sch-history p.sch-line")[1])];
+            await click(chip("repo", ""));
+            r.kindResult = rows();
+            await click(chip("kind", ""));
+            r.result = rows();
+            await click(chip("result", ""));
+            r.reset = rows();
+            return r;""", sch_view(strip=HISTORY))
+        self.assertEqual(got["all"], ["r-4", "r-3", "r-2", "r-1"])                      # newest first
+        self.assertEqual(got["repos"], ["All repos", "alpha", "beta"])
+        self.assertEqual(got["kinds"], ["All kinds", "build", "engine-test"])
+        self.assertEqual(got["count"], "Showing 4 of 4 finished runs.")
+        self.assertEqual((got["repo"], got["pressed"]), (["r-4", "r-3"], "true"))
+        self.assertEqual(got["repoKind"], ["r-3"])
+        self.assertEqual(got["none"][0], [])
+        self.assertEqual(got["none"][1:], ["Showing 0 of 4 finished runs.", "No finished run matches."])
+        self.assertEqual(got["kindResult"], ["r-1"])
+        self.assertEqual(got["result"], ["r-4", "r-1"])
+        self.assertEqual(got["reset"], ["r-4", "r-3", "r-2", "r-1"])
+
+    def test_a_filter_value_that_vanishes_is_dropped_and_one_that_stays_survives_a_redraw(self):
+        got = self.run_("""
+            const rows = () => $$("#sch-history li[data-hist]").map(r => r.dataset.hist);
+            const chip = (key, val) => $$("#sch-history [data-key=" + key + "]").find(b => b.dataset.val === val);
+            await click(chip("repo", "beta"));
+            const r = { before: rows() };
+            await answerLock(200, NEXT);
+            r.stays = rows();
+            await click(chip("repo", "alpha"));
+            await answerLock(200, NEXT2);
+            r.rows = rows();
+            r.pressed = $$("#sch-history [data-key=repo]").map(b => [b.dataset.val, b.getAttribute("aria-pressed")]);
+            return r;""".replace("NEXT2", json.dumps(dict(sch_view(rev=7, strip=[HISTORY[2], HISTORY[3]]), changed=True)))
+                        .replace("NEXT", json.dumps(dict(sch_view(rev=6, strip=HISTORY[1:]), changed=True))),
+                        sch_view(rev=5, strip=HISTORY))
+        self.assertEqual(got["before"], ["r-4", "r-3"])
+        self.assertEqual(got["stays"], ["r-4", "r-3"])                                   # a redraw of the lock keeps the filter
+        self.assertEqual(got["rows"], ["r-4", "r-3"])                                    # no alpha run left: the filter is dropped
+        self.assertEqual(got["pressed"], [["", "true"], ["beta", "false"]])
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ScheduleFollowTest(unittest.TestCase):
+    """The Schedule view follows the lock through the one watcher: what a failed read, a busy lock, an unpaired browser
+    and an answer with no view show. (Taken over from the old /lock.html page's tests; the watcher's success paths are in HomeTest.)"""
+
+    def run_(self, body, route, view=None):
+        return dom("server.lock = %s; server.route = %s; await start(); await visible(true);\n%s" % (json.dumps(view or sch_view(runs=[RUN1])), route, body),
+                   snapshot(strong=True), hash="#schedule")
+
+    def test_failures_back_off_doubling(self):
+        got = self.run_("""
+            const seen = [];
+            for (let i = 0; i < 7; i++) { seen.push(sleeps().slice(-1)[0]); await fireTimers(); }
+            return { seen, say: text($("#list")) };""",
+                        """c => c.path === "/lock/view" ? { status: 503, body: { ok: false, error: { code: "unavailable", message: "the lock store is shut", field: "lock" } } } : undefined""")
+        self.assertEqual(got["seen"], [2000, 4000, 8000, 16000, 32000, 60000, 60000])  # doubling, then it stops growing
+        self.assertEqual(got["say"], "The machine lock could not be read (the lock store is shut).")
+
+    def test_a_busy_server_is_waited_out_as_it_asks_then_the_view_is_read_again(self):
+        got = self.run_("""
+            await answerLock(429, { ok: false, error: { code: "rate_limited", message: "slow down", field: "" } }, { "Retry-After": "7" });
+            const r = { banner: text($("#list .gone")), sleeps: sleeps(), rows: $$("#list article").map(a => a.id) };
+            await fireTimers();
+            r.calls = calls.map(c => c.path.split("?")[0]).slice(-2);
+            r.after = [$$("#list .gone").length];
+            return r;""", "undefined")
+        self.assertEqual(got["banner"], "Out of date: the machine lock could not be read again (slow down).")
+        self.assertEqual(got["sleeps"], [7000])
+        self.assertEqual(got["rows"], ["row-run:r1", "row-hist"])                       # what it showed stays up
+        self.assertEqual(got["calls"], ["/lock/view", "/lock/wait"])
+        self.assertEqual(got["after"], [0])
+
+    def test_an_unpaired_browser_is_told_to_pair_and_waits_long(self):
+        got = self.run_("return { say: text($(\"#sch-wait\")), sleeps: sleeps() };",
+                        """c => c.path === "/lock/view" ? { status: 401, body: { ok: false, error: { code: "unauthorized", message: "no session", field: "" } } } : undefined""")
+        self.assertEqual(got["say"], "The machine lock could not be read (this browser is not paired with the hub).")
+        self.assertEqual(got["sleeps"], [45000])
+
+    def test_a_dropped_answer_is_a_network_failure(self):
+        got = self.run_("""return { say: text($("#sch-wait")), sleeps: sleeps() };""",
+                        """c => c.path === "/lock/view" ? { status: 200, body: {}, cut: true } : undefined""")
+        self.assertIn("The machine lock could not be read (", got["say"])
+        self.assertEqual(got["sleeps"], [2000])
+
+    def test_an_answer_with_no_view_is_not_drawn(self):
+        got = self.run_("""
+            await click($("#sctab-week"));
+            return { say: text($("#sch-wait")), cells: $$("#sch-grid td").length };""",
+                        """c => c.path === "/lock/view" ? { status: 200, body: { lock_revision: 3 } } : undefined""")
+        self.assertEqual(got["say"], "The machine lock could not be read (the hub server sent no lock view).")
+        self.assertEqual(got["cells"], 0)
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
@@ -4146,6 +4607,30 @@ class PageTextTest(unittest.TestCase):
         tasks = json.loads(re.search(r"const TASKS = (\[.*?\]);\n", self.script).group(1))
         self.assertEqual(tuple(t for t, _ in tasks), api.SCHEDULE_TASKS)
 
+    def test_the_lock_page_is_gone_from_the_page_and_the_stylesheet(self):
+        with open(os.path.join(WEB, "hub.css"), encoding="utf-8") as f:
+            css = f.read()
+        self.assertNotIn("lock.html", self.p)
+        self.assertNotIn("lock.html", css)
+
+    def test_every_schedule_change_is_still_wired_to_its_route_and_body(self):
+        wired = ['schWrite("/lock/runs/" + schSeg(id) + "/top", {}',
+                 'schWrite("/lock/runs/" + schSeg(id) + "/end", { confirm: id }',
+                 'schWrite("/lock/holds/" + schSeg(id) + "/end", {}',
+                 'schWrite("/lock/holds/" + schSeg(id) + "/edit", { start: e.start, end: e.end, note: e.note }',
+                 'schWrite("/lock/holds", { kind: "reserve", scope, start: schIso(pick.s), end: schIso(pick.e), note: s.note }',
+                 'schWrite("/lock/holds", { kind: "hold", scope: f.scope, start: f.start, end: f.end, note: f.note, cpu: slots ? f.cpu : "", gpu: slots ? f.gpu : "" }',
+                 'schWrite("/lock/game_mode", { enabled: !on }',
+                 'schWrite("/lock/games", { text: s.games }',
+                 'schWrite("/lock/division", { fields }',
+                 'schWrite("/lock/division", { defaults: true }']
+        for w in wired:
+            self.assertEqual(self.script.count(w), 1, w)
+        self.assertEqual(len(re.findall(r"schWrite\(", self.script)), 11)        # the definition and ten changes
+        self.assertEqual(sorted(set(re.findall(r'schWrite\("(/lock/[a-z_/]*)', self.script))),
+                         ["/lock/division", "/lock/game_mode", "/lock/games", "/lock/holds", "/lock/holds/", "/lock/runs/"])
+        self.assertIn('"/lock/stats?days=" + days', self.script)
+
     def test_the_hidden_attribute_hides_whatever_display_rule_an_element_has(self):
         """A browser lets any author `display` rule beat its own rule for `hidden`; the stand-in DOM has no CSS and
         cannot see that. So the page's style must carry the one rule that makes `hidden` win, and nothing above it."""
@@ -4232,10 +4717,9 @@ class PageTextTest(unittest.TestCase):
 
     def test_no_attribute_that_loads_or_navigates_is_ever_set(self):
         """The page builds no link, image or frame, so no server value can become an address the browser follows. Its
-        markup has no link but the stylesheet; the script has two fixed ones, the Home machine line's (to #schedule) and the
-        Schedule view's to the machine lock's page."""
+        markup has no link but the stylesheet; the script has one fixed one, the Home machine line's (to #schedule)."""
         keys = r"(?:href|src|srcset|srcdoc|action|formaction|poster|background|ping|xlink:href)"
-        self.assertEqual([re.sub(r"[\s{,]", "", m) for m in re.findall(r'[{,\s]"?%s"?\s*:\s*"[^"]*"' % keys, self.script)], ['href:"#schedule"', 'href:"/lock.html"'])
+        self.assertEqual([re.sub(r"[\s{,]", "", m) for m in re.findall(r'[{,\s]"?%s"?\s*:\s*"[^"]*"' % keys, self.script)], ['href:"#schedule"'])
         self.assertEqual(re.findall(r'[{,\s]"?%s"?\s*:\s*[^"\s]' % keys, self.script), [])    # and no other: every value is a literal
         self.assertEqual(re.findall(r'setAttribute\(\s*"%s"' % keys, self.script), [])
         # A property set: none, but the reader frame's one body (test_the_reader_is_one_locked_frame).
