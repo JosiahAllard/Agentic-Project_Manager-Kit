@@ -631,7 +631,12 @@ starts at the first tick at or after it, up to about 15 minutes later. `tick.las
 its offset; the page shows `first_run` as it is and says it is the hub machine's time. `GET /api/v1/schedules` (anyone) lists them,
 filtered by `repo` like every list, with `tick`: {last, running, every_s}: when the tick was last
 seen, whether that is recent enough to call it running, and its period in seconds
-(`kitlib.hubsite.api` "Schedules").
+(`kitlib.hubsite.api` "Schedules"). Each listed schedule also carries three derived fields,
+never stored: `last_outcome`, the tick's record for it (`started`, `skipped`, `seen` or `failed`,
+from the tick's state file through `Api.tick_state`, default `tick_run_state`; null for none);
+`last_run`, that record's time when it is `started` (null otherwise, so a `failed` record is no
+run); and `next_due`, the first slot after now by `kitlib.autotasks.due`'s rule, in the hub
+machine's local time like `first_run` (null when off).
 
 ## finding_marks/<fingerprint>
 The owner's mark on one maintenance-lint finding (docs/maint-lint.md), so it stops showing:
