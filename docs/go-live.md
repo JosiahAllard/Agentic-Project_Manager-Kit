@@ -22,7 +22,7 @@ The code is on kit main except the lines marked unbuilt.
 - Kind sizes: converting kinds.json from medium/heavy to whole numbers is a `gate.py --measure` proposal plus a reviewed commit. Once converted, `--cores` above the kind's size exits 2, a size past agent_cap stops every run (exit 10), and the kind no longer takes every slot inside an owner whole hold but its integer size, at most agent_cap.
 - Hub repo aliases: set `aliases` on the hub store's repos/ docs for every short tag an old item still carries (docs/action-hub.md "repos/<name>").
 - Retirements: heavy_run, test-runner wrappers. The global reserve_ui.pyw is replaced by the kit window `reserve_ui.pyw` at the kit root, which stays.
-- Backlog store per repo: `backlog.py migrate`, then the switch-over branch (docs/backlog-store.md "Migration"). Until a repo's remote has a store, the landing close writes nothing and the ancestry check passes; the check still asks the remote (`ls-remote`) and refuses the landing when it cannot. `backlog.py` refuses two repos' current `.kit.json`: they still use the older kit's spellings, refused on purpose (tests/config/test_load.py `test_the_old_hook_and_owner_spellings_refuse`). The new spellings are in docs/kit-json.md and docs/doc-tools.md. The PM kit cannot load them, so each repo runs `backlog.py migrate` first, then makes the key move on its switch-over branch.
+- Backlog store per repo: the switch-over branch (docs/backlog-store.md "Migration"). Until a repo's remote has a store, the landing close writes nothing and the ancestry check passes; the check still asks the remote (`ls-remote`) and refuses the landing when it cannot. `backlog.py` refuses two repos' current `.kit.json`: they still use the older kit's spellings, refused on purpose (tests/config/test_load.py `test_the_old_hook_and_owner_spellings_refuse`). The new spellings are in docs/kit-json.md and docs/doc-tools.md. The PM kit cannot load them, so each repo makes the key move on its switch-over branch.
 - Switch-over command: `installer/machine-setup.ps1 -OldKit <old kit clone>` makes the per-account re-point below and the statusline, shortcut, temp ACL and comfy steps in one reviewed run, and reports each link an earlier setup left, with the command that removes it; it makes no link (dry run first, then `-Apply`; docs/machine-setup.md). On a machine with no older kit clone, `installer/machine-setup.ps1 -PmSettings <PM repo>\.claude\settings.local.json` (the default mode) appends the guard's entry (unless the managed settings file already has it, as `-OldKit` also checks), writes the PM SessionStart hook to that file alone, enables the plugin per account, stores the owner's email and runs the temp folder steps; it does not set `KIT_MACHINE_LOCK`, because the plugin's lock tool is used, and makes the schedule shortcut only with `-Shortcut` (docs/machine-setup.md "Default mode").
 - Per-account settings re-point (owner runs these; PM drafts the commands):
   - Remove the old kit's PreToolUse hooks (no_root_search.py, main_checkout_redirect_guard.py) from settings.json in every account's config folder.
@@ -104,7 +104,7 @@ On kit main, none live. Each repo reaches them as `python <kit>/tools/<x>.py -C 
 ## Universal gate (tools/gate.py, kitlib/gate)
 
 - Switch a repo only after its .kit.json lists every check as a gate step (Python tests included).
-- push_block goes on in a repo only after it has landed once through `gate.py land`.
+- push_block goes on in a repo only after it has landed once through the kit's landing (`land.py`; `gate.py land` is its one-branch form, docs/gate.md "Landing").
 - Retire the repo's own gate and land wrappers when it switches (gate.py/land.py, a lander command).
 - Hook modules load from the landing's base, the main it merges onto (docs/gate.md "Landing", step 6), one file each; sibling imports are unsupported.
 - landing.log_dir inside a checkout must be git-ignored, or every landing is NOT LANDED.
@@ -119,7 +119,7 @@ Per Claude account, once reviewed. Nothing here has been run.
    `content/skills` (`claude plugin install` from the kit checkout, or add the kit as the account's plugin source),
    then remove the per-skill links as docs/install.md "After the plugin install: remove the per-item junctions" says.
    On a machine with no older kit clone, `machine-setup.ps1` enables it for every account and makes no per-skill links.
-   Check with `ListSkills` that the nineteen names in docs/shipping.md appear once each.
+   Check with `ListSkills` that the skill names in docs/shipping.md appear once each.
 2. Statusline: in the account's `settings.json`, point `statusLine.command` at
    `optional/usage/statusline-usage.ps1` in the kit checkout (it was the old kit's copy), and
    any scheduled call of `write-usage-status.ps1` at the kit's copy. Machine setup plans the
