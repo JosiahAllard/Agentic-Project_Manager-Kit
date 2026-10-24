@@ -8,11 +8,18 @@ and refuses, outside ALLOWED:
     `%USERPROFILE%\\.pm-kit`, `$env:USERPROFILE\\.pm-kit`, `$HOME\\.pm-kit`;
   - a '~/...' format string filled with the config folder's name (`'~/%s' % user.DIR_NAME`, an
     f-string);
-  - a call or a `/` join whose arguments hold the config folder (`'.pm-kit'`, `user.DIR_NAME`,
-    `kuser.DIR_NAME`, or a name the module assigns from one, as `FOLDER = user.DIR_NAME`) and whose
-    first part comes from the home folder (home, USERPROFILE, expanduser, home_dir, Path.home), in
-    its own text or through a local name assigned from it (`h = home_dir(); join(h, DIR_NAME)`);
-  - a PowerShell line, not a comment, naming `.pm-kit` with USERPROFILE, HOME or `~`.
+  - a call, a `.joinpath` or a `/` join whose later parts hold the config folder (`'.pm-kit'`,
+    `user.DIR_NAME`, `kuser.DIR_NAME`, `kitlib.config.user.DIR_NAME`, an import alias of it, or a
+    name the module assigns from one, as `FOLDER = user.DIR_NAME`) and whose first part (a
+    joinpath's receiver) comes from the home folder: a name in it says so (home, USERPROFILE,
+    expanduser, home_dir, Path.home, an 'USERPROFILE' or 'HOME' key), or a name assigned from it,
+    in the same function or a scope around it (`h = home_dir(); join(h, DIR_NAME)`, a module's
+    `BASE = os.path.expanduser('~')` used in a function), lambdas included;
+  - a PowerShell line, not a comment, naming `.pm-kit` with USERPROFILE, HOME or `~`, or with a
+    variable an earlier line set from one (`$h = $env:USERPROFILE`).
+It reads AST node names, not source text, and follows plain-name assignments only: a home folder
+passed through an attribute, a container, a function's return value or another module is not
+followed.
 ALLOWED exempts one function (or module-level name) of a file, never the whole file.
 Docstrings and comments may still name the home folder: they describe the move and its leftovers."""
 import ast
@@ -48,8 +55,12 @@ ALLOWED = {
 
 SPELLED = re.compile(r'(?i)(?:~|%USERPROFILE%|\$env:USERPROFILE|\$HOME)[/\\]\.pm-kit(?![\w-])')
 HOMEISH = re.compile(r'(?i)home|USERPROFILE|expanduser')
+HOME_KEYS = re.compile(r'(?i)^(?:USERPROFILE|HOME|HOMEDRIVE|HOMEPATH)$')
 SHELL_HOME = re.compile(r'(?i)USERPROFILE|\$HOME\b|~[/\\]')
+SHELL_SET = re.compile(r'^\s*\$(\w+)\s*=(.*)$')
+SHELL_VAR = re.compile(r'\$(\w+)')
 CONFIG_NAMES = ('user', 'kuser')
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
 def _docstrings(tree):
@@ -63,59 +74,21 @@ def _docstrings(tree):
 
 
 def _is_config(node, aliases=()):
-    """Whether `node` is the config folder's name: the literal, kitlib.config.user.DIR_NAME, or a
-    name in `aliases` (one the module assigns from those, as `FOLDER = user.DIR_NAME`)."""
+    """Whether `node` is the config folder's name: the literal, kitlib.config.user.DIR_NAME (as
+    `user.`, `kuser.` or the full dotted name), or a name in `aliases` (one the module gives it)."""
     if isinstance(node, ast.Constant):
         return node.value == CONFIG
     if isinstance(node, ast.Name):
         return node.id == 'DIR_NAME' or node.id in aliases
-    return (isinstance(node, ast.Attribute) and node.attr == 'DIR_NAME'
-            and isinstance(node.value, ast.Name) and node.value.id in CONFIG_NAMES)
+    if isinstance(node, ast.Attribute) and node.attr == 'DIR_NAME':
+        v = node.value
+        return ((isinstance(v, ast.Name) and v.id in CONFIG_NAMES)
+                or (isinstance(v, ast.Attribute) and v.attr == 'user'))
+    return False
 
 
 def _holds_config(node, aliases=()):
     return any(_is_config(n, aliases) for n in ast.walk(node))
-
-
-def _config_aliases(tree):
-    """The names a module assigns the config folder's name to, anywhere in it."""
-    aliases = set()
-    grew = True
-    while grew:
-        grew = False
-        for a in ast.walk(tree):
-            if isinstance(a, ast.Assign) and _is_config(a.value, aliases):
-                for t in a.targets:
-                    if isinstance(t, ast.Name) and t.id not in aliases:
-                        aliases.add(t.id)
-                        grew = True
-    return aliases
-
-
-def _homeish(src, node, held=()):
-    """Whether `node` comes from the home folder: its source names it, or it uses a name `held`
-    (a local assigned from the home folder)."""
-    if HOMEISH.search(ast.get_source_segment(src, node) or ''):
-        return True
-    return any(isinstance(n, ast.Name) and n.id in held for n in ast.walk(node))
-
-
-def _div_parts(node):
-    """The operands of a chain of `/` joins, leftmost first."""
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        return _div_parts(node.left) + [node.right]
-    return [node]
-
-
-def _own_nodes(scope):
-    """The nodes of a module or function body, without those of the functions and classes
-    defined in it."""
-    todo = list(ast.iter_child_nodes(scope))
-    while todo:
-        n = todo.pop()
-        yield n
-        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            todo.extend(ast.iter_child_nodes(n))
 
 
 def _target_names(targets):
@@ -129,40 +102,101 @@ def _target_names(targets):
     return out
 
 
-def _held_home(src, scope):
-    """The names a scope assigns from the home folder (home_dir(), expanduser, USERPROFILE, or a
-    name already held), to a fixed point: `h = home_dir(); q = join(h, 'x')` holds both."""
-    held = set()
-    assigns = [n for n in _own_nodes(scope) if isinstance(n, (ast.Assign, ast.AnnAssign,
-                                                                ast.NamedExpr))]
+def _config_aliases(tree):
+    """The names a module gives the config folder's name, anywhere in it: `FOLDER = user.DIR_NAME`
+    and `from kitlib.config.user import DIR_NAME as D`."""
+    aliases, assigns = set(), []
+    for a in ast.walk(tree):
+        if isinstance(a, ast.ImportFrom):
+            aliases.update(al.asname for al in a.names if al.name == 'DIR_NAME' and al.asname)
+        elif isinstance(a, ast.Assign):
+            assigns.append(a)
     grew = True
     while grew:
         grew = False
         for a in assigns:
-            if a.value is None or not _homeish(src, a.value, held):
-                continue
+            new = [t for t in _target_names(a.targets) if t not in aliases]
+            if new and _is_config(a.value, aliases):
+                aliases.update(new)
+                grew = True
+    return aliases
+
+
+def _homeish(node, held=()):
+    """Whether `node` comes from the home folder, by the names in it: one that says so (home,
+    home_dir, Path.home, expanduser, USERPROFILE), an environment key naming it ('USERPROFILE',
+    'HOME'), or a name in `held` (one assigned from the home folder). It reads names, never the
+    source text, so a file is split once (ast.parse), not once per node."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name):
+            if n.id in held or HOMEISH.search(n.id):
+                return True
+        elif isinstance(n, ast.Attribute):
+            if HOMEISH.search(n.attr):
+                return True
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and HOME_KEYS.match(n.value):
+            return True
+    return False
+
+
+def _div_parts(node):
+    """The operands of a chain of `/` joins, leftmost first."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _div_parts(node.left) + [node.right]
+    return [node]
+
+
+def _joins(n):
+    """The (home side, config side) pairs of node `n`: a call's first argument and its other
+    arguments; a `.joinpath` call's receiver and its arguments (`Path(h).joinpath(DIR_NAME)`); a
+    `/` chain's first part and the rest."""
+    if isinstance(n, ast.Call):
+        out = [(n.args[0], n.args[1:])] if n.args else []
+        if isinstance(n.func, ast.Attribute) and n.func.attr == 'joinpath':
+            out.append((n.func.value, n.args))
+        return out
+    if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div):
+        parts = _div_parts(n)
+        return [(parts[0], parts[1:])]
+    return []
+
+
+def _own_nodes(scope):
+    """The nodes of a module, class or function, without those of the functions and classes
+    defined in it (their own scopes); a lambda's body is its enclosing scope's."""
+    todo = list(ast.iter_child_nodes(scope))
+    while todo:
+        n = todo.pop()
+        yield n
+        if not isinstance(n, SCOPES):
+            todo.extend(ast.iter_child_nodes(n))
+
+
+def _params(scope):
+    if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return set()
+    a = scope.args
+    return ({x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
+            | {x.arg for x in (a.vararg, a.kwarg) if x})
+
+
+def _held_home(nodes, inherited):
+    """The names a scope holds from the home folder: those of the scopes around it (`inherited`)
+    and those it assigns from the home folder (home_dir(), expanduser, USERPROFILE, or a name
+    already held), to a fixed point: `h = home_dir(); q = join(h, 'x')` holds both."""
+    held = set(inherited)
+    assigns = [n for n in nodes if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+               and n.value is not None]
+    grew = True
+    while grew:
+        grew = False
+        for a in assigns:
             targets = a.targets if isinstance(a, ast.Assign) else [a.target]
-            for n in _target_names(targets):
-                if n not in held:
-                    held.add(n)
-                    grew = True
+            new = [t for t in _target_names(targets) if t not in held]
+            if new and _homeish(a.value, held):
+                held.update(new)
+                grew = True
     return held
-
-
-def _scopes(tree):
-    """[(scope node, its name)]: the module, then every function and class by qualified name."""
-    out = [(tree, None)]
-
-    def visit(node, prefix):
-        for n in ast.iter_child_nodes(node):
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                name = prefix + n.name
-                out.append((n, name))
-                visit(n, name + '.')
-            else:
-                visit(n, prefix)
-    visit(tree, '')
-    return out
 
 
 def _module_name(tree, line):
@@ -176,10 +210,9 @@ def _module_name(tree, line):
     return '<module>'
 
 
-def _scope_findings(src, scope, docs, aliases):
-    held = _held_home(src, scope)
+def _scope_findings(nodes, held, docs, aliases):
     found = []
-    for n in _own_nodes(scope):
+    for n in nodes:
         if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs:
             if SPELLED.search(n.value):
                 found.append((n.lineno, 'spells the home config folder'))
@@ -193,38 +226,52 @@ def _scope_findings(src, scope, docs, aliases):
             if (isinstance(head, ast.Constant) and isinstance(head.value, str)
                     and head.value.startswith(('~/', '~\\')) and _holds_config(n, aliases)):
                 found.append((n.lineno, 'formats ~/ with the config folder'))
-        elif isinstance(n, ast.Call) and n.args:
-            if any(_is_config(a, aliases) for a in n.args[1:]) and _homeish(src, n.args[0], held):
+        for home, rest in _joins(n):
+            if any(_is_config(p, aliases) for p in rest) and _homeish(home, held):
                 found.append((n.lineno, 'joins the config folder to the home folder'))
-        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div):
-            parts = _div_parts(n)
-            if (len(parts) > 1 and any(_is_config(p, aliases) for p in parts[1:])
-                    and _homeish(src, parts[0], held)):
-                found.append((n.lineno, 'joins the config folder to the home folder'))
+                break
     return found
 
 
 def python_findings(src):
     """[(line, what, scope)] for one Python file's text. The scope is the qualified name of the
-    function or class the line is in, or for a module-level line the name it assigns."""
+    function or class the line is in, or for a module-level line the name it assigns. A name a
+    scope holds from the home folder is held in the functions inside it too (not one a function
+    takes as a parameter), and a class body's names are not passed to its methods."""
     tree = ast.parse(src)
     docs = _docstrings(tree)
     aliases = _config_aliases(tree)
     found = set()                     # a chain of `/` joins is one finding, not one per link
-    for scope, name in _scopes(tree):
-        for line, what in _scope_findings(src, scope, docs, aliases):
+
+    def visit(scope, name, inherited):
+        nodes = list(_own_nodes(scope))
+        held = _held_home(nodes, set(inherited) - _params(scope))
+        for line, what in _scope_findings(nodes, held, docs, aliases):
             found.add((line, what, name or _module_name(tree, line)))
+        passed = inherited if isinstance(scope, ast.ClassDef) else held
+        for n in nodes:
+            if isinstance(n, SCOPES):
+                visit(n, (name + '.' if name else '') + n.name, passed)
+
+    visit(tree, None, frozenset())
     return sorted(found)
 
 
 def shell_findings(text):
     """[(line, what)] for one PowerShell file's text: a line, not a comment, that names the
-    config folder with the home folder."""
+    config folder with the home folder, or with a variable an earlier line set from it
+    (`$h = $env:USERPROFILE`, then `Join-Path $h '.pm-kit'`)."""
     found = []
+    held = set()
     for i, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith('#'):
             continue
-        if SPELLED.search(line) or (CONFIG in line and SHELL_HOME.search(line)):
+        uses = {v.lower() for v in SHELL_VAR.findall(line)} & held
+        m = SHELL_SET.match(line)
+        if m and (SHELL_HOME.search(m.group(2))
+                  or {v.lower() for v in SHELL_VAR.findall(m.group(2))} & held):
+            held.add(m.group(1).lower())
+        if SPELLED.search(line) or (CONFIG in line and (SHELL_HOME.search(line) or uses)):
             found.append((i, 'names the home config folder'))
     return found
 
@@ -290,6 +337,38 @@ class NoHomeConfigPathTest(unittest.TestCase):
         }
         for src, want in cases.items():
             self.assertEqual(len(python_findings(src)), want, src)
+
+    def test_a_joinpath_on_the_home_folder_is_caught(self):
+        cases = {
+            "p = Path(user.home_dir()).joinpath(user.DIR_NAME)\n": 1,
+            "p = Path.home().joinpath('.pm-kit', 'hub')\n": 1,
+            "p = Path(pm).joinpath(user.DIR_NAME)\n": 0,
+        }
+        for src, want in cases.items():
+            self.assertEqual(len(python_findings(src)), want, src)
+
+    def test_a_module_name_held_from_the_home_folder_is_caught_in_a_function(self):
+        cases = {
+            "BASE = os.path.expanduser('~')\ndef f():\n    return os.path.join(BASE, DIR_NAME)\n": 1,
+            "BASE = os.path.expanduser('~')\nclass C:\n    def f(self):\n"
+            "        return os.path.join(BASE, DIR_NAME)\n": 1,
+            "BASE = os.path.expanduser('~')\ndef f(BASE):\n    return os.path.join(BASE, DIR_NAME)\n": 0,
+        }
+        for src, want in cases.items():
+            self.assertEqual(len(python_findings(src)), want, src)
+
+    def test_an_imported_alias_a_dotted_name_and_a_lambda_are_caught(self):
+        cases = {
+            "from kitlib.config.user import DIR_NAME as D\np = os.path.join(home_dir(), D)\n": 1,
+            "p = os.path.join(home_dir(), kitlib.config.user.DIR_NAME)\n": 1,
+            "f = lambda: os.path.join(home_dir(), DIR_NAME)\n": 1,
+        }
+        for src, want in cases.items():
+            self.assertEqual(len(python_findings(src)), want, src)
+
+    def test_a_shell_variable_held_from_the_home_folder_is_caught(self):
+        self.assertEqual(len(shell_findings("$h = $env:USERPROFILE\n$p = Join-Path $h '.pm-kit'\n")), 1)
+        self.assertEqual(len(shell_findings("$h = $PmRepo\n$p = Join-Path $h '.pm-kit'\n")), 0)
 
     def test_an_allowed_file_is_allowed_its_named_function_only(self):
         rel = 'kitlib/config/user.py'
