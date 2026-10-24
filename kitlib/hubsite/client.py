@@ -32,7 +32,11 @@ Client(port, tokens, via=serve.VIA_CLI)
                                         item of that session key; a poll the server took and did
                                         not answer in its time (serve.NoAnswer) is asked again,
                                         up to NO_ANSWER_TURNS in a row, when it has a `since`
-                                        or waits for its own pending items only
+                                        or waits for its own pending items only; on the same
+                                        rule a hub that is restarting (serve.NotRunning, or
+                                        Refused `store`) is asked again every RETRY_PAUSE_S
+                                        until the wait's timeout or RESTART_WAIT_S down in a
+                                        row, then the last of those is raised
 """
 import time
 import urllib.parse
@@ -44,6 +48,10 @@ OK, REFUSED, USAGE, NOT_RUNNING, TIMED_OUT = 0, 1, 2, 3, 4
 OWNER, AGENT, ANY = _api.OWNER, _api.AGENT, _api.ANY
 WAIT_MARGIN_S = 10              # the socket waits this much longer than the server was asked to
 NO_ANSWER_TURNS = 3             # unanswered polls in a row (serve.NoAnswer) that end a wait
+RETRY_PAUSE_S = 1.0             # a wait asks a hub that is down or closing again after this
+RESTART_WAIT_S = 600            # a hub down or closing this long in a row ends a wait: a restart
+                                # is a stop (control.DEFAULT_TIMEOUT_S, 300) and a start
+STORE_DOWN = 'store'            # the refusal code of a hub whose store is not available
 REFUSAL_UNKNOWN = 'not the expected answer'
 
 
@@ -83,12 +91,13 @@ class Client(object):
     passed it as a keyword only when it is not VIA_CLI."""
 
     def __init__(self, port, tokens=None, timeout=serve.ASK_TIMEOUT_S, ask=None,
-                 clock=time.monotonic, via=serve.VIA_CLI):
+                 clock=time.monotonic, via=serve.VIA_CLI, sleep=time.sleep):
         self.port = port
         self.tokens = tokens if tokens is not None else auth.folder()
         self.timeout = timeout
         self._ask = ask or serve.ask
         self._clock = clock
+        self._sleep = sleep
         self.via = via
 
     def token(self, role):
@@ -149,6 +158,7 @@ class Client(object):
         pending) leaves out the items with those ids, ones the caller has already acted on."""
         end = None if timeout is None else self._clock() + max(0.0, float(timeout))
         silent = 0                  # polls in a row the server took and did not answer
+        down = None                 # when the hub was first found down or closing, in a row
         while True:
             left = _api.WAIT_MAX_S if end is None else end - self._clock()
             turn = max(0.0, min(float(left), float(_api.WAIT_MAX_S)))
@@ -158,6 +168,22 @@ class Client(object):
                                               'for': for_key or None,
                                               'except': ','.join(except_ids or ()) or None},
                                timeout=turn + WAIT_MARGIN_S)
+            except (serve.NotRunning, Refused) as e:
+                # the hub is restarting: its port is closed (NotRunning) or it answers that its
+                # store is not available (Refused `store`). Ask again after RETRY_PAUSE_S, with
+                # the same query and on the rule a NoAnswer retry keeps, until the wait's own time
+                # is spent or the hub stayed down RESTART_WAIT_S in a row; then the last reason
+                # is raised as it came. Every other refusal ends the wait at once.
+                if isinstance(e, Refused) and e.code != STORE_DOWN:
+                    raise
+                now = self._clock()
+                down = now if down is None else down
+                if (end is not None and now >= end) or now - down >= RESTART_WAIT_S:
+                    raise
+                if since is None and not (pending and (for_key or except_ids)):
+                    raise
+                self._sleep(RETRY_PAUSE_S if end is None else min(RETRY_PAUSE_S, end - now))
+                continue
             except serve.NoAnswer:
                 # the server took the poll and held it past the socket's time: ask again with
                 # the same query, unless the wait's own time is spent (a turn begun past it),
@@ -170,7 +196,7 @@ class Client(object):
                 if since is None and not (pending and (for_key or except_ids)):
                     raise
                 continue
-            silent = 0
+            silent, down = 0, None
             if not got.get('timed_out'):
                 return got
             if end is not None and self._clock() >= end:
