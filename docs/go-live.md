@@ -104,7 +104,7 @@ On kit main, none live. Each repo reaches them as `python <kit>/tools/<x>.py -C 
 ## Universal gate (tools/gate.py, kitlib/gate)
 
 - Switch a repo only after its .kit.json lists every check as a gate step (Python tests included).
-- push_block goes on in a repo only after it has landed once through `gate.py land`.
+- push_block goes on in a repo only after it has landed once through the kit's landing (`land.py`; `gate.py land` is its one-branch form, docs/gate.md "Landing").
 - Retire the repo's own gate and land wrappers when it switches (gate.py/land.py, a lander command).
 - Hook modules load from the landing's base, the main it merges onto (docs/gate.md "Landing", step 6), one file each; sibling imports are unsupported.
 - landing.log_dir inside a checkout must be git-ignored, or every landing is NOT LANDED.
@@ -119,7 +119,7 @@ Per Claude account, once reviewed. Nothing here has been run.
    `content/skills` (`claude plugin install` from the kit checkout, or add the kit as the account's plugin source),
    then remove the per-skill links as docs/install.md "After the plugin install: remove the per-item junctions" says.
    On a machine with no older kit clone, `machine-setup.ps1` enables it for every account and makes no per-skill links.
-   Check with `ListSkills` that the nineteen names in docs/shipping.md appear once each.
+   Check with `ListSkills` that the skill names in docs/shipping.md appear once each.
 2. Statusline: in the account's `settings.json`, point `statusLine.command` at
    `optional/usage/statusline-usage.ps1` in the kit checkout (it was the old kit's copy), and
    any scheduled call of `write-usage-status.ps1` at the kit's copy. Machine setup plans the
