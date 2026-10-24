@@ -12,7 +12,7 @@ import sys
 import unittest
 from unittest import mock
 
-from kitlib import syncbase
+from kitlib import commit as kcommit, syncbase
 from kitlib.config import load as load_config
 from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
@@ -339,6 +339,15 @@ class UsageAndTarget(SyncCase):
         self.assertNotIn('efused', out)
         self.assertNotIn('conflict_advice()', out, 'the usage error is not the whole docstring')
         self.assertEqual(self.head(), head)
+
+    def test_no_model_refuses_with_commit_pys_own_text(self):
+        """KIT-SKILL-MODEL-ARG: the two tools once refused a missing --model in two wordings;
+        an agent fixing one form from the other's text got it wrong."""
+        done = self.cli(self.stage_clean(), '--host', 'claude')
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn('USAGE: %s\n' % kcommit.resolve_model(False, None, {}, 'claude')[2],
+                      done.stderr)
+        self.assertIn('--model "<model name>"', done.stderr)
 
     def test_a_blank_model_is_the_same_usage_error(self):
         target = self.stage_clean()

@@ -14,7 +14,7 @@ You transcribe and place. A fact that looks wrong or contradicts the file: say s
 3. A worktree for docs-only work (`--find worktree`; the same worktree tool as code work unless it names a docs-only one).
 4. One region of a long plan file per task; asked for two distant regions, say so and make two commits.
 5. Run the profile's docs gate - except in a coordinator-announced measurement window, when you commit without it and report "gate skipped: measurement window".
-6. Commit by explicit path: `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`.
+6. Commit by explicit path: `python <kit>/tools/commit.py -C <worktree> -m "<subject>" --model "<model name>" <path> ...`.
 7. Landing needs the final gate on the committed tip: `python <kit>/tools/gate.py -C <worktree> --full` when you changed a strict path (a path in `STRICT_DEFAULTS`), else the optimized default gate (no flag) once the repo's gate config names smoke steps, `--full` until then. Run it now, or in a measurement window report that the final gate has not run. Then stop and report the hash. The coordinator lands it.
 8. The shell: the docs-writer role's Hard rules.
 
