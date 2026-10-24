@@ -230,15 +230,14 @@ def not_on_remote(target, upstream, remote, base, tip):
 def in_flight_reader(top, cfg):
     """kitlib.records.inflight's reader for the repository `top` is in, or None when `.kit.json`
     "landing".in_flight is unset. Its command runs in the main checkout. Raises ConfigError or
-    kitlib.records.landing.LockError for a lock_file or a git common dir that cannot be used."""
+    kitlib.records.landing.LockError for a git common dir that cannot be used."""
     if cfg.section('landing').get('in_flight') is None:
         return None
     common, why = gitrepo.common_dir(top)
     if not common:
         raise landing.LockError('no git common dir for %s: %s' % (top, why))
     main = os.path.realpath(os.path.abspath(os.path.dirname(common)))
-    lanes = tuple(cfg.section('landing').get('lanes') or ())
-    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg, lanes=lanes))
+    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg))
 
 
 def _size(cat, rev, path):

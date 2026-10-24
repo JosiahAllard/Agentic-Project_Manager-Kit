@@ -14,7 +14,6 @@ from kitlib import kitroot
 from kitlib.git import cmd, refs
 from kitlib import machinepaths
 
-from . import ledger as lmod
 from . import offer as omod
 from . import policy
 from . import record as rmod
@@ -32,13 +31,20 @@ WRITTEN_BY = {
     'displaced': '`pull`, which computes it from the offer',
     'preempt': '`pull --reason`', 'preempt_by': '`pull --reason`', 'preempt_at': '`pull --reason`',
     'pulled_at': '`pull`', 'pulled_by': '`pull`',
-    'priority_ruling': '`--ruling R-nnnn`, checked before it is written',
-    'hold_ruling': '`--ruling R-nnnn` on a release, or `set --hold-ruling R-nnnn`',
-    'q': '`set-status parked --q Q-nnn`', 'parked_at': '`set-status parked --q Q-nnn`',
-    'resume': '`unpark --ruling R-nnnn`',
+    'q': '`set-status parked [--q Q-nnn]`', 'parked_at': '`set-status parked [--q Q-nnn]`',
     'review': '`add` from the Action Hub (the library\'s `review=`); a coordinator clears it with '
               '`clear-review ID --reason T`',
+    'answer': 'the Action Hub, filing the owner\'s answer to a question bound to the record '
+              '(the library\'s `plan_answer`)',
 }
+# Keys no verb writes any more: an owner gate is a role (kitlib/backlog/roles.py), not a cited
+# id. A record that carries one keeps it until `set ID --unset K` clears it (a price move drops
+# `priority_ruling`, which named the old price; `uncite` drops `priority_ruling` and
+# `hold_ruling`). In WRITTEN_BY too, so the Action Hub shows them as no edit's to make.
+UNWRITTEN = ('priority_ruling', 'hold_ruling', 'resume')
+WRITTEN_BY.update((k, 'no verb: an owner gate is a role now (kitlib/backlog/roles.py); '
+                      '`set ID --unset %s` clears it' % k)
+                  for k in UNWRITTEN)
 
 
 class Context(object):
@@ -626,14 +632,24 @@ def _fold_where(hits):
     return ', '.join(branches)
 
 
-def _fold_message(rid, hits, form, verb='pull'):
+def _fold_message(rid, hits, override, verb='pull'):
     """The fold refusal's text (`verb` `pull`, or `widen` for `set --scope`): the overlapping
-    pairs, where the work belongs, and the override. The caller raises it as a Refusal
-    (tests/backlog/test_refusal_kinds.py audits each raise by name)."""
+    pairs, where the work belongs, and the override (`override`: the row in words, and any form
+    it takes). The caller raises it as a Refusal (tests/backlog/test_refusal_kinds.py audits each
+    raise by name)."""
     where = _fold_where(hits)
     return ('cannot %s %s: its scope overlaps the work of %s, so it belongs there:\n  %s\n'
-                   'fold it into %s, or %s it after %s lands. Overriding that takes the PM\'s '
-                   'ruling: `%s`' % (verb, rid, where, '\n  '.join(hits), where, verb, where, form))
+            'fold it into %s, or %s it after %s lands. Overriding that is %s'
+            % (verb, rid, where, '\n  '.join(hits), where, verb, where, override))
+
+
+def _collision_change(change, verb):
+    """`change` marked as one that took the collision row of `verb` (policy.COLLISION_ROWS): its
+    `rows` for the audit log (tools/backlog.py), and the mark on its subject the audit check reads
+    back from the store's history."""
+    change.rows = [policy.COLLISION_ROWS[verb]]
+    change.subject += policy.COLLISION_MARK
+    return change
 
 
 def _branch_changes(ctx, branch, tip, base=None, mb=None):
@@ -661,44 +677,53 @@ def _branch_changes(ctx, branch, tip, base=None, mb=None):
 
 # --- set ------------------------------------------------------------------------------------------
 
-# The form a pulled record's widening takes with a ruling, named by every message about it.
-WIDEN_FORM = 'set %s --scope <path> [--scope <path> ...] --ruling R-nnnn'
+def refuse_top(rid, verb, rows):
+    """A write planned without the role check (`role_checked` false: a library caller, not
+    tools/backlog.py or an owner route) refuses when it takes a row only the owner and the PM may
+    take (policy.top_only of sort's `rows`): the role check decides those, not the plan."""
+    top = policy.top_only(rows)
+    if top:
+        raise Refusal('`%s`: this %s is %s (kitlib/backlog/roles.py), and no role check ran: '
+                      'make it with tools/backlog.py, whose role check decides it'
+                      % (rid, verb, policy.row_text(top[0])))
 
-def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_ruling=None,
-             role_checked=False):
+
+WIDEN_ROW = policy.COLLISION_ROWS['set']
+
+
+def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, role_checked=False,
+             may_collide=False):
     """Edit fields and/or the body. `changes` is `[(key, [values])]`.
 
-    - Changing a price field on an owner-prioritised or owner-held record, or writing
-      `priority_by: owner`, needs `--ruling` (its shape checked, written as `priority_ruling`);
-      `priority_by: pm` always needs one. A ruling id is taken on its word.
-    - `role_checked` (the caller ran the role check: opener for tools/backlog.py, the hub's
-      owner routes): a price move whose rows only the owner and the PM may take
-      (policy.price_is_top: set-price-owner, set-hold) needs no `--ruling`, unless it ends at
-      `priority_by: pm` or releases a `-1` beside a live `hold_ruling`. Moved without one to
-      `priority_by: owner`, the record's `priority_ruling` is dropped (it named the old price).
-    - Releasing an owner hold (dropping `owner` from `blocked_on`, moving `priority` off `-1`)
-      needs `--ruling` (written as `hold_ruling`); `-1` -> `-` is a release with no price.
-    - A result of `priority_by: agent` drops `priority_ruling`.
-    - `state: pulled` is entered only by `pull` and left only by `release`.
-    - `hold_ruling` R re-cites the record's hold ruling to R and changes nothing else.
+    - Who may move an owner's or the PM's price, set or release a `-1` hold, or clear the owner
+      from `blocked_on` is the role check's (kitlib/backlog/roles.py: set-price-owner, set-hold,
+      unblock-owner). `role_checked` says the caller ran it (opener for tools/backlog.py, the
+      hub's owner routes); without it such a write refuses (refuse_top).
+    - An owner-held record's priority changes only with `priority_by` owner or pm, or by a
+      release from `-1` to `-`.
+    - A price field moved drops the record's `priority_ruling` (it named the old price); so does
+      a result of `priority_by: agent`.
+    - `ruling`: kept for kitlib/dailyfull/file.py's pricing alone, until the uncite work's next
+      slice moves it to the role check: the write counts as role-checked, a price it moves records
+      `priority_ruling: <ruling>`, and the commit carries its `Ruling:` line.
+    - `state: pulled` is entered only by `pull` and left only by `release`; `state: parked` only
+      by `set-status parked` and `unpark`.
+    - `priority_ruling`, `hold_ruling` and `resume` (UNWRITTEN) are never written; `unset` of
+      one clears it. Clearing `resume` is the owner's and the PM's (policy.OWNER_CLEARS, the
+      `set-price-owner` row), so without the role check it refuses (refuse_top).
     - On a pulled record, `scope` members no old member covers (widened_members) that collide
       with a live pull, or overlap a path another live pull's branch changed (the fold-in guard,
-      `_pull_fold_hits`, the record's own branch aside), need `--ruling` (the commit's `Ruling:`
-      line), and that ruling covers the widening alone. Narrowing, and widening into free scope,
-      are free; a ruling given on a free widening is still recorded (the collision a refusal
-      named may have cleared), and one given on a narrowing is USAGE. Each `--scope` value is
-      checked first: a malformed member is USAGE, not a collision.
+      `_pull_fold_hits`, the record's own branch aside), take the `set-widen-collision` row:
+      refused unless `may_collide` (the caller's role may take it). Taken, the output names each
+      collision and the Change names the row (_collision_change). Narrowing, and widening into
+      free scope, are free. Each `--scope` value is checked first: a malformed member is USAGE,
+      not a collision.
     - `scope` replaces the whole list; the output names each member it removed.
     """
     for key, vals in changes:
         refuse_machine_paths('--' + key, *vals)
     refuse_machine_paths('--body-file', body)
     rec = require(snap, rid)
-    if hold_ruling is not None:
-        if changes or unset or ruling is not None or body is not None:
-            raise Usage('`--hold-ruling` re-cites the hold ruling and changes nothing else; give it '
-                        'alone')
-        return _plan_recite(snap, ctx, rec, hold_ruling)
     for key in unset:
         if key not in rmod.FIELDS:
             raise Usage('`--unset %s` names no field' % key)
@@ -706,12 +731,18 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
             raise Usage('`%s` is required in every record, so it cannot be unset' % key)
     if not changes and not unset and body is None:
         raise Usage('`set` was given nothing to change')
-    for key, vals in list(changes) + [(k, []) for k in unset]:
+    for key, vals in list(changes) + [(k, None) for k in unset]:
         if key not in rmod.FIELDS:
             raise Usage('`%s` is not a field' % key)
+        if key in UNWRITTEN:
+            if vals is None:
+                continue                # clearing one is the write left (the role check's row)
+            raise Refusal('`%s` is no longer written: an owner gate is a role now '
+                          '(kitlib/backlog/roles.py), not a cited id; `set %s --unset %s` '
+                          'clears it' % (key, rid, key))
         if key in WRITTEN_BY:
             raise Refusal('`%s` is written only by %s' % (key, WRITTEN_BY[key]))
-        if key in rmod.SINGLE_VALUED and len(vals) > 1:
+        if key in rmod.SINGLE_VALUED and vals is not None and len(vals) > 1:
             raise Usage('`%s` takes one value and was given %d' % (key, len(vals)))
     for s in dict(changes).get('scope', []):
         # Before the widening check, which counts a member it cannot compare as a collision.
@@ -728,39 +759,27 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
         raise Refusal('`state: pulled` is entered only by `pull` and left only by `release`, which '
                       'record who has it; `set` does neither')
     if (rec.get('state') == 'parked') != (get('state') == ['parked']):
-        raise Refusal('`state: parked` is entered only by `set-status parked --q Q-nnn` and left only '
-                      'by `unpark --ruling R-nnnn`, which record the question and its answer')
+        raise Refusal('`state: parked` is entered only by `set-status parked [--q Q-nnn]` and left '
+                      'only by `unpark`, which record the wait and its end')
+    if ruling is not None:
+        role_checked = True     # the daily full run's pricing (see the docstring)
+    if not role_checked:
+        refuse_top(rid, 'set', policy.sort('set', policy.given_of_set(changes, unset, body), rec))
 
     new_priority = dict(changes).get('priority', [rec.get('priority')])[0]
     minus_one_release = rec.get('priority') == rmod.OWNER_PRIORITY and new_priority == '-'
     new_by = dict(changes).get('priority_by', [None])[0]
-    prices = list(dict(changes).get('priority', [])) + (['-'] if 'priority' in unset else [])
-    # the role check already held this price move to the owner and the PM (roles.py TOP)
-    top = role_checked and policy.price_is_top(prices, rec)
     if 'priority' in keys and rmod.is_owner_held(rec) and not minus_one_release \
             and new_by not in RULED_PRICE_BY:
         raise Refusal('`%s` is owner-held (%s), so its priority changes only with `--priority-by '
-                      'owner|pm%s`, or a release from `-1` to `-`%s'
-                      % (rid, rmod.owner_hold_label(rec), '' if top else ' --ruling R-nnnn',
-                         '' if top else ' with `--ruling`'))
-    # A price that ends at `priority_by: pm`, from the flag or kept from the record, names the
-    # PM's ruling: one given with no ruling would keep a ruling about the old price.
-    if ruling is None and get('priority_by') == ['pm'] and (new_by == 'pm' or prices):
-        raise Refusal('%s needs `--ruling R-nnnn`, the ruling the PM priced `%s` on'
-                      % ('`--priority-by pm`' if new_by == 'pm' else
-                         'a price on `%s` that keeps `priority_by: pm`' % rid, rid))
+                      'owner|pm`, or a release from `-1` to `-`'
+                      % (rid, rmod.owner_hold_label(rec)))
 
     moved = [k for k in rmod.PRIORITY_KEYS if rec.all(k) != get(k)]
     priced = [k for k in moved if k != 'priority_ruling']
     if minus_one_release and priced == ['priority']:
         priced = []
-    owners = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
-    unheld = clears_owner_blocker(rec, get('blocked_on'))
-    released_minus_one = rec.get('priority') == rmod.OWNER_PRIORITY and \
-        get('priority') != [rmod.OWNER_PRIORITY]
-    releases = unheld or released_minus_one
     widen_hits, folds, notes, added = [], [], [], []
-    form = WIDEN_FORM % rid
     if 'scope' in keys and was_pulled:
         added = widened_members(rec.all('scope'), get('scope'))
         if added:
@@ -768,76 +787,33 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
             widen_hits = live_hits(added, holding, skip=rid, branch=rec.get('pulled_by'))
             # The fold-in guard, as `pull` runs it.
             folds, notes = _pull_fold_hits(ctx, added, holding, rec.get('pulled_by'))
-    # A ruling on a widening that collides with nothing now is still recorded: the collision a
-    # refusal named may have cleared before the retry. With a price move or a hold release it
-    # stays theirs, since free scope needs none.
-    free_widen = bool(added) and ruling is not None and not widen_hits and not folds \
-        and not priced and not releases
-    if widen_hits or folds or free_widen:
-        if ruling is None:
-            if widen_hits:
-                raise Refusal('`%s` is pulled, and this widens its scope into a live pull: %s. '
-                              'Narrowing is free; widening into a live pull takes `%s` (the '
-                              'whole new list), citing the PM\'s ruling that allows it'
-                              % (rid, '; '.join(widen_hits), form))
-            raise Refusal(_fold_message(rid, folds, form, 'widen'))
-        if priced or releases:
-            raise Usage('`--ruling %s` would allow both this scope widening and %s. One ruling, '
-                        'one change: widen the scope in its own `set`'
-                        % (ruling, 'a price move' if priced else 'an owner-hold release'))
-        _check_ruling(rid, rec, ruling, 'set', hold_only=True)
-    elif ruling is not None:
-        if not priced and not releases:
-            raise Usage('`--ruling %s` was given, and this write moves no price, releases no '
-                        'owner hold and widens no pulled scope: there is nothing for it to '
-                        'record. A widening of a pulled record takes `%s`; narrowing is free, so '
-                        'drop `--ruling`' % (ruling, form))
-        if released_minus_one:
-            lmod.refuse_unnamed_release(rid, rec, ruling, 'set')
-        _check_ruling(rid, rec, ruling, 'set', hold_only=not priced)
-        if priced:
-            pairs = rmod.apply_changes(pairs, [('priority_ruling', [ruling])])
-        if releases:
-            pairs = rmod.apply_changes(pairs, [('hold_ruling', [ruling])])
-    elif unheld:
-        raise Refusal('`%s` is blocked on the owner, and this write clears that hold, so it needs '
-                      '`--ruling R-nnnn`' % rid)
-    elif top and released_minus_one and lmod.hold_live(rec):
-        # ledger.refuse_unnamed_release, with no ruling given: the live hold_ruling is named
-        raise Refusal('`%s`\'s `priority: -1` was released by `hold_ruling: %s`, still live, so '
-                      'this set needs `--ruling %s`' % (rid, rec.get('hold_ruling'),
-                                                        rec.get('hold_ruling')))
-    elif moved and (owners or new_by == 'owner') and not top:
-        raise Refusal('`%s` is %s, so changing %s needs `--ruling R-nnnn`: an owner\'s price is not '
-                      'repriced on an agent\'s word'
-                      % (rid, 'owner-held (%s)' % rmod.owner_hold_label(rec)
-                         if rmod.is_owner_held(rec) else 'owner-prioritised (`priority_by: %s`)'
-                         % rec.get('priority_by') if owners else 'given `priority_by: owner`',
-                         ', '.join('`%s`' % k for k in moved)))
+    if (widen_hits or folds) and not may_collide:
+        override = '%s: `set %s --scope <path> [--scope <path> ...]` (the whole new list)' \
+            % (policy.row_text(WIDEN_ROW), rid)
+        if widen_hits:
+            raise Refusal('`%s` is pulled, and this widens its scope into a live pull: %s. '
+                          'Narrowing is free; widening into a live pull is %s'
+                          % (rid, '; '.join(widen_hits), override))
+        raise Refusal(_fold_message(rid, folds, override, 'widen'))
     dropped = dropped_why = None
-    if get('priority_by') == ['agent'] and get('priority_ruling'):
-        dropped, dropped_why = get('priority_ruling')[0], '`priority_by: agent` carries no ruling'
-    elif top and ruling is None and priced and get('priority_by') == ['owner'] \
-            and get('priority_ruling'):
+    if ruling is not None and priced:
+        pairs = rmod.apply_changes(pairs, [('priority_ruling', [ruling])])
+    elif get('priority_ruling') and (priced or get('priority_by') == ['agent']):
         dropped = get('priority_ruling')[0]
-        dropped_why = 'it named the old price, and this one was set without a ruling'
-    if dropped is not None:
+        dropped_why = ('`priority_by: agent` carries no ruling' if get('priority_by') == ['agent']
+                       else 'it named the old price')
         pairs = [(k, v) for k, v in pairs if k != 'priority_ruling']
 
     lines = notes + ['SET %s' % rid]
     for key in sorted(set(keys) | set(unset) | ({'priority_ruling'} if dropped or priced and
-                                                ruling else set()) |
-                      ({'hold_ruling'} if ruling and releases else set())):
+                                                ruling else set())):
         lines.append('  %-11s %s -> %s' % (key + ':', ' / '.join(rec.all(key)) or '(absent)',
                                            ' / '.join(rmod.values(pairs, key)) or '(absent)'))
     if body is not None:
         lines.append('  body:       replaced (%d bytes)' % len(body.encode('utf-8')))
-    lines += ['  widened into a live pull on %s: %s' % (ruling, h) for h in widen_hits]
-    if free_widen:
-        lines.append('  widened on %s: no live pull collides now; the ruling is recorded: %s'
-                     % (ruling, ', '.join(added)))
-    lines += ['  folds into the work of %s on %s: %s'
-              % (h.rpartition('(changed on ')[2].partition(')')[0], ruling, h) for h in folds]
+    lines += ['  widened into a live pull: %s' % h for h in widen_hits]
+    lines += ['  folds into the work of %s: %s'
+              % (h.rpartition('(changed on ')[2].partition(')')[0], h) for h in folds]
     if 'scope' in keys:
         # `--scope` replaces the whole list; say plainly what that dropped.
         gone = [m for m in rec.all('scope') if m not in get('scope')]
@@ -846,55 +822,23 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
                                                          else 'entries', ', '.join(gone)))
     if dropped is not None:
         lines.append('  priority_ruling %s dropped: %s' % (dropped, dropped_why))
-    acts = [a for a, on in (('priority', priced), ('unblock', unheld),
-                            ('hold release', released_minus_one and not priced)) if on]
-    subject = ('backlog: %s %s' % (' and '.join(acts), rid) if acts and ruling
+    subject = ('backlog: priority %s' % rid if ruling is not None and priced
                else 'backlog: set %s' % rid)
     text = _text(pairs, body if body is not None else rec.body)
     if text == rec.text:
         return Change({}, subject, lines + ['  (no change)'])
-    return Change({rid: text}, subject, lines, ruling=ruling)
-
-
-def _check_ruling(rid, rec, ruling, verb, hold_only=False):
-    """`--ruling`'s refusals where an owner gate needs one: the shape, one ruling one change, a
-    spent id. The id is taken on its word: no ledger is read."""
-    if not rmod.RULING_RE.match(ruling or ''):
-        raise Usage('`--ruling %s` is not a ruling id - `R-nnnn`' % ruling)
-    if rec.get('priority_ruling') == ruling:
-        raise Refusal('`%s` already carries `priority_ruling: %s`. One ruling, one change: cite the '
-                      'ruling that allows THIS %s' % (rid, ruling, verb))
-    if ruling in lmod.spent_hold_rulings(rec):
-        raise Refusal('`--ruling %s` is spent: it released an earlier hold on `%s`, which was held '
-                      'again. This %s needs the ruling that releases THIS hold' % (ruling, rid, verb))
-    if rec.get('hold_ruling') == ruling and not hold_only:
-        raise Refusal('`%s` already carries `hold_ruling: %s`; a hold release never moves a price. '
-                      'Cite the ruling that allows THIS %s' % (rid, ruling, verb))
-
-
-def _plan_recite(snap, ctx, rec, ruling):
-    rid = rec.id
-    if not rmod.RULING_RE.match(ruling or ''):
-        raise Usage('`--hold-ruling %s` is not a ruling id - `R-nnnn`' % ruling)
-    old = rec.get('hold_ruling')
-    if old is None:
-        raise Refusal('`%s` carries no `hold_ruling` to re-cite' % rid)
-    if ruling == old:
-        raise Refusal('`%s` already carries `hold_ruling: %s`' % (rid, ruling))
-    if rec.get('priority_ruling') == ruling:
-        raise Refusal('`%s` already carries `priority_ruling: %s`. One ruling, one change' % (rid, ruling))
-    pairs = rmod.apply_changes(rec.pairs(), [('hold_ruling', [ruling])])
-    return Change({rid: _text(pairs, rec.body)},
-                  'backlog: re-cite %s hold_ruling %s -> %s, no price change' % (rid, old, ruling),
-                  ['RECITED %s' % rid, '  hold_ruling: %s -> %s' % (old, ruling)], ruling=ruling)
+    change = Change({rid: text}, subject, lines, ruling=ruling)
+    if widen_hits or folds:
+        _collision_change(change, 'set')
+    return change
 
 
 # --- block / unblock ------------------------------------------------------------------------------
 
-def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None):
+def plan_block(snap, ctx, rid, members, owner_ask=None, reason=None):
     """`block` ADDS `members` to `blocked_on`, in order, after the blockers already there (one
-    already present is not repeated); it never removes one, so it never releases the owner's hold
-    and takes no `--ruling` (USAGE): removing a blocker is `unblock --on`'s job. `ruling` stays a parameter so the USAGE names it.
+    already present is not repeated); it never removes one, so it never releases the owner's hold:
+    removing a blocker is `unblock --on`'s job.
     `reason`, when given, goes into the commit subject and onto one line appended to the body
     (`Blocked on M (date): T`), so `show` says why the record is held; no header key is written
     for it. A PULLED record is blocked only by whoever may stop its pull (stop_pull), and only
@@ -919,10 +863,6 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
             raise Usage('bad `--on %s`: %s' % (m, err))
     if 'item:%s' % rid in members:
         raise Usage('`%s` cannot be blocked on itself' % rid)
-    if ruling is not None:
-        raise Usage('`--ruling %s` was given, and `block` only adds blockers, so it releases no '
-                    'hold of the owner\'s: `unblock %s --on owner --ruling R-nnnn` does that'
-                    % (ruling, rid))
     if 'owner' in members and not owner_ask and not rec.has('owner_ask'):
         raise Usage('blocking on the owner needs `--owner-ask "<the question>"`')
     stop = None
@@ -971,10 +911,12 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
     return Change({rid: text}, subject, lines)
 
 
-def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
+def plan_unblock(snap, ctx, rid, on=None, reason=None, role_checked=False):
     """Clear one blocker. A record with one blocker opens, `on` and `reason` optional; one with
     several needs `on` (the member to clear) and `reason`, and keeps the rest blocked. The reason
-    goes into the commit subject, as `release`'s does."""
+    goes into the commit subject, as `release`'s does. Clearing the owner is the role check's
+    `unblock-owner` row (kitlib/backlog/roles.py): without `role_checked` it refuses
+    (refuse_top)."""
     rec = require(snap, rid)
     if rec.get('state') != 'blocked':
         raise Usage('`%s` is `state: %s`, not `blocked`: there is nothing to unblock'
@@ -984,9 +926,8 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
     if on is None and several:
         raise Refusal('`%s` is blocked on %s; `unblock` clears one blocker, named, with a reason:\n%s'
                       % (rid, ', '.join(members), '\n'.join(
-                          '  %s -C <worktree> unblock %s --on %s --reason "<why>"%s'
-                          % (kitroot.command('backlog'), rid, m, ' --ruling R-nnnn' if m == 'owner' else '')
-                          for m in members)))
+                          '  %s -C <worktree> unblock %s --on %s --reason "<why>"'
+                          % (kitroot.command('backlog'), rid, m) for m in members)))
     if on is not None and on not in members:
         raise Usage('`--on %s` is not a blocker of `%s`; it is blocked on %s'
                     % (on, rid, ', '.join(members)))
@@ -997,20 +938,12 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
             raise Usage(bad)
     left = [m for m in members if m != on] if several else []
     unheld = clears_owner_blocker(rec, left)
-    if unheld and ruling is None:
-        raise Refusal('`%s` is blocked on the owner, so unblocking it needs `--ruling R-nnnn`' % rid)
-    if ruling is not None:
-        if not unheld and not several:
-            raise Usage('`--ruling %s` was given, and `%s` is not blocked on the owner' % (ruling, rid))
-        if not unheld:
-            raise Usage('`--ruling %s` was given, and clearing `%s` from `%s` releases no hold of '
-                        'the owner\'s' % (ruling, on, rid))
-        _check_ruling(rid, rec, ruling, 'unblock', hold_only=True)
+    if unheld and not role_checked:
+        refuse_top(rid, 'unblock', ['unblock-owner'])
     drop = unheld and rec.get('priority') != rmod.OWNER_PRIORITY
     pairs = [(k, v) for k, v in rec.pairs() if not (drop and k == 'owner_ask')]
     changes = [('blocked_on', left)] if left else [('state', ['open']), ('blocked_on', ['-'])]
-    pairs = rmod.apply_changes(pairs, changes
-                               + ([('hold_ruling', [ruling])] if ruling is not None else []))
+    pairs = rmod.apply_changes(pairs, changes)
     if left:
         lines = ['UNBLOCKED %s - `%s` removed -> %s' % (rid, on, ', '.join(left))]
     else:
@@ -1021,62 +954,63 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
     if reason is not None:
         named = next((m for m in ([on] if on else members) if m != '-'), None)
         subject += '%s: %s' % (' from %s' % named if named else '', ' '.join(reason.split()))
-    return Change({rid: _text(pairs, rec.body)}, subject, lines, ruling=ruling)
+    return Change({rid: _text(pairs, rec.body)}, subject, lines)
 
 
 # --- park / unpark -----------------------------------------------------------------------
 
 def plan_set_status(snap, ctx, rid, status, q=None):
-    """Park an open or pulled record on the owner's question `q`. A pull is given up: a parked
-    record holds no scope and takes no place in the offer. A record parked on another question
-    is re-pointed to `q`; the same question again refuses."""
+    """Park an open or pulled record, on the owner's question `q` when one is given (`q` is
+    optional: a record can wait with no question id). A pull is given up: a parked record holds no
+    scope and takes no place in the offer. A parked record is re-pointed to another `q`; with no
+    `q` its recorded question is dropped (`parked_at` kept). The same question again, or no `q`
+    on a record parked with none, refuses: nothing would change."""
     if status != 'parked':
         raise Usage('`set-status` sets `parked` only; `%s` is reached by its own verb (open: '
                     '`unblock`/`release`/`unpark`, blocked: `block`, pulled: `pull`)' % status)
-    if q is None or rmod._question(q) is not None:
-        raise Usage('parking needs `--q Q-nnn`, the owner question it waits on%s'
-                    % ('' if q is None else ': %s' % rmod._question(q)))
+    if q is not None and rmod._question(q) is not None:
+        raise Usage('bad `--q %s`: %s' % (q, rmod._question(q)))
     rec = require(snap, rid)
     state = rec.get('state')
     if state == 'parked':
         was = rec.get('q')
         if was == q:
-            raise Refusal('`%s` is already parked on %s' % (rid, q))
+            raise Refusal('`%s` is already parked on %s' % (rid, q) if q else
+                          '`%s` is already parked with no question' % rid)
         # Re-point: only `q` changes; `parked_at` keeps the day the wait began, and the old
         # question stays in the store's log through the commit subject.
-        pairs = rmod.apply_changes(rec.pairs(), [('q', [q])])
+        pairs = rmod.apply_changes(rec.pairs(), [('q', [q] if q else [])])
         was = was or 'no recorded question'
+        on = 'on %s' % q if q else 'with no question'
         return Change({rid: _text(pairs, rec.body)},
-                      'backlog: re-park %s on %s (was %s)' % (rid, q, was),
-                      ['PARKED %s on %s, re-pointed (was %s)' % (rid, q, was)])
+                      'backlog: re-park %s %s (was %s)' % (rid, on, was),
+                      ['PARKED %s %s, re-pointed (was %s)' % (rid, on, was)])
     if state not in ('open', 'pulled'):
         raise Refusal('`%s` is `state: %s`; only an open or pulled record is parked. %s first'
                       % (rid, state, 'Unblock it' if state == 'blocked' else 'Open it'))
     pairs = [(k, v) for k, v in rec.pairs() if k not in rmod.PULL_KEYS + rmod.PREEMPT_KEYS]
-    pairs = rmod.apply_changes(pairs, [('state', ['parked']), ('q', [q]),
+    pairs = rmod.apply_changes(pairs, [('state', ['parked']), ('q', [q] if q else []),
                                        ('parked_at', [ctx.date()])])
-    lines = ['PARKED %s on %s' % (rid, q)]
+    lines = ['PARKED %s %s' % (rid, 'on %s' % q if q else '(no question)')]
     if state == 'pulled':
         lines.append('  pull by %s given up: its scope is free and it is out of the offer'
                      % rec.get('pulled_by'))
-    return Change({rid: _text(pairs, rec.body)}, 'backlog: park %s on %s' % (rid, q), lines)
+    return Change({rid: _text(pairs, rec.body)},
+                  'backlog: park %s%s' % (rid, ' on %s' % q if q else ''), lines)
 
 
-def plan_unpark(snap, ctx, rid, ruling=None):
-    """Open a parked record on the ruling that answered its question; `resume: <ruling>` ranks
-    it above priority (below a pin) in `next`."""
-    if ruling is None:
-        raise Usage('`unpark` needs `--ruling R-nnnn`, the ruling that answered the question')
+def plan_unpark(snap, ctx, rid):
+    """Open a parked record once its question is answered: the park keys go and it is `state:
+    open` again, an ordinary record in `next`. Who may is the role check's `unpark` row."""
     rec = require(snap, rid)
     if rec.get('state') != 'parked':
         raise Refusal('`%s` is `state: %s`, not `parked`: there is nothing to unpark'
                       % (rid, rec.get('state')))
-    _check_ruling(rid, rec, ruling, 'unpark', hold_only=True)
     pairs = [(k, v) for k, v in rec.pairs() if k not in rmod.PARK_KEYS]
-    pairs = rmod.apply_changes(pairs, [('state', ['open']), ('resume', [ruling])])
-    lines = ['UNPARKED %s - state: open, resume: %s%s' % (rid, ruling, ' (was parked on %s)'
-                                                          % rec.get('q') if rec.get('q') else '')]
-    return Change({rid: _text(pairs, rec.body)}, 'backlog: unpark %s' % rid, lines, ruling=ruling)
+    pairs = rmod.apply_changes(pairs, [('state', ['open'])])
+    lines = ['UNPARKED %s - state: open%s' % (rid, ' (was parked on %s)' % rec.get('q')
+                                                if rec.get('q') else '')]
+    return Change({rid: _text(pairs, rec.body)}, 'backlog: unpark %s' % rid, lines)
 
 
 # --- review mark ----------------------------------------------------------------------------------
@@ -1101,22 +1035,136 @@ def plan_clear_review(snap, ctx, rid, reason):
                    % (rec.get('state'), rec.get('priority'))])
 
 
+# --- the owner's answer ---------------------------------------------------------------------------
+
+ANSWER_REVIEW = 'owner-answer'
+ASKED_Q = re.compile(r'(?<![A-Za-z0-9-])Q-[0-9]{3,}(?![A-Za-z0-9_])')
+
+
+def _waits_on(rec):
+    """The questions the record's own wait names: `q` on a parked record, the Q-ids `owner_ask`
+    cites on one blocked on the owner. Empty: nothing binds the wait to a question."""
+    state = rec.get('state')
+    if state == 'parked':
+        return [rec.get('q')] if rec.get('q') else []
+    if state == 'blocked' and 'owner' in rec.all('blocked_on'):
+        return ASKED_Q.findall(rec.get('owner_ask') or '')
+    return []
+
+
+def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, other=False,
+                waiting=(), role_checked=False):
+    """File the owner's answer to question `qid` (answered at `at`, the hub's timestamp) into
+    the record it is bound to, in one write: an `answer: <qid> <at>` line (one per question; a
+    re-answer replaces its line) and a `## Owner answer (Action Hub, <at>)` body section with
+    `title`, the choice `label` and `note` verbatim, and `via`. Only the Action Hub calls it
+    (WRITTEN_BY: `set` neither writes nor unsets `answer`).
+
+    The record's wait ends only on the last answer: when `waiting` (the other questions bound to
+    the record, still unanswered; the hub knows them) is empty and every question the wait names
+    (_waits_on) has an answer line, a parked record is unparked (as plan_unpark) and the `owner`
+    blocker is cleared (as plan_unblock: other blockers stay, `owner_ask` goes unless
+    `priority: -1`), which is the `unblock-owner` row, so it needs `role_checked` (else a
+    Refusal: the owner's or the PM's role clears an owner blocker). A pulled or open record, or
+    a wait no question names, only gets the answer.
+    `other` (a free-text answer) also writes the review mark `review: owner-answer <date>`
+    unless one stands, so `pull` refuses the record and `next` lists it to review until a
+    coordinator's `clear-review`. The same `qid` and `at` again changes nothing, and so does an
+    `at` older than the record's line for `qid` (a stale re-file never overwrites a newer
+    answer). A record that
+    is gone is NotFound: the hub leaves the answer to the PM."""
+    err = rmod._question(qid) if qid else 'no question id'
+    if err:
+        raise Usage('bad question `%s`: %s' % (qid, err))
+    line = '%s %s' % (qid, at)
+    err = rmod._answer(line)
+    if err:
+        raise Usage('bad answer time: %s' % err)
+    if not (title or '').strip() or not (label or '').strip():
+        raise Usage('an owner answer needs the question\'s title and the choice\'s label')
+    for w in waiting:
+        if rmod._question(w):
+            raise Usage('bad waiting question `%s`: %s' % (w, rmod._question(w)))
+    refuse_machine_paths('answer', title, label, note, via)
+    rec = require(snap, rid)
+    subject = 'backlog: owner answer %s on %s' % (rid, qid)
+    if line in rec.all('answer'):
+        return Change({}, subject, ['ANSWERED %s on %s (%s)' % (rid, qid, at), '  (no change)'])
+    when = datetime.datetime.fromisoformat(at)
+    newer = [v for v in rec.all('answer') if v.partition(' ')[0] == qid
+             and rmod._answer(v) is None
+             and datetime.datetime.fromisoformat(v.partition(' ')[2]) > when]
+    if newer:
+        return Change({}, subject, ['ANSWERED %s on %s (%s)' % (rid, qid, at),
+                                    '  (no change: the record holds a newer answer, `%s`)'
+                                    % newer[0]])
+    others = [v for v in rec.all('answer') if v.partition(' ')[0] != qid]
+    pairs = rmod.apply_changes(rec.pairs(), [('answer', others + [line])])
+    lines = ['ANSWERED %s on %s (%s): %s' % (rid, qid, at, ' '.join(label.split()))]
+    done = set(rmod.answered(rec)) | {qid}
+    asked = _waits_on(rec)
+    state = rec.get('state')
+    pending = [q for q in asked if q not in done] + [w for w in waiting if w not in done]
+    if not asked:
+        lines.append('  state: %s, unchanged: its wait names no question' % state)
+    elif pending:
+        lines.append('  state: %s, unchanged: still waits on %s' % (state, ', '.join(pending)))
+    elif state == 'parked':
+        pairs = [(k, v) for k, v in pairs if k not in rmod.PARK_KEYS]
+        pairs = rmod.apply_changes(pairs, [('state', ['open'])])
+        lines.append('  UNPARKED - state: open (was parked on %s)' % rec.get('q'))
+    else:
+        if not role_checked:
+            raise Refusal('`%s`: filing the answer to %s clears the record\'s owner blocker, '
+                          'which needs the owner\'s or the PM\'s role (`unblock-owner`, '
+                          'kitlib/backlog/roles.py), and no role check ran: the Action Hub files '
+                          'it from the owner\'s answer route, with role_checked' % (rid, qid))
+        left = [m for m in rec.all('blocked_on') if m != 'owner']
+        if rec.get('priority') != rmod.OWNER_PRIORITY:
+            pairs = [(k, v) for k, v in pairs if k != 'owner_ask']
+        changes = [('blocked_on', left)] if left else [('state', ['open']),
+                                                         ('blocked_on', ['-'])]
+        pairs = rmod.apply_changes(pairs, changes)
+        lines.append('  owner blocker cleared - %s' % ('still blocked on %s' % ', '.join(left)
+                                                       if left else 'state: open'))
+    marked = other and not rec.has('review')
+    if marked:
+        mark = '%s %s' % (ANSWER_REVIEW, ctx.date())
+        pairs = rmod.apply_changes(pairs, [('review', [mark])])
+        lines.append('  review: %s - a free-text answer: `pull` refuses it until a coordinator '
+                     'reads it and runs `clear-review %s --reason T`' % (mark, rid))
+    section = ['## Owner answer (Action Hub, %s)' % at, '',
+               'Question: %s, %s' % (qid, ' '.join(title.split())), 'Answer: %s' % label]
+    if note:
+        section.append('Note: %s' % note)
+    if via:
+        section.append('Via: %s' % via)
+    if marked:
+        section.append('Marked for review: a free-text answer, read by a coordinator before '
+                       'anyone pulls the record.')
+    body = (rec.body or '').rstrip('\n')
+    body = (body + '\n\n' if body.strip() else '') + '\n'.join(section) + '\n'
+    lines.append('  body: section `## Owner answer (Action Hub, %s)` appended' % at)
+    return Change({rid: _text(pairs, body)}, subject, lines)
+
+
 # --- pull / release -------------------------------------------------------------------------------
 
-def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
+def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
     """Take an open, priced record and record the branch. One in `next`'s offer pulls plainly;
     one outside it needs `--reason` and records `preempt` and the `displaced` offer, computed
     here. In the offer means in `next`'s offer as the caller's branch prints it (its own pulls
     left out, so a record overlapping only them is offered) or as `next` prints it without a
     branch (current_offer).
-    A `priority: -1` record is refused whatever ruling is given, as tools/backlog.py's role
-    check refuses `pull-held` to every role: its hold is released first (`set ID --priority N`,
-    the owner or the PM), then it is pulled. One whose scope collides with a live pull on
-    another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling`
-    (the PM's ruling, cited in `preempt`). An unmet `requires:` refuses.
+    A `priority: -1` record is refused, as tools/backlog.py's role check refuses `pull-held` to
+    every role: its hold is released first (`set ID --priority N`, the owner or the PM), then it
+    is pulled. One whose scope collides with a live pull on another branch (one on the caller's
+    branch is no collision) is the `pull-collision` row (kitlib/backlog/roles.py): refused unless
+    `may_collide` (the caller's role may take it), and then it needs `--reason`, recorded in
+    `preempt`, and the Change names the row (_collision_change). An unmet `requires:` refuses.
     The fold-in guard (`_pull_fold_hits`): one whose scope overlaps a path another live pull's
-    branch changed needs `--reason` and `--ruling` too, and records `preempt`; `next` passes
-    such a record over, so its refusal comes before the not-offered one.
+    branch changed is that row too; `next` passes such a record over, so its refusal comes
+    before the not-offered one.
     A pulled record refuses, unless its pull is dead and it is this session's: see
     `_plan_takeover`."""
     refuse_machine_paths('--reason', reason)
@@ -1125,11 +1173,9 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         reason = ' '.join(reason.split())
         if not reason:
             raise Usage('`--reason` was given blank')
-    if ruling is not None and not rmod.RULING_RE.match(ruling):
-        raise Usage('`--ruling %s` is not a ruling id - `R-nnnn`' % ruling)
     state = rec.get('state')
     if state == 'pulled':
-        return _plan_takeover(snap, ctx, rec, reason, ruling, blocker)
+        return _plan_takeover(snap, ctx, rec, reason, may_collide, blocker)
     if state != 'open':
         raise Refusal('`%s` is `state: %s`, and `pull` takes an open record. %s first, in its own '
                       'step' % (rid, state, 'Unblock it' if state == 'blocked' else 'Open it'))
@@ -1160,19 +1206,18 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
     # The fold refusal first: `next` passes a folding record over, so "not in the offer" would
     # hide the reason and the override that this one names.
-    if folds and (ruling is None or reason is None):
-        raise Refusal(_fold_message(rid, folds, 'pull %s --reason "<why>" --ruling R-nnnn' % rid))
+    override = '%s, with `pull %s --reason "<why>"`' % (policy.row_text('pull-collision'), rid)
+    if folds and (not may_collide or reason is None):
+        raise Refusal(_fold_message(rid, folds, override))
     if not offered and reason is None:
         raise Refusal('`%s` is not in `next`\'s offer - %s. An out-of-order pull is allowed and '
-                      'recorded: `pull %s --reason "<why>"%s`'
+                      'recorded: `pull %s --reason "<why>"`%s'
                       % (rid, omod.not_offered_why(rec, passed, ctx.session), rid,
-                         ' --ruling R-nnnn' if hits else ''))
-    if hits and ruling is None:
-        raise Refusal('`%s` collides with a live pull: %s. `--reason` alone never overrides a '
-                      'collision with a live pull: `pull %s --reason "<why>" --ruling R-nnnn`, '
-                      'citing the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
-    if hits or folds:
-        _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
+                         '; its scope collides with a live pull, so it is %s' % override
+                         if hits else ''))
+    if hits and (not may_collide or reason is None):
+        raise Refusal('`%s` collides with a live pull: %s. `--reason` alone never overrides it: '
+                      'pulling it anyway is %s' % (rid, '; '.join(hits), override))
     lines = offer_notes + notes + ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
                      '  pulled_by:  %s' % branch]
     resume = resume_line(rec.body)
@@ -1185,8 +1230,6 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         changes += [(k, []) for k in rmod.PREEMPT_KEYS]
     else:
         recorded = reason
-        if ruling is not None:
-            recorded = '%s (PM %s)' % (reason, ruling)
         if blocker is not None:
             recorded += ' (unblocks %s)' % blocker
         lines += _collisions(rec, holding)
@@ -1200,8 +1243,10 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         lines += ['  displaced:  %s' % d for d in displaced]
         subject += ', pre-empting %d offered item%s' % (len(offers), '' if len(offers) == 1 else 's')
     pairs = rmod.apply_changes(rec.pairs(), changes)
-    return Change({rid: _text(pairs, rec.body)}, subject, lines,
-                  ruling=ruling if (hits or folds or not offered) else None)
+    change = Change({rid: _text(pairs, rec.body)}, subject, lines)
+    if hits or folds:
+        _collision_change(change, 'pull')
+    return change
 
 
 def live_hits(scopes, holding, skip=None, branch=None):
@@ -1290,15 +1335,15 @@ def landing_merge(root, main_branch, branch, since=None, rev=None, any_case=Fals
     return None
 
 
-def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
+def _plan_takeover(snap, ctx, rec, reason, may_collide, blocker):
     """A pull of a pulled record. It refuses `already in flight`, unless the record's `session:` is
     the caller's session and its pull is dead by `next`'s test (omod.in_flight_split: git
     answered and no branch, remote-tracking branch or worktree has its `pulled_by`); then the
     pull moves to this branch, `pulled_at` restamped, any pre-emption lines kept as the first pull
     wrote them, with the scope-collision warnings a pre-empting pull prints. A takeover whose scope
     collides with a live pull on another branch, or folds into one's diff (`_pull_fold_hits`),
-    needs `--ruling R-nnnn`, as a pull does; it takes no other flag, and no `--ruling` when
-    nothing collides. A dead pull marked for review refuses, as `pull` of a marked record does,
+    is the `pull-collision` row, as a pull is: refused unless `may_collide`, and the Change names
+    the row (_collision_change). It takes no flag. A dead pull marked for review refuses, as `pull` of a marked record does,
     until `clear-review`. A failed git probe
     holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
     merge on its first-parent line, committed on or after the `pulled_at` day; one brought in
@@ -1318,8 +1363,7 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
                       'anyone takes it over' % (rid, rec.get('review'), rid))
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=ctx.current_branch())
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, ctx.current_branch())
-    given =[f for f, v in (('--reason', reason), ('--ruling', None if hits or folds else ruling),
-                            ('--blocker', blocker)) if v is not None]
+    given = [f for f, v in (('--reason', reason), ('--blocker', blocker)) if v is not None]
     if given:
         raise Usage('`%s` is a dead pull of this session (pulled_by %s has no branch): `pull %s` '
                     'takes it over as it stands, with no %s' % (rid, old, rid, ', '.join(given)))
@@ -1327,14 +1371,12 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     if merge:
         raise Refusal('`%s` was pulled by %s, which has landed on %s (%s): close the record, do '
                       'not take it over' % (rid, old, ctx.main_branch, merge))
-    if hits and ruling is None:
+    override = '%s, with `pull %s`' % (policy.row_text('pull-collision'), rid)
+    if hits and not may_collide:
         raise Refusal('`%s` is a dead pull of this session, and its scope collides with a live '
-                      'pull: %s. Taking it over anyway takes `pull %s --ruling R-nnnn`, citing '
-                      'the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
-    if folds and ruling is None:
-        raise Refusal(_fold_message(rid, folds, 'pull %s --ruling R-nnnn' % rid))
-    if hits or folds:
-        _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
+                      'pull: %s. Taking it over anyway is %s' % (rid, '; '.join(hits), override))
+    if folds and not may_collide:
+        raise Refusal(_fold_message(rid, folds, override))
     branch = ctx.current_branch()
     today = ctx.date()
     pairs = rmod.apply_changes(rec.pairs(), [('pulled_at', [today]), ('pulled_by', [branch])])
@@ -1346,9 +1388,12 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
         lines.append(resume)
     lines += _collisions(rec, holding)
     lines += ['warning: %s' % f for f in folds]
-    return Change({rid: _text(pairs, rec.body)},
-                  'backlog: pull %s onto %s, taking over a dead pull from %s' % (rid, branch, old),
-                  lines, ruling=ruling)
+    change = Change({rid: _text(pairs, rec.body)},
+                    'backlog: pull %s onto %s, taking over a dead pull from %s' % (rid, branch, old),
+                    lines)
+    if hits or folds:
+        _collision_change(change, 'pull')
+    return change
 
 
 def branch_name_error(name, root):
@@ -1494,63 +1539,44 @@ def _claim_subject(verb, rid, reason, flag):
     return '%s %s: %s' % (verb, rid, ' '.join(reason.split()))
 
 
-def plan_close(snap, ctx, rid, reason, ruling=None, role_checked=False):
-    """The work is done: delete the record. An owner-held record takes `--ruling` (deleting it
-    ends his hold); its own live `hold_ruling` is accepted. With `role_checked` (opener: the role
-    check sorted the close of a held record as `close-held`, the owner's and the PM's alone) it
-    needs none; a landing's close (at_landing) runs no role check, so it keeps the gate."""
+def refuse_unchecked_end(rec, verb, role_checked):
+    """`close`, `retire` and `delete` of an owner-held record (`close-held`), and `retire` or
+    `delete` of one the owner or the PM priced (`retire-priced`), are the owner's and the PM's
+    (kitlib/backlog/roles.py): without `role_checked` (a landing's close, a library caller) the
+    write refuses (refuse_top)."""
+    if not role_checked:
+        refuse_top(rec.id, verb, policy.sort(verb, {}, rec))
+
+
+def plan_close(snap, ctx, rid, reason, role_checked=False):
+    """The work is done: delete the record. An owner-held record is the `close-held` row, so a
+    close without `role_checked` (opener ran the role check; a landing's close, at_landing, runs
+    none) refuses it (refuse_unchecked_end)."""
     rec = require(snap, rid)
     subject = _claim_subject('closes', rid, reason, '--reason')
-    held = rmod.is_owner_held(rec)
-    if held and ruling is None and not role_checked:
-        raise Refusal('`%s` is owner-held (%s), so closing it needs `--ruling R-nnnn`%s'
-                      % (rid, rmod.owner_hold_label(rec),
-                         '; its own `hold_ruling: %s` is live and accepted' % rec.get('hold_ruling')
-                         if lmod.hold_live(rec) else ''))
-    own = ruling is not None and ruling == rec.get('hold_ruling') and lmod.hold_live(rec)
-    if ruling is not None:
-        if not held and not own:
-            raise Usage('`--ruling %s` was given, and `%s` is not owner-held and it is not the '
-                        'record\'s own live `hold_ruling`' % (ruling, rid))
-        if held:
-            lmod.refuse_unnamed_release(rid, rec, ruling, 'close')
-        if not own:
-            _check_ruling(rid, rec, ruling, 'close', hold_only=True)
+    refuse_unchecked_end(rec, 'close', role_checked)
     writes, lines = dependent_rewrites(snap, rid)
     writes[rid] = None
     lines.insert(0, 'CLOSED %s' % rid)
     if rec.get('state') != 'pulled':
         lines.append('warning: `%s` was `state: %s`, never pulled; it closes anyway'
                      % (rid, rec.get('state')))
-    return Change(writes, subject, lines, ruling=ruling)
+    return Change(writes, subject, lines)
 
 
-def plan_retire(snap, ctx, rid, why, ruling=None, role_checked=False):
-    """The work should not be done: delete the record. An owner-prioritised or owner-held record
-    takes `--ruling`, a ruling id; with `role_checked` (the role check sorted a held record as
-    `close-held`, the owner's and the PM's alone) a held one that no owner or PM priced needs
-    none, and a ruling given on it is still recorded. A pull whose branch is live refuses, as
+def plan_retire(snap, ctx, rid, why, role_checked=False):
+    """The work should not be done: delete the record. An owner-held or owner-priced record is
+    the owner's and the PM's (refuse_unchecked_end). A pull whose branch is live refuses, as
     `delete` does (`_refuse_live_pulls`); a dead pull goes with the record."""
     rec = require(snap, rid)
     subject = _claim_subject('retires', rid, why, '--why')
     notes = _refuse_live_pulls(snap, ctx, [rec])
-    gated = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
-    guarded = rmod.is_owner_prioritised(rec) or (rmod.is_owner_held(rec) and not role_checked)
-    if guarded and ruling is None:
-        raise Refusal('`%s` is %s, so retiring it needs `--ruling R-nnnn`'
-                      % (rid, 'owner-held (%s)' % rmod.owner_hold_label(rec)
-                         if rmod.is_owner_held(rec)
-                         else 'owner-prioritised (`priority_by: %s`)' % rec.get('priority_by')))
-    if ruling is not None:
-        if not gated:
-            raise Usage('`--ruling %s` was given, and `%s` is neither owner-prioritised nor '
-                        'owner-held: its retirement needs no ruling' % (ruling, rid))
-        _check_ruling(rid, rec, ruling, 'retirement')
+    refuse_unchecked_end(rec, 'retire', role_checked)
     writes, lines = dependent_rewrites(snap, rid)
     writes[rid] = None
     lines.insert(0, 'RETIRED %s' % rid)
     lines[1:1] = notes
-    return Change(writes, subject, lines, ruling=ruling)
+    return Change(writes, subject, lines)
 
 
 def _refuse_live_pulls(snap, ctx, recs, note='  dead pull on `%s` dropped with the record',
@@ -1592,11 +1618,11 @@ def _live_pull_refusal(building, retarget):
     return '%s; retarget after they land, or release them first (%s, each from its branch)'         % (where, releases)
 
 
-def plan_delete(snap, ctx, rid, why, ruling=None, role_checked=False):
+def plan_delete(snap, ctx, rid, why, role_checked=False):
     """The record should not exist (the owner's delete from the Action Hub, or a coordinator's):
     delete it, with the subject `deletes ID: <why>`, which history reads as `closes`/`retires`
     are read (`add` again needs `--reopen`; a `requires: item:` on it never lands). The owner
-    gates are `retire`'s, `role_checked` included. A pull whose branch is live refuses: its
+    gates are `retire`'s (refuse_unchecked_end). A pull whose branch is live refuses: its
     holder releases it first. A dead pull goes with the record; a parked record's kept branch is
     left for its owner to remove."""
     rec = require(snap, rid)
@@ -1606,18 +1632,374 @@ def plan_delete(snap, ctx, rid, why, ruling=None, role_checked=False):
     if state == 'parked':
         notes.append('  parked on %s; a branch kept for it is not touched: remove it by hand'
                      % (rec.get('q') or 'no recorded question'))
-    gated = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
-    guarded = rmod.is_owner_prioritised(rec) or (rmod.is_owner_held(rec) and not role_checked)
-    if guarded and ruling is None:
-        raise Refusal('`%s` is %s, so deleting it needs `--ruling R-nnnn`'
-                      % (rid, 'owner-held (%s)' % rmod.owner_hold_label(rec)
-                         if rmod.is_owner_held(rec)
-                         else 'owner-prioritised (`priority_by: %s`)' % rec.get('priority_by')))
-    if ruling is not None:
-        if not gated:
-            raise Usage('`--ruling %s` was given, and `%s` is neither owner-prioritised nor '
-                        'owner-held: deleting it needs no ruling' % (ruling, rid))
-        _check_ruling(rid, rec, ruling, 'deletion')
+    refuse_unchecked_end(rec, 'delete', role_checked)
     writes, lines = dependent_rewrites(snap, rid)
     writes[rid] = None
-    return Change(writes, subject, ['DELETED %s' % rid] + notes + lines, ruling=ruling)
+    return Change(writes, subject, ['DELETED %s' % rid] + notes + lines)
+
+
+# --- uncite ---------------------------------------------------------------------------------------
+
+# An owner ruling or question id as a record body cites it: `R-` and four or more digits, `Q-` and
+# three or more, not glued to a word after it. `T-` ids, `item:` members and an `R-` id of fewer
+# than four digits are not ones.
+CITE_ID = r'(?:R-[0-9]{4,}|Q-[0-9]{3,})(?![A-Za-z0-9_])'
+CITED = re.compile(r'(?<![A-Za-z0-9-])' + CITE_ID)
+# One glued to a word before it by a hyphen (`pre-R-nnnn`): no rule reads it, so its line is left
+# for a hand edit.
+GLUED = re.compile(r'(?<=[A-Za-z0-9]-)' + CITE_ID)
+# The header keys `uncite` drops: each holds only a cited id. `resume`, `q` and `priority_per`
+# are kept (offer ranking and the park read them).
+UNCITED_KEYS = ('priority_ruling', 'hold_ruling')
+# One cite as a sentence names it: a `PM ` or `owner ` before it and a `(c)` part after it are its.
+_CITE = r'(?:(?:PM|[Oo]wner) )?' + CITE_ID + r'(?:\([a-z0-9]{1,3}\))?'
+_RUN = r'(?:, | and |/|; | & )'
+# One cite or a run of them (`R-nnnn, R-nnnn and Q-nnn`), never glued to a word before it.
+_G = r'(?<![A-Za-z0-9-])' + _CITE + r'(?:' + _RUN + _CITE + r')*'
+# Inside a parenthesis a cite may name the part of it meant (`O2`, `Q2`, `b`).
+_PART = r'(?: (?:[A-Z][0-9]{1,2}[a-z]?|[a-z]))?'
+_GP = r'(?<![A-Za-z0-9-])' + _CITE + _PART + r'(?:' + _RUN + _CITE + _PART + r')*'
+# A key or lead word before a cite that goes with it (`value_ruling R-nnnn`, `ref: R-nnnn`).
+_KEY = r'(?:(?:[a-z][a-z0-9]*_[a-z0-9_]+|[Rr]ef|[Pp]er|[Ss]ee|PM|[Oo]wner):? )?'
+_BULLET = r'\s*(?:[-*] |[0-9]+\. )?'
+# A cite (with a part it names) that ends the text before a tag rule's mark: the mark joins a run
+# of cites (`by R-nnnn, R-nnnn`), which is no tag, so the run stays whole for the object rule.
+_CITE_END = re.compile(CITE_ID + r'(?:\([a-z0-9]{1,3}\))?' + _PART + '$')
+# The mark after a leading cite list that goes with it: not when the words after it join on to
+# the cites (`(R-nnnn, and the rule)`, `R-nnnn, which says`), which without them reads wrong.
+# After a colon `which` and `that` start the text the label names (`Q-nnn: which one?`).
+_JOINS = r'(?!(?:and|or|but|nor|plus|then|with)\b)'
+_LIST_MARK = r'(?:[:;]|,(?!\s+(?:which|that)\b))\s+' + _JOINS
+# The words a cite can follow as their object (`per R-nnnn`, `answered by R-nnnn`).
+_PREP = (r'(?:\b(?:[Pp]er|[Uu]nder|[Ii]n|[Bb]y|[Ff]rom|[Ss]ince|[Aa]fter|[Bb]efore|[Uu]ntil|'
+         r'[Ff]ollowing|[Ss]ee|[Cc]iting|[Cc]ites|[Oo]n|[Oo]f|[Ww]ith|[Aa]gainst|[Bb]reaks?|'
+         r'[Oo]verrides?|[Rr]everses|[Cc]ontradicts|[Rr]espects|[Ff]ollows) )')
+# What may follow a cite as an object: punctuation, the line's end, a parenthesis, a joining word.
+_AFTER = (r'(?=[.,;:)!?]|$| \(| (?:and|or|but|so|then|which|that|to|for|when|while|because|as|'
+          r'until|unless|if|before|after)\b)')
+# The words a question id can follow as an object and still read as the question (`waiting on
+# Q-nnn`, `asked in Q-nnn`). After any other (`done per Q-nnn`) the id stands for its answer, which
+# `an owner question` would not say: that line is left for a hand edit.
+_Q_PREPS = ('on', 'in', 'of', 'see', 'citing', 'cites')
+_NOUN = r'(?:ruling|question|answer|decision)s?\b'
+# What may stand before `ruling`, `question` and the like for the noun rule to drop the cite after
+# it: an article, `this`/`that`/`its`, or a possessive, with an `owner` or `PM` between. A bare
+# `Owner ruling R-nnnn` has none: dropping the cite would leave `Owner ruling wants`.
+_DET = r"(?:The|the|[Aa]n?|[Tt]hat|This|this|[Ii]ts|[Oo]wner's|PM's)"
+# What a rewrite can leave that reads wrong: an empty or space-led parenthesis, one opened at the
+# line's end, a space before punctuation, a doubled comma or space.
+_ODD = re.compile(r'\(\s*\)|\( |\($|\s[,;.]|,,|\S  \S')
+
+
+def _opens_at(s, i, opens):
+    """Whether position `i` of line `s` starts a sentence: the line's start (after a bullet) when
+    the line `opens` one, or just after `.`, `!` or `?` and a space."""
+    before = s[:i]
+    if re.fullmatch(_BULLET, before):
+        return opens
+    return re.search(r'[.!?]\s+$', before) is not None
+
+
+def _words(cites, alone):
+    """The words for the cite run `cites`: `an owner ruling` / `an owner question` for one (`an
+    owner` when `alone` is False: a noun follows), `owner rulings` / `owner questions` for more
+    of one kind (`owner`), None for a run that mixes rulings and questions."""
+    ids = CITED.findall(cites)
+    kinds = {i[0] for i in ids}
+    if len(kinds) != 1:
+        return None
+    noun = 'question' if kinds == {'Q'} else 'ruling'
+    if len(ids) == 1:
+        return 'an owner %s' % noun if alone else 'an owner'
+    return 'owner %ss' % noun if alone else 'owner'
+
+
+def _uncite_rules(opens, state):
+    """The rewrites in the order they run, each `(pattern, replacement)`. The first ones drop a
+    cite that is a tag on the sentence (in a parenthesis, after a comma, a label before a colon,
+    one cite after a noun with an article that already says it); the rest put `an owner ruling` /
+    `an owner question` where the cite is a word of the sentence: an object (`per R-nnnn`), before
+    a noun after a preposition (`under the R-nnnn ruling`), or a dated label of rulings opening a
+    line. No rule
+    words a cite that is a subject (`R-nnnn says`) or a possessive (`R-nnnn's`): `an owner
+    ruling` there would say some ruling where the line meant one. A tag rule whose mark follows a
+    cite leaves the run (`by R-nnnn, R-nnnn`) for the object rule, which keeps it plural; one whose
+    list would leave a joining word first (`(R-nnnn, and the rule)`) does not run. A cite no rule
+    places, a run a rule cannot word, or a word rule at the start of a line that continues a
+    sentence, sets state['hand']: uncite_line then leaves the line as it was. state['words']
+    counts the word rules that ran."""
+    def hand(m):
+        state['hand'] = True
+        return m.group(0)
+
+    def tag(m):
+        # a mark after a cite joins a run of them: no tag, left whole for the object rule
+        return m.group(0) if _CITE_END.search(m.string[:m.start()]) else ''
+
+    def continued(m):
+        # the line's first words continue the line before's sentence: no rule knows the word
+        # before the cite
+        return not opens and m.start('pre') == 0 and re.fullmatch(_BULLET, m.group('pre'))
+
+    def prefix(m):
+        if not m.group(2) and not opens:
+            return hand(m)
+        nxt = m.group(3)
+        if not m.group(2):
+            nxt = nxt.upper()
+        return m.group(1) + m.group(2) + nxt
+
+    def noun(m):
+        # one cite after the noun: more (`the ruling R-nnnn and Q-nnn say`) would leave the
+        # noun saying one where the line named several
+        return hand(m) if len(CITED.findall(m.group(2))) > 1 else m.group(1)
+
+    def word(alone=True, suffix='', obj=False, rulings=False):
+        def rep(m):
+            text = _words(m.group('c'), alone)
+            q_word = 'question' in (text or '')
+            if text is None or continued(m) or (rulings and q_word) or (
+                    obj and q_word and m.group('pre').strip().lower() not in _Q_PREPS):
+                return hand(m)
+            state['words'] += 1
+            start = m.end('pre')
+            if _opens_at(m.string, start, opens):
+                text = text[:1].upper() + text[1:]
+            return m.group('pre') + text + suffix
+        return rep
+
+    return [
+        # a parenthesis holding only cites (a lead word and parts with them): gone, with the
+        # space before it (never the line's indent)
+        (r'(?:(?<=\S)\s+)?\(' + _KEY + _GP + r'\)', ''),
+        # a sentence that only points at cites: `See R-nnnn.`
+        (r'^(' + _BULLET + r')[Ss]ee ' + _G + r'\.\s*', r'\1'),
+        (r'(?<=[.!?]) [Ss]ee ' + _G + r'\.', ''),
+        # `(CITES: rest`, `rest; CITES)`, `rest, CITES, more`
+        (r'\(' + _KEY + _GP + _LIST_MARK, '('),
+        (r'[,;]\s+' + _KEY + _GP + r'(?=\))', tag),
+        (r'[,;]\s+' + _KEY + _G + r'(?=[,;]\s)', tag),
+        # a trailing `, CITES` (or `, key CITES`) before the line's end, a full stop or a
+        # parenthesis
+        (r'\s*[,;|]\s*' + _KEY + _G + r'(?=\s*(?:\.|\(|$))', tag),
+        # a leading `CITES: ` or `CITES, ` (after a bullet and a short `Note: ` style label)
+        (r'^(' + _BULLET + r')((?:[A-Za-z][A-Za-z _-]{0,20}: )?)' + _G + r'(?!;)' + _LIST_MARK +
+         r'(\S?)', prefix),
+        # `the ruling CITES`, `an owner question CITES`: the noun already says it
+        (r'\b(' + _DET + r" (?:(?:[Oo]wner|PM)(?:'s)? )?" + _NOUN + r') (' + _G + r')', noun),
+        # `R-nnnn (2026-10-07): ...` opening a line; a `Q-nnn (date):` label names the answer,
+        # which `an owner question` would not say
+        (r'^(?P<pre>' + _BULLET + r')(?P<c>' + _G + r')(?= \([0-9]{4}-[0-9]{2}-[0-9]{2}\):)',
+         word(rulings=True)),
+        # `under the R-nnnn ruling`
+        (r'(?P<pre>' + _PREP + r')(?:(?:The|the) )?(?P<c>' + _G + r') (?=' + _NOUN + r')',
+         word(alone=False, suffix=' ')),
+        # `per R-nnnn`, `answered by R-nnnn`
+        (r'(?P<pre>' + _PREP + r')(?P<c>' + _G + r')' + _AFTER, word(obj=True)),
+    ]
+
+
+def uncite_line(line, opens=True):
+    """`(after, hand)`: one body line with each owner ruling or question id (CITE_ID) rewritten
+    into plain words (_uncite_rules), or the line as it was and `hand` True where no rule words it
+    cleanly: a cite no rule places, one glued to a word by a hyphen (GLUED), more than one cite
+    put into words in the line (distinct rulings would read as one), or odd punctuation (_ODD) or
+    indentation the rewrite left. Such a line is listed for a hand edit and never rewritten: no
+    rewrite says `the owner` or `the owner's`. `opens`: the line starts a sentence (the line before
+    it is blank, absent, or ends a sentence). A line left opening on a mark (`, then x`, after a
+    parenthesis went) is the body's to join (_uncite_body). A `Blocked on M (date): T` line
+    (record.BLOCK_NOTE, written by plan_block) has only its reason T worded, as a line that opens
+    a sentence; one whose reason would be left empty or opening on a mark, or that has no such
+    prefix, is left for a hand edit. Idempotent: a line with no cite comes back as it was."""
+    if not (CITED.search(line) or GLUED.search(line)):
+        return line, False
+    if line.startswith(rmod.BLOCK_NOTE):
+        head = _BLOCK_HEAD.match(line)
+        if not head:
+            return line, True
+        reason, hand = _uncite_text(line[head.end():], True)
+        if hand or not reason.strip() or re.match(r'[,;.:]', reason):
+            return line, True
+        return head.group(0) + reason, False
+    return _uncite_text(line, opens)
+
+
+# The prefix of the body line plan_block writes for `--reason`: `Blocked on M (yyyy-mm-dd): `.
+_BLOCK_HEAD = re.compile(re.escape(rmod.BLOCK_NOTE) + r'[^()]*\([0-9]{4}-[0-9]{2}-[0-9]{2}\): ')
+
+
+def _uncite_text(line, opens):
+    """uncite_line for one line of text that is not a `Blocked on` line: a body line, or a
+    `summary` or `ref` value (plan_uncite)."""
+    if not (CITED.search(line) or GLUED.search(line)):
+        return line, False
+    if GLUED.search(line):
+        return line, True
+    opens = opens or re.match(r'\s*(?:[-*]|[0-9]+\.) ', line) is not None
+    state = {'hand': False, 'words': 0}
+    after = line
+    for pattern, rep in _uncite_rules(opens, state):
+        after = re.sub(pattern, rep, after)
+    if re.fullmatch(r'\s*(?:[-*]|[0-9]+\.)?\s*', after):
+        return '', False                     # only cites (and a bullet): the line goes
+    lead = re.match(r'\s*', line).group(0)
+    joined = re.sub(r'^(\s*)[,;.:]\s*', r'\1', after)    # a leading mark is the body's to join
+    if (state['hand'] or state['words'] > 1 or CITED.search(after) or
+            len(_ODD.findall(joined)) > len(_ODD.findall(line)) or
+            (after.strip() and re.match(r'\s*', after).group(0) != lead)):
+        return line, True
+    return after, False
+
+
+def _uncite_body(body, keep_block=False):
+    """`(new body, rewritten, hand)`: `rewritten` the `[before, after]` of each line the rewrite
+    changed, in order (`after` None for a line that was only cites and goes); `hand` the
+    `(n, line)` of each line uncite_line left for a hand edit, `n` its 1-based place in the new
+    body. `keep_block`: each `Blocked on` line that cites one is left for a hand edit unworded
+    (it is a hold's only citation: plan_uncite). A rewritten line left opening on a stray mark (`, not this one.` once a parenthesis of
+    cites went) gives the mark to the line above it, or drops it where that line is blank, a
+    heading or already ends on a mark, capitalising what is left after a blank line, a heading or
+    a finished sentence; it is left for a hand edit when the line above is one."""
+    out, rewritten, hand = [], [], []
+    at = {}                                  # out index -> its rewritten entry
+    prev = ''
+    for line in (body or '').split('\n'):
+        opens = not prev.strip() or prev.rstrip()[-1:] in '.!?:'
+        prev = line
+        if keep_block and line.startswith(rmod.BLOCK_NOTE) and CITED.search(line):
+            after, needs = line, True
+        else:
+            after, needs = uncite_line(line, opens)
+        stray = re.match(r'(\s*)([,;.:])\s*', after)
+        if stray and not needs and after != line and not re.match(r'\s*[,;.:]', line):
+            above = out[-1] if out else ''
+            if hand and hand[-1][0] == len(out):
+                needs = True
+            else:
+                rest = after[stray.end():]
+                if above.strip() and above.rstrip()[-1:] not in '.,;:!?' and \
+                        not above.lstrip().startswith('#'):
+                    out[-1] = above.rstrip() + stray.group(2)
+                    if len(out) - 1 in at:
+                        at[len(out) - 1][1] = out[-1]
+                    else:
+                        at[len(out) - 1] = [above, out[-1]]
+                        rewritten.append(at[len(out) - 1])
+                elif (not above.strip() or above.rstrip()[-1:] in '.!?' or
+                      above.lstrip().startswith('#')):
+                    # the line starts a sentence (after a blank line, a finished one or a
+                    # heading): it opens with a capital
+                    rest = rest[:1].upper() + rest[1:]
+                after = stray.group(1) + rest if rest else ''
+        if needs:
+            out.append(line)
+            hand.append((len(out), line))
+        elif after != line and not after.strip():
+            rewritten.append([line, None])
+        elif after != line:
+            out.append(after)
+            at[len(out) - 1] = [line, after]
+            rewritten.append(at[len(out) - 1])
+        else:
+            out.append(line)
+    return '\n'.join(out), rewritten, hand
+
+
+UNCITED_FIELDS = ('summary', 'ref')     # the header values uncite words as it words a body line
+
+
+def _uncite_fields(pairs):
+    """`(pairs, worded, hand)` for one record's header pairs: each UNCITED_FIELDS value that cites
+    one worded as a line that opens a sentence (_uncite_text). `worded` the `(key, before,
+    after)` of each value changed, `after` None for a `ref` of only cites, which is dropped;
+    `hand` the `(n, key, value)` of each value kept for a hand edit, `n` its line in the written
+    record: one no rule words cleanly, a `summary` of only cites (it is required) and a value
+    left opening on a mark."""
+    out, worded, hand = [], [], []
+    for key, value in pairs:
+        if key in UNCITED_FIELDS and (CITED.search(value) or GLUED.search(value)):
+            after, needs = _uncite_text(value, True)
+            if key == 'ref' and re.fullmatch(r'\s*' + _KEY + _GP + r'\s*\.?\s*', value):
+                after, needs = '', False         # only cites: no rule takes a bare one
+            if not needs and not after.strip() and key == 'ref':
+                worded.append((key, value, None))
+                continue
+            if needs or not after.strip() or re.match(r'\s*[,;.:]', after):
+                hand.append((len(out) + 1, key, value))
+            else:
+                worded.append((key, value, after.strip()))
+                value = after.strip()
+        out.append((key, value))
+    return out, worded, hand
+
+
+def _hold_needs_block_lines(rec, body):
+    """Whether `rec` is a blocked record with a `deliberate` or `owner` hold whose citations
+    (record.hold_citations) would all be gone with its `Blocked on` lines worded as in `body`:
+    nothing in `q`, `owner_ask` or `blocked_on` cites one, and no `Blocked on` line of `body`
+    does. Its `Blocked on` lines that cite one are then kept for a hand edit, so `check`'s hold
+    citations still read the hold."""
+    if rec.get('state') != 'blocked' or not any(
+            m in rmod.UNCITED_KINDS for m in rec.all('blocked_on')):
+        return False
+    if any(rmod.cites(v) for key in ('q', 'owner_ask', 'blocked_on') for v in rec.all(key)):
+        return False
+    return not any(rmod.cites(line) for line in (body or '').split('\n')
+                   if line.startswith(rmod.BLOCK_NOTE))
+
+
+def plan_uncite(snap, ctx):
+    """Rewrite every owner ruling and question id (CITE_ID) cited in the readable records' bodies,
+    their `Blocked on` lines' reasons among them, and in their `summary` and `ref` values
+    (UNCITED_FIELDS) into plain words (uncite_line), and drop the header keys that hold only one
+    (UNCITED_KEYS), in one store commit. `owner_ask`, `q`, `resume`, `priority_per` and
+    `requires` are kept as they are, and so is a `Blocked on` line that is a deliberate or owner
+    hold's only citation (_hold_needs_block_lines). A line or value no rule words cleanly is left
+    as it was and listed under NEEDS HAND EDIT, with the store, the record and its line in the
+    written record, in the dry run and in the `--apply` output alike. A second run rewrites
+    nothing; it lists the lines still left for a hand edit."""
+    writes, out, hands = {}, [], []
+    cites = body_lines = fields = headers = 0
+    for rec in snap.readable:
+        body, rewritten, hand = _uncite_body(rec.body)
+        only = _hold_needs_block_lines(rec, body)
+        if only:
+            body, rewritten, hand = _uncite_body(rec.body, keep_block=True)
+        drop = [(k, rec.get(k)) for k in UNCITED_KEYS if rec.has(k)]
+        pairs, worded, field_hand = _uncite_fields(
+            [(k, v) for k, v in rec.pairs() if k not in UNCITED_KEYS])
+        hands += ['  %s %s line %d (%s): %s' % (snap.where, rec.stem, n, key, value.strip())
+                  for n, key, value in field_hand]
+        # the header, its blank line, then the body: line n of the body is line len(pairs)+1+n
+        hands += ['  %s %s line %d: %s%s' % (
+            snap.where, rec.stem, len(pairs) + 1 + n, line.strip(),
+            " (the hold's only citation)" if only and line.startswith(rmod.BLOCK_NOTE) else '')
+            for n, line in hand]
+        if not rewritten and not drop and not worded:
+            continue
+        writes[rec.stem] = _text(pairs, body if rewritten else rec.body)
+        out.append('  %s' % rec.stem)
+        for key, before, after in worded:
+            cites += len(CITED.findall(before))
+            out += ['    - %s: %s' % (key, before),
+                    '    + %s: %s' % (key, after if after is not None else '(dropped)')]
+        fields += len(worded)
+        for before, after in rewritten:
+            cites += len(CITED.findall(before))
+            out += ['    - %s' % before.strip(),
+                    '    + %s' % (after.strip() if after is not None else '(line removed)')]
+        for key, val in drop:
+            out.append('    dropped %s: %s' % (key, val))
+        body_lines += len(rewritten)
+        headers += len(drop)
+    tail = ['NEEDS HAND EDIT (%d line(s) left unchanged: no rule words their cites cleanly; edit '
+            'them by hand)' % len(hands)] + hands if hands else []
+    if not writes:
+        return Change({}, 'backlog: uncite', ['UNCITE: nothing to rewrite in %s%s' % (
+            snap.where, '; %d line(s) still cite one' % len(hands) if hands else
+            ': no owner ruling or question id is cited')] + tail)
+    lines = ['UNCITE: %d cite(s) in %d record(s): %d body line(s) rewritten, %d field(s) '
+             'rewritten, %d header line(s) dropped, %d line(s) left for a hand edit'
+             % (cites, len(writes), body_lines, fields, headers, len(hands))] + out + tail
+    return Change(writes, 'backlog: uncite %d cite(s) in %d record(s)' % (cites, len(writes)),
+                  lines)

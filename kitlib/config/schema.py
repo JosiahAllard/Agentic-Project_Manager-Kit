@@ -120,14 +120,6 @@ DATA_ROOT = Obj({
     'why': Field(Str(), None, 'the reason, a ruling or a measurement'),
 }, required=('path', 'mode'), what='{path, mode, why}')
 
-# A landing lane (gate.py land --lane).
-LANE = Obj({
-    'branch_prefix': Field(Strs, None, 'a branch landing on the lane starts with one of these'),
-    'paths': Field(Strs, None, 'every path the branch changes matches one of these globs'),
-    'why': Field(Str(), None, 'the ruling that made the lane'),
-    'merged_args': Field(Strs, None, 'arguments added to every step command of a landing on this lane, after the step merged_args'),
-}, what='{branch_prefix, paths, why, merged_args}')
-
 # A red-first runner (tools/redfirst.py, kitlib/redfirst/verdict.py): the first whose glob matches.
 RUNNER = Obj({
     'glob': Field(Str(), None, 'repo-relative test files it takes (fnmatch, case-blind, * crosses /)'),
@@ -217,9 +209,6 @@ SECTIONS = {
     'gate': {
         'steps': Field(ListOf(STEP), [], 'the repo gate steps'),
         'setup': Field(Argv, None, 'argv run before the steps'),
-        'python_tests': Field(Enum('discover', 'pytests'), 'discover', 'how the Python tests run'),
-        'python_tests_floor': Field(Int(0), None, 'fewest tests a full run may report'),
-        'trailers': Field(Bool(), None, 'check commit trailers'),
         'worktree_guard': Field(Bool(), None, 'refuse to gate in a main checkout'),
         'warn_untracked': Field(Bool(), None, 'warn about untracked files'),
         'fail': Field(Regexes, None, 'log patterns that fail every step'),
@@ -239,9 +228,7 @@ SECTIONS = {
         'role_policy': Field(Bool(), False, 'hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only'),
     },
     'landing': {
-        'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
         'log_dir': Field(RelPath(), None, 'where gate logs live'),
-        'lanes': Field(MapOf(LANE, 'lane'), {}, 'lanes besides full that gate.py land --lane takes'),
         'wait_s': Field(Int(0, 86400), 21600, 'seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise'),
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
@@ -265,17 +252,10 @@ SECTIONS = {
                                       'why': Field(Str(), None, 'reason')},
                                      required=('glob', 'hits'), what='{glob, hits, line, why}')),
                           [], 'test fixtures that name machine paths'),
-        'piece_fixtures': Field(ListOf(Obj({'piece': Field(Str(), None, 'piece'),
-                                            'path': Field(Str(), None, 'path in the piece'),
-                                            'hits': Field(ListOf(Regex()), None, 'hits'),
-                                            'why': Field(Str(), None, 'reason')},
-                                           required=('piece', 'hits'), what='{piece, path, hits, why}')),
-                                [], 'fixtures named by piece; machine_paths.py refuses a non-empty list until it resolves pieces'),
         'known_binary': Field(MapOf(Str(), 'path'), {}, 'binary file -> why it may hold paths'),
         'scan': Field(Strs, ['*'], 'globs scanned'),
         'fallback_vars': Field(Strs, [], 'environment variables a machine path may fall back to'),
     },
-    'new_worktree': {},
     'pieces': {},
     'preflight': {
         'engines': Field(Strs, [], 'process-name prefixes listed as running engines'),
@@ -344,7 +324,7 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
 # dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
-RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo')}
+RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo'), 'landing': ('lanes', 'lock_file')}
 # Whole sections no tool reads any more. A config that still carries one loads: the section is
 # dropped unchecked, whatever it holds. Any other unknown section still refuses.
 RETIRED_SECTIONS = ('ruling_cites',)

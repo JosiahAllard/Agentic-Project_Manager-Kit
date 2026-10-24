@@ -3,7 +3,6 @@
 `under <id>` naming any file. kitlib.ledger.fmt, write, read, standing, files and precommit.
 
 Ids are built by rid(n) and hid(repo, n), so this file holds no ruling id of its own (tests/scrub)."""
-import json
 import os
 import shutil
 import tempfile
@@ -11,7 +10,7 @@ import threading
 import unittest
 from unittest import mock
 
-from kitlib.config import user as kuser
+from tests.home import machine_config
 from kitlib.ledger import files, fmt, precommit, read, standing, write
 from kitlib.ledger.errors import Refused, Usage
 
@@ -271,20 +270,18 @@ class PrecommitTargetsTest(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(shutil.rmtree, self.home, True)
-        os.makedirs(kuser.config_dir(self.home))
         self.dir = os.path.join(self.home, 'rulings')
 
     def test_every_file_the_frozen_one_and_the_digest(self):
         frozen = os.path.join(self.dir, 'LEDGER.md')
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump({'ledger_dir': self.dir, 'ledger_repos': ['alpha', 'pm'], 'ledger_path': frozen}, f)
+        machine_config(self.home, {'ledger_dir': self.dir, 'ledger_repos': ['alpha', 'pm'], 'ledger_path': frozen},
+                       case=self)
         self.assertEqual(precommit.targets(self.home),
                          (os.path.join(self.dir, 'alpha.md'), os.path.join(self.dir, 'pm.md'), frozen,
                           os.path.join(self.dir, standing.NAME)))
 
     def test_without_the_frozen_file(self):
-        with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump({'ledger_dir': self.dir, 'ledger_repos': ['alpha']}, f)
+        machine_config(self.home, {'ledger_dir': self.dir, 'ledger_repos': ['alpha']}, case=self)
         self.assertEqual(precommit.targets(self.home),
                          (os.path.join(self.dir, 'alpha.md'), os.path.join(self.dir, standing.NAME)))
 

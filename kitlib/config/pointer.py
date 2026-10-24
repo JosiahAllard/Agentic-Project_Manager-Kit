@@ -14,7 +14,8 @@ no record it must be the main checkout.
 Under the kit's tests (kitlib.config.user.fenced) the registry is never read: the value is the
 environment's FENCE_ENV, and with none there is no pointer.
 
-Nothing reads the pointer for config yet: preflight's `pointer` line reports it.
+The machine config is read from the PM repository it names (kitlib.config.user.locate), and
+preflight's `pointer` line reports it.
 """
 import collections
 import os
@@ -31,8 +32,9 @@ FENCE_ENV = 'KIT_PM_REPO_FENCE'
 OK, NONE, BAD = 'OK', 'NONE', 'BAD'
 
 # `state` OK, NONE or BAD; `path` the value as stored (None when there is none or it cannot be
-# read); `error` why it is BAD, else None.
-Pointer = collections.namedtuple('Pointer', 'state path error')
+# read); `error` why it is BAD, else None; `record` the kitlib.pmdata Record in its repository's
+# common dir for OK, None when it has none.
+Pointer = collections.namedtuple('Pointer', 'state path error record', defaults=(None,))
 
 
 def _winreg():
@@ -45,6 +47,13 @@ def read_raw():
     read or is not a REG_SZ. Under the tests: FENCE_ENV's value, and the registry is not read."""
     if user.fenced():
         return os.environ.get(FENCE_ENV) or None, None
+    return registry()
+
+
+def registry():
+    """read_raw's answer from the registry, fenced or not: only for the test fence's one
+    exception (tests.real_install_config, which reads it before the fence); everything else
+    calls read_raw."""
     try:
         winreg = _winreg()
     except ImportError:
@@ -64,46 +73,53 @@ def read_raw():
     return value, None
 
 
-def check(path):
-    """None when `path` can be the pointer's value; else why not, in words."""
+def check(path, classify=None, branch=None):
+    """None when `path` can be the pointer's value; else why not, in words. `classify` and
+    `branch` replace repo.classify and refs.current_branch (the guard reads both from files)."""
+    return _check(path, classify, branch)[0]
+
+
+def _check(path, classify=None, branch=None):
+    """(check's answer, the kitlib.pmdata Record of path's repository or None)."""
     if not os.path.isabs(path) or not os.path.splitdrive(path)[0]:
-        return '%s is not an absolute path' % path
+        return '%s is not an absolute path' % path, None
     if not os.path.isdir(path):
-        return 'no folder at %s' % path
-    place = repo.classify(path)
+        return 'no folder at %s' % path, None
+    place = (classify or repo.classify)(path)
     if place.kind not in (repo.MAIN, repo.LINKED):
-        return '%s is not a git work tree (%s)' % (path, place.detail or place.kind)
+        return '%s is not a git work tree (%s)' % (path, place.detail or place.kind), None
     if not repo.same_path(place.top, path):
-        return '%s is not the top of its work tree (that is %s)' % (path, place.top)
+        return '%s is not the top of its work tree (that is %s)' % (path, place.top), None
     try:
         record = pmdata.read(place.common)
     except pmdata.PmDataError as e:
-        return str(e)
+        return str(e), None
     if record is None:
         if place.kind != repo.MAIN:
             return ('%s is a linked worktree and its repository has no PM data record (%s): name '
-                    'the main checkout' % (path, pmdata.FILE_NAME))
-        return None
-    branch, why = refs.current_branch(path)
-    if branch is None:
-        return 'cannot read the branch of %s: %s' % (path, why)
-    if branch != record.branch:
+                    'the main checkout' % (path, pmdata.FILE_NAME)), None
+        return None, None
+    name, why = (branch or refs.current_branch)(path)
+    if name is None:
+        return 'cannot read the branch of %s: %s' % (path, why), None
+    if name != record.branch:
         return ('%s is on %s, not the PM data branch %s: name the PM repository\'s data work tree'
-                % (path, "branch '%s'" % branch if branch else 'a detached HEAD', record.branch))
-    return None
+                % (path, "branch '%s'" % name if name else 'a detached HEAD', record.branch)), None
+    return None, record
 
 
-def read():
-    """The Pointer on this machine."""
-    value, why = read_raw()
+def read(raw=None, classify=None, branch=None):
+    """The Pointer on this machine. `raw` is read_raw's answer already taken; `classify` and
+    `branch` are check's."""
+    value, why = raw if raw is not None else read_raw()
     if why:
         return Pointer(BAD, None, why)
     if value is None:
         return Pointer(NONE, None, None)
-    bad = check(value)
+    bad, record = _check(value, classify, branch)
     if bad:
         return Pointer(BAD, value, bad)
-    return Pointer(OK, value, None)
+    return Pointer(OK, value, None, record)
 
 
 def quoted(path):

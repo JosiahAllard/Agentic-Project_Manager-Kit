@@ -12,10 +12,16 @@ import unittest
 from unittest import mock
 
 from kitlib import hubvalidate
-from kitlib.hubsite import api, approvals, todosteps
+from kitlib.backlog import store as smod
+from kitlib.hubsite import api, approvals, derived, push, recordwrite, serve, todosteps
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
+from kitlib.maintlint import result as lint_result
+from tests.backlog.helpers import rec
 from tests.gitfixture import TempRepo
+from tests.home import pm_repo
+from tests.hubsite import test_record_write as trw
+from tests.hubsite.test_notify_creator import RouteCase
 
 NOW = '2026-01-02T03:04:05+00:00'
 CLOCK = lambda: NOW      # noqa: E731
@@ -60,13 +66,14 @@ class ApiCase(unittest.TestCase):
         self.assertEqual((status, obj.get('error')), (200, None))
         return obj
 
-    def refused(self, code, field, method, path, role, body=None, query=None, **kw):
+    def refused(self, code, field, method, path, role, body=None, query=None, more=(), **kw):
+        # more: the error's own keys past code, field and message (a schedule conflict names its id)
         before = self.store.snapshot()
         status, obj = self.call(method, path, role, body, query, **kw)
         self.assertEqual(obj['error']['code'], code, obj)
         self.assertEqual(status, api.STATUS[code])
         self.assertIs(obj['ok'], False)
-        self.assertEqual(sorted(obj['error']), ['code', 'field', 'message'])
+        self.assertEqual(sorted(obj['error']), sorted(['code', 'field', 'message', *more]))
         if field is not None:
             self.assertEqual(obj['error']['field'], field, obj)
         self.assertEqual(self.store.snapshot(), before, 'a refused call wrote')
@@ -331,7 +338,7 @@ class QuestionTest(ApiCase):
         self.assertEqual(ids({'unknown': 'x'}), [a, b])
         item = self.ok('GET', '/questions', OWNER)['items'][0]
         self.assertEqual((item['title'], item['version'], item['status']), ('t', 1, 'open'))
-        self.refused('invalid', 'status', 'GET', '/questions', OWNER, None, {'status': 'done'})
+        self.refused('invalid', 'status', 'GET', '/questions', OWNER, None, {'status': 'closed'})
         self.refused('invalid', 'since', 'GET', '/questions', OWNER, None, {'since': 'monday'})
         self.refused('invalid', 'since', 'GET', '/questions', OWNER, None,
                      {'since': '2026-01-02T03:04:05'})
@@ -2214,6 +2221,9 @@ class WriteViews(object):
     def record_delete(self, repo, id, why, ruling):
         return self._do('delete', repo, id, why, ruling)
 
+    def record_unblock(self, repo, id, on, reason, ruling):
+        return self._do('unblock', repo, id, on, reason, ruling)
+
 
 class RecordWriteRouteTest(ApiCase):
     def setUp(self):
@@ -2229,18 +2239,24 @@ class RecordWriteRouteTest(ApiCase):
                 {'version': 'c:v', 'changes': {'effort': 's', 'scope': ['a', 'b']},
                  'unset': ['ref'], 'body': 'B\n', 'ruling': 'R-1'})
         self.ok('POST', '/records/kit/EX-1/delete', OWNER, {'why': 'w', 'confirm': 'EX-1'})
+        self.ok('POST', '/records/kit/EX-1/unblock', OWNER, {})
+        self.ok('POST', '/records/kit/EX-1/unblock', OWNER,
+                {'on': 'item:EX-2', 'reason': 'landed', 'ruling': 'R-2'})
         self.assertEqual(self.views.calls, [
             ('add', 'kit', 'EX-2', 's', ['tools/x.py'], None, None),
             ('edit', 'kit', 'EX-1', 'c:v', [('effort', ['s']), ('scope', ['a', 'b'])], ['ref'],
              'B\n', 'R-1'),
-            ('delete', 'kit', 'EX-1', 'w', None)])
+            ('delete', 'kit', 'EX-1', 'w', None),
+            ('unblock', 'kit', 'EX-1', None, None, None),
+            ('unblock', 'kit', 'EX-1', 'item:EX-2', 'landed', 'R-2')])
 
     def test_the_writes_are_the_owners(self):
         for method, path, body in (('POST', '/records/kit', {'id': 'A', 'summary': 's',
                                                              'scope': ['x']}),
                                    ('POST', '/records/kit/A/edit', {'version': 'v'}),
                                    ('POST', '/records/kit/A/delete', {'why': 'w',
-                                                                      'confirm': 'A'})):
+                                                                      'confirm': 'A'}),
+                                   ('POST', '/records/kit/A/unblock', {'on': 'owner'})):
             with self.subTest(path=path):
                 self.refused('forbidden', None, method, path, AGENT, body)
         self.assertEqual(self.views.calls, [])
@@ -2264,7 +2280,11 @@ class RecordWriteRouteTest(ApiCase):
                 ('/records/kit/EX-1/edit', {'version': 'v', 'state': 'open'}, None),
                 ('/records/kit/EX-1/edit', {'changes': {}}, 'version'),
                 ('/records/kit', {'id': 'A', 'summary': 's'}, 'scope'),
-                ('/records/kit', {'id': 'A', 'summary': 's', 'scope': [1]}, 'scope')):
+                ('/records/kit', {'id': 'A', 'summary': 's', 'scope': [1]}, 'scope'),
+                ('/records/kit/EX-1/unblock', {'on': 3}, 'on'),
+                ('/records/kit/EX-1/unblock', {'reason': ['r']}, 'reason'),
+                ('/records/kit/EX-1/unblock', {'why': 'w'}, 'why'),
+                ('/records/kit/EX..1/unblock', {}, 'id')):
             with self.subTest(body=body):
                 self.refused('invalid', field, 'POST', path, OWNER, body)
         self.assertEqual(self.views.calls, [])
@@ -2443,6 +2463,1174 @@ class ApprovalRouteTest(ApiCase):
         for role, strong in ((OWNER, False), (AGENT, True), (AGENT, False), (OWNER, 'yes')):
             with self.subTest(role=role, strong=strong):
                 self.assertIs(self.ok('GET', '/snapshot', role, strong=strong)['strong'], False)
+
+
+class OpApprovalRouteTest(ApiCase):
+    """The approvals routes for the op kind: one run of a delegated operation (docs/delegations.md
+    "Hub approvals"). No checkout is read for it. The rules are tests/hubsite/test_approvals_op.py."""
+
+    KEY = 'k' * 64
+    LINE = 'run D-001 dest=dd/out src=dd/in'
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+
+        def checkout(repo_id):
+            self.asked.append(repo_id)
+            return None
+        self.api = api.Api(self.store, clock=CLOCK, approval_key=lambda: self.KEY,
+                           checkout=checkout)
+
+    def add(self, **kw):
+        body = {'kind': 'op', 'op': 'D-001', 'repo': 'pm', 'line': self.LINE,
+                'title': 'Copy the inputs', 'reason': 'asked for', 'what': 'copies a folder'}
+        body.update(kw)
+        return self.ok('POST', '/approvals', AGENT, body)
+
+    def approved(self):
+        doc_id = self.add()['id']
+        self.ok('POST', '/approvals/%s/decide' % doc_id, OWNER,
+                {'decision': 'approve', 'if_version': 1}, strong=True)
+        return doc_id
+
+    def verify(self, doc_id, **query):
+        q = {'kind': 'op', 'op': 'D-001', 'repo': 'pm', 'args': approvals.line_sha256(self.LINE)}
+        q.update(query)
+        return self.ok('GET', '/approvals/%s/verify' % doc_id, AGENT, query=q)
+
+    def test_an_op_request_is_added_with_the_hash_and_no_checkout_or_diff(self):
+        doc = self.store.get('approvals', self.add()['id'])
+        self.assertEqual((doc['status'], doc['kind'], doc['op'], doc['repo'], doc['line'],
+                          doc['args_sha256'], doc['what'], doc['via']),
+                         ('pending', 'op', 'D-001', 'pm', self.LINE,
+                          approvals.line_sha256(self.LINE), 'copies a folder', 'api'))
+        self.assertNotIn('diff', doc)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.store.get('approvals', self.add(repo='*')['id'])['repo'], '*')
+
+    def test_a_bad_op_request_is_refused(self):
+        for kw, field in (({'kind': 'other'}, 'kind'), ({'kind': 'OP'}, 'kind'),
+                          ({'kind': 7}, 'kind'), ({'op': 'D-1'}, 'op'), ({'repo': 'Pm'}, 'repo'),
+                          ({'line': ''}, 'line'), ({'line': 'a\nb'}, 'line'),
+                          ({'line': 'robocopy.exe a b'}, 'line'), ({'line': 'run D-002'}, 'line'),
+                          ({'head': 'a' * 40}, 'head'), ({'files': []}, 'files'),
+                          ({'args_sha256': 'a' * 64}, 'args_sha256')):
+            body = {'kind': 'op', 'op': 'D-001', 'repo': 'pm', 'line': self.LINE, 'title': 't'}
+            body.update(kw)
+            with self.subTest(kw=kw):
+                self.refused('invalid', field, 'POST', '/approvals', AGENT, body)
+
+    def test_an_op_field_on_a_change_request_is_refused(self):
+        for name in ('op', 'line', 'what', 'args_sha256'):
+            self.refused('invalid', name, 'POST', '/approvals', AGENT,
+                         {'repo': 'https://github.com/o/r', 'title': 't', 'head': 'a' * 40,
+                          'files': [], name: 'x'})
+
+    def test_an_approved_op_verifies_with_its_version_and_never_the_sig(self):
+        doc_id = self.approved()
+        obj = self.verify(doc_id)
+        self.assertEqual(obj, {'ok': True, 'valid': True, 'why': '', 'version': 2,
+                               'revision': self.store.revision})
+        self.assertNotIn(self.store.get('approvals', doc_id)['sig'], json.dumps(obj))
+        for query, why in (({'op': 'D-002'}, approvals.WHY_OP),
+                           ({'repo': '*'}, approvals.WHY_REPO),
+                           ({'args': approvals.line_sha256('x')}, approvals.WHY_ARGS)):
+            obj = self.verify(doc_id, **query)
+            self.assertEqual((obj['valid'], obj['why']), (False, why), query)
+        obj = self.verify(self.add()['id'])
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_UNSIGNED))
+
+    def test_an_op_approval_is_not_a_change_and_a_change_query_does_not_pass_it(self):
+        doc_id = self.approved()
+        obj = self.ok('GET', '/approvals/%s/verify' % doc_id, AGENT,
+                      query={'repo': 'pm', 'head': 'a' * 40, 'files': '{}'})
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_KIND_OP))
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'commit': 'c' * 40, 'if_version': 2})
+
+    def test_an_op_approval_is_consumed_once_by_its_own_arguments(self):
+        doc_id = self.approved()
+        args = approvals.line_sha256(self.LINE)
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': approvals.line_sha256('x'), 'if_version': 2})
+        self.refused('invalid', 'args_sha256', 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': args, 'commit': 'c' * 40, 'if_version': 2})
+        self.refused('conflict', 'if_version', 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': args, 'if_version': 1})
+        obj = self.ok('POST', '/approvals/%s/consume' % doc_id, AGENT,
+                      {'args_sha256': args, 'if_version': 2})
+        self.assertEqual(obj['status'], 'consumed')
+        doc = self.store.get('approvals', doc_id)
+        self.assertEqual((doc['status'], doc['consumed_at']), ('consumed', NOW))
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': args, 'if_version': 3})
+        self.assertEqual(self.verify(doc_id)['why'], approvals.WHY_STATUS % 'consumed')
+
+    def test_a_change_approval_is_not_consumed_by_arguments(self):
+        now = datetime.datetime.fromisoformat(NOW)
+        doc = approvals.new_doc('https://github.com/o/r', 't', 'a' * 40,
+                                [{'path': 'x.md', 'base_blob': None, 'content': 'x\n'}], now)
+        doc_id = self.store.add('approvals', doc).id
+        self.store.update('approvals', doc_id, approvals.decide_fields(
+            self.KEY, doc_id, self.store.get('approvals', doc_id), 'approve', now))
+        version = self.store.get('approvals', doc_id)['version']
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': approvals.line_sha256(self.LINE), 'if_version': version})
+        obj = self.verify(doc_id)
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_KIND_FILES))
+
+
+class PushStatusTest(ApiCase):
+    """The snapshot carries the push worker's status: delivery up or down, and what is undelivered.
+    The worker runs on its own thread, as in a hub (state is 'down' until start() has finished)."""
+
+    class Deliver(object):
+        def __init__(self):
+            self.states = {}
+            self.calls = []
+
+        def deliver(self, recipient, text):
+            self.calls.append(recipient)
+            return push.Sent(self.states.get(recipient, push.WRITTEN), None, None, False)
+
+        def is_pm(self, recipient):
+            return False
+
+    def setUp(self):
+        super().setUp()
+        # a running worker reads the PM watcher's heartbeat; the default reader reads the
+        # machine's config (the home fence)
+        patcher = mock.patch.object(push, 'watcher_heartbeat', lambda: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit'})
+        self.folder = tempfile.mkdtemp(prefix='kit-hubapi-push-')
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        self.fake = self.Deliver()
+        self.t = [1000000.0]
+        self.worker = push.PushWorker(self.store, self.api, self.fake, self.folder, clock=lambda: self.t[0])
+
+    def run_worker(self):
+        self.worker.start()
+        self.addCleanup(self.worker.stop, 5)
+
+    def status(self):
+        return self.ok('GET', '/snapshot', OWNER)['push']
+
+    def until(self, want):
+        deadline = threading.Event()
+        for _ in range(200):
+            got = self.status()
+            if all(got.get(k) == v for k, v in want.items()):
+                return got
+            deadline.wait(0.05)
+        self.fail('push status never became %r: %r' % (want, self.status()))
+
+    def answered(self, **kw):
+        body = {'title': 't', 'options': OPTIONS}
+        body.update(kw)
+        qid = self.ok('POST', '/questions', AGENT, body)['id']
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        return qid
+
+    def test_no_worker_is_null(self):
+        self.assertIsNone(api.Api(self.store, clock=CLOCK).push_seen())
+
+    def test_a_running_worker_is_up_with_nothing_undelivered(self):
+        self.run_worker()
+        self.assertEqual(self.status(), {'state': 'up', 'last': None, 'undelivered': 0})
+
+    def test_a_worker_whose_start_failed_is_down(self):
+        self.assertEqual(self.status()['state'], 'down', 'made, not started')
+        with mock.patch.object(self.store, 'snapshot', side_effect=RuntimeError('no')):
+            with self.assertRaises(RuntimeError):
+                self.worker.start()
+        self.assertEqual(self.status(), {'state': 'down', 'last': None, 'undelivered': 0})
+
+    def test_a_delivery_to_the_pm_not_written_is_down_and_counts_the_item(self):
+        self.fake.states['pm'] = push.NO_SESSION
+        self.run_worker()
+        self.answered()
+        self.until({'state': 'down', 'last': push.NO_SESSION, 'undelivered': 1})
+        self.fake.states['pm'] = push.WRITTEN
+        self.t[0] += push.SCHEDULE_S[0]
+        self.until({'state': 'up', 'last': push.WRITTEN, 'undelivered': 0})
+
+    def test_an_ended_asking_session_does_not_make_delivery_down(self):
+        self.fake.states['kit'] = push.NO_SESSION
+        self.run_worker()
+        self.answered(**{'from': 'kit'})
+        got = self.until({'last': push.WRITTEN, 'undelivered': 1})
+        self.assertEqual(got['state'], 'up', 'the PM heard it; only the ended session did not')
+
+    def test_the_last_state_is_the_pms_whatever_order_the_round_tries(self):
+        # poll() on this thread, so the order is fixed: the PM's earlier item makes the PM the
+        # first recipient of the round, the ended session the last one tried
+        self.fake.states['kit'] = push.NO_SESSION
+        self.worker.begin()
+        self.answered()
+        self.worker.poll()
+        self.t[0] += push.SCHEDULE_S[0]
+        self.answered(**{'from': 'kit'})
+        self.worker.poll()
+        self.assertEqual(self.fake.calls, ['pm', 'pm', 'kit'], 'the ended session was tried last')
+        got = self.status()
+        self.assertEqual((got['last'], got['undelivered']), (push.WRITTEN, 1), got)
+
+    def test_a_worker_whose_thread_ended_is_down(self):
+        self.run_worker()
+        self.assertEqual(self.status()['state'], 'up')
+        self.assertTrue(self.worker.stop(5))
+        self.assertEqual(self.status()['state'], 'down')
+
+    def test_a_status_that_raises_is_down_with_its_class_name(self):
+        def broken():
+            raise RuntimeError('no')
+        self.api.push_status = broken
+        self.assertEqual(self.status(), {'state': 'down', 'last': 'RuntimeError', 'undelivered': None})
+
+    # the snapshot and health carry the PM watcher's heartbeat as the push worker read it
+    def seen(self, role=OWNER):
+        return (self.ok('GET', '/snapshot', OWNER)['watcher'], self.ok('GET', '/health', role)['watcher'])
+
+    def test_no_worker_is_null_in_the_snapshot_and_health(self):
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.assertEqual(self.seen(), (None, None))
+
+    def test_a_worker_says_the_heartbeats_state_and_age(self):
+        beat = [None]
+        self.worker = push.PushWorker(self.store, self.api, self.fake, self.folder,
+                                      clock=lambda: self.t[0], watcher=lambda: beat[0])
+        self.worker.begin()
+        none = {'state': 'none', 'age': None}
+        self.assertEqual(self.seen(), (none, none), 'never read')
+        beat[0] = {'pid': 1, 'beat': self.t[0] - 20, 'stream': False, 'started': None}
+        self.worker.watch()
+        up = {'state': 'up', 'age': 20}
+        self.assertEqual(self.seen(AGENT), (up, up))
+        self.t[0] += push.WATCHER_STALE_S
+        self.worker.watch()
+        self.assertEqual(self.seen()[1], {'state': 'down', 'age': push.WATCHER_STALE_S + 20})
+
+    def test_a_status_that_raises_is_down_with_no_age(self):
+        def broken():
+            raise RuntimeError('no')
+        self.api.watcher_status = broken
+        down = {'state': 'down', 'age': None}
+        self.assertEqual(self.seen(), (down, down))
+
+    # GET health carries the same push value as the snapshot
+    def test_health_push_is_null_with_no_worker(self):
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.assertIsNone(self.ok('GET', '/health', OWNER)['push'])
+
+    def test_health_push_is_up_with_a_running_worker(self):
+        self.run_worker()
+        want = {'state': 'up', 'last': None, 'undelivered': 0}
+        self.assertEqual(self.ok('GET', '/health', AGENT)['push'], want)
+        self.assertEqual(self.ok('GET', '/health', OWNER)['push'], self.status())
+
+    def test_health_push_is_down_when_the_worker_died(self):
+        self.run_worker()
+        self.assertTrue(self.worker.stop(5))
+        self.assertEqual(self.ok('GET', '/health', OWNER)['push']['state'], 'down')
+
+
+class PushedRouteTest(RouteCase):
+    """A push written to a session keeps its items routed to it for the ack window, with no wait
+    open (module docstring "Routes")."""
+
+    def test_a_written_push_routes_to_the_key_for_the_ack_window_then_to_the_pm(self):
+        tid = self.todo()
+        self.assertEqual(self.routes(), {tid: 'pm'}, 'never heard from')
+        self.api.pushed('kit')
+        self.assertEqual(self.routes(), {tid: 'kit'})
+        self.assertEqual(self.api.route_change_in(), api.ACK_WINDOW_S)
+        self.assertEqual(self.pending(**{'for': 'pm'}), [])
+        self.t[0] += api.ACK_WINDOW_S - 1
+        self.assertEqual(self.routes(), {tid: 'kit'})
+        self.t[0] += 1
+        self.assertEqual(self.routes(), {tid: 'pm'})
+        self.assertIsNone(self.api.route_change_in())
+
+    def test_a_push_lasts_past_a_shorter_grace(self):
+        self.heard()
+        tid = self.todo()
+        self.api.pushed('kit')
+        self.t[0] += api.REACH_GRACE_S + 1
+        self.assertLess(api.REACH_GRACE_S + 1, api.ACK_WINDOW_S)
+        self.assertEqual(self.routes(), {tid: 'kit'})
+
+    def test_the_pm_and_an_empty_key_are_not_noted(self):
+        self.api.pushed('pm')
+        self.api.pushed('')
+        self.api.pushed(None)
+        self.assertEqual(self.api._pushed, {})
+
+
+class ScheduleTest(ApiCase):
+    """POST schedules (the owner's) and GET schedules (anybody's): docs/action-hub.md
+    "schedules/<task>-<repo>"."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.store.put('repos', 'kit', {'name': 'Kit', 'aliases': ['old-kit']})
+        # the machine config's launcher.repos as kitlib.autotasks.tick.launcher_repos gives it
+        self.launcher = [('kit', 'C:\\checkouts\\Kit', 'Kit'), ('alpha', 'C:\\checkouts\\Alpha', 'Alpha')]
+        self.seen = None
+        self.state = {}         # the tick's records by schedule key, as tick.read_state gives them
+        self.api = api.Api(self.store, clock=CLOCK, schedule_repos=lambda: list(self.launcher),
+                           tick_seen=lambda: self.seen, tick_state=lambda: self.state)
+
+    def body(self, **kw):
+        b = {'task': 'maint-lint', 'repo': 'Kit', 'cadence': 'daily', 'at': '04:00'}
+        b.update(kw)
+        return {k: v for k, v in b.items() if v is not None}
+
+    def test_the_owner_sets_a_schedule_and_both_roles_read_it(self):
+        got = self.ok('POST', '/schedules', OWNER, self.body(), via='web')
+        self.assertEqual((got['id'], got['version']), ('maint-lint-Kit', 1))
+        d = self.store.get('schedules', 'maint-lint-Kit')
+        self.assertEqual({k: d.get(k) for k in ('task', 'repo', 'cadence', 'at', 'days', 'set_at',
+                                                'via')},
+                         {'task': 'maint-lint', 'repo': 'Kit', 'cadence': 'daily', 'at': '04:00',
+                          'days': None, 'set_at': NOW, 'via': 'web'})
+        for role in (OWNER, AGENT):
+            items = self.ok('GET', '/schedules', role)['items']
+            self.assertEqual([(i['id'], i['cadence']) for i in items],
+                             [('maint-lint-Kit', 'daily')])
+        mine = self.ok('GET', '/schedules', AGENT, query={'repo': 'kit'})['items']
+        self.assertEqual([i['id'] for i in mine], ['maint-lint-Kit'])
+        self.assertEqual(self.ok('GET', '/schedules', AGENT, query={'repo': 'other'})['items'], [])
+
+    def test_every_task_and_cadence_of_the_table(self):
+        self.assertEqual(api.SCHEDULE_TASKS, ('maint-lint', 'worktree-sweep', 'agent-temp-sweep'))
+        self.assertEqual(api.CADENCES, ('off', 'daily', 'weekly'))
+        for task in api.SCHEDULE_TASKS:
+            self.ok('POST', '/schedules', OWNER, self.body(task=task, cadence='off', at='00:00'))
+        self.assertEqual(sorted(self.store.docs('schedules')),
+                         ['agent-temp-sweep-Kit', 'maint-lint-Kit', 'worktree-sweep-Kit'])
+
+    def test_weekly_days_are_stored_once_each_in_week_order(self):
+        self.ok('POST', '/schedules', OWNER,
+                self.body(cadence='weekly', days=['Sun', 'Mon', 'Sun', 'Wed'], at='23:59'))
+        d = self.store.get('schedules', 'maint-lint-Kit')
+        self.assertEqual((d['cadence'], d['days'], d['at']),
+                         ('weekly', ['Mon', 'Wed', 'Sun'], '23:59'))
+
+    def test_the_repo_is_stored_as_the_name_the_hub_knows(self):
+        for given in ('kit', 'KIT', 'old-kit', ' Kit '):
+            with self.subTest(repo=given):
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                got = self.ok('POST', '/schedules', OWNER, self.body(repo=given))
+                self.assertEqual(got['id'], 'maint-lint-Kit')
+                self.assertEqual(self.store.get('schedules', got['id'])['repo'], 'Kit')
+
+    def test_a_repo_the_store_knows_from_the_config_counts(self):
+        self.store.known_repos = lambda: ('Alpha',)
+        got = self.ok('POST', '/schedules', OWNER, self.body(repo='alpha'))
+        self.assertEqual((got['id'], self.store.get('schedules', got['id'])['repo']),
+                         ('maint-lint-Alpha', 'Alpha'))
+
+    def test_each_field_is_judged_and_nothing_is_written(self):
+        bad = [
+            ({'task': 'format-disk'}, 'task'), ({'task': 3}, 'task'),
+            ({'task': 'Maint-Lint'}, 'task'),
+            ({'cadence': 'hourly'}, 'cadence'), ({'cadence': ['daily']}, 'cadence'),
+            ({'at': '4:00'}, 'at'), ({'at': '24:00'}, 'at'), ({'at': '12:60'}, 'at'),
+            ({'at': '04:00:00'}, 'at'), ({'at': '04:00\n'}, 'at'), ({'at': 400}, 'at'),
+            ({'repo': 'nobody'}, 'repo'), ({'repo': 'all'}, 'repo'), ({'repo': 'pm'}, 'repo'),
+            ({'repo': ['Kit']}, 'repo'),
+            ({'cadence': 'weekly'}, 'days'), ({'cadence': 'weekly', 'days': []}, 'days'),
+            ({'cadence': 'weekly', 'days': ['Funday']}, 'days'),
+            ({'cadence': 'weekly', 'days': ['mon']}, 'days'),
+            ({'cadence': 'weekly', 'days': 'Mon'}, 'days'),
+            ({'cadence': 'weekly', 'days': [1]}, 'days'),
+            ({'cadence': 'daily', 'days': ['Mon']}, 'days'),
+            ({'cadence': 'off', 'days': ['Mon']}, 'days'),
+            ({'if_version': -1}, 'if_version'), ({'if_version': '1'}, 'if_version'),
+            ({'if_version': True}, 'if_version'),
+            ({'id': 'x'}, 'id'), ({'via': 'tunnel'}, 'via'), ({'set_at': NOW}, 'set_at'),
+            ({'enabled': True}, 'enabled'),
+        ]
+        for change, field in bad:
+            with self.subTest(change=change):
+                self.refused('invalid', field, 'POST', '/schedules', OWNER, self.body(**change))
+        for missing in ('task', 'repo', 'cadence', 'at'):
+            for empty in (None, '', ' '):
+                with self.subTest(missing=missing, empty=empty):
+                    self.refused('invalid', missing, 'POST', '/schedules', OWNER,
+                                 self.body(**{missing: empty}))
+        self.refused('invalid', 'body', 'POST', '/schedules', OWNER, ['task'])
+        self.assertEqual(self.store.docs('schedules'), {})
+
+    def test_a_repo_whose_name_cannot_be_an_id_is_refused(self):
+        self.store.known_repos = lambda: ('my repo',)
+        self.refused('invalid', 'repo', 'POST', '/schedules', OWNER, self.body(repo='my repo'))
+
+    def test_setting_it_again_is_pinned_to_the_version_read(self):
+        self.ok('POST', '/schedules', OWNER, self.body())
+        # the refusal names the schedule there, so the page can open it
+        for pin in (None, 2):
+            got = self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
+                               self.body(cadence='off', if_version=pin), more=('id',))
+            self.assertEqual(got['error']['id'], 'maint-lint-Kit')
+        got = self.ok('POST', '/schedules', OWNER,
+                      self.body(cadence='weekly', days=['Fri'], at='03:30', if_version=1))
+        self.assertEqual(got['version'], 2)
+        d = self.store.get('schedules', 'maint-lint-Kit')
+        self.assertEqual((d['cadence'], d['days'], d['at']), ('weekly', ['Fri'], '03:30'))
+        # back to daily: the put replaces the document, so the days go with it
+        self.ok('POST', '/schedules', OWNER, self.body(if_version=2))
+        self.assertNotIn('days', self.store.get('schedules', 'maint-lint-Kit'))
+        # a pin on a schedule that is not there
+        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
+                     self.body(task='worktree-sweep', if_version=1), more=('id',))
+
+    def test_an_agent_is_refused_the_write(self):
+        self.refused('forbidden', 'role', 'POST', '/schedules', AGENT, self.body())
+        self.refused('forbidden', 'role', 'POST', '/schedules', AGENT, self.body(),
+                     agent_words=True)
+        self.assertEqual(self.store.docs('schedules'), {})
+
+    def test_a_repo_that_is_not_exactly_one_launcher_checkout_is_refused(self):
+        # the hub knows Kit, but the tick could not run it: no checkout, or two (tick.find_repo)
+        two = [('kit', 'C:\\checkouts\\Kit', 'Kit'), ('kit2', 'D:\\other\\Kit', 'Kit')]
+        for launcher in ([], [('alpha', 'C:\\checkouts\\Alpha', 'Alpha')], two):
+            with self.subTest(launcher=launcher):
+                self.launcher = launcher
+                for task in ('maint-lint', 'worktree-sweep'):
+                    obj = self.refused('invalid', 'repo', 'POST', '/schedules', OWNER,
+                                       self.body(task=task))
+                    self.assertIn("launcher.repos", obj['error']['message'])
+                    self.assertIn("'Kit'", obj['error']['message'])
+        self.assertEqual(self.store.docs('schedules'), {})
+        # exactly one, by its label, its name or its folder's name
+        for launcher in ([('kit', 'C:\\checkouts\\Kit', 'Kit')], [('k', 'C:\\x\\y', 'kit')],
+                         [('k', 'C:\\x\\KIT', 'other')]):
+            with self.subTest(launcher=launcher):
+                self.launcher = launcher
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                self.ok('POST', '/schedules', OWNER, self.body())
+
+    def test_off_and_a_machine_wide_task_need_no_checkout(self):
+        self.launcher = []
+        self.ok('POST', '/schedules', OWNER, self.body(cadence='off'))
+        self.ok('POST', '/schedules', OWNER, self.body(task='agent-temp-sweep'))
+        self.assertEqual(sorted(self.store.docs('schedules')),
+                         ['agent-temp-sweep-Kit', 'maint-lint-Kit'])
+
+    def test_a_launcher_config_that_cannot_be_read_is_refused(self):
+        from kitlib.config import ConfigError
+
+        def broken():
+            raise ConfigError('launcher.repos is not a table')
+        self.api.schedule_repos = broken
+        obj = self.refused('invalid', 'repo', 'POST', '/schedules', OWNER, self.body())
+        self.assertIn('launcher.repos is not a table', obj['error']['message'])
+
+    def test_a_launcher_config_that_cannot_be_opened_is_refused(self):
+        # the tick takes an OSError as an unreadable list too (kitlib/autotasks/tick.py), so the
+        # POST answers invalid on repo, not a 500
+        def broken():
+            raise PermissionError(13, 'Access is denied', 'config.json')
+        self.api.schedule_repos = broken
+        obj = self.refused('invalid', 'repo', 'POST', '/schedules', OWNER, self.body())
+        self.assertIn('Access is denied', obj['error']['message'])
+        self.assertEqual(self.store.docs('schedules'), {})
+
+    def test_the_answer_says_the_first_run(self):
+        # set at Monday 10:00 local: the first slot strictly after it (kitlib.autotasks.due)
+        self.api.clock = lambda: '2026-01-05T10:00:00'
+        cases = [
+            ({'at': '11:00'}, '2026-01-05T11:00'),
+            ({'at': '09:00'}, '2026-01-06T09:00'),
+            ({'at': '10:00'}, '2026-01-06T10:00'),                    # not the minute it was set
+            ({'cadence': 'weekly', 'days': ['Mon'], 'at': '10:00'}, '2026-01-12T10:00'),
+            ({'cadence': 'weekly', 'days': ['Mon'], 'at': '10:01'}, '2026-01-05T10:01'),
+            ({'cadence': 'weekly', 'days': ['Wed', 'Sun'], 'at': '08:00'}, '2026-01-07T08:00'),
+            ({'cadence': 'weekly', 'days': ['Sun'], 'at': '23:59'}, '2026-01-11T23:59'),
+            ({'cadence': 'off'}, None),
+        ]
+        for change, first in cases:
+            with self.subTest(change=change):
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                got = self.ok('POST', '/schedules', OWNER, self.body(**change))
+                self.assertEqual(got['first_run'], first)
+        # an offset time is taken as local time first, as the tick does
+        self.store.delete('schedules', 'maint-lint-Kit')
+        self.api.clock = CLOCK
+        from kitlib.autotasks import due
+        set_at = due.local(NOW)
+        got = self.ok('POST', '/schedules', OWNER, self.body(at='%02d:%02d' % (set_at.hour, set_at.minute)))
+        self.assertEqual(got['first_run'], (set_at.replace(second=0) + datetime.timedelta(days=1))
+                         .isoformat(timespec='minutes'))
+
+    def test_get_says_when_the_tick_was_last_seen(self):
+        now = datetime.datetime.fromisoformat(NOW)
+        for seen, running in ((None, False),
+                              ((now - datetime.timedelta(minutes=16)).isoformat(), True),
+                              ((now - datetime.timedelta(seconds=api.TICK_STALE_S)).isoformat(), True),
+                              ((now - datetime.timedelta(seconds=api.TICK_STALE_S + 1)).isoformat(), False),
+                              ((now - datetime.timedelta(days=3)).isoformat(), False)):
+            with self.subTest(seen=seen):
+                self.seen = seen
+                for role in (OWNER, AGENT):
+                    got = self.ok('GET', '/schedules', role)
+                    self.assertEqual(got['tick'], {'last': seen, 'running': running,
+                                                   'every_s': 15 * 60})
+        # the period is the one machine setup registers the tick with, not a copy of it; a few
+        # missed ticks before it is said not to run
+        from kitlib.machinesetup import extras
+        self.assertEqual(api.tick_every_s(), extras.AUTO_EVERY_MINUTES * 60)
+        with mock.patch.object(extras, 'AUTO_EVERY_MINUTES', 7):
+            self.assertEqual(self.ok('GET', '/schedules', OWNER)['tick']['every_s'], 7 * 60)
+        self.assertGreater(api.TICK_STALE_S, 2 * api.tick_every_s())
+
+    def test_get_gives_each_schedule_its_last_run_and_outcome_from_the_tick(self):
+        self.ok('POST', '/schedules', OWNER, self.body())
+        self.ok('POST', '/schedules', OWNER, self.body(task='worktree-sweep'))
+        self.ok('POST', '/schedules', OWNER, self.body(task='agent-temp-sweep'))
+        self.state = {
+            'maint-lint-Kit': {'at': '2026-01-04T04:00:09', 'what': 'started', 'slot': 'x'},
+            'worktree-sweep-Kit': {'at': '2026-01-04T05:00:00', 'what': 'failed', 'why': 'boom'},
+            'stray': {'at': '2026-01-04T05:00:00', 'what': 'started'}}
+        got = {i['id']: i for i in self.ok('GET', '/schedules', AGENT)['items']}
+        self.assertEqual((got['maint-lint-Kit']['last_run'], got['maint-lint-Kit']['last_outcome']),
+                         ('2026-01-04T04:00:09', 'started'))
+        # a failed record is no run: the outcome says why there is none
+        self.assertEqual((got['worktree-sweep-Kit']['last_run'],
+                          got['worktree-sweep-Kit']['last_outcome']), (None, 'failed'))
+        self.assertEqual((got['agent-temp-sweep-Kit']['last_run'],
+                          got['agent-temp-sweep-Kit']['last_outcome']), (None, None))
+        # derived, never stored
+        self.assertNotIn('last_run', self.store.get('schedules', 'maint-lint-Kit'))
+        self.assertNotIn('next_due', self.store.get('schedules', 'maint-lint-Kit'))
+
+    def test_get_gives_each_schedule_its_next_due_slot(self):
+        self.api.clock = lambda: '2026-01-05T10:00:00'      # a Monday
+        cases = [
+            ({'at': '11:00'}, '2026-01-05T11:00'),
+            ({'at': '09:00'}, '2026-01-06T09:00'),
+            ({'at': '10:00'}, '2026-01-06T10:00'),           # strictly after now
+            ({'cadence': 'weekly', 'days': ['Mon'], 'at': '10:00'}, '2026-01-12T10:00'),
+            ({'cadence': 'weekly', 'days': ['Wed', 'Sun'], 'at': '08:00'}, '2026-01-07T08:00'),
+            ({'cadence': 'weekly', 'days': ['Mon', 'Fri'], 'at': '10:01'}, '2026-01-05T10:01'),
+            ({'cadence': 'off'}, None),
+        ]
+        for change, due_at in cases:
+            with self.subTest(change=change):
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                self.ok('POST', '/schedules', OWNER, self.body(**change))
+                item = self.ok('GET', '/schedules', OWNER)['items'][0]
+                self.assertEqual(item['next_due'], due_at)
+        # a stored document due cannot place has none, and the list still answers
+        self.store.put('schedules', 'maint-lint-Kit', {'task': 'maint-lint', 'repo': 'Kit',
+                                                       'cadence': 'daily', 'at': 'noon'})
+        self.assertIsNone(self.ok('GET', '/schedules', OWNER)['items'][0]['next_due'])
+
+    def test_the_default_tick_state_is_the_state_files_records(self):
+        bare = api.Api(self.store)
+        self.assertIs(bare.tick_state, api.tick_run_state)
+        home = tempfile.mkdtemp(prefix='kit-hubapi-home-')
+        self.addCleanup(shutil.rmtree, home, True)
+        from kitlib.autotasks import tick
+        with mock.patch.object(tick, 'state_dir', lambda home_=None: os.path.join(home, 'auto-tasks')):
+            self.assertEqual(api.tick_run_state(), {})
+            os.makedirs(os.path.join(home, 'auto-tasks'))
+            path = os.path.join(home, 'auto-tasks', tick.STATE_NAME)
+            with open(path, 'w') as f:
+                f.write('not json')
+            self.assertEqual(api.tick_run_state(), {})      # unreadable: no records, no error
+            tick.write_state(path, {'maint-lint-Kit': {'at': 'T', 'what': 'started'}})
+            self.assertEqual(api.tick_run_state(), {'maint-lint-Kit': {'at': 'T', 'what': 'started'}})
+
+    def test_the_default_tick_seen_is_the_state_file_time(self):
+        # serve.py passes neither seam: the hub server reads the tick's own files
+        bare = api.Api(self.store)
+        self.assertIs(bare.schedule_repos, api.launcher_checkouts)
+        self.assertIs(bare.tick_seen, api.tick_last_seen)
+        home =tempfile.mkdtemp(prefix='kit-hubapi-home-')
+        self.addCleanup(shutil.rmtree, home, True)
+        from kitlib.autotasks import tick
+        with mock.patch.object(tick, 'state_dir', lambda home_=None: os.path.join(home, 'auto-tasks')):
+            self.assertIsNone(api.tick_last_seen())
+            os.makedirs(os.path.join(home, 'auto-tasks'))
+            path = os.path.join(home, 'auto-tasks', tick.STATE_NAME)
+            with open(path, 'w') as f:
+                f.write('{}')
+            os.utime(path, (1767323045, 1767323045))      # 2026-01-02T03:04:05Z
+            self.assertEqual(api.tick_last_seen(), '2026-01-02T03:04:05+00:00')
+
+
+# ------------------------------------------------------------ the maintenance lint's findings
+FP, FP2 = '0123456789abcdef', 'fedcba9876543210'
+# finding text a check could carry: markup, a script, Windows and relative paths, quotes
+HOSTILE = '<script>alert("x")</script> <img src=x onerror=1> D:\\data\\..\\y ../../etc & \'q\''
+
+
+def finding(**kw):
+    out = {'repo': 'kit', 'check': 'stale-pull', 'target': 'KIT-A', 'text': 'pulled, no branch',
+           'fix': 'release it', 'age': None, 'fingerprint': FP, 'new': True,
+           'started': '2026-01-02T03:04:05Z'}
+    out.update(kw)
+    return out
+
+
+class FindingViews(object):
+    """The findings view as SiteViews gives it: the rows, or `fail` raised when set."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.fail = None
+
+    def findings(self):
+        if self.fail:
+            raise self.fail
+        return [dict(r) for r in self.rows]
+
+
+class FindingsTest(ApiCase):
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = FindingViews([finding(), finding(fingerprint=FP2, repo='other',
+                                                      target='OT-1', new=False)])
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def mark(self, status='dismissed', **kw):
+        return self.ok('POST', '/finding_marks', OWNER, dict(kw, fingerprint=FP, status=status))
+
+    def test_findings_lists_the_lint_rows_filtered_by_repo(self):
+        obj = self.ok('GET', '/findings', AGENT)
+        self.assertEqual(obj['items'], [finding(), finding(fingerprint=FP2, repo='other',
+                                                           target='OT-1', new=False)])
+        obj = self.ok('GET', '/findings', OWNER, query={'repo': 'OTHER'})
+        self.assertEqual([f['fingerprint'] for f in obj['items']], [FP2])
+        self.assertNotIn('findings', api.VIEWS)     # never part of the snapshot
+
+    def test_a_marked_finding_is_hidden_until_its_mark_is_deleted(self):
+        for status in ('dismissed', 'passed_on', 'done'):
+            with self.subTest(status=status):
+                obj = self.mark(status, note='seen')
+                self.assertEqual(obj['id'], FP)
+                ids = [f['fingerprint'] for f in self.ok('GET', '/findings', OWNER)['items']]
+                self.assertEqual(ids, [FP2])
+                marks = self.ok('GET', '/finding_marks', AGENT)['items']
+                self.assertEqual(len(marks), 1)
+                m = marks[0]
+                self.assertEqual({k: m[k] for k in ('id', 'status', 'repo', 'check', 'target',
+                                                    'text', 'note', 'marked_at', 'via')},
+                                 {'id': FP, 'status': status, 'repo': 'kit',
+                                  'check': 'stale-pull', 'target': 'KIT-A',
+                                  'text': 'pulled, no branch', 'note': 'seen', 'marked_at': NOW,
+                                  'via': 'api'})
+                self.assertEqual(self.ok('GET', '/finding_marks', OWNER,
+                                         query={'status': status})['items'][0]['id'], FP)
+                self.ok('POST', '/finding_marks/%s/delete' % FP, OWNER, {'if_version': 1})
+                ids = [f['fingerprint'] for f in self.ok('GET', '/findings', OWNER)['items']]
+                self.assertEqual(ids, [FP, FP2])
+                self.assertEqual(self.store.docs('finding_marks'), {})
+
+    def test_marking_again_is_pinned_to_the_version_read(self):
+        self.mark()
+        self.refused('conflict', 'if_version', 'POST', '/finding_marks', OWNER,
+                     {'fingerprint': FP, 'status': 'done'})
+        self.refused('conflict', 'if_version', 'POST', '/finding_marks', OWNER,
+                     {'fingerprint': FP, 'status': 'done', 'if_version': 7})
+        obj = self.mark('done', if_version=1)
+        self.assertEqual(obj['version'], 2)
+        self.assertEqual(self.store.get('finding_marks', FP)['status'], 'done')
+        self.refused('conflict', 'if_version', 'POST', '/finding_marks', OWNER,
+                     {'fingerprint': FP2, 'status': 'done', 'if_version': 1})
+        self.refused('conflict', 'if_version', 'POST', '/finding_marks/%s/delete' % FP, OWNER,
+                     {'if_version': 1})
+
+    def test_a_mark_names_a_finding_the_lint_shows(self):
+        self.refused('not_found', 'fingerprint', 'POST', '/finding_marks', OWNER,
+                     {'fingerprint': 'a' * 16, 'status': 'done'})
+        for bad in ('ABCDEF0123456789', 'a' * 15, 'a' * 17, '../../x', 'con', 7, None):
+            with self.subTest(fingerprint=bad):
+                self.refused('invalid', 'fingerprint', 'POST', '/finding_marks', OWNER,
+                             {'fingerprint': bad, 'status': 'done'})
+        for body, field in (({'fingerprint': FP, 'status': 'fixed'}, 'status'),
+                            ({'fingerprint': FP}, 'status'),
+                            ({'fingerprint': FP, 'status': 'done', 'note': 3}, 'note'),
+                            ({'fingerprint': FP, 'status': 'done', 'repo': 'x'}, 'repo'),
+                            ({'fingerprint': FP, 'status': 'done', 'text': 'x'}, 'text')):
+            with self.subTest(body=body):
+                self.refused('invalid', field, 'POST', '/finding_marks', OWNER, body)
+        self.refused('not_found', 'id', 'POST', '/finding_marks/%s/delete' % FP, OWNER)
+        self.assertEqual(self.store.docs('finding_marks'), {})
+
+    def test_a_failing_or_missing_view_is_unavailable_and_names_nothing(self):
+        self.views.fail = OSError('C:\\secret\\maint-lint\\kit\\result.json')
+        for method, path, body in (('GET', '/findings', None),
+                                   ('POST', '/finding_marks', {'fingerprint': FP,
+                                                               'status': 'done'}),
+                                   ('POST', '/to_pm', {'kind': 'act', 'finding': FP})):
+            with self.subTest(path=path):
+                obj = self.refused('unavailable', 'views', method, path, OWNER, body)
+                self.assertNotIn('secret', obj['error']['message'])
+        self.api = api.Api(self.store, views=None, clock=CLOCK)
+        self.refused('unavailable', 'views', 'GET', '/findings', AGENT)
+
+    def test_an_act_note_to_the_pm_is_prefilled_from_the_finding(self):
+        obj = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})
+        d = self.store.get('to_pm', obj['id'])
+        self.assertEqual((d['kind'], d['status'], d['repo'], d['finding'], d['refs']),
+                         ('act', 'queued', 'kit', FP, [FP, 'KIT-A']))
+        for part in ('stale-pull', 'KIT-A', 'pulled, no branch', 'release it'):
+            self.assertIn(part, d['text'])
+        self.assertEqual(self.store.get('finding_marks', FP), None)    # the page marks it
+        # what the owner gives is kept, the finding's refs first and each once
+        obj = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP2, 'repo': 'pm',
+                                                'text': 'look at this', 'urgent': True,
+                                                'refs': ['Q-3', FP2, 'OT-1']})
+        d = self.store.get('to_pm', obj['id'])
+        self.assertEqual((d['repo'], d['text'], d['urgent'], d['refs']),
+                         ('pm', 'look at this', True, [FP2, 'OT-1', 'Q-3']))
+        # a marked finding can still be passed on
+        self.mark('passed_on')
+        self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})
+
+    def test_an_act_note_needs_a_finding_the_lint_shows(self):
+        self.refused('invalid', 'finding', 'POST', '/to_pm', OWNER, {'kind': 'act'})
+        self.refused('not_found', 'finding', 'POST', '/to_pm', OWNER,
+                     {'kind': 'act', 'finding': 'a' * 16})
+        self.refused('invalid', 'finding', 'POST', '/to_pm', OWNER,
+                     {'kind': 'act', 'finding': '../x'})
+        for kind in ('question', 'fyi'):
+            with self.subTest(kind=kind):
+                self.refused('invalid', 'finding', 'POST', '/to_pm', OWNER,
+                             {'kind': kind, 'text': 't', 'finding': FP})
+                self.refused('invalid', 'text', 'POST', '/to_pm', OWNER, {'kind': kind})
+        self.refused('invalid', 'refs', 'POST', '/to_pm', OWNER,
+                     {'kind': 'act', 'finding': FP, 'refs': ['Q-1', 3]})
+        self.refused('invalid', 'refs', 'POST', '/to_pm', OWNER,
+                     {'kind': 'act', 'finding': FP, 'refs': ['  ']})
+        self.refused('invalid', 'kind', 'POST', '/to_pm', OWNER, {'kind': 'acts', 'text': 't'})
+        # a question still takes refs
+        obj = self.ok('POST', '/to_pm', OWNER, {'text': 't', 'refs': ['Q-1']})
+        self.assertEqual(self.store.get('to_pm', obj['id'])['refs'], ['Q-1'])
+        self.assertEqual(self.store.get('to_pm', obj['id'])['kind'], 'question')
+
+    def test_hostile_finding_text_round_trips_as_data(self):
+        row = finding(text=HOSTILE, target='..\\..\\Windows\\x', fix='<b>%s</b>' % HOSTILE,
+                      check='<i>c</i>', age='C:\\x')
+        self.views.rows = [row]
+        obj = self.ok('GET', '/findings', OWNER)        # the local owner: the row as it is
+        self.assertEqual(json.loads(json.dumps(obj))['items'], [row])
+        # anyone else: the same row, the fix's absolute path cut (test_a_path_is_the_local...)
+        obj = self.ok('GET', '/findings', AGENT)
+        self.assertEqual(json.loads(json.dumps(obj))['items'],
+                         [dict(row, fix=row['fix'].replace('D:\\data\\..\\y', '.../y'))])
+        self.mark(note=HOSTILE)
+        m = self.store.get('finding_marks', FP)
+        self.assertEqual((m['text'], m['target'], m['check'], m['note']),
+                         (HOSTILE, '..\\..\\Windows\\x', '<i>c</i>', HOSTILE))
+        obj = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})
+        d = self.store.get('to_pm', obj['id'])
+        self.assertIn(HOSTILE, d['text'])
+        self.assertEqual(d['refs'], [FP, '..\\..\\Windows\\x'])
+        self.assertEqual([f['text'] for f in self.ok('GET', '/to_pm', OWNER)['items']],
+                         [d['text']])
+        self.assertEqual([f['text'] for f in self.ok('GET', '/to_pm', AGENT)['items']],
+                         [d['text'].replace('D:\\data\\..\\y', '.../y')])
+
+    def test_a_path_is_the_local_owners_to_see(self):
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        fix = 'python "Q:/kit plugin/tools/x.py" -C Q:/work/Repo drop; see \\\\share\\x\\y'
+        self.views.rows = [finding(target=wt, fix=fix, text='worktree my-slug is gone')]
+        cut = ('.../my-slug', 'python .../x.py -C .../Repo drop; see .../y')
+        local = {}
+        remote = ({'role': AGENT}, {'role': OWNER, 'via': 'tunnel', 'agent_words': True},
+                  {'role': OWNER, 'agent_words': True}, {'role': OWNER, 'via': 'tunnel'})
+
+        def get(path, role=OWNER, **kw):
+            return self.ok('GET', path, role, **kw)['items']
+
+        f = get('/findings', **local)[0]
+        self.assertEqual((f['target'], f['fix']), (wt, fix))
+        for kw in remote:
+            with self.subTest(caller=kw):
+                f = get('/findings', **kw)[0]
+                self.assertEqual((f['target'], f['fix']), cut)
+                self.assertNotIn('Q:', json.dumps(f))
+        # a mark keeps the target; only the local owner reads it whole
+        self.mark()
+        self.assertEqual(get('/finding_marks')[0]['target'], wt)
+        for kw in remote:
+            with self.subTest(caller=kw):
+                self.assertEqual(get('/finding_marks', **kw)[0]['target'], cut[0])
+        # an act note: the caller's view in its text, and never a path in its refs
+        obj = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})
+        d = self.store.get('to_pm', obj['id'])
+        self.assertEqual(d['refs'], [FP, '.../my-slug'])
+        self.assertIn(wt, d['text'])
+        obj = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP}, via='tunnel',
+                      agent_words=True)
+        d = self.store.get('to_pm', obj['id'])
+        self.assertEqual(d['refs'], [FP, '.../my-slug'])
+        self.assertNotIn('Q:', d['text'])
+        self.assertNotIn('\\\\share', d['text'])
+        self.assertIn(cut[1], d['text'])
+
+    # every caller but the local owner (Request.full), as test_a_path_is_the_local_owners_to_see
+    REMOTE = ({'role': AGENT}, {'role': OWNER, 'via': 'tunnel', 'agent_words': True},
+              {'role': OWNER, 'agent_words': True}, {'role': OWNER, 'via': 'tunnel'})
+
+    def seen_fix(self, fix, **kw):
+        self.views.rows = [finding(fix=fix)]
+        return self.ok('GET', '/findings', kw.pop('role', OWNER), **kw)['items'][0]['fix']
+
+    def test_a_forward_slash_share_is_cut(self):
+        fix = 'copy it to //nas/share/Users/jdoe/out.txt; see https://example.com/a/b'
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'copy it to .../out.txt; see https://example.com/a/b')
+
+    def test_a_bare_path_with_a_space_is_cut_whole(self):
+        fix = 'run Q:\\home\\Jane Doe\\repo\\x.py -C Z:/w/Repo then D:\\a\\b ../rel/c'
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'run .../x.py -C .../Repo then .../b ../rel/c')
+
+    def test_a_doubled_backslash_with_no_share_is_not_cut(self):
+        fix = 'split on \\\\ or \\\\n, not \\\\host alone; Q:\\\\home\\\\a\\\\b.py is a path'
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'split on \\\\ or \\\\n, not \\\\host alone; .../b.py is a path')
+
+    def test_get_to_pm_cuts_an_act_notes_paths_for_all_but_the_local_owner(self):
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        self.views.rows = [finding(target=wt, fix='python Q:/kit/tools/x.py')]
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP,
+                                                'refs': ['Q:\\work\\Repo\\x']})['id']
+        note = self.ok('POST', '/to_pm', OWNER, {'text': 'a question'})['id']
+        made = self.store.get('to_pm', act)
+        self.assertIn(wt, made['text'])                     # made locally: the paths whole
+        self.mark()
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                kw = dict(kw)
+                role = kw.pop('role')
+                got = {d['id']: d for d in self.ok('GET', '/to_pm', role, **kw)['items']}
+                cols = self.ok('GET', '/snapshot', role, **kw)['collections']
+                self.assertEqual(cols['to_pm'][act],
+                                 {k: v for k, v in got[act].items() if k != 'id'})
+                self.assertEqual(cols['finding_marks'][FP]['target'], '.../my-slug')
+                self.assertNotIn('Q:', json.dumps(got[act]))
+                self.assertNotIn('Q:', json.dumps(cols))
+                self.assertIn('.../my-slug', got[act]['text'])
+                self.assertIn('.../x.py', got[act]['text'])
+                self.assertEqual(got[act]['refs'], [FP, '.../my-slug', '.../x'])
+                self.assertEqual(got[note]['text'], 'a question')
+        cols = self.ok('GET', '/snapshot', OWNER)['collections']   # the local owner: whole
+        self.assertEqual(cols['to_pm'][act], made)
+        self.assertEqual(cols['finding_marks'][FP]['target'], wt)
+
+    def test_a_sent_act_notes_pending_title_is_cut_for_all_but_the_local_owner(self):
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        self.views.rows = [finding(target=wt, fix='python Q:/kit/tools/x.py')]
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})['id']
+        note = self.ok('POST', '/to_pm', OWNER, {'text': 'see Q:\\mine\\a.txt'})['id']
+        self.assertEqual(self.ok('POST', '/to_pm/send', OWNER)['sent'], [act, note])
+        made = self.store.get('to_pm', act)
+        self.assertIn(wt, made['text'])                     # stored whole
+        whole = made['text'].splitlines()[0]
+
+        def titles(items):
+            return {d['id']: d['title'] for d in items if d['kind'] == 'to_pm'}
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                kw = dict(kw)
+                role = kw.pop('role')
+                for got in (titles(self.ok('GET', '/pending', role, **kw)['items']),
+                            titles(self.ok('GET', '/snapshot', role, **kw)['pending']),
+                            titles(self.ok('GET', '/wait', role, query=self.WAIT,
+                                           **kw)['pending'])):
+                    self.assertNotIn('Q:', got[act])
+                    self.assertIn('.../my-slug', got[act])
+                    self.assertIn('.../x.py', got[act])
+                    self.assertEqual(got[note], 'see Q:\\mine\\a.txt')   # the owner's words
+        self.assertEqual(self.store.get('to_pm', act), made)   # nothing stored was cut
+        for got in (titles(self.ok('GET', '/pending', OWNER)['items']),
+                    titles(self.ok('GET', '/snapshot', OWNER)['pending']),
+                    titles(self.ok('GET', '/wait', OWNER, query=self.WAIT)['pending'])):
+            self.assertEqual(got[act], whole)               # the local owner: whole
+
+    WAIT = {'pending': '1', 'timeout': '0'}
+
+    def test_an_act_note_deleted_mid_request_keeps_its_title_cut(self):
+        # the kind is read with the pending item: a note gone by the time its title is cut
+        # (a re-read would find None) is still cut, and no item carries the kind out
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        self.views.rows = [finding(target=wt, fix='python Q:/kit/tools/x.py')]
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})['id']
+        self.ok('POST', '/to_pm/send', OWNER)
+        real = self.store.get
+
+        def gone(collection, doc_id, *a, **k):
+            return None if (collection, doc_id) == ('to_pm', act) else real(
+                collection, doc_id, *a, **k)
+        with mock.patch.object(self.store, 'get', side_effect=gone):
+            for kw in self.REMOTE:
+                with self.subTest(caller=kw):
+                    kw = dict(kw)
+                    role = kw.pop('role')
+                    for items in (self.ok('GET', '/pending', role, **kw)['items'],
+                                  self.ok('GET', '/snapshot', role, **kw)['pending'],
+                                  self.ok('GET', '/wait', role, query=self.WAIT,
+                                          **kw)['pending']):
+                        got = {d['id']: d for d in items}[act]
+                        self.assertNotIn('Q:', got['title'])
+                        self.assertIn('.../my-slug', got['title'])
+                        self.assertNotIn('note', got)
+            for items in (self.ok('GET', '/pending', OWNER)['items'],
+                          self.ok('GET', '/wait', OWNER, query=self.WAIT)['pending']):
+                self.assertNotIn('note', {d['id']: d for d in items}[act])
+
+    def test_a_json_escaped_share_is_cut(self):
+        # a share path inside JSON text: each backslash doubled (\\\\nas\\share\\...)
+        fix = ('see {"p": "\\\\\\\\nas\\\\share\\\\jdoe\\\\out.txt"}, \\\\\\\\nas\\\\s\\\\a.log'
+               ' and \\\\\\\\')
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'see {"p": .../out.txt}, .../a.log and \\\\\\\\')
+
+    def runs(self, rows, **kw):
+        self.views.lint_runs = lambda: rows
+        return self.ok('GET', '/findings', OWNER, **kw)['runs']
+
+    def test_findings_name_a_skipped_run_only_when_the_marker_is_newer(self):
+        self.assertEqual(self.ok('GET', '/findings', AGENT)['runs'], [])     # no view
+        skip = {'reason': 'busy', 'at': '2026-01-09T03:00:00Z', 'code': 3}
+        run = {'repo': 'kit', 'started': '2026-01-02T03:04:05Z', 'ledger': None, 'skip': skip}
+        self.assertEqual(self.runs([run]), [{'repo': 'kit', 'started': '2026-01-02T03:04:05Z',
+                                             'ledger': None, 'skipped': {
+                                                 'reason': 'busy', 'at': skip['at']}}])
+        self.assertEqual(self.runs([run], query={'repo': 'OTHER'}), [])
+        self.assertEqual(len(self.runs([run], query={'repo': 'KIT'})), 1)
+        for bad in (dict(skip, at='2026-01-01T00:00:00Z'),      # a result newer: no skip
+                    dict(skip, at=run['started']),
+                    dict(skip, at='last tuesday'), dict(skip, at=None),
+                    dict(skip, at='2026-01-09T03:00:00'),      # no offset
+                    dict(skip, reason=3), 'busy', None):
+            with self.subTest(skip=bad):
+                self.assertIsNone(self.runs([dict(run, skip=bad)])[0]['skipped'])
+        for started, shown in (('?', '?'), (None, None), (5, None)):
+            with self.subTest(started=started):
+                got = self.runs([dict(run, started=started)])[0]
+                self.assertEqual((got['started'], got['skipped']), (shown, None))
+        for bad in (dict(run, repo=None), 'kit', None):
+            with self.subTest(row=bad):
+                self.assertEqual(self.runs([bad]), [])
+        self.assertEqual(self.runs('not a list'), [])
+
+        def broken():
+            raise OSError('C:\\secret\\skipped.json')
+        self.views.lint_runs = broken
+        obj = self.ok('GET', '/findings', OWNER)
+        self.assertEqual((obj['runs'], len(obj['items'])), ([], 2))
+
+    def test_findings_give_the_ledger_as_whole_counts_only(self):
+        led = {'stale_cites': 2, 'superseded': 0, 'superseded_live': True, 'extra': 5,
+               'notes': ['Q:\\home\\x']}
+        got = self.runs([{'repo': 'kit', 'started': None, 'ledger': led, 'skip': None}])
+        self.assertEqual(got[0]['ledger'], {'stale_cites': 2, 'superseded': 0})
+        self.assertIsNone(self.runs([{'repo': 'kit', 'ledger': [1]}])[0]['ledger'])
+
+    def test_the_local_owner_sees_every_path_whole(self):
+        wt = 'Q:\\home\\Jane Doe\\repo'
+        fix = ('copy to //nas/share/jdoe/out.txt; run Q:\\home\\Jane Doe\\repo\\x.py; '
+               'split on \\\\')
+        self.views.rows = [finding(target=wt, fix=fix)]
+        self.assertEqual(self.ok('GET', '/findings', OWNER)['items'], [finding(target=wt,
+                                                                                fix=fix)])
+        self.mark()
+        self.assertEqual(self.ok('GET', '/finding_marks', OWNER)['items'][0]['target'], wt)
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP,
+                                                'refs': ['Q:\\home\\Jane Doe\\x']})['id']
+        made = self.store.get('to_pm', act)
+        got = self.ok('GET', '/to_pm', OWNER)['items']
+        self.assertEqual([(d['text'], d['refs']) for d in got], [(made['text'], made['refs'])])
+        self.assertIn(fix, made['text'])
+        self.assertIn('Q:\\home\\Jane Doe\\x', made['refs'])
+
+    def test_an_edit_never_makes_or_unmakes_an_act_note(self):
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})['id']
+        note = self.ok('POST', '/to_pm', OWNER, {'kind': 'question', 'text': 't'})['id']
+        for pid, kind in ((act, 'question'), (act, 'fyi'), (note, 'act')):
+            with self.subTest(id=pid, kind=kind):
+                self.refused('invalid', 'kind', 'POST', '/to_pm/%s/edit' % pid, OWNER,
+                             {'kind': kind})
+        self.assertEqual(self.store.get('to_pm', act)['kind'], 'act')
+        self.assertEqual(self.store.get('to_pm', note)['kind'], 'question')
+        # the same kind, or any other change, is still an edit
+        self.ok('POST', '/to_pm/%s/edit' % act, OWNER, {'kind': 'act', 'text': 'reworded'})
+        self.assertEqual(self.store.get('to_pm', act)['text'], 'reworded')
+        self.ok('POST', '/to_pm/%s/edit' % note, OWNER, {'kind': 'fyi'})
+        self.assertEqual(self.store.get('to_pm', note)['kind'], 'fyi')
+
+
+class FindingsSourceTest(unittest.TestCase):
+    """kitlib.hubsite.derived.findings over a folder of maint-lint result.json files, and
+    SiteViews serving it."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='kit-findings-')
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def result(self, repo, rows, started='2026-01-02T03:04:05Z', folder=None):
+        lint_result.write(os.path.join(self.root, folder or repo, lint_result.NAME),
+                          {'version': 1, 'repo': repo, 'started': started, 'findings': rows})
+
+    def row(self, **kw):
+        out = finding(**kw)
+        out.pop('started')
+        return out
+
+    def test_every_repos_rows_with_the_run_they_came_from(self):
+        self.result('kit', [self.row(target='B'), self.row(target='A', fingerprint=FP2)])
+        self.result('app', [self.row(repo='app', fingerprint='1' * 16)], started='S')
+        got = derived.findings(self.root)
+        self.assertEqual([(f['repo'], f['target'], f['fingerprint']) for f in got],
+                         [('app', 'KIT-A', '1' * 16), ('kit', 'A', FP2), ('kit', 'B', FP)])
+        self.assertEqual(got[0]['started'], 'S')
+        self.assertEqual(sorted(got[1]), sorted(finding()))
+
+    def test_what_cannot_be_a_finding_is_skipped_and_odd_values_are_data(self):
+        self.result('kit', [self.row(), self.row(fingerprint='../x'), 'not a row',
+                            self.row(fingerprint=None),
+                            dict(self.row(fingerprint=FP2), secret='C:\\x', text=['a'],
+                                 new='yes', repo=None)])
+        os.makedirs(os.path.join(self.root, 'broken'))
+        with open(os.path.join(self.root, 'broken', lint_result.NAME), 'w') as fh:
+            fh.write('{not json')
+        os.makedirs(os.path.join(self.root, 'empty'))
+        with open(os.path.join(self.root, 'stray.json'), 'w') as fh:
+            fh.write('{}')
+        got = derived.findings(self.root)
+        self.assertEqual([f['fingerprint'] for f in got], [FP, FP2])
+        odd = got[1]
+        self.assertNotIn('secret', odd)
+        self.assertEqual((odd['text'], odd['new'], odd['repo']), (None, False, 'kit'))
+
+    def test_no_folder_is_no_findings(self):
+        self.assertEqual(derived.findings(None), [])
+        self.assertEqual(derived.findings(os.path.join(self.root, 'missing')), [])
+
+    def test_site_views_serve_the_folder_and_the_api_hides_a_marked_one(self):
+        self.result('kit', [self.row(), self.row(fingerprint=FP2)])
+        store = Store.open(os.path.join(self.root, 'store'), clock=CLOCK)
+        self.addCleanup(store.close)
+        views = serve.SiteViews(store, serve.Sources(findings=self.root))
+        self.assertEqual(views.findings(), derived.findings(self.root))
+        a = api.Api(store, views=views, clock=CLOCK)
+        status, obj = a.call('POST', BASE + '/finding_marks', OWNER,
+                             {'fingerprint': FP, 'status': 'dismissed'})
+        self.assertEqual(status, 200, obj)
+        status, obj = a.call('GET', BASE + '/findings', AGENT)
+        self.assertEqual([f['fingerprint'] for f in obj['items']], [FP2])
+        # a server with no findings folder (no pm_data) shows none
+        self.assertEqual(serve.SiteViews(store, serve.Sources()).findings(), [])
+
+    def test_site_views_show_each_lint_run_in_the_findings_runs(self):
+        """KIT-HUB-FINDINGS-LINT-RUNS: the lint folder's runs reach GET findings' runs."""
+        self.result('kit', [self.row()])
+        from kitlib.maintlint import slot
+        slot.write_skip(os.path.join(self.root, 'kit', lint_result.NAME),
+                        slot.Skipped('busy', slot.EXIT_BUSY, 'busy'),
+                        now=datetime.datetime(2026, 1, 9, 3, 0, tzinfo=datetime.timezone.utc))
+        store = Store.open(os.path.join(self.root, 'store'), clock=CLOCK)
+        self.addCleanup(store.close)
+        a = api.Api(store, views=serve.SiteViews(store, serve.Sources(findings=self.root)),
+                    clock=CLOCK)
+        status, obj = a.call('GET', BASE + '/findings', AGENT)
+        self.assertEqual(status, 200, obj)
+        self.assertEqual(obj['runs'], [{'repo': 'kit', 'started': '2026-01-02T03:04:05Z',
+                                        'ledger': None, 'skipped': {
+                                            'reason': 'busy', 'at': '2026-01-09T03:00:00Z'}}])
+        bare = api.Api(store, views=serve.SiteViews(store, serve.Sources()), clock=CLOCK)
+        self.assertEqual(bare.call('GET', BASE + '/findings', AGENT)[1]['runs'], [])
+
+    def test_the_machine_sources_read_the_pm_data_lint_folder(self):
+        home = os.path.join(self.root, 'home')
+        os.makedirs(home)
+        pm = os.path.join(self.root, 'pm')
+        pm_repo(self, record=False)          # the hub's token folder needs the PM-repo pointer
+        with mock.patch.object(serve.pmdata, 'machine_settings', lambda h: {'path': pm}):
+            src = serve.machine_sources(home, sync=False)
+        self.assertEqual(src.findings, os.path.join(pm, lint_result.FOLDER))
+        with mock.patch.object(serve.pmdata, 'machine_settings', lambda h: None):
+            self.assertIsNone(serve.machine_sources(home, sync=False).findings)
+
+
+class UnblockStoreTest(trw.Case):
+    """recordwrite.unblock and SiteViews' record_unblock on a real ref store."""
+
+    def test_a_record_with_one_blocker_opens(self):
+        self.named()
+        self.seed(**rec('FOO', state='blocked', blocked_on='item:BAR'), **rec('BAR'))
+        out = recordwrite.unblock(self.repo.root, 'FOO')
+        self.assertIn('UNBLOCKED FOO - state: open, blocked_on: -', out['lines'])
+        self.assertEqual(self.field('FOO', 'state'), ['open'])
+        log = self.repo.git('log', '-1', '--format=%B', smod.STORE_REF)
+        self.assertIn('Session: owner-hub', log)
+
+    def test_the_store_refusals_are_hub_errors_with_no_path(self):
+        self.named()
+        self.seed(**rec('FOO', state='blocked', blocked_on=['item:BAR', 'item:BAZ']),
+                  **rec('BAR'), **rec('BAZ'), **rec('OPEN'),
+                  **rec('OWN', state='blocked', blocked_on='owner', owner_ask='which one?'))
+        e = self.refused(lambda: recordwrite.unblock(self.repo.root, 'FOO'), 'invalid')
+        self.assertEqual(e.field, 'on')
+        self.assertNotIn(':\\', e.message)
+        self.assertNotIn('backlog', e.message)
+        e = self.refused(lambda: recordwrite.unblock(self.repo.root, 'FOO', on='item:BAR'),
+                         'invalid')
+        self.assertIn('reason', e.message)
+        out = recordwrite.unblock(self.repo.root, 'FOO', on='item:BAR',
+                                  reason='BAR landed on main')
+        self.assertEqual(self.field('FOO', 'blocked_on'), ['item:BAZ'])
+        self.assertTrue(out['lines'])
+        e = self.refused(lambda: recordwrite.unblock(self.repo.root, 'OPEN'), 'invalid')
+        self.assertIn('nothing to unblock', e.message)
+        # an OWNER route: the unblock-owner row is the owner's and the role check ran, so the
+        # owner's own hold clears with no ruling
+        recordwrite.unblock(self.repo.root, 'OWN')
+        self.assertEqual(self.field('OWN', 'state'), ['open'])
+        self.refused(lambda: recordwrite.unblock(self.repo.root, 'NOPE'), 'not_found')
+
+    def test_site_views_unblock_then_read_the_repository_again(self):
+        self.named()
+        self.seed(**rec('FOO', state='blocked', blocked_on='item:BAR'), **rec('BAR'))
+        root, reread = self.repo.root, []
+
+        class Backlog(object):
+            def _named(self, repo):
+                return 'r', root
+
+            def reread(self, name, at):
+                reread.append((name, at))
+
+            def record(self, repo, rid):
+                return {'repo': repo, 'id': rid}
+
+        views = serve.SiteViews(None, serve.Sources(), backlog_views=Backlog())
+        out = views.record_unblock('r', 'FOO', None, None, None)
+        self.assertEqual(out['record'], {'repo': 'r', 'id': 'FOO'})
+        self.assertEqual(reread, [('r', root)])
+        self.assertEqual(self.field('FOO', 'state'), ['open'])
 
 
 if __name__ == '__main__':

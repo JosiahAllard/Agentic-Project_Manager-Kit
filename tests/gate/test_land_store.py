@@ -330,8 +330,8 @@ class CloseEdges(StoreLandCase):
         out = self.land()
         warn = self.warnings(out)
         self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('backlog.py" -C "%s" close FOO --reason "landed %s" --ruling R-nnnn'
-                      % (at_landing.WORKTREE, out.merge), warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
+                                      % (at_landing.WORKTREE, out.merge)), warn[0])
         self.assertNotIn(self.repo.root, warn[0])
 
     def test_the_close_command_runs_the_repositorys_own_backlog_tool_when_it_has_one(self):

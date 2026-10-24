@@ -9,7 +9,7 @@ import unittest
 from kitlib import pmstart
 from kitlib.pmstart import fglock
 from tests.home import temp_home
-from tests.pmstart import HUB_KEPT_OFF, keep_off_hub_site, keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, HUB_KEPT_OFF, keep_off_hub_site, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"pm_watch_cmd": "python launcher/pm_watch.py --stream", "memory_dir": "M",
@@ -42,7 +42,7 @@ def proc(name, cmd, exe=""):
 
 
 class StandingTest(unittest.TestCase):
-    FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+    FAKES = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
                  liveness={"read": lambda p: "{}"})
 
     def test_lines(self):
@@ -160,7 +160,7 @@ class WatcherTest(unittest.TestCase):
     def test_checklist_passes_the_watcher_fake(self):
         hb = {"pid": 42, "beat": 0}
         txt = pmstart.checklist(CFG, NOW, procs=[wproc(42)], watcher={"beat": lambda: hb, "now": 10},
-                                handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+                                handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
                                 liveness={"read": lambda p: "{}"})
         self.assertNotIn("pm_watch.py", txt)
 
@@ -184,16 +184,54 @@ class WatcherTest(unittest.TestCase):
 
 
 class HandoffTest(unittest.TestCase):
-    def test_newest_by_mtime(self):
-        times = {"M/pm-handoff-a.md": 1, "M/pm-handoff-b.md": 5}
-        seen = []
-        out = pmstart.handoff(CFG, globber=lambda p: seen.append(p) or list(times), mtime=times.get)
-        self.assertEqual(out, ["read first: M/pm-handoff-b.md"])
-        self.assertTrue(seen[0].endswith("pm-handoff-*.md"))
+    TOP = os.path.normpath("X:/pm")
 
-    def test_none(self):
-        (s,) = pmstart.handoff(CFG, globber=lambda p: [])
-        self.assertIn("no handoff", s)
+    def run_handoff(self, cfg=CFG, files=(), strays=(), seen=None):
+        def globber(p):
+            if seen is not None:
+                seen.append(p)
+            return list(strays)
+        return pmstart.handoff(cfg, globber=globber, exists=lambda p: p in files, pm_repo=lambda c: self.TOP)
+
+    def test_the_one_file_in_the_pm_repo_is_read_first(self):
+        path = os.path.join(self.TOP, "HANDOFF.md")
+        self.assertEqual(self.run_handoff(files=[path]), ["read first: %s" % path])
+
+    def test_handoff_file_names_another_file_relative_or_absolute(self):
+        rel = os.path.join(self.TOP, "notes", "H.md")
+        self.assertEqual(self.run_handoff(dict(CFG, handoff_file="notes/H.md"), files=[rel]),
+                         ["read first: %s" % rel])
+        ab = os.path.abspath("Q:/h/HAND.md")
+        self.assertEqual(self.run_handoff(dict(CFG, handoff_file=ab), files=[ab]), ["read first: %s" % ab])
+
+    def test_a_missing_file_is_a_line_that_names_it(self):
+        (s,) = self.run_handoff()
+        self.assertIn("no hand-off file " + os.path.join(self.TOP, "HANDOFF.md"), s)
+
+    def test_stray_notes_in_memory_dir_are_told_to_merge_and_delete(self):
+        path = os.path.join(self.TOP, "HANDOFF.md")
+        seen = []
+        got = self.run_handoff(files=[path], strays=["M/pm-handoff-b.md", "M/pm-handoff-a.md"], seen=seen)
+        self.assertEqual(got, ["read first: %s" % path,
+                               "hand-off notes belong in %s: merge and delete M/pm-handoff-a.md, M/pm-handoff-b.md"
+                               % path])
+        self.assertTrue(seen[0].endswith("pm-handoff*.md"))
+        self.assertEqual(seen[0], os.path.join("M", "pm-handoff*.md"))
+
+    def test_a_missing_file_and_strays_give_both_lines(self):
+        got = self.run_handoff(strays=["M/pm-handoff-a.md"])
+        self.assertEqual(len(got), 2)
+        self.assertIn("no hand-off file", got[0])
+        self.assertIn("merge and delete", got[1])
+
+    def test_no_memory_dir_looks_for_no_strays(self):
+        seen = []
+        self.run_handoff({k: v for k, v in CFG.items() if k != "memory_dir"}, seen=seen)
+        self.assertEqual(seen, [])
+
+    def test_a_relative_file_with_no_pm_repo_is_refused(self):
+        with self.assertRaises(KeyError):
+            pmstart.handoff(CFG, pm_repo=lambda c: None)
 
 
 class RemindersTest(unittest.TestCase):
@@ -242,16 +280,50 @@ class LivenessTest(unittest.TestCase):
         sess = json.dumps({"Beta": {"name": "be-a2"}})
         self.assertEqual(pmstart.liveness(CFG, procs, read=lambda p: sess, account=never), [])
 
+    def test_a_repo_with_no_live_consultant_gets_one_line(self):
+        sess = json.dumps({"a": {"name": "a-1", "repo": "alpha"}, "b": {"name": "b-1", "repo": "alpha"},
+                           "c": {"name": "c-1", "repo": "beta"}})
+        procs = [proc("claude.exe", "claude --remote-control a-1", "C:/bin/claude.exe"),
+                 proc("claude.exe", "claude --remote-control b-1", "C:/bin/claude.exe"),
+                 proc("claude.exe", "claude --remote-control c-1", "C:/bin/claude.exe"),
+                 proc("claude.exe", "claude --remote-control consultant-beta", "C:/bin/claude.exe")]
+        self.assertEqual(pmstart.liveness(CFG, procs, read=lambda p: sess, account=lambda: "2", repos={}),
+                         ["consultant-alpha is not running: launch.py consultant --repo alpha "
+                          "--repo-path <its checkout>"])
+
+    def test_the_consultant_line_names_the_repo_folder_when_launcher_repos_has_it(self):
+        sess = json.dumps({"a": {"name": "a-1", "repo": "alpha"}})
+        out = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "2",
+                               repos={"alpha": "C:/r/alpha", "beta": "C:/r/beta"})
+        self.assertEqual(out[-1], "consultant-alpha is not running: launch.py consultant --repo alpha "
+                                  "--repo-path C:/r/alpha")
+
+    def test_the_placeholder_stays_when_launcher_repos_cannot_be_read(self):
+        sess = json.dumps({"a": {"name": "a-1", "repo": "alpha"}})
+        orig = pmstart.launcher_repos
+        pmstart.launcher_repos = lambda: 1 / 0
+        try:
+            out = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "2")
+        finally:
+            pmstart.launcher_repos = orig
+        self.assertTrue(out[-1].endswith("--repo-path <its checkout>"), out)
+
+    def test_a_consultant_entry_is_left_to_the_coordinator_line(self):
+        sess = json.dumps({"k": {"name": "consultant-kit", "repo": "kit", "agent": "pm-kit:consultant"}})
+        (line,) = pmstart.liveness(CFG, [], read=lambda p: sess, account=lambda: "2")
+        self.assertTrue(line.startswith("coordinator k "), line)
+
 
 class ChecklistTest(unittest.TestCase):
     def test_all_pass(self):
         procs = [proc("python.exe", "python pm_watch.py")]
         txt = pmstart.checklist(CFG, NOW, procs=procs,
-                                handoff={"globber": lambda p: ["h.md"], "mtime": lambda f: 1},
+                                handoff={"globber": lambda p: [], "exists": lambda p: True,
+                                         "pm_repo": lambda c: "X:/pm"},
                                 reminders={"read": lambda p: "[]"},
                                 liveness={"read": lambda p: "{}"})
         self.assertIn(HUB_KEPT_OFF, txt)
-        self.assertIn("read first: h.md", txt)
+        self.assertIn("read first: " + os.path.normpath("X:/pm/HANDOFF.md"), txt)
         self.assertNotIn("could not check", txt)
 
     def test_failures_isolated(self):
@@ -271,7 +343,7 @@ class ChecklistTest(unittest.TestCase):
         pmstart.list_processes = bad
         try:
             txt = pmstart.checklist(CFG, NOW, reminders={"read": lambda p: "[]"},
-                                    handoff={"globber": lambda p: []})
+                                    handoff=HANDOFF_FAKE)
         finally:
             pmstart.list_processes = orig
         self.assertIn("could not check watcher", txt)
@@ -379,7 +451,7 @@ class EngReviewTest(unittest.TestCase):
     def test_unset_or_empty_gives_no_line(self):
         for cfg in (CFG, dict(CFG, eng_review=[])):
             self.assertEqual(pmstart.eng_review(cfg), [])
-        fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
+        fakes = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
         self.assertNotIn("eng_review", pmstart.checklist(CFG, NOW, procs=[], **fakes))
 
     def test_bad_value_raises(self):
@@ -388,7 +460,7 @@ class EngReviewTest(unittest.TestCase):
                 pmstart.eng_review(dict(CFG, eng_review=bad))
 
     def test_in_checklist_and_bad_value_isolated(self):
-        fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
+        fakes = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
         self.assertIn("EX-API-*", pmstart.checklist(dict(CFG, eng_review=["EX-API-*"]), NOW, procs=[], **fakes))
         txt = pmstart.checklist(dict(CFG, eng_review="x"), NOW, procs=[], **fakes)
         self.assertIn("could not check eng_review:", txt)
@@ -478,7 +550,7 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(top, "T:\\pm")
 
     def test_in_the_checklist(self):
-        fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+        fakes = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
                      liveness={"read": lambda p: "{}"})
         txt = pmstart.checklist(CFG, NOW, procs=[], **fakes, memory={
             "repos": {"b": self.b}, "check": lambda p, label=None: "memory (b): add it", "pm_repo": lambda c: None})

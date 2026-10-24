@@ -21,8 +21,8 @@ loaded machine makes a test slower, not different. The tool processes a test sta
 
 The home fence has one exception, real_install_config(): the scrub tests check the kit's files against
 this install's own names, which only the real machine config holds. It reads the machine config
-under the home recorded below, before the fence, and returns only the install-name keys
-(install_config).
+the PM-repo pointer names (the registry's value, read below before the fence), else the one under
+the home recorded below, and returns only the install-name keys (install_config).
 
 The console hook (kitlib.proc.console, docs/daily-full.md "The schedule"): `import kitlib` comes
 first, so a test process that has no console gets one with no window before its first start, and
@@ -36,10 +36,12 @@ os.environ.setdefault('KIT_FAKE_GIT', '1')
 
 from kitlib import clock as _kclock  # noqa: E402
 from kitlib.config import user as _kuser  # noqa: E402  (after KIT_FAKE_GIT is set)
+from kitlib.config import pointer as _kpointer  # noqa: E402
 
 os.environ.setdefault(_kclock.FENCE_ENV, '1')   # the time fence: degrade budgets are the ceiling
 
 _REAL_HOME = os.path.expanduser('~')    # read by real_install_config() only
+_REAL_POINTER = _kpointer.registry()    # the same: (value, why), the registry's PM-repo pointer
 _kuser.fence_env(os.environ)            # the marker the children of this process inherit
 _kuser.fence_home()
 
@@ -63,10 +65,20 @@ def install_config(cfg):
 
 def real_install_config():
     """The home fence's one exception: (install_config of the real machine config, None), or
-    (None, why) when there is no machine config file. It reads the machine config file under the
-    home recorded before the fence, explicitly and read-only, and returns only the install-name
-    keys; a malformed config raises ConfigError."""
-    loc = _kuser.locate(_REAL_HOME)
+    (None, why) when there is no machine config file. It reads, explicitly and read-only, the
+    machine config files in the PM repository the registry's pointer named before the fence (a
+    Location built here, so no git starts), else the file under the home recorded before the
+    fence, and returns only the install-name keys; a malformed config raises ConfigError."""
+    value = _REAL_POINTER[0]
+    if value and os.path.isabs(value):
+        pm = os.path.normpath(value)
+        folder = os.path.join(pm, _kuser.DIR_NAME)
+        path = os.path.join(folder, _kuser.FILE_NAME)
+        local = os.path.join(folder, _kuser.LOCAL_FILE_NAME)
+        if os.path.isfile(path) or os.path.isfile(local):
+            loc = _kuser.Location(_kuser.OK, path, local, folder, pm, None, None, None, _REAL_HOME, path)
+            return install_config(_kuser.user_config(location=loc)), None
+    loc = _kuser.home_location(_REAL_HOME)
     if loc.state == _kuser.NONE:
         return None, 'no machine config file (%s)' % loc.display()
     return install_config(_kuser.user_config(location=loc)), None

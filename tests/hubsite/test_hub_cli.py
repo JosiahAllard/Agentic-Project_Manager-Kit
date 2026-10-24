@@ -20,6 +20,7 @@ from unittest import mock
 from kitlib.hubsite import approvals, auth, httpd, schema, serve, todosteps, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.store import Store, StoreBusy
+from tests.home import machine_config, pm_repo
 from tests.hubsite import httpfix
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,8 +46,15 @@ class CliCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home})
         env.start()
         self.addCleanup(env.stop)
-        self.tokens = os.path.join(self.home, '.pm-kit', 'hub')
+        # The fenced PM repository, with no kit-pm-data.json record: no pm_data, as a machine
+        # config without the key had before pm_data was derived (a test's pm_data.path makes one).
+        pm_repo(self, record=False)
         self.store_dir = os.path.join(self.home, 'scratch-store')
+
+    @property
+    def tokens(self):
+        """The hub's credential folder for the machine config as it stands now (auth.folder)."""
+        return auth.folder(self.home)
 
     def run_cli(self, *argv, **kw):
         """(exit code, stdout, stderr) of hub.py with these arguments."""
@@ -60,10 +68,8 @@ class CliCase(unittest.TestCase):
         return code, out.getvalue(), err.getvalue()
 
     def config(self, obj):
-        folder = os.path.join(self.home, '.pm-kit')
-        os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, 'config.json'), 'w', encoding='utf-8') as f:
-            json.dump(obj, f)
+        """The machine config `obj`, in the fenced PM repository's two files: their folder."""
+        return machine_config(self.home, obj, case=self)
 
     def dead_port(self):
         """A loopback port nothing listens on: bound here, never listening, until the test ends."""
@@ -95,7 +101,7 @@ class UsageCase(CliCase):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
-                      'migrate, questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
+                      'questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
                       'pending, wait or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
@@ -607,7 +613,8 @@ class SetupCase(CliCase):
         self.assertNotIn(agent, out)
         self.assertIn('NOTE: no store folder is set', out)
         self.assertIn('serve', out)
-        self.assertEqual(os.listdir(os.path.join(self.home, '.pm-kit')), ['hub'])
+        # the machine config folder holds the credential folder only: no config file is written
+        self.assertEqual(os.listdir(os.path.dirname(self.tokens)), ['hub'])
         # a second run keeps the tokens
         self.assertEqual(self.run_cli('setup')[0], 0)
         self.assertEqual(auth.read_token(self.tokens, auth.OWNER), owner)
@@ -665,13 +672,17 @@ class SetupCheckCase(CliCase):
         obj = {'plugin': {'export_dir': self.root}}
         if hub is not None:
             obj['hub'] = hub
-        self.config(obj)
-        path = os.path.join(self.home, '.pm-kit', 'config.json')
-        with open(path, 'rb') as f:
-            before = f.read()
+        folder = self.config(obj)
+
+        def files():
+            got = {}
+            for n in os.listdir(folder):
+                with open(os.path.join(folder, n), 'rb') as f:
+                    got[n] = f.read()
+            return got
+        before = files()
         code, out, err = self.run_cli('setup', '--check')
-        with open(path, 'rb') as f:
-            self.assertEqual(f.read(), before, 'setup --check wrote the machine config')
+        self.assertEqual(files(), before, 'setup --check wrote the machine config')
         self.assertFalse(os.path.exists(self.tokens), 'setup --check made the token files')
         return code, out, err
 
@@ -1734,7 +1745,7 @@ class ArgumentCase(CliCase):
         # each verb of the tool is in that list, but for those that ask no running server
         self.assertEqual(sorted({v[0] for v in self.VERBS}),
                          sorted(set(HUB.VERB_NAMES)
-                                - {'serve', 'status', 'setup', 'open', 'migrate', 'validate',
+                                - {'serve', 'status', 'setup', 'open', 'validate',
                                    'unpair',    # unpair with no server: ClientCase
                                    'stop', 'restart'}))     # with no server: StopRestartCase
 

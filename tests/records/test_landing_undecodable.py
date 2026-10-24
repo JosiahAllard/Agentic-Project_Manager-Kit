@@ -30,8 +30,8 @@ class NotUtf8Test(unittest.TestCase):
 
     def test_take_is_busy_by_nobody_named(self):
         with self.assertRaises(landing.Busy) as got:
-            self.lk.take('full', ['kit/a'], pid=42)
-        self.assertEqual(got.exception.record['lane'], '?')
+            self.lk.take(['kit/a'], pid=42)
+        self.assertEqual(got.exception.record['phase'], '?')
         self.still_there()
 
     def test_break_lock_refuses_even_when_declared_gone(self):
@@ -42,7 +42,7 @@ class NotUtf8Test(unittest.TestCase):
         self.still_there()
 
     def test_a_gate_is_refused(self):
-        self.assertIn('cannot be read', self.lk.gate_refusal('full'))
+        self.assertIn('cannot be read', self.lk.gate_refusal())
         self.assertTrue(os.path.exists(self.lk.path))
 
 

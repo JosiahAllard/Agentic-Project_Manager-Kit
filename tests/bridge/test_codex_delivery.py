@@ -307,6 +307,55 @@ class CodexDeliveryTests(unittest.TestCase):
             with self.assertRaises(BeforeWriteError) as caught:
                 CodexDesktopAdapter(lease=self.lease).send(self.message)
         self.assertEqual(caught.exception.code, 'codex-native-peer-unavailable-before-write')
+
+    def other_host_sender(self):
+        return ChatBinding(SessionIdentity('claude', 'claude-native', 'claude-desktop', 'incarnation',
+            WorkspaceIdentity('fixture-host', 'project', 'workspace')), 'account', 1)
+
+    def test_a_leased_writer_carries_another_hosts_message_as_the_executor(self):
+        message = replace(self.message, sender=self.other_host_sender())
+        @contextmanager
+        def lease(message):
+            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check, writer=self.sender)
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call',
+                return_value={'success': True}) as call:
+            result = CodexDesktopAdapter(lease=lease).send(message)
+        self.assertEqual(result.state, 'recipient-accepted')
+        request = call.call_args.args[1]
+        self.assertEqual((request['params']['threadId'], request['params']['turnId']),
+            (self.context.thread_id, self.context.turn_id))
+        self.assertEqual(request['params']['arguments']['threadId'], self.recipient.identity.native_session_id)
+
+    def test_writer_rules_refuse_before_any_native_call(self):
+        claude = self.other_host_sender()
+        third = replace(self.context, thread_id=str(uuid.uuid4())).binding('fixture-host')
+        cases = (
+            # A Codex sender never borrows a writer, even one that is its own executor.
+            (self.message, self.context, self.sender),
+            (self.message, self.context, third),
+            # The writer must be a binding, not the sender itself, and the executor.
+            (replace(self.message, sender=claude), self.context, 'not-a-binding'),
+            (replace(self.message, sender=claude), self.context, claude),
+            (replace(self.message, sender=claude), self.context, third),
+            # The recipient can never execute its own delivery.
+            (replace(self.message, sender=claude), self.target_context, self.recipient))
+        for message, executor, writer in cases:
+            @contextmanager
+            def lease(message):
+                yield DesktopLease(self.recipient, executor, self.endpoint, self.check, writer=writer)
+            with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call') as call:
+                with self.assertRaises(BeforeWriteError) as caught:
+                    CodexDesktopAdapter(lease=lease).send(message)
+                call.assert_not_called()
+            self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
+
+    def test_another_hosts_sender_without_a_writer_is_never_its_own_executor(self):
+        message = replace(self.message, sender=self.other_host_sender())
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call') as call:
+            with self.assertRaises(BeforeWriteError) as caught:
+                CodexDesktopAdapter(lease=lambda message: self.lease(self.message)).send(message)
+            call.assert_not_called()
+        self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
         # Any other failure before the write keeps the generic code and hides its detail.
         @contextmanager
         def broken(message):

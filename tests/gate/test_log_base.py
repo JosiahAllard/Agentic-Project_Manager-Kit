@@ -4,7 +4,6 @@ folder, %LOCALAPPDATA%/Temp on Windows). Never whatever TEMP a process inherited
 whose TEMP was moved and the owner's shells read the same folder."""
 import contextlib
 import io
-import json
 import os
 import shutil
 import tempfile
@@ -13,6 +12,7 @@ from unittest import mock
 
 from kitlib.config import user
 from kitlib.gate import runner
+from tests.home import machine_config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRIVE = os.path.splitdrive(HERE)[0]
@@ -125,12 +125,11 @@ class NewLogDir(unittest.TestCase):
 
 
 def bad_machine_config(test):
-    """A home whose machine config work_temp refuses (a relative temp_dir), patched in."""
+    """A home whose machine config work_temp refuses (a relative temp_dir, in the fenced PM
+    repository the pointer names), patched in."""
     home = tempfile.mkdtemp(prefix='kit-home-')
     test.addCleanup(shutil.rmtree, home, True)
-    os.makedirs(os.path.join(home, user.DIR_NAME))
-    with open(user.config_file(home), 'w', encoding='utf-8') as fh:
-        json.dump({'temp_dir': 'relative'}, fh)
+    machine_config(home, {'temp_dir': 'relative'}, case=test)
     patch = mock.patch.object(user, 'home_dir', return_value=home)
     patch.start()
     test.addCleanup(patch.stop)

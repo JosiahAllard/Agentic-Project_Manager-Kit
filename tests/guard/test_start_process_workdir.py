@@ -15,19 +15,19 @@ BS = chr(92)
 
 class Placeable(unittest.TestCase):
     def test_forms_it_cannot_place(self):
-        for text in ('', 'Z:', 'z:', 'Z:x', 'Z:repo' + BS + 'sub', 'Z:' + BS + 'repo?', 'Z:' + BS + 'r*',
-                     'Z:' + BS + '[r]epo', 'Z:' + BS + 'a`b', '..' + BS + 'rep?', 'rep*',
-                     'Main:' + BS + 'x', 'Registry::HKCU' + BS + 'x', 'FileSystem::Z:', 'FileSystem::Z:x',
-                     'Z:' + BS + 'x:stream', BS * 2 + '.' + BS + 'Z:' + BS + 'x', '//./Z:/x',
-                     BS * 2 + '?' + BS + 'Z:' + BS + 'x', '/c', '/z/repo', '/Z'):
+        for text in ('', 'Q:', 'q:', 'Q:x', 'Q:repo' + BS + 'sub', 'Q:' + BS + 'repo?', 'Q:' + BS + 'r*',
+                     'Q:' + BS + '[r]epo', 'Q:' + BS + 'a`b', '..' + BS + 'rep?', 'rep*',
+                     'Main:' + BS + 'x', 'Registry::HKCU' + BS + 'x', 'FileSystem::Q:', 'FileSystem::Q:x',
+                     'Q:' + BS + 'x:stream', BS * 2 + '.' + BS + 'Q:' + BS + 'x', '//./Q:/x',
+                     BS * 2 + '?' + BS + 'Q:' + BS + 'x', '/c', '/z/repo', '/Z'):
             with self.subTest(text=text):
                 self.assertTrue(commands.sp_workdir_unplaceable(text))
 
     def test_forms_it_places(self):
-        for text in ('Z:' + BS, 'Z:/', 'Z:' + BS + 'repo', 'z:/repo/sub', 'repo', '.', '..' + BS + 'repo',
+        for text in ('Q:' + BS, 'Q:/', 'Q:' + BS + 'repo', 'q:/repo/sub', 'repo', '.', '..' + BS + 'repo',
                      BS + 'repo', '/repo', '~', '~' + BS + 'x', BS * 2 + 'server' + BS + 'share' + BS + 'x',
-                     'FileSystem::Z:' + BS + 'repo', 'Microsoft.PowerShell.Core' + BS + 'FileSystem::Z:' + BS + 'r',
-                     BS + 'FileSystem::Z:' + BS + 'repo'):
+                     'FileSystem::Q:' + BS + 'repo', 'Microsoft.PowerShell.Core' + BS + 'FileSystem::Q:' + BS + 'r',
+                     BS + 'FileSystem::Q:' + BS + 'repo'):
             with self.subTest(text=text):
                 self.assertFalse(commands.sp_workdir_unplaceable(text))
 

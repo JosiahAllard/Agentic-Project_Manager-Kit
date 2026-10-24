@@ -1,7 +1,7 @@
 """The retired machine config folder name (kitlib.config.migration.OLD_DIR_NAME): its literal
 stands on one line of kitlib/config/migration.py (tests/scrub/test_generic.py KIT_NAMES_ALLOWED),
 and the constant is used only by the modules that handle the move, listed here, so retiring
-the fallback finds every place to clean."""
+the name finds every place to clean."""
 import re
 import unittest
 
@@ -10,9 +10,11 @@ from tests.scrub.test_scrub import read_text, tracked_files
 
 USERS = (
     'kitlib/config/migration.py',     # defines it
-    'kitlib/config/user.py',          # locate(): the read fallback
+    'kitlib/config/user.py',          # locate(): a leftover home file, reported, never read
     'kitlib/machinesetup/__init__.py',  # not a Claude account folder
     'kitlib/guard/jail.py',           # no mark root on either config folder
+    'kitlib/delegations/schema.py',   # E2: neither config folder may be a delegated write's target
+    'kitlib/delegations/place.py',    # no hub-approved run may touch either config folder
     'docs/kit-json.md',               # "Moving the machine config folder" names it
     'docs/machine-setup.md',          # the folders machine_setup skips
 )

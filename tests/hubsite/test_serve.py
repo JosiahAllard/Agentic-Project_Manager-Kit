@@ -23,6 +23,8 @@ from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
 from kitlib.proc import process
+from kitlib.config import user
+from tests.home import PM_REPO_FENCE_ENV, machine_config, pm_repo
 from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
@@ -303,6 +305,27 @@ class BuildCase(ServeCase):
         hub.close()
         # no backlog at all: no checkout
         self.assertIsNone(self.build().api.checkout('github.com/team/beta'))
+
+    def test_the_api_names_an_approvals_repo_by_the_launchers_session_keys(self):
+        """build() hands _repo_name the launcher's session keys: of two names on one checkout
+        the coordinator's key wins over the folder name that sorts first, and the root's remote
+        is asked of git once, not on every read."""
+        from kitlib.hubsite import approvals
+
+        class Repos(FakeBacklog):
+            def repos(self):
+                return [('Folder-Kit', 'X:\\kit'), ('kit', 'X:\\kit')]
+        asked = []
+        for p in (mock.patch.object(approvals, 'remote_id', lambda root: asked.append(root) or (
+                      'github.com/team/kit', None)),
+                  mock.patch.object(serve._api, 'launcher_keys', lambda: {'kit'})):
+            p.start()
+            self.addCleanup(p.stop)
+        hub = self.build(backlog=lambda refresh_s: Repos(self.calls))
+        for _ in range(3):
+            self.assertEqual(hub.api.repo_name('github.com/team/kit'), 'kit')
+        self.assertEqual(asked, ['X:\\kit'])
+        hub.close()
 
     def test_health_answers_on_the_bound_port_and_a_foreign_host_is_refused(self):
         hub = self.build()
@@ -1785,14 +1808,25 @@ class MachineCase(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def config(self, obj):
-        folder = os.path.join(self.home, '.pm-kit')
-        os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, 'config.json'), 'w', encoding='utf-8') as f:
-            json.dump(obj, f)
+        """The machine config `obj`, in the fenced PM repository's two files: their folder."""
+        return machine_config(self.home, obj, case=self)
+
+    def test_a_machine_with_no_pointer_has_no_sources(self):
+        # no token folder without the PM-repo pointer: hub.py serve refuses, never a home folder
+        with mock.patch.dict(os.environ):
+            os.environ.pop(PM_REPO_FENCE_ENV, None)
+            user.forget()
+            self.addCleanup(user.forget)
+            with self.assertRaises(ConfigError) as got:
+                serve.machine_sources(self.home)
+        self.assertIn('--pm-repo', str(got.exception))
+        self.assertEqual(os.listdir(self.home), [], 'reading the sources wrote something')
 
     def test_a_machine_with_no_config_serves_on_defaults(self):
+        pm = pm_repo(self, record=False)
         src = serve.machine_sources(self.home)
-        self.assertEqual(src.tokens, os.path.join(self.home, '.pm-kit', 'hub'))
+        self.assertEqual(os.path.normcase(src.tokens),
+                         os.path.normcase(os.path.join(pm, user.DIR_NAME, auth.FOLDER_NAME)))
         self.assertEqual((src.pm_data, src.notices, src.repos, src.usage, src.backlog),
                          (None, None, None, None, None))
         self.assertIs(src.sync, gitsync.GitSync)
@@ -1830,7 +1864,7 @@ class MachineCase(unittest.TestCase):
             return [(n, None) for n in names]
 
         with mock.patch.object(serve.hubbacklog, 'git', git), \
-                mock.patch.object(serve.pmstart, 'known_repos', lambda c: ['a', 'b']), \
+                mock.patch.object(serve.pmstart, 'known_repos', lambda c, **kw: ['a', 'b']), \
                 mock.patch.object(serve.backlog, 'repo_list', repo_list):
             pairs = serve._repo_pairs(cfg)
             self.assertEqual(asked, [])
@@ -1884,6 +1918,8 @@ class MachineCase(unittest.TestCase):
             r = store.add('questions', question(repo='ghost'))
             self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
             self.assertEqual(src.known_repos(), want)
+            for _ in range(3):                      # the repos view, on every snapshot
+                self.assertEqual([r['name'] for r in src.repos([])], want)
         self.assertEqual(len(asked), 2, asked)      # the two folders, once each, for every call
         self.assertEqual(asked[0], os.path.dirname(path))
 
@@ -1926,10 +1962,35 @@ class MachineCase(unittest.TestCase):
                              [])
         self.assertEqual(len(ran), 2, ran)          # git was tried, for both folders
 
-    def test_a_pm_data_object_that_cannot_be_used_is_a_config_error(self):
-        self.config({'pm_data': 5})
-        with self.assertRaises(ConfigError):
-            serve.machine_sources(self.home)
+    def test_a_found_top_level_is_kept_and_a_miss_is_asked_again_after_a_while(self):
+        now, answers, asked = [0.0], {'pm': 'pmrepo', 'gone': None}, []
+
+        def toplevel(folder):
+            asked.append(folder)
+            return answers[folder]
+        with mock.patch.object(serve.pmstart, '_toplevel', toplevel):
+            tops = serve._toplevels(clock=lambda: now[0])
+            for _ in range(3):
+                self.assertEqual((tops('pm'), tops('gone')), ('pmrepo', None))
+            self.assertEqual(asked, ['pm', 'gone'])
+            now[0] = serve.TOPLEVEL_MISS_S
+            answers['gone'] = 'found-later'
+            self.assertEqual((tops('pm'), tops('gone')), ('pmrepo', 'found-later'))
+            now[0] = 10 * serve.TOPLEVEL_MISS_S
+            self.assertEqual((tops('pm'), tops('gone')), ('pmrepo', 'found-later'))
+        self.assertEqual(asked, ['pm', 'gone', 'gone'])
+
+    def test_a_pm_data_key_in_the_machine_config_is_never_the_sources_pm_data(self):
+        # pm_data is derived from the PM-repo pointer (kitlib.pmdata.machine_settings), so a key
+        # planted in the file cannot change it; the file itself is refused by hub_settings.load,
+        # which `hub.py serve` reads before machine_sources.
+        pm = os.path.dirname(self.config({'pm_data': {'path': os.path.join(self.home, 'pm')}}))
+        self.config('{"pm_data": 5}')
+        self.assertEqual(serve.machine_sources(self.home).pm_data,
+                         {'path': pm, 'branch': 'main', 'remote': 'origin'})
+        with self.assertRaises(ConfigError) as cm:
+            hub_settings.load(home=self.home)
+        self.assertIn('pm_data is derived', str(cm.exception))
 
 
 class ClientCase(ServeCase):

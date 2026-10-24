@@ -384,10 +384,10 @@ class Holds(ApiCase):
     def test_an_aliased_kind_makes_a_hold_of_the_canonical_kind_a_run_can_claim(self):
         with open(self.kinds_path, "w", encoding="utf-8") as f:
             json.dump({"kinds": {"graph-build": {"cpu": 2, "gpu": 0, "warn_min": 30}},
-                       "aliases": {"worldgraph": {"to": "graph-build", "why": "retired name"}}}, f)
-        h = self.ok(self.agent_hold(kind="worldgraph"))["hold"]
+                       "aliases": {"old-name": {"to": "graph-build", "why": "retired name"}}}, f)
+        h = self.ok(self.agent_hold(kind="old-name"))["hold"]
         self.assertEqual(h["kind"], "graph-build")
-        with rm.slot("worldgraph", "kit", "t", cores=1, hold=h["id"], store=self.store,
+        with rm.slot("old-name", "kit", "t", cores=1, hold=h["id"], store=self.store,
                      wait_s=30, env=clean_env()) as launch:
             rec = self.store.read("active/%s.json" % launch.id)
             self.assertEqual(rec["kind"], "graph-build")

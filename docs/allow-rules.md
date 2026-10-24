@@ -31,25 +31,15 @@ Both are written with forward slashes.
 
 The tool refuses when:
 - there is no current export;
-- K or R holds a space, a quote, a backtick, `( ) * ? [ ] ; & | $ % < >`, a control character (U+0000-U+001F, U+007F), or any other character a deny line names (`_UNSAFE` in `kitlib/allowrules/__init__.py`). A bare rule cannot spell such a path, and a deny naming a character of the path would refuse every submit; the quoted-only form is not emitted;
-- the repository's config cannot be read;
-- a lane name is not `[A-Za-z0-9][A-Za-z0-9_.-]*`.
+- K or R holds a space, a quote, a backtick, `( ) * ? [ ] ; & | $ % < >`, a control character (U+0000-U+001F, U+007F), or any other character a deny line names (`_UNSAFE` in `kitlib/allowrules/__init__.py`). A bare rule cannot spell such a path, and a deny naming a character of the path would refuse every submit; the quoted-only form is not emitted.
 
 ## The lines
-
-The lanes are `full` plus the `"landing".lanes` of the main checkout's `.kit.json` at HEAD, which is
-the set `kitlib/gate/land.py` checks `--lane` against. `land.py`'s own `--lane` is free text.
-
-The lane lines limit only a trailing `--lane <lane>`, the one after `--submit`. A `--lane` inside
-the first `*` takes any value. That is safe because `land.py` itself refuses a lane that is not
-`full` or in `.kit.json` (`config_refusal` in `kitlib/gate/land.py`), not because of the rules.
 
 Each line comes in two script spellings, `K/tools/land.py` and `"K/tools/land.py"`. The allows
 are `PowerShell(...)` only; the denies come in both `Bash(...)` and `PowerShell(...)`. So the lines are:
 
-- **Allow:** `PowerShell(python <script> -C R * --expect-tip * --submit)`, plus one line per lane
-  that adds ` --lane <lane>`. There is never a `--lane *`: a `*` at the end would carry `> file`.
-  With no extra lanes this is 4 lines.
+- **Allow:** `PowerShell(python <script> -C R * --expect-tip * --submit)`, one line per spelling,
+  2 in all. Nothing may follow `--submit`: a `*` at the end would carry `> file`.
 - **Deny:** 55 lines per shell and spelling, 220 in all:
   - `python <script> * -C*`: a second `-C` after a space, or a glued one;
   - `python <script> -C R *-C*`: the text `-C` anywhere after the fixed `-C R` prefix;

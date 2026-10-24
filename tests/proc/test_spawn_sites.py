@@ -121,8 +121,6 @@ GUARD_TEST = ('a guard test hands the guard a command line that holds this text 
               'command is parsed, never run')
 FLAG_PASSES = ('a test of how a caller\'s console choice is passed on: the flag goes to a stand-in '
                'for CreateProcess, nothing is started with it')
-BRIDGE_TEXT = ('a bridge startup test reads the launcher text startup.render writes; this line '
-               'asserts that text and runs nothing')
 OPEN = ' OPEN (reported, not fixed here): '
 
 HAZARD_EXEMPT = {
@@ -174,18 +172,6 @@ HAZARD_EXEMPT = {
            'sys.executable and CREATE_NO_WINDOW | DETACHED_PROCESS.' + OPEN + 'python.exe '
            'detached has no console, so any console program it starts opens a window (two '
            'finds: the getattr string and the `flags` name it is bound to, used in the start)'),
-    ('tests/bridge/test_startup.py',
-     'StartupTests.test_actual_hidden_launcher_preserves_path_arguments_and_child_exit_code',
-     '-WindowStyle Hidden'): (
-        1, 'runs the rendered start-bridge.ps1 under powershell started with CREATE_NO_WINDOW in a '
-           'kill-on-close job, to prove the launcher keeps its arguments.' + OPEN + 'the script\'s '
-           'own Start-Process -WindowStyle Hidden starts python.exe in a console of its own'),
-    ('tests/bridge/test_startup.py',
-     'StartupTests.test_native_scheduler_validates_xml_without_registering_a_task',
-     '-WindowStyle Hidden'): (1, BRIDGE_TEXT),
-    ('tests/bridge/test_startup.py',
-     'StartupTests.test_task_uses_current_interactive_user_and_hidden_explicit_python_launcher',
-     '-WindowStyle Hidden'): (2, BRIDGE_TEXT),
     ('tests/guard/extra_rows.py', '<module>', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (122, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'cmd /c start'): (2, GUARD_TEST),
@@ -244,6 +230,9 @@ HAZARD_EXEMPT = {
      'LookalikeWrappers.test_a_drive_less_script_in_a_computed_working_directory_is_not_the_kit_s',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_backlog_role.py', 'Spellings.test_start_process', 'Start-Process'): (4, GUARD_TEST),
+    ('tests/guard/test_backlog_role.py',
+     'AsFromItsWorktree.test_a_start_process_runs_where_its_working_directory_says.sp',
+     'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_gaterole.py', 'GateAllow.ps_spellings', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_launchers', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_review_rows_for_owner_verbs', 'Start-Process'): (1, GUARD_TEST),

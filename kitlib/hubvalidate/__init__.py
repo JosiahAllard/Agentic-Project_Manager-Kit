@@ -1,7 +1,8 @@
 """kitlib.hubvalidate: checks on the Action Hub's data (docs/action-hub.md field tables).
 
 Pure logic over the hub's JSON shape, `docs = {collection: {doc_id: fields}}` (what
-kitlib.hubsite.migrate.check takes); it knows nothing of the page, ArtifactData or any transport.
+kitlib.hubsite.storecheck.check takes); it knows nothing of the page, ArtifactData or any
+transport.
 Nothing here prints, parses arguments or exits.
 
   validate(docs, only=None, known_repos=())
@@ -17,7 +18,10 @@ Nothing here prints, parses arguments or exits.
 A Finding is (level, rel, field, code, message). level is `error` (the page would drop or hide
 the data), `warn` (the data is intact but wrong or unreachable) or `note` (a check was skipped).
 Codes: commands-type, status-unknown, status-missing, ref-dangling, options-shape, repo-alias,
-handstep-commands, pages-schema, not-object, unreadable.
+handstep-commands, plugin-path, pages-schema, not-object, unreadable.
+
+plugin-path warns of a to-do (not done) whose command names a kit plugin export folder
+(PLUGIN_EXPORT); the store hands that warning back to whoever adds or edits the to-do.
 """
 import collections
 import json
@@ -28,14 +32,15 @@ Finding = collections.namedtuple('Finding', 'level rel field code message')
 
 ERROR, WARN, NOTE = 'error', 'warn', 'note'
 
-# status values per collection (docs/action-hub.md: questions, stories, todos, to_pm; approvals:
-# kitlib.hubsite.approvals)
+# status values per collection (docs/action-hub.md: questions, stories, todos, to_pm, finding_marks;
+# approvals: kitlib.hubsite.approvals)
 STATUSES = {
-    'questions': ('open', 'answered', 'logged'),
+    'questions': ('open', 'answered', 'logged', 'done'),
     'stories': ('submitted', 'review', 'questions', 'added', 'declined', 'withdrawn'),
     'todos': ('open', 'done'),
     'to_pm': ('queued', 'sent', 'done'),
     'approvals': ('pending', 'approved', 'denied', 'consumed', 'expired'),
+    'finding_marks': ('dismissed', 'passed_on', 'done'),
 }
 # the collection a Q-/M-/T-/P-/S-/A- id names (the store's id prefixes), and the fields that carry
 # such ids (an A- id is never a ref)
@@ -46,6 +51,10 @@ REF_FIELDS = {'questions': ('refs',), 'inbox': ('ref', 'refs'), 'parked': ('q',)
 REPO_COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'parked')
 ANY_REPO = ('all', 'pm', '')        # a repo tag that needs no repos/ entry
 _REF = re.compile(r'(?<![A-Za-z0-9])([QMTPS])-\d+(?![A-Za-z0-9])', re.I)
+# a kit plugin export folder (kitlib.pluginsource: <export_dir>/<sha12>, the default export_dir
+# %LOCALAPPDATA%\pm-kit\plugin): a plugin refresh replaces it, so a to-do command naming it goes
+# stale (plugin-path)
+PLUGIN_EXPORT = re.compile(r'(?i)[^\s"\']*?[\\/]plugin[\\/]+[0-9a-f]{12}(?![0-9a-z])')
 
 
 def _f(level, coll, doc_id, field, code, message):
@@ -63,6 +72,17 @@ def _check_commands(coll, doc_id, d, out):
     if not (isinstance(c, list) and all(_text(x) for x in c)):
         out.append(_f(ERROR, coll, doc_id, 'commands', 'commands-type',
                       'commands must be a list of non-empty strings, not %s' % type(c).__name__))
+        return
+    if d.get('status') == 'done':
+        return
+    for i, cmd in enumerate(c):
+        m = PLUGIN_EXPORT.search(cmd)
+        if m:
+            out.append(_f(WARN, coll, doc_id, 'commands', 'plugin-path',
+                          'commands[%d] names the kit plugin export folder %s, which a plugin refresh '
+                          'replaces, so the command goes stale. Instead: name the tool in the kit main '
+                          'checkout (python <kit main checkout>/tools/<tool>.py)' % (i, m.group(0))))
+            return
 
 
 def _check_status(coll, doc_id, d, out):

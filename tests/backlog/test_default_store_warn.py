@@ -154,13 +154,14 @@ class DefaultStoreWarn(unittest.TestCase):
         self.assertFalse([l for l in lines if l.startswith('NOTE')], lines)
         self.assertEqual(self.tips(), before)
 
-    def test_an_owner_held_default_ref_record_names_the_ruling_in_its_close_command(self):
+    def test_an_owner_held_default_ref_record_names_the_plain_close_command(self):
         before = self.seed_default(pulled('FOO', by='kit/other', priority='-1', priority_by='-',
                                           owner_ask='may this ship?'))
         lines = self.land('Closes: FOO')
         warn = self.warnings(lines)
         self.assertEqual(len(warn), 1, lines)
-        self.assertIn('close FOO --reason "landed %s" --ruling R-nnnn' % MERGE, warn[0])
+        self.assertIn('close FOO --reason "landed %s"' % MERGE, warn[0])
+        self.assertNotIn('--ruling', warn[0])
         self.assertEqual(self.tips(), before)
 
     def test_a_named_ref_store_closes_as_before(self):

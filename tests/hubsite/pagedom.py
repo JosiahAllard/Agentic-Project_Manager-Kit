@@ -20,7 +20,7 @@ from kitlib.proc import spawn       # node is started with no console window of 
 DOM = r"""
 "use strict";
 const realImmediate = setImmediate;
-const created = [], sinks = [], timers = [], calls = [], waits = [];
+const created = [], sinks = [], timers = [], calls = [], waits = [], lockWaits = [];
 let timerId = 0;
 globalThis.setTimeout = (fn, ms) => { const t = { id: ++timerId, fn, ms: ms || 0 }; timers.push(t); return t.id; };
 globalThis.clearTimeout = id => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); };
@@ -109,12 +109,31 @@ function matchChain(el, parts){
 }
 
 const body = new El("body");
-globalThis.document = { body, activeElement: body,
+// The tab starts hidden, so the page's machine-lock watcher is idle until a test calls visible(true): a test that is
+// not about the lock sees no lock call.
+globalThis.document = { body, activeElement: body, hidden: true,
   createElement: t => { created.push(String(t).toLowerCase()); return new El(t); },
   querySelector: s => body.querySelector(s), querySelectorAll: s => body.querySelectorAll(s),
   getElementById: id => { let hit = null; const walk = n => { for (const c of n.children) { if (!hit && c.id === id) hit = c; walk(c); } }; walk(body); return hit; },
-  addEventListener(){}, createRange: () => ({ selectNodeContents(){} }) };
+  listeners: {}, addEventListener(type, fn){ (this.listeners[type] = this.listeners[type] || []).push(fn); },
+  createRange: () => ({ selectNodeContents(){} }) };
 globalThis.getSelection = () => ({ removeAllRanges(){}, addRange(){} });
+// The window's own events (popstate, hashchange) and the session history: `hist` is every address the tab has had,
+// `at` the one shown. pushState drops what was ahead of it, as a browser does.
+const winListeners = {};
+globalThis.window = globalThis;
+globalThis.addEventListener = (type, fn) => { (winListeners[type] = winListeners[type] || []).push(fn); };
+const hist = [];
+let at = 0;
+globalThis.history = {
+  get length(){ return hist.length; },
+  pushState(st, title, url){ hist.splice(at + 1); hist.push(String(url)); at = hist.length - 1; location.hash = String(url); },
+  replaceState(st, title, url){ hist[at] = String(url); location.hash = String(url); } };
+const fireWin = async type => { const done = []; for (const f of winListeners[type] || []) done.push(f({ type })); await Promise.all(done); await settle(); };
+// Back moves one step down the history, as the browser's button does: the address changes, then popstate and
+// hashchange. navigate() is a hash typed in the address bar or a link followed.
+async function back(){ if (at === 0) throw new Error("nothing to go back to"); at -= 1; location.hash = hist[at]; await fireWin("popstate"); await fireWin("hashchange"); }
+async function navigate(h){ hist.splice(at + 1); hist.push(h); at = hist.length - 1; location.hash = h; await fireWin("hashchange"); }
 const store = new Map();
 globalThis.localStorage = { getItem: k => store.has(k) ? store.get(k) : null, setItem: (k, v) => { store.set(k, String(v)); }, removeItem: k => { store.delete(k); } };
 
@@ -134,7 +153,10 @@ function build(markup){
 }
 
 // The scripted server.
-const server = { snap: null, route: null };
+// server.lock is what GET /lock/view answers when a test has not routed it: a quiet machine, read by the owner.
+const server = { snap: null, route: null, lock: { ok: true, lock_revision: 1, writer: "owner", writes: { lock: true, strong: true, why: "" },
+  view: { now: "2026-10-05T12:00:00+00:00", zone: "UTC", holds: [], agent_holds: [], runs: [], colour: {}, strip: [], warnings: [], queue_items: [],
+    cores: { head: "", cpu: [], gpu: [] }, memory: null, details: [], queue: [], bookings: [] } } };
 // `cut` is an answer whose status came and whose body did not: reading it fails, as on a dropped connection.
 const answer = (status, bodyOf, headers, cut) => ({ ok: status >= 200 && status < 300, status,
   headers: { get: k => (headers && k in headers ? String(headers[k]) : null) },
@@ -147,17 +169,25 @@ globalThis.fetch = (url, init) => {
   if (own) return Promise.resolve(answer(own.status, own.body, own.headers, own.cut));
   // A long-poll (the hub's, or the machine lock's) hangs until the test answers it, or until the page gives up on it
   // through its signal.
+  // On the action hub page (a snapshot is given) the machine lock's own long-poll is kept apart (lockWaits): the
+  // page's one lock watcher starts with the page, and the hub's wake() must still find the hub's. The lock page
+  // (no snapshot) has the one long-poll, in waits.
   if (/^\/(lock\/)?wait/.test(path)) return new Promise((done, fail) => {
-    waits.push(done);
-    if (init.signal) init.signal.addEventListener("abort", () => { const i = waits.indexOf(done); if (i >= 0) waits.splice(i, 1); fail(new Error("aborted")); });
+    const q = OPTS.lockSplit && path.startsWith("/lock/") ? lockWaits : waits;
+    q.push(done);
+    if (init.signal) init.signal.addEventListener("abort", () => { const i = q.indexOf(done); if (i >= 0) q.splice(i, 1); fail(new Error("aborted")); });
   });
   if (path === "/snapshot") return Promise.resolve(answer(200, server.snap));
+  if (OPTS.lockSplit && path === "/lock/view") return Promise.resolve(answer(200, server.lock));
   return Promise.resolve(answer(200, { ok: true, id: "EX-1" }));
 };
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(r => realImmediate(r)); };
 // Answer the waiting long-poll: wake() says "something changed", answerWait() answers it as the test says.
 const answerWait = async (status, bodyOf, headers) => { const w = waits.shift(); if (!w) throw new Error("no long-poll is waiting"); w(answer(status, bodyOf, headers)); await settle(); };
 const wake = () => answerWait(200, { ok: true, revision: server.snap.revision });
+// The same for the machine lock's long-poll; and the tab hidden or shown again (document.hidden, then its listeners).
+const answerLock = async (status, bodyOf, headers) => { const w = lockWaits.shift(); if (!w) throw new Error("no lock wait is waiting"); w(answer(status, bodyOf, headers)); await settle(); };
+const visible = async on => { document.hidden = !on; const done = []; for (const f of document.listeners.visibilitychange || []) done.push(f({ type: "visibilitychange" })); await Promise.all(done); await settle(); };
 const fireTimers = async () => { for (const t of timers.splice(0)) t.fn(); await settle(); };
 // The waits the page asked for that are not the 30 s / 90 s limit on a call.
 const sleeps = () => timers.filter(t => t.ms !== 30000 && t.ms !== 90000).map(t => t.ms);
@@ -172,6 +202,18 @@ async function fire(node, type){
   await Promise.all(done); await settle();
 }
 const click = n => fire(n, "click");
+// A key pressed with the focus on `node` (the page's body when none is given): the event goes up from the node, then
+// to the document's listeners. It comes back so a test can see whether the page took it.
+async function key(k, node, mods){
+  const target = node || document.activeElement || body;
+  const ev = { type: "keydown", key: k, target, defaultPrevented: false, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
+    ...(mods || {}), preventDefault(){ this.defaultPrevented = true; } };
+  const done = [];
+  for (let p = target; p; p = p.parentNode) for (const f of (p.listeners && p.listeners.keydown) || []) done.push(f(ev));
+  for (const f of document.listeners.keydown || []) done.push(f(ev));
+  await Promise.all(done); await settle();
+  return ev;
+}
 async function type(node, value){ node.value = value; await fire(node, "input"); }
 const button = (within, label) => (within ? within.querySelectorAll("button") : []).find(b => text(b).trim().startsWith(label)) || null;
 const all = () => { const out = []; const walk = n => { for (const c of n.children) { out.push(c); walk(c); } }; walk(body); return out; };
@@ -180,6 +222,7 @@ const all = () => { const out = []; const walk = n => { for (const c of n.childr
 HARNESS = r"""
 (async () => {
   globalThis.location = { hash: OPTS.hash || "" };
+  hist.push(location.hash);
   server.snap = OPTS.snap;
   build(MARKUP);
   created.length = 0;                     // from here on, every element is one the script made
@@ -207,7 +250,7 @@ def run(node, page_text, body, snap, hash=""):
     """
     markup, script = parts(page_text)
     src = "%s\nconst MARKUP = %s, SCRIPT = %s, OPTS = %s;\n%s" % (
-        DOM, json.dumps(markup), json.dumps(script), json.dumps({"snap": snap, "hash": hash}),
+        DOM, json.dumps(markup), json.dumps(script), json.dumps({"snap": snap, "hash": hash, "lockSplit": snap is not None}),
         HARNESS.replace("BODY", body))
     out = spawn.run([node, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr[-4000:]

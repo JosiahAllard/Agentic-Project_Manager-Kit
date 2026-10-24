@@ -16,6 +16,9 @@ from kitlib.hubsite.store import Store
 CLOCK = lambda: '2026-01-02T03:04:05+00:00'      # noqa: E731
 TIMEOUT = 20                    # a client socket never waits longer; no test sleeps
 OPTIONS = [{'label': 'a', 'description': 'b'}]
+# the one finding the stand-in views show (GET findings), so a finding mark has one to name
+FINDING = {'repo': 'r', 'check': 'stale-pull', 'target': 'X-1', 'text': 't', 'fix': 'f',
+           'age': None, 'fingerprint': '0123456789abcdef', 'new': False, 'started': None}
 
 
 class Views(object):
@@ -54,6 +57,12 @@ class Views(object):
 
     def record_delete(self, repo, id, why, ruling):
         return {}
+
+    def record_unblock(self, repo, id, on, reason, ruling):
+        return {}
+
+    def findings(self):
+        return [dict(FINDING)]
 
 
 class Reply(object):
@@ -162,7 +171,8 @@ class ListenerCase(unittest.TestCase):
         auth.ensure_tokens(self.tokens)
         self.owner = auth.read_token(self.tokens, auth.OWNER)
         self.agent = auth.read_token(self.tokens, auth.AGENT)
-        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+        self.api = api.Api(self.store, views=Views(), clock=CLOCK,
+                           schedule_repos=lambda: [], tick_seen=lambda: None, tick_state=lambda: {})
         self.lines = []                 # (level, text) the listeners logged
 
     def log(self, level, text):

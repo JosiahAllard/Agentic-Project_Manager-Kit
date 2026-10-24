@@ -2,8 +2,8 @@
 per-repo files (docs/ledger.md "Standing digest").
 
 The digest lists the rules still in force, one `- <id>: <rule>` line each under `##` (and
-deeper) headings for repository and topic; the `#` title is not a heading here. Written by hand
-(the guard's ledger rule does not cover it); the ledger tool only reads it:
+deeper) headings for repository and topic; the `#` title is not a heading here. The owner edits
+it by hand (the guard's ledger rule refuses an agent's write to it); the ledger tool only reads it:
 
 - `problems` (for `check`): every ruling id the digest cites must be a live ledger entry, present
   and not a tombstone. No digest is no finding.

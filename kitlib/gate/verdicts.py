@@ -36,9 +36,10 @@ An entry (every key always present):
   reviewer        the reviewer's agent type
   reviewer_model  the model the reviewer ran on
   reviewer_id     the reviewer's agent or session id
-  author          the change's author: commit author and agent type (`Kit Test / worker`); on a
-                  strict path the agent type picks the reviewer models that count
-                  (kitlib.gate.land.REVIEWER_MODELS_BY_AUTHOR)
+  author          the change's author: commit author and agent type (`Kit Test / worker`); it
+                  picks no reviewer model: a strict branch needs a strong-tier reviewer
+                  whoever built it, and off the strict paths there is no tier rule
+                  (kitlib.gate.land, Lander.review_refusal)
   range           the range reviewed, `<base>..<tip>`; its right side is the tip or a prefix of
                   it (7 or more hex digits), so the review covered the commit queued
   session         the coordinator session that queued it
@@ -56,7 +57,8 @@ and, only in an entry carry() moved (a re-add drops it):
                   landing checks it again (docs/gate.md "Carrying a verdict forward").
 
 Errors (all VerdictError): BadEntry for a malformed entry or branch name given, nothing read or
-written; TipMismatch when the tip is not the branch's head, or there is no such branch;
+written; SelfReview (a BadEntry) when add() is given a High-risk verdict the coordinator queueing
+it reviewed itself (self_review_why), nothing read or written; TipMismatch when the tip is not the branch's head, or there is no such branch;
 CarryRefused when carry() finds the head does not carry the verdict, nothing written;
 OtherBranch when the file for the branch named holds another branch's entry (names that differ
 only in case share one file on Windows); VerdictError itself for a queue file that cannot be read
@@ -127,6 +129,11 @@ class BadEntry(VerdictError):
     """The entry (or branch name) given is malformed: nothing was read or written."""
 
 
+class SelfReview(BadEntry):
+    """A High-risk verdict whose reviewer is the coordinator queueing it (self_review_why): its
+    text ends with the Instead: line (SELF_REVIEW_INSTEAD). Nothing was read or written."""
+
+
 class TipMismatch(VerdictError):
     """The tip to queue is not the branch's head (or the branch does not exist)."""
 
@@ -191,6 +198,33 @@ def reviewer_types(text):
     ';', stripped, a `plugin:` prefix dropped, empty ones left out (`pm-kit:` names none). Pure."""
     return set(p.strip().rpartition(':')[2].strip().casefold()
                for p in re.split(r'[/,;]', text)) - {''}
+
+
+SELF_REVIEW_INSTEAD = ('Instead: dispatch a fresh analyst to review the branch (skill branch-review, '
+                       'step 3), then queue its verdict with --reviewer pm-kit:analyst '
+                       '--reviewer-id <its agent id>')
+COORDINATOR_RE = re.compile(r'(?<![a-z0-9])coordinator(?![a-z0-9])')
+
+
+def self_review_why(entry):
+    """Why add() refuses `entry` as a self-review, or None. Refused: a High-risk verdict whose
+    reviewer is the coordinator queueing it, that is an id `reviewer_id` lists (split as
+    land.is_author splits it) is `session`, case and outer space aside, or an agent type the
+    reviewer names (reviewer_types) holds `coordinator` as a word (`pm-kit:coordinator`,
+    `kit-coordinator`). A Low or Medium one is not: a coordinator may read a small branch itself
+    (skill branch-review, step 3). `entry` is well formed (check). Pure."""
+    if entry['risk'] != 'High':
+        return None
+    session = entry['session'].strip().casefold()
+    ids = [i for i in re.split(r'[/,;\s]+', entry['reviewer_id'].casefold()) if i]
+    if session in ids:
+        who = 'its reviewer id %s is the session queueing it' % entry['reviewer_id'].strip()
+    elif any(COORDINATOR_RE.search(t) for t in reviewer_types(entry['reviewer'])):
+        who = 'its reviewer %s is the coordinator role' % entry['reviewer'].strip()
+    else:
+        return None
+    return ('a High-risk verdict needs a reviewer other than the coordinator queueing it, and %s '
+            '(skill branch-review, step 3); nothing was queued\n%s' % (who, SELF_REVIEW_INSTEAD))
 
 
 def check(entry, stored=True):
@@ -389,10 +423,14 @@ def head_of(common_dir, branch):
 def add(common_dir, entry, now=None):
     """Queue `entry` (the GIVEN_KEYS; nothing else) for its branch, replacing an entry already
     queued for it: `(path, stored entry)`. The tip must be `refs/heads/<branch>` in the repository
-    whose common dir is `common_dir`, else TipMismatch. `now`: a datetime for queued_utc."""
+    whose common dir is `common_dir`, else TipMismatch. A High-risk self-review is SelfReview
+    (self_review_why). `now`: a datetime for queued_utc."""
     why = check(entry, stored=False)
     if why:
         raise BadEntry(why)
+    why = self_review_why(entry)
+    if why:
+        raise SelfReview(why)
     branch, tip = entry['branch'], entry['tip']
     path = entry_path(common_dir, branch)
     head = head_of(common_dir, branch)

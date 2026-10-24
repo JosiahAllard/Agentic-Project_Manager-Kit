@@ -105,8 +105,12 @@ class ServedTest(httpfix.ListenerCase):
     def test_the_action_hub_page_links_to_it_and_it_links_back(self):
         with open(INDEX, encoding="utf-8") as f:
             index = f.read()
-        head = index.split("</header>")[0]
-        self.assertEqual(re.findall(r'<a href="([^"]*)"', head), ["/lock.html"])
+        # The Schedule is a section of the action hub page (a button, not a link); the page's one link to this one is the
+        # Schedule view's "Machine settings" line, drawn by the script.
+        self.assertEqual(re.findall(r'<a [^>]*href="[^"]*lock[^"]*"', index.split("<script>")[0]), [])
+        self.assertEqual(index.count("/lock.html"), 1)
+        self.assertRegex(index, r'id:\s*"sch-settings"')
+        self.assertEqual(re.findall(r'<a href="([^"]*)"', index.split("</header>")[0]), [])
         self.assertEqual(re.findall(r'<a href="([^"]*)"', page().split("</header>")[0]), ["/"])
 
 
@@ -641,6 +645,110 @@ class WriteTest(unittest.TestCase):
         self.assertEqual(out["writer"], "")
 
 
+def hist(id, repo, kind, result, end, **kw):
+    """A finished run as the view's strip carries it (kitlib.lockui.model: type hist, with repo, kind, result)."""
+    return dict({"type": "hist", "id": id, "open": False, "late": False, "text": "ran %s/%s (%s)" % (repo, id, kind),
+                 "repo": repo, "kind": kind, "result": result, "start": end, "end": end, "expect_end": None, "lane": 0}, **kw)
+
+
+HISTORY = [hist("r-1", "alpha", "build", "ok", "2026-10-19T10:00:00-04:00"),
+           hist("r-2", "alpha", "engine-test", "failed", "2026-10-19T11:00:00-04:00"),
+           hist("r-3", "beta", "build", "cancelled", "2026-10-19T12:00:00-04:00"),
+           hist("r-4", "beta", "engine-test", "ok", "2026-10-19T13:00:00-04:00")]
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ScheduleTest(unittest.TestCase):
+    """The schedule page's sections and its History, collapsed and filtered in the client."""
+
+    def test_the_four_sections_are_drawn_and_history_is_not_in_the_running_strip(self):
+        run = {"id": "r-9", "type": "run", "open": True, "late": False, "text": "alpha/s9 build", "start": NOW, "end": None}
+        out = dom("""
+            await start();
+            const h = id => text($("#" + id));
+            return { heads: ["h-running", "h-next", "h-holds", "h-history"].map(h), strip: $$("#strip li").map(text),
+                     queue: h("queue"), rows: $$("#hist tr[data-hist]").length };
+        """, answer(view(strip=[run] + HISTORY)))
+        self.assertEqual(out["heads"], ["Running now", "Next up", "Holds", "History"])
+        self.assertEqual(out["strip"], ["alpha/s9 build"])
+        self.assertEqual(out["queue"], "Nothing waits.")
+        self.assertEqual(out["rows"], 4)
+
+    def test_history_is_collapsed_by_default(self):
+        out = dom("await start(); return $('#history').getAttribute('open');")
+        self.assertIsNone(out)
+        self.assertEqual(re.findall(r"<details[^>]*>", page()), ['<details class="hist" id="history">'])
+
+    def test_the_filters_narrow_the_rows_by_repo_kind_and_result(self):
+        out = dom("""
+            await start();
+            const rows = () => $$("#hist tr[data-hist]").map(r => r.dataset.hist);
+            const chip = (sel, val) => $$(sel + " button").find(b => b.dataset.val === val);
+            const r = { all: rows(), repos: $$("#frepo button").map(text), kinds: $$("#fkind button").map(text),
+                        results: $$("#fresult button").map(text), count: text($("#histcount")) };
+            await click(chip("#frepo", "beta"));
+            r.repo = rows(); r.pressed = chip("#frepo", "beta").getAttribute("aria-pressed");
+            await click(chip("#fkind", "build"));
+            r.repoKind = rows();
+            await click(chip("#fresult", "ok"));
+            r.none = [rows(), text($("#hist")), text($("#histcount"))];
+            await click(chip("#frepo", ""));
+            r.kindResult = rows();
+            await click(chip("#fkind", ""));
+            r.result = rows();
+            await click(chip("#fresult", ""));
+            r.reset = rows();
+            return r;
+        """, answer(view(strip=HISTORY)))
+        self.assertEqual(out["all"], ["r-4", "r-3", "r-2", "r-1"])           # newest first
+        self.assertEqual(out["repos"], ["All repos", "alpha", "beta"])
+        self.assertEqual(out["kinds"], ["All kinds", "build", "engine-test"])
+        self.assertEqual(out["results"], ["All results", "cancelled", "failed", "ok"])
+        self.assertEqual(out["count"], "Showing 4 of 4 finished runs.")
+        self.assertEqual((out["repo"], out["pressed"]), (["r-4", "r-3"], "true"))
+        self.assertEqual(out["repoKind"], ["r-3"])
+        self.assertEqual(out["none"], [[], "No finished run matches.", "Showing 0 of 4 finished runs."])
+        self.assertEqual(out["kindResult"], ["r-1"])
+        self.assertEqual(out["result"], ["r-4", "r-1"])
+        self.assertEqual(out["reset"], ["r-4", "r-3", "r-2", "r-1"])
+
+    def test_a_filter_value_that_vanishes_is_dropped(self):
+        nxt = answer(view(strip=[HISTORY[0], HISTORY[2], HISTORY[3]]), rev=8, changed=True)     # no failed run left
+        out = dom("""
+            await start();
+            await click($$("#fresult button").find(b => b.dataset.val === "failed"));
+            const r = { before: $$("#hist tr[data-hist]").map(t => t.dataset.hist) };
+            await answerWait(200, NEXT);
+            r.rows = $$("#hist tr[data-hist]").map(t => t.dataset.hist);
+            r.pressed = $$("#fresult button").map(b => [b.dataset.val, b.getAttribute("aria-pressed")]);
+            return r;
+        """.replace("NEXT", json.dumps(nxt)), answer(view(strip=HISTORY)))
+        self.assertEqual(out["before"], ["r-2"])
+        self.assertEqual(out["rows"], ["r-4", "r-3", "r-1"])
+        self.assertEqual(out["pressed"], [["", "true"], ["cancelled", "false"], ["ok", "false"]])
+
+    def test_history_text_from_the_server_stays_text(self):
+        evil = '<img src=x onerror=1>'
+        out = dom("""
+            await start();
+            return { shown: text($("#hist")), repo: text($("#frepo")), tags: [...new Set(created)], sinks };
+        """, answer(view(strip=[hist("r-5", evil, "build", "ok", "2026-10-19T14:00:00-04:00")])))
+        self.assertIn(evil, out["shown"])
+        self.assertIn(evil, out["repo"])
+        self.assertNotIn("img", out["tags"])
+        self.assertEqual(out["sinks"], [])
+
+    def test_a_filter_survives_a_redraw_of_the_lock(self):
+        nxt = answer(view(strip=HISTORY[:3]), rev=8, changed=True)
+        out = dom("""
+            await start();
+            await click($$("#fresult button").find(b => b.dataset.val === "ok"));
+            await answerWait(200, NEXT);
+            return $$("#hist tr[data-hist]").map(r => r.dataset.hist);
+        """.replace("NEXT", json.dumps(nxt)), answer(view(strip=HISTORY)))
+        self.assertEqual(out, ["r-1"])
+
+
 class PageTextTest(unittest.TestCase):
     def setUp(self):
         self.p = page()
@@ -663,7 +771,8 @@ class PageTextTest(unittest.TestCase):
         self.assertEqual(re.findall(r'setAttribute\(\s*"%s"' % keys, self.script), [])
         self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys, self.script), [])
         # The markup's one link is the page's own text: back to the Action Hub.
-        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<a href="/">'])
+        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup),
+                         ['<link rel="stylesheet" href="hub.css">', '<a href="/">'])
         for gone in ("location", "window.open"):
             self.assertNotIn(gone, self.script, gone)
         names = re.findall(r"setAttribute\(([^,]*),", self.script)
@@ -672,7 +781,9 @@ class PageTextTest(unittest.TestCase):
     def test_nothing_outside_the_page_is_loaded(self):
         self.assertIsNone(re.search(r"https?:", self.p))
         self.assertIsNone(re.search(r"(?<![:\w])//[\w-]+\.[a-z]{2,}", self.markup))
-        for tag in ("<link", "<img", "<iframe", "<object", "<embed", "<base", "@import", "url("):
+        # The one stylesheet is the shared hub.css, served beside the page; any other link is refused.
+        self.assertEqual(re.findall(r"<link\b[^>]*>", self.p), ['<link rel="stylesheet" href="hub.css">'])
+        for tag in ("<img", "<iframe", "<object", "<embed", "<base", "@import", "url("):
             self.assertNotIn(tag, self.p, tag)
 
     def test_markup_fits_a_strict_content_policy(self):
@@ -705,6 +816,30 @@ class PageTextTest(unittest.TestCase):
         self.assertIn('base: "/api/v1",', self.script)
         self.assertIn('headers: { Accept: "application/json", "X-Hub-Via": "web" }', self.script)
         self.assertIn('credentials: "same-origin"', self.script)
+
+    def test_every_write_is_still_wired_to_its_route_and_body(self):
+        wired = ['write("/lock/runs/" + seg(id) + "/top", {}',
+                 'write("/lock/holds/" + seg(id) + "/end", {}',
+                 'write("/lock/runs/" + seg(id) + "/end", {confirm: id}',
+                 'write("/lock/holds", {kind: "reserve", scope, start: iso(p.s), end: iso(p.e), note: val("#picknote")}',
+                 'write("/lock/holds", {kind: "hold", scope: state.scope, start: val("#hstart"), end: val("#hend"), note: val("#hnote")',
+                 'write("/lock/holds/" + seg(id) + "/edit", {start: val("#estart"), end: val("#eend"), note: val("#enote")}',
+                 'write("/lock/game_mode", {enabled: on}',
+                 'write("/lock/games", {text: val("#gamestext")}',
+                 'write("/lock/division", {fields}',
+                 'write("/lock/division", {defaults: true}']
+        for w in wired:
+            self.assertEqual(self.script.count(w), 1, w)
+        # The second click before a release or an end, and the buttons that start each write.
+        for ident in ("reservewhole", "reservehalf", "holdgo", "editgo", "gametoggle", "gamesgo", "divgo", "divdefaults"):
+            self.assertIn('id="%s"' % ident, self.markup)
+
+    def test_the_schedule_has_its_four_sections_and_history_starts_closed(self):
+        for h in ("h-running", "h-next", "h-holds", "h-history"):
+            self.assertEqual(self.markup.count('<h2 id="%s">' % h), 1, h)
+        order = [self.markup.index('id="%s"' % h) for h in ("h-running", "h-next", "h-holds", "h-history")]
+        self.assertEqual(order, sorted(order))
+        self.assertNotRegex(self.markup, r"<details[^>]*\sopen")
 
 
 if __name__ == "__main__":

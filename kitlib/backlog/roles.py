@@ -65,7 +65,10 @@ OWN_GRANTS = tuple((role, OWN_PULL) for role in BUILDERS)
 
 # Sorting a `set`: TEXT_FIELDS set-text, other fields but priority set-other. Priority: HOLD
 # set-hold (a held record makes pull-held and close-held), PRICE_TOP set-price-owner, PRICE_LOW
-# set-price on an unpriced or agent-priced record; on a PRICED_BY_OWNER record, set-price-owner.
+# set-price on an unpriced or agent-priced record; on a PRICED_BY_OWNER record, or one blocked on
+# the owner, set-price-owner. `priority_by` set to a PRICED_BY_OWNER value, or changed on a
+# PRICED_BY_OWNER record, set-price-owner. `blocked_on` changed on a record blocked on the owner,
+# unblock-owner.
 TEXT_FIELDS = ('summary', 'scope', 'effort', 'body')
 HOLD = '-1'
 PRICE_LOW = ('2', '3', '4', '5')
@@ -82,20 +85,30 @@ ACTIONS = collections.OrderedDict([
     ('set-price-owner', Row(('set',), MEDIUM, TOP, (), ('set-price',))),
     ('set-hold', Row(('set',), HIGH, TOP, (), ('set-price', 'set-price-owner'))),
     ('set-other', Row(('set',), MEDIUM, LEADS, (), ())),
+    # A pulled record's scope widened into another branch's live pull (or a path its branch
+    # changed): computed by the plan (kitlib/backlog/plan.py plan_set), not read from a flag.
+    ('set-widen-collision', Row(('set',), MEDIUM, LEADS, (), ())),
     ('pull', Row(('pull',), LOW, LEADS + BUILDERS, (), ())),
+    # A pull whose scope collides with a live pull on another branch, or folds into its work:
+    # computed by the plan (plan_pull), not read from a flag.
     ('pull-collision', Row(('pull',), MEDIUM, LEADS, (), ('pull',))),
     ('pull-held', Row(('pull',), REFUSED, (), (), ('pull', 'pull-collision'))),
     ('release', Row(('release',), LOW, LEADS, OWN_GRANTS, ())),
     ('block', Row(('block', 'unblock'), LOW, LEADS, OWN_GRANTS, ())),
-    ('block-owner', Row(('block', 'unblock'), MEDIUM, LEADS, (), ('block',))),
+    ('block-owner', Row(('block',), MEDIUM, LEADS, (), ('block',))),
+    # Clearing the owner from a record's blockers (`unblock`, or a `set` of `blocked_on`) is TOP's.
+    ('unblock-owner', Row(('unblock', 'set'), MEDIUM, TOP, (), ('block',))),
     ('set-status', Row(('set-status', 'unpark'), MEDIUM, LEADS, (), ())),
     ('close', Row(('close',), MEDIUM, LEADS, tuple((r, VIA_LAND) for r in LANDERS), ())),
     # A held record: closing, retiring or deleting it is TOP's (the owner added delete).
     ('close-held', Row(('close', 'retire', 'delete'), HIGH, TOP, (), ('close', 'retire', 'delete'))),
+    # A record the owner or the PM priced (PRICED_BY_OWNER), not held: retiring or deleting it is
+    # TOP's.
+    ('retire-priced', Row(('retire', 'delete'), MEDIUM, TOP, (), ('retire', 'delete'))),
     ('retire', Row(('retire',), MEDIUM, LEADS, (), ())),
     ('delete', Row(('delete',), MEDIUM, LEADS, (), ())),
     ('clear-review', Row(('clear-review',), MEDIUM, LEADS, (), ())),
-    ('retarget', Row(('retarget', 'migrate'), HIGH, TOP, (), ())),
+    ('retarget', Row(('retarget', 'migrate', 'uncite'), HIGH, TOP, (), ())),
     # `catch-up --apply PATH...` commits the PM data worktree's uncommitted record paths; the plain
     # `catch-up` lists them (a read). Coordinators, the PM and the owner use it.
     ('catch-up', Row(('catch-up',), MEDIUM, LEADS, (), ())),

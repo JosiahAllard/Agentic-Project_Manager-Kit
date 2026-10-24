@@ -1,6 +1,5 @@
 """kitlib.config.user.work_temp / make_temp: the kit's temp files (test run folders, gate logs) on
 the checkout's own drive, from a rule that reads neither TEMP nor TMP, so every process agrees."""
-import json
 import os
 import shutil
 import string
@@ -10,6 +9,7 @@ from unittest import mock
 
 from kitlib.config import user
 from kitlib.config.types import ConfigError
+from tests.home import machine_config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRIVE = os.path.splitdrive(HERE)[0]
@@ -37,9 +37,7 @@ class WorkTemp(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, True)
 
     def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(body, f)
+        machine_config(self.home, body, case=self)   # the PM repository's two files
 
     def temp(self, near, env):
         return user.work_temp(near, home=self.home, environ=env, platform='win32')

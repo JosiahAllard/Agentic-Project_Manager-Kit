@@ -1,6 +1,6 @@
 # Installing the kit
 
-Two steps: set the machine up once, then work in any repository, with nothing of the kit written into it (plan decision 27, docs/multi-host-plan.md section 7). Held for the joint review: no repository runs the kit yet, and machine setup has not run on a real machine. The zero repo setup cycle below is proven by a test (`tests/zerosetup/test_cycle.py`, "What first use writes").
+Three steps: point the machine at its PM repository, set the machine up once, then work in any repository, with nothing of the kit written into it (plan decision 27, docs/multi-host-plan.md section 7). Held for the joint review: no repository runs the kit yet, and machine setup has not run on a real machine. The zero repo setup cycle below is proven by a test (`tests/zerosetup/test_cycle.py`, "What first use writes").
 
 A repository never holds a copy of the kit, and by default nothing else either: no stubs, no
 `.kit.json`, no ignore lines. Skills, roles and the default profile run every kit tool from the
@@ -37,8 +37,42 @@ opt-in there (`--stubs`) or by `kit_stubs.py write` ("Stubs: tools/kit_stubs.py"
 **Windows: apply the token-leak fix** (optional, recommended). It stops process launches slowing
 down the longer the machine stays up: docs/windows-token-leak.md.
 
-1. **Machine setup, once per machine** (docs/machine-setup.md), from the kit's main checkout,
-   in a terminal:
+1. **The PM repository and its pointer, first, once per machine.** The machine config lives in
+   the PM repository, never in the home folder: `<PM repo>/.pm-kit/config.json` (the policy keys)
+   and `<PM repo>/.pm-kit/local.json` beside it (the machine-local and personal keys, the owner's
+   email among them; `kitlib/config/user.py` `LOCAL_FILE_NAME`). Keep `local.json` and the hub's
+   token folder `hub/` out of commits: the pre-push hook refuses a push that holds either
+   (`kitlib/guard/prepush.py`), but nothing writes their ignore lines in a new PM repository, so
+   add `.pm-kit/.gitignore` with the lines the config move writes (`kitlib/config/move.py`
+   `GITIGNORE`: `local.json`, `hub/`, `managed-settings.json`, `*.bak*`, `*.move-tmp`). The kit
+   finds that folder through one machine-wide registry value, the PM-repo pointer
+   (docs/kit-json.md "The PM repo pointer"), so the pointer comes before anything that reads or
+   writes the machine config. Nothing is made in the home folder and there is no copy to keep in
+   step by hand.
+   - **The PM repository** can be anywhere, on any drive (a Dev Drive, step 0, suits it): the
+     main checkout of a clone of your PM repository, or a new one (`git init -b main <folder>`).
+     The pointer names the top of its work tree, never a linked worktree; with PM data on a
+     private branch (docs/pm-data-branch.md) it names that branch's work tree instead.
+   - **Set the pointer**, from the kit's main checkout. Read the dry run, then run it again with
+     `-Apply` from an elevated terminal (Run as administrator):
+
+     ```
+     powershell -NoProfile -File installer\machine-setup.ps1 -PmRepo <PM repo>
+     ```
+
+     `-PmRepo` passes `--pm-repo` to `tools/machine_setup.py` and is a mode of its own: it takes
+     only `-Python` and `-Apply` (exit 2 otherwise). It checks the folder as the reader does, sets
+     `HKLM\SOFTWARE\pm-kit` value `pm_repo` and nothing else; `-Apply` is refused when the
+     terminal is not elevated (docs/machine-setup.md "PM repo pointer").
+   - **Until it is set**, every tool that needs the machine config refuses rather than fall back
+     to the home folder, and this is the intended state of a new machine, not a fault. `hub.py
+     setup` and `hub.py serve` (the Action Hub, whose token folder is `<PM repo>/.pm-kit/hub`,
+     `kitlib/hubsite/auth.py` `folder`) exit 2 (usage) with one line, `machine config: no PM repo
+     pointer is set, so the hub has no token folder: set it first ...`, and write nothing; machine
+     setup (step 2) refuses to store the owner's email and does not ask for it.
+
+2. **Machine setup, once per machine** (docs/machine-setup.md), after step 1, from the kit's main
+   checkout, in a terminal:
 
    ```
    powershell -NoProfile -File installer\machine-setup.ps1 [-OwnerEmail <your commit email>] [-PmSettings <PM repo>\.claude\settings.local.json]
@@ -46,13 +80,13 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
    Read the dry run, then run it again with `-Apply`. It adds the guard's entry to each Claude
    account's `settings.json`, installs the kit plugin per account from the export of the kit's
-   pushed main, stores the owner's email in the machine config (`-OwnerEmail`; without it the
-   `-Apply` run asks in the console, offering your `git config user.email`, which is never
-   stored unconfirmed) and makes the agents' temp folder. It writes nothing into any
-   repository but the `-PmSettings` file, when you name one (a local settings file kept out of
-   commits). A machine that ran an older kit clone uses `-OldKit <that clone>` instead
-   (docs/machine-setup.md). Run it yourself: the guard refuses `-Apply` to agent sessions, since
-   it stores the owner's email (docs/guard.md "Owner machine setup").
+   pushed main, stores the owner's email in the PM repository's `.pm-kit/local.json` (step 1;
+   `-OwnerEmail`; without it the `-Apply` run asks in the console, offering your `git config
+   user.email`, which is never stored unconfirmed) and makes the agents' temp folder. It writes
+   nothing into any repository but that machine config and the `-PmSettings` file, when you name
+   one (a local settings file kept out of commits). Run it yourself: the guard refuses `-Apply`
+   to agent sessions, since it stores the owner's email (docs/guard.md "Owner machine setup"). A
+   machine set up with the old home-folder layout follows "Existing installs" below as well.
 
    The settings every account shares (the guard's hook, the status line, the plugin's marketplace) can
    instead live once in Claude Code's machine-wide managed settings file, under
@@ -63,12 +97,13 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    ```
 
    It writes that file from the kit's template `hosts/claude/managed-settings.json`, merged with
-   your own lines from `~/.pm-kit/managed-settings.json` when that file is there
+   your own lines from `managed-settings.json` in the machine config folder (the PM repository's
+   `.pm-kit`) when that file is there
    (docs/machine-setup.md "Managed settings"). A file already there is not merged: it is replaced
    whole, so the run is refused when it is not JSON or has keys that neither the template nor your
    overlay holds (they are named; add them to the template). With it in place the default mode adds
    no guard entry to any account, and notes when the file is out of date.
-2. **A repository** needs nothing installed: any git checkout with an `origin` remote whose
+3. **A repository** needs nothing installed: any git checkout with an `origin` remote whose
    default branch is pushed (`origin/HEAD` names main) works as it is. `<kit>/tools/new_worktree.py`
    fetches `origin` (it refuses if the fetch fails), and `<kit>/tools/preflight.py` does only with
    `--fetch` (it never refuses for a missing remote). A new repository: `git init -b main`,
@@ -79,15 +114,26 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    stack and runs its usual test and lint steps, labelled `source: auto` (docs/gate.md
    "Auto-detected gate"). The doc index and the repo profile are opt-in (docs/doc-tools.md,
    docs/agent-profile.md).
-3. **Overrides, when the defaults are not enough:** a `.kit.json` with only the keys that differ
+4. **Overrides, when the defaults are not enough:** a `.kit.json` with only the keys that differ
    (docs/kit-json.md), committed under the owner's identity; a gate section that lists the
    repository's checks as `gate.steps` (a start per language:
    `templates/stacks/<stack>/tools/gate.json`); where landers edit the main checkout,
    `roles.lander.edit_main_checkout: true`. `<kit>/tools/gate.py` books the machine lock itself:
    do not wrap it in `machine_lock.py run`: the gate would then run as a nested lock run, booking
    twice. The committed setup below writes a starting `.kit.json` and the rest in one step.
-4. **Later:** turn on `repo.push_block` only after the repository has landed once through
+5. **Later:** turn on `repo.push_block` only after the repository has landed once through
    `<kit>/tools/land.py` or `gate.py land` (docs/go-live.md "Universal gate").
+
+### Backlog records and the rulings ledger
+
+`<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
+tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
+`--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
+"The fold-in guard").
+
+The rulings ledger is once per machine: set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file) in
+the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
+`templates/common/LEDGER.md` (docs/ledger.md "A new ledger"). Every ledger write needs git to run, since it places the write lock (docs/ledger.md "Write lock").
 
 ### What first use writes
 
@@ -123,7 +169,7 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
 (`-Target` is `--repo`, `-OwnerEmail` `--owner-email`, and so on). Nothing in the kit needs it.
 
 1. **The repository** must be a git checkout's top level, with an `origin` remote and a first
-   commit (step 2 above); the setup warns, and prints the commands, when it finds no `origin`.
+   commit (step 3 above); the setup warns, and prints the commands, when it finds no `origin`.
 2. **Dry run**, from the kit checkout:
 
    ```
@@ -171,7 +217,7 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
      with N of 1 or more, so a run of none fails on every Python version. It runs without
      `-t .`, so test modules import as top-level names: a `tests/__init__.py` layout with
      relative imports breaks (use absolute imports, or change the command).
-     Without `--stack` there is no gate section and `gate.py` detects the stack (step 2 above):
+     Without `--stack` there is no gate section and `gate.py` detects the stack (step 3 above):
      the closing text prints the copy-and-point step that replaces it, or write `gate.steps`
      yourself (docs/kit-json.md).
 3. **Apply:** run it again with `--apply` (`-Apply`), then commit what it wrote. `.kit.json` and
@@ -307,6 +353,21 @@ whose plugin is not enabled from the export: it makes the export, then runs the 
 that folder through the same code (docs/machine-setup.md "Default mode"). The CLI also
 rewrites other keys of that `settings.json`, so the step backs the file up first.
 
+## Existing installs: a machine with the old home-folder layout
+
+A new machine skips this section: steps 1 and 2 leave no machine config and no link in the home
+folder. A machine an older machine setup ran on can hold leftovers of the old layout; each is cleared once, after step 1:
+
+- **An older kit clone:** run machine setup with `-OldKit <that clone>` instead of the default
+  mode (docs/machine-setup.md).
+- **A machine config in the home folder** (`~/.pm-kit`): with the pointer set (step 1), move it
+  into the PM repository with `tools/config_move.py`, a dry run first, then `--apply`
+  (docs/kit-json.md "Moving the machine config into the PM repo"). Until it is moved, the kit
+  reads neither copy: a leftover home config is refused with the move's command
+  (`kitlib/config/user.py` `UNMOVED`), the Action Hub's tools included (`kitlib/hubsite/auth.py`
+  `folder`).
+- **Links under `~/.claude`** (junctions an earlier setup made): remove them in the stages below.
+
 ### After the plugin install: remove the per-item junctions
 
 An account set up by `machine_setup.py` has per-item junctions under `~/.claude` that load the same
@@ -349,15 +410,6 @@ leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
 ```
 
 A second dry run then reports no leftover link.
-
-`<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
-tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
-`--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
-"The fold-in guard").
-
-The rulings ledger is once per machine: set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file) in
-the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
-`templates/common/LEDGER.md` (docs/ledger.md "A new ledger"). Every ledger write needs git to run, since it places the write lock (docs/ledger.md "Write lock").
 
 ## Stubs: tools/kit_stubs.py
 

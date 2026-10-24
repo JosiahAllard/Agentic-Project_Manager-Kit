@@ -28,15 +28,18 @@ DESIGN = {
     'set-price-owner': ('medium', TOP, {}),
     'set-hold': ('high', TOP, {}),
     'set-other': ('medium', CPO, {}),       # the set fields no design row names
+    'set-widen-collision': ('medium', CPO, {}),
     'pull': ('low', CPO + ('deep-worker',) + BUILDERS, {}),
     'pull-collision': ('medium', CPO, {}),
     'pull-held': ('refused', (), {}),
     'release': ('low', CPO, OWN),
     'block': ('low', CPO, OWN),
     'block-owner': ('medium', CPO, {}),
+    'unblock-owner': ('medium', TOP, {}),
     'set-status': ('medium', CPO, {}),
     'close': ('medium', CPO, {'lander': 'via-land'}),
     'close-held': ('high', TOP, {}),
+    'retire-priced': ('medium', TOP, {}),
     'retire': ('medium', CPO, {}),
     'delete': ('medium', CPO, {}),
     'clear-review': ('medium', CPO, {}),
@@ -47,6 +50,11 @@ DESIGN = {
 VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'add', 'set', 'block', 'unblock',
          'pull', 'release', 'close', 'retire', 'delete', 'clear-review', 'set-status', 'unpark',
          'retarget', 'migrate', 'catch-up'}
+# `uncite --apply` takes the retarget row; roles.py's row names it, so the owner and the PM may apply it.
+# The flag stays so a roles.py whose row lacks it still fails closed (no role may apply it).
+UNCITE_ROW = 'uncite' in R.ACTIONS['retarget'].verbs
+if UNCITE_ROW:
+    VERBS.add('uncite')
 
 
 class RolesTest(unittest.TestCase):
@@ -122,6 +130,11 @@ class RolesTest(unittest.TestCase):
                 row = R.ACTIONS[action]
                 self.assertEqual((row.risk, sorted(row.allowed)), (risk, sorted(allowed)))
                 self.assertEqual(sorted(row.when), sorted(when.items()))
+
+    @unittest.skipUnless(UNCITE_ROW, "roles.py's retarget row does not name uncite yet (owner approval)")
+    def test_uncite_is_the_retarget_rows_and_no_other(self):
+        self.assertEqual(R.ACTIONS['retarget'].verbs, ('retarget', 'migrate', 'uncite'))
+        self.assertEqual([n for n, row in R.ACTIONS.items() if 'uncite' in row.verbs], ['retarget'])
 
     def test_no_unknown_role_fact_risk_or_row_is_named(self):
         for action, row in R.ACTIONS.items():

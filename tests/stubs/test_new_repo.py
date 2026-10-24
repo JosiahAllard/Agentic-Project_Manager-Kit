@@ -320,7 +320,12 @@ class PmData(unittest.TestCase):
         self.assertEqual(self.kit.git('--git-dir', self.private, 'rev-parse', 'refs/heads/pmdata'),
                          root)
         self.assertEqual(self.kit.git('rev-parse', '--abbrev-ref', 'HEAD', cwd=self.data), 'pmdata')
-        self.assertTrue(os.path.isfile(user.config_file(self.home)))
+        # Ruling P: init writes no machine config; it ends with the owner's pointer step, which
+        # makes pm_data (kitlib.pmdata.init.pointer_line). Under the fence no pointer is set.
+        self.assertFalse(os.path.isfile(user.config_file(self.home)), out)
+        self.assertIn('pointer   owner step, in an elevated terminal: ', out)
+        self.assertIn(' --pm-repo "%s" --apply sets the PM repo pointer to the data worktree' % self.data,
+                      out)
         # The target got no data branch: the branch is the kit's.
         self.assertEqual(self.target.git('branch', '--list', 'pmdata'), '')
 

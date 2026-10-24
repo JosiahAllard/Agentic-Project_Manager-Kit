@@ -3,6 +3,10 @@ from unittest import mock
 import unittest
 
 
+# A current handoff fake: the one file exists in a PM repo, no stray notes (kitlib.pmstart handoff).
+HANDOFF_FAKE = {"globber": lambda p: [], "exists": lambda p: True, "pm_repo": lambda c: "X:/pm"}
+
+
 def keep_off_launcher_repos():
     """For a module's setUpModule: the checklist's stubs check reads {} for launcher.repos, not this
     machine's config (and keep_off_plugin_export). Undone with the module (unittest.addModuleCleanup)."""
@@ -56,3 +60,25 @@ def keep_off_hub_site():
     p = mock.patch.object(pmstart, "hub_site", lambda procs=(), **kw: [HUB_KEPT_OFF])
     p.start()
     unittest.addModuleCleanup(p.stop)
+
+
+def _no_config_lines(loc=None, run=None, rules=None):
+    return []
+
+
+REAL_CONFIG_LINES = None
+
+
+def stub_config_lines():
+    """For a test package's __init__: the session-start machine config check
+    (kitlib.pmstart.configcheck.lines) gives no line, reading no home folder, pointer or PM
+    repository, in every test that does not put the real one back (REAL_CONFIG_LINES, as
+    tests/pmstart/test_config_check.py does). Once per process; never undone."""
+    global REAL_CONFIG_LINES
+    from kitlib.pmstart import configcheck
+    if configcheck.lines is not _no_config_lines:
+        REAL_CONFIG_LINES = configcheck.lines
+        configcheck.lines = _no_config_lines
+
+
+stub_config_lines()

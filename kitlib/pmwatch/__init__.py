@@ -276,21 +276,68 @@ def watched_sessions(sessions):
                    and v.get("autostart") is not False})
 
 
-def idle_baseline(names, newest, now, minutes):
-    """{name: newest mtime} for sessions already quiet, so a relaunch-free first run stays silent.
+_STOP_MARK, _SUCC_MARK = " stopped '", "; successor '"
+
+
+def _stop_entry(line):
+    """(stamp, name, successor) of a stop.log line kitlib.launcher.stop wrote, else None."""
+    if line[19:19 + len(_STOP_MARK)] != _STOP_MARK or _SUCC_MARK not in line:
+        return None
+    name = line[19 + len(_STOP_MARK):].split("'", 1)[0]
+    return line[:19], name, line.rsplit(_SUCC_MARK, 1)[1].split("'", 1)[0]
+
+
+def stop_log_reader(sessions):
+    """stopped(name, mtime) -> the epoch time of the launcher stop that ended the session `name`
+    with no successor, or None. Reads stop.log beside the sessions file (kitlib.launcher.stop writes
+    one line per stop: "<stamp> stopped '<name>' ...; successor '<name or ->'"). Only the newest stop
+    of the name counts, and only when it is not older than `mtime`, the session's newest
+    activity: later activity means it was started again. A missing or unreadable log gives None."""
+    if not sessions:
+        return lambda name, mtime: None
+    log = os.path.join(os.path.dirname(os.path.abspath(sessions)), "stop.log")
+
+    def stopped(name, mtime):
+        last = None
+        try:
+            with open(log, encoding="utf-8-sig") as f:
+                for line in f:
+                    e = _stop_entry(line)
+                    if e and e[1] == name:
+                        last = (e[0], e[2])
+        except OSError:
+            return None
+        if last is None or last[1] != "-":
+            return None
+        try:
+            t = time.mktime(time.strptime(last[0], "%Y-%m-%d %H:%M:%S"))
+        except (ValueError, OverflowError):
+            return None
+        return t if t + 1 > mtime else None        # the stamp is whole seconds, mtime is not
+    return stopped
+
+
+def idle_baseline(names, newest, now, minutes, stopped=None):
+    """{name: marker} for sessions already quiet or stopped, so a relaunch-free first run stays
+    silent. The marker is the newest activity time, or [time, "stopped"] for a stopped session.
     newest(name) is the newest activity time of that session, or None (hosts.claude.adapter.claude_host.newest_finder)."""
     out = {}
     for n in names:
         m = newest(n)
-        if m is not None and now - m >= minutes * 60:
+        if m is None:
+            continue
+        if stopped and stopped(n, m) is not None:
+            out[n] = [m, "stopped"]
+        elif now - m >= minutes * 60:
             out[n] = m
     return out
 
 
-def idle_events(names, newest, fired, nolog, now, minutes):
+def idle_events(names, newest, fired, nolog, now, minutes, stopped=None):
     """(events, fired now, nolog now). IDLE once per quiet spell: fired maps name -> the mtime it
-    fired at, and a session drops out of it when active again. A name with no transcript gives
-    one ERROR, then stays quiet (nolog) until it has a transcript."""
+    fired at, and a session drops out of it when active again. A session the launcher stopped with
+    no successor (`stopped`, stop_log_reader) gives STOPPED once, never IDLE. A name with no
+    transcript gives one ERROR, then stays quiet (nolog) until it has a transcript."""
     ev, cur, miss = [], {}, []
     for n in names:
         m = newest(n)
@@ -298,6 +345,12 @@ def idle_events(names, newest, fired, nolog, now, minutes):
             miss.append(n)
             if n not in nolog:
                 ev.append("ERROR idle: no transcript for %s" % n)
+            continue
+        t = stopped(n, m) if stopped else None
+        if t is not None:
+            cur[n] = [m, "stopped"]
+            if fired.get(n) != cur[n]:
+                ev.append("STOPPED %s at %s" % (n, time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))))
         elif now - m >= minutes * 60:
             cur[n] = m
             if fired.get(n) != m:
@@ -350,12 +403,14 @@ class Watcher:
     plugin: check(last) -> (lines, last) (plugin_check), or None for no PLUGIN check. Unlike the
     others it has no baseline: a plugin export already behind at the first run is reported then.
     preload_modules: the host's own modules its checks import late (preload).
+    stopped: stopped(name, mtime) -> time or None (stop_log_reader over stop.log beside `sessions`).
     """
 
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
-                 notice_dir=None, plugin=None, preload_modules=()):
+                 notice_dir=None, plugin=None, preload_modules=(), stopped=None):
         preload(preload_modules)
+        self.stopped = stop_log_reader(sessions) if stopped is None else stopped
         self.s = state
         self.branches = branches
         self.usage_reader = usage_reader
@@ -385,7 +440,7 @@ class Watcher:
             s["lock_notices"] = notice_events([], self.notice_dir)[1]
         if "idle" not in s:                         # first run: sessions already quiet are baseline
             s["idle"] = idle_baseline(watched_sessions(self.sessions), self.newest, now,
-                                      self.idle_minutes)
+                                      self.idle_minutes, self.stopped)
 
     def _failed(self, what, e, events):
         self.fails[what] += 1
@@ -420,7 +475,7 @@ class Watcher:
             try:
                 ev, s["idle"], s["idle_nolog"] = idle_events(
                     watched_sessions(self.sessions), self.newest, s.get("idle", {}),
-                    s.get("idle_nolog", []), now, self.idle_minutes)
+                    s.get("idle_nolog", []), now, self.idle_minutes, self.stopped)
                 events += ev
                 self.fails["idle"] = 0
             except Exception as e:

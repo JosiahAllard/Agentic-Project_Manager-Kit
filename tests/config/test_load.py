@@ -174,6 +174,18 @@ class GateRulesTest(TreeCase):
         self.assertIn('"gate": unknown key(s) dependency_pin_check, python_tests_audit, python_tests_docs, '
                       'python_tests_docs_floor, python_tests_drops, python_tests_selected_floor', why)
 
+    def test_the_unported_gate_keys_refuse_as_unknown_whatever_their_value(self):
+        # The gate never implemented these, and none is a key, so a config setting one fails to
+        # load, whatever the value (once they loaded and the gate refused only some values).
+        for key, values in (('python_tests', ('pytests', 'discover')),
+                            ('python_tests_floor', (10, 0, None)), ('trailers', (True, False))):
+            for value in values:
+                why = self.refused({'gate': {key: value, 'steps': []}})
+                self.assertIn('"gate": unknown key(s) %s (allowed:' % key, why)
+                self.assertIn('unknown key(s) %s' % key,
+                              self.refused({'gate': 'tools/gate.json'},
+                                           {'tools/gate.json': {key: value}}))
+
     def test_a_step_runs_exactly_one_of_cmd_and_check(self):
         why = self.refused({'hook': {'module': 'gate_hook'},
                             'gate': {'steps': [{'name': 'a', 'always': True},
@@ -236,9 +248,9 @@ class SectionFileTest(TreeCase):
         self.assertEqual(cfg.section('gate')['steps'], [])
 
     def test_a_legacy_file_is_read_when_kit_json_names_it(self):
-        cfg = self.load({'gate': 'tools/gate.json'}, {'tools/gate.json': {'trailers': True}})
+        cfg = self.load({'gate': 'tools/gate.json'}, {'tools/gate.json': {'worktree_guard': True}})
         self.assertEqual(cfg.section_file('gate'), 'tools/gate.json')
-        self.assertIs(cfg.section('gate')['trailers'], True)
+        self.assertIs(cfg.section('gate')['worktree_guard'], True)
 
 
 class DuplicateKeyTest(TreeCase):
@@ -320,6 +332,32 @@ class RetiredLedgerRepoUnchangedTest(TreeCase):
         self.assertIn('unknown key(s) ledger_repoz', why)
 
 
+class RetiredLandingLanesTest(TreeCase):
+    """`landing.lanes` named the landing lanes gate.py land --lane took, which are gone: the key is
+    retired, so a config that still carries it loads, whatever its value."""
+
+    def test_a_config_still_carrying_lanes_loads_without_it(self):
+        for value in ({'docs': {'branch_prefix': ['docs/'], 'paths': ['docs/*'], 'why': 'w'}},
+                      {}, 3, 'docs', {'bad name': {'no_such_key': 1}}):
+            with self.subTest(value=value):
+                cfg = self.load({'landing': {'batch_max': 2, 'lanes': value}})
+                self.assertEqual(cfg.section('landing')['batch_max'], 2)
+                self.assertNotIn('lanes', cfg.section('landing'))
+
+    def test_lanes_in_a_landing_section_file_loads_without_it(self):
+        cfg = self.load({'landing': 'l.json'}, {'l.json': {'lanes': {'docs': {}}}})
+        self.assertNotIn('lanes', cfg.section('landing'))
+
+    def test_lanes_is_retired_and_not_a_schema_field(self):
+        self.assertIn('lanes', schema.RETIRED['landing'])
+        self.assertNotIn('lanes', schema.SECTIONS['landing'])
+        self.assertFalse(any('`lanes`' in line for line in schema.doc_lines()))
+
+    def test_a_typo_beside_lanes_still_refuses(self):
+        why = self.refused({'landing': {'lanes': {}, 'lanez': {}}})
+        self.assertIn('unknown key(s) lanez', why)
+
+
 class RetiredSectionTest(TreeCase):
     """A whole section no tool reads any more (schema.RETIRED_SECTIONS): a config that still
     carries it loads, the section dropped unchecked."""
@@ -384,7 +422,6 @@ class RealRepoShapeTest(TreeCase):
         self.assertEqual(cfg.section_file('tool_tests'), 'tools/tool_tests.json')
         self.assertEqual(cfg.section_file('pieces'), 'tools/pieces.json')
         self.assertEqual(cfg.owner()['email'], OWNER)
-        self.assertEqual(cfg.section('landing')['lock_file'], 'git:alpha-landing.lock')
         self.assertEqual(config.load_hook_module(cfg)[0].HOOKED, 'alpha')
         checks, options = config.load_gate_checks(cfg)
         self.assertEqual((sorted(checks), options), (['pin_check'], {'python_tests_audit': True}))

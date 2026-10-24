@@ -4,7 +4,10 @@
                  --reviewer-id ID --author A --range BASE..TIP --session S [--record ID ...] [-C DIR]
       queue B at SHA (the coordinator, after reading the review; never the reviewer). SHA must be
       B's head now. A re-add replaces B's entry. V: LAND | "LAND WITH FOLLOW-UP"; R: Low |
-      Medium | High. Prints `QUEUED <branch> <tip>`.
+      Medium | High. Prints `QUEUED <branch> <tip>`. A High-risk verdict whose reviewer is the
+      calling coordinator (--reviewer-id is --session, or --reviewer names the coordinator role)
+      prints `REFUSED: ...` and an `Instead:` line naming a dispatched analyst (exit 2, nothing
+      written; verdicts.self_review_why).
   verdict.py carry --branch B [-C DIR]
       after a main sync of a queued branch: move B's verdict to B's head when every commit after
       the review is a conflict-free merge of main and B's own diff against main is the one
@@ -27,7 +30,7 @@
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate.verdicts, prints and
 exits. Exit codes: 0 done; 1 not done (git gave no answer, a queue file cannot be read or written,
 nothing queued to drop or carry, a carry refused, or list found a file that is not an entry); 2 usage (the arguments, or an
-entry add finds malformed; nothing written); 3 tip mismatch (add: SHA is not the branch's head, or
+entry add finds malformed or a High-risk self-review; nothing written); 3 tip mismatch (add: SHA is not the branch's head, or
 there is no such branch; nothing written).
 """
 import argparse
@@ -183,6 +186,8 @@ def main(argv=None):
         return fail('NOT DONE', 'no git repository at %s: %s' % (root, why), NOT_DONE)
     try:
         return run(a, common_dir)
+    except verdicts.SelfReview as e:
+        return fail('REFUSED', str(e), USAGE)
     except verdicts.BadEntry as e:
         p.print_usage(sys.stderr)
         sys.stderr.write('USAGE: %s\n' % e)

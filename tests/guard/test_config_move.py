@@ -1,7 +1,10 @@
-"""The guard across the machine config folder's move (docs/kit-json.md "Moving the machine config
-folder"; docs/guard.md "Known limits"): the ledger stays protected while only the old file
-exists, a new file or folder the guard cannot read fails closed for subagents, and with both
-present the new file's ledger_path is the one protected."""
+"""The guard across the machine config's moves (docs/kit-json.md "Moving the machine config
+folder" and "Moving the machine config into the PM repo"; docs/guard.md "Known limits"). A machine
+config still in the home folder (kitlib.config.user UNMOVED) fails closed for subagents, and its
+ledger_path, with its ledger_dir's rulebooks and digest, stays protected: the old file's while it
+is the only one, the new folder's file when both are there; a new file or folder the guard cannot
+read fails closed too. The PM repository's config (OK) protects its own ledger, and the pointer's
+machine config folder is held."""
 import json
 import os
 import unittest
@@ -62,7 +65,26 @@ class ConfigMove(unittest.TestCase):
         d = self.subagent_write()
         self.assertIsNotNone(d)
         self.assertEqual(d.rule, 'ledger', d.reason)
-        self.assertIn('not a folder', d.reason)
+        self.assertIn('still in the home folder', d.reason)
+        self.assertIn(migration.OLD_DIR_NAME, d.reason)
+
+    def test_an_unmoved_config_denies_every_subagent_write_and_keeps_its_ledger(self):
+        self.put(self.new_dir, {'ledger_path': self.w.ledger})
+        d = self.subagent_write()
+        self.assertIsNotNone(d)
+        self.assertEqual(d.rule, 'ledger', d.reason)
+        self.assertIn('still in the home folder', d.reason)
+        d = self.edit_ledger(self.w.ledger)
+        self.assertIsNotNone(d)
+        self.assertEqual(d.rule, 'ledger', d.reason)
+
+    def test_an_unmoved_config_keeps_its_ledger_dir_books(self):
+        split = os.path.join(self.w.base, 'pm', 'split')
+        self.put(self.new_dir, {'ledger_dir': split, 'ledger_repos': ['kit']})
+        for name in ('STANDING.md', os.path.join('rules', 'kit.md')):
+            d = self.edit_ledger(os.path.join(split, name))
+            self.assertIsNotNone(d, name)
+            self.assertEqual(d.rule, 'ledger', d.reason)
 
     def test_with_both_present_the_new_ledger_is_the_one_protected(self):
         other = os.path.join(os.path.dirname(self.w.ledger), 'OLD-LEDGER.md')
@@ -73,11 +95,10 @@ class ConfigMove(unittest.TestCase):
         self.assertEqual(d.rule, 'ledger', d.reason)
         self.assertIsNone(self.edit_ledger(other))      # the known limit docs/guard.md states
 
-    def test_with_a_pointer_the_home_ledger_stays_protected_and_the_pm_folder_is_held(self):
-        # the PM repository's machine config folder (docs/guard.md "Owner machine setup") beside
-        # the home one: the home config's ledger_path is still the ledger rule's, and a write into
-        # <pointer>/.pm-kit is machine-config's
-        self.put(self.new_dir, {'ledger_path': self.w.ledger})
+    def test_with_a_pointer_the_pm_ledger_is_protected_and_the_pm_folder_is_held(self):
+        # the machine config read from the PM repository (World.user_config): its ledger_path is
+        # the ledger rule's, and a write into <pointer>/.pm-kit is machine-config's
+        self.w.user_config({'ledger_path': self.w.ledger})
         ctx = lambda: self.w.ctx(pointer=lambda: self.w.data)
         d = decide(event('Write', {'file_path': self.w.ledger, 'content': ''}, self.w.plain, sub=True), ctx())
         self.assertIsNotNone(d)

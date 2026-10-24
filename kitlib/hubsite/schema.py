@@ -5,13 +5,14 @@ field tables), checked by the store before every write.
   ID_PREFIX              {collection: prefix} of the collections whose ids the store assigns
   STORE_KEYS             the keys the store itself sets on every document (version, updated_at)
   check(coll, fields)    [kitlib.hubvalidate.Finding]: an `error` per missing required field, per
-                         field of the wrong type, and per to_pm kind that is not known (an
-                         unknown status is kitlib.hubvalidate's status-unknown error)
+                         field of the wrong type, and per to_pm or approvals kind that is not
+                         known (an unknown status is kitlib.hubvalidate's status-unknown error);
+                         an approval's required fields depend on its kind (BY_KIND)
   check_id(doc_id)       an error message for a document id that cannot be a file name, else None
   whole_recommended(coll, fields)
                          (fields, old, label): a question whose `recommended` is text that
                          stands for a number, given back with the number; read so by the
-                         store and written so by kitlib.hubsite.migrate
+                         store
 
 A field that is absent or null passes its type check unless it is required: the page writes many
 fields as null until they are set (sent_at, q, reply). Unknown fields pass. The status values and
@@ -23,7 +24,7 @@ import re
 from kitlib import hubvalidate
 
 COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'pages', 'page_html', 'repos',
-               'approvals')
+               'approvals', 'schedules', 'finding_marks')
 ID_PREFIX = {coll: prefix for prefix, coll in hubvalidate.REF_COLLECTIONS.items()}
 STORE_KEYS = ('version', 'updated_at')
 CODE = 'schema-field'
@@ -34,7 +35,7 @@ FIELDS = {
     'questions': (('status', 'title'), {
         'status': _STR, 'title': _STR, 'repo': _STR, 'from': _STR, 'asked_at': _STR,
         'context': _STR, 'options': _LIST, 'recommended': _INT, 'refs': _LIST, 'urgent': _BOOL,
-        'answer': _DICT, 'ruling': _STR, 'story': _STR}),
+        'answer': _DICT, 'ruling': _STR, 'story': _STR, 'done_why': _STR, 'done_at': _STR}),
     'inbox': (('text',), {
         'text': _STR, 'ref': _STR, 'asked': _STR, 'title': _STR, 'repo': _STR, 'from': _STR,
         'at': _STR, 'refs': _LIST, 'read': _BOOL, 'read_at': _STR}),
@@ -44,7 +45,8 @@ FIELDS = {
         'pm_ack': (bool, str)}),
     'to_pm': (('status', 'kind', 'text'), {
         'status': _STR, 'kind': _STR, 'text': _STR, 'repo': _STR, 'urgent': _BOOL,
-        'created_at': _STR, 'sent_at': _STR, 'reply': _STR, 'ruling': _STR, 'done_at': _STR}),
+        'created_at': _STR, 'sent_at': _STR, 'reply': _STR, 'ruling': _STR, 'done_at': _STR,
+        'refs': _LIST, 'finding': _STR}),
     'stories': (('status', 'repo', 'title', 'story'), {
         'status': _STR, 'repo': _STR, 'title': _STR, 'story': _STR, 'urgent': _BOOL,
         'from': _STR, 'submitted_at': _STR, 'reviewer': _STR, 'review_note': _STR,
@@ -52,13 +54,25 @@ FIELDS = {
     'pages': (('title',), {'title': _STR}),
     'page_html': (('html',), {'html': _STR}),
     'repos': ((), {'name': _STR, 'added_at': _STR, 'aliases': _LIST}),
-    # kitlib.hubsite.approvals, "The document"
-    'approvals': (('status', 'repo', 'title', 'head', 'files', 'created_at'), {
+    # kitlib.hubsite.approvals, "The document"; BY_KIND adds the fields of each kind
+    'approvals': (('status', 'repo', 'title', 'created_at'), {
         'status': _STR, 'repo': _STR, 'title': _STR, 'head': _STR, 'files': _LIST,
         'created_at': _STR, 'reason': _STR, 'decision': _STR, 'decided_at': _STR, 'sig': _STR,
-        'commit': _STR, 'consumed_at': _STR, 'diff': _LIST}),
+        'commit': _STR, 'consumed_at': _STR, 'diff': _LIST, 'kind': _STR, 'op': _STR,
+        'line': _STR, 'args_sha256': _STR, 'what': _STR}),
+    # kitlib.hubsite.api, "Schedules": the owner's times for the kit's automatic tasks
+    'schedules': (('task', 'repo', 'cadence', 'at'), {
+        'task': _STR, 'repo': _STR, 'cadence': _STR, 'days': _LIST, 'at': _STR, 'set_at': _STR}),
+    # kitlib.hubsite.api, "Findings": the owner's mark on one maintenance-lint finding, by its
+    # fingerprint, with what the finding said when it was marked
+    'finding_marks': (('status',), {
+        'status': _STR, 'repo': _STR, 'check': _STR, 'target': _STR, 'text': _STR, 'note': _STR,
+        'marked_at': _STR}),
 }
-KINDS = {'to_pm': ('question', 'fyi')}
+KINDS = {'to_pm': ('question', 'fyi', 'act')}
+# {collection: {kind: more required fields}}: a document of such a collection needs its kind's
+# fields too, None standing for a document with no kind; any other kind is an error
+BY_KIND = {'approvals': {None: ('head', 'files'), 'op': ('op', 'line', 'args_sha256')}}
 
 _ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
 # Windows device names: a file named so (any extension) opens the device, not a file
@@ -86,6 +100,14 @@ def check(coll, fields, doc_id='?'):
         return [_err(coll, doc_id, '', 'the document is not an object')]
     required, types = FIELDS[coll]
     out = []
+    by_kind = BY_KIND.get(coll)
+    if by_kind is not None:
+        kind = fields.get('kind')
+        if kind is None or (isinstance(kind, str) and kind in by_kind):
+            required = required + by_kind[kind]
+        elif isinstance(kind, str):     # another type is the type check's error below
+            out.append(_err(coll, doc_id, 'kind', 'kind %r is not one of %s' % (
+                kind, ', '.join(k for k in by_kind if k is not None))))
     for field in required:
         v = fields.get(field)
         if v is None or (isinstance(v, str) and not v.strip()):
@@ -113,10 +135,22 @@ def check_id(doc_id):
 
 
 def whole_recommended(coll, fields):
-    """(fields, old, label): a question whose `recommended` is text that stands for a number
-    (the rule is in kitlib.hubsite.migrate's module docstring) is given back as a copy with the
-    number; old is that text and label is True when it was an option's label. Any other document
-    is given back as it is, with old None."""
+    """(fields, old, label): a question whose `recommended` is text that stands for a number is
+    given back as a copy with the number; old is that text and label is True when it was an
+    option's label. Any other document is given back as it is, with old None.
+
+    The rule. Text that is exactly the `label` of one of the question's options (the same
+    characters, case and spaces included; an option that is an object) stands for that option's
+    position, counted from 0 as hubvalidate's options check and the page count it. Text that is
+    a whole number (one to nine of the digits 0-9 and nothing else) stands for that number, in
+    range of the options or not. These stand for nothing, and the document is given back as it
+    is: text that is not a whole number and is no option's label or the label of two; a whole
+    number that is also an option's label, unless it is the label of one option only and that
+    option is at the position the number says; more than nine digits; and the empty text. The
+    store refuses every update of a question whose `recommended` is text that stands for nothing
+    (check), so such a question cannot be answered or logged until its file is fixed. The store
+    never rewrites a file for this: one that holds text that stands for a number keeps it, the
+    store reads it as the number and its next write stores the number."""
     old = fields.get('recommended') if coll == 'questions' else None
     if not isinstance(old, str) or not old:
         return fields, None, False              # '' names no option, whatever an option's label is

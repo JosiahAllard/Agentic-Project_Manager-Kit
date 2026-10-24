@@ -12,6 +12,7 @@ from kitlib import config
 from kitlib.config import user
 from kitlib.git import defaults
 from tests import gitfixture
+from tests.home import machine_config
 from tests.realgit import real_git
 
 
@@ -24,7 +25,8 @@ def write(path, text):
 class Repo(object):
     """base/<folder> with a `.git` folder holding what a test writes; base/home a home folder."""
 
-    def __init__(self, folder='work'):
+    def __init__(self, folder='work', case=None):
+        self.case = case
         self.base = tempfile.mkdtemp(prefix='kit-nofile-')
         self.root = os.path.join(self.base, folder)
         self.git = os.path.join(self.root, '.git')
@@ -41,7 +43,8 @@ class Repo(object):
         write(os.path.join(self.git, 'config'), text)
 
     def machine(self, data):
-        write(os.path.join(user.config_dir(self.home), user.FILE_NAME), json.dumps(data))
+        # the PM repository's two files, under the pointer the test `case` holds
+        machine_config(self.home, data, case=self.case)
 
     def kit(self, data):
         write(os.path.join(self.root, '.kit.json'), data if isinstance(data, str) else json.dumps(data))
@@ -56,7 +59,7 @@ class Repo(object):
 class Case(unittest.TestCase):
 
     def repo(self, folder='work'):
-        r = Repo(folder)
+        r = Repo(folder, case=self)
         self.addCleanup(r.cleanup)
         return r
 

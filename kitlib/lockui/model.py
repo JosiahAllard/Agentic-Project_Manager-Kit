@@ -217,6 +217,17 @@ def build(snap, history_rows=(), now=None):
     return v
 
 
+def _result(d):
+    """A history line's outcome for the hub's filter: its `how` when the run was cancelled or
+    interrupted, else "ok" (exit code 0) or "failed" (any other code); None with no code."""
+    how, code = d.get("how"), d.get("code")
+    if how in ("cancelled", "interrupted"):
+        return how
+    if not isinstance(code, int) or isinstance(code, bool):
+        return None
+    return "ok" if code == 0 else "failed"
+
+
 def _strip(runs, queue, agent_holds, history_rows, now):
     out = []
     for r in runs:
@@ -257,6 +268,8 @@ def _strip(runs, queue, agent_holds, history_rows, now):
         vs = ("expected %s (%s %s)" % (span(exp), span(abs(took - exp)), "over" if late else "under")
               if exp else "no expected time")
         out.append({"type": "hist", "id": d.get("id"), "_s": s, "_e": max(e, s),
+                    "repo": d.get("repo") or None, "slug": d.get("slug") or None,
+                    "kind": d.get("kind") or None, "result": _result(d),
                     "_x": s + dt.timedelta(seconds=exp) if exp else None, "late": late, "open": False,
                     "text": "ran %s/%s (%s, %s) %s-%s: %s, %s%s%s%s" % (
                         d.get("repo") or "", d.get("slug") or "", d.get("kind") or "?",
@@ -443,7 +456,7 @@ HOLD_KEYS = ("id", "owner", "scope", "start", "end", "start_local", "end_local",
              "slots", "slots_fixed", "live", "state", "lapses_at", "repo", "slug", "kind")
 RUN_KEYS = ("id", "state", "repo", "slug", "kind", "since", "held_since", "expected_end",
             "expect_s", "expect_from", "cores", "gpus", "background", "overrun", "usage")
-STRIP_KEYS = ("type", "id", "open", "late", "text")
+STRIP_KEYS = ("type", "id", "open", "late", "text", "repo", "slug", "kind", "result")
 DIVISION_KEYS = ("division", "default_division", "owner_division", "wanted_division",
                  "cpu_slots", "gpu_slots", "agent_cap")
 GAME_KEYS = ("enabled", "hold", "slots", "would_take")
@@ -466,6 +479,24 @@ def _hold_json(h):
 
 def _parts(parts):
     return [[text, list(tags)] for text, tags in parts]
+
+
+def _queue_items(snap):
+    """The queue as structured rows for the hub's Schedule: only these keys, never a run note,
+    process id or path. Times are local ISO text."""
+    qd = snap.get("queue") or {}
+    out = []
+    for q in qd.get("entries") if isinstance(qd.get("entries"), list) else []:
+        if not isinstance(q, dict):
+            continue
+        n = q.get("needs") or {}
+        out.append({"id": q.get("id"), "position": q.get("position"), "repo": q.get("repo"),
+                    "slug": q.get("slug"), "kind": q.get("kind"),
+                    "needs_cpu": n.get("cpu") or 0, "needs_gpu": n.get("gpu") or 0,
+                    "est_start": _t(to_local(q.get("est_start"))), "since": _t(to_local(q.get("since"))),
+                    "backfill": bool(q.get("backfill")), "parked": bool(q.get("parked")),
+                    "why": q.get("why") or None})
+    return out
 
 
 def to_json(view, snap, remote=False):
@@ -502,6 +533,7 @@ def to_json(view, snap, remote=False):
             "runs": [_pick(r, RUN_KEYS) for r in view["runs"]], "colour": dict(view["colour"]),
             "strip": strip, "lanes": view["lanes"],
             "details": _parts(view["details"]), "queue": _parts(view["queue"]),
+            "queue_items": _queue_items(snap),
             "bookings": _parts(view["bookings"]), "cores": view["cores"],
             "memory": view["memory"], "warnings": _warnings(snap, remote),
             "game": game, "division": division}

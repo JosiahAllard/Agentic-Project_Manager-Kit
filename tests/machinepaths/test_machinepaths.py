@@ -18,9 +18,8 @@ from unittest import mock
 
 from kitlib import machinepaths as M
 from kitlib.git import cmd
-from kitlib.config import user
 from tests import gitfixture
-from tests.home import TempHomeCase
+from tests.home import TempHomeCase, machine_config as write_machine_config
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_paths.py')
@@ -75,9 +74,13 @@ class PlantedTree(TempHomeCase):
             self.machine_config(json.dumps({'machine_path_folders': list(self.folders)}))
 
     def machine_config(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as fh:
-            fh.write(body)
+        """The machine config text `body`: a JSON object split between the fenced PM repository's
+        two files, anything else written as its config.json."""
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = None
+        write_machine_config(self.home, data if isinstance(data, dict) else body, case=self)
 
     def set_config(self, section, top=None):
         data = dict(top or {})
@@ -385,19 +388,16 @@ class FallbackVars(PlantedTree):
         self.assertEqual(rc, 2, out)
 
 
-class PieceFixtures(PlantedTree):
-    """piece_fixtures needs the pieces-table resolver, which kitlib has not got: refused, never
-    ignored (an ignored entry would turn a fixture's allowed path into a failure the repository
-    cannot explain)."""
-    ENTRY = {'piece': 'worker', 'path': 'src/test/LoginTest.java', 'hits': ['[C]:/Users/x']}
+class RemovedPieceFixtures(PlantedTree):
+    """piece_fixtures is gone: a repository that still sets it is refused as an unknown key."""
 
-    def test_piece_fixtures_refuse(self):
-        self.set_config({'piece_fixtures': [self.ENTRY]})
+    def test_piece_fixtures_refuses_as_an_unknown_key(self):
+        self.set_config({'piece_fixtures': [{'piece': 'worker', 'hits': ['[C]:/Users/x']}]})
         rc, out = self.run_guard()
         self.assertEqual(rc, 2, out)
-        self.assertIn('pieces table', out)
+        self.assertIn('piece_fixtures', out)
 
-    def test_no_piece_fixtures_needs_no_table(self):
+    def test_the_repo_config_loads(self):
         self.set_config(REPO_CONFIG)
         cfg = M.load_config(self.root)
         self.assertTrue(cfg.allow)

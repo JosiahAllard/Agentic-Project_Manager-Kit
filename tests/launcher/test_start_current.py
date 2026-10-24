@@ -1,14 +1,13 @@
 """start --session KEY --account current|auto (kitlib/launcher/start.py start_entry,
 kitlib/launcher/accounts.py resolve_current): the PM starts a coordinator on the account it is on."""
 import io
-import json
 import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from kitlib.config import user as kuser
 from kitlib.launcher import accounts, start
 from kitlib.launcher import settings as S
+from tests.home import machine_config
 from tests.launcher.fakes import NOW, FakeHost, Home
 from tools import launch
 
@@ -58,9 +57,7 @@ class Current(unittest.TestCase):
         self.assertEqual(out[0], 'auto picked account 2')
 
     def test_the_cli_takes_current(self):
-        os.makedirs(kuser.config_dir(self.h.root))
-        with open(kuser.config_file(self.h.root), 'w', encoding='utf-8') as f:
-            json.dump({'launcher': self.h.obj}, f)
+        machine_config(self.h.root, {'launcher': self.h.obj}, case=self)
         host = self.host(self.h.accounts['10'][0])
         out = io.StringIO()
         with redirect_stdout(out), redirect_stderr(io.StringIO()):

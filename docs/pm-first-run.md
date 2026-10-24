@@ -22,12 +22,12 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    knowledge").
    Success: `ListSkills` shows each skill named in docs/shipping.md once.
 
-4. **Write the user config.** Create `<config-dir>/config.json` (docs/kit-json.md "Machine config keys") holding a JSON object,
+4. **Write the user config.** Create `<config-dir>/config.json`, in the PM repository's `.pm-kit` (docs/kit-json.md "Machine config keys"), holding a JSON object,
    with `ledger_dir` (the folder for the owner's rulings) and `ledger_repos` set, or `ledger_path` for one file (docs/ledger.md "Configuration"). Paths must be
    absolute; in JSON write Windows paths with `/` or `\\`.
    Success: `python -c "from kitlib.config import user;user.user_config()"`, run in `<kit>`,
-   prints nothing. When the owner gives the first ruling, `python <kit>/tools/ledger.py add`
-   creates the ledger and prints the new ruling's id.
+   prints nothing. When the owner gives the first ruling, `python <kit>/tools/ledger.py add --repo <name>`
+   creates that repository's file (with `ledger_path` alone, the one ledger file) and prints the new ruling's id. From an existing one-file ledger: docs/ledger.md "A new ledger".
 
 5. **Check the machine lock.** No setup. Run `python <kit>/tools/machine_lock.py status`.
    Success: it prints the layout (threads, cpu and gpu slots) and what holds each slot. Never run
@@ -56,7 +56,9 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    7's hook needs the file's folder to exist; create the rest of step 7's files either way.
 
 7. **Turn on the PM checklist.** Create the files it reads: a sessions file, a reminders file
-   holding `[]`, and a memory folder for handoff notes. The sessions file is `sessions.json` in
+   holding `[]`. The one hand-off file, `HANDOFF.md` in the PM repository, is created on the first
+   hand-off and edited in place after that (docs/pm-start.md "Hand-off file"); the PM repository
+   git-ignores it, so it is never committed. The sessions file is `sessions.json` in
    `launcher.state_dir` (docs/launcher.md "State files"): start it from
    `docs/launcher.sessions.example.json`, or from `{}` until step 11. Put that folder inside the PM
    repository (the hub server's backlog view finds the repository from the sessions file's folder,

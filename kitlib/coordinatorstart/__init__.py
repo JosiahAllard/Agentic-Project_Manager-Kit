@@ -13,9 +13,8 @@ and stubs: a line only when a repo that uses stubs has them not current), run as
 config, and the file is never opened.
 
 Install values come from the config, never from the code: "repos_root" (the folder whose top-level
-folders are the repositories, matched against the session's cwd) and "landing_lock" ({repo: the
-landing lock's file name in that repo's git common dir}; a repo not named there gets no
-landing-lock line).
+folders are the repositories, matched against the session's cwd). The landing-lock line reads
+the kit's fixed lock file (kitlib.records.landing LOCK_NAME); a "landing_lock" key is ignored.
 """
 import datetime
 import json
@@ -26,6 +25,8 @@ import sys
 from kitlib import kitroot, pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
+from kitlib.pmstart import configcheck
+from kitlib.records import landing
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -178,23 +179,17 @@ def cap(cfg, repo, today):
     return ["agent cap: every configured period for %s has ended; ask the PM" % repo]
 
 
-def lock_file_for(cfg, repo):
-    """The landing lock's file name the config's "landing_lock" gives repo, or None."""
-    locks = (cfg or {}).get("landing_lock") or {}
-    return locks.get(repo) or locks.get(str(repo).lower())
+def landing_lock(entry, run=_run, read=_read, root=None):
+    """The landing-lock holder line for the coordinator's repo, or None without a repos_root.
 
-
-def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
-    """The landing-lock holder line for the coordinator's repo, or None when no lock file is
-    configured for it (or no repos_root).
-
-    Read-only: the lock is the file <git common dir>/<lock_file>."""
-    if not (root and lock_file):
+    Read-only: the lock is the file <git common dir>/kit-landing.lock (kitlib.records.landing
+    LOCK_NAME), whatever the config says: the old "landing_lock" key is ignored."""
+    if not root:
         return None
     repo = "%s/%s" % (root.replace("\\", "/").rstrip("/"), entry.get("repo"))
     common = run(["git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir"]).strip()
     try:
-        text = read(os.path.join(common, lock_file))
+        text = read(os.path.join(common, landing.LOCK_NAME))
     except FileNotFoundError:
         return "landing lock (%s): free" % entry.get("repo")
     try:
@@ -202,12 +197,12 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
     except ValueError:
         return "landing lock (%s): HELD, record unreadable" % entry.get("repo")
     who = "pid %s" % r["pid"] if r.get("pid") is not None else "a token holder"
-    return "landing lock (%s): HELD - lane %s, branches %s, %s, phase %s, since %s" % (
-        entry.get("repo"), r.get("lane"), " ".join(r.get("branches") or ()) or "-", who,
+    return "landing lock (%s): HELD - branches %s, %s, phase %s, since %s" % (
+        entry.get("repo"), " ".join(r.get("branches") or ()) or "-", who,
         r.get("phase"), r.get("started_utc"))
 
 
-def machine(entry, run=_run, read=_read, now=None, kit=None, root=None, lock_file=None):
+def machine(entry, run=_run, read=_read, now=None, kit=None, root=None):
     """Owner and agent holds in force or starting within 4 h, free gpu and cpu slots, landing lock.
 
     Runs the kit's own `tools/machine_lock.py status --json` (kitlib.kitroot.lock_tool; `kit`
@@ -236,7 +231,7 @@ def machine(entry, run=_run, read=_read, now=None, kit=None, root=None, lock_fil
     lines = ["machine: " + ("; ".join(owner) if owner else "no owner or agent hold within %d h" % SOON_HOURS),
              "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (
                  free(gpus), len(gpus), free(cores), len(cores))]
-    lock = landing_lock(entry, run, read, root, lock_file)
+    lock = landing_lock(entry, run, read, root)
     if lock:
         lines.append(lock)
     return lines
@@ -300,8 +295,9 @@ def others(entry, procs, env, pid):
 
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
-            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check)."""
+            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None,
+            config_lines=None):
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -353,9 +349,9 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             return ledger_lines(m, entry_once()["repo"]) if m.get("ledger_dir") else []
 
         checks = [
+            ("machine_config", config_lines or configcheck.lines),
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
-            ("machine state", lambda: machine(entry_once(), run, read, now, kit, cfg.get("repos_root"),
-                                              lock_file_for(cfg, entry_once().get("repo")))),
+            ("machine state", lambda: machine(entry_once(), run, read, now, kit, cfg.get("repos_root"))),
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),
             ("ledger", ledger),
             ("hub key", own_key),
@@ -378,7 +374,12 @@ def render(env=None, path=None, **kw):
     try:
         cfg = load_config(path)
         if cfg is None:
-            return "Coordinator session start: no coordinator_start config in %s; skipped." % (path or kuser.display())
+            text = "Coordinator session start: no coordinator_start config in %s; skipped." % (path or kuser.display())
+            try:     # the machine config lines still show (kitlib.pmstart.configcheck)
+                extra = (kw.get("config_lines") or configcheck.lines)()
+            except Exception as e:
+                extra = ["could not check machine_config: %s: %s" % (type(e).__name__, e)]
+            return text + "".join("\n- " + l for l in extra)
         return context(cfg, env=env, **kw)
     except Exception as e:
         return "Coordinator session start: could not check config: %s: %s" % (type(e).__name__, e)

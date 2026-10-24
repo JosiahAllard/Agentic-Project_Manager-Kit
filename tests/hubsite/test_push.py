@@ -21,6 +21,7 @@ from tests.hubsite import httpfix
 OPTIONS = [{'label': 'first', 'description': 'b'}, {'label': 'second', 'description': 'c'}]
 PLANTED = 'PUSHPROOF title text'
 NOTE = 'PUSHPROOF note text'
+REAL_HEARTBEAT = push.watcher_heartbeat      # the default reader, before no_watcher patches it
 
 
 class Ticks(object):
@@ -58,8 +59,17 @@ class FakePush(object):
         return [text for r, text in self.calls if r == recipient]
 
 
+def no_watcher(case):
+    """Patch the default heartbeat reader for `case`: a running worker reads it, and the real
+    one reads the machine's config (the home fence)."""
+    patcher = mock.patch.object(push, 'watcher_heartbeat', lambda: None)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class PushCase(unittest.TestCase):
     def setUp(self):
+        no_watcher(self)
         self.root = tempfile.mkdtemp(prefix='kit-hubpush-')
         self.addCleanup(shutil.rmtree, self.root, True)
         self.folder = os.path.join(self.root, 'state')
@@ -500,13 +510,182 @@ class TextTest(PushCase):
         with open(os.path.join(self.folder, push.OUTBOX), encoding='utf-8') as f:
             self.assertNotIn('PUSHPROOF', f.read())
 
+    def test_a_story_or_a_note_pushes_no_free_text(self):
+        self.ok('POST', '/stories', OWNER, {'repo': 'kit', 'title': PLANTED, 'story': NOTE})
+        self.ok('POST', '/to_pm', OWNER, {'text': PLANTED})
+        self.ok('POST', '/to_pm/send', OWNER)
+        self.worker.poll()
+        self.assertEqual(len(self.push.calls), 1)
+        self.assertNotIn('PUSHPROOF', self.push.calls[0][1])
+
     def test_header_fields_are_cut_to_a_safe_set(self):
         self.assertEqual(push.field('a b<c>\n' + 'x' * 80), ('a_b_c__' + 'x' * 80)[:64])
         self.assertEqual(push.field(None), '-')
 
 
+class StoryAndNoteTest(PushCase):
+    def story(self):
+        return self.ok('POST', '/stories', OWNER, {'repo': 'kit', 'title': 't', 'story': 's'})['id']
+
+    def sent_note(self):
+        pid = self.ok('POST', '/to_pm', OWNER, {'text': 'one'})['id']
+        self.ok('POST', '/to_pm/send', OWNER)
+        return pid
+
+    def test_a_submitted_story_pushes_to_the_pm_once_until_its_status_changes(self):
+        sid = self.story()
+        self.worker.poll()
+        self.assertEqual([r for r, _ in self.push.calls], ['pm'])
+        self.assertIn('[hub push] story %s submitted repo:kit from:- route:pm attempt:1' % sid,
+                      self.push.to('pm')[0])
+        self.assertIn('hub stories set %s' % sid, self.push.to('pm')[0])
+        self.worker.poll()
+        self.assertEqual(len(self.push.calls), 1, 'pushed again with nothing new')
+        self.later(push.SCHEDULE_S[0])
+        self.assertEqual(self.attempts('pm'), [1, 2], 'not picked up: tried again on the schedule')
+        self.ok('POST', '/stories/%s' % sid, AGENT, {'status': 'review', 'if_version': 1})
+        self.later(push.SCHEDULE_S[1])
+        self.assertEqual(self.attempts('pm'), [1, 2], 'its status changed: acknowledged')
+        self.assertEqual(self.worker.status()['undelivered'], 0)
+
+    def test_a_sent_note_pushes_to_the_pm_once_until_it_is_replied_to(self):
+        self.ok('POST', '/to_pm', OWNER, {'text': 'queued only'})
+        self.worker.poll()
+        self.assertEqual(self.push.calls, [], 'a queued note is not sent yet')
+        self.ok('POST', '/to_pm/send', OWNER)
+        self.worker.poll()
+        self.assertEqual([r for r, _ in self.push.calls], ['pm'])
+        self.assertIn('[hub push] to_pm P-001 sent repo:- from:- route:pm attempt:1',
+                      self.push.to('pm')[0])
+        self.assertIn('hub to-pm reply P-001', self.push.to('pm')[0])
+        self.worker.poll()
+        self.assertEqual(len(self.push.calls), 1, 'pushed again with nothing new')
+        self.ok('POST', '/to_pm/P-001/reply', AGENT, {'reply': 'r'})
+        self.later(push.SCHEDULE_S[0])
+        self.assertEqual(len(self.push.calls), 1, 'replied: acknowledged')
+
+    def test_the_outbox_keeps_a_story_push_across_a_restart(self):
+        self.push.states['pm'] = push.NO_SESSION
+        self.story()
+        self.worker.poll()
+        self.push.states['pm'] = push.WRITTEN
+        self.worker = self.make()
+        self.later(push.SCHEDULE_S[0])
+        self.assertEqual(self.attempts('pm'), [1, 2])
+
+    def test_a_written_push_to_a_session_is_told_to_the_api(self):
+        told = []
+        self.api.pushed = told.append
+        self.push.states['zeta'] = push.NOT_WRITTEN
+        self.answer(self.ask(**{'from': 'kit'}))
+        self.answer(self.ask(**{'from': 'zeta'}))
+        self.worker.poll()
+        self.assertEqual(told, ['kit'], 'the PM and a try not written are not told')
+
+
+class WatcherTest(PushCase):
+    def setUp(self):
+        super().setUp()
+        self.beat = [None]
+        self.worker = push.PushWorker(self.store, self.api, self.push, self.folder,
+                                      clock=lambda: self.t, watcher=self.read)
+        self.worker.begin()
+
+    def read(self):
+        b = self.beat[0]
+        return None if b is None else {'pid': 7, 'beat': b, 'stream': False, 'started': None}
+
+    def watch(self, beat_age=None, after=0):
+        self.t += after
+        self.beat[0] = None if beat_age is None else self.t - beat_age
+        self.worker.watch()
+
+    def downs(self):
+        return [t for t in self.push.to('pm') if t.startswith('[hub push] watcher down')]
+
+    def test_a_watcher_never_seen_fresh_pushes_nothing(self):
+        self.watch(None)
+        self.watch(push.WATCHER_STALE_S + 1, after=60)
+        self.assertEqual(self.push.calls, [])
+        self.assertEqual(self.worker.watcher_status(),
+                         {'state': 'down', 'age': push.WATCHER_STALE_S + 1})
+
+    def test_a_stale_heartbeat_pushes_watcher_down_once_and_again_only_after_fresh(self):
+        self.watch(10)
+        self.assertEqual(self.worker.watcher_status(), {'state': 'up', 'age': 10})
+        self.assertEqual(self.push.calls, [])
+        self.watch(push.WATCHER_STALE_S + 5, after=60)
+        self.assertEqual(len(self.downs()), 1)
+        self.assertEqual(self.downs()[0].splitlines()[0],
+                         '[hub push] watcher down age:%d route:pm attempt:1' % (push.WATCHER_STALE_S + 5))
+        self.assertEqual([r for r, _ in self.push.calls], ['pm'], 'the PM alone')
+        for _ in range(3):
+            self.watch(push.WATCHER_STALE_S + 5, after=push.SCHEDULE_S[-1])
+        self.assertEqual(len(self.downs()), 1, 'written once: not sent again while still down')
+        self.watch(5, after=60)
+        self.watch(push.WATCHER_STALE_S + 1, after=60)
+        self.assertEqual(len(self.downs()), 2, 'fresh again, then stale: a second push')
+
+    def test_a_heartbeat_that_goes_missing_is_down(self):
+        self.watch(10)
+        self.watch(None, after=60)
+        self.assertEqual(self.worker.watcher_status(), {'state': 'none', 'age': None})
+        self.assertEqual(self.downs()[0].splitlines()[0], '[hub push] watcher down age:none route:pm attempt:1')
+
+    def test_a_push_not_written_is_tried_on_the_schedule_until_fresh(self):
+        self.push.states['pm'] = push.NO_SESSION
+        self.watch(10)
+        self.watch(push.WATCHER_STALE_S + 1, after=60)
+        self.watch(push.WATCHER_STALE_S + 1, after=1)
+        self.assertEqual(len(self.downs()), 1, 'not due again at once')
+        self.assertEqual(self.worker.status()['last'], push.NO_SESSION)
+        self.watch(push.WATCHER_STALE_S + 1, after=push.SCHEDULE_S[0])
+        self.assertEqual(len(self.downs()), 2)
+        self.assertEqual([(u['kind'], u['id'], u['reason']) for u in self.undelivered()],
+                         [('watcher', 'down', push.NO_SESSION)] * 2)
+        self.watch(5, after=push.SCHEDULE_S[1])
+        self.watch(5, after=push.SCHEDULE_S[2])
+        self.assertEqual(len(self.downs()), 2, 'fresh again: acknowledged')
+
+    def test_a_reader_that_raises_is_none(self):
+        self.watch(10)
+
+        def broken():
+            raise OSError('locked')
+        self.worker.watcher = broken
+        self.t += 60
+        self.worker.watch()
+        self.assertEqual(self.worker.watcher_status(), {'state': 'none', 'age': None})
+        self.assertEqual(len(self.downs()), 1)
+
+    def test_poll_never_reads_the_heartbeat(self):
+        self.worker.watcher = lambda: self.fail('poll read the heartbeat')
+        self.worker.poll()
+
+    def test_the_thread_reads_the_heartbeat(self):
+        read = threading.Event()
+
+        def reader():
+            read.set()
+            return None
+        self.worker = push.PushWorker(self.store, self.api, self.push, self.folder, watcher=reader)
+        self.worker.start()
+        self.addCleanup(self.worker.stop, push.STOP_S)
+        self.assertTrue(read.wait(10), 'the running worker never read the heartbeat')
+
+    def test_the_default_reader_reads_pm_watchs_heartbeat_file(self):
+        state = os.path.join(self.root, 'pmw', 'state.json')
+        os.mkdir(os.path.dirname(state))
+        with open(state + '.beat', 'w', encoding='utf-8') as f:
+            json.dump({'pid': 3, 'beat': 123.0, 'stream': False, 'started': None}, f)
+        with mock.patch.object(push.pmwatch, 'load_config', lambda: {'state_file': state}):
+            got = REAL_HEARTBEAT()
+        self.assertEqual(got['beat'], 123.0)
+
+
 class ThreadTest(unittest.TestCase):
     def setUp(self):
+        no_watcher(self)
         self.addCleanup(lambda: self.assertEqual(httpfix.http_threads(), [],
                                                  'a listener thread outlived its test'))
         self.root = tempfile.mkdtemp(prefix='kit-hubpush-')

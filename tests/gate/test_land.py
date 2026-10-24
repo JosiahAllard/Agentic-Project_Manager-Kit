@@ -29,7 +29,7 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 
 class LandCase(fixtures.GateRepoCase):
-    KIT = {'landing': {'lanes': {'docs': {'branch_prefix': ['docs/'], 'paths': ['docs/*']}}}}
+    KIT = {}
     # lander() gives each tip the full-gate OK record a landing requires (fixtures.gate_full);
     # a test of that check itself sets it False and gates its tips (test_land_tip_gated)
     GATE_TIPS = True
@@ -53,7 +53,7 @@ class LandCase(fixtures.GateRepoCase):
         self.__dict__.setdefault('fixture_records', set()).update(made)
 
     def lock(self):
-        return landing.LandingLock(self.repo.root, lanes=('docs',))
+        return landing.LandingLock(self.repo.root)
 
     def main_now(self):
         return self.repo.git('rev-parse', 'refs/heads/main')
@@ -138,24 +138,13 @@ class Lands(LandCase):
     def test_usage_and_refusals(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         self.assertEqual(self.lander(BRANCH, 'abc', tip).run().code, G.USAGE)
-        self.assertEqual(self.lander(BRANCH, self.main, tip, lane='nosuch').run().code, G.USAGE)
         wt = self.repo.path('.claude', 'worktrees', 'feature')
         out = land.Lander(wt, BRANCH, self.main, tip, git_env=self.env).run()
         self.assertEqual(out.code, G.REFUSED)
         self.assertIn('not a main checkout', out.lines[0])
         self.assertEqual(self.lander('main', self.main, tip).run().code, G.REFUSED)
         self.assertEqual(self.lander('kit/nosuch', self.main, tip).run().code, G.REFUSED)
-        self.assertEqual(self.lander(BRANCH, self.main, tip, lane='docs').run().code, G.REFUSED)
         self.assertIsNone(self.lock().read())
-
-    def test_lane_takes_only_its_paths(self):
-        wt = self.repo.worktree('d', branch='docs/d')
-        self.repo.write('docs/x.md', 'x\n', root=wt)
-        self.repo.write('code.py', 'x\n', root=wt)
-        tip = self.repo.commit('mixed', 'docs/x.md', 'code.py', cwd=wt)
-        out = self.lander('docs/d', self.main, tip, lane='docs').run()
-        self.assertIn('lane docs takes only docs/*; the branch changes code.py', out.lines[0])
-        self.assert_untouched(out, G.REFUSED)
 
 
 @real_git('git reflog')
@@ -449,7 +438,7 @@ class TakeTurns(LandCase):
 
     def test_a_branch_gate_does_not_wait_for_the_landing_lock(self):
         wt, tip = self.branch('feature', {'a.py': 'a\n'})
-        rec = self.lock().take('full', ['kit/someone'], pid=os.getpid())
+        rec = self.lock().take(['kit/someone'], pid=os.getpid())
         self.addCleanup(self.lock().release, rec['token'])
         out = runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs)
         self.assertEqual(out.code, G.OK, out.lines)

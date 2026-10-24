@@ -74,12 +74,6 @@ class Build(unittest.TestCase):
             with self.assertRaises(S.GateConfigError):
                 S.build(gate_of(cmd(name)), ROOT, 'b', 't')
 
-    def test_unported_settings_refuse_rather_than_being_ignored(self):
-        for top in ({'python_tests': 'pytests'}, {'python_tests_floor': 10}, {'trailers': True}):
-            with self.assertRaises(S.GateConfigError, msg=top):
-                S.build(gate_of(cmd('a'), **top), ROOT, 'b', 't')
-        self.assertEqual(S.unsupported(gate_of(cmd('a'), python_tests='discover')), [])
-
     def test_the_pid_hold_flag_refuses_wherever_a_gate_could_pass_it(self):
         hold = S.PID_HOLD_FLAG
         kt = ['{python}', 'tools/kit_tests.py', '--select']
@@ -91,9 +85,6 @@ class Build(unittest.TestCase):
             with self.assertRaises(S.GateConfigError, msg=g) as cm:
                 S.build(g, ROOT, 'b', 't')
             self.assertIn(S.PID_HOLD_WHY, str(cm.exception))
-        with self.assertRaises(S.GateConfigError) as cm:      # a landing lane's merged_args
-            S.build(gate_of(cmd('a', cmd=kt)), ROOT, 'b', 't', merged=True, extra=[hold])
-        self.assertIn('landing lane', str(cm.exception))
         self.assertEqual(S.unsupported(gate_of(cmd('a', cmd=kt + ['--pid-holder']))), [])
 
 

@@ -105,7 +105,7 @@ def hold_citations(rec):
 def block_citation_error(members, reason=None, owner_ask=None):
     """None, or why `block --on <members>` may not be written: a `deliberate` or `owner` member
     names nothing it waits on, so `--reason` or `--owner-ask` must cite an R-nnnn, Q-nnn, T-nnn
-    or item:<ID> (an uncited hold is void; `block` takes no `--ruling`, so the reason carries it)."""
+    or item:<ID> (an uncited hold is void; `block` takes no ruling flag, so the reason carries it)."""
     bare = [m for m in members if m in UNCITED_KINDS]
     if not bare or cites(reason) or cites(owner_ask):
         return None
@@ -221,6 +221,38 @@ def _review(v, rules=None):
     return _date(date)
 
 
+# The one spelling of an answer's `at`: no `Z`, no fractional seconds, no compact form, so a
+# repeat filing of one answer matches its line exactly (plan.py plan_answer).
+ANSWER_AT_RE = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+                          r'[+-][0-9]{2}:[0-9]{2}$')
+
+
+def _answer(v, rules=None):
+    """`<Q-nnn> <at>`: the owner's answer to that question, filed by the Action Hub at `at`,
+    exactly `YYYY-MM-DDTHH:MM:SS+HH:MM` (ANSWER_AT_RE, then a real moment; docs/backlog.md
+    "Records"). One line per question (_cross_field)."""
+    qid, _, at = v.partition(' ')
+    shape = ('`%s` is not an answer line - `<Q-nnn> <at>`, `at` a timestamp with its offset '
+             '(YYYY-MM-DDTHH:MM:SS+HH:MM)' % v)
+    if not QUESTION_RE.match(qid) or not ANSWER_AT_RE.match(at):
+        return shape
+    try:
+        when = datetime.datetime.fromisoformat(at)
+    except ValueError:
+        return shape
+    return shape if when.tzinfo is None else None
+
+
+def answered(rec):
+    """{question id: at} of the record's `answer:` lines (a malformed line is left out)."""
+    out = {}
+    for v in rec.all('answer'):
+        if _answer(v) is None:
+            qid, _, at = v.partition(' ')
+            out.setdefault(qid, at)
+    return out
+
+
 # key -> (cardinality, validator), in the order a new key is inserted.
 FIELDS = collections.OrderedDict([
     ('id', (ONE, _id)),
@@ -239,6 +271,7 @@ FIELDS = collections.OrderedDict([
     ('parked_at', (AT_MOST_ONE, _date)),
     ('resume', (AT_MOST_ONE, _ruling)),
     ('review', (AT_MOST_ONE, _review)),
+    ('answer', (ANY, _answer)),
     ('scope', (ONE_PLUS, _scope)),
     ('files', (ANY, _path)),
     ('files_at', (AT_MOST_ONE, _free)),
@@ -424,9 +457,6 @@ def _cross_field(rec):
         if is_band(priority) and by == '-':
             add(Finding(SCHEMA, path, rec.line_of('priority_by'), '`priority: %s` was set by '
                         'somebody - `priority_by` is `owner`, `pm` or `agent`' % priority))
-        if by == 'pm' and not rec.has('priority_ruling'):
-            add(Finding(SCHEMA, path, rec.line_of('priority_by'), '`priority_by: pm` without '
-                        '`priority_ruling` - a PM price is written only with `--ruling R-nnnn`'))
     if rec.has('priority_per') and not is_band(priority):
         add(Finding(SCHEMA, path, rec.line_of('priority_per'), '`priority_per` cites the '
                     'decision a band was taken from, and this record carries no band'))
@@ -455,6 +485,14 @@ def _cross_field(rec):
     if rec.has('displaced') and not rec.has('preempt'):
         add(Finding(SCHEMA, path, rec.line_of('displaced'), '`displaced` without `preempt` - '
                     'written only by an out-of-order `pull`'))
+    seen_q = set()
+    for n, key, value in rec.entries:
+        qid = value.partition(' ')[0]
+        if key == 'answer' and _answer(value) is None:
+            if qid in seen_q:
+                add(Finding(SCHEMA, path, n, '`answer` holds one line per question, and %s has '
+                            'more than one; a re-answer replaces its line' % qid))
+            seen_q.add(qid)
     if scopemod.NONE in scopes and len(scopes) > 1:
         add(Finding(SCHEMA, path, rec.line_of('scope'), '`scope: none` touches no tracked file, '
                     'so it cannot sit beside other members'))

@@ -525,8 +525,8 @@ class LockVerbs(Base):
         lock = 'tools/machine_lock.py'
         rows = (('bash', 'git log -- %s' % lock), ('bash', 'git log -p -- %s' % lock),
                 ('bash', 'git -C x show HEAD:%s' % lock), ('bash', 'git --no-pager diff -- %s' % lock),
-                ('bash', 'git commit -m "machine_lock.py: fix"'),
-                ('powershell', 'git commit -m "machine_lock.py: fix"'),
+                ('bash', 'git commit --dry-run -m "machine_lock.py: fix"'),
+                ('powershell', 'git commit --dry-run -m "machine_lock.py: fix"'),
                 ('bash', 'winpty python %s status' % lock), ('bash', 'bash -c "python %s status"' % lock),
                 ('bash', 'bash -c "cd tools && python machine_lock.py status"'),
                 ('bash', "bash <<'EOF'\npython %s status\nEOF" % lock),
@@ -1014,10 +1014,15 @@ class ComputedCheckoutReads(Base):
                   lambda a, **kw: self.allowed(a, **kw))
 
     def test_a_write_stays_refused(self):
-        self.each([('bash', 'git -C "$p" tag "v$n"'), ('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x'),
+        self.each([('bash', 'git -C "$p" tag "v$n"'),
                    ('bash', 'git -C "$p" branch -m main old'), ('powershell', 'git -C $p branch -m main "$b"'),
                    ('bash', 'git -C "$p" config user.name "$n"')],
                   lambda a, **kw: self.denied(a, 'unplaced', **kw))
+        # a symbolic-ref write moves a ref every worktree shares: git-shared-ref holds every
+        # session but the PM's (which the jail still refuses as unplaced)
+        self.each([('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x')],
+                  lambda a, **kw: self.denied(a, 'unplaced' if kw['environ'].get(context.ROLE_ENV) == 'pm'
+                                              else 'git-shared-ref', **kw))
 
 
 setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)

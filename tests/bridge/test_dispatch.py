@@ -272,6 +272,20 @@ box.run_dispatch('op',send)
         self.assertEqual(self.core.dispatch_once('op').state, 'failed')
         self.assertEqual(len(self.adapter.calls), 1)
 
+    def test_before_write_failure_keeps_the_adapters_fixed_code_as_its_reason(self):
+        self.admit()
+        self.adapter.fail = BeforeWriteError('test-native-not-ready')
+        receipt = self.core.dispatch_once('op')
+        self.assertEqual((receipt.state, receipt.reason), ('failed', 'test-native-not-ready'))
+        self.assertEqual(self.store.receipt('op').reason, 'test-native-not-ready')
+
+    def test_before_write_failure_with_a_code_that_is_not_an_id_gets_the_generic_reason(self):
+        for operation, code in (('op', 'private detail, not an id'), ('op2', 'x' * 200)):
+            self.admit(operation)
+            self.adapter.fail = BeforeWriteError(code)
+            receipt = self.core.dispatch_once(operation)
+            self.assertEqual((receipt.state, receipt.reason), ('failed', 'native-before-write'))
+
     def test_clock_regression_and_invalid_expiry_fail_closed(self):
         self.admit()
         self.now = 999

@@ -2,7 +2,7 @@
 "Landing").
 
   land.py BRANCH [BRANCH ...] --expect-tip SHA [--expect-tip SHA ...] [--expect-main SHA]
-          [-C DIR] [--lane L] [--summary TEXT] [--full] [--fresh] [--wait SECONDS]
+          [-C DIR] [--summary TEXT] [--full] [--fresh] [--wait SECONDS]
           [--log-dir D] [--keep-branch] [--submit]
       from the main checkout: take the landing's turn in the machine lock's queue (one booking,
       whose slot the merged gate runs in) and the landing lock, fetch, merge each branch onto
@@ -44,7 +44,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+def safe_stdio():
+    """tools/gate.py's safe_stdio: a character the console's encoding has no byte for (cp1252 on
+    a redirected Windows stream: a branch name, a merged gate's step reason or a console window's
+    title) is written as a \\u escape, never raised: a landing never ends `error` over printing."""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(errors='backslashreplace')
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
+    safe_stdio()
     from kitlib.gate import pin                                     # noqa: E402
     _code, _said = pin.run(__file__, sys.argv[1:])
     if _said:
@@ -83,7 +96,6 @@ def parser():
     p.add_argument('--expect-tip', action='append', default=[], metavar='SHA',
                    help='the tip of each BRANCH, in the same order')
     p.add_argument('-C', dest='root', default='.', help='the main checkout (default: here)')
-    p.add_argument('--lane', default='full')
     p.add_argument('--summary', help='the merge title after "Merge <branch>: "')
     p.add_argument('--full', action='store_true', help='gate every non-manual step')
     p.add_argument('--fresh', action='store_true',
@@ -106,7 +118,7 @@ def parser():
 def child_args(a, root):
     """The arguments of the detached landing a --submit starts: this landing's, -C and --log-dir
     absolute."""
-    args = ['-C', root, '--lane', a.lane]
+    args = ['-C', root]
     if a.expect_main:
         args += ['--expect-main', a.expect_main]
     for tip in a.expect_tip:
@@ -153,6 +165,7 @@ def emit(outcome):
 
 
 def main(argv):
+    safe_stdio()
     p = parser()
     a = p.parse_args(argv)
     root = os.path.abspath(a.root)
@@ -160,7 +173,7 @@ def main(argv):
         p.error('--apply goes with --sweep-landed')
     if a.sweep_landed:
         if (a.branches or a.expect_main or a.expect_tip or a.queue or a.keep_branch or a.full
-                or a.fresh or a.summary or a.wait is not None or a.log_dir or a.lane != 'full'
+                or a.fresh or a.summary or a.wait is not None or a.log_dir
                 or a.submit or a.submitted):
             p.error('--sweep-landed takes only --apply and -C')
         try:
@@ -191,7 +204,7 @@ def main(argv):
     branch = a.branches[0] if len(a.branches) == 1 else a.branches
     tip = a.expect_tip[0] if len(a.expect_tip) == 1 else a.expect_tip
     try:
-        out = landmod.land(root, branch, a.expect_main, tip, lane=a.lane, summary=a.summary,
+        out = landmod.land(root, branch, a.expect_main, tip, summary=a.summary,
                            full=a.full, wait_s=a.wait, say=say,
                            book_kw={'store': Store(say=say)}, log_dir=a.log_dir,
                            keep_branch=a.keep_branch, fresh=a.fresh, submitted=submitted)

@@ -97,7 +97,8 @@ class Notes(Base):
             out = self.cons(plan=plan)
             self.assertIn('Warning: %s is no longer read; the notes file is %s. The old file is left as it is.'
                           % (self.old, self.notes), out)
-            self.assertNotIn('copy', out.lower())
+            for message in ('would copy', 'copied the old notes file', 'removed the copy'):
+                self.assertNotIn(message, out.lower())
         self.assertEqual(read(self.notes), b'new')
         self.assertEqual(read(self.old), OLD_TEXT)
 

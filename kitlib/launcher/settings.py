@@ -152,14 +152,14 @@ class Settings(object):
     def state_dir(self):
         if not self._state_dir:
             raise LaunchError('launcher.state_dir is not set in %s: the folder holding sessions.json '
-                              'and coordinators.json (docs/launcher.md "Settings")' % kuser.config_file(self.home))
+                              'and coordinators.json (docs/launcher.md "Settings")' % kuser.key_file(self.home, KEY))
         return self._state_dir
 
     def repo_path(self, name):
         if name in self.repos:
             return self.repos[name]
         raise LaunchError('repo %r is not in launcher.repos of %s (known: %s); give --repo-path instead'
-                          % (name, kuser.config_file(self.home), ', '.join(sorted(self.repos)) or 'none'))
+                          % (name, kuser.key_file(self.home, KEY), ', '.join(sorted(self.repos)) or 'none'))
 
 
 def load(home=None):

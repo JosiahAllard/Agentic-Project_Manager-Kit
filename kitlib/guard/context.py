@@ -37,16 +37,26 @@ a constructor argument, and the defaults read this machine.
                      variable alone is never proof.
   gate_ok(root, sha) kitlib.gate.runner.verify_record: the record must name a config_rev in
                      sha's history and hash the gate config that commit holds
-  user()             the machine config (ledger_path and the guard_* keys), read
-                     tolerantly: a file the strict reader refuses only for keys this kit does not
-                     know still yields its absolute ledger_path and its string or string-list
-                     values. A file that cannot be read, is
-                     not a JSON object, or whose ledger_path is not an absolute path string sets
-                     'broken' (why), and the ledger rule then denies every subagent write. A
-                     missing file is an empty config, not a broken one. The file is the one
-                     config_location() names; a BAD location sets 'broken' too (fail closed).
-  config_location()  kitlib.config.user.locate(home), taken once per Ctx, so every read of
-                     the machine config in one hook call reads the same file.
+  user()             the machine config (ledger_path, ledger_dir and the guard_* keys), read
+                     tolerantly: files the strict reader refuses only for keys this kit does not
+                     know still yield their ledger_path, ledger_dir and their string or
+                     string-list values, each key from its own file (kitlib.config.user
+                     POLICY_KEYS from config.json, LOCAL_KEYS from local.json) and a relative
+                     ledger_path or ledger_dir read against the PM repository. A file that cannot
+                     be read or is not a JSON object, or a ledger_path or ledger_dir that is not a
+                     path string, sets 'broken' (why), and the ledger rule then denies every
+                     subagent write. Missing files are an empty config, not
+                     a broken one. The files are the ones config_location() names; an UNMOVED or
+                     BAD location sets 'broken' too (fail closed), and an UNMOVED one's home
+                     leftover is still read, so its ledger_path stays protected.
+  ledger_files()     kitlib.ledger.files.of_config over user(): where the ledger's log files,
+                     standing digest and rulebooks' folder are (the ledger rule), or None
+  config_location()  kitlib.config.user.locate(home) with the PM-repo pointer read once from the
+                     registry (kitlib.config.pointer.read_raw; pm_repo_pointer shares that read)
+                     and checked by kitlib.config.pointer.read with place()'s classify and the
+                     branch read from the work tree's HEAD file, so a hook call starts no git for
+                     it when the filesystem answers; taken once per Ctx: every read of the
+                     machine config in one hook call reads the same files.
   kit                the kit the guard runs from (kitlib.kitroot.root(): the checkout this module
                      is in), or a test's folder; the lock tool an alternative names is under it
                      (rules.lock_tool).
@@ -62,7 +72,10 @@ a constructor argument, and the defaults read this machine.
                      reads it (rules.mcp_prefix).
 
 The pm_data argument replaces the machine-config read (a callable returning
-kitlib.pmdata.machine_settings's answer, or raising its errors).
+kitlib.pmdata.machine_settings's answer, or raising its errors). The pointer argument replaces the
+PM-repo pointer value pm_repo_pointer answers (a callable returning it or None), and only that:
+the machine config is still read through the registry's pointer. The location argument replaces
+config_location (a callable returning a kitlib.config.user.Location).
 """
 import json
 import os
@@ -72,6 +85,7 @@ from kitlib import config as kconfig
 from kitlib import kitroot
 from kitlib import pmdata
 from kitlib import sessionmark
+from kitlib.config import pointer as kpointer
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
 from kitlib.guard import paths
@@ -80,6 +94,7 @@ from kitlib.guard import place as fsplace
 ROLE_ENV = sessionmark.ENV
 OWNER = 'owner'
 SUBAGENT = 'subagent'
+LEDGER_KEYS = ('ledger_path', 'ledger_dir')     # the paths the ledger rule protects (_tolerant)
 
 
 def default_session_role(action, environ):
@@ -109,32 +124,29 @@ def _default_lock_held(environ, store):
 
 
 def _machine_pm_data(home, location=None):
-    """kitlib.pmdata.machine_settings(home). When the strict reader refuses the machine config,
-    its pm_data key alone is read and checked with the same rules, so another key's fault does
-    not hide the PM data worktree; a file that cannot be read or parsed, or a BAD `location`
-    (kitlib.config.user.locate), raises, and the guard fails closed."""
-    loc = location or kuser.locate(home)
+    """kitlib.pmdata.machine_settings(home): the pm_data the PM-repo pointer derives
+    (kitlib.config.user.Location.pm_data), which no key of the machine config's files can hide; an
+    UNMOVED or BAD `location` (kitlib.config.user.locate) raises, and the guard fails closed."""
+    return pmdata.machine_settings(home, location=location or kuser.locate(home))
+
+
+def _tolerant_read(path):
+    """(the JSON object in `path`, None), ({}, None) when it is absent, or ({}, why) when it cannot
+    be read or is not a JSON object."""
     try:
-        return pmdata.machine_settings(home, location=loc)
-    except kconfig.ConfigError as e:
-        if loc.error:
-            raise
-        path = loc.path
-        try:
-            with open(path, encoding='utf-8-sig') as f:
-                data = json.load(f)
-        except (OSError, UnicodeDecodeError, ValueError, RecursionError):
-            raise e
-        if not isinstance(data, dict):
-            raise e
-        return pmdata.check_settings(data.get(pmdata.KEY), '%s key %s' % (path, pmdata.KEY))
-
-
-def _pointer_value():
-    """The PM-repo pointer's value (kitlib.config.pointer.read_raw), or None."""
-    from kitlib.config import pointer
-    value, _why = pointer.read_raw()
-    return value
+        with open(path, encoding='utf-8-sig') as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {}, None
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        return {}, 'cannot read it: %s' % e
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        return {}, 'it is not valid JSON: %s' % e
+    if not isinstance(data, dict):
+        return {}, 'it must be an object, not %s' % type(data).__name__
+    return data, None
 
 
 def _same_dir(a, b):
@@ -144,10 +156,12 @@ def _same_dir(a, b):
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
                  gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
-                 pm_data=None, kit=None, profile=None, pointer=None):
+                 pm_data=None, kit=None, profile=None, pointer=None, location=None):
         self.environ = dict(os.environ if environ is None else environ)
-        self._pointer_read = pointer or _pointer_value
-        self._pointer = None
+        self._pointer_read = pointer             # None: the registry (kitlib.config.pointer.read_raw)
+        self._pointer = None                     # pm_repo_pointer's (value or None, why or None)
+        self._registry = None                    # read_raw's answer, read once
+        self._location_read = location
         self.home = home or kuser.home_dir()
         self.kit = kit or kitroot.root()
         self.store = store
@@ -160,6 +174,7 @@ class Ctx(object):
         self._profile = profile
         self.tempdir = tempdir or self.environ.get('TEMP') or tempfile.gettempdir()
         self._places, self._configs, self._config_errors = {}, {}, {}
+        self._raw_places = {}                    # key -> self._classify's answer, unadjusted
         self._user = None
         self._location = None
         self._pm_data = pm_data or (lambda: _machine_pm_data(self.home, self.config_location()))
@@ -170,12 +185,27 @@ class Ctx(object):
 
     # ------------------------------------------------------------ places and config
 
+    def _raw(self, path):
+        """self._classify(path), cached: place's answer before its PM data change (the pointer
+        check reads it; place itself needs the machine config, so it cannot)."""
+        key = paths.norm(path, absolute=True)
+        if key not in self._raw_places:
+            self._raw_places[key] = self._classify(path)
+        return self._raw_places[key]
+
+    def _head_branch(self, path):
+        """refs.current_branch's answer for the work tree at `path`, read from its HEAD file
+        (_raw's git_dir) when that names a branch or a commit, else from git."""
+        p = self._raw(path)
+        answer = fsplace.head_branch(p.git_dir) if p.git_dir else None
+        return answer if answer is not None else self.git.current_branch(path)
+
     def place(self, path):
         if not path:
             return repo.Place(repo.UNKNOWN, None, 'no path', None, None)
         key = paths.norm(path, absolute=True)
         if key not in self._places:
-            p = self._classify(path)
+            p = self._raw(path)
             branch = self._pm_data_top(key, p) if p.kind == repo.LINKED and p.top else None
             if branch:
                 self._pm_places[key] = branch
@@ -230,9 +260,23 @@ class Ctx(object):
         """The PM-repo pointer's value as stored (kitlib.config.pointer.read_raw), read once, or
         None when there is none or it cannot be read. It is not checked: a rule that protects a
         file under it holds whatever folder it names."""
+        return self._pointer_answer()[0] or None
+
+    def _pointer_answer(self):
+        """The registry's answer (_registry_raw), or the pointer argument's value as (value or
+        None, None); read once."""
         if self._pointer is None:
-            self._pointer = (self._pointer_read() or '',)
-        return self._pointer[0] or None
+            if self._pointer_read is None:
+                self._pointer = self._registry_raw()
+            else:
+                self._pointer = (self._pointer_read() or None, None)
+        return self._pointer
+
+    def _registry_raw(self):
+        """kitlib.config.pointer.read_raw's answer, read once."""
+        if self._registry is None:
+            self._registry = kpointer.read_raw()
+        return self._registry
 
     def pm_root(self):
         """The machine's PM data record as (root sha, None); (None, None) when the machine config
@@ -347,7 +391,11 @@ class Ctx(object):
 
     def config_location(self):
         if self._location is None:
-            self._location = kuser.locate(self.home)
+            if self._location_read is not None:
+                self._location = self._location_read()
+            else:
+                ptr = kpointer.read(raw=self._registry_raw(), classify=self._raw, branch=self._head_branch)
+                self._location = kuser.locate(self.home, ptr=ptr)
         return self._location
 
     def user(self):
@@ -358,42 +406,51 @@ class Ctx(object):
                 self._user = self._tolerant(str(e))
         return self._user
 
+    def ledger_files(self):
+        from kitlib.ledger import files
+        return files.of_config(self.user())
+
     def _tolerant(self, why):
         out = {k: None for k in kuser.SCHEMA}
         out['error'] = why
         loc = self.config_location()
-        if loc.error:
+        if loc.error and loc.state != kuser.UNMOVED:
             out['broken'] = loc.error
             return out
-        path = loc.path
-        try:
-            with open(path, encoding='utf-8-sig') as f:
-                text = f.read()
-        except FileNotFoundError:
-            return out
-        except (OSError, UnicodeDecodeError, ValueError) as e:
-            out['broken'] = 'cannot read it: %s' % e
-            return out
-        try:
-            data = json.loads(text)
-        except ValueError as e:
-            out['broken'] = 'it is not valid JSON: %s' % e
-            return out
-        if not isinstance(data, dict):
-            out['broken'] = 'it must be an object, not %s' % type(data).__name__
-            return out
-        for k in kuser.SCHEMA:
-            v = data.get(k)
-            if isinstance(v, str) and v.strip():
-                out[k] = v
-            elif isinstance(v, list) and v and all(isinstance(x, str) and x.strip() for x in v):
-                out[k] = list(v)
-        lp = data.get('ledger_path')
-        if lp is not None and not isinstance(lp, str):
-            out['broken'] = 'ledger_path must be a string, not %r' % (lp,)
-        elif isinstance(lp, str) and lp.strip() and not os.path.isabs(lp):
-            out['broken'] = 'ledger_path must be an absolute path, not %r' % lp
-            out['ledger_path'] = None
+        if loc.state == kuser.OK:
+            files = ((loc.path, kuser.POLICY_KEYS), (loc.local, kuser.LOCAL_KEYS))
+        else:
+            files = ((loc.path, tuple(kuser.SCHEMA)),)
+        for path, keys in files:
+            data, broken = _tolerant_read(path)
+            if broken:
+                # the rules name loc.path's file; the local file names itself
+                out['broken'] = broken if path == loc.path else '%s: %s' % (loc.display(path), broken)
+                return out
+            for k in keys:
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    out[k] = v
+                elif isinstance(v, list) and v and all(isinstance(x, str) and x.strip() for x in v):
+                    out[k] = list(v)
+            for k in LEDGER_KEYS:
+                if k not in keys:
+                    continue
+                lp = data.get(k)
+                if lp is not None and not isinstance(lp, str):
+                    out['broken'] = '%s must be a string, not %r' % (k, lp)
+                    out[k] = None
+                elif isinstance(lp, str) and lp.strip() and not os.path.isabs(lp):
+                    if loc.pm:
+                        out[k] = kuser.resolved({k: lp}, loc.pm)[k]
+                    else:
+                        out['broken'] = '%s must be an absolute path, not %r' % (k, lp)
+                        out[k] = None
+        if loc.error:
+            # UNMOVED: the home folder's leftover is read for its ledger_path, so the ledger stays
+            # protected, and the config is still broken (every subagent write is denied)
+            out['broken'] = loc.error
+        out['pm_data'] = loc.pm_data
         return out
 
     def session_role(self, event):

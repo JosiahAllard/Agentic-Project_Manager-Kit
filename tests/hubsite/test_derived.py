@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.hubsite import derived
 
@@ -157,6 +158,47 @@ class AgentsTests(Tmp):
         self.assertTrue(got['available'], (default, got))
         self.assertIn('worker', [a['name'] for a in got['agents']])
         self.assertIsNone(serve.agents_dir({registry.ENV: 'no-such-host'}))
+
+
+class LintRunsTests(Tmp):
+    """derived.lint_runs: each repository's last maintenance lint run and its skip marker, from
+    <lint_dir>/<repo>/ (KIT-HUB-FINDINGS-LINT-RUNS); what is on disk never makes it raise."""
+    SKIP = {'reason': 'busy', 'at': '2026-01-09T03:00:00Z', 'code': 3}
+
+    def run_file(self, repo, run):
+        return self.put('%s/result.json' % repo, run if isinstance(run, str) else json.dumps(run))
+
+    def test_a_run_shows_its_start_and_ledger_and_a_marker_shows_beside_it(self):
+        led = {'stale_cites': 1, 'superseded': 0}
+        self.run_file('kit', {'repo': 'kit', 'started': '2026-01-02T03:04:05Z', 'ledger': led,
+                              'findings': []})
+        self.put('Alpha/skipped.json', json.dumps(self.SKIP))
+        self.assertEqual(derived.lint_runs(self.d), [
+            {'repo': 'Alpha', 'started': None, 'ledger': None, 'skip': self.SKIP},
+            {'repo': 'kit', 'started': '2026-01-02T03:04:05Z', 'ledger': led, 'skip': None}])
+
+    def test_wrong_types_read_as_none(self):
+        self.run_file('kit', {'repo': 5, 'started': 7, 'ledger': [1]})
+        self.assertEqual(derived.lint_runs(self.d),
+                         [{'repo': 'kit', 'started': None, 'ledger': None, 'skip': None}])
+
+    def test_nothing_readable_is_no_run_and_never_an_error(self):
+        self.assertEqual(derived.lint_runs(None), [])
+        self.assertEqual(derived.lint_runs(''), [])
+        self.assertEqual(derived.lint_runs(os.path.join(self.d, 'missing')), [])
+        self.assertEqual(derived.lint_runs(self.put('a-file', 'x')), [])      # not a folder
+        self.run_file('garbage', '{not json')
+        self.run_file('list', '[1, 2]')
+        os.makedirs(os.path.join(self.d, 'dir', 'result.json'))             # a folder by its name
+        self.put('badskip/skipped.json', '{"reason": 3}')
+        self.put('stray.txt', 'not a repo folder')
+        os.makedirs(os.path.join(self.d, 'empty'))
+        self.assertEqual(derived.lint_runs(self.d), [])
+
+    def test_an_unreadable_folder_is_no_run(self):
+        self.run_file('kit', {'repo': 'kit'})
+        with mock.patch.object(derived.os, 'listdir', side_effect=PermissionError('denied')):
+            self.assertEqual(derived.lint_runs(self.d), [])
 
 
 if __name__ == '__main__':

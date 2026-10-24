@@ -12,6 +12,7 @@ from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
 import tests
 from tests import shipped
+from tests.home import machine_config
 
 
 class InstallPatternsTest(unittest.TestCase):
@@ -21,10 +22,9 @@ class InstallPatternsTest(unittest.TestCase):
         self.home = self._tmp.name
 
     def write_config(self, text):
-        d = os.path.join(self.home, kuser.DIR_NAME)
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, kuser.FILE_NAME), 'w', encoding='utf-8') as f:
-            f.write(text)
+        """The machine config `text` (a JSON object), split into the fenced PM repository's two
+        files as the kit reads them."""
+        machine_config(self.home, json.loads(text), case=self)
 
     def test_scrub_patterns_become_case_insensitive_install_names(self):
         self.write_config(json.dumps({'scrub_patterns': [r'\bacme\b', 'widgetco']}))
@@ -86,13 +86,20 @@ class RealScrubPatternsTest(unittest.TestCase):
     (machine_patterns) first and fail on a finding of theirs.
     The process stays fenced, so any other home lookup would raise HomeFenced."""
 
-    write_config = InstallPatternsTest.write_config
+    def write_config(self, text):
+        """`text` as the recorded home's machine config file (the registry's pointer is patched
+        to none, so real_install_config reads it)."""
+        d = os.path.join(self.home, kuser.DIR_NAME)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, kuser.FILE_NAME), 'w', encoding='utf-8') as f:
+            f.write(text)
 
     def setUp(self):
         InstallPatternsTest.setUp(self)
-        p = mock.patch.object(tests, '_REAL_HOME', self.home)
-        p.start()
-        self.addCleanup(p.stop)
+        for name, value in (('_REAL_HOME', self.home), ('_REAL_POINTER', (None, 'no pointer here'))):
+            p = mock.patch.object(tests, name, value)
+            p.start()
+            self.addCleanup(p.stop)
 
     def opened(self, fn):
         """(fn's result, [every file it opened])."""
@@ -120,7 +127,7 @@ class RealScrubPatternsTest(unittest.TestCase):
                                 'pm_start': {'hub_url': 'https://example.invalid/a/hubid',
                                              'sessions_file': sessions, 'repos': ['alpha']},
                                 'cap': {'beta': 2}}, None))
-        self.assertEqual(seen, [os.path.normcase(kuser.config_file(self.home))])
+        self.assertEqual(seen, [os.path.normcase(kuser.home_location(self.home).path)])
         pats = shipped.install_patterns()
         self.assertEqual([what for _rx, what in pats], ['install name', 'install name'])
         self.assertEqual([rx.pattern for rx, _what in pats], ['acme', 'widgetco'])

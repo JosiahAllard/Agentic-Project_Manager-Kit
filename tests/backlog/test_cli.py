@@ -123,7 +123,7 @@ class Cli(unittest.TestCase):
     def test_refusals_exit_2_and_write_nothing(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
-        for args in (('set', 'FOO', '--priority', '2', '--priority-by', 'pm'),
+        for args in (('set', 'FOO', '--priority-ruling', 'x'),
                      ('add', 'FOO', '--summary', 'again', '--scope', 'tools/y.py', *ADD_FLAGS),
                      ('add', 'BAR', '--summary', 'bad', '--scope', '*.py', *ADD_FLAGS),
                      ('pull', 'FOO'),
@@ -138,15 +138,13 @@ class Cli(unittest.TestCase):
             rc, out = self.run_process(*args)
             self.assertEqual(rc, 2, (args, out))
 
-    def test_retire_owner_said_is_refused_and_points_at_ruling(self):
+    def test_retire_takes_no_owner_words_and_no_ruling(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
-        rc, out = self.run_tool('retire', 'FOO', '--why', 'no longer wanted at all',
-                                '--owner-said', 'go ahead')
-        self.assertEqual(rc, 2, out)
-        self.assertRegex(out, r'^USAGE: ')
-        self.assertIn('--ruling R-nnnn', out)
-        self.assertNotIn('go ahead', out)
+        for flag in ('--owner-said', '--ruling'):
+            rc, out = self.run_tool('retire', 'FOO', '--why', 'no longer wanted at all', flag, 'x')
+            self.assertEqual(rc, 2, out)
+            self.assertIn('USAGE: unrecognized arguments: %s' % flag, out)
         self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), tip)
         self.assertEqual(self.run_tool('show', 'FOO')[0], 0)
 
@@ -203,17 +201,18 @@ class Cli(unittest.TestCase):
     def test_park_list_parked_and_unpark(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md', *ADD_FLAGS)
-        rc, out = self.run_tool('set-status', 'FOO', 'parked')
-        self.assertEqual(rc, 2, out)
-        self.ok('set-status', 'FOO', 'parked', '--q', 'Q-001')
+        self.ok('set-status', 'FOO', 'parked')                  # no question yet
+        self.assertRegex(self.ok('list', '--status', 'parked'), r'FOO .*\[q \?, parked 0d\]')
+        self.ok('set-status', 'FOO', 'parked', '--q', 'Q-001')  # re-pointed on one
         out = self.ok('list', '--status', 'parked')
         self.assertRegex(out, r'FOO .*\[q Q-001, parked 0d\]')
         self.assertNotIn('BAR', out)
         self.assertIn('1 parked', out)
-        rc, out = self.run_tool('unpark', 'FOO')
-        self.assertEqual(rc, 2, out)
-        self.ok('unpark', 'FOO', '--ruling', 'R-9001')
-        self.assertIn('resume: R-9001', self.ok('show', 'FOO'))
+        out = self.ok('unpark', 'FOO')
+        self.assertIn('UNPARKED FOO - state: open (was parked on Q-001)', out)
+        shown = self.ok('show', 'FOO')
+        self.assertIn('state: open', shown)
+        self.assertNotIn('resume', shown)
         self.assertIn('GREEN', self.ok('check'))
 
     def test_an_invalid_record_on_the_ref_makes_check_red(self):
@@ -242,9 +241,8 @@ class Cli(unittest.TestCase):
 
 class RulingCitesUnchecked(unittest.TestCase):
     """A ledger the machine config names is never read by tools/backlog.py: `check` does not test
-    a record's cited ruling against it, and a ruled write takes any well-shaped id on its word,
-    whether the ledger holds it, retired it, or the machine config calls it the standing
-    delegation."""
+    a record's cited ruling against it, and no write takes a ruling: the role check decides an
+    owner's price, whatever the machine config calls the standing delegation."""
     run_tool, run_process, ok = Cli.run_tool, Cli.run_process, Cli.ok  # Cli's sandbox only
     LEDGER = ('# Rulings ledger (test fixture)\n\n'
               '## R-9168 | 2026-09-25 08:08Z | kit | typed\n\nstand-in text\nItems: FOO\n\n'
@@ -264,11 +262,15 @@ class RulingCitesUnchecked(unittest.TestCase):
             json.dump(dict(ledger_path=self.ledger, **extra), f)
 
     def test_check_stays_green_over_cites_the_ledger_does_not_hold(self):
-        # priced before the ledger is configured; R-9999 is absent from it, R-9007 is retired
-        for rid, ruling in (('FOO', 'R-9999'), ('BAR', 'R-9007')):
-            self.ok('add', rid, '--summary', 'a thing to do', '--scope', 'tools/%s.py' % rid.lower(),
-                    *ADD_FLAGS)
-            self.ok('set', rid, '--priority', '1', '--priority-by', 'owner', '--ruling', ruling)
+        # records an older tool priced with a cite: R-9999 is absent from the ledger, R-9007 retired
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            backend = smod.RefBackend(self.repo.root, 'origin', smod.STORE_REF, smod.STORE_REF)
+            store = smod.Store(backend, rmod.Rules())
+            backend.publish(store.load(), dict(
+                priced('FOO', priority='1', priority_by='owner', priority_ruling='R-9999',
+                       scope='tools/foo.py'),
+                **priced('BAR', priority='1', priority_by='owner', priority_ruling='R-9007',
+                         scope='tools/bar.py')), 'seed\n')
         self.configure()
         # a real child: the machine config reaches backlog.py only through the env it inherits
         rc, out = self.run_process('--no-fetch', 'check')
@@ -277,22 +279,24 @@ class RulingCitesUnchecked(unittest.TestCase):
         self.assertNotIn('priority rulings', out)
         self.assertNotIn('hold rulings', out)
 
-    def test_a_ruled_write_takes_an_id_the_ledger_does_not_hold(self):
+    def test_an_owner_price_takes_no_ruling(self):
         self.configure()
         self.ok('add', 'BAZ', '--summary', 'a thing to do', '--scope', 'tools/baz.py', *ADD_FLAGS)
         rc, out = self.run_tool('set', 'BAZ', '--priority', '2', '--priority-by', 'owner',
                                 '--ruling', 'R-9999')
-        self.assertEqual(rc, 0, out)
-        self.assertIn('priority_ruling: R-9999', self.ok('show', 'BAZ'))
+        self.assertEqual(rc, 2, out)
+        self.assertIn('USAGE: unrecognized arguments: --ruling', out)
+        self.ok('set', 'BAZ', '--priority', '2', '--priority-by', 'owner')
+        shown = self.ok('show', 'BAZ')
+        self.assertIn('priority_by: owner', shown)
+        self.assertNotIn('priority_ruling', shown)
 
-    def test_the_standing_delegation_id_is_not_refused(self):
+    def test_the_standing_delegation_changes_no_price(self):
         self.configure(standing_delegation='R-9168')
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
-        rc, out = self.run_tool('set', 'FOO', '--priority', '1', '--priority-by', 'owner',
-                                '--ruling', 'R-9168')
-        self.assertEqual(rc, 0, out)
+        out = self.ok('set', 'FOO', '--priority', '1', '--priority-by', 'owner')
         self.assertNotIn('standing delegation', out)
-        self.assertIn('priority_ruling: R-9168', self.ok('show', 'FOO'))
+        self.assertNotIn('priority_ruling', self.ok('show', 'FOO'))
 
 
 if __name__ == '__main__':

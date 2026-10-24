@@ -208,7 +208,7 @@ class MovedToTop(unittest.TestCase):
         self.assertEqual(q["entries"][1]["ticket"], 3)          # it keeps its ticket
 
 
-LAND = "landing:z:\\repo\\.git"
+LAND = "landing:q:\\repo\\.git"
 
 
 def land(rid, cpu, expect_s, ticket, **kw):
@@ -299,7 +299,7 @@ class ResourceExclusion(unittest.TestCase):
 
     def test_another_resource_or_none_does_not(self):
         h = holder("r-h", [0], NOW - 100, 1000)
-        h["resource"] = "landing:z:\\other\\.git"
+        h["resource"] = "landing:q:\\other\\.git"
         got = self.plan([h, land("r-l", 1, 100, 2), waiter("r-a", 1, 100, 3, resource=None)])
         self.assertTrue(got["r-l"]["now"])
         self.assertTrue(got["r-a"]["now"])
@@ -322,7 +322,7 @@ class ResourceExclusion(unittest.TestCase):
         # waits for X2.
         L = lay.derive(lay.fake_hardware(threads=32, smt=2, gpus=0))
         self.assertEqual(L["cpu_slots"], 16)
-        other = "landing:z:\\other\\.git"
+        other = "landing:q:\\other\\.git"
 
         def plan(extra):
             x1 = holder("r-x1", [0, 1, 2, 3], NOW - 600, 2400)

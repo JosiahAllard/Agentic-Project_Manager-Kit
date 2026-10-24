@@ -11,7 +11,7 @@ from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
 from tests import gitfixture
 from tests.home import temp_home
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
 from tests.realgit import real_git
 
 
@@ -124,7 +124,7 @@ class KitSyncTest(Base):
 
     def test_landing_held_left_alone(self):
         self.remote_ahead()
-        landing.LandingLock(self.repo.root).take('full', ['kit/x'])
+        landing.LandingLock(self.repo.root).take(['kit/x'])
         self.assertLeft(self.run_check(), 'landing lock is held')
         self.assertEqual(self.repo.git('rev-parse', 'refs/heads/main'), self.repo.initial)
 
@@ -190,7 +190,7 @@ class KitSyncTest(Base):
         self.assertEqual(self.repo.git('rev-parse', 'refs/heads/main'), mine)
 
     def test_in_checklist_and_failure_isolated(self):
-        fakes = dict(handoff={'globber': lambda p: []}, reminders={'read': lambda p: '[]'},
+        fakes = dict(handoff=HANDOFF_FAKE, reminders={'read': lambda p: '[]'},
                      liveness={'read': lambda p: '{}'})
         now = datetime.datetime(2026, 10, 6, 9, 0)
         sha = self.remote_ahead()

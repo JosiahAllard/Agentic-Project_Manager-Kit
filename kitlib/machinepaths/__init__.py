@@ -20,7 +20,6 @@ Every spelling of the separator is matched (single and doubled backslash, forwar
 What a repository allows is `.kit.json` "machine_paths" (load_config, docs/commit.md):
   allow          [{glob, line, hit?, why, temporary?}] - a line kind a literal may stay on;
   fixtures       [{glob, hits, line?, why?}] - a test file's invented paths, exactly those;
-  piece_fixtures refused: the pieces-table resolver is not in kitlib (docs/commit.md, Not ported);
   known_binary   {path: reason} - files not searched and not warned about;
   scan           [globs] - only files matching one are searched (default: every file);
   fallback_vars  [names] - a hit on a line that reads one of these variables
@@ -124,9 +123,6 @@ def from_section(data, where='.kit.json "%s"' % SECTION):
         if not hits or not all(hits):
             raise ConfigError('%s.hits must be a list of non-empty regex strings' % w)
         allow.append(_fixture(e['glob'], *hits, line_re=e.get('line') or '.', why=e.get('why') or ''))
-    if data.get('piece_fixtures'):
-        raise ConfigError('%s.piece_fixtures needs a pieces table resolver, and kitlib has none: '
-                          'name the file with a "fixtures" glob instead (docs/commit.md)' % where)
     kb = data.get('known_binary') or {}
     if not all(isinstance(v, str) and v.strip() for v in kb.values()):
         raise ConfigError('%s.known_binary must map each path to its reason' % where)
@@ -155,7 +151,7 @@ def folders(home=None):
     except ConfigError:
         return DEFAULT_FOLDERS, ('WARNING: machine config %s could not be read, so only '
                                  'user-profile paths were searched - run tools/preflight.py to see '
-                                 'what it refuses' % kuser.DISPLAY)
+                                 'what it refuses' % kuser.display(home))
 
 
 def load_config(root, home=None):

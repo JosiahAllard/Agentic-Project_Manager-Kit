@@ -96,6 +96,16 @@ class KitAdapter(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 plan("ledger", args, ROOT, role="pm")
 
+    def test_ledger_calls_carry_their_repo_and_prov_to_the_tool(self):
+        add = ["add", "--repo", "kit", "--prov", "owner", "--commit", "--model", "gpt-6.1-sol"]
+        self.assertEqual(plan("ledger", add, ROOT, role="pm").argv[2:], tuple(add))
+        listing = ["list", "--prov", "delegated", "--since", "2026-01-01", "--repo=kit"]
+        self.assertEqual(plan("ledger", listing, ROOT, role="analyst").argv[2:], tuple(listing))
+        for args in (["add", "--repo", "kit", "--prov", "owner", "--provider", "claude"],
+                     ["list", "--pro", "owner"]):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                plan("ledger", args, ROOT, role="pm")
+
     def test_lander_and_test_runner_cannot_mutate_backlog(self):
         for role in ("lander", "test-runner"):
             with self.subTest(role=role), self.assertRaises(ValueError):
@@ -111,6 +121,72 @@ class KitAdapter(unittest.TestCase):
         self.assertEqual(plan("ledger", ["add"], ROOT, role="pm").role, "pm")
         with self.assertRaises(ValueError):
             plan("ledger", ["add", "--comm"], ROOT, role="pm")
+
+    RULEBOOK_ROLES = ("analyst", "worker", "coordinator", "test-runner", "lander", "pm")
+    RULE_DROP = ["rule-drop", "kit-tools.one-entry", "--repo", "kit", "--prov", "owner",
+                 "--why", "superseded", "--source", "hub"]
+    RULE_SET = ["rule-set", "--repos", "kit,game", "--budget", "40", "--repo", "kit", "--prov",
+                "owner", "--why", "two checkouts", "--source", "hub"]
+
+    def test_rules_is_a_read_for_every_role(self):
+        args = ["rules", "--repo", "kit", "--sources", "--topic", "gate"]
+        for role in self.RULEBOOK_ROLES:
+            with self.subTest(role=role):
+                self.assertEqual(plan("ledger", args, ROOT, role=role).argv[2:], tuple(args))
+
+    def test_conflicts_is_a_read_for_every_role(self):
+        args = ["conflicts", "--repo", "kit", "--topic", "Gate", "--key", "gate.full", "--text", "run it"]
+        for role in self.RULEBOOK_ROLES:
+            with self.subTest(role=role):
+                self.assertEqual(plan("ledger", args, ROOT, role=role).argv[2:], tuple(args))
+
+    def test_migrate_report_is_a_read_for_every_role(self):
+        args = ["migrate-report", "--out", "report.md"]
+        for role in self.RULEBOOK_ROLES:
+            with self.subTest(role=role):
+                self.assertEqual(plan("ledger", args, ROOT, role=role).argv[2:], tuple(args))
+
+    def test_rule_drop_and_rule_set_are_pm_only(self):
+        for args in (self.RULE_DROP, self.RULE_SET):
+            for role in self.RULEBOOK_ROLES[:-1]:
+                with self.subTest(verb=args[0], role=role), self.assertRaises(ValueError):
+                    plan("ledger", args, ROOT, role=role)
+            self.assertEqual(plan("ledger", args, ROOT, role="pm").argv[2:], tuple(args))
+
+    def test_pm_rule_drop_commits_with_its_model(self):
+        args = self.RULE_DROP + ["--commit", "--model", "gpt-6.1-sol"]
+        self.assertEqual(plan("ledger", args, ROOT, role="pm").argv[2:], tuple(args))
+        pushed = self.RULE_DROP + ["--push", "--model", "gpt-6.1-sol"]
+        self.assertEqual(plan("ledger", pushed, ROOT, role="pm").argv[2:], tuple(pushed))
+
+    def test_pm_rule_set_commits_with_its_model(self):
+        args = self.RULE_SET + ["--commit", "--model", "gpt-6.1-sol"]
+        self.assertEqual(plan("ledger", args, ROOT, role="pm").argv[2:], tuple(args))
+
+    # rule-apply (the migration apply) is not in tools/ledger.py yet: these pin only how dispatch
+    # classifies it, a PM-only write that takes --commit.
+    def test_rule_apply_is_pm_only(self):
+        args = ["rule-apply", "report.md", "--write"]
+        for role in self.RULEBOOK_ROLES[:-1]:
+            with self.subTest(role=role), self.assertRaises(ValueError):
+                plan("ledger", args, ROOT, role=role)
+        self.assertEqual(plan("ledger", args, ROOT, role="pm").argv[2:], tuple(args))
+
+    def test_pm_rule_apply_commits_with_its_model(self):
+        args = ["rule-apply", "report.md", "--write", "--commit", "--model", "gpt-6.1-sol"]
+        self.assertEqual(plan("ledger", args, ROOT, role="pm").argv[2:], tuple(args))
+        with self.assertRaises(ValueError):
+            plan("ledger", ["rule-apply", "report.md", "--commit"], ROOT, role="pm")
+
+    def test_a_rulebook_commit_keeps_the_commit_checks(self):
+        for role, args in (("pm", self.RULE_DROP + ["--commit"]),
+                           ("pm", self.RULE_DROP + ["--comm", "--model", "gpt-6.1-sol"]),
+                           ("pm", self.RULE_SET + ["--commit", "--provider", "claude", "--model", "gpt-6.1-sol"]),
+                           ("pm", ["rules", "--commit", "--model", "gpt-6.1-sol"]),
+                           ("pm", ["conflicts", "--push", "--model", "gpt-6.1-sol"]),
+                           ("coordinator", self.RULE_DROP + ["--commit", "--model", "gpt-6.1-sol"])):
+            with self.subTest(role=role, args=args), self.assertRaises(ValueError):
+                plan("ledger", args, ROOT, role=role)
 
     def test_landing_needs_role_verdict_and_full_hashes(self):
         args = ["codex/task", "--expect-main", "1" * 40, "--expect-tip", "2" * 40]

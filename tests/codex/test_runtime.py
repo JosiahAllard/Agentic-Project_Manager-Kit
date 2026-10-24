@@ -344,14 +344,15 @@ class BoundGuard(unittest.TestCase):
 
     def test_a_broker_deny_is_logged_and_an_allow_is_not(self):
         # kitlib.guard.refusal_log (docs/guard-v2.md "Refusal log"): one line per deny, in the
-        # pm_data the machine config names, with the bound role and never the patch's text
+        # pm_data the PM-repo pointer gives, with the bound role and never the patch's text
         from tests.gitfixture import rmtree
         from tests.home import machine_config, temp_home
         from hosts.codex.adapter.runtime import evaluate_bound
         home = temp_home(self)
         data = tempfile.mkdtemp(prefix='kit-pmdata-')
         self.addCleanup(rmtree, data)
-        machine_config(home, {'pm_data': {'path': data}})
+        machine_config(home, {'pm_data': {'path': data}}, case=self)   # the pointer names it
+        self.w.user_config({'pm_data': {'path': data, 'branch': 'main', 'remote': 'origin'}})
         self.assertIsNone(self.judge('worker', 'a.py'))
         self.assertIn('rule=host-role-edit', self.judge('analyst', 'secret-name.py', child=True))
         binding = SimpleNamespace(role='worker', cwd=self.w.wt, parent=None, thread='t')

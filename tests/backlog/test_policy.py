@@ -1,6 +1,7 @@
 """kitlib.backlog.policy: a backlog command sorted into kitlib/backlog/roles.py's rows, the refusal for
 a role that may not take one, the guard's reader of a backlog.py command line (pinned to the tool's
 own parser), and tools/backlog.py's own check of its session's mark (docs/backlog.md "Roles")."""
+import os
 import tempfile
 import unittest
 
@@ -26,6 +27,23 @@ class Sort(unittest.TestCase):
             self.assertEqual(policy.sort(verb), ['read'], verb)
         self.assertEqual(policy.sort('retarget', {}), ['read'])
         self.assertEqual(policy.sort('retarget', {'apply': True}), ['retarget'])
+        self.assertEqual(policy.sort('uncite', {}), ['read'])
+        self.assertEqual(policy.sort('uncite', {'apply': False}), ['read'])
+
+    @unittest.skipUnless('uncite' in roles.ACTIONS['retarget'].verbs,
+                         "roles.py's retarget row does not name uncite yet (owner approval)")
+    def test_uncite_apply_is_the_retarget_row(self):
+        self.assertEqual(policy.sort('uncite', {'apply': True}), ['retarget'])
+        self.assertEqual(policy.sort('uncite', {'unknown': True}), ['retarget'])
+
+    def test_clearing_resume_is_the_owners_and_the_ruling_keys_are_set_other(self):
+        priced = record(priority='3', priority_by='agent')
+        for key, row in (('resume', 'set-price-owner'), ('hold_ruling', 'set-other'),
+                         ('priority_ruling', 'set-other')):
+            given = policy.read_argv(words('set', 'FOO', '--unset', key)).given
+            self.assertEqual(given['fields'], [key], key)
+            self.assertEqual(policy.sort('set', given, priced), [row], key)
+            self.assertEqual(policy.sort('set', given, None), [row], key)
 
     def test_a_set_sorts_by_its_fields_and_the_record(self):
         self.assertEqual(policy.sort('set', {'fields': ['scope', 'summary']}), ['set-text'])
@@ -47,23 +65,37 @@ class Sort(unittest.TestCase):
         self.assertEqual(policy.sort('set', hold, priced), ['set-hold'])
         unset = {'fields': ['priority'], 'priority': ['-']}
         self.assertEqual(policy.sort('set', unset, priced), ['set-price'])
-        self.assertEqual(policy.sort('set', {'hold_ruling': True}, priced), ['set-hold'])
+        blocked = record(priority='3', priority_by='agent', state='blocked', blocked_on='owner',
+                         owner_ask='which one?')
+        self.assertEqual(policy.sort('set', one, blocked), ['set-price-owner'])
+        by = {'fields': ['priority_by'], 'priority_by': ['agent']}
+        self.assertEqual(policy.sort('set', by, owner), ['set-price-owner'])
+        self.assertEqual(policy.sort('set', by, priced), ['set-other'])
+        clear = {'fields': ['blocked_on'], 'blocked_on': ['-']}
+        self.assertEqual(policy.sort('set', clear, blocked), ['set-other', 'unblock-owner'])
+        self.assertEqual(policy.sort('set', clear, priced), ['set-other'])
 
     def test_pull_block_and_close_sort_by_their_options_and_the_record(self):
         free, held = record(), record(priority='-1', priority_by='owner')
         self.assertEqual(policy.sort('pull', {}, free), ['pull'])
-        self.assertEqual(policy.sort('pull', {'ruling': True}, free), ['pull-collision'])
-        self.assertEqual(policy.sort('pull', {'ruling': True}, held), ['pull-held'])
+        self.assertEqual(policy.sort('pull', {}, held), ['pull-held'])
+        # a collision is the plan's to find, not a flag's: the CLI's sort never names it
+        self.assertEqual(policy.sort('pull', {'reason': True}, free), ['pull'])
         self.assertEqual(policy.sort('block', {'on': ['BAR']}, free), ['block'])
         self.assertEqual(policy.sort('block', {'on': ['owner']}, free), ['block-owner'])
         self.assertEqual(policy.sort('block', {'owner_ask': True}, free), ['block-owner'])
-        self.assertEqual(policy.sort('unblock', {}, None), ['block-owner'])
+        self.assertEqual(policy.sort('unblock', {}, None), ['unblock-owner'])
+        self.assertEqual(policy.sort('unblock', {'on': ['owner']}, free), ['unblock-owner'])
         self.assertEqual(policy.sort('unblock', {'on': ['BAR']}, None), ['block'])
         self.assertEqual(policy.sort('close', {}, free), ['close'])
         self.assertEqual(policy.sort('close', {}, held), ['close-held'])
         self.assertEqual(policy.sort('close', {}, None), ['close-held'])
         self.assertEqual(policy.sort('retire', {}, free), ['retire'])
         self.assertEqual(policy.sort('delete', {}, held), ['close-held'])
+        owner = record(priority='3', priority_by='pm')
+        self.assertEqual(policy.sort('retire', {}, owner), ['retire-priced'])
+        self.assertEqual(policy.sort('delete', {}, owner), ['retire-priced'])
+        self.assertEqual(policy.sort('close', {}, owner), ['close'])
         for verb, row in (('add', 'add'), ('release', 'release'), ('clear-review', 'clear-review'),
                           ('set-status', 'set-status'), ('unpark', 'set-status')):
             self.assertEqual(policy.sort(verb, {}, free), [row], verb)
@@ -71,33 +103,31 @@ class Sort(unittest.TestCase):
     def test_what_is_not_read_counts_as_every_row_it_could_be(self):
         self.assertEqual(policy.sort(None), [n for n in roles.ACTIONS if n != 'read'])
         self.assertEqual(policy.sort('set', {'unknown': True}),
-                         ['set-text', 'set-price', 'set-price-owner', 'set-hold', 'set-other'])
+                         ['set-text', 'set-price', 'set-price-owner', 'set-hold', 'set-other',
+                          'set-widen-collision', 'unblock-owner'])
         self.assertEqual(policy.sort('show', {'unknown': True}), ['read'])
         self.assertEqual(policy.sort('catch-up'), ['read'])
         self.assertEqual(policy.sort('catch-up', {'apply': True}), ['catch-up'])
         self.assertEqual(policy.sort('frobnicate'), [])        # no row names it
 
 
-class TopPrice(unittest.TestCase):
-    """policy.price_is_top: the price rows plan_set lifts its ruling gate for once the role check
-    ran are the ones only the owner and the PM may take."""
+class TopOnly(unittest.TestCase):
+    """policy.top_only: the rows a plan run without the role check refuses (plan.refuse_top) are
+    the ones only the owner and the PM may take."""
 
-    def test_the_lifted_rows_are_the_top_rows(self):
-        for name in policy.TOP_PRICE_ROWS:
+    def test_the_owner_gates_are_top_only(self):
+        gates = ['set-price-owner', 'set-hold', 'unblock-owner', 'close-held', 'retire-priced']
+        for name in gates:
             self.assertEqual(roles.ACTIONS[name].allowed, roles.TOP, name)
-        self.assertNotIn(roles.ACTIONS['set-price'].allowed, (roles.TOP,))
+        # and retarget, a rewrite of many records, not an owner gate on one
+        self.assertEqual(policy.top_only(list(roles.ACTIONS)), gates + ['retarget'])
 
-    def test_which_prices_are_top(self):
-        agent = record(priority='3', priority_by='agent')
-        owner = record(priority='3', priority_by='owner', priority_ruling='R-9001')
-        hold = record(priority='-1', priority_by='-', owner_ask='which one?')
-        self.assertFalse(policy.price_is_top(['2'], agent))
-        self.assertTrue(policy.price_is_top(['1'], agent))
-        self.assertTrue(policy.price_is_top(['-1'], agent))
-        self.assertTrue(policy.price_is_top(['4'], owner))
-        self.assertTrue(policy.price_is_top(['-'], hold))
-        self.assertTrue(policy.price_is_top(['2'], None))       # not read: the hold row
-        self.assertFalse(policy.price_is_top([], owner))
+    def test_the_collision_rows_are_the_leads(self):
+        self.assertEqual(sorted(policy.COLLISION_ROWS.values()),
+                         ['pull-collision', 'set-widen-collision'])
+        for name in policy.COLLISION_ROWS.values():
+            self.assertEqual(roles.ACTIONS[name].allowed, roles.LEADS, name)
+        self.assertEqual(policy.top_only(list(policy.COLLISION_ROWS.values())), [])
 
 
 class Refusal(unittest.TestCase):
@@ -133,18 +163,21 @@ class Refusal(unittest.TestCase):
 
 class ReadArgv(unittest.TestCase):
     def test_globals_verb_id_and_options(self):
-        a = policy.read_argv(words('-C', 'Z:/pm', '--session', 'kit', '--as', 'kit/wk', 'set', 'FOO',
+        a = policy.read_argv(words('-C', 'Q:/pm', '--session', 'kit', '--as', 'kit/wk', 'set', 'FOO',
                                    '--scope', 'tools/x.py', '--priority=2'))
-        self.assertEqual((a.root, a.branch, a.verb, a.rid, a.help), ('Z:/pm', 'kit/wk', 'set', 'FOO', False))
+        self.assertEqual((a.root, a.branch, a.verb, a.rid, a.help), ('Q:/pm', 'kit/wk', 'set', 'FOO', False))
         self.assertEqual(a.given['fields'], ['scope', 'priority'])
         self.assertEqual(a.given['priority'], ['2'])
-        self.assertEqual(policy.read_argv(words('-CZ:/pm', 'show', 'FOO')).root, 'Z:/pm')
+        self.assertEqual(policy.read_argv(words('-CQ:/pm', 'show', 'FOO')).root, 'Q:/pm')
         a = policy.read_argv(words('block', 'FOO', '--on', 'owner', '--reason', 'r'))
         self.assertEqual((a.verb, a.given['on']), ('block', ['owner']))
         a = policy.read_argv(words('set', 'FOO', '--unset', 'priority', '--body-file', 'b.md'))
         self.assertEqual((a.given['fields'], a.given['priority']), (['priority', 'body'], ['-']))
-        self.assertTrue(policy.read_argv(words('pull', 'FOO', '--ruling', 'x')).given['ruling'])
+        self.assertTrue(policy.read_argv(words('pull', 'FOO', '--ruling', 'x')).given['unknown'])
         self.assertTrue(policy.read_argv(words('retarget', 'A', 'B', '--apply')).given['apply'])
+        a = policy.read_argv(words('uncite', '--apply'))
+        self.assertEqual((a.verb, a.rid, a.given['apply']), ('uncite', None, True))
+        self.assertFalse(policy.read_argv(words('uncite')).given.get('apply'))
 
     def test_help_runs_nothing(self):
         self.assertTrue(policy.read_argv(words('set', 'FOO', '--help')).help)
@@ -158,10 +191,10 @@ class ReadArgv(unittest.TestCase):
         rec = record()                                    # read, so a price sorts by its value
         rows = ((('retarget', 'A', 'B', '--apply'), ['retarget']),
                 (('set', 'FOO', '--priority', '1'), ['set-price-owner']),
-                (('pull', 'FOO', '--ruling', 'R'), ['pull-collision']),
+                (('pull', 'FOO', '--reason', 'R'), ['pull']),
                 (('block', 'FOO', '--on', 'owner'), ['block-owner']))
         for argv, want in rows:
-            for lead in ((), ('-C', 'Z:/pm')):
+            for lead in ((), ('-C', 'Q:/pm')):
                 line = lead + ('--',) + argv
                 parser.parse_args(list(line))            # the tool takes it
                 a = policy.read_argv(words(*line))
@@ -171,8 +204,9 @@ class ReadArgv(unittest.TestCase):
 
     def test_a_word_it_cannot_read_counts_as_unknown(self):
         self.assertEqual(policy.read_argv([('set', True), ('FOO', True), ('$x', False)]).given,
-                         {'fields': [], 'priority': [], 'on': [], 'unknown': True})
-        a = policy.read_argv([('-C', True), ('Z:/pm', True), ('$verb', False)])
+                         {'fields': [], 'priority': [], 'on': [], 'priority_by': [], 'blocked_on': [],
+                          'unknown': True})
+        a = policy.read_argv([('-C', True), ('Q:/pm', True), ('$verb', False)])
         self.assertEqual((a.verb, a.given), (None, {'unknown': True}))
         for argv in (('--sess', 'kit', 'show', 'FOO'), ('set', 'FOO', '--scop', 'x'),
                      ('frobnicate', 'FOO'), ('set', 'FOO', '--scope')):
@@ -237,6 +271,14 @@ class CliRole(unittest.TestCase):
         self.assertIn('(kitlib/backlog/roles.py); ask a session whose role may', out)
         return out
 
+    def body_file(self, text):
+        folder = tempfile.mkdtemp(prefix='kit-body-')
+        self.addCleanup(rmtree, folder)
+        path = os.path.join(folder, 'body.md')
+        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(text + '\n')
+        return path
+
     def seed(self):
         self.ok(None, 'add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok(None, 'set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
@@ -244,7 +286,30 @@ class CliRole(unittest.TestCase):
     def test_unmarked_is_the_owner(self):
         self.seed()
         self.refused('coordinator', 'retarget', 'FOO', 'BAR', '--apply')
-        self.ok(None, 'set', 'FOO', '--priority', '1', '--priority-by', 'owner', '--ruling', 'R-9234')
+        self.ok(None, 'set', 'FOO', '--priority', '1', '--priority-by', 'owner')
+
+    def test_the_uncite_dry_run_is_a_read_and_its_apply_is_top_only(self):
+        self.seed()
+        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-9033, keep it.'))
+        before = self.ok(None, 'show', 'FOO')
+        out = self.ok('plain', 'uncite')
+        self.assertIn('UNCITE: 1 cite(s) in 1 record(s)', out)
+        self.assertIn('    + Per an owner ruling, keep it.', out)
+        self.assertEqual(self.ok(None, 'show', 'FOO'), before)          # a dry run writes nothing
+        for mark in ('coordinator', 'worker'):
+            rc, out = self.run_tool(mark, 'uncite', '--apply')
+            self.assertEqual(rc, 2, out)
+            self.assertIn('REFUSED: ', out)
+        self.assertEqual(self.ok(None, 'show', 'FOO'), before)
+
+    @unittest.skipUnless('uncite' in roles.ACTIONS['retarget'].verbs,
+                         "roles.py's retarget row does not name uncite yet (owner approval)")
+    def test_the_owner_applies_uncite(self):
+        self.seed()
+        self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-9033, keep it.'))
+        self.ok(None, 'uncite', '--apply')
+        self.assertIn("Per an owner ruling, keep it.", self.ok(None, 'show', 'FOO'))
+        self.assertIn('nothing to rewrite', self.ok('plain', 'uncite'))
 
     def test_a_role_may_not_take_a_row_roles_py_does_not_give_it(self):
         self.seed()
@@ -252,7 +317,7 @@ class CliRole(unittest.TestCase):
         self.assertIn('`set-price-owner` (risk medium)', out)
         self.assertIn("this session's role is coordinator", out)
         self.ok('coordinator', 'set', 'FOO', '--scope', 'tools/y.py')
-        self.ok('pm', 'set', 'FOO', '--priority', '1', '--priority-by', 'pm', '--ruling', 'R-9234')
+        self.ok('pm', 'set', 'FOO', '--priority', '1', '--priority-by', 'pm')
         out = self.refused('plain', 'add', 'BAR', '--summary', 'x', '--scope', 'tools/z.py', *ADD_FLAGS)
         self.assertIn('unlisted (only risk none)', out)
         self.assertIn('FOO', self.ok('plain', 'show', 'FOO'))

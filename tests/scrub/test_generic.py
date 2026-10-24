@@ -261,7 +261,7 @@ class Generic(unittest.TestCase):
         if not pats:
             from kitlib.config import user
             print('scrub: no install names configured; set "scrub_patterns" in the machine config '
-                  '(%s) to a list of case-insensitive patterns for the ' % user.DISPLAY +
+                  '(%s) to a list of case-insensitive patterns for the ' % user.display() +
                   "install's own names (repositories, owner, accounts)")
             self.skipTest('no install names configured')
         found, stale = scan(tracked_files(), read_text, pats, NAMES_ALLOWED, excluded=())
@@ -315,18 +315,16 @@ class TheChecks(unittest.TestCase):
 
     def _home(self, cfg, sessions=None, sessions_encoding='utf-8'):
         import tempfile
-        from kitlib.config import user
+        from tests.home import machine_config
         home = tempfile.mkdtemp(prefix='scrub-home-')
         self.addCleanup(__import__('shutil').rmtree, home, True)
-        os.makedirs(user.config_dir(home))
         if sessions is not None:
             sf = os.path.join(home, 'pm', 'launcher', 'sessions.json')
             os.makedirs(os.path.dirname(sf))
             with open(sf, 'w', encoding=sessions_encoding) as f:
                 json.dump(sessions, f)
             cfg.setdefault('pm_start', {})['sessions_file'] = sf
-        with open(user.config_file(home), 'w', encoding='utf-8') as f:
-            json.dump(cfg, f)
+        machine_config(home, cfg, case=self)            # the fenced pointer's PM repository
         return home
 
     def test_a_sessions_file_with_a_bom_is_read(self):

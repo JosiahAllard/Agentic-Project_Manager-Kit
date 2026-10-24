@@ -18,8 +18,8 @@ from tests.gate import fixtures
 
 BRANCH = 'kit/feature'
 RACE = "fatal: unable to access '%s': Permission denied"
-CONFIGS = ('Z:\\GitHub\\repo\\.git\\config', 'Z:/GitHub/repo/.git/config', '.git/config',
-           'Z:/GitHub/repo/.git/worktrees/wt/config.worktree')
+CONFIGS = ('Q:\\GitHub\\repo\\.git\\config', 'Q:/GitHub/repo/.git/config', '.git/config',
+           'Q:/GitHub/repo/.git/worktrees/wt/config.worktree')
 
 
 def gitstatus():
@@ -59,9 +59,9 @@ class Retry(unittest.TestCase):
 
     def test_another_failure_is_not_tried_again(self):
         for err in ('fatal: not a git repository (or any of the parent directories): .git',
-                    RACE % 'Z:/home/.config/git/attributes',
-                    "fatal: unable to access 'Z:/repo/.git/config': Invalid argument",
-                    'fatal: unable to read Z:/repo/.git/index'):
+                    RACE % 'Q:/home/.config/git/attributes',
+                    "fatal: unable to access 'Q:/repo/.git/config': Invalid argument",
+                    'fatal: unable to read Q:/repo/.git/index'):
             with self.subTest(err=err):
                 patch, asked = answers((128, b'', err), (0, b'', ''))
                 with patch:

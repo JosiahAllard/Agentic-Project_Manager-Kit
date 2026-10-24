@@ -47,6 +47,11 @@ class Agents(unittest.TestCase):
         self.assertEqual((beta['model'], beta['model_reasoning_effort'], beta['sandbox_mode'],
                           beta['developer_instructions']), ('gpt-x', 'high', 'workspace-write', 'body\n'))
 
+    def test_a_compact_window_is_not_rendered(self):
+        # No per-agent compact key is established for Codex (docs/content.md "Codex").
+        plain = self.render(ROLE, BETA)
+        self.assertEqual(self.render(ROLE.replace(b'tier: deep\n', b'tier: deep\ncompact: 170000\n'), BETA), plain)
+
     def test_every_kit_role_reads_back_with_its_body(self):
         c = kcontent.load(ROOT)
         files = cc.renderer().render(c)

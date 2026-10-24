@@ -259,7 +259,8 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     record by id and session, a record already in this offer as `(offered above)`. Scopes are each record's current `scope:` lines, so a pulled record
     narrowed with `set --scope` frees what it gave up. A seed (`next --with`) goes first and is
     not passed over for the rest of the offer, but one that collides with a live pull is passed
-    over like any record: only `pull --reason --ruling` takes scope a live pull holds.
+    over like any record: only `pull --reason`, by a role that may take the `pull-collision` row
+    (kitlib/backlog/roles.py), takes scope a live pull holds.
     `folded(rec)` -> a reason or None: a record of `session` it gives a reason for (its scope
     folds into another live pull's branch, or git cannot tell) is passed over with that reason
     and takes no scope; it is asked only of a record that would otherwise be offered."""

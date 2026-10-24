@@ -11,7 +11,9 @@ lock is given up. A failure
 after the write leaves the entry written and says what was not done. Nothing here prints or exits.
 
 `prepare(..., noun=)` and `commit_one` serve any one file a kit tool writes and then commits alone
-(tools/pending.py too); `noun` names it in the refusals.
+(tools/pending.py too); `noun` names it in the refusals. `prepare(..., extra=)` names more files
+of the same work tree that the commit carries with the ledger file: the rulebook a rule verb
+writes beside its log entry (docs/ledger.md "Rulebooks"), so the two land in one commit.
 """
 import collections
 import os
@@ -32,7 +34,8 @@ INDEX_LOCK_WAIT = 3.0   # seconds commit_one keeps retrying add+commit while git
 INDEX_LOCK_PAUSE = 0.1  # seconds between those tries
 DEFAULT_REMOTE = 'origin'   # the schema default of repo.remote, for a config that cannot be read
 
-Plan = collections.namedtuple('Plan', 'root rel trailer env')
+# extra: the paths (relative, forward slashes) committed with rel; () for the file alone.
+Plan = collections.namedtuple('Plan', 'root rel trailer env extra', defaults=((),))
 
 
 def locate(path, noun='the ledger'):
@@ -62,14 +65,22 @@ def short_title(text, limit=TITLE_LIMIT):
     return re.sub(r'\s+', ' ', text).strip()[:limit].rstrip()
 
 
-def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger', provider=None):
-    """A Plan for committing the file at `path` alone, or Usage/Refused. Call before writing."""
+def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger', provider=None, extra=()):
+    """A Plan for committing the file at `path` alone (with `extra`, those files too: each in the
+    same work tree and, like `path`, without uncommitted changes), or Usage/Refused. Call before
+    writing."""
     name, _source, error = kcommit.resolve_model(False, model, env, provider)
     if error:
         raise Usage(error)
     if not (name or '').strip():
         raise Usage('--commit needs the model for the Co-Authored-By trailer: --model, else %s' % MODEL_ENV)
     root, rel = locate(path, noun)
+    more = []
+    for p in extra:
+        other, other_rel = locate(p, noun)
+        if os.path.normcase(os.path.abspath(other)) != os.path.normcase(os.path.abspath(root)):
+            raise Refused('%s is in the work tree %s, not in %s with %s' % (p, other, root, rel))
+        more.append(other_rel)
     sets = _settings(root, noun)
     branch, why = refs.current_branch(root)
     if branch is None:
@@ -79,12 +90,14 @@ def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger', prov
     if branch != sets['main_branch'] and not branch_ok:
         raise Refused('the current branch of %s is %r, not %s (pass --branch-ok to commit here)'
                       % (root, branch, sets['main_branch']))
-    out, why = cmd.run_text(['status', '--porcelain', '--', rel], root, env=env, strip=False)
-    if out is None:
-        raise Refused('git status failed: %s' % why)
-    if out.strip():
-        raise Refused('%s has uncommitted changes; refusing so another edit is not swept in' % rel)
-    return Plan(root, rel, kcommit.coauthor(name, sets['coauthor_families'], provider), env)
+    for one in [rel] + more:
+        out, why = cmd.run_text(['status', '--porcelain', '--', one], root, env=env, strip=False)
+        if out is None:
+            raise Refused('git status failed: %s' % why)
+        if out.strip():
+            raise Refused('%s has uncommitted changes; refusing so another edit is not swept in' % one)
+    return Plan(root, rel, kcommit.coauthor(name, sets['coauthor_families'], provider), env,
+                tuple(more))
 
 
 def finish(plan, rid, title, decides, push=False):
@@ -160,14 +173,15 @@ def push_branch(plan, what, sha):
 
 
 def _add_commit(plan, subject):
-    """Stage and commit plan's file once; None on success, else why it failed (the file is left
-    unstaged after a failed commit)."""
-    _, why = cmd.run(['add', '--', plan.rel], plan.root, env=plan.env)
+    """Stage and commit plan's file (and its extra files) once; None on success, else why it
+    failed (the files are left unstaged after a failed commit)."""
+    rels = [plan.rel] + list(plan.extra)
+    _, why = cmd.run(['add', '--'] + rels, plan.root, env=plan.env)
     if why is None:
-        _, why = cmd.run(['commit', '-q', '-m', '%s\n\n%s\n' % (subject, plan.trailer), '--', plan.rel],
+        _, why = cmd.run(['commit', '-q', '-m', '%s\n\n%s\n' % (subject, plan.trailer), '--'] + rels,
                          plan.root, env=plan.env)
         if why is not None:
-            cmd.run(['reset', '-q', '--', plan.rel], plan.root, env=plan.env)
+            cmd.run(['reset', '-q', '--'] + rels, plan.root, env=plan.env)
     return why
 
 

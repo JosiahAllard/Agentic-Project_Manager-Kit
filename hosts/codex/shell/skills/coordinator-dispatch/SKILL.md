@@ -27,12 +27,13 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
   owns it, or by a fresh agent dispatched into that worktree; never by you with `-C` from outside.
   Only for new work: a refused command is never rerouted this way.
 - Non-trivial: plan read-only -> your approval or correction -> build.
+- Slicing a redesign or mockup-built record: walk the mockups into an element checklist on the umbrella (one line per sidebar entry, view, control, state, each owned by a slice); it closes when every element is ticked against a landed slice, not when every slice has landed (`<kit>/docs/backlog.md` "Umbrella records").
 - A change to `.kit.json` or any other owner-only path (`--find kit-json`, key `owner.paths`) is
   never dispatched to a builder: it goes to the owner, through the PM.
 
 ## The brief
 
-- Holds: role; the owner's decisions where they matter, as a paraphrase plus the ruling id; verified facts; **exact files and sections
+- Holds: role; the owner's decisions where they matter, as a paraphrase, no ruling id; verified facts; **exact files and sections
   to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: `gate.py --full` on the exact tip);
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
@@ -47,6 +48,7 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 - Briefs to the docs-writer role give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
   logs split into more per-area files as they fill.
+- A brief for an owner-approved change tells the author to commit with `commit.py --owner-approval hub:A-n` and leave the work tree at the approval's base; never to copy the approved content in first.
 
 ## Which role, which tier
 

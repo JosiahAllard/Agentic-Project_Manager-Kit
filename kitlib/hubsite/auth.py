@@ -1,6 +1,8 @@
 """kitlib.hubsite.auth: who a request on the LOCAL listener is.
 
-  folder(home=None)                 <machine config dir>/hub, where the token files live
+  folder(home=None)                 <machine config dir>/hub, where the token files live: the
+                                    PM repository's; ConfigError with no PM-repo pointer
+                                    (NO_POINTER)
   ensure_tokens(folder)             make the folder and the two token files when absent;
                                     TokenFileError for one that exists and cannot serve
   read_token(folder, role)          a role's token as a client sends it, or None
@@ -82,11 +84,17 @@ import threading
 import time
 
 from kitlib.config import user
+from kitlib.config.types import ConfigError
 
 OWNER = 'owner'
 AGENT = 'agent'
 ROLES = (OWNER, AGENT)
 FOLDER_NAME = 'hub'
+# folder()'s refusal with no PM-repo pointer: the token files live in the PM repository's machine
+# config folder, and only the pointer names that repository
+NO_POINTER = ('no PM repo pointer is set, so the hub has no token folder: set it first, from an '
+              'elevated shell: python tools/machine_setup.py --pm-repo <PM repository> (%s); '
+              'nothing written' % user.POINTER_DOC)
 OWNER_FILE = 'owner.token'
 AGENT_FILE = 'agent.token'
 TOKEN_FILES = {OWNER: OWNER_FILE, AGENT: AGENT_FILE}
@@ -116,9 +124,17 @@ class TokenFileError(Exception):
 
 
 def folder(home=None):
-    """The credential folder: FOLDER_NAME in the machine config folder writers use
-    (kitlib.config.user.DIR_NAME), under `home` (default the user's). Never the retired folder."""
-    return os.path.join(os.path.dirname(user.locate(home).new), FOLDER_NAME)
+    """The credential folder: FOLDER_NAME in the PM repository's machine config folder
+    (kitlib.config.user.locate OK; `home`, default the user's, is its leftover check only).
+    ConfigError when the PM-repo pointer is not set (NO_POINTER) or the machine config cannot be
+    read (locate's error): never a folder in the home folder, so hub.py setup writes no token
+    file there."""
+    loc = user.locate(home)
+    if loc.state == user.NONE:
+        raise ConfigError(NO_POINTER)
+    if loc.state != user.OK:
+        raise ConfigError(loc.error)
+    return os.path.join(os.path.dirname(loc.new), FOLDER_NAME)
 
 
 def cookie_name(port=None):

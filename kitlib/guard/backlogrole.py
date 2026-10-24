@@ -4,7 +4,8 @@
                      role its hook payload names (Action.agent_role), from the command's words
                      (kitlib.backlog.policy.read_argv). A PM_KIT_ROLE the line sets changes
                      nothing. A builder's own pull (roles.OWN_PULL) is read from the store, as it
-                     is locally, only when it alone would decide.
+                     is locally, only when it alone would decide; an --as branch is its own from
+                     that branch's linked worktree (own_pull_refusal).
   backlog-raw-write  a write of the backlog that skips the tool and its role check: a subagent's
                      python code importing kitlib.backlog (-c, standard input, -m, runpy) or naming
                      tools/backlog.py; any session's but the owner's git write of the store's ref
@@ -25,6 +26,7 @@ from kitlib.git import repo
 
 from . import commands as cm
 from . import jail
+from . import paths
 from . import rules
 
 ROLE_RULE = 'backlog-role'
@@ -50,6 +52,18 @@ def read_record(root, rid):
     The guard's one read of the store (patched in the tests)."""
     from kitlib.backlog import opener
     return opener.open_store(root, fetch=False).store.load().get(rid)
+
+
+def live_store(root):
+    """The PM data worktree of the repository of the checkout `root` when its .kit.json names a
+    store of its own (kitlib.backlog.store.pm_data_live_store), else None: where the records are
+    when `root`'s store does not hold them. Read only for a refusal's form (patched in the tests)."""
+    from kitlib.backlog import store
+    try:
+        pm_root, named, why = store.pm_data_live_store(root)
+    except Exception:                           # noqa: BLE001 - no PM data worktree found: none
+        return None
+    return pm_root if pm_root and named and not why else None
 
 
 def shell(event, ctx, cmd, inv, cwd, role):
@@ -109,10 +123,46 @@ def run_words(inv):
 def argv_words(cmd, words):
     """read_argv's (text, readable) pairs: a computed word is unreadable, and so is a PowerShell
     word holding a double quote (Windows PowerShell 5.1 passes it on unescaped, so it can split).
+    A bash word that is all one double-quoted string (`"$PWD"`, `"$M/x"`; not `"$@"` or
+    `${a[@]}`, which split) is policy.ONE: one word, its text unknown.
     A Start-Process -ArgumentList string comes already split as Windows splits it
     (commands._split_list): a double-quoted segment is one word, spaces and all."""
+    from kitlib.backlog import policy
     ps = cmd.shell == rules.sh.PS
-    return [(w.text, not w.dyn and not (ps and '"' in w.text)) for w in words]
+    out = []
+    for w in words:
+        if not w.dyn:
+            out.append((w.text, not (ps and '"' in w.text)))
+        else:
+            out.append((w.text, policy.ONE if _one_word(cmd, w) else False))
+    return out
+
+
+def _one_word(cmd, w):
+    """True when the bash word `w` is written as one double-quoted string holding no `"` or `@`."""
+    src = cmd.source or ''
+    if cmd.shell != rules.sh.BASH or w.synth or w.start is None or w.end is None or \
+            not 0 <= w.start < w.end <= len(src):
+        return False
+    return '"' not in w.text and '@' not in w.text and src[w.start:w.end] == '"%s"' % w.text
+
+
+def _unread(pairs, argv, who):
+    """The refusal's sentence naming the words read_argv could not read when they decided it, else
+    '': no verb read, or the run without its unread words, as its own pull, would be allowed (an
+    unread `-C "$PWD"` on a `close` the role may never take decides nothing)."""
+    from kitlib.backlog import policy, roles
+    words = [t for t, ok in pairs if ok is not True]
+    if not words:
+        return ''
+    if argv.verb is not None:
+        given = dict(argv.given)
+        given.pop(policy.UNKNOWN, None)
+        if policy.refusal(who, policy.sort(argv.verb, given, _Unheld()), (roles.OWN_PULL,)):
+            return ''
+    return ' The guard cannot read %s (computed, or a word that can split), so it judged the run ' \
+           'as the strictest those words could make it; write them out.' \
+           % ', '.join('`%s`' % t for t in words)
 
 
 def role_run(event, ctx, cmd, inv, cwd, role):
@@ -125,29 +175,41 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     if words is None:
         return None
     from kitlib.backlog import policy, roles
-    argv = policy.read_argv(argv_words(cmd, words))
+    pairs = argv_words(cmd, words)
+    argv = policy.read_argv(pairs)
     if argv.help:
         return None
     who = roles.role_of(agentname.bare(getattr(event, 'agent_role', None) or ''), True)
     rows = policy.sort(argv.verb, argv.given)
     text = policy.refusal(who, rows)
+    form, instead = '', None
     if text and argv.rid and not argv.given.get(policy.UNKNOWN) and \
             policy.refusal(who, rows, (roles.OWN_PULL,)) is None:
-        text = own_pull_refusal(ctx, cmd, cwd, argv, who)
+        text, form, instead = own_pull_refusal(ctx, cmd, cwd, argv, who, cm.run_dir(inv), pairs)
     if not text:
         return None
     # the rows were sorted as if the record were held (not read: the strictest); when the role
     # may not take the unheld row either, that row is the one to name
     text = policy.refusal(who, policy.sort(argv.verb, argv.given, _Unheld())) or text
-    return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py). %s'
-                        % (rules.bare(cmd), text, ASK), read_alternative(ctx, cmd, cwd, argv))
+    return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py).%s%s%s'
+                        % (rules.bare(cmd), text, _unread(pairs, argv, who), form, '' if instead else ' ' + ASK),
+                        instead or read_alternative(ctx, cmd, cwd, argv))
+
+
+def _root(cmd, cwd, argv):
+    """The folder the run names (its -C, else the command's directory); None when -C is a word
+    the guard cannot read (policy.UNREAD) or no folder is known."""
+    from kitlib.backlog import policy
+    base = cmd.cwd or cwd
+    if argv.root is policy.UNREAD:
+        return None
+    return rules.sh.resolve_path(argv.root, base, cmd.shell) if argv.root is not None else base
 
 
 def read_alternative(ctx, cmd, cwd, argv):
     """The tool's read of the record the run names (`show <ID>`; `list` when it names none), at
     the folder it runs on (its -C, else the command's directory)."""
-    base = cmd.cwd or cwd
-    root = rules.sh.resolve_path(argv.root, base, cmd.shell) if argv.root is not None else base
+    root = _root(cmd, cwd, argv)
     where = rules.quote(root) if root else '<worktree>'
     what = 'show %s' % argv.rid if argv.rid and re.match(r'^[\w.-]+$', argv.rid) else 'list'
     return 'python %s -C %s %s' % (rules.kit_tool(ctx, TOOL), where, what)
@@ -163,26 +225,148 @@ class _Unheld(object):
         return []
 
 
-def own_pull_refusal(ctx, cmd, cwd, argv, who):
-    """policy.refusal for a run only a builder's own pull would allow: the record read where the
-    tool runs (its -C folder, else the command's directory), its pull compared with the branch
-    checked out there; an --as naming another branch is not this session's."""
+def _branch_at(ctx, where):
+    """The branch checked out at `where` (ctx.git.current_branch), or None."""
+    try:
+        return ctx.git.current_branch(where)[0] or None
+    except Exception:                           # noqa: BLE001 - no branch: not its own
+        return None
+
+
+def _worktree_on(ctx, where, branch):
+    """True when the directory `where` is in a linked worktree whose checked-out branch is
+    `branch`, as written: the --as branch's own worktree. ctx.place reads the real path (a
+    junction or symlink on the way goes to git) and answers the main checkout, and the PM data
+    worktree, as MAIN, so neither is ever one."""
+    if not where or not isinstance(branch, str) or not branch:
+        return False
+    place = ctx.place(where)
+    if place.kind != repo.LINKED or not place.top:
+        return False
+    return _branch_at(ctx, place.top) == branch
+
+
+def own_pull_refusal(ctx, cmd, cwd, argv, who, here=None, pairs=None):
+    """(policy.refusal, the form sentence, the form or None) for a run only a builder's own pull
+    would allow: the
+    record read where the tool runs (its -C folder, else the command's directory), its pull
+    compared with the branch the run acts as. That is the branch checked out at that folder, or
+    an --as branch when `here`, the directory the tool runs in (commands.run_dir: as the line
+    leaves it, or a Start-Process -WorkingDirectory; None, never evidence, when the text cannot
+    tell), is that branch's linked worktree (_worktree_on): a builder in its worktree
+    runs `-C <store> --as <its branch>`, the form the tool's own refusal names
+    (plan.holder_form). Any other --as is not this session's. When the own pull alone would allow
+    the run, the form sentence names the accepted way, else it is ''; the form is that way written
+    out (own_form) when the guard finds the store holding the record pulled by the branch the run
+    acts as, and that branch's worktree, else None. Nothing own_form reads changes the decision."""
     from kitlib.backlog import policy, roles
-    base = cmd.cwd or cwd
-    root = rules.sh.resolve_path(argv.root, base, cmd.shell) if argv.root is not None else base
+    root = _root(cmd, cwd, argv)
     rec, branch = None, None
     if root:
-        try:
-            branch = ctx.git.current_branch(root)[0]
-        except Exception:                       # noqa: BLE001 - no branch: not its own
-            branch = None
+        branch = _branch_at(ctx, root)
+        if argv.branch is not None and argv.branch != branch and _worktree_on(ctx, here, argv.branch):
+            branch = argv.branch
         if branch and argv.branch in (None, branch):
             try:
                 rec = read_record(root, argv.rid)
             except Exception:                   # noqa: BLE001 - a store that does not read: not its own
                 rec = None
     facts = (roles.OWN_PULL,) if rec is not None and policy.own_pull(rec, branch) else ()
-    return policy.refusal(who, policy.sort(argv.verb, argv.given, rec), facts)
+    rows = policy.sort(argv.verb, argv.given, rec)
+    text = policy.refusal(who, rows, facts)
+    form, instead = '', None
+    if text and policy.refusal(who, rows, (roles.OWN_PULL,)) is None:
+        found = own_form(ctx, cmd, argv, who, root, here, pairs)
+        if found is not None and found[3] is not None:
+            store, b, wt, instead = found
+            form = OWN_FOUND % (rules.fwd(store), b, rules.fwd(wt))
+        else:
+            store = found[0] if found is not None else root
+            form = OWN_FORM % (rules.kit_tool(ctx, TOOL), rules.quote(store) if store else '<store>', argv.verb,
+                               argv.rid if re.match(r'^[\w.-]+$', argv.rid) else '<ID>')
+    return text, form, instead
+
+
+def own_form(ctx, cmd, argv, who, root, here, pairs):
+    """(store, branch, worktree, form) for a run its own pull would allow but that was refused:
+    the store holding the record pulled by the branch the run acts as (its --as, else the branch
+    checked out at its folder), read in the run's folder and then in the repository's PM data
+    worktree (live_store: a folder store the run's folder does not read), and the run written
+    again as `python <tool> -C <store> --as <branch> <verb> <words>` from that branch's worktree:
+    the folder the tool runs in when it is in a linked worktree on that branch, else the run's
+    folder when that is one. (store, branch, None, None) when the store is found but no worktree
+    or the words do not read; None when no store read holds the record pulled by that branch
+    (someone else's pull, or none). It never names a branch the run does not act as, nor a store
+    it did not read the record in."""
+    from kitlib.backlog import policy, roles
+    b = argv.branch if argv.branch is not None else (_branch_at(ctx, root) if root else None)
+    if not root or not isinstance(b, str) or not b or rules.shell_word(b) != b:
+        return None
+    hp = ctx.place(here) if here else None
+    if hp is not None and hp.kind == repo.LINKED and hp.top:
+        wt, at = (hp.top, here) if _branch_at(ctx, hp.top) == b else (None, None)
+    else:
+        wt = ctx.place(root).top if _worktree_on(ctx, root, b) else None
+        at = wt
+    stores = [root]
+    pm = live_store(wt or root)
+    if pm and paths.norm(pm) != paths.norm(root):
+        stores.append(pm)
+    for store in stores:
+        try:
+            rec = read_record(store, argv.rid)
+        except Exception:                       # noqa: BLE001 - a store that does not read: not there
+            continue
+        if not policy.own_pull(rec, b) or \
+                policy.refusal(who, policy.sort(argv.verb, argv.given, rec), (roles.OWN_PULL,)) is not None:
+            continue
+        words = _rerun_words(pairs) if wt else None
+        if words is None:
+            return store, b, None, None
+        run = 'python %s -C %s --as %s %s' % (rules.kit_tool(ctx, TOOL), rules.quote(store), b, words)
+        return store, b, wt, rules.cd_line(rules.fwd(at), run, rules.outer_shell(cmd))
+    return None
+
+
+def _rerun_words(pairs):
+    """The run's words from its verb on, after the global options it gives before the verb but -C
+    and --as (own_form writes its own), each a word both shells read as written
+    (rules.shell_word); None when a word does not read."""
+    from kitlib.backlog import policy
+    if not pairs or any(ok is not True for _t, ok in pairs):
+        return None
+    out, k = [], 0
+    while k < len(pairs):
+        text = pairs[k][0]
+        name, eq, _value = text.partition('=')
+        if text == '--':
+            k += 1
+            continue
+        if not text.startswith('-'):
+            break
+        if name.startswith('-C') and not name.startswith('--') and len(name) > 2:
+            k += 1
+            continue
+        if name not in policy.GLOBAL:
+            return None
+        take = 2 if policy.GLOBAL[name] and not eq else 1
+        if name not in ('-C', '--as'):
+            out.extend(t for t, _ok in pairs[k:k + take])
+        k += take
+    if k >= len(pairs):
+        return None
+    out.extend(t for t, _ok in pairs[k:])
+    return ' '.join(rules.shell_word(t) for t in out)
+
+
+# the form refusal sentence for a run its own pull would allow (own_pull_refusal)
+OWN_FORM = (' It is your own pull only when the record is pulled by the branch the run acts as: run it '
+            'from your branch\'s linked worktree as `python %s -C %s --as <your branch> %s %s ...`, or '
+            'with -C that worktree; a worktree on another branch, or a branch that does not hold the '
+            'pull, does not count.')
+# the form refusal sentence when own_form found the store and the worktree
+OWN_FOUND = (' The record in the store %s is pulled by %s: run it from that branch\'s worktree %s, with -C '
+             'that store and --as that branch:')
 
 
 # ---------------------------------------------------------------- code that skips the tool
@@ -236,8 +420,9 @@ def _store_read(ctx, path):
 def is_store_ref(name, store, short=False):
     """True when the ref `name` is the store's: under refs/backlog/ always, and with a `branch`
     store the backlog branch (refs/heads/backlog, refs/remotes/<remote>/backlog; `short`: its
-    bare name too, as push and branch read one). A wildcard matches when it would take one."""
-    name = name.lstrip('+')
+    bare name too, as push and branch read one). A wildcard matches when it would take one. Case
+    is not compared: on this machine's file system refs/Backlog/x is the file refs/backlog/x."""
+    name = name.lstrip('+').lower()
     if '*' in name:
         import fnmatch
         samples = [REF_DIR + 'main'] + (['refs/heads/' + BRANCH] if store == 'branch' else [])
@@ -312,7 +497,8 @@ def _written_refs(gc, store, unsure=None):
         out = []
         for spec in texts[1:]:
             _src, colon, dst = spec.lstrip('+').partition(':')
-            if colon and dst and is_store_ref(dst, store, short=False):
+            # a short destination is a branch (or under refs/) as git's fetch reads it
+            if colon and dst and is_store_ref(rules.fetch_dst_ref(dst), store, short=False):
                 out.append(spec)
         return out, None
     if sub == 'branch' and store == 'branch':

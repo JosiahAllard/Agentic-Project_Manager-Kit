@@ -39,7 +39,10 @@ Rules, in the order they are checked:
                    the guard cannot read where the verb could be counts), in any session but the
                    owner's own. Text that only names the hub tool (prose, a pipe of a run into
                    another program) is not read
-  ledger          an edit of the machine config's ledger_path, by anyone
+  ledger          an edit of the machine config's ledger_path, of the rulebooks' folder or a
+                   `.md` file directly in it, or of the standing digest (kitlib.ledger.files
+                   of_config: `rules` and STANDING.md in ledger_dir, else beside ledger_path), by
+                   anyone; with a broken machine config, every subagent write
   lock-state       an agent session's edit of a file in the machine lock's state folder
   machine-config   an edit of a file in the PM repository's machine config folder
                    (<pointer>/.pm-kit) or in a .pm-kit folder at the top of a checkout, in any
@@ -66,7 +69,12 @@ Rules, in the order they are checked:
   git-shared-ref   git update-ref by an agent session (a subagent or a jailed mark but pm) from any
                    checkout, of a ref other than refs/tmp/<name>, a per-worktree ref, or in a linked
                    worktree its HEAD and the branch checked out there (never a guarded main); a
-                   ref or a repository the text does not name is refused too
+                   ref or a repository the text does not name is refused too. A coordinator's
+                   main session may also delete a stray ref (refs/ outside refs/heads, refs/tags,
+                   refs/stash and refs/backlog) in its own repository. The same allowance
+                   judges a push into the repository itself, a fetch or pull refspec's
+                   destination (a remote's own tracking ref passes), symbolic-ref with two
+                   names or -d, replace and a notes write
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   git-stash-shared git stash in a linked worktree by an agent session that adds an untagged
@@ -80,6 +88,7 @@ A command line the parser cannot read cleanly also goes through kitlib.guard.fal
 unreadable, is a warning by default).
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
+import fnmatch
 import json
 import ntpath
 import os
@@ -91,6 +100,7 @@ from kitlib import config as kconfig
 from kitlib.config import user as kuser
 from kitlib import kitroot
 from kitlib import pmdata
+from kitlib.git import defaults as gitdefaults
 from kitlib.git import repo
 from kitlib import lockmcp as lockmcp_names
 from kitlib.host import Decision
@@ -139,6 +149,25 @@ def fwd(path):
 
 def quote(path):
     return '"%s"' % fwd(path)
+
+
+def shell_word(text):
+    """`text` as one word bash and PowerShell both read as written: bare when it holds only
+    characters neither shell treats specially (no `,`, which PowerShell reads as an array, and no
+    leading `@`, its splat), else single-quoted (literal in both); one that holds a single quote
+    too has no such word, so it is `<value>` for the agent to fill in."""
+    if re.fullmatch(r'[A-Za-z0-9_=.:/%+-][A-Za-z0-9_=.:/@%+-]*', text):
+        return text
+    return "'%s'" % text if "'" not in text else '<value>'
+
+
+def kept_word(lead, sep, value, dyn):
+    """One kept option of a held form (commit_scan's `keep`) as words both shells read as
+    written: `lead` (`-X`, `--strategy`) and its `value`, joined (`sep` '') or as two words (' ');
+    a value the shell computes, or one holding a single quote, is `<value>` after its lead."""
+    if dyn or "'" in value:
+        return lead + sep + '<value>'
+    return shell_word(lead) + ' ' + shell_word(value) if sep else shell_word(lead + value)
 
 
 def literal_word(path):
@@ -274,9 +303,9 @@ def shell_command(event, ctx, text, shell, cwd, role):
     hub_rules = HubShell(event, ctx, parsed)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, wrapped_gate,
-                     root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path, owner_identity,
-                     kill_by_name, shell_writes):
+        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, ledger_git,
+                     wrapped_gate, root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path,
+                     owner_identity, kill_by_name, shell_writes, git_plain_commit, interpreter_git):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -603,7 +632,10 @@ def owner_tool(event, ctx, cmd, inv, cwd, role):
 # works. A name the shell or code builds at run time is not read: the rules catch mistakes, not
 # an adversary.
 HUB_SCRIPT = 'hub.py'
-NODE_EVAL = ('-e', '--eval', '-p', '--print')
+NODE_EVAL = ('-e', '--eval', '-p', '--print', '-pe')
+# node's options whose value is the next word (inline_code): a module it loads first, not a script
+NODE_VALUE_OPTS = ('-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions',
+                   '--input-type')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
                    'tool and its MCP server, which read agent.token themselves (docs/guard.md "Hub secrets").')
@@ -613,16 +645,17 @@ HUB_OWNER_WHY = ('answering, closing, submitting, sending and approving on the A
 
 def hub_config(ctx):
     """The machine config's `hub` object: the strict read's, else (a config the strict read
-    refuses) the file's own JSON, else {}. Its store and ports are read even from a config with
-    a fault elsewhere."""
+    refuses) its file's own JSON (the PM repository's local.json, kitlib.config.user LOCAL_KEYS),
+    else {}. Its store and ports are read even from a config with a fault elsewhere."""
     user = ctx.user()
     obj = user.get('hub')
     if isinstance(obj, dict):
         return obj
     if not user.get('error'):
         return {}
+    loc = ctx.config_location()
     try:
-        with open(ctx.config_location().path, encoding='utf-8-sig') as f:
+        with open(loc.local or loc.path, encoding='utf-8-sig') as f:
             data = json.loads(f.read())
     except (OSError, ValueError, UnicodeDecodeError):
         return {}
@@ -639,14 +672,18 @@ def hub_real(path):
 
 
 def hub_secret_folders(ctx):
-    """[(path, real)]: the hub's token folders, each as written and as jail.real gives it. The
-    one beside the machine config the guard reads (kitlib.guard.hub.secret_folder), and `hub` in
-    the PM repository's machine config folder (jail.pointer_config_dir), where the owner's
-    machine setup copies the hub's files before the hub reads them from there; a folder named
-    twice is listed once, and one jail.real cannot take is left out."""
+    """[(path, real)]: the hub's token folders, each as written and as jail.real gives it. `hub`
+    in the home folder's machine config folder (kitlib.config.user.DIR_NAME), where the hub kept
+    them before the move and the move leaves its source; the one beside the machine config the
+    guard reads (kitlib.guard.hub.secret_folder of Location.new, where kitlib.hubsite.auth.folder
+    finds them); and `hub` in the PM repository's machine config folder
+    (jail.pointer_config_dir), where the owner's machine setup copies the hub's files before the
+    hub reads them from there. A folder named twice is listed once, and one jail.real cannot take
+    is left out."""
     out = []
     pointer = jail.pointer_config_dir(ctx)
-    folders = [hubg.secret_folder(ctx.config_location().new)]
+    folders = [os.path.join(ctx.home, kuser.DIR_NAME, hubg.FOLDER_NAME),
+               hubg.secret_folder(ctx.config_location().new)]
     if pointer:
         folders.append(os.path.join(pointer, hubg.FOLDER_NAME))
     for p in folders:
@@ -795,11 +832,11 @@ def hub_path_texts(text):
     return []
 
 
-def glob_folder(text):
+def glob_folder(text, chars=hubg.GLOB_CHARS):
     """The literal folder a wildcard path `text` starts with (everything before the separator
-    ahead of its first wildcard character), or None when it has none: `<token folder>/o*` is in
-    the token folder whatever the wildcard matches."""
-    first = min(text.index(c) for c in hubg.GLOB_CHARS if c in text)
+    ahead of its first wildcard character, one of `chars`), or None when it has none:
+    `<token folder>/o*` is in the token folder whatever the wildcard matches."""
+    first = min(text.index(c) for c in chars if c in text)
     cut = max(text.rfind('/', 0, first), text.rfind('\\', 0, first))
     return text[:cut] if cut > 0 else None
 
@@ -820,7 +857,7 @@ def inline_code(cmd, inv, skip_pipe=None):
     code, stdin, k = False, True, 0
     while k < len(args):
         t = args[k]
-        if py and t in cm.PY_VALUE_OPTS:
+        if (py and t in cm.PY_VALUE_OPTS) or (node and t in NODE_VALUE_OPTS):
             k += 2
             continue
         if (py and re.match(r'^-[A-Za-z]*c', t)) or (node and t.split('=', 1)[0] in NODE_EVAL):
@@ -852,7 +889,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
     no path into it, passes), and python or node code that names a token file or the folder
     (kitlib.guard.hub.INLINE_RE; docs/guard-v2.md W3: a parsed hub tool run of an agent verb piped into
     code given on the command line is that code's data, hub_run_verb). A wildcard path is read as the literal folder before its first
-    wildcard (glob_folder); the store and the word hub are not refused (the guard blocks only
+    wildcard (glob_folder); a DOS wildcard (LEDGER_GLOB_CHARS: `<`, `>`, `"`) is read both ways,
+    as that folder and as the literal path (hub_texts); the store and the word hub are not refused (the guard blocks only
     what it can place; an edit tool's write into the store is still hub_secret_edit's).
     A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
     %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
@@ -861,25 +899,34 @@ def hub_secret_shell(ctx, cmd, inv, places):
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
     for w in list(cmd.words) + targets:
         for text in hub_path_texts(w.text):
-            text = sh.home_text(text, ctx.home, w.dyn)
-            if text is not None and hubg.has_glob(text):
-                text = glob_folder(text)
-            if text is None:
-                continue
-            try:
-                p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
-            except (OSError, ValueError):
-                p = None
-            if not p:
-                continue
-            p_ = places()
-            if p_.where(p) == 'secret':
-                return 'reaches %s (%s)' % (p_.label('secret', p), w.text)
+            for text in hub_texts(sh.home_text(text, ctx.home, w.dyn)):
+                try:
+                    p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
+                except (OSError, ValueError):
+                    p = None
+                if not p:
+                    continue
+                p_ = places()
+                if p_.where(p) == 'secret':
+                    return 'reaches %s (%s)' % (p_.label('secret', p), w.text)
     for text in inline_code(cmd, inv, lambda c: hub_run_verb(c) == ''):
         m = hubg.INLINE_RE.search(text)
         if m:
             return 'runs code that names %s' % m.group(0)
     return None
+
+
+def hub_texts(text):
+    """The paths hub_secret_shell judges for one path text: a wildcard one as its literal folder
+    (glob_folder); one with a DOS wildcard (`<`, `>`, `"`: FindFirstFile reads them as wildcards)
+    also as the literal folder before the first of those, and, when it has no other wildcard, as
+    the literal path too (each reading only adds a path judged)."""
+    if text is None:
+        return []
+    out = [glob_folder(text) if hubg.has_glob(text) else text]
+    if any(c in text for c in '<>"'):
+        out.append(glob_folder(text, LEDGER_GLOB_CHARS))
+    return [t for t in out if t is not None]
 
 
 def hub_run_args(inv):
@@ -989,11 +1036,411 @@ def hub_mcp(event, ctx, tool, role):
 
 # ---------------------------------------------------------------- edits: ledger and main checkout
 
-def same_file(a, b):
-    return paths.norm(a, absolute=True) == paths.norm(b, absolute=True)
+def stream_free(path):
+    """`path` with an NTFS stream suffix (`:name`, `::$DATA`, `:name:$DATA`) dropped from each of
+    its parts after the drive: `STANDING.md::$DATA` opens STANDING.md itself."""
+    drive, rest = os.path.splitdrive(path)
+    parts = re.split(r'([\\/])', rest)
+    return drive + ''.join(p.split(':', 1)[0] if i % 2 == 0 else p for i, p in enumerate(parts))
 
 
-def ledger_rule(ctx, target, role, what):
+LONG_PREFIX = re.compile(r'[\\/]{2}[?.][\\/]|(?:[A-Za-z]:)?[\\/]\?\?[\\/]')
+
+
+def unprefixed(path):
+    r"""`path` without a Win32 namespace prefix (`\\?\`, `\\.\`, `\??\`, either slash), which
+    opens the same file: `\\?\<drive>:\pm\STANDING.md` is `<drive>:\pm\STANDING.md`, and
+    `\\?\UNC\host\share` is `\\host\share`. `\??\` is also dropped after a drive
+    (`<drive>:\??\<drive>:\pm`): abspath reads it as a
+    folder of the current drive, but Windows opens it as the NT name it is, and no folder is
+    named `??`. A prefixed name of another form (`\\?\Volume{...}\`) is left whole for realpath,
+    which gives the drive name of a file that exists."""
+    m = LONG_PREFIX.match(path)
+    if not m:
+        return path
+    rest = path[m.end():]
+    if rest[:4].lower() in ('unc\\', 'unc/'):
+        return '\\\\' + rest[4:]
+    return rest if re.match(r'[A-Za-z]:(?:[\\/]|$)', rest) else path
+
+
+def file_key(path):
+    """`path` as the filesystem opens it, to compare: a namespace prefix dropped (unprefixed),
+    absolute, a stream suffix dropped (stream_free), a trailing dot or space dropped (abspath:
+    `alpha.md.` is `alpha.md`), then links, junctions and 8.3 short names resolved and case folded
+    (jail.real), as lock_state compares; a prefix realpath keeps or gives (a volume GUID name) is
+    dropped from that too."""
+    return unprefixed(jail.real(os.path.abspath(stream_free(os.path.abspath(unprefixed(path))))))
+
+
+def ledger_guarded(ctx):
+    """[(kind, real path)] of what the ledger rule holds: 'log' for ledger_path, 'rulebook' for
+    the rulebooks' folder and 'digest' for the standing digest (kitlib.ledger.files.of_config over
+    the machine config, Ctx.ledger_files). Paths are file_key()ed."""
+    out = []
+    ledger = ctx.user().get('ledger_path')
+    if ledger:
+        out.append(('log', file_key(ledger)))
+    files = ctx.ledger_files()
+    if files is not None:
+        if files.rules:
+            out.append(('rulebook', file_key(files.rules)))
+        if files.digest:
+            out.append(('digest', file_key(files.digest)))
+    return out
+
+
+def ledger_kind(ctx, target, above=False):
+    r"""What of the ledger `target` is: 'log' for the ledger file, 'rulebook' for the rulebooks'
+    folder or a `.md` file directly in it, 'digest' for the standing digest, else None. Names
+    compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
+    space, a namespace prefix, links, junctions and 8.3 names), first as the literal name (an
+    edit's path is never a wildcard: `[PM]` is a folder name), then, when it has a wildcard
+    character after its namespace prefix (a DOS one too, LEDGER_GLOB_CHARS), as a wildcard that is any of them it can match
+    (ledger_glob; the prefix's own `?` is no wildcard). A `\??\` unprefixed leaves (no drive after
+    it) is read both ways: as a prefix, and as a `??` wildcard folder (`<drive>:/??/STANDING.md`
+    names `<drive>:\pm\STANDING.md`). With `above`, a folder above a held path is that path's
+    kind too, and a wildcard that can name such a folder (ledger_glob): removing or moving the
+    folder writes what it holds."""
+    full = file_key(target)
+    for kind, real in ledger_guarded(ctx):
+        if full == real or (kind == 'rulebook' and os.path.dirname(full) == real and full.endswith('.md')):
+            return kind
+    if above:
+        for kind, real in ledger_guarded(ctx):
+            if jail.inside(real, full):
+                return kind
+    bare_target = unprefixed(target)
+    end = prefix_end(bare_target)
+    starts = (end, 0) if end and not re.match(r'[\\/]{2}', bare_target) else (end,)
+    for start in starts:
+        if any(c in LEDGER_GLOB_CHARS for c in bare_target[start:]):
+            kind = ledger_glob(ctx, bare_target, start, above)
+            if kind:
+                return kind
+    return None
+
+
+# FindFirstFile also reads `<` (DOS_STAR), `>` (DOS_QM) and `"` (DOS_DOT) as wildcards: `cmd /c del
+# "STANDING<"` deletes STANDING.md. ledger_glob matches each as `*`, which matches all they can
+# (fail closed); no file name holds one, so none is read as a literal name.
+LEDGER_GLOB_CHARS = hubg.GLOB_CHARS | frozenset('<>"')
+DOS_WILDCARDS = str.maketrans('<>"', '***')
+
+
+def prefix_end(path):
+    r"""Where a namespace prefix unprefixed leaves (`\\?\Volume{...}\`) ends in `path`, else 0."""
+    m = LONG_PREFIX.match(path)
+    return m.end() if m else 0
+
+
+def ledger_glob(ctx, target, start=0, above=False):
+    """ledger_kind for the wildcard path `target`: the literal folder it starts in (file_key), and
+    each part after it matched (case folded, a stream suffix dropped, as glob matching reads it)
+    against the matching part of a held path below that folder. A file is matched by a wildcard
+    of the same depth; the rulebooks' folder also by one a part deeper (a file in it), and every
+    wildcard that starts in it is a rulebook (fail closed: `rules/*.txt`); `**` or `..` after the
+    wildcard matches every held path below the folder. A part also matches a name it spells
+    literally (`[PM]` the folder `[PM]`). A wildcard is searched for from `start` (past a namespace
+    prefix, prefix_end, whose `?` is none); a DOS wildcard (LEDGER_GLOB_CHARS) is one too, matched
+    as `*`. A part matches the 8.3 short name too (glob_part, short_parts), as FindFirstFile
+    matches: `A-LONG~?` names `a-long-folder`. With `above`, a wildcard shallower than a held
+    path whose parts each match the folders it passes through names a folder above it
+    (ledger_kind's `above`)."""
+    first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
+    cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
+    base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
+    b = file_key(base)
+    parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
+             if x and x != '.']
+    wide = any('**' in x or x == '..' for x in parts)
+    for kind, real in ledger_guarded(ctx):
+        if kind == 'rulebook' and b == real:
+            return kind
+        if real == b or not jail.inside(real, b):
+            continue
+        below = real[len(b.rstrip('\\/')) + 1:].split(os.sep)
+        shorts = short_parts(real, len(below))
+        deeper = kind == 'rulebook' and len(parts) == len(below) + 1
+        shallower = above and len(parts) < len(below)
+        if wide or ((len(parts) == len(below) or deeper or shallower) and
+                    all(n == x or glob_part(n, s, x) for n, s, x in zip(below, shorts, parts))):
+            return kind
+    return None
+
+
+def glob_part(name, short, pattern):
+    """Whether the wildcard part `pattern` matches a path part, as FindFirstFile matches it: its
+    long name `name` or its 8.3 short name `short` (None when it has none), both case folded."""
+    return fnmatch.fnmatchcase(name, pattern) or (short is not None and fnmatch.fnmatchcase(short, pattern))
+
+
+def short_parts(real, depth):
+    """The last `depth` parts of the 8.3 short spelling of the path `real` (GetShortPathNameW),
+    case folded, to match a wildcard against as FindFirstFile does. A part that does not exist
+    yet (a held file not written) is None, and its nearest existing folder gives the parts above
+    it; None for every part when the volume gives none (the long names alone)."""
+    path, tail = real, 0
+    short = _short_path(path)
+    while short is None and tail < depth:
+        parent = os.path.dirname(path)
+        if not parent or parent == path:
+            break
+        path, tail = parent, tail + 1
+        short = _short_path(path)
+    need = depth - tail
+    parts = re.split(r'[\\/]', short.lower().rstrip('\\/')) if short else []
+    head = parts[-need:] if need > 0 and len(parts) >= need else [None] * need
+    return head + [None] * tail
+
+
+def _short_path(path):
+    """GetShortPathNameW of `path`, or None when it does not resolve (a missing path)."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.WinDLL('kernel32').GetShortPathNameW(path, buf, len(buf))
+    except (ImportError, OSError, AttributeError, ValueError):
+        return None
+    return buf.value if 0 < n < len(buf) else None
+
+
+def ledger_git(event, ctx, cmd, inv, cwd, role):
+    """git run in a work tree that holds part of the ledger (outside git: run in a folder that
+    holds it) whose pathspec reaches that part (ledger_kind's files): rm and mv, restore (not
+    --staged alone, and only when every long option is one GIT_LONGS names: `--w` is
+    `--worktree` to git, and _canon_long leaves a one-letter body as written), checkout-index, and checkout of paths (after `--`, or every positional word
+    without one: git reads a word that names no branch as a path). A pathspec reaches a held path
+    as kitlib.guard.delegfile.covers reads it (the path, a folder above it, a wildcard whose
+    literal folder is above it; a computed word or unread magic always), or is a `.md` file
+    directly in the rulebooks' folder (a wildcard there: its literal folder, that folder). A
+    branch name is read as a path too (fail closed: `git checkout pm` from
+    the folder above the ledger's). Paths read from elsewhere (git_every_path:
+    `--pathspec-from-file`, checkout-index `-a` or `--stdin`) reach every path of the tree.
+    In such a tree, for the sessions ledger_wide_binds names, the forms that rewrite the whole
+    tree are refused too (ledger_git_tree_form: checkout or switch that discards changes, reset
+    --hard, --merge or --keep, a stash that is not a read, a clean that is not a dry run with no
+    pathspec or one that reaches a held path); and a git call whose directory the guard cannot
+    place (a computed -C, GIT_DIR, --git-dir, --work-tree and the like: gc.blind) is refused in
+    any of those writing forms while a ledger is configured, since it can act on the ledger's
+    tree (fail closed); a read there passes."""
+    gc = git_call_judged(inv)
+    if gc is None or gc.sub_dyn:
+        return None
+    sub, args = gc.sub, gc.rest
+    held = ledger_guarded(ctx)
+    if not held:
+        return None
+    from . import delegfile
+    short, longs, pos = _opts(sub, args, wide=True)
+    tree_form = ledger_git_tree_form(sub, args, short, longs)
+    if not gc.dir or gc.unknown or gc.blind:
+        if not ledger_wide_binds(event, ctx):
+            return None
+        form = tree_form or ledger_git_path_form(sub, args, short, longs, held)
+        if not form:
+            return None
+        kind = held[0][0]
+        return refuse('ledger', role, STANDING_WHY[kind] % (
+            '`%s` (%s, in a place the guard cannot tell: it can be the tree of the ledger)' % (bare(cmd), form)),
+            UNPLACED_BRANCH_INSTEAD if checkout_makes_branch(sub, short, longs) and not tree_form
+            else ledger_instead(ctx, kind))
+    if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout') and not tree_form:
+        return None
+    if sub == 'restore' and restore_index_only(short, longs):
+        return None                             # the index alone
+    place = ctx.place(gc.dir)
+    top = place.top if place.kind in (repo.MAIN, repo.LINKED) and place.top else gc.dir
+    tree = jail.real(top)
+    held = [(kind, real) for kind, real in held if jail.inside(real, tree)]
+    if not held:
+        return None
+    if sub == 'stash' and tree_form:
+        pos = delegfile.after_dashes(args) or []    # push's pathspecs after `--`; none: the tree
+    specs = sub in ('clean', 'stash') and tree_form and ledger_wide_binds(event, ctx)
+    if tree_form and ledger_wide_binds(event, ctx) and (not specs or not pos or all(
+            delegfile.spec_real(ctx, w, gc.dir, top) is False for w in pos)):
+        kind = held[0][0]                       # no pathspec, or exclusions alone: the tree
+        return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), tree_form)),
+                      ledger_instead(ctx, kind))
+    if sub == 'checkout':
+        after = delegfile.after_dashes(args)
+        pos = after if after is not None else pos
+    elif sub not in ('rm', 'mv', 'restore', 'checkout-index'):
+        if not specs:
+            return None                         # a tree form the session is not held to
+    every = git_every_path(sub, short, longs)
+    if every:
+        kind = held[0][0]
+        return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), every)),
+                      ledger_instead(ctx, kind))
+    for w in pos:
+        spec = delegfile.spec_real(ctx, w, gc.dir, top)
+        if spec is False:
+            continue                            # an exclusion names nothing to write
+        for kind, real in held:
+            if spec is True or jail.inside(real, spec) or (
+                    kind == 'rulebook' and os.path.dirname(spec) == real and spec.endswith('.md')):
+                return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), w.text)),
+                              ledger_instead(ctx, kind))
+    return None
+
+
+def ledger_wide_binds(event, ctx):
+    """Whether the ledger rule's wider refusals hold the session of `event`: a folder above a held
+    path or a wildcard that can name one (ledger_rule's `above`), git that rewrites a tree holding
+    the ledger (ledger_git_tree_form), and a writing git call in a place the guard cannot tell.
+    The one place their sessions are chosen: a marked session but the PM's (marked_not_pm), so
+    a subagent, a `plain` or other agent's mark and an unknown mark are bound (fail closed); the
+    owner's unmarked session and the PM's pass. Whether to widen them is the owner's open
+    question: `return True` here binds every session, as the rest of the ledger rule does (only
+    ledger.py writes the ledger); that change is made here alone."""
+    return marked_not_pm(event, ctx)
+
+
+def marked_not_pm(event, ctx):
+    """True for a marked session but the PM's: a subagent, or a main session whose launcher mark
+    (without the kit plugin's prefix, case ignored) is anything but the owner's and `pm`, an
+    unknown mark included. False for the owner's unmarked session and the PM's."""
+    if subagent(event):
+        return True
+    who = agentname.bare_mark(str(ctx.session_role(event) or context.OWNER)).lower()
+    return who not in (context.OWNER, 'pm')
+
+
+def ledger_git_tree_form(sub, args, short, longs):
+    """The option or form of a git call (sub, its argument Words, and _opts(wide=True)) that
+    rewrites the work tree as a whole, discarding what is there: checkout or switch with -f or
+    --force (switch's --discard-changes; any abbreviation git could read as either, an
+    ambiguous one too: fail closed), reset --hard, --merge or --keep (delegfile.GIT_RESETS), a
+    stash that is not a read (stash_reads), a clean that is not a dry run (clean_dry_run). None
+    for any other call. ledger_git judges a clean's pathspecs, and a stash's after `--`, as a
+    path form's: one that misses the ledger passes; none, or exclusions alone, is the tree."""
+    from . import delegfile
+    if sub in ('checkout', 'switch'):
+        names = ('force', 'discard-changes') if sub == 'switch' else ('force',)
+        if 'f' in short:
+            return '-f'
+        for n in sorted(longs):
+            if n and any(name.startswith(n) for name in names):
+                return '--' + n
+        return None
+    if sub == 'reset':
+        hit = sorted(delegfile.GIT_RESETS & longs)
+        return '--' + hit[0] if hit else None
+    if sub == 'stash':
+        return None if stash_reads(args) else 'stash'
+    if sub == 'clean':
+        return None if clean_dry_run(args) else 'clean'
+    return None
+
+
+def ledger_git_path_form(sub, args, short, longs, held=()):
+    """The subcommand of a git call that writes the paths it names, where the guard cannot place
+    the tree: rm, mv, restore (not the index alone), checkout-index, and a checkout that can
+    write paths (checkout_branch_only is False). None for any other call."""
+    if sub in ('rm', 'mv', 'checkout-index'):
+        return sub
+    if sub == 'checkout' and not checkout_branch_only(args, short, longs, held):
+        return sub
+    if sub == 'restore' and not restore_index_only(short, longs):
+        return sub
+    return None
+
+
+def checkout_branch_only(args, short, longs, held=()):
+    """Whether a checkout (its argument Words, and _opts(wide=True)) can only switch to a branch
+    or a commit, the reading where the guard cannot place the tree; anything else fails closed.
+    True for no positional word, or exactly one that is a plain name: not `.`, not computed, no
+    wildcard or pathspec magic, no path separator (so `kit/x` stays refused: without the tree the
+    guard cannot tell a branch from a folder), no `~` short name, and not a part of a held path
+    (`LEDGER.md`, its folders, their 8.3 short names: git reads a word that names no branch as
+    a path), nor a `.md` name while a rulebooks' folder is held (a rulebook in it). False with `--`, paths read from elsewhere (git_every_path), -p or --patch (any
+    abbreviation git could read as it), or two or more positional words."""
+    from . import delegfile
+    if delegfile.after_dashes(args) is not None or git_every_path('checkout', short, longs):
+        return False
+    if 'p' in short or any(n and 'patch'.startswith(n) for n in longs):
+        return False
+    pos = _opts('checkout', args, wide=True)[2]
+    if not pos:
+        return True
+    if len(pos) > 1:
+        return False
+    w = pos[0]
+    t = w.text
+    if (getattr(w, 'dyn', False) or not t or t in ('.', '..') or t.startswith(':')
+            or any(c in t for c in '*?[]\\/~')):
+        return False
+    name = t.rstrip('. ').lower()
+    if name.endswith('.md') and any(kind == 'rulebook' for kind, _real in held):
+        return False                            # a rulebook: a `.md` file in the held folder
+    return name not in held_names(held)
+
+
+UNPLACED_BRANCH_INSTEAD = ('run it with a literal `git -C <worktree>` so the guard can place the tree, or create '
+                           'the branch with `git switch -c <branch> <start>`.')
+
+
+def checkout_makes_branch(sub, short, longs):
+    """Whether a checkout creates a branch (-b, -B, --orphan): its refusal's Instead names the
+    forms the guard can judge, not the ledger tool."""
+    return sub == 'checkout' and bool('b' in short or 'B' in short or 'orphan' in longs)
+
+
+def held_names(held):
+    """The lower-case names of every part of each held path ((kind, real) pairs) and of its 8.3
+    short name, trailing dots and spaces dropped as Windows drops them."""
+    out = set()
+    for _kind, real in held:
+        for p in (real, _short_path(real)):
+            if p:
+                out.update(n.rstrip('. ').lower() for n in re.split(r'[\\/]', p) if n)
+    return out
+
+
+def git_every_path(sub, short, longs):
+    """The option of a ledger_git call that takes its paths from where the guard cannot read
+    them, so they can be every path, else None: `--pathspec-from-file` (rm, restore, checkout; any
+    abbreviation git could read as it), and checkout-index's `-a`/`--all` and `--stdin`."""
+    if sub in ('rm', 'restore', 'checkout'):
+        for n in sorted(longs):
+            if len(n) > 1 and 'pathspec-from-file'.startswith(n):
+                return '--' + n
+    if sub == 'checkout-index':
+        if 'a' in short:
+            return '-a'
+        for n in sorted(longs):
+            if n and ('all'.startswith(n) or 'stdin'.startswith(n)):
+                return '--' + n
+    return None
+
+
+def ledger_instead(ctx, kind):
+    if kind == 'log':
+        return ('python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
+                '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
+    return 'python %s conflicts --repo <repo> --topic "<topic>" --key <key> --text "<rule>"' % kit_tool(ctx, 'ledger')
+
+
+STANDING_WHY = {
+    'log': '%s writes the rulings ledger, which only ledger.py writes. Add the entry with the kit\'s '
+           'tools/ledger.py add (docs/ledger.md).',
+    'rulebook': '%s writes a rulebook, which only ledger.py writes, each rule change paired with a log entry: read '
+                'the proposed rule against the others with conflicts, then add it with add --rule KEY --topic '
+                'TOPIC --checked HASH, or remove one with rule-drop (docs/ledger.md "Rulebooks").',
+    'digest': '%s writes the standing digest, which the rulebooks replace: it is read, never written, until it '
+              'goes, and a standing rule goes in a rulebook through ledger.py: conflicts, then add --rule '
+              '(docs/ledger.md "Rulebooks").',
+}
+
+
+def ledger_rule(event, ctx, target, role, what, stand_in=False):
+    """The ledger rule over an edit of `target`: what of the ledger it is (ledger_kind), and, for
+    the sessions ledger_wide_binds names, a folder above a held path or a wildcard that can name
+    one (`above`), unless the target is a stand-in for what the guard cannot read (edit_target's
+    `stand_in`: the folder python runs in), as delegfile.reaches reads folders. A broken machine
+    config refuses every subagent write."""
     user = ctx.user()
     broken = user.get('broken')
     if broken and role == 'subagent':
@@ -1001,13 +1448,12 @@ def ledger_rule(ctx, target, role, what):
                       'guard cannot tell where the rulings ledger is and refuses every subagent write. The owner '
                       'or the PM session fixes it.' % (what, ctx.config_location().display(), broken),
                       'python -m json.tool %s' % quote(ctx.config_location().path))
-    ledger = user.get('ledger_path')
-    if not ledger or not target or not same_file(target, ledger):
+    if not target:
         return None
-    return refuse('ledger', role, '%s writes the rulings ledger, which only ledger.py writes. '
-                  "Add the entry with the kit's tools/ledger.py add (docs/ledger.md)." % what,
-                  'python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
-                  '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
+    kind = ledger_kind(ctx, target, above=not stand_in and ledger_wide_binds(event, ctx))
+    if kind is None:
+        return None
+    return refuse('ledger', role, STANDING_WHY[kind] % what, ledger_instead(ctx, kind))
 
 
 def lock_state_dir(ctx):
@@ -1147,7 +1593,7 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     `stand_in`, a target that stands for what the guard cannot read (the folder python runs in, the
     pipeline's paths), which counts as the owner's delegation list only when it is that file
     (delegfile.edit)."""
-    d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
+    d = ledger_rule(event, ctx, target, role, what, stand_in) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         delegations_edit(event, ctx, target, role, what, stand_in) or \
         machine_config(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
@@ -1403,22 +1849,27 @@ def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
     return jail_refusal(role, rs, verdict, root, what, target, rewrite, run)
 
 
+def jail_why(rs, verdict, root, what, target):
+    """The sentence a write-jail refusal of `target` opens with, for its verdict."""
+    if verdict == jail.ADD_ONLY:
+        return ('%s: %s already exists in %s, an add-only data folder: an agent session creates new files there and '
+                'never overwrites, moves or deletes one. %s' % (what, fwd(target), fwd(root.path), JAIL_ASK))
+    if verdict == jail.READ_ONLY:
+        return ('%s: %s is in %s, a data folder that is read-only for agent sessions (.kit.json guard.data_roots). %s'
+                % (what, fwd(target), fwd(root.path), JAIL_ASK))
+    return ('%s: %s is outside the folders an agent session may write: %s. %s'
+            % (what, fwd(target), jail.describe(rs), JAIL_ASK))
+
+
 def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None):
     dest = jail.destination(rs)
+    why = jail_why(rs, verdict, root, what, target)
     if verdict == jail.ADD_ONLY:
-        why = ('%s: %s already exists in %s, an add-only data folder: an agent session creates new files there and '
-               'never overwrites, moves or deletes one. %s' % (what, fwd(target), fwd(root.path), JAIL_ASK))
         if rewrite is not None:
             folder = target if os.path.isdir(target) else os.path.dirname(target)
             return refuse('write-jail', role, why + ' To write a new file:',
                           rewrite(fwd(folder) + '/<new file name>'))
         return refuse('write-jail', role, why + ' To see the folder\'s files:', 'ls %s' % quote(root.path))
-    if verdict == jail.READ_ONLY:
-        why = ('%s: %s is in %s, a data folder that is read-only for agent sessions (.kit.json guard.data_roots). %s'
-               % (what, fwd(target), fwd(root.path), JAIL_ASK))
-    else:
-        why = ('%s: %s is outside the folders an agent session may write: %s. %s'
-               % (what, fwd(target), jail.describe(rs), JAIL_ASK))
     if dest is None:
         return refuse('write-jail', role, why + ' To see where this session runs:', 'pwd')
     if rewrite is not None:
@@ -1628,7 +2079,7 @@ PS_ALIASES = {'sc': 'set-content', 'ac': 'add-content', 'clc': 'clear-content', 
               'epal': 'export-alias', 'epsn': 'export-pssession',
               'gci': 'get-childitem', 'ls': 'get-childitem', 'dir': 'get-childitem', 'sp': 'set-itemproperty'}
 BASH_WRITERS = {'tee', 'touch', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'truncate', 'install', 'ln',
-                'unlink', 'shred'}
+                'unlink', 'shred', 'dos2unix', 'unix2dos', 'mac2unix', 'unix2mac', 'sponge'}
 CMD_WRITERS = {'copy', 'xcopy', 'robocopy', 'move', 'del', 'erase', 'md', 'mkdir', 'rd', 'rmdir',
                'ren', 'rename', 'type'}
 COPIERS = {'robocopy', 'xcopy'}                 # Windows programs every shell runs
@@ -2183,6 +2634,215 @@ def _perl(args, cmd_word=None):
     if not in_place:
         return [here(cmd_word)] if script else []     # perl -e: as python -c
     return pos if script else pos[1:]
+
+
+# gawk 5's options (its getopt list "+F:f:v:W;bcCd::D::e:E:ghi:l:L::nNo::Op::MPrSstVYZ:", options
+# ending at the first operand): the short ones that take a value, the ones whose value is only the
+# rest of their word, and the long names (a unique prefix names one) that take a value, take one
+# only after `=`, or take none
+AWK_VALUE_SHORTS = 'FfvieElZ'
+AWK_OPTIONAL_SHORTS = 'dDLop'
+AWK_LONGS = {'assign': 'v', 'exec': 'E', 'field-separator': 'F', 'file': 'f', 'include': 'i', 'load': 'l',
+             'source': 'e', 'locale': 'Z'}
+AWK_OPTIONAL_LONGS = {'dump-variables': 'd', 'debug': 'D', 'lint': 'L', 'pretty-print': 'o', 'profile': 'p'}
+AWK_FLAG_LONGS = ('bignum', 'characters-as-bytes', 'copyright', 'csv', 'gen-pot', 'help', 'lint-old',
+                  'no-optimize', 'non-decimal-data', 'optimize', 'parsedebug', 'persist', 'posix',
+                  're-interval', 'sandbox', 'trace', 'traditional', 'use-lc-numeric', 'version')
+AWK_ASSIGN_RE = re.compile(r'^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?=')   # an operand gawk reads as var=value
+
+
+def _awk_inplace_lib(w):
+    """True when the -i/-f/-l value Word `w` may load gawk's inplace library: its name, or a value
+    the line computes (fail closed)."""
+    if w is None or w.dyn:
+        return w is not None
+    base = re.split(r'[\\/]', w.text)[-1].lower()
+    return base in ('inplace', 'inplace.awk')
+
+
+def _awk_inplace_text(w):
+    """True when the program text Word `w` may @include the inplace library."""
+    return w is not None and not w.dyn and '@include' in w.text and 'inplace' in w.text
+
+
+def _awk_long(name):
+    """The letter the long option `name` (without its dashes) stands for, or None when gawk does
+    not know it or it is ambiguous (gawk then runs nothing)."""
+    names = list(AWK_LONGS) + list(AWK_OPTIONAL_LONGS) + list(AWK_FLAG_LONGS)
+    if name in names:
+        hits = [name]
+    else:
+        hits = [n for n in names if n.startswith(name)]
+    if len(hits) != 1:
+        return None
+    return AWK_LONGS.get(hits[0]) or AWK_OPTIONAL_LONGS.get(hits[0]) or ''
+
+
+def _awk(args, cmd_word):
+    """What awk/gawk writes: every file operand under the inplace library (`-i inplace` in any
+    spelling, `-f inplace`, `-l inplace`, `@include "inplace"` in the program text; counted even
+    with -v inplace::enable=0), and the file -d, -o or -p names (else the directory it runs in,
+    for awkvars.out or awkprof.out). A run that is neither writes nothing."""
+    in_place, program_given, dumps = False, False, []
+    k = 0
+
+    def take(letter, value):
+        nonlocal in_place, program_given
+        if letter in 'ifl' and _awk_inplace_lib(value):
+            in_place = True
+        if letter in 'feE':
+            program_given = True
+        if letter == 'e' and _awk_inplace_text(value):
+            in_place = True
+        if letter in 'dop':
+            dumps.append(value if value is not None and value.text else here(cmd_word))
+
+    def word(t, w):
+        return sh.Word(t, w.dyn, w.start, w.end)
+
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            k += 1
+            break
+        if not t.startswith('-') or len(t) < 2:
+            break
+        k += 1
+        if t.startswith('--'):
+            spec = t[2:]
+        else:
+            body, spec = t[1:], None
+            for j, c in enumerate(body):
+                rest = body[j + 1:]
+                if c == 'W':
+                    if rest:
+                        spec = rest
+                    elif k < len(args):
+                        spec = args[k].text
+                        w = args[k]
+                        k += 1
+                    break
+                if c in AWK_VALUE_SHORTS:
+                    if rest:
+                        value = word(rest, w)
+                    else:
+                        value = args[k] if k < len(args) else None
+                        k += 1
+                    take(c, value)
+                    break
+                if c in AWK_OPTIONAL_SHORTS:
+                    take(c, word(rest, w) if rest else None)
+                    break
+            if spec is None:
+                if c == 'E':
+                    break                       # -E file: the rest are the program's arguments
+                continue
+        name, eq, val = spec.partition('=')     # --name[=value], or -W name[=value]
+        letter = _awk_long(name)
+        if letter is None or letter == '':
+            continue
+        if eq:
+            value = word(val, w)
+        elif letter in AWK_OPTIONAL_SHORTS:
+            value = None
+        else:
+            value = args[k] if k < len(args) else None
+            k += 1
+        take(letter, value)
+        if letter == 'E':
+            break
+    rest = args[k:]
+    if not program_given and rest:
+        if _awk_inplace_text(rest[0]):
+            in_place = True
+        rest = rest[1:]
+    if not in_place:
+        return dumps
+    files = [w for w in rest if w.dyn or (w.text != '-' and not AWK_ASSIGN_RE.match(w.text))]
+    return dumps + files
+
+
+def _ruby(args, cmd_word):
+    """ruby -i[ext]: the files it edits, as perl -i (after the script unless -e gives the code),
+    placed under each -C or -x folder in turn; without -i, code on the line (_evals)."""
+    code = _evals('ruby', args, cmd_word)
+    in_place, script, pos, dirs = False, False, [], []
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            pos.extend(args[k + 1:])
+            break
+        if t.startswith('--') or t == '-':
+            if t == '-':
+                pos.append(w)
+            k += 1
+            continue                            # a long option: any value it takes is an operand (fail closed)
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            k += 1
+            for j, c in enumerate(body):
+                rest = body[j + 1:]
+                if c == 'i':
+                    in_place = True
+                    break                       # -i.bak: the rest is the suffix
+                if c in 'eIrCE':
+                    script = script or c == 'e'
+                    value = sh.Word(rest, w.dyn, w.start, w.end) if rest else (args[k] if k < len(args) else None)
+                    if not rest:
+                        k += 1
+                    if c == 'C' and value is not None:
+                        dirs.append(value)
+                    break
+                if c == 'x':
+                    if rest:
+                        dirs.append(sh.Word(rest, w.dyn, w.start, w.end))
+                    break
+                if c in 'FWT0K':
+                    break                       # their value is the rest of the word
+            continue
+        pos.append(w)
+        k += 1
+    if not in_place:
+        return code
+    files = pos if script else pos[1:]
+    for d in reversed(dirs):
+        files = [_under(d, f) for f in files]
+    return code + files
+
+
+# vi, vim, nvim, ex and ed: a scripted run writes the files it is given, so every file operand
+# counts, an operand-only read too; the options whose value is the next word (a short one last in
+# its word, as `-sc <cmd>`) are passed over, bar -w/-W's script output file, which is written
+EDITORS = {'vi', 'vim', 'nvim', 'ex', 'ed'}
+EDITOR_VALUE_SHORTS = 'cuUiTtwW'
+
+
+def _editor(name, args):
+    out, k = [], 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            out.extend(args[k + 1:])
+            break
+        if name != 'ed' and t.startswith('+'):
+            k += 1                              # +cmd
+            continue
+        if t.startswith('-') and len(t) > 1:
+            short = not t.startswith('--')
+            if (t == '-p') if name == 'ed' else (t == '--cmd' or (short and t[-1] in EDITOR_VALUE_SHORTS)):
+                if short and t[-1] in 'wW' and k + 1 < len(args):
+                    out.append(args[k + 1])     # the script output file
+                k += 2
+            else:
+                k += 1
+            continue
+        out.append(w)
+        k += 1
+    return [w for w in out if w.dyn or w.text != '-']
 
 
 def _curl(args, cmd_word):
@@ -2741,6 +3401,8 @@ def write_targets(cmd, inv):
         return out + _wget(args, word) + grouped
     if cm.PYTHON_RE.match(name):
         return out + _python(cmd, name, args, word, inv.via)
+    if name == 'ruby' and cmd.shell != sh.PS:
+        return out + _ruby(args, word)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
@@ -2751,6 +3413,10 @@ def write_targets(cmd, inv):
         return out + _sed(args)
     if name == 'perl':
         return out + _perl(args, word)
+    if name in ('awk', 'gawk'):
+        return out + _awk(args, word)
+    if name in EDITORS:
+        return out + _editor(name, args)
     if name == 'unzip':
         return out + _unzip(args, word)
     if name == 'dd':
@@ -3687,6 +4353,10 @@ GIT_LONGS = {
     'stash': ('message', 'patch', 'staged', 'keep-index', 'no-keep-index', 'include-untracked', 'all', 'quiet',
               'pathspec-from-file', 'pathspec-file-nul', 'index'),
     'update-ref': ('no-deref', 'stdin', 'create-reflog', 'batch-updates'),
+    # --prefix and --stage take a value; left out of GIT_LONG_VALUES, the value is read as a path
+    # (fail closed)
+    'checkout-index': ('index', 'quiet', 'force', 'all', 'no-create', 'prefix', 'stage', 'temp',
+                       'ignore-skip-worktree-bits', 'stdin'),
 }
 GIT_LONGS['stage'] = GIT_LONGS['add']
 GIT_LONG_VALUES = {'message', 'file', 'author', 'date', 'template', 'reuse-message', 'reedit-message', 'fixup',
@@ -3699,17 +4369,43 @@ GIT_SHORT_VALUES = {'commit': 'mFCct', 'restore': 's', 'clean': 'e', 'push': 'o'
 
 def _canon_long(sub, body):
     """The long options `--body` selects for `sub`: itself when exact or unknown, the one it
-    abbreviates, or every one it could abbreviate (an ambiguous prefix fails closed)."""
+    abbreviates, or every one it could abbreviate (an ambiguous prefix fails closed). git reads
+    `--no-<prefix>` as the negation of an option too (`--no-st` is `--no-staged`), so `--no`,
+    `--no-` and `--no-<prefix>` also select `no-<name>` for each name the prefix abbreviates."""
     table = GIT_LONGS.get(sub, ())
     if body in table or len(body) < 2:
         return [body]
     hits = [n for n in table if n.startswith(body)]
+    if body.startswith('no-') or 'no-'.startswith(body):
+        hits += ['no-' + n for n in table if n.startswith(body[3:]) and not n.startswith('no-')
+                 and 'no-' + n not in hits]
     return hits or [body]
 
 
-def _opts(sub, args):
+def restore_index_only(short, longs):
+    """Whether git restore with these options (_opts) writes the index alone: --staged (-S)
+    without --worktree (-W), and every long option one GIT_LONGS names (fail closed: _canon_long
+    leaves a one-letter body as written, and `--w` is `--worktree` to git; `--no-st` is
+    `--no-staged`, which it names and the table does not; `--no` and `--no-` git rejects as
+    ambiguous, and _canon_long's names for them are not in the table either)."""
+    return (('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs)
+            and longs <= set(GIT_LONGS['restore']))
+
+
+def _one_letter(sub, body):
+    """The long option a one-letter `--body` abbreviates for `sub` when exactly one starts with it
+    (git reads `--h` as reset's `--hard`), else None (ambiguous or unknown: git rejects it)."""
+    hits = [n for n in GIT_LONGS.get(sub, ()) if len(body) == 1 and n.startswith(body)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _opts(sub, args, wide=False):
     """(short option letters, long option names, positional Words) of a git subcommand's
-    arguments, option values left out."""
+    arguments, option values left out. `wide` also names the long option a one-letter body
+    abbreviates (_one_letter) beside the body itself, for a check that refuses on that option:
+    the body stays, so a check that passes only on known options (restore_index_only) still
+    fails closed, and a caller that passes on an option it names (a listing, --no-deref) keeps
+    the narrow reading."""
     shorts, longs, pos = set(), set(), []
     values = GIT_SHORT_VALUES.get(sub, '')
     k = 0
@@ -3722,6 +4418,9 @@ def _opts(sub, args):
             body, eq, _v = t[2:].partition('=')
             names = _canon_long(sub, body)
             longs.update(names)
+            one = _one_letter(sub, body) if wide else None
+            if one:
+                longs.add(one)
             k += 1
             if not eq and len(names) == 1 and names[0] in GIT_LONG_VALUES:
                 k += 1
@@ -3754,15 +4453,37 @@ def _pos(args):
     return [w for w in args if not w.text.startswith('-')]
 
 
-def git_alias(cmd, gc, role):
+def git_alias(ctx, cmd, gc, cwd, role):
     name, val = gc.alias
     rest = ' '.join(w.text for w in gc.rest)
     if val.startswith('!'):
         how, instead = 'Run the command itself:', ('%s %s' % (val[1:], rest)).strip()
+        instead = alias_heavy_run(ctx, cmd, cwd, instead) or instead
     else:
         how, instead = 'Run the git command itself:', ('git %s %s' % (val if gc.sub == name else gc.sub, rest)).strip()
     return refuse('git-alias', role, '`%s` defines a git alias on the command line (alias.%s=%s), which hides '
                   'the command git runs. %s' % (bare(cmd), name, val, how), instead)
+
+
+def alias_heavy_run(ctx, cmd, cwd, text):
+    """The machine_lock run line for a shell alias's command `text` when it is one heavy program
+    (heavy) and the session holds no machine lock, so the alternative git_alias prints is not
+    refused as heavy in turn; else None."""
+    where = cmd.cwd or cwd
+    try:
+        parsed = cm.read(text, cmd.shell, where, home=getattr(ctx, 'home', None))
+    except Exception:  # noqa: BLE001 - an alternative's text only: the plain one stands
+        return None
+    if not parsed.clean or len(parsed.commands) != 1:
+        return None
+    inv = cm.invocation(parsed.commands[0])
+    if inv is None or inv.dyn:
+        return None
+    cfg = ctx.config(where) if where else None
+    entry = kconfig.heavy_match(inv.path, inv.argv, kconfig.heavy_programs(cfg))
+    if not entry or ctx.lock_held()[0]:
+        return None
+    return lock_alternative(ctx, cmd, entry, cwd, text)
 
 
 def inline_alias(gc):
@@ -3806,7 +4527,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if gc is None:
         return None
     if gc.alias:
-        d = git_alias(cmd, gc, role)
+        d = git_alias(ctx, cmd, gc, cwd, role)
         if d:
             return d                            # a warning by default: the command git runs is judged below
         gc = inline_alias(gc)
@@ -3822,7 +4543,12 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if sub == 'worktree':
         return git_worktree_remove(ctx, gc, role, text)     # from any place: it removes another tree
     if sub == 'push':
-        return git_push(event, ctx, gc, role)
+        # git_push's refusal first, so git-shared-ref in warn mode never hides it
+        return git_push(event, ctx, gc, role) or git_shared_push(event, ctx, cmd, gc, cwd, role)
+    if sub in SHARED_REF_FORMS:
+        d = git_shared_ref_forms(event, ctx, cmd, gc, cwd, role)    # from any place, as update-ref
+        if d:
+            return d
     if sub == 'branch':
         d = git_branch_delete(ctx, gc, role)
         if d:
@@ -3846,8 +4572,342 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     return d
 
 
+# git verbs that make a commit, each refused for an agent session in a linked worktree
+# (git_plain_commit): plain git writes no Co-Authored-By trailer, so the gate's trailer check fails
+# the branch. Known limits, none read here:
+# - a git alias from git's config files (an inline -c alias.<name> is expanded);
+# - a verb the shell computes or a script runs;
+# - commit-tree and rebase;
+# - a computed -C, --git-dir or --work-tree: no place is known, so the unplaced handling and
+#   git-main-history judge the line, not this rule;
+# - a --continue of a revert or cherry-pick sequence started with --no-commit makes no commit, but
+#   it is refused like any other: git keeps that mode in the sequence's state, which is not read;
+# - a word the shell computes after a hold (`git cherry-pick -n $X`) is read as a commit, though
+#   it may be an option that undoes the hold (`--commit`): a computed commit is the common case,
+#   so failing closed there would refuse honest lines;
+# - commit.py commits only the change in progress of a revert, cherry-pick or am sequence: it does
+#   not go on with the commits or patches left, so the refusal says to end the sequence (--quit).
+COMMIT_VERBS = ('commit', 'merge', 'revert', 'cherry-pick', 'am', 'pull')
+# the words after which a verb makes no commit, spelled exactly
+COMMIT_STOPS = {'commit': ('--dry-run',), 'merge': ('--abort', '--quit'), 'revert': ('--abort', '--quit'),
+                'cherry-pick': ('--abort', '--quit'),
+                'am': ('--abort', '--quit', '--show-current-patch', '--show-current-patch=diff',
+                       '--show-current-patch=raw')}
+# the options, spelled exactly, that leave the verb's change uncommitted; an abbreviation is none
+# (revert's and cherry-pick's -n is read as --no-commit)
+COMMIT_HOLDS = {'merge': ('--no-commit', '--squash', '--ff-only'), 'pull': ('--no-commit', '--squash', '--ff-only'),
+                'revert': ('--no-commit',), 'cherry-pick': ('--no-commit',)}
+# the long options that undo a hold (a prefix of one counts): the last of --commit and --no-commit
+# (or -n) wins, of --squash and --no-squash, and of --ff, --no-ff and --ff-only
+COMMIT_UNDOES = {'commit': '--no-commit', 'no-squash': '--squash', 'ff': '--ff-only', 'no-ff': '--ff-only'}
+# the words that go on with a sequence: the commit is made by commit.py, not by the verb again
+COMMIT_STEPS = ('--continue', '--skip', '--resolved')
+# the short options that take a value (attached, or the next word), per verb (git 2.5x)
+COMMIT_SHORT_VALUES = {'commit': 'mFcCt', 'merge': 'mFsX', 'pull': 'sXj', 'revert': 'mX', 'cherry-pick': 'mX',
+                       'am': 'pC'}
+# the short options whose value, if any, is attached only (-S<key>, commit's -u<mode>): each ends
+# its cluster and takes no next word
+COMMIT_SHORT_ATTACHED = {'commit': 'Su', 'merge': 'S', 'pull': 'S', 'revert': 'S', 'cherry-pick': 'S', 'am': 'S'}
+# the short options that take no value, per verb: any other letter may take the rest of its cluster
+# or the next word, so a hold after it is not counted (commit_scan)
+COMMIT_SHORT_FLAGS = {'commit': 'apsnevqzio', 'merge': 'nqve', 'pull': 'nqvrfkpa46t', 'revert': 'ens',
+                      'cherry-pick': 'enxs', 'am': 'skcq3imunrb'}
+# the long options that take a value in the next word when no `=` gives it
+COMMIT_LONG_VALUES = {'message', 'file', 'strategy', 'strategy-option', 'cleanup', 'into-name', 'mainline',
+                      'depth', 'deepen', 'shallow-since', 'shallow-exclude', 'upload-pack', 'jobs',
+                      'negotiation-tip', 'server-option', 'refmap', 'reuse-message', 'reedit-message',
+                      'fixup', 'squash', 'author', 'date', 'template', 'trailer', 'pathspec-from-file',
+                      'directory', 'exclude', 'include', 'patch-format', 'quoted-cr', 'whitespace', 'resolvemsg',
+                      'empty'}
+# the options of a revert or cherry-pick that its --no-commit form keeps (commit_scan's `keep`)
+COMMIT_KEPT_LONG = ('strategy', 'strategy-option')
+# the long options, spelled in full, that take no next word; any other long option without `=`
+# (one git does not know, or an abbreviation, which may be of one that takes a value) may take the
+# next word, so a hold after it is not counted (commit_scan)
+COMMIT_LONG_FLAGS = {
+    'commit', 'no-commit', 'squash', 'no-squash', 'ff', 'no-ff', 'ff-only', 'edit', 'no-edit', 'signoff',
+    'no-signoff', 'stat', 'no-stat', 'summary', 'no-summary', 'log', 'no-log', 'verbose', 'quiet', 'progress',
+    'no-progress', 'verify', 'no-verify', 'verify-signatures', 'no-verify-signatures', 'gpg-sign', 'no-gpg-sign',
+    'allow-unrelated-histories', 'autostash', 'no-autostash', 'rerere-autoupdate', 'no-rerere-autoupdate',
+    'overwrite-ignore', 'no-overwrite-ignore', 'rebase', 'no-rebase', 'all', 'append', 'force', 'keep', 'prune',
+    'tags', 'no-tags', 'unshallow', 'update-shallow', 'ipv4', 'ipv6', 'recurse-submodules',
+    'no-recurse-submodules', 'allow-empty', 'allow-empty-message', 'keep-redundant-commits', 'no-reference',
+    'amend', 'no-post-rewrite', 'reset-author', 'short', 'branch', 'porcelain', 'long', 'null', 'only',
+    'interactive', 'patch', 'status', 'no-status', '3way', 'no-3way', 'keep-cr', 'no-keep-cr', 'scissors',
+    'no-scissors', 'utf8', 'no-utf8', 'keep-non-patch', 'ignore-space-change', 'ignore-whitespace',
+    'committer-date-is-author-date', 'ignore-date', 'message-id', 'no-message-id', 'reject', 'retry', 'binary'}
+
+
+def commit_scan(sub, args):
+    """(makes, revs, mainline, keep): whether git `sub` (COMMIT_VERBS) with the Words `args` after
+    it makes a commit, the words that are neither options nor their values (a revert's or
+    cherry-pick's commits; None after an option the scan cannot place that may take a value, so a
+    word after it may be that value),
+    the -m/--mainline value given, or None, and the strategy options of a revert or cherry-pick
+    (-X, COMMIT_KEPT_LONG) its --no-commit form keeps, as kept_word's (lead, sep, value, dyn). Read left to right as git
+    reads them: a stop word (COMMIT_STOPS) makes none; a hold (COMMIT_HOLDS, or -n in a short
+    cluster of revert or cherry-pick; merge's and pull's -n is --no-stat) holds until a long option
+    that undoes it (COMMIT_UNDOES), or a prefix of one, comes after it; a sequence's next step
+    (COMMIT_STEPS) commits. Option values are skipped, so `-m --no-commit` is a message; `--` ends
+    the options. It fails closed: after a word it cannot place (a computed word, a long option
+    without `=` that COMMIT_LONG_FLAGS and COMMIT_LONG_VALUES do not name, or a short letter
+    COMMIT_SHORT_FLAGS does not), no later hold or stop word counts, since that word may have taken
+    it as its value."""
+    stops, holds = COMMIT_STOPS.get(sub, ()), COMMIT_HOLDS.get(sub, ())
+    values, attached = COMMIT_SHORT_VALUES.get(sub, ''), COMMIT_SHORT_ATTACHED.get(sub, '')
+    flags = COMMIT_SHORT_FLAGS.get(sub, '')
+    held, revs, mainline, unsure, keep, unplaced = set(), [], None, False, [], False
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        k += 1
+        if w.dyn or not t.startswith('-') or t == '-':
+            revs.append(t)
+            unsure = unsure or w.dyn
+            continue
+        if t == '--':
+            revs.extend(x.text for x in args[k:])
+            break
+        if t.startswith('--'):
+            body, eq, val = t[2:].partition('=')
+            if t in stops and not unsure:
+                return False, None if unplaced else revs, mainline, keep
+            if t in COMMIT_STEPS:
+                return True, None if unplaced else revs, mainline, keep
+            if t in holds:
+                if not unsure:
+                    held.add(t)
+                continue
+            if len(body) >= 2:
+                held -= {h for n, h in COMMIT_UNDOES.items() if n.startswith(body)}
+            kept = body in COMMIT_KEPT_LONG and sub in ('revert', 'cherry-pick')
+            if eq:
+                if body == 'mainline':
+                    mainline = val
+                if kept:
+                    keep.append(('--%s=' % body, '', val, False))
+                continue
+            if body in COMMIT_LONG_VALUES:
+                if body == 'mainline' and k < len(args):
+                    mainline = args[k].text
+                if kept and k < len(args):
+                    keep.append((t, ' ', args[k].text, args[k].dyn))
+                k += 1
+            elif body not in COMMIT_LONG_FLAGS:
+                unsure = True
+                # an abbreviation of flags alone takes no value, so the words after it stay commits
+                unplaced = unplaced or any(n.startswith(body) for n in COMMIT_LONG_VALUES) or \
+                    not any(n.startswith(body) for n in COMMIT_LONG_FLAGS)
+            continue
+        for j, c in enumerate(t[1:]):
+            if c in values:
+                rest, dyn = t[j + 2:], False
+                if not rest:
+                    rest, dyn = (args[k].text, args[k].dyn) if k < len(args) else ('', False)
+                    k += 1
+                if c == 'm' and sub in ('revert', 'cherry-pick'):
+                    mainline = rest
+                if c == 'X' and sub in ('revert', 'cherry-pick'):
+                    keep.append(('-X', '', rest, dyn))
+                break
+            if c in attached:
+                break
+            if c not in flags:
+                unsure = unplaced = True
+                break
+            if c == 'n' and sub in ('revert', 'cherry-pick') and not unsure:
+                held.add('--no-commit')
+    return sub in ('commit', 'am') or not held, None if unplaced else revs, mainline, keep
+
+
+def git_plain_commit(event, ctx, cmd, inv, cwd, role):
+    """A git verb that makes a commit (COMMIT_VERBS, commit_scan), run by an agent session
+    (agent_session) in a linked worktree: plain git writes no Co-Authored-By trailer, so the gate's
+    trailer check fails the branch. It runs after every other shell rule, so a refusal another
+    rule owns (owner-identity, write-jail and the rest) stands. The alternative is the kit tool
+    that does the job with the trailer: commit.py for a commit or a sequence's next step,
+    sync_base.py for a merge or pull, the verb's --no-commit form (its -m, -X and --strategy kept) and then commit.py
+    for a revert or cherry-pick, git apply --index and then commit.py for am. A --skip drops the
+    change in progress and goes on with plain commits: the alternative ends the sequence, drops the
+    change and takes what is left one at a time."""
+    gc = git_call_judged(inv)
+    if gc is None or gc.sub not in COMMIT_VERBS or not gc.dir or gc.unknown or gc.blind:
+        return None
+    if not agent_session(event, ctx):
+        return None
+    place = ctx.place(gc.dir)
+    if place.kind != repo.LINKED or not place.top:
+        return None
+    alt = commit_alternative(ctx, gc, place.top)
+    if alt is None:
+        return None
+    why = '`%s` makes a commit with plain git, which writes no Co-Authored-By trailer: the gate\'s trailer check ' \
+          'then fails the branch. ' % bare(cmd)
+    return refuse('git-plain-commit', role, why + alt[0], alt[1])
+
+
+def commit_alternative(ctx, gc, where):
+    """(advice, command) for git `gc` when it makes a commit (COMMIT_VERBS, commit_scan), run in
+    the linked worktree `where`: the kit tool that does the job with the trailer (git_plain_commit
+    names the forms); None when it makes no commit."""
+    if gc.sub not in COMMIT_VERBS:
+        return None
+    sub = gc.sub
+    makes, revs, mainline, kept = commit_scan(sub, gc.rest)
+    if not makes:
+        return None
+    top = quote(where)
+    commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), top)
+    words = {w.text for w in gc.rest}
+    one = 'git -C %s apply --index <patch>' % top if sub == 'am' else \
+        'git -C %s %s --no-commit <commit>' % (top, sub)
+    # --quit forgets the commits or patches still to come: the advice says where to read them first
+    left = 'the patches from the one in progress on are in the folder git -C %s rev-parse --git-path ' \
+        'rebase-apply names' % top if sub == 'am' else \
+        'the commits still to come are listed in the file git -C %s rev-parse --git-path sequencer/todo ' \
+        'names' % top
+    note = ' --quit forgets what is left, so read it first: %s.' % left
+    if sub in ('revert', 'cherry-pick', 'am') and '--skip' in words:
+        return ('--skip drops the change in progress and goes on with the rest as plain commits.%s End the sequence '
+                'here, then in their own calls drop the change in progress with git -C %s reset --merge and take '
+                'each one left with %s, then %s:' % (note, top, one, commit),
+                'git -C %s %s --quit' % (top, sub))
+    if sub == 'commit' or words & set(COMMIT_STEPS) or (sub == 'am' and '-r' in words):
+        rest = ''
+        if sub in ('revert', 'cherry-pick', 'am'):
+            rest = ' The kit tool commits only the change in progress: it does not go on with the rest of the ' \
+                   'sequence. After it, end the sequence with git -C %s %s --quit and take each one left with %s, ' \
+                   'then commit.py.%s' % (top, sub, one, note)
+        return 'Commit with the kit tool, which stages the paths you name and adds the trailer.%s The commit:' % rest, \
+            commit
+    if sub in ('merge', 'pull'):
+        return ('Sync with the commit your coordinator named; the tool merges exactly it and adds the trailer (to '
+                'merge anything else, run git -C %s merge --no-commit <rev>, then in its own call %s):' % (top, commit),
+                'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), top))
+    if sub == 'am':
+        return ('Apply the patch to the index, then in its own call commit it with %s:' % commit,
+                'git -C %s apply --index <patch>' % top)
+    keep = ''
+    if mainline is not None:
+        keep = ' -m %s' % (mainline if mainline.isdigit() else '<n>')
+    keep += ''.join(' ' + kept_word(*w) for w in kept)
+    return ('Run it with --no-commit, then in its own call commit what it changed with %s:' % commit,
+            'git -C %s %s --no-commit%s %s' % (top, sub, keep, ' '.join(revs or ()) or '<commit>'))
+
+
+# git that python or node code given on the line runs (interpreter_git): the guard reads git only
+# as a typed shell command, so every git rule (commit.py's trailer, the shared refs, the main
+# checkout) is blind to it. Known limits, none read here:
+# - a script file (one in a temp or scratch folder too) and python -m: only code on the line
+#   (-c, -e) or on standard input (a heredoc, a here-string, text piped in) is read;
+# - a program or a git name the code builds at run time ('g' + 'it', importlib, getattr);
+# - other interpreters (ruby, perl, deno) and compiled programs; PowerShell's Start-Process and
+#   .NET's Process;
+# - a library that writes the repository itself (dulwich, pygit2, open('.git/refs/...'));
+# - a line the parser cannot read: the fallback does not run this rule;
+# - a git command that is not at the start of its string ('cd x && git commit', shell=True);
+# - a git name the code is given from outside its text: an argument (python -c
+#   "...subprocess.run(sys.argv[1:])" git commit) or an environment variable (G=git python -c
+#   "...os.environ['G']...");
+# - python or node run by a launcher (uv run python -c ..., npx node -e ...): the line's program
+#   is the launcher, and its arguments are not read as code;
+# - an option that takes the next word as its value and is not named (python's
+#   --check-hash-based-pycs always, a node option outside NODE_VALUE_OPTS): its value is read as
+#   the script, so the code after it is not read.
+# It refuses honest code in two ways, both kept: a git read (rev-parse, log) is refused like a
+# write, since a read allowance would pass a verb the code computes; and a 'git ...' string in code
+# whose launch runs another program is read as git.
+# a call that starts a program: subprocess, os.system and its kin, asyncio's, node's child_process
+INTERPRETER_LAUNCH_RE = re.compile(r'\b(subprocess|os\.(system|popen|exec\w*|spawn\w*|posix_spawn\w*)|from os import'
+                                   r'|pty\.spawn|create_subprocess_\w+|child_process)\b')
+# git named as a program: a quoted string that is git or git.exe (a path before it allowed), or
+# starts with `git ` (a list's first element, a shell=True string, an f-string, shutil.which('git'))
+INTERPRETER_GIT_RE = re.compile(r'''(['"`])(?:[^'"`\s]*[\\/]|[A-Za-z]:[\\/][^'"`\n]*[\\/])?git(?:\.exe)?'''
+                                r'''(?:\1|\s)''', re.I)
+# a git verb near the git name, which only chooses the alternative's line
+INTERPRETER_VERB_RE = re.compile(r'''(?:['"`]|\bgit(?:\.exe)?\s+(?:-C\s+\S+\s+)?)'''
+                                 r'''(commit-tree|commit|revert|cherry-pick|am|merge|pull)(?=['"`\s])''')
+INTERPRETER_COMMITS = ('commit-tree', 'commit', 'revert', 'cherry-pick', 'am')
+
+
+def interpreter_git(event, ctx, cmd, inv, cwd, role):
+    """git run by python or node code given on the line (rules.inline_code: -c, -e, a heredoc, a
+    here-string, text piped in), in an agent session (agent_session), from any directory: one
+    text of that code that both starts a program (INTERPRETER_LAUNCH_RE) and names git as one
+    (INTERPRETER_GIT_RE). The guard reads git only as a typed shell command, so no git rule judges
+    git that code runs. It runs after every other shell rule, so a refusal another rule owns (the
+    main checkout's unplaced code, owner-identity and the rest) stands. The alternative is the git
+    command typed: commit.py for a commit the code makes, sync_base.py for a merge or pull, else
+    `git -C <worktree> <the git command your code ran>`; a git verb in the code only chooses it."""
+    if not agent_session(event, ctx):
+        return None
+    texts = [t for t in inline_code(cmd, inv, skip_pipe=lambda c: True)
+             if INTERPRETER_LAUNCH_RE.search(t) and INTERPRETER_GIT_RE.search(t)]
+    if not texts:
+        return None
+    verbs = {m.group(1) for t in texts for m in INTERPRETER_VERB_RE.finditer(t)}
+    top = own_worktree(ctx, cwd)
+    wt = quote(top) if top else '"<worktree>"'
+    commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), wt)
+    sync = 'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), wt)
+    which = 'node' if inv.name == 'node' else 'python'
+    why = ('`%s` runs git from %s code. The guard reads git only as a typed shell command, so none of its git '
+           'rules (the shared refs, the main checkout, the commit trailer) judge git that code runs. Type the git '
+           'command itself, one per call; a commit goes through the kit\'s commit.py and a sync through its '
+           'sync_base.py. If the guard refuses the typed git command, that refusal stands: do not route it through '
+           'a program or a script file.' % (hub_line(bare(cmd)), which))
+    if verbs & set(INTERPRETER_COMMITS):
+        return refuse('interpreter-git', role, why + ' The commit:', commit)
+    if verbs & {'merge', 'pull'}:
+        return refuse('interpreter-git', role, why + ' The sync:', sync)
+    return refuse('interpreter-git', role, why + ' The git command:',
+                  'git -C %s <the git command your code ran>' % wt)
+
+
 STASH_READS = ('list', 'show', 'create')        # no entry added or taken
 STASH_NAMED = ('apply', 'drop')                 # pass with the entry named: `apply <sha>`, `drop stash@{1}`
+
+
+def clean_dry_run(args):
+    """True when git clean with arguments `args` (the Words after `clean`) is a dry run, read in
+    order as git reads it: the last of `-n` (in a short cluster), `--dry-run` (an abbreviation of
+    two letters or more) and its negation `--no-dry-run` (`--no`, `--no-`, `--no-d`: git rejects
+    the ambiguous ones, and a refused line deletes nothing) wins; `-fn --no-dry-run` deletes. A
+    one-letter `--d` is `--dry-run` to git (-d has no long form), but is left unread: the line is
+    refused (fail closed). The value of `-e`/`--exclude` (any abbreviation, `--e` too) is skipped,
+    so `-f -e -n` is no dry run; a word the shell computes cancels one. Words after `--` are paths."""
+    dry = False
+    values = GIT_SHORT_VALUES['clean']
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        k += 1
+        if w.dyn:
+            dry = False                         # a word the shell computes may be --no-dry-run
+            continue
+        if t == '--':
+            break
+        if t.startswith('--'):
+            body, eq, _v = t[2:].partition('=')
+            if body.startswith('no') and 'no-dry-run'.startswith(body):
+                dry = False
+            elif not eq and len(body) > 1 and 'dry-run'.startswith(body):
+                dry = True
+            elif body and 'exclude'.startswith(body) and not eq:
+                k += 1
+            continue
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            for j, c in enumerate(body):
+                if c == 'n':
+                    dry = True
+                if c in values:
+                    if not body[j + 1:]:
+                        k += 1
+                    break
+    return dry
 
 
 def stash_reads(args):
@@ -3869,8 +4929,17 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
     git refuses (`git stash -q list`), so only the first word is taken as the verb. An entry or branch name the shell computes
     (`drop $E`) fails closed: empty, it leaves a bare drop of the top entry. A main checkout's
     stash is git-stash's (git_main_rules)."""
-    if not agent_session(event, ctx):
+    if not agent_session(event, ctx) or not stash_shared(gc):
         return None
+    how, instead = stash_alternative(ctx, place.top)
+    return refuse('git-stash-shared', role, '`%s` adds to or takes from the stash stack every worktree of this '
+                  'repository shares; while it holds an entry every gate and landing refuses (docs/gate.md "The '
+                  'stash guard"). %s' % (bare(cmd), how), instead)
+
+
+def stash_shared(gc):
+    """True when git stash `gc` adds an entry with no tag or takes one it does not name
+    (git_stash_shared)."""
     first = gc.rest[0] if gc.rest else None
     if first is not None and (first.dyn or not first.text.startswith('-')):
         verb, args = first, gc.rest[1:]
@@ -3881,17 +4950,19 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
         need = 2 if verb.text == 'branch' else 1
         named = len(pos) >= need and not any(w.dyn for w in pos[:need])
         if verb.text in STASH_READS or (verb.text in STASH_NAMED + ('branch',) and named):
-            return None
+            return False
     if (verb is None or (verb.text == 'push' and not verb.dyn)) and \
             ('m' in short or any(n and 'message'.startswith(n) for n in longs)):
-        return None                             # a tagged push: its owner finds it again by the tag
-    top = quote(place.top)
-    return refuse('git-stash-shared', role, '`%s` adds to or takes from the stash stack every worktree of this '
-                  'repository shares; while it holds an entry every gate and landing refuses (docs/gate.md "The '
-                  'stash guard"). Set the work aside as a WIP commit on your branch: stage each path you changed, '
-                  'a new file too, then commit them with git -C %s commit -m "WIP: <what>" -- <each path you '
-                  'changed>, each in its own call. To stage:' % (bare(cmd), top),
-                  'git -C %s add -- <each path you changed>' % top)
+        return False                            # a tagged push: its owner finds it again by the tag
+    return True
+
+
+def stash_alternative(ctx, where):
+    """(advice, command): the WIP commit with the kit tool in the linked worktree `where` that
+    takes the place of a shared stash entry (git_stash_shared)."""
+    return ('Set the work aside as a WIP commit on your branch with the kit tool, which stages each path you name, '
+            'a new file too, and adds the trailer:',
+            'python %s -C %s -m "WIP: <what>" <each path you changed>' % (kit_tool(ctx, 'commit'), quote(where)))
 
 
 def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
@@ -3902,21 +4973,20 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
     where = 'the main checkout %s' % place.top if place.kind == repo.MAIN else \
         'a checkout git cannot place (%s)' % place.detail
     top = place.top or '<main checkout>'
-    short, longs, pos = _opts(sub, args)
+    short, longs, pos = _opts(sub, args, wide=True)
     if writes_main(sub, short, longs):
         cfg = ctx.config(place.top or gc.dir)
         if not kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout'):
             why = lander_check(event, ctx, cmd, inv, gc)[1] if place.kind == repo.MAIN else None
             if why is not None:
                 return lander_refusal(ctx, cmd, gc, 'git-main-history', role, why)
-            how, instead = ref_delete_hint(ctx, gc, top, cwd, short, longs, pos) or git_in_worktree(ctx, cmd, gc, top, cwd)
+            how, instead = ref_delete_hint(ctx, gc, top, cwd, short, longs, pos) or \
+                git_in_worktree(ctx, cmd, gc, top, cwd, agent_session(event, ctx))
             return refuse('git-main-history', role, '`%s` writes history or files in %s; this role may not change a '
                           'main checkout. %s' % (text, where, how), instead)
     no_wt, wt = new_worktree(ctx, place.top)
     if sub == 'restore':
-        staged = 'S' in short or 'staged' in longs
-        worktree = 'W' in short or 'worktree' in longs
-        if not staged or worktree:
+        if not restore_index_only(short, longs):
             return refuse('git-restore', role, '`%s` overwrites working files in %s, where landers work. To undo a '
                           'change, make it in a worktree (%s). To unstage only:' % (text, where, WT_ADD % quote(top)),
                           'git -C %s restore --staged -- <path>' % quote(top)) if not no_wt else \
@@ -3928,10 +4998,17 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
             refuse('git-checkout', role, '`%s` changes files in %s. %s' % (text, where, no_wt), wt)
     if sub == 'reset' and 'hard' in longs:
         rev = ' '.join(w.text for w in pos) or 'HEAD'
+        if place.kind == repo.MAIN and not kconfig.permissions(
+                event, kconfig.roles(ctx.config(place.top or gc.dir))).get('edit_main_checkout'):
+            # reset --keep changes the main checkout too, which git-main-history refuses this role
+            mine = own_worktree(ctx, cwd, place.top)
+            return refuse('git-reset-hard', role, '`%s` discards work in %s; this role may not change a main '
+                          'checkout. In your worktree, reset --keep refuses to drop uncommitted changes:'
+                          % (text, where), 'git -C %s reset --keep %s' % (quote(mine or '<worktree>'), rev))
         return refuse('git-reset-hard', role, '`%s` discards work in %s. Reset --keep refuses to drop uncommitted '
                       'changes:' % (text, where), 'git -C %s reset --keep %s' % (quote(top), rev))
     if sub == 'clean':
-        if 'n' in short or 'dry-run' in longs:
+        if clean_dry_run(args):
             return None
         return refuse('git-clean', role, '`%s` deletes untracked files in %s. Remove what must go one named path at a '
                       'time; to list them:' % (text, where), 'git -C %s clean -n' % quote(top))
@@ -4544,7 +5621,7 @@ def git_jail_unknown(ctx, cmd, gc, cwd, role):
     if git_reads(gc, strict=True):
         return None
     if gc.blind:                                # a deliberate re-pointing: denied, not unplaced
-        how, instead = git_unplaced(ctx, cmd, gc, cwd)
+        how, instead = git_unplaced(ctx, cmd, gc, cwd, True)
         return refuse('write-jail', role, '`%s` writes a checkout the guard cannot place: %s can point git at a '
                       'git directory, work tree, index or config the text does not show, and a -C does not undo '
                       'it. %s' % (bare(cmd), gc.blind, how), instead)
@@ -4595,12 +5672,36 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         return lander_refusal(ctx, cmd, gc, 'write-jail', role, why)
     what = '`%s` changes the checkout %s' % (bare(cmd), fwd(gc.dir))
     dest = jail.destination(rs)
-    if verdict != jail.OUTSIDE or dest is None:
+    if dest is None:
         return jail_refusal(role, rs, verdict, root, what, gc.dir)
-    rest = git_rest_text(cmd, gc)
-    return refuse('write-jail', role, '%s: it is outside the folders an agent session may write: %s. %s The same command '
-                  'in %s:' % (what, jail.describe(rs), JAIL_ASK, fwd(dest.path)),
-                  ('git -C %s %s %s' % (quote(dest.path), gc.sub, rest)).rstrip())
+    if verdict == jail.OUTSIDE:
+        why = '%s: it is outside the folders an agent session may write: %s. %s' % (what, jail.describe(rs), JAIL_ASK)
+    else:
+        why = jail_why(rs, verdict, root, what, gc.dir)
+    note, instead = git_elsewhere(ctx, cmd, gc, dest.path, True)
+    return refuse('write-jail', role, why + (' In %s, %s' % (fwd(dest.path), note) if note else
+                                             ' The same command in %s:' % fwd(dest.path)), instead)
+
+
+def git_elsewhere(ctx, cmd, gc, where, agent):
+    """(note, command): git `gc` run again in the checkout `where`, `git -C <where> <sub> <rest>`
+    and no note. In a linked worktree an agent session's commit (commit_alternative) or shared
+    stash entry (stash_shared) is refused there too (git_plain_commit, git_stash_shared): the kit
+    tool's form, the note saying why."""
+    plain = ('', ('git -C %s %s %s' % (quote(where), gc.sub, git_rest_text(cmd, gc))).rstrip())
+    if not agent:
+        return plain
+    place = ctx.place(where)
+    if place.kind != repo.LINKED or not place.top:
+        return plain
+    alt = commit_alternative(ctx, gc, place.top)
+    if alt is not None:
+        return ('plain git writes no Co-Authored-By trailer, which the gate\'s trailer check fails. ' + alt[0],
+                alt[1])
+    if gc.sub == 'stash' and stash_shared(gc):
+        how, instead = stash_alternative(ctx, place.top)
+        return 'the stash stack is shared by every worktree of the repository. ' + how, instead
+    return plain
 
 
 def git_retarget(ctx, cmd, inv, gc, w, cwd):
@@ -4626,29 +5727,31 @@ def git_retarget(ctx, cmd, inv, gc, w, cwd):
     return rewrite
 
 
-def git_in_worktree(ctx, cmd, gc, main_top, cwd):
+def git_in_worktree(ctx, cmd, gc, main_top, cwd, agent=False):
     """(sentence, command): the same git command in the session's own worktree of this main
-    checkout, when it has one, else the worktree to make; git_unplaced when what hides the place
-    is in the text."""
+    checkout, when it has one (git_elsewhere: an agent session's commit there is the kit tool's),
+    else the worktree to make; git_unplaced when what hides the place is in the text."""
     if gc.blind:
-        return git_unplaced(ctx, cmd, gc, cwd)
-    rest = git_rest_text(cmd, gc)
+        return git_unplaced(ctx, cmd, gc, cwd, agent)
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
-        return 'Run it in your worktree:', ('git -C %s %s %s' % (quote(mine), gc.sub, rest)).rstrip()
+        note, instead = git_elsewhere(ctx, cmd, gc, mine, agent)
+        return 'Run it in your worktree:' + (' ' + note if note else ''), instead
     no_wt, instead = new_worktree(ctx, main_top)
     if no_wt:
         return no_wt, instead
     return 'Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub, instead
 
 
-def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
+def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos, cleanup=False):
     """(sentence, command) for `git update-ref -d <ref>`, or None. Every worktree of a repository
     shares its refs, so neither a worktree nor the lander carries a ref delete to main: a branch
-    goes with git branch -d, which refuses an unmerged one; any other ref is shown, and the PM
-    deletes it; a guarded main is never offered to branch -d. Both run in the session's own
-    worktree of this main checkout when it has one. None too for a ref git_shared_ref lets any
-    session delete (scratch_ref): only where it runs is wrong, and git_in_worktree says so."""
+    goes with git branch -d, which refuses an unmerged one; a stray ref (stray_ref) is shown, and
+    a coordinator deletes it in its own repository (`cleanup`: the session is one); any other ref
+    is shown, and the PM deletes it; a guarded main is never offered to branch -d. Both run in
+    the session's own worktree of this main checkout when it has one. None too for a ref
+    git_shared_ref lets any session delete (scratch_ref): only where it runs is wrong, and
+    git_in_worktree says so."""
     if gc.sub != 'update-ref' or 'd' not in short or 'stdin' in longs or gc.blind:
         return None
     ref = pos[0] if pos else None
@@ -4664,6 +5767,12 @@ def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
                     (shared, name), 'git -C %s show-ref %s' % (at, name))
         return ('%s Delete a branch with git branch -d, which refuses an unmerged one; unmerged work goes to '
                 'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, branch))
+    if name and stray_ref(name):
+        who = 'you delete it in your own repository, naming the ref literally' if cleanup else \
+            'your coordinator deletes it from its own session in its own repository, so send it the ref'
+        return ('%s A ref outside refs/heads, refs/tags, refs/stash and refs/backlog is a coordinator\'s '
+                'to delete: %s. To show it:' %
+                (shared, who), 'git -C %s show-ref %s' % (at, name))
     return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
             'git -C %s show-ref %s' % (at, name or '<ref>'))
 
@@ -4697,6 +5806,41 @@ def scratch_ref(name):
     """True for a ref any agent session may write or delete from any checkout: refs/tmp/<name>
     and the per-worktree refs but HEAD."""
     return ref_name_ok(name) and name != 'HEAD' and (name.startswith('refs/tmp/') or per_worktree_ref(name))
+
+
+# the main sessions that may delete a stray ref in their own repository (the coordinator and its
+# old mark: AGENT_MARKS's first two), and the refs that are no stray ref, compared without case:
+# NTFS reads refs/HEADS/main as the loose file of refs/heads/main
+REF_CLEANUP_MARKS = AGENT_MARKS[:2]
+NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash', 'refs/backlog')
+
+
+def stray_ref(name):
+    """True for a ref a coordinator may delete in its own repository: a ref_name_ok name under
+    refs/, outside refs/heads, refs/tags, refs/stash (every worktree's stash entries) and
+    refs/backlog (the backlog store, in any case)."""
+    low = (name or '').lower()
+    return ref_name_ok(name) and low.startswith('refs/') and not low.startswith(NOT_STRAY)
+
+
+def cleanup_session(event, ctx):
+    """True for a main session whose mark (session_mark: None for every subagent, a call a host
+    cannot tell apart included) is one of REF_CLEANUP_MARKS, case ignored."""
+    return str(session_mark(event, ctx) or '').lower() in REF_CLEANUP_MARKS
+
+
+def _deref_unsure(place, name):
+    """Why `git update-ref -d <name>` without --no-deref may delete another ref (git follows a
+    symbolic ref and deletes where it points), or None: a reftable repository, where the guard
+    reads no ref file, a loose ref file that does not read, or one that is a symbolic ref."""
+    if os.path.isdir(os.path.join(place.common, 'reftable')):
+        return 'its refs are in a reftable, where the guard cannot tell a symbolic ref'
+    text, why = _read_ref(os.path.join(place.common, *name.split('/')))
+    if text is None:
+        return why
+    if text.startswith('ref:'):
+        return 'it is a symbolic ref to %s, and git deletes that ref instead' % text[4:].strip()
+    return None
 
 
 def main_names(ctx, where):
@@ -4819,11 +5963,54 @@ def _update_ref_unread(gc, short, longs, pos):
     return None
 
 
+def _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role):
+    """A coordinator's `git update-ref -d <stray_ref>`: None (allowed) in its own repository (the
+    main checkout `top` of the place git runs in is the one of its session's folder `cwd`) when
+    git deletes that ref itself (--no-deref, or _deref_unsure finds no other ref it may reach);
+    else the refusal."""
+    mine = ctx.main_top(cwd) if cwd else None
+    at = quote(top or gc.dir)
+    if not top or not mine or paths.norm(mine) != paths.norm(top):
+        return refuse('git-shared-ref', role, '`%s` deletes %s in a repository other than the one your session '
+                      'runs in (%s): a coordinator deletes a stray ref only in its own repository, and that '
+                      'repository\'s coordinator deletes this one. To show it:' % (text, name, fwd(mine or cwd or '?')),
+                      'git -C %s show-ref %s' % (at, name))
+    why = None if 'no-deref' in longs else _deref_unsure(place, name)
+    if why is None:
+        return None
+    return refuse('git-shared-ref', role, '`%s` may delete another ref than %s: %s. Delete the ref itself with '
+                  '--no-deref:' % (text, name, why), 'git -C %s update-ref --no-deref -d %s' % (at, name))
+
+
+SHARED_REFS = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
+SHARED_REF_ALLOWED = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs ' \
+                     '(refs/bisect/, refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD ' \
+                     'and the branch checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, ' \
+                     'refs/stash and refs/backlog in its own repository; any other ref is the PM\'s.'
+
+
+def _shared_scene(ctx, gc, cwd):
+    """(place, top, at, why) of a ref write by git `gc`: the Place git runs in (None when the text
+    does not name it), its main checkout, the checkout a refusal's Instead names (the session's own
+    worktree of it when it has one), and why the guard cannot judge that place (None when it can)."""
+    why = None
+    if gc.blind or gc.unknown or not gc.dir:
+        why = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
+    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    if not why and place.kind not in (repo.MAIN, repo.LINKED):
+        why = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
+    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
+    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
+    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
+    return place, top, at, why
+
+
 def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
     repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
     write scratch_ref names, and in a linked worktree its HEAD and the branch checked out there
-    (never a guarded main); it deletes only scratch_ref names. A ref is judged by its name; HEAD
+    (never a guarded main); it deletes only scratch_ref names, and a coordinator's main session
+    (cleanup_session) a stray_ref in its own repository too (_stray_delete). A ref is judged by its name; HEAD
     (unless --no-deref) by the branch it is on too, so a worktree on a guarded main does not move
     it. A scratch repository (_scratch_repo: in a temp root, no
     link out of its git directory) is not judged. Neither the PM data worktree nor, while the
@@ -4839,22 +6026,14 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         if after and (w.dyn or w.alt is not None or w.synth):
             delete = True                       # a word only the shell knows may be -d
         after = after or (bool(pos) and w is pos[0])
-    if not unread and (gc.blind or gc.unknown or not gc.dir):
-        unread = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
-    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    place, top, at, where = _shared_scene(ctx, gc, cwd)
     if _scratch_repo(ctx, place):
         return None
-    if not unread and place.kind not in (repo.MAIN, repo.LINKED):
-        unread = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
-    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
-    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
-    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
-    shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
-    allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
-              'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
-              'checked out there; any other ref is the PM\'s.'
+    unread = unread or where
+    shared, allowed = SHARED_REFS, SHARED_REF_ALLOWED
+    cleanup = cleanup_session(event, ctx)
     if unread:
-        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
         if hint:
             return refuse('git-shared-ref', role, '`%s`: %s, and %s. %s' % (text, unread, shared, hint[0]), hint[1])
         return refuse('git-shared-ref', role, '`%s`: the guard cannot tell which ref it writes: %s; %s. Name one '
@@ -4875,13 +6054,397 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         bad = [r for r in chain if not _ref_ok(r, delete, linked, own)]
         if not bad:
             return None
+        if cleanup and 'd' in short and stray_ref(name):
+            return _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role)
         why = '%s is not one it may %s' % (bad[0] if bad[0] == name else '%s, where %s points,' % (bad[0], name),
                                            'delete' if delete else 'write')
-    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
     if hint:
         return refuse('git-shared-ref', role, '`%s` deletes %s: %s. %s' % (text, name, why, hint[0]), hint[1])
     return refuse('git-shared-ref', role, '`%s` %s %s: %s; %s. %s To show it:' % (
         text, 'deletes' if delete else 'moves', name, why, shared, allowed), 'git -C %s show-ref %s' % (quote(at), name))
+
+
+# ---------------------------------------------------------------- other git forms that write refs
+# git-shared-ref judges these as it judges update-ref (_judge_refs): a push into the repository
+# itself (git_shared_push), a fetch or pull refspec's destination, symbolic-ref with two names or
+# -d, replace and a notes write (git_shared_ref_forms). Known limits (docs/guard.md "Known
+# limits"): refspecs and remotes git takes from its config files, a named remote whose URL is this
+# repository, a fetch or pull refspec the shell computes whole, a push into another local repository.
+SHARED_REF_FORMS = ('fetch', 'pull', 'symbolic-ref', 'replace', 'notes')
+# per form: (long flags, long options that take a value, short flags, short options that take a
+# value, short options whose value may only be attached)
+FETCH_FLAGS = ('all', 'append', 'atomic', 'dry-run', 'write-fetch-head', 'force', 'keep', 'multiple',
+               'auto-maintenance', 'auto-gc', 'write-commit-graph', 'prefetch', 'prune', 'prune-tags', 'tags',
+               'recurse-submodules', 'quiet', 'verbose', 'progress', 'update-head-ok', 'update-shallow',
+               'unshallow', 'ipv4', 'ipv6', 'show-forced-updates', 'set-upstream', 'stdin', 'porcelain',
+               'negotiate-only')
+FETCH_VALUES = ('upload-pack', 'jobs', 'depth', 'deepen', 'shallow-since', 'shallow-exclude', 'refmap',
+                'server-option', 'negotiation-tip', 'filter', 'submodule-prefix', 'recurse-submodules-default')
+PULL_FLAGS = FETCH_FLAGS + ('commit', 'edit', 'ff', 'ff-only', 'squash', 'stat', 'summary', 'compact-summary',
+                            'verify', 'verify-signatures', 'autostash', 'allow-unrelated-histories', 'rebase',
+                            'signoff', 'log', 'gpg-sign')
+PULL_VALUES = FETCH_VALUES + ('strategy', 'strategy-option', 'cleanup')
+REF_FORM_OPTS = {'fetch': (FETCH_FLAGS, FETCH_VALUES, 'afkmnPpqtuv46', 'jo', ''),
+                 'pull': (PULL_FLAGS, PULL_VALUES, 'aefknpqrtuv46', 'joXs', 'S'),
+                 'symbolic-ref': (('quiet', 'delete', 'short', 'recurse', 'no-recurse'), (), 'qd', 'm', '')}
+# git replace that only lists: these options (and --format=<f>), with a pattern only after -l
+REPLACE_LIST_OPTS = ('-l', '--list')
+NOTES_READ_VERBS = (None, 'list', 'show', 'get-ref')
+REMOTE_FETCH_KEY_RE = re.compile(r'^remote\.(.+)\.fetch$')
+PRUNE_TAGS_KEY_RE = re.compile(r'^(?:fetch|remote\..+)\.prunetags$')
+FALSE_WORDS = ('false', 'no', 'off', '0')
+
+
+def _computed(w):
+    """True for a Word whose text is not what git gets: computed, an alias's, or one bash changes."""
+    return bool(w.dyn or w.alt is not None or w.synth)
+
+
+def _form_words(sub, args):
+    """(short flags, {long name: [(value text, computed)]}, positional Words, unread option texts)
+    of git `sub`'s arguments by REF_FORM_OPTS: a long option is its exact name, a `no-` one, or the
+    one name it abbreviates; one the table does not name, or an ambiguous prefix, is unread."""
+    flags, values, s_flags, s_values, s_attached = REF_FORM_OPTS[sub]
+    known = set(flags) | set(values)
+    shorts, longs, pos, unread = set(), {}, [], []
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        k += 1
+        if t == '--':
+            pos.extend(args[k:])
+            break
+        if t.startswith('--'):
+            body, eq, v = t[2:].partition('=')
+            neg = body.startswith('no-') and body not in known
+            stem = body[3:] if neg else body
+            hits = [stem] if stem in known else [n for n in known if n.startswith(stem)] if stem else []
+            if len(hits) != 1:
+                unread.append(t)
+                continue
+            name = hits[0]
+            if name in values and not neg:
+                if not eq and k < len(args):
+                    v, computed = args[k].text, _computed(args[k])
+                    k += 1
+                else:
+                    computed = _computed(w)
+                longs.setdefault(name, []).append((v, computed))
+            else:
+                longs.setdefault('no-' + name if neg else name, []).append((v, _computed(w)))
+            continue
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            for j, c in enumerate(body):
+                if c in s_values:
+                    if not body[j + 1:] and k < len(args):
+                        longs.setdefault('-' + c, []).append((args[k].text, _computed(args[k])))
+                        k += 1
+                    else:
+                        longs.setdefault('-' + c, []).append((body[j + 1:], _computed(w)))
+                    break
+                if c in s_attached:
+                    break
+                if c in s_flags:
+                    shorts.add(c)
+                else:
+                    unread.append('-' + c)
+            continue
+        pos.append(w)
+    return shorts, longs, pos, unread
+
+
+def fetch_dst_ref(dst):
+    """The local ref a fetch refspec's destination names (git's get_local_ref): a refs/ name as
+    it is, heads/, tags/ and remotes/ under refs/, any other name a branch."""
+    if dst.startswith('refs/'):
+        return dst
+    if dst.startswith(('heads/', 'tags/', 'remotes/')):
+        return 'refs/' + dst
+    return 'refs/heads/' + dst
+
+
+def _tracking_ref(src, dst, remote):
+    """True for the remote-tracking map a fetch makes: `dst` refs/remotes/<remote>/<x> (remote and
+    folder compared without case) from `src` <x> or refs/heads/<x>, one `*` in both allowed; <x>
+    never HEAD."""
+    if not remote or not ref_name_ok(remote):
+        return False
+    prefix = 'refs/remotes/%s/' % remote
+    if dst[:len(prefix)].lower() != prefix.lower():
+        return False
+    x = dst[len(prefix):]
+    if not x or x == 'HEAD' or x.count('*') > 1 or not ref_name_ok(x.replace('*', 'x')):
+        return False
+    return src in (x, 'refs/heads/' + x)
+
+
+def fetch_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None): the refs git fetch or pull `gc` writes
+    beyond FETCH_HEAD and the remote-tracking map (_tracking_ref): each refspec destination after
+    the remote (fetch_dst_ref; a `^` exclusion and an empty destination write nothing), each
+    --refmap and inline -c remote.<name>.fetch mapping, local tags under --prune-tags (or an inline
+    *.pruneTags) and a forced --tags. Unread: --stdin, a refspec the shell computes with a literal
+    `:` or `+`, an option the guard does not read on a line with a `:` word."""
+    shorts, longs, pos, unknown = _form_words(gc.sub, gc.rest)
+    remote = pos[0] if pos else None
+    rname = remote.text if remote is not None and not _computed(remote) else None
+    # with --multiple every word names a remote (and --all takes none)
+    many = 'm' in shorts or 'multiple' in longs
+    specs = [] if many else [(w.text, _computed(w), rname) for w in pos[1:]]
+    specs += [(v, c, rname) for v, c in longs.get('refmap', ())]
+    if gc.inv is not None:
+        for key, val, first, last in git_prefix_configs(gc):
+            # --config-env names a variable that holds the value: the text is not the value
+            computed = _computed(last) or first.text.startswith('--config-env')
+            m = REMOTE_FETCH_KEY_RE.match(key)
+            if m:
+                specs.append((val, computed, m.group(1)))
+            elif PRUNE_TAGS_KEY_RE.match(key) and (computed or val.strip().lower() not in FALSE_WORDS):
+                longs.setdefault('prune-tags', []).append((val, computed))
+    if 'stdin' in longs:
+        return [], 'it reads refspecs from its input'
+    if unknown and (any(':' in w.text for w in pos) or any(':' in t for t in unknown)):
+        return [], 'it gives an option the guard does not read (%s)' % unknown[0]
+    instead = 'Fetch into a remote-tracking ref (refs/remotes/<remote>/<branch>) or your scratch space:'
+    out = []
+    for text, computed, rem in specs:
+        spec = text.strip('"\'') if computed else text
+        if computed and (':' in spec or spec.startswith('+')):
+            return [], 'a refspec holds something only the shell knows (%s)' % text
+        if computed:
+            continue                            # a refspec computed whole: a known limit
+        spec = spec[1:] if spec.startswith('+') else spec
+        src, colon, dst = spec.partition(':')
+        if spec.startswith('^') or not colon or not dst:
+            continue
+        ref = fetch_dst_ref(dst)
+        if _tracking_ref(src, ref, rem):
+            continue
+        out.append((ref, False, None, (instead, 'git -C <at> fetch %s %s:refs/tmp/<name>' % (rem or '<remote>',
+                                                                                             src or 'HEAD'))))
+    tags = ('without --prune-tags or a forced --tags (a fetch never moves a tag you have):',
+            'git -C <at> fetch %s' % (rname or '<remote>'))
+    if 'P' in shorts or 'prune-tags' in longs:
+        out.append(('refs/tags/*', True, 'deletes every tag the remote does not have', ('Fetch ' + tags[0], tags[1])))
+    if ('t' in shorts or 'tags' in longs) and ('f' in shorts or 'force' in longs):
+        out.append(('refs/tags/*', False, 'moves every tag to the remote\'s', ('Fetch ' + tags[0], tags[1])))
+    return out, None
+
+
+def symbolic_ref_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git symbolic-ref `gc`: none for a
+    read (one name, no -d); with -d the name, deleted; with two names the name, written (HEAD
+    itself: symbolic-ref does not follow it), and the ref it then points at, since later writes go
+    through it. A computed word or an option the guard does not read is unread."""
+    shorts, longs, pos, unknown = _form_words('symbolic-ref', gc.rest)
+    delete = 'd' in shorts or 'delete' in longs
+    if any(_computed(w) for w in gc.rest):
+        return [], 'a word holds something only the shell knows (%s)' % next(w.text for w in gc.rest if _computed(w))
+    if unknown:
+        return [], 'it gives an option the guard does not read (%s)' % unknown[0]
+    if not pos or (len(pos) < 2 and not delete):
+        return [], None
+    name = pos[0].text
+    switch = ('To put your worktree on another branch:', 'git -C <at> switch <branch>') if name == 'HEAD' else None
+    if delete:
+        return [(name, True, None, switch)], None
+    target = pos[1].text
+    return [(name, False, None, switch), (target, False, 'points %s at %s, so later writes through it move it' % (
+        name, target), switch)], None
+
+
+def replace_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git replace `gc`: none when it only
+    lists (no word, or REPLACE_LIST_OPTS and --format=<f> with a pattern only after -l); else the
+    refs/replace/<object> ref it writes or deletes (-d)."""
+    words = [w.text for w in gc.rest]
+    if any(_computed(w) for w in gc.rest):
+        return [], 'a word holds something only the shell knows (%s)' % next(w.text for w in gc.rest if _computed(w))
+    opts = [t for t in words if t.startswith('-')]
+    objs = [t for t in words if not t.startswith('-')]
+    if all(t in REPLACE_LIST_OPTS or t.startswith('--format=') for t in opts) and \
+            (not objs or any(t in REPLACE_LIST_OPTS for t in opts)):
+        return [], None
+    delete = '-d' in opts or any(len(t) > 2 and '--delete'.startswith(t) for t in opts)
+    ref = 'refs/replace/%s' % (objs[0] if objs else '<object>')
+    return [(ref, delete, None, ('To list the replace refs:', 'git -C <at> replace -l'))], None
+
+
+def notes_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git notes `gc`: none for a verb in
+    NOTES_READ_VERBS; any other writes the notes ref (--ref <ref> under refs/notes/, else
+    refs/notes/commits). A computed verb, or an option before it other than --ref, is unread."""
+    args, k, ref = gc.rest, 0, 'refs/notes/commits'
+    while k < len(args) and args[k].text.startswith('-'):
+        w = args[k]
+        body, eq, v = w.text[2:].partition('=')
+        if w.text == '--' or not w.text.startswith('--') or not body or not 'ref'.startswith(body):
+            return [], 'it gives an option the guard does not read (%s)' % w.text
+        if not eq:
+            k += 1
+            v = args[k].text if k < len(args) else ''
+        ref = v if v.startswith('refs/notes/') else 'refs/' + v if v.startswith('notes/') else 'refs/notes/' + v
+        k += 1
+    verb = args[k] if k < len(args) else None
+    if verb is not None and _computed(verb):
+        return [], 'its verb holds something only the shell knows (%s)' % verb.text
+    if (verb.text if verb is not None else None) in NOTES_READ_VERBS:
+        return [], None
+    return [(ref, verb.text == 'remove', None, ('To show the notes:', 'git -C <at> notes list'))], None
+
+
+REF_FORM_READERS = {'fetch': fetch_refs, 'pull': fetch_refs, 'symbolic-ref': symbolic_ref_refs,
+                    'replace': replace_refs, 'notes': notes_refs}
+
+
+def _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread):
+    """git-shared-ref for a git form other than update-ref: `refs` [(ref, delete, what, instead)]
+    the refs it writes or deletes (`what` a phrase for the refusal, None for "writes/deletes
+    <ref>"; `instead` (sentence, command with <at>), None for show-ref), `unread` why the guard
+    cannot tell them (None when it can). As git_shared_ref: only a held session
+    (shared_ref_held), not in a scratch repository (_scratch_repo), each ref by _ref_ok; no form
+    here writes through HEAD."""
+    if (not refs and not unread) or not shared_ref_held(event, ctx):
+        return None
+    place, _top, at, where = _shared_scene(ctx, gc, cwd)
+    if _scratch_repo(ctx, place):
+        return None
+    text = bare(cmd)
+    unread = unread or where
+    if unread:
+        return refuse('git-shared-ref', role, '`%s`: the guard cannot tell which refs it writes: %s; %s. Name each '
+                      'ref literally. %s To keep a commit in your scratch space:' % (
+                          text, unread, SHARED_REFS, SHARED_REF_ALLOWED),
+                      'git -C %s update-ref refs/tmp/<name> <new-oid>' % quote(at))
+    linked = place.kind == repo.LINKED and not ctx.pm_data_error(gc.dir)
+    own = _own_branch(ctx, place, gc.dir)
+    for name, delete, what, instead in refs:
+        if _ref_ok(name, delete, linked, own):
+            continue
+        what = what or '%s %s' % ('deletes' if delete else 'writes', name)
+        how, command = instead or ('To show it:', 'git -C <at> show-ref %s' % name)
+        return refuse('git-shared-ref', role, '`%s` %s: %s is not one it may %s; %s. %s %s' % (
+            text, what, name, 'delete' if delete else 'write', SHARED_REFS, SHARED_REF_ALLOWED, how),
+            command.replace('<at>', quote(at)))
+    return None
+
+
+def git_shared_ref_forms(event, ctx, cmd, gc, cwd, role):
+    """git-shared-ref for fetch, pull, symbolic-ref, replace and notes (SHARED_REF_FORMS)."""
+    if not shared_ref_held(event, ctx):
+        return None
+    refs, unread = REF_FORM_READERS[gc.sub](gc)
+    return _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread)
+
+
+def _repo_common(path):
+    """The git common dir of the repository git opens at `path` (a work tree, its .git, a git dir,
+    or <path>.git, as git's enter_repo tries them), or None."""
+    for p in (path, path + '.git'):
+        common = gitdefaults.common_dir(p)
+        if common:
+            return common
+        if os.path.isfile(os.path.join(p, 'HEAD')):
+            named = gitdefaults._read(os.path.join(p, 'commondir'), 4096)
+            return paths.norm(os.path.join(p, named.strip()), fold=False) if named and named.strip() else p
+    return None
+
+
+def _push_self(gc, place, t, computed):
+    """True when git push's repository `word` is the repository git runs in: `.`, or a local path
+    or file:// URL (resolved against where git runs and its work tree's top) that opens this
+    repository's common dir; False for a URL, scp-like host:path, or a name that opens no such
+    repository; None when the guard cannot tell (a computed word, or a path with no place to
+    compare). A named remote is taken as a remote, whatever its URL (a known limit)."""
+    if computed:
+        return None
+    if t == '.':
+        return True
+    if t.lower().startswith('file://'):
+        t = t[len('file://'):]
+        t = t[1:] if re.match(r'^/[A-Za-z]:', t) else t
+    elif '://' in t or (not re.match(r'^[A-Za-z]:', t) and re.match(r'^[^/\\]*:', t)):
+        return False
+    absolute = os.path.isabs(t) or bool(re.match(r'^[A-Za-z]:[\\/]', t))
+    if place is None or not place.common:
+        return None if absolute or '/' in t or '\\' in t or t.startswith('.') else False
+    bases = [t] if absolute else [os.path.join(b, t) for b in (gc.dir, place.top) if b]
+    mine = paths.norm(jail.real(place.common))
+    for p in bases:
+        common = _repo_common(paths.norm(p, fold=False))
+        if common and paths.norm(jail.real(common)) == mine:
+            return True
+    return False
+
+
+def _long_value(sub, args, name):
+    """(value text, computed) of git `sub`'s long option `name` (or an abbreviation of it), the
+    last one given, or None."""
+    out, k = None, 0
+    while k < len(args):
+        t = args[k].text
+        if t == '--':
+            break
+        if t.startswith('--'):
+            body, eq, v = t[2:].partition('=')
+            if _canon_long(sub, body) == [name]:
+                if eq:
+                    out = (v, _computed(args[k]))
+                elif k + 1 < len(args):
+                    out = (args[k + 1].text, _computed(args[k + 1]))
+                    k += 1
+        k += 1
+    return out
+
+
+def git_shared_push(event, ctx, cmd, gc, cwd, role):
+    """git-shared-ref for a push into the repository itself (_push_self): it writes this
+    repository's refs, so each refspec destination is judged as update-ref's ref. A destination
+    must be a full refs/ name (push matches a short one against the refs there); `:dst` and -d
+    delete; a refspec with no `:` is a no-op. --all, --mirror, --branches, --tags, --prune, no
+    refspec, a computed refspec, or a repository the guard cannot tell with a refspec that writes,
+    are unread."""
+    if not shared_ref_held(event, ctx):
+        return None
+    short, longs, pos = _opts('push', gc.rest)
+    remote = (pos[0].text, _computed(pos[0])) if pos else _long_value('push', gc.rest, 'repo')
+    if remote is None:
+        return None
+    specs = pos[1:]
+    delete = 'd' in short or 'delete' in longs
+    every = sorted({'all', 'mirror', 'branches', 'tags', 'prune'} & longs)
+    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    self_ = _push_self(gc, place, *remote)
+    if self_ is False:
+        return None
+    writes = delete or every or any(':' in w.text or _computed(w) for w in specs)
+    if self_ is None:
+        why = 'the guard cannot tell whether %s is this repository' % remote[0]
+        return _judge_refs(event, ctx, cmd, gc, cwd, role, [], why) if writes else None
+    refs, unread = [], None
+    if every:
+        unread = 'with --%s it pushes refs it does not name into this repository' % every[0]
+    elif not specs:
+        unread = 'it names no refspec, so git takes them from its config'
+    for w in specs:
+        if unread:
+            break
+        if _computed(w):
+            unread = 'a refspec holds something only the shell knows (%s)' % w.text
+            break
+        spec = w.text[1:] if w.text.startswith('+') else w.text
+        src, colon, dst = spec.partition(':')
+        if spec.startswith('^') or (not colon and not delete):
+            continue                            # an exclusion, or a ref pushed onto itself
+        dst = dst if colon else src
+        if not dst or not dst.startswith('refs/'):
+            unread = '%r names no full ref (refs/...); push into this repository names it in full' % spec
+            break
+        refs.append((dst, delete or not src, None, None))
+    return _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread)
 
 
 SAFE_WORD_RE = re.compile(r'^[\w@%+=:,./-]+$')
@@ -4909,18 +6472,20 @@ def git_rest_text(cmd, gc):
     return ' '.join(words)
 
 
-def git_unplaced(ctx, cmd, gc, cwd):
+def git_unplaced(ctx, cmd, gc, cwd, agent=False):
     """(sentence, command) for git whose place `gc.blind` hides (GIT_DIR and the like, --git-dir,
     --work-tree, core.worktree, --config-env, a computed -c): drop it and run the same git
-    command in the session's own worktree, or where it runs when it is in none."""
-    rest = git_rest_text(cmd, gc)
+    command in the session's own worktree (git_elsewhere), or where it runs when it is in none."""
     mine = own_worktree(ctx, cwd)
-    git = 'git -C %s' % quote(mine) if mine else 'git'
-    return 'Drop %s and run it in your worktree:' % gc.blind, ('%s %s %s' % (git, gc.sub, rest)).rstrip()
+    if mine:
+        note, instead = git_elsewhere(ctx, cmd, gc, mine, agent)
+        return 'Drop %s and run it in your worktree:%s' % (gc.blind, ' ' + note if note else ''), instead
+    rest = git_rest_text(cmd, gc)
+    return 'Drop %s and run it in your worktree:' % gc.blind, ('git %s %s' % (gc.sub, rest)).rstrip()
 
 
 def git_branch_delete(ctx, gc, role):
-    short, longs, pos = _opts('branch', gc.rest)
+    short, longs, pos = _opts('branch', gc.rest, wide=True)
     force = 'D' in short or (('delete' in longs or 'd' in short) and ('force' in longs or 'f' in short))
     if not force:
         return None
@@ -5132,8 +6697,8 @@ def data_copy(event, ctx, where, role, what):
     """A push or send-pack (`what`) from a repository without a PM data record of its own, when
     the machine config names pm_data but the guard cannot read the machine's record, in every
     session but the owner's own: it fails closed, so while the data worktree folder is deleted
-    every such push is denied until pm_data.py init --adopt re-adds it (docs/pm-data-branch.md
-    "Failure modes"). Whether the repository holds a copy of the data (its root commit, a shallow
+    every such push is denied until the owner re-adds it with git (docs/pm-data-branch.md
+    "Failure modes"; init refuses while the PM-repo pointer is set). Whether the repository holds a copy of the data (its root commit, a shallow
     clone) is not read: the guard catches honest mistakes, not evasion."""
     if is_owner_session(event, ctx) or not where:
         return None
@@ -5143,13 +6708,15 @@ def data_copy(event, ctx, where, role, what):
     if root is None and why is None:
         return None                             # the machine config names no pm_data
     if root is None:
-        path = ctx.pm_data_path()
+        path = ctx.pm_data_path() or ctx.pm_repo_pointer()
+        path = quote(path) if path else '"<pm_data.path>"'
         return refuse('git-push-pmdata', role, '%s: the repository %s has no %s of its own, and the guard cannot read '
                       'the machine\'s PM data record to tell whether it holds PM data (%s), so it fails closed. When '
-                      'the data worktree folder was deleted (docs/pm-data-branch.md "Failure modes"), pm_data.py init '
-                      '--adopt re-adds it:' % (what, fwd(where), pmdata.FILE_NAME, why),
-                      'python %s init --adopt --path %s' % (kit_tool(ctx, 'pm_data'),
-                                                            quote(path) if path else '"<pm_data.path>"'))
+                      'the data worktree folder was deleted (docs/pm-data-branch.md "Failure modes"), the owner '
+                      're-adds it from the PM repository\'s main checkout, one git command at a time (pm_data.py init '
+                      'refuses while the PM-repo pointer is set):' % (what, fwd(where), pmdata.FILE_NAME, why),
+                      'git -C "<PM repo main checkout>" worktree unlock %s, then worktree remove %s, worktree add '
+                      '%s <data branch>, worktree lock --reason "PM data" %s' % (path, path, path, path))
     return None
 
 

@@ -131,8 +131,18 @@ class GuardSites(unittest.TestCase):
 
     def test_the_delete_guards(self):
         fn = function(self.plan, 'plan_delete')
-        self.assertEqual(sorted(set(raised_kinds(fn))), ['Refusal', 'Usage'])
-        self.assertEqual(first_raise_after(fn, 'guarded and ruling is None', self.src), 'Refusal')
+        # The why's form (_claim_subject) is a usage error; an owner-held or owner-priced record
+        # without the role check (refuse_unchecked_end, refuse_top) is refused.
+        self.assertEqual(sorted(set(raised_kinds(function(self.plan, '_claim_subject')))),
+                         ['Usage'])
+        self.assertEqual(raised_kinds(function(self.plan, 'refuse_top')), ['Refusal'])
+        own = [n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call)
+               and isinstance(n.func, ast.Name)]
+        self.assertIn('_claim_subject', own)
+        self.assertIn('refuse_unchecked_end', own)
+        end = function(self.plan, 'refuse_unchecked_end')
+        self.assertIn('refuse_top', [n.func.id for n in ast.walk(end) if isinstance(n, ast.Call)
+                                     and isinstance(n.func, ast.Name)])
         # The live-pull guard `delete`, `retire` and `retarget` share: a live pull refuses, a
         # branch probe git cannot answer fails.
         guard = function(self.plan, '_refuse_live_pulls')
@@ -151,7 +161,7 @@ class GuardSites(unittest.TestCase):
         self.assertEqual(sorted(set(raised_kinds(fn))), ['Usage'])
 
     def test_every_raise_in_the_verbs_is_one_of_the_four_kinds(self):
-        for rel in ('kitlib/backlog/plan.py', 'kitlib/backlog/ledger.py',
+        for rel in ('kitlib/backlog/plan.py',
                     'kitlib/backlog/retarget.py', 'kitlib/backlog/opener.py',
                     'kitlib/backlog/pull_branch.py'):
             kinds = raised_kinds(parse(rel))

@@ -121,6 +121,13 @@ class IntegerSizes(KindsTest):
     def test_the_repo_table_fits_an_agent_cap_of_six(self):
         self.assertTrue(kinds.load(agent_cap=6))
 
+    def test_the_maint_lint_kind_is_one_cpu_slot_and_no_gpu(self):
+        table = kinds.load()
+        self.assertEqual((table['maint-lint']['cpu'], table['maint-lint']['gpu']), (1, 0))
+        self.assertEqual(table['maint-lint']['warn_min'], 15)
+        kinds.check_cap(table, 6)
+        kinds.check_cap({'maint-lint': table['maint-lint']}, 1)
+
     def test_describe_names_the_cores(self):
         lines = kinds.describe({'a': {'cpu': 3, 'gpu': 0, 'share': False},
                                 'b': {'cpu': 1, 'gpu': 0, 'share': False},

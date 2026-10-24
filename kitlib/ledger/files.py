@@ -12,21 +12,24 @@ import os
 
 from kitlib.config.user import files_of
 
-from . import read, standing
+from . import read, rulebook, standing
 from .fmt import repo_of
 
 # split: True with ledger_dir. repos: {repo: path} in ledger_repos order ({} unsplit). frozen: the
-# ledger_path file or None. digest: the standing digest's path.
-Files = collections.namedtuple('Files', 'split repos frozen digest')
+# ledger_path file or None. digest: the standing digest's path. rules: the rulebooks' folder
+# (kitlib.ledger.rulebook), `rules` beside the log files.
+Files = collections.namedtuple('Files', 'split repos frozen digest rules', defaults=(None,))
 
 
 def of_config(cfg):
     """The Files of a machine config, or None when it sets neither ledger_dir nor ledger_path."""
     folder, frozen = cfg.get('ledger_dir'), cfg.get('ledger_path')
     if folder:
-        return Files(True, files_of(cfg), frozen, os.path.join(folder, standing.NAME))
+        return Files(True, files_of(cfg), frozen, os.path.join(folder, standing.NAME),
+                     os.path.join(folder, rulebook.FOLDER))
     if frozen:
-        return Files(False, {}, frozen, standing.path_beside(frozen))
+        return Files(False, {}, frozen, standing.path_beside(frozen),
+                     os.path.join(os.path.dirname(os.path.abspath(frozen)), rulebook.FOLDER))
     return None
 
 

@@ -4,13 +4,15 @@
 `additionalContext`; logic `kitlib/pmstart`). A hook cannot call tools, so it lists steps for the
 PM. It always exits 0; a failed check becomes one "could not check X: reason" line.
 
-Checks: standing rules, eng_review flags, the hub, `pm_watch.py` running, the newest handoff file, reminders due, and coordinators not running (no `claude.exe`
+Checks: standing rules, eng_review flags, the hub, `pm_watch.py` running, the hand-off file ("Hand-off file"), reminders due, and coordinators not running (no `claude.exe`
 with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/lookup.py`); each such line names the
-`launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). `<n>` is the account
+`launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). A repository in sessions.json with no live `consultant-<repo>` session (and no consultant entry of its own) gets one `consultant-<repo> is not running: launch.py consultant --repo <repo> --repo-path <folder>` line, the folder from the machine config's `launcher.repos` or `<its checkout>` when it is not there (`kitlib.pmstart` `_consultants_missing`; no config switch). `<n>` is the account
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
 launches every coordinator, the kit's included, from whatever account it started on; when that
 account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
-`tests/pmstart/test_pmstart.py` `LivenessTest`.
+`tests/pmstart/test_pmstart.py` `LivenessTest` (the consultant line too). A coordinator the PM stopped on its `ready to stop:`
+reply (skill session-handoff) is listed too; the PM starts it only when its repo gets startable
+work, an owner answer or an approval, adding a `--prompt` that names the reply's note.
 
 Hub (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`; docs/action-hub.md): the
 lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)
@@ -155,6 +157,21 @@ agent-temp-sweep: ...", after the other two lines, never "not registered"
 config reader is one `could not check agent_temp: ...` line. Code: `kitlib/pmstart` `agent_temp_lines`; tests:
 `tests/pmstart/test_agent_temp_check.py`.
 
+## C: drive (`cdrive`)
+
+After `agent_temp`, the `cdrive` check prints one line, "on the C: drive: <item> (<path>; set <VAR>), ...",
+naming each folder that resolves to the C: drive and the variable that would move it; nothing on C: prints
+nothing. Items: `TEMP`, `TMP`; the pip cache (`PIP_CACHE_DIR`, else `%LOCALAPPDATA%\pip\Cache`); the npm cache
+(`npm_config_cache`, else `%LOCALAPPDATA%\npm-cache`); the nuget packages (`NUGET_PACKAGES`, else
+`%USERPROFILE%\.nuget\packages`); the nuget http cache (`NUGET_HTTP_CACHE_PATH`, else `%LOCALAPPDATA%\NuGet\v3-cache`); the dotnet CLI home
+(`DOTNET_CLI_HOME`, checked only when set); the gradle home (`GRADLE_USER_HOME`, else `%USERPROFILE%\.gradle`);
+the uv cache (`UV_CACHE_DIR`, else `%LOCALAPPDATA%\uv\cache`); the Claude transcripts, labelled "agent transcripts" (`projects/` under
+`CLAUDE_CONFIG_DIR`, else `%USERPROFILE%\.claude`, resolved through links with `os.path.realpath`, so a
+junction to another drive is not a hit). It reads this process's environment variables only (never the
+machine-scope TEMP of system services), runs no subprocess (no `npm config get`), and skips a relative path or a default whose base
+variable is unset. It changes nothing. Code: `kitlib/pmstart` `cdrive_lines`; tests:
+`tests/pmstart/test_agent_temp_check.py` (`CDriveCheck`).
+
 ## Console tasks (`console_tasks`)
 
 After `agent_temp` and before the foreground lock check, always on and with no config key, the
@@ -183,6 +200,17 @@ since `schtasks /Query /XML` declares `encoding="UTF-16"` over single-byte text 
 limit, no `schtasks`) is one `could not check console_tasks: ...` line. Code:
 `kitlib/pmstart/consoletasks.py`; tests: `tests/pmstart/test_console_tasks.py`.
 
+## Hand-off file
+
+The PM keeps one hand-off file in the PM repository and edits it in place, never a dated copy
+(`kitlib.pmstart` `handoff`; tests `HandoffTest` in `tests/pmstart/test_pmstart.py`). The check reads
+only the file `pm_start.handoff_file` names and prints `read first: <file>`, or `no hand-off file
+<file>: create it ...` when it is not there. When `pm_start.memory_dir` is set and holds any
+`pm-handoff*.md`, one more line says `hand-off notes belong in <file>: merge and delete <those files>`.
+A relative `handoff_file` with no PM repository found (no readable `sessions_file`) is one `could not
+check handoff` line. The former `handoff_glob` key is not read. The PM repository git-ignores
+`HANDOFF.md` (an owner decision): it is a working note and is never committed.
+
 ## Config
 
 The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; without it the checklist says it is skipped.
@@ -192,13 +220,16 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 {"pm_start": {
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py --stream",
   "memory_dir": "<repo drive>/Agent-memory/<pm-repo>",
-  "handoff_glob": "pm-handoff-*.md",
+  "handoff_file": "HANDOFF.md",
   "reminders_file": "<config-dir>/reminders.json",
   "sessions_file": "<launcher state_dir>/sessions.json",
   "eng_review": ["EX-API-*"]
 }}
 ```
 
+- `handoff_file` (optional): the PM's one hand-off file, default `HANDOFF.md` in the PM repository's
+  main checkout (the repository holding `sessions_file`, `kitlib.pmstart` `pm_memory_repo`); an absolute
+  path is used as is. See "Hand-off file".
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.

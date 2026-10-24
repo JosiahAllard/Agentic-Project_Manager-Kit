@@ -22,7 +22,7 @@ OLD = 'b' * 40
 
 class Names(unittest.TestCase):
     def test_the_folder_is_under_the_hosts_worktrees_folder_with_a_safe_slug(self):
-        main = os.path.join('Z:' + os.sep, 'repo')
+        main = os.path.join('Q:' + os.sep, 'repo')
         base = os.path.join(main, home.folder())
         self.assertEqual(home.folder(), os.path.normpath(registry.default_profile().worktrees_directory))
         self.assertEqual(home.home_path(main, 'alpha-coord'), os.path.join(base, 'home-alpha-coord'))
@@ -30,7 +30,7 @@ class Names(unittest.TestCase):
         self.assertEqual(home.home_path(main, '..'), os.path.join(base, 'home-session'))
 
     def test_each_full_session_name_has_its_own_home(self):
-        main = os.path.join('Z:' + os.sep, 'repo')
+        main = os.path.join('Q:' + os.sep, 'repo')
         names = ('deep-x', 'deep-x-r2', 'deep-x-a1', 'alpha-deep-worker-a1', 'alpha-deep-worker-a2')
         self.assertEqual(len({home.home_path(main, n) for n in names}), len(names))
 
@@ -45,7 +45,7 @@ class Names(unittest.TestCase):
         importlib.reload(home)
 
     def test_names_that_differ_only_in_case_or_a_trailing_dash_share_a_home(self):
-        main = os.path.join('Z:' + os.sep, 'repo')
+        main = os.path.join('Q:' + os.sep, 'repo')
         for a, b in (('deep-x', 'Deep-X'), ('deep-x', 'deep-x-'), ('deep-x', 'deep-x'.upper() + '.')):
             self.assertEqual(home.home_path(main, a), home.home_path(main, b), (a, b))
 

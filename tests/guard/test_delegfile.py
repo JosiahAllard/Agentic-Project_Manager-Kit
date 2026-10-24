@@ -277,6 +277,10 @@ class OwnerDelegations(unittest.TestCase):
         'checkout main', 'checkout HEAD~1 -- .pm-kit/owner-delegations.json', 'checkout -- .',
         'switch other', 'switch -c new',
         'restore .pm-kit/owner-delegations.json', 'restore --source HEAD~1 :/', 'restore -SW .pm-kit',
+        'restore --staged --w .pm-kit/owner-delegations.json',     # `--w` is `--worktree` to git
+        'restore --staged --wor .pm-kit/owner-delegations.json',
+        'restore --staged --no- .pm-kit/owner-delegations.json',   # git rejects `--no-` as ambiguous; judged
+        'restore -S --no-st .pm-kit/owner-delegations.json',       # `--no-st` is `--no-staged`
         'checkout-index -a -f', 'checkout-index -f .pm-kit/owner-delegations.json',
         'reset --hard', 'reset --hard HEAD~1', 'reset --merge', 'reset --keep HEAD~1',
         'clean -fdx', 'clean -f .pm-kit', 'stash', 'stash push', 'stash pop', 'stash drop',

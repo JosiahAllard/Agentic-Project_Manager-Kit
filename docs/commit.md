@@ -82,10 +82,12 @@ Refused before anything is written (exit 1, `Nothing was written or committed.`)
 - The hub cannot be asked, has no such approval, or it is not `approved`: consumed already, pending, denied or expired (`fetch`, `state_error`).
 - A render source is named (the commit would carry rendered files nobody approved), or a merge is in progress (the commit would have two parents).
 - An approved path is staged already.
-- `prewrite_error`: the paths named are not exactly the approval's files; HEAD is not its `head`; a path is not a plain file of the work tree (`..`, absolute, a backslash, a colon, a `.git` part, a symlink, or a parent outside the tree); a file in the work tree is not its `base_blob`; a content is not its `blob`; or a file would not change.
+- `prewrite_error`: the paths named are not exactly the approval's files; HEAD is not its `head` (a worktree at that base: `new_worktree.py --approval hub:A-<n>`, docs/new-worktree.md "A base commit"); a path is not a plain file of the work tree (`..`, absolute, a backslash, a colon, a `.git` part, a symlink, or a parent outside the tree); a file in the work tree is not its `base_blob`; a content is not its `blob`; or a file would not change.
 - `preverify_error`: the hub's verify route does not verify the approval for this repository (its `origin` remote, `kitlib.hubsite.approvals.remote_id`), HEAD and the approved blobs.
 
 A staged file the call does not name refuses first, as for any commit.
+
+The work tree stays at the approval's base: never copy the approved content in first, or the call refuses (`prewrite_error`: the file is not its `base_blob`). `commit.py` writes the approved content from the hub.
 
 Then the approved content is written (UTF-8; a null content deletes the file), the paths are staged, and each staged entry is checked against the approval: a git filter or `.gitattributes` that changed one on staging, or a staged mode other than a regular file's (100644 or 100755), refuses (`staged_error`). The other checks above (HEAD moved, machine paths) hold as for any commit; the owner-only refusal and `--owner-approved` do not apply. A refusal after the write and before the commit step puts every file back and unstages the paths (`The work tree is as it was, and nothing this call staged is staged.`). A refusal from the commit step itself (HEAD moved during the call; a commit made may stand or be undone, as for any commit) leaves the approved content in the work tree and the approval not consumed (`hub:A-<n> was not consumed; the approved content is left in the work tree.`).
 
@@ -124,5 +126,5 @@ Each item below was dropped on purpose (port brief).
 - **Backlog claim folding.** The kit backlog has no claim queue.
 - **The `-C` hand-off** (chdir to main, `KIT_CALLER_CWD`, a glued `-Cdir`, `-C` given twice), `KIT_REPO_ROOT`, `KIT_CONFIG` and `_repo_guard`. Here `-C` is a plain option, and argparse takes the last value given.
 - **machine_paths built-in allow entries.** These were the PM kit's `_paths.py` fallbacks, its `test_paths.py` table, the kit stubs and backlog.py's ledger. They named the older kit's files and one drive. A repository that relied on them needs explicit `allow` or `fixtures` entries.
-- **`machine_paths.piece_fixtures`.** kitlib has no pieces-table resolver, so a non-empty list is refused rather than ignored. Use `fixtures` with the file's glob.
+- **`machine_paths.piece_fixtures`.** kitlib has no pieces-table resolver, so the key is gone and a config that sets it is refused as an unknown key. Use `fixtures` with the file's glob.
 - **The doc_budget PowerShell twin.** Only `tools/doc_budget.py` is run.

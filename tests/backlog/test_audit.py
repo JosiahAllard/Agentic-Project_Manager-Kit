@@ -18,11 +18,12 @@ from kitlib.backlog import audit_check
 from kitlib.backlog import opener
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
+from kitlib.backlog import roles
 from kitlib.backlog import store as smod
 from tests import inproc
 from tests.backlog.helpers import ADD_FLAGS, kit_json_ref
 from tests.gitfixture import TempRepo, fixture_env, rmtree
-from tests.home import machine_config
+from tests.home import PM_REPO_FENCE_ENV, machine_config, pm_repo
 
 BACKLOG = inproc.load_tool('backlog')
 UTC = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z')
@@ -87,7 +88,7 @@ class Tool(unittest.TestCase):
         self.addCleanup(rmtree, self.home)
         self.data = tempfile.mkdtemp(prefix='kit-pmdata-')
         self.addCleanup(rmtree, self.data)
-        machine_config(self.home, {'pm_data': {'path': self.data}})
+        machine_config(self.home, {'pm_data': {'path': self.data}}, case=self)
         self.env = fixture_env({'USERPROFILE': self.home, 'HOME': self.home})
         for name in (sessionmark.ENV, sessionmark.SESSION_NAME_ENV):
             self.env.pop(name, None)
@@ -156,8 +157,12 @@ class Tool(unittest.TestCase):
         self.assertIn('nothing was written', out)
         self.assertEqual(len(self.lines()), 1)
 
+    def no_pm_data(self):
+        """The pointer names a PM repository with no kit-pm-data.json record: no pm_data."""
+        self.env[PM_REPO_FENCE_ENV] = pm_repo(self, record=False)
+
     def test_no_pm_data_is_a_note_and_no_line(self):
-        machine_config(self.home, {})
+        self.no_pm_data()
         self.add()
         out, err = self.ok('close', 'FOO', '--reason', 'the work is finished')
         self.assertIn('WROTE', out)
@@ -204,8 +209,8 @@ def kinds(report):
 class Check(unittest.TestCase):
     """kitlib.backlog.audit_check over a ref store the tool wrote, against its own audit log."""
 
-    setUp, run_tool, ok, lines, tip, add = (Tool.setUp, Tool.run_tool, Tool.ok, Tool.lines,
-                                            Tool.tip, Tool.add)
+    setUp, run_tool, ok, lines, tip, add, no_pm_data = (Tool.setUp, Tool.run_tool, Tool.ok, Tool.lines,
+                                            Tool.tip, Tool.add, Tool.no_pm_data)
 
     def report(self, entries=None, since=0):
         _top, cfg, rules = opener.open_repo(self.repo.root)
@@ -285,8 +290,29 @@ class Check(unittest.TestCase):
     def test_a_subject_no_verb_wrote_is_unknown(self):
         self.assertIsNone(audit_check.verb_of('records'))
         for subject, verb in (('closes X: landed 1', 'close'), ('backlog: park X on Q-1', 'set-status'),
-                              ('backlog: pull X onto b', 'pull'), ('migrate: docs/backlog/*.md', 'migrate')):
+                              ('backlog: pull X onto b', 'pull'), ('migrate: docs/backlog/*.md', 'migrate'),
+                              ('backlog: park X', 'set-status'),
+                              ('backlog: re-park X with no question (was Q-1)', 'set-status'),
+                              ('backlog: uncite 3 cite(s) in 2 record(s)', 'uncite')):
             self.assertEqual(audit_check.verb_of(subject), verb)
+
+    def test_an_uncite_change_is_read_as_its_apply(self):
+        # an uncite commit is the --apply, never the dry run (which writes nothing)
+        self.assertEqual(audit_check._given('uncite', None, None, None), {'apply': True})
+
+    def test_a_write_subject_no_row_names_is_unknown(self):
+        # a store commit whose subject reads as a verb roles.py has no row for sorts to no rows:
+        # a forged commit with that subject must not pass unflagged
+        self.add()
+        ctx = opener.open_store(self.repo.root, fetch=False)
+        ctx.store.write(lambda snap: smod.Change(
+            {'FOO': snap.get('FOO').text + '\nforged line\n'},
+            'backlog: uncite 1 cite(s) in 1 record(s)'))
+        rowless = {n: r for n, r in roles.ACTIONS.items() if 'uncite' not in r.verbs}
+        with mock.patch.object(roles, 'ACTIONS', rowless):
+            r = self.report(entries=[])
+        self.assertEqual(kinds(r), ['UNKNOWN'])
+        self.assertIn(' uncite rows=none ', r.findings[0].text)
 
     def run_check(self, *args):
         return inproc.run_main(AUDIT.main, ['-C', self.repo.root, '--no-fetch'] + list(args),
@@ -305,7 +331,7 @@ class Check(unittest.TestCase):
         self.assertIn('NOTE: no audit log', out)
         self.assertIn('UNAUDITED ', out)
         self.assertEqual(out.splitlines()[-1], 'FINDINGS 1')
-        machine_config(self.home, {})
+        self.no_pm_data()
         rc, out, _err = self.run_check()
         self.assertEqual(rc, 2, out)
         self.assertIn('NOT CHECKED: the machine config names no pm_data', out)

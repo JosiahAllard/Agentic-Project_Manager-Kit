@@ -17,14 +17,14 @@ from kitlib import pluginsource, pmstart
 from kitlib.pmstart import consoletasks as ct
 from kitlib.proc import spawn
 from tests.home import temp_home
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
 
 REAL_READ = ct.read_tasks      # before setUpModule patches it off this machine
 NOW = datetime.datetime(2026, 10, 13, 9, 0)
-KIT = r"Z:\kit"
+KIT = r"Q:\kit"
 PYW = r"C:\Py\pythonw.exe"
-CARRIED = '"Z:\\kit\\tools\\no_window.py" python "Z:\\kit\\tools\\daily_full.py" -C "Z:\\repo"'
-FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+CARRIED = '"Q:\\kit\\tools\\no_window.py" python "Q:\\kit\\tools\\daily_full.py" -C "Q:\\repo"'
+FAKES = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
              watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0})
 
@@ -44,7 +44,7 @@ def judge(tasks):
 class Judge(unittest.TestCase):
     def test_a_kit_task_run_by_python_exe_is_flagged(self):
         lines = judge([task(r"\kit-daily-full", r"C:\Py\python.exe",
-                            r'"Z:\kit\tools\daily_full.py" -C "Z:\repo"')])
+                            r'"Q:\kit\tools\daily_full.py" -C "Q:\repo"')])
         self.assertEqual(len(lines), 1)
         self.assertIn(r"scheduled task \kit-daily-full starts python.exe, a console program", lines[0])
         self.assertIn("pythonw.exe with the carrier tools\\no_window.py", lines[0])
@@ -66,32 +66,32 @@ class Judge(unittest.TestCase):
     def test_pythonw_with_the_carrier_is_not_flagged(self):
         self.assertEqual(judge([task(r"\kit-daily-full", PYW, CARRIED),
                                 task(r"\Claude coordinators after reboot", PYW,
-                                     r'"Z:\kit\tools\no_window.py" python "Z:\kit\tools\launch.py"')]), [])
+                                     r'"Q:\kit\tools\no_window.py" python "Q:\kit\tools\launch.py"')]), [])
 
     def test_a_task_that_is_not_the_kits_is_not_flagged(self):
         self.assertEqual(judge([task(r"\SomeoneElsesTask", "powershell.exe", r"-File C:\x\brain.ps1"),
                                 task(r"\Microsoft\Windows\X", r"C:\Py\python.exe", r"C:\other\run.py")]), [])
 
     def test_a_task_naming_a_path_in_the_kit_folder_is_the_kits_and_a_tool_name_elsewhere_is_not(self):
-        rows = ((r'"z:/KIT/tools/whatever.py"', True),             # case and slashes do not matter
-                (r"Z:\kit\tools\daily_full.py -C x", True),          # unquoted
-                (r'-X "Z:\kit"', True),                              # the folder itself
-                (r"""-Command "& 'Z:\kit\tools\x.ps1'" """, True),   # PowerShell's call operator
-                (r"-NoProfile -Command & 'Z:\kit\tools\x.ps1' -y", True),
-                (r"--flag=Z:\kit\x", True),                          # an option's value
-                (r'-File:"Z:\kit\tools\x.ps1"', True),
+        rows = ((r'"q:/KIT/tools/whatever.py"', True),             # case and slashes do not matter
+                (r"Q:\kit\tools\daily_full.py -C x", True),          # unquoted
+                (r'-X "Q:\kit"', True),                              # the folder itself
+                (r"""-Command "& 'Q:\kit\tools\x.ps1'" """, True),   # PowerShell's call operator
+                (r"-NoProfile -Command & 'Q:\kit\tools\x.ps1' -y", True),
+                (r"--flag=Q:\kit\x", True),                          # an option's value
+                (r'-File:"Q:\kit\tools\x.ps1"', True),
                 (r"""-Command "& 'C:\proj\tools\gate.ps1'" """, False),
                 (r"--flag=C:\proj\tools\gate.py", False),
                 (r'"C:\copy\tools\worktree_remove.py" -C x', False),  # a kit tool's name in a copy
                 (r"C:\proj\tools\gate.py --full", False),            # another repository's gate
-                (r'"Z:\kit2\tools\gate.py"', False),                 # a folder that only starts like it
+                (r'"Q:\kit2\tools\gate.py"', False),                 # a folder that only starts like it
                 (r"tools\gate.py", False))                           # relative: no folder to be in
         for args, mine in rows:
             with self.subTest(args=args):
                 self.assertEqual(len(judge([task(r"\anything", r"C:\Py\python.exe", args)])), int(mine))
 
     def test_a_program_inside_the_kit_folder_is_the_kits(self):
-        self.assertEqual(len(judge([task(r"\x", r"Z:\kit\.venv\Scripts\python.exe", "-V")])), 1)
+        self.assertEqual(len(judge([task(r"\x", r"Q:\kit\.venv\Scripts\python.exe", "-V")])), 1)
 
     def test_every_console_action_of_a_task_is_one_line(self):
         t = {"path": r"\kit-daily-full", "actions": [{"exe": "python.exe", "args": "a"},
@@ -161,8 +161,8 @@ XML = """
   <Actions Context="Author">
     <Exec>
       <Command>C:\\Py\\python.exe</Command>
-      <Arguments>"Z:\\kit\\tools\\daily_full.py" -C "Z:\\repo"</Arguments>
-      <WorkingDirectory>Z:\\repo</WorkingDirectory>
+      <Arguments>"Q:\\kit\\tools\\daily_full.py" -C "Q:\\repo"</Arguments>
+      <WorkingDirectory>Q:\\repo</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
@@ -182,7 +182,7 @@ XML = """
 
 
 DECLARED = '<?xml version="1.0" encoding="UTF-16"?>'   # what schtasks /Query /XML writes first
-KIT_NON_ASCII = "Z:\\K\u00eft"
+KIT_NON_ASCII = "Q:\\K\u00eft"
 
 
 class FakeRun:
@@ -201,7 +201,7 @@ class Read(unittest.TestCase):
     def test_parse_names_and_exec_actions(self):
         self.assertEqual(ct.parse(XML), [
             {"path": r"\kit-daily-full", "actions": [
-                {"exe": r"C:\Py\python.exe", "args": r'"Z:\kit\tools\daily_full.py" -C "Z:\repo"'}]},
+                {"exe": r"C:\Py\python.exe", "args": r'"Q:\kit\tools\daily_full.py" -C "Q:\repo"'}]},
             {"path": r"\Folder\no-uri", "actions": [{"exe": "notepad.exe", "args": ""}]}])
 
     def test_read_asks_schtasks_for_the_xml_with_a_timeout(self):
@@ -212,7 +212,7 @@ class Read(unittest.TestCase):
         self.assertEqual(kw["timeout"], ct.TIMEOUT_S)
 
     def test_utf16_output_with_its_declaration_goes_to_the_parser_as_bytes(self):
-        text = DECLARED + XML.replace("Z:\\kit", KIT_NON_ASCII)
+        text = DECLARED + XML.replace("Q:\\kit", KIT_NON_ASCII)
         for raw in (codecs.BOM_UTF16_LE + text.encode("utf-16-le"), text.encode("utf-16-le"),
                     text.encode("utf-16"), codecs.BOM_UTF16_BE + text.encode("utf-16-be")):
             with self.subTest(raw=raw[:4]):
@@ -222,20 +222,20 @@ class Read(unittest.TestCase):
 
     def test_single_byte_output_declaring_utf16_is_read_in_the_console_code_page(self):
         # schtasks /Query /XML writes encoding="UTF-16" and one byte per character to a pipe
-        text = DECLARED + XML.replace("Z:\\kit", KIT_NON_ASCII)
+        text = DECLARED + XML.replace("Q:\\kit", KIT_NON_ASCII)
         try:
             raw = text.encode("oem")
         except UnicodeEncodeError:
             self.skipTest("the OEM code page has no %r" % KIT_NON_ASCII)
         tasks = REAL_READ(run=FakeRun(stdout=raw))
         self.assertEqual(tasks[0]["actions"][0]["args"],
-                         '"%s\\tools\\daily_full.py" -C "Z:\\repo"' % KIT_NON_ASCII)
+                         '"%s\\tools\\daily_full.py" -C "Q:\\repo"' % KIT_NON_ASCII)
         lines = ct.judge(tasks, roots={KIT_NON_ASCII})
         self.assertEqual(len(lines), 1)
 
     def test_single_byte_output_declaring_a_single_byte_encoding_keeps_it(self):
         raw = (b'<?xml version="1.0" encoding="windows-1252"?>'
-               + XML.replace("Z:\\kit", KIT_NON_ASCII).encode("cp1252"))
+               + XML.replace("Q:\\kit", KIT_NON_ASCII).encode("cp1252"))
         self.assertIsInstance(ct.xml_input(raw), bytes)
         self.assertIn(KIT_NON_ASCII, REAL_READ(run=FakeRun(stdout=raw))[0]["actions"][0]["args"])
 
@@ -282,7 +282,7 @@ class InTheChecklist(unittest.TestCase):
 
     def test_a_flagged_task_is_a_checklist_line(self):
         def read():
-            return ct.parse(XML.replace("Z:\\kit", ct.KIT))
+            return ct.parse(XML.replace("Q:\\kit", ct.KIT))
         txt = self.checklist(read)
         self.assertIn(r"- scheduled task \kit-daily-full starts python.exe, a console program", txt)
 

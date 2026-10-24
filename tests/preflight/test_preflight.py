@@ -19,9 +19,10 @@ from unittest import mock
 
 from kitlib.config import ConfigError, load as load_config
 from kitlib.git import cmd
-from kitlib.config import migration, user
+from kitlib.config import user
 from kitlib.preflight import configline, hooks, lockline, machine, nextblock, report, settings as st
 from tests import gitfixture
+from tests.home import machine_config
 from tools import preflight
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -430,16 +431,18 @@ class TheLinesAfterTheWorktrees(Fixture):
         self.assertTrue(out.splitlines()[-1].startswith('lock      cpu free (0/4)'), out)
 
     def test_the_config_line_reads_the_home_it_is_given(self):
-        """kitlib.preflight.configline over the scratch home: both folders, one key apart."""
-        for name, repos in ((user.DIR_NAME, ['alpha']), (migration.OLD_DIR_NAME, ['beta'])):
-            os.makedirs(os.path.join(self.home, name))
-            with open(os.path.join(self.home, name, user.FILE_NAME), 'w', encoding='utf-8') as fh:
-                json.dump({'ledger_repos': repos}, fh)
+        """kitlib.preflight.configline over the scratch home: the PM repository's file is read and
+        the home folder's copy is a leftover to retire."""
+        folder = machine_config(self.home, {'ledger_repos': ['alpha']}, case=self)
+        os.makedirs(os.path.join(self.home, user.DIR_NAME))
+        with open(os.path.join(self.home, user.DIR_NAME, user.FILE_NAME), 'w', encoding='utf-8') as fh:
+            json.dump({'ledger_repos': ['beta']}, fh)
         out = self.run_preflight()[1]
         self.assertEqual(self.line(out, 'config '),
-                         'config    WARN both ~/%s/%s (read) and ~/%s/%s (ignored) exist, DIFFERENT (keys: '
-                         'ledger_repos) - retire the old folder (docs/kit-json.md "Moving the machine '
-                         'config folder")' % (user.DIR_NAME, user.FILE_NAME, migration.OLD_DIR_NAME, user.FILE_NAME))
+                         'config    WARN %s (config.json) is read; ~/%s/%s is still in the home folder and '
+                         'ignored - retire it once the move is checked (%s)'
+                         % (os.path.dirname(folder).replace('\\', '/') + '/' + user.DIR_NAME,
+                            user.DIR_NAME, user.FILE_NAME, user.MOVE_DOC))
         self.assertLess(out.index('\nconfig '), out.index('\nindex '))
 
 

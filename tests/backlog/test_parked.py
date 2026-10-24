@@ -1,6 +1,7 @@
-"""Parked records: `set-status ID parked --q Q-nnn` parks a record on an owner
-question, `unpark ID --ruling R-nnnn` opens it again with a `resume` sort key that ranks above
-priority and below a pin, and a parked record never takes a place in the offer's cap."""
+"""Parked records: `set-status ID parked [--q Q-nnn]` parks a record, on an owner question or
+with none, `unpark ID` opens it again as an ordinary open record, a `resume` sort key (which an
+older unpark wrote) ranks above priority and below a pin, and a parked record never takes a place
+in the offer's cap."""
 import unittest
 
 from kitlib.backlog import offer as omod
@@ -43,14 +44,32 @@ class Park(StoreCase):
         self.assertIn('was Q-001', change.subject)
         self.assertIn('Q-001', ' '.join(change.lines))
 
+    def test_parking_with_no_question_records_only_the_date(self):
+        self.seed(priced('FOO'))
+        change = self.verb('set_status', 'FOO', 'parked', None)
+        r = self.get('FOO')
+        self.assertEqual((r.get('state'), r.has('q'), r.get('parked_at')),
+                         ('parked', False, TODAY))
+        self.assertEqual(change.subject, 'backlog: park FOO')
+        self.assertEqual(omod.classify(r)[0], omod.PARKED)
+
+    def test_parking_a_parked_record_with_no_question_drops_the_question(self):
+        self.seed(priced('FOO', **PARKED))
+        change = self.verb('set_status', 'FOO', 'parked', None)
+        r = self.get('FOO')
+        self.assertEqual((r.get('state'), r.has('q'), r.get('parked_at')),
+                         ('parked', False, '2026-10-01'))
+        self.assertIn('was Q-001', change.subject)
+
     def test_park_refusals(self):
         self.seed(priced('FOO'), rec('BAR', state='blocked', blocked_on='live-client'),
-                  priced('BAZ', **PARKED))
-        for args, exc in ((('FOO', 'parked', None), Usage),
-                          (('FOO', 'parked', 'q28'), Usage),
+                  priced('BAZ', **PARKED),
+                  priced('QUX', state='parked', parked_at='2026-10-01'))
+        for args, exc in ((('FOO', 'parked', 'q28'), Usage),
                           (('FOO', 'open', 'Q-001'), Usage),
                           (('BAR', 'parked', 'Q-001'), Refusal),
-                          (('BAZ', 'parked', 'Q-001'), Refusal)):     # the same question
+                          (('BAZ', 'parked', 'Q-001'), Refusal),      # the same question
+                          (('QUX', 'parked', None), Refusal)):        # already with none
             with self.assertRaises(exc, msg=args):
                 self.verb('set_status', *args)
 
@@ -66,28 +85,22 @@ class Park(StoreCase):
 class Unpark(StoreCase):
     remote = False
 
-    def test_unpark_opens_the_record_and_sets_resume(self):
+    def test_unpark_opens_the_record_and_writes_no_resume(self):
         self.seed(priced('FOO', **PARKED))
-        self.verb('unpark', 'FOO', 'R-9001')
+        change = self.verb('unpark', 'FOO')
+        self.assertEqual(change.lines, ['UNPARKED FOO - state: open (was parked on Q-001)'])
         r = self.get('FOO')
-        self.assertEqual((r.get('state'), r.get('resume')), ('open', 'R-9001'))
+        self.assertEqual((r.get('state'), r.has('resume')), ('open', False))
         self.assertFalse(r.has('q'))
         self.assertFalse(r.has('parked_at'))
         self.assertEqual(omod.classify(r)[0], omod.PULLABLE)
 
-    def test_unpark_refusals(self):
+    def test_unpark_refuses_a_record_not_parked(self):
         self.seed(priced('FOO', **PARKED), priced('BAR'))
-        for args, exc in ((('BAR', 'R-9001'), Refusal),      # not parked
-                          (('FOO', None), Usage),            # no ruling
-                          (('FOO', 'R1'), Usage)):           # not a ruling id
-            with self.assertRaises(exc, msg=args):
-                self.verb('unpark', *args)
+        with self.assertRaises(Refusal):
+            self.verb('unpark', 'BAR')
+        self.assertEqual(self.get('BAR').get('state'), 'open')
         self.assertEqual(self.get('FOO').get('state'), 'parked')
-
-    def test_any_well_shaped_ruling_unparks(self):
-        self.seed(priced('FOO', **PARKED))
-        self.verb('unpark', 'FOO', 'R-9999')
-        self.assertEqual(self.get('FOO').get('resume'), 'R-9999')
 
 
 class ParkedRankAndCap(unittest.TestCase):

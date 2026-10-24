@@ -42,9 +42,11 @@ def profile(path, since):
         if d.get("type") != "assistant":
             continue
         m = d.get("message") or {}
-        if m.get("id") in seen:
+        mid = m.get("id")
+        if mid is not None and mid in seen:
             continue
-        seen.add(m.get("id"))
+        if mid is not None:
+            seen.add(mid)
         u = m.get("usage") or {}
         turns += 1
         models[m.get("model")] += 1

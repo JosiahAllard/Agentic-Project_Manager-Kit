@@ -13,7 +13,7 @@ import time
 
 from kitlib.config import user as kuser
 from kitlib.host import registry
-from kitlib.pmstart import consoletasks, fglock
+from kitlib.pmstart import configcheck, consoletasks, fglock
 from kitlib.proc import spawn
 
 KEY = "pm_start"
@@ -85,14 +85,24 @@ BEAT_STALE = 300      # seconds: a heartbeat older than this is a watcher that s
 def machine_config(path=None):
     """The whole machine config as a dict ({} when the file is missing or is not a JSON object),
     read as load_config reads it: unchecked, so one bad key elsewhere does not stop the hub line.
-    ConfigError when its location cannot be told (kitlib.config.user.readable_file)."""
-    p = os.path.expanduser(path) if path else kuser.readable_file()
-    try:
-        with open(p, encoding="utf-8-sig") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    With no `path`, a PM repository's local.json is read too (its keys over config.json's: `hub`
+    and `launcher` live there, kitlib.config.user.LOCAL_KEYS). ConfigError when its location
+    cannot be told (kitlib.config.user.readable_file)."""
+    def read(p):
+        try:
+            with open(p, encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    if path:
+        return read(os.path.expanduser(path))
+    data = read(kuser.readable_file())
+    loc = kuser.locate()
+    if loc.state == kuser.OK and loc.local:
+        data.update(read(loc.local))
+    return data
 
 
 def current_account():
@@ -309,16 +319,31 @@ def _watcher_state(hb, running, now, cmd):
     return ["pm_watch.py is not running: start it under Monitor: %s" % cmd]
 
 
-def handoff(cfg, globber=glob.glob, mtime=os.path.getmtime):
+HANDOFF_DEFAULT = "HANDOFF.md"
+HANDOFF_STRAY = "pm-handoff*.md"
+
+
+def handoff(cfg, globber=glob.glob, exists=os.path.isfile, pm_repo=None):
+    """The PM's one hand-off file, edited in place (docs/pm-start.md "Hand-off file"): pm_start.handoff_file
+    (default HANDOFF.md; a relative name is in the PM repository's main checkout, `pm_repo`, default
+    pm_memory_repo). Its line is "read first: <file>", or a line saying it is missing. Any pm-handoff*.md
+    left in pm_start.memory_dir (when set) is one more line: merge it into the file and delete it."""
+    name = cfg.get("handoff_file") or HANDOFF_DEFAULT
+    if os.path.isabs(name):
+        path = name
+    else:
+        top = (pm_repo or pm_memory_repo)(cfg)
+        if not top:
+            raise KeyError("handoff_file %s is relative and the PM repository is not found "
+                           "(set pm_start.sessions_file, or an absolute pm_start.handoff_file)" % name)
+        path = os.path.normpath(os.path.join(top, name))
+    lines = ["read first: %s" % path] if exists(path) else [
+        "no hand-off file %s: create it (the PM keeps one, edited in place)" % path]
     mem = cfg.get("memory_dir")
-    if not mem:
-        raise KeyError("memory_dir not configured")
-    pattern = os.path.join(mem, cfg.get("handoff_glob", "pm-handoff-*.md"))
-    files = globber(pattern)
-    if not files:
-        return ["no handoff file matches %s" % pattern]
-    newest = max(files, key=mtime)
-    return ["read first: %s" % newest]
+    stray = sorted(globber(os.path.join(mem, HANDOFF_STRAY))) if mem else []
+    if stray:
+        lines.append("hand-off notes belong in %s: merge and delete %s" % (path, ", ".join(stray)))
+    return lines
 
 
 def reminders(cfg, today, read=None):
@@ -364,7 +389,7 @@ def live_session_names(procs):
     return names
 
 
-def liveness(cfg, procs, read=None, account=None):
+def liveness(cfg, procs, read=None, account=None, repos=None):
     path = cfg.get("sessions_file")
     if not path:
         raise KeyError("sessions_file not configured")
@@ -385,6 +410,28 @@ def liveness(cfg, procs, read=None, account=None):
                 label = "auto" if label == accounts.DEFAULT_LABEL else label
             out.append("coordinator %s (%s) is not running: launch.py start --session %s --account %s"
                        % (key, e["name"], key, label))
+    return out + _consultants_missing(sessions, alive, repos)
+
+
+def _consultants_missing(sessions, alive, repos=None):
+    """One line per repository in sessions (an entry's "repo") with no live consultant-<repo> session
+    (launch.py consultant names it so, kitlib.launcher.start.consultant). A repository with a
+    consultant entry of its own is left to the coordinator lines above. The line names the repository's
+    folder from launcher.repos (`repos`, launcher_repos by default, read only when a line is needed);
+    a repository not there, or a read that fails, keeps the placeholder."""
+    entries = [e for k, e in sessions.items() if not k.startswith("_") and isinstance(e, dict)]
+    covered = {e.get("repo") for e in entries if str(e.get("agent") or "").endswith("consultant")}
+    out = []
+    folders = None
+    for repo in sorted({e["repo"] for e in entries if isinstance(e.get("repo"), str) and e["repo"]}, key=str.lower):
+        if repo not in covered and "consultant-" + repo not in alive:
+            if folders is None:
+                try:
+                    folders = launcher_repos() if repos is None else repos
+                except Exception:
+                    folders = {}
+            out.append("consultant-%s is not running: launch.py consultant --repo %s --repo-path %s"
+                       % (repo, repo, folders.get(repo) or "<its checkout>"))
     return out
 
 
@@ -776,6 +823,49 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
     return lines
 
 
+def _cdrive_items(get, realpath):
+    """(label, path or None, env var that moves it) for each folder the C: drive warning covers; `get`
+    reads one environment variable, `realpath` resolves links (the Claude folder may be a junction to
+    another drive). A default that needs an unset base variable is None."""
+    from kitlib.launcher.accounts import CONFIG_DIR_ENV     # the host's config folder variable and default
+    from kitlib.launcher.settings import DEFAULT_FOLDER
+    local, home = get("LOCALAPPDATA"), get("USERPROFILE")
+
+    def under(base, *parts):
+        return os.path.join(base, *parts) if base else None
+    config = get(CONFIG_DIR_ENV) or under(home, DEFAULT_FOLDER)
+    config = realpath(config) if config else None
+    return [
+        ("TEMP", get("TEMP"), "TEMP"),
+        ("TMP", get("TMP"), "TMP"),
+        ("pip cache", get("PIP_CACHE_DIR") or under(local, "pip", "Cache"), "PIP_CACHE_DIR"),
+        ("npm cache", get("npm_config_cache") or under(local, "npm-cache"), "npm_config_cache"),
+        ("nuget packages", get("NUGET_PACKAGES") or under(home, ".nuget", "packages"), "NUGET_PACKAGES"),
+        ("nuget http cache", get("NUGET_HTTP_CACHE_PATH") or under(local, "NuGet", "v3-cache"),
+         "NUGET_HTTP_CACHE_PATH"),
+        ("dotnet CLI home", get("DOTNET_CLI_HOME"), "DOTNET_CLI_HOME"),
+        ("gradle home", get("GRADLE_USER_HOME") or under(home, ".gradle"), "GRADLE_USER_HOME"),
+        ("uv cache", get("UV_CACHE_DIR") or under(local, "uv", "cache"), "UV_CACHE_DIR"),
+        ("agent transcripts", under(config, "projects"), CONFIG_DIR_ENV),
+    ]
+
+
+def cdrive_lines(environ=None, realpath=None):
+    """One warning line naming each of TEMP, TMP, the pip, npm, nuget and dotnet tool caches and the
+    Claude transcript folder (CLAUDE_CONFIG_DIR, else ~/.claude, projects/) that resolves to the C:
+    drive, with the variable that would move it; none when nothing is on C:. Also the nuget http
+    cache, gradle home and uv cache. Reads this process's environment only (`environ`, default
+    os.environ; never the machine-scope TEMP of system services) and runs no subprocess, no `npm
+    config get`. The Claude folder is resolved through links (`realpath`, default os.path.realpath).
+    A relative or unset path is skipped (its drive is unknown)."""
+    env = {k.upper(): v for k, v in (os.environ if environ is None else environ).items()}
+    hits = []
+    for label, path, var in _cdrive_items(lambda k: env.get(k.upper()), realpath or os.path.realpath):
+        if path and os.path.splitdrive(os.path.normpath(path))[0].upper() == "C:":
+            hits.append("%s (%s; set %s)" % (label, path, var))
+    return ["on the C: drive: " + ", ".join(hits)] if hits else []
+
+
 def worktree_sweep_lines(repos=None, read=None, plugin=None):
     """One line per repository in launcher.repos whose `<repo>-worktree-sweep` task is missing, or
     runs from a removed plugin export (kitlib.machinesetup.worktreesweep, docs/machine-setup.md
@@ -853,6 +943,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
 
     checks = [
         ("standing", lambda: standing(cfg)),
+        ("machine_config", lambda: configcheck.lines(**fakes.get("machine_config", {}))),
         ("eng_review", lambda: eng_review(cfg)),
         ("hub", lambda: hub_site(procs_once, **fakes.get("hub_site", {}))),
         ("watcher", lambda: watcher(cfg, procs_once(), **fakes.get("watcher", {}))),
@@ -872,6 +963,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
             "stubs", {}).items() if k == "repos"}))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
+        ("cdrive", lambda: cdrive_lines(**fakes.get("cdrive", {}))),
         # A stubs fake's repos stand for launcher.repos here too.
         ("worktree_sweep", lambda: worktree_sweep_lines(**fakes.get("worktree_sweep", {
             k: v for k, v in fakes.get("stubs", {}).items() if k == "repos"}))),

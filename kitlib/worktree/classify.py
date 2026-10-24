@@ -199,8 +199,7 @@ def landing_branches(ctx):
     from kitlib.config import ConfigError
     from kitlib.records import landing
     try:
-        lock = landing.LandingLock.for_config(
-            ctx.main, ctx.cfg, lanes=tuple(ctx.cfg.section('landing').get('lanes') or ()))
+        lock = landing.LandingLock.for_config(ctx.main, ctx.cfg)
         held = lock.read()
     except (ConfigError, landing.LockError) as e:
         return None, 'the landing lock cannot be read (%s)' % e

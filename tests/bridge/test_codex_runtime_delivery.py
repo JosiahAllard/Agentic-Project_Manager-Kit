@@ -15,7 +15,7 @@ import uuid
 
 from optional.bridge.hosts.codex.runtime import CodexSources
 from optional.bridge.core.contracts import Capability
-from optional.bridge.core.messages import BeforeWriteError,DeliveryError,OutboundMessage
+from optional.bridge.core.messages import BeforeWriteError,DeliveryError,OutboundMessage,reply_operation_id
 from kitlib.proc.pipe import (INVALID,SecurityAttributes,connect_pipe,create_file,create_pipe,
     disconnect_pipe,from_sddl,local_free,peek,process_sids,read,write,close)
 from optional.bridge.win.channel import NativeChannel
@@ -23,6 +23,7 @@ from optional.bridge.win.frontend import NativeFrontend
 from optional.bridge.win.transport import PipeTarget
 from kitlib.proc.process import own_ctime,proc_ctime
 from tests.bridge import test_codex_runtime as runtime_fixtures
+from tests.bridge.test_pairing import chat
 
 ERROR_BROKEN_PIPE=109
 
@@ -271,6 +272,107 @@ class DirectRuntimeDeliveryTests(unittest.TestCase):
         with self.assertRaises(DeliveryError) as caught: adapter.send(self.message)
         self.assertNotIsInstance(caught.exception,BeforeWriteError)
         self.assertEqual(len(self.rpc.requests),1)
+
+
+class LeasedWriterDeliveryTests(unittest.TestCase):
+    """Another host's sender reaches a Codex chat only through an owner-leased Codex writer."""
+    write=DirectRuntimeDeliveryTests.write
+    write_login=DirectRuntimeDeliveryTests.write_login
+    tearDown=DirectRuntimeDeliveryTests.tearDown
+    setUp=DirectRuntimeDeliveryTests.setUp
+    populate=DirectRuntimeDeliveryTests.populate
+    complete_source=DirectRuntimeDeliveryTests.complete_source
+
+    def leased(self):
+        # self.sender is the Codex writer W (an active turn); self.recipient is R.
+        adapter=self.populate()
+        self.other=chat('claude-sender',adapter='claude-desktop')
+        self.controller.enroll(self.other,lambda binding:binding==self.other)
+        self.controller.owner.change(self.other.reference,self.recipient.reference,enabled=True)
+        self.claude_message=OutboundMessage('leased-fixture-op',self.thread,self.other,self.recipient,
+            'owned fixture body')
+        return adapter
+
+    def grant(self,enabled=True):
+        self.controller.owner.lease(self.sender.reference,self.recipient.reference,enabled=enabled)
+
+    def refused(self,adapter,message,code=None):
+        with self.assertRaises(BeforeWriteError) as caught: adapter.send(message)
+        if code is not None: self.assertEqual(caught.exception.code,code)
+        self.assertEqual(self.rpc.requests,[])
+
+    def test_another_hosts_sender_without_a_lease_is_refused_before_any_native_bytes(self):
+        adapter=self.leased()
+        self.refused(adapter,self.claude_message,'codex-direct-route-unavailable')
+
+    def test_leased_writer_delivers_another_hosts_message_as_the_native_executor(self):
+        adapter=self.leased()
+        self.grant()
+        with self.controller.pairs.selected_guard(self.other,self.recipient):
+            result=adapter.send(self.claude_message)
+        self.assertEqual(result.state,'recipient-accepted')
+        self.assertEqual(len(self.rpc.requests),1)
+        params=self.rpc.requests[0]['params']
+        self.assertEqual((params['threadId'],params['turnId']),(self.sender.identity.native_session_id,self.turn))
+        self.assertEqual(params['arguments']['threadId'],self.recipient.identity.native_session_id)
+        self.assertEqual(params['arguments']['prompt'].split('\n\n',1)[1],self.claude_message.text)
+
+    def test_a_reply_return_from_another_host_needs_the_lease_too(self):
+        adapter=self.leased()
+        reply=OutboundMessage(reply_operation_id('parent-fixture-op'),self.thread,self.other,self.recipient,
+            'owned reply body',reply_of='parent-fixture-op')
+        self.refused(adapter,reply,'codex-direct-route-unavailable')
+        self.grant()
+        self.assertEqual(adapter.send(reply).state,'recipient-accepted')
+        self.assertEqual(self.rpc.requests[0]['params']['threadId'],self.sender.identity.native_session_id)
+
+    def test_writer_turn_ending_stops_delivery_before_any_bytes(self):
+        adapter=self.leased()
+        self.grant()
+        self.complete_source()
+        self.refused(adapter,self.claude_message)
+
+    def test_revoked_or_expired_lease_invalidates_an_open_scope_before_write(self):
+        from optional.bridge.core.owner import LEASE_SECONDS  # here, so the guard test runs at the base
+        adapter=self.leased()
+        self.grant()
+        with self.factory._delivery_lease(self.claude_message) as lease:
+            self.assertEqual(lease.writer,self.sender)
+            self.assertTrue(lease.recheck())
+            self.grant(False)
+            self.assertFalse(lease.recheck())
+        self.grant()
+        with self.factory._delivery_lease(self.claude_message) as lease:
+            self.assertTrue(lease.recheck())
+            self.controller.leases._clock=lambda:time.monotonic()+LEASE_SECONDS+1
+            self.assertFalse(lease.recheck())
+        self.refused(adapter,self.claude_message,'codex-direct-route-unavailable')
+
+    def test_a_lease_is_no_route_so_a_deselected_sender_gets_no_bytes(self):
+        adapter=self.leased()
+        self.grant()
+        self.controller.owner.change(self.other.reference,self.recipient.reference,enabled=False)
+        self.refused(adapter,self.claude_message)
+
+    def test_a_writer_on_another_account_or_the_recipient_itself_is_refused(self):
+        adapter=self.leased()
+        for writer in (replace(self.sender,account_ref='other-account'),self.recipient):
+            self.controller.leases._leases[self.recipient.reference]=(writer,self.recipient,time.monotonic()+60)
+            self.refused(adapter,self.claude_message,'codex-direct-route-unavailable')
+
+    def test_codex_sender_is_unchanged_byte_for_byte_with_a_lease_present(self):
+        adapter=self.leased()
+        self.assertEqual(adapter.send(self.message).state,'recipient-accepted')
+        # A lease naming another host's chat as writer would refuse if a Codex sender used it.
+        self.controller.owner.lease(self.other.reference,self.recipient.reference,enabled=True)
+        self.assertEqual(self.controller.leases.writer(self.recipient),self.other)
+        with self.factory._delivery_lease(self.message) as lease:
+            self.assertIsNone(lease.writer)
+            self.assertEqual(lease.executor.thread_id,self.sender.identity.native_session_id)
+        self.assertEqual(adapter.send(self.message).state,'recipient-accepted')
+        self.assertEqual(len(self.rpc.requests),2)
+        self.assertEqual(self.rpc.requests[0],self.rpc.requests[1])
+        self.assertEqual(self.rpc.requests[1]['params']['threadId'],self.sender.identity.native_session_id)
 
 
 class OwnedNativeRPCFixtureTests(unittest.TestCase):

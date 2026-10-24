@@ -10,7 +10,7 @@ plan inside the native sandbox).
       an owner flag, a checkout other than cwd or an abbreviated option, or a lock verb an agent
       does not run. A commit, a sync or a ledger or pending write needs an explicit --model, the actual
       model id (Codex's attribution has no fallback: hosts.json). The host is not inserted: the
-      run's environment carries PM_KIT_HOST=codex, which every shared tool reads; a --host or
+      run's environment carries PM_KIT_HOST=codex (a ledger call's own --repo and --prov pass through), which every shared tool reads; a --host or
       --provider naming another host is refused.
   execute(plan)              runs it here, in this session's environment (lock token kept)
   execute_in_host(plan, host)   runs it through a CommandHost (runtime.SandboxCommandHost)
@@ -34,7 +34,8 @@ READ_TOOLS = {"preflight", "board", "landed", "review_pack", "worktree_paths", "
               "doc_index", "codemap", "trailers", "machine_paths",
               "checkout_guard", "agent_roster", "testlist", "tool_deps"}
 READ_BACKLOG = {"next", "show", "list", "check", "landable", "stale"}
-READ_LEDGER = {"show", "grep", "check", "list", "standing"}
+READ_LEDGER = {"show", "grep", "check", "list", "standing", "rules", "conflicts", "migrate-report"}
+COMMIT_LEDGER = {"add", "rule-drop", "rule-set", "rule-apply"}   # the PM's ledger writes that take --commit/--push
 OWNER_FLAGS = {"--owner-authored", "--owner-approved", "--owner-confirmed", "--owner-said"}
 
 
@@ -192,10 +193,13 @@ def _backlog_verb(args):
     return ""
 
 
-def _host_flags(args):
-    """Refuse a --host or --provider (or an abbreviation of one) naming another host."""
+def _host_flags(args, tool=None):
+    """Refuse a --host or --provider (or an abbreviation of one) naming another host. The ledger's
+    own `--prov` (the entry's provenance) is that tool's option, not an abbreviation."""
     for name in ("--host", "--provider"):
         keys = [arg.split("=", 1)[0] for arg in args if arg.startswith("--") and arg != "--"]
+        if tool == "ledger":
+            keys = [key for key in keys if key != "--prov"]
         if any(key != name and len(key) >= 4 and name.startswith(key) for key in keys):
             raise ValueError("use the full %s option name" % name)
         value = _flag(args, name)
@@ -211,12 +215,12 @@ def _provider_args(tool, args):
                     flag.startswith(key) and flag != key for flag in ("--commit", "--push")):
                 raise ValueError("use full ledger --commit/--push option names")
     committing_ledger = tool in {"ledger", "pending"} and any(a in {"--commit", "--push"} for a in args)
-    _host_flags(args)
+    _host_flags(args, tool)
     if tool not in {"commit", "sync_base"} and not committing_ledger:
         return args
     trailer(_flag(args, "--model"))  # the explicit active model; never an inherited identity
     if committing_ledger:
-        verbs = {"add"} if tool == "ledger" else {"add", "edit", "done"}
+        verbs = COMMIT_LEDGER if tool == "ledger" else {"add", "edit", "done"}
         if not args or args[0] not in verbs:
             raise ValueError("commit/push dispatch requires a documented write verb and full option names")
     return args

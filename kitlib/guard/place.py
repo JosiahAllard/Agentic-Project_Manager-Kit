@@ -39,6 +39,9 @@ It answers only when the answer cannot differ from git's, and otherwise calls `f
   - the work tree, the gitdir file or a git directory is not owned by the current user (git's
     safe.directory check; Windows only)
   - anything else goes wrong while reading (any Exception): git answers instead
+
+head_branch(git_dir) reads the branch a git directory's HEAD file names, as
+kitlib.git.refs.current_branch answers it, or None when the file does not say (the caller asks git).
 """
 import os
 import re
@@ -50,6 +53,22 @@ NOT_A_REPO = 'fatal: not a git repository (or any of the parent directories): .g
 FALLBACK_ENV = ('GIT_OBJECT_DIRECTORY', 'GIT_DISCOVERY_ACROSS_FILESYSTEM', 'GIT_CONFIG_PARAMETERS',
                 'GIT_CONFIG_COUNT', 'GIT_TEST_ASSUME_DIFFERENT_OWNER', 'GIT_ALTERNATE_OBJECT_DIRECTORIES')
 _HEX = frozenset('0123456789abcdef')
+
+
+def head_branch(git_dir):
+    """The branch named by `git_dir`'s HEAD file: (name, None), ('', None) for a detached HEAD,
+    or None when the file cannot be read or holds neither (the caller asks git)."""
+    try:
+        with open(os.path.join(git_dir, 'HEAD'), encoding='utf-8') as f:
+            text = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if text.startswith('ref: refs/heads/'):
+        name = text[len('ref: refs/heads/'):]
+        return (name, None) if name else None
+    if len(text) in (40, 64) and all(c in _HEX for c in text):
+        return '', None
+    return None
 
 
 class _Fallback(Exception):

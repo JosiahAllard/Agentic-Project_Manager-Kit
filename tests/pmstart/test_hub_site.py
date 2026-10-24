@@ -10,16 +10,17 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import pmstart
+from kitlib import pmdata, pmstart
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
 from kitlib.pmstart import fglock
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import auth, serve, settings
-from tests.pmstart import keep_off_launcher_repos
+from tests.home import machine_config, pm_repo
+from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+FAKES = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
 SET = settings.settings({"port": 4321})
 TOKEN = "secret_token_value_" + "x" * auth.MIN_TOKEN
@@ -289,11 +290,11 @@ class RealSettingsTest(unittest.TestCase):
         p = mock.patch.dict(os.environ, {"USERPROFILE": d, "HOME": d})
         p.start()
         self.addCleanup(p.stop)
+        self.pm = pm_repo(self)          # the fenced pointer names it: the machine config's place
 
     def write(self, body):
-        os.makedirs(os.path.dirname(kuser.config_file(self.home)), exist_ok=True)
-        with open(kuser.config_file(self.home), "w", encoding="utf-8") as f:
-            f.write(json.dumps(body))
+        """The machine config `body`, split between the fenced PM repository's two files."""
+        return machine_config(self.home, body, case=self)
 
     def test_no_hub_key_gives_the_default_settings_and_the_site_lines(self):
         self.write({})
@@ -304,8 +305,23 @@ class RealSettingsTest(unittest.TestCase):
         self.assertTrue(out[0].startswith("hub: hub server down (nothing listens on port 8790)"), out)
 
     def test_no_machine_config_at_all_gives_the_default_settings(self):
-        self.assertFalse(os.path.exists(kuser.config_file(self.home)))
+        self.assertFalse(os.path.exists(os.path.join(self.pm, kuser.DIR_NAME)))
         self.assertEqual(pmstart.hub_settings().port, settings.PORT)
+
+    def test_machine_config_reads_local_json_too_and_its_keys_win(self):
+        # hub and launcher live in the PM repository's local.json (kitlib.config.user.LOCAL_KEYS)
+        folder = self.write({"pm_start": {}})
+        cfg_file, local_file = (os.path.join(folder, n) for n in (kuser.FILE_NAME, kuser.LOCAL_FILE_NAME))
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            json.dump({"pm_start": {}, "hub": {"port": 1111}}, f)
+        with open(local_file, "w", encoding="utf-8") as f:
+            json.dump({"hub": {"port": 4322}, "launcher": {"accounts": {}}}, f)
+        self.assertEqual(pmstart.machine_config(),
+                         {"pm_start": {}, "hub": {"port": 4322}, "launcher": {"accounts": {}}})
+        self.assertEqual(pmstart.machine_config(cfg_file), {"pm_start": {}, "hub": {"port": 1111}})
+        with open(local_file, "w", encoding="utf-8") as f:
+            f.write("[not an object")                   # unreadable: config.json's keys stand
+        self.assertEqual(pmstart.machine_config(), {"pm_start": {}, "hub": {"port": 1111}})
 
     def test_a_valid_hub_key_gives_the_settings(self):
         self.write({"hub": {"port": 4322}})
@@ -326,29 +342,47 @@ class RealSettingsTest(unittest.TestCase):
         with self.assertRaises(pmstart.HubSettingsError):
             pmstart.hub_settings()
 
-    def test_a_pm_data_value_that_is_not_a_string_is_named_and_never_shown(self):
-        from kitlib import pmdata
+    def test_a_pm_data_key_in_the_machine_config_is_named_and_its_value_never_shown(self):
+        # pm_data is derived from the PM-repo pointer (kitlib.config.user.locate): a pm_data key
+        # left in config.json makes the machine config unreadable, and no line shows its value
         down = dict(make_client=lambda port: FakeClient(error=serve.NotRunning(port)))
-        for pm, rule in (({"path": ["SECRETPATH"]}, "path must be an absolute path"),
-                         ({"path": "C:\\pm", "branch": ["SECRETBR"]},
-                          "branch must be a branch or remote name"),
-                         ({"path": "C:\\pm", "remote": 7654321}, "remote must be a branch or remote name")):
-            for hub in (None, {"port": 4322}):
-                with self.subTest(pm=pm, hub=hub):
-                    body = {"pm_data": pm}
-                    if hub:
-                        body["hub"] = hub
-                    self.write(body)
-                    txt = pmstart.checklist({}, NOW, procs=[], pm_data=pmdata.machine_settings,
-                                            hub_site=down, **FAKES)
-                    kit = [l for l in txt.splitlines() if "kit_sync" in l]
-                    self.assertEqual(len(kit), 1, txt)
-                    self.assertIn("could not check kit_sync: PmDataError: ", kit[0])
-                    self.assertIn(rule, kit[0])
-                    if hub:
-                        self.assertIn("hub: the hub key of the machine config cannot be used: ", txt)
-                    for word in ("SECRET", "7654321", ", not "):
-                        self.assertNotIn(word, txt)
+        for hub in (None, {"port": 4322}):
+            with self.subTest(hub=hub):
+                folder = self.write({"hub": hub} if hub else {})
+                with open(os.path.join(folder, kuser.FILE_NAME), "w", encoding="utf-8") as f:
+                    json.dump({"pm_data": {"path": ["SECRETPATH"], "branch": ["SECRETBR"],
+                                           "remote": 7654321}}, f)
+                txt = pmstart.checklist({}, NOW, procs=[], pm_data=lambda: None, hub_site=down, **FAKES)
+                hub_lines = [l for l in txt.splitlines() if l.startswith("- hub: ")]
+                self.assertEqual(len(hub_lines), 1, txt)
+                if hub:
+                    self.assertTrue(hub_lines[0].startswith(
+                        "- hub: the hub key of the machine config cannot be used: "), txt)
+                    self.assertIn("pm_data is derived", hub_lines[0])
+                else:
+                    self.assertEqual(hub_lines[0], "- hub: the machine config could not be read (ConfigError)")
+                for word in ("SECRET", "7654321", ", not "):
+                    self.assertNotIn(word, txt)
+
+    def test_a_bad_pm_data_value_fails_the_kit_sync_check_naming_the_rule_and_never_the_value(self):
+        # the kit_sync check reads pm_data through kitlib.pmdata's own check (check_settings), whose
+        # PmDataError echoes the rejected value: the "could not check" line takes it out
+        # (pmstart._failure_text)
+        down = dict(make_client=lambda port: FakeClient(error=serve.NotRunning(port)))
+        for bad, rule in (({"path": "C:\\SECRETPATH", "branch": "SECRET BR", "remote": 7654321},
+                           "pm_data: branch must be a branch or remote name; "
+                           "remote must be a branch or remote name"),
+                          ({"path": ["SECRETPATH"]}, "pm_data: path must be an absolute path")):
+            with self.subTest(bad=bad):
+                def settings():
+                    return pmdata.check_settings(bad, "pm_data")
+                with self.assertRaises(pmdata.PmDataError) as cm:
+                    settings()
+                self.assertIn("SECRET", str(cm.exception))    # the value the line must not show
+                txt = pmstart.checklist({}, NOW, procs=[], pm_data=settings, hub_site=down, **FAKES)
+                self.assertIn("- could not check kit_sync: PmDataError: %s\n" % rule, txt + "\n")
+                for word in ("SECRET", "7654321", ", not "):
+                    self.assertNotIn(word, txt)
 
     def test_a_broken_config_with_no_hub_key_is_one_line_naming_the_class(self):
         self.write({"no_such_key": 1})

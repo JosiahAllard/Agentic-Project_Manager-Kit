@@ -778,15 +778,15 @@ class TheRefAndTheCheckout(StoreCase):
         self.repo.git('fetch', '-q', 'origin')
         self.assertIn('backlog: add BAR', self.repo.git('log', '-1', '--format=%s', smod.STORE_REF))
 
-    def test_the_commit_names_verb_id_session_and_ruling(self):
+    def test_the_commit_names_verb_id_and_session(self):
         self.store.session = 'kit'
-        # FOO is outside the offer (BAR ranks above it), so the pull takes --reason and --ruling
+        # FOO is outside the offer (BAR ranks above it), so the pull takes --reason
         self.seed(priced('FOO', priority='5'), priced('BAR', priority='1'))
-        self.verb('pull', 'FOO', reason='the owner said go', ruling='R-9001')
+        self.verb('pull', 'FOO', reason='the owner said go')
         msg = self.repo.git('log', '-1', '--format=%B', smod.STORE_REF)
         self.assertIn('backlog: pull FOO onto %s' % BRANCH, msg)
         self.assertIn('Session: kit', msg)
-        self.assertIn('Ruling: PM R-9001', msg)
+        self.assertNotIn('Ruling:', msg)
 
     def test_a_read_of_a_remote_with_no_store_adds_no_refspec(self):
         """A refspec naming a ref the remote lacks breaks every plain `git fetch` there."""

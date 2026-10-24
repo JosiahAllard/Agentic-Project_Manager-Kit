@@ -12,8 +12,8 @@ commit_branch) HEAD's under the folder. A folder store anywhere else commits not
 so there is nothing to match: NotChecked.
 
 Each change's command is rebuilt from its commit (the subject's verb, SUBJECTS; the record before
-and after it; the message's `Ruling:` line) and sorted by kitlib.backlog.policy.sort, the tool's
-own sort, so roles.py alone says which changes must have a line (audit.audited). A change is
+and after it; a collision the plan marked on the subject, policy.COLLISION_MARK) and sorted by
+kitlib.backlog.policy.sort, the tool's own sort, so roles.py alone says which changes must have a line (audit.audited). A change is
 covered when a log line's `store_sha` is its commit. The log is the machine's, every repository's
 lines in one file, so a line that names no commit here is someone else's and flags nothing; a
 line whose sha is MISSING cannot be matched and is only counted.
@@ -50,9 +50,9 @@ OK, FINDINGS, NOT_CHECKED = 0, 1, 2
 # holds them equal).
 BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
 
-# (subject prefix, verb): kitlib.backlog.plan's, retarget's and store.catch_up's subjects, and the
-# removed `backlog.py migrate`'s, a store's first commit in old store history (docs/backlog-store.md
-# "Migration").
+# (subject prefix, verb): kitlib.backlog.plan's (`uncite` among them), retarget's and
+# store.catch_up's subjects, and `migrate: `, the subject of a store's first commit in old store
+# history (the store migration's; kept so that history stays audited).
 SUBJECTS = (
     ('closes ', 'close'), ('retires ', 'retire'), ('deletes ', 'delete'),
     ('migrate: ', 'migrate'),
@@ -64,7 +64,8 @@ SUBJECTS = (
     ('backlog: unpark ', 'unpark'),
     ('backlog: clear review ', 'clear-review'),
     ('backlog: pull ', 'pull'), ('backlog: release ', 'release'),
-    ('backlog: retarget ', 'retarget'), ('backlog: catch up ', 'catch-up'),
+    ('backlog: retarget ', 'retarget'), ('backlog: uncite ', 'uncite'),
+    ('backlog: catch up ', 'catch-up'),
 )
 # Keys only a verb writes (kitlib.backlog.plan.WRITTEN_BY): a `set` that changed them did so
 # itself, so they say nothing about what it was given.
@@ -163,10 +164,6 @@ def store_place(backend, rules):
     return backend.root, snap.tip, smod.STORE_DIR
 
 
-def _ruled(body):
-    return any(line.startswith('Ruling:') for line in body.split('\n'))
-
-
 def _given(verb, change, before, after):
     """policy.sort's `given` for one record of `change`: `before` and `after` are its Records (None:
     absent on that side)."""
@@ -178,8 +175,9 @@ def _given(verb, change, before, after):
         if before is not None and after is not None and before.body != after.body:
             fields.append('body')
         prices = [(after.get('priority') if after else None) or '-'] if 'priority' in fields else []
-        recite = change.subject.startswith('backlog: re-cite ')
-        return {'fields': fields, 'priority': prices, 'hold_ruling': recite}
+        priced_by = (after.all('priority_by') if after else []) if 'priority_by' in fields else []
+        return {'fields': fields, 'priority': prices, 'priority_by': priced_by,
+                'blocked_on': after.all('blocked_on') if after else []}
     was = set(before.all('blocked_on')) if before else set()
     now = set(after.all('blocked_on')) if after else set()
     if verb == 'block':
@@ -188,9 +186,7 @@ def _given(verb, change, before, after):
         return {'on': sorted(now - was), 'owner_ask': asked and bool(after.all('owner_ask'))}
     if verb == 'unblock':
         return {'on': sorted(was - now)}
-    if verb == 'pull':
-        return {'ruling': _ruled(change.body)}
-    if verb in ('retarget', 'catch-up'):
+    if verb in ('retarget', 'uncite', 'catch-up'):
         return {'apply': True}
     return {}
 
@@ -217,10 +213,13 @@ def _records(root, change):
 
 
 def rows_of(root, verb, change):
-    """The ACTIONS rows (sorted names) `change` took, by policy.sort over each record it wrote."""
+    """The ACTIONS rows (sorted names) `change` took, by policy.sort over each record it wrote,
+    and the collision row a plan found when the subject carries policy.COLLISION_MARK."""
     rows = set()
     for before, after in _records(root, change).values():
         rows.update(policy.sort(verb, _given(verb, change, before, after), before))
+    if verb in policy.COLLISION_ROWS and policy.COLLISION_MARK in change.subject:
+        rows.add(policy.COLLISION_ROWS[verb])
     return sorted(rows)
 
 
@@ -259,6 +258,10 @@ def check(backend, rules, entries, since):
             report.findings.append(Finding('UNKNOWN', '%s  %s' % (what, change.subject)))
             continue
         rows = rows_of(root, verb, change)
+        if not rows:                         # a write subject no roles.py row names yet
+            report.findings.append(Finding('UNKNOWN', '%s %s rows=none  %s' % (
+                what, verb, change.subject)))
+            continue
         if audit.audited(rows):
             report.audited += 1
             report.findings.append(Finding('UNAUDITED', '%s %s rows=%s  %s' % (

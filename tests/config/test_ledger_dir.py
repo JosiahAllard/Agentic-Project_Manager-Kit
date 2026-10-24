@@ -1,6 +1,5 @@
 """The machine config's `ledger_dir`: one ledger file per name in `ledger_repos`, in that folder.
 `ledger_repos` is required with it, and a name whose file would collide is refused."""
-import json
 import os
 import shutil
 import tempfile
@@ -8,6 +7,7 @@ import unittest
 
 from kitlib import config
 from kitlib.config import schema, user
+from tests.home import machine_config
 
 
 class LedgerDirTest(unittest.TestCase):
@@ -18,9 +18,7 @@ class LedgerDirTest(unittest.TestCase):
         self.dir = os.path.join(self.home, 'rulings')
 
     def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            f.write(json.dumps(body))
+        machine_config(self.home, body, case=self)   # the PM repository's two files
 
     def refused(self, body):
         self.write(body)
@@ -59,8 +57,20 @@ class LedgerDirTest(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertIn('ledger_dir needs ledger_repos', self.refused(body))
 
-    def test_a_relative_folder_refuses(self):
-        self.assertIn('must be an absolute path', self.refused({'ledger_dir': 'rulings', 'ledger_repos': ['kit']}))
+    def test_a_relative_folder_is_read_against_the_pm_repository(self):
+        folder = machine_config(self.home, {'ledger_dir': 'rulings', 'ledger_repos': ['kit']}, case=self)
+        pm = os.path.dirname(folder)
+        self.assertEqual(user.ledger_dir(self.home), os.path.join(pm, 'rulings'))
+        self.assertEqual(config.ledger_files(self.home), {'kit': os.path.join(pm, 'rulings', 'kit.md')})
+
+    def test_a_relative_folder_in_the_home_folders_file_refuses(self):
+        # the move's source, read as it is (user.home_location): no PM repository to read against
+        os.makedirs(os.path.join(self.home, user.DIR_NAME))
+        with open(os.path.join(self.home, user.DIR_NAME, user.FILE_NAME), 'w', encoding='utf-8') as f:
+            f.write('{"ledger_dir": "rulings", "ledger_repos": ["kit"]}')
+        with self.assertRaises(config.ConfigError) as cm:
+            user.user_config(location=user.home_location(self.home))
+        self.assertIn('must be an absolute path', str(cm.exception))
 
     def test_a_name_whose_file_would_collide_refuses(self):
         frozen = os.path.join(self.dir, 'LEDGER.md')

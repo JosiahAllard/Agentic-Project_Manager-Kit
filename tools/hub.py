@@ -89,17 +89,6 @@
       command, exit 3. A task whose state cannot be read or that cannot be started after the
       stop: the STOPPED line, why, and the start command, exit 1. --timeout S covers the whole
       restart: exit 4 as for stop (the console advice only when the new server never answered).
-  hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]
-      copies the documents of each DIR (the mirror folder, or an export of one account's copy)
-      into the store (hub.store, else hub/ in the PM data worktree; --store PATH: that folder)
-      and prints the migration report (kitlib.hubsite.migrate). It only copies in: no source is
-      changed, and a document the store already holds is never replaced, so a second run prints
-      `nothing changed`. --dry-run writes nothing and reports what a run would do. Refused
-      while a running server holds the store. Exit 1 too when a document that has a place in
-      the store was not imported (the CONFLICT and SKIPPED lines): a file that is no document,
-      two sources that differ, or a source that differs from a store document no server has
-      written (the store folder is the mirror folder by default). A document a server has
-      written since is kept (KEPT) and does not fail the run.
 
 The verbs below ask the running server through kitlib.hubsite.client. Each takes --port N
 (default: hub.port) and --json, which prints the server's answer as one JSON line in place of
@@ -114,6 +103,8 @@ the server alone decides what a role may do.
                                                      (default pm), refused when the hub does
                                                      not know it
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
+  hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
+                                                     that needs no ruling
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
         [--urgent | --no-urgent]                     `EDITED Q-1`; an --option list replaces
@@ -167,6 +158,14 @@ the server alone decides what a role may do.
                                                      kitlib.hubsite.approvals status_at)
   hub.py approvals show A-1                         its status, repo, head, title and reason,
                                                      then `<path> <base_blob> -> <blob>` per file
+  hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...] [--checkout DIR] [--repo R]
+        [--head SHA] [--reason TEXT]                 `REQUESTED A-001`: asks the owner to approve
+                                                     writing each PATH (relative to the repo top)
+                                                     as CONTENT_FILE's exact UTF-8 bytes; its base
+                                                     is PATH's blob at --head (default: HEAD of
+                                                     the checkout DIR, default .), none for a new
+                                                     file; --repo defaults to DIR's origin. It only
+                                                     asks: no delete, no --from (kitlib.hubapprove)
   hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
                                                      each item of owner input not yet handled: R
                                                      is the session key to handle it now (pm
@@ -182,7 +181,10 @@ the server alone decides what a role may do.
       The PM waits with --for pm. Prints `HUB <rev> <kind> <id> to=R from=K <title>` for each
       pending item (R and K as for pending) and `HUB <rev> <collection>
       <id> <op> <status>` for each change, exit 0. With --timeout S: exit 4 and no line when S
-      seconds pass with neither. Without it the wait has no end of its own.
+      seconds pass with neither. Without it the wait has no end of its own. A hub that goes
+      down after a poll of the wait was answered (port closed, or `REFUSED store`: a restart) is
+      asked again each second until S runs out, or 600 s down in a row, then that reason is the
+      exit (3 or 1); one down at the first poll ends the wait at once (client.Client.wait).
   hub.py validate [--store PATH]
       reads the store folder itself (hub.store, else hub/ in the PM data worktree), with no
       server and no lock, so it may run beside one; it writes nothing. Prints each finding as
@@ -190,8 +192,8 @@ the server alone decides what a role may do.
       a finding is an error.
 
 `--choice N` and `--recommended N` are the option's place in the question's list, counted from
-0 as the api counts it. `questions log`, `stories set` and each `edit` and `withdraw` need
---if-version V: the version of the document the caller read and decided on, which the `questions`
+0 as the api counts it. `questions log`, `questions done`, `stories set` and each `edit` and
+`withdraw` need --if-version V: the version of the document the caller read and decided on, which the `questions`
 and `stories` lines show as `v2` and --json (`todos --json` too) as `version`. Without it the verb is a usage error and asks nothing; with a version
 the document no longer has, the server refuses the write (`REFUSED conflict`).
 
@@ -212,21 +214,21 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kitlib import hubvalidate                                     # noqa: E402
+from kitlib import hubapprove, hubvalidate                         # noqa: E402
 from kitlib.config import copies, user                             # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tunnel   # noqa: E402
 from kitlib.hubsite import approvals                               # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import control                                 # noqa: E402
-from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 from kitlib.hubsite import pagecheck                               # noqa: E402
+from kitlib.hubsite import storecheck                              # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
 OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
-VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart', 'migrate',
+VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart',
               'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pages', 'approvals',
               'pending', 'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
@@ -256,13 +258,6 @@ def _folder(text):
     serves the configured store with git sync on."""
     if not text.strip():
         raise argparse.ArgumentTypeError('--store needs a folder, not an empty value')
-    return text
-
-
-def _source(text):
-    """migrate's --from value: a folder, never an empty value."""
-    if not text.strip():
-        raise argparse.ArgumentTypeError('--from needs a folder, not an empty value')
     return text
 
 
@@ -346,7 +341,8 @@ def _leaf(subs, name, what):
 def _client_verbs(sub):
     S = hubvalidate.STATUSES
     q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
-                'edit, withdraw: change or remove one you asked', S['questions'])
+                'done: handled with no ruling; edit, withdraw: change or remove one you asked',
+                S['questions'])
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
     _repo(x)
@@ -364,6 +360,10 @@ def _client_verbs(sub):
     x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
     x.add_argument('id')
     x.add_argument('ruling', metavar='ruling-id')
+    _pins(x, required=True)
+    x = _leaf(q, 'done', 'mark an answered question handled with no ruling (a one-off go)')
+    x.add_argument('id')
+    x.add_argument('--why', required=True, help='why the answer needs no ruling')
     _pins(x, required=True)
     x = _leaf(q, 'edit', 'change an open question you asked')
     _creator(x, 'KEY')
@@ -478,9 +478,20 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('--out', metavar='F', help='write the HTML to this file instead')
 
-    x = _listed(sub, 'approvals', "list the requests for the owner's approval; show",
-                S['approvals'])
+    x = _listed(sub, 'approvals', "list the requests for the owner's approval; show; add: ask "
+                "for one", S['approvals'])
     _leaf(x, 'show', 'one request and its files').add_argument('id')
+    y = _leaf(x, 'add', "ask the owner to approve writing these files")
+    y.add_argument('--checkout', default='.', metavar='DIR',
+                   help='the git checkout the change is for (default: .)')
+    y.add_argument('--title', required=True)
+    y.add_argument('--file', dest='files', action='append', nargs=2, required=True,
+                   metavar=('PATH', 'CONTENT_FILE'),
+                   help='a path relative to the repo top and the UTF-8 file holding its new '
+                        'text (repeatable)')
+    _repo(y)
+    y.add_argument('--head', metavar='SHA', help="the base commit (default: the checkout's HEAD)")
+    y.add_argument('--reason')
 
     x = _asks(sub.add_parser('pending', help='the owner input the PM has not handled'))
     x.add_argument('--for', dest='for_key', metavar='KEY',
@@ -537,13 +548,6 @@ def parser():
                             "the task's state by up to %d s"
                             % (control.DEFAULT_TIMEOUT_S, serve.ASK_TIMEOUT_S,
                                hub_autostart.TASK_TIMEOUT_S))
-    m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
-    m.add_argument('--from', dest='sources', action='append', type=_source, required=True,
-                   metavar='DIR', help='a folder to copy from: the mirror folder or an export '
-                                       '(repeatable); it is only read')
-    m.add_argument('--store', type=_folder, help='the store folder (default: the configured one)')
-    m.add_argument('--dry-run', dest='dry_run', action='store_true',
-                   help='write nothing; report what a run would do')
     _client_verbs(sub)
     return p
 
@@ -879,22 +883,12 @@ def _store_root(a):
     return root
 
 
-def _migrate(a, stop):
-    try:
-        result = hub_migrate.migrate(_store_root(a), a.sources, dry_run=a.dry_run)
-    except hub_migrate.MigrateError as e:
-        raise serve.ServeError(str(e))
-    for line in hub_migrate.report_lines(result):
-        print(serve.scrub(line))
-    return 0 if result.complete else 1
-
-
 def _validate(a, stop):
     try:
-        findings = hub_migrate.validate(_store_root(a))
-    except hub_migrate.MigrateError as e:
+        findings = storecheck.validate(_store_root(a))
+    except storecheck.StoreReadError as e:
         raise serve.ServeError(str(e))
-    for line in hub_migrate.validate_lines(findings):
+    for line in storecheck.validate_lines(findings):
         _put(line)
     return 1 if any(f.level == hubvalidate.ERROR for f in findings) else 0
 
@@ -990,6 +984,10 @@ def _questions(a, stop):
         got = hub.post(_one('questions', a) + '/log', client.AGENT,
                        {'ruling': a.ruling, 'if_version': a.if_version})
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
+    if a.sub == 'done':
+        got = hub.post(_one('questions', a) + '/done', client.AGENT,
+                       {'why': a.why, 'if_version': a.if_version})
+        return _wrote(a, got, 'DONE %s' % got.get('id'))
     if a.sub == 'edit':
         context = _text_of(a.context_file, 'context') if a.context_file else None
         got = hub.post(_one('questions', a) + '/edit', client.AGENT, _edits(a, _body(
@@ -1135,7 +1133,16 @@ def _pages(a, stop):
 
 def _approvals(a, stop):
     """The requests from GET /snapshot (the api has no route that lists approvals), each with
-    its status read now: approvals.status_at applies the expiry, `malformed` for a bad document."""
+    its status read now: approvals.status_at applies the expiry, `malformed` for a bad document.
+    add posts one request (kitlib.hubapprove): it never decides or consumes one."""
+    if a.sub == 'add':
+        try:
+            body = hubapprove.build(a.checkout, a.title, [tuple(f) for f in a.files],
+                                    repo=getattr(a, 'repo', None), head=a.head, reason=a.reason)
+        except hubapprove.RequestError as e:
+            raise serve.ServeError(e.message)
+        got = hubapprove.request(_hub(a), body)
+        return _wrote(a, got, 'REQUESTED %s' % got.get('id'))
     docs = (_hub(a).get('/snapshot').get('collections') or {}).get('approvals') or {}
     now = datetime.datetime.now(datetime.timezone.utc)
     items = [dict(docs[k], id=k, status=approvals.status_at(docs[k], now) or 'malformed')
@@ -1189,7 +1196,7 @@ def _wait(a, stop):
 
 
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
-         'unpair': _unpair, 'stop': _stop, 'restart': _restart, 'migrate': _migrate,
+         'unpair': _unpair, 'stop': _stop, 'restart': _restart,
          'questions': _questions, 'answer': _answer, 'todos': _todos,
          'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pages': _pages,
          'approvals': _approvals,
