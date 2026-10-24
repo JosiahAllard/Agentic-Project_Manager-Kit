@@ -401,8 +401,8 @@ class HubTrigger(Fixture):
         self.q['status'] = 'filed'
         self.q.pop('ruling')
         self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}
-        self.deny('Q-1001 is filed in its record but not logged')
-        self.deny('log it first: `hub.py questions log Q-1001 <ruling id>`')
+        self.deny('is filed in its record but not logged')
+        self.deny('log it first: `hub.py questions log %s <ruling id>`' % self.q['id'])
 
     def test_a_filed_question_once_logged_runs(self):
         self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}
