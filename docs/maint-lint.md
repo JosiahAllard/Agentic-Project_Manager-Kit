@@ -159,7 +159,7 @@ each `gate-time` finding, through the store `kitlib.dailyfull.file.open_filing_s
 repository's, or the PM data branch's when that is the implicit default). Its id is
 `<prefix>-GATE-TIME-<STEP>-<YYYYMMDD>`, its ref `maint-lint gate-time <step>`, its scope `none`,
 unpriced (the `unpriced` check then lists it). Nothing is filed while a live record of that step
-(that ref, or an id beginning `<prefix>-GATE-TIME-<STEP>-`) is in the store, in any state. The
+(that ref, or an id that is `<prefix>-GATE-TIME-<STEP>-` and exactly 8 digits) is in the store, in any state. The
 date in the id lets the next run over the bound file again once that record is closed: the store
 refuses an id it closed before. With no `"maint_lint".gate_time.prefix`, the finding shows and
 nothing is filed. Each outcome, and each store or config refusal, is one `gate time:` line, never
@@ -170,6 +170,8 @@ an error. `--dry-run` files nothing.
 - Gate-OK records are written for passes only, so a slow gate that failed is not a sample.
 - After a fix lands, the window still holds the slower samples until newer full gates replace
   them; a record closed before that may be filed again on the next run.
+- Step names that make the same id text (`kit_suite` and `kit-suite`) share one record: a live
+  record of either holds back the other.
 
 - An A tree is reported only when it has non-empty claims. An empty A tree whose tip is on the
   base's first-parent chain is skipped by the nightly sweep as fresh

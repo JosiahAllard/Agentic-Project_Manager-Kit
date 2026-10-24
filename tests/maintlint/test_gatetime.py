@@ -85,6 +85,52 @@ class Filing(GateTimeCase):
         gatetime.file(self.root, self.lint(later), later)
         self.assertEqual(self.gate_records(), ['EX-GATE-TIME-KIT-SUITE-20261025'])
 
+    def test_a_same_day_refile_after_a_close_is_one_line_never_raised(self):
+        kit_json_ref(self.repo, FILING)
+        self.gates(6, 1000)
+        gatetime.file(self.root, self.lint(), NOW)
+        self.verb('close', 'EX-GATE-TIME-KIT-SUITE-20261024', 'the step was made faster')
+        lines = gatetime.file(self.root, self.lint(), NOW)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].startswith(
+            'gate time: not filed EX-GATE-TIME-KIT-SUITE-20261024: '), lines)
+        self.assertEqual(self.gate_records(), [])   # closed, and not filed again
+
+    def test_a_live_record_of_a_longer_step_name_does_not_hold_a_shorter_one(self):
+        kit_json_ref(self.repo, FILING)
+        self.gates(6, 1000, step='test-e2e')
+        gatetime.file(self.root, self.lint(), NOW)
+        self.assertEqual(self.gate_records(), ['EX-GATE-TIME-TEST-E2E-20261024'])
+        self.gates(6, 1000, step='test')
+        gatetime.file(self.root, self.lint(), NOW)
+        self.assertEqual(self.gate_records(), ['EX-GATE-TIME-TEST-20261024',
+                                               'EX-GATE-TIME-TEST-E2E-20261024'])
+
+    def test_the_median_of_an_even_count_is_the_mean_of_the_middle_two(self):
+        # Sorted: 4 x 100, 1000, 1200, 4 x 1300. Median 1100; the mean (780) is under the bound,
+        # the max is 1300, the lower and upper middles are 1000 and 1200.
+        kit_json_ref(self.repo, FILING)
+        self.gates(4, 100)
+        self.gates(1, 1000, start=NOW - datetime.timedelta(hours=4))
+        self.gates(1, 1200, start=NOW - datetime.timedelta(hours=5))
+        self.gates(4, 1300, start=NOW - datetime.timedelta(hours=6))
+        res = self.lint()
+        self.assertEqual(self.checks(res), [('gate-time', 'kit-suite')], res['notes'])
+        text = [f['text'] for f in res['findings'] if f['check'] == 'gate-time'][0]
+        self.assertIn('median 1100 s over its last 10 full gate(s)', text)
+
+    def test_a_median_under_the_bound_is_no_finding_whatever_the_mean_or_max(self):
+        # 6 x 100 and 4 x 3000: the mean (1260) and the max are over 900, the median (100) is not.
+        kit_json_ref(self.repo, FILING)
+        self.gates(6, 100)
+        self.gates(4, 3000, start=NOW - datetime.timedelta(hours=6))
+        self.assertEqual(self.checks(self.lint()), [])
+
+    def test_a_median_equal_to_the_bound_is_no_finding(self):
+        kit_json_ref(self.repo, FILING)
+        self.gates(6, 900)
+        self.assertEqual(self.checks(self.lint()), [])
+
     def test_a_step_under_the_bound_files_nothing(self):
         kit_json_ref(self.repo, FILING)
         self.gates(6, 800)

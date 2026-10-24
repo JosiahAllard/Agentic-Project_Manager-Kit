@@ -140,10 +140,11 @@ def record_id(prefix, name, now):
 
 
 def _live(snap, prefix, name):
-    """The live record already filed for step `name`, or None: its ref, or its id's stem."""
-    stem = '%s-GATE-TIME-%s-' % (prefix, step_id(name))
+    """The live record already filed for step `name`, or None: its ref, or its id (the stem
+    and exactly 8 digits, so step `test` is not held by a `test-e2e` record)."""
+    stem = re.compile(re.escape('%s-GATE-TIME-%s-' % (prefix, step_id(name))) + r'\d{8}')
     for rec in snap.readable:
-        if rec.get('ref') == REF % name or rec.stem.startswith(stem):
+        if rec.get('ref') == REF % name or stem.fullmatch(rec.stem):
             return rec.stem
     return None
 
