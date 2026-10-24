@@ -95,13 +95,35 @@ there they are read in the code repository's main checkout, against its code mai
 `kitlib/maintlint/worktrees.py` reads `classify` without apply and reports what the nightly sweep
 (`kitlib.worktree.sweep`) leaves, never a tree that sweep removes or abandons on its own:
 - an A tree only when a pulled record claims its branch (`claims` is a non-empty list). It also
-  gives `landed-still-pulled` per claim, whose fix is a `release`. An A tree no record claims is
-  the sweep's to remove.
+  gives `landed-still-pulled` per claim, whose fix is a `release`; when "Landing checks" already
+  gave that record's `landed-still-pulled`, that one is kept and this one dropped (one row per
+  check and target). An A tree no record claims is the sweep's to remove.
 - a B or C tree only when no stale mark holds on its branch. A tree whose mark holds is the sweep's
   to abandon; one whose mark is void is reported.
 - every E and O tree.
 
 Each finding carries its `worktree_remove.py` form.
+
+## Landing checks
+
+`kitlib/maintlint/verify.py`, in the code checkout (as "Path checks"). Whether the store and the
+code agree on what landed, measured against the code base: the pushed
+`refs/remotes/<remote>/<main>` when the checkout has it, else `refs/heads/<main>`. A branch has
+landed when its tip is in the base and off the base's first-parent chain (the rule of
+`kitlib.worktree.remove.merged_worktrees`), so a fresh branch, whose tip is a base tip, never has.
+- `landed-still-pulled`: a pulled record whose `pulled_by` branch has landed, for every branch,
+  with or without a worktree. The branch is read locally, else on the remote. The fix is a
+  `close --reason "landed <merge>"`, or a `release` when that landing was one slice of the record.
+- `closed-unlanded`: a record the store no longer holds whose newest close, retire or delete in
+  the store's history over the last 7 days (the audit's window) has the subject
+  `closes <ID>: landed <sha>`, the form a landing writes, and whose `<sha>` the code checkout has
+  and the base does not hold. The fix is an `add <ID> --reopen`, once it is clear the work did not
+  land by another commit. A record back in the store was reopened and is not flagged; nor is one
+  whose landed close was followed by a close for another reason, a retire or a delete.
+
+Notes, never findings: no base to measure against, a branch listing git cannot give, a store
+history that cannot be read, and closes whose `<sha>` this checkout does not have (another
+repository's, or not fetched), counted.
 
 ## Ledger counts
 
@@ -110,8 +132,13 @@ Each finding carries its `worktree_remove.py` form.
 - `superseded`: entries that another entry's Supersedes names;
 - `superseded_live`: how many of those are not retired.
 
-No entry id and no entry text leave the module. Dropping the module drops the counts and nothing
-else.
+Each count above 0 is also a finding for the PM, whose ledger it is: `ledger-stale-cites` (fix:
+`ledger.py check`, which names each citation, then re-point or drop the digest line) and
+`ledger-superseded-live` (fix: `ledger.py retire` for each superseded entry not yet a tombstone).
+Their text carries the numbers only.
+
+No entry id and no entry text leave the module. Dropping the module drops the counts, their
+findings and nothing else.
 
 ## Known limits
 
@@ -119,6 +146,9 @@ else.
   base's first-parent chain is skipped by the nightly sweep as fresh
   (`kitlib/worktree/sweep.py` 260-262), so neither tool reports it.
 - At 10 rows per check, `page.render` can still go over `pagecheck.MAX_BYTES`.
+- `closed-unlanded` reads only a close whose subject is `closes <ID>: landed <sha>`. A close by
+  hand with another reason names no commit to check, so it is not checked; a `<sha>` the checkout
+  does not have is a note.
 
 ## Output
 
