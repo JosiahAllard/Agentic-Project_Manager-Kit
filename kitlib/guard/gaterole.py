@@ -34,13 +34,8 @@ INSTEAD = ('stop and send your coordinator what each gate run found and why anot
 
 def gate_words(inv):
     """The Words after tools/gate.py when `inv` runs it (rules.tool_run; runpy's module read as
-    the script), else None."""
-    run = rules.tool_run(inv)
-    if run is not None and run[0] == 'runpy.py':
-        words = run[1]
-        if not words or words[0].dyn:
-            return None
-        run = words[0].text.rsplit('.', 1)[-1].lower() + '.py', words[1:]
+    the script; the kit command's `kit gate`: rules.script_run), else None."""
+    run = rules.script_run(inv)
     if run is None or run[0] not in SCRIPTS:
         return None
     return run[1]

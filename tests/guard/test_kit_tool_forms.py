@@ -3,8 +3,10 @@ stub (decision 21 in docs/multi-host-plan.md section 7: a repository holds no st
 and roles run `python <kit>/tools/<x>.py -C <worktree>`). The guard knows a kit tool by its
 file name, never by a path relative to the checkout: each row's stub form
 (`python tools/<x>.py ...`) and its kit forms (the kit's absolute path, quoted and not, with -C
-when the tool takes one) get the same verdict and rule, from the shared rules and from the role
-policy. The alternatives the guard prints name the kit's tool, never a repository's tools folder."""
+when the tool takes one; the kit command's `python <kit>/tools/kit.py <x>`, `kit <x>` and
+`kit.cmd <x>`, docs/guard.md "The kit command") get the same verdict and rule, from the shared rules and
+from the role policy. The alternatives the guard prints name the kit's tool, never a
+repository's tools folder."""
 import os
 import unittest
 
@@ -37,6 +39,9 @@ SHARED = [
     ('lock owner write, subagent', 'machine_lock', False, 'hold whole', 'bash', 'wt', True),
     ('lock status, subagent', 'machine_lock', False, 'status', 'bash', 'wt', True),
     ('land from a worktree', 'land', True, 'kit/wt --expect-main <sha> --expect-tip <sha>', 'bash', 'wt', True),
+    ('setup applied, subagent', 'machine_setup', False, '--apply', 'bash', 'wt', True),
+    ('lock owner write in ps, subagent', 'machine_lock', False, 'hold whole', 'ps', 'wt', True),
+    ('gate piped in ps', 'gate', True, '--full 2>&1 | Select-Object -Last 5', 'ps', 'wt', False),
 ]
 # (name, role, tool, -C?, arguments, cwd attribute)
 POLICY = [
@@ -53,13 +58,17 @@ POLICY = [
 
 
 def forms(w, tool, takes_c, args, cwd):
-    """The stub form, then each kit form, of one call."""
+    """The stub form, then each kit form, of one call: the tool's script, then the kit command."""
     kit, here = W.fwd(w.kit_dir), W.fwd(cwd)
     args = args.format(temp=W.fwd(w.temp))
     c = ' -C "%s"' % here if takes_c else ''
     return ['python tools/%s.py %s' % (tool, args),
             'python "%s/tools/%s.py"%s %s' % (kit, tool, c, args),
-            'python %s/tools/%s.py%s %s' % (kit, tool, c, args)]
+            'python %s/tools/%s.py%s %s' % (kit, tool, c, args),
+            'python "%s/tools/kit.py" %s%s %s' % (kit, tool, c, args),
+            'python %s/tools/kit.py %s%s %s' % (kit, tool, c, args),
+            'kit %s%s %s' % (tool, c, args),
+            'kit.cmd %s%s %s' % (tool, c, args)]
 
 
 def verdict(d):
@@ -81,7 +90,7 @@ class SharedRules(unittest.TestCase):
             for text in forms(self.w, tool, takes_c, args, cwd):
                 got.append(verdict(claude_decide(make(text, cwd, sub=sub), self.w.ctx())))
             with self.subTest(name):
-                self.assertEqual(got[1:], [got[0]] * 2, got)
+                self.assertEqual(got[1:], [got[0]] * (len(got) - 1), got)
 
     def test_the_rows_do_test_something(self):
         """The parity holds for refusals, not only for calls nothing judges."""
@@ -101,6 +110,25 @@ class SharedRules(unittest.TestCase):
         self.assertEqual(d.instead, 'python "%s/tools/gate.py" -C "%s" --full' % (W.fwd(self.w.kit_dir), W.fwd(self.w.wt)))
         self.assertIn('in the background', d.reason)
 
+    def test_a_wrapped_kit_command_gate_keeps_its_words_and_takes_the_c_after_the_name(self):
+        kit, wt = W.fwd(self.w.kit_dir), W.fwd(self.w.wt)
+        for cmd, want in (('kit gate --full 2>&1 | tail -5', 'kit gate -C "%s" --full' % wt),
+                          ('kit.cmd gate --full | tail', 'kit.cmd gate -C "%s" --full' % wt),
+                          ('python "%s/tools/kit.py" gate --full | tail' % kit,
+                           'python "%s/tools/kit.py" gate -C "%s" --full' % (kit, wt)),
+                          ('kit gate -C "%s" --full | tail' % wt, 'kit gate -C "%s" --full' % wt)):
+            with self.subTest(cmd):
+                d = claude_decide(bash(cmd, self.w.wt), self.w.ctx())
+                self.assertEqual(d.rule, 'wrapped-gate', d.reason)
+                self.assertEqual(d.instead, want)
+
+    def test_a_kit_gate_word_that_holds_its_arguments_is_given_back_bare(self):
+        """A PowerShell word that names the gate and holds more (`'gate" --full'`) has no place
+        after the name for a -C: the alternative is the command as written, nothing piped."""
+        d = claude_decide(ps('kit \'gate" --full\' | Select-Object -Last 5', self.w.wt), self.w.ctx())
+        self.assertEqual(d.rule, 'wrapped-gate', d.reason)
+        self.assertEqual(d.instead, 'kit \'gate" --full\'')
+
 
 # (name, tool, -C?, the arguments after the tool and its -C, the verdict): a kit tool's output may be
 # piped like any program's, except a run that holds the machine or waits on it (docs/guard.md
@@ -110,7 +138,9 @@ PIPED = [
     ('gate plan piped', 'gate', True, '--plan | head', ('allow', None)),
     ('backlog list piped', 'backlog', True, 'list | head', ('allow', None)),
     ('hub questions list piped', 'hub', False, 'questions list | head', ('allow', None)),
+    ('lock run help piped', 'machine_lock', False, 'run --help | head', ('allow', None)),
     ('gate full piped', 'gate', True, '--full | tail', ('deny', 'wrapped-gate')),
+    ('lock run piped', 'machine_lock', False, 'run --kind build -- x | tail', ('deny', 'wrapped-gate')),
     ('gate land piped', 'gate', True, 'land kit/wt | tail', ('deny', 'wrapped-gate')),
 ]
 
@@ -187,7 +217,7 @@ class RolePolicy(unittest.TestCase):
                    for text in forms(self.w, tool, takes_c, args, cwd)]
             seen.update(got)
             with self.subTest(name):
-                self.assertEqual(got[1:], [got[0]] * 2, got)
+                self.assertEqual(got[1:], [got[0]] * (len(got) - 1), got)
         self.assertTrue({('deny', 'role-lock'), ('deny', 'write-jail'), ('allow', None)} <= seen, seen)
 
     def test_a_lock_run_of_the_kit_gate_is_a_lander_s(self):

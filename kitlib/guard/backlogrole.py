@@ -39,9 +39,9 @@ UNIDENTIFIED = 'unidentified'                   # kitlib.host.hookmain.UNIDENTIF
 ASK = ('Ask a session whose role may take it (your coordinator; a coordinator asks the PM) to run it, '
        'and say why. Every role may read the record:')
 # python code that reaches the backlog's library or runs its tool: an import of kitlib.backlog
-# in any spelling, or a name of tools/backlog.py
+# in any spelling, a name of tools/backlog.py, or the kit command naming it (['kit', 'backlog', ...])
 CODE_RE = re.compile(r'kitlib\s*[./\\]\s*backlog\b|from\s+kitlib\s+import\s+[^\n;]*\bbacklog\b|'
-                     r'\btools\s*[./\\]\s*backlog\b|\bbacklog\.py\b')
+                     r'\btools\s*[./\\]\s*backlog\b|\bbacklog\.py\b|\bkit(?:\.py|\.cmd|\.exe)?\W{1,4}backlog\b')
 REF_DIR = 'refs/backlog/'                       # kitlib.backlog.store.STORE_REF's folder
 BRANCH = 'backlog'                              # kitlib.backlog.store.BRANCH
 REMOTE_BRANCH_RE = re.compile(r'^refs/remotes/[^/]+/%s$' % BRANCH)
@@ -108,13 +108,9 @@ def py_module(inv):
 
 def run_words(inv):
     """The Words after tools/backlog.py when `inv` runs it (rules.tool_run: the script, -m
-    tools.backlog; runpy's module read as the script), else None."""
-    run = rules.tool_run(inv)
-    if run is not None and run[0] == 'runpy.py':
-        words = run[1]
-        if not words or words[0].dyn:
-            return None
-        run = words[0].text.rsplit('.', 1)[-1].lower() + '.py', words[1:]
+    tools.backlog; runpy's module read as the script; the kit command's `kit backlog`:
+    rules.script_run), else None."""
+    run = rules.script_run(inv)
     if run is None or run[0] != SCRIPT:
         return None
     return run[1]
