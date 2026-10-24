@@ -3257,6 +3257,16 @@ class AutoTasksTest(unittest.TestCase):
         self.assertTrue(any(c.startswith("ran ") for c in got["chipsA"]), got["chipsA"])
         self.assertIn("failed", got["chipsB"])
 
+    def test_a_schedule_whose_latest_tick_record_is_skipped_does_not_say_never(self):
+        items = [{"id": "maint-lint-alpha", "task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "03:00", "set_at": NOW,
+                  "via": "web", "version": 2, "last_outcome": "skipped", "last_run": None, "next_due": "2026-10-25T03:00"}]
+        got = self.run_page("""
+            await start();
+            await click($("#row-maint-lint-alpha"));
+            return text($("#s-maint-lint-alpha-last"));
+        """, sched=schedules(items=items))
+        self.assertEqual(got, "Last run: skipped, the tick passed it over")
+
     def test_a_refused_repo_shows_the_servers_words_and_keeps_the_form(self):
         refusal = ("repo 'beta' is not exactly one checkout in the machine config's launcher.repos, so the automatic task "
                    "could not run for it: add it there once (launcher.repos), then set the schedule again")
@@ -3870,6 +3880,20 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(got["moved"]["posts"], [])
         self.assertIn("changed since it was read here", got["moved"]["said"])
         self.assertEqual(got["posts"], [["/records/alpha/R-4/unblock", {"reason": "it landed"}]])
+
+    def test_unblock_starts_on_the_blocker_the_dead_blocker_finding_names(self):
+        found = [finding("fp4", "dead-blocker", "R-4 R-6", "R-4 is blocked on R-6, which names no live record")]
+        got = self.run_page("""
+            await start();
+            lintS.recs["R-4"].blockers = [{ value: "R-5", target: "R-5" }, { value: "R-6", target: "R-6" }];
+            await click($("#row-fp4")); await click(button($("#pane-detail #finding-fp4"), "Unblock R-4")); await settle();
+            const picked = $("#fa-fp4-R-4-on").value;
+            await type($("#fa-fp4-R-4-reason"), "it is gone");
+            await click(button($("#fa-fp4-R-4"), "Save")); await settle();
+            return { picked, posts: posts() };
+        """, found=found)
+        self.assertEqual(got["picked"], "R-6")
+        self.assertEqual(got["posts"], [["/records/alpha/R-4/unblock", {"on": "R-6", "reason": "it is gone"}]])
 
     def test_retire_waits_for_a_reason_and_the_typed_id_then_deletes_the_record_named(self):
         got = self.run_page("""

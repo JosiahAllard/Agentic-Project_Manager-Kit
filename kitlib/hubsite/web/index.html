@@ -1696,7 +1696,7 @@ ul.hist .sch-line{display:block}
   const PC_TASKS = ["worktree-sweep", "agent-temp-sweep"];
   const lockIcon = () => el("span", {class: "lock", title: "Set on the PC", "aria-label": "Set on the PC", role: "img", text: "🔒"});
   // last_run, last_outcome and next_due are the server's (api.py schedules_list); next_due is the hub machine's local time.
-  const lastRunText = s => s.last_run ? when(s.last_run) : s.last_outcome === "failed" ? "failed, the tick could not start it" : "never";
+  const lastRunText = s => s.last_run ? when(s.last_run) : s.last_outcome === "failed" ? "failed, the tick could not start it" : s.last_outcome === "skipped" ? "skipped, the tick passed it over" : "never";
   const nextDueText = s => s.cadence === "off" ? "not scheduled (off)" : s.next_due ? when(s.next_due) + " (the hub machine's time)" : "not known";
   const scheduleRow = s => {
     const pc = PC_TASKS.includes(s.task);
@@ -2018,6 +2018,8 @@ ul.hist .sch-line{display:block}
         const members = rec.blockers.map(b => b.value);
         if (!members.length) { say("status", id + " is not blocked."); return; }
         const on = el("select", {"aria-label":"Blocker to clear", id: box.id + "-on", onchange: touched}, ...members.map(m => el("option", {value: m, text: m})));
+        const named = d.target.trim().split(/\s+/)[1];                 // a dead-blocker finding names the member: "<id> <member>"
+        if (members.includes(named)) on.value = named;
         const reason = el("input", {type:"text", placeholder:"Why it is clear", "aria-label":"Why it is clear", id: box.id + "-reason", oninput: touched});
         inputs = [members.length > 1 ? on : null, reason];
         send = async () => { await same(); return write(path + "/unblock", ruling.put({ ...(members.length > 1 ? { on: on.value } : {}), ...(reason.value.trim() ? { reason: reason.value.trim() } : {}) })); };

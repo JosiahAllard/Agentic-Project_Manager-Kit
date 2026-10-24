@@ -124,7 +124,7 @@ repository; Questions, To do and Docs also by id or title. Automatic tasks lists
 ("schedules/") under "Schedules", and the two PC-set sweeps (`worktree-sweep`, `agent-temp-sweep`, which
 machine setup registers with Windows) under "Set on the PC": read-only, with a lock, and a plain row with no times
 where the hub holds no schedule doc for one. A schedule's card shows its last run and next due (`last_run`,
-`next_due`; a failed start is a chip). It is edited with a segmented Off / Daily / Weekly control, seven day chips
+`next_due`; a failed start is a chip, and a record of `skipped` reads "skipped", not "never"). It is edited with a segmented Off / Daily / Weekly control, seven day chips
 (weekly only) and a 24-hour time; the sweeps are not offered by the New schedule form.
 
 Lint findings (the Upkeep group, and the More page on a phone) lists the maintenance lint's findings, read from `GET
@@ -142,8 +142,8 @@ and "last run skipped: <reason>, <time>" only when the server names a skip later
   without leaving the section: Set priority (`unpriced`), Unblock (`keyword-hold`, `dead-blocker`,
   `answered-question`), Edit scope (`scope-path-gone`, `body-path-gone`, `file-moved`) or Retire
   (`duplicate`, one per record, `dead-pull`, `landed-still-pulled`) (`FINDING_ACTS`, `findingAct`).
-  The panel reads `GET records/{repo}/{id}` for the fields and version, then calls the owner route
-  the record page uses: Set priority and Edit scope `POST .../edit` with the version read
+  The panel reads `GET records/{repo}/{id}` for the fields and version, then calls the existing owner
+  routes (edit, unblock, delete): Set priority and Edit scope `POST .../edit` with the version read
   (`changes` = `priority`, or `scope` one path per line); Unblock `POST .../unblock` with the
   reason (and `on`, when the record has several blockers); Retire `POST .../delete` with the reason
   and the record's id typed again (the button waits for both). Unblock and Retire take no version, so
