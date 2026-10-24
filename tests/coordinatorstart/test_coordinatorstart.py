@@ -69,7 +69,7 @@ class RenderTest(unittest.TestCase):
                      "price only those going into this set; never a sweep",
                      "`next` never offers an unpriced record",
                      "under `unprioritised+open`, not under `held` (`held` = blocked)",
-                     "goes to the PM", "never ask him directly"):
+                     "goes to the PM", "never ask the owner directly"):
             self.assertIn(want, line)
         # Withdrawn wording: no pass at all, unpriced called held, the capped-offer and duplicate triggers.
         for gone in ("No start-up pricing pass", "is held", "stay held", "held is not waiting",

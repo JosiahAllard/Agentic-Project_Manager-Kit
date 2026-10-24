@@ -16,8 +16,8 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
   by-path call clears one), every later check still running. A slug never names an outside tree:
   one that only matches such a tree is refused with its path-form command (`slug_redirect`);
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
-  never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
-  commands and the `--abandon` verb, running none of them;
+  never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints the
+  owner's commands and the `--abandon` verb, running none of them;
 - on a tree outside the worktree folders or a DETACHED one anywhere, every commit in its HEAD
   reflog is reached by a ref (`kept_reflog`; a commit left there by a checkout lives only in that
   log, which `git worktree remove` deletes), and HEAD and the log are read again just before git
@@ -1094,9 +1094,9 @@ def _remove(ctx, argument, keep_branch, branch_ok=False):
     if refusal:
         ctx.say(*refusal)
         if any('UNLANDED' in line for line in refusal):
-            # His printed commands are exactly as destructive on failure, so name any holder too.
+            # The owner's printed commands are exactly as destructive on failure, so name any holder too.
             ctx.describe(path, holders.blockers(path))
-            ctx.say('  note     release every holder first: his `git worktree remove` above fails'
+            ctx.say('  note     release every holder first: the owner\'s `git worktree remove` above fails'
                     ' the same destructive way this tool refuses to risk.')
         return REFUSED
     # An outside tree, and a detached one anywhere: a commit made there and left by a checkout

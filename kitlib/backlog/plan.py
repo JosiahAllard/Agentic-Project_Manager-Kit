@@ -949,7 +949,7 @@ def plan_unblock(snap, ctx, rid, on=None, reason=None, role_checked=False):
     else:
         lines = ['UNBLOCKED %s - state: open, blocked_on: -' % rid]
     if drop and rec.has('owner_ask'):
-        lines.append('  owner_ask dropped: nothing waits on him now. It was: %s' % rec.get('owner_ask'))
+        lines.append('  owner_ask dropped: nothing waits on the owner now. It was: %s' % rec.get('owner_ask'))
     subject = 'backlog: unblock %s' % rid
     if reason is not None:
         named = next((m for m in ([on] if on else members) if m != '-'), None)
