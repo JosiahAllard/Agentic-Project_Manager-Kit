@@ -114,11 +114,12 @@ landed when its tip is in the base and off the base's first-parent chain (the ru
 - `landed-still-pulled`: a pulled record whose `pulled_by` branch has landed, for every branch,
   with or without a worktree. The branch is read locally, else on the remote. The fix is a
   `close --reason "landed <merge>"`, or a `release` when that landing was one slice of the record.
-- `closed-unlanded`: a record the store no longer holds whose newest close in the store's history
-  over the last 7 days (the audit's window) has the subject `closes <ID>: landed <sha>`, the form a
-  landing writes, and whose `<sha>` the code checkout has and the base does not hold. The fix is
-  an `add <ID> --reopen`, once it is clear the work did not land by another commit. A record back
-  in the store was reopened and is not flagged.
+- `closed-unlanded`: a record the store no longer holds whose newest close, retire or delete in
+  the store's history over the last 7 days (the audit's window) has the subject
+  `closes <ID>: landed <sha>`, the form a landing writes, and whose `<sha>` the code checkout has
+  and the base does not hold. The fix is an `add <ID> --reopen`, once it is clear the work did not
+  land by another commit. A record back in the store was reopened and is not flagged; nor is one
+  whose landed close was followed by a close for another reason, a retire or a delete.
 
 Notes, never findings: no base to measure against, a branch listing git cannot give, a store
 history that cannot be read, and closes whose `<sha>` this checkout does not have (another

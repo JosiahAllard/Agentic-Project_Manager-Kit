@@ -21,9 +21,9 @@ has.
                                        (landed-still-pulled: the check the worktree list gives
                                        for an A tree, for every branch)
   closed_unlanded(changes, snap, root, base, cmd, commits)
-                                       the newest `closes ID: landed <sha>` store commit of each
-                                       record the store no longer holds, whose <sha> the code
-                                       checkout has and the base does not hold
+                                       each record the store no longer holds whose newest close,
+                                       retire or delete is `closes ID: landed <sha>`, whose <sha>
+                                       the code checkout has and the base does not hold
 
 Each returns `(findings, notes)`. Nothing here writes.
 """
@@ -159,19 +159,24 @@ def landed_pulls(snap, root, remote, base, cmd, tips=branch_tips):
 
 
 LANDED_CLOSE = re.compile(r'^closes (\S+): landed ([0-9a-f]{40})$')
+# Every subject that ends a record (kitlib.backlog.plan's close, retire and delete).
+ENDS = re.compile(r'^(?:closes|retires|deletes) (\S+): ')
 
 
 def closed_unlanded(changes, snap, root, base, cmd, commits=batch.commits):
-    """`changes`: kitlib.backlog.audit_check.history's Changes, newest first."""
+    """`changes`: kitlib.backlog.audit_check.history's Changes, newest first. Only a record's
+    newest close, retire or delete is judged, and only when it is a landed close."""
     ref, _chain, ancestors = base
     newest = {}
     for change in changes:
-        m = LANDED_CLOSE.match(change.subject.strip())
+        subject = change.subject.strip()
+        m = ENDS.match(subject)
         if m and m.group(1) not in newest:
-            newest[m.group(1)] = m.group(2)
+            landed = LANDED_CLOSE.match(subject)
+            newest[m.group(1)] = landed.group(2) if landed else None
     # A record back in the store was reopened; a sha the base holds landed.
     asked = {rid: sha for rid, sha in newest.items()
-             if snap.get(rid) is None and sha not in ancestors}
+             if sha and snap.get(rid) is None and sha not in ancestors}
     if not asked:
         return [], []
     have, why = commits(sorted(set(asked.values())), root, timeout=GIT_TIMEOUT)

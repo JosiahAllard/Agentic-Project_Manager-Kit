@@ -338,6 +338,17 @@ class LandingChecks(StoreCase):
         self.assertTrue(got[0].fix.startswith(CMD + ' close AAA --reason "landed <merge>"'))
         self.assertIn('--as kit/done release AAA', got[0].fix)
 
+    def test_a_branch_at_a_main_tip_or_merged_by_fast_forward_has_not_landed(self):
+        self.repo.git('branch', '-q', 'kit/fresh')                  # at the main tip
+        self.side_commit('kit/ff', 'f.txt')
+        self.repo.git('merge', '-q', '--ff-only', 'kit/ff')         # on the first-parent chain
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.repo.git('branch', '-q', 'kit/fresh-after')            # at the new main tip
+        s = snap(self.pulled('AAA', 'kit/fresh'), self.pulled('BBB', 'kit/ff'),
+                 self.pulled('CCC', 'kit/fresh-after'))
+        self.assertEqual(verify.landed_pulls(s, self.repo.root, 'origin', self.base(), CMD),
+                         ([], []))
+
     def test_a_branch_known_only_on_the_remote_is_read_there(self):
         self.side_commit('kit/done', 'a.txt')
         self.land('kit/done')
@@ -379,6 +390,18 @@ class LandingChecks(StoreCase):
         self.assertTrue(got[0].fix.startswith(CMD + ' add AAA --reopen --summary'))
         self.assertEqual(notes, ['closed-unlanded: 1 close(s) name a commit this checkout does'
                                  ' not have (another repository\'s, or not fetched): NOT CHECKED'])
+
+    def test_a_landed_close_followed_by_another_close_a_retire_or_a_delete_is_not_judged(self):
+        unlanded = self.side_commit('kit/open', 'c.txt')
+        ended = [Change('f' * 40, 0, '%s %s: %s' % (verb, rid, why), '', [])
+                 for verb, rid, why in (('closes', 'AAA', 'the work is finished'),
+                                        ('retires', 'BBB', 'not wanted'),
+                                        ('deletes', 'CCC', 'filed by mistake'))]
+        older = [self.close(rid, unlanded) for rid in ('AAA', 'BBB', 'CCC', 'DDD')]
+        got, notes = verify.closed_unlanded(ended + older, snap(), self.repo.root, self.base(),
+                                            CMD)
+        self.assertEqual(([(f.check, f.key) for f in got], notes),
+                         ([('closed-unlanded', 'DDD')], []))
 
     def test_with_no_close_to_check_git_is_not_asked(self):
         def never(*a, **k):
