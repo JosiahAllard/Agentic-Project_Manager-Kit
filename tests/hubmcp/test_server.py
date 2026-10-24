@@ -762,7 +762,7 @@ class Live(httpfix.ListenerCase):
         self.assertEqual((payload["status"], payload["error"]["code"]), (400, "invalid"))
         got = httpfix.post(self.lis.port, api.BASE + "/questions/%s/answer" % qid,
                            {"choice": 0}, token=self.owner)
-        self.assertEqual(got[0], 200, got)
+        self.assertEqual(got.status, 200, got.body)
         version = self.store.docs("questions")[qid]["version"]
         payload, is_error = self.mcp.call("hub_question_done",
                                           {"id": qid, "why": "  ", "if_version": version})
