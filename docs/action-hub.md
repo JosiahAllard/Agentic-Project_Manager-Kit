@@ -121,7 +121,11 @@ at the top.
 Links ending `#inbox`, `#approvals`, `#more`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
 repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
-("schedules/") with the tick's last run, and sets, edits or turns one off.
+("schedules/") under "Schedules", and the two PC-set sweeps (`worktree-sweep`, `agent-temp-sweep`, which
+machine setup registers with Windows) under "Set on the PC": read-only, with a lock, and a plain row with no times
+where the hub holds no schedule doc for one. A schedule's card shows its last run and next due (`last_run`,
+`next_due`; a failed start is a chip). It is edited with a segmented Off / Daily / Weekly control, seven day chips
+(weekly only) and a 24-hour time; the sweeps are not offered by the New schedule form.
 
 Lint findings (the Upkeep group, and the More page on a phone) lists the maintenance lint's findings, read from `GET
 /api/v1/findings` and `GET /api/v1/finding_marks` each time the section is shown and after each

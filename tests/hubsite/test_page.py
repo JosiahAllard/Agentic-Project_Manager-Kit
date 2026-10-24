@@ -3151,12 +3151,17 @@ class AutoTasksTest(unittest.TestCase):
         got = self.run_page("""
             await start();
             return { sec: $("#sections .sec[aria-selected=true]").dataset.s, rows: $$("#list article").map(a => [a.id, text(a.querySelector("h2")), text(a.querySelector(".chip"))]),
+                     heads: $$("#list h3.sch-group").map(h => text(h)), locks: $$("#list article").filter(a => a.querySelector(".lock")).map(a => a.id),
                      tick: text($("#tick-line")), cls: $("#tick-line").className, card: !!$("#pane-detail #sched-maint-lint-alpha"),
                      gets: calls.filter(c => c.path === "/schedules").map(c => c.method) };
         """)
         self.assertEqual(got["sec"], "autotasks")
+        # the two sweeps the PC sets sit under "Set on the PC" with a lock; the sweep with no schedule doc is a plain row
         self.assertEqual(got["rows"], [["row-maint-lint-alpha", "Maintenance lint for alpha", "Daily at 03:00"],
-                                       ["row-worktree-sweep-alpha", "Worktree sweep for alpha", "Mon, Thu at 04:00"]])
+                                       ["row-worktree-sweep-alpha", "Worktree sweep for alpha", "Mon, Thu at 04:00"],
+                                       ["row-pc-agent-temp-sweep", "Agent temp sweep", "Set on the PC"]])
+        self.assertEqual(got["heads"], ["Schedules", "Set on the PC"])
+        self.assertEqual(got["locks"], ["row-worktree-sweep-alpha", "row-pc-agent-temp-sweep"])
         self.assertTrue(got["tick"].startswith("The tick that starts these tasks was last seen "), got["tick"])
         self.assertTrue(got["tick"].endswith("; it runs every 15 min."), got["tick"])
         self.assertEqual(got["cls"], "status")
@@ -3175,11 +3180,11 @@ class AutoTasksTest(unittest.TestCase):
     def test_save_sends_the_schedule_with_its_version_and_shows_the_first_run(self):
         got = self.run_page("""
             await start();
-            const c = $("#sched-maint-lint-alpha"), cad = $("#s-maint-lint-alpha-how-often");
+            const c = $("#sched-maint-lint-alpha");
             const hiddenBefore = $("#sched-maint-lint-alpha fieldset.days").hidden;
-            cad.value = "weekly"; await fire(cad, "change");
+            await click($("#s-maint-lint-alpha-how-often-weekly"));
             const hiddenAfter = $("#sched-maint-lint-alpha fieldset.days").hidden;
-            for (const d of ["Wed", "Mon"]) { const b = $("#s-maint-lint-alpha-" + d); b.checked = true; await fire(b, "change"); }
+            for (const d of ["Wed", "Mon"]) await click($("#s-maint-lint-alpha-" + d));
             await type($("#s-maint-lint-alpha-at"), "04:30");
             await click(button(c, "Save"));
             const expect = new Date("2026-10-24T04:30").toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
@@ -3196,12 +3201,61 @@ class AutoTasksTest(unittest.TestCase):
     def test_a_schedule_set_off_says_it_does_not_run(self):
         got = self.run_page("""
             await start();
-            const cad = $("#s-maint-lint-alpha-how-often"); cad.value = "off"; await fire(cad, "change");
+            await click($("#s-maint-lint-alpha-how-often-off"));
             await click(button($("#sched-maint-lint-alpha"), "Save"));
             return [calls.filter(c => c.method === "POST").map(c => c.body), text($("#s-maint-lint-alpha-status"))];
         """, post={"status": 200, "body": {"ok": True, "id": "maint-lint-alpha", "version": 3, "first_run": None}})
         self.assertEqual(got[0], [{"task": "maint-lint", "repo": "alpha", "cadence": "off", "at": "03:00", "if_version": 2}])
         self.assertEqual(got[1], "Saved. It is off, so it does not run.")
+
+    def test_a_pc_set_sweep_is_read_only_with_a_lock_and_no_save(self):
+        got = self.run_page("""
+            await start();
+            await click($("#row-worktree-sweep-alpha"));
+            const c = $("#pane-detail #sched-worktree-sweep-alpha");
+            return { saves: $$("#pane-detail button").filter(b => text(b) === "Save").length, inputs: c.querySelectorAll("input, select, fieldset").length,
+                     lock: !!c.querySelector(".lock"), said: text(c), staticRow: $("#row-pc-agent-temp-sweep").getAttribute("tabindex"),
+                     staticText: text($("#row-pc-agent-temp-sweep")) };
+        """)
+        self.assertEqual((got["saves"], got["inputs"], got["lock"]), (0, 0, True))
+        self.assertIn("Set on the PC", got["said"])
+        self.assertIn("Schedule: Mon, Thu at 04:00", got["said"])
+        self.assertIsNone(got["staticRow"])                                    # a sweep with no doc: shown, not selectable
+        self.assertIn("shows no times", got["staticText"])
+
+    def test_how_often_is_a_segmented_control_and_the_days_are_chips(self):
+        got = self.run_page("""
+            await start();
+            const on = () => ["off", "daily", "weekly"].filter(v => $("#s-maint-lint-alpha-how-often-" + v).getAttribute("aria-checked") === "true");
+            const before = on();
+            await click($("#s-maint-lint-alpha-how-often-weekly"));
+            const mon = $("#s-maint-lint-alpha-Mon");
+            const p0 = mon.getAttribute("aria-pressed"); await click(mon); const p1 = mon.getAttribute("aria-pressed");
+            return { before, after: on(), p0, p1, group: $("#s-maint-lint-alpha-how-often").getAttribute("role"), at: $("#s-maint-lint-alpha-at").type };
+        """)
+        self.assertEqual((got["before"], got["after"]), (["daily"], ["weekly"]))
+        self.assertEqual((got["p0"], got["p1"]), ("false", "true"))
+        self.assertEqual((got["group"], got["at"]), ("radiogroup", "time"))
+
+    def test_last_run_and_next_due_are_shown_and_a_failed_start_is_a_chip(self):
+        items = [{"id": "maint-lint-alpha", "task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "03:00", "set_at": NOW,
+                  "via": "web", "version": 2, "last_outcome": "started", "last_run": NOW, "next_due": "2026-10-25T03:00"},
+                 {"id": "maint-lint-beta", "task": "maint-lint", "repo": "beta", "cadence": "off", "at": "03:00", "set_at": NOW,
+                  "via": "web", "version": 1, "last_outcome": "failed", "last_run": None, "next_due": None}]
+        got = self.run_page("""
+            await start();
+            const a = $("#row-maint-lint-alpha"), b = $("#row-maint-lint-beta");
+            await click(a);
+            const one = [text($("#s-maint-lint-alpha-last")), text($("#s-maint-lint-alpha-next"))];
+            await click(b);
+            return { one, two: [text($("#s-maint-lint-beta-last")), text($("#s-maint-lint-beta-next"))],
+                     chipsA: $$("#row-maint-lint-alpha .chip").map(text), chipsB: $$("#row-maint-lint-beta .chip").map(text) };
+        """, sched=schedules(items=items))
+        self.assertTrue(got["one"][0].startswith("Last run: ") and "never" not in got["one"][0], got["one"])
+        self.assertTrue(got["one"][1].startswith("Next due: ") and "hub machine's time" in got["one"][1], got["one"])
+        self.assertEqual(got["two"], ["Last run: failed, the tick could not start it", "Next due: not scheduled (off)"])
+        self.assertTrue(any(c.startswith("ran ") for c in got["chipsA"]), got["chipsA"])
+        self.assertIn("failed", got["chipsB"])
 
     def test_a_refused_repo_shows_the_servers_words_and_keeps_the_form(self):
         refusal = ("repo 'beta' is not exactly one checkout in the machine config's launcher.repos, so the automatic task "
@@ -3212,17 +3266,17 @@ class AutoTasksTest(unittest.TestCase):
             const c = $("#pane-detail #sched-new");
             const task = $("#s-new-task"), repo = $("#s-new-repo");
             const menus = [[...task.options].map(o => o.value), [...repo.options].map(o => o.value)];
-            task.value = "worktree-sweep"; await fire(task, "change");
             repo.value = "beta"; await fire(repo, "change");
             await click(button(c, "Save"));
             return { menus, posts: calls.filter(c => c.method === "POST").map(c => c.body), said: text($("#s-new-status")),
                      cls: $("#s-new-status").className, kept: [$("#s-new-task").value, $("#s-new-repo").value], same: $("#pane-detail #sched-new") === c, sinks };
         """, post={"status": 400, "body": {"ok": False, "error": {"code": "invalid", "message": refusal, "field": "repo"}}})
-        self.assertEqual(got["menus"], [["maint-lint", "worktree-sweep", "agent-temp-sweep"], ["alpha", "beta"]])
-        self.assertEqual(got["posts"], [{"task": "worktree-sweep", "repo": "beta", "cadence": "daily", "at": "03:00"}])   # new: no version
+        # the sweeps are set on the PC: a new schedule is not offered them
+        self.assertEqual(got["menus"], [["maint-lint"], ["alpha", "beta"]])
+        self.assertEqual(got["posts"], [{"task": "maint-lint", "repo": "beta", "cadence": "daily", "at": "03:00"}])   # new: no version
         self.assertEqual(got["said"], "Not saved: " + refusal + ". What you picked is kept.")
         self.assertEqual(got["cls"], "status err")
-        self.assertEqual(got["kept"], ["worktree-sweep", "beta"])
+        self.assertEqual(got["kept"], ["maint-lint", "beta"])
         self.assertTrue(got["same"])
         self.assertEqual(got["sinks"], [])
 
@@ -3292,13 +3346,13 @@ class AutoTasksTest(unittest.TestCase):
         got = self.run_page("""
             await start();
             await click($("#sched-new"));
-            const cad = $("#s-new-how-often"); cad.value = "weekly"; await fire(cad, "change");
-            const tue = $("#s-new-Tue"); tue.checked = true; await fire(tue, "change");
+            await click($("#s-new-how-often-weekly"));
+            await click($("#s-new-Tue"));
             await type($("#s-new-at"), "05:15");
             await click(button($("#pane-detail #sched-new"), "Save"));
             const live = $("#pane-detail #sched-maint-lint-alpha");
-            const shown = { cad: $("#s-maint-lint-alpha-how-often").value, at: $("#s-maint-lint-alpha-at").value,
-                            days: ["Mon", "Tue"].map(w => $("#s-maint-lint-alpha-" + w).checked), hidden: $("#sched-maint-lint-alpha fieldset.days").hidden,
+            const shown = { cad: ["off", "daily", "weekly"].filter(v => $("#s-maint-lint-alpha-how-often-" + v).getAttribute("aria-checked") === "true").join(), at: $("#s-maint-lint-alpha-at").value,
+                            days: ["Mon", "Tue"].map(w => $("#s-maint-lint-alpha-" + w).getAttribute("aria-pressed") === "true"), hidden: $("#sched-maint-lint-alpha fieldset.days").hidden,
                             said: text(live.querySelector("[role=status]")) };
             server.route = c => c.path === "/schedules" && c.method === "POST" ? { status: 200, body: { ok: true, id: "maint-lint-alpha", version: 3, first_run: "2026-10-27T05:15" } }
               : c.path === "/schedules" ? { status: 200, body: SCHED } : undefined;
@@ -3511,7 +3565,8 @@ class AutoTasksTest(unittest.TestCase):
             await start();
             const before = $("#pane-detail").hidden;
             await click($("#row-worktree-sweep-alpha"));
-            return [before, $("#pane-detail").hidden, !!$("#pane-detail #sched-worktree-sweep-alpha"), $("#s-worktree-sweep-alpha-Thu").checked];
+            const card = $("#pane-detail #sched-worktree-sweep-alpha");
+            return [before, $("#pane-detail").hidden, !!card, card.textContent.includes("Mon, Thu at 04:00")];
         """)
         self.assertEqual(got, [True, False, True, True])
 
@@ -4021,7 +4076,8 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("window.open", self.script)
         # Every attribute name comes from the page's own code: el() takes the key its caller wrote, the rest name one.
         names = re.findall(r"setAttribute\(([^,]*),", self.script)
-        self.assertEqual(sorted(set(names)), ['"aria-selected"', "k"])
+        # (aria-checked and aria-pressed: the schedule form's segmented control and day chips, literal names too)
+        self.assertEqual(sorted(set(names)), ['"aria-checked"', '"aria-pressed"', '"aria-selected"', "k"])
         self.assertEqual(names.count("k"), 1)
         self.assertIn("else n.setAttribute(k, v === true ? \"\" : v);", self.script)
 
