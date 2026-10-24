@@ -160,6 +160,15 @@ class SessionStartTest(Case):
         self.assertEqual(out[0], configcheck.PREFIX + 'not ignored')
         self.assertIn('Copy-Item', out[1])
 
+    def test_an_ignore_file_without_the_line_is_named_through_the_ticks_check(self):
+        from unittest import mock
+        from kitlib.autotasks import tick
+        from kitlib.config import move
+        with mock.patch.object(configcheck, '_unignored', tpm.REAL_UNIGNORED),                 mock.patch.object(move, 'ignored', lambda pm, rels: (list(rels), None)):
+            out = self.lines()
+        self.assertEqual(out, [configcheck.PREFIX + tick.UNIGNORED
+                               % (self.pm, os.path.join(self.folder, '.gitignore'))])
+
     def test_the_ignore_check_is_the_ticks(self):
         from unittest import mock
         from kitlib.autotasks import tick
