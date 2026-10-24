@@ -1243,7 +1243,8 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
         kind = held[0][0]
         return refuse('ledger', role, STANDING_WHY[kind] % (
             '`%s` (%s, in a place the guard cannot tell: it can be the tree of the ledger)' % (bare(cmd), form)),
-            ledger_instead(ctx, kind))
+            UNPLACED_BRANCH_INSTEAD if checkout_makes_branch(sub, short, longs) and not tree_form
+            else ledger_instead(ctx, kind))
     if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout') and not tree_form:
         return None
     if sub == 'restore' and restore_index_only(short, longs):
@@ -1354,7 +1355,7 @@ def checkout_branch_only(args, short, longs, held=()):
     wildcard or pathspec magic, no path separator (so `kit/x` stays refused: without the tree the
     guard cannot tell a branch from a folder), no `~` short name, and not a part of a held path
     (`LEDGER.md`, its folders, their 8.3 short names: git reads a word that names no branch as
-    a path). False with `--`, paths read from elsewhere (git_every_path), -p or --patch (any
+    a path), nor a `.md` name while a rulebooks' folder is held (a rulebook in it). False with `--`, paths read from elsewhere (git_every_path), -p or --patch (any
     abbreviation git could read as it), or two or more positional words."""
     from . import delegfile
     if delegfile.after_dashes(args) is not None or git_every_path('checkout', short, longs):
@@ -1372,7 +1373,19 @@ def checkout_branch_only(args, short, longs, held=()):
             or any(c in t for c in '*?[]\\/~')):
         return False
     name = t.rstrip('. ').lower()
+    if name.endswith('.md') and any(kind == 'rulebook' for kind, _real in held):
+        return False                            # a rulebook: a `.md` file in the held folder
     return name not in held_names(held)
+
+
+UNPLACED_BRANCH_INSTEAD = ('run it with a literal `git -C <worktree>` so the guard can place the tree, or create '
+                           'the branch with `git switch -c <branch> <start>`.')
+
+
+def checkout_makes_branch(sub, short, longs):
+    """Whether a checkout creates a branch (-b, -B, --orphan): its refusal's Instead names the
+    forms the guard can judge, not the ledger tool."""
+    return sub == 'checkout' and bool('b' in short or 'B' in short or 'orphan' in longs)
 
 
 def held_names(held):

@@ -150,6 +150,21 @@ class SplitLedger(Base):
         self.rows(self.not_ledger, ((s, 'git clean -fd .'), (s, 'git stash show'), (s, 'git checkout main'),
                                     (s, 'git reset --soft HEAD~1')))
 
+    def test_an_unplaced_checkout_of_a_rulebook(self):
+        # git reads a word that names no branch as a path: a `.md` name can be a rulebook
+        s = self.src
+        rows = ((s, 'git -C "$d" checkout policy.md'), (s, 'git -C "$d" checkout POLICY.MD.'),
+                (s, 'cd "$x" && git checkout topic.md'))
+        self.rows(self.refused, rows)
+        self.rows(lambda make, label: self.not_ledger(make, label, sessions=FREE), rows)
+
+    def test_an_unplaced_branch_creation_is_told_how_to_place_it(self):
+        d = self.decide(lambda sub: bash('git -C "$d" checkout -b new main', self.src, sub), SUB)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'ledger'), d.reason)
+        self.assertIn('Instead: run it with a literal `git -C <worktree>`', d.reason)
+        self.assertIn('git switch -c <branch> <start>', d.reason)
+        self.assertNotIn('ledger.py', d.instead)
+
 
 if __name__ == '__main__':
     unittest.main()
