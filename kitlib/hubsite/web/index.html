@@ -906,6 +906,13 @@ ul.hist .sch-line{display:block}
     const r = Number(retryAfter), asked = r > 0 ? Math.max(1, Math.min(r, 300)) * 1000 : 0;
     return unpaired ? Math.max(HUB_UNPAIRED_MS, asked) : asked || Math.min(60000, 1000 * 2 ** Math.min(Math.max(fails, 1), 6));
   };
+  // A question bound to a record (its record is an object): only its card offers the standing-rule box and button.
+  const qBound = d => !!(d && d.record && typeof d.record === "object" && !Array.isArray(d.record));
+  // An answer as the card sends it (POST /questions/<id>/answer, the version added by pin): the choice and the note,
+  // and standing when the owner ticked the box on a bound question. The PM logs a standing rule in the ledger.
+  const answerBody = (d, draft) => ({ choice: draft.choice, note: String(draft.note || "").trim(), ...(qBound(d) && draft.standing === true ? { standing: true } : {}) });
+  // A filed answer the owner may still make a standing rule: the same route with standing and no choice.
+  const canPromote = d => qBound(d) && d.status === "filed" && !d.standing;
   // pm-pure:end
 
   // An act note keeps its kind (the server refuses a change to or from act): its form offers no kind and its Save
@@ -2758,7 +2765,7 @@ ul.hist .sch-line{display:block}
     parts.push(refsLine(d.refs, "Refs: ", ", "));
 
     if (editable) {
-      const draft = readDraft(d.id) || (d.answer ? {choice: d.answer.choice, note: d.answer.note || ""} : {choice: null, note: ""});
+      const draft = readDraft(d.id) || (d.answer ? {choice: d.answer.choice, note: d.answer.note || "", standing: !!d.standing} : {choice: null, note: ""});
       const name = "q-" + d.id;
       const fs = el("fieldset", {}, el("legend", {text: "Options for " + d.id}));
       const radios = [];
@@ -2776,6 +2783,9 @@ ul.hist .sch-line{display:block}
       const note = el("textarea", {id: name + "-note", placeholder: "Note for the PM (optional; required for Something else)"});
       note.value = draft.note || "";
       note.addEventListener("input", () => { draft.note = note.value; saveDraft(d.id, draft); if (draft.choice === "other") btn.disabled = !note.value.trim(); });
+      // A bound question's box: the answer is also a standing rule, which the PM logs in the ledger.
+      const keep = qBound(d) ? el("input", {type:"checkbox", id: name + "-standing", checked: draft.standing === true}) : null;
+      if (keep) keep.addEventListener("change", () => { draft.standing = keep.checked; saveDraft(d.id, draft); });
       const status = el("span", {class: "status" + (said.has(d.id) ? " err" : ""), role:"status", text: said.get(d.id) || ""});
       const btn = el("button", {class:"primary", type:"button", text: reanswerable(d) ? "Save new answer" : "Send answer"});
       btn.disabled = draft.choice == null || (draft.choice === "other" && !draft.note.trim());
@@ -2783,7 +2793,7 @@ ul.hist .sch-line{display:block}
         btn.disabled = true; said.delete(d.id); unread.delete(d.id); status.className = "status"; status.textContent = "Sending…";
         try {
           // The choice is the option's place in the list, or "other" with a note; the server writes the label and the time.
-          await hub.post("/questions/" + seg(d.id) + "/answer", { choice: draft.choice, note: (draft.note||"").trim(), ...pin(d) });
+          await hub.post("/questions/" + seg(d.id) + "/answer", { ...answerBody(d, draft), ...pin(d) });
           // Sent. If the lists cannot be read again the card is still the question from before the answer:
           // it says the answer was sent and offers no second send (which the server would refuse).
           clearDraft(d.id); state.editing.delete(d.id); await refresh().catch(() => { sent.set(d.id, asIs(d)); }); render();
@@ -2814,7 +2824,9 @@ ul.hist .sch-line{display:block}
       if (reanswerable(d)) acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); unread.delete(d.id); render(); }}));
       // An open question the owner does not mean to answer is withdrawn: it leaves the hub.
       else acts.append(delButton("/questions/" + seg(d.id) + "/delete", status, d.version, "Withdraw", "withdrawn"));
-      parts.push(fs, note, acts);
+      parts.push(fs, note);
+      if (keep) parts.push(el("label", {class:"opt", for: name + "-standing"}, keep, el("span", {class:"ol", text:"Make this a standing rule"}), el("span", {class:"od", text:"The PM logs it in the ledger, so the same question is not asked again."})));
+      parts.push(acts);
     } else if (sent.has(d.id)) {
       parts.push(el("p", {class:"gone", role:"status", text: SENT_UNREAD}));
     } else if (d.answer) {
@@ -2823,8 +2835,19 @@ ul.hist .sch-line{display:block}
       parts.push(el("div", {class:"ans"},
         el("div", {}, el("b", {text: "Your answer: "}), pick, a.choice === rec ? " (the recommendation)" : ""),
         a.note ? el("div", {text: a.note}) : null,
-        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : d.status === "filed" ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · waiting for " + filedFor(d) + " to read it" : " · waiting for the PM to log it")})
+        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : d.status === "filed" ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · waiting for " + filedFor(d) + " to read it" : " · waiting for the PM to log it") + (qBound(d) && d.standing ? " · a standing rule, for the PM to log" : "")})
       ));
+      if (canPromote(d)) {
+        // A filed answer made a standing rule afterwards: the answer route with standing and no choice.
+        const st = el("span", {class:"status", role:"status"});
+        const go = el("button", {class:"link", type:"button", text:"Make it a standing rule"});
+        go.addEventListener("click", async () => {
+          go.disabled = true; st.className = "status"; st.textContent = "Sending…";
+          try { await hub.post("/questions/" + seg(d.id) + "/answer", { standing: true, ...pin(d) }); await refresh().catch(() => {}); render(); }
+          catch (e) { st.className = "status err"; st.textContent = "Not sent: " + why(e) + "."; go.disabled = false; }
+        });
+        parts.push(el("div", {class:"act"}, go, st));
+      }
       if (reanswerable(d)) parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Change answer", onclick: () => { state.editing.add(d.id); render(); }})));
     }
     return el("article", {class: "q " + d.status + (d.urgent ? " urgent" : ""), id: "q-" + d.id}, ...parts);

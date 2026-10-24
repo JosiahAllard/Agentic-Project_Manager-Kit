@@ -1421,7 +1421,96 @@ class DomTest(unittest.TestCase):
         self.assertIn("filed in EX-1 · waiting for the PM to read it", got["pm"])
         self.assertEqual((got["save"], got["cancel"], got["withdraw"]), (True, True, False))
 
-    DOWN = {"status": 500, "body": {"ok": False, "error": {"code": "internal", "message": "store unreadable", "field": ""}}}
+    REC = {"repo": "kit", "id": "EX-1"}
+
+    def test_the_answer_sends_standing_only_when_a_bound_questions_box_is_ticked(self):
+        bound, rec = {"record": self.REC}, self.REC
+        got = js("""[answerBody(items[0], {choice: 1, note: " why ", standing: true}),
+                     answerBody(items[0], {choice: 0, note: "", standing: false}),
+                     answerBody(items[0], {choice: 0, standing: "yes"}),
+                     answerBody(items[1], {choice: 0, note: "", standing: true}),
+                     answerBody(items[2], {choice: 0, note: "", standing: true}),
+                     [items[0], items[1], items[2], items[3]].map(qBound)]""",
+                 [bound, {}, {"record": [rec]}, {"record": "kit:EX-1"}])
+        self.assertEqual(got[:5], [{"choice": 1, "note": "why", "standing": True},
+                                   {"choice": 0, "note": ""}, {"choice": 0, "note": ""},
+                                   {"choice": 0, "note": ""}, {"choice": 0, "note": ""}])
+        self.assertEqual(got[5], [True, False, False, False])
+
+    def test_only_a_filed_bound_answer_not_standing_yet_can_be_promoted(self):
+        rec = self.REC
+        cases = [({"status": "filed", "record": rec}, True),
+                 ({"status": "filed", "record": rec, "standing": {"at": NOW, "via": "web"}}, False),
+                 ({"status": "answered", "record": rec}, False),
+                 ({"status": "logged", "record": rec}, False),
+                 ({"status": "filed"}, False)]
+        self.assertEqual(js("items.map(canPromote)", [c for c, _ in cases]), [w for _, w in cases])
+
+    def test_a_bound_question_offers_the_standing_box_and_sends_it_ticked(self):
+        lists = {"questions": {
+            "Q-1": dict(LISTS["questions"]["Q-1"], record=self.REC),
+            "Q-2": dict(LISTS["questions"]["Q-1"], title="loose")}}
+        got = dom("""
+            await start();
+            const card = id => $("#q-" + id), box = $("#q-Q-1-standing");
+            const seen = { bound: !!box, said: text(card("Q-1")), checked: box.checked };
+            box.checked = true; await fire(box, "change");
+            for (const id of ["Q-1", "Q-2"]) {
+              await click($("#row-" + id));         // the list is rows; the card is in the detail pane
+              if (id === "Q-2") seen.loose = !!$("#q-Q-2-standing");
+              const pick = $("#q-" + id + "-1"); pick.checked = true; await fire(pick, "change");
+              await click(button(card(id), "Send answer"));
+            }
+            return { seen, sent: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]) };
+        """, snapshot(collections=lists))
+        self.assertEqual((got["seen"]["bound"], got["seen"]["loose"], got["seen"]["checked"]),
+                         (True, False, False))
+        self.assertIn("Make this a standing rule", got["seen"]["said"])
+        self.assertIn("The PM logs it in the ledger", got["seen"]["said"])
+        self.assertEqual(dict(got["sent"]), {
+            "/questions/Q-1/answer": {"choice": 1, "note": "", "standing": True, "if_version": 1},
+            "/questions/Q-2/answer": {"choice": 1, "note": "", "if_version": 1}})
+
+    def test_a_filed_answer_is_promoted_by_its_button_and_a_standing_one_says_so(self):
+        def filed(qid, **kw):
+            return dict({"status": "filed", "title": "which " + qid, "version": 3, "asked_at": NOW,
+                         "options": [{"label": "one"}, {"label": "two"}], "record": self.REC,
+                         "answer": {"choice": 0, "label": "one", "note": "", "at": NOW}, "filed_at": NOW,
+                         "from": "kit-1"}, **kw)
+        lists = {"questions": {"Q-1": filed("Q-1"),
+                               "Q-2": filed("Q-2", standing={"at": NOW, "via": "web"})}}
+        got = dom("""
+            await start();
+            await click($("#tabs [data-f=other]"));
+            const card = id => $("#q-" + id);
+            await click($("#row-Q-2"));             // the list is rows; the card is in the detail pane
+            const seen = { rule: text(card("Q-2")), ruleButton: !!button(card("Q-2"), "Make it a standing rule") };
+            await click($("#row-Q-1"));
+            seen.plain = text(card("Q-1"));
+            server.route = c => {
+              if (c.path !== "/questions/Q-1/answer") return undefined;
+              const d = server.snap.collections.questions["Q-1"]; server.snap.revision++;
+              d.version++; d.standing = { at: d.filed_at, via: "web" };
+              return { status: 200, body: { ok: true } };
+            };
+            await click(button(card("Q-1"), "Make it a standing rule"));
+            const after = { card: text(card("Q-1")), button: !!button(card("Q-1"), "Make it a standing rule") };
+            await click($("#row-Q-2"));
+            await click(button(card("Q-2"), "Change answer"));
+            return { seen, after, ticked: $("#q-Q-2-standing").checked,
+                     sent: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]) };
+        """, snapshot(collections=lists))
+        self.assertNotIn("a standing rule, for the PM to log", got["seen"]["plain"])
+        self.assertIn("Make it a standing rule", got["seen"]["plain"])
+        self.assertIn("filed in EX-1 · waiting for kit-1 to read it · a standing rule, for the PM to log",
+                      got["seen"]["rule"])
+        self.assertFalse(got["seen"]["ruleButton"])
+        self.assertEqual(got["sent"], [["/questions/Q-1/answer", {"standing": True, "if_version": 3}]])
+        self.assertIn("a standing rule, for the PM to log", got["after"]["card"])
+        self.assertFalse(got["after"]["button"])
+        self.assertTrue(got["ticked"], "a re-answer keeps the box as the answer had it")
+
+    DOWN ={"status": 500, "body": {"ok": False, "error": {"code": "internal", "message": "store unreadable", "field": ""}}}
 
     def test_an_answer_that_was_sent_and_not_read_back_says_it_was_sent_and_is_not_sent_twice(self):
         answered = {"Q-1": dict(LISTS["questions"]["Q-1"], status="answered", version=2,
