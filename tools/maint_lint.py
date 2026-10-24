@@ -47,8 +47,11 @@ def _counts(res):
     out = ['%-20s %d' % (c, n) for c, n in res['counts'].items() if n]
     led = res.get('ledger')
     out.append('ledger: %s' % ('NOT CHECKED' if led is None else
-                               'stale_cites %(stale_cites)d, superseded_live %(superseded_live)d'
-                               ' of %(superseded)d' % led))
+                               'stale_cites %d, rules %d in %d file(s), over budget %d, '
+                               'conflict pairs %d, overrides %d'
+                               % (led['stale_cites'], sum(led['rules'].values()),
+                                  len(led['rules']), len(led['over_budget']),
+                                  led['conflict_pairs'], led['overrides'])))
     return out
 
 
