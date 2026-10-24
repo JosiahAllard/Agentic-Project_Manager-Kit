@@ -30,39 +30,39 @@ _spec.loader.exec_module(cli)
 
 TESTCASE = 'import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n        pass\n'
 
-# A repository's "tool_tests" section (its TOOLS_EXTRA, TOOLS_PINNED_ROOT + PINNED_IN_PIECES + the
-# solution pin, BUILD_GRAPH / TEST_SOURCE, WHOLE_TREE, UNTESTED): the selection tests
-# below are its own tests, run against its own values.
+# An invented "path"-mode repository's "tool_tests" section: extra files, pinned paths and pieces, the
+# solution pin, build-graph and test-source patterns, whole-tree and untested entries. The selection
+# tests below run against these values.
 BUILD_GRAPH = (r'(?:^|/)(?:build\.gradle\.kts|settings\.gradle\.kts|[^/]+\.csproj|'
                r'Directory\.[^/]+\.props|[^/]+\.slnx)$')
 TEST_SOURCE = r'(?:^|/)src/(?:test|testFixtures)/.+\.java$|(?:^|/)[^/]*Tests[^/]*/(?:.+/)?[^/]+\.cs$'
 R_DATA = {
-    'extra': {'doc_budget.json': ['doc_budget', 'doc_index'], 'forbidden-tokens.json': ['forbidden'],
-              'pieces.json': ['pieces'], 'gate.json': ['gate'],
-              'README.md': ['test_backlog', 'test_daily_full']},
+    'extra': {'ex_budget.json': ['ex_budget', 'ex_index'], 'ex-tokens.json': ['ex_tokens'],
+              'ex_pieces.json': ['ex_pieces'], 'ex_gate.json': ['ex_gate'],
+              'README.md': ['test_ex_store', 'test_ex_daily']},
     'pinned': [
-        ['docs/reference/BACKLOG_STORE.md', ['test_backlog']],
-        ['docs/reference/BACKLOG_STORE_PROCESS.md', ['test_backlog']],
-        ['docs/reference/API_PLAN.md', ['test_backlog']],
-        ['docs/INDEX.md', ['test_doc_index']],
-        ['docs/ops/REPO.md', ['test_doc_index']],
-        ['settings.gradle.kts', ['test_gate', 'test_pieces']],
-        ['buildscripts/', ['test_buildscripts', 'test_republish_live']],
-        ['buildscripts/models-container.sh', ['test_trainer_step']],
-        ['gradle.properties', ['test_dep_bump']],
-        [{'piece': 'model-sums', 'path': ''}, ['test_deploy_scripts']],
-        [{'piece': 'aux-scripts', 'path': 'src/test/java/'}, ['test_gate']],
-        [{'piece': 'link', 'path': 'src/main/java/org/example/link/client/CycleProbe.java'},
-         ['test_density_report']],
-        [{'piece': 'control-ops', 'path': '/'}, ['test_republish_live']],
-        [{'piece': 'trainer', 'path': 'env/'}, ['test_trainer_step']],
-        [{'piece': 'trainer', 'path': 'train/'}, ['test_trainer_step']],
-        [{'solution': True}, ['test_pieces']],
+        ['docs/ex/STORE.md', ['test_ex_store']],
+        ['docs/ex/STORE_PROCESS.md', ['test_ex_store']],
+        ['docs/ex/PLAN.md', ['test_ex_store']],
+        ['docs/INDEX.md', ['test_ex_index']],
+        ['docs/ops/REPO.md', ['test_ex_index']],
+        ['settings.gradle.kts', ['test_ex_gate', 'test_ex_pieces']],
+        ['scripts/', ['test_ex_scripts', 'test_ex_republish']],
+        ['scripts/ex-container.sh', ['test_ex_trainer']],
+        ['gradle.properties', ['test_ex_bump']],
+        [{'piece': 'model-sums', 'path': ''}, ['test_ex_deploy']],
+        [{'piece': 'aux-scripts', 'path': 'src/test/java/'}, ['test_ex_gate']],
+        [{'piece': 'link', 'path': 'src/main/java/org/example/ExProbe.java'},
+         ['test_ex_report']],
+        [{'piece': 'control-ops', 'path': '/'}, ['test_ex_republish']],
+        [{'piece': 'trainer', 'path': 'env/'}, ['test_ex_trainer']],
+        [{'piece': 'trainer', 'path': 'train/'}, ['test_ex_trainer']],
+        [{'solution': True}, ['test_ex_pieces']],
     ],
-    'patterns': [{'regex': BUILD_GRAPH, 'modules': ['test_gate', 'test_test_reads']},
-                 {'regex': TEST_SOURCE, 'modules': ['test_test_reads']}],
-    'whole_tree': {'test_gate.BuildGraphOracle': 'the scope covers every input; tree-shape'},
-    'untested': ['cacheregions', 'check', 'codemap'],
+    'patterns': [{'regex': BUILD_GRAPH, 'modules': ['test_ex_gate', 'test_ex_reads']},
+                 {'regex': TEST_SOURCE, 'modules': ['test_ex_reads']}],
+    'whole_tree': {'test_ex_gate.GraphOracle': 'the scope covers every input; tree-shape'},
+    'untested': ['ex_cache', 'ex_check', 'ex_map'],
 }
 # An invented repository's "tokens" mode: full-suite trigger files, a .ps1 scanner and a kill-site
 # scanner that any .ps1 change adds, doc scans that always run, its sources, skips and ignores.
@@ -227,7 +227,7 @@ class Selection(Fixture):
         self.assertEqual(self.select('tools/_helper.py'), ['test_f', 'test_g', 'test_tool_deps'])
 
     def test_a_tool_naming_a_test_file_is_not_a_dependency(self):
-        # machine_paths.py's allow-list names test files as data; the edge would make every test
+        # A tool's allow-list can name test files as data; the edge would make every test
         # of that tool depend on the named test module.
         self.write('lister.py', "ALLOW = ('tools/test_c.py',)\n")
         self.write('test_lister.py', 'import lister\n' + TESTCASE)
@@ -252,29 +252,29 @@ class Selection(Fixture):
         self.assertEqual(self.select('tools/b.py', merged=True), tool_deps.ALL)
 
     def test_merged_with_only_a_pinned_path_selects_its_modules(self):
-        self.assertEqual(self.select('docs/reference/BACKLOG_STORE.md', merged=True),
-                         ['test_backlog', 'test_tool_deps'])
+        self.assertEqual(self.select('docs/ex/STORE.md', merged=True),
+                         ['test_ex_store', 'test_tool_deps'])
 
     def test_a_non_tools_unpinned_path_selects_nothing(self):
         self.assertEqual(self.select('docs/architecture.md', 'mesh/Node.cs'), [])
 
     def test_a_pinned_path_selects_exactly_its_module(self):
-        self.assertEqual(self.select('docs/INDEX.md'), ['test_doc_index', 'test_tool_deps'])
+        self.assertEqual(self.select('docs/INDEX.md'), ['test_ex_index', 'test_tool_deps'])
         # aux-scripts' test sources are also test sources: the literal-scan slice too.
         self.assertEqual(self.select(OLD.path('aux-scripts', 'src/test/java/org/X.java')),
-                         ['test_gate', 'test_test_reads', 'test_tool_deps'])
+                         ['test_ex_gate', 'test_ex_reads', 'test_tool_deps'])
 
     def test_a_tools_extra_file_selects_its_readers_dependents(self):
-        self.write('doc_budget.py', 'import json\n')
-        self.write('doc_index.py', 'X = 1\n')
-        self.write('test_doc_budget.py', 'import doc_budget\n' + TESTCASE)
-        self.write('test_doc_index.py', 'import doc_index\n' + TESTCASE)
-        self.write('forbidden.py', 'X = 1\n')
-        self.write('test_forbidden.py', 'import forbidden\n' + TESTCASE)
-        self.assertEqual(self.select('tools/doc_budget.json'),
-                         ['test_doc_budget', 'test_doc_index', 'test_tool_deps'])
-        self.assertEqual(self.select('tools/forbidden-tokens.json'),
-                         ['test_forbidden', 'test_tool_deps'])
+        self.write('ex_budget.py', 'import json\n')
+        self.write('ex_index.py', 'X = 1\n')
+        self.write('test_ex_budget.py', 'import ex_budget\n' + TESTCASE)
+        self.write('test_ex_index.py', 'import ex_index\n' + TESTCASE)
+        self.write('ex_tokens.py', 'X = 1\n')
+        self.write('test_ex_tokens.py', 'import ex_tokens\n' + TESTCASE)
+        self.assertEqual(self.select('tools/ex_budget.json'),
+                         ['test_ex_budget', 'test_ex_index', 'test_tool_deps'])
+        self.assertEqual(self.select('tools/ex-tokens.json'),
+                         ['test_ex_tokens', 'test_tool_deps'])
 
     def test_a_tool_no_test_depends_on_still_selects_test_tool_deps(self):
         # Review finding 1: this returned [] and the gate dropped the python-tests step.
@@ -334,15 +334,15 @@ class PinnedInPieces(unittest.TestCase):
         for (pid, rel), mods in self.in_piece():
             path = self.P(pid, rel + ('x.java' if rel.endswith('/') else ''))
             with self.subTest(path=path):
-                extra = {'test_test_reads'} if re.search(TEST_SOURCE, path) else set()
+                extra = {'test_ex_reads'} if re.search(TEST_SOURCE, path) else set()
                 self.assertEqual(self.select(path), sorted(set(mods) | {'test_tool_deps'} | extra))
 
-    def test_the_solution_file_selects_test_pieces(self):
-        self.assertIn('test_pieces', self.select(self.table.solution()))
+    def test_the_solution_file_selects_test_ex_pieces(self):
+        self.assertIn('test_ex_pieces', self.select(self.table.solution()))
 
-    def test_every_build_graph_file_selects_test_gate(self):
-        # BuildGraphOracle (in test_gate) must run on the branch that adds a
-        # dependency edge, so every file it parses selects test_gate, a new module's included.
+    def test_every_build_graph_file_selects_test_ex_gate(self):
+        # GraphOracle (in test_ex_gate) must run on the branch that adds a
+        # dependency edge, so every file it parses selects test_ex_gate, a new module's included.
         paths = ['settings.gradle.kts', 'Directory.Build.props', 'Directory.Packages.props',
                  self.table.solution(), 'brand-new/build.gradle.kts', 'brand/New.Thing/New.Thing.csproj']
         paths += [d + '/build.gradle.kts' for _, d in self.table.gradle_pieces()]
@@ -350,11 +350,11 @@ class PinnedInPieces(unittest.TestCase):
                   if p.get('dotnet') and p['id'].startswith('Mesh.')]
         for path in paths:
             with self.subTest(path=path):
-                self.assertIn('test_gate', self.select(path))
+                self.assertIn('test_ex_gate', self.select(path))
         for path in ('settings.gradle', 'docs/build.gradle.kts.md', 'control/Mesh.Control/Program.cs',
                      'shared/x.csproj.user'):
             with self.subTest(path=path):
-                self.assertNotIn('test_gate', self.select(path))
+                self.assertNotIn('test_ex_gate', self.select(path))
 
     def test_a_test_source_change_selects_the_literal_scan_slice_only(self):
         # A new runtime read in test code is checked on its own branch.
@@ -365,18 +365,18 @@ class PinnedInPieces(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path):
                 got = self.select(path)
-                self.assertIn('test_test_reads', got)
-                if not path.startswith(self.P('aux-scripts', '')):   # pinned to test_gate on its own
-                    self.assertNotIn('test_gate', got)
+                self.assertIn('test_ex_reads', got)
+                if not path.startswith(self.P('aux-scripts', '')):   # pinned to test_ex_gate on its own
+                    self.assertNotIn('test_ex_gate', got)
         for path in (self.P('Mesh.Control', 'Program.cs'), self.P('link', 'src/main/java/org/X.java')):
             with self.subTest(path=path):
-                self.assertNotIn('test_test_reads', self.select(path))
+                self.assertNotIn('test_ex_reads', self.select(path))
         # A build-graph file can make a project a test project, so it
         # runs the slice's TEST_SOURCE naming guard too (a new non-*Tests* test project's .csproj).
         for path in (self.P('Mesh.Control.Tests', 'Mesh.Control.Tests.csproj'), 'brand/New.Checks/New.Checks.csproj',
                      'settings.gradle.kts', 'brand-new/build.gradle.kts'):
             with self.subTest(path=path):
-                self.assertIn('test_test_reads', self.select(path))
+                self.assertIn('test_ex_reads', self.select(path))
 
     def test_the_old_path_selects_nothing_once_moved(self):
         for (pid, rel), _ in self.in_piece():
@@ -660,7 +660,7 @@ class Config(Fixture):
 
 
 class Audit(Fixture):
-    """`audit` (`--check`): the honesty checks a repository ran as TheRealTools, on a fixture."""
+    """`audit` (`--check`): the honesty checks a repository runs on its own tools, on a fixture."""
     DATA = {'extra': {'data.json': ['a']}, 'pinned': [['docs/x.md', ['test_a']]],
             'untested': ['lonely'], 'whole_tree': {'test_a.T': 'reads the whole tree'}}
 
@@ -709,7 +709,7 @@ class Audit(Fixture):
         self.assertEqual(self.audit(dynamic_imports={'loader': [['a'], 'plugins']}), [])
 
     def test_every_test_module_the_scan_finds_is_one_discover_loads(self):
-        # A repository's test_all_is_what_discover_loads, on a fixture: a TestCase-less test*.py
+        # The scan and unittest discovery agree on what a test module is, on a fixture: a TestCase-less test*.py
         # is a tool to both.
         self.write('test_zz_tooldeps_fixture.py', TESTCASE)
         self.write('test_zz_tooldeps_report.py', 'def main():\n    pass\n')
