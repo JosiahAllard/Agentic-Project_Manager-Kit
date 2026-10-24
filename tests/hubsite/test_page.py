@@ -14,11 +14,13 @@ import re
 import shutil
 import unittest
 
-from kitlib.hubsite import httpd, pagecheck, serve
+from kitlib.hubsite import httpd, lockdoor, pagecheck, serve
 from kitlib.hubsite.api import BASE
+from kitlib.lock import api as lock_api
 from kitlib.proc import spawn
 from tests.hubsite import httpfix, pagedom
 from tests.hubsite.httpfix import get, post
+from tests.lock import helpers as lh
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WEB = os.path.join(ROOT, "kitlib", "hubsite", "web")
@@ -3210,6 +3212,23 @@ class ScheduleChangesTest(unittest.TestCase):
         self.assertEqual(got["settings"], [["lock", False, ""]] * 2 + [["strong", False, ""]] * 2)
         self.assertEqual(got["writer"], "")
 
+    def test_a_form_left_open_when_the_login_loses_the_right_is_closed_with_the_reason(self):
+        why = "the holds and the division need the owner's own sign-in"
+        lost = json.dumps(dict(sch_view(rev=6, holds=[HOLD1], game=game(), division=division(),
+                                        writes={"lock": True, "strong": False, "why": why}), changed=True))
+        got = self.run_("""
+            await click($("#sctab-holds")); await click($("#sch-newhold"));
+            await click($("#sctab-settings")); await click($("#sch-divedit"));
+            const r = { open: [$("#sch-divgo").disabled] };
+            await answerLock(200, LOST);
+            r.division = [$("#sch-divgo").disabled, $("#sch-divgo").getAttribute("title")];
+            await click($("#sctab-holds"));
+            r.hold = [$("#sch-holdgo").disabled, $("#sch-holdgo").getAttribute("title")];
+            return r;""".replace("LOST", lost), sch_view(holds=[HOLD1], game=game(), division=division()))
+        self.assertEqual(got["open"], [False])
+        self.assertEqual(got["division"], [True, why])                               # Save the division
+        self.assertEqual(got["hold"], [True, why])                                   # Make the hold
+
     def test_server_text_in_the_new_cards_is_drawn_as_text(self):
         bad = mark("note")
         got = self.run_("""
@@ -3237,6 +3256,54 @@ HISTORY = [hist_run("r-1", "alpha", "build", "ok", "2026-10-05T10:00:00+00:00"),
            hist_run("r-2", "alpha", "engine-test", "failed", "2026-10-05T11:00:00+00:00"),
            hist_run("r-3", "beta", "build", "cancelled", "2026-10-05T12:00:00+00:00"),
            hist_run("r-4", "beta", "engine-test", "ok", "2026-10-05T13:00:00+00:00")]
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ScheduleRealViewTest(lh.StoreCase):
+    """The Schedule against what the hub's lock door gives from a real lock store, so a renamed field in the lock's view
+    (holds, agent_holds, the division, the games, the stats rows) is caught here and not only by hand-built views."""
+
+    def test_the_real_view_is_drawn_in_every_tab_and_server_text_stays_text(self):
+        now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        iso = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        made = lock_api.hold_create(lh.OWNER, {"owner": "owner", "scope": "whole", "start": iso(now + datetime.timedelta(hours=2)),
+                                               "end": iso(now + datetime.timedelta(hours=3)), "note": mark("note")}, store=self.store)
+        self.assertTrue(made.get("ok"), made)
+        games = lock_api.set_games(lh.OWNER, [{"name": "Chess", "exe": "chess.exe", "pin": True}], store=self.store)
+        self.assertTrue(games.get("ok"), games)
+        self.live_record("kit-1", slug=mark("slug"), cores=[0, 1])
+        got = lockdoor.LockDoor(make_store=lambda: self.store, actor=lh.OWNER).view()
+        got["writes"] = {"lock": True, "strong": True, "why": ""}
+        out = dom("""
+            server.lock = %s;
+            server.route = c => c.path.startsWith("/lock/stats") ? { status: 200, body: %s } : undefined;
+            await start(); await visible(true);
+            const r = { now: { err: text($("#sch-wait")), rows: $$("#list article").map(a => a.id), shown: text($("#list")) } };
+            await click($("#sctab-week"));
+            r.cells = $$("#sch-grid td").length;
+            await click($("#sctab-holds"));
+            r.holds = { rows: $$("#list [data-hold]").length, shown: text($("#list")) };
+            await click($("#sctab-settings"));
+            r.settings = { division: text($("#sch-division")), games: text($("#sch-game")), listed: $$("#sch-games li").map(text),
+                           gated: $$("[data-need]").map(b => b.disabled) };
+            r.sinks = sinks;
+            r.attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || ["href", "src", "srcdoc", "style"].includes(k)).map(k => e.tag + " " + k));
+            r.tags = [...new Set(created)];
+            return r;""" % (json.dumps(got), json.dumps(STATS)), snapshot(strong=True), hash="#schedule")
+        self.assertEqual(out["now"]["err"], "")
+        self.assertEqual([i for i in out["now"]["rows"] if i.startswith("row-run:")], ["row-run:kit-1"])
+        self.assertIn(mark("slug"), out["now"]["shown"])
+        self.assertEqual(out["cells"], 7 * 48)
+        self.assertEqual(out["holds"]["rows"], 1)
+        self.assertIn(mark("note"), out["holds"]["shown"])
+        self.assertIn("Chess", out["settings"]["games"])
+        self.assertEqual(len(out["settings"]["listed"]), 1)
+        self.assertIn("cpu_slotsin force 12", out["settings"]["division"])
+        self.assertNotIn(True, out["settings"]["gated"])
+        self.assertEqual(out["sinks"], [])
+        self.assertEqual(out["attrs"], [])
+        self.assertNotIn("script", out["tags"])
+        self.assertNotIn("img", out["tags"])
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
