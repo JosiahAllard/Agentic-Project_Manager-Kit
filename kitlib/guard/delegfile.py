@@ -59,6 +59,7 @@ from kitlib.git import repo
 
 from . import hub as hubg
 from . import jail
+from . import paths
 from . import rules
 from . import shell as sh
 
@@ -201,7 +202,7 @@ def glob_config_below(ctx, base, rest):
         wild = hubg.has_glob(pattern)
         for folder in level:
             if not wild:
-                found.append(os.path.normpath(os.path.join(folder, part)))
+                found.append(paths.norm(os.path.join(folder, part), fold=False))
                 continue
             try:
                 names = os.listdir(folder)
