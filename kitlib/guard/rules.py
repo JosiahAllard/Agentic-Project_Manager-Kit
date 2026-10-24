@@ -1342,8 +1342,9 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     are judged as paths. git that xargs runs takes arguments the guard cannot read: a path
     subcommand's are every path (git_every_path's reading), and checkout, switch, reset or clean
     with them is a tree form. In a placed tree, for the same sessions, git that moves the tree
-    to other content is a tree form too (ledger_git_moves: switch, merge, pull, apply that writes
-    the tree, read-tree -u)."""
+    to other content is a tree form too (ledger_git_moves: switch, checkout of a branch, merge,
+    pull, apply that writes the tree, read-tree -u); a checkout whose word names a held path is
+    refused as that path."""
     gc = git_call_judged(inv)
     if gc is None:
         return None
@@ -1368,7 +1369,8 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
         if checkout_makes_branch(sub, short, longs) and not tree_form:
             return refuse('ledger', role, UNPLACED_BRANCH_WHY % where, unplaced_branch_instead(gc))
         return refuse('ledger', role, STANDING_WHY[kind] % where, ledger_instead(ctx, kind))
-    tree_form = tree_form or ledger_git_moves(sub, args, short, longs)
+    moves = None if tree_form else ledger_git_moves(sub, args, short, longs)
+    tree_form = tree_form or moves
     if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout') and not tree_form:
         return None
     if sub == 'restore' and restore_index_only(short, longs) and not xargs:
@@ -1382,6 +1384,8 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     if sub == 'stash' and tree_form:
         pos = delegfile.after_dashes(args) or []    # push's pathspecs after `--`; none: the tree
     specs = sub in ('clean', 'stash') and tree_form and ledger_wide_binds(event, ctx)
+    if sub == 'checkout' and moves and held_spec(ctx, pos, gc.dir, top, held):
+        tree_form = None                        # a word that names a held path: refused as that path below
     if tree_form and ledger_wide_binds(event, ctx) and (not specs or not pos or xargs or all(
             delegfile.spec_real(ctx, w, gc.dir, top) is False for w in pos)):
         kind = held[0][0]                       # no pathspec, or exclusions alone: the tree
@@ -1400,15 +1404,27 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
         kind = held[0][0]
         return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), every)),
                       ledger_instead(ctx, kind))
-    for w in pos:
-        spec = delegfile.spec_real(ctx, w, gc.dir, top)
+    hit = held_spec(ctx, pos, gc.dir, top, held)
+    if hit:
+        kind, text = hit
+        return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), text)),
+                      ledger_instead(ctx, kind))
+    return None
+
+
+def held_spec(ctx, words, cwd, top, held):
+    """(kind, text) for the first of the pathspec Words `words` (read from `cwd` in the tree at
+    `top`) that reaches a held path ((kind, real) pairs): the path, a folder above it, a computed
+    word, or a `.md` file directly in a held rulebooks' folder; an exclusion names none. Else None."""
+    from . import delegfile
+    for w in words:
+        spec = delegfile.spec_real(ctx, w, cwd, top)
         if spec is False:
             continue                            # an exclusion names nothing to write
         for kind, real in held:
             if spec is True or jail.inside(real, spec) or (
                     kind == 'rulebook' and os.path.dirname(spec) == real and spec.endswith('.md')):
-                return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), w.text)),
-                              ledger_instead(ctx, kind))
+                return kind, w.text
     return None
 
 
@@ -1489,7 +1505,8 @@ def computed_option_word(sub, args):
 def ledger_git_moves(sub, args, short, longs):
     """The form of a git call (sub, its argument Words, and _opts(wide=True)) that moves a placed
     work tree to other content, which can overwrite or take away the ledger's files there:
-    switch (but `-c`/`-C <branch>` with no start, which keeps the tree as it is), merge, pull,
+    switch (but `-c`/`-C <branch>` with no start, which keeps the tree as it is), checkout of a
+    branch or commit as switch (checkout_moves), merge, pull,
     apply unless it only reads the patch or writes the index alone (--check, --stat, --numstat,
     --summary, --cached; any other option, -3 or an abbreviation fails closed), and read-tree
     -u. None for any other call. ledger_git judges it only where it can place the tree:
@@ -1497,6 +1514,8 @@ def ledger_git_moves(sub, args, short, longs):
     repository."""
     if sub == 'switch' and switch_creates_here(args):
         return None
+    if sub == 'checkout':
+        return checkout_moves(args, longs)
     if sub in ('switch', 'merge', 'pull'):
         return sub
     if sub == 'apply':
@@ -1515,6 +1534,38 @@ def switch_creates_here(args):
     other option, a computed word: False)."""
     return (len(args) == 2 and not any(w.dyn for w in args)
             and args[0].text in ('-c', '-C', '--create', '--force-create') and not args[1].text.startswith('-'))
+
+
+def checkout_moves(args, longs):
+    """The form of a git checkout (its argument Words, and _opts(wide=True)'s long names) that
+    moves the tree as switch does, else None: `--orphan` (any abbreviation of two letters or
+    more), or exactly one positional word before any `--` once the values of -b and -B are left
+    out (`checkout main`, `-`, `-b new main`; a word that names no branch fails closed). None
+    with `--` or two or more positional words (a tree-ish and paths, judged as paths), and with
+    none (`checkout`, `-b new`: a branch at HEAD keeps the tree, as switch -c does)."""
+    from . import delegfile
+    if delegfile.after_dashes(args) is not None:
+        return None
+    if any(len(n) > 1 and 'orphan'.startswith(n) for n in longs):
+        return 'checkout --orphan'
+    pos, k = 0, 0
+    while k < len(args):
+        t = args[k].text
+        k += 1
+        if t.startswith('--'):
+            body, eq, _v = t[2:].partition('=')
+            names = _canon_long('checkout', body)
+            k += not eq and len(names) == 1 and names[0] in GIT_LONG_VALUES   # --conflict <style>
+            continue
+        if not t.startswith('-') or t == '-':
+            pos += 1
+            continue
+        body = t[1:]
+        for j, c in enumerate(body):
+            if c in 'bB':
+                k += not body[j + 1:]           # -b <name>; -bname carries it
+                break
+    return 'checkout' if pos == 1 else None
 
 
 def ledger_git_path_form(sub, args, short, longs, held=(), xargs=False):

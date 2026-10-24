@@ -107,11 +107,29 @@ class OutsideGit(Base):
                                  (f, 'git -C "$d" checkout kit/x'), (f, 'git -C "$d" checkout "*"'),
                                  (f, 'git -C "$d" checkout "$b"'), (f, 'git -C "$d" checkout LEDGER.md.')))
 
-    def test_a_plain_checkout_of_a_branch_is_not_this_rule(self):
+    def test_an_unplaced_checkout_of_a_branch_is_not_this_rule(self):
         f = self.folder
         self.rows(self.not_ledger, ((f, 'git -C "$d" checkout main'), (f, 'cd "$x" && git checkout main'),
-                                    (f, 'git -C "$d" switch main'), (f, 'git checkout main'),
+                                    (f, 'git -C "$d" switch main'),
                                     (f, 'git -C "$d" checkout feature-x'), (f, 'git -C "$d" checkout')))
+
+    def test_a_placed_checkout_of_a_branch_moves_the_tree(self):
+        # as switch: a branch or commit, a new branch with a start, an orphan
+        f = self.folder
+        self.rows(self.refused, ((f, 'git checkout main'), (f, 'git checkout feature-x'), (f, 'git checkout -'),
+                                 (f, 'git checkout --detach main'), (f, 'git checkout -m main'),
+                                 (f, 'git checkout -b new main'), (f, 'git checkout -bnew main'),
+                                 (f, 'git checkout -qb new main'), (f, 'git checkout -B new main'),
+                                 (f, 'git checkout --orphan new'), (f, 'git checkout --orphan=new'),
+                                 (f, 'git checkout --orph new main'), (f, 'git checkout -p main'),
+                                 (f, 'git checkout --conflict merge main')))
+        # as switch -c <branch>: a new branch at HEAD keeps the tree; path forms are judged as paths
+        self.rows(self.not_ledger, ((f, 'git checkout'), (f, 'git checkout -b new'), (f, 'git checkout -B new'),
+                                    (f, 'git checkout -- other'), (f, 'git checkout main -- other'),
+                                    (f, 'git checkout main other notes'), (self.w.wt, 'git checkout main'),
+                                    (self.w.wt, 'git checkout -b new main')))
+        self.rows(lambda make, label: self.refused(make, label, sessions=AGENTS + FREE, free=()),
+                  ((f, 'git checkout -- LEDGER.md'), (f, 'git checkout main -- .'), (f, 'git checkout main LEDGER.md')))
 
     def test_what_still_passes(self):
         f = self.folder
@@ -187,7 +205,7 @@ class SplitLedger(Base):
 
     def test_what_still_passes(self):
         s = self.src
-        self.rows(self.not_ledger, ((s, 'git clean -fd .'), (s, 'git stash show'), (s, 'git checkout main'),
+        self.rows(self.not_ledger, ((s, 'git clean -fd .'), (s, 'git stash show'), (s, 'git checkout -- .'),
                                     (s, 'git reset --soft HEAD~1')))
 
     def test_an_unplaced_checkout_of_a_rulebook(self):
@@ -237,7 +255,10 @@ class SplitLedger(Base):
     def test_git_that_moves_a_tree_holding_a_split_ledger(self):
         s = self.src
         self.rows(self.refused, ((s, 'git switch main'), (s, 'git apply x.patch'), (s, 'git read-tree -u -m HEAD'),
-                                 (s, 'ls | xargs git reset')))
+                                 (s, 'ls | xargs git reset'), (s, 'git checkout main'), (s, 'git checkout -b new main'),
+                                 (s, 'git checkout -B new main'), (s, 'git checkout --orphan new')))
+        self.rows(self.not_ledger, ((s, 'git checkout -b new'), (s, 'git checkout -- x'),
+                                    (s, 'git checkout main -- x')))
         self.rows(lambda make, label: self.refused(make, label, sessions=AGENTS + FREE, free=()),
                   ((s, 'ls | xargs git rm'), (s, 'git $x ../ledger')))
 
