@@ -4,7 +4,7 @@
 
 ## Where it is
 
-`~/.pm-kit/owner-delegations.json`, in the home folder's `kitlib.config.user.DIR_NAME`, where the machine config used to be (the kit now reads that from the PM repository, docs/kit-json.md "Machine config keys"). Only the owner writes it. Nothing moves it: there is no setting and no environment variable, and the retired machine config folder is never read. Tests pass `home=` with a temp folder.
+`owner-delegations.json` in the PM repository's machine config folder, `<PM repo>/.pm-kit` (`kitlib.config.user.locate`'s `OK` folder; docs/kit-json.md "Machine config keys"), tracked there. `load` reads only that file: with no PM repo pointer there is no list (nothing is delegated), and a machine config that cannot be read (`UNMOVED` or `BAD`) is a `DelegationError`. `tools/config_move.py` copies the home folder's `~/.pm-kit/owner-delegations.json` there when the machine config moves; that home copy is only the move's source (`kitlib.delegations.load.delegations_file`), which the guard still holds, and `load` never reads it. Only the owner writes the list. No setting and no environment variable moves it. Tests pass `home=` with a temp folder.
 
 `load(home=None)` returns `Delegations(path, schema, operations)`. It raises these errors:
 

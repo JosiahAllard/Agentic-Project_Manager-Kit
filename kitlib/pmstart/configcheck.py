@@ -46,7 +46,7 @@ def _rules(pm):
 
 def integrity(loc, run=None, rules=None):
     """The integrity line for an OK Location `loc`, or None when its policy file is committed by
-    the owner and unchanged. `run(args, cwd)` gives a kitlib.git.cmd
+    the owner and unchanged, or is not there and never was tracked (an empty config). `run(args, cwd)` gives a kitlib.git.cmd
     Result (default kitlib.git.cmd.call); `rules` the owner rules (default the PM repository's
     kitlib.config.load owner_rules). Raises when git cannot answer."""
     if run is None:
@@ -55,7 +55,8 @@ def integrity(loc, run=None, rules=None):
     shown, pm = loc.display(), loc.pm
     rel = os.path.relpath(loc.path, pm).replace('\\', '/')
     if not _git(run, ['ls-files', '--', rel], pm):         # untracked: never committed
-        return NEVER % shown
+        # no file at all is an empty config: nothing to commit (a tracked one deleted is a change)
+        return NEVER % shown if os.path.lexists(loc.path) else None
     if _git(run, ['status', '--porcelain', '--', rel], pm):
         return DIRTY % (shown, pm, rel)
     author = _git(run, ['log', '-1', '--format=%ae', '--', rel], pm)
@@ -80,7 +81,8 @@ def lines(loc=None, run=None, rules=None):
         return [UNREADABLE % loc.error]
     out = []
     if loc.leftover:
-        out.append(LEFTOVER % (loc.leftover, loc.display(), loc.leftover))
+        # PowerShell's single-quoted string: a ' in the path is written ''
+        out.append(LEFTOVER % (loc.leftover, loc.display(), loc.leftover.replace("'", "''")))
     try:
         line = integrity(loc, run, rules)
     except Exception as e:                      # the leftover line still shows

@@ -144,6 +144,26 @@ class LinesTest(ConfigCheckCase):
         self.assertIn("cannot check", line)
         self.assertIn("identity is not configured", line)
 
+    def test_no_config_file_in_the_pm_repository_prints_nothing(self):
+        loc = kuser.locate(self.home)
+        os.remove(loc.path)
+        loc = kuser.locate(self.home)
+        self.assertEqual(loc.state, kuser.OK)
+        self.assertEqual(configcheck.lines(loc, git(tracked='')), [])
+
+    def test_a_tracked_file_that_was_deleted_is_a_change(self):
+        loc = kuser.locate(self.home)
+        os.remove(loc.path)
+        (line,) = configcheck.lines(kuser.locate(self.home), git(status=' D ' + REL), self.rules)
+        self.assertIn('has uncommitted changes', line)
+
+    def test_an_apostrophe_in_the_leftover_path_is_doubled_in_the_remove_command(self):
+        left = os.path.join(self.home, "it's", kuser.FILE_NAME)
+        loc = kuser.locate(self.home)._replace(leftover=left)
+        (line,) = configcheck.lines(loc, git(), self.rules)
+        self.assertIn("Remove-Item -LiteralPath '%s')" % left.replace("'", "''"), line)
+        self.assertIn('home folder (%s)' % left, line)
+
     def test_git_failing_keeps_the_leftover_line(self):
         self.leave()
         out = self.lines(git(rc=128))
