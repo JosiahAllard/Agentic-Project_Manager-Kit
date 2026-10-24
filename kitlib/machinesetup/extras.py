@@ -20,7 +20,7 @@ from kitlib.launcher import pythonw as pythonw_mod
 from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
 from . import agenttemp, procwatch
-from .common import kit_file, norm, under
+from .common import Report, kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
 LOCK_ENV = 'KIT_MACHINE_LOCK'
@@ -84,6 +84,39 @@ class Host(object):
 
     def env_set(self, name, value):
         self._ps('[Environment]::SetEnvironmentVariable(%s, %s, "User")' % (_ps_quote(name), _ps_quote(value)))
+
+    def user_path(self):
+        """(raw value, winreg type) of the user Path (HKCU\\Environment), %VAR% unexpanded; (None,
+        None) when it is unset. Read only. Not env_get's expanded read, so a write keeps it."""
+        if winreg is None:
+            return None, None
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as k:
+                value, kind = winreg.QueryValueEx(k, 'Path')
+        except FileNotFoundError:
+            return None, None
+        if not isinstance(value, str):
+            raise ValueError('HKCU\\Environment Path is not a string (type %d)' % kind)
+        return value, kind
+
+    def set_user_path(self, value, kind):
+        """Write the user Path through winreg as `kind` (REG_EXPAND_SZ keeps %VAR% entries; .NET's
+        SetEnvironmentVariable would write REG_SZ), then broadcast WM_SETTINGCHANGE so programs
+        started later from Explorer see it. A Report line when the broadcast fails."""
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_SET_VALUE) as k:
+            winreg.SetValueEx(k, 'Path', 0, kind, value)
+        try:
+            import ctypes
+            from ctypes import wintypes
+            result = wintypes.DWORD(0)
+            # HWND_BROADCAST, WM_SETTINGCHANGE, "Environment", SMTO_ABORTIFHUNG, 5 s
+            ok = ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, 'Environment', 0x0002, 5000,
+                                                          ctypes.byref(result))
+        except (ImportError, AttributeError, OSError) as e:
+            return Report(['the PATH change was not broadcast (%s): sign out and in to see it' % e])
+        if not ok:
+            return Report(['the PATH change was not broadcast: sign out and in to see it'])
+        return None
 
     def task_exists(self, name):
         """Whether the scheduled task `name` is registered (agenttemp.task_registered: False only

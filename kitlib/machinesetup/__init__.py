@@ -24,6 +24,9 @@ In both modes each repository in the machine config's launcher.repos gets its ni
 sweep task when it has none or its task runs a removed plugin export, after one dry run of the
 sweep (kitlib.machinesetup.worktreesweep; opt-out: `worktree_sweep` false).
 
+In both modes the kit command (`kit TOOL ...`, tools/kit.py) gets its launcher, kit.cmd in
+<plugin.export_dir>\\bin, and that folder on the user Path (kitlib.machinesetup.kitcommand).
+
 In both modes machine setup makes no link: kitlib.machinesetup.links reports each link an earlier
 setup left under a config folder, with the command that removes the link only, and the settings
 step re-points a path through `<config>/tools/<link>` to the kit's own file
@@ -45,7 +48,7 @@ import os
 from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
-from . import agenttemp, extras, links, managed, owner, plugin, settings, worktreesweep
+from . import agenttemp, extras, kitcommand, links, managed, owner, plugin, settings, worktreesweep
 from .common import Change, Plan, Report, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
@@ -165,6 +168,7 @@ def survey(ctx):
     owner.survey(plan, ctx)
     extras.survey(plan, ctx)
     worktreesweep.survey(plan, ctx)
+    kitcommand.survey(plan, ctx)
     return plan
 
 

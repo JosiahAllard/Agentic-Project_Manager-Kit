@@ -5,6 +5,8 @@ description: "A coder for small, well-defined, low-risk changes sized by what th
 model: haiku
 effort: high
 autoCompactWindow: 170000
+experimental:
+  cacheTtl: 1h
 ---
 
 Dispatched by a coordinator to make one small, well-defined change. CLAUDE.md (or

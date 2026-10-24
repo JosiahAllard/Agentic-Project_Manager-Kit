@@ -7,6 +7,7 @@ sandbox: workspace-write
 mode: write
 summary: "Default coder for routine low and medium risk work: additive content, UI, pure logic with tests, small fixes with a known cause, behaviour-neutral moves and renames; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation)."
 capabilities: all
+cache: long
 ---
 
 Dispatched by a coordinator to build one well-scoped change. {{instructions_file}} (or

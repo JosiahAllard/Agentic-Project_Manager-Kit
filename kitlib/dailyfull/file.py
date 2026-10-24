@@ -55,16 +55,18 @@ def culprit_scope(root, culprit, git):
     return paths
 
 
-def _open(root):
-    """The store's Context: the configured one, or the PM data branch's when the configured one
-    is the implicit default. Raises Refusal (the store's own) or returns (None, why)."""
-    ctx = opener.open_store(root, fetch=True, session=SLUG)
+def open_filing_store(root, session=SLUG):
+    """`(Context, None)` for the store a kit tool files a found record in: the repository's
+    configured one, or the PM data branch's when the configured one is the implicit default;
+    fetched, its commits carrying `session` as their Session: line. `(None, why)` when there is
+    neither. Raises Refusal (the store's own). kitlib.maintlint.gatetime files through it too."""
+    ctx = opener.open_store(root, fetch=True, session=session)
     if not getattr(ctx.store.backend, 'implicit', False):
         return ctx, None
     pm_root, _cfg, _backend, why = at_landing.pm_data_store(root, None)
     if pm_root is None:
         return None, why or bstore.default_store_refusal(ctx.root)
-    return opener.open_store(pm_root, fetch=True, session=SLUG), None
+    return opener.open_store(pm_root, fetch=True, session=session), None
 
 
 def file(root, settings, found, red, git, home=None):
@@ -96,7 +98,7 @@ def file(root, settings, found, red, git, home=None):
     scopes = culprit_scope(root, found.get('culprit'), git)
     lines = []
     try:
-        ctx, why = _open(root)
+        ctx, why = open_filing_store(root)
         if ctx is None:
             return None, ['daily: not filed: %s' % why], None
 
