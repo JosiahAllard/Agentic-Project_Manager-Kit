@@ -170,7 +170,7 @@ class LeftoverTest(_Case):
         self.ledger = os.path.join(self.books, 'LEDGER.md')
         self.split = os.path.join(self.books, 'split')
         write(self.policy, {'ledger_path': self.ledger, 'ledger_dir': self.split, 'ledger_repos': ['kit'],
-                            'guard_mark_roots': {'m': [{'path': self.books, 'mode': 'write', 'why': 'x'}]}})
+                            'guard_mcp_tools': ['mcp__x__write'], 'guard_mcp_prefix': 'mcp__x__'})
         write(self.local, {})
         write(os.path.join(self.home, kuser.DIR_NAME, kuser.FILE_NAME), {})
 
@@ -187,8 +187,9 @@ class LeftoverTest(_Case):
         u = c.user()
         self.assertEqual((u['ledger_path'], u['ledger_dir']), (self.ledger, self.split))
         self.assertEqual(u['broken'], c.config_location().error)
-        # only the ledger keys: no jail root, no other key is taken from the refused config
-        self.assertEqual((u['guard_mark_roots'], u['ledger_repos']), (None, None))
+        # only the ledger keys: no other key (string or string list, which the tolerant reader
+        # keeps) is taken from the refused config
+        self.assertEqual((u['guard_mcp_tools'], u['guard_mcp_prefix'], u['ledger_repos']), (None, None, None))
 
     def test_a_main_session_edit_of_the_ledger_is_refused(self):
         for path in (self.ledger, os.path.join(self.split, 'rules', 'kit.md'), os.path.join(self.split, 'STANDING.md')):

@@ -46,9 +46,10 @@ a constructor argument, and the defaults read this machine.
                      be read or is not a JSON object, or a ledger_path or ledger_dir that is not a
                      path string, sets 'broken' (why), and the ledger rule then denies every
                      subagent write. Missing files are an empty config, not
-                     a broken one. The files are the ones config_location() names; an UNMOVED or
-                     BAD location sets 'broken' too (fail closed), and an UNMOVED one's home
-                     leftover is still read, so its ledger_path stays protected.
+                     a broken one. The files are the ones config_location() names; an UNMOVED,
+                     LEFTOVER or BAD location sets 'broken' too (fail closed); an UNMOVED one's
+                     home leftover is still read, and a LEFTOVER one's PM repository config.json
+                     for its ledger_path and ledger_dir only, so the ledger stays protected.
   ledger_files()     kitlib.ledger.files.of_config over user(): where the ledger's log files,
                      standing digest and rulebooks' folder are (the ledger rule), or None
   config_location()  kitlib.config.user.locate(home) with the PM-repo pointer read once from the
