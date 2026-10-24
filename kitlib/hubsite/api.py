@@ -250,7 +250,8 @@ Push status. GET snapshot carries `push`: null when this hub runs no push-notifi
 else {"state", "last", "undelivered"} from PushWorker.status (kitlib.hubsite.push docstring
 "Status"): state 'up' or 'down', last the latest delivery to the PM's state (null before the first),
 undelivered the number of items some recipient has not yet had a written try of. The worker
-sets Api.push_status when it is made; the snapshot reads it on the request's thread.
+sets Api.push_status when it is made; the snapshot reads it on the request's thread. GET health
+carries the same `push` (Api.push_seen), so a hub with no worker or a dead one shows on health.
 
 Watcher. GET snapshot and GET health carry `watcher`: null when this hub runs no push worker,
 else {"state", "age"} from PushWorker.watcher_status (kitlib.hubsite.push docstring "Watcher"):
@@ -2129,7 +2130,7 @@ def health(api, req):
         out.update(extra)
     out.pop('store', None)
     out.update(ok=True, version=API_VERSION, revision=api.store.revision, unavailable=missing,
-               watcher=api.watcher_seen())
+               watcher=api.watcher_seen(), push=api.push_seen())
     if req.role == OWNER:           # where the store is on this machine is the owner's to know
         out['store'] = api.store.root
     return out

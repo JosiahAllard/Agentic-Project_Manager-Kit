@@ -2720,6 +2720,22 @@ class PushStatusTest(ApiCase):
         down = {'state': 'down', 'age': None}
         self.assertEqual(self.seen(), (down, down))
 
+    # GET health carries the same push value as the snapshot
+    def test_health_push_is_null_with_no_worker(self):
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.assertIsNone(self.ok('GET', '/health', OWNER)['push'])
+
+    def test_health_push_is_up_with_a_running_worker(self):
+        self.run_worker()
+        want = {'state': 'up', 'last': None, 'undelivered': 0}
+        self.assertEqual(self.ok('GET', '/health', AGENT)['push'], want)
+        self.assertEqual(self.ok('GET', '/health', OWNER)['push'], self.status())
+
+    def test_health_push_is_down_when_the_worker_died(self):
+        self.run_worker()
+        self.assertTrue(self.worker.stop(5))
+        self.assertEqual(self.ok('GET', '/health', OWNER)['push']['state'], 'down')
+
 
 class PushedRouteTest(RouteCase):
     """A push written to a session keeps its items routed to it for the ack window, with no wait
