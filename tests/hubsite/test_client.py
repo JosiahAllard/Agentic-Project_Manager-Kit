@@ -201,8 +201,9 @@ class StandIn(unittest.TestCase):
         def sleep(s):
             self.slept.append(s)
             self.now[0] += s
-        return client.Client(1, tokens=self.tokens, ask=ask, clock=lambda: self.now[0],
-                             sleep=sleep)
+        hub = client.Client(1, tokens=self.tokens, ask=ask, clock=lambda: self.now[0])
+        hub._sleep = sleep          # set after, not as sleep=: a client without it still runs
+        return hub
 
 
 class LoopCase(StandIn):
