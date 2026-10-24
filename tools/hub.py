@@ -179,10 +179,10 @@ the server alone decides what a role may do.
       The PM waits with --for pm. Prints `HUB <rev> <kind> <id> to=R from=K <title>` for each
       pending item (R and K as for pending) and `HUB <rev> <collection>
       <id> <op> <status>` for each change, exit 0. With --timeout S: exit 4 and no line when S
-      seconds pass with neither. Without it the wait has no end of its own. A hub that is
-      restarting (port closed, or `REFUSED store`) is asked again each second until S runs out,
-      or 600 s down in a row, then that reason is the exit (3 or 1); with neither --since nor
-      --for/--except, it ends the wait at once (client.Client.wait).
+      seconds pass with neither. Without it the wait has no end of its own. A hub that goes
+      down after a poll of the wait was answered (port closed, or `REFUSED store`: a restart) is
+      asked again each second until S runs out, or 600 s down in a row, then that reason is the
+      exit (3 or 1); one down at the first poll ends the wait at once (client.Client.wait).
   hub.py validate [--store PATH]
       reads the store folder itself (hub.store, else hub/ in the PM data worktree), with no
       server and no lock, so it may run beside one; it writes nothing. Prints each finding as

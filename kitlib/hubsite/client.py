@@ -34,7 +34,8 @@ Client(port, tokens, via=serve.VIA_CLI)
                                         up to NO_ANSWER_TURNS in a row, when it has a `since`
                                         or waits for its own pending items only; on the same
                                         rule a hub that is restarting (serve.NotRunning, or
-                                        Refused `store`) is asked again every RETRY_PAUSE_S
+                                        Refused `store`, after a poll of this wait was
+                                        answered) is asked again every RETRY_PAUSE_S
                                         until the wait's timeout or RESTART_WAIT_S down in a
                                         row, then the last of those is raised
 """
@@ -159,6 +160,7 @@ class Client(object):
         end = None if timeout is None else self._clock() + max(0.0, float(timeout))
         silent = 0                  # polls in a row the server took and did not answer
         down = None                 # when the hub was first found down or closing, in a row
+        answered = False            # a poll of this wait was answered: a restart can follow
         while True:
             left = _api.WAIT_MAX_S if end is None else end - self._clock()
             turn = max(0.0, min(float(left), float(_api.WAIT_MAX_S)))
@@ -173,8 +175,10 @@ class Client(object):
                 # store is not available (Refused `store`). Ask again after RETRY_PAUSE_S, with
                 # the same query and on the rule a NoAnswer retry keeps, until the wait's own time
                 # is spent or the hub stayed down RESTART_WAIT_S in a row; then the last reason
-                # is raised as it came. Every other refusal ends the wait at once.
-                if isinstance(e, Refused) and e.code != STORE_DOWN:
+                # is raised as it came. Every other refusal ends the wait at once, and so does
+                # this one before any poll of this wait was answered: a hub that was never up
+                # is said at once, not after RESTART_WAIT_S.
+                if not answered or (isinstance(e, Refused) and e.code != STORE_DOWN):
                     raise
                 now = self._clock()
                 down = now if down is None else down
@@ -196,7 +200,7 @@ class Client(object):
                 if since is None and not (pending and (for_key or except_ids)):
                     raise
                 continue
-            silent, down = 0, None
+            silent, down, answered = 0, None, True
             if not got.get('timed_out'):
                 return got
             if end is not None and self._clock() >= end:
