@@ -41,7 +41,7 @@ Each recipient is sent each item until it is acknowledged:
   from-session, question   Api.handed_to names its key (its own `hub pending --for` or `wait`
                            picked it up), or the question is no longer answered
   from-session, to-do      the same, or pm_ack, or the to-do is no longer done
-  PM, question             the question is no longer answered (logged)
+  PM, question             the question is no longer answered (logged, or done: no ruling)
   PM, to-do                pm_ack, or no longer done (an owner-added one: pm_ack)
   PM, story or note        its status changed (hub stories set, hub to-pm reply)
   either                   the item is withdrawn, or a newer fingerprint replaces the push
