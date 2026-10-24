@@ -8,6 +8,7 @@ sandbox: workspace-write
 mode: write
 summary: "Small, well-defined, low-risk changes the brief sizes by listing them (named files, named edits, a few files): doc lines, small additive changes with their test. Escalates to worker when the task is bigger or less clear than briefed."
 capabilities: all
+cache: long
 ---
 
 Dispatched by a coordinator to make one small, well-defined change. {{instructions_file}} (or
