@@ -36,17 +36,15 @@ owner may clear output/ at any time. A ComfyUI this tool starts puts output/ und
 Every saved file gets a sidecar <file>.json (tool, model, licence, inputs, seed,
 settings, date, seconds taken) for the repository's ATTRIBUTIONS row.
 
-GPU etiquette: generation shares the GPU with the game engine. Every command
-except `check` takes this tool's own GPU self-lock for its own duration,
-waiting up to --lock-wait seconds (exit 4 if it never frees), so two
-generations never overlap; ordering against the repos' engine, network and
-render runs is the machine lock's job, not this file's: every generating
-command (with --force too) runs as a local-ai machine-lock run, and with no
-machine lock tool it refuses (exit 2). When that run's slot ends, a ComfyUI
+GPU etiquette: generation shares the GPU with the game engine. Serialising
+generations against each other and against the repos' engine, network and
+render runs is the machine lock's job: every generating command runs as a
+local-ai machine-lock run (the slot is held for the command, waiting up to
+--lock-wait seconds, at most 540), and with no machine lock tool it refuses
+(exit 2). When that run's slot ends, a ComfyUI
 this tool started is stopped and a local ComfyUI has its models unloaded if
 idle (the hidden `release` command, the run's --on-release). One
-command is one slice: keep it under ~10 minutes. Pass --force only if you
-already hold this tool's GPU self-lock. Keep images near 1 MP, and never
+command is one slice: keep it under ~10 minutes. Keep images near 1 MP, and never
 generate during a measurement window.
 
 Knowledge base (read before; record sessions in the repo's docs/ops/assets.md): <kit>/knowledge/asset-generation/
@@ -63,7 +61,6 @@ import sys
 import time
 import urllib.error
 import urllib.parse
-import uuid
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 # The kit library, for the shared temp folder (kitlib.config.user.shared_temp: the machine
@@ -129,56 +126,9 @@ MODELS = {
 }
 # MoGe-2 weights and the krea2_darkbrush LoRA are NOT approved (licence unchecked).
 MAX_PIXELS = 2_100_000
-# comfy_gen's own self-lock: never two generations at once on this GPU. Held by keeping the
-# file open; never delete a lock you did not create. This is not the machine lock (kitlib/lock):
-# machine_lock_rerun re-runs each command under it as kind local-ai, which covers ordering
-# against the repos' engine and render runs; this file just serialises comfy_gen against itself.
-# In the shared temp, so every process finds it whatever TEMP it inherited.
-GPU_LOCK = os.environ.get("GPU_LOCK", os.path.join(SHARED_TEMP, "comfy-gen.lock") if SHARED_TEMP
-                          else os.path.join(os.environ.get("LOCALAPPDATA", ""), "Temp",
-                                            "comfy-gen.lock"))
 
 
-# ---------------------------------------------------------------- helpers
-class gpu_lock:
-    """Hold the machine-wide GPU lock for one command (one slice: keep it under ~10 minutes)."""
-
-    def __init__(self, args):
-        self.args, self.fd = args, None
-
-    def __enter__(self):
-        deadline = time.time() + self.args.lock_wait
-        waited = False
-        while True:
-            try:
-                self.fd = os.open(GPU_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                # The holder line carries the pid, so a reader can tell who holds it.
-                slug = re.sub(r"\s+", "_", f"comfy_gen-{self.args.cmd}-{getattr(self.args, 'name', '') or ''}")
-                os.write(self.fd, f"token={uuid.uuid4()} pid={os.getpid()} slug={slug} "
-                                  f"{datetime.datetime.now().astimezone().isoformat()}\n".encode())
-                if waited:
-                    print("GPU lock acquired", file=sys.stderr)
-                return self
-            except FileExistsError:
-                if time.time() > deadline:
-                    print(f"GPU lock {GPU_LOCK} still held after {self.args.lock_wait}s; try later "
-                          "(never delete a lock you did not create)", file=sys.stderr)
-                    sys.exit(4)
-                if not waited:
-                    print("waiting for the GPU lock (an engine run or another generation is using the GPU)",
-                          file=sys.stderr)
-                    waited = True
-                time.sleep(5)
-
-    def __exit__(self, *exc):
-        os.close(self.fd)
-        try:
-            os.remove(GPU_LOCK)
-        except OSError:
-            pass
-
-
-# ---------------------------------------------------------------- ComfyUI lifecycle 
+# ---------------------------------------------------------------- ComfyUI lifecycle
 # Before that the owner always started ComfyUI by hand (a taskbar shortcut to Comfy Desktop);
 # agents only ever found it up or not. Now `ensure_running()` may start it, headless where
 # possible, and this tool shuts down only what IT started - a ComfyUI the owner started is
@@ -880,10 +830,8 @@ def main():
             p.add_argument("--name", required=True, help="file name stem")
         p.add_argument("--seed", type=int)
         p.add_argument("--timeout", type=int, default=900)
-        p.add_argument("--force", action="store_true",
-                       help="do not take this tool's GPU self-lock because the caller already holds "
-                            "it (the machine lock is still taken)")
-        p.add_argument("--lock-wait", type=int, default=900, help="seconds to wait for the GPU lock (exit 4 after)")
+        p.add_argument("--lock-wait", type=int, default=900,
+                       help="seconds to wait for the machine lock's GPU slot (capped at 540)")
         return p
 
     sub.add_parser("check")
@@ -928,10 +876,6 @@ def main():
     args = ap.parse_args(argv)
     if args.cmd not in UNLOCKED and not getattr(args, "print_api", False):
         machine_lock_rerun(args, argv)
-    if (args.cmd not in UNLOCKED and not getattr(args, "force", False)
-            and not getattr(args, "print_api", False)):
-        with gpu_lock(args):
-            return run_handler(args)
     return run_handler(args)
 
 
@@ -956,7 +900,7 @@ def machine_lock_rerun(args, argv):
     Returns without re-running only in that re-run itself (RERUN_ENV, consumed here so nothing it
     starts inherits it). Inside another locked run (MACHINE_LOCK_RUN) it still goes through the
     tool: that runs it directly when the enclosing run holds gpu and takes gpu when it holds only
-    cpu. --force goes through it too (it skips only the GPU self-lock). With no tool it refuses
+    cpu. With no tool it refuses
     (exit 2) rather than run on a GPU slot nobody holds. The run's --on-release is `release`: the
     ComfyUI it used is freed when the slot ends, not ~10 idle minutes later."""
     if os.environ.pop(RERUN_ENV, None) and os.environ.get("MACHINE_LOCK_RUN"):

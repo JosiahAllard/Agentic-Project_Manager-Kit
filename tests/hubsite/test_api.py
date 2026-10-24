@@ -20,6 +20,7 @@ from kitlib.maintlint import result as lint_result
 from tests.backlog.helpers import rec
 from tests.gitfixture import TempRepo
 from tests.hubsite import test_record_write as trw
+from tests.hubsite.test_notify_creator import RouteCase
 
 NOW = '2026-01-02T03:04:05+00:00'
 CLOCK = lambda: NOW      # noqa: E731
@@ -2597,6 +2598,11 @@ class PushStatusTest(ApiCase):
 
     def setUp(self):
         super().setUp()
+        # a running worker reads the PM watcher's heartbeat; the default reader reads the
+        # machine's config (the home fence)
+        patcher = mock.patch.object(push, 'watcher_heartbeat', lambda: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit'})
         self.folder = tempfile.mkdtemp(prefix='kit-hubapi-push-')
         self.addCleanup(shutil.rmtree, self.folder, True)
@@ -2682,6 +2688,68 @@ class PushStatusTest(ApiCase):
             raise RuntimeError('no')
         self.api.push_status = broken
         self.assertEqual(self.status(), {'state': 'down', 'last': 'RuntimeError', 'undelivered': None})
+
+    # the snapshot and health carry the PM watcher's heartbeat as the push worker read it
+    def seen(self, role=OWNER):
+        return (self.ok('GET', '/snapshot', OWNER)['watcher'], self.ok('GET', '/health', role)['watcher'])
+
+    def test_no_worker_is_null_in_the_snapshot_and_health(self):
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.assertEqual(self.seen(), (None, None))
+
+    def test_a_worker_says_the_heartbeats_state_and_age(self):
+        beat = [None]
+        self.worker = push.PushWorker(self.store, self.api, self.fake, self.folder,
+                                      clock=lambda: self.t[0], watcher=lambda: beat[0])
+        self.worker.begin()
+        none = {'state': 'none', 'age': None}
+        self.assertEqual(self.seen(), (none, none), 'never read')
+        beat[0] = {'pid': 1, 'beat': self.t[0] - 20, 'stream': False, 'started': None}
+        self.worker.watch()
+        up = {'state': 'up', 'age': 20}
+        self.assertEqual(self.seen(AGENT), (up, up))
+        self.t[0] += push.WATCHER_STALE_S
+        self.worker.watch()
+        self.assertEqual(self.seen()[1], {'state': 'down', 'age': push.WATCHER_STALE_S + 20})
+
+    def test_a_status_that_raises_is_down_with_no_age(self):
+        def broken():
+            raise RuntimeError('no')
+        self.api.watcher_status = broken
+        down = {'state': 'down', 'age': None}
+        self.assertEqual(self.seen(), (down, down))
+
+
+class PushedRouteTest(RouteCase):
+    """A push written to a session keeps its items routed to it for the ack window, with no wait
+    open (module docstring "Routes")."""
+
+    def test_a_written_push_routes_to_the_key_for_the_ack_window_then_to_the_pm(self):
+        tid = self.todo()
+        self.assertEqual(self.routes(), {tid: 'pm'}, 'never heard from')
+        self.api.pushed('kit')
+        self.assertEqual(self.routes(), {tid: 'kit'})
+        self.assertEqual(self.api.route_change_in(), api.ACK_WINDOW_S)
+        self.assertEqual(self.pending(**{'for': 'pm'}), [])
+        self.t[0] += api.ACK_WINDOW_S - 1
+        self.assertEqual(self.routes(), {tid: 'kit'})
+        self.t[0] += 1
+        self.assertEqual(self.routes(), {tid: 'pm'})
+        self.assertIsNone(self.api.route_change_in())
+
+    def test_a_push_lasts_past_a_shorter_grace(self):
+        self.heard()
+        tid = self.todo()
+        self.api.pushed('kit')
+        self.t[0] += api.REACH_GRACE_S + 1
+        self.assertLess(api.REACH_GRACE_S + 1, api.ACK_WINDOW_S)
+        self.assertEqual(self.routes(), {tid: 'kit'})
+
+    def test_the_pm_and_an_empty_key_are_not_noted(self):
+        self.api.pushed('pm')
+        self.api.pushed('')
+        self.api.pushed(None)
+        self.assertEqual(self.api._pushed, {})
 
 
 class ScheduleTest(ApiCase):

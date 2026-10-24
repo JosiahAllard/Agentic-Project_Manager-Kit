@@ -388,19 +388,16 @@ class FallbackVars(PlantedTree):
         self.assertEqual(rc, 2, out)
 
 
-class PieceFixtures(PlantedTree):
-    """piece_fixtures needs the pieces-table resolver, which kitlib has not got: refused, never
-    ignored (an ignored entry would turn a fixture's allowed path into a failure the repository
-    cannot explain)."""
-    ENTRY = {'piece': 'worker', 'path': 'src/test/LoginTest.java', 'hits': ['[C]:/Users/x']}
+class RemovedPieceFixtures(PlantedTree):
+    """piece_fixtures is gone: a repository that still sets it is refused as an unknown key."""
 
-    def test_piece_fixtures_refuse(self):
-        self.set_config({'piece_fixtures': [self.ENTRY]})
+    def test_piece_fixtures_refuses_as_an_unknown_key(self):
+        self.set_config({'piece_fixtures': [{'piece': 'worker', 'hits': ['[C]:/Users/x']}]})
         rc, out = self.run_guard()
         self.assertEqual(rc, 2, out)
-        self.assertIn('pieces table', out)
+        self.assertIn('piece_fixtures', out)
 
-    def test_no_piece_fixtures_needs_no_table(self):
+    def test_the_repo_config_loads(self):
         self.set_config(REPO_CONFIG)
         cfg = M.load_config(self.root)
         self.assertTrue(cfg.allow)

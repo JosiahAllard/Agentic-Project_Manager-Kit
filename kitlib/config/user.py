@@ -374,8 +374,8 @@ def temp_parent(home=None):
 
 def shared_temp(environ=None, platform=None, home=None):
     """The temp folder every process on the machine shares, whatever TEMP/TMP it inherited, for
-    the kit's few small files there (gate fallback logs, the worktree sweep log, comfy_gen's GPU
-    self-lock and state; private index folders go in the same `temp_dir` through mkdtemp): the
+    the kit's few small files there (gate fallback logs, the worktree sweep log, comfy_gen's
+    state; private index folders go in the same `temp_dir` through mkdtemp): the
     machine config's `temp_dir` (temp_parent), even
     when it is a session's TEMP, made here if missing since its callers open files in it at once;
     else, or when it cannot be made, system_temp(). Only work_temp keeps the heavy churn out of

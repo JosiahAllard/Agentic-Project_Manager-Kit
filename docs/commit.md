@@ -126,5 +126,5 @@ Each item below was dropped on purpose (port brief).
 - **Backlog claim folding.** The kit backlog has no claim queue.
 - **The `-C` hand-off** (chdir to main, `KIT_CALLER_CWD`, a glued `-Cdir`, `-C` given twice), `KIT_REPO_ROOT`, `KIT_CONFIG` and `_repo_guard`. Here `-C` is a plain option, and argparse takes the last value given.
 - **machine_paths built-in allow entries.** These were the PM kit's `_paths.py` fallbacks, its `test_paths.py` table, the kit stubs and backlog.py's ledger. They named the older kit's files and one drive. A repository that relied on them needs explicit `allow` or `fixtures` entries.
-- **`machine_paths.piece_fixtures`.** kitlib has no pieces-table resolver, so a non-empty list is refused rather than ignored. Use `fixtures` with the file's glob.
+- **`machine_paths.piece_fixtures`.** kitlib has no pieces-table resolver, so the key is gone and a config that sets it is refused as an unknown key. Use `fixtures` with the file's glob.
 - **The doc_budget PowerShell twin.** Only `tools/doc_budget.py` is run.

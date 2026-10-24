@@ -1299,7 +1299,7 @@ class ChooseBase(unittest.TestCase):
 
 class ConfigKeys(WorktreeCase):
     """The `.kit.json` keys it reads: "repo".remote / worktrees_dir / tools_dir / main_branch and
-    "landing".in_flight. "new_worktree" takes no key. A refused configuration exits 2, nothing made."""
+    "landing".in_flight. There is no "new_worktree" section. A refused configuration exits 2, nothing made."""
 
     def assert_config_refused(self, data, why):
         self.configure(data)
@@ -1309,12 +1309,9 @@ class ConfigKeys(WorktreeCase):
         self.assertIn(why, out)
         self.assertFalse(os.path.exists(self.slug_path('fresh')), out)
 
-    def test_the_dropped_landing_stale_minutes_refuses(self):
-        self.assert_config_refused({'new_worktree': {'landing_stale_minutes': 90}},
-                                   'landing_stale_minutes')
-
-    def test_an_unknown_key_refuses(self):
-        self.assert_config_refused({'new_worktree': {'landing_minutes': 90}}, 'landing_minutes')
+    def test_a_new_worktree_section_refuses_as_an_unknown_section(self):
+        self.assert_config_refused({'new_worktree': {'landing_minutes': 90}},
+                                   'unknown section(s) new_worktree')
 
     def test_in_flight_shapes_that_refuse(self):
         for bad, why in (({'wait_s': 3601}, 'wait_s'), ({'wait_s': -1}, 'wait_s'),
