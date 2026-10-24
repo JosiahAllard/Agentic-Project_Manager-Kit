@@ -14,7 +14,7 @@ from unittest import mock
 from kitlib.hubsite import api, auth, push, serve, store as store_mod
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import AGENT, BASE, OWNER
-from kitlib.hubsite.store import Store
+from kitlib.hubsite.store import HubError, Store
 
 from tests.hubsite import httpfix
 
@@ -787,6 +787,222 @@ class ThreadTest(unittest.TestCase):
         self.assertIsNone(hub.push)
         self.assertIn('push notifications did not start', ' '.join(t for _l, t in self.lines))
         self.assertTrue(hub.close(timeout=3))
+
+
+class RecordViews(object):
+    """The record view and its write for a question bound to record EX-1 of repo kit: the
+    record's state line is `before` until an answer is filed, then `after` (what plan_answer
+    leaves). `fail`: the HubError the write raises; `during`: run once inside the next write,
+    before it is done (the push worker polling while the answer is being filed)."""
+
+    def __init__(self, before='open', after=None):
+        self.before, self.after = before, before if after is None else after
+        self.filed, self.fail, self.during = False, None, None
+
+    def record(self, repo, id):
+        if repo.lower() != 'kit' or id != 'EX-1':
+            raise HubError('not_found', 'no such record', 'id')
+        state = self.after if self.filed else self.before
+        return {'repo': 'kit', 'id': id, 'where': 'open',
+                'fields': [['id', id], ['state', state]]}
+
+    def record_answer(self, repo, id, qid, at, title, label, note, via, other, waiting):
+        during, self.during = self.during, None
+        if during is not None:
+            during()
+        if self.fail is not None:
+            raise self.fail
+        self.filed = True
+        return {'lines': []}
+
+
+class ResolvingPush(FakePush):
+    """FakePush with resolve(key): the live session of `key`, None when none (`live`)."""
+
+    def __init__(self, live=()):
+        FakePush.__init__(self)
+        self.live, self.resolved = set(live), []
+
+    def resolve(self, key):
+        self.resolved.append(key)
+        return ('sid-' + key) if key in self.live else None
+
+
+class FiledPushCase(PushCase):
+    """A question bound to a record, answered and filed through the Api: who hears it depends on
+    what the filing did to the record (docs/action-hub.md "Push notifications", "Filed answers")."""
+
+    def bind(self, before, after=None, live=None):
+        self.views = RecordViews(before, after)
+        self.api = api.Api(self.store, views=self.views, clock=self.ticks,
+                           session_keys=lambda: {'kit', 'zeta'})
+        if live is not None:
+            self.push = ResolvingPush(live)
+        self.worker = self.make()
+
+    def ask_bound(self, asker='kit'):
+        return self.ask(**{'from': asker, 'record': {'repo': 'kit', 'id': 'EX-1'}})
+
+    def promote(self, qid):
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'standing': True})
+
+    def log(self, qid):
+        version = self.store.get('questions', qid)['version']
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'R-1', 'if_version': version})
+
+
+class FiledRecipientsTest(FiledPushCase):
+
+    def test_an_answer_filed_into_a_pulled_record_goes_to_its_asker_alone(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.assertEqual(self.store.get('questions', qid)['filed_as'], 'pulled')
+        self.assertEqual([r for r, _t in self.push.calls], ['kit'])
+        self.assertIn('filed into record kit:EX-1, which is being worked on', self.push.to('kit')[0])
+        self.assertIn('hub pending --for kit', self.push.to('kit')[0])
+        self.later(130)
+        self.assertEqual(self.attempts('kit'), [1, 2], 'the asker is told until it picks it up')
+        self.pick_up('kit')
+        self.later(400)
+        self.assertEqual(self.attempts('kit'), [1, 2])
+        self.assertEqual(self.push.to(push.PM_KEY), [])
+
+    def test_a_pulled_answer_the_pm_asked_tells_the_pm_once(self):
+        self.bind('pulled')
+        qid = self.ask_bound(asker='pm')
+        self.answer(qid)
+        self.worker.poll()
+        self.later(130)
+        self.assertEqual(self.attempts(push.PM_KEY), [1])
+        self.assertIn('its worker reads it', self.push.to(push.PM_KEY)[0])
+        self.assertIn('no ack needed', self.push.to(push.PM_KEY)[0])
+
+    def test_an_answer_that_leaves_its_record_waiting_pushes_to_nobody(self):
+        self.bind('blocked')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.later(130)
+        self.assertEqual(self.store.get('questions', qid)['filed_as'], 'held')
+        self.assertEqual(self.push.calls, [])
+        self.assertEqual([p['id'] for p in self.ok('GET', '/pending', AGENT,
+                                                    query={'for': 'kit'})['items']], [qid],
+                         'its asker still reads it in its pending list')
+
+    def test_a_freed_record_with_no_live_coordinator_pings_the_pm_once(self):
+        self.bind('parked', 'open', live=())
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.later(130)
+        self.later(400)
+        self.assertEqual(self.store.get('questions', qid)['filed_as'], 'freed')
+        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY])
+        text = self.push.to(push.PM_KEY)[0]
+        self.assertIn('frees it, and no coordinator of repo kit is running', text)
+        self.assertIn('no ack needed', text)
+        self.assertEqual(self.push.resolved, ['kit'], 'the asker and the repo are one key here')
+
+    def test_a_freed_record_whose_coordinator_is_live_pushes_to_nobody(self):
+        for live in ({'kit'}, {'zeta'}):        # the record's repository, or the asker
+            with self.subTest(live=live):
+                self.bind('blocked', 'open', live=live)
+                qid = self.ask_bound(asker='zeta')
+                self.answer(qid)
+                self.worker.poll()
+                self.assertEqual(self.store.get('questions', qid)['filed_as'], 'freed')
+                self.assertEqual(self.push.calls, [])
+
+    def test_a_freed_record_without_resolve_pings_the_pm(self):
+        self.bind('blocked', 'open')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY])
+
+    def test_nothing_fires_while_an_answer_is_being_filed(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        seen = []
+
+        def poll_mid_filing():
+            self.worker.poll()
+            seen.append((self.store.get('questions', qid)['status'], list(self.push.calls)))
+        self.views.during = poll_mid_filing
+        self.answer(qid)
+        self.assertEqual(seen, [('answered', [])])
+        self.worker.poll()
+        self.assertEqual([r for r, _t in self.push.calls], ['kit'])
+
+    def test_an_answer_whose_filing_failed_goes_to_its_asker_and_the_pm(self):
+        self.bind('pulled')
+        self.views.fail = HubError('store', 'disk full', 'views')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.assertIsNotNone(self.store.get('questions', qid)['filing'])
+        self.assertEqual(sorted(r for r, _t in self.push.calls), sorted(['kit', push.PM_KEY]))
+
+    def test_a_re_answer_seen_while_it_is_filed_reaches_an_asker_that_held_the_first(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.pick_up('kit')
+        self.later(130)
+        self.assertEqual(self.attempts('kit'), [1])
+        self.views.during = self.worker.poll
+        self.answer(qid, choice=1)
+        self.worker.poll()
+        self.assertEqual(self.attempts('kit'), [1, 1], 'the re-answer is sent to the asker')
+
+
+class StandingPushTest(FiledPushCase):
+
+    def test_a_standing_answer_goes_to_the_pm_until_it_is_logged(self):
+        self.bind('blocked')
+        qid = self.ask_bound()
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER,
+                {'choice': 0, 'note': NOTE, 'standing': True})
+        self.worker.poll()
+        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY])
+        self.assertIn('a standing rule', self.push.to(push.PM_KEY)[0])
+        self.assertIn('hub questions log %s' % qid, self.push.to(push.PM_KEY)[0])
+        self.pick_up('pm')
+        self.later(130)
+        self.assertEqual(self.attempts(push.PM_KEY), [1, 2], 'picking it up is not logging it')
+        self.log(qid)
+        self.later(400)
+        self.assertEqual(self.attempts(push.PM_KEY), [1, 2])
+
+    def test_a_promote_adds_the_pm_to_the_push_its_asker_is_owed(self):
+        self.bind('pulled')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.assertEqual([r for r, _t in self.push.calls], ['kit'])
+        self.promote(qid)
+        self.later(130)
+        self.assertEqual(self.attempts('kit'), [1, 2], 'the asker is still owed the answer')
+        self.assertEqual(self.attempts(push.PM_KEY), [1])
+        self.assertIn('a standing rule', self.push.to(push.PM_KEY)[0])
+        self.pick_up('kit')
+        self.later(400)
+        self.assertEqual(self.attempts('kit'), [1, 2])
+        self.assertEqual(self.attempts(push.PM_KEY), [1, 2], 'the PM until it logs it')
+
+    def test_a_promote_of_an_answer_pushed_to_nobody_goes_to_the_pm_alone(self):
+        self.bind('blocked')
+        qid = self.ask_bound()
+        self.answer(qid)
+        self.worker.poll()
+        self.assertEqual(self.push.calls, [])
+        self.promote(qid)
+        self.worker.poll()
+        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY])
+        self.assertIn('standing rule', self.push.to(push.PM_KEY)[0])
 
 
 if __name__ == '__main__':
