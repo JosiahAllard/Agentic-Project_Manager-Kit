@@ -21,12 +21,13 @@ SPECIALTY_MIN = {"specialty-3d-assets": "senior-worker", "specialty-rigging": "s
                  "specialty-research": "analyst", "specialty-records": "docs-writer",
                  "specialty-spec": "docs-writer"}
 CREATIVE = ("specialty-3d-assets", "specialty-rigging", "specialty-tech-art", "specialty-sound")
+# the one creative.md lives in specialty-tech-art; the other CREATIVE skills reach it as a sibling folder
+CREATIVE_HOME = "specialty-tech-art"
 # companion files written once in meaning and carried byte for byte by each skill that needs them
-SHARED_COMPANIONS = {"creative.md": CREATIVE, "doc-writing.md": ("specialty-records", "specialty-spec")}
+SHARED_COMPANIONS = {"doc-writing.md": ("specialty-records", "specialty-spec")}
 # reference files a skill carries beside its SKILL.md
-EXTRA_FILES = {"coordinator-dispatch": ["roster.md"], "specialty-3d-assets": ["creative.md"],
-               "specialty-rigging": ["creative.md"],
-               "specialty-tech-art": ["creative.md"], "specialty-sound": ["creative.md", "measuring.md"],
+EXTRA_FILES = {"coordinator-dispatch": ["roster.md"], "specialty-tech-art": ["creative.md"],
+               "specialty-sound": ["measuring.md"],
                "specialty-records": ["doc-writing.md"], "specialty-spec": ["doc-writing.md"]}
 # one repo's own: never shipped in the plugin (docs/shipping.md, "Stays repo-local")
 REPO_LOCAL = {"worktree-start"}
@@ -167,6 +168,10 @@ class SkillFilesTest(unittest.TestCase):
             text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
             for extra in extras:
                 self.assertIn(f"`{extra}`", text, f"{name}/SKILL.md never names its {extra}")
+        for name in CREATIVE:
+            text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn(f"`../{CREATIVE_HOME}/creative.md`" if name != CREATIVE_HOME else "`creative.md`", text, name)
+            self.assertTrue((SKILLS / CREATIVE_HOME / "creative.md").is_file())
 
     def test_repo_owned_doc_name_passes_though_kit_has_it(self):
         with tempfile.TemporaryDirectory() as d:

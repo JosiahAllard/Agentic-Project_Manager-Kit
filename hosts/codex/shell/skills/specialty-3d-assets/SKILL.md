@@ -1,13 +1,13 @@
 ---
 name: specialty-3d-assets
-description: Use when your brief says to load it - building a 3D asset as a Blender Python script (the script is the asset, the exported glTF a build output), cleaning a mesh from the owner's local image-to-3D generators into a game asset, validating the export against budgets and delivering a contact sheet. Props here; characters and rigs go to skill specialty-rigging.
+description: Use when your brief says to load it - building a game-ready 3D prop as a Blender Python script, cleaning generated meshes, validating budgets and delivering a contact sheet.
 ---
 
 # Specialty: scripted 3D assets
 
 Dispatch: senior-worker at least, never weak-worker; reads the repo profile's **Branches and worktrees**, **Build and test**, **Shared resources** and **Art**.
 
-Read `creative.md` beside this file first. Props are yours; characters, rigs and skins are skill `specialty-rigging`. A reader of your contact sheet should say what each object is, who would use it and what it feels like, without being told.
+Read `creative.md` (`../specialty-tech-art/creative.md` from this folder) first. Props are yours; characters, rigs and skins are skill `specialty-rigging`. A reader of your contact sheet should say what each object is, who would use it and what it feels like, without being told.
 
 1. Inputs: what to build, the art direction it matches, the FEEL block, its real-world size in the project's units and what it sits next to, where it lives (asset path, the scene or material that uses it). Size missing: ask; scale is the classic scripted-asset failure. No art direction in the profile's **Art** section (the default profile has none): stop and say so.
 2. Say once, in your first report, which category the brief is: parametric hard-surface (props, housings, frames, panels, barriers, blocky weapons, architecture) is what scripts do well; faces, cloth, creatures and hand-painted detail they do badly. Then make the best version the method allows.

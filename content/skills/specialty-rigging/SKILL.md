@@ -1,13 +1,13 @@
 ---
 name: specialty-rigging
-description: Use when your brief says to load it - rigging a Blender character as a Blender Python script (the script is the source, the export a build output) to the body contract the repo names, weighting it and checking deformation, rendering test poses and animations to a contact sheet, and putting several skins on one shared rig.
+description: Use when your brief says to load it - rigging and weighting a Blender character as a script, rendering test poses, and sharing one rig across skins.
 ---
 
 # Specialty: scripted character rigs
 
 Dispatch: senior-worker at least, never weak-worker; reads the repo profile's **Branches and worktrees**, **Build and test**, **Shared resources** and **Art**.
 
-Read `creative.md` beside this file first. Props are specialty-3d-assets work; characters, rigs and skins are yours. Numbered steps are rules; the Advice lines are expectations, not measured facts.
+Read `creative.md` (`../specialty-tech-art/creative.md` from this folder) first. Props are specialty-3d-assets work; characters, rigs and skins are yours. Numbered steps are rules; the Advice lines are expectations, not measured facts.
 
 1. Inputs: the body contract by document and section - skeleton, bone names (a bone map), rest pose, scale, facing axis, the clips, any per-skin scenes the engine needs (a first-person body, a ragdoll); the mesh; the export path. No contract: stop and say so.
 2. Fit the repo's skeleton by bone names: the bone map is the contract. Script the armature (a generated metarig renamed to the map, or a bone list placed at landmarks measured on the mesh). Before weighting: one root, the contract's parent chain and rest pose, consistent bone roll, exact names, every joint inside the mesh it drives.
