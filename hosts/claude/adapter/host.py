@@ -31,7 +31,9 @@ kitlib.host.hookmain.dispatch.
                        agent-start block after it (kitlib.agentstart, _agent_start); 'coordinator' the coordinator rules
                        (kitlib.coordinatorstart.render, checked in the payload's cwd) in a session
                        marked coordinator, else nothing; 'pm' the PM checklist (kitlib.pmstart; the
-                       PM settings' SessionStart hook, docs/pm-start.md). A check that fails says
+                       PM settings' SessionStart hook, docs/pm-start.md), or with no pm_start config
+                       the skip line and the machine config lines (kitlib.pmstart.configcheck
+                       appended). A check that fails says
                        so in the text; it never raises. boot/hook.py writes it; tools/agent_view.py
                        shows it.
   start_parts(event_name, role)   the parts a session of `role` runs at `event_name`: the plugin's
@@ -152,7 +154,9 @@ class ClaudeAdapter(object):
             cfg = pmstart.load_config()
             if cfg is None:
                 from kitlib.config import user
-                return "PM session start: no pm_start config in %s; checklist skipped." % user.display()
+                from kitlib.pmstart import configcheck     # the machine config lines still show
+                return configcheck.appended(
+                    "PM session start: no pm_start config in %s; checklist skipped." % user.display())
             return pmstart.checklist(cfg)
         except Exception as e:
             return "PM session start: checklist failed: %s: %s" % (type(e).__name__, e)
