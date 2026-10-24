@@ -506,7 +506,9 @@ class WalkLimitText(unittest.TestCase):
     def test_a_walk_past_the_limit_says_the_word_was_too_wide(self):
         folder = W.fwd(self.big)
         for name, payload_of in (('rm', lambda sub: bash('rm big/*.tmp', self.w.wt, sub)),
-                                 ('Remove-Item', lambda sub: ps('Remove-Item big\\*.tmp', self.w.wt, sub))):
+                                 ('rm back', lambda sub: bash("rm 'big\\*.tmp'", self.w.wt, sub)),
+                                 ('Remove-Item', lambda sub: ps('Remove-Item big\\*.tmp', self.w.wt, sub)),
+                                 ('Remove-Item fwd', lambda sub: ps('Remove-Item big/*.tmp', self.w.wt, sub))):
             for environ, sub in SESSIONS:
                 with self.subTest(name, environ=environ, sub=sub), \
                         mock.patch.object(delegfile, 'WALK_LIMIT', 3):
