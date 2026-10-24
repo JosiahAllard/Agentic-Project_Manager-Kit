@@ -195,6 +195,12 @@ class RemovedKitOnlyTools(StubCase):
 
     GONE = 'ledger_refs'
 
+    def test_a_config_naming_it_loads_because_it_is_retired(self):
+        self.assertIn(self.GONE, stubs.RETIRED)
+        self.config(stubs={'tools': ['landed', self.GONE]})
+        code, out = self.run_stubs('write')
+        self.assertNotEqual(code, stubs.CONFIG, out)
+
     def test_the_kit_has_no_command_of_that_name_and_no_list_names_it(self):
         self.assertNotIn(self.GONE, stubs.commands())
         self.assertNotIn(self.GONE, stubs.SHARED + stubs.KIT_ONLY)

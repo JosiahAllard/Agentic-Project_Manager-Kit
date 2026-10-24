@@ -291,13 +291,6 @@ class RulingCitesUnchecked(unittest.TestCase):
         self.assertIn('priority_by: owner', shown)
         self.assertNotIn('priority_ruling', shown)
 
-    def test_the_standing_delegation_changes_no_price(self):
-        self.configure(standing_delegation='R-9168')
-        self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
-        out = self.ok('set', 'FOO', '--priority', '1', '--priority-by', 'owner')
-        self.assertNotIn('standing delegation', out)
-        self.assertNotIn('priority_ruling', self.ok('show', 'FOO'))
-
 
 if __name__ == '__main__':
     unittest.main()

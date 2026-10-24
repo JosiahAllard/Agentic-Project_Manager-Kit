@@ -43,22 +43,6 @@ class UserConfigTest(unittest.TestCase):
         self.assertNotIn('ledger_path', schema.SECTIONS['repo'])
         self.assertFalse(any('ledger_path' in fields for fields in schema.SECTIONS.values()))
 
-    def test_the_standing_delegation_is_read_from_the_machine_config(self):
-        self.assertIsNone(user.standing_delegation(self.home))   # no file
-        self.write({'ledger_path': self.ledger})
-        self.assertIsNone(user.standing_delegation(self.home))   # file without the key
-        rid = 'R-' + '9168'      # built, so tests/scrub sees no id in this file
-        self.write({'standing_delegation': rid})
-        self.assertEqual(user.standing_delegation(self.home), rid)
-
-    def test_a_standing_delegation_that_is_not_a_ruling_id_refuses(self):
-        rid = 'R-' + '9168'
-        for bad in ('9168', rid + 'x', rid.lower(), rid[:4], '', 9168):
-            self.write({'standing_delegation': bad})
-            with self.assertRaises(config.ConfigError, msg=repr(bad)) as cm:
-                user.standing_delegation(self.home)
-            self.assertIn('standing_delegation', str(cm.exception))
-
     def test_a_relative_path_an_unknown_key_or_bad_json_refuses(self):
         for body, why in (({'ledger': self.ledger}, 'unknown key(s) ledger'),
                           ('{', 'is not valid JSON'),
@@ -181,6 +165,13 @@ class RetiredKeyTest(unittest.TestCase):
         self.assertEqual(got['ledger_path'], self.ledger)
         for key in user.RETIRED:
             self.assertNotIn(key, got)
+
+    def test_the_retired_standing_delegation_still_loads_and_is_not_returned(self):
+        self.assertIn('standing_delegation', user.RETIRED)
+        self.write({'ledger_path': self.ledger, 'standing_delegation': 'R-' + '9168'})
+        got = self.read()
+        self.assertEqual(got['ledger_path'], self.ledger)
+        self.assertNotIn('standing_delegation', got)
 
     def test_a_retired_key_loads_whatever_it_holds(self):
         for value in ('not an object', 7, [], None, {'no_such_key': 1}):

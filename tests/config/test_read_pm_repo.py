@@ -52,10 +52,10 @@ class KeySetsTest(unittest.TestCase):
 
 class TwoFilesTest(_PmRepo):
     def test_each_file_gives_its_own_keys(self):
-        self.write(self.policy, {'standing_delegation': RID, 'temp_dir': 'Q:\\t'})
+        self.write(self.policy, {'daily_red_ruling': RID, 'temp_dir': 'Q:\\t'})
         self.write(self.local, {'owner_email': 'owner@example.invalid', 'hub': {'port': 9001}})
         cfg = user.user_config(self.home)
-        self.assertEqual((cfg['standing_delegation'], cfg['temp_dir']), (RID, 'Q:\\t'))
+        self.assertEqual((cfg['daily_red_ruling'], cfg['temp_dir']), (RID, 'Q:\\t'))
         self.assertEqual((cfg['owner_email'], cfg['hub']), ('owner@example.invalid', {'port': 9001}))
         self.assertIsNone(cfg['ledger_path'])
 
@@ -63,17 +63,17 @@ class TwoFilesTest(_PmRepo):
         self.write(self.local, {'owner_email': 'owner@example.invalid'})
         self.assertEqual(user.user_config(self.home)['owner_email'], 'owner@example.invalid')
         os.remove(self.local)
-        self.write(self.policy, {'standing_delegation': RID})
+        self.write(self.policy, {'daily_red_ruling': RID})
         cfg = user.user_config(self.home)
-        self.assertEqual((cfg['standing_delegation'], cfg['owner_email']), (RID, None))
+        self.assertEqual((cfg['daily_red_ruling'], cfg['owner_email']), (RID, None))
 
     def test_a_local_key_in_config_json_is_refused_naming_its_file(self):
         self.write(self.policy, {'owner_email': 'owner@example.invalid'})
         self.refused('%s: owner_email belongs in %s, not here' % (self.policy, self.local))
 
     def test_a_policy_key_in_local_json_is_refused_naming_its_file(self):
-        self.write(self.local, {'standing_delegation': RID})
-        self.refused('%s: standing_delegation belongs in %s, not here' % (self.local, self.policy))
+        self.write(self.local, {'daily_red_ruling': RID})
+        self.refused('%s: daily_red_ruling belongs in %s, not here' % (self.local, self.policy))
 
     def test_a_dropped_key_in_either_file_is_refused(self):
         for path in (self.policy, self.local):
@@ -93,9 +93,9 @@ class TwoFilesTest(_PmRepo):
         self.refused('no_such_key')
 
     def test_notes_are_skipped_in_both_files(self):
-        self.write(self.policy, {'_about': 'policy', 'standing_delegation': RID})
+        self.write(self.policy, {'_about': 'policy', 'daily_red_ruling': RID})
         self.write(self.local, {'_about': 'local'})
-        self.assertEqual(user.user_config(self.home)['standing_delegation'], RID)
+        self.assertEqual(user.user_config(self.home)['daily_red_ruling'], RID)
 
     def test_every_problem_in_both_files_is_named_at_once(self):
         self.write(self.policy, {'owner_email': 'owner@example.invalid'})
@@ -179,7 +179,7 @@ class FileByKeyTest(_PmRepo):
         with mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''}):
             user.forget()
             home_file = os.path.join(self.home, user.DIR_NAME, user.FILE_NAME)
-            for key in ('owner_email', 'standing_delegation', None):
+            for key in ('owner_email', 'daily_red_ruling', None):
                 self.assertEqual(user.key_file(self.home, key), home_file)
                 with self.assertRaises(ConfigError, msg=key) as cm:
                     user.writable_file(self.home, key)
