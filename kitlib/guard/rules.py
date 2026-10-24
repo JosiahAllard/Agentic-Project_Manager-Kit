@@ -832,11 +832,11 @@ def hub_path_texts(text):
     return []
 
 
-def glob_folder(text):
+def glob_folder(text, chars=hubg.GLOB_CHARS):
     """The literal folder a wildcard path `text` starts with (everything before the separator
-    ahead of its first wildcard character), or None when it has none: `<token folder>/o*` is in
-    the token folder whatever the wildcard matches."""
-    first = min(text.index(c) for c in hubg.GLOB_CHARS if c in text)
+    ahead of its first wildcard character, one of `chars`), or None when it has none:
+    `<token folder>/o*` is in the token folder whatever the wildcard matches."""
+    first = min(text.index(c) for c in chars if c in text)
     cut = max(text.rfind('/', 0, first), text.rfind('\\', 0, first))
     return text[:cut] if cut > 0 else None
 
@@ -889,7 +889,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
     no path into it, passes), and python or node code that names a token file or the folder
     (kitlib.guard.hub.INLINE_RE; docs/guard-v2.md W3: a parsed hub tool run of an agent verb piped into
     code given on the command line is that code's data, hub_run_verb). A wildcard path is read as the literal folder before its first
-    wildcard (glob_folder); the store and the word hub are not refused (the guard blocks only
+    wildcard (glob_folder); a DOS wildcard (LEDGER_GLOB_CHARS: `<`, `>`, `"`) is read both ways,
+    as that folder and as the literal path (hub_texts); the store and the word hub are not refused (the guard blocks only
     what it can place; an edit tool's write into the store is still hub_secret_edit's).
     A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
     %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
@@ -898,25 +899,34 @@ def hub_secret_shell(ctx, cmd, inv, places):
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
     for w in list(cmd.words) + targets:
         for text in hub_path_texts(w.text):
-            text = sh.home_text(text, ctx.home, w.dyn)
-            if text is not None and hubg.has_glob(text):
-                text = glob_folder(text)
-            if text is None:
-                continue
-            try:
-                p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
-            except (OSError, ValueError):
-                p = None
-            if not p:
-                continue
-            p_ = places()
-            if p_.where(p) == 'secret':
-                return 'reaches %s (%s)' % (p_.label('secret', p), w.text)
+            for text in hub_texts(sh.home_text(text, ctx.home, w.dyn)):
+                try:
+                    p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
+                except (OSError, ValueError):
+                    p = None
+                if not p:
+                    continue
+                p_ = places()
+                if p_.where(p) == 'secret':
+                    return 'reaches %s (%s)' % (p_.label('secret', p), w.text)
     for text in inline_code(cmd, inv, lambda c: hub_run_verb(c) == ''):
         m = hubg.INLINE_RE.search(text)
         if m:
             return 'runs code that names %s' % m.group(0)
     return None
+
+
+def hub_texts(text):
+    """The paths hub_secret_shell judges for one path text: a wildcard one as its literal folder
+    (glob_folder); one with a DOS wildcard (`<`, `>`, `"`: FindFirstFile reads them as wildcards)
+    also as the literal folder before the first of those, and, when it has no other wildcard, as
+    the literal path too (each reading only adds a path judged)."""
+    if text is None:
+        return []
+    out = [glob_folder(text) if hubg.has_glob(text) else text]
+    if any(c in text for c in '<>"'):
+        out.append(glob_folder(text, LEDGER_GLOB_CHARS))
+    return [t for t in out if t is not None]
 
 
 def hub_run_args(inv):
