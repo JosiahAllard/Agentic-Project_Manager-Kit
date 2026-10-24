@@ -5,33 +5,12 @@ drawn under Info. The Docs reader the old artifact had is the Docs section, test
 The page's pure block runs under node; the tab runs against the stand-in DOM of
 tests/hubsite/pagedom.py.
 """
-import json
-import os
-import re
-import shutil
 import unittest
 
-from kitlib.proc import spawn
 from tests.hubsite import pagedom
-
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PAGE = os.path.join(ROOT, "kitlib", "hubsite", "web", "index.html")
-NODE = shutil.which("node")
-
-
-def page():
-    with open(PAGE, encoding="utf-8") as f:
-        return f.read()
-
-
-def js(expr, items):
-    """expr, which sees `items` and the page's pure functions, evaluated under node, as JSON."""
-    m = re.search(r"// pm-pure:begin\r?\n(.*?)// pm-pure:end", page(), re.S)
-    assert m, "pm-pure markers missing from kitlib/hubsite/web/index.html"
-    src = m.group(1) + "\nconst items = %s;\nconsole.log(JSON.stringify(%s));" % (json.dumps(items), expr)
-    out = spawn.run([NODE, "-"], input=src, capture_output=True, text=True, encoding="utf-8", timeout=30)
-    assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout)
+# The page and node helpers of the page's own tests: this module starts no child of its own
+# (tests/hubsite/test_package.py counts the ones that do).
+from tests.hubsite.test_page import NODE, js, page
 
 
 def dom(body, snap, hash=""):
