@@ -40,6 +40,14 @@ class Field(unittest.TestCase):
             self.assertTrue(messages(answer=bad), bad)
             self.assertIsNotNone(rmod._answer(bad), bad)
 
+    def test_only_the_one_documented_form_of_at_passes(self):
+        for bad in ('2026-10-24T11:40:00Z', '2026-10-24T04:40:00.5-07:00',
+                    '2026-10-24T04:40:00.000000-07:00', '20261024T044000-0700',
+                    '2026-10-24T04:40:00-0700', '2026-10-24T04:40-07:00'):
+            self.assertIsNotNone(rmod._answer('Q-101 %s' % bad), bad)
+            self.assertTrue(messages(answer='Q-101 %s' % bad), bad)
+        self.assertIsNone(rmod._answer('Q-101 2026-10-24T11:40:00+00:00'))
+
     def test_one_line_per_question(self):
         got = messages(answer=['Q-101 %s' % AT, 'Q-101 %s' % AT2])
         self.assertTrue(any('one line per question' in m for m in got), got)
@@ -146,10 +154,23 @@ class States(AnswerCase):
         self.seed(held('FOO'))
         with self.assertRaises(Refusal) as cm:
             self.answer('FOO', role_checked=False)
-        self.assertIn('unblock-owner', str(cm.exception))
+        text = str(cm.exception)
+        self.assertIn('unblock-owner', text)
+        self.assertIn("needs the owner's or the PM's role", text)
+        self.assertIn('owner blocker', text)
+        self.assertNotIn('tools/backlog.py', text)
         r = self.get('FOO')
         self.assertEqual(r.get('state'), 'blocked')
         self.assertFalse(r.has('answer'))
+
+    def test_two_cited_questions_one_answered_stays_blocked(self):
+        self.seed(held('FOO', ask='Q-101: keep the cap? Q-102: and the floor?'))
+        change = self.answer('FOO')
+        r = self.get('FOO')
+        self.assertEqual((r.get('state'), r.all('blocked_on')), ('blocked', ['owner']))
+        self.assertEqual(r.get('owner_ask'), 'Q-101: keep the cap? Q-102: and the floor?')
+        self.assertEqual(r.all('answer'), ['Q-101 %s' % AT])
+        self.assertIn('still waits on Q-102', '\n'.join(change.lines))
 
     def test_pulled_and_open_records_get_the_answer_only(self):
         self.seed(priced('FOO', state='pulled', pulled_at='2026-10-20',
@@ -181,6 +202,13 @@ class Other(AnswerCase):
             self.verb('pull', 'FOO')
         self.assertIn('marked for review', str(cm.exception))
 
+    def test_an_other_answer_keeps_a_mark_that_stands(self):
+        self.seed(parked('FOO', review='hub 2026-10-01'))
+        self.answer('FOO', label='Other', note='do it differently', other=True)
+        r = self.get('FOO')
+        self.assertEqual(r.all('review'), ['hub 2026-10-01'])
+        self.assertNotIn('Marked for review', r.body)
+
     def test_a_chosen_answer_writes_no_mark(self):
         self.seed(parked('FOO'))
         self.answer('FOO')
@@ -206,6 +234,17 @@ class Repeat(AnswerCase):
         self.assertEqual(r.body.count('## Owner answer'), 2)
         self.assertIn('Answer: No, drop it', r.body)
 
+    def test_a_stale_re_file_keeps_the_newer_answer(self):
+        self.seed(parked('FOO'))
+        self.answer('FOO', at=AT2, label='No, drop it')
+        text = self.get('FOO').text
+        change = self.answer('FOO', at=AT)
+        self.assertEqual(change.writes, {})
+        self.assertIn('newer answer', '\n'.join(change.lines))
+        r = self.get('FOO')
+        self.assertEqual(r.text, text)
+        self.assertEqual(r.all('answer'), ['Q-101 %s' % AT2])
+
 
 class Refusals(AnswerCase):
 
@@ -224,6 +263,17 @@ class Refusals(AnswerCase):
                 self.answer('FOO', note='the notes are in %s now' % drive)
             self.assertIn('machine path', str(cm.exception))
         self.assertEqual(self.get('FOO').get('state'), 'parked')
+
+    def test_a_machine_path_in_the_title_label_or_via_is_refused(self):
+        self.seed(parked('FOO'))
+        drive = test_verbs.MachinePaths.DRIVES[0]
+        for field in ('title', 'label', 'via'):
+            with self.assertRaises(Usage, msg=field) as cm:
+                self.answer('FOO', **{field: 'see %s' % drive})
+            self.assertIn('machine path', str(cm.exception), field)
+        r = self.get('FOO')
+        self.assertEqual(r.get('state'), 'parked')
+        self.assertFalse(r.has('answer'))
 
 
 if __name__ == '__main__':

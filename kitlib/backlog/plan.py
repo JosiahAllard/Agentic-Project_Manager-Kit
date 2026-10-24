@@ -1064,11 +1064,14 @@ def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, othe
     the record, still unanswered; the hub knows them) is empty and every question the wait names
     (_waits_on) has an answer line, a parked record is unparked (as plan_unpark) and the `owner`
     blocker is cleared (as plan_unblock: other blockers stay, `owner_ask` goes unless
-    `priority: -1`), which is the `unblock-owner` row, so it needs `role_checked`
-    (refuse_top). A pulled or open record, or a wait no question names, only gets the answer.
+    `priority: -1`), which is the `unblock-owner` row, so it needs `role_checked` (else a
+    Refusal: the owner's or the PM's role clears an owner blocker). A pulled or open record, or
+    a wait no question names, only gets the answer.
     `other` (a free-text answer) also writes the review mark `review: owner-answer <date>`
     unless one stands, so `pull` refuses the record and `next` lists it to review until a
-    coordinator's `clear-review`. The same `qid` and `at` again changes nothing. A record that
+    coordinator's `clear-review`. The same `qid` and `at` again changes nothing, and so does an
+    `at` older than the record's line for `qid` (a stale re-file never overwrites a newer
+    answer). A record that
     is gone is NotFound: the hub leaves the answer to the PM."""
     err = rmod._question(qid) if qid else 'no question id'
     if err:
@@ -1087,6 +1090,14 @@ def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, othe
     subject = 'backlog: owner answer %s on %s' % (rid, qid)
     if line in rec.all('answer'):
         return Change({}, subject, ['ANSWERED %s on %s (%s)' % (rid, qid, at), '  (no change)'])
+    when = datetime.datetime.fromisoformat(at)
+    newer = [v for v in rec.all('answer') if v.partition(' ')[0] == qid
+             and rmod._answer(v) is None
+             and datetime.datetime.fromisoformat(v.partition(' ')[2]) > when]
+    if newer:
+        return Change({}, subject, ['ANSWERED %s on %s (%s)' % (rid, qid, at),
+                                    '  (no change: the record holds a newer answer, `%s`)'
+                                    % newer[0]])
     others = [v for v in rec.all('answer') if v.partition(' ')[0] != qid]
     pairs = rmod.apply_changes(rec.pairs(), [('answer', others + [line])])
     lines = ['ANSWERED %s on %s (%s): %s' % (rid, qid, at, ' '.join(label.split()))]
@@ -1104,7 +1115,10 @@ def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, othe
         lines.append('  UNPARKED - state: open (was parked on %s)' % rec.get('q'))
     else:
         if not role_checked:
-            refuse_top(rid, 'answer', ['unblock-owner'])
+            raise Refusal('`%s`: filing the answer to %s clears the record\'s owner blocker, '
+                          'which needs the owner\'s or the PM\'s role (`unblock-owner`, '
+                          'kitlib/backlog/roles.py), and no role check ran: the Action Hub files '
+                          'it from the owner\'s answer route, with role_checked' % (rid, qid))
         left = [m for m in rec.all('blocked_on') if m != 'owner']
         if rec.get('priority') != rmod.OWNER_PRIORITY:
             pairs = [(k, v) for k, v in pairs if k != 'owner_ask']

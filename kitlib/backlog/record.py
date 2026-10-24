@@ -221,14 +221,20 @@ def _review(v, rules=None):
     return _date(date)
 
 
+# The one spelling of an answer's `at`: no `Z`, no fractional seconds, no compact form, so a
+# repeat filing of one answer matches its line exactly (plan.py plan_answer).
+ANSWER_AT_RE = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+                          r'[+-][0-9]{2}:[0-9]{2}$')
+
+
 def _answer(v, rules=None):
-    """`<Q-nnn> <at>`: the owner's answer to that question, filed by the Action Hub at `at`, an
-    ISO timestamp with its UTC offset and no space (docs/backlog.md "Records"). One line per
-    question (_cross_field)."""
+    """`<Q-nnn> <at>`: the owner's answer to that question, filed by the Action Hub at `at`,
+    exactly `YYYY-MM-DDTHH:MM:SS+HH:MM` (ANSWER_AT_RE, then a real moment; docs/backlog.md
+    "Records"). One line per question (_cross_field)."""
     qid, _, at = v.partition(' ')
     shape = ('`%s` is not an answer line - `<Q-nnn> <at>`, `at` a timestamp with its offset '
              '(YYYY-MM-DDTHH:MM:SS+HH:MM)' % v)
-    if not QUESTION_RE.match(qid) or not at or ' ' in at or 'T' not in at:
+    if not QUESTION_RE.match(qid) or not ANSWER_AT_RE.match(at):
         return shape
     try:
         when = datetime.datetime.fromisoformat(at)
