@@ -18,8 +18,8 @@ from kitlib.proc.win32 import K32
 def _read(pid):
     """(creation, parent pid) of the running process pid, from one handle; else None.
 
-    A snapshot lists running processes only. An exited one stays openable while any
-    handle to it is open, so it ends the walk here too.
+    A snapshot can still name a process just after it exits; an exited one stays openable
+    while any handle to it is open, so it ends the walk here too.
     """
     handle=process.open_process(pid,process.PROCESS_QUERY_LIMITED_INFORMATION|process.SYNCHRONIZE)
     if not handle: return None

@@ -97,19 +97,37 @@ def alive(pid, ctime):
         K32.CloseHandle(h)
 
 
+def _ancestor(pid):
+    """(creation FILETIME or None, exited) of pid, both from one handle. exited is True only when
+    a wait shows the process has ended; a process that can be queried but not waited on counts as
+    running."""
+    h = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE)
+    if not h:
+        return proc_ctime(pid), False
+    try:
+        return handle_ctime(h), K32.WaitForSingleObject(h, 0) == win32.WAIT_OBJECT_0
+    finally:
+        K32.CloseHandle(h)
+
+
 def ancestors_of(pid, ctime, parents=None, limit=64):
     """[(pid, ctime)] of a process's ancestors, nearest first; the walk stops at a parent created
-    after its child (the parent's pid was reused) or one that cannot be opened."""
+    after its child (the parent's pid was reused) or one that cannot be opened. An ancestor that
+    has exited, but that a handle keeps openable, is the last one: a listing can still name it
+    just after its exit (or name it from before), and the parent it records says nothing about
+    the processes above it now."""
     parents = process_parents() if parents is None else parents
     out, cur, cur_ct = [], int(pid), ctime
     for _ in range(limit):
         pp = parents.get(cur)
         if not pp or pp == cur:
             break
-        pct = proc_ctime(pp)
+        pct, exited = _ancestor(pp)
         if pct is None or (cur_ct is not None and pct > cur_ct):
             break
         out.append((pp, pct))
+        if exited:
+            break
         cur, cur_ct = pp, pct
     return out
 

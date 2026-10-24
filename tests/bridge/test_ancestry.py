@@ -69,8 +69,8 @@ class AncestryTests(unittest.TestCase):
         """The bridge's walk of pid, checked against the snapshot walk; returns it.
 
         The snapshot walk opens each parent pid the snapshot records, so an ancestor that has
-        exited while a handle keeps it openable is its last hop (an exited process is in no
-        snapshot, so nothing above it is reached). The bridge walk takes running ancestors only
+        exited while a handle keeps it openable is its last hop (the walk ends there even when
+        the snapshot still names it). The bridge walk takes running ancestors only
         and stops before it. Every other hop is the same in both."""
         expected=process.ancestors_of(pid,creation,limit=8)
         with patch('kitlib.proc.process.snapshot',wraps=process.snapshot) as listings:
@@ -105,6 +105,31 @@ class AncestryTests(unittest.TestCase):
         self.assertEqual(process.ancestors_of(grandchild,creation,limit=8),
             [(middle.pid,process.proc_ctime(middle.pid))])
         self.assertEqual(self.assert_walks_agree(grandchild,creation),[])
+
+    def test_a_listing_that_still_names_an_exited_ancestor_ends_the_walk_at_it(self):
+        # A listing can still name a process whose exit a wait has already seen (a landing gate's
+        # walk climbed from middle into this process and on to its ancestors). Here the listing
+        # is taken while middle runs, so it names middle and middle's parent, this process, for
+        # sure; middle has exited, and its handle is held, by the time the walk opens it.
+        code=('import subprocess,sys;'
+            'g=subprocess.Popen([sys.executable,"-I","-c","import time; time.sleep(120)"],stdin=subprocess.DEVNULL,'
+            'stdout=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW);print(g.pid,flush=True);'
+            'sys.stdin.readline()')
+        middle=subprocess.Popen([sys.executable,'-I','-c',code],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        self.addCleanup(middle.stdout.close)
+        self.addCleanup(lambda:(middle.stdin.closed or middle.stdin.close(),middle.wait(timeout=10)))
+        grandchild=int(middle.stdout.readline())
+        held=process.open_process(grandchild,process.SYNCHRONIZE|process.PROCESS_TERMINATE)
+        self.assertTrue(held)
+        self.addCleanup(lambda:(K32.TerminateProcess(held,1),K32.WaitForSingleObject(held,5000),process.close(held)))
+        creation=process.proc_ctime(grandchild)
+        listing=process.process_parents()
+        self.assertEqual(listing.get(middle.pid),os.getpid())
+        middle.stdin.write(b'\n');middle.stdin.close()
+        middle.wait(timeout=10)
+        self.assertEqual(process.ancestors_of(grandchild,creation,listing,limit=8),
+            [(middle.pid,process.proc_ctime(middle.pid))])
 
     def test_an_exited_process_has_no_ancestry_while_a_handle_keeps_it_openable(self):
         child=self.child()
