@@ -163,6 +163,30 @@ class Rulebooks(unittest.TestCase):
         self.assertEqual(d.rule, 'ledger', d.reason)
         self.assertIn(LOG, d.reason)
 
+    def test_a_dos_wildcard_that_can_name_them_is_refused(self):
+        # FindFirstFile reads `<` (DOS_STAR), `>` (DOS_QM) and `"` (DOS_DOT) as wildcards: cmd's
+        # `del "STANDING.m>"` deletes STANDING.md. Each is judged as `*` (fail closed), in any shell;
+        # cmd strips a `"` from del's words, so the `"` rows are the other shells'
+        self.w.user_config({'ledger_path': self.w.ledger})
+        f = self.folder
+        for name, why in ((os.path.join(f, 'STANDING<.md'), DIGEST), (os.path.join(f, 'STANDING.m>'), DIGEST),
+                          (os.path.join(f, 'STANDING<'), DIGEST), (os.path.join(self.rules, 'alpha.m>'), BOOK),
+                          (os.path.join(self.rules, '<.md'), BOOK), (os.path.join(f, 'LEDGER<.md'), LOG),
+                          ('STANDING<', DIGEST), ('rules\\alpha.m>', BOOK)):
+            with self.subTest(name):
+                self.refused(ps('cmd /c del "%s"' % name, f, sub=True), why)
+        for cmd, why in (("rm 'STANDING<'", DIGEST), ("rm 'STANDING\"md'", DIGEST), ("rm 'rules/alpha.m>'", BOOK),
+                         ("rm 'r<'/alpha.md", BOOK), ("rm 'LEDGER\"md'", LOG)):
+            with self.subTest(cmd):
+                self.refused(bash(cmd, f, sub=True), why)
+        for path, why in ((os.path.join(f, 'STANDING"md'), DIGEST), (os.path.join(self.rules, 'alpha.m>'), BOOK),
+                          (os.path.join(f, 'STANDING<'), DIGEST)):
+            with self.subTest(path):
+                self.refused(ps("Remove-Item -Path '%s'" % path, f, sub=True), why)
+        self.allowed(ps('cmd /c del "%s"' % os.path.join(f, 'NOTES<.md'), f, sub=True))
+        self.allowed(bash("rm 'NOTES.m>'", f, sub=True))
+        self.allowed(ps("Remove-Item -Path '%s'" % os.path.join(self.rules, 'drafts', 'a"md'), f, sub=True))
+
     def git_refused(self, ev, why=BOOK):
         d = decide(ev, self.w.ctx())
         self.assertIsNotNone(d, ev['tool_input'])
@@ -226,7 +250,7 @@ class Rulebooks(unittest.TestCase):
         for cmd, why in (('git restore --staged --w rules/alpha.md', BOOK), ('git restore -S --w STANDING.md', DIGEST),
                          ('git restore --staged --no-staged STANDING.md', DIGEST),
                          # every prefix git takes for --worktree, or for a negation (`--no-st` is
-                         # `--no-staged`; `--no` and `--no-` may negate any option)
+                         # `--no-staged`; `--no` and `--no-` git rejects as ambiguous)
                          ('git restore --staged --wor rules/alpha.md', BOOK),
                          ('git restore --staged --work STANDING.md', DIGEST),
                          ('git restore -S --workt STANDING.md', DIGEST),

@@ -279,7 +279,7 @@ class OwnerDelegations(unittest.TestCase):
         'restore .pm-kit/owner-delegations.json', 'restore --source HEAD~1 :/', 'restore -SW .pm-kit',
         'restore --staged --w .pm-kit/owner-delegations.json',     # `--w` is `--worktree` to git
         'restore --staged --wor .pm-kit/owner-delegations.json',
-        'restore --staged --no- .pm-kit/owner-delegations.json',   # `--no-` may be `--no-staged` to git
+        'restore --staged --no- .pm-kit/owner-delegations.json',   # git rejects `--no-` as ambiguous; judged
         'restore -S --no-st .pm-kit/owner-delegations.json',       # `--no-st` is `--no-staged`
         'checkout-index -a -f', 'checkout-index -f .pm-kit/owner-delegations.json',
         'reset --hard', 'reset --hard HEAD~1', 'reset --merge', 'reset --keep HEAD~1',

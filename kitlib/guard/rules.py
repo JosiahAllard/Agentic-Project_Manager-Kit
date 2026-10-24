@@ -1086,7 +1086,7 @@ def ledger_kind(ctx, target):
     compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
     space, a namespace prefix, links, junctions and 8.3 names), first as the literal name (an
     edit's path is never a wildcard: `[PM]` is a folder name), then, when it has a wildcard
-    character after its namespace prefix, as a wildcard that is any of them it can match
+    character after its namespace prefix (a DOS one too, LEDGER_GLOB_CHARS), as a wildcard that is any of them it can match
     (ledger_glob; the prefix's own `?` is no wildcard). A `\??\` unprefixed leaves (no drive after
     it) is read both ways: as a prefix, and as a `??` wildcard folder (`<drive>:/??/STANDING.md`
     names `<drive>:\pm\STANDING.md`)."""
@@ -1098,11 +1098,18 @@ def ledger_kind(ctx, target):
     end = prefix_end(bare_target)
     starts = (end, 0) if end and not re.match(r'[\\/]{2}', bare_target) else (end,)
     for start in starts:
-        if hubg.has_glob(bare_target[start:]):
+        if any(c in LEDGER_GLOB_CHARS for c in bare_target[start:]):
             kind = ledger_glob(ctx, bare_target, start)
             if kind:
                 return kind
     return None
+
+
+# FindFirstFile also reads `<` (DOS_STAR), `>` (DOS_QM) and `"` (DOS_DOT) as wildcards: `cmd /c del
+# "STANDING<"` deletes STANDING.md. ledger_glob matches each as `*`, which matches all they can
+# (fail closed); no file name holds one, so none is read as a literal name.
+LEDGER_GLOB_CHARS = hubg.GLOB_CHARS | frozenset('<>"')
+DOS_WILDCARDS = str.maketrans('<>"', '***')
 
 
 def prefix_end(path):
@@ -1119,12 +1126,14 @@ def ledger_glob(ctx, target, start=0):
     wildcard that starts in it is a rulebook (fail closed: `rules/*.txt`); `**` or `..` after the
     wildcard matches every held path below the folder. A part also matches a name it spells
     literally (`[PM]` the folder `[PM]`). A wildcard is searched for from `start` (past a namespace
-    prefix, prefix_end, whose `?` is none)."""
-    first = min(target.index(c, start) for c in hubg.GLOB_CHARS if c in target[start:])
+    prefix, prefix_end, whose `?` is none); a DOS wildcard (LEDGER_GLOB_CHARS) is one too, matched
+    as `*`."""
+    first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
     cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
     b = file_key(base)
-    parts = [x.split(':', 1)[0].lower() for x in re.split(r'[\\/]', rest) if x and x != '.']
+    parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
+             if x and x != '.']
     wide = any('**' in x or x == '..' for x in parts)
     for kind, real in ledger_guarded(ctx):
         if kind == 'rulebook' and b == real:
@@ -4165,8 +4174,9 @@ def _canon_long(sub, body):
 def restore_index_only(short, longs):
     """Whether git restore with these options (_opts) writes the index alone: --staged (-S)
     without --worktree (-W), and every long option one GIT_LONGS names (fail closed: _canon_long
-    leaves a one-letter body as written, and `--w` is `--worktree` to git; `--no`, `--no-` and
-    `--no-st` can be `--no-staged`, which it names and the table does not)."""
+    leaves a one-letter body as written, and `--w` is `--worktree` to git; `--no-st` is
+    `--no-staged`, which it names and the table does not; `--no` and `--no-` git rejects as
+    ambiguous, and _canon_long's names for them are not in the table either)."""
     return (('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs)
             and longs <= set(GIT_LONGS['restore']))
 
