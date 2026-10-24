@@ -40,7 +40,7 @@ ALLOWED = tuple(('%s' % glob, 'record-id', '', why) for glob, why in ID_SHAPE_FO
     ('tests/scrub/test_no_cites.py', 'record-id', "'docs/near.md': 'PR-",
      'longer tokens that end like a cite, to prove the cite pattern anchors on a word boundary; '
      'an EX- prefix would change what the anchor sees'),
-    ('.kit.json', 'record-id', '"prefix": "KIT-',
+    ('.kit.json', 'record-id', '"gate_time": {"prefix": "KIT-GATE-SLOW"',
      'the maint_lint record prefix set in the repo config (owner-approved exception)'),
 )
 
