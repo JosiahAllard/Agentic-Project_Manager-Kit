@@ -234,6 +234,8 @@ SECTIONS = {
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
         'reuse_never': Field(Strs, [], 'globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache'),
         'in_flight': Field(IN_FLIGHT, None, 'how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")'),
+        # Not in "gate": a key there is in every gate-OK record's gate_config hash (runner.gate_config).
+        'shared_paths': Field(ListOf(Str(), nonempty=True), None, 'globs of the repo\'s shared code: a landing takes a default-mode (scoped) record of a tip that changes none of them and no strict path, without "gate".smoke_steps; a tip that changes one needs a --full record (docs/gate.md "Shared paths"); unset: a landing needs a --full record unless "gate".smoke_steps or "gate".docs_only take it'),
     },
     'ledger': {
         'pre_commit_check': Field(Bool(), False, 'githooks/pre-commit runs tools/ledger.py check --base HEAD before each commit that changes the ledger file or its standing digest (opt-in; docs/ledger.md "Pre-commit check")'),

@@ -41,7 +41,9 @@ tools/land.py).
                  base's config takes (Lander.select_refusal: the record's diff covers the
                  landing's, and either the base's "gate".smoke_steps all passed in it and no gate
                  config file changes, or the change is docs-only under the base's
-                 "gate".docs_only and its steps all passed); a miss names the `gate.py -C <worktree>
+                 "gate".docs_only and its steps all passed, or the base sets
+                 "landing".shared_paths and the change touches none of them, no strict path and
+                 no gate config file; docs/gate.md "Shared paths"); a miss names the `gate.py -C <worktree>
                  --full` command that gates it, and, when the kit lands itself and the tip does
                  not contain the base, says to merge <remote>/<main> into the branch first (its
                  own gate.py may predate the record's `full` key). Then the
@@ -76,7 +78,7 @@ tools/land.py).
                  gate.py --full selects them, whatever paths the merge changes; a step that
                  passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
-                 --fresh, --full or a batch). A merge that is docs-only under the base's config
+                 --fresh or --full; a batch reuses per step like one branch). A merge that is docs-only under the base's config
                  (not --full) runs only the "gate".docs_only steps (docs/gate.md "Docs-only
                  changes"). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),
@@ -767,10 +769,15 @@ class Lander(object):
           smoke   the record is a default-mode pass ("select"), the base sets "gate".smoke_steps,
                   every one of them passed in the record, and the landing diff changes none of the
                   gate's config files (reuse.config_hits: `.kit.json`, a section file, the hook
-                  module)."""
+                  module); and
+          shared  when the base sets "landing".shared_paths (docs/gate.md "Shared paths"), a
+                  default-mode record lands without "gate".smoke_steps, and any default-mode
+                  record (smoke steps or not) is refused when the landing diff changes a shared
+                  path or a strict path (shared_refusal), beside the config check above."""
         gate = self.cfg.section('gate')
         smoke = list(gate.get('smoke_steps') or [])
-        if not smoke and not S.docs_steps(gate):
+        shared = self.cfg.section('landing').get('shared_paths')
+        if not smoke and not S.docs_steps(gate) and shared is None:
             return ('the base %s sets no "gate".smoke_steps or "gate".docs_only, so only a --full '
                     'record lands' % self.expect_main[:10])
         mb, why = refs.merge_base(tip, self.expect_main, self.root)
@@ -801,16 +808,40 @@ class Lander(object):
                 ', '.join(missing))
         if mode != 'select':
             return 'its gate ran only the docs-only steps, and the change is not docs-only under the base'
-        if not smoke:
+        if not smoke and shared is None:
             return ('the change is not docs-only, and the base %s sets no "gate".smoke_steps'
                     % self.expect_main[:10])
         hit = reuse.config_hits(self.cfg, changed)
         if hit:
             return 'the tip changes the gate\'s config (%s), which only a --full record lands' % (
                 ', '.join(hit[:5]))
+        if shared is not None:
+            why = self.shared_refusal(shared, changed)
+            if why:
+                return why
         missing = [n for n in smoke if n not in passed]
         if missing:
             return 'the base\'s smoke step %s did not pass in it' % ', '.join(missing)
+        return None
+
+    def shared_refusal(self, shared, changed):
+        """Why a default-mode record does not land a landing diff `changed` under the base's
+        "landing".shared_paths `shared`, or None: a changed path matching one of `shared`, or one
+        of the strict paths (strict_globs; a strict branch always ends on --full), refuses, and so
+        does a strict list that cannot be read. Globs match as step globs (steps._match)."""
+        paths = reuse.changed_list(changed)
+        hits = [p for p in paths if S._match(p, shared)]
+        if hits:
+            return ('the tip changes shared path %s ("landing".shared_paths), which only a --full '
+                    'record lands' % ', '.join(hits[:5]))
+        globs, why = self.strict_globs()
+        if globs is None:
+            return 'cannot read the strict paths from %s at %s: %s' % (
+                self.cfg.main_branch, self.expect_main[:10], why)
+        hits = [p for p in paths if S._match(p, globs)]
+        if hits:
+            return ('the tip changes strict path %s, which only a --full record lands under '
+                    '"landing".shared_paths' % ', '.join(hits[:5]))
         return None
 
     def no_full_step(self):
