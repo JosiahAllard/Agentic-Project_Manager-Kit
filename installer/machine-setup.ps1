@@ -9,6 +9,12 @@
 #                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
 #                                [-NoSweepTask] [-Apply]
 #   powershell -NoProfile -File installer\machine-setup.ps1 -ManagedSettings [-Apply]
+#   powershell -NoProfile -File installer\machine-setup.ps1 -PmRepo <PM repository> [-Apply]
+#
+# -PmRepo sets the PM-repo pointer (HKLM\SOFTWARE\pm-kit pm_repo), the first step on a new machine:
+# the machine config lives in that repository's .pm-kit folder, so nothing that reads or writes it
+# works before the pointer is set. -Apply then needs an elevated terminal. It takes no other
+# parameter but -Python (docs/machine-setup.md "PM repo pointer"; docs/install.md step 1).
 #
 # -ManagedSettings writes Claude Code's machine-wide managed settings file (under Program Files)
 # from the kit's template instead, and nothing else; -Apply then needs an elevated terminal. It
@@ -43,7 +49,8 @@
 # on PATH.
 #
 # Exit: 0 dry run printed, changes made or nothing to do; 1 refused or stopped; 2 usage (both -OldKit
-# and -Fresh, -ManagedSettings with -OldKit or -Fresh (the tool refuses its other options), both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
+# and -Fresh, -ManagedSettings with -OldKit or -Fresh (the tool refuses its other options), -PmRepo
+# with any parameter but -Python and -Apply, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
 # file, no python on PATH, no tools\machine_setup.py).
 param(
     [string]$OldKit = '',
@@ -61,6 +68,7 @@ param(
     [switch]$Procwatch,
     [switch]$ProcwatchKill,
     [switch]$ManagedSettings,
+    [string]$PmRepo = '',
     [switch]$Apply
 )
 
@@ -68,7 +76,7 @@ $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 passes a native argument with a space inside plain double quotes without
 # escaping one inside it, so a `"` in a value could split it into more arguments (an --apply the
 # command line does not show, say): refused in every parameter.
-foreach ($v in @($OldKit, $OwnerEmail, $PmSettings, $AgentTemp, $HomeDir, $Desktop, $Python) + @($ConfigDir)) {
+foreach ($v in @($OldKit, $OwnerEmail, $PmSettings, $AgentTemp, $HomeDir, $Desktop, $Python, $PmRepo) + @($ConfigDir)) {
     if ($v -and "$v".Contains('"')) { Write-Host "machine-setup: usage - no parameter may contain a double quote ($v)"; exit 2 }
 }
 if ($OldKit -and $Fresh) {
@@ -76,6 +84,10 @@ if ($OldKit -and $Fresh) {
 }
 if ($ManagedSettings -and ($OldKit -or $Fresh)) {
     Write-Host 'machine-setup: usage - -ManagedSettings is a mode of its own: not with -OldKit or -Fresh'; exit 2
+}
+if ($PmRepo -and ($OldKit -or $Fresh -or $ManagedSettings -or $OwnerEmail -or $PmSettings -or $ConfigDir.Count -or $AgentTemp -or
+                   $HomeDir -or $Desktop -or $NoSweepTask -or $RegisterSweepTask -or $Shortcut -or $Procwatch -or $ProcwatchKill)) {
+    Write-Host 'machine-setup: usage - -PmRepo is a mode of its own: it takes only -Python and -Apply'; exit 2
 }
 if ($NoSweepTask -and $RegisterSweepTask) { Write-Host 'machine-setup: usage - give -NoSweepTask or -RegisterSweepTask, not both'; exit 2 }
 if ($PmSettings -and $OldKit) { Write-Host 'machine-setup: usage - -PmSettings goes with the default mode only, not -OldKit'; exit 2 }
@@ -94,6 +106,7 @@ if ($Python) {
 
 $argv = @($tool, '--kit', $kit)
 if ($ManagedSettings) { $argv += '--managed-settings' }
+if ($PmRepo) { $argv += @('--pm-repo', $PmRepo) }
 if ($OldKit) { $argv += @('--old-kit', $OldKit) }
 if ($OwnerEmail) { $argv += @('--owner-email', $OwnerEmail) }
 if ($PmSettings) { $argv += @('--pm-settings', $PmSettings) }

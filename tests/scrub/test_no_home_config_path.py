@@ -24,11 +24,11 @@ CONFIG = '.pm-kit'
 
 # path: why it may name the home folder's machine config. Each is a leftover's handling, read or
 # guarded, never a place the kit keeps its config. Only files the check finds something in are
-# listed (test_every_allowed_file_still_needs_it). The leftover detection that spells its paths
-# from the bare DIR_NAME or a folder named `h` needs no line: kitlib/config/user.py (UNMOVED,
-# home_location), kitlib/config/move.py, kitlib/pmstart/configcheck.py (LEFTOVER, a message),
-# kitlib/machinesetup/links.py.
+# listed (test_every_allowed_file_still_needs_it). The leftover handling that joins a home folder
+# held in a short name (`h`) needs no line: kitlib/config/user.py's locate() and home_location(),
+# kitlib/config/move.py, kitlib/pmstart/configcheck.py (LEFTOVER), kitlib/machinesetup/links.py.
 ALLOWED = {
+    'kitlib/config/user.py': 'DISPLAY: the old home config\'s name, for messages about a leftover',
     'kitlib/delegations/load.py': 'delegations_file(): the home folder\'s delegations copy, the '
                                   'move\'s source, which the guard still holds',
     'kitlib/guard/jail.py': 'home_config_dirs(): no write root may be on a leftover home config folder',
@@ -58,6 +58,8 @@ def _is_config(node):
     """Whether `node` is the config folder's name: the literal or kitlib.config.user.DIR_NAME."""
     if isinstance(node, ast.Constant):
         return node.value == CONFIG
+    if isinstance(node, ast.Name):
+        return node.id == 'DIR_NAME'
     return (isinstance(node, ast.Attribute) and node.attr == 'DIR_NAME'
             and isinstance(node.value, ast.Name) and node.value.id in CONFIG_NAMES)
 
