@@ -599,7 +599,9 @@ def run(root, out, section=None, find=None, tools=False, stale=False, role=None,
         except ConfigError as e:
             return refuse(e, out)
     if stale:
-        stale_report(root, cfg, files, days or cfg.get('stale_days') or 14, out, ref=head)
+        # `is None`, not `or`: --days 0 is an age of 0 days, and a 0 in the config is kept too.
+        limit = days if days is not None else cfg.get('stale_days')
+        stale_report(root, cfg, files, 14 if limit is None else limit, out, ref=head)
         return 0
     wanted = sorted({f for f in files if f.endswith('.md')} | set(cfg.get('shard_indexes', {}).values()))
     text, why = texts_at(root, head, wanted)
