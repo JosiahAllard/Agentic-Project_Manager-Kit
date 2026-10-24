@@ -26,7 +26,7 @@ or after an unpair or a session that ran out) is told so on the page and to run
 `GET /api/v1/health`.
 
 The sidebar lists the sections in groups under small headings: Home on its own; Your work (Questions,
-To-dos, Approvals); Projects (Backlog, Machine schedule, Docs); More (Message the PM, Usage and agents);
+To-dos, Approvals); Projects (Backlog, Schedule, Docs); More (Message the PM, Usage and agents);
 Upkeep (Lint findings, Automatic tasks). A count sits at the right edge of its entry, and is highlighted
 for what waits on you: any pending approval, urgent question or to-do. Lint findings shows a dash until
 the page has read `GET /api/v1/findings` once (at the start and after each wait wake, without drawing the
@@ -35,7 +35,7 @@ Questions, Approvals, Schedule (the link to the machine schedule) and More, a pa
 with their counts (`#more`; a wider window opens Home instead). Between 761 and 1100 pixels the detail
 pane stacks under the list instead of beside it.
 
-- **Inbox.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
+- **Questions.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
   Submitted (answered, not yet logged by the PM), Logged, and Other, which shows only when a
   question has another status. Answers: the PM's replies to what you asked in a note, in Unread
@@ -49,7 +49,7 @@ pane stacks under the list instead of beside it.
   with Approve and Deny, which need a strong session) and Decided (approved, denied, used or expired
   ones from the snapshot, newest first, with the decision and no buttons). The tab is not an address.
   The Approvals count is the pending ones; Questions no longer lists approvals.
-- **To do.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
+- **To-dos.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
   done. You can add, edit and delete your own. Tabs: To do and Done.
 - **Backlog.** Three tabs: Open (each repository's open work under a heading per priority, with
   priority, status and text filters, which stay chips), Parked (backlog items a coordinator has
@@ -79,7 +79,7 @@ pane stacks under the list instead of beside it.
   effort) and Lock notices. Usage and Agents are rows (an account with its 5-hour and weekly
   percentages, an agent with its model and effort); a row opens the account's meters or the agent's
   definition in the detail pane. Lock notices stay a list.
-- **Machine schedule.** A link in the sidebar's Projects group (and the phone's Schedule tab) opens `/lock.html`, the machine lock's own page
+- **Schedule.** A link in the sidebar's Projects group (and the phone's Schedule tab) opens `/lock.html`, the machine lock's own page
   ("Machine lock routes" below): what holds the PC's slots now, a week of half hours (back two
   weeks, on four), the holds, runs and queue, game mode, the division, and what ran over 1, 7, 30
   or 90 days. It follows the lock as it changes. Times are the PC's local time, labelled with its

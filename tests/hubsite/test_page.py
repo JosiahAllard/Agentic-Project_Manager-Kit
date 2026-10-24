@@ -3658,16 +3658,35 @@ class TriageShellTest(unittest.TestCase):
                                                  "sh-upkeep", "sec-findings", "sec-autotasks"])
         heads = re.findall(r'<div class="sechead" id="[\w-]+">([^<]+)</div>', side)
         self.assertEqual(heads, ["Your work", "Projects", "More", "Upkeep"])
-        for label in ("Message the PM", "Usage and agents", "Lint findings", "Automatic tasks", "Machine schedule", "Approvals"):
+        for label in ("Message the PM", "Usage and agents", "Lint findings", "Automatic tasks", "Schedule", "Approvals"):
             self.assertIn(label, side)
+        self.assertIn('id="sec-schedule">Schedule<', side)                  # the owner's word, not "Machine schedule"
+        self.assertIn('id="tb-schedule">Schedule<', self.markup)
+        self.assertNotIn("Machine schedule", self.markup)
         self.assertNotIn(">Findings", side)                                  # renamed Lint findings
         self.assertNotIn("Message to the PM", self.markup)
 
     def test_the_counts_sit_at_the_right_edge_and_a_hot_one_is_loud(self):
         style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
         self.assertRegex(style, r"\.sec>\.n:first-of-type\{margin-left:auto\}")
-        self.assertRegex(style, r"\.n\.hot\{")
+        self.assertRegex(style, r"\.sec \.n\.hot\{background:var\(--warn-soft\);color:var\(--warn\)\}")
         self.assertRegex(style, r"\.sechead\{[^}]*text-transform:uppercase")
+        # What S4 added: a count on Approvals and on Lint findings, each the last child of its sidebar entry.
+        side = re.search(r'<div class="sections".*?</div>\s*<div class="sidefoot"', self.markup, re.S).group(0)
+        self.assertRegex(side, r'id="sec-approvals">Approvals <span class="n" id="n-ap">0</span></button>')
+        self.assertRegex(side, r'id="sec-findings">Lint findings <span class="n" id="n-f">\u2013</span></button>')
+        got = dom("""
+            await start();
+            return { ap: text($("#n-ap")), apHot: $("#n-ap").classList.contains("hot"), q: $("#n-q").classList.contains("hot"),
+                     t: $("#n-t").classList.contains("hot"), f: text($("#n-f")), fHot: $("#n-f").classList.contains("hot") };
+        """, snapshot(strong=True, collections=NEEDS), hash="#approvals")
+        self.assertEqual((got["ap"], got["apHot"]), ("1", True))                # a pending approval makes its count loud
+        self.assertEqual(got["f"], "0")                                          # Lint findings: the open count, none here
+        self.assertFalse(got["fHot"])
+        calm = dom("""
+            await start(); return $("#n-ap").classList.contains("hot");
+        """, snapshot(strong=True, collections={}), hash="#approvals")
+        self.assertFalse(calm)                                                   # nothing pending: not loud
 
     def test_between_a_phone_and_a_wide_window_the_detail_pane_stacks_under_the_list(self):
         style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
@@ -3724,8 +3743,12 @@ class TriageShellTest(unittest.TestCase):
     def test_the_pill_is_for_a_phone_only(self):
         style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
         self.assertRegex(style, r"(?m)^\.pill\{display:none;")
-        phone = re.search(r"@media \(max-width:760px\)\{(.*?)\n\}", style, re.S).group(1)
-        self.assertIn(".pill{display:inline-block}", phone)
+        media = re.search(r"@media \(max-width:760px\)\{(.*?)\n\}", style, re.S)
+        self.assertIn(".pill{display:inline-block}", media.group(1))
+        # Same specificity: the plain rule must come before the media block or it wins at every width.
+        plain = [m.start() for m in re.finditer(r"(?m)^\.pill\{display:none;", style)]
+        self.assertEqual(len(plain), 1)
+        self.assertLess(plain[0], media.start())
 
     def test_the_lint_findings_count_is_a_dash_until_read_then_the_open_ones_and_hot(self):
         route = FINDINGS_ROUTE.replace("FOUND", json.dumps(FOUND[:2])).replace("MARKS", "[]").replace("RUNS", "[]")

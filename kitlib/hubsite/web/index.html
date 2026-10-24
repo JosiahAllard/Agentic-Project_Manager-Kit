@@ -43,6 +43,7 @@
 }
 /* The reader holds the window: nothing under it scrolls (openDoc puts .reading on the body, closeDoc takes it off). */
 body.reading{overflow:hidden}
+.pill{display:none;margin:0;font-size:.8rem;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
 @media (max-width:760px){
   .wrap,.wrap:has(> #pane-detail:not([hidden])){grid-template-columns:minmax(0,1fr)}
   .side{display:none}
@@ -61,7 +62,6 @@ body.reading{overflow:hidden}
   .detailpane{border-left:0;border-top:1px solid var(--line)}
 }
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
-.pill{display:none;margin:0;font-size:.8rem;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
 .links{margin:0;font-size:.9rem}.links a{color:var(--accent)}
 .tabs{display:flex;flex-wrap:wrap;gap:6px}
 .tab{font:600 .85rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:999px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
@@ -223,7 +223,7 @@ button.danger{color:var(--warn)}
     <button class="sec" role="tab" data-s="approvals" aria-selected="false" id="sec-approvals">Approvals <span class="n" id="n-ap">0</span></button>
     <div class="sechead" id="sh-projects">Projects</div>
     <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
-    <a class="sec" href="/lock.html" id="sec-schedule">Machine schedule</a>
+    <a class="sec" href="/lock.html" id="sec-schedule">Schedule</a>
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
     <div class="sechead" id="sh-more">More</div>
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">Message the PM <span class="n" id="n-pm">0</span></button>
@@ -313,7 +313,7 @@ button.danger{color:var(--warn)}
     <button class="tb" role="tab" data-s="home" aria-selected="false" id="tb-home">Home</button>
     <button class="tb" role="tab" data-s="questions" aria-selected="true" id="tb-questions">Questions <span class="n" data-of="n-q">0</span></button>
     <button class="tb" role="tab" data-s="approvals" aria-selected="false" id="tb-approvals">Approvals <span class="n" data-of="n-ap">0</span></button>
-    <a class="tb" href="/lock.html" id="tb-schedule">Machine schedule</a>
+    <a class="tb" href="/lock.html" id="tb-schedule">Schedule</a>
     <button class="tb" role="tab" data-s="more" aria-selected="false" id="tb-more">More</button>
   </div>
 </div>
