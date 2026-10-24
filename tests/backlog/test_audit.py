@@ -440,15 +440,77 @@ class AnswerCheck(unittest.TestCase):
                 self.assertIn('no answered or filed hub question Q-1002 on FOO', found[0].text)
                 self.assertEqual(r.by_design['owner-hub'], 1)
 
-    def test_a_hub_that_cannot_be_read_fails_closed(self):
+    def test_a_re_answer_is_verified(self):
+        # "Change answer": the hub files the new answer, which replaces the line; the hub then
+        # holds only the newer `at`, and the first filing, still in the window, must pass
+        from kitlib.hubsite import recordwrite
+        later = '2026-10-24T11:00:00+00:00'
+        self.add()
+        recordwrite.answer(self.repo.root, 'FOO', 'Q-1001', AT, 'which way', 'this way')
+        recordwrite.answer(self.repo.root, 'FOO', 'Q-1001', later, 'which way', 'that way')
+        r = self.report([question(at=later)])
+        self.assertEqual(self.answers(r), [])
+        self.assertEqual(r.by_design['owner-hub'], 2)
+        # a hub answer older than the line is no cover for it
+        found = self.answers(self.report([question()]))
+        self.assertEqual(len(found), 1, found)
+        self.assertIn('answer: Q-1001 %s' % later, found[0].text)
+
+    def test_covered_and_by_design_changes_read_no_record(self):
+        # the window's records are read in one git process, shared by the answer check and
+        # rows_of: a covered or by-design change starts none of its own
+        self.add()
+        self.ok('set', 'FOO', *PRICE)                                # covered by its line
+        self.ok('--session', 'daily-full', 'set', 'FOO', '--priority', '3')    # by design
+        reads = []
+        real = audit_check.batch.cat_file
+
+        def counted(specs, root):
+            if any('^:' in spec for spec in specs):          # a change's records, not the tip's
+                reads.append(specs)
+            return real(specs, root)
+        _top, cfg, rules = opener.open_repo(self.repo.root)
+        backend = smod.open_backend(self.repo.root, cfg, fetch=False)
+        entries, _notes = audit_check.read_log(self.log)
+        with mock.patch.object(audit_check.batch, 'cat_file', counted):
+            r = audit_check.check(backend, rules, entries, 0, lambda: [])
+        self.assertEqual((r.covered, dict(r.by_design), r.findings), (1, {'daily-full': 1}, []))
+        self.assertEqual(len(reads), 1, reads)
+        reads[:] = []
+        from kitlib.hubsite import recordwrite
+        recordwrite.answer(self.repo.root, 'FOO', 'Q-1001', AT, 'which way', 'this way')
+        with mock.patch.object(audit_check.batch, 'cat_file', counted):
+            r = audit_check.check(backend, rules, entries, 0, lambda: [question()])
+        self.assertEqual((self.answers(r), len(reads)), ([], 1), reads)
+
+    def test_a_hub_that_cannot_be_read_is_not_checked(self):
         from kitlib.hubsite import serve
         self.add()
         self.answer('owner-hub')
+        self.answer('kit', qid='Q-1002')               # no hub needed: never the hub's
         r = self.report(serve.NotRunning(1))
         found = self.answers(r)
         self.assertEqual(len(found), 1, r.findings)
-        self.assertIn('the hub store could not be read', found[0].text)
-        self.assertTrue(any('hub store could not be read' in n for n in r.notes), r.notes)
+        self.assertIn('answer: Q-1002 ', found[0].text)
+        self.assertIn('not written by owner-hub', found[0].text)
+        self.assertTrue(any(n.startswith('answers NOT CHECKED: the hub store could not be read')
+                            for n in r.notes), r.notes)
+
+    def test_run_gives_an_unreadable_hub_as_a_note_and_exit_ok(self):
+        from kitlib.hubsite import serve
+        self.add()
+        self.answer('owner-hub')
+
+        def questions():
+            raise serve.NotRunning(1)
+        code, lines = audit_check.run(self.repo.root, fetch=False, home=self.home,
+                                      questions=questions)
+        self.assertEqual(code, audit_check.OK, lines)
+        self.assertEqual(lines[-1], 'OK')
+        notes = [x for x in lines if x.startswith('NOTE: answers NOT CHECKED: the hub store could '
+                                                  'not be read (NotRunning')]
+        self.assertEqual(len(notes), 1, lines)
+        self.assertFalse([x for x in lines if x.startswith(audit_check.ANSWER)], lines)
 
     def test_no_answer_change_asks_no_hub(self):
         self.add()
