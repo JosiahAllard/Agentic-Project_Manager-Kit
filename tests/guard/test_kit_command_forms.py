@@ -110,7 +110,7 @@ class Hub(unittest.TestCase):
         return decide(make(text, self.w.wt, True), self.w.ctx())
 
     def test_an_owner_verb_is_refused_in_every_kit_spelling(self):
-        for args in ('answer Q-1 --label yes', 'todos done T-1', 'approvals approve A-1'):
+        for args in ('answer EX-1 --label yes', 'todos done T-1', 'approvals approve A-1'):
             for shell, text in kit_spellings(self.w.kit_dir, 'hub', args):
                 with self.subTest(text):
                     d = self.judge(shell, text)
@@ -181,7 +181,7 @@ class PowerShellSplit(unittest.TestCase):
         self.addCleanup(self.w.cleanup)
 
     def test_an_owner_verb_after_the_quote_is_refused(self):
-        for text in ('kit \'hub" answer Q-1 --label yes\'', '& kit \'hub" todos done T-1\''):
+        for text in ('kit \'hub" answer EX-1 --label yes\'', '& kit \'hub" todos done T-1\''):
             with self.subTest(text):
                 d = decide(ps(text, self.w.wt, True), self.w.ctx())
                 self.assertIsNotNone(d, 'allowed')
