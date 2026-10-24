@@ -771,9 +771,10 @@ class Lander(object):
                   gate's config files (reuse.config_hits: `.kit.json`, a section file, the hook
                   module); and
           shared  when the base sets "landing".shared_paths (docs/gate.md "Shared paths"), a
-                  default-mode record lands without "gate".smoke_steps, and any default-mode
-                  record (smoke steps or not) is refused when the landing diff changes a shared
-                  path or a strict path (shared_refusal), beside the config check above."""
+                  default-mode record lands without "gate".smoke_steps, and any record that is
+                  not --full (docs or select, smoke steps or not) is refused when the landing diff
+                  changes a shared path or a strict path (shared_refusal, checked before the
+                  docs route), beside the config check above."""
         gate = self.cfg.section('gate')
         smoke = list(gate.get('smoke_steps') or [])
         shared = self.cfg.section('landing').get('shared_paths')
@@ -800,6 +801,10 @@ class Lander(object):
                                           self.expect_main[:10]))
         passed = {s.get('name') for s in rec.get('steps') or []
                   if isinstance(s, dict) and s.get('result') in ('pass', 'warn', 'reused')}
+        if shared is not None:          # before the docs-only route: a docs record too
+            why = self.shared_refusal(shared, changed)
+            if why:
+                return why
         if reuse.docs_only_change(self.cfg, gate, changed):
             missing = [n for n in S.docs_steps(gate) if n not in passed]
             if not missing:
@@ -815,17 +820,13 @@ class Lander(object):
         if hit:
             return 'the tip changes the gate\'s config (%s), which only a --full record lands' % (
                 ', '.join(hit[:5]))
-        if shared is not None:
-            why = self.shared_refusal(shared, changed)
-            if why:
-                return why
         missing = [n for n in smoke if n not in passed]
         if missing:
             return 'the base\'s smoke step %s did not pass in it' % ', '.join(missing)
         return None
 
     def shared_refusal(self, shared, changed):
-        """Why a default-mode record does not land a landing diff `changed` under the base's
+        """Why a record that is not --full does not land a landing diff `changed` under the base's
         "landing".shared_paths `shared`, or None: a changed path matching one of `shared`, or one
         of the strict paths (strict_globs; a strict branch always ends on --full), refuses, and so
         does a strict list that cannot be read. Globs match as step globs (steps._match)."""
