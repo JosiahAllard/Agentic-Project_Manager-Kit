@@ -335,9 +335,10 @@ def _apply_one(r, top, common, qdir, item, environ):
     record.update(bytes_blob=m.blob, match_ref=m.ref, match_commit=m.commit)
     why = _log_safe(common, record)
     if why:
-        # No line records the discard, so the moved copy stays where the reason says.
-        return item._replace(verdict=LEAVE, match=None, reason='%s; the stray is kept at %s'
-                             % (why, held)), why
+        # The path was acted on (deleted, or HEAD's file written), so the item keeps its verdict.
+        # No line records the discard, so the moved copy stays where the error says.
+        why = '%s; %s acted on, the stray is kept at %s' % (why, item.path, held)
+        return item._replace(match=m, reason=why), why
     try:
         os.remove(held)
     except OSError:
@@ -397,7 +398,8 @@ def apply(path, environ=None):
     _drop_empty(qdir)
     left, why = refs.status(top, untracked='all')
     if left is None:
-        error = error or 'git status failed afterwards: %s' % why
+        failed = 'git status failed afterwards: %s' % why
+        error = '%s; %s' % (error, failed) if error else failed
     return Run(top, done, None, left, error)
 
 

@@ -329,24 +329,65 @@ class AnError(Fixture):
         self.assertEqual(sorted(p for _xy, p in run.left), ['README.md', 'b.md', 'z/new.md'])
 
     def test_a_log_write_failure_keeps_the_stray_and_stops_the_rest(self):
-        def no_log(_common, _record):
-            raise OSError('disk full')
         with mock.patch.object(sr, '_log', no_log):
             run = sr.apply(self.top, ENV)
-        self.assertIn('could not write the log', run.error)
         first, rest = run.items[0], run.items[1:]
-        self.assertEqual((first.path, first.verdict), ('README.md', sr.LEAVE))
-        self.assertIn('kept at', first.reason)
+        # README.md was acted on (HEAD's file is written), so it reads as restored, not LEAVE.
+        self.assertEqual((first.path, first.verdict), ('README.md', sr.RESTORE))
+        self.assertEqual(self.get('README.md'), b'hello\n')
         for item in rest:
             self.assertEqual(item.verdict, sr.LEAVE)
             self.assertIn('not reached', item.reason)
-        kept = [os.path.join(r, f) for r, _d, files
-                in os.walk(os.path.join(self.r.common_dir(), sr.QUARANTINE)) for f in files]
-        self.assertEqual(len(kept), 1)
-        self.assertIn(os.path.normcase(kept[0]), os.path.normcase(first.reason))
-        with open(kept[0], 'rb') as fh:
-            self.assertEqual(fh.read(), b'branch text\n')
+        self.assertEqual(kept_copies(self), [b'branch text\n'])
+        self.assertIn('could not write the log', run.error)
+        self.assertIn(os.path.normcase(kept_paths(self)[0]), os.path.normcase(run.error))
         self.assertEqual((self.get('b.md'), self.get('z/new.md')), (b'branch bee\n', b'new\n'))
+        self.assertEqual(sorted(p for _xy, p in run.left), ['b.md', 'z/new.md'])
+
+    def test_a_final_status_failure_after_an_error_reports_both(self):
+        real_status, calls = sr.refs.status, []
+
+        def status(*a, **k):
+            calls.append(1)
+            return real_status(*a, **k) if len(calls) == 1 else (None, 'gone')
+        with mock.patch.object(sr, '_restore_head', lambda *a: 'boom'), \
+                mock.patch.object(sr.refs, 'status', status):
+            run = sr.apply(self.top, ENV)
+        self.assertEqual(run.error, 'boom; git status failed afterwards: gone')
+        self.assertIsNone(run.left)
+
+
+def no_log(_common, _record):
+    raise OSError('disk full')
+
+
+def kept_paths(case):
+    return [os.path.join(r, f) for r, _d, files
+            in os.walk(os.path.join(case.r.common_dir(), sr.QUARANTINE)) for f in files]
+
+
+def kept_copies(case):
+    out = []
+    for full in kept_paths(case):
+        with open(full, 'rb') as fh:
+            out.append(fh.read())
+    return out
+
+
+@real_git(REASON)
+class LogFailure(Fixture):
+
+    def test_a_delete_whose_log_fails_reads_as_deleted_and_keeps_the_copy(self):
+        self.branch('kit/a', {'docs/new.md': b'new text\n'})
+        self.put('docs/new.md', b'new text\n')
+        with mock.patch.object(sr, '_log', no_log):
+            run = sr.apply(self.top, ENV)
+        item = by_path(run)['docs/new.md']
+        self.assertEqual(item.verdict, sr.DELETE)
+        self.assertFalse(os.path.exists(os.path.join(self.top, 'docs', 'new.md')))
+        self.assertEqual(kept_copies(self), [b'new text\n'])
+        self.assertIn(os.path.normcase(kept_paths(self)[0]), os.path.normcase(run.error))
+        self.assertEqual(run.left, [])
 
 
 @real_git(REASON)

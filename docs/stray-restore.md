@@ -41,7 +41,7 @@ The whole run is refused (exit 2, nothing touched) when the main checkout has an
 3. If the copy still matches, a RESTORE runs `git restore --source=<head> --worktree` on the path, where `<head>` is the HEAD commit read at the start of the run, the one the log names. A DELETE does nothing more. The log line is written, then the quarantine copy is deleted.
 4. If the copy no longer matches, it is moved back. If something has been written at the path since, the copy stays in quarantine and the LEAVE line names where it is. The same happens when a file appears at the path before `git restore` runs.
 
-If a step fails (a `git restore` error, say), that path is put back and the run stops. Every path not yet reached is LEAVE ("not reached"), and the tool prints `ERROR:`, then the `left:` lines, and exits 1. A failure to write the log line stops the run the same way. The moved copy then stays in quarantine, and the LEAVE line names where it is.
+If a step fails (a `git restore` error, say), that path is put back and the run stops. Every path not yet reached is LEAVE ("not reached"), and the tool prints `ERROR:`, then the `left:` lines, and exits 1. A failure to write the log line stops the run the same way, after the path was acted on: the file is already deleted or restored, and its line reads `deleted` or `restored`. The moved copy stays in quarantine, and the `ERROR:` line names where it is.
 
 Afterwards the tool lists what `git status` still shows (`left:` lines).
 
@@ -61,8 +61,8 @@ To recover a discarded file, run `git cat-file blob <bytes_blob> > <path>` in Gi
 ## Exit codes
 
 - 0: nothing is LEAVE. After `--apply`, nothing is left in `git status`.
-- 1: something is LEAVE or left, or an error stopped `--apply` part way. It is also 1 when the final `git status` fails: the tool prints `ERROR:` and no `left:` lines, since git could not list them.
-- 2: a usage error, a refusal (the session mark, an operation in progress) or a git failure before anything was touched.
+- 1: something is LEAVE or left, or an error stopped `--apply` part way. It is also 1 when the final `git status` fails after the plan found strays: the tool prints `ERROR:` and no `left:` lines, since git could not list them. When an earlier error stopped the run as well, the `ERROR:` line carries both.
+- 2: a usage error, a refusal (the session mark, an operation in progress) or a git failure before anything was touched. It is also 2 when the plan found no strays and the final `git status` then fails.
 
 ## Who runs it
 
