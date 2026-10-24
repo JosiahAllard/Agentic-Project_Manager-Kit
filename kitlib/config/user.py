@@ -15,8 +15,9 @@ present file that cannot be read, or that holds an unknown key or a bad value, i
 
 No pointer and no machine config left in the home folder (NONE) is an empty config. A machine
 config still in the home folder (DIR_NAME's, or the retired kitlib.config.migration.OLD_DIR_NAME's)
-while the PM repository has none is UNMOVED, and a pointer that is BAD, or a PM folder or file that
-cannot be told apart from absent, is BAD: both a ConfigError, never a fallback. home_location()
+while the PM repository has none is UNMOVED; one beside the PM repository's files is LEFTOVER (the
+config moved: the copy must go, LEFTOVER_WHY); a pointer that is BAD, or a PM folder or file that
+cannot be told apart from absent, is BAD: each a ConfigError, never a fallback. home_location()
 still reads the home folder's file, for the move (kitlib.config.move) alone.
 """
 import collections
@@ -41,6 +42,7 @@ LOCAL_FILE_NAME = 'local.json'
 OK = 'ok'            # the PM-repo pointer is good: <PM repo>/.pm-kit's FILE_NAME and LOCAL_FILE_NAME
 NONE = 'none'        # no pointer and no machine config in the home folder: an empty config
 UNMOVED = 'unmoved'  # a machine config still in the home folder, none in the PM repository: a ConfigError
+LEFTOVER = 'leftover'  # the PM repository's config, and a copy still in the home folder: a ConfigError
 BAD = 'bad'          # the pointer is BAD, or a PM folder or file cannot be read as present or absent
 # kitlib.config.pointer's states, repeated (that module imports this one).
 OK_POINTER, BAD_POINTER = 'OK', 'BAD'
@@ -583,15 +585,16 @@ def make_temp(near, prefix, home=None):
 class Location(collections.namedtuple('Location', 'state path local folder pm pm_data leftover error home new')):
     """Which machine config is read (locate).
 
-    `state` OK, NONE, UNMOVED or BAD. `path` the policy file: `<PM repo>/.pm-kit/config.json` for
-    OK, the known-absent home file `~/.pm-kit/config.json` for NONE, the home folder's leftover
-    file for UNMOVED, and for BAD the PM repository's file when the pointer named one, else the
-    home file. `local` LOCAL_FILE_NAME beside `path` for OK, else None. `folder` the PM
-    repository's `.pm-kit` for OK, else None. `pm` the PM repository (the pointer's value,
-    normalised) for OK, else None. `pm_data` the derived {path, branch, remote} for OK when the
-    repository's kit-pm-data.json record is there, else None. `leftover` a machine config file
-    still in the home folder (either folder name), else None. `error` why the config cannot be
-    read (UNMOVED, BAD), else None. `home` the home folder.
+    `state` OK, NONE, UNMOVED, LEFTOVER or BAD. `path` the policy file:
+    `<PM repo>/.pm-kit/config.json` for OK and LEFTOVER, the known-absent home file
+    `~/.pm-kit/config.json` for NONE, the home folder's leftover file for UNMOVED, and for BAD the PM repository's file when the pointer named
+    one, else the home file. `local` LOCAL_FILE_NAME beside `path` for OK and LEFTOVER, else None.
+    `folder` the PM repository's `.pm-kit` for OK and LEFTOVER, else None. `pm` the PM repository
+    (the pointer's value, normalised) for OK and LEFTOVER, else None. `pm_data` the derived
+    {path, branch, remote} for OK and LEFTOVER when the repository's kit-pm-data.json record is
+    there, else None. `leftover` a machine config file still in the home folder (either folder
+    name; UNMOVED, LEFTOVER), else None. `error` why the config cannot be read (UNMOVED,
+    LEFTOVER, BAD), else None. `home` the home folder.
 
     `new` exists only for kitlib.hubsite.auth.folder (its line 121, the hub's credential folder
     beside it) and the guard's matching hold on that folder (kitlib.guard.rules.hub_secret_folders);
@@ -710,6 +713,11 @@ def _leftover(h):
 
 MOVE_DOC = 'docs/kit-json.md "Moving the machine config into the PM repo"'
 POINTER_DOC = 'docs/machine-setup.md "PM repo pointer"'
+# LEFTOVER's error: (the PM repository's policy file, the home file, the home file with each '
+# doubled for PowerShell's single-quoted string, MOVE_DOC).
+LEFTOVER_WHY = ("the machine config moved to the PM repository (%s); a copy is still in the home "
+                "folder (%s) and the kit stops until it is gone: remove it (Remove-Item -LiteralPath "
+                "'%s'), %s")
 
 
 def locate(home=None, ptr=None):
@@ -769,7 +777,11 @@ def locate(home=None, ptr=None):
     pm_data = None
     if record is not None:
         pm_data = {'path': pm, 'branch': record.branch, 'remote': record.remote}
-    return make(OK, path, local=local, folder=folder, pm=pm, pm_data=pm_data, leftover=leftover)
+    if leftover:
+        why = LEFTOVER_WHY % (path, leftover, leftover.replace("'", "''"), MOVE_DOC)
+        return make(LEFTOVER, path, why, local=local, folder=folder, pm=pm, pm_data=pm_data,
+                    leftover=leftover)
+    return make(OK, path, local=local, folder=folder, pm=pm, pm_data=pm_data)
 
 
 def config_dir(home=None):
@@ -779,14 +791,14 @@ def config_dir(home=None):
 
 
 def config_file(home=None):
-    """The machine config's policy file locate() names, even for UNMOVED and BAD. Never raises."""
+    """The machine config's policy file locate() names, even for UNMOVED, LEFTOVER and BAD. Never raises."""
     return locate(home).path
 
 
 def readable_file(home=None):
     """The machine config's policy file a reader opens (locate()): the PM repository's
     config.json for OK, the known-absent home file for NONE. ConfigError when the config cannot
-    be read (UNMOVED, BAD): a reader that opens the file itself (pmstart, pmwatch, backloglint,
+    be read (UNMOVED, LEFTOVER, BAD): a reader that opens the file itself (pmstart, pmwatch, backloglint,
     ...) must not take a file it cannot use for an absent one."""
     loc = locate(home)
     if loc.error:
@@ -809,7 +821,7 @@ def key_file(home=None, key=None):
 def writable_file(home=None, key=None):
     """The file a writer of the machine config key `key` writes: for OK the PM repository's
     LOCAL_FILE_NAME when `key` is a LOCAL_KEYS key, else its FILE_NAME. ConfigError when the
-    config cannot be read (UNMOVED, BAD), for OK when `key` is one the PM repository's config
+    config cannot be read (UNMOVED, LEFTOVER, BAD), for OK when `key` is one the PM repository's config
     never holds (DROPPED_KEYS: `pm_data` is derived), and for NONE: with no pointer there is no
     file to write, and the home file is never made again (it would be a leftover, UNMOVED)."""
     loc = locate(home)
