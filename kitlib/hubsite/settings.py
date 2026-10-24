@@ -40,10 +40,6 @@ ACCESS = Obj({
                     'the emails a token may carry on the tunnel listener; empty: it does not start'),
 }, what='{team, aud, emails}')
 
-RELAY = Obj({
-    'source': Field(Str(), None, 'the artifact the relay is drained from; unset: no relay'),
-}, what='{source}')
-
 HUB = Obj({
     'port': Field(Int(1, 65535), PORT, 'the local listener, loopback only'),
     'tunnel_port': Field(Int(1, 65535), TUNNEL_PORT, 'the tunnel listener, loopback only'),
@@ -54,7 +50,6 @@ HUB = Obj({
                                 'the data worktree)'),
     'backlog_refresh_s': Field(Int(30, 86400), BACKLOG_REFRESH_S, 'seconds between two backlog fetches'),
     'access': Field(ACCESS, None, 'what the tunnel listener requires of an Access token'),
-    'relay': Field(RELAY, None, 'the artifact relay; unset: off'),
 }, what='hub settings')
 
 
@@ -102,10 +97,9 @@ class Access(collections.namedtuple('Access', 'team aud emails')):
 
 
 Settings = collections.namedtuple(
-    'Settings', 'port tunnel_port store commit_every_s push backlog_refresh_s access relay')
+    'Settings', 'port tunnel_port store commit_every_s push backlog_refresh_s access')
 Settings.__doc__ = """The hub's settings. `store`: an absolute folder, or None when neither
-hub.store nor pm_data is set. `push`: a bool. `access`: an Access. `relay`: the relay's source,
-or None (off)."""
+hub.store nor pm_data is set. `push`: a bool. `access`: an Access."""
 
 
 def check(obj, where=KEY):
@@ -114,7 +108,9 @@ def check(obj, where=KEY):
     errs = []
     if obj is None:
         return errs
-    HUB.check(obj, where, errs)
+    # `relay` was a setting for a feature that never shipped; a file still carrying it loads, ignored.
+    HUB.check({k: v for k, v in obj.items() if k != 'relay'} if isinstance(obj, dict) else obj,
+              where, errs)
     if not errs and obj.get('port', PORT) == obj.get('tunnel_port', TUNNEL_PORT):
         errs.append('%s.port and %s.tunnel_port must differ' % (where, where))
     return errs
@@ -139,7 +135,6 @@ def settings(obj, pm_data=None, where=KEY):
         store = os.path.join(pm_data['path'], STORE_DIR)
     push = obj.get('push')
     access = obj.get('access') or {}
-    relay = obj.get('relay') or {}
     return Settings(
         port=_value(obj, 'port', PORT),
         tunnel_port=_value(obj, 'tunnel_port', TUNNEL_PORT),
@@ -148,8 +143,7 @@ def settings(obj, pm_data=None, where=KEY):
         push=derived if push is None else push,
         backlog_refresh_s=_value(obj, 'backlog_refresh_s', BACKLOG_REFRESH_S),
         access=Access(access.get('team') or '', access.get('aud') or '',
-                      tuple(access.get('emails') or ())),
-        relay=relay.get('source') or None)
+                      tuple(access.get('emails') or ())))
 
 
 def _home(environ):
