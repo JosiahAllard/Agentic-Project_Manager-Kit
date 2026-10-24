@@ -54,7 +54,7 @@ COMMAND = 'tools/machine_setup.py'
 # the replace (named in the diff and the plan line); any other key the template and overlay lack
 # still refuses. Add a path here in the same commit that drops it from the template.
 RETIRED = (
-    'effortLevel',      # dropped by 28ec2ad6a "Managed settings: drop effortLevel and modelSettings"
+    'effortLevel',      # dropped by the commit "Managed settings: drop effortLevel and modelSettings"
     'modelSettings',    # the same commit (it held claude-opus-5-5.autoCompactWindow)
 )
 
