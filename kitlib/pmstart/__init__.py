@@ -319,16 +319,31 @@ def _watcher_state(hb, running, now, cmd):
     return ["pm_watch.py is not running: start it under Monitor: %s" % cmd]
 
 
-def handoff(cfg, globber=glob.glob, mtime=os.path.getmtime):
+HANDOFF_DEFAULT = "HANDOFF.md"
+HANDOFF_STRAY = "pm-handoff*.md"
+
+
+def handoff(cfg, globber=glob.glob, exists=os.path.isfile, pm_repo=None):
+    """The PM's one hand-off file, edited in place (docs/pm-start.md "Hand-off file"): pm_start.handoff_file
+    (default HANDOFF.md; a relative name is in the PM repository's main checkout, `pm_repo`, default
+    pm_memory_repo). Its line is "read first: <file>", or a line saying it is missing. Any pm-handoff*.md
+    left in pm_start.memory_dir (when set) is one more line: merge it into the file and delete it."""
+    name = cfg.get("handoff_file") or HANDOFF_DEFAULT
+    if os.path.isabs(name):
+        path = name
+    else:
+        top = (pm_repo or pm_memory_repo)(cfg)
+        if not top:
+            raise KeyError("handoff_file %s is relative and the PM repository is not found "
+                           "(set pm_start.sessions_file, or an absolute pm_start.handoff_file)" % name)
+        path = os.path.normpath(os.path.join(top, name))
+    lines = ["read first: %s" % path] if exists(path) else [
+        "no hand-off file %s: create it (the PM keeps one, edited in place)" % path]
     mem = cfg.get("memory_dir")
-    if not mem:
-        raise KeyError("memory_dir not configured")
-    pattern = os.path.join(mem, cfg.get("handoff_glob", "pm-handoff-*.md"))
-    files = globber(pattern)
-    if not files:
-        return ["no handoff file matches %s" % pattern]
-    newest = max(files, key=mtime)
-    return ["read first: %s" % newest]
+    stray = sorted(globber(os.path.join(mem, HANDOFF_STRAY))) if mem else []
+    if stray:
+        lines.append("hand-off notes belong in %s: merge and delete %s" % (path, ", ".join(stray)))
+    return lines
 
 
 def reminders(cfg, today, read=None):
