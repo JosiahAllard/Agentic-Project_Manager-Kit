@@ -2,6 +2,10 @@
 
 `tools/pm_watch.py` stays silent until something needs the PM and prints one line per event. With `--stream` it keeps polling after an event, so the PM runs it once under Monitor and each batch of events arrives as a notification. Without it, it exits after the first events and the PM relaunches it in the background after each one. Logic: `kitlib/pmwatch` (checks and the `Watcher` poll), with the Claude-only parts (`~/.claude*/projects` transcripts, the `custom-title` record, the `~/.claude/machine-lock/alerts` default) in `hosts/claude/adapter/claude_host.py`, the seam the host split (ARCHITECTURE "Host split") lifts out. Ported from the PM repo's `launcher/pm_watch.py` at 95f7262: the event lines, state keys (`branches`, `usage`, `bg_alerts`, `idle`, `idle_nolog`) and options are the same; the tool's docstring lists the events.
 
+## Stopped sessions
+
+A session that `launch.py stop` ended with no successor reads `STOPPED <name> at <iso>`, once per stop, and never `IDLE` (a stopped session keeps its `sessions.json` entry, so the idle check would otherwise report it as a quiet one). The watcher reads the launcher's `stop.log` in the folder of the sessions file (`kitlib.pmwatch` `stop_log_reader`; the line `kitlib.launcher.stop` writes, `successor '-'`). The newest stop of the name counts, and only while it is not older than the session's newest transcript activity: activity after the stop means the session was started again, and a quiet one then reads `IDLE` as before. A stop with a successor, a missing `stop.log` and a stop of another name leave the idle check as it was. A `STOPPED` line was chosen over dropping the session, so a stop done by another session is still seen; the first run records a stopped session in the `idle` baseline as `[time, "stopped"]`, silently. Code: `kitlib.pmwatch` `idle_events`, `idle_baseline`; tests: `tests/pmwatch/test_pmwatch.py` `IdleEvents`.
+
 ## Config
 
 The machine config (docs/kit-json.md "Machine config keys"), key `pm_watch`; a flag of the same meaning wins:
