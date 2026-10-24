@@ -293,7 +293,7 @@ def _direct_launch_command():
         if out_dir:
             args += ["--output-directory", out_dir]
         # posix=False keeps Windows backslashes but also keeps the quotes round a token; Comfy
-        # Desktop writes `--temp-directory "C:\ComfyUI"`, so strip one pair (seen 2026-10-01).
+        # Desktop writes a quoted path such as `--temp-directory "D:\Comfy Temp"`, so strip one pair.
         args += [a[1:-1] if len(a) >= 2 and a[0] == a[-1] == '"' else a
                  for a in shlex.split(inst.get("launchArgs") or "", posix=False)]
         # Headless and on the same host/port this tool talks to (C.HOST), forced last so an

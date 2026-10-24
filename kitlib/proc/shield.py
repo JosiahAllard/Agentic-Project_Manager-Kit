@@ -23,15 +23,15 @@ creation, so the caller's handle keeps every right: `proc.kill()`, TerminateJobO
 `before_resume` - so not one instruction of it runs unshielded. Its cost: while shielded, the
 process cannot be ended by its pid (Task Manager and taskkill get "Access is denied"), and no
 process of this user, its own children included, can open it by pid for any access holding
-PROCESS_TERMINATE: .NET's Process.EnableRaisingEvents asks for such access (.NET 8, measured
-2026-10-06), so a .NET child that watches its shielded parent dies with Win32Exception 5.
+PROCESS_TERMINATE: .NET's Process.EnableRaisingEvents asks for such access (.NET 8), so a
+.NET child that watches its shielded parent dies with Win32Exception 5.
 kitlib.pytests keeps each unit shielded for life (its job ends it).
 
 Every message says "returned", never "failed": a caller that runs the child unshielded anyway
 prints it, and it must not read as a failing line to a gate's fail patterns. (runner.PidHoldRun's
 lines do say FAILED: its flag is refused in any gate step, so no gate reads them.)
 
-Ported from the PM kit's pid_shield.py at kit/pid-hold d151596 (the PidHold version). The bindings
+Ported from the PM kit's pid_shield.py (the PidHold version). The bindings
 are kitlib.proc.win32's; resume is win32.resume (Job.start calls it).
 """
 import atexit
@@ -147,7 +147,7 @@ class PidHold(object):
     seconds after its process exited. Windows only.
 
     WHY: a process object outlives its process while any handle to it is open, and Windows does
-    not hand its pid to a new process until the object is gone (measured 2026-10-06: taskkill of
+    not hand its pid to a new process until the object is gone (taskkill of
     a held, exited pid answers "not found", exit 128, and kills nothing). Held from before a
     shell exits until `linger` (3 s) after, the pid Claude Code's second taskkill names - ~1.6 s
     after the shell ended, pid_shield's GOTCHA - belongs to no live process, so it kills nothing.
@@ -163,8 +163,8 @@ class PidHold(object):
 
     COST AND LIMITS: one handle per process of this user, and each exited process object kept
     `linger` seconds longer. A process that starts and exits between two passes is never held:
-    Git's usr\\bin\\bash.exe running `true` lives at least 15.5 ms, three passes (measured
-    2026-10-06, n=20; bin\\bash.exe at least 29.4 ms). A refused pid freed and reused by a process
+    Git's usr\\bin\\bash.exe running `true` lives at least about 15 ms, three passes
+    (bin\\bash.exe about twice that). A refused pid freed and reused by a process
     of this user within one pass is held only at the next retry. Pids freed before the first pass
     are not held at all: `warm` waits out that window. The 5 ms `interval` assumes Python 3.11 or
     later, whose time.sleep is high-resolution on Windows; before 3.11 a sleep lasts at least a
@@ -295,10 +295,10 @@ class PidHold(object):
         return self._k32.WaitForSingleObject(handle, 0) == win32.WAIT_OBJECT_0
 
     def _pass(self, sweep):
-        # Set operations only, so a quiet pass runs no Python loop over every held pid. Cost
-        # measured 2026-10-06 (process_time of one warmed hold over 30 s windows, Python 3.14,
-        # 24 threads, shared machine): 11.5-14.8% of one core at 149-167 passes a second with
-        # 512-683 pids held; it grows with the pids held (3.1% at 228, kit SOURCES.md).
+        # Set operations only, so a quiet pass runs no Python loop over every held pid. Cost, as
+        # process_time of one warmed hold over 30 s windows on one shared machine: 11.5-14.8% of
+        # one core at 149-167 passes a second with 512-683 pids held; it grows with the pids held
+        # (3.1% at 228).
         listed = self._listed()
         listed.discard(0)                                           # the System Idle Process
         now = time.monotonic()

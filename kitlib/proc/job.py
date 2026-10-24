@@ -2,8 +2,8 @@
 It replaces machine_lock's Job, winproc's job helpers and pytests' Job.
 
 A job never allows breakaway (no JOB_OBJECT_LIMIT_BREAKAWAY_OK): Git's sh and bash (MSYS2) start
-every child with CREATE_BREAKAWAY_FROM_JOB whenever the job allows it, and measured 2026-10-05
-with it allowed, what `sh -c` started was in no job, on every thread, and outlived the wrapper.
+every child with CREATE_BREAKAWAY_FROM_JOB whenever the job allows it, and measured with it
+allowed, what `sh -c` started was in no job, on every thread, and outlived the wrapper.
 A program that asks to break away anyway has that start refused (access denied).
 
 Pinning past 64 logical processors: a mask whose threads are all in processor group 0 is
@@ -16,7 +16,7 @@ no_window_flags. A console program started by a process with no console at all (
 under pythonw.exe) gets a new console, and Windows shows a window for it; CREATE_NO_WINDOW gives it
 a console with no window. A parent that has a console, shown or hidden, keeps its children on that
 console as before. The test is "attached to a console" (GetConsoleProcessList), not
-GetConsoleWindow: measured 2026-10-10, a python started with CREATE_NO_WINDOW, and an agent's
+GetConsoleWindow: measured, a python started with CREATE_NO_WINDOW, and an agent's
 shell, have a console whose GetConsoleWindow() is 0. A caller that wants a visible window passes
 CREATE_NEW_CONSOLE. A start that needs no job gets the same flags through kitlib.proc.spawn (run,
 call, popen); tests/proc/test_spawn_sites.py holds every start in the kit to one of the two.
@@ -256,7 +256,7 @@ class Job:
     def narrow(self, mask):
         """Pins the pinned job to `mask`, some of the threads it is pinned to now, while its
         processes run: Windows moves every process in the job, and in jobs nested in it, onto
-        `mask` at once (measured 2026-10-10: a live process in a nested job without a pin of its
+        `mask` at once (measured: a live process in a nested job without a pin of its
         own followed, and so did one started after). True when set; False, the pin unchanged,
         when the job is not pinned, `mask` is not a non-empty part of its mask, or Windows
         refused. repin(old) puts a wider mask back."""
@@ -269,7 +269,7 @@ class Job:
     def repin(self, mask):
         """Sets the pinned job's mask to `mask` (narrow's undo); False, unchanged, when refused.
         A wider mask moves the job's live processes back onto all of it too, in nested jobs as
-        well (measured 2026-10-10: a process narrowed from 2 threads to 1 ran on both again at
+        well (measured: a process narrowed from 2 threads to 1 ran on both again at
         once, in the job and in a job nested in it)."""
         if self.h is None or self.pin != "pinned" or not mask:
             return False
@@ -376,7 +376,7 @@ class Job:
     def processes(self):
         """The processes ever started in the job, ended ones included (its basic accounting's
         TotalProcesses), or None (ended, or Windows will not say). One query, no pid list.
-        Measured 2026-10-19: a process started in a job nested in this one counts here too, and
+        Measured: a process started in a job nested in this one counts here too, and
         so does the conhost a child started with CREATE_NO_WINDOW gets; a child that shares its
         parent's console adds itself only."""
         if self.h is None:

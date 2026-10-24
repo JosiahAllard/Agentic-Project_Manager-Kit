@@ -20,11 +20,11 @@ kitlib/__init__.py calls install() on `import kitlib`, so every kit process has 
 loads ctypes until the first such start.
 
 ensure_windowless_console(): AllocConsoleWithOptions with ALLOC_CONSOLE_MODE_NO_WINDOW where
-kernel32 exports it (measured 2026-10-13 on Windows 11 10.0.26300 under pythonw: hr 0, a new
+kernel32 exports it (measured on Windows 11 under pythonw: hr 0, a new
 console, no Windows Terminal or OpenConsole process, the std handles unchanged, a bare child's
 GetConsoleWindow() 0). Else the fallback: a holder program started with CREATE_NO_WINDOW, so it
 has a console with no window; AttachConsole(holder), then the holder ends and the console stays
-with this process (measured the same day: attached after about 16 ms of ERROR_INVALID_HANDLE while
+with this process (measured too: attached after about 16 ms of ERROR_INVALID_HANDLE while
 the holder started, std handles unchanged, a bare child's GetConsoleWindow() 0). FORCE_FALLBACK
 makes ensure take the fallback where the export exists (the tests).
 
@@ -39,7 +39,7 @@ characters, with secrets masked (_mask); it never raises.
 
 Ctrl+C: a console Ctrl+C has no window to be typed into here; only GenerateConsoleCtrlEvent from a
 process on the same console sends one (no kit code calls it). A pythonw process that gains a
-console would be ended by one at once (exit 0xC000013A, measured 2026-10-13: Python's SIGINT
+console would be ended by one at once (exit 0xC000013A, measured: Python's SIGINT
 handler, SIG_IGN included, never runs under pythonw), where before it had no console and got none.
 So ensure gives it a console control handler that takes Ctrl+C and Ctrl+Break for this process
 (_take_ctrl). A handler is not inherited: a child on the console gets them as before
@@ -119,8 +119,7 @@ def _k32():
 def has_console():
     """True when this process is attached to a console, with a window or without one.
     GetConsoleProcessList, not GetConsoleWindow: a console made with CREATE_NO_WINDOW, or by
-    ensure_windowless_console, has a GetConsoleWindow() of 0 (kitlib/proc/job.py, measured
-    2026-10-10)."""
+    ensure_windowless_console, has a GetConsoleWindow() of 0 (kitlib/proc/job.py, measured)."""
     from ctypes import wintypes
     one = (wintypes.DWORD * 1)()
     return _k32().GetConsoleProcessList(one, 1) != 0
