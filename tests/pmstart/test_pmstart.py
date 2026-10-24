@@ -9,7 +9,7 @@ import unittest
 from kitlib import pmstart
 from kitlib.pmstart import fglock
 from tests.home import temp_home
-from tests.pmstart import HUB_KEPT_OFF, keep_off_hub_site, keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, HUB_KEPT_OFF, keep_off_hub_site, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 CFG = {"pm_watch_cmd": "python launcher/pm_watch.py --stream", "memory_dir": "M",
@@ -42,7 +42,7 @@ def proc(name, cmd, exe=""):
 
 
 class StandingTest(unittest.TestCase):
-    FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+    FAKES = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
                  liveness={"read": lambda p: "{}"})
 
     def test_lines(self):
@@ -160,7 +160,7 @@ class WatcherTest(unittest.TestCase):
     def test_checklist_passes_the_watcher_fake(self):
         hb = {"pid": 42, "beat": 0}
         txt = pmstart.checklist(CFG, NOW, procs=[wproc(42)], watcher={"beat": lambda: hb, "now": 10},
-                                handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+                                handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
                                 liveness={"read": lambda p: "{}"})
         self.assertNotIn("pm_watch.py", txt)
 
@@ -343,7 +343,7 @@ class ChecklistTest(unittest.TestCase):
         pmstart.list_processes = bad
         try:
             txt = pmstart.checklist(CFG, NOW, reminders={"read": lambda p: "[]"},
-                                    handoff={"globber": lambda p: []})
+                                    handoff=HANDOFF_FAKE)
         finally:
             pmstart.list_processes = orig
         self.assertIn("could not check watcher", txt)
@@ -451,7 +451,7 @@ class EngReviewTest(unittest.TestCase):
     def test_unset_or_empty_gives_no_line(self):
         for cfg in (CFG, dict(CFG, eng_review=[])):
             self.assertEqual(pmstart.eng_review(cfg), [])
-        fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
+        fakes = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
         self.assertNotIn("eng_review", pmstart.checklist(CFG, NOW, procs=[], **fakes))
 
     def test_bad_value_raises(self):
@@ -460,7 +460,7 @@ class EngReviewTest(unittest.TestCase):
                 pmstart.eng_review(dict(CFG, eng_review=bad))
 
     def test_in_checklist_and_bad_value_isolated(self):
-        fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
+        fakes = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"}, liveness={"read": lambda p: "{}"})
         self.assertIn("EX-API-*", pmstart.checklist(dict(CFG, eng_review=["EX-API-*"]), NOW, procs=[], **fakes))
         txt = pmstart.checklist(dict(CFG, eng_review="x"), NOW, procs=[], **fakes)
         self.assertIn("could not check eng_review:", txt)
@@ -550,7 +550,7 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(top, "T:\\pm")
 
     def test_in_the_checklist(self):
-        fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+        fakes = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
                      liveness={"read": lambda p: "{}"})
         txt = pmstart.checklist(CFG, NOW, procs=[], **fakes, memory={
             "repos": {"b": self.b}, "check": lambda p, label=None: "memory (b): add it", "pm_repo": lambda c: None})
