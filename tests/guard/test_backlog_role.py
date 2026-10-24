@@ -45,6 +45,10 @@ class Base(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         self.reads = []
+        self.live = None                        # the PM data worktree whose store holds the records
+        p = mock.patch.object(backlogrole, 'live_store', lambda root: self.live, create=True)
+        p.start()
+        self.addCleanup(p.stop)
 
     def read(self, root, rid):
         self.reads.append((W.fwd(root), rid))
@@ -374,6 +378,132 @@ class AsFromItsWorktree(Base):
                 self.assertNotIn('--as <your branch>', d.reason)
         d = self.refused(self.run_as('kit/wt', cwd=self.w.main, agent_type='reviewer'))
         self.assertNotIn('--as <your branch>', d.reason)
+
+
+class HeldStore(Base):
+    """The stores of OwnPullInstead and OwnPullDecision: the worktree's holds nothing, w.plain
+    stands for the PM data worktree (read_record and live_store are patched, so any folder serves)."""
+
+    def setUp(self):
+        super(HeldStore, self).setUp()
+        self.live = self.w.plain
+        self.store = W.fwd(self.w.plain)
+        self.held = {}                          # store folder -> the record its store holds
+
+    def read(self, root, rid):
+        self.reads.append((W.fwd(root), rid))
+        return self.held.get(W.fwd(root))
+
+    def again(self, d, tool='Bash', cwd=None, agent_type='worker'):
+        """The decision on the refusal's Instead, run as the refused command was."""
+        return self.cmd(d.instead, agent_type, tool=tool, cwd=cwd)
+
+    def form(self, words, at=None, tool='Bash'):
+        run = 'python %s -C "%s" --as kit/wt %s' % (backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL),
+                                                   self.store, words)
+        if tool == 'PowerShell':
+            return 'cd "%s"; if ($?) { %s }' % (at or self.wt, run)
+        return 'cd "%s" && %s' % (at or self.wt, run)
+
+
+class OwnPullInstead(HeldStore):
+    """A builder's `set` on its own pull of a folder store, run
+    with -C its worktree, reads the worktree's store (refs/backlog/main), finds no record and is
+    refused; the refusal named `-C <worktree> --as <your branch>`, which reads the same store and
+    is refused again. The Instead is now the run written out against the store that holds the
+    record (the PM data worktree's, backlogrole.live_store) from the branch's worktree, and that
+    form passes (HeldStore: where each store is)."""
+
+    def test_the_form_names_the_store_that_holds_it_and_passes(self):
+        self.held[self.store] = pulled_by('kit/wt')
+        for args, words in (('set X-1 --scope s', 'set X-1 --scope s'),
+                            ('release X-1 --reason r', 'release X-1 --reason r'),
+                            ('block X-1 --on Y-2 --reason "a b"', "block X-1 --on Y-2 --reason 'a b'"),
+                            ('--no-fetch --session S set X-1 --scope s', '--no-fetch --session S set X-1 --scope s')):
+            for tool in ('Bash', 'PowerShell'):
+                with self.subTest(args, tool=tool):
+                    text = self.bl(args) if tool == 'Bash' else '& ' + self.bl(args)
+                    d = self.refused(self.cmd(text, tool=tool))
+                    self.assertEqual(d.instead, self.form(words, tool=tool))
+                    self.assertIn('The record in the store %s is pulled by kit/wt' % self.store, d.reason)
+                    self.allowed(self.again(d, tool))
+                    self.allowed(self.again(d, tool, cwd=self.w.main))
+
+    def test_from_the_main_checkout_with_c_its_worktree(self):
+        self.held[self.store] = pulled_by('kit/wt')
+        d = self.refused(self.cmd(self.bl('set X-1 --scope s'), cwd=self.w.main))
+        self.assertEqual(d.instead, self.form('set X-1 --scope s'))
+        self.allowed(self.again(d, cwd=self.w.main))
+
+    def test_someone_elses_pull_is_refused_with_the_read(self):
+        read = 'python %s -C "%s" show X-1' % (backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL), self.wt)
+        for rec in (pulled_by('kit/other'), Rec(id='X-1', state='open'), None,
+                    Rec(id='X-1', state='done', pulled_by='kit/wt')):
+            with self.subTest(rec=rec):
+                self.held[self.store] = rec
+                d = self.refused(self.cmd(self.bl('set X-1 --scope s')))
+                self.assertEqual(d.instead, read)
+                self.assertNotIn(self.store, d.reason)            # a store not holding its pull is never named
+                self.allowed(self.again(d))
+
+    def test_it_never_names_a_branch_the_run_does_not_act_as(self):
+        self.held[self.store] = pulled_by('kit/other')
+        d = self.refused(self.cmd(self.bl('--as kit/other set X-1 --scope s')))
+        self.assertNotIn('kit/other', d.instead)
+        self.assertTrue(d.instead.endswith('show X-1'), d.instead)
+        self.held[self.store] = pulled_by('kit/wt')
+        d = self.refused(self.cmd(self.bl('--as kit/other set X-1 --scope s')))
+        self.assertTrue(d.instead.endswith('show X-1'), d.instead)
+        self.assertNotIn('--as kit/wt', d.instead)
+
+    def test_a_store_found_without_its_worktree_is_named_in_the_sentence(self):
+        # run from the main checkout as kit/wt: the store is found, the branch's worktree is not
+        self.held[self.store] = pulled_by('kit/wt')
+        d = self.refused(self.cmd('python "%s" -C "%s" --as kit/wt set X-1 --scope s' % (self.tool, W.fwd(self.w.main)),
+                                  cwd=self.w.main))
+        self.assertIn('-C "%s" --as <your branch> set X-1 ...' % self.store, d.reason)
+        self.assertTrue(d.instead.endswith('show X-1'), d.instead)
+
+    def test_a_lead_row_or_a_reviewer_gets_no_form(self):
+        self.held[self.store] = pulled_by('kit/wt')
+        for args, agent_type in (('close X-1', 'worker'), ('set X-1 --scope s --priority 3', 'worker'),
+                                 ('set X-1 --scope s', 'reviewer')):
+            with self.subTest(args, agent_type=agent_type):
+                d = self.refused(self.cmd(self.bl(args), agent_type))
+                self.assertNotIn('--as kit/wt', d.instead)
+
+
+class OwnPullDecision(HeldStore):
+    """The own-pull fix changes only the printed Instead: each input here refuses or passes as it
+    did before the fix (green at the base, docs/redfirst.md). The own pull run with -C its worktree,
+    someone else's pull, `--as` another branch, a reviewer and a lead row are refused as
+    backlog-role; the form the fix prints (-C the store that holds the record, from the branch's
+    worktree) passes. Bash and PowerShell each."""
+
+    def test_the_same_inputs_refuse_or_pass_as_before(self):
+        mine, other = pulled_by('kit/wt'), pulled_by('kit/other')
+        rows = (('own pull, -C its worktree', mine, 'set X-1 --scope s', 'worker'),
+                ('own pull, from the main checkout', mine, 'set X-1 --scope s', 'worker'),
+                ('someone else\'s pull', other, 'set X-1 --scope s', 'worker'),
+                ('an open record', Rec(id='X-1', state='open'), 'release X-1', 'worker'),
+                ('--as another branch', mine, '--as kit/other set X-1 --scope s', 'worker'),
+                ('a reviewer', mine, 'set X-1 --scope s', 'reviewer'),
+                ('a lead row', mine, 'close X-1', 'worker'),
+                ('a price', mine, 'set X-1 --scope s --priority 3', 'worker'))
+        for name, rec, args, agent_type in rows:
+            for tool in ('Bash', 'PowerShell'):
+                with self.subTest(name, tool=tool):
+                    self.held = {self.store: rec}
+                    text = self.bl(args) if tool == 'Bash' else '& ' + self.bl(args)
+                    cwd = self.w.main if 'main checkout' in name else None
+                    self.refused(self.cmd(text, agent_type, tool=tool, cwd=cwd))
+        for tool in ('Bash', 'PowerShell'):
+            for cwd in (None, self.w.main):
+                with self.subTest('the printed form', tool=tool, cwd=cwd):
+                    self.held = {self.store: mine}
+                    self.allowed(self.cmd(self.form('set X-1 --scope s', tool=tool), tool=tool, cwd=cwd))
+                    self.held = {self.store: other}
+                    self.refused(self.cmd(self.form('set X-1 --scope s', tool=tool), tool=tool, cwd=cwd))
 
 
 class QuotedWords(Base):

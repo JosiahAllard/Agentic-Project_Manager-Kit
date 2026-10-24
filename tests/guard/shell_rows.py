@@ -564,7 +564,7 @@ ROWS = [
     ('subagent stash list in main reads', lambda w: bash('git stash list --oneline', w.main, sub=True), None, None, None),
     ('subagent stash -- show in another checkout is a push',
      lambda w: bash('git -C "%s" stash -- show' % W.fwd(w.plain), w.wt, sub=True), 'deny', 'write-jail',
-     'git -C "{wt}" stash -- show'),
+     'python "{kit}/tools/commit.py" -C "{wt}" -m "WIP: <what>" <each path you changed>'),
     ('subagent stash -- show where -C is computed', lambda w: bash('git -C $x stash -- show', w.wt, sub=True),
      'deny', 'unplaced', 'git -C "<main checkout>" worktree add .claude/worktrees/<slug> -b <branch>'),
     ('subagent stash -- list in a place git cannot tell',

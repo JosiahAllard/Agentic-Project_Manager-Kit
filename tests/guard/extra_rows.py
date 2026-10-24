@@ -172,7 +172,7 @@ ROWS = [
     # which says to drop the variable and commit in the worktree the agent is in
     ('git-hooks-path: GIT_CONFIG_PARAMETERS', lambda w: bash(
         "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x", w.wt, sub=True), 'deny',
-     'git-main-history', 'git -C "{wt}" commit -m x'),
+     'git-main-history', 'python "{kit}/tools/commit.py" -C "{wt}" -m "<subject>" <each path you changed>'),
     ('git-hooks-path: GIT_CONFIG_PARAMETERS on a read', lambda w: bash(
         "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git status", w.wt, sub=True), 'deny', 'git-hooks-path',
      'git -C "{wt}" config --get core.hooksPath'),
