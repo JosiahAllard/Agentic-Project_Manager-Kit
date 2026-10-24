@@ -313,7 +313,7 @@ def stop_log_reader(sessions):
             t = time.mktime(time.strptime(last[0], "%Y-%m-%d %H:%M:%S"))
         except (ValueError, OverflowError):
             return None
-        return t if t >= mtime else None
+        return t if t + 1 > mtime else None        # the stamp is whole seconds, mtime is not
     return stopped
 
 

@@ -223,6 +223,13 @@ class IdleEvents(unittest.TestCase):
         self.assertEqual(len(ev), 1)
         self.assertTrue(ev[0].startswith("STOPPED n7 at "), ev[0])
 
+    def test_stop_in_the_same_second_as_the_last_write_reads_stopped(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7") + 0.7     # stop.log keeps whole seconds
+        os.utime(os.path.join(self.proj, "D--src-alpha", "a.jsonl"), (t, t))
+        stopped = self.stop_log("n7", int(t))
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), {}, [], self.NOW, 20, stopped)
+        self.assertTrue(ev[0].startswith("STOPPED n7"), ev[0])
+
     def test_stop_with_a_successor_is_not_stopped(self):
         t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
         stopped = self.stop_log("n7", t + 60, successor="n8")
