@@ -46,9 +46,10 @@ a constructor argument, and the defaults read this machine.
                      be read or is not a JSON object, or a ledger_path or ledger_dir that is not a
                      path string, sets 'broken' (why), and the ledger rule then denies every
                      subagent write. Missing files are an empty config, not
-                     a broken one. The files are the ones config_location() names; an UNMOVED or
-                     BAD location sets 'broken' too (fail closed), and an UNMOVED one's home
-                     leftover is still read, so its ledger_path stays protected.
+                     a broken one. The files are the ones config_location() names; an UNMOVED,
+                     LEFTOVER or BAD location sets 'broken' too (fail closed); an UNMOVED one's
+                     home leftover is still read, and a LEFTOVER one's PM repository config.json
+                     for its ledger_path and ledger_dir only, so the ledger stays protected.
   ledger_files()     kitlib.ledger.files.of_config over user(): where the ledger's log files,
                      standing digest and rulebooks' folder are (the ledger rule), or None
   config_location()  kitlib.config.user.locate(home) with the PM-repo pointer read once from the
@@ -414,11 +415,15 @@ class Ctx(object):
         out = {k: None for k in kuser.SCHEMA}
         out['error'] = why
         loc = self.config_location()
-        if loc.error and loc.state != kuser.UNMOVED:
+        if loc.error and loc.state not in (kuser.UNMOVED, kuser.LEFTOVER):
             out['broken'] = loc.error
             return out
         if loc.state == kuser.OK:
             files = ((loc.path, kuser.POLICY_KEYS), (loc.local, kuser.LOCAL_KEYS))
+        elif loc.state == kuser.LEFTOVER:
+            # the PM repository's policy file, for the ledger's keys only: no other key (a jail
+            # root, an MCP tool) is taken from a config the kit refuses
+            files = ((loc.path, LEDGER_KEYS),)
         else:
             files = ((loc.path, tuple(kuser.SCHEMA)),)
         for path, keys in files:
@@ -447,8 +452,9 @@ class Ctx(object):
                         out['broken'] = '%s must be an absolute path, not %r' % (k, lp)
                         out[k] = None
         if loc.error:
-            # UNMOVED: the home folder's leftover is read for its ledger_path, so the ledger stays
-            # protected, and the config is still broken (every subagent write is denied)
+            # UNMOVED (the home folder's file) and LEFTOVER (the PM repository's) are read for their
+            # ledger keys, so the ledger stays protected, and the config is still broken (every
+            # subagent write is denied)
             out['broken'] = loc.error
         out['pm_data'] = loc.pm_data
         return out
