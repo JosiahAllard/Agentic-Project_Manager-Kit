@@ -421,6 +421,16 @@ class CliTest(WriteBase):
         self.assertEqual(self.read(self.kit_path()), kit)
         self.assertEqual(self.run_tool('check').returncode, 0)
 
+    def test_add_rule_book_checked_hint_names_the_book(self):
+        base = ['add', '--repo', 'kit', '--prov', 'selected', '--q', 'q', '--a', 'a', '--decides', 'd',
+                '--source', 's', '--rule', 'landing.fast', '--topic', 'Landing', '--book', 'all']
+        r = self.run_tool(*base)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('conflicts --repo all ', r.stderr)
+        r = self.run_tool(*(base + ['--checked', '0' * 16]))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn('conflicts --repo all ', r.stderr)
+
     def test_add_rule_arguments(self):
         base = ['add', '--repo', 'kit', '--prov', 'selected', '--q', 'q', '--a', 'a', '--decides', 'd',
                 '--source', 's']

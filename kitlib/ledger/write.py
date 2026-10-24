@@ -234,7 +234,7 @@ def _rule_change(rule, repo, rid, decides, warnings):
     name = _book_name(books, repo, rule.book)
     book = books.get(name)
     fix = ('run `ledger.py conflicts --repo %s --topic ... --key %s --text ...`, read what it lists, '
-           'then pass the checked hash it prints' % (repo, rule.key))
+           'then pass the checked hash it prints' % (rule.book or repo, rule.key))
     if rule.op == 'set':
         text = rule.text if (rule.text or '').strip() else decides
         if not (rule.checked or '').strip():

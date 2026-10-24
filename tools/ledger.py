@@ -259,7 +259,7 @@ def do_add(a, found, repos):
         if not (a.checked or '').strip():
             raise Usage('--rule needs --checked HASH: run `ledger.py conflicts --repo %s --topic ... '
                         '--key %s --text ...`, read what it lists, then pass the checked hash it prints'
-                        % (a.repo, a.rule))
+                        % (a.book or a.repo, a.rule))
         rule = write.RuleChange(found.rules, 'set', a.rule, a.topic, a.rule_text, a.checked,
                                 book=a.book)
     return write_entry(a, found, repos, a.q, a.a, a.decides, a.supersedes, rule)
