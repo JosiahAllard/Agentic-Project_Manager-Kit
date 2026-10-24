@@ -89,11 +89,12 @@ experimental:
 - Only these four rows have it (tests/agents/test_agents.py,
   `test_only_the_long_cache_roles_ask_for_the_one_hour_prompt_cache`): strong-worker, worker,
   docs-writer and weak-worker. The owner asked for the last three after a prompt-cache audit. The
-  pricing computation in docs/agent-review.md, "Context and cache findings", was made for the
-  opus/medium default coder, which was senior-worker (opus-worker before it) until the two roles
-  swapped charters on 2026-10-15, and for worker; it does not cover docs-writer or weak-worker.
-- Check it took: in one strong-worker run's usage block, the cache-creation split counts tokens
-  in the one-hour field and none in the five-minute field. Not yet observed for this file.
+  untested pricing computation in docs/agent-review.md, "Context and cache findings", was made for
+  the opus/medium default coder, which was senior-worker (opus-worker before it) until the two
+  roles swapped charters on 2026-10-15, and for worker; it does not cover docs-writer or weak-worker.
+- Check it took: in one run's usage block for any of these four roles, the cache-creation split
+  counts tokens in the one-hour field and none in the five-minute field. Not yet observed for any
+  of them.
 
 ## Changes versus the live files
 
