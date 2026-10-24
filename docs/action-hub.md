@@ -358,7 +358,11 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
 - A `pending` or `wait` `--for <key>` that returns one of the key's items hands it over. The item
   is then the key's for `ACK_WINDOW_S` (30 minutes) from the first hand-over, and the PM's after
   that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
-  an answered question stays pending until the PM logs it.
+  an answered question stays pending until the PM logs it (`questions log`) or, when it needs no
+  ruling (a one-off go such as a landing or archive go, which the ledger keeps out), marks it
+  done (`questions done <id> --why <text> --if-version V`; status `done`, with `done_why` and
+  `done_at`; refused for a question bound to a record). A done question is no longer pending and
+  its push ends (`kitlib/hubsite/api.py` `questions_done`).
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
   logs each ruling, and every decided approval. A PM wait is also woken when an item turns to the
   PM with no write.
