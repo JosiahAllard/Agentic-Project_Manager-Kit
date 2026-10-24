@@ -201,9 +201,9 @@ class Cli(unittest.TestCase):
     def test_park_list_parked_and_unpark(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         self.ok('add', 'BAR', '--summary', 'another thing', '--scope', 'docs/y.md', *ADD_FLAGS)
-        rc, out = self.run_tool('set-status', 'FOO', 'parked')
-        self.assertEqual(rc, 2, out)
-        self.ok('set-status', 'FOO', 'parked', '--q', 'Q-001')
+        self.ok('set-status', 'FOO', 'parked')                  # no question yet
+        self.assertRegex(self.ok('list', '--status', 'parked'), r'FOO .*\[q \?, parked 0d\]')
+        self.ok('set-status', 'FOO', 'parked', '--q', 'Q-001')  # re-pointed on one
         out = self.ok('list', '--status', 'parked')
         self.assertRegex(out, r'FOO .*\[q Q-001, parked 0d\]')
         self.assertNotIn('BAR', out)

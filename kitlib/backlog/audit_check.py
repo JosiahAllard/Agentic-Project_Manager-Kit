@@ -50,7 +50,8 @@ OK, FINDINGS, NOT_CHECKED = 0, 1, 2
 # holds them equal).
 BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
 
-# (subject prefix, verb): kitlib.backlog.plan's, migrate's, retarget's and store.catch_up's subjects.
+# (subject prefix, verb): kitlib.backlog.plan's (`uncite` among them), migrate's, retarget's and
+# store.catch_up's subjects.
 SUBJECTS = (
     ('closes ', 'close'), ('retires ', 'retire'), ('deletes ', 'delete'),
     ('migrate: ', 'migrate'),
@@ -62,7 +63,8 @@ SUBJECTS = (
     ('backlog: unpark ', 'unpark'),
     ('backlog: clear review ', 'clear-review'),
     ('backlog: pull ', 'pull'), ('backlog: release ', 'release'),
-    ('backlog: retarget ', 'retarget'), ('backlog: catch up ', 'catch-up'),
+    ('backlog: retarget ', 'retarget'), ('backlog: uncite ', 'uncite'),
+    ('backlog: catch up ', 'catch-up'),
 )
 # Keys only a verb writes (kitlib.backlog.plan.WRITTEN_BY): a `set` that changed them did so
 # itself, so they say nothing about what it was given.
@@ -183,7 +185,7 @@ def _given(verb, change, before, after):
         return {'on': sorted(now - was), 'owner_ask': asked and bool(after.all('owner_ask'))}
     if verb == 'unblock':
         return {'on': sorted(was - now)}
-    if verb in ('retarget', 'catch-up'):
+    if verb in ('retarget', 'uncite', 'catch-up'):
         return {'apply': True}
     return {}
 
@@ -255,6 +257,10 @@ def check(backend, rules, entries, since):
             report.findings.append(Finding('UNKNOWN', '%s  %s' % (what, change.subject)))
             continue
         rows = rows_of(root, verb, change)
+        if not rows:                         # a write subject no roles.py row names yet
+            report.findings.append(Finding('UNKNOWN', '%s %s rows=none  %s' % (
+                what, verb, change.subject)))
+            continue
         if audit.audited(rows):
             report.audited += 1
             report.findings.append(Finding('UNAUDITED', '%s %s rows=%s  %s' % (

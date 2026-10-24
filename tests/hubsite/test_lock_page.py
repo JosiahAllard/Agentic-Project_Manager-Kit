@@ -105,8 +105,12 @@ class ServedTest(httpfix.ListenerCase):
     def test_the_action_hub_page_links_to_it_and_it_links_back(self):
         with open(INDEX, encoding="utf-8") as f:
             index = f.read()
-        head = index.split("</header>")[0]
-        self.assertEqual(re.findall(r'<a href="([^"]*)"', head), ["/lock.html"])
+        # The Schedule is a section of the action hub page (a button, not a link); the page's one link to this one is the
+        # Schedule view's "Machine settings" line, drawn by the script.
+        self.assertEqual(re.findall(r'<a [^>]*href="[^"]*lock[^"]*"', index.split("<script>")[0]), [])
+        self.assertEqual(index.count("/lock.html"), 1)
+        self.assertRegex(index, r'id:\s*"sch-settings"')
+        self.assertEqual(re.findall(r'<a href="([^"]*)"', index.split("</header>")[0]), [])
         self.assertEqual(re.findall(r'<a href="([^"]*)"', page().split("</header>")[0]), ["/"])
 
 

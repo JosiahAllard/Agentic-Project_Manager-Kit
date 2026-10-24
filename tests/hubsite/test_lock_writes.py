@@ -264,6 +264,23 @@ class DoorWriteTest(DoorWriteCase):
         self.assertEqual(obj['result']['hold']['note'], 'reserve window')
         self.no_folder(obj)
 
+    def test_the_view_and_a_write_answer_carry_the_fields_the_schedule_page_reads(self):
+        # index.html's Schedule reads these keys of GET lock/view and of the view after a write
+        # (tests/hubsite/pagedom.py stubs them); a missing key would blank the page, so pin them here.
+        want = {'now', 'cores', 'strip', 'warnings', 'runs', 'queue_items', 'holds', 'agent_holds'}
+        status, got = self.api.call('GET', BASE + '/lock/view', OWNER, None, {}, 'api', strong=True)
+        self.assertEqual(status, 200, got)
+        self.assertEqual({'lock_revision', 'view', 'writer', 'writes'} - set(got), set())
+        self.assertEqual((got['writer'], got['writes']), ('owner', {'lock': True, 'strong': True, 'why': ''}))
+        self.assertEqual(want - set(got['view']), set())
+        self.assertIsInstance(got['view']['queue_items'], list)
+        self.assertIsInstance(got['view']['now'], str)
+        wrote = self.reserve()
+        self.assertEqual({'ok', 'result', 'lock_revision', 'view', 'writer', 'writes'} - set(wrote), set())
+        self.assertEqual(want - set(wrote['view']), set())
+        self.assertEqual(wrote['writes'], got['writes'])
+        self.assertGreater(wrote['lock_revision'], got['lock_revision'])
+
     def test_a_reserve_needs_times_with_their_offset(self):
         for body, field in (({'start': '2026-10-08T12:00', 'end': '2026-10-08T13:00Z'}, 'start'),
                             ({'start': '2026-10-08T12:00Z', 'end': 'later'}, 'end'),

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
@@ -195,6 +196,68 @@ class IdleEvents(unittest.TestCase):
         self.assertEqual(W.idle_baseline(["n7", "gamma", "none"], H.newest_finder([self.proj]),
                                          self.NOW, 20), {"n7": t})
 
+    def stop_log(self, name, at, successor="-"):
+        """A stop.log beside sessions.json with the line kitlib.launcher.stop writes; returns the
+        stopped(name, mtime) reader over it."""
+        p = os.path.join(self.root, "sessions.json")
+        with open(os.path.join(self.root, "stop.log"), "a", encoding="utf-8") as f:
+            f.write("%s stopped '%s' claude PID 41, window PID 40, conhost PID 39; successor '%s'\n"
+                    % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(at)), name, successor))
+        return W.stop_log_reader(p)
+
+    def test_stopped_without_successor_reads_stopped_never_idle(self):
+        t = self.put("D--src-alpha", "a.jsonl", 21, "n7")
+        stopped = self.stop_log("n7", t + 60)
+        ev, fired, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), {}, [], self.NOW, 20, stopped)
+        self.assertEqual(len(ev), 1)
+        self.assertTrue(ev[0].startswith("STOPPED n7 at "), ev[0])
+        self.assertFalse(any(e.startswith("IDLE") for e in ev))
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), fired, [], self.NOW, 20, stopped)
+        self.assertEqual(ev, [])                    # once per stop
+
+    def test_stop_after_idle_fired_still_reads_stopped(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        stopped = self.stop_log("n7", t + 60)
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), {"n7": t}, [], self.NOW, 20,
+                                 stopped)
+        self.assertEqual(len(ev), 1)
+        self.assertTrue(ev[0].startswith("STOPPED n7 at "), ev[0])
+
+    def test_stop_in_the_same_second_as_the_last_write_reads_stopped(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7") + 0.7     # stop.log keeps whole seconds
+        os.utime(os.path.join(self.proj, "D--src-alpha", "a.jsonl"), (t, t))
+        stopped = self.stop_log("n7", int(t))
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), {}, [], self.NOW, 20, stopped)
+        self.assertTrue(ev[0].startswith("STOPPED n7"), ev[0])
+
+    def test_stop_with_a_successor_is_not_stopped(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        stopped = self.stop_log("n7", t + 60, successor="n8")
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), {}, [], self.NOW, 20, stopped)
+        self.assertTrue(ev[0].startswith("IDLE n7 30m"), ev[0])
+
+    def test_started_again_after_the_stop_reads_idle_when_quiet(self):
+        self.stop_log("n7", self.NOW - 3 * 3600)
+        self.put("D--src-alpha", "a.jsonl", 30, "n7")      # activity after the stop
+        stopped = W.stop_log_reader(os.path.join(self.root, "sessions.json"))
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), {}, [], self.NOW, 20, stopped)
+        self.assertTrue(ev[0].startswith("IDLE n7 30m"), ev[0])
+
+    def test_other_sessions_stop_does_not_count_and_no_log_is_idle(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        stopped = self.stop_log("gamma", t + 60)
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), {}, [], self.NOW, 20, stopped)
+        self.assertTrue(ev[0].startswith("IDLE n7"), ev[0])
+        self.assertIsNone(W.stop_log_reader(os.path.join(self.root, "x", "sessions.json"))("n7", t))
+
+    def test_baseline_marks_a_stopped_session_so_the_first_run_is_silent(self):
+        t = self.put("D--src-alpha", "a.jsonl", 30, "n7")
+        stopped = self.stop_log("n7", t + 60)
+        base = W.idle_baseline(["n7"], H.newest_finder([self.proj]), self.NOW, 20, stopped)
+        self.assertEqual(base, {"n7": [t, "stopped"]})
+        ev, _, _ = W.idle_events(["n7"], H.newest_finder([self.proj]), base, [], self.NOW, 20, stopped)
+        self.assertEqual(ev, [])
+
     def test_project_roots_are_claude_config_folders(self):
         for d in (".claude", ".claude-account2", ".codex", "other"):
             os.makedirs(os.path.join(self.root, d))
@@ -242,6 +305,17 @@ class WatcherRun(unittest.TestCase):
         self.assertTrue(ev[2].startswith("IDLE n7 66m since "), ev[2])
         self.assertEqual(ev[3], "BGFAIL run r-5 failed")
         self.assertEqual(w.s["branches"]["repo main"], "abcd1234")
+
+    def test_watcher_reads_stop_log_beside_sessions_file(self):
+        with open(os.path.join(self.tmp.name, "stop.log"), "w", encoding="utf-8") as f:
+            f.write("%s stopped 'n7' claude PID 41, window PID -, conhost PID -; successor '-'\n"
+                    % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(1060.0)))
+        w = self.watcher({"branches": {"repo main": "abcd1234"}, "usage": self.use, "bg_alerts": [],
+                          "idle": {}})
+        w.start(5000.0)
+        ev = w.poll(5000.0)
+        self.assertEqual(len(ev), 1)
+        self.assertTrue(ev[0].startswith("STOPPED n7 at "), ev)
 
     def test_error_on_third_failure_only(self):
         def bad():

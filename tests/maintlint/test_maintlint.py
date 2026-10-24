@@ -21,6 +21,7 @@ from tests.backlog.helpers import BRANCH, StoreCase, kit_json_ref, priced, rec
 from tests.backlog.test_stale import at
 from tests.gitfixture import rmtree
 from tests.ledger.test_standing import entry, rid
+from tests.pathfree import without_paths
 from tools import maint_lint
 
 CMD = 'python "kit/tools/backlog.py" -C "wt"'
@@ -96,8 +97,7 @@ class BacklogChecks(unittest.TestCase):
         for f in got:
             for text in (f.key, f.text, f.fix):
                 # the fix names the kit's own checkout, whose path may contain the word
-                for root in (KIT_ROOT, KIT_ROOT.replace(os.sep, '/')):
-                    text = text.replace(root, '')
+                text = without_paths(text, KIT_ROOT)
                 self.assertNotIn('private', text)
                 self.assertNotIn('abc1234', text)
         got, notes = backlog.audit('r', CMD, run=lambda *a, **k: (audit_check.NOT_CHECKED,

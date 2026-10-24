@@ -329,8 +329,7 @@ def git(event, ctx, cmd, inv, role):
     why = None
     if sub in ('rm', 'mv') and hit:
         why = 'removes or moves it'
-    elif sub == 'restore' and hit and not (('S' in short or 'staged' in longs) and
-                                           not ('W' in short or 'worktree' in longs)):
+    elif sub == 'restore' and hit and not rules.restore_index_only(short, longs):
         why = 'overwrites it'
     elif sub == 'checkout-index' and (hit or 'a' in short or 'all' in longs):
         why = 'overwrites it'
@@ -373,7 +372,7 @@ def git_config(event, ctx, role, text, top, base, sub, short, longs, args, pos):
     if sub in ('rm', 'mv', 'checkout-index'):
         hit = lands(pos)
     elif sub == 'restore':
-        hit = lands(pos) and not (('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs))
+        hit = lands(pos) and not rules.restore_index_only(short, longs)
     elif sub == 'checkout':
         hit = lands(after_dashes(args))
     elif sub == 'clean':

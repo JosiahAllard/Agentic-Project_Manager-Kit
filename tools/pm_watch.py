@@ -16,6 +16,10 @@ Events:
   IDLE <name> <N>m since <iso>  a session in sessions.json (named, not autostart=false) has its own
                                 main and subagent transcripts all older than --idle-minutes, found by
                                 the custom-title record; once per quiet spell
+  STOPPED <name> at <iso>       a session in sessions.json that launch.py stop ended with no
+                                successor (the launcher's stop.log), with no transcript activity
+                                since; once per stop, and never IDLE for it
+                                (docs/pm-watch.md "Stopped sessions")
   PLUGIN pm-kit plugin behind kit main <sha12>: python tools/plugin_refresh.py --apply
                                 the plugin export is not at the kit's refs/remotes/<remote>/main;
                                 once per main sha, reported on the first run too; with

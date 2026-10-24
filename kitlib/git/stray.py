@@ -18,7 +18,9 @@ import os
 from . import refs, repo
 
 STRAY_FAIL = ('[FAIL] stray in the main checkout: %s (%s) - a write went to the main checkout; '
-              'remove it (owner if a delete is refused)')
+              'first python <kit>/tools/stray_restore.py -C <main checkout> (a dry run; --apply '
+              'discards what a branch tip holds, docs/stray-restore.md), else remove it (owner if a '
+              'delete is refused)')
 CLEAN = 'main checkout clean: no stray untracked or uncommitted files'
 
 

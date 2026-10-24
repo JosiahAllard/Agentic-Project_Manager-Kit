@@ -180,7 +180,6 @@ PENDING_OWNER_TEXT = {
     ('hardware', 'kitlib/proc/process.py'): 1,
     ('hardware', 'kitlib/proc/shield.py'): 1,
     ('hardware', 'tests/lock/test_layout.py'): 2,
-    ('hardware', 'tests/lock/test_run.py'): 1,
     ('hardware', 'tests/lockmcp/scratch_server.py'): 1,
 }
 PENDING = (PENDING_FIXTURES, PENDING_HISTORY, PENDING_OWNER_TEXT)

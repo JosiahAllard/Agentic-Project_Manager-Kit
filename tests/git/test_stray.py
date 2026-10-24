@@ -134,7 +134,18 @@ class Changes(Fixture):
 class Check(Fixture):
     """stray.check: [FAIL] (1) naming each stray, 0 when clean, WARNING when it could not tell."""
 
-    STRAY_ADVICE = 'a write went to the main checkout; remove it (owner if a delete is refused)'
+    RESTORE_POINTER = 'python <kit>/tools/stray_restore.py -C <main checkout> (a dry run; --apply '
+    REMOVE_ADVICE = 'else remove it (owner if a delete is refused)'
+    STRAY_ADVICE = 'a write went to the main checkout; first ' + RESTORE_POINTER
+
+    def test_the_fail_line_points_at_the_safe_restore_before_a_delete(self):
+        # tools/stray_restore.py discards only what a branch tip
+        # holds, so the FAIL line names it, and its real form, ahead of a plain delete.
+        self.stray('x', name='oops.txt')
+        code, out = self.check(self.w)
+        self.assertEqual(code, 1, out)
+        self.assertIn(self.RESTORE_POINTER, out)
+        self.assertLess(out.index(self.RESTORE_POINTER), out.index(self.REMOVE_ADVICE), out)
 
     def test_a_stray_untracked_file_fails_and_names_the_path(self):
         self.stray('x', name='src/Approach.java')
@@ -143,6 +154,7 @@ class Check(Fixture):
         self.assertIn('[FAIL]', out)
         self.assertIn('src/Approach.java (untracked)', out)
         self.assertIn(self.STRAY_ADVICE, out)
+        self.assertIn(self.REMOVE_ADVICE, out)
 
     def test_a_modified_tracked_file_in_main_fails_from_a_worktree(self):
         self.append('.gitignore', '# stray edit\n')

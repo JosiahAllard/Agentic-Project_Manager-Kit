@@ -314,6 +314,33 @@ class ToJson(unittest.TestCase):
                                "r-3": ("kit", "engine-test", "cancelled"),
                                "r-4": ("kit", "engine-test", "interrupted")})
 
+    def test_history_items_carry_the_slug(self):
+        it, = self.hist_items([self.line(1)])
+        self.assertEqual(it["slug"], "gate")
+        it, = self.hist_items([self.line(2, slug=None)])
+        self.assertIsNone(it["slug"])
+
+    def test_queue_items_are_structured_and_allow_listed(self):
+        s = self.full()
+        s["queue"]["entries"][0].update(pid=4242, log=self.SECRET + "\q.log", note="a queued note")
+        out = m.to_json(m.build(s, now=NOW), s)
+        it, = out["queue_items"]
+        self.assertEqual(set(it), {"id", "position", "repo", "slug", "kind", "needs_cpu", "needs_gpu",
+                                   "est_start", "since", "backfill", "parked", "why"})
+        self.assertEqual((it["id"], it["position"], it["repo"], it["slug"], it["kind"]),
+                         ("r-B", 1, "game", "e2e", "measure"))
+        self.assertEqual((it["needs_cpu"], it["needs_gpu"], it["backfill"], it["parked"], it["why"]),
+                         (2, 1, True, False, "waits for r-A"))
+        self.assertEqual(it["est_start"], m.to_local(at(5)).isoformat(timespec="seconds"))
+        for remote in (False, True):
+            _, text = self.json_of(remote)
+            self.assertNotIn("a queued note", text)
+
+    def test_queue_items_of_a_bare_or_unreadable_queue_are_empty(self):
+        self.assertEqual(m.to_json(m.build({}, now=NOW), {})["queue_items"], [])
+        s = snap(queue={"entries": None, "error": "queue unreadable"})
+        self.assertEqual(m.to_json(m.build(s, now=NOW), s)["queue_items"], [])
+
     def test_history_fields_are_null_when_not_derivable(self):
         it, = self.hist_items([self.line(1, repo=None, kind="", code=None)])
         self.assertEqual((it["repo"], it["kind"], it["result"]), (None, None, None))
@@ -332,7 +359,7 @@ class ToJson(unittest.TestCase):
         out = m.to_json(m.build(s, HISTORY, now=NOW), s)
         for it in out["strip"]:
             if it["type"] != "hist":
-                self.assertFalse({"repo", "kind", "result"} & set(it))
+                self.assertFalse({"repo", "slug", "kind", "result"} & set(it))
 
     def test_the_view_is_plain_json_with_local_times(self):
         out, _ = self.json_of(False)
