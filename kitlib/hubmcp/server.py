@@ -69,6 +69,15 @@ _CREATOR = {"type": "string", "description": "The from the item was added with (
 _REFS = {"type": "array", "items": {"type": "string"},
          "description": "Ids of other hub documents this one names."}
 _URGENT = {"type": "boolean"}
+_RECORD_SAYS = ("The backlog record the question is about: {repo, id}, repo a repository the "
+                "hub has configured (the kit's own records: pm). The hub reads it now and "
+                "refuses a repo it has not configured, a record that repo's backlog does not "
+                "have or has completed, and a record it cannot read (unavailable).")
+_RECORD = {"type": "object", "description": _RECORD_SAYS,
+           "properties": {"repo": {"type": "string"}, "id": {"type": "string"}},
+           "required": ["repo", "id"], "additionalProperties": False}
+_RECORD_EDIT = dict(_RECORD, type=["object", "null"],
+                    description=_RECORD_SAYS + " null unbinds the question.")
 
 
 def _obj(props, required=()):
@@ -131,7 +140,8 @@ TOOLS = {
               "recommended": {"type": "integer", "description": "The index of the option you "
                                                                 "recommend."},
               "repo": _REPO, "from": _ASK_FROM, "refs": _REFS, "urgent": _URGENT,
-              "story": {"type": "string", "description": "The story this question is about."}},
+              "story": {"type": "string", "description": "The story this question is about."},
+              "record": _RECORD},
              ["title"]), "POST", "/questions", AGENT),
     "hub_question_log": (
         "Records the ruling an answered question became (POST /questions/<id>/log); the question "
@@ -166,7 +176,8 @@ TOOLS = {
                           "description": "The choices: [{label, description}]."},
               "recommended": {"type": "integer", "description": "The index of the option you "
                                                                 "recommend."},
-              "refs": _REFS, "urgent": _URGENT}, ["id", "from", "if_version"]),
+              "refs": _REFS, "urgent": _URGENT, "record": _RECORD_EDIT},
+             ["id", "from", "if_version"]),
         "POST", "/questions/{id}/edit", AGENT),
     "hub_question_withdraw": (
         "Removes an open question you asked (POST /questions/<id>/delete): it leaves the Action "
