@@ -24,6 +24,11 @@ R-nnnn ledger: read by show, grep, list and check, never written. Without `ledge
   ledger.py rule-set --repo REPO (--repos A,B | --budget N | --book-title T) --prov PROV --why WHY
                 --source S [--q Q] [--a A] [commit flags]
       set REPO's rulebook header (made when absent; it then needs --repos), with a log entry.
+  ledger.py migrate-report [--out FILE] [--digest PATH]
+      read-only: tag each standing digest rule KEEP, CUT or MERGE gN (a `?` marks it unreviewed).
+  ledger.py rule-apply REPORT [--write --prov PROV --source S [--when W] [commit flags]]
+      set the KEEP and MERGE rules of a report whose `?` marks are all deleted, one log entry
+      per rule; a dry run without --write. Refuses an unreviewed or stale report, writing nothing.
   ledger.py retire ID --class spent|superseded|duplicate --why WHY [--by ID] [--ruling ID]
       turn an entry into its tombstone in place, in its own file, print its id.
   ledger.py show ID              print one entry, from the file its id names.
@@ -53,6 +58,7 @@ text not found, or a commit or push that failed after the entry was written; 2 u
 """
 import argparse
 import contextlib
+import datetime
 import os
 import sys
 
@@ -62,7 +68,7 @@ from kitlib import ledger                                          # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.host import registry                                    # noqa: E402
-from kitlib.ledger import files, fmt, read, rulebook, safepath, standing, vcs, write  # noqa: E402
+from kitlib.ledger import files, fmt, migrate, read, rulebook, safepath, standing, vcs, write  # noqa: E402
 from kitlib.ledger.errors import Refused, Usage                    # noqa: E402
 
 
@@ -137,6 +143,16 @@ def parser():
     rl.add_argument('--all', action='store_true', help='every rulebook')
     rl.add_argument('--sources', action='store_true', help="add each rule's log ids")
     rl.add_argument('--topic', help='only rules whose heading, key or text holds this word')
+    mr = sub.add_parser('migrate-report', help="propose KEEP, CUT or MERGE for each standing digest rule (read-only)")
+    mr.add_argument('--out', help='write the report to this file (default: print it)')
+    mr.add_argument('--digest', help='the digest to read (default: the standing digest beside the log)')
+    ra = sub.add_parser('rule-apply', help="set the rules of an edited migrate-report (a dry run without --write)")
+    ra.add_argument('report', help='the migrate-report file, every `?` deleted from the lines judged')
+    ra.add_argument('--write', action='store_true', help='write; without it, print what would be written')
+    ra.add_argument('--prov', choices=fmt.PROVS, help='the entries\' provenance (needed with --write)')
+    ra.add_argument('--source', help='the entries\' source (needed with --write)')
+    ra.add_argument('--when', help="UTC 'YYYY-MM-DD HH:MMZ' (default: now); for backfill")
+    commit_flags(ra)
     return p
 
 
@@ -388,6 +404,92 @@ def do_rules(a, found):
     return 0 if shown or not a.topic else 1
 
 
+def same_file(a, b):
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def do_migrate_report(a, found):
+    """Print (or write to --out) the proposals for the standing digest's rules; read-only."""
+    digest_path = a.digest or found.digest
+    text, why = standing.read_digest(digest_path)
+    if text is None:
+        return fail(why or 'no standing digest at %s' % digest_path)
+    texts, why = read_views(found, None)
+    if texts is None:
+        return fail(why)
+    entries = [e for t in texts for e in read.parse(t)]
+    retired = {e.id for e in entries if e.dead}
+    since = datetime.datetime.fromtimestamp(os.path.getmtime(digest_path)).strftime('%Y-%m-%d')
+    report = migrate.render(migrate.propose(text, retired), migrate.basis(text, retired),
+                            os.path.basename(digest_path), migrate.uncited(entries, text, since))
+    if a.out is None:
+        sys.stdout.write(report)
+        return 0
+    protected = [p for _, p in files.readable(found)] + [found.digest]
+    if any(same_file(a.out, p) for p in protected) or \
+            same_file(os.path.dirname(os.path.abspath(a.out)), found.rules):
+        raise Usage('--out must not be a ledger file, the digest or in the rules folder')
+    with open(a.out, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(report)
+    print('wrote %s' % a.out)
+    return 0
+
+
+def do_rule_apply(a, found, repos):
+    """Check the whole report first, then (only with --write) set each KEEP and MERGE rule through
+    write_entry, one log entry per rule; a dry run prints what would be written."""
+    if a.write and not (a.prov and a.source):
+        raise Usage('rule-apply --write needs --prov and --source')
+    report, why = read.read_file(a.report)
+    if report is None:
+        return fail(why)
+    texts, why = read_views(found, None)
+    if texts is None:
+        return fail(why)
+    retired = {e.id for t in texts for e in read.parse(t) if e.dead}
+    digest, why = standing.read_digest(found.digest)
+    if digest is None:
+        return fail(why or 'no standing digest at %s' % found.digest)
+    changes, errs = migrate.plan(report, migrate.basis(digest, retired), found.split)
+    books = write.load_books(found.rules)
+    todo = []
+    for c in changes:
+        state = migrate.status(books, c)
+        if not found.split:
+            bad = fmt.repo_problem(c.repo, repos)
+        elif c.repo in found.repos:
+            bad = write.split_repo_problem(found.repos[c.repo], c.repo, list(found.repos))
+        else:
+            bad = None if c.repo == fmt.ALL_REPOS else 'repo %r is not one of ledger_repos' % c.repo
+        if bad:
+            errs.append('line %d: rule %s: %s' % (c.line, c.key, bad))
+        elif state == 'conflict':
+            errs.append('line %d: rule %s is already in %s with other text; change the key or drop '
+                        'it first' % (c.line, c.key, rulebook.file_name(rulebook.target(books, c.repo))))
+        elif state == 'new':
+            todo.append(c)
+        else:
+            print('skip %s (already in %s)' % (c.key, rulebook.file_name(rulebook.target(books, c.repo))))
+    for e in errs:
+        sys.stderr.write('ledger.py: REFUSED %s\n' % e)
+    if errs:
+        sys.stderr.write('ledger.py: %d problem(s); nothing was written\n' % len(errs))
+        return 1
+    for c in todo:
+        name = rulebook.file_name(rulebook.target(books, c.repo))
+        if not a.write:
+            print('would set %s in %s (log repo %s): %s' % (c.key, name, c.repo, c.text))
+            continue
+        q, ans, decides = migrate.entry_text(c, standing.NAME)
+        # Each rule's `checked` hash is taken from the books as they are now, after the last write.
+        rule = migrate.rule_change(found.rules, c, write.load_books(found.rules))
+        write_entry(argparse.Namespace(**dict(vars(a), repo=c.repo)), found, repos, q, ans, decides,
+                    rule=rule)
+    if not a.write:
+        print('dry run: %d rule(s) to set; add --write to write them' % len(todo))
+    return 0
+
+
 def rulebook_findings(found, texts):
     """`(lines for check to print, error count, rule count, book count)`: every rulebook present
     parsed, then checked against the ids of the log `texts`."""
@@ -476,6 +578,10 @@ def run(a, p, found, repos):
         return do_rule_set(a, found, repos)
     if a.cmd == 'conflicts':
         return do_conflicts(a, found)
+    if a.cmd == 'migrate-report':
+        return do_migrate_report(a, found)
+    if a.cmd == 'rule-apply':
+        return do_rule_apply(a, found, repos)
     if a.cmd == 'retire':
         return do_retire(a, found, repos)
     if a.cmd == 'show':
