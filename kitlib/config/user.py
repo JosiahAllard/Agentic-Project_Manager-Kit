@@ -786,8 +786,18 @@ def locate(home=None, ptr=None):
 
 def config_dir(home=None):
     """The folder of the machine config file locate() names (the PM repository's `.pm-kit` for
-    OK). Never raises."""
+    OK; the home folder's for the other states, where it is only a place to keep clear of: a
+    caller that reads or writes a file there uses pm_config_dir). Never raises."""
     return os.path.dirname(locate(home).path)
+
+
+def pm_config_dir(home=None):
+    """The PM repository's machine config folder (`<PM repo>/.pm-kit`) when locate() is OK, else
+    None: with no good pointer, or a config that cannot be read, there is no such folder, and the
+    home folder's `.pm-kit` is never named in its place (config_dir does, for the callers that only
+    keep clear of it). Never raises."""
+    loc = locate(home)
+    return loc.folder if loc.state == OK else None
 
 
 def config_file(home=None):
