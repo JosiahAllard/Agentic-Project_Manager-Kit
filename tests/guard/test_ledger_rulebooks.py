@@ -136,8 +136,10 @@ class Rulebooks(unittest.TestCase):
                               ('rm "%s/LEDGER.md"' % short, LOG)):
                 with self.subTest(text, sub=sub):
                     self.refused(bash(text, self.w.base, sub=sub), why)
-        # the folder above binds agent sessions alone (rules.ledger_wide_binds)
+        # the folder above binds marked sessions but the PM's (rules.ledger_wide_binds): the owner passes
         self.refused(bash('rm -r A-LONG~?', self.w.base, sub=True), LOG)
+        d = decide(bash('rm -r A-LONG~?', self.w.base, sub=False), self.w.ctx())
+        self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
         d = decide(bash('rm -f A-LONG~?/NOTES.md', self.w.base, sub=False), self.w.ctx())
         self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
 

@@ -1237,7 +1237,7 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     if not gc.dir or gc.unknown or gc.blind:
         if not ledger_wide_binds(event, ctx):
             return None
-        form = tree_form or ledger_git_path_form(sub, args, short, longs)
+        form = tree_form or ledger_git_path_form(sub, args, short, longs, held)
         if not form:
             return None
         kind = held[0][0]
@@ -1289,11 +1289,22 @@ def ledger_wide_binds(event, ctx):
     """Whether the ledger rule's wider refusals hold the session of `event`: a folder above a held
     path or a wildcard that can name one (ledger_rule's `above`), git that rewrites a tree holding
     the ledger (ledger_git_tree_form), and a writing git call in a place the guard cannot tell.
-    The one place their sessions are chosen: agent sessions (agent_session) but the PM's, the
-    sessions git_shared_ref holds (shared_ref_held); the owner's and the PM's pass. Whether to
-    widen them is the owner's open question: `return True` here binds every session, as the rest
-    of the ledger rule does (only ledger.py writes the ledger); that change is made here alone."""
-    return shared_ref_held(event, ctx)
+    The one place their sessions are chosen: a marked session but the PM's (marked_not_pm), so
+    a subagent, a `plain` or other agent's mark and an unknown mark are bound (fail closed); the
+    owner's unmarked session and the PM's pass. Whether to widen them is the owner's open
+    question: `return True` here binds every session, as the rest of the ledger rule does (only
+    ledger.py writes the ledger); that change is made here alone."""
+    return marked_not_pm(event, ctx)
+
+
+def marked_not_pm(event, ctx):
+    """True for a marked session but the PM's: a subagent, or a main session whose launcher mark
+    (without the kit plugin's prefix, case ignored) is anything but the owner's and `pm`, an
+    unknown mark included. False for the owner's unmarked session and the PM's."""
+    if subagent(event):
+        return True
+    who = agentname.bare_mark(str(ctx.session_role(event) or context.OWNER)).lower()
+    return who not in (context.OWNER, 'pm')
 
 
 def ledger_git_tree_form(sub, args, short, longs):
@@ -1323,19 +1334,56 @@ def ledger_git_tree_form(sub, args, short, longs):
     return None
 
 
-def ledger_git_path_form(sub, args, short, longs):
-    """The subcommand of a git call that writes the paths it names, the form ledger_git judges by
-    its pathspec: rm, mv, restore (not the index alone), checkout-index, and checkout of paths
-    (after `--`, or read from elsewhere: git_every_path). None for any other call: a checkout
-    with no `--` is read as a branch where the guard cannot place the tree, as switch is."""
-    from . import delegfile
+def ledger_git_path_form(sub, args, short, longs, held=()):
+    """The subcommand of a git call that writes the paths it names, where the guard cannot place
+    the tree: rm, mv, restore (not the index alone), checkout-index, and a checkout that can
+    write paths (checkout_branch_only is False). None for any other call."""
     if sub in ('rm', 'mv', 'checkout-index'):
         return sub
-    if sub == 'checkout' and (delegfile.after_dashes(args) is not None or git_every_path(sub, short, longs)):
+    if sub == 'checkout' and not checkout_branch_only(args, short, longs, held):
         return sub
     if sub == 'restore' and not restore_index_only(short, longs):
         return sub
     return None
+
+
+def checkout_branch_only(args, short, longs, held=()):
+    """Whether a checkout (its argument Words, and _opts(wide=True)) can only switch to a branch
+    or a commit, the reading where the guard cannot place the tree; anything else fails closed.
+    True for no positional word, or exactly one that is a plain name: not `.`, not computed, no
+    wildcard or pathspec magic, no path separator (so `kit/x` stays refused: without the tree the
+    guard cannot tell a branch from a folder), no `~` short name, and not a part of a held path
+    (`LEDGER.md`, its folders, their 8.3 short names: git reads a word that names no branch as
+    a path). False with `--`, paths read from elsewhere (git_every_path), -p or --patch (any
+    abbreviation git could read as it), or two or more positional words."""
+    from . import delegfile
+    if delegfile.after_dashes(args) is not None or git_every_path('checkout', short, longs):
+        return False
+    if 'p' in short or any(n and 'patch'.startswith(n) for n in longs):
+        return False
+    pos = _opts('checkout', args, wide=True)[2]
+    if not pos:
+        return True
+    if len(pos) > 1:
+        return False
+    w = pos[0]
+    t = w.text
+    if (getattr(w, 'dyn', False) or not t or t in ('.', '..') or t.startswith(':')
+            or any(c in t for c in '*?[]\\/~')):
+        return False
+    name = t.rstrip('. ').lower()
+    return name not in held_names(held)
+
+
+def held_names(held):
+    """The lower-case names of every part of each held path ((kind, real) pairs) and of its 8.3
+    short name, trailing dots and spaces dropped as Windows drops them."""
+    out = set()
+    for _kind, real in held:
+        for p in (real, _short_path(real)):
+            if p:
+                out.update(n.rstrip('. ').lower() for n in re.split(r'[\\/]', p) if n)
+    return out
 
 
 def git_every_path(sub, short, longs):

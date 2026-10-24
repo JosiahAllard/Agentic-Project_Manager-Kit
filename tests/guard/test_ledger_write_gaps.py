@@ -2,8 +2,9 @@
 a wildcard that can name one), git that rewrites a tree holding the ledger (checkout or switch
 that discards changes, reset --hard/--merge/--keep, a stash that is not a read, a clean that is
 not a dry run), and a writing git call in a place the guard cannot tell (GIT_DIR, --git-dir,
---work-tree, a computed -C). These bind agent sessions, the PM's aside: an owner or PM session
-passes them (rules.ledger_wide_binds, the one switch that would widen them to every session)."""
+--work-tree, a computed -C). These bind every marked session but the PM's (a subagent, an
+agent's mark, `plain`, an unknown mark): the owner's unmarked session and the PM's pass them
+(rules.ledger_wide_binds, the one switch that would widen them to every session)."""
 import os
 import unittest
 
@@ -17,7 +18,10 @@ OWNER = ({}, False)
 SUB = ({}, True)
 PM = ({context.ROLE_ENV: 'pm'}, False)
 COORDINATOR = ({context.ROLE_ENV: 'coordinator'}, False)
-AGENTS = (SUB, COORDINATOR)
+WORKER = ({context.ROLE_ENV: 'worker'}, False)
+PLAIN = ({context.ROLE_ENV: 'plain'}, False)
+ODD = ({context.ROLE_ENV: 'no-such-role'}, False)
+AGENTS = (SUB, COORDINATOR, WORKER, PLAIN, ODD)
 FREE = (OWNER, PM)
 
 
@@ -65,7 +69,8 @@ class OutsideGit(Base):
 
     def test_the_binding_default_is_agent_sessions(self):
         ev = lambda environ, sub: action(event('Bash', {'command': 'x'}, self.w.wt, sub=sub))
-        for (environ, sub), binds in ((SUB, True), (COORDINATOR, True), (OWNER, False), (PM, False)):
+        for (environ, sub), binds in ((SUB, True), (COORDINATOR, True), (WORKER, True), (PLAIN, True),
+                                      (ODD, True), (OWNER, False), (PM, False)):
             with self.subTest(environ=environ, sub=sub):
                 self.assertIs(bool(rules.ledger_wide_binds(ev(environ, sub), self.w.ctx(environ=environ))), binds)
         self.refused(lambda sub: bash('rm -r rulings', self.pm, sub), 'rm -r rulings')
@@ -95,12 +100,18 @@ class OutsideGit(Base):
                                  (self.w.wt, 'git --work-tree=%s checkout -- .' % W.fwd(f)),
                                  (f, 'git -C "$d" checkout main -- LEDGER.md'), (f, 'git -C "$d" checkout -f main'),
                                  (f, 'git -C "$d" switch --discard-changes main'),
-                                 (f, 'git -C "$d" checkout --pathspec-from-file=x')))
+                                 (f, 'git -C "$d" checkout --pathspec-from-file=x'),
+                                 (f, 'git -C "$d" checkout .'), (f, 'git -C "$d" checkout HEAD LEDGER.md'),
+                                 (f, 'git -C "$d" checkout LEDGER.md'), (f, 'git -C "$d" checkout -p'),
+                                 (f, 'git -C "$d" checkout --patch main'), (f, 'git -C "$d" checkout rulings'),
+                                 (f, 'git -C "$d" checkout kit/x'), (f, 'git -C "$d" checkout "*"'),
+                                 (f, 'git -C "$d" checkout "$b"'), (f, 'git -C "$d" checkout LEDGER.md.')))
 
     def test_a_plain_checkout_of_a_branch_is_not_this_rule(self):
         f = self.folder
         self.rows(self.not_ledger, ((f, 'git -C "$d" checkout main'), (f, 'cd "$x" && git checkout main'),
-                                    (f, 'git -C "$d" switch main'), (f, 'git checkout main')))
+                                    (f, 'git -C "$d" switch main'), (f, 'git checkout main'),
+                                    (f, 'git -C "$d" checkout feature-x'), (f, 'git -C "$d" checkout')))
 
     def test_what_still_passes(self):
         f = self.folder
