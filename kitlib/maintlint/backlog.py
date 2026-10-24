@@ -30,8 +30,9 @@ AUDIT_KINDS = {'UNAUDITED': 'store change(s) in %d days with no audit line',
                'UNKNOWN': 'store change(s) in %d days whose subject names no backlog verb',
                'UNMAPPED': 'audit line(s) in %d days whose role the role map does not list'}
 # a hub question's status once the owner has answered it; `done`: the PM marked it handled with
-# no ruling (hub.py questions done)
-ANSWERED = ('answered', 'logged', 'done')
+# no ruling (hub.py questions done); `filed`: the hub wrote the answer into the bound record
+# itself, so the PM has no log step left before the unpark
+ANSWERED = ('answered', 'filed', 'logged', 'done')
 
 
 def age_of(rec):
@@ -149,7 +150,7 @@ def answered(snap, cmd, questions=None):
             fix = ('%s unpark %s; the question was marked done with no ruling, so there is none '
                    'to cite' % (cmd, rec.stem))
         else:
-            first = ('' if got == 'logged' else
+            first = ('' if got in ('logged', 'filed') else
                      'the PM logs the answer (hub.py questions log %s <ruling> --if-version V), '
                      'then ' % q)
             fix = '%s%s unpark %s, giving the ruling it was logged as' % (first, cmd, rec.stem)
