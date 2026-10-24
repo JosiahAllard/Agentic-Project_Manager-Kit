@@ -49,6 +49,8 @@ class Rulebooks(unittest.TestCase):
         self.refused(event('Write', {'file_path': self.book(), 'content': '# Alpha rules\n'}, f, sub=True))
         self.refused(event('Edit', {'file_path': self.book(), 'old_string': 'a', 'new_string': 'b'}, f, sub=True))
         self.refused(event('Write', {'file_path': self.book('Beta.MD'), 'content': ''}, f, sub=True))
+        self.refused(event('Write', {'file_path': self.book('alpha.md.'), 'content': ''}, f, sub=True))
+        self.refused(event('Write', {'file_path': self.book('alpha.md '), 'content': ''}, f, sub=True))
         self.refused(bash('echo "- a rule" >> rules/alpha.md', f, sub=True))
         self.refused(bash('cp draft.md rules/alpha.md', f, sub=True))
         self.refused(ps('Set-Content -Path %s -Value x' % self.book(), f, sub=True))

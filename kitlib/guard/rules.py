@@ -1032,13 +1032,15 @@ def same_file(a, b):
 def standing_file(ctx, target):
     """What of the standing rules `target` is: 'rulebook' for the rulebooks' folder or a `.md` file
     directly in it (any case: the filesystem folds it), 'digest' for the standing digest, else
-    None. Both from kitlib.ledger.files.of_config over the machine config (Ctx.ledger_files)."""
+    None. Both from kitlib.ledger.files.of_config over the machine config (Ctx.ledger_files). The
+    name is read as Windows opens it (abspath drops a trailing dot or space: `alpha.md.` is
+    `alpha.md`)."""
     files = ctx.ledger_files()
     if files is None:
         return None
-    rules_dir = files.rules
-    if rules_dir and (same_file(target, rules_dir) or (
-            same_file(os.path.dirname(os.path.abspath(target)), rules_dir) and target.lower().endswith('.md'))):
+    rules_dir, full = files.rules, os.path.abspath(target)
+    if rules_dir and (same_file(full, rules_dir) or (
+            same_file(os.path.dirname(full), rules_dir) and full.lower().endswith('.md'))):
         return 'rulebook'
     if files.digest and same_file(target, files.digest):
         return 'digest'
