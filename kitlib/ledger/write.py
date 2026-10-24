@@ -170,7 +170,7 @@ def add(path, repo, prov, q, a, decides, source, supersedes='-', when=None, repo
         if rule is not None:
             # The book's own lock too: in split mode two log files (two log locks) can route to
             # one book. Taken after the log's, as every writer does, so no two wait on each other.
-            name, book_path = rule_target(rule.folder, repo)
+            name, book_path = rule_target(rule.folder, repo, rule.book)
             stack.enter_context(locked(book_path))
         text = read_text(path)
         _valid_or_refuse(text, repos, 'the ledger is already invalid', mine, others)
@@ -201,8 +201,9 @@ def add(path, repo, prov, q, a, decides, source, supersedes='-', when=None, repo
 # A rulebook change paired with a log entry (docs/ledger.md "Rulebooks"). folder: the rules folder
 # (kitlib.ledger.files `Files.rules`). op: 'set' (key, topic, text, checked: the hash `conflicts`
 # printed), 'dropped' (key) or 'header' (repos, budget, title; the book is made when absent).
-RuleChange = collections.namedtuple('RuleChange', 'folder op key topic text checked repos budget title',
-                                    defaults=(None,) * 7)
+# book: a rulebook name (`all` or an existing one) that replaces rulebook.target's choice for the log repo.
+RuleChange = collections.namedtuple('RuleChange', 'folder op key topic text checked repos budget title book',
+                                    defaults=(None,) * 8)
 
 
 def load_books(folder):
@@ -214,19 +215,26 @@ def load_books(folder):
     return books
 
 
-def rule_target(folder, repo):
-    """`(book name, path)` of the rulebook a rule change for log repo `repo` writes."""
-    name = rulebook.target(load_books(folder), repo)
+def _book_name(books, repo, book):
+    try:
+        return rulebook.target(books, repo, book)
+    except ValueError as e:
+        raise Usage('--book: %s' % e)
+
+
+def rule_target(folder, repo, book=None):
+    """`(book name, path)` of the rulebook a rule change for log repo `repo` writes (`book`: named)."""
+    name = _book_name(load_books(folder), repo, book)
     return name, os.path.join(folder, rulebook.file_name(name))
 
 
 def _rule_change(rule, repo, rid, decides, warnings):
     """`(the new Book, the Decides to log, its tag at the end)` for `rule`, or Usage/Refused."""
     books = load_books(rule.folder)
-    name = rulebook.target(books, repo)
+    name = _book_name(books, repo, rule.book)
     book = books.get(name)
     fix = ('run `ledger.py conflicts --repo %s --topic ... --key %s --text ...`, read what it lists, '
-           'then pass the checked hash it prints' % (repo, rule.key))
+           'then pass the checked hash it prints' % (rule.book or repo, rule.key))
     if rule.op == 'set':
         text = rule.text if (rule.text or '').strip() else decides
         if not (rule.checked or '').strip():
