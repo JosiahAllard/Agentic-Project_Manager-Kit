@@ -13,7 +13,9 @@ Without --dry-run it writes the result (default `<pm_data>/maint-lint/<repo>/res
 the backlog's audit/ folder) and the page (--out, default page.html beside the result), and prints
 the two paths and the counts. With --dry-run (--out is then required) it writes only the page to
 --out, never result.json, and prints the page's path and the counts. A finding that was not in the
-previous result.json is marked new.
+previous result.json is marked new. A plain run then publishes the page on the Action Hub as
+`maint-lint-<repo>` (kitlib.maintlint.publish) and prints `PUBLISHED <id>`, or a NOT CHECKED note
+when the hub cannot take it; that changes no exit code. --dry-run never publishes.
 A plain run holds one cpu slot of the machine lock's maint-lint kind (kitlib.maintlint.slot) for
 the whole run, waiting at most 15 min; --dry-run takes no slot. A skipped run writes the skip
 marker skipped.json beside result.json (its reason and time); a run that writes result.json removes
@@ -31,7 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import maintlint                                       # noqa: E402
-from kitlib.maintlint import page, result as rmod, slot            # noqa: E402
+from kitlib.maintlint import page, publish, result as rmod, slot   # noqa: E402
 
 # An unexpected error (any Exception other than the lock's refusals): none of 0-4, nor a lock code.
 EXIT_ERROR = 5
@@ -85,7 +87,7 @@ def main(argv=None):
 def _run(root, path, a):
     """The lint after its arguments were checked: --dry-run, or inside the held slot."""
     if a.dry_run:
-        return _report(_lint(root, path, a.out, False))
+        return _report(_lint(root, path, a.out, False)[0])
     try:
         held = slot.take(maintlint.repo_name(root))
     except slot.Skipped as e:
@@ -99,12 +101,16 @@ def _run(root, path, a):
         print(e, file=sys.stderr)
         return e.code
     with held:
-        res = _lint(root, path, a.out, True)
-    return _report(res)
+        res, html = _lint(root, path, a.out, True)
+    line, notes = publish.publish(res, html)
+    if line:
+        print(line)
+    return _report(dict(res, notes=res['notes'] + notes))
 
 
 def _lint(root, path, out, write):
-    """Runs the lint, writes result.json (when `write`) and the page, and prints their paths."""
+    """Runs the lint, writes result.json (when `write`) and the page, and prints their paths.
+    Returns the result and the page's html."""
     res = maintlint.run(root, previous=rmod.read(path) if path else None)
     if write:
         print('result: %s' % rmod.write(path, res))
@@ -114,10 +120,11 @@ def _lint(root, path, out, write):
             print('note: the old skip marker was not removed: %s' % err, file=sys.stderr)
     out = os.path.abspath(out or os.path.join(os.path.dirname(os.path.abspath(path)), rmod.PAGE))
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    html = page.render(res)
     with open(out, 'w', encoding='utf-8', newline='\n') as fh:
-        fh.write(page.render(res))
+        fh.write(html)
     print('page: %s' % out)
-    return res
+    return res, html
 
 
 def _report(res):

@@ -109,7 +109,11 @@ class Tool(unittest.TestCase):
 
     def main(self, *argv):
         out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        # Every completed plain run calls kitlib.maintlint.publish. These results name no repo,
+        # so it sends nothing; a run that would reach the machine's hub fails loudly instead.
+        live = mock.Mock(side_effect=AssertionError('test reached the live hub publish'))
+        with redirect_stdout(out), redirect_stderr(err), \
+                mock.patch.object(maint_lint.publish, 'hub_client', live):
             code = maint_lint.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 

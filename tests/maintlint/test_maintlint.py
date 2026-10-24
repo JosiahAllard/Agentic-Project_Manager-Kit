@@ -564,13 +564,83 @@ class WholeRun(StoreCase):
 
 class Cli(StoreCase):
 
-    def main(self, *argv):
+    def main(self, *argv, **kw):
         out, err = io.StringIO(), io.StringIO()
-        # A plain run books the machine lock (kitlib.maintlint.slot): stubbed here, never booked.
+        # A plain run books the machine lock (kitlib.maintlint.slot) and publishes on the hub
+        # (kitlib.maintlint.publish): both stubbed here, never booked and never sent.
+        sent = kw.get('publish') or mock.Mock(return_value=(None, []))
         with redirect_stdout(out), redirect_stderr(err), \
-                mock.patch.object(maint_lint.slot, 'take', return_value=nullcontext()):
+                mock.patch.object(maint_lint.slot, 'take',
+                                  return_value=kw.get('held') or nullcontext()), \
+                mock.patch.object(maint_lint.publish, 'publish', sent):
             code = maint_lint.main(list(argv))
         return code, out.getvalue(), err.getvalue()
+
+    def test_a_plain_run_publishes_the_page_it_wrote_and_prints_the_line(self):
+        kit_json_ref(self.repo)
+        self.seed(priced('AAA', state='blocked', blocked_on='item:GONE'))
+        folder = temp_dir(self)
+        sent = mock.Mock(return_value=('PUBLISHED maint-lint-x v3', []))
+        code, out, _ = self.main('-C', self.repo.root, '--result',
+                                 os.path.join(folder, 'result.json'), publish=sent)
+        self.assertEqual(code, 1, out)
+        sent.assert_called_once()
+        res, doc = sent.call_args[0]
+        self.assertEqual(res['repo'], maintlint.repo_name(self.repo.root))
+        with open(os.path.join(folder, 'page.html'), encoding='utf-8') as fh:
+            self.assertEqual(doc, fh.read())
+        self.assertIn('PUBLISHED maint-lint-x v3\n', out)
+
+    def test_a_plain_run_publishes_only_after_the_slot_is_given_back(self):
+        kit_json_ref(self.repo)
+        self.seed(priced('AAA'))
+        folder = temp_dir(self)
+        state = {'held': False, 'entered': 0}
+        seen = []
+
+        class Held(object):
+            def __enter__(self):
+                state['held'] = True
+                state['entered'] += 1
+
+            def __exit__(self, *exc):
+                state['held'] = False
+
+        def sent(res, doc):
+            seen.append(state['held'])
+            return None, []
+        code, out, _ = self.main('-C', self.repo.root, '--result',
+                                 os.path.join(folder, 'result.json'), publish=sent, held=Held())
+        self.assertEqual(code, 0, out)
+        self.assertEqual((state['entered'], seen), (1, [False]))
+
+    def test_dry_run_never_publishes(self):
+        kit_json_ref(self.repo)
+        self.seed(priced('AAA'))
+        folder = temp_dir(self)
+        sent = mock.Mock(side_effect=AssertionError('published'))
+        code, out, _ = self.main('-C', self.repo.root, '--dry-run', '--result',
+                                 os.path.join(folder, 'result.json'),
+                                 '--out', os.path.join(folder, 'page.html'), publish=sent)
+        self.assertEqual(code, 0, out)
+        sent.assert_not_called()
+        self.assertNotIn('PUBLISHED', out)
+
+    def test_a_hub_that_cannot_take_the_page_is_a_note_and_keeps_the_exit_code(self):
+        kit_json_ref(self.repo)
+        folder = temp_dir(self)
+        for seed, want in ((priced('AAA'), 0),
+                           (priced('BBB', state='blocked', blocked_on='item:GONE'), 1)):
+            self.seed(seed)
+            note = 'hub page NOT CHECKED: no hub server is listening on port 4321'
+            sent = mock.Mock(return_value=(None, [note]))
+            code, out, err = self.main('-C', self.repo.root, '--result',
+                                       os.path.join(folder, 'result.json'), publish=sent)
+            self.assertEqual(code, want, out + err)
+            self.assertIn('note: %s\n' % note, out)
+            self.assertNotIn('PUBLISHED', out)
+            with open(os.path.join(folder, 'result.json'), encoding='utf-8') as fh:
+                self.assertNotIn(note, fh.read())
 
     def test_dry_run_writes_only_the_page_to_out_and_prints_the_counts(self):
         kit_json_ref(self.repo)
