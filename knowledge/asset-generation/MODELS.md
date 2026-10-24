@@ -2,8 +2,8 @@
 
 Times are one run each on one mid-range desktop GPU running ComfyUI Desktop, with other work
 competing for the GPU at times, so treat them as rough and expect different figures on other
-hardware. Licences were checked on each model's official page when the model was approved.
-Recheck before shipping if a model is updated.
+hardware. Licences were checked on each model's official page; recheck before use, and
+before shipping if a model is updated.
 
 | `comfy_gen.py` key | Model | Licence | Time (measured) | Best for | Known weaknesses |
 |---|---|---|---|---|---|

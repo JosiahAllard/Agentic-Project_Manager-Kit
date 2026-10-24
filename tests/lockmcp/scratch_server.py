@@ -3,9 +3,9 @@
   python scratch_server.py <store root> <kinds.json> owner|agent
 
 The store is made as tests/lock/helpers.StoreCase makes it: its own folder (so its own mutex
-names), fake hardware (main's fake_hardware call, two L3 domains), the FAST settings, and game probes that never
-look at this machine's processes. A scratch store takes the actor as given (kitlib.lock.api.who),
-so the second argument picks the owner or an agent.
+names), fake hardware (this file's main() calls fake_hardware, two L3 domains), the FAST
+settings, and game probes that never look at this machine's processes. A scratch store takes
+the actor as given (kitlib.lock.api.who), so the second argument picks the owner or an agent.
 """
 import os
 import sys
