@@ -2070,9 +2070,8 @@ class Lander(object):
 
     def break_command(self):
         return ('python -c "import sys; sys.path.insert(0, r\'%s\'); from kitlib.records.landing '
-                'import LandingLock as L; print(L(r\'%s\', \'%s\', \'%s\', name=\'%s\')'
-                '.break_lock())"' % (S.kit_live(), self.root, self.cfg.main_branch, self.cfg.remote,
-                                     os.path.basename(self.lock.path)))
+                'import LandingLock as L; print(L(r\'%s\', \'%s\', \'%s\')'
+                '.break_lock())"' % (S.kit_live(), self.root, self.cfg.main_branch, self.cfg.remote))
 
     def stuck(self, why):
         state = 'the landing lock could not be marked stuck'

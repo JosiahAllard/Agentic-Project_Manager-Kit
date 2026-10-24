@@ -315,6 +315,8 @@ class ConfigAndProcTest(unittest.TestCase):
                                             start_of=lambda pid: None, is_alive=ALIVE)
         self.assertEqual(os.path.basename(lk.path), landing.LOCK_NAME)
         self.assertEqual(landing.LOCK_NAME, 'kit-landing.lock')
+        with self.assertRaises(TypeError):          # no option names another lock file
+            landing.LandingLock(repo.root, name='other.lock')
         rec = lk.take(['kit/a'])
         self.assertEqual(rec['main_at_take'], repo.git('rev-parse', 'master'))
         self.assertEqual(rec['origin_at_take'], rec['main_at_take'])
