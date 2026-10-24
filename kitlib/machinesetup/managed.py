@@ -77,13 +77,17 @@ def _read_object(path, what):
 
 
 def overlay_path(home):
-    return os.path.join(user.config_dir(home), OVERLAY)
+    """The overlay's path in the PM repository's machine config folder; None when there is none
+    (no good PM-repo pointer, or a machine config that cannot be read): the home folder holds no
+    overlay any more."""
+    folder = user.pm_config_dir(home)
+    return os.path.join(folder, OVERLAY) if folder else None
 
 
 def overlay(home):
     """The overlay object; {} when there is no file."""
     path = overlay_path(home)
-    if not os.path.lexists(path):
+    if not path or not os.path.lexists(path):
         return {}
     data = _read_object(path, 'the managed settings overlay')
     env = data.get('env')

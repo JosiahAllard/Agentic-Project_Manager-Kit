@@ -64,28 +64,7 @@ permissions.
 
 ## Creative dispatches
 
-- Art that is code (skill `specialty-tech-art`), scripted 3D props (skill `specialty-3d-assets`)
-  and scripted character rigs (skill `specialty-rigging`) go to senior-worker at least; sound
-  (skill `specialty-sound`; the agent cannot hear, so its report ends in a question you put to the
-  owner) to worker at least, senior-worker for design; never weak-worker. They work via the
-  owner's local models, against an art direction the owner has decided or, where none exists, by
-  proposing strongly different looks for the owner to pick; none hand-sculpts; rigs and their test
-  animations are scripted (skill `specialty-rigging`). An asset generation cannot supply -> the
-  owner, not another agent.
-- Every creative brief carries this block, filled in:
-
-  > FEEL: one sentence. REFERENCES: one to three (a game and what specifically, or an image path,
-  > including any inspiration images the owner sent). AVOID: one line. SCOPE OF CHOICE: the agent may
-  > propose X, may not change Y.
-
-  Cannot fill FEEL: ask the owner once, through the PM, using the agent's options as the question.
-- Anything new with a creative choice runs options first, one dispatch per step: Step 0, a cheap
-  sheet of 5-10 very different designs (or designs from the owner's inspiration images) -> the
-  owner narrows -> about three takes -> the owner picks, through the PM -> a polish dispatch on
-  the pick only. A fix to something the owner already approved skips to the fix.
-- Visual output: as the repo profile says; default a self-contained HTML (images inlined base64)
-  in the agent's scratch folder, report leading with its absolute path. Never relay a bare
-  worktree image path; an image nobody opened has not been reviewed.
+Briefing art, 3D, rig or sound work: read `creative.md` in this skill's folder (beside this file) first.
 
 ## Shared resources and measurements
 
@@ -117,19 +96,4 @@ permissions.
 
 ## Upkeep
 
-- **Prune daily.** Start each day with `python <kit>/tools/doc_index.py -C <repo> --stale`: confirm (touch it),
-  rewrite or delete each line, in ONE docs-writer commit. A new `.md`, shard or section adds its
-  index line in the same commit, or the doc-budget check refuses the branch.
-- Durable facts -> the repo's docs, landed like any docs change, never in the host's config
-  folder; session state -> your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`). Worktrees are created and removed as the
-  profile says.
-- **Stale worktrees.** A B or C tree in `--classify` whose work is stale (superseded, ruled out, its
-  record closed): mark it, `python <kit>/tools/worktree_remove.py -C <repo> <branch> --mark-stale
-  "<why>"` (only a clean, unlanded, unclaimed tree; `--classify` offers the line for those and
-  notes why the others take none). The nightly sweep then abandons it under `archive/<slug>` once it is idle 24 h, unless
-  it changes first; `<branch> --unmark-stale` clears the mark. A branch with no worktree is
-  abandoned by hand, `<branch> --branch --abandon "<why>"`, on the PM's word.
-- **Grow the tool set.** Weekly, run the repetition report on the repo
-  (`<kit>/optional/usage/repetition_report.py`): repeated shell shapes, or a scratch script
-  written twice, become lines in the repo's `docs/ops/tool-requests.md`; build the top one as
-  ordinary work (`tools/` is High risk).
+The daily prune, stale worktrees and the weekly tool-set run: read `upkeep.md` in this skill's folder (beside this file).
