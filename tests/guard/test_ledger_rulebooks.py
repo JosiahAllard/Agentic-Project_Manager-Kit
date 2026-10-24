@@ -16,6 +16,7 @@ from .world import bash, event, ps
 
 BOOK = 'writes a rulebook, which only ledger.py writes'
 DIGEST = 'writes the standing digest, which the rulebooks replace'
+LOG = 'writes the rulings ledger, which only ledger.py writes'
 
 
 class Rulebooks(unittest.TestCase):
@@ -28,13 +29,14 @@ class Rulebooks(unittest.TestCase):
         os.makedirs(self.rules)
         self.alt = ('Instead: python "%s/tools/ledger.py" conflicts --repo <repo> --topic "<topic>" '
                     '--key <key> --text "<rule>"' % W.fwd(self.w.kit_dir))
+        self.log_alt = 'Instead: python "%s/tools/ledger.py" add --repo <repo>' % W.fwd(self.w.kit_dir)
 
     def refused(self, ev, why=BOOK):
         d = decide(ev, self.w.ctx())
         self.assertIsNotNone(d, ev['tool_input'])
         self.assertEqual(d.rule, 'ledger', d.reason)
         self.assertIn(why, d.reason)
-        self.assertIn(self.alt, d.reason)
+        self.assertIn(self.log_alt if why == LOG else self.alt, d.reason)
 
     def allowed(self, ev):
         d = decide(ev, self.w.ctx())
@@ -83,7 +85,135 @@ class Rulebooks(unittest.TestCase):
         # with ledger_dir set, the folder beside a ledger_path that is not set holds nothing of it
         self.allowed(event('Write', {'file_path': self.book(), 'content': ''}, self.folder, sub=True))
 
+    def test_a_junction_still_reaches_them(self):
+        # the names compare as the filesystem opens them, links and junctions resolved
+        self.w.user_config({'ledger_path': self.w.ledger})
+        open(self.book(), 'w').close()
+        open(self.digest, 'w').close()
+        link = os.path.join(self.w.base, 'link')
+        try:
+            import _winapi
+            _winapi.CreateJunction(self.folder, link)
+        except (ImportError, OSError) as e:
+            self.skipTest('no junction: %s' % e)
+        self.addCleanup(os.rmdir, link)
+        for path, why in ((os.path.join(link, 'rules', 'alpha.md'), BOOK), (os.path.join(link, 'STANDING.md'), DIGEST),
+                          (os.path.join(link, 'rules', 'gamma.md'), BOOK)):
+            with self.subTest(path):
+                self.refused(event('Write', {'file_path': path, 'content': ''}, self.w.plain, sub=True), why)
+        self.refused(bash('rm -r %s' % W.fwd(os.path.join(link, 'rules')), self.w.plain, sub=True))
+        self.refused(bash('rm %s/*' % W.fwd(os.path.join(link, 'rules')), self.w.plain, sub=True))
+        self.allowed(event('Write', {'file_path': os.path.join(link, 'NOTES.md'), 'content': ''}, self.folder,
+                           sub=True))
+
+    def test_a_short_name_still_reaches_them(self):
+        self.w.user_config({'ledger_path': self.w.ledger})
+        book = self.book('a-long-rulebook-name.md')
+        open(book, 'w').close()
+        open(self.digest, 'w').close()
+        self.refused(event('Write', {'file_path': self.short(book), 'content': ''}, self.folder, sub=True))
+        short_digest = os.path.join(self.short(self.folder), 'STANDING.md')
+        self.refused(event('Write', {'file_path': short_digest, 'content': ''}, self.folder, sub=True), DIGEST)
+
+    def short(self, path):
+        """The short (8.3) spelling of `path`; the test is skipped when its volume gives none."""
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.WinDLL('kernel32').GetShortPathNameW(path, buf, len(buf))
+        short = buf.value if 0 < n < len(buf) else ''
+        if not short or os.path.normcase(short) == os.path.normcase(path):
+            self.skipTest('the temp folder\'s volume gives no short (8.3) names')
+        return short
+
+    def test_a_stream_suffix_is_the_file_itself(self):
+        self.w.user_config({'ledger_path': self.w.ledger})
+        f = self.folder
+        for path, why in ((self.digest + '::$DATA', DIGEST), (self.book() + '::$DATA', BOOK),
+                          (self.book() + ':notes', BOOK), (self.book() + ':notes:$DATA', BOOK),
+                          (self.digest + ':x', DIGEST)):
+            with self.subTest(path):
+                self.refused(event('Write', {'file_path': path, 'content': ''}, f, sub=True), why)
+        self.refused(bash("echo x > 'STANDING.md::$DATA'", f, sub=True), DIGEST)
+        # PowerShell writes .\x::$DATA to x's stream (rules\x::$DATA it reads as a provider's name and refuses)
+        self.refused(ps("Set-Content -Path '.\\rules\\alpha.md::$DATA' -Value x", f, sub=True))
+        self.refused(ps("Set-Content -Path '%s::$DATA' -Value x" % self.digest, f, sub=True), DIGEST)
+        self.allowed(event('Write', {'file_path': os.path.join(f, 'NOTES.md::$DATA'), 'content': ''}, f, sub=True))
+
+    def test_a_wildcard_that_can_name_them_is_refused(self):
+        self.w.user_config({'ledger_path': self.w.ledger})
+        f = self.folder
+        for cmd, why in (('rm rules/*', BOOK), ('rm -f rules/*.txt', BOOK), ('rm rules/[ab]*', BOOK),
+                         ('rm STAND*', DIGEST), ('rm ?TANDING.md', DIGEST), ('rm -r ru*', BOOK),
+                         ('rm -r *', LOG), ('rm %s/*' % W.fwd(self.rules), BOOK), ('rm r*/alpha.md', BOOK)):
+            with self.subTest(cmd):
+                self.refused(bash(cmd, f, sub=True), why)
+        for cmd, why in (('Remove-Item rules\\*', BOOK), ('Remove-Item %s\\*' % self.rules, BOOK),
+                         ('Remove-Item STAND*', DIGEST), ('Remove-Item -Recurse ru*', BOOK)):
+            with self.subTest(cmd):
+                self.refused(ps(cmd, f, sub=True), why)
+        self.allowed(bash('rm -f *.txt', f, sub=True))
+        self.allowed(bash('rm -f rules/drafts/*', f, sub=True))
+        self.allowed(ps('Remove-Item NOTES*', f, sub=True))
+
+    def test_a_wildcard_reaches_the_ledger_file_too(self):
+        self.w.user_config({'ledger_path': self.w.ledger})
+        d = decide(bash('rm *.md', self.folder, sub=True), self.w.ctx())
+        self.assertIsNotNone(d)
+        self.assertEqual(d.rule, 'ledger', d.reason)
+        self.assertIn(LOG, d.reason)
+
+    def git_refused(self, ev, why=BOOK):
+        d = decide(ev, self.w.ctx())
+        self.assertIsNotNone(d, ev['tool_input'])
+        self.assertEqual(d.rule, 'ledger', d.reason)
+        self.assertIn(why, d.reason)
+
+    def test_git_that_removes_moves_or_restores_them_is_refused(self):
+        self.w.user_config({'ledger_path': self.w.ledger})
+        f = self.folder
+        for cmd, why in (('git rm rules/alpha.md', BOOK), ('git rm --cached STANDING.md', DIGEST),
+                         ('git rm -r rules', BOOK), ('git rm "rules/*.md"', BOOK), ('git rm -r .', LOG),
+                         ('git mv STANDING.md old.md', DIGEST), ('git mv draft.md rules/new.md', BOOK),
+                         ('git checkout -- STANDING.md', DIGEST), ('git checkout HEAD~1 -- rules/alpha.md', BOOK),
+                         ('git checkout STANDING.md', DIGEST), ('git restore rules/alpha.md', BOOK),
+                         ('git restore --staged --worktree STANDING.md', DIGEST),
+                         ('git checkout-index -f rules/alpha.md', BOOK),
+                         ('git -C %s rm rules/alpha.md' % W.fwd(f), BOOK)):
+            with self.subTest(cmd):
+                self.git_refused(bash(cmd, f, sub=True), why)
+        self.git_refused(ps('git rm rules\\alpha.md', f, sub=True))
+        self.git_refused(ps('git mv STANDING.md old.md', f), DIGEST)
+        # the PM is refused too: only ledger.py writes them
+        self.w.environ = {context.ROLE_ENV: 'pm'}
+        self.git_refused(bash('git -C %s rm STANDING.md' % W.fwd(f), self.w.plain), DIGEST)
+
+    def test_git_that_leaves_them_alone_passes_the_rule(self):
+        self.w.user_config({'ledger_path': self.w.ledger})
+        f = self.folder
+        for cmd in ('git rm NOTES.md', 'git restore --staged STANDING.md', 'git mv a.txt b.txt',
+                    'git rm ":!STANDING.md"', 'git status', 'git diff STANDING.md', 'git rm rules/drafts/a.md'):
+            with self.subTest(cmd):
+                d = decide(bash(cmd, f, sub=True), self.w.ctx())
+                self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+        # git in a tree that does not hold the ledger: even a computed pathspec is not this rule's
+        d = decide(bash('git rm "$f"', self.w.wt, sub=True), self.w.ctx())
+        self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+
+    def test_git_in_a_work_tree_that_holds_a_split_ledger(self):
+        split = os.path.join(self.w.wt, 'ledger')
+        os.makedirs(os.path.join(split, 'rules'))
+        os.makedirs(os.path.join(self.w.wt, 'src'))
+        self.w.user_config({'ledger_dir': split, 'ledger_repos': ['kit']})
+        src = os.path.join(self.w.wt, 'src')
+        for cmd, why in (('git rm :/ledger/STANDING.md', DIGEST), ('git rm ":(top)ledger/rules/kit.md"', BOOK),
+                         ('git rm -r ../ledger', BOOK), ('git rm "$f"', BOOK)):
+            with self.subTest(cmd):
+                self.git_refused(bash(cmd, src, sub=True), why)
+        d = decide(bash('git rm a.py', src, sub=True), self.w.ctx())
+        self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+
     def test_the_pm_tool_write_passes(self):
+        # the command line is not refused; the hook never sees the tool's own writes
         self.w.user_config({'ledger_path': self.w.ledger})
         self.w.environ = {context.ROLE_ENV: 'pm'}
         tool = W.fwd(os.path.join(self.w.kit_dir, 'tools', 'ledger.py'))

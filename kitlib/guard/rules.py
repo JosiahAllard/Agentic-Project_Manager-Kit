@@ -88,6 +88,7 @@ A command line the parser cannot read cleanly also goes through kitlib.guard.fal
 unreadable, is a warning by default).
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
+import fnmatch
 import json
 import ntpath
 import os
@@ -302,9 +303,9 @@ def shell_command(event, ctx, text, shell, cwd, role):
     hub_rules = HubShell(event, ctx, parsed)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, wrapped_gate,
-                     root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path, owner_identity,
-                     kill_by_name, shell_writes, git_plain_commit, interpreter_git):
+        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, ledger_git,
+                     wrapped_gate, root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path,
+                     owner_identity, kill_by_name, shell_writes, git_plain_commit, interpreter_git):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -1025,29 +1026,132 @@ def hub_mcp(event, ctx, tool, role):
 
 # ---------------------------------------------------------------- edits: ledger and main checkout
 
-def same_file(a, b):
-    return paths.norm(a, absolute=True) == paths.norm(b, absolute=True)
+def stream_free(path):
+    """`path` with an NTFS stream suffix (`:name`, `::$DATA`, `:name:$DATA`) dropped from each of
+    its parts after the drive: `STANDING.md::$DATA` opens STANDING.md itself."""
+    drive, rest = os.path.splitdrive(path)
+    parts = re.split(r'([\\/])', rest)
+    return drive + ''.join(p.split(':', 1)[0] if i % 2 == 0 else p for i, p in enumerate(parts))
 
 
-def standing_file(ctx, target):
-    """What of the standing rules `target` is: 'rulebook' for the rulebooks' folder or a `.md` file
-    directly in it (any case: the filesystem folds it), 'digest' for the standing digest, else
-    None. Both from kitlib.ledger.files.of_config over the machine config (Ctx.ledger_files). The
-    name is read as Windows opens it (abspath drops a trailing dot or space: `alpha.md.` is
-    `alpha.md`)."""
+def file_key(path):
+    """`path` as the filesystem opens it, to compare: absolute, a stream suffix dropped
+    (stream_free), a trailing dot or space dropped (abspath: `alpha.md.` is `alpha.md`), then
+    links, junctions and 8.3 short names resolved and case folded (jail.real), as lock_state
+    compares."""
+    return jail.real(os.path.abspath(stream_free(os.path.abspath(path))))
+
+
+def ledger_guarded(ctx):
+    """[(kind, real path)] of what the ledger rule holds: 'log' for ledger_path, 'rulebook' for
+    the rulebooks' folder and 'digest' for the standing digest (kitlib.ledger.files.of_config over
+    the machine config, Ctx.ledger_files). Paths are file_key()ed."""
+    out = []
+    ledger = ctx.user().get('ledger_path')
+    if ledger:
+        out.append(('log', file_key(ledger)))
     files = ctx.ledger_files()
-    if files is None:
-        return None
-    rules_dir, full = files.rules, os.path.abspath(target)
-    if rules_dir and (same_file(full, rules_dir) or (
-            same_file(os.path.dirname(full), rules_dir) and full.lower().endswith('.md'))):
-        return 'rulebook'
-    if files.digest and same_file(target, files.digest):
-        return 'digest'
+    if files is not None:
+        if files.rules:
+            out.append(('rulebook', file_key(files.rules)))
+        if files.digest:
+            out.append(('digest', file_key(files.digest)))
+    return out
+
+
+def ledger_kind(ctx, target):
+    """What of the ledger `target` is: 'log' for the ledger file, 'rulebook' for the rulebooks'
+    folder or a `.md` file directly in it, 'digest' for the standing digest, else None. Names
+    compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
+    space, links, junctions and 8.3 names). A wildcard path is any of them it can match
+    (ledger_glob)."""
+    if hubg.has_glob(target):
+        return ledger_glob(ctx, target)
+    full = file_key(target)
+    for kind, real in ledger_guarded(ctx):
+        if full == real or (kind == 'rulebook' and os.path.dirname(full) == real and full.endswith('.md')):
+            return kind
     return None
 
 
+def ledger_glob(ctx, target):
+    """ledger_kind for the wildcard path `target`: the literal folder it starts in (file_key), and
+    each part after it matched (case folded, a stream suffix dropped, as glob matching reads it)
+    against the matching part of a held path below that folder. A file is matched by a wildcard
+    of the same depth; the rulebooks' folder also by one a part deeper (a file in it), and every
+    wildcard that starts in it is a rulebook (fail closed: `rules/*.txt`); `**` or `..` after the
+    wildcard matches every held path below the folder."""
+    first = min(target.index(c) for c in hubg.GLOB_CHARS if c in target)
+    cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
+    base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
+    b = file_key(base)
+    parts = [x.split(':', 1)[0].lower() for x in re.split(r'[\\/]', rest) if x and x != '.']
+    wide = any('**' in x or x == '..' for x in parts)
+    for kind, real in ledger_guarded(ctx):
+        if kind == 'rulebook' and b == real:
+            return kind
+        if real == b or not jail.inside(real, b):
+            continue
+        below = real[len(b.rstrip('\\/')) + 1:].split(os.sep)
+        deeper = kind == 'rulebook' and len(parts) == len(below) + 1
+        if wide or ((len(parts) == len(below) or deeper) and
+                    all(fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts))):
+            return kind
+    return None
+
+
+def ledger_git(event, ctx, cmd, inv, cwd, role):
+    """git run in a work tree that holds part of the ledger (outside git: run in a folder that
+    holds it) whose pathspec reaches that part (ledger_kind's files): rm and mv, restore (not
+    --staged alone), checkout-index, and checkout of paths (after `--`, or every positional word
+    without one: git reads a word that names no branch as a path). A pathspec reaches a held path
+    as kitlib.guard.delegfile.covers reads it (the path, a folder above it, a wildcard whose
+    literal folder is above it; a computed word or unread magic always), or is a `.md` file
+    directly in the rulebooks' folder (a wildcard there: its literal folder, that folder). A
+    branch name is read as a path too (fail closed: `git checkout pm` from
+    the folder above the ledger's)."""
+    gc = git_call_judged(inv)
+    if gc is None or gc.sub_dyn or not gc.dir or gc.unknown or gc.blind:
+        return None
+    sub, args = gc.sub, gc.rest
+    if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout'):
+        return None
+    held = ledger_guarded(ctx)
+    if not held:
+        return None
+    from . import delegfile
+    short, longs, pos = _opts(sub, args)
+    if sub == 'restore' and ('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs):
+        return None
+    if sub == 'checkout':
+        after = delegfile.after_dashes(args)
+        pos = after if after is not None else pos
+    place = ctx.place(gc.dir)
+    top = place.top if place.kind in (repo.MAIN, repo.LINKED) and place.top else gc.dir
+    tree = jail.real(top)
+    held = [(kind, real) for kind, real in held if jail.inside(real, tree)]
+    for w in pos:
+        spec = delegfile.spec_real(ctx, w, gc.dir, top)
+        if spec is False:
+            continue                            # an exclusion names nothing to write
+        for kind, real in held:
+            if spec is True or jail.inside(real, spec) or (
+                    kind == 'rulebook' and os.path.dirname(spec) == real and spec.endswith('.md')):
+                return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), w.text)),
+                              ledger_instead(ctx, kind))
+    return None
+
+
+def ledger_instead(ctx, kind):
+    if kind == 'log':
+        return ('python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
+                '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
+    return 'python %s conflicts --repo <repo> --topic "<topic>" --key <key> --text "<rule>"' % kit_tool(ctx, 'ledger')
+
+
 STANDING_WHY = {
+    'log': '%s writes the rulings ledger, which only ledger.py writes. Add the entry with the kit\'s '
+           'tools/ledger.py add (docs/ledger.md).',
     'rulebook': '%s writes a rulebook, which only ledger.py writes, each rule change paired with a log entry: read '
                 'the proposed rule against the others with conflicts, then add it with add --rule KEY --topic '
                 'TOPIC --checked HASH, or remove one with rule-drop (docs/ledger.md "Rulebooks").',
@@ -1067,18 +1171,10 @@ def ledger_rule(ctx, target, role, what):
                       'python -m json.tool %s' % quote(ctx.config_location().path))
     if not target:
         return None
-    ledger = user.get('ledger_path')
-    if ledger and same_file(target, ledger):
-        return refuse('ledger', role, '%s writes the rulings ledger, which only ledger.py writes. '
-                      "Add the entry with the kit's tools/ledger.py add (docs/ledger.md)." % what,
-                      'python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
-                      '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
-    kind = standing_file(ctx, target)
+    kind = ledger_kind(ctx, target)
     if kind is None:
         return None
-    return refuse('ledger', role, STANDING_WHY[kind] % what,
-                  'python %s conflicts --repo <repo> --topic "<topic>" --key <key> --text "<rule>"'
-                  % kit_tool(ctx, 'ledger'))
+    return refuse('ledger', role, STANDING_WHY[kind] % what, ledger_instead(ctx, kind))
 
 
 def lock_state_dir(ctx):
