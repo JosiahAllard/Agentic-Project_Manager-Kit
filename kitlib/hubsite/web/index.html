@@ -9,20 +9,13 @@
 /* Layout, the Triage shell: the sections in a sidebar, then the list pane (summary strip, filter tabs, cards stacked
    newest-open first), then a detail pane whenever one is open. At phone width a tab bar along the bottom takes the
    sidebar's place, and an open detail pane takes the list's.
-   Nothing here is loaded from the network: the fonts named below are used only where the machine has them. */
+   Nothing here is loaded from the network. Every colour, font and corner is a token of hub.css (light and dark). */
 [hidden]{display:none !important}
-:root{
-  --accent-soft:#e3eef6; --rec-soft:#fbf0d9;
-}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --accent-soft:#1c3346; --rec-soft:#3a2d14;}}
-:root[data-theme="dark"]{
-  --accent-soft:#1c3346; --rec-soft:#3a2d14;}
 .wrap{display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);min-height:100vh}
 .wrap:has(> #pane-detail:not([hidden])){grid-template-columns:var(--side-w) minmax(320px,440px) minmax(0,1fr)}
 .side{background:var(--side);border-right:1px solid var(--line);padding:18px 10px;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
 .listpane{width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px;align-content:start}
-.detailpane{background:var(--surface);border-left:1px solid var(--line);padding:24px 28px;min-width:0;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
+.detailpane{background:var(--surface);border-left:1px solid var(--line);padding:24px;min-width:0;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
 .tabbar{display:none}
 .tb{font:500 .72rem var(--f-body);background:none;border:0;color:var(--muted);padding:6px 2px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;min-height:44px;justify-content:center;text-align:center;text-decoration:none}
 .tb[aria-selected="true"]{color:var(--accent);font-weight:700}
@@ -32,6 +25,8 @@
 #list article:focus{outline:none}
 #list article:focus-visible{outline:2px dashed var(--accent);outline-offset:2px}
 #list article.row[role="button"]{cursor:pointer}
+#list article.row{min-height:44px;box-sizing:border-box}
+#list article.row[role="button"]:hover{border-color:var(--muted)}
 /* Above a phone's width the page itself does not scroll: the shell fills the window and the list and the detail
    pane each scroll on their own, each with its scrollbar at its own right edge. The list's content keeps its
    760px column through its padding, so its scrollbar is at the pane's edge and not beside the column. */
@@ -61,10 +56,10 @@ body.reading{overflow:hidden}
   .listpane,.detailpane{grid-column:2}
   .detailpane{border-left:0;border-top:1px solid var(--line)}
 }
-h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+h1{font-size:1.75rem;line-height:1.25;margin:0;font-weight:600;letter-spacing:-.01em;text-wrap:balance}
 .links{margin:0;font-size:.9rem}.links a{color:var(--accent)}
 .tabs{display:flex;flex-wrap:wrap;gap:6px}
-.tab{font:600 .85rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:999px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.tab{font:600 .8125rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:var(--r-s);cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
 .tab .n{font:600 .75rem var(--f-mono);font-variant-numeric:tabular-nums;opacity:.85}
 .sw{gap:0;align-items:baseline}
@@ -73,11 +68,11 @@ h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:bal
 .sw .tab .n{margin-left:5px}
 .sw .tab+.tab::before{content:"\00b7";display:inline-block;margin:0 8px;color:var(--muted)}
 .tab:focus-visible,button:focus-visible,textarea:focus-visible,label.opt:focus-within{outline:2px solid var(--accent);outline-offset:2px}
-select{font:500 .85rem var(--f-body);padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
+select{font:500 .8125rem var(--f-body);padding:5px 8px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--surface);color:var(--fg)}
 .list{display:grid;gap:14px}
 .listpane>*,.list>*{min-width:0}
 .usage{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
-.acct{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
+.acct{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:grid;gap:12px;min-width:0}
 .acct h3{margin:0;font:600 1rem var(--f-body);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .meter{display:grid;gap:4px}
 .meter .lab{display:flex;justify-content:space-between;gap:8px;font-size:.8rem;color:var(--muted)}
@@ -91,15 +86,15 @@ select{font:500 .85rem var(--f-body);padding:5px 8px;border-radius:8px;border:1p
 .bfil{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
 .bfil .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .bfil .lbl{font:600 .7rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);min-width:4.5em}
-.fchip{font:500 .8rem var(--f-body);padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
+.fchip{font:500 .8125rem var(--f-body);padding:3px 10px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .fchip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .fchip .c{opacity:.75;margin-left:4px}
-.bfil input[type=search]{font:500 .85rem var(--f-body);padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg);width:100%;max-width:28rem;box-sizing:border-box}
+.bfil input[type=search]{font:500 .8125rem var(--f-body);padding:6px 10px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--surface);color:var(--fg);width:100%;max-width:28rem;box-sizing:border-box}
 .period{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 8px;font-size:.85rem;color:var(--muted)}
 .agt .pr{font:600 .8rem var(--f-mono);white-space:nowrap}
 h3.blk{font:600 .78rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
 .unote{font-size:.8rem;color:var(--muted);margin:0 0 4px}
-.agwrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.agwrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
 .agt{width:100%;border-collapse:collapse;font-size:.875rem}
 .agt th{text-align:left;font:600 .72rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:10px 14px;border-bottom:1px solid var(--line)}
 .agt td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -107,12 +102,12 @@ h3.blk{font:600 .78rem var(--f-body);letter-spacing:.06em;text-transform:upperca
 .agt .nm{font:600 .875rem var(--f-mono);white-space:nowrap}
 .agt .md{font:500 .8rem var(--f-mono);white-space:nowrap}
 .agt .role{color:var(--muted);min-width:220px;overflow-wrap:anywhere}
-.q{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
+.q{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:grid;gap:12px;min-width:0}
 .q.answered{border-left:4px solid var(--accent)}
 .q.logged{border-left:4px solid var(--ok);opacity:.92}
-.meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:.78rem;color:var(--muted)}
-.id{font:600 .78rem var(--f-mono);color:var(--fg)}
-.chip{font:600 .7rem var(--f-body);text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent)}
+.meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:.8125rem;color:var(--muted)}
+.id{font:600 .75rem var(--f-mono);color:var(--fg)}
+.chip{font:600 .75rem/1.5 var(--f-body);padding:1px 8px;border-radius:var(--r-s);background:var(--accent-soft);color:var(--accent)}
 .chip.ok{background:var(--ok-soft);color:var(--ok)}
 .chip.rec{background:var(--rec-soft);color:var(--rec)}
 .q h2{font-size:1.08rem;margin:0;line-height:1.35;text-wrap:balance}
@@ -122,76 +117,86 @@ h3.blk{font:600 .78rem var(--f-body);letter-spacing:.06em;text-transform:upperca
 .refs{font:.78rem var(--f-mono);color:var(--muted);overflow-wrap:anywhere}
 fieldset{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
 legend{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-label.opt{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;align-items:start}
+label.opt{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;padding:12px 14px;min-height:44px;box-sizing:border-box;border:1px solid var(--line);border-radius:var(--r);cursor:pointer;align-items:start}
+label.opt:hover{border-color:var(--muted)}
 label.opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
 label.opt input{margin-top:4px;accent-color:var(--accent)}
 .ol{font-weight:600;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .od{grid-column:2;color:var(--muted);font-size:.88rem;overflow-wrap:anywhere}
-textarea{width:100%;box-sizing:border-box;min-height:64px;font:inherit;font-size:.9rem;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);resize:vertical}
+textarea{width:100%;box-sizing:border-box;min-height:64px;font:inherit;padding:8px 10px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--bg);color:var(--fg);resize:vertical}
 .act{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .keys{margin-left:auto;font-size:.78rem;color:var(--muted)}
-.keys kbd{font:600 .72rem var(--f-body);border:1px solid var(--line);border-radius:4px;padding:1px 5px;background:var(--surface)}
+.keys kbd{font:600 .72rem var(--f-mono);border:1px solid var(--line);border-radius:4px;padding:1px 5px;background:var(--surface)}
 @media (max-width:760px){.keys{display:none}}
-button.primary{font:600 .9rem var(--f-body);background:var(--accent);color:var(--surface);border:0;border-radius:8px;padding:8px 16px;cursor:pointer}
+button.primary{font:600 .875rem var(--f-body);background:var(--accent);color:var(--surface);border:0;border-radius:var(--r-s);padding:8px 16px;min-height:36px;cursor:pointer}
 button.link{font:500 .85rem var(--f-body);background:none;border:0;color:var(--accent);cursor:pointer;padding:4px 0;text-decoration:underline}
 button:disabled{opacity:.5;cursor:default}
 .status{font-size:.82rem;color:var(--muted)}
 .status.err{color:var(--warn)}
-.ans{background:var(--bg);border-radius:8px;padding:10px 12px;display:grid;gap:4px;font-size:.9rem}
+.ans{background:var(--bg);border-radius:var(--r-s);padding:10px 12px;display:grid;gap:4px}
 .ans b{font-weight:600}
-.empty{background:var(--surface);border:1px dashed var(--line);border-radius:10px;padding:28px 20px;text-align:center;color:var(--muted)}
+.empty{background:var(--surface);border:1px dashed var(--line);border-radius:var(--r);padding:28px 20px;text-align:center;color:var(--muted)}
 .sections{display:flex;flex-direction:column;gap:2px}
 .sechead{font:600 .7rem var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:14px 10px 4px}
-.sec{font:600 .95rem var(--f-body);background:none;border:0;border-radius:7px;color:var(--muted);padding:7px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;text-align:left;width:100%;box-sizing:border-box;text-decoration:none}
+.sec{font:500 .875rem var(--f-body);background:none;border:0;border-radius:var(--r-s);color:var(--fg);padding:7px 10px;min-height:36px;cursor:pointer;display:flex;gap:6px;align-items:center;text-align:left;width:100%;box-sizing:border-box;text-decoration:none}
 .sec>.n:first-of-type{margin-left:auto}
-.sec:hover{color:var(--fg)}
-.sec[aria-selected="true"]{color:var(--fg);background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
-.sec .n{font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
+.sec:hover{background:var(--hover)}
+.sec[aria-selected="true"]{color:var(--fg);font-weight:600;background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.sec .n{font:500 .75rem var(--f-mono);font-variant-numeric:tabular-nums;background:none;color:var(--muted);border-radius:var(--r-s);padding:1px 6px}
 .sidefoot{margin-top:18px;padding:8px 10px;font-size:.75rem;color:var(--muted);overflow-wrap:anywhere}
 .sidefoot>*{display:block;margin:0 0 4px}
-.morerow{font:600 1rem var(--f-body);display:flex;gap:8px;align-items:center;width:100%;box-sizing:border-box;text-align:left;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-height:44px;cursor:pointer}
+.morerow{font:600 .9375rem var(--f-body);display:flex;gap:8px;align-items:center;width:100%;box-sizing:border-box;text-align:left;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;min-height:44px;cursor:pointer}
 .morerow>.n{margin-left:auto;font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
 .morerow>.n.hot{background:var(--warn-soft);color:var(--warn)}
 .machine{margin:0}
 .home-title{margin:0 0 8px;font-size:1.25rem}
 #machine a{display:block;color:inherit;text-decoration:none}
 .sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.t{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
+.t{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
 .t.done{opacity:.72}
 .t.done h2{text-decoration:line-through;text-decoration-color:var(--muted)}
 .t > .body{display:grid;gap:8px;min-width:0}
 .t h2{font-size:1rem;margin:0;line-height:1.4;text-wrap:balance}
 .chk{width:22px;height:22px;margin-top:2px;accent-color:var(--ok);cursor:pointer}
 .cmd{display:flex;gap:8px;align-items:stretch;min-width:0}
-.cmd pre{margin:0;flex:1;min-width:0;overflow-x:auto;font:.8rem/1.5 var(--f-mono);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;white-space:pre}
+.cmd pre{margin:0;flex:1;min-width:0;overflow-x:auto;font:.8rem/1.5 var(--f-mono);background:var(--bg);border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;white-space:pre}
 .cmd pre.diff{max-height:60vh;overflow:auto}
-.copy{font:600 .78rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:6px;padding:0 10px;cursor:pointer}
-form.add{display:grid;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
-form.add input[type=text]{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box}
+.copy{font:600 .78rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:var(--r-s);padding:0 10px;cursor:pointer}
+form.add{display:grid;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+form.add input[type=text]{font:inherit;padding:8px 10px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box}
 form.add textarea{min-height:44px}
 .chip.urgent{background:var(--warn-soft);color:var(--warn)}
+.chip.st-late,.chip.st-stopped{background:var(--rec-soft);color:var(--rec)}
+/* Status is a glyph plus a word: the word is the element's text, the glyph is drawn here (this <style>: hub.css holds no escapes) and given empty
+   alternative text (the second content form), so a screen reader reads the word once. */
+.st-done::before,.st-failed::before,.st-stopped::before,.st-late::before,.st-urgent::before{display:inline-block;margin-right:4px;font-weight:700}
+.st-done::before{content:"\2713";content:"\2713" / ""}
+.st-failed::before{content:"\2715";content:"\2715" / ""}
+.st-stopped::before{content:"\25A0";content:"\25A0" / ""}
+.st-late::before{content:"\25B2";content:"\25B2" / ""}
+.st-urgent::before{content:"\26A0\FE0E";content:"\26A0\FE0E" / ""}
 .q.urgent:not(.logged):not(.done),.t.urgent:not(.done){border-left:4px solid var(--warn)}
 .sec .n.hot{background:var(--warn-soft);color:var(--warn)}
 .urg{display:inline-flex;gap:6px;align-items:center;font-size:.85rem;color:var(--muted);cursor:pointer}
 .urg input{accent-color:var(--warn)}
 .chip.need{background:var(--warn-soft);color:var(--warn)}
 .flow{display:flex;flex-wrap:wrap;gap:4px;font:500 .74rem var(--f-mono);color:var(--muted)}
-.flow span{padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+.flow span{padding:2px 8px;border-radius:var(--r-s);border:1px solid var(--line)}
 .flow span.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .flow span.past{color:var(--fg)}
 .links{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-form.add select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
-.rec input[type=text],.rec textarea,.rec select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box}
+form.add select{font:inherit;padding:8px 10px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.rec input[type=text],.rec textarea,.rec select{font:inherit;padding:8px 10px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box}
 .rec textarea{min-height:110px;font-family:var(--f-mono)}
 .rec .kv{margin:0;overflow-wrap:anywhere}
 .rec .kv b{font:500 .85rem var(--f-mono)}
 .q.unread{border-left:4px solid var(--accent)}
 .quote{margin:0;padding-left:10px;border-left:3px solid var(--line);color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;max-width:68ch}
 .reply{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-width:68ch}
-.gone{background:var(--rec-soft);color:var(--rec);border-radius:8px;padding:8px 12px;font-size:.85rem;margin:0;overflow-wrap:anywhere}
+.gone{background:var(--rec-soft);color:var(--rec);border-radius:var(--r-s);padding:8px 12px;font-size:.85rem;margin:0;overflow-wrap:anywhere}
 .pk h2{margin:0;font-size:1rem;line-height:1.4}
 .pk-h{font:600 .78rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:6px 0 0}
-.pk{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px;display:grid;gap:6px;min-width:0}
+.pk{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px;display:grid;gap:6px;min-width:0}
 .pk .age{font:600 .8rem var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
 .pk .age.old{color:var(--rec)}
 .pk .br{font:.78rem var(--f-mono);color:var(--muted);overflow-wrap:anywhere}
@@ -200,12 +205,12 @@ form.add select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid
 .pmf .row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
 .pmbar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
 .q.row{gap:8px}
-.row[aria-current="true"]{box-shadow:inset 0 0 0 2px var(--accent)}
+.row[aria-current="true"]{background:var(--accent-soft);border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
 .row h2{font-size:1rem}
 .dview{display:grid;gap:14px;align-content:start}
 fieldset.days{display:flex;flex-wrap:wrap;gap:6px}
 .sched .fld{display:grid;gap:4px;font-size:.85rem;color:var(--muted)}
-.segc{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;width:max-content}
+.segc{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-s);overflow:hidden;width:max-content}
 .segc button{font:inherit;padding:6px 14px;border:0;border-radius:0;background:var(--bg);color:var(--fg);cursor:pointer}
 .segc button[aria-checked=true]{background:var(--accent-soft);color:var(--accent);font-weight:600}
 button.daychip{font:inherit;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
@@ -214,7 +219,7 @@ button.daychip[aria-pressed=true]::before{content:"\2713\00a0"}
 .lock{font-size:.8rem}
 .row.muted{opacity:.62}
 .row.pc{cursor:default}
-.sched input[type=time]{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:max-content}
+.sched input[type=time]{font:inherit;padding:6px 8px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--bg);color:var(--fg);width:max-content}
 .q.queued{border-left:4px solid var(--line)}
 .q.sent{border-left:4px solid var(--accent)}
 .q.done{border-left:4px solid var(--ok)}
@@ -256,9 +261,12 @@ ul.hist .sch-line{display:block}
 .sch-grid td.pick{outline:2px solid var(--accent);outline-offset:-2px}
 .sch-form{display:grid;gap:8px}
 .sch-fld{display:grid;gap:3px;font-size:.85rem;color:var(--muted)}
-.sch-fld input,.sch-form textarea{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box;min-width:0}
+.sch-fld input,.sch-form textarea{font:inherit;padding:6px 8px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box;min-width:0}
 .sch-form textarea{min-height:7em;font-family:var(--f-mono)}
-@media (prefers-reduced-motion:no-preference){.q{transition:border-color .15s}}
+/* Hover and selection fade only for an owner who has not asked for less motion; nothing moves under reduce. */
+@media (prefers-reduced-motion:no-preference){
+  .q,.t,.pk,label.opt,.sec,.tab,.fchip,.tb,.morerow,button.primary,.copy{transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s}
+}
 </style>
 </head>
 <body>
@@ -1014,8 +1022,8 @@ ul.hist .sch-line{display:block}
     });
     return del;
   }
-  const pmMeta = (x, tab) => el("div", {class:"meta"}, x.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: x.id}), el("span", {class:"chip", text: pmKindText(x.kind)}), x.repo ? el("span", {class:"chip", text: x.repo}) : null,
-    x.created_at ? el("span", {text: "written " + when(x.created_at)}) : null, x.sent_at && tab !== "queued" ? el("span", {text: "sent " + when(x.sent_at)}) : null, tab === "done" && x.done_at ? el("span", {class:"chip ok", text: "done " + when(x.done_at)}) : null);
+  const pmMeta = (x, tab) => el("div", {class:"meta"}, x.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null, el("span", {class:"id", text: x.id}), el("span", {class:"chip", text: pmKindText(x.kind)}), x.repo ? el("span", {class:"chip", text: x.repo}) : null,
+    x.created_at ? el("span", {text: "written " + when(x.created_at)}) : null, x.sent_at && tab !== "queued" ? el("span", {text: "sent " + when(x.sent_at)}) : null, tab === "done" && x.done_at ? el("span", {class:"chip ok st-done", text: "done " + when(x.done_at)}) : null);
   // The card of a queued item being edited, built once for the edit `ed`.
   function pmEditCard(x, ed){
     const fl = pmFields(x), st = el("span", {class:"status", role:"status"});
@@ -1071,7 +1079,7 @@ ul.hist .sch-line{display:block}
   }
   // One short row per message (its first line); the detail beside it has the whole text, and Edit, Delete or the reply.
   const pmRow = x => rowCard("pm", { ...x, title: String(x.text || "").trim().split("\n")[0].slice(0, 140), urgent: x.urgent && state.pfilter !== "done" },
-    [x.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"chip", text: pmKindText(x.kind)}), x.repo ? el("span", {class:"chip", text: String(x.repo)}) : null],
+    [x.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null, el("span", {class:"chip", text: pmKindText(x.kind)}), x.repo ? el("span", {class:"chip", text: String(x.repo)}) : null],
     x.created_at ? "written " + when(x.created_at) : "");
 
   function renderTodos(){
@@ -1114,7 +1122,7 @@ ul.hist .sch-line{display:block}
       writeQuick("/todos/" + seg(t.id) + "/done", { done: on }, () => paint(!on), status);
     });
     const body = el("div", {class:"body"},
-      el("div", {class:"meta"}, t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: t.id}), t.repo ? el("span", {class:"chip", text: t.repo}) : null, t.from ? el("span", {text: "from " + t.from}) : null, t.added_at ? el("span", {text: "added " + when(t.added_at)}) : null, isDone && t.done_at ? el("span", {class:"chip ok", text: "done " + when(t.done_at)}) : null));
+      el("div", {class:"meta"}, t.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null, el("span", {class:"id", text: t.id}), t.repo ? el("span", {class:"chip", text: t.repo}) : null, t.from ? el("span", {text: "from " + t.from}) : null, t.added_at ? el("span", {text: "added " + when(t.added_at)}) : null, isDone && t.done_at ? el("span", {class:"chip ok st-done", text: "done " + when(t.done_at)}) : null));
     body.append(el("h2", {}, el("label", {for: "t-" + t.id, text: t.title || "(untitled)"})));
     if (t.detail) body.append(el("p", {class:"ctx", text: t.detail}));
     for (const c of pmCommands(t)) {
@@ -1313,7 +1321,7 @@ ul.hist .sch-line{display:block}
   function doneCard(c){
     const id = c.item || c.id;
     return el("article", {class:"q", id: "done-" + c.id},
-      el("div", {class:"meta"}, el("span", {class:"id", text: id}), el("span", {class:"chip ok", text:"Done"}), el("span", {class:"chip", text: String(c.repo || "")}), c.done_at ? el("span", {text: "done " + when(c.done_at)}) : null),
+      el("div", {class:"meta"}, el("span", {class:"id", text: id}), el("span", {class:"chip ok st-done", text:"Done"}), el("span", {class:"chip", text: String(c.repo || "")}), c.done_at ? el("span", {text: "done " + when(c.done_at)}) : null),
       el("h2", {text: c.title || "(untitled)"}), recordFacts(c.repo, id),
       el("div", {class:"act"}, el("button", {class:"primary", type:"button", text:"Open the record", onclick: () => openRecord(c.repo, id)})));
   }
@@ -1345,7 +1353,7 @@ ul.hist .sch-line{display:block}
       withdrawn: el("span", {class:"chip", text:"Withdrawn"})
     }[st.status] || el("span", {class:"chip", text: st.status || "?"});
     const parts = [el("div", {class:"meta"},
-      st.urgent && live ? el("span", {class:"chip urgent", text:"Urgent"}) : null,
+      st.urgent && live ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null,
       el("span", {class:"id", text: st.id}),
       st.repo ? el("span", {class:"chip", text: st.repo}) : null, stat,
       st.submitted_at ? el("span", {text: "submitted " + when(st.submitted_at)}) : null,
@@ -1609,10 +1617,10 @@ ul.hist .sch-line{display:block}
   }
   const approvalRow = d => rowCard("approval", d, [el("span", {class:"chip need", text: d.kind === "op" ? "Run approval" : "Approval"}), d.status !== "pending" ? el("span", {class:"chip " + (d.status === "denied" || d.status === "expired" ? "" : "ok"), text: APPROVAL_SAID[d.status] || String(d.status)}) : null],
     d.status !== "pending" && d.decided_at ? "decided " + when(d.decided_at) : d.created_at ? "asked " + when(d.created_at) : "");
-  const questionRow = d => rowCard("q", d, [d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
+  const questionRow = d => rowCard("q", d, [d.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null, d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
     d.status !== "open" ? el("span", {class:"chip " + (d.status === "logged" || d.status === "done" ? "ok" : ""), text: d.status === "answered" ? "Submitted" : String(d.status)}) : null], d.asked_at ? "asked " + when(d.asked_at) : "");
-  const todoRow = t => rowCard("todo", t, [t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: String(t.repo)}) : null,
-    t.status === "done" ? el("span", {class:"chip ok", text:"Done"}) : null, t.from === "you" && state.todoEdit.has(t.id) ? el("span", {class:"chip need", text:"Editing"}) : null], t.added_at ? "added " + when(t.added_at) : "");
+  const todoRow = t => rowCard("todo", t, [t.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: String(t.repo)}) : null,
+    t.status === "done" ? el("span", {class:"chip ok st-done", text:"Done"}) : null, t.from === "you" && state.todoEdit.has(t.id) ? el("span", {class:"chip need", text:"Editing"}) : null], t.added_at ? "added " + when(t.added_at) : "");
   // Settles what is open among the rows the view offers ([kind, item] pairs, in list order), before the rows are drawn
   // so the open one is marked; pickDetail then puts its card in the detail pane under a button that closes it.
   // With nothing picked (a section just shown), a to-do the owner is editing opens before the first row, so the edit
@@ -1713,7 +1721,7 @@ ul.hist .sch-line{display:block}
     const row = rowCard("schedule", { ...s, title: taskName(s.task) + " for " + String(s.repo || "?") },
       [pc ? lockIcon() : null, el("span", {class: "chip" + (s.cadence === "off" ? "" : " ok"), text: cadenceText(s)}),
        s.last_run ? el("span", {class: "chip", text: "ran " + when(s.last_run)}) : null,
-       s.last_outcome === "failed" ? el("span", {class: "chip need", text: "failed"}) : null], s.set_at ? "set " + when(s.set_at) : "");
+       s.last_outcome === "failed" ? el("span", {class: "chip need st-failed", text: "failed"}) : null], s.set_at ? "set " + when(s.set_at) : "");
     return row;
   };
   // A sweep the hub holds no schedule for: a plain row, no times (the hub cannot know the PC's).
@@ -2338,7 +2346,7 @@ ul.hist .sch-line{display:block}
   }
   function schRunRow([key, , r, it]){
     const late = !!(it.late || r.overrun);
-    return schRow(key, [r.kind ? el("span", { class: "chip", text: String(r.kind) }) : null, late ? el("span", { class: "chip urgent", text: "Late" }) : null, r.background ? el("span", { class: "chip", text: "background" }) : null],
+    return schRow(key, [r.kind ? el("span", { class: "chip", text: String(r.kind) }) : null, late ? el("span", { class: "chip urgent st-late", text: "Late" }) : null, r.background ? el("span", { class: "chip", text: "background" }) : null],
       schName(r), r.held_since || r.since ? "since " + schHm(msOf(r.held_since || r.since)) : "", schProgress(r, it));
   }
   function schQueueRow([key, , q]){
@@ -2355,7 +2363,7 @@ ul.hist .sch-line{display:block}
   function schRunCard([key, , r, it]){
     const u = r.usage || {}, id = String(r.id), ask = state.sch.confirm === key, late = !!(it.late || r.overrun);
     return el("article", { class: "q", id: "sch-card" },
-      el("div", { class: "meta" }, el("span", { class: "chip", text: "Running now" }), late ? el("span", { class: "chip urgent", text: "Late" }) : null, el("span", { class: "id", text: id })),
+      el("div", { class: "meta" }, el("span", { class: "chip", text: "Running now" }), late ? el("span", { class: "chip urgent st-late", text: "Late" }) : null, el("span", { class: "id", text: id })),
       el("h2", { text: schName(r) }),
       schLine(r.kind, r.state + (r.background ? ", background run" : "")),
       schLine(schPools({ cpu: r.cores, gpu: r.gpus }) || "no slots"),
@@ -2434,7 +2442,7 @@ ul.hist .sch-line{display:block}
         const a = msOf(it.start), z = msOf(it.end), e = msOf(it.expect_end);
         const took = a != null && z != null ? "Took " + schDur((z - a) / 1000) + (e != null && e > a ? " of " + schDur((e - a) / 1000) + " expected" : "") : "";
         return el("li", { "data-hist": String(it.id || ""), class: it.late ? "late" : null },
-          el("strong", { text: schName(it) }), " ", el("span", { class: "chip" + (it.result === "ok" ? " ok" : schBad(it.result) ? " urgent" : ""), text: it.result === "ok" ? "Done" : it.result || "ended" }),
+          el("strong", { text: schName(it) }), " ", el("span", { class: "chip" + (it.result === "ok" ? " ok st-done" : it.result === "failed" ? " urgent st-failed" : schBad(it.result) ? " urgent st-stopped" : ""), text: it.result === "ok" ? "Done" : it.result || "ended" }),
           el("span", { class: "sch-line", text: [it.kind, z != null ? "ended " + schDay(z) + " " + schHm(z) : "", took].filter(Boolean).join(" · ") }));
       })) : el("p", { class: "sch-line", text: all.length ? "No finished run matches." : "No finished runs in the lock's history." }),
       el("h3", { class: "sch-group", text: "What ran" }),
@@ -2729,7 +2737,7 @@ ul.hist .sch-line{display:block}
     if (unread.has(d.id) && unread.get(d.id) !== asIs(d)) { unread.delete(d.id); if (said.has(d.id)) said.set(d.id, CHANGED); }
     const editable = !sent.has(d.id) && (d.status === "open" || (d.status === "answered" && state.editing.has(d.id)));
     const head = el("div", {class:"meta"},
-      d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null,
+      d.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null,
       el("span", {class:"id", text: d.id}),
       d.repo ? el("span", {class:"chip", text: d.repo}) : null,
       d.from ? el("span", {text: "from " + d.from}) : null,
