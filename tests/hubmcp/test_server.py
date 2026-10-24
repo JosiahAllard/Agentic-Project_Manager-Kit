@@ -26,7 +26,7 @@ PINNED = ("hub_answer", "hub_todo_done", "hub_story_submit", "hub_to_pm_send")
 READS = {"hub_pending", "hub_wait", "hub_list", "hub_inbox", "hub_backlog", "hub_completed",
          "hub_view", "hub_health", "hub_page"}
 CREATOR = {"hub_question_edit", "hub_question_withdraw", "hub_todo_edit", "hub_todo_withdraw"}
-WRITES = {"hub_ask", "hub_question_log", "hub_todo_add", "hub_todo_ack", "hub_story_set",
+WRITES = {"hub_ask", "hub_question_log", "hub_question_done", "hub_todo_add", "hub_todo_ack", "hub_story_set",
           "hub_to_pm_reply", "hub_inbox_post", "hub_page_publish",
           "hub_approval_request"} | CREATOR
 
@@ -98,7 +98,7 @@ class Pinned(Case):
 
     def test_destructive_hint_is_only_on_tools_that_change_an_existing_document(self):
         additive = {"hub_ask", "hub_todo_add", "hub_inbox_post", "hub_approval_request"}
-        changes = {"hub_question_log", "hub_todo_ack", "hub_story_set",
+        changes = {"hub_question_log", "hub_question_done", "hub_todo_ack", "hub_story_set",
                    "hub_to_pm_reply", "hub_page_publish"} | CREATOR    # publish replaces a page
         self.assertEqual(additive | changes, WRITES)
         for t in self.server().tool_list():
@@ -250,6 +250,8 @@ class Arguments(Case):
                 ("hub_list", {"collection": "inbox"}, "collection"),
                 ("hub_story_set", {"id": "S-1", "status": "submitted", "if_version": 1}, "status"),
                 ("hub_question_log", {"id": " ", "ruling": "R", "if_version": 1}, "id"),
+                ("hub_question_done", {"id": "Q-1", "if_version": 1}, "why"),
+                ("hub_question_done", {"id": "Q-1", "why": "w"}, "if_version"),
                 ("hub_todo_ack", {"id": "T-1", "if_version": True}, "if_version")):
             with self.subTest(name=name, args=args):
                 payload, is_error = self.rpc(self.server(), name, args)
@@ -748,6 +750,30 @@ class Live(httpfix.ListenerCase):
         self.assertTrue(is_error)
         self.assertEqual(payload["error"]["code"], "invalid")      # not answered yet: the hub says
         self.assertEqual(payload["status"], 400)
+        self.assertEqual(self.errors(), [])
+
+    def test_an_answered_question_is_marked_done_with_a_why_and_no_ruling(self):
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+                                                      "options": httpfix.OPTIONS})
+        qid = payload["id"]
+        payload, is_error = self.mcp.call("hub_question_done",
+                                          {"id": qid, "why": "no ruling", "if_version": 1})
+        self.assertTrue(is_error)                       # not answered yet: the hub refuses
+        self.assertEqual((payload["status"], payload["error"]["code"]), (400, "invalid"))
+        got = httpfix.post(self.lis.port, api.BASE + "/questions/%s/answer" % qid,
+                           {"choice": 0}, token=self.owner)
+        self.assertEqual(got[0], 200, got)
+        version = self.store.docs("questions")[qid]["version"]
+        payload, is_error = self.mcp.call("hub_question_done",
+                                          {"id": qid, "why": "  ", "if_version": version})
+        self.assertTrue(is_error)                       # a blank why
+        self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                         ("invalid", "why"))
+        payload, is_error = self.mcp.call("hub_question_done",
+                                          {"id": qid, "why": " go once ", "if_version": version})
+        self.assertFalse(is_error, payload)
+        doc = self.store.docs("questions")[qid]
+        self.assertEqual((doc["status"], doc["done_why"]), ("done", "go once"))
         self.assertEqual(self.errors(), [])
 
     def test_a_to_do_with_steps_is_rendered_by_the_hub(self):
