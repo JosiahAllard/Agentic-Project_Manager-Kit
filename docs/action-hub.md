@@ -35,6 +35,12 @@ Questions, Approvals, Schedule and More, a page of the other sections
 with their counts (`#more`; a wider window opens Home instead). Between 761 and 1100 pixels the detail
 pane stacks under the list instead of beside it.
 
+Home is titled "Today <date>" and lists what waits on the owner in four groups: Decisions (open questions),
+Approvals (pending), Hand steps (open to-dos) and Replies from the PM (`to_pm` notes with status `done` and a
+`reply`, whose `done_at` is within `HOME_REPLY_DAYS` (7) days, newest first; the snapshot has no read marker).
+Each row opens its card in the detail pane, and the first is open on a wide screen. The machine strip sits under
+the title.
+
 - **Questions.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
   Submitted (answered, not yet logged by the PM), Logged, and Other, which shows only when a
@@ -91,9 +97,9 @@ pane stacks under the list instead of beside it.
     machine or half, with a note.
   - Holds lists the owner's holds and the agents' holds.
 
-  One watcher reads the lock for every view (the Home machine line, the count, this section): it
+  One watcher reads the lock for every view (the Home machine strip, the count, this section): it
   waits on `GET /lock/wait`, stops while the browser tab is hidden and reads again when shown,
-  backing off like the other waits. Home's machine line links to `#schedule`. The Schedule view has
+  backing off like the other waits. Home's machine strip (the slot boxes drawn by the same `schBoxes` as the Schedule's machine card, and a summary line) is one link to `#schedule`. The Schedule view has
   one link, "Machine settings (game mode, division, holds, stats)", to `/lock.html`, which stays served
   with every other control (hold editing, game mode, the division, stats). Times are the PC's local
   time and a reserved window is sent in UTC.
