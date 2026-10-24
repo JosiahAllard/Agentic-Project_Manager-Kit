@@ -57,7 +57,8 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
 
 7. **Turn on the PM checklist.** Create the files it reads: a sessions file, a reminders file
    holding `[]`. The one hand-off file, `HANDOFF.md` in the PM repository, is created on the first
-   hand-off and edited in place after that (docs/pm-start.md "Hand-off file"). The sessions file is `sessions.json` in
+   hand-off and edited in place after that (docs/pm-start.md "Hand-off file"); the PM repository
+   git-ignores it, so it is never committed. The sessions file is `sessions.json` in
    `launcher.state_dir` (docs/launcher.md "State files"): start it from
    `docs/launcher.sessions.example.json`, or from `{}` until step 11. Put that folder inside the PM
    repository (the hub server's backlog view finds the repository from the sessions file's folder,

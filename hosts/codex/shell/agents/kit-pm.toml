@@ -92,5 +92,5 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 Before a compact, a recycle or the end of the day, update the one hand-off file, HANDOFF.md in the
 PM repo, in place; never write a dated copy or a pm-handoff*.md. Put in it: what is running and
 where, what waits on the owner, what was promised to whom, and the next step. The next session
-starts from it.
+starts from it. HANDOFF.md is git-ignored in the PM repo: a working note, never committed.
 """

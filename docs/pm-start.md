@@ -193,7 +193,8 @@ only the file `pm_start.handoff_file` names and prints `read first: <file>`, or 
 <file>: create it ...` when it is not there. When `pm_start.memory_dir` is set and holds any
 `pm-handoff*.md`, one more line says `hand-off notes belong in <file>: merge and delete <those files>`.
 A relative `handoff_file` with no PM repository found (no readable `sessions_file`) is one `could not
-check handoff` line. The former `handoff_glob` key is not read.
+check handoff` line. The former `handoff_glob` key is not read. The PM repository git-ignores
+`HANDOFF.md` (an owner decision): it is a working note and is never committed.
 
 ## Config
 
