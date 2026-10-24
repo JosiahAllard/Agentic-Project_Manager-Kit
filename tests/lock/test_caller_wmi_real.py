@@ -2,7 +2,7 @@
 run or a submitted landing has (kitlib.lock.detach: Win32_Process.Create starts pythonw.exe running
 the carrier tools/no_window.py, which starts python.exe). WMI's provider host, WmiPrvSE.exe, is
 listed but this user cannot open it, so the walk ends below it at the running carrier; that read
-as the owner (KIT-LOCK-DETACHED-CALLER-OWNER), and must read as an agent. tests/lock/test_caller_tree.py
+as the owner, and must read as an agent. tests/lock/test_caller_tree.py
 has the same rule on fakes."""
 import json
 import os
