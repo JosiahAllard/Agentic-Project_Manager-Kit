@@ -175,7 +175,8 @@ def validate(text, repos=None, repo=None, others=()):
     column's shape only. `repo` set: the text is that repo's per-repo file (H-<repo>-nnnn ids, every
     repo column `repo`), and a delegated entry may be `under` an owner entry of `others` (the other
     files' texts) as well as an earlier one of this file; None: the one-file ledger (R-nnnn). A
-    delegated entry `under hub:A-nnn` (HUB_ANCHOR) needs no owner entry."""
+    delegated entry `under hub:A-nnn` (HUB_ANCHOR) needs no owner entry. A per-repo entry may also
+    supersede an `R-nnnn` entry found in `others` (the frozen ledger)."""
     errs = []
     _, blocks = split_entries(text)
     parsed = {}
@@ -205,9 +206,13 @@ def validate(text, repos=None, repo=None, others=()):
                 errs.append('%s: delegated under %s, which is not an earlier owner entry' % (rid, m.group(1)))
         if e.get('Supersedes', '-') != '-':
             for ref in RID_RE.findall(e['Supersedes']):
-                if ref not in known or num(ref) >= num(rid):
-                    errs.append('%s: supersedes %s, which is not an earlier entry%s'
-                                % (rid, ref, ' of this file' if repo is not None else ''))
+                if ref in known and num(ref) < num(rid):
+                    continue
+                if repo is not None and repo_of(ref) is None and ref in elsewhere:
+                    continue            # an R-nnnn entry of the frozen ledger (read, never written)
+                errs.append('%s: supersedes %s, which is not an earlier entry%s'
+                            % (rid, ref, ' of this file or an entry of the frozen ledger'
+                               if repo is not None else ''))
     return errs
 
 

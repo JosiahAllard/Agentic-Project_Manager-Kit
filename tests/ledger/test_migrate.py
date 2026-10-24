@@ -415,6 +415,15 @@ class SplitTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.dir, 'alpha.md')))
         self.assertEqual(os.listdir(os.path.join(self.dir, 'rules')), [])
 
+    def test_a_refused_rule_apply_prints_a_REFUSED_line_and_exits_1(self):
+        self.make_report(lambda t: t.replace('| alpha |', '| all |', 1))
+        r = self.apply()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        refused = [l for l in r.stderr.splitlines() if 'REFUSED' in l]
+        self.assertTrue(refused)
+        for line in refused:
+            self.assertTrue(line.startswith('REFUSED:'), line)
+
     def test_known_repos_write_to_their_own_files(self):
         self.make_report(lambda t: t.replace('KEEP | zeta', 'CUT | zeta'))
         dry = self.apply()
