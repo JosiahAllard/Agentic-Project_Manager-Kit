@@ -230,11 +230,15 @@ class Store(StoreCase):
         a, b = self.get('AAA'), self.get('BBB')
         self.assertIsNone(a.get('priority_ruling'))
         self.assertIsNone(b.get('hold_ruling'))
+        # AAA's `Blocked on` reason cites one as a subject (`R-9035 says`), which no rule words:
+        # it is left for a hand edit, not kept because it is a `Blocked on` line
         self.assertEqual(a.body.strip().split('\n'),
                          ['Per an owner ruling, the hub moves.', '',
                           'Blocked on owner (2026-01-01): R-9035 says wait'])
         self.assertEqual(b.body.strip().split('\n'), ['- Which one?', '- T-1234 stays'])
-        # what uncite keeps, byte for byte
+        # unchanged, byte for byte: `summary` and `ref` only because no seed value cites one that
+        # a rule words (BBB's `ref: R-9004 notes` is left for a hand edit; uncite words the
+        # others: tests/backlog/test_uncite_fields.py); the other keys uncite never rewrites
         for key in ('summary', 'ref', 'owner_ask', 'q', 'parked_at', 'resume', 'priority',
                     'priority_by', 'state', 'scope'):
             for rid in ('AAA', 'BBB'):

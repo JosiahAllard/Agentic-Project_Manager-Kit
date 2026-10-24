@@ -102,6 +102,16 @@ class Store(StoreCase):
         self.assertEqual(self.hand_tail(change), [
             "  %s AAA line %d: %s (the hold's only citation)" % (before.where, n, line)])
 
+    def test_a_hold_line_still_citing_after_wording_is_worded(self):
+        # the T- id still cites the hold once R-9035 is worded: the guard does not keep it
+        self.seed(rec('AAA', state='blocked', blocked_on='deliberate',
+                      body='Blocked on deliberate (2026-01-01): until T-1234 is done, per R-9035'))
+        change = self.verb('uncite')
+        self.assertEqual(sorted(change.writes), ['AAA'])
+        self.assertEqual(self.get('AAA').body.strip(),
+                         'Blocked on deliberate (2026-01-01): until T-1234 is done')
+        self.assertNotIn('NEEDS HAND EDIT', '\n'.join(change.lines))
+
     def test_a_second_run_changes_nothing(self):
         self.seed(rec('AAA', summary='Move the hub per R-9033.', ref='R-9034',
                       state='blocked', blocked_on='live-client',
