@@ -89,17 +89,6 @@
       command, exit 3. A task whose state cannot be read or that cannot be started after the
       stop: the STOPPED line, why, and the start command, exit 1. --timeout S covers the whole
       restart: exit 4 as for stop (the console advice only when the new server never answered).
-  hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]
-      copies the documents of each DIR (the mirror folder, or an export of one account's copy)
-      into the store (hub.store, else hub/ in the PM data worktree; --store PATH: that folder)
-      and prints the migration report (kitlib.hubsite.migrate). It only copies in: no source is
-      changed, and a document the store already holds is never replaced, so a second run prints
-      `nothing changed`. --dry-run writes nothing and reports what a run would do. Refused
-      while a running server holds the store. Exit 1 too when a document that has a place in
-      the store was not imported (the CONFLICT and SKIPPED lines): a file that is no document,
-      two sources that differ, or a source that differs from a store document no server has
-      written (the store folder is the mirror folder by default). A document a server has
-      written since is kept (KEPT) and does not fail the run.
 
 The verbs below ask the running server through kitlib.hubsite.client. Each takes --port N
 (default: hub.port) and --json, which prints the server's answer as one JSON line in place of
@@ -227,14 +216,14 @@ from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tu
 from kitlib.hubsite import approvals                               # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import control                                 # noqa: E402
-from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 from kitlib.hubsite import pagecheck                               # noqa: E402
+from kitlib.hubsite import storecheck                              # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
 OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
-VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart', 'migrate',
+VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart',
               'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pages', 'approvals',
               'pending', 'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
@@ -264,13 +253,6 @@ def _folder(text):
     serves the configured store with git sync on."""
     if not text.strip():
         raise argparse.ArgumentTypeError('--store needs a folder, not an empty value')
-    return text
-
-
-def _source(text):
-    """migrate's --from value: a folder, never an empty value."""
-    if not text.strip():
-        raise argparse.ArgumentTypeError('--from needs a folder, not an empty value')
     return text
 
 
@@ -556,13 +538,6 @@ def parser():
                             "the task's state by up to %d s"
                             % (control.DEFAULT_TIMEOUT_S, serve.ASK_TIMEOUT_S,
                                hub_autostart.TASK_TIMEOUT_S))
-    m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
-    m.add_argument('--from', dest='sources', action='append', type=_source, required=True,
-                   metavar='DIR', help='a folder to copy from: the mirror folder or an export '
-                                       '(repeatable); it is only read')
-    m.add_argument('--store', type=_folder, help='the store folder (default: the configured one)')
-    m.add_argument('--dry-run', dest='dry_run', action='store_true',
-                   help='write nothing; report what a run would do')
     _client_verbs(sub)
     return p
 
@@ -898,22 +873,12 @@ def _store_root(a):
     return root
 
 
-def _migrate(a, stop):
-    try:
-        result = hub_migrate.migrate(_store_root(a), a.sources, dry_run=a.dry_run)
-    except hub_migrate.MigrateError as e:
-        raise serve.ServeError(str(e))
-    for line in hub_migrate.report_lines(result):
-        print(serve.scrub(line))
-    return 0 if result.complete else 1
-
-
 def _validate(a, stop):
     try:
-        findings = hub_migrate.validate(_store_root(a))
-    except hub_migrate.MigrateError as e:
+        findings = storecheck.validate(_store_root(a))
+    except storecheck.StoreReadError as e:
         raise serve.ServeError(str(e))
-    for line in hub_migrate.validate_lines(findings):
+    for line in storecheck.validate_lines(findings):
         _put(line)
     return 1 if any(f.level == hubvalidate.ERROR for f in findings) else 0
 
@@ -1217,7 +1182,7 @@ def _wait(a, stop):
 
 
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
-         'unpair': _unpair, 'stop': _stop, 'restart': _restart, 'migrate': _migrate,
+         'unpair': _unpair, 'stop': _stop, 'restart': _restart,
          'questions': _questions, 'answer': _answer, 'todos': _todos,
          'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pages': _pages,
          'approvals': _approvals,

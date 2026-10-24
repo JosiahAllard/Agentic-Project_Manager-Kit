@@ -19,7 +19,7 @@
   push     the push notifications: an answer or a done to-do told to its session and the PM
   serve    the server: the store, the api, the views and the listeners, started and closed
   client   the client of the hub server on this machine: one call, its refusal, the exit codes
-  migrate  the earlier hub's documents (the old hub's data folder, an export) copied into the store
+  storecheck the store folder's findings as on disk, read only, no lock (hub.py validate)
   autostart the opt-in scheduled task that starts the server at sign-in (hub.py setup --autostart)
   control  hub.py stop and restart: ask the server to close, wait for it, start the task again
 """

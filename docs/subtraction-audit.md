@@ -10,11 +10,13 @@ ids in tracked files, so records are named in words.
 
 Verdict, area, what, why, size, risk. Risk: L low, M medium.
 
-- **Candidate 1, REMOVE** (kitlib/hubsite, tools/hub.py). `kitlib/hubsite/migrate.py`, the
+- **Candidate 1, DONE** (kitlib/hubsite, tools/hub.py). `kitlib/hubsite/migrate.py`, the
   `hub.py migrate` verb, `tests/hubsite/test_migrate.py`. Why: one-shot copy of the old artifact
   hub, done; finished migrations are deleted (git keeps them). Size: ~566 + 1106 test lines.
   Risk: L. `docs/action-hub.md:766-781` still names gone tools; it goes with this (see Stale doc
-  text).
+  text). Done: the copy-in, the verb and their tests are gone. The read-only half `hub.py
+  validate` uses is kept as `kitlib/hubsite/storecheck.py`, with its tests and the
+  `recommended` rule's cases in `tests/hubsite/test_storecheck.py`.
 - **Candidate 2, REMOVE** (kitlib/backlog, tools/backlog.py). `kitlib/backlog/migrate.py`, the
   `backlog.py migrate` verb, `policy.py:85-90` and `:253`, `roles.py:98`, `backlog/__init__.py:17`,
   `store.py:1362`. Why: all stores migrated. Size: ~256 + 324 test lines. Risk: L-M. Keep the
@@ -107,5 +109,7 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
 
 ## Stale doc text
 
-`docs/action-hub.md:766-781` still names the gone `tools/hub_mirror.py` and `kitlib.hubmirror`.
-It goes with Candidate 1.
+The mirror and migrate passage of `docs/action-hub.md` went with Candidate 1; that file no
+longer names `tools/hub_mirror.py`, `kitlib.hubmirror` or `hub.py migrate`. Still stale:
+`docs/install.md`'s tool list names `hub_mirror.py`, and the Hub store row of
+`docs/pm-data-branch.md` says the old hub's data is copied in with `hub.py migrate`.

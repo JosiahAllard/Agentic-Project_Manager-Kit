@@ -101,7 +101,7 @@ class UsageCase(CliCase):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
-                      'migrate, questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
+                      'questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
                       'pending, wait or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
@@ -1745,7 +1745,7 @@ class ArgumentCase(CliCase):
         # each verb of the tool is in that list, but for those that ask no running server
         self.assertEqual(sorted({v[0] for v in self.VERBS}),
                          sorted(set(HUB.VERB_NAMES)
-                                - {'serve', 'status', 'setup', 'open', 'migrate', 'validate',
+                                - {'serve', 'status', 'setup', 'open', 'validate',
                                    'unpair',    # unpair with no server: ClientCase
                                    'stop', 'restart'}))     # with no server: StopRestartCase
 

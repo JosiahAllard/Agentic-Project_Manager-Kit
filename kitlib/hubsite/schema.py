@@ -12,7 +12,7 @@ field tables), checked by the store before every write.
   whole_recommended(coll, fields)
                          (fields, old, label): a question whose `recommended` is text that
                          stands for a number, given back with the number; read so by the
-                         store and written so by kitlib.hubsite.migrate
+                         store
 
 A field that is absent or null passes its type check unless it is required: the page writes many
 fields as null until they are set (sent_at, q, reply). Unknown fields pass. The status values and
@@ -135,10 +135,22 @@ def check_id(doc_id):
 
 
 def whole_recommended(coll, fields):
-    """(fields, old, label): a question whose `recommended` is text that stands for a number
-    (the rule is in kitlib.hubsite.migrate's module docstring) is given back as a copy with the
-    number; old is that text and label is True when it was an option's label. Any other document
-    is given back as it is, with old None."""
+    """(fields, old, label): a question whose `recommended` is text that stands for a number is
+    given back as a copy with the number; old is that text and label is True when it was an
+    option's label. Any other document is given back as it is, with old None.
+
+    The rule. Text that is exactly the `label` of one of the question's options (the same
+    characters, case and spaces included; an option that is an object) stands for that option's
+    position, counted from 0 as hubvalidate's options check and the page count it. Text that is
+    a whole number (one to nine of the digits 0-9 and nothing else) stands for that number, in
+    range of the options or not. These stand for nothing, and the document is given back as it
+    is: text that is not a whole number and is no option's label or the label of two; a whole
+    number that is also an option's label, unless it is the label of one option only and that
+    option is at the position the number says; more than nine digits; and the empty text. The
+    store refuses every update of a question whose `recommended` is text that stands for nothing
+    (check), so such a question cannot be answered or logged until its file is fixed. The store
+    never rewrites a file for this: one that holds text that stands for a number keeps it, the
+    store reads it as the number and its next write stores the number."""
     old = fields.get('recommended') if coll == 'questions' else None
     if not isinstance(old, str) or not old:
         return fields, None, False              # '' names no option, whatever an option's label is

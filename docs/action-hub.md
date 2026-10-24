@@ -118,7 +118,7 @@ shows as Act, its edit offers no kind, and the server's refusal shows in its own
   The port is `hub.port` of the machine config (default 8790); the store is `hub.store`, else
   `hub/` in the PM data worktree (docs/pm-data-branch.md). `--store PATH` serves a scratch copy
   with git sync off. The server needs no `hub` key: without one every default holds. A trial
-  run with `--store` (and `migrate --store`) therefore never writes the `hub` key; the owner
+  run with `--store` therefore never writes the `hub` key; the owner
   writes that key only for the live store (docs/go-live.md "Switches").
 - The PM session-start checklist (docs/pm-start.md) runs its site checks whether or not the `hub`
   key is written: it uses the key's settings, or the defaults (port 8790) when there is none.
@@ -249,7 +249,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `pending [--for KEY]` | `<kind> <id> [repo] to=<route> from=<key> title` |
 | `wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID ...]]` | `HUB <rev> <kind> <id> to=<route> from=<key> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
 | `validate [--store PATH]` | `VALIDATE <LEVEL> <document> <field>: <message> [<code>]` |
-| `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]`, `migrate` | see "Serving it" and "Data from the old hub" |
+| `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]` | see "Serving it" |
 
 Notes on the table:
 - `todos` lines carry no version; `todos --json` gives each to-do's `version`.
@@ -694,7 +694,7 @@ policy no longer applies there; the sandbox still blocks scripts and forms on th
 browsers may also look up the host names of links in advance (DNS prefetch). The page check
 refuses such a link, `<link>` and every `<meta>` but the ones above at publish, along with any markup where a browser
 could build one the check's parser never saw (the paragraph above), so a body published through
-the check has none. A body placed in the store by hand or copied in by `migrate` is not checked.
+the check has none. A body placed in the store by hand is not checked.
 A whole document goes in unchanged, the policy still first
 (`test_a_whole_document_is_framed_with_the_policy_still_first`). That a browser still applies it
 there is inferred from the HTML spec, not tested: an iframe srcdoc document is always no-quirks,
@@ -969,24 +969,7 @@ store, is one).
 
 ## Data from the old hub
 The hub was once a claude.ai artifact page, one copy per Claude account; it is retired. What the
-owner and the PM wrote on it was mirrored in git as `hub/<collection>/<doc_id>.json` in the PM
-data worktree, else in the absolute folder `pm_start.hub_mirror` (`kitlib.hubmirror`,
-`tools/hub_mirror.py`). `python tools/hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]` copies
-those documents into the hub site's store (`kitlib.hubsite.migrate`). Use a new store folder.
-It only copies in, never replaces a document the store holds, and is refused while a server
-holds the store. A second run prints `nothing changed`.
-
-- A store document with a `version` that differs from the source is kept (the newer truth) and
-  does not fail the run. One without a `version` that differs is a conflict, and the run exits 1.
-- Two sources that differ, with nothing in the store, write neither side: a conflict.
-- A file that is no document, or has a bad or mismatched id, is skipped, and the run exits 1.
-- A source folder the store has no collection for is left alone. A question's text
-  `recommended` is written as a number.
-- `--dry-run` writes nothing, and takes the store lock only if the lock file already exists.
-- The report has `hub store: ...`, `source: ...`, per-collection counts, `NOT COMPLETE: ...` when
-  it stopped short and `imported N; no source was changed` (a dry run ends `dry run: ... nothing
-  was written`).
-
-`tools/hub_mirror.py save` refuses a mirror
-folder that is a live hub store (`kitlib.hubsite.store.META_NAME`): the server is the only
-writer there.
+owner and the PM wrote on it is now in the hub store. A file the old hub left in the store
+folder has no `version` and is read at version 0 (`kitlib.hubsite.store`); a question's
+`recommended` that is text standing for a number is read as that number (the rule:
+`schema.whole_recommended` in `kitlib/hubsite/schema.py`).
