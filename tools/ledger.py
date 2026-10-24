@@ -51,6 +51,11 @@ R-nnnn ledger: read by show, grep, list and check, never written. Without `ledge
       shared one then FOLDER's own; --all every one. Rules print under their topic headings;
       --sources adds each rule's log ids; --topic keeps the rules whose heading, key or text holds
       WORD.
+  ledger.py split-move [--apply]
+      after the owner adds ledger_dir (keeping ledger_path as the frozen file): move STANDING.md
+      and the `rules` folder from beside ledger_path into ledger_dir, each whole. A dry run
+      without --apply; refuses, moving nothing, when a destination already exists. A rerun
+      resumes an interrupted move. --apply prints the git step that stages the move.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.ledger, prints and exits.
 Exit codes: 0 ok; 1 no ledger configured or unreadable, a refused write, a failed check, an id or
@@ -60,6 +65,7 @@ import argparse
 import contextlib
 import datetime
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -68,7 +74,7 @@ from kitlib import ledger                                          # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.host import registry                                    # noqa: E402
-from kitlib.ledger import files, fmt, migrate, read, rulebook, safepath, standing, vcs, write  # noqa: E402
+from kitlib.ledger import files, fmt, migrate, move, read, rulebook, safepath, standing, vcs, write  # noqa: E402
 from kitlib.ledger.errors import Refused, Usage                    # noqa: E402
 
 
@@ -153,6 +159,9 @@ def parser():
     ra.add_argument('--source', help='the entries\' source (needed with --write)')
     ra.add_argument('--when', help="UTC 'YYYY-MM-DD HH:MMZ' (default: now); for backfill")
     commit_flags(ra)
+    sm = sub.add_parser('split-move', help='move STANDING.md and rules/ from beside ledger_path into '
+                        'ledger_dir (a dry run without --apply)')
+    sm.add_argument('--apply', action='store_true', help='move; without it, print what would move')
     return p
 
 
@@ -565,6 +574,43 @@ def do_check(a, found, repos):
     return 1 if problems else 0
 
 
+def split_move_line(item, moved=False):
+    if moved:
+        return 'moved   %s -> %s' % (item.src, item.dst)
+    if item.state == move.MOVE:
+        count = ' (%d files)' % item.count if item.name == rulebook.FOLDER else ''
+        return 'move    %s -> %s%s' % (item.src, item.dst, count)
+    if item.state == move.DONE:
+        return 'done    %s (already in ledger_dir)' % item.dst
+    return 'none    %s (absent)' % item.src
+
+
+def do_split_move(a, cfg):
+    """Print the move (kitlib.ledger.move); with --apply make it, then print the git step."""
+    if not a.apply:
+        got, moved = move.plan(cfg), []
+    else:
+        got, moved = move.apply(cfg)
+    if got.same:
+        print('nothing to move: ledger_dir is the ledger_path folder (%s)' % got.new)
+        return 0
+    for item in got.items:
+        print(split_move_line(item, item in moved))
+    todo = [i for i in got.items if i.state == move.MOVE]
+    if not todo:
+        print('nothing to move')
+        return 0
+    if not a.apply:
+        print('dry run: %d to move; add --apply to move them' % len(todo))
+        return 0
+    steps = move.git_steps(got)
+    for top, paths in steps:
+        print('next: %s' % subprocess.list2cmdline(['git', '-C', top, 'add', '-A', '--'] + paths))
+    tail = 'then commit those paths, then run ' if steps else 'then run '
+    print('%spython "%s" check' % (tail, os.path.abspath(__file__).replace('\\', '/')))
+    return 0
+
+
 def run(a, p, found, repos):
     if a.cmd == 'list':
         texts, why = read_views(found, a.repo)
@@ -623,10 +669,12 @@ def main(argv=None):
         cfg = user.user_config()
     except ConfigError as e:
         return fail(str(e))
-    found = files.of_config(cfg)
-    if found is None:
-        return fail('no ledger_path or ledger_dir in %s' % user.display())
     try:
+        if a.cmd == 'split-move':
+            return do_split_move(a, cfg)
+        found = files.of_config(cfg)
+        if found is None:
+            return fail('no ledger_path or ledger_dir in %s' % user.display())
         return run(a, p, found, cfg['ledger_repos'])
     except Usage as e:
         p.print_usage(sys.stderr)
