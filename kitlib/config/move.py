@@ -41,7 +41,7 @@ POLICY = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
           'backlog_lint', 'machine_lock', 'temp_dir', 'agent_temp_sweep', 'machine_path_folders',
           'plugin')
 LOCAL = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
-DROPPED = ('ledger_refs', 'standing_delegation', OLD_START, 'pm_data')
+DROPPED = ('ledger_refs', OLD_START, 'pm_data', 'standing_delegation')
 # The policy keys written relative to the PM repository when they lie inside it.
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 

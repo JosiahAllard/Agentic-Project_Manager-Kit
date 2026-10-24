@@ -172,7 +172,8 @@ class FileByKeyTest(_PmRepo):
             with self.assertRaises(ConfigError, msg=key) as cm:
                 user.writable_file(self.home, key)
             self.assertIn(self.folder, str(cm.exception))
-        self.assertIn('pm_data is derived', str(cm.exception))
+            if key == 'pm_data':
+                self.assertIn('pm_data is derived', str(cm.exception))
         self.assertEqual(user.key_file(self.home, 'pm_data'), self.policy)
 
     def test_none_names_the_home_file_to_readers_and_refuses_every_writer(self):
