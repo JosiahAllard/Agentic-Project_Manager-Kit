@@ -1,4 +1,5 @@
 {
+  "landing": {"shared_paths": ["kitlib/*", "boot/*", "hosts/*", "githooks/*", "kit.json", "hosts.json"]},
   "roles": {"lander": {"edit_main_checkout": true, "why": "landers fetch and fast-forward main from their worktree"}},
   "repo": {"name": "Agentic-Project_Manager-Kit"},
   "guard": {"role_policy": true},

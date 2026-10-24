@@ -1,13 +1,13 @@
 ---
 name: specialty-sound
-description: Use when your brief says to load it - designing, building or upgrading game sound effects from procedural synthesis, a free-licence library, text-to-speech for announcer lines, or (music only) the owner's local music model. You cannot hear, so you measure every clip, compare it with the set it joins, and end with a question the owner answers by listening.
+description: Use when your brief says to load it - designing or upgrading game sound effects (synthesis, free libraries, text-to-speech), measured since you cannot hear.
 ---
 
 # Specialty: sound
 
 Dispatch: worker at least, senior-worker for design (a new sound or family with no picked direction), never weak-worker; reads the repo profile's **Branches and worktrees**, **Build and test**, **Shared resources** and **Audio**.
 
-Read `creative.md` and `measuring.md` beside this file first.
+Read `creative.md` (`../specialty-tech-art/creative.md` from this folder) and `measuring.md` beside this file first.
 
 **You cannot hear.** Never claim to have heard something, never call a clip punchy, muddy or satisfying, and never claim an improvement from the strength of its source. Describe a clip only by what you measured or what its source says; the owner is the ear.
 

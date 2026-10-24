@@ -1,7 +1,7 @@
 # Creative work: brief, options first, generation, delivery, limits
 
-Shared by the specialty-3d-assets, specialty-rigging, specialty-tech-art and specialty-sound skills;
-the same bytes in each folder.
+One copy, shared by the specialty-3d-assets, specialty-rigging, specialty-tech-art and specialty-sound
+skills; the other three read it as `../specialty-tech-art/creative.md`.
 
 ## The brief block
 

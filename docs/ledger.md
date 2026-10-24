@@ -20,7 +20,7 @@ Supersedes: <id> | -
 - **Ids** are `H-<repo>-nnnn` in a repository's file and `R-nnnn` in the one-file ledger (`fmt.ID`). The number has four or more digits, from 1 in file order, one apart, per file. The time is UTC.
 - **Repo column:** in a repository's file, that repository. In the one-file ledger, `all` or a name from `ledger_repos` (unset: any lower-case name; "Configuration").
 - **Provenance:** `typed`, `selected`, `relayed-from-terminal` (the owner's own answer) or `delegated`. A delegated entry's Source says `under <id>`, naming an owner entry: an earlier one of its own file, or one of any other ledger file, the frozen one included; or `under hub:A-nnn`, with the hub approval as its anchor (`fmt.HUB_ANCHOR`), which needs no owner entry.
-- **Supersedes** names an earlier entry of the same file.
+- **Supersedes** names an earlier entry of the same file; with `ledger_dir` set it may also name an `R-nnnn` entry of the frozen `ledger_path` file. An id found in neither is refused.
 - **Values:** a value's continuation lines start with two spaces. An older entry may end with an `Items: A, B` line. It is still read and validated; `add` no longer writes one.
 - **Tombstone:** keeps its header, and its body is one line: `Retired: spent|superseded|duplicate - <why> (see <id>|-)`.
 - **Append-only:** an entry never changes once written, except that a full entry may become its own tombstone.
@@ -64,7 +64,7 @@ python tools/ledger.py split-move [--apply]
 - **`list`** is the read-only digest feed (docs/engineering-rulings.md "Kit pieces").
 - **`standing`** prints the standing digest's rule lines for a topic word, under their headings; `--repo` keeps only the digest's `## REPO` section, and with no word prints all of it. It needs a word, `--repo`, or both. Exits 1 on no match or no digest.
 - **`split-move`** moves STANDING.md and the `rules` folder from beside the frozen `ledger_path` file into `ledger_dir` ("A new ledger"), each whole by one rename, contents untouched (`kitlib/ledger/move.py`). Without `--apply` it is a dry run: one line per item, `move <src> -> <dst>` (the folder with its file count), `done <dst> (already in ledger_dir)` or `none <src> (absent)`. It is refused, moving nothing, when `ledger_dir` or `ledger_path` is unset, when a destination exists while its source is still there (the owner keeps one), when `ledger_dir` lies inside the old `rules` folder, when a path check fails, or when an item is of the wrong kind. `ledger_dir` the frozen file's folder has nothing to move. A rename that fails part-way says what moved, and a rerun resumes, since a moved item reads as `done`; the owner moves one on another volume by hand, since the guard refuses an agent's. `--apply` holds the write lock of each rulebook and of both digest paths, old and new, where they are in a git checkout, then prints `moved` lines and the `git -C <work tree> add -A -- <paths>` step to stage the move (an old path only while git's index lists it); a rerun with every item `done` prints that step again; the commit is the caller's. Tests: `tests/ledger/test_move.py`.
-- **Exit codes:** 0 ok; 1 no ledger configured, a ledger file that cannot be read, a refused write, a failed check, nothing found, or a commit or push that failed after the entry was written; 2 usage.
+- **Exit codes:** 0 ok; 1 no ledger configured, a ledger file that cannot be read, a refused write (a `REFUSED: <msg>` line on stderr), a failed check, nothing found, or a commit or push that failed after the entry was written; 2 usage.
 
 ## One reader
 

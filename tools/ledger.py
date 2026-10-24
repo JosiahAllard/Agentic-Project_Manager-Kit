@@ -491,7 +491,7 @@ def do_rule_apply(a, found, repos):
         else:
             print('skip %s (already in %s)' % (c.key, rulebook.file_name(rulebook.target(books, c.repo))))
     for e in errs:
-        sys.stderr.write('ledger.py: REFUSED %s\n' % e)
+        sys.stderr.write('REFUSED: %s\n' % e)
     if errs:
         sys.stderr.write('ledger.py: %d problem(s); nothing was written\n' % len(errs))
         return 1
@@ -687,7 +687,8 @@ def main(argv=None):
         sys.stderr.write('USAGE: %s\n' % e)
         return 2
     except Refused as e:
-        return fail('refused: %s' % e)
+        sys.stderr.write('REFUSED: %s\n' % e)
+        return 1
 
 
 if __name__ == '__main__':
