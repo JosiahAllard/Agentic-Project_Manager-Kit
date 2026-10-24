@@ -1086,14 +1086,22 @@ def ledger_kind(ctx, target):
     compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
     space, a namespace prefix, links, junctions and 8.3 names), first as the literal name (an
     edit's path is never a wildcard: `[PM]` is a folder name), then, when it has a wildcard
-    character, as a wildcard that is any of them it can match (ledger_glob)."""
+    character after its namespace prefix, as a wildcard that is any of them it can match
+    (ledger_glob; the prefix's own `?` is no wildcard)."""
     full = file_key(target)
     for kind, real in ledger_guarded(ctx):
         if full == real or (kind == 'rulebook' and os.path.dirname(full) == real and full.endswith('.md')):
             return kind
-    if hubg.has_glob(target):
-        return ledger_glob(ctx, target)
+    bare_target = unprefixed(target)
+    if hubg.has_glob(bare_target[prefix_end(bare_target):]):
+        return ledger_glob(ctx, bare_target)
     return None
+
+
+def prefix_end(path):
+    r"""Where a namespace prefix unprefixed leaves (`\\?\Volume{...}\`) ends in `path`, else 0."""
+    m = LONG_PREFIX.match(path)
+    return m.end() if m else 0
 
 
 def ledger_glob(ctx, target):
@@ -1103,8 +1111,9 @@ def ledger_glob(ctx, target):
     of the same depth; the rulebooks' folder also by one a part deeper (a file in it), and every
     wildcard that starts in it is a rulebook (fail closed: `rules/*.txt`); `**` or `..` after the
     wildcard matches every held path below the folder. A part also matches a name it spells
-    literally (`[PM]` the folder `[PM]`)."""
-    first = min(target.index(c) for c in hubg.GLOB_CHARS if c in target)
+    literally (`[PM]` the folder `[PM]`). A namespace prefix (prefix_end) is not searched for one."""
+    start = prefix_end(target)
+    first = min(target.index(c, start) for c in hubg.GLOB_CHARS if c in target[start:])
     cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
     b = file_key(base)
@@ -1126,7 +1135,8 @@ def ledger_glob(ctx, target):
 def ledger_git(event, ctx, cmd, inv, cwd, role):
     """git run in a work tree that holds part of the ledger (outside git: run in a folder that
     holds it) whose pathspec reaches that part (ledger_kind's files): rm and mv, restore (not
-    --staged alone), checkout-index, and checkout of paths (after `--`, or every positional word
+    --staged alone, and only when every long option is one GIT_LONGS names: `--w` is
+    `--worktree` to git, and _canon_long leaves a one-letter body as written), checkout-index, and checkout of paths (after `--`, or every positional word
     without one: git reads a word that names no branch as a path). A pathspec reaches a held path
     as kitlib.guard.delegfile.covers reads it (the path, a folder above it, a wildcard whose
     literal folder is above it; a computed word or unread magic always), or is a `.md` file
@@ -1145,8 +1155,9 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
         return None
     from . import delegfile
     short, longs, pos = _opts(sub, args)
-    if sub == 'restore' and ('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs):
-        return None
+    if (sub == 'restore' and ('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs)
+            and longs <= set(GIT_LONGS['restore'])):
+        return None                             # the index alone; a long option not pinned may be --worktree
     if sub == 'checkout':
         after = delegfile.after_dashes(args)
         pos = after if after is not None else pos

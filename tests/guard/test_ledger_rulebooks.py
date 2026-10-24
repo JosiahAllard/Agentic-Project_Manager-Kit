@@ -219,6 +219,20 @@ class Rulebooks(unittest.TestCase):
                 d = decide(bash(cmd, cwd, sub=True), self.w.ctx())
                 self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
 
+    def test_restore_staged_with_a_long_option_not_pinned_is_judged(self):
+        # a one-letter long option is an abbreviation to git (`--w` is `--worktree`): not pinned, so judged
+        self.w.user_config({'ledger_path': self.w.ledger})
+        f = self.folder
+        for cmd, why in (('git restore --staged --w rules/alpha.md', BOOK), ('git restore -S --w STANDING.md', DIGEST),
+                         ('git restore --staged --no-staged STANDING.md', DIGEST)):
+            with self.subTest(cmd):
+                self.git_refused(bash(cmd, f, sub=True), why)
+        # options the guard names in full or by a prefix it pins keep the index-only exception
+        for cmd in ('git restore --staged --quiet STANDING.md', 'git restore --sta --source HEAD STANDING.md'):
+            with self.subTest(cmd):
+                d = decide(bash(cmd, f, sub=True), self.w.ctx())
+                self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+
     def test_a_bracket_in_a_folder_name_is_that_name(self):
         # an edit's path is never a wildcard: `[PM]` names the folder, not the letter P or M
         folder = os.path.join(self.w.base, '[PM]', 'rulings')
@@ -244,15 +258,6 @@ class Rulebooks(unittest.TestCase):
                                      why)
         self.refused(bash("echo x > '//?/%s'" % W.fwd(self.digest), self.folder, sub=True), DIGEST)
         self.refused(ps("Set-Content -LiteralPath '\\\\?\\%s' -Value x" % self.book(), self.folder, sub=True))
-        # a volume GUID name: realpath gives the drive's name
-        import ctypes
-        buf = ctypes.create_unicode_buffer(100)
-        drive = os.path.splitdrive(self.folder)[0] + os.sep
-        if ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW(drive, buf, 100):
-            for path, why in ((self.digest, DIGEST), (self.book('new.md'), BOOK)):
-                volume = buf.value + os.path.splitdrive(path)[1].lstrip('\\')
-                with self.subTest(volume):
-                    self.refused(event('Write', {'file_path': volume, 'content': ''}, self.w.plain), why)
         # (a subagent's prefixed write is the write jail's to refuse; the owner's here is no one's)
         self.allowed(event('Write', {'file_path': '\\\\?\\' + os.path.join(self.folder, 'NOTES.md'), 'content': ''},
                            self.w.plain))
@@ -261,6 +266,41 @@ class Rulebooks(unittest.TestCase):
         self.assertEqual(rules.unprefixed('//?/unc/host/share/x'), '\\\\host/share/x')
         self.assertEqual(rules.unprefixed('Z:\\pm\\x'), 'Z:\\pm\\x')
         self.assertEqual(rules.unprefixed('C:\\??\\Z:\\pm\\x'), 'Z:\\pm\\x')
+
+    def volume_name(self):
+        """The volume GUID name (`\\\\?\\Volume{...}\\`) of the test folder's drive; skipped when
+        the volume gives none."""
+        import ctypes
+        buf = ctypes.create_unicode_buffer(100)
+        drive = os.path.splitdrive(self.folder)[0] + os.sep
+        if not ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW(drive, buf, 100):
+            self.skipTest('GetVolumeNameForVolumeMountPointW gives no volume name for %s' % drive)
+        return buf.value
+
+    def test_a_volume_guid_name_is_the_file_itself(self):
+        # realpath gives the drive's name of a volume GUID name
+        self.w.user_config({'ledger_path': self.w.ledger})
+        vol = self.volume_name()
+        for path, why in ((self.digest, DIGEST), (self.book('new.md'), BOOK)):
+            volume = vol + os.path.splitdrive(path)[1].lstrip('\\')
+            with self.subTest(volume):
+                self.refused(event('Write', {'file_path': volume, 'content': ''}, self.w.plain), why)
+        rules_glob = vol + os.path.splitdrive(self.rules)[1].lstrip('\\') + '\\*.md'
+        self.refused(ps("Remove-Item -Path '%s'" % rules_glob, self.w.plain))
+
+    def test_a_namespace_prefix_with_a_wildcard_is_still_matched(self):
+        # the prefix's own `?` is no wildcard: the one after it is
+        self.w.user_config({'ledger_path': self.w.ledger})
+        for pre in ('\\\\?\\', '\\??\\'):
+            for folder, pattern, why in ((self.rules, '*.md', BOOK), (self.folder, 'STAND*', DIGEST),
+                                         (self.folder, '*', LOG)):
+                target = pre + folder + '\\' + pattern
+                # bash: the prefix quoted (its `?` would glob), the wildcard bare (quoted it is literal)
+                for maker, cmd in ((ps, 'cmd /c del "%s"' % target), (ps, "Remove-Item -Path '%s'" % target),
+                                   (bash, "rm '%s\\'%s" % (pre + folder, pattern))):
+                    with self.subTest(cmd):
+                        self.refused(maker(cmd, self.w.plain), why)
+        self.allowed(ps("Remove-Item -Path '\\\\?\\%s'" % os.path.join(self.folder, 'NOTES*'), self.w.plain))
 
     def test_git_in_a_work_tree_that_holds_a_split_ledger(self):
         split = os.path.join(self.w.wt, 'ledger')
