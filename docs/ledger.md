@@ -161,7 +161,7 @@ Logic: `kitlib/ledger/standing.py`.
 
 Logic: `kitlib/ledger/rulebook.py` (`parse`, `render`, `load`, `check`, `for_repo`, `view`, `lines`; the write side `target`, `conflicts`, `digest`, `set_rule`, `drop_rule`, `set_header`, `applied`); the paired write in `kitlib/ledger/write.py` (`add` with a `RuleChange`); the migration from the digest `kitlib/ledger/migrate.py`; the folder from `kitlib/ledger/files.py` `of_config` (`Files.rules`); tests `tests/ledger/test_rulebook.py` and `tests/ledger/test_rulebook_write.py` and `tests/ledger/test_migrate.py`.
 
-The standing rules of the machine live in rulebooks beside the log, in a `rules` folder: `<ledger_dir>/rules/` with `ledger_dir` set, else `rules/` in the folder of the `ledger_path` file. No config key names it. The books are the lower-case `<name>.md` files there: one per repository, named by a short name, and `all.md`, the shared one (printed as "shared"). No file is no rulebook and no error. The verbs below write them, each change paired with a log entry.
+The standing rules of the machine live in rulebooks beside the log, in a `rules` folder: `<ledger_dir>/rules/` with `ledger_dir` set, else `rules/` in the folder of the `ledger_path` file. No config key names it. The books are the lower-case `<name>.md` files there: one per repository, named by a short name, and `all.md`, the shared one (printed as "shared"). No file is no rulebook and no error. The verbs below write them, each change paired with a log entry. The owner can also make an answer on the Action Hub a standing rule (docs/action-hub.md "A standing rule"): the hub then asks the PM to log it, and only binding the ruling to the question (`hub questions log <id> <ruling-id>`) ends that ask.
 
 ```
 # Alpha rules
