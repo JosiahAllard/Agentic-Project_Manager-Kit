@@ -1,6 +1,6 @@
 """kitlib.lock.store.caller reads who is asking from this process's tree: a chain that runs into a
-shell that has exited, but that a handle keeps openable, is never the owner's on that account
-(KIT-LOCK-CALLER-EXITED-SHELL), and the owner's own chains still are. Fakes only
+shell that has exited, but that a handle keeps openable, is never the owner's on that account,
+and the owner's own chains still are. Fakes only
 (tests/proc/fakeproc.py): the process calls answer from a table, this process at its head."""
 import os
 import unittest
