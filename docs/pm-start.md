@@ -66,10 +66,13 @@ gets a line too: either watcher exits after one batch of events. Tests:
 
 When the hub is up and its pending ask answered, the hub lines end, before the wait line, with at
 most one line counting the owner's answers the hub filed into their records since the last PM
-start (`kitlib.pmstart` `filed_digest`; docs/action-hub.md "Filing the answer"). A filed answer
-that changed nothing for the PM to do (`filed_as` `held`, or `pulled` with a worker on the
-record) is pushed to nobody or to its asker alone (docs/action-hub.md "Push notifications"), so
-this line is where the PM sees them all. It is information, not a step.
+start that are still `filed`, waiting for their askers (`kitlib.pmstart` `filed_digest`;
+docs/action-hub.md "Filing the answer"). An answer its asker has logged or marked done since is
+not counted, and one answered again counts only once it is filed again, by that filing's time.
+A filed answer that changed nothing for the PM to do (`filed_as` `held`, or `pulled` with a
+worker on the record) is pushed to nobody or to its asker alone (docs/action-hub.md "Push
+notifications"), so this line is where the PM sees the ones still unread. It is information,
+not a step.
 - The stamp: `pm-start-last.json`, `{"at": <ISO time with its offset>}`, in the folder of the
   pm_watch state file (the `pm_watch` config's `state_file`, else
   `kitlib.pmwatch.default_state_file`; `filed_stamp_file`). The path is worked out only when the

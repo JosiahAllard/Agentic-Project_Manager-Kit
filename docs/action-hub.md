@@ -428,7 +428,8 @@ It is not the store's git push (the `push` setting).
     `resolve` counts as none live, and a key whose `resolve` raises as not live (logged), so the
     PM is told.
   - `held` (the record still waits on more): nobody. The asker reads it in its pending list, and
-    the PM start's digest counts every filed answer (docs/pm-start.md "Filed answers").
+    the PM start's digest counts the answers filed since the last start that are still `filed`,
+    waiting for their askers (docs/pm-start.md "Filed answers"); a logged or done one drops out.
   The phase a question goes through while it is being filed is skipped: a filed answer is
   judged against the question as it was before the answer (a first answer or a re-answer).
   An answer that is a standing rule also goes to the PM, whatever its `filed_as`, and a

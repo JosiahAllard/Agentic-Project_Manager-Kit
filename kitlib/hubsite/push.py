@@ -42,7 +42,8 @@ Filed answers (`filed`, by the question's `filed_as`, kitlib.hubsite.api _filed_
               the delivery object's resolve(key) (None: none live) finds none of the asker, the
               record's repository and the question's repo; with no resolve the PM is told
   held        nobody: the record waits on more, and the asker reads it in its pending list
-              (the PM start's digest counts every filed answer)
+              (the PM start's digest counts the answers filed since the last start that are
+              still `filed`, waiting for their askers: a logged or done one drops out)
 An answer that is a standing rule (`standing`) also goes to the PM, who logs it, whatever its
 filed_as; a `standing` change of an answer already pushed adds the PM to the push still owed.
 

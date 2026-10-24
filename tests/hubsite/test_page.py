@@ -1510,7 +1510,7 @@ class DomTest(unittest.TestCase):
         self.assertFalse(got["after"]["button"])
         self.assertTrue(got["ticked"], "a re-answer keeps the box as the answer had it")
 
-    DOWN ={"status": 500, "body": {"ok": False, "error": {"code": "internal", "message": "store unreadable", "field": ""}}}
+    DOWN = {"status": 500, "body": {"ok": False, "error": {"code": "internal", "message": "store unreadable", "field": ""}}}
 
     def test_an_answer_that_was_sent_and_not_read_back_says_it_was_sent_and_is_not_sent_twice(self):
         answered = {"Q-1": dict(LISTS["questions"]["Q-1"], status="answered", version=2,
