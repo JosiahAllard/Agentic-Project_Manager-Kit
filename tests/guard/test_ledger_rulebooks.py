@@ -99,8 +99,9 @@ class Rulebooks(unittest.TestCase):
         self.addCleanup(os.rmdir, link)
         for path, why in ((os.path.join(link, 'rules', 'alpha.md'), BOOK), (os.path.join(link, 'STANDING.md'), DIGEST),
                           (os.path.join(link, 'rules', 'gamma.md'), BOOK)):
-            with self.subTest(path):
-                self.refused(event('Write', {'file_path': path, 'content': ''}, self.w.plain, sub=True), why)
+            for sub in (True, False):    # the owner's session has no write jail to stop it first
+                with self.subTest(path, sub=sub):
+                    self.refused(event('Write', {'file_path': path, 'content': ''}, self.w.plain, sub=sub), why)
         self.refused(bash('rm -r %s' % W.fwd(os.path.join(link, 'rules')), self.w.plain, sub=True))
         self.refused(bash('rm %s/*' % W.fwd(os.path.join(link, 'rules')), self.w.plain, sub=True))
         self.allowed(event('Write', {'file_path': os.path.join(link, 'NOTES.md'), 'content': ''}, self.folder,
