@@ -26,7 +26,7 @@ CREATIVE_HOME = "specialty-tech-art"
 # companion files written once in meaning and carried byte for byte by each skill that needs them
 SHARED_COMPANIONS = {"doc-writing.md": ("specialty-records", "specialty-spec")}
 # reference files a skill carries beside its SKILL.md
-EXTRA_FILES = {"coordinator-dispatch": ["roster.md"], "specialty-tech-art": ["creative.md"],
+EXTRA_FILES = {"coordinator-dispatch": ["roster.md", "creative.md", "upkeep.md"], "specialty-tech-art": ["creative.md"],
                "specialty-sound": ["measuring.md"],
                "specialty-records": ["doc-writing.md"], "specialty-spec": ["doc-writing.md"]}
 # one repo's own: never shipped in the plugin (docs/shipping.md, "Stays repo-local")
