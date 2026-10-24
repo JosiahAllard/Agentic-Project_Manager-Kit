@@ -133,11 +133,25 @@ class Rulebooks(unittest.TestCase):
         short = os.path.basename(self.short(folder))
         for sub in (True, False):
             for text, why in (('rm A-LONG~?/LEDGER.md', LOG), ('rm a-long~?/STANDING.md', DIGEST),
-                              ('rm "%s/LEDGER.md"' % short, LOG), ('rm -r A-LONG~?', LOG)):
+                              ('rm "%s/LEDGER.md"' % short, LOG)):
                 with self.subTest(text, sub=sub):
                     self.refused(bash(text, self.w.base, sub=sub), why)
+        # the folder above binds agent sessions alone (rules.ledger_wide_binds)
+        self.refused(bash('rm -r A-LONG~?', self.w.base, sub=True), LOG)
         d = decide(bash('rm -f A-LONG~?/NOTES.md', self.w.base, sub=False), self.w.ctx())
         self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+
+    def test_a_short_name_wildcard_reaches_a_file_not_written_yet(self):
+        # the held file is missing: its folder's short name still matches (rules.short_parts walks
+        # to the nearest existing folder)
+        self.short_world()
+        folder = os.path.join(self.w.base, 'a-long-ledger-folder')
+        os.makedirs(folder)
+        self.w.user_config({'ledger_path': os.path.join(folder, 'LEDGER.md')})
+        self.short(folder)
+        for sub in (True, False):
+            with self.subTest(sub=sub):
+                self.refused(bash('rm A-LONG~?/LEDGER.md', self.w.base, sub=sub), LOG)
 
     def short_world(self):
         """Rebuild the world on a volume with 8.3 short names (W.short_name_root); skipped when

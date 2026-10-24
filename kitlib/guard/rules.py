@@ -1176,19 +1176,33 @@ def glob_part(name, short, pattern):
 
 
 def short_parts(real, depth):
-    """The last `depth` parts of the 8.3 short spelling of the existing path `real`
-    (GetShortPathNameW), case folded, to match a wildcard against as FindFirstFile does; [None]
-    * depth when the volume gives none or the path does not resolve (its long names alone)."""
-    short = None
+    """The last `depth` parts of the 8.3 short spelling of the path `real` (GetShortPathNameW),
+    case folded, to match a wildcard against as FindFirstFile does. A part that does not exist
+    yet (a held file not written) is None, and its nearest existing folder gives the parts above
+    it; None for every part when the volume gives none (the long names alone)."""
+    path, tail = real, 0
+    short = _short_path(path)
+    while short is None and tail < depth:
+        parent = os.path.dirname(path)
+        if not parent or parent == path:
+            break
+        path, tail = parent, tail + 1
+        short = _short_path(path)
+    need = depth - tail
+    parts = re.split(r'[\\/]', short.lower().rstrip('\\/')) if short else []
+    head = parts[-need:] if need > 0 and len(parts) >= need else [None] * need
+    return head + [None] * tail
+
+
+def _short_path(path):
+    """GetShortPathNameW of `path`, or None when it does not resolve (a missing path)."""
     try:
         import ctypes
         buf = ctypes.create_unicode_buffer(1024)
-        n = ctypes.WinDLL('kernel32').GetShortPathNameW(real, buf, len(buf))
-        short = buf.value if 0 < n < len(buf) else None
+        n = ctypes.WinDLL('kernel32').GetShortPathNameW(path, buf, len(buf))
     except (ImportError, OSError, AttributeError, ValueError):
-        short = None
-    parts = re.split(r'[\\/]', short.lower().rstrip('\\/')) if short else []
-    return parts[-depth:] if depth and len(parts) >= depth else [None] * depth
+        return None
+    return buf.value if 0 < n < len(buf) else None
 
 
 def ledger_git(event, ctx, cmd, inv, cwd, role):
@@ -1223,7 +1237,7 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     if not gc.dir or gc.unknown or gc.blind:
         if not ledger_wide_binds(event, ctx):
             return None
-        form = tree_form or ledger_git_path_form(sub, short, longs)
+        form = tree_form or ledger_git_path_form(sub, args, short, longs)
         if not form:
             return None
         kind = held[0][0]
@@ -1240,15 +1254,19 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     held = [(kind, real) for kind, real in held if jail.inside(real, tree)]
     if not held:
         return None
-    if tree_form and ledger_wide_binds(event, ctx) and (sub != 'clean' or not pos):
-        kind = held[0][0]
+    if sub == 'stash' and tree_form:
+        pos = delegfile.after_dashes(args) or []    # push's pathspecs after `--`; none: the tree
+    specs = sub in ('clean', 'stash') and tree_form and ledger_wide_binds(event, ctx)
+    if tree_form and ledger_wide_binds(event, ctx) and (not specs or not pos or all(
+            delegfile.spec_real(ctx, w, gc.dir, top) is False for w in pos)):
+        kind = held[0][0]                       # no pathspec, or exclusions alone: the tree
         return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), tree_form)),
                       ledger_instead(ctx, kind))
     if sub == 'checkout':
         after = delegfile.after_dashes(args)
         pos = after if after is not None else pos
     elif sub not in ('rm', 'mv', 'restore', 'checkout-index'):
-        if not (sub == 'clean' and tree_form and ledger_wide_binds(event, ctx)):
+        if not specs:
             return None                         # a tree form the session is not held to
     every = git_every_path(sub, short, longs)
     if every:
@@ -1271,11 +1289,11 @@ def ledger_wide_binds(event, ctx):
     """Whether the ledger rule's wider refusals hold the session of `event`: a folder above a held
     path or a wildcard that can name one (ledger_rule's `above`), git that rewrites a tree holding
     the ledger (ledger_git_tree_form), and a writing git call in a place the guard cannot tell.
-    The one place their sessions are chosen: every session, the owner's and the PM's included, as
-    the rest of the ledger rule binds them (only ledger.py writes the ledger). The owner's answer
-    may narrow it to agent sessions only (subagent(event), or a marked session but the PM's), or
-    to agents and the PM (agent_session(event, ctx)): that change is made here alone."""
-    return True
+    The one place their sessions are chosen: agent sessions (agent_session) but the PM's, the
+    sessions git_shared_ref holds (shared_ref_held); the owner's and the PM's pass. Whether to
+    widen them is the owner's open question: `return True` here binds every session, as the rest
+    of the ledger rule does (only ledger.py writes the ledger); that change is made here alone."""
+    return shared_ref_held(event, ctx)
 
 
 def ledger_git_tree_form(sub, args, short, longs):
@@ -1284,7 +1302,8 @@ def ledger_git_tree_form(sub, args, short, longs):
     --force (switch's --discard-changes; any abbreviation git could read as either, an
     ambiguous one too: fail closed), reset --hard, --merge or --keep (delegfile.GIT_RESETS), a
     stash that is not a read (stash_reads), a clean that is not a dry run (clean_dry_run). None
-    for any other call."""
+    for any other call. ledger_git judges a clean's pathspecs, and a stash's after `--`, as a
+    path form's: one that misses the ledger passes; none, or exclusions alone, is the tree."""
     from . import delegfile
     if sub in ('checkout', 'switch'):
         names = ('force', 'discard-changes') if sub == 'switch' else ('force',)
@@ -1304,11 +1323,15 @@ def ledger_git_tree_form(sub, args, short, longs):
     return None
 
 
-def ledger_git_path_form(sub, short, longs):
+def ledger_git_path_form(sub, args, short, longs):
     """The subcommand of a git call that writes the paths it names, the form ledger_git judges by
-    its pathspec: rm, mv, restore (not the index alone), checkout-index, checkout. None for any
-    other call."""
-    if sub in ('rm', 'mv', 'checkout-index', 'checkout'):
+    its pathspec: rm, mv, restore (not the index alone), checkout-index, and checkout of paths
+    (after `--`, or read from elsewhere: git_every_path). None for any other call: a checkout
+    with no `--` is read as a branch where the guard cannot place the tree, as switch is."""
+    from . import delegfile
+    if sub in ('rm', 'mv', 'checkout-index'):
+        return sub
+    if sub == 'checkout' and (delegfile.after_dashes(args) is not None or git_every_path(sub, short, longs)):
         return sub
     if sub == 'restore' and not restore_index_only(short, longs):
         return sub
