@@ -13,7 +13,7 @@ from unittest import mock
 
 from kitlib import hubvalidate
 from kitlib.backlog import store as smod
-from kitlib.hubsite import api, approvals, derived, push, recordwrite, serve, todosteps
+from kitlib.hubsite import api, approvals, derived, push, recordwrite, schema, serve, todosteps
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
 from kitlib.maintlint import result as lint_result
@@ -2196,6 +2196,132 @@ class RecordRouteTest(ApiCase):
         self.assertNotIn('record_template', api.VIEWS)
         self.ok('GET', '/snapshot', OWNER)
         self.assertEqual(self.views.calls, [])
+
+
+class BindViews(object):
+    """The record view as SiteViews gives it, for a question bound to a record: repo names match
+    without case and the record answers with the configured name; DONE-1 is completed; repo
+    `down` cannot be read."""
+
+    def __init__(self):
+        self.calls = []
+
+    def record(self, repo, id):
+        self.calls.append((repo, id))
+        if repo.lower() == 'down':
+            raise HubError('unavailable', 'git timed out', 'views')
+        if repo.lower() != 'kit':
+            raise HubError('not_found', 'repo not known', 'repo')
+        if id == 'bad..id':
+            raise HubError('invalid', 'not a record id', 'id')
+        if id not in ('EX-1', 'EX-2', 'DONE-1'):
+            raise HubError('not_found', 'no such record', 'id')
+        return {'repo': 'kit', 'id': id, 'where': 'completed' if id == 'DONE-1' else 'open'}
+
+
+class QuestionRecordTest(ApiCase):
+    """A question bound to a backlog record: `record` {repo, id}, checked against the configured
+    repositories when it is asked and when it is edited (docs/action-hub.md "questions/Q-NNN")."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = BindViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def doc(self, qid):
+        return self.store.docs('questions')[qid]
+
+    def test_a_question_is_bound_to_a_record_by_its_configured_name(self):
+        qid = self.question(record={'repo': 'KIT', 'id': 'EX-1'})
+        self.assertEqual(self.doc(qid)['record'], {'repo': 'kit', 'id': 'EX-1'})
+        self.assertEqual(self.views.calls, [('KIT', 'EX-1')])
+
+    def test_a_question_without_a_record_is_unbound_and_reads_no_backlog(self):
+        qid = self.question()
+        self.assertNotIn('record', self.doc(qid))
+        self.assertEqual(self.views.calls, [])
+
+    def test_each_record_that_cannot_be_bound_is_refused_and_nothing_is_written(self):
+        for record, code, says in (
+                ('kit:EX-1', 'invalid', 'record is {"repo"'),
+                ({'repo': 'kit'}, 'invalid', 'record is {"repo"'),
+                ({'repo': 'kit', 'id': 'EX-1', 'more': 1}, 'invalid', 'record is {"repo"'),
+                ({'repo': 'kit', 'id': 5}, 'invalid', 'record is {"repo"'),
+                ({'repo': ' ', 'id': 'EX-1'}, 'invalid', 'record is {"repo"'),
+                ({'repo': 'kit', 'id': 'bad..id'}, 'invalid', 'not a record id'),
+                ({'repo': 'elsewhere', 'id': 'EX-1'}, 'not_found',
+                 "names repo 'elsewhere', which is not a repository the hub has configured"),
+                ({'repo': 'kit', 'id': 'EX-404'}, 'not_found',
+                 "repo kit's backlog has no record EX-404"),
+                ({'repo': 'kit', 'id': 'DONE-1'}, 'invalid',
+                 'record kit:DONE-1 is completed: bind a question to an open record'),
+                ({'repo': 'down', 'id': 'EX-1'}, 'unavailable',
+                 'record down:EX-1 could not be checked: git timed out')):
+            with self.subTest(record=record):
+                obj = self.refused(code, 'record', 'POST', '/questions', AGENT,
+                                   {'title': 't', 'record': record})
+                self.assertIn(says, obj['error']['message'])
+        self.assertEqual(self.store.docs('questions'), {})
+
+    def test_a_record_is_refused_when_the_server_has_no_record_view(self):
+        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+        obj = self.refused('unavailable', 'record', 'POST', '/questions', AGENT,
+                           {'title': 't', 'record': {'repo': 'kit', 'id': 'EX-1'}})
+        self.assertIn('record kit:EX-1 could not be checked', obj['error']['message'])
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.refused('unavailable', 'record', 'POST', '/questions', AGENT,
+                     {'title': 't', 'record': {'repo': 'kit', 'id': 'EX-1'}})
+
+    def test_a_record_view_that_raises_anything_else_is_unavailable_with_its_class_only(self):
+        class Broken(object):
+            def record(self, repo, id):
+                raise OSError('C:\\secret\\folder is gone')
+        self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
+        obj = self.refused('unavailable', 'record', 'POST', '/questions', AGENT,
+                           {'title': 't', 'record': {'repo': 'kit', 'id': 'EX-1'}})
+        self.assertIn('OSError', obj['error']['message'])
+        self.assertNotIn('secret', obj['error']['message'])
+
+    def test_an_open_question_is_bound_rebound_and_cleared_by_its_asker(self):
+        qid = self.question()
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                {'from': 'pm', 'if_version': 1, 'record': {'repo': 'kit', 'id': 'EX-1'}})
+        self.assertEqual(self.doc(qid)['record'], {'repo': 'kit', 'id': 'EX-1'})
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                {'from': 'pm', 'if_version': 2, 'record': {'repo': 'kit', 'id': 'EX-2'}})
+        self.assertEqual(self.doc(qid)['record'], {'repo': 'kit', 'id': 'EX-2'})
+        for version, cleared in ((3, None), (4, '')):
+            with self.subTest(cleared=cleared):
+                self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                        {'from': 'pm', 'if_version': version, 'record': cleared})
+                self.assertIsNone(self.doc(qid)['record'])
+        self.assertEqual(self.views.calls, [('kit', 'EX-1'), ('kit', 'EX-2')])
+        self.refused('not_found', 'record', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     {'from': 'pm', 'if_version': 5, 'record': {'repo': 'kit', 'id': 'EX-404'}})
+
+    def test_an_edit_refused_for_its_asker_or_its_status_reads_no_backlog(self):
+        qid = self.question()
+        bind = {'repo': 'kit', 'id': 'EX-1'}
+        self.refused('forbidden', 'from', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     {'from': 'someone', 'if_version': 1, 'record': bind})
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        self.refused('conflict', 'status', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     {'from': 'pm', 'if_version': 2, 'record': bind})
+        self.assertEqual(self.views.calls, [])
+
+    def test_an_unbound_question_from_before_still_edits_and_is_answered(self):
+        qid = self.question()
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                {'from': 'pm', 'if_version': 1, 'title': 'which'})
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 1})
+        self.assertNotIn('record', self.doc(qid))
+        self.assertEqual(self.views.calls, [])
+
+    def test_the_schema_types_the_record(self):
+        found = schema.check('questions', {'status': 'open', 'title': 't', 'record': 'kit:EX-1'})
+        self.assertEqual([f.field for f in found], ['record'])
+        self.assertEqual(schema.check('questions', {'status': 'open', 'title': 't',
+                                                    'record': None}), [])
 
 
 class WriteViews(object):
