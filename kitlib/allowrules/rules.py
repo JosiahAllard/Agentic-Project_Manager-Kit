@@ -25,8 +25,10 @@ KIT_COMMAND = 'kit land'
 # PATH is a kit.cmd shim, which cmd.exe reads before python does. `^` is its escape: cmd strips it,
 # so `-^C` reaches land.py as a second -C past the `* -C*` deny (probed on a kit.cmd: `-^C` came
 # out as -C). `!` expands a variable under delayed expansion, off under cmd /c unless the Command
-# Processor DelayedExpansion registry value turns it on (the guard's shell.CMD_REPARSE holds both).
-CMD_CHARS = ('^', '!')
+# Processor DelayedExpansion registry value turns it on. `)` ends a ( ) block: METACHARS denies
+# every `(`, but a shim whose `%*` sits inside a block of its own would end it there (not probed;
+# denied as the guard refuses it). The guard's shell.CMD_REPARSE holds all three.
+CMD_CHARS = ('^', '!', ')')
 # Shell metacharacters that redirect, chain, substitute, expand, quote, escape or cut the command
 # short: any of them in a land command is denied, so no `*` of an allow can carry one (`$` and `(`
 # stand for `$(`, `@(` and PowerShell's `(expr)`; quotes, the backslash, braces and the tab hide a

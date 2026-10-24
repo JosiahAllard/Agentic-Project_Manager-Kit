@@ -70,7 +70,7 @@ class RuleTextTest(unittest.TestCase):
         want = []
         for shell in SHELLS:
             for command, extra in (('python %s/tools/land.py' % K, ()), ('python "%s/tools/land.py"' % K, ()),
-                                   ('kit land', ('^', '!'))):
+                                   ('kit land', ('^', '!', ')'))):
                 want.append('%s(%s * -C*)' % (shell, command))
                 want.append('%s(%s -C Y:/repo *-C*)' % (shell, command))
                 want.append('%s(%s *--lo*)' % (shell, command))
@@ -85,7 +85,7 @@ class RuleTextTest(unittest.TestCase):
                                    ' ', ' ', ' ', ' ', ' ',
                                    ' ', ' ', ' ', ' ', '　') + extra]
         self.assertEqual(LINES['deny'], want)
-        self.assertEqual(len(want), 220 + 2 * 57)
+        self.assertEqual(len(want), 220 + 2 * 58)
 
 
 class AllowedTest(unittest.TestCase):
@@ -193,6 +193,16 @@ class DeniedTest(unittest.TestCase):
                 self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
                 self.assertEqual(decide(cmd, shell), 'deny')
         self.assertEqual(decide(submit(P, middle='kit/a !X!')), 'allow')
+
+    def test_block_close_denied_in_the_kit_spelling(self):
+        """`)` ends a ( ) block in cmd.exe; every `(` is denied already, and the kit spelling
+        denies a lone `)` too. The script spellings take no `)` deny."""
+        for shell in SHELLS:
+            cmd = submit(KC, middle='kit/a )')
+            with self.subTest(shell=shell, cmd=cmd):
+                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
+                self.assertEqual(decide(cmd, shell), 'deny')
+        self.assertEqual(decide(submit(P, middle='kit/a )')), 'allow')
 
     def test_backslash_escaped_submit_denied(self):
         """`abc\\ --submit` is one word in Bash: --expect-tip takes "abc --submit" and land.py runs

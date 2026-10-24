@@ -460,26 +460,124 @@ def cmd_invocation(cmd, inv):
 BATCH_SUFFIXES = ('.cmd', '.bat')
 
 
+def is_batch(prog):
+    """True when the program text `prog` names a batch file (batch_run): .cmd or .bat, any case,
+    any path, the trailing dots and blanks Windows drops dropped, or the bare kit command."""
+    b = ntpath.basename(prog.replace('/', '\\')).lower().rstrip('. ')
+    return b.endswith(BATCH_SUFFIXES) or b == KIT
+
+
+# Where cmd ends a command name inside its own text (OBSERVED, docs/guard.md "Batch files and
+# cmd.exe"): at its delimiters , ; = and at ( and /, so `kit,status`, `kit(x` and `kit/x` run
+# kit, the rest of the word its first argument. @ and + end none. A / is in a path too, so the
+# word is read both cut at the first of these and cut at the first but a /.
+CMD_NAME_ENDS = (',;=(', ',;=(/')
+
+
+def _cmd_names(cmd, word, text, args):
+    """The (program text, argument Words) readings of cmd's program word `word` (its text `text`,
+    the lead dropped): as written, then cut at the first of each CMD_NAME_ENDS set, the rest of the
+    word an argument of its own before `args`. Another shell's, and a quoted word, as written only."""
+    out = [(text, args)]
+    if cmd.shell != sh.CMD or (word is not None and word.start is not None and quoted(cmd, word)):
+        return out
+    for ends in CMD_NAME_ENDS:
+        k = next((j for j, c in enumerate(text) if c in ends), 0)
+        if k:
+            out.append((text[:k], [sh.Word(text[k:], False, None, None, synth=True)] + list(args)))
+    return out
+
+
 def batch_run(cmd, inv):
     """(program text, its argument Words) when `inv` runs a batch file, which CreateProcess hands
-    to cmd.exe (docs/guard.md "Batch files and cmd.exe"): a program named with .cmd or .bat (any
-    case, any path, the trailing dots and blanks Windows drops dropped), cmd's `call` of one, and
-    the kit command named without an extension (`kit`, any path), which machine setup puts on the
-    PATH as kit.cmd. It is read from the text alone, no file looked up, so a bare `kit` counts
-    whether or not a kit.cmd is there (it fails closed). None otherwise, and for a computed
-    program."""
+    to cmd.exe (docs/guard.md "Batch files and cmd.exe"): a program is_batch names, cmd's `call` of
+    one, and the kit command named without an extension (`kit`, any path), which machine setup
+    puts on the PATH as kit.cmd. In cmd's own text the program word is read cut where cmd ends a
+    command name too (_cmd_names: `kit,status`, `call;kit`). It is read from the text alone, no
+    file looked up, so a bare `kit` counts whether or not a kit.cmd is there (it fails closed).
+    None otherwise, and for a computed program."""
     inv = cmd_invocation(cmd, inv)
     if inv is None or inv.dyn:
         return None
-    prog, args = inv.path, list(inv.args)
-    if cmd.shell == sh.CMD and inv.name == 'call':
-        if not args or args[0].dyn:
-            return None
-        prog, args = args[0].text, args[1:]
-    b = ntpath.basename(prog.replace('/', '\\')).lower().rstrip('. ')
-    if b.endswith(BATCH_SUFFIXES) or b == KIT:
-        return prog, args
+    for prog, args in _cmd_names(cmd, inv.word, inv.path, list(inv.args)):
+        if cmd.shell == sh.CMD and prog.lower() == 'call':
+            if not args or args[0].dyn:
+                continue
+            called = CMD_LEAD_RE.sub('', args[0].text)
+            for prog2, args2 in _cmd_names(cmd, args[0], called, args[1:]):
+                if is_batch(prog2):
+                    return prog2, args2
+            continue
+        if is_batch(prog):
+            return prog, args
     return None
+
+
+# start's options that take the next word as their value (/D dir), as Git Bash spells them too
+START_VALUE_OPTS = ('/d', '//d')
+
+
+def bash_start(cmd, inv):
+    """(program Word or None, every Word after start) when `inv` is Git Bash's start: /usr/bin/start
+    is a script that runs `"$COMSPEC" //c start` with all its words, escaping only &, so cmd.exe
+    reads every word before the program does, whatever the program, and a batch file it starts
+    reads them again (OBSERVED, docs/guard.md "Batch files and cmd.exe"). The program is the first
+    word after start's options (/b, //wait, /d dir) and a title (an empty word, or one with a blank,
+    which Git Bash quotes and start takes as the title). None otherwise."""
+    if cmd.shell != sh.BASH or inv is None or inv.dyn or inv.name != 'start' or inv.via == 'start-process':
+        return None
+    args = list(inv.args)
+    i, titled = 0, False
+    while i < len(args):
+        w = args[i]
+        if w.dyn:
+            break
+        t = w.text
+        if t.startswith('/'):
+            i += 2 if t.lower() in START_VALUE_OPTS else 1
+            continue
+        if not titled and (not t or ' ' in t or '\t' in t):
+            titled = True
+            i += 1
+            continue
+        break
+    return (args[i] if i < len(args) else None), args
+
+
+BASH_GLOB_CHARS = '*?['
+
+
+def bash_glob(cmd, w):
+    """True when bash fills in the word `w` with file names: an unquoted, unescaped * ? or [ in its
+    spelling in the line (a word with no place in the line: one of them anywhere in its text, which
+    fails closed). False in another shell: PowerShell and cmd pass a wildcard to a native program
+    as written."""
+    if cmd.shell != sh.BASH:
+        return False
+    if w.start is None or w.end is None:
+        return any(c in BASH_GLOB_CHARS for c in w.text)
+    s, i, end = cmd.source, w.start, min(w.end, len(cmd.source))
+    q = None
+    while i < end:
+        c = s[i]
+        if q == "'":
+            q = None if c == "'" else q
+        elif q in ('"', "$'"):
+            if c == '\\':
+                i += 1
+            elif c == q[-1]:
+                q = None
+        elif c == '\\':
+            i += 1
+        elif c == "'" or c == '"':
+            q = c
+        elif c == '$' and s[i + 1:i + 2] == "'":
+            q = "$'"
+            i += 1
+        elif c in BASH_GLOB_CHARS:
+            return True
+        i += 1
+    return False
 
 
 ENV_VALUE_OPTS = ('-u', '--unset')
