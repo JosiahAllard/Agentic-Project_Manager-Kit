@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import storecheck
+from kitlib.hubsite import schema, storecheck
 from kitlib.hubsite.storecheck import StoreReadError
 from kitlib.hubsite.store import HubError, Store, normal_text
 from tests.home import machine_config
@@ -183,6 +183,124 @@ class KnownReposCase(Case):
     def test_validate_takes_known_repos_given_to_it(self):
         found = storecheck.validate(self.store_with('gamerepo', 'ghost'), known_repos=['gamerepo'])
         self.assertEqual(self.codes(found), [('questions/Q-002', 'repo-alias')])
+
+
+def labelled(recommended, labels=('Paint it', 'Leave it: as found', 'Ask again'), **kw):
+    """A question as the earlier hub's writer left it: `recommended` holds an option's label."""
+    return question(recommended=recommended, title='which one', options=[
+        {'description': 'what %s means' % x, 'label': x} for x in labels], **kw)
+
+
+def refused(lines):
+    """The documents validate_lines says the api will refuse every update of."""
+    return [x.split(':')[0] for x in lines if 'the api will refuse' in x]
+
+
+class RecommendedRuleCase(unittest.TestCase):
+    """schema.whole_recommended, the rule the store and storecheck read a question's text
+    `recommended` by: text standing for a number is read as that number, any other text stays
+    and storecheck.check reports it."""
+
+    def read(self, fields, coll='questions'):
+        """(the number the store reads, the text it stood for, whether it was a label), or None
+        when the document is given back as it is."""
+        got, old, label = schema.whole_recommended(coll, fields)
+        if old is None:
+            self.assertIs(got, fields, 'a document that stands for nothing is given back as is')
+            self.assertFalse(label)
+            return None
+        self.assertEqual(got, dict(fields, recommended=got['recommended']),
+                         'nothing else in the document is changed')
+        return got['recommended'], old, label
+
+    def lines(self, docs):
+        return storecheck.validate_lines(storecheck.check({'questions': docs}))
+
+    def test_a_whole_number_written_as_text_is_read_as_the_number(self):
+        text = question(recommended='1', title='as text', options=[
+            {'label': 'a', 'description': 'b'}, {'label': 'c', 'description': 'd'}])
+        self.assertEqual(self.read(text), (1, '1', False))
+
+    def test_text_that_is_not_a_whole_number_stays_and_is_reported(self):
+        base = question(recommended='1', title='as text', options=[
+            {'label': 'a', 'description': 'b'}, {'label': 'c', 'description': 'd'}])
+        kept = {'Q-021': 'one', 'Q-022': '1.0', 'Q-023': '-1', 'Q-024': ' 1', 'Q-025': ''}
+        docs = {doc_id: dict(base, recommended=text) for doc_id, text in kept.items()}
+        for doc_id, fields in docs.items():
+            self.assertIsNone(self.read(fields), doc_id)
+        # no other field is read as a number, and no other collection's `recommended` is
+        self.assertIsNone(self.read(question(title='7')))
+        todo = {'status': 'open', 'title': 'run it', 'from': 'pm', 'commands': ['python x.py'],
+                'recommended': '1'}
+        self.assertIsNone(self.read(todo, coll='todos'))
+        lines = self.lines(docs)
+        self.assertIn('VALIDATE ERROR questions/Q-021 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertEqual(refused(lines), ['VALIDATE questions/%s' % i for i in sorted(kept)])
+
+    def test_a_label_is_read_as_its_options_position(self):
+        self.assertEqual(self.read(labelled('Leave it: as found')),
+                         (1, 'Leave it: as found', True))
+        self.assertEqual(self.read(labelled('Paint it', labels=('Paint it', 'Leave it'))),
+                         (0, 'Paint it', True))                                   # the first
+        self.assertEqual(self.read(labelled('Ask again')), (2, 'Ask again', True))  # the last
+        self.assertEqual(self.read(labelled('1', labels=('Paint it', '1'))),     # both say 1
+                         (1, '1', True))
+
+    def test_text_that_is_not_exactly_one_options_label_stays_and_is_reported(self):
+        kept = {
+            'Q-033': labelled('Sell it'),                                   # no option's label
+            'Q-034': labelled('Paint it', labels=('Paint it', 'Leave it', 'Paint it')),   # two
+            'Q-035': labelled('paint it'),                                  # another case
+            'Q-036': labelled('Paint it '),                                 # a space more
+            'Q-037': question(recommended='Paint it', options=['Paint it', 'Leave it']),
+            'Q-038': labelled('0', labels=('Paint it', '0')),   # the number 0, or the option at 1
+            # the number 2, or one of the two options that are labelled 2: it does not say
+            'Q-040': labelled('2', labels=('2', '2', 'Paint it')),
+            'Q-043': labelled('1', labels=('Paint it', '1', '1')),  # even with one of them at 1
+        }
+        for doc_id, fields in kept.items():
+            self.assertIsNone(self.read(fields), doc_id)
+        lines = self.lines(dict(kept, **{'Q-039': labelled('1', labels=('Paint it', '1'))}))
+        self.assertIn("VALIDATE ERROR questions/Q-033 recommended: recommended must be an index "
+                      "into options (3 option(s)), not 'Sell it' [options-shape]", lines)
+        self.assertIn('VALIDATE ERROR questions/Q-033 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertEqual(refused(lines), ['VALIDATE questions/%s' % i for i in sorted(kept)])
+
+    def test_digits_too_many_to_be_a_position_stay_as_text(self):
+        endless = '9' * 5000                    # more digits than int() reads
+        kept = {
+            'Q-044': labelled('1234567890'),                                # ten digits
+            'Q-045': labelled(endless),
+            'Q-046': labelled('1234567890', labels=('Paint it', '1234567890')),  # a label too
+        }
+        for doc_id, fields in kept.items():
+            self.assertIsNone(self.read(fields), doc_id)
+        self.assertEqual(self.read(labelled('000000001')), (1, '000000001', False))   # nine
+        lines = self.lines(dict(kept, **{'Q-047': labelled('000000001')}))
+        self.assertIn('VALIDATE ERROR questions/Q-044 recommended: recommended must be int, not '
+                      'str [schema-field]', lines)
+        self.assertEqual(refused(lines), ['VALIDATE questions/%s' % i for i in sorted(kept)])
+
+    def test_the_empty_text_is_never_an_options_label(self):
+        fields = labelled('', labels=('', 'Paint it'))
+        self.assertIsNone(self.read(fields))
+        self.assertIn('VALIDATE ERROR questions/Q-048 recommended: recommended must be int, not '
+                      'str [schema-field]', self.lines({'Q-048': fields}))
+
+    def test_a_number_past_the_last_option_is_read_as_that_number_and_reported(self):
+        self.assertEqual(self.read(labelled('7')), (7, '7', False))
+        self.assertIn('VALIDATE ERROR questions/Q-049 recommended: recommended must be an index '
+                      'into options (3 option(s)), not 7 [options-shape]',
+                      self.lines({'Q-049': labelled('7')}))
+
+    def test_an_answered_question_keeps_its_answer_as_it_is(self):
+        answer = {'at': AT, 'choice': 0, 'label': 'Paint it', 'note': ''}
+        fields = labelled('Paint it', status='answered', answer=answer)
+        got, _old, _label = schema.whole_recommended('questions', fields)
+        self.assertEqual(got, dict(fields, recommended=0))
+        self.assertEqual(got['answer'], answer)
 
 
 if __name__ == '__main__':
