@@ -858,11 +858,17 @@ def cdrive_lines(environ=None, realpath=None):
     os.environ; never the machine-scope TEMP of system services) and runs no subprocess, no `npm
     config get`. The Claude folder is resolved through links (`realpath`, default os.path.realpath).
     A relative or unset path is skipped (its drive is unknown)."""
+    from kitlib.launcher.accounts import CONFIG_DIR_ENV
     env = {k.upper(): v for k, v in (os.environ if environ is None else environ).items()}
     hits = []
     for label, path, var in _cdrive_items(lambda k: env.get(k.upper()), realpath or os.path.realpath):
         if path and os.path.splitdrive(os.path.normpath(path))[0].upper() == "C:":
-            hits.append("%s (%s; set %s)" % (label, path, var))
+            # the Claude folder variable already set: move the folder it names; unset: set it
+            if var == CONFIG_DIR_ENV and env.get(var):
+                hint = "move the folder %s names" % var
+            else:
+                hint = "set %s" % var
+            hits.append("%s (%s; %s)" % (label, path, hint))
     return ["on the C: drive: " + ", ".join(hits)] if hits else []
 
 
