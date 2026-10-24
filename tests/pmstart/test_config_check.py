@@ -3,6 +3,7 @@ a missing or unreadable pointer, and the integrity line (a file never committed,
 committed by someone other than the owner); no line at all when all is well; and its place right
 after the standing rules in the PM checklist. Every case runs on a temp home; this module puts the
 real check back over the package's stub (tests/pmstart/__init__.py stub_config_lines)."""
+from tests.pmstart import HANDOFF_FAKE
 import datetime
 import os
 import unittest
@@ -224,7 +225,7 @@ class PointerTest(unittest.TestCase):
 
 
 class ChecklistTest(unittest.TestCase):
-    FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+    FAKES = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
                  liveness={"read": lambda p: "{}"})
 
     def setUp(self):

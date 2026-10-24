@@ -3,6 +3,10 @@ from unittest import mock
 import unittest
 
 
+# A current handoff fake: the one file exists in a PM repo, no stray notes (kitlib.pmstart handoff).
+HANDOFF_FAKE = {"globber": lambda p: [], "exists": lambda p: True, "pm_repo": lambda c: "X:/pm"}
+
+
 def keep_off_launcher_repos():
     """For a module's setUpModule: the checklist's stubs check reads {} for launcher.repos, not this
     machine's config (and keep_off_plugin_export). Undone with the module (unittest.addModuleCleanup)."""

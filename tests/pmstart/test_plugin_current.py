@@ -1,5 +1,6 @@
 """kitlib.pmstart.plugin_current: the session-start line when the pm-kit plugin export is behind
 kit main, a folder's last refresh failed, or the state cannot be read (docs/plugin-source.md)."""
+from tests.pmstart import HANDOFF_FAKE
 import datetime
 import json
 import os
@@ -12,7 +13,7 @@ from tests.home import temp_home
 from tests.pluginsource import FakeProc, Kit
 
 NOW = datetime.datetime(2026, 10, 11, 9, 0)
-FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+FAKES = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
              watcher={"beat": lambda: None, "now": 0},
              foreground_lock={"read": lambda: 0},
