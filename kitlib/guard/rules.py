@@ -1039,8 +1039,9 @@ LONG_PREFIX = re.compile(r'[\\/]{2}[?.][\\/]|(?:[A-Za-z]:)?[\\/]\?\?[\\/]')
 
 def unprefixed(path):
     r"""`path` without a Win32 namespace prefix (`\\?\`, `\\.\`, `\??\`, either slash), which
-    opens the same file: `\\?\Z:\pm\STANDING.md` is `Z:\pm\STANDING.md`, and `\\?\UNC\host\share`
-    is `\\host\share`. `\??\` is also dropped after a drive (`Z:\??\Z:\pm`): abspath reads it as a
+    opens the same file: `\\?\<drive>:\pm\STANDING.md` is `<drive>:\pm\STANDING.md`, and
+    `\\?\UNC\host\share` is `\\host\share`. `\??\` is also dropped after a drive
+    (`<drive>:\??\<drive>:\pm`): abspath reads it as a
     folder of the current drive, but Windows opens it as the NT name it is, and no folder is
     named `??`. A prefixed name of another form (`\\?\Volume{...}\`) is left whole for realpath,
     which gives the drive name of a file that exists."""
