@@ -823,6 +823,49 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
     return lines
 
 
+def _cdrive_items(get, realpath):
+    """(label, path or None, env var that moves it) for each folder the C: drive warning covers; `get`
+    reads one environment variable, `realpath` resolves links (the Claude folder may be a junction to
+    another drive). A default that needs an unset base variable is None."""
+    from kitlib.launcher.accounts import CONFIG_DIR_ENV     # the host's config folder variable and default
+    from kitlib.launcher.settings import DEFAULT_FOLDER
+    local, home = get("LOCALAPPDATA"), get("USERPROFILE")
+
+    def under(base, *parts):
+        return os.path.join(base, *parts) if base else None
+    config = get(CONFIG_DIR_ENV) or under(home, DEFAULT_FOLDER)
+    config = realpath(config) if config else None
+    return [
+        ("TEMP", get("TEMP"), "TEMP"),
+        ("TMP", get("TMP"), "TMP"),
+        ("pip cache", get("PIP_CACHE_DIR") or under(local, "pip", "Cache"), "PIP_CACHE_DIR"),
+        ("npm cache", get("npm_config_cache") or under(local, "npm-cache"), "npm_config_cache"),
+        ("nuget packages", get("NUGET_PACKAGES") or under(home, ".nuget", "packages"), "NUGET_PACKAGES"),
+        ("nuget http cache", get("NUGET_HTTP_CACHE_PATH") or under(local, "NuGet", "v3-cache"),
+         "NUGET_HTTP_CACHE_PATH"),
+        ("dotnet CLI home", get("DOTNET_CLI_HOME"), "DOTNET_CLI_HOME"),
+        ("gradle home", get("GRADLE_USER_HOME") or under(home, ".gradle"), "GRADLE_USER_HOME"),
+        ("uv cache", get("UV_CACHE_DIR") or under(local, "uv", "cache"), "UV_CACHE_DIR"),
+        ("agent transcripts", under(config, "projects"), CONFIG_DIR_ENV),
+    ]
+
+
+def cdrive_lines(environ=None, realpath=None):
+    """One warning line naming each of TEMP, TMP, the pip, npm, nuget and dotnet tool caches and the
+    Claude transcript folder (CLAUDE_CONFIG_DIR, else ~/.claude, projects/) that resolves to the C:
+    drive, with the variable that would move it; none when nothing is on C:. Also the nuget http
+    cache, gradle home and uv cache. Reads this process's environment only (`environ`, default
+    os.environ; never the machine-scope TEMP of system services) and runs no subprocess, no `npm
+    config get`. The Claude folder is resolved through links (`realpath`, default os.path.realpath).
+    A relative or unset path is skipped (its drive is unknown)."""
+    env = {k.upper(): v for k, v in (os.environ if environ is None else environ).items()}
+    hits = []
+    for label, path, var in _cdrive_items(lambda k: env.get(k.upper()), realpath or os.path.realpath):
+        if path and os.path.splitdrive(os.path.normpath(path))[0].upper() == "C:":
+            hits.append("%s (%s; set %s)" % (label, path, var))
+    return ["on the C: drive: " + ", ".join(hits)] if hits else []
+
+
 def worktree_sweep_lines(repos=None, read=None, plugin=None):
     """One line per repository in launcher.repos whose `<repo>-worktree-sweep` task is missing, or
     runs from a removed plugin export (kitlib.machinesetup.worktreesweep, docs/machine-setup.md
@@ -920,6 +963,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
             "stubs", {}).items() if k == "repos"}))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
+        ("cdrive", lambda: cdrive_lines(**fakes.get("cdrive", {}))),
         # A stubs fake's repos stand for launcher.repos here too.
         ("worktree_sweep", lambda: worktree_sweep_lines(**fakes.get("worktree_sweep", {
             k: v for k, v in fakes.get("stubs", {}).items() if k == "repos"}))),
