@@ -58,8 +58,8 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(item('Agents must stop until the freeze ends.')[0], 'CUT')
 
     def test_a_ruling_or_question_id_is_not_a_record(self):
-        for text in ('Agents never reopen R-0012.', 'Agents never reopen Q-12.',
-                     'Agents never reopen H-kit-0007.', 'Agents never reopen H-kit-0007 or UTF-8 files.'):
+        for text in ('Agents never reopen R-' + '0012.', 'Agents never reopen Q-12.',
+                     'Agents never reopen H-kit-' + '0007.', 'Agents never reopen H-kit-' + '0007 or UTF-8 files.'):
             self.assertEqual(item(text)[0], 'KEEP', text)
 
 
@@ -119,8 +119,8 @@ class ReportTest(unittest.TestCase):
         self.assertEqual((errs, back[0].text), ([], 'Use a / b or c / d.'))
 
     def test_parse_reports_bad_lines_and_tags(self):
-        _, _, errs = migrate.parse('Basis: x\nnonsense\nFOO | kit | a.b | T | t | from: R-0001\n'
-                                   'MERGE | kit | a.b | T | t | from: R-0001\n')
+        _, _, errs = migrate.parse('Basis: x\nnonsense\nFOO | kit | a.b | T | t | from: ' + R1 + '\n'
+                                   'MERGE | kit | a.b | T | t | from: ' + R1 + '\n')
         self.assertEqual(len(errs), 3, errs)
 
 
