@@ -520,7 +520,7 @@ class DomTest(unittest.TestCase):
             self.assertIn(m[name], got["shown"], name)
         self.assertNotIn(mark("d-body"), got["shown"])                       # a body is never drawn into the page
         self.assertEqual(got["sinks"], [])
-        self.assertEqual(got["attrs"], ["a href"])                           # the header's one fixed link, to lock.html
+        self.assertEqual(got["attrs"], ["a href", "a href"])                 # the two fixed links to lock.html: the sidebar's and the tab bar's
         self.assertEqual(got["err"], "")
         made = set(got["tags"])
         self.assertIn("article", made)
@@ -1332,7 +1332,8 @@ class DomTest(unittest.TestCase):
             out.none = on(); out.empty = text($("#list"));
             return out;
         """, snapshot(views=views))
-        self.assertEqual(got["sections"], ["home", "questions", "topm", "todo", "backlog", "docs", "autotasks", "findings", "info"])
+        # The sidebar's order is its groups' (Machine schedule is the link to lock.html, which has no section).
+        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", None, "docs", "topm", "info", "findings", "autotasks"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -1630,7 +1631,8 @@ class DomTest(unittest.TestCase):
             await start();
             const c = $("#approval-A-1");
             const before = { card: text(c), diff: text(c.querySelector("pre")), approve: button(c, "Approve").disabled,
-                             deny: button(c, "Deny").disabled, decided: !!$("#approval-A-2"), n: text($("#n-qq")), q: !!$("#row-Q-1") };
+                             deny: button(c, "Deny").disabled, decided: !!$("#approval-A-2"), n: text($("#n-qq")), nap: text($("#n-ap")), hot: $("#n-ap").classList.contains("hot"),
+                             q: !!$("#row-Q-1"), rows: $$("#list article").map(a => a.id) };
             server.route = r => {
               if (r.path !== "/approvals/A-1/decide") return undefined;
               const d = server.snap.collections.approvals["A-1"]; d.status = "approved"; d.version = 3; server.snap.revision++;
@@ -1638,12 +1640,13 @@ class DomTest(unittest.TestCase):
             };
             await click(button(c, "Approve"));
             return { before, sent: calls.filter(r => r.method === "POST").map(r => [r.path, r.body]), after: !!$("#approval-A-1"), tags: [...new Set(created)] };
-        """, snapshot(strong=True, collections=dict(LISTS, approvals=self.APPROVALS)))
+        """, snapshot(strong=True, collections=dict(LISTS, approvals=self.APPROVALS)), hash="#approvals")
         b = got["before"]
         for part in ("A-1", "github.com/team/alpha", "Raise the cap", "a" * 40, "the cap is too low"):
             self.assertIn(part, b["card"], part)
         self.assertEqual(b["diff"], "--- a/conf.txt\n+++ b/conf.txt\n@@ -1 +1 @@\n-cap = 3\n+cap = 9 <img src=x>")
-        self.assertEqual((b["approve"], b["deny"], b["decided"], b["q"], b["n"]), (False, False, False, True, "2"))
+        self.assertEqual((b["approve"], b["deny"], b["decided"], b["q"], b["n"]), (False, False, False, False, "1"))     # Questions no longer hold approvals
+        self.assertEqual((b["nap"], b["hot"], b["rows"]), ("1", True, ["row-A-1"]))                       # the Approvals count is its own, and hot
         self.assertEqual(got["sent"], [["/approvals/A-1/decide", {"decision": "approve", "if_version": 2}]])
         self.assertFalse(got["after"])                                          # approved: no longer pending
         self.assertNotIn("img", got["tags"])
@@ -1653,7 +1656,7 @@ class DomTest(unittest.TestCase):
             await start();
             const c = $("#approval-A-1");
             return { approve: button(c, "Approve").disabled, deny: button(c, "Deny").disabled, card: text(c) };
-        """, snapshot(collections={"approvals": self.APPROVALS}))
+        """, snapshot(collections={"approvals": self.APPROVALS}), hash="#approvals")
         self.assertEqual((weak["approve"], weak["deny"]), (True, True))           # pagedom fires a disabled button; a browser does not
         self.assertIn("need a strong session", weak["card"])
         words = "POST /approvals/{id}/decide needs the owner logged in through Cloudflare Access"
@@ -1665,7 +1668,7 @@ class DomTest(unittest.TestCase):
             await click(button(c, "Deny"));
             return { card: text(c), approve: button(c, "Approve").disabled, sent: calls.filter(r => r.method === "POST").map(r => r.body),
                      err: text($("#loaderr")) };
-        """ % json.dumps(words), snapshot(strong=True, collections={"approvals": self.APPROVALS}))
+        """ % json.dumps(words), snapshot(strong=True, collections={"approvals": self.APPROVALS}), hash="#approvals")
         self.assertIn("Not decided: " + words, got["card"])
         self.assertNotIn("not paired", got["card"])
         self.assertFalse(got["approve"])                                        # the owner may try again
@@ -1686,7 +1689,7 @@ class DomTest(unittest.TestCase):
             server.route = r => r.path === "/approvals/A-5/decide" ? { status: 200, body: { ok: true } } : undefined;
             await click(button(c, "Approve"));
             return { before, sent: calls.filter(r => r.method === "POST").map(r => [r.path, r.body]), tags: [...new Set(created)] };
-        """, snapshot(strong=True, collections={"approvals": self.OP_APPROVALS}))
+        """, snapshot(strong=True, collections={"approvals": self.OP_APPROVALS}), hash="#approvals")
         b = got["before"]
         for part in ("Run approval", "A-5", "any repository", "Copy the inputs", "asked for", "runs D-004",
                      "The agent's note, not signed: copies a folder <img src=x>"):
@@ -2073,12 +2076,17 @@ class DocsTest(unittest.TestCase):
 
 
 # What a test reads off the shell: the section the sidebar and the tab bar mark, the tab marked inside the Inbox,
-# the Backlog and Info, the address's hash and how many history entries the tab has.
+# the Backlog, Approvals and Info, the address's hash and how many history entries the tab has.
 SHELL_NOW = """
-    const marked = q => $$(q).filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s || b.dataset.qt || b.dataset.sf || b.dataset.nf);
+    const marked = q => $$(q).filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s || b.dataset.qt || b.dataset.sf || b.dataset.nf || b.dataset.af);
     const now = () => ({ sec: marked("#sections .sec"), tb: marked("#tabbar .tb"), qt: marked("#qtabs .tab"), sf: marked("#stabs .tab"),
-                         nf: marked("#ftabs .tab"), hash: location.hash, len: history.length });
+                         nf: marked("#ftabs .tab"), af: marked("#atabs .tab"), hash: location.hash, len: history.length });
 """
+
+
+def bar_tab(section):
+    """The phone's tab bar has three sections of its own; every other section is marked on its More tab."""
+    return section if section in ("home", "questions", "approvals") else "more"
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
@@ -2090,7 +2098,10 @@ class ShellTest(unittest.TestCase):
                  "#questions": ("questions", "questions", None, None, "#questions"),
                  "#inbox": ("questions", "inbox", None, None, "#inbox"),
                  "#todo": ("todo", None, None, None, "#todo"),
+                 "#approvals": ("approvals", None, None, None, "#approvals"),
                  "#topm": ("topm", None, None, None, "#topm"),
+                 "#autotasks": ("autotasks", None, None, None, "#autotasks"),
+                 "#findings": ("findings", None, None, None, "#findings"),
                  "#backlog": ("backlog", None, "current", None, "#backlog"),
                  "#stories": ("backlog", None, "current", None, "#stories"),
                  "#parked": ("backlog", None, "parked", None, "#parked"),
@@ -2103,7 +2114,8 @@ class ShellTest(unittest.TestCase):
             got = dom(SHELL_NOW + "await start(); return now();", snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash=hash_)
             with self.subTest(hash=hash_):
                 self.assertEqual(got["sec"], [sec])
-                self.assertEqual(got["tb"], [sec])                 # the tab bar marks the same section
+                self.assertEqual(got["tb"], [bar_tab(sec)])        # the tab bar marks the same section, or its More tab
+                if sec == "approvals": self.assertEqual(got["af"], ["waiting"])
                 if qt: self.assertEqual(got["qt"], [qt])
                 if sf: self.assertEqual(got["sf"], [sf])
                 if nf: self.assertEqual(got["nf"], [nf])
@@ -2130,7 +2142,36 @@ class ShellTest(unittest.TestCase):
         self.assertEqual(got[4]["sf"], ["parked"])
         self.assertEqual(got[5]["sf"], ["current"])                    # Back from Parked is the Backlog's current list
         self.assertEqual(got[8]["nf"], ["agents"])
-        self.assertTrue(all(s["tb"] == s["sec"] for s in got))
+        self.assertTrue(all(s["tb"] == [bar_tab(s["sec"][0])] for s in got))
+
+    def test_the_approvals_tab_has_a_route_and_its_filter_is_not_an_address(self):
+        got = dom(SHELL_NOW + """
+            await start();
+            const seen = [now()];
+            await click($("#sections [data-s=approvals]")); seen.push(now());
+            await click($("#atabs [data-af=decided]")); seen.push(now());       // a tab of Approvals is not an address of its own
+            await back(); seen.push(now());
+            return seen;
+        """, snapshot(strong=True, collections=NEEDS))
+        self.assertEqual([(s["sec"], s["tb"], s["hash"], s["len"]) for s in got], [
+            (["questions"], ["questions"], "#questions", 1), (["approvals"], ["approvals"], "#approvals", 2),
+            (["approvals"], ["approvals"], "#approvals", 2), (["questions"], ["questions"], "#questions", 2)])
+        self.assertEqual([s["af"] for s in got][:3], [["waiting"], ["waiting"], ["decided"]])      # Waiting is the tab the markup starts on
+
+    def test_more_is_a_page_on_a_phone_and_opens_home_on_a_wide_window(self):
+        wide = dom(SHELL_NOW + "await start(); return now();", snapshot(collections=LISTS), hash="#more")
+        self.assertEqual((wide["sec"], wide["tb"], wide["hash"], wide["len"]), (["home"], ["home"], "#home", 1))
+        got = dom(TriageListTest.PHONE + SHELL_NOW + """
+            await start();
+            const first = now(), rows = $$("#list .morerow").map(b => [b.id, text(b)]);
+            await click($("#more-backlog"));
+            return { first, rows, after: now(), tabs: $$("#tabbar .tb").map(b => b.id) };
+        """, snapshot(collections=LISTS), hash="#more")
+        self.assertEqual((got["first"]["sec"], got["first"]["tb"], got["first"]["hash"], got["first"]["len"]), ([], ["more"], "#more", 1))
+        self.assertEqual([r[0] for r in got["rows"]], ["more-todo", "more-backlog", "more-docs", "more-topm", "more-info", "more-findings", "more-autotasks"])
+        self.assertEqual([r[1] for r in got["rows"]][:2], ["To-dos2", "Backlog0"])
+        self.assertEqual((got["after"]["sec"], got["after"]["tb"], got["after"]["hash"]), (["backlog"], ["more"], "#backlog"))
+        self.assertEqual(got["tabs"], ["tb-home", "tb-questions", "tb-approvals", "tb-schedule", "tb-more"])
 
     def test_j_and_k_move_through_the_cards_and_never_while_typing(self):
         got = dom("""
@@ -2163,23 +2204,31 @@ class ShellTest(unittest.TestCase):
         self.assertEqual(got["reading"], [first, False])
 
     def test_the_tab_bar_is_the_sidebar_on_a_phone(self):
+        """Three of the phone's five tabs are sidebar sections (Home, Questions, Approvals), the fourth is the link to the
+        machine schedule and the fifth is More; each tab's count is a copy of the sidebar's."""
         got = dom("""
             await start();
-            const tabs = $$("#tabbar .tb").map(b => [b.dataset.s, b.getAttribute("role")]);
-            const secs = $$("#sections .sec").map(b => [b.dataset.s, b.getAttribute("role")]);
+            const tabs = $$("#tabbar .tb").map(b => [b.dataset.s || null, b.getAttribute("role"), b.attrs.href || null]);
+            const secs = $$("#sections .sec").map(b => [b.dataset.s || null, b.getAttribute("role"), b.attrs.href || null]);
             const counts = $$("#tabbar [data-of]").map(n => [n.dataset.of, text(n), n.className, text(document.getElementById(n.dataset.of)),
                                                                document.getElementById(n.dataset.of).className]);
-            await click($("#tabbar [data-s=todo] .n"));
-            return { tabs, secs, counts, after: { sec: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
+            await click($("#tabbar [data-s=approvals] .n"));
+            const approvals = { sec: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
                      tb: $$("#tabbar .tb").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s), hash: location.hash,
-                     section: localStorage.getItem("oq.section") } };
-        """, snapshot(collections=LISTS))
-        self.assertEqual(got["tabs"], got["secs"])
-        self.assertEqual([c[0] for c in got["counts"]], ["n-q", "n-pm", "n-t", "n-s", "n-d"])
+                     section: localStorage.getItem("oq.section") };
+            await click($("#tabbar #tb-schedule"));                                      // a link: it picks no section
+            return { tabs, secs, counts, approvals, afterLink: location.hash };
+        """, snapshot(strong=True, collections=NEEDS))
+        self.assertEqual(got["tabs"], [["home", "tab", None], ["questions", "tab", None], ["approvals", "tab", None], [None, None, "/lock.html"], ["more", "tab", None]])
+        for t in got["tabs"]:
+            if t[0] in ("home", "questions", "approvals"): self.assertIn(t, got["secs"])        # the same section and role, and no link
+        self.assertIn([None, None, "/lock.html"], got["secs"])                                  # the sidebar has the same link
+        self.assertEqual([c[0] for c in got["counts"]], ["n-q", "n-ap"])
         for of, shown, cls, src, src_cls in got["counts"]:
             self.assertEqual((shown, cls), (src, src_cls), of)
-        self.assertEqual(dict((c[0], c[1]) for c in got["counts"])["n-t"], "2")
-        self.assertEqual(got["after"], {"sec": ["todo"], "tb": ["todo"], "hash": "#todo", "section": "todo"})
+        self.assertEqual(dict((c[0], c[1]) for c in got["counts"])["n-ap"], "1")
+        self.assertEqual(got["approvals"], {"sec": ["approvals"], "tb": ["approvals"], "hash": "#approvals", "section": "approvals"})
+        self.assertEqual(got["afterLink"], "#approvals")
 
     def test_a_backlog_address_leaves_parked_whichever_backlog_hash_it_is(self):
         """Back or a typed #stories from Parked shows the current list, as #backlog does."""
@@ -2361,17 +2410,18 @@ class HomeTest(unittest.TestCase):
                 for n in ("a-title", "q-title", "t-title") + (("head", "strip") if name == "view" else ("err",)):
                     self.assertIn(m[n], got["shown"], n)
                 self.assertEqual(got["sinks"], [])
-                self.assertEqual(got["attrs"], ["a href"])               # the header's own link to the lock page
+                self.assertEqual(got["attrs"], ["a href", "a href"])     # the sidebar's and the tab bar's own links to the lock page
                 self.assertNotIn("script", got["tags"])
                 self.assertNotIn("img", got["tags"])
 
-    def test_opening_an_approval_from_the_needs_you_list_shows_it_in_the_questions_section(self):
+    def test_opening_an_approval_from_the_needs_you_list_shows_it_in_the_approvals_section(self):
         got = dom("""
             await start();
             await click($("#need-open-A-1"));
-            return { sec: $("#sections .sec[aria-selected=true]").dataset.s, hash: location.hash, card: !!$("#approval-A-1") };
+            return { sec: $("#sections .sec[aria-selected=true]").dataset.s, hash: location.hash, card: !!$("#approval-A-1"),
+                     af: $("#atabs .tab[aria-selected=true]").dataset.af };
         """, snapshot(strong=True, collections=NEEDS), hash="#home")
-        self.assertEqual(got, {"sec": "questions", "hash": "#questions", "card": True})
+        self.assertEqual(got, {"sec": "approvals", "hash": "#approvals", "card": True, "af": "waiting"})
 
     def test_a_wait_that_changed_nothing_leaves_the_focus_on_the_open_button(self):
         got = dom(HOLD_LOCK_WAIT + """
@@ -2451,8 +2501,8 @@ class TriageListTest(unittest.TestCase):
             const rows = $$("#list article").map(a => a.id);
             await click($("#row-A-1"));
             return { rows, card: !!$("#pane-detail #approval-A-1"), inList: !!$("#list #approval-A-1") };
-        """, snapshot(strong=True, collections=NEEDS), hash="#questions")
-        self.assertEqual(got["rows"][:2], ["row-A-1", "row-Q-3"])
+        """, snapshot(strong=True, collections=NEEDS), hash="#approvals")
+        self.assertEqual(got["rows"], ["row-A-1"])
         self.assertEqual((got["card"], got["inList"]), (True, False))
 
     def test_an_action_in_the_detail_pane_sends_the_same_request_as_before(self):
@@ -2464,7 +2514,7 @@ class TriageListTest(unittest.TestCase):
             await click($("#sections [data-s=todo]"));
             await click($("#row-T-2"));
             const box = $("#t-T-2"); box.checked = true; await fire(box, "change");
-            await click($("#sections [data-s=questions]"));
+            await click($("#sections [data-s=approvals]"));
             await click($("#row-A-1"));
             await click(button($("#approval-A-1"), "Approve"));
             return calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
@@ -2917,7 +2967,7 @@ class AutoTasksTest(unittest.TestCase):
             holding = true;
             const saving = click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
             await settle();
-            await click($("#tabbar [data-s=todo]")); await click($("#tabbar [data-s=autotasks]"));   // redrawn, the read held
+            await click($("#sections [data-s=todo]")); await click($("#sections [data-s=autotasks]"));   // redrawn, the read held
             const meanwhile = [$("#pane-detail #s-maint-lint-alpha-at").value, text($("#pane-detail #s-maint-lint-alpha-status"))];
             holding = false; while (queue.length) { queue.shift()(); await settle(); }
             await saving; await settle();
@@ -2985,7 +3035,7 @@ class AutoTasksTest(unittest.TestCase):
             globalThis.fetch = (url, init) => { const p = realFetch(url, init); return holding && /\\/schedules$/.test(url) && init.method === "GET" ? new Promise(r => queue.push(() => r(p))) : p; };
             await start();
             holding = true;
-            await click($("#tabbar [data-s=todo]")); await click($("#tabbar [data-s=autotasks]"));   // a read now in flight
+            await click($("#sections [data-s=todo]")); await click($("#sections [data-s=autotasks]"));   // a read now in flight
             holding = false;
             await type($("#s-maint-lint-alpha-at"), "05:00");
             const saving = click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
@@ -3019,8 +3069,8 @@ class AutoTasksTest(unittest.TestCase):
             await click($("#sections [data-s=todo]"));
             await back();
             const back1 = [location.hash, $("#sections .sec[aria-selected=true]").dataset.s, gets()];
-            await click($("#tabbar [data-s=todo]"));
-            await click($("#tabbar [data-s=autotasks]"));
+            await click($("#sections [data-s=todo]"));
+            await click($("#sections [data-s=autotasks]"));
             return { off, on, back1, again: gets(), repo: $("#repo").hidden };
         """, hash="#todo")
         self.assertEqual(got["off"], 0)                                            # not read off the section
@@ -3152,7 +3202,7 @@ class AutoTasksTest(unittest.TestCase):
             await click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
             const first = text($("#pane-detail #s-maint-lint-alpha-status"));
             after.items[0] = { ...after.items[0], at: "07:00", via: "cli", version: 4 };
-            await click($("#tabbar [data-s=todo]")); await click($("#tabbar [data-s=autotasks]")); await settle();
+            await click($("#sections [data-s=todo]")); await click($("#sections [data-s=autotasks]")); await settle();
             return { first, said: text($("#pane-detail #s-maint-lint-alpha-status")), at: $("#pane-detail #s-maint-lint-alpha-at").value };
         """)
         self.assertTrue(got["first"].startswith("Saved. First run: "), got["first"])
@@ -3228,7 +3278,7 @@ class FindingsTest(unittest.TestCase):
     def test_the_findings_are_read_each_time_the_section_is_shown(self):
         got = self.run_page("""
             await start();
-            await click($("#tabbar [data-s=todo]")); await click($("#tabbar [data-s=findings]")); await settle();
+            await click($("#sections [data-s=todo]")); await click($("#sections [data-s=findings]")); await settle();
             return calls.filter(c => c.method === "GET" && c.path === "/findings").length;
         """)
         self.assertEqual(got, 2)
@@ -3499,14 +3549,14 @@ class PageTextTest(unittest.TestCase):
 
     def test_no_attribute_that_loads_or_navigates_is_ever_set(self):
         """The page builds no link, image or frame, so no server value can become an address the browser follows. Its
-        markup has one fixed link, the header's to the machine lock's page."""
+        markup has two fixed links, the sidebar's and the tab bar's, both to the machine lock's page."""
         keys = r"(?:href|src|srcset|srcdoc|action|formaction|poster|background|ping|xlink:href)"
         self.assertEqual(re.findall(r'[{,\s]"?%s"?\s*:' % keys, self.script), [])           # an el() attribute
         self.assertEqual(re.findall(r'setAttribute\(\s*"%s"' % keys, self.script), [])
         # A property set: none, but the reader frame's one body (test_the_reader_is_one_locked_frame).
         self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys.replace("srcdoc|", ""), self.script), [])
         self.assertEqual(re.findall(r"\.srcdoc\s*=[^=]", self.script), [".srcdoc = "])
-        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<link rel="stylesheet" href="hub.css">', '<a href="/lock.html">'])
+        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<link rel="stylesheet" href="hub.css">', '<a class="sec" href="/lock.html" id="sec-schedule">', '<a class="tb" href="/lock.html" id="tb-schedule">'])
         self.assertNotIn("location.assign", self.script)
         self.assertNotIn("location.replace", self.script)
         self.assertNotIn("window.open", self.script)
@@ -3533,7 +3583,7 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/lock", "/pages", "/records", "/schedules", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/pages", "/records", "/schedules", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
                                  "/finding_marks"})
@@ -3553,12 +3603,119 @@ class PageTextTest(unittest.TestCase):
         self.assertIn(".q.row{gap:8px}", style)
         self.assertNotIn("setDetail", self.p)
 
-    def test_the_automatic_tasks_section_is_in_the_sidebar_and_the_tab_bar(self):
+    def test_the_automatic_tasks_section_is_in_the_sidebar_and_on_the_more_page(self):
         self.assertIn('<button class="sec" role="tab" data-s="autotasks" aria-selected="false" id="sec-autotasks">Automatic tasks</button>', self.markup)
-        self.assertIn('<button class="tb" role="tab" data-s="autotasks" aria-selected="false" id="tb-autotasks">', self.markup)
+        self.assertNotIn('id="tb-autotasks"', self.markup)                  # the tab bar has no room: the More page lists it
+        self.assertIn('["autotasks", "Automatic tasks", ""]', self.script)
         style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
-        n = len(re.findall(r'<button class="tb" ', self.markup))
+        n = len(re.findall(r'<(?:button|a) class="tb" ', self.markup))
+        self.assertEqual(n, 5)
         self.assertIn("repeat(%d,minmax(0,1fr))" % n, style)
+        self.assertEqual(re.findall(r'<(?:button|a) class="tb" [^>]*?(?:data-s="(\w+)"|href="([^"]+)")', self.markup),
+                         [("home", ""), ("questions", ""), ("approvals", ""), ("", "/lock.html"), ("more", "")])
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class TriageShellTest(unittest.TestCase):
+    """Slice S4 of the hub redesign: the grouped sidebar, the Approvals section and its Decided tab, the sidebar foot,
+    the Lint findings count."""
+
+    def setUp(self):
+        self.p = page()
+        self.markup, self.script = self.p.split("<script>")[0], self.p.split("<script>")[1]
+
+    def test_the_sidebar_is_four_groups_under_headings_in_one_order(self):
+        side = re.search(r'<div class="sections".*?</div>\s*<div class="sidefoot"', self.markup, re.S).group(0)
+        order = re.findall(r'class="(sechead|sec)"[^>]*?(?:id="([\w-]+)")', side)
+        self.assertEqual([i for _, i in order], ["sec-home", "sh-work", "sec-questions", "sec-todo", "sec-approvals", "sh-projects",
+                                                 "sec-backlog", "sec-schedule", "sec-docs", "sh-more", "sec-topm", "sec-info",
+                                                 "sh-upkeep", "sec-findings", "sec-autotasks"])
+        heads = re.findall(r'<div class="sechead" id="[\w-]+">([^<]+)</div>', side)
+        self.assertEqual(heads, ["Your work", "Projects", "More", "Upkeep"])
+        for label in ("Message the PM", "Usage and agents", "Lint findings", "Automatic tasks", "Machine schedule", "Approvals"):
+            self.assertIn(label, side)
+        self.assertNotIn(">Findings", side)                                  # renamed Lint findings
+        self.assertNotIn("Message to the PM", self.markup)
+
+    def test_the_counts_sit_at_the_right_edge_and_a_hot_one_is_loud(self):
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        self.assertRegex(style, r"\.sec>\.n:first-of-type\{margin-left:auto\}")
+        self.assertRegex(style, r"\.n\.hot\{")
+        self.assertRegex(style, r"\.sechead\{[^}]*text-transform:uppercase")
+
+    def test_between_a_phone_and_a_wide_window_the_detail_pane_stacks_under_the_list(self):
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        mid = re.search(r"@media \(min-width:761px\) and \(max-width:1100px\)\{(.*?)\n\}", style, re.S)
+        self.assertIsNotNone(mid)
+        self.assertIn("grid-template-columns:var(--side-w) minmax(0,1fr)", mid.group(1))
+        self.assertIn("grid-template-rows", mid.group(1))
+        self.assertIn(".detailpane{", mid.group(1))
+
+    def test_the_waiting_tab_holds_the_pending_approvals_and_the_decided_tab_the_rest_without_buttons(self):
+        got = dom("""
+            await start();
+            const waiting = { rows: $$("#list article").map(a => a.id), n: [text($("#n-awaiting")), text($("#n-adecided"))],
+                              urgent: $$("#list article.urgent").map(a => a.id) };
+            await click($("#atabs [data-af=decided]"));
+            const decided = { rows: $$("#list article").map(a => [a.id, a.className, [...a.querySelectorAll(".chip")].map(text)]),
+                              card: text($("#pane-detail #approval-A-2")), buttons: $$("#pane-detail #approval-A-2 button").map(text),
+                              tab: $$("#atabs .tab").filter(t => t.getAttribute("aria-selected") === "true").map(t => t.dataset.af) };
+            return { waiting, decided };
+        """, snapshot(strong=True, collections=NEEDS), hash="#approvals")
+        self.assertEqual(got["waiting"], {"rows": ["row-A-1"], "n": ["1", "1"], "urgent": ["row-A-1"]})
+        d = got["decided"]
+        self.assertEqual([r[0] for r in d["rows"]], ["row-A-2"])
+        self.assertNotIn("urgent", d["rows"][0][1])                           # a decided approval is not urgent
+        self.assertIn("Approved", d["rows"][0][2])
+        self.assertIn("decided", d["card"])
+        self.assertEqual(d["buttons"], [])                                    # no Approve or Deny on a decided one
+        self.assertEqual(d["tab"], ["decided"])
+
+    def test_the_approvals_count_is_hot_while_one_waits_and_calm_when_none_does(self):
+        hot = dom("await start(); return [text($('#n-ap')), $('#n-ap').classList.contains('hot')];", snapshot(strong=True, collections=NEEDS))
+        self.assertEqual(hot, ["1", True])
+        calm = dom("await start(); return [text($('#n-ap')), $('#n-ap').classList.contains('hot')];",
+                   snapshot(strong=True, collections={"approvals": {"A-2": dict(APPROVAL, status="approved")}}))
+        self.assertEqual(calm, ["0", False])
+
+    def test_the_sidebar_foot_holds_the_read_the_pm_and_the_push_lines_and_the_header_holds_none(self):
+        got = dom("""
+            await start();
+            const foot = $("#sidefoot");
+            return { inFoot: ["readseen", "pmseen", "pushseen"].map(i => foot.contains(document.getElementById(i))),
+                     inHeader: !!$("header #pmseen") || !!$("header #pushseen"), foot: text(foot), pill: text($("#pmpill")),
+                     pillIn: !!$("header #pmpill") };
+        """, snapshot(collections=LISTS, pm_seen={"waited": NOW, "pulled": None, "waiting": 1}))
+        self.assertEqual(got["inFoot"], [True, True, True])
+        self.assertFalse(got["inHeader"])
+        self.assertTrue(got["pillIn"])
+        self.assertEqual(got["pill"], "PM listening")
+        self.assertIn("Read from the hub server", got["foot"])
+        self.assertIn("Push notifications are off", got["foot"])
+        none = dom("await start(); return text($('#pmpill'));", snapshot(collections=LISTS))
+        self.assertEqual(none, "No PM listening")
+
+    def test_the_pill_is_for_a_phone_only(self):
+        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
+        self.assertRegex(style, r"(?m)^\.pill\{display:none;")
+        phone = re.search(r"@media \(max-width:760px\)\{(.*?)\n\}", style, re.S).group(1)
+        self.assertIn(".pill{display:inline-block}", phone)
+
+    def test_the_lint_findings_count_is_a_dash_until_read_then_the_open_ones_and_hot(self):
+        route = FINDINGS_ROUTE.replace("FOUND", json.dumps(FOUND[:2])).replace("MARKS", "[]").replace("RUNS", "[]")
+        got = dom(route + """
+            const before = text($("#n-f"));
+            await start();
+            return { before, n: text($("#n-f")), hot: $("#n-f").classList.contains("hot"),
+                     gets: calls.filter(c => c.method === "GET" && c.path === "/findings").length,
+                     sec: $("#sections .sec[aria-selected=true]").dataset.s };
+        """, snapshot(collections=LISTS), hash="#home")
+        self.assertEqual((got["before"], got["n"], got["hot"], got["sec"]), ("–", "2", True, "home"))
+        self.assertEqual(got["gets"], 1)                                      # one background read at the start, no section drawn
+        down = dom(route.replace("readFail: null", "readFail: { status: 500, body: { ok: false, error: { code: 'x', message: 'x', field: '' } } }") + """
+            await start(); return text($("#n-f"));
+        """, snapshot(collections=LISTS), hash="#home")
+        self.assertEqual(down, "–")                                           # a failed read keeps the dash
 
 
 if __name__ == "__main__":

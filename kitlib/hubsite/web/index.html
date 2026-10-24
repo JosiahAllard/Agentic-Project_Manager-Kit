@@ -24,7 +24,7 @@
 .listpane{width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;padding-inline:16px;padding-block:24px 64px;display:grid;gap:18px;align-content:start}
 .detailpane{background:var(--surface);border-left:1px solid var(--line);padding:24px 28px;min-width:0;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto}
 .tabbar{display:none}
-.tb{font:500 .72rem var(--f-body);background:none;border:0;color:var(--muted);padding:6px 2px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0}
+.tb{font:500 .72rem var(--f-body);background:none;border:0;color:var(--muted);padding:6px 2px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;min-height:44px;justify-content:center;text-align:center;text-decoration:none}
 .tb[aria-selected="true"]{color:var(--accent);font-weight:700}
 .tb .n{font:600 .68rem var(--f-mono);font-variant-numeric:tabular-nums;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:0 6px}
 .tb .n.hot{background:var(--warn-soft);color:var(--warn)}
@@ -49,10 +49,19 @@ body.reading{overflow:hidden}
   .listpane{padding-block:16px 88px}
   .wrap:has(> #pane-detail:not([hidden])) > .listpane{display:none}
   .detailpane{position:static;height:auto;border-left:0;padding:16px 16px 88px}
-  .tabbar{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
+  .tabbar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
+  .pill{display:inline-block}
+}
+/* Between a phone and a wide window the detail pane stacks under the list instead of squeezing beside it. */
+@media (min-width:761px) and (max-width:1100px){
+  .wrap,.wrap:has(> #pane-detail:not([hidden])){grid-template-columns:var(--side-w) minmax(0,1fr)}
+  .wrap:has(> #pane-detail:not([hidden])){grid-template-rows:minmax(0,2fr) minmax(0,3fr)}
+  .side{grid-column:1;grid-row:1 / -1}
+  .listpane,.detailpane{grid-column:2}
+  .detailpane{border-left:0;border-top:1px solid var(--line)}
 }
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
-.sub{color:var(--muted);margin:0;max-width:62ch}
+.pill{display:none;margin:0;font-size:.8rem;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
 .links{margin:0;font-size:.9rem}.links a{color:var(--accent)}
 .tabs{display:flex;flex-wrap:wrap;gap:6px}
 .tab{font:600 .85rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:999px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
@@ -127,12 +136,17 @@ button:disabled{opacity:.5;cursor:default}
 .ans b{font-weight:600}
 .empty{background:var(--surface);border:1px dashed var(--line);border-radius:10px;padding:28px 20px;text-align:center;color:var(--muted)}
 .sections{display:flex;flex-direction:column;gap:2px}
-.sec{font:600 .95rem var(--f-body);background:none;border:0;border-radius:7px;color:var(--muted);padding:7px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;text-align:left;width:100%}
+.sechead{font:600 .7rem var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:14px 10px 4px}
+.sec{font:600 .95rem var(--f-body);background:none;border:0;border-radius:7px;color:var(--muted);padding:7px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;text-align:left;width:100%;box-sizing:border-box;text-decoration:none}
 .sec>.n:first-of-type{margin-left:auto}
 .sec:hover{color:var(--fg)}
 .sec[aria-selected="true"]{color:var(--fg);background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
 .sec .n{font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
 .sidefoot{margin-top:18px;padding:8px 10px;font-size:.75rem;color:var(--muted);overflow-wrap:anywhere}
+.sidefoot>*{display:block;margin:0 0 4px}
+.morerow{font:600 1rem var(--f-body);display:flex;gap:8px;align-items:center;width:100%;box-sizing:border-box;text-align:left;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-height:44px;cursor:pointer}
+.morerow>.n{margin-left:auto;font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
+.morerow>.n.hot{background:var(--warn-soft);color:var(--warn)}
 .machine{margin:0}
 .sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .t{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
@@ -203,25 +217,28 @@ button.danger{color:var(--warn)}
   <nav class="side" aria-label="Sections">
   <div class="sections" role="tablist" id="sections" aria-orientation="vertical">
     <button class="sec" role="tab" data-s="home" aria-selected="false" id="sec-home">Home</button>
-    <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
-    <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
-    <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
+    <div class="sechead" id="sh-work">Your work</div>
+    <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Questions <span class="n" id="n-q">0</span></button>
+    <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To-dos <span class="n" id="n-t">0</span></button>
+    <button class="sec" role="tab" data-s="approvals" aria-selected="false" id="sec-approvals">Approvals <span class="n" id="n-ap">0</span></button>
+    <div class="sechead" id="sh-projects">Projects</div>
     <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
+    <a class="sec" href="/lock.html" id="sec-schedule">Machine schedule</a>
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
+    <div class="sechead" id="sh-more">More</div>
+    <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">Message the PM <span class="n" id="n-pm">0</span></button>
+    <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Usage and agents</button>
+    <div class="sechead" id="sh-upkeep">Upkeep</div>
+    <button class="sec" role="tab" data-s="findings" aria-selected="false" id="sec-findings">Lint findings <span class="n" id="n-f">–</span></button>
     <button class="sec" role="tab" data-s="autotasks" aria-selected="false" id="sec-autotasks">Automatic tasks</button>
-    <button class="sec" role="tab" data-s="findings" aria-selected="false" id="sec-findings">Findings</button>
-    <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
   </div>
-  <div class="sidefoot" id="sidefoot" role="status"></div>
+  <div class="sidefoot" id="sidefoot" role="status"><span id="readseen"></span><div id="pmseen"></div><div id="pushseen"></div></div>
   </nav>
 
   <main class="listpane" id="pane-list">
   <header>
     <h1>Action Hub</h1>
-    <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
-    <p class="links"><a href="/lock.html">Machine schedule</a>: who holds this PC's slots, the week ahead and what ran.</p>
-    <div class="status" id="pmseen" role="status"></div>
-    <div class="status" id="pushseen" role="status"></div>
+    <p class="pill" id="pmpill" role="status"></p>
     <div class="status err" id="loaderr" role="alert" hidden></div>
   </header>
 
@@ -242,6 +259,10 @@ button.danger{color:var(--warn)}
     </div>
   </div>
   <div class="bar">
+    <div class="tabs sw" role="tablist" id="atabs" data-for="approvals" hidden>
+      <button class="tab" role="tab" data-af="waiting" aria-selected="true" id="atab-waiting">Waiting <span class="n" id="n-awaiting">0</span></button>
+      <button class="tab" role="tab" data-af="decided" aria-selected="false" id="atab-decided">Decided <span class="n" id="n-adecided">0</span></button>
+    </div>
     <div class="tabs sw" role="tablist" id="ttabs" data-for="todo" hidden>
       <button class="tab" role="tab" data-tf="open" aria-selected="true" id="ttab-open">To do <span class="n" id="n-topen">0</span></button>
       <button class="tab" role="tab" data-tf="done" aria-selected="false" id="ttab-done">Done <span class="n" id="n-tdone">0</span></button>
@@ -290,14 +311,10 @@ button.danger{color:var(--warn)}
 
   <div class="tabbar" role="tablist" id="tabbar" aria-label="Sections">
     <button class="tb" role="tab" data-s="home" aria-selected="false" id="tb-home">Home</button>
-    <button class="tb" role="tab" data-s="questions" aria-selected="true" id="tb-questions">Inbox <span class="n" data-of="n-q">0</span></button>
-    <button class="tb" role="tab" data-s="topm" aria-selected="false" id="tb-topm">To PM <span class="n" data-of="n-pm">0</span></button>
-    <button class="tb" role="tab" data-s="todo" aria-selected="false" id="tb-todo">To do <span class="n" data-of="n-t">0</span></button>
-    <button class="tb" role="tab" data-s="backlog" aria-selected="false" id="tb-backlog">Backlog <span class="n" data-of="n-s">0</span></button>
-    <button class="tb" role="tab" data-s="docs" aria-selected="false" id="tb-docs">Docs <span class="n" data-of="n-d">0</span></button>
-    <button class="tb" role="tab" data-s="autotasks" aria-selected="false" id="tb-autotasks">Auto</button>
-    <button class="tb" role="tab" data-s="findings" aria-selected="false" id="tb-findings">Lint</button>
-    <button class="tb" role="tab" data-s="info" aria-selected="false" id="tb-info">Info</button>
+    <button class="tb" role="tab" data-s="questions" aria-selected="true" id="tb-questions">Questions <span class="n" data-of="n-q">0</span></button>
+    <button class="tb" role="tab" data-s="approvals" aria-selected="false" id="tb-approvals">Approvals <span class="n" data-of="n-ap">0</span></button>
+    <a class="tb" href="/lock.html" id="tb-schedule">Machine schedule</a>
+    <button class="tb" role="tab" data-s="more" aria-selected="false" id="tb-more">More</button>
   </div>
 </div>
 
@@ -309,11 +326,11 @@ button.danger{color:var(--warn)}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null };
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null };
   // The address's hash names a section (and, for some, the tab inside it): what each route sets in state. The
   // page opens on the route it is given, Back and Forward return to the section before, and a hash it does not
   // know leaves the page where it is.
-  const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"},
+  const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"}, "#approvals": {section:"approvals"}, "#more": {section:"more"},
     "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
     "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"}, "#notices": {section:"info", infotab:"notices"} };
   const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
@@ -369,7 +386,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks", "#findings"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks", "#findings", "#approvals", "#more"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -427,7 +444,7 @@ button.danger{color:var(--warn)}
   }
 
   // What the server last knew of the PM, as information only: nothing here is a control.
-  const seenLine = () => { $("#sidefoot").textContent = ready && lastRead ? "Read from the hub server " + when(new Date(lastRead).toISOString()) + "." : ""; $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now(), state.push, state.watcher) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; };
+  const seenLine = () => { $("#readseen").textContent = ready && lastRead ? "Read from the hub server " + when(new Date(lastRead).toISOString()) + "." : ""; $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now(), state.push, state.watcher) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; $("#pmpill").textContent = ready ? (Number(state.seen && state.seen.waiting) > 0 ? "PM listening" : "No PM listening") : ""; };
   // A redraw gives the focus and the caret back to a field it rebuilt (a question's note, found by its id)
   // or moved.
   function render(){
@@ -463,19 +480,25 @@ button.danger{color:var(--warn)}
   function draw(){
     detailKids = [];
     seenLine();
+    if (state.section === "more" && !phone()) state.section = "home";     // More is the phone's list of the rest: a wide window opens Home instead
     const sc = state.section, q = sc === "questions";
     if (sc === "autotasks" && drewSection !== "autotasks") sched.read = false;     // the schedules are read again each time the section is shown
     if (sc === "findings" && drewSection !== "findings") lint.read = false;        // and so are the findings
     drewSection = sc;
     const inb = q || sc === "inbox";
-    document.querySelectorAll(".sec, .tb").forEach(b =>b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === sc)));
+    // The phone's More tab holds every section the other four tabs do not.
+    const onBar = ["home", "questions", "inbox", "approvals"].includes(sc);
+    document.querySelectorAll(".sec, .tb").forEach(b => { if (b.dataset.s) b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === "more" ? !onBar : b.dataset.s === sc)); });
     document.querySelectorAll("#qtabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.qt === sc)));
     $("#qbar").hidden = !inb; if (inb) state.inboxtab = sc;
     const oq = state.docs.filter(d => d.status === "open"), ot = state.todos.filter(t => t.status !== "done");
     const ui = state.inbox.filter(m => !m.read);
-    const na = state.approvals.length;     // a pending approval is drawn above the open questions, and counted with them
-    $("#n-qq").textContent = oq.length + na; $("#n-qq").classList.toggle("hot", oq.some(d => d.urgent) || na > 0);
-    $("#n-q").textContent = oq.length + na + ui.length; $("#n-q").classList.toggle("hot", oq.some(d => d.urgent) || na > 0 || ui.length > 0);
+    const na = state.approvals.length;     // approvals have their own section and count: a pending one is always hot
+    $("#n-qq").textContent = oq.length; $("#n-qq").classList.toggle("hot", oq.some(d => d.urgent));
+    $("#n-q").textContent = oq.length + ui.length; $("#n-q").classList.toggle("hot", oq.some(d => d.urgent) || ui.length > 0);
+    $("#n-ap").textContent = na; $("#n-ap").classList.toggle("hot", na > 0);
+    $("#n-awaiting").textContent = na; $("#n-adecided").textContent = state.decided.length;
+    $("#n-f").textContent = state.lintOpen === null ? "–" : state.lintOpen; $("#n-f").classList.toggle("hot", state.lintOpen > 0);
     $("#n-t").textContent = ot.length; $("#n-t").classList.toggle("hot", ot.some(t => t.urgent));
     const os = state.stories.filter(st => ACTIVE.includes(st.status));
     $("#n-s").textContent = os.length; $("#n-s").classList.toggle("hot", os.some(st => st.status === "questions"));
@@ -489,16 +512,16 @@ button.danger{color:var(--warn)}
     $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
-    $("#repo").hidden = sc === "home" || sc === "info" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings";
+    $("#repo").hidden = sc === "home" || sc === "info" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings" || sc === "approvals" || sc === "more";
     $("#n-d").textContent = state.pages.length;
     // The phone's tab bar shows the sidebar's counts: each copies the one it names.
     document.querySelectorAll("#tabbar [data-of]").forEach(n => { const o = document.getElementById(n.dataset.of); n.textContent = o.textContent; n.className = o.className; });
     $("#idq").hidden = !(q || sc === "todo" || sc === "docs");
-    $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
+    $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#atabs").hidden = sc !== "approvals"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
-    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
+    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "approvals" ? renderApprovals() : sc === "more" ? renderMore() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
     place($("#pane-detail"), detailKids); $("#pane-detail").hidden = !detailKids.length;
   }
 
@@ -753,6 +776,9 @@ button.danger{color:var(--warn)}
   // {view: [{repo, reason, since}]} for a repository whose items are those of an earlier read, the last one
   // having failed (reason is the server's own phrase for the failure, since the time the hub server last
   // fetched that repository, which is not the time of the read shown).
+  // The statuses of an approval once the owner (or time) has decided it: the Decided tab.
+  const APPROVAL_SAID = { approved: "Approved", denied: "Denied", consumed: "Approved and used", expired: "Expired" };
+  const DECIDED = ["approved", "denied", "consumed", "expired"];
   function hubState(snap){
     const s = snap && typeof snap === "object" ? snap : {};
     const obj = v => v && typeof v === "object" && !Array.isArray(v) ? v : {};
@@ -781,7 +807,8 @@ button.danger{color:var(--warn)}
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, notices: noticeRows(views.notices),
-      approvals: col("approvals").filter(d => d.status === "pending").sort((x, y) => String(x.created_at || "").localeCompare(String(y.created_at || ""))), strong: s.strong === true };
+      approvals: col("approvals").filter(d => d.status === "pending").sort((x, y) => String(x.created_at || "").localeCompare(String(y.created_at || ""))),
+      decided: col("approvals").filter(d => DECIDED.includes(d.status)).sort((x, y) => String(y.decided_at || "").localeCompare(String(x.decided_at || ""))), strong: s.strong === true };
   }
   // The wait before the next try after `fails` failures in a row: the server's Retry-After when it gave one (1 s to 300 s), else 2 s doubling to 60 s.
   // An unpaired browser waits at least HUB_UNPAIRED_MS: it keeps reading, slowly, so that it carries on by itself once
@@ -1358,7 +1385,6 @@ button.danger{color:var(--warn)}
     document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
     fillRepos(state.docs);
 
-    const apps = state.filter === "open" ? state.approvals : [];
     let rows = state.docs.filter(d => pmQBucket(d) === state.filter && inR(d) && inId(d));
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.filter === "open"
       ? String(a.asked_at||"").localeCompare(String(b.asked_at||""))
@@ -1372,14 +1398,41 @@ button.danger{color:var(--warn)}
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
       if (ready && state.idq.trim()) { msg[0] = "No match for \"" + state.idq.trim() + "\""; msg[1] = "Clear the id box to see every question in this tab."; }
-      const at = settle([...apps.map(d => ["approval", d]), ...rows.map(d => ["q", d])]);
-      show(["repos"], apps.map(d => drawn(approvalRow, d)), el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
+      const at = settle(rows.map(d => ["q", d]));
+      show(["repos"], el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
       pickDetail(at);
       return;
     }
-    const at = settle([...apps.map(d => ["approval", d]), ...rows.map(d => ["q", d])]);
-    show(["repos"], apps.map(d => drawn(approvalRow, d)), rows.map(d => drawn(questionRow, d)));
+    const at = settle(rows.map(d => ["q", d]));
+    show(["repos"], rows.map(d => drawn(questionRow, d)));
     pickDetail(at);
+  }
+
+  // ---- Approvals: what an agent asks to run or change, waiting for the owner's Approve or Deny, and (Decided) the ones
+  // already decided, newest first. A row opens its card in the detail pane, like a question's.
+  function renderApprovals(){
+    const waiting = state.afilter !== "decided", rows = (waiting ? state.approvals : state.decided).filter(d => inId(d));
+    document.querySelectorAll("#atabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.af === (waiting ? "waiting" : "decided"))));
+    if (!rows.length) {
+      const msg = !ready ? [NOT_READY, NOT_READY_WHY] : state.idq.trim() ? ["No match for \"" + state.idq.trim() + "\"", "Clear the id box to see every approval in this tab."]
+        : waiting ? ["Nothing waiting for approval", "When an agent asks to run or change something, the request shows here."] : ["Nothing decided yet", "Approvals you have approved or denied show here, newest first."];
+      const at = settle([]);
+      show([], el("div", {class:"empty"}, el("strong", {text: msg[0]}), msg[1]));
+      pickDetail(at);
+      return;
+    }
+    const at = settle(rows.map(d => ["approval", d]));
+    show([], rows.map(d => drawn(approvalRow, d)));
+    pickDetail(at);
+  }
+
+  // ---- More (the phone's last tab): the sections the tab bar has no room for, each with its count.
+  const MORE_ROWS = [["todo", "To-dos", "n-t"], ["backlog", "Backlog", "n-s"], ["docs", "Docs", "n-d"], ["topm", "Message the PM", "n-pm"], ["info", "Usage and agents", "n-u"], ["findings", "Lint findings", "n-f"], ["autotasks", "Automatic tasks", ""]];
+  function renderMore(){
+    place($("#list"), MORE_ROWS.map(([sec, label, of]) => {
+      const o = of ? document.getElementById(of) : null;
+      return el("button", {class:"morerow", type:"button", id:"more-" + sec, onclick: () => pickSection(sec)}, label, o ? el("span", {class:o.className, text:o.textContent, "data-of": of}) : null);
+    }));
   }
 
   // ---- List and detail. A question, a to-do or an approval is one short row in the list; the card the row opens (the
@@ -1401,7 +1454,7 @@ button.danger{color:var(--warn)}
   function rowCard(kind, d, chips, since){
     const on = !!state.sel && state.sel.kind === kind && state.sel.id === d.id, open = () => pickRow(kind, d.id);
     const title = d.title ? String(d.title) : "(untitled)";
-    const row = el("article", {class: "q row" + (d.urgent || kind === "approval" ? " urgent" : ""), id: "row-" + d.id, tabindex: "0", role: "button",
+    const row = el("article", {class: "q row" + (d.urgent || (kind === "approval" && d.status === "pending") ? " urgent" : ""), id: "row-" + d.id, tabindex: "0", role: "button",
         "aria-label": d.id + ": " + title, "aria-current": on ? "true" : null},
       el("div", {class:"meta"}, ...chips, el("span", {class:"id", text: String(d.id)}), since ? el("span", {text: since}) : null),
       el("h2", {text: title}));
@@ -1409,7 +1462,8 @@ button.danger{color:var(--warn)}
     row.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target === row) { e.preventDefault(); open(); } });
     return row;
   }
-  const approvalRow = d => rowCard("approval", d, [el("span", {class:"chip need", text: d.kind === "op" ? "Run approval" : "Approval"})], d.created_at ? "asked " + when(d.created_at) : "");
+  const approvalRow = d => rowCard("approval", d, [el("span", {class:"chip need", text: d.kind === "op" ? "Run approval" : "Approval"}), d.status !== "pending" ? el("span", {class:"chip " + (d.status === "denied" || d.status === "expired" ? "" : "ok"), text: APPROVAL_SAID[d.status] || String(d.status)}) : null],
+    d.status !== "pending" && d.decided_at ? "decided " + when(d.decided_at) : d.created_at ? "asked " + when(d.created_at) : "");
   const questionRow = d => rowCard("q", d, [d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
     d.status !== "open" ? el("span", {class:"chip " + (d.status === "logged" ? "ok" : ""), text: d.status === "answered" ? "Submitted" : String(d.status)}) : null], d.asked_at ? "asked " + when(d.asked_at) : "");
   const todoRow = t => rowCard("todo", t, [t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: String(t.repo)}) : null,
@@ -1655,7 +1709,7 @@ button.danger{color:var(--warn)}
           lint.again = false;
           const errs = [], got = (what, p) => p.catch(e => { errs.push("the " + what + " (" + ((e && e.message) || "no reason given") + ")"); return null; });
           const [f, m] = await Promise.all([got("findings", hub.call("GET", "/findings")), got("marks", hub.call("GET", "/finding_marks"))]);
-          if (f) { lint.items = lintRows(f, "items").filter(x => typeof x.fingerprint === "string"); lint.runs = lintRows(f, "runs").filter(r => typeof r.repo === "string"); }
+          if (f) { lint.items = lintRows(f, "items").filter(x => typeof x.fingerprint === "string"); state.lintOpen = lint.items.length; lint.runs = lintRows(f, "runs").filter(r => typeof r.repo === "string"); }
           if (m) lint.marks = lintRows(m, "items").filter(x => x.id != null);
           lint.err = errs.join(" and ");
         } while (lint.again);
@@ -1664,6 +1718,19 @@ button.danger{color:var(--warn)}
     const read = lint.reading;
     read.then(lintRedraw);
     return read;
+  }
+  // The sidebar's Lint findings count is read behind the page's draw: one GET /findings at the start and after each wait
+  // wake, without drawing the section. A failed read keeps the last count (or the dash).
+  let counting = false;
+  async function countFindings(){
+    if (counting || lint.reading) return;
+    counting = true;
+    try {
+      const f = await hub.call("GET", "/findings");
+      state.lintOpen = lintRows(f, "items").filter(x => typeof x.fingerprint === "string").length;
+      const mr = document.getElementById("more-findings");
+      for (const x of [$("#n-f"), mr && mr.querySelector(".n")]) if (x) { x.textContent = state.lintOpen; x.classList.toggle("hot", state.lintOpen > 0); }
+    } catch (e) {} finally { counting = false; }
   }
   function lintRedraw(){
     try { if (state.section === "findings") render(); }
@@ -1804,7 +1871,7 @@ button.danger{color:var(--warn)}
   function goNeed(n){
     state.repo = ""; $("#repo").value = "";
     if (n.kind === "question") return goQuestion(n.id);
-    state.section = n.kind === "todo" ? "todo" : "questions"; state.filter = "open"; state.tfilter = "open"; state.sel = { kind: n.kind === "todo" ? "todo" : "approval", id: n.id };
+    state.section = n.kind === "todo" ? "todo" : "approvals"; state.afilter = "waiting"; state.tfilter = "open"; state.sel = { kind: n.kind === "todo" ? "todo" : "approval", id: n.id };
     render();
     const x = document.getElementById((n.kind === "todo" ? "todo-" : "approval-") + n.id); if (x) x.scrollIntoView({block:"start"});
   }
@@ -1892,13 +1959,15 @@ button.danger{color:var(--warn)}
     };
     const btns = [el("button", {class:"primary", type:"button", text:"Approve", disabled: !state.strong, onclick: decide("approve")}),
                   el("button", {class:"link", type:"button", text:"Deny", disabled: !state.strong, onclick: decide("deny")})];
-    return el("article", {class:"q urgent", id: "approval-" + d.id},
+    const pending = d.status === "pending";
+    return el("article", {class: pending ? "q urgent" : "q", id: "approval-" + d.id},
       el("div", {class:"meta"}, el("span", {class:"chip need", text: op ? "Run approval" : "Approval"}), el("span", {class:"id", text: d.id}),
         d.repo ? el("span", {class:"chip", text: op && d.repo === "*" ? "any repository" : String(d.repo)}) : null, d.created_at ? el("span", {text: "asked " + when(d.created_at)}) : null),
       el("h2", {text: d.title ? String(d.title) : "(untitled)"}),
       d.reason ? el("p", {class:"ctx", text: String(d.reason)}) : null,
       ...body,
-      el("div", {class:"act"}, ...btns, status));
+      pending ? el("div", {class:"act"}, ...btns, status)
+        : el("p", {class:"status", role:"status", text: (APPROVAL_SAID[d.status] || String(d.status || "Decided")) + (d.decided_at ? " " + when(d.decided_at) : "") + "."}));
   }
 
   function card(d){
@@ -2075,8 +2144,8 @@ button.danger{color:var(--warn)}
     render();
     const r = state.sel && document.getElementById("row-" + state.sel.id); if (r && r.scrollIntoView) r.scrollIntoView({block: "nearest"});
   }
-  $("#sections").addEventListener("click", e => { const b = e.target.closest(".sec"); if (b) pickSection(b.dataset.s); });
-  $("#tabbar").addEventListener("click", e => { const b = e.target.closest(".tb"); if (b) pickSection(b.dataset.s); });
+  $("#sections").addEventListener("click", e => { const b = e.target.closest(".sec"); if (b && b.dataset.s) pickSection(b.dataset.s); });
+  $("#tabbar").addEventListener("click", e => { const b = e.target.closest(".tb"); if (b && b.dataset.s) pickSection(b.dataset.s); });
   // J and K move the focus to the next and the previous card of the list. Never while the owner types in a
   // field, with a modifier held, or while the reader is open.
   const FIELD = "input, textarea, select, [contenteditable]:not([contenteditable=false])";
@@ -2107,6 +2176,10 @@ button.danger{color:var(--warn)}
   $("#itabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
     state.ifilter = t.dataset.if; render();
+  });
+  $("#atabs").addEventListener("click", e => {
+    const t = e.target.closest(".tab"); if (!t) return;
+    state.afilter = t.dataset.af; state.sel = null; render();
   });
   $("#ttabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
@@ -2147,7 +2220,7 @@ button.danger{color:var(--warn)}
     if (ready && next.revision < rev) return;         // an older answer that arrived late
     rev = next.revision;
     const first = !ready; ready = true; lastRead = Date.now();
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "strong"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);
@@ -2173,10 +2246,11 @@ button.danger{color:var(--warn)}
     let again = true;
     for (;;) {
       try {
-        if (again) { await refresh(); again = false; loadSay(""); }    // fails is kept: only a wait that answers ends the run of failures
+        if (again) { await refresh(); again = false; loadSay(""); countFindings(); }    // fails is kept: only a wait that answers ends the run of failures
         const w = await hub.wait(rev);
         if (w.reset) rev = 0;                           // the server's history does not reach back to rev: take whatever it holds now
         await refresh();
+        countFindings();
         fails = 0; loadSay("");
       } catch (e) {
         const old = ready ? " The lists may be out of date." : "";

@@ -25,14 +25,28 @@ or after an unpair or a session that ran out) is told so on the page and to run
 `python tools/hub.py open` in the kit folder and open the link it prints. The server's health is
 `GET /api/v1/health`.
 
+The sidebar lists the sections in groups under small headings: Home on its own; Your work (Questions,
+To-dos, Approvals); Projects (Backlog, Machine schedule, Docs); More (Message the PM, Usage and agents);
+Upkeep (Lint findings, Automatic tasks). A count sits at the right edge of its entry, and is highlighted
+for what waits on you: any pending approval, urgent question or to-do. Lint findings shows a dash until
+the page has read `GET /api/v1/findings` once (at the start and after each wait wake, without drawing the
+section), then the number of open findings. On a phone the sidebar becomes a bar of five tabs: Home,
+Questions, Approvals, Schedule (the link to the machine schedule) and More, a page of the other sections
+with their counts (`#more`; a wider window opens Home instead). Between 761 and 1100 pixels the detail
+pane stacks under the list instead of beside it.
+
 - **Inbox.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
   Submitted (answered, not yet logged by the PM), Logged, and Other, which shows only when a
   question has another status. Answers: the PM's replies to what you asked in a note, in Unread
   and Read tabs.
-- **To PM.** Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
+- **Message the PM** (the `#topm` section). Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
   item at once. Tabs: Queued (you can edit or delete), Sent (waiting on the PM), Done (the PM's
   reply; the last 30 days, with Show older).
+- **Approvals.** What an agent asked to run or change. Two tabs: Waiting (pending approvals, each
+  with Approve and Deny, which need a strong session) and Decided (approved, denied, used or expired
+  ones from the snapshot, newest first, with the decision and no buttons). The tab is not an address.
+  The Approvals count is the pending ones; Questions no longer lists approvals.
 - **To do.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
   done. You can add, edit and delete your own. Tabs: To do and Done.
 - **Backlog.** Three tabs: Current backlog (each repository's open work, with priority, status
@@ -50,8 +64,8 @@ or after an unpair or a session that ran out) is told so on the page and to run
   a document) that names a listed document is a button that opens it the same way
   (`test_a_page_id_in_a_question_or_a_to_do_opens_the_reader`). Delete (pressed twice) removes a document; the page writes
   none, agents publish them.
-- **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
-- **Machine schedule.** A link under the header opens `/lock.html`, the machine lock's own page
+- **Usage and agents** (`#info`). Usage (each account's plan usage) and Agents (each agent's model and effort).
+- **Machine schedule.** A link in the sidebar's Projects group (and the phone's Schedule tab) opens `/lock.html`, the machine lock's own page
   ("Machine lock routes" below): what holds the PC's slots now, a week of half hours (back two
   weeks, on four), the holds, runs and queue, game mode, the division, and what ran over 1, 7, 30
   or 90 days. It follows the lock as it changes. Times are the PC's local time, labelled with its
@@ -70,13 +84,13 @@ or after an unpair or a session that ran out) is told so on the page and to run
   strong owner; a hub started under an agent session changes nothing
   (`tests/hubsite/test_lock_page.py`, `WriteTest`).
 
-Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
+In the sidebar's foot (when the hub was read, then the PM line and the push line) a line says whether a PM is listening: "A PM is listening." while a PM holds a
 `wait` open, else "Push delivery reaches the PM." while the snapshot's `push` state is `up` and
 its `last` is `written` (a try to the PM was written), else when one last asked; another session's wait `--for` its own key does not count (`Api.seen` in
 `kitlib/hubsite/api.py`). With a push worker running, the line ends with the PM watcher's
 heartbeat from the snapshot's `watcher` field ("Push notifications"): "The PM's watcher is
 running.", "The PM's watcher has stopped: its last heartbeat is <age> old." or "No PM watcher
-heartbeat is found." (`pmSeenText` in `kitlib/hubsite/web/index.html`). A second line gives the push notifications'
+heartbeat is found." (`pmSeenText` in `kitlib/hubsite/web/index.html`). On a phone the header also shows a pill, "PM listening" or "No PM listening". A second line gives the push notifications'
 status from the snapshot's `push` field ("Push notifications"): "Push delivery is up" or "is
 down" (with the state of the latest try to the PM), and how many items are undelivered, or "Push notifications
 are off on this hub server." when the server runs no push worker. The page reads everything at once
@@ -84,12 +98,12 @@ are off on this hub server." when the server runs no push worker. The page reads
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
+Links ending `#inbox`, `#approvals`, `#more`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
 repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
 ("schedules/") with the tick's last run, and sets, edits or turns one off.
 
-Findings (Lint in the phone tab bar) lists the maintenance lint's findings, read from `GET
+Lint findings (the Upkeep group, and the More page on a phone) lists the maintenance lint's findings, read from `GET
 /api/v1/findings` and `GET /api/v1/finding_marks` each time the section is shown and after each
 mark (`renderFindings` and `findingCard` in `kitlib/hubsite/web/index.html`). A row gives the check,
 the repo, the target and the finding's text, with its age as context; a marked one stays listed with
