@@ -1706,6 +1706,192 @@ class DomTest(unittest.TestCase):
         self.assertNotIn("img", got["tags"])
 
 
+# A POST the test answers by hand: `held` collects one resolver per POST to a path matching the regex, in the order sent.
+HOLD = """
+    const realFetch = globalThis.fetch, held = [];
+    globalThis.fetch = (url, init) => {
+      if (init.method !== "POST" || !%s.test(url)) return realFetch(url, init);
+      calls.push({ method: init.method, path: url.replace(/^\\/api\\/v1/, ""), body: JSON.parse(init.body) });
+      return new Promise(done => held.push(done));
+    };
+    const ok = () => answer(200, { ok: true, id: "X-1" });
+    const refuse = (status, message) => answer(status, { ok: false, error: { code: "x", message, field: "" } });
+    const reads = () => calls.filter(c => c.path === "/snapshot").length;
+"""
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class QuickWriteTest(unittest.TestCase):
+    """A tick, Mark urgent and Mark read repaint at once and are sent without waiting for the lists to be read again."""
+    def test_a_tick_repaints_before_the_post_answers_and_the_box_stays_live(self):
+        got = dom(HOLD % r"/\/todos\/T-1\/done$/" + """
+            await start();
+            const before = reads();
+            let box = $("#t-T-1");
+            box.checked = true; await fire(box, "change");
+            const card = $("#todo-T-1");
+            const painted = { checked: box.checked, done: card.classList.contains("done"), off: box.disabled,
+                              sent: calls.filter(c => c.path === "/todos/T-1/done").map(c => c.body), pending: held.length, reads: reads() - before };
+            held[0](ok()); await settle();
+            return { painted, after: reads() - before, off: $("#t-T-1").disabled };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got["painted"], {"checked": True, "done": True, "off": False, "sent": [{"done": True}], "pending": 1, "reads": 0})
+        self.assertEqual(got["after"], 1)               # the lists are read again once the POST has answered
+        self.assertFalse(got["off"])
+
+    def test_a_failed_tick_is_put_back_and_says_not_saved_whatever_the_refusal(self):
+        got = dom(HOLD % r"/\/todos\/T-1\/done$/" + """
+            await start();
+            const out = [];
+            for (const [status, why] of [[500, "disk full"], [409, "todos/T-1 changed"]]) {
+              const box = $("#t-T-1");
+              box.checked = true; await fire(box, "change");
+              held.shift()(refuse(status, why)); await settle();
+              const now = $("#t-T-1");
+              out.push({ checked: now.checked, off: now.disabled, done: $("#todo-T-1").classList.contains("done"), card: text($("#todo-T-1")) });
+            }
+            return out;
+        """, snapshot(collections=LISTS), hash="#todo")
+        for one, why in zip(got, ["disk full", "todos/T-1 changed"]):
+            self.assertEqual((one["checked"], one["off"], one["done"]), (False, False, False))
+            self.assertIn("Not saved: " + why + ".", one["card"])
+
+    def test_two_quick_ticks_both_go_out_before_either_answers(self):
+        got = dom(HOLD % r"/\/todos\/T-1\/done$/" + """
+            await start();
+            const box = $("#t-T-1");
+            box.checked = true; await fire(box, "change");
+            box.checked = false; await fire(box, "change");
+            return { sent: calls.filter(c => c.path === "/todos/T-1/done").map(c => c.body.done), pending: held.length, off: box.disabled };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got, {"sent": [True, False], "pending": 2, "off": False})
+
+    def test_when_one_of_two_ticks_fails_only_its_own_paint_is_put_back(self):
+        got = dom(HOLD % r"/\/todos\/T-1\/done$/" + """
+            await start();
+            const box = $("#t-T-1");
+            box.checked = true; await fire(box, "change");
+            box.checked = false; await fire(box, "change");
+            held[0](ok()); held[1](refuse(500, "no space")); await settle();
+            return { checked: $("#t-T-1").checked, done: $("#todo-T-1").classList.contains("done"), card: text($("#todo-T-1")) };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertTrue(got["checked"])              # the second tick failed: back to what the first one said
+        self.assertTrue(got["done"])
+        self.assertIn("Not saved: no space.", got["card"])
+
+    def test_mark_urgent_repaints_first_waits_only_for_its_own_post_and_is_put_back_on_failure(self):
+        got = dom(HOLD % r"/\/todos\/T-1\/edit$/" + """
+            await start();
+            const b = button($("#todo-T-1"), "Mark urgent");
+            await click(b);
+            const painted = { label: text(b).trim(), urgent: $("#todo-T-1").classList.contains("urgent"), off: b.disabled,
+                              sent: calls.filter(c => c.path === "/todos/T-1/edit").map(c => c.body) };
+            held[0](refuse(500, "no space")); await settle();
+            const now = button($("#todo-T-1"), "Mark urgent");
+            return { painted, back: !!now, urgent: $("#todo-T-1").classList.contains("urgent"), off: now && now.disabled, card: text($("#todo-T-1")) };
+        """, snapshot(collections=LISTS), hash="#todo")
+        self.assertEqual(got["painted"], {"label": "Not urgent", "urgent": True, "off": True, "sent": [{"urgent": True, "if_version": 1}]})
+        self.assertEqual((got["back"], got["urgent"], got["off"]), (True, False, False))
+        self.assertIn("Not saved: no space.", got["card"])
+
+    def test_mark_read_repaints_first_and_is_put_back_on_failure(self):
+        lists = {"inbox": {"I-1": {"title": "a reply", "text": "body", "read": False, "at": NOW}}}
+        got = dom(HOLD % r"/\/inbox\/I-1\/read$/" + """
+            await start();
+            await click(button($("#m-I-1"), "Mark read"));
+            const painted = { read: !!button($("#m-I-1"), "Mark unread"), unread: $("#m-I-1").classList.contains("unread"),
+                              sent: calls.filter(c => c.path === "/inbox/I-1/read").map(c => c.body) };
+            held[0](refuse(500, "no space")); await settle();
+            return { painted, back: !!button($("#m-I-1"), "Mark read"), unread: $("#m-I-1").classList.contains("unread"), card: text($("#m-I-1")) };
+        """, snapshot(collections=lists), hash="#inbox")
+        self.assertEqual(got["painted"], {"read": True, "unread": False, "sent": [{"read": True}]})
+        self.assertTrue(got["back"])
+        self.assertTrue(got["unread"])
+        self.assertIn("Not saved: no space.", got["card"])
+
+    def test_a_read_at_the_same_revision_is_not_redrawn_unless_something_the_revision_does_not_cover_changed(self):
+        got = dom("""
+            await start();
+            const before = $("#row-T-2");
+            await wake();                                                    // the same snapshot at the same revision
+            const same = $("#row-T-2") === before;
+            server.snap.views.backlog[0].error = "another reason";            // a view moved, the revision did not
+            await wake();
+            const stale = $("#row-T-2") !== before;
+            const mid = $("#row-T-2");
+            server.snap.views.backlog[0].error = null;
+            await wake();
+            const cleared = $("#row-T-2") !== mid;
+            server.snap.collections.todos["T-1"].title = "moved"; server.snap.revision++;      // a revision change is always drawn
+            const mid2 = $("#row-T-2");
+            await wake();
+            return { same, stale, cleared, bumped: $("#row-T-2") !== mid2 };
+        """, snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash="#todo")
+        self.assertEqual(got, {"same": True, "stale": True, "cleared": True, "bumped": True})
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class QuestionKeysTest(unittest.TestCase):
+    """Number keys pick an option of the open question and Enter sends the answer; the card shows the keys."""
+    def test_number_keys_pick_an_option_and_enter_sends_the_answer(self):
+        got = dom("""
+            await start();
+            const sends = () => calls.filter(c => c.path === "/questions/Q-1/answer").map(c => [c.body.choice, c.body.if_version]);
+            const first = await key("2");
+            const picked = { prevented: first.defaultPrevented, two: $("#q-Q-1-1").checked, one: $("#q-Q-1-0").checked,
+                             off: button($("#q-Q-1"), "Send answer").disabled, focus: document.activeElement.id };
+            const past = await key("4");                                            // two options and Something else: 1 to 3
+            const other = await key("3");                                           // Something else needs its note first
+            const needNote = { other: $("#q-Q-1-other").checked, off: button($("#q-Q-1"), "Send answer").disabled, prevented: other.defaultPrevented };
+            await key("Enter", $("#q-Q-1-other"));
+            const early = sends().length;
+            await key("2");
+            const enter = await key("Enter");
+            return { hint: text($("#pane-detail .keys")), picked, past: past.defaultPrevented, needNote, early, enter: enter.defaultPrevented, sent: sends() };
+        """, snapshot(collections=LISTS), hash="#questions")
+        self.assertEqual(got["hint"], "J K move · 1-3 pick · Enter submit")
+        self.assertEqual(got["picked"], {"prevented": True, "two": True, "one": False, "off": False, "focus": "q-Q-1-1"})
+        self.assertFalse(got["past"])
+        self.assertEqual(got["needNote"], {"other": True, "off": True, "prevented": True})
+        self.assertEqual(got["early"], 0)
+        self.assertTrue(got["enter"])
+        self.assertEqual(got["sent"], [[1, 1]])
+
+    def test_the_keys_never_act_while_typing_on_a_button_with_a_modifier_or_with_the_reader_open(self):
+        got = dom("""
+            await start();
+            const sends = () => calls.filter(c => c.path === "/questions/Q-1/answer").length;
+            const note = $("#q-Q-1-note");
+            note.focus(); const typed = await key("2", note);
+            await type(note, "x"); const typedEnter = await key("Enter", note);
+            const chosen = $("#q-Q-1-1").checked;
+            $("#q-Q-1").focus();
+            const ctrl = await key("2", null, { ctrlKey: true });
+            $("#reader").hidden = false; const reading = await key("2"); $("#reader").hidden = true;
+            await key("1");
+            const onButton = await key("Enter", button($("#q-Q-1"), "Send answer"));     // a button's own Enter is not taken
+            const before = sends();
+            const onRadio = await key("Enter", $("#q-Q-1-0"));
+            return { typed: typed.defaultPrevented, typedEnter: typedEnter.defaultPrevented, chosen, ctrl: ctrl.defaultPrevented,
+                     reading: reading.defaultPrevented, onButton: onButton.defaultPrevented, before, after: sends(), onRadio: onRadio.defaultPrevented };
+        """, snapshot(collections=LISTS), hash="#questions")
+        self.assertEqual((got["typed"], got["typedEnter"], got["chosen"], got["ctrl"], got["reading"], got["onButton"]),
+                         (False, False, False, False, False, False))
+        self.assertEqual((got["before"], got["after"], got["onRadio"]), (0, 1, True))
+
+    def test_an_answered_question_and_a_to_do_show_no_key_hints_and_ignore_the_keys(self):
+        lists = {"questions": {"Q-1": {"status": "answered", "title": "which", "version": 2, "asked_at": NOW, "options": [{"label": "one"}],
+                                       "answer": {"choice": 0, "label": "one", "note": ""}}}, "todos": LISTS["todos"]}
+        got = dom("""
+            await start();
+            const hints = $$(".keys").length, ev = await key("1");
+            await click($("#sections [data-s=todo]"));
+            const ev2 = await key("1"), ev3 = await key("Enter");
+            return { hints, ev: ev.defaultPrevented, ev2: ev2.defaultPrevented, ev3: ev3.defaultPrevented, todoHints: $$(".keys").length };
+        """, snapshot(collections=lists), hash="#questions")
+        self.assertEqual(got, {"hints": 0, "ev": False, "ev2": False, "ev3": False, "todoHints": 0})
+
+
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class RecordPageTest(unittest.TestCase):
     """The record page (docs/action-hub.md "The record page"): a row's id opens it, each section is edited
@@ -3610,7 +3796,7 @@ class PageTextTest(unittest.TestCase):
 
     def test_only_the_decided_routes(self):
         self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/pages", "/records", "/records", "/schedules", "/snapshot", "/wait"])
-        roots = set(re.findall(r'(?:write|hub\.post|delButton)\("(/[a-z_]+)', self.script))
+        roots = set(re.findall(r'(?:write|writeQuick|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
                                  "/finding_marks"})
         self.assertEqual(re.findall(r'"/approvals/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/decide"])

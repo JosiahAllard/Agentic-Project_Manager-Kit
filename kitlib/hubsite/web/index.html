@@ -129,6 +129,9 @@ label.opt input{margin-top:4px;accent-color:var(--accent)}
 .od{grid-column:2;color:var(--muted);font-size:.88rem;overflow-wrap:anywhere}
 textarea{width:100%;box-sizing:border-box;min-height:64px;font:inherit;font-size:.9rem;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);resize:vertical}
 .act{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.keys{margin-left:auto;font-size:.78rem;color:var(--muted)}
+.keys kbd{font:600 .72rem var(--f-body);border:1px solid var(--line);border-radius:4px;padding:1px 5px;background:var(--surface)}
+@media (max-width:760px){.keys{display:none}}
 button.primary{font:600 .9rem var(--f-body);background:var(--accent);color:var(--surface);border:0;border-radius:8px;padding:8px 16px;cursor:pointer}
 button.link{font:500 .85rem var(--f-body);background:none;border:0;color:var(--accent);cursor:pointer;padding:4px 0;text-decoration:underline}
 button:disabled{opacity:.5;cursor:default}
@@ -385,6 +388,17 @@ button.danger{color:var(--warn)}
   const seg = id => encodeURIComponent(String(id));
   // One write, then the lists are read again, so the page shows what the server holds and not a guess.
   async function write(path, body){ const r = await hub.post(path, body); await refresh().catch(() => {}); return r; }
+  // A write the owner repeats at once (a tick, a flag, a read mark): the caller has already painted the new state, the
+  // POST goes out without waiting for the lists to be read again (the watch loop reconciles), and a failure of any kind
+  // (a 409 too) puts the old paint back through `undo` and says "Not saved" in `say`, so a real failure stays in sight.
+  // Two of them can be in flight at once; each undoes only its own paint, and the read after a failure shows what the
+  // server holds. The returned promise ends when the POST has answered.
+  function writeQuick(path, body, undo, say){
+    return hub.post(path, body).then(() => { refresh().catch(() => {}); }, e => {
+      undo(); say.className = "status err"; say.textContent = "Not saved: " + why(e) + ".";
+      refresh().catch(() => {});
+    });
+  }
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
@@ -416,6 +430,8 @@ button.danger{color:var(--warn)}
     for (const c of kids.flat()) if (c != null) n.append(c);
     return n;
   }
+  // The key hint under an open question: what the keys do (the keydown handler near the J/K one); n is how many number keys pick.
+  const keyHint = n => { const k = t => el("kbd", {text: t}); return [k("J"), " ", k("K"), " move · ", k(n > 1 ? "1-" + n : "1"), " pick · ", k("Enter"), " submit"]; };
   const when = iso => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? String(iso) : d.toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}); };
 
   // A view the server could not give: its reason is shown where the view would be, as text.
@@ -664,10 +680,13 @@ button.danger{color:var(--warn)}
       {
         const status = el("span", {class:"status", role:"status"});
         const b = el("button", {class: m.read ? "link" : "primary", type:"button", text: m.read ? "Mark unread" : "Mark read"});
-        b.addEventListener("click", async () => {
-          b.disabled = true; status.className = "status"; status.textContent = "";
-          try { await write("/inbox/" + seg(m.id) + "/read", { read: !m.read }); }
-          catch (e) { b.disabled = false; status.className = "status err"; status.textContent = "Not saved: " + why(e) + "."; }
+        // Painted at once; the mark is not pinned to a version, so the button stays live (see writeQuick).
+        let read = !!m.read;
+        b.addEventListener("click", () => {
+          const on = !read, card = b.closest("article");
+          const paint = v => { read = v; b.textContent = v ? "Mark unread" : "Mark read"; b.className = v ? "link" : "primary"; if (card) card.classList.toggle("unread", !v); };
+          paint(on); status.className = "status"; status.textContent = "";
+          writeQuick("/inbox/" + seg(m.id) + "/read", { read: on }, () => paint(!on), status);
         });
         parts.push(el("div", {class:"act"}, b, status));
       }
@@ -1031,13 +1050,12 @@ button.danger{color:var(--warn)}
     if (ed && !ed.gone) return ed.node || (ed.node = todoEditCard(t, ed));
     const box = el("input", {type:"checkbox", class:"chk", id:"t-" + t.id, checked: isDone, "aria-label": isDone ? "Mark not done" : "Mark done"});
     const status = el("span", {class:"status", role:"status"});
-    box.addEventListener("change", async () => {
-      box.disabled = true;
-      try { await write("/todos/" + seg(t.id) + "/done", { done: box.checked }); }
-      catch (e) {
-        box.checked = !box.checked; box.disabled = false;
-        status.className = "status err"; status.textContent = "Not saved: " + why(e) + ".";
-      }
+    // The box stays live while the write and the reload run: a second tick goes out at once (see writeQuick).
+    box.addEventListener("change", () => {
+      const on = box.checked, card = box.parentNode;
+      const paint = v => { box.checked = v; if (card) card.classList.toggle("done", v); };
+      paint(on); status.className = "status"; status.textContent = "";
+      writeQuick("/todos/" + seg(t.id) + "/done", { done: on }, () => paint(!on), status);
     });
     const body = el("div", {class:"body"},
       el("div", {class:"meta"}, t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: t.id}), t.repo ? el("span", {class:"chip", text: t.repo}) : null, t.from ? el("span", {text: "from " + t.from}) : null, t.added_at ? el("span", {text: "added " + when(t.added_at)}) : null, isDone && t.done_at ? el("span", {class:"chip ok", text: "done " + when(t.done_at)}) : null));
@@ -1056,10 +1074,14 @@ button.danger{color:var(--warn)}
     { const refs = refsLine(t.refs, "Refs: ", ", "); if (refs) body.append(refs); }
     if (mine) {
       const urg = el("button", {class:"link", type:"button", text: t.urgent ? "Not urgent" : "Mark urgent"});
-      urg.addEventListener("click", async () => {
-        urg.disabled = true;
-        try { await write("/todos/" + seg(t.id) + "/edit", { urgent: !t.urgent, ...pin(t) }); }
-        catch (e) { urg.disabled = false; status.className = "status err"; status.textContent = "Not saved: " + why(e) + "."; }
+      // Painted at once. The button stays disabled only until its own POST answers, not while the lists reload: the edit
+      // is pinned to this card's version, so a second click before the answer would be refused (409) on its own.
+      let flag = !!t.urgent;
+      urg.addEventListener("click", () => {
+        const on = !flag, card = urg.closest("article");
+        const paint = v => { flag = v; urg.textContent = v ? "Not urgent" : "Mark urgent"; if (card) card.classList.toggle("urgent", v); };
+        paint(on); urg.disabled = true; status.className = "status"; status.textContent = "";
+        writeQuick("/todos/" + seg(t.id) + "/edit", { urgent: on, ...pin(t) }, () => paint(!on), status).then(() => { urg.disabled = false; });
       });
       body.append(el("div", {class:"act"}, urg, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.todoEdit.set(t.id, { version: t.version }); render(); }}), delButton("/todos/" + seg(t.id) + "/delete", status, t.version)));
     } else if (t.status === "open") {
@@ -2066,8 +2088,10 @@ button.danger{color:var(--warn)}
       const draft = readDraft(d.id) || (d.answer ? {choice: d.answer.choice, note: d.answer.note || ""} : {choice: null, note: ""});
       const name = "q-" + d.id;
       const fs = el("fieldset", {}, el("legend", {text: "Options for " + d.id}));
+      const radios = [];
       opts.forEach((o, i) => {
         const input = el("input", {type:"radio", name, value: String(i), id: name + "-" + i, checked: draft.choice === i});
+        radios.push(input);
         input.addEventListener("change", () => { draft.choice = i; saveDraft(d.id, draft); btn.disabled = false; });
         fs.append(el("label", {class:"opt", for: name + "-" + i}, input,
           el("span", {class:"ol"}, o.label || ("Option " + (i+1)), i === rec ? el("span", {class:"chip rec", text:"Recommended"}) : null),
@@ -2082,7 +2106,7 @@ button.danger{color:var(--warn)}
       const status = el("span", {class: "status" + (said.has(d.id) ? " err" : ""), role:"status", text: said.get(d.id) || ""});
       const btn = el("button", {class:"primary", type:"button", text: d.status === "answered" ? "Save new answer" : "Send answer"});
       btn.disabled = draft.choice == null || (draft.choice === "other" && !draft.note.trim());
-      btn.addEventListener("click", async () => {
+      const send = async () => {
         btn.disabled = true; said.delete(d.id); unread.delete(d.id); status.className = "status"; status.textContent = "Sending…";
         try {
           // The choice is the option's place in the list, or "other" with a note; the server writes the label and the time.
@@ -2099,8 +2123,21 @@ button.danger{color:var(--warn)}
           status.textContent = "Not sent: " + why(e) + ". Your draft is kept; try again.";
           btn.disabled = false;
         }
-      });
+      };
+      btn.addEventListener("click", send);
+      // The number keys (see the keydown handler): key n picks option n, the key after the last option is Something else.
+      // The same pick as a click on the radio; the keys also send through this card's own button.
+      const picks = [...radios, otherIn].slice(0, 9);
+      fs.pick = n => {
+        const r = picks[n - 1]; if (!r) return false;
+        for (const x of picks) x.checked = x === r;
+        draft.choice = r === otherIn ? "other" : n - 1; saveDraft(d.id, draft);
+        btn.disabled = draft.choice === "other" && !draft.note.trim();
+        r.focus(); return true;
+      };
+      fs.send = btn; fs.go = send;
       const acts = el("div", {class:"act"}, btn, status);
+      acts.append(el("span", {class:"keys", text: ""}, ...keyHint(picks.length)));
       if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); unread.delete(d.id); render(); }}));
       // An open question the owner does not mean to answer is withdrawn: it leaves the hub.
       else acts.append(delButton("/questions/" + seg(d.id) + "/delete", status, d.version, "Withdraw", "withdrawn"));
@@ -2249,6 +2286,22 @@ button.danger{color:var(--warn)}
     n.focus();
     if (n.scrollIntoView) n.scrollIntoView({block: "nearest"});
   });
+  // The number keys and Enter act on the open question in the detail pane (its card gave its fieldset pick and send).
+  // 1 to 9 pick the option of that number (the one after the last is Something else); Enter sends the answer when the
+  // Send button is enabled. Never while the owner types in a text field, a select or a note, with a modifier held, on a
+  // button or link (Enter there is theirs), or while the reader is open. A radio (where a click leaves the focus) is
+  // not a field for these keys.
+  document.addEventListener("keydown", e => {
+    const n = /^[1-9]$/.test(e.key) ? +e.key : 0, enter = e.key === "Enter";
+    if ((!n && !enter) || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || !$("#reader").hidden) return;
+    const fs = $("#pane-detail fieldset");
+    if (!fs || !fs.pick) return;
+    const radio = t => !!t && typeof t.getAttribute === "function" && t.tagName === "INPUT" && t.getAttribute("type") === "radio";
+    for (const t of [e.target, document.activeElement]) if (inField(t) && !radio(t)) return;
+    if (enter && ((e.target && typeof e.target.closest === "function" && e.target.closest("button, a, summary")) || fs.send.disabled)) return;
+    if (enter) { e.preventDefault(); fs.go(); }
+    else if (fs.pick(n)) e.preventDefault();
+  });
   $("#qtabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
     state.sel = null; state.section = state.inboxtab = t.dataset.qt; try { localStorage.setItem("oq.section", state.section); } catch(err){}
@@ -2298,12 +2351,24 @@ button.danger{color:var(--warn)}
   // snapshot is read again. A failure is said at the top, in its own words: an unpaired browser is told how to
   // pair and reads again only every HUB_UNPAIRED_MS (a refusal at a server restart heals by itself), a busy
   // server is given the wait it asked for, and anything else is tried again after hubRetryMs.
-  let rev = 0, lastKey = "", fails = 0;
+  let rev = 0, lastKey = "", lastCheap = "", fails = 0;
   function loadSay(text){ const b = $("#loaderr"); b.textContent = text; b.hidden = !text; }
   const typing = () => { const a = document.activeElement; return !!a && a !== document.body && a.matches("input:not([type=checkbox]):not([type=radio]), textarea"); };
   async function refresh(){
     const next = hubState(await hub.snapshot());
     if (ready && next.revision < rev) return;         // an older answer that arrived late
+    // The same revision and the same of everything a revision does not cover (the git-backed views: backlogs, usage,
+    // agents, repos, notices, what is stale, partial or unavailable) is the page already drawn: only what moves on every
+    // read is brought up to date, without the whole-snapshot comparison and the redraw. The lists of the store's own
+    // documents are what a revision covers, so they are left out of this cheaper key.
+    const untimedRows = rows => rows.map(r => ({ ...r, posted_at: null }));
+    const cheap = JSON.stringify([next.revision, next.gone, next.partial, next.stale, next.strong, next.repos, untimedRows(next.backlog), untimedRows(next.completed), next.usage.map(u => ({ ...u, measured_at: null })), next.agents, next.notices]);
+    if (ready && next.revision === rev && cheap === lastCheap) {
+      for (const k of ["seen", "push"]) state[k] = next[k];
+      lastRead = Date.now(); seenLine();
+      return;
+    }
+    lastCheap = cheap;
     rev = next.revision;
     const first = !ready; ready = true; lastRead = Date.now();
     for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
@@ -2321,7 +2386,7 @@ button.danger{color:var(--warn)}
     // its revision), the next read draws again, and the error goes up to be said at the top.
     try { if (first || !same || !typing()) render(); else seenLine(); }
     catch (e) {
-      lastKey = "";
+      lastKey = ""; lastCheap = "";
       if (first) { ready = false; try { render(); } catch (e2) {} }
       throw e;
     }
