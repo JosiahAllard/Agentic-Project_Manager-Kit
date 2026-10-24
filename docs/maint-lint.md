@@ -174,4 +174,12 @@ new.
 A check that cannot run gives a NOT CHECKED note, never a finding. Notes cover a store that cannot
 be opened, no `pm_data`, no ledger configured, a hub that cannot be asked, or a git failure.
 
-This slice does not post to the Action Hub.
+After it writes both files, and outside the lock slot, a plain run publishes the page on the
+Action Hub (`kitlib/maintlint/publish.py`) as page `maint-lint-<repo>`, one per repository and
+written over by each run, with `from` `maint-lint` and the agent token; a scheduled run has no hub
+session key and needs none (docs/action-hub.md "pages/<id> and page_html/<id>"). Over a page
+already there it sends that card's version as `if_version`. The page is judged by
+`kitlib.hubsite.pagecheck.check` before it is sent. It prints `PUBLISHED maint-lint-<repo> v<n>`;
+a page that was not sent (the page check refuses it, the hub is not running or cannot be reached,
+the server refuses the write) is one `hub page NOT CHECKED: <why>` note instead, and the exit code
+stays what the findings make it. `--dry-run` never publishes.
