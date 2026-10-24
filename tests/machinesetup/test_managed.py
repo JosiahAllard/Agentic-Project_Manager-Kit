@@ -20,7 +20,7 @@ from unittest import mock
 from kitlib import machinesetup as M
 from kitlib.config import user as kuser
 from kitlib.machinesetup import extras, managed, settings
-from tests.home import machine_config, pm_repo
+from tests.home import PM_REPO_FENCE_ENV, machine_config, pm_repo
 from tests.machinesetup import test_fresh as F
 from tests.machinesetup import test_machinesetup as T
 
@@ -239,6 +239,19 @@ class ManagedMode(ManagedBase):
         self.assertIn('WARNING: no overlay found at %s:' % managed.overlay_path(self.home), out)
         self.overlay({})
         self.assertNotIn('WARNING', self.run_it()[1])
+
+    def test_no_pointer_reads_no_overlay_from_the_home_folder(self):
+        home_overlay = os.path.join(self.home, kuser.DIR_NAME, managed.OVERLAY)
+        dump(home_overlay, {'env': {'GIT_AUTHOR_NAME': 'home'}})
+        with mock.patch.dict(os.environ):
+            os.environ.pop(PM_REPO_FENCE_ENV, None)      # no pointer, whatever the runner set
+            kuser.forget()
+            self.addCleanup(kuser.forget)
+            self.assertIsNone(managed.overlay_path(self.home))
+            self.assertEqual(managed.overlay(self.home), {})
+            code, out = self.run_it()
+        self.assertIn('WARNING: no overlay found at <PM repo>/.pm-kit/%s' % managed.OVERLAY, out)
+        self.assertNotIn(home_overlay, out)
 
     def test_apply_is_refused_unless_elevated(self):
         self.host.admin = False
