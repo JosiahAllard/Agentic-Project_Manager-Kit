@@ -373,7 +373,7 @@ def question(qid='Q-1001', rid='FOO', at=AT, status='filed'):
 
 
 class AnswerCheck(unittest.TestCase):
-    """ANSWER-UNVERIFIED: an `answer:` line not written by owner-hub, or matching no answered or
+    """UNVERIFIED: an `answer:` line not written by owner-hub, or matching no answered or
     filed question in the hub store (read through a stand-in for the hub's client)."""
 
     run_tool, ok, tip, add = Tool.run_tool, Tool.ok, Tool.tip, Tool.add

@@ -25,7 +25,7 @@ writes add no line by design (the landing's close, the Action Hub's writes, the 
 pricing; docs/backlog.md
 "Audit log", Known limit), is counted.
 
-ANSWER-UNVERIFIED (docs/backlog.md "Audit log"): each `answer:` line a change
+UNVERIFIED (docs/backlog.md "Audit log"): each `answer:` line a change
 adds or changes, whatever its session, covered and by-design changes included, is checked. It
 passes only when the change was written by the Action Hub (its `Session:` is owner-hub,
 ANSWER_WRITER) or is a `catch-up` commit (an answer line a failed hub write left in a folder
@@ -65,7 +65,7 @@ BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
 # that may carry one it left uncommitted (store.catch_up), and the hub question statuses that hold
 # the owner's answer (kitlib.hubvalidate STATUSES: answered, filed, then logged or done once its
 # asker reads it; a re-answer is told apart by its `at`).
-ANSWER = 'ANSWER-UNVERIFIED'
+ANSWER = 'UNVERIFIED'
 ANSWER_WRITER = 'owner-hub'
 CATCH_UP = 'backlog: catch up '
 ANSWERED = ('answered', 'filed', 'logged', 'done')
