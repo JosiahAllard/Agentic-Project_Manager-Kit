@@ -121,7 +121,7 @@ class GradleCmdReparse(unittest.TestCase):
                     self.assertIn('nothing was run', refused)
 
     def test_every_cmd_character_in_the_filter_refuses(self):
-        for c in '&|<>^%!()"\n':
+        for c in '&|<>^%!()"\r\n':
             with self.assertRaisesRegex(V.Usage, 'cmd.exe reads again', msg=repr(c)):
                 V.parse_selector('engine/core/src/test/FooTest.java::a%sb' % c, RUNNERS)
 
