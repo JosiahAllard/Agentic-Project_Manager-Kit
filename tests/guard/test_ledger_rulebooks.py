@@ -171,7 +171,7 @@ class Rulebooks(unittest.TestCase):
         f = self.folder
         for name, why in ((os.path.join(f, 'STANDING<.md'), DIGEST), (os.path.join(f, 'STANDING.m>'), DIGEST),
                           (os.path.join(f, 'STANDING<'), DIGEST), (os.path.join(self.rules, 'alpha.m>'), BOOK),
-                          (os.path.join(self.rules, '<.md'), BOOK), (os.path.join(f, 'LEDGER<.md'), LOG),
+                          (os.path.join(self.rules, '<'), BOOK), (os.path.join(f, 'LEDGER<.md'), LOG),
                           ('STANDING<', DIGEST), ('rules\\alpha.m>', BOOK)):
             with self.subTest(name):
                 self.refused(ps('cmd /c del "%s"' % name, f, sub=True), why)
