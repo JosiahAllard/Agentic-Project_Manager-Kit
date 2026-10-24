@@ -340,14 +340,18 @@ def _repo(p):
     p.add_argument('--repo', default=argparse.SUPPRESS)
 
 
-def _listed(sub, name, what, statuses=None, repo=True):
+def _listed(sub, name, what, statuses=None, repo=True, since=False):
     """The parser of a verb that lists its collection when no sub-verb follows; its
-    sub-parsers."""
+    sub-parsers. `since`: the list takes --since, an ISO time with its offset (the route keeps
+    the documents written at or after it)."""
     p = _asks(sub.add_parser(name, help=what))
     if statuses:
         p.add_argument('--status', choices=statuses + ('all',), default=argparse.SUPPRESS)
     if repo:
         p.add_argument('--repo', default=argparse.SUPPRESS)
+    if since:
+        p.add_argument('--since', default=argparse.SUPPRESS, metavar='ISO',
+                       help='only those written at or after this time (ISO, with its offset)')
     return p.add_subparsers(dest='sub')
 
 
@@ -359,7 +363,7 @@ def _client_verbs(sub):
     S = hubvalidate.STATUSES
     q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
                 'done: handled with no ruling; edit, withdraw: change or remove one you asked; '
-                'file: file answers into their records again', S['questions'])
+                'file: file answers into their records again', S['questions'], since=True)
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
     _repo(x)
@@ -957,7 +961,8 @@ def _list(a, collection, version=False):
     """The lines of a collection. `version`: each line shows its document's version, for the
     collections that have a write which needs it named (--if-version)."""
     got = _hub(a).get('/' + collection, query={'status': getattr(a, 'status', None),
-                                              'repo': getattr(a, 'repo', None)})
+                                              'repo': getattr(a, 'repo', None),
+                                              'since': getattr(a, 'since', None)})
     return _show(a, got, [_item(d, version=version) for d in got.get('items') or []])
 
 

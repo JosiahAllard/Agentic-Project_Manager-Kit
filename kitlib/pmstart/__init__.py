@@ -112,7 +112,7 @@ def current_account():
     return accounts.current_account(machine_config())
 
 
-HUB_SITE_TIMEOUT_S = 1.5    # seconds each ask of the hub server waits (two asks at most)
+HUB_SITE_TIMEOUT_S = 1.5    # seconds each ask of the hub server waits (three asks at most)
 HUB_TOOL = os.path.join(KIT_ROOT, "tools", "hub.py")
 HUB_ERROR_MAX = 400         # characters of a rejected `hub` key's message shown in its line
 
@@ -193,7 +193,7 @@ def _wait_running(procs):
     return False
 
 
-def hub_site(procs=(), load=None, make_client=_hub_client):
+def hub_site(procs=(), load=None, make_client=_hub_client, stamp=None, now=None):
     """The hub site's lines, on the `hub` key's settings or, with no key, on the defaults (port
     8790): the site is the hub whether or not the key is written. Asks only the loopback server,
     with HUB_SITE_TIMEOUT_S per ask; starts nothing. A machine config that cannot be read is one
@@ -201,7 +201,9 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
     server side is one line naming no more than the port and the exception's class, so no token,
     URL or message of the server reaches the text. The one message shown is a rejected `hub`
     key's own, without the value it refused (_without_values): key names, the rules, and the
-    machine config's path when the settings name it; never a value written in the key."""
+    machine config's path when the settings name it; never a value written in the key. With a
+    `stamp` (the checklist gives filed_stamp_file), the up server's lines carry the filed-answers
+    digest (filed_digest, one more ask) after the pending ones; with none, no digest."""
     try:
         site = (load or hub_settings)()      # looked up at the call, so a test can replace it
     except HubSettingsError as e:
@@ -235,6 +237,8 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
     if items:
         lines.append("hub: process the %d pending item(s): python \"%s\" pending --for pm, then "
                      "handle, ack or log each" % (len(items), HUB_TOOL))
+    if stamp is not None:
+        lines.extend(filed_digest(hub, stamp, now))
     if _wait_running(procs):
         lines.append("hub: wait --pending is running")
     else:
@@ -243,6 +247,77 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
                      "exits with one HUB line per item; handle the items, then start it again)"
                      % HUB_TOOL)
     return lines
+
+
+FILED_STAMP_NAME = "pm-start-last.json"
+FILED_FALLBACK = datetime.timedelta(hours=24)
+
+
+def filed_stamp_file():
+    """The PM-start stamp: pm-start-last.json beside the pm_watch state file (the `state_file` of
+    the pm_watch config, else pmwatch.default_state_file)."""
+    from kitlib import pmwatch
+    state = pmwatch.load_config().get("state_file") or pmwatch.default_state_file()
+    return os.path.join(os.path.dirname(os.path.abspath(state)), FILED_STAMP_NAME)
+
+
+def _read_stamp(path):
+    """The time the stamp at `path` holds ({"at": ISO time with its offset}); None when the file
+    is missing or unreadable or its time is not one."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            at = datetime.datetime.fromisoformat(json.load(f)["at"])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return at if at.tzinfo is not None else None
+
+
+def _write_stamp(path, at):
+    """Writes {"at": at} to `path`, replacing it whole; False when it cannot be written."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"at": at.isoformat(timespec="seconds")}, f)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
+def filed_digest(hub, stamp, now=None):
+    """The PM-start digest of the owner's answers filed into a record since the last PM start
+    (docs/pm-start.md "Filed answers"): at most one line, and no push. `stamp` is the stamp file's
+    path, or a function giving it (asked here, so a checklist whose hub is down reads no pm_watch
+    config). The time since is the stamp's, or `now` less FILED_FALLBACK when the stamp is missing
+    or unreadable; the stamp is rewritten with `now` once the hub has answered, so a start whose
+    ask failed leaves it for the next start. One ask (GET /questions?status=filed&since=T): the
+    questions whose filed_at is at or after T are counted, and none is no line."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    try:
+        path = stamp() if callable(stamp) else stamp
+    except Exception as e:
+        return ["hub: answers filed since the last start not counted (%s)" % type(e).__name__]
+    since = _read_stamp(path) or now - FILED_FALLBACK
+    text = since.isoformat(timespec="seconds")
+    try:
+        items = hub.get("/questions", query={"status": "filed", "since": text},
+                        timeout=HUB_SITE_TIMEOUT_S).get("items")
+    except Exception as e:
+        return ["hub: answers filed since %s not asked (%s)" % (text, type(e).__name__)]
+    _write_stamp(path, now)
+    count = 0
+    for d in items if isinstance(items, list) else []:
+        try:
+            at = datetime.datetime.fromisoformat((d or {}).get("filed_at"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if at.tzinfo is not None and at >= since:
+            count += 1
+    if not count:
+        return []
+    return ["hub: %d answer(s) filed into records since %s, for your information: python \"%s\" "
+            "questions --status filed --since %s" % (count, text, HUB_TOOL, text)]
 
 
 def read_heartbeat():
@@ -951,7 +1026,8 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("standing", lambda: standing(cfg)),
         ("machine_config", lambda: configcheck.lines(**fakes.get("machine_config", {}))),
         ("eng_review", lambda: eng_review(cfg)),
-        ("hub", lambda: hub_site(procs_once, **fakes.get("hub_site", {}))),
+        ("hub", lambda: hub_site(procs_once, **dict({"stamp": filed_stamp_file},
+                                                     **fakes.get("hub_site", {})))),
         ("watcher", lambda: watcher(cfg, procs_once(), **fakes.get("watcher", {}))),
         ("handoff", lambda: handoff(cfg, **fakes.get("handoff", {}))),
         ("reminders", lambda: reminders(cfg, today, **fakes.get("reminders", {}))),

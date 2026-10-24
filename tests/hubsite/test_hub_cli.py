@@ -1361,6 +1361,15 @@ class WriteCase(VerbCase):
         self.assertEqual(self.ok('questions', 'log', 'Q-1000', 'D-7', '--if-version',
                                  str(doc['version'])), ['LOGGED Q-1000 D-7'])
 
+    def test_questions_since_lists_the_ones_written_at_or_after_it(self):
+        # the PM-start digest's command (docs/pm-start.md "Filed answers")
+        self.ask()
+        written = self.direct('/questions')['items'][0]['updated_at']
+        self.assertEqual(self.ok('questions', '--since', written),
+                         ['Q-1000 v1 open [kit] which way'])
+        self.assertEqual(self.ok('questions', '--since', '2999-01-01T00:00:00+00:00'), [])
+        self.assertIn('REFUSED invalid: ', self.refused('questions', '--since', 'yesterday'))
+
     def test_a_story_set_on_a_version_it_no_longer_has_is_refused_and_not_set(self):
         story = self.file('story.md', 'As the owner I want it.\n')
         self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb', '--story-file', story)
