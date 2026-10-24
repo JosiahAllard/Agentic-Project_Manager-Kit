@@ -61,6 +61,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/pm-start.md` | PM session-start checklist | starting a PM session | kw: pm-start, checklist
 - `docs/pm-watch.md` | PM watcher | watching sessions | kw: pm-watch, watcher
 - `docs/preflight.md` | preflight, board and checkout guard | starting any task | kw: preflight, board, checkout
+- `docs/stray-restore.md` | discard a main-checkout stray a branch already holds byte for byte | the gate reports main-checkout-stray | kw: stray-restore, stray, main-checkout-stray, restore
 - `docs/redfirst.md` | redfirst | proving a test fails first | kw: redfirst, red
 - `docs/repo-checks.md` | forbidden, trailers, pieces | repo checks | kw: forbidden, trailers, pieces
 - `docs/review-pack.md` | review_pack | preparing a review | kw: review-pack, review
@@ -129,6 +130,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/agent_view.py` | everything one role is given and held to on one host (`docs/content.md` "Agent view") | kw: agent_view, role, view, instructions, mode, capabilities
 - `tools/board.py` | the coordinator's whole board in one call (`docs/preflight.md`) | kw: board
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
+- `tools/stray_restore.py` | discard main-checkout strays a branch tip holds (`docs/stray-restore.md`) | kw: stray_restore, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
