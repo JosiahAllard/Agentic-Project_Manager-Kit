@@ -182,7 +182,7 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     here = cm.run_dir(inv)
     if text and argv.rid and not argv.given.get(policy.UNKNOWN) and \
             policy.refusal(who, rows, (roles.OWN_PULL,)) is None:
-        text, form, instead = own_pull_refusal(ctx, cmd, cwd, argv, who, here, pairs)
+        text, form, instead = own_pull_refusal(ctx, cmd, argv, who, here, pairs)
     if not text:
         return None
     # the rows were sorted as if the record were held (not read: the strictest); when the role
@@ -245,7 +245,7 @@ def _worktree_on(ctx, where, branch):
     return _branch_at(ctx, place.top) == branch
 
 
-def own_pull_refusal(ctx, cmd, cwd, argv, who, here=None, pairs=None):
+def own_pull_refusal(ctx, cmd, argv, who, here=None, pairs=None):
     """(policy.refusal, the form sentence, the form or None) for a run only a builder's own pull
     would allow: the
     record read where the tool runs (_root: its -C folder, else `here`; none when unknown), its pull
