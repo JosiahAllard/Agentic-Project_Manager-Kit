@@ -2625,7 +2625,7 @@ ul.hist .sch-line{display:block}
     return el("article", { class: "q", id: "sch-division" },
       el("div", { class: "meta" }, el("span", { class: "chip", text: "Division" })),
       el("h2", { text: d.cpu_slots + " cpu slots, " + d.gpu_slots + " gpu slots" }),
-      schLine("An agent run takes at most " + d.agent_cap),
+      schLine("An agent run takes at most " + d.agent_cap + "."),
       d.changed || d.reason ? schLine("Waiting to change: " + (d.reason || "the division changes once nothing holds the slots.")) : null,
       el("ul", { class: "hist", id: "sch-divlist" }, ...SCH_DIV.map(k => el("li", { "data-key": k }, el("strong", { text: k }),
         el("span", { class: "sch-line", text: "in force " + (schShown(now[k]) || "-") + " · yours " + (schShown(own[k]) || "-") + " · default " + (schShown(def[k]) || "-") })))),

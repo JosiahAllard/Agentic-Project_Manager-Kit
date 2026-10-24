@@ -86,7 +86,7 @@ the title.
   percentages, an agent with its model and effort); a row opens the account's meters or the agent's
   definition in the detail pane. Lock notices stay a list.
 - **Schedule.** A section of its own (the sidebar's Projects group and the phone's Schedule tab; the
-  hash `#schedule`), drawn from `GET /lock/view` ("Machine lock routes" below), with three tabs:
+  hash `#schedule`), drawn from `GET /lock/view` ("Machine lock routes" below), with four tabs:
   - Now lists the runs now (each with a progress line against the time expected, and a Late chip
     past it), the line behind them (Next up, from `queue_items`), today's holds, and a closed
     History row that opens the finished runs, filterable to those that failed or were stopped. A
@@ -95,19 +95,23 @@ the title.
   - Week is the week of half hours (back two weeks, on four). Reserve time on a card opens it in
     pick mode: the half hour a window starts in, then the one it ends in, then Reserve the whole
     machine or half, with a note.
-  - Holds lists the owner's holds and the agents' holds.
+  - Holds lists the owner's holds and the agents' holds. New hold opens a form (the whole machine,
+    half, or named slots, with typed times); Edit changes a hold's window or note and Release (asked
+    twice) ends it, whoever made it.
+  - Settings has the Game mode card (on or off, and the games list) and the Division card (what is in
+    force, what the owner set, the default for each key; change it or use the defaults).
+  - History (under Now) also shows what ran over the last 1, 7, 30 or 90 days.
 
   One watcher reads the lock for every view (the Home machine strip, the count, this section): it
   waits on `GET /lock/wait`, stops while the browser tab is hidden and reads again when shown,
-  backing off like the other waits. Home's machine strip (the slot boxes drawn by the same `schBoxes` as the Schedule's machine card, and a summary line) is one link to `#schedule`. The Schedule view has
-  one link, "Machine settings (game mode, division, holds, stats)", to `/lock.html`, which stays served
-  with every other control (hold editing, game mode, the division, stats). Times are the PC's local
+  backing off like the other waits. Home's machine strip (the slot boxes drawn by the same `schBoxes` as the Schedule's machine card, and a summary line) is one link to `#schedule`. Every control of the
+  old lock page now lives on the Schedule; `/lock.html` is removed and answers 404, with no redirect
+  (`tests/hubsite/test_page.py`, `ServedTest`). Times are the PC's local
   time and a reserved window is sent in UTC.
 
   A control this login may not use is disabled and says why (a "Read only" line gives the reason):
   holds and the division need the strong owner; a hub started under an agent session changes
-  nothing (`tests/hubsite/test_page.py`, `ScheduleTest`; `tests/hubsite/test_lock_page.py`,
-  `WriteTest`). The lock routes themselves stay the owner's: an agent is refused them
+  nothing (`tests/hubsite/test_page.py`, `ScheduleTest`; `ScheduleChangesTest`). The lock routes themselves stay the owner's: an agent is refused them
   (`tests/hubsite/test_api_roles.py`, `tests/hubsite/test_lockdoor.py`).
 
 In the sidebar's foot (when the hub was read, then the PM line and the push line) a line says whether a PM is listening: "A PM is listening." while a PM holds a
