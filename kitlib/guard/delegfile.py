@@ -162,44 +162,79 @@ def shell_paths(event, ctx, cmd, inv, role):
             f = word_reaches(ctx, w, where, cmd.shell, into)
             what = '`%s` writes %s' % (rules.bare(cmd), w.text)
             if f is None and config is None:
-                folder = glob_config(ctx, w, where, cmd.shell)
-                config = (w, folder) if folder else None
+                found = glob_config(ctx, w, where, cmd.shell)
+                config = (w,) + found if found else None
         if f is not None:
             return refusal(event, ctx, role, what, f)
     if config is not None:
-        w, folder = config
+        w, folder, over = config
+        if over:
+            return rules.machine_config_refusal(event, ctx, role, (
+                '`%s` writes %s, a wildcard the guard stopped resolving after %d names in and below %s, so it '
+                'may name a machine config folder (fail closed); name the paths without a wildcard, or with '
+                'one that starts deeper') % (rules.bare(cmd), w.text, WALK_LIMIT, rules.quote(folder)), folder)
         return rules.machine_config_refusal(event, ctx, role, '`%s` writes %s, a wildcard in %s' % (
             rules.bare(cmd), w.text, rules.quote(folder)), folder)
     return None
 
 
 def glob_config(ctx, w, where, shell):
-    """The machine config folder (rules.machine_config_folder) the wildcard write target Word `w`,
-    read from `where`, starts in or can name: its literal folder is that folder or lies in it, or
-    a path its parts after that folder match on disk is or lies in it (glob_config_below). None
-    for a word with no wildcard, or one the guard cannot place."""
+    """(folder, over) for the wildcard write target Word `w`, read from `where`: the machine
+    config folder (rules.machine_config_folder) it starts in or can name, its literal folder
+    being that folder or lying in it, or a path its parts after that folder match on disk being
+    or lying in it (glob_config_below), with `over` False; or (the literal folder, True) when
+    that match passed WALK_LIMIT names (fail closed). None for a word with no wildcard, one the
+    guard cannot place, or one that names none."""
     text = sh.home_text(w.text, ctx.home, w.dyn)
     if not text or not hubg.has_glob(text):
         return None
     base, rest = glob_base(ctx, text, where, shell)
     if not base:
         return None
-    return rules.machine_config_folder(ctx, base) or glob_config_below(ctx, base, rest)
+    folder = rules.machine_config_folder(ctx, base)
+    if folder:
+        return folder, False
+    try:
+        folder = glob_config_below(ctx, base, rest, shell)
+    except WalkLimit:
+        return base, True
+    return (folder, False) if folder else None
 
 
-def glob_config_below(ctx, base, rest):
-    """The machine config folder a path the wildcard parts `rest` match below the folder `base`
-    is or lies in, resolved as FindFirstFile resolves them: a wildcard part (a DOS one as `*`,
-    rules.DOS_WILDCARDS) against the names in each folder reached so far, long or 8.3 short
-    (rules.glob_part), case folded and a leading dot like any other character; a part with none
-    joined as written. Every part is matched, the last too (`rm -r .pm-k*` names the folder); a
-    folder part matches folders only. None when no path it matches is in one."""
+# the most folder entries glob_config_below reads for one wildcard before it stops and the write
+# is refused (fail closed): the guard answers within the host's hook deadline (Codex 7 s)
+WALK_LIMIT = 4000
+# a bash set that starts `[^` is negated as `[!` is; fnmatch reads only `[!`
+BASH_NEGATE_RE = re.compile(r'\[\^')
+
+
+class WalkLimit(Exception):
+    """glob_config_below read more than WALK_LIMIT folder entries."""
+
+
+def glob_config_below(ctx, base, rest, shell=None):
+    """The machine config folder an existing path the wildcard parts `rest` match below the
+    folder `base` is or lies in, resolved as FindFirstFile resolves them: a wildcard part (a DOS
+    one as `*`, rules.DOS_WILDCARDS) against the names in each folder reached so far, long or
+    8.3 short (rules.glob_part), case folded; a part with none joined as written. For a bash
+    word (sh.BASH) a part that starts with `*`, `?` or `[` matches no name that starts with a
+    dot, as bash without dotglob reads it, and a `[^` set is negated; PowerShell and cmd match
+    a leading dot like any other character. Every part is matched, the last too (`rm -r .pm-k*`
+    names the folder); a folder part matches folders only, and only a path that exists is
+    judged (`*/__pycache__` names no new folder in .pm-kit; a new file there is glob_config's
+    literal-folder check). None when no path it matches is in one; WalkLimit past WALK_LIMIT
+    folder entries read."""
+    bash = shell == sh.BASH
     parts = [x for x in re.split(r'[\\/]', rest) if x and x != '.']
-    level = [base]
+    level, read = [base], 0
+    found = []
     for i, part in enumerate(parts):
         found = []
         pattern = part.lower().translate(rules.DOS_WILDCARDS)
+        if bash:
+            pattern = BASH_NEGATE_RE.sub('[!', pattern)
         wild = hubg.has_glob(pattern)
+        no_dot = bash and part[:1] in hubg.GLOB_CHARS
         for folder in level:
             if not wild:
                 found.append(paths.norm(os.path.join(folder, part), fold=False))
@@ -208,19 +243,24 @@ def glob_config_below(ctx, base, rest):
                 names = os.listdir(folder)
             except OSError:
                 continue
+            read += len(names)
+            if read > WALK_LIMIT:
+                raise WalkLimit()
             for name in names:
+                if no_dot and name.startswith('.'):
+                    continue
                 path = os.path.join(folder, name)
                 long_name = name.lower()            # the short name is read only when the long one fails
                 if long_name == pattern or fnmatch.fnmatchcase(long_name, pattern) or rules.glob_part(
                         long_name, rules.short_parts(path, 1)[0], pattern):
                     found.append(path)
-        for path in found:
-            if config_named(path):
-                folder = rules.machine_config_folder(ctx, path)
-                if folder:
-                    return folder
         if i < len(parts) - 1:
             level = [p for p in found if os.path.isdir(p)]
+    for path in found:
+        if os.path.lexists(path) and config_named(path):
+            folder = rules.machine_config_folder(ctx, path)
+            if folder:
+                return folder
     return None
 
 

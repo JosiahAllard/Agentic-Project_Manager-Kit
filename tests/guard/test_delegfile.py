@@ -4,6 +4,7 @@ session but the owner's own is refused a write, move or delete of either copy, t
 tool, shell or git; reads and copies out stay open."""
 import os
 import unittest
+from unittest import mock
 
 from kitlib.guard import context, delegfile, rules
 
@@ -388,6 +389,9 @@ class FolderWildcards(unittest.TestCase):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, 'w', encoding='utf-8') as fh:
                     fh.write('{}\n')
+        os.makedirs(os.path.join(self.w.wt, 'sub', '.pm-kit'))
+        with open(os.path.join(self.w.wt, 'sub', '.pm-kit', 'config.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{}\n')
 
     def decide(self, payload, environ):
         return decide(payload, self.w.ctx(environ=environ, pointer=lambda: self.pointer))
@@ -443,6 +447,73 @@ class FolderWildcards(unittest.TestCase):
                 ('deeper', lambda sub: bash('rm sub*/.pm-kit/config.json', self.w.wt, sub)),
                 ('not the folder', lambda sub: bash('rm .pm-kit*.json', self.w.wt, sub))):
             self.assert_not_config(payload, name)
+
+    def test_a_folder_wildcard_names_only_a_path_that_exists(self):
+        # every worktree of the PM repository holds a .pm-kit at its top: a folder wildcard that
+        # reaches it names nothing there unless the joined path exists
+        for name, payload in (
+                ('rm -rf */__pycache__', lambda sub: bash('rm -rf */__pycache__', self.w.wt, sub)),
+                ('rm */*.log', lambda sub: bash('rm */*.log', self.w.wt, sub)),
+                ('Remove-Item */bin', lambda sub: ps('Remove-Item */bin -Recurse', self.w.wt, sub)),
+                ('Remove-Item *\\new.json', lambda sub: ps('Remove-Item *\\new.json', self.w.wt, sub))):
+            self.assert_not_config(payload, name)
+        self.assert_config(lambda sub: ps('Remove-Item */config.json', self.w.wt, sub), 'Remove-Item */config.json')
+
+    def test_a_bash_leading_wildcard_skips_dot_names_and_powershell_does_not(self):
+        for name, payload in (
+                ('rm */config.json', lambda sub: bash('rm */config.json', self.w.wt, sub)),
+                ('rm -rf *', lambda sub: bash('rm -rf *', self.w.wt, sub)),
+                ('rm ?pm-kit/config.json', lambda sub: bash('rm ?pm-kit/config.json', self.w.wt, sub))):
+            self.assert_not_config(payload, name)
+        for name, payload in (
+                ('rm .*/config.json', lambda sub: bash('rm .*/config.json', self.w.wt, sub)),
+                ('Remove-Item *', lambda sub: ps('Remove-Item -Recurse *', self.w.wt, sub)),
+                ('Remove-Item ?pm-kit', lambda sub: ps('Remove-Item ?pm-kit\\config.json', self.w.wt, sub))):
+            self.assert_config(payload, name)
+
+    def test_a_bash_caret_set_is_negated(self):
+        self.assert_config(lambda sub: bash('rm .pm-[^x]it/config.json', self.w.wt, sub), '[^x]')
+        self.assert_not_config(lambda sub: bash('rm .pm-[^k]it/config.json', self.w.wt, sub), '[^k]')
+
+    def test_a_walk_past_the_limit_is_refused(self):
+        for name in ('a', 'b', 'c'):
+            os.makedirs(os.path.join(self.w.wt, name))
+        with mock.patch.object(delegfile, 'WALK_LIMIT', 3):
+            self.assert_config(lambda sub: bash('rm */x/*.log', self.w.wt, sub), 'past the limit')
+            d = self.decide(bash('rm */x/*.log', self.w.wt, True), {})
+            self.assertIn('stopped resolving after 3 names', d.reason)
+        self.assert_not_config(lambda sub: bash('rm */x/*.log', self.w.wt, sub), 'under the limit')
+
+
+class FolderWildcardShortNames(unittest.TestCase):
+    """A folder wildcard that matches only the 8.3 short name of a checkout's .pm-kit names it
+    (delegfile.glob_config_below through rules.glob_part). Run on a volume that gives short
+    names (world.short_name_root); skipped when no temp folder has them."""
+
+    def setUp(self):
+        root = W.short_name_root()
+        if root is None:
+            self.skipTest('no temp folder\'s volume gives short (8.3) names')
+        self.w = W.World(root=root)
+        self.addCleanup(self.w.cleanup)
+        folder = os.path.join(self.w.wt, '.pm-kit')
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'config.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{}\n')
+        short = W.short_name(folder)
+        if not short:
+            self.skipTest('the volume gave .pm-kit no short (8.3) name')
+        self.short = os.path.basename(short)
+
+    def test_a_short_name_folder_wildcard_names_the_config_folder(self):
+        pattern = self.short[:-1] + '?'
+        self.assertNotEqual(pattern.lower()[:1], '.')
+        for payload in (bash('rm %s/config.json' % pattern, self.w.wt, True),
+                        ps('Remove-Item %s\\config.json' % pattern, self.w.wt, True)):
+            with self.subTest(payload['tool_input']):
+                d = decide(payload, self.w.ctx(environ={}, pointer=lambda: None))
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual((d.verdict, d.rule), ('deny', FolderWildcards.CONFIG), d.reason)
 
 
 class Matchers(unittest.TestCase):
