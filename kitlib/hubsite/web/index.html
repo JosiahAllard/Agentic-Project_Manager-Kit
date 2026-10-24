@@ -2730,13 +2730,18 @@ ul.hist .sch-line{display:block}
         : el("p", {class:"status", role:"status", text: (APPROVAL_SAID[d.status] || String(d.status || "Decided")) + (d.decided_at ? " " + when(d.decided_at) : "") + "."}));
   }
 
+  // A question the owner has answered takes a new answer: one waiting for the PM, and one the hub filed into its record
+  // (the server files the new answer again).
+  const reanswerable = d => d.status === "answered" || d.status === "filed";
+  // Who reads a filed answer: the session that asked it, or the PM when the PM asked it (or no session is named).
+  const filedFor = d => typeof d.from === "string" && d.from && d.from !== "pm" && d.from !== "you" ? d.from : "the PM";
   function card(d){
     const opts = Array.isArray(d.options) ? d.options : [];
     const rec = Number.isInteger(d.recommended) ? d.recommended : 0;
     if (sent.has(d.id) && sent.get(d.id) !== asIs(d)) sent.delete(d.id);
     // The lists now hold the changed question: the refusal's line is the one about the question as it is now.
     if (unread.has(d.id) && unread.get(d.id) !== asIs(d)) { unread.delete(d.id); if (said.has(d.id)) said.set(d.id, CHANGED); }
-    const editable = !sent.has(d.id) && (d.status === "open" || (d.status === "answered" && state.editing.has(d.id)));
+    const editable = !sent.has(d.id) && (d.status === "open" || (reanswerable(d) && state.editing.has(d.id)));
     const head = el("div", {class:"meta"},
       d.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null,
       el("span", {class:"id", text: d.id}),
@@ -2772,7 +2777,7 @@ ul.hist .sch-line{display:block}
       note.value = draft.note || "";
       note.addEventListener("input", () => { draft.note = note.value; saveDraft(d.id, draft); if (draft.choice === "other") btn.disabled = !note.value.trim(); });
       const status = el("span", {class: "status" + (said.has(d.id) ? " err" : ""), role:"status", text: said.get(d.id) || ""});
-      const btn = el("button", {class:"primary", type:"button", text: d.status === "answered" ? "Save new answer" : "Send answer"});
+      const btn = el("button", {class:"primary", type:"button", text: reanswerable(d) ? "Save new answer" : "Send answer"});
       btn.disabled = draft.choice == null || (draft.choice === "other" && !draft.note.trim());
       const send = async () => {
         btn.disabled = true; said.delete(d.id); unread.delete(d.id); status.className = "status"; status.textContent = "Sending…";
@@ -2806,7 +2811,7 @@ ul.hist .sch-line{display:block}
       fs.send = btn; fs.go = send;
       const acts = el("div", {class:"act"}, btn, status);
       acts.append(el("span", {class:"keys", text: ""}, ...keyHint(picks.length)));
-      if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); unread.delete(d.id); render(); }}));
+      if (reanswerable(d)) acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); unread.delete(d.id); render(); }}));
       // An open question the owner does not mean to answer is withdrawn: it leaves the hub.
       else acts.append(delButton("/questions/" + seg(d.id) + "/delete", status, d.version, "Withdraw", "withdrawn"));
       parts.push(fs, note, acts);
@@ -2818,9 +2823,9 @@ ul.hist .sch-line{display:block}
       parts.push(el("div", {class:"ans"},
         el("div", {}, el("b", {text: "Your answer: "}), pick, a.choice === rec ? " (the recommendation)" : ""),
         a.note ? el("div", {text: a.note}) : null,
-        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : " · waiting for the PM to log it")})
+        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : d.status === "filed" ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · waiting for " + filedFor(d) + " to read it" : " · waiting for the PM to log it")})
       ));
-      if (d.status === "answered") parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Change answer", onclick: () => { state.editing.add(d.id); render(); }})));
+      if (reanswerable(d)) parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Change answer", onclick: () => { state.editing.add(d.id); render(); }})));
     }
     return el("article", {class: "q " + d.status + (d.urgent ? " urgent" : ""), id: "q-" + d.id}, ...parts);
   }

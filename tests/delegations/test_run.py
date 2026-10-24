@@ -397,6 +397,18 @@ class HubTrigger(Fixture):
         self.q['status'] = 'answered'
         self.deny('is not a logged hub question')
 
+    def test_a_filed_question_is_refused_until_its_asker_logs_it(self):
+        self.q['status'] = 'filed'
+        self.q.pop('ruling')
+        self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}
+        self.deny('is filed in its record but not logged')
+        self.deny('log it first: `hub.py questions log %s <ruling id>`' % self.q['id'])
+
+    def test_a_filed_question_once_logged_runs(self):
+        self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}
+        self.q['filed_at'] = self.q['answer']['at']
+        self.assertEqual(self.go().entry, 'H-kit-0002')
+
     def test_another_label_is_refused(self):
         self.q['answer'].update(choice=1, label='not now')
         self.deny('not the run line')
