@@ -25,6 +25,8 @@ the owner, against kitlib/backlog/roles.py; docs/backlog.md "Roles"): a row it m
 REFUSED before the write plans. A published write of a MEDIUM or HIGH row appends its line to the
 audit log, <pm_data>/audit/backlog.jsonl (kitlib.backlog.audit; docs/backlog.md "Audit log"); no
 pm_data is a NOTE and a log that cannot be written a WARNING, on standard error, after the write.
+A marked session may not give `--session` a by-design writer's name (gate-land, owner-hub,
+daily-full: audit_check.BY_DESIGN): REFUSED before the store is opened.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
 REFUSED / NOT LANDABLE.
 """
@@ -34,8 +36,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kitlib import kitroot                                         # noqa: E402
+from kitlib import kitroot, sessionmark                            # noqa: E402
 from kitlib.backlog import audit                                    # noqa: E402
+from kitlib.backlog import audit_check                              # noqa: E402
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
@@ -392,6 +395,17 @@ def do_catch_up(args, store):
     return 0
 
 
+def refuse_by_design_session(session, environ=None):
+    """A marked session (kitlib.sessionmark) may not run as one of the sessions whose store writes
+    add no audit line by design (audit_check.BY_DESIGN; docs/backlog.md "Audit log"): Refusal.
+    The owner's own unmarked shell may."""
+    name = (session or '').strip().lower()
+    if name in audit_check.BY_DESIGN and sessionmark.mark(environ) is not None:
+        raise Refusal('`--session %s` is the name of a kit writer whose store writes add no audit '
+                      'line by design (%s); a marked session may not use it: give your own '
+                      'session name' % (session, ', '.join(audit_check.BY_DESIGN)))
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
@@ -399,6 +413,7 @@ def main(argv=None):
             err = rmod.block_citation_error(args.on, args.reason, args.owner_ask)
             if err:
                 raise Usage(err)
+        refuse_by_design_session(args.session)
         root = os.path.abspath(args.root or os.getcwd())
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
         store = ctx.store
