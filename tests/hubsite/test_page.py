@@ -3728,7 +3728,7 @@ def finding(fp, check, target, text, **kw):
     return d
 
 
-FOUND = [finding("fp1", "unpriced", "R-1", "R-1 has no priority"),
+FOUND = [finding("fp1", "unpriced", "R-1", "R-1 has no priority", new=True),
          finding("fp2", "duplicate", "R-2 R-3", "two records say the same", new=True),
          finding("fp3", "worktree-A", ".../wt-old", "a worktree with no branch")]
 MARKS = [{"id": "fp9", "repo": "alpha", "check": "dead-pull", "target": "R-9", "text": "pulled, no branch", "status": "passed_on",
@@ -3751,8 +3751,18 @@ FINDINGS_ROUTE = """
         return { status: 200, body: { ok: true, id: d.fingerprint, version: 1 } };
       }
       if (c.path === "/to_pm" && c.method === "POST") return lintS.actFail || { status: 200, body: { ok: true, id: "P-9" } };
+      if (c.path.startsWith("/records/")) {                        // the record a finding names: GET reads it, a POST is one of the owner's writes
+        const id = c.path.split("/")[3];
+        if (c.method === "GET") return lintS.recFail || { status: 200, body: Object.assign({ ok: true }, lintS.recs[id]) };
+        return lintS.recWrite || { status: 200, body: { ok: true } };
+      }
       return undefined;
     };
+    lintS.recFail = null; lintS.recWrite = null;
+    const rec = (id, o) => Object.assign({ id, repo: "alpha", where: "open", version: 4, readable: true, fields: [["priority", "-"], ["effort", "S"], ["scope", "a/b.md"]],
+                                           blockers: [], hold: {}, body: "" }, o || {});
+    lintS.recs = { "R-1": rec("R-1"), "R-2": rec("R-2", { version: 2 }), "R-3": rec("R-3"),
+                   "R-4": rec("R-4", { blockers: [{ value: "R-5", target: "R-5" }] }), "R-6": rec("R-6", { fields: [["scope", "gone/x.md"], ["scope", "a/b.md"]] }) };
     const posts = () => calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
 """
 
@@ -3775,11 +3785,15 @@ class FindingsTest(unittest.TestCase):
             await start();
             return { sec: $("#sections .sec[aria-selected=true]").dataset.s,
                      rows: $$("#list article").map(a => [a.id, text(a.querySelector("h2")), [...a.querySelectorAll(".chip")].map(text), text(a.querySelector("p.ctx"))]),
+                     heads: $$("#list h3.sch-group").map(text), muted: $$("#list article.muted").map(a => a.id),
                      gets: calls.filter(c => c.method === "GET" && /^\\/finding/.test(c.path)).map(c => c.path).sort() };
         """)
         self.assertEqual(got["sec"], "findings")
+        # grouped: New this run (the lint's `new` flag), Still open, then Handled, muted and tagged
+        self.assertEqual(got["heads"], ["New this run (2)", "Still open (1)", "Handled (2)"])
+        self.assertEqual(got["muted"], ["row-fp9", "row-fp8"])
         self.assertEqual(got["rows"], [
-            ["row-fp1", "R-1", ["unpriced", "alpha"], "R-1 has no priority"],
+            ["row-fp1", "R-1", ["unpriced", "alpha", "New"], "R-1 has no priority"],
             ["row-fp2", "R-2 R-3", ["duplicate", "alpha", "New"], "two records say the same"],
             ["row-fp3", ".../wt-old", ["worktree-A", "alpha"], "a worktree with no branch"],      # a path as the server gives it
             ["row-fp9", "R-9", ["dead-pull", "alpha", "Passed on"], "pulled, no branch"],
@@ -3794,21 +3808,113 @@ class FindingsTest(unittest.TestCase):
         """)
         self.assertEqual(got, 2)
 
-    def test_a_record_check_opens_the_record_it_names_and_a_duplicate_offers_each(self):
+    def test_a_record_check_offers_its_action_inline_and_the_record_page_as_a_link_and_a_duplicate_offers_each(self):
         got = self.run_page("""
             await start();
             const acts = id => { const c = $("#pane-detail #finding-" + id); return [...c.querySelectorAll("button")].map(b => text(b)); };
-            const one = acts("fp1");
+            await click($("#row-fp1")); const one = acts("fp1");
             await click($("#row-fp2")); const two = acts("fp2");
             await click($("#row-fp3")); const three = acts("fp3");
             await click($("#row-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
-            return { one, two, three, read: calls.filter(c => /^\\/records\\//.test(c.path)).map(c => c.path), sec: $("#sections .sec[aria-selected=true]").dataset.s };
+            const inline = { read: calls.filter(c => /^\\/records\\//.test(c.path)).map(c => c.path), sec: $("#sections .sec[aria-selected=true]").dataset.s,
+                             panel: !!$("#pane-detail #fa-fp1-R-1") };
+            await click(button($("#pane-detail #finding-fp1"), "Open R-1")); await settle();
+            return { one, two, three, inline, sec: $("#sections .sec[aria-selected=true]").dataset.s };
         """)
-        self.assertEqual(got["one"], ["Set priority R-1", "Pass on", "Dismiss"])
-        self.assertEqual(got["two"], ["Retire R-2", "Retire R-3", "Pass on", "Dismiss"])
+        self.assertEqual(got["one"], ["Set priority R-1", "Open R-1", "Pass on", "Dismiss"])
+        self.assertEqual(got["two"], ["Retire R-2", "Open R-2", "Retire R-3", "Open R-3", "Pass on", "Dismiss"])
         self.assertEqual(got["three"], ["Pass on", "Dismiss"])
-        self.assertEqual(got["read"], ["/records/alpha/R-1"])
-        self.assertEqual(got["sec"], "backlog")
+        self.assertEqual(got["inline"], {"read": ["/records/alpha/R-1"], "sec": "findings", "panel": True})   # read here, no navigation
+        self.assertEqual(got["sec"], "backlog")                                                              # Open R-1 is the link to the page
+
+    def test_set_priority_runs_inline_pinned_to_the_version_read(self):
+        got = self.run_page("""
+            await start();
+            await click($("#row-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
+            const before = $("#fa-fp1-R-1-priority").value;
+            await type($("#fa-fp1-R-1-priority"), "P1");
+            await click(button($("#fa-fp1-R-1"), "Save")); await settle();
+            return { before, posts: posts(), said: text($("#fa-fp1-R-1 .status")), sec: $("#sections .sec[aria-selected=true]").dataset.s };
+        """)
+        self.assertEqual(got["before"], "-")
+        self.assertEqual(got["posts"], [["/records/alpha/R-1/edit", {"version": 4, "changes": {"priority": ["P1"]}}]])
+        self.assertEqual(got["said"], "Set priority done on R-1.")
+        self.assertEqual(got["sec"], "findings")
+
+    def test_edit_scope_sends_the_paths_one_per_line_at_the_version_read(self):
+        found = [finding("fp6", "scope-path-gone", "R-6", "R-6 names a path that is gone")]
+        got = self.run_page("""
+            await start();
+            await click($("#row-fp6")); await click(button($("#pane-detail #finding-fp6"), "Edit scope R-6")); await settle();
+            const before = $("#fa-fp6-R-6-scope").value;
+            await type($("#fa-fp6-R-6-scope"), "a/b.md\\nc/d.md");
+            await click(button($("#fa-fp6-R-6"), "Save")); await settle();
+            return { before, posts: posts() };
+        """, found=found)
+        self.assertEqual(got["before"], "gone/x.md\na/b.md")
+        self.assertEqual(got["posts"], [["/records/alpha/R-6/edit", {"version": 4, "changes": {"scope": ["a/b.md", "c/d.md"]}}]])
+
+    def test_unblock_sends_the_reason_and_refuses_when_the_record_moved_since_it_was_read(self):
+        found = [finding("fp4", "keyword-hold", "R-4", "R-4 is held on a keyword")]
+        got = self.run_page("""
+            await start();
+            await click($("#row-fp4")); await click(button($("#pane-detail #finding-fp4"), "Unblock R-4")); await settle();
+            await type($("#fa-fp4-R-4-reason"), "it landed");
+            lintS.recs["R-4"].version = 9;                             // somebody else wrote it after this panel read it
+            await click(button($("#fa-fp4-R-4"), "Save")); await settle();
+            const moved = { posts: posts(), said: text($("#fa-fp4-R-4 .status")) };
+            lintS.recs["R-4"].version = 4;
+            await click(button($("#fa-fp4-R-4"), "Save")); await settle();
+            return { moved, posts: posts() };
+        """, found=found)
+        self.assertEqual(got["moved"]["posts"], [])
+        self.assertIn("changed since it was read here", got["moved"]["said"])
+        self.assertEqual(got["posts"], [["/records/alpha/R-4/unblock", {"reason": "it landed"}]])
+
+    def test_retire_waits_for_a_reason_and_the_typed_id_then_deletes_the_record_named(self):
+        got = self.run_page("""
+            await start();
+            await click($("#row-fp2")); await click(button($("#pane-detail #finding-fp2"), "Retire R-3")); await settle();
+            const go = button($("#fa-fp2-R-3"), "Retire R-3");
+            const none = go.disabled;
+            await type($("#fa-fp2-R-3-why"), "a copy of R-2");
+            const reasonOnly = go.disabled;
+            await type($("#fa-fp2-R-3-confirm"), "R-2");
+            const wrongId = go.disabled; await click(go);
+            const noPost = posts().length;
+            await type($("#fa-fp2-R-3-confirm"), "R-3");
+            const ready = go.disabled; await click(go); await settle();
+            return { none, reasonOnly, wrongId, noPost, ready, posts: posts(), said: text($("#fa-fp2-R-3 .status")) };
+        """)
+        self.assertEqual((got["none"], got["reasonOnly"], got["wrongId"], got["noPost"], got["ready"]), (True, True, True, 0, False))
+        self.assertEqual(got["posts"], [["/records/alpha/R-3/delete", {"why": "a copy of R-2", "confirm": "R-3"}]])
+        self.assertEqual(got["said"], "Retire done on R-3.")
+
+    def test_a_refused_inline_action_shows_the_stores_words_and_asks_for_a_ruling_only_when_named(self):
+        got = self.run_page("""
+            await start();
+            await click($("#row-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
+            await type($("#fa-fp1-R-1-priority"), "P1");
+            const ruling = () => $("#fa-fp1-R-1-ruling").hidden;
+            lintS.recWrite = REFUSAL_A; await click(button($("#fa-fp1-R-1"), "Save")); await settle();
+            const first = [text($("#fa-fp1-R-1 .status")), ruling()];
+            lintS.recWrite = REFUSAL_B; await click(button($("#fa-fp1-R-1"), "Save")); await settle();
+            const second = [text($("#fa-fp1-R-1 .status")), ruling()];
+            return { first, second, enabled: !button($("#fa-fp1-R-1"), "Save").disabled };
+        """.replace("REFUSAL_A", json.dumps(refusal("conflict", "R-1 is at version 5, not 4", 409)))
+           .replace("REFUSAL_B", json.dumps(refusal("ruling", "this edit needs a ruling id"))))
+        self.assertEqual(got["first"], ["Not done: R-1 is at version 5, not 4", True])
+        self.assertEqual(got["second"], ["Not done: this edit needs a ruling id", False])
+        self.assertTrue(got["enabled"])
+
+    def test_a_record_that_is_not_open_has_nothing_to_change(self):
+        got = self.run_page("""
+            await start();
+            lintS.recs["R-1"].where = "completed";
+            await click($("#row-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
+            return { said: text($("#fa-fp1-R-1 .status")), inputs: $$("#fa-fp1-R-1 input, #fa-fp1-R-1 textarea").length, posts: posts() };
+        """)
+        self.assertEqual(got, {"said": "R-1 is completed: there is nothing to change here.", "inputs": 0, "posts": []})
 
     def test_pass_on_sends_an_act_note_then_marks_it(self):
         got = self.run_page("""

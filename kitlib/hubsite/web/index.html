@@ -1950,6 +1950,7 @@ ul.hist .sch-line{display:block}
     const row = rowCard("finding", { id: d.id, title: d.target || "(no target)" }, findingChips(d),
       d.status != null ? (d.marked_at ? "marked " + when(d.marked_at) : "") : ageText(d.age));
     row.append(el("p", {class:"ctx", text: String(d.text || "")}));
+    if (d.status != null) row.classList.add("muted");
     return row;
   }
   // Each repo's last run, as context: its ledger as counts only, and a skip only when the skip marker is later than
@@ -1971,14 +1972,78 @@ ul.hist .sch-line{display:block}
     if (!lint.read && !lint.busy) readFindings();
     const open = lint.items.map(f => ({ ...f, id: f.fingerprint }));
     for (const [id, f] of [...lint.forms]) if (!f.saving && !f.reading && !open.some(x => x.id === id)) lint.forms.delete(id);
-    const all = [...open, ...lint.marks];
+    // New this run: the lint flags it `new` (its fingerprint was not in the repo's previous run). Still open: the rest.
+    // Handled: the marked ones, muted. A group with no rows is left out.
+    const groups = [["New this run", open.filter(d => d.new === true)], ["Still open", open.filter(d => d.new !== true)], ["Handled", lint.marks]].filter(g => g[1].length);
+    const all = groups.flatMap(g => g[1]);
     const at = settle(all.map(d => ["finding", d]));
     const head = [lint.err ? el("p", {class:"gone", role:"status", text: "Could not read " + lint.err + "."}) : null, ...runLines()];
-    show([], head, all.length ? all.map(d => drawn(findingRow, d))
+    show([], head, all.length ? groups.flatMap(([t, rows]) => [el("h3", {class:"sch-group", text: t + " (" + rows.length + ")"}), ...rows.map(d => drawn(findingRow, d))])
       : el("div", {class:"empty"}, el("strong", {text: !lint.read ? "Reading the findings…" : "No findings"}), "What the maintenance lint's last run of each repo found shows here, with what can be done about it."));
     pickDetail(at);
   }
   function goRecord(repo, id){ state.section = "backlog"; state.sfilter = "current"; state.repo = ""; $("#repo").value = ""; openRecord(canonRepo(repo) || String(repo || ""), id); }
+  // One record check's action, run in the finding's detail pane against the owner routes the record page uses: the record is
+  // read for its fields and version; an edit is pinned to that version, and Unblock and Retire (whose routes take none)
+  // read the record again first and refuse when its version moved. The ruling id appears only when the store asks for one.
+  function findingAct(d, id, f){
+    const act = FINDING_ACTS[d.check], repo = canonRepo(d.repo) || String(d.repo || "");
+    const path = "/records/" + seg(repo) + "/" + seg(id);
+    const box = el("div", {class:"pk", id: "fa-" + d.id + "-" + id}, el("h2", {text: act + " " + id}));
+    const st = el("span", {class:"status", role:"status", text:"Reading…"});
+    const say = (cls, t) => { st.className = cls; st.textContent = t; };
+    box.append(st);
+    (async () => {
+      let rec;
+      try { rec = await hub.call("GET", path); } catch (e) { say("status err", "Cannot read " + id + ": " + why(e)); return; }
+      if (rec.where !== "open") { say("status", id + " is " + rec.where + (rec.removed ? " (" + rec.removed.how + ")" : "") + ": there is nothing to change here."); return; }
+      const ruling = rulingField(); ruling.id = box.id + "-ruling";
+      const go = el("button", {class: act === "Retire" ? "danger" : "primary", type:"button", text: act === "Retire" ? "Retire " + id : "Save"});
+      const touched = () => { f.edits++; };
+      const same = async () => { const now = await hub.call("GET", path); if (now.version !== rec.version) throw new Error(id + " changed since it was read here (version " + rec.version + " to " + now.version + "). Close and open this again."); };
+      const field = (k) => rec.fields.filter(x => x[0] === k).map(x => x[1]);
+      let inputs, send;
+      if (act === "Set priority") {
+        const pr = el("input", {type:"text", "aria-label":"Priority", id: box.id + "-priority", oninput: touched}); pr.value = field("priority")[0] || "";
+        inputs = [pr];
+        send = async () => { const v = pr.value.trim(); if (!v) throw new Error("Give a priority."); if (v === (field("priority")[0] || "")) return null;
+          return write(path + "/edit", ruling.put({ version: rec.version, changes: { priority: [v] } })); };
+      } else if (act === "Edit scope") {
+        const sc = el("textarea", {"aria-label":"Scope: one path per line", id: box.id + "-scope", oninput: touched}); sc.value = field("scope").join("\n");
+        inputs = [sc];
+        send = async () => { const v = sc.value.split("\n").map(s => s.trim()).filter(Boolean); if (!v.length) throw new Error("Give at least one path.");
+          if (JSON.stringify(v) === JSON.stringify(field("scope"))) return null;
+          return write(path + "/edit", ruling.put({ version: rec.version, changes: { scope: v } })); };
+      } else if (act === "Unblock") {
+        const members = rec.blockers.map(b => b.value);
+        if (!members.length) { say("status", id + " is not blocked."); return; }
+        const on = el("select", {"aria-label":"Blocker to clear", id: box.id + "-on", onchange: touched}, ...members.map(m => el("option", {value: m, text: m})));
+        const reason = el("input", {type:"text", placeholder:"Why it is clear", "aria-label":"Why it is clear", id: box.id + "-reason", oninput: touched});
+        inputs = [members.length > 1 ? on : null, reason];
+        send = async () => { await same(); return write(path + "/unblock", ruling.put({ ...(members.length > 1 ? { on: on.value } : {}), ...(reason.value.trim() ? { reason: reason.value.trim() } : {}) })); };
+      } else {
+        const why_ = el("input", {type:"text", placeholder:"Why retire it", "aria-label":"Why retire it", id: box.id + "-why", oninput: () => { touched(); check(); }});
+        const typed = el("input", {type:"text", placeholder:"Type " + id + " to confirm", "aria-label":"Type the id to confirm", id: box.id + "-confirm", oninput: () => { touched(); check(); }});
+        const check = () => { go.disabled = !(why_.value.trim() && typed.value.trim() === id); };
+        go.disabled = true; inputs = [why_, typed];
+        send = async () => { await same(); return write(path + "/delete", ruling.put({ why: why_.value.trim(), confirm: typed.value.trim() })); };
+      }
+      go.addEventListener("click", async () => {
+        if (go.disabled) return;
+        go.disabled = true; say("status", "Saving…");
+        let out;
+        try { out = await send(); } catch (e) { say("status err", "Not done: " + why(e)); ruling.ask(e); go.disabled = false; return; }
+        if (out === null) { say("status", "Nothing changed."); go.disabled = false; return; }
+        say("status", act + " done on " + id + ".");
+        lint.said.set(d.id, { text: act + " done on " + id + ".", kept: null });
+        try { await readFindings(); } catch (e) {}
+        lintRedraw();
+      });
+      st.textContent = "";
+      box.append(...inputs.filter(Boolean), ruling, el("div", {class:"act"}, go, st));
+    })();
+    return box;
+  }
   function findingCard(d){
     const told = lint.said.get(d.id);
     const say = told ? el("p", {class:"status", role:"status", id: "f-" + d.id + "-status", text: told.text}) : null;
@@ -2037,10 +2102,20 @@ ul.hist .sch-line{display:block}
       lint.forms.delete(d.id);
       lintRedraw();
     }
-    const recs = findingRecords(d).map(id => el("button", {class:"link", type:"button", text: FINDING_ACTS[d.check] + " " + id,
-      "aria-label": FINDING_ACTS[d.check] + " " + id + ": opens its record page", onclick: () => goRecord(d.repo, id)}));
+    // The record check's action runs here, in a panel under its button; "Open the record" is the way to its page.
+    const panels = el("div", {class:"pmf"});
+    const recs = findingRecords(d).map(id => {
+      const b = el("button", {class:"link", type:"button", text: FINDING_ACTS[d.check] + " " + id, "aria-label": FINDING_ACTS[d.check] + " " + id});
+      let panel = null;
+      b.addEventListener("click", () => {
+        f.edits++;                                  // an open panel keeps this card through a redraw
+        if (panel) { panel.hidden = !panel.hidden; return; }
+        panel = findingAct(d, id, f); panels.append(panel);
+      });
+      return [b, el("button", {class:"link", type:"button", text:"Open " + id, "aria-label":"Open the record " + id, onclick: () => goRecord(d.repo, id)})];
+    }).flat();
     f.ta = ta; f.st = st;
-    f.node = el("article", {class:"q", id: "finding-" + d.id}, ...facts, recs.length ? el("div", {class:"act"}, ...recs) : null,
+    f.node = el("article", {class:"q", id: "finding-" + d.id}, ...facts, recs.length ? el("div", {class:"act"}, ...recs) : null, recs.length ? panels : null,
       el("label", {class:"fld", for: ta.id}, "Note to the PM", ta), el("div", {class:"act"}, pass, dismiss, st));
     return f.node;
   }

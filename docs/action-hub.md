@@ -130,15 +130,27 @@ where the hub holds no schedule doc for one. A schedule's card shows its last ru
 Lint findings (the Upkeep group, and the More page on a phone) lists the maintenance lint's findings, read from `GET
 /api/v1/findings` and `GET /api/v1/finding_marks` each time the section is shown and after each
 mark (`renderFindings` and `findingCard` in `kitlib/hubsite/web/index.html`). A row gives the check,
-the repo, the target and the finding's text, with its age as context; a marked one stays listed with
-a Passed on, Dismissed or Done tag. Above the rows, each repo's last run gives its ledger as counts,
+the repo, the target and the finding's text, with its age as context. The rows come in three groups,
+each headed with its count and left out when empty: New this run (the lint's `new` flag on the
+finding: its fingerprint was not in that repo's previous run, so it is false on a repo's first run
+and true again for a finding that went away and came back), Still open, and Handled (the marked
+ones, muted, each with a Passed on, Dismissed or Done tag). Above the rows, each repo's last run gives its ledger as counts,
 and "last run skipped: <reason>, <time>" only when the server names a skip later than that run
 ("finding_marks/<fingerprint>"). The card of an unmarked finding offers:
 
-- for a check that names a record, a button that opens that record's page, named for what is done
-  there: Set priority (`unpriced`), Unblock (`keyword-hold`, `dead-blocker`, `answered-question`),
-  Edit scope (`scope-path-gone`, `body-path-gone`, `file-moved`) or Retire (`duplicate`, one per
-  record, `dead-pull`, `landed-still-pulled`) (`FINDING_ACTS`);
+- for a check that names a record, a button named for what is done, which runs in the detail pane
+  without leaving the section: Set priority (`unpriced`), Unblock (`keyword-hold`, `dead-blocker`,
+  `answered-question`), Edit scope (`scope-path-gone`, `body-path-gone`, `file-moved`) or Retire
+  (`duplicate`, one per record, `dead-pull`, `landed-still-pulled`) (`FINDING_ACTS`, `findingAct`).
+  The panel reads `GET records/{repo}/{id}` for the fields and version, then calls the owner route
+  the record page uses: Set priority and Edit scope `POST .../edit` with the version read
+  (`changes` = `priority`, or `scope` one path per line); Unblock `POST .../unblock` with the
+  reason (and `on`, when the record has several blockers); Retire `POST .../delete` with the reason
+  and the record's id typed again (the button waits for both). Unblock and Retire take no version, so
+  the panel reads the record again first and refuses when its version moved. The ruling id is asked
+  for only when the store's refusal names one, and a refusal or conflict shows in the panel in the
+  store's words. A done action leaves the finding listed until the next lint run; an "Open <id>"
+  button beside it opens the record page;
 - Pass on: an act note to the PM with the note field's text (prefilled as the server would write
   it; unchanged, the server writes it), queued in To PM like any note, then the mark `passed_on`. A
   mark that fails after the note was taken is retried by Pass on without a second note;
