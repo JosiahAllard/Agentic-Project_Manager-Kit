@@ -44,7 +44,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    and `<kit>/templates/common/agent-profile.TEMPLATE.md`); writing into `.claude/` is
    owner-only. No work waits for a profile.
 3. Check in with the project manager at once: `ListAgents`, find the "Project Manager" session
-   (a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
+   (or pm-session, when the launcher resumed it; a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
    account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
    kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
 4. Read your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`, below); treat as stale. `docs/ops/coordinator-runbook.md`
