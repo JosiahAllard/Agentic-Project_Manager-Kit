@@ -113,9 +113,9 @@ class GradleCmdReparse(unittest.TestCase):
                     else:
                         out = subprocess.run(argv, cwd=tw, capture_output=True, text=True,
                                              stdin=subprocess.DEVNULL, timeout=60).stdout
-                        lines = [l.strip() for l in out.splitlines()]
-                        self.assertNotIn('INJECTED%d' % n, lines,
-                                         'cmd.exe ran the injected echo: %r' % out)
+                        # the echo prints the words after it too: a line that starts with the marker
+                        ran = [l for l in out.splitlines() if l.startswith('INJECTED%d' % n)]
+                        self.assertEqual(ran, [], 'cmd.exe ran the injected echo: %r' % out)
                         self.fail('the filter reached gradlew.bat: %r' % out)
                     self.assertIn('the filter %r holds %s' % (filt, char), refused)
                     self.assertIn('nothing was run', refused)
