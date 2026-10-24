@@ -17,6 +17,7 @@ from kitlib.config import load as load_config
 from kitlib.git import cmd as gitcmd
 from kitlib.records import landing
 from tests.gitfixture import NAME, EMAIL, TempRepo, fixture_env
+from tests.pathfree import without_paths
 from tests.realgit import real_git
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -682,14 +683,14 @@ class ConfiguredToolsDir(SyncCase):
         self.assertEqual(done.code, syncbase.OK, text)
         self.assertTrue(text.endswith('no regrowth. Now rerun your gate: %s' % self.kit_hint('gate')),
                         text)
-        self.assertNotIn('devtools', text)
+        self.assertNotIn('devtools', without_paths(text, KIT, self.git('rev-parse', '--show-toplevel')))
 
     def test_the_dirty_tree_refusal_names_the_kit_tool_not_the_tools_dir(self):
         target = self.stage_clean()
         self.write('docs/rows.md', 'dirty\n')
         text = self.out(self.sync(target))
         self.assertIn('Commit work in progress first (%s ...);' % self.kit_hint('commit'), text)
-        self.assertNotIn('devtools', text)
+        self.assertNotIn('devtools', without_paths(text, KIT, self.git('rev-parse', '--show-toplevel')))
 
 
 class FakeTime(object):
