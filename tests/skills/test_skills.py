@@ -9,7 +9,7 @@ from tests.shipped import ROOT, frontmatter, violations
 SKILLS = ROOT / "content" / "skills"      # every host ships these (docs/content.md)
 GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
 EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "builder", "coordinator-dispatch", "doc-claims-discipline",
-            "flaky-test-triage", "hub-ops", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
+            "flaky-test-triage", "hub-ops", "ledger-ops", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
             "shell-and-worktree-traps", "subagent-dispatch",
             "specialty-3d-assets", "specialty-rigging", "specialty-tech-art", "specialty-sound",
             "specialty-review", "specialty-research", "specialty-records", "specialty-spec"}
@@ -26,7 +26,7 @@ CREATIVE_HOME = "specialty-tech-art"
 # companion files written once in meaning and carried byte for byte by each skill that needs them
 SHARED_COMPANIONS = {"doc-writing.md": ("specialty-records", "specialty-spec")}
 # reference files a skill carries beside its SKILL.md
-EXTRA_FILES = {"coordinator-dispatch": ["roster.md"], "specialty-tech-art": ["creative.md"],
+EXTRA_FILES = {"coordinator-dispatch": ["roster.md", "creative.md", "upkeep.md"], "specialty-tech-art": ["creative.md"],
                "specialty-sound": ["measuring.md"],
                "specialty-records": ["doc-writing.md"], "specialty-spec": ["doc-writing.md"]}
 # one repo's own: never shipped in the plugin (docs/shipping.md, "Stays repo-local")

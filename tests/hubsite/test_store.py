@@ -491,6 +491,14 @@ class PendingTest(StoreCase):
                                   'done_at': '2'}}}
         self.assertEqual([p.sender for p in store.pending_items(docs)], ['kit', 'zeta'])
 
+    def test_a_filed_question_is_pending_until_it_is_logged_or_done(self):
+        docs = {'questions': {
+            'Q-1': question(status='filed', answer={'at': '1'}, **{'from': 'kit'}),
+            'Q-2': question(status='done', answer={'at': '2'}, filed_at='2'),
+            'Q-3': question(status='logged', answer={'at': '3'}, filed_at='3')}}
+        self.assertEqual(store.pending_items(docs), [
+            store.Pending('question', 'Q-1', 't', 'pm', '1', 'kit', 'filed')])
+
     def test_the_store_lists_and_clears_pending(self):
         s = self.open()
         s.add('stories', {'status': 'submitted', 'repo': 'pm', 'title': 't', 'story': 's'})

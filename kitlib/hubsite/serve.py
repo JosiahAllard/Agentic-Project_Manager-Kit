@@ -542,7 +542,8 @@ def _record_call(fn, *args):
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
     exists: `backlog_views` for backlog, completed, record, record_template and the record
-    writes (record_add, record_edit, record_delete, record_unblock), sources.repos and .agents
+    writes (record_add, record_edit, record_delete, record_unblock, and record_answer, the
+    filing of a bound question's answer), sources.repos and .agents
     for theirs. notices, findings, lint_runs, usage and health are always there
     (kitlib.hubsite.derived answers a missing notice or findings folder with none and a missing
     usage source with its own phrase). `sync` is the git
@@ -572,6 +573,7 @@ class SiteViews(object):
             self.record_edit = self._record_edit
             self.record_delete = self._record_delete
             self.record_unblock = self._record_unblock
+            self.record_answer = self._record_answer
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
@@ -683,6 +685,12 @@ class SiteViews(object):
         out = recordwrite.unblock(root, id, on, reason, ruling)
         self._backlog.reread(name, root)
         return dict(out, record=self._record(name, id))
+
+    def _record_answer(self, repo, id, qid, at, title, label, note, via, other, waiting):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.answer(root, id, qid, at, title, label, note, via, other, waiting)
+        self._backlog.reread(name, root)
+        return out
 
     def _notices(self):
         return derived.notices(self._sources.notices)
@@ -1234,7 +1242,22 @@ class Hub(object):
                     self.push = None
             for lis in self.listeners:
                 lis.start()
+            if self.backlog is not None:
+                threading.Thread(target=self._refile, name='hub-refile', daemon=True).start()
             return True
+
+    def _refile(self):
+        """File, once at start, each answer to a bound question that is not filed yet (kitlib.
+        hubsite.api file_answer): one a crash or a failure left behind. A failure is logged as a
+        note, with its code and fixed phrase only, and the PM sees the question pending."""
+        try:
+            got = self.api.call('POST', _api.BASE + '/questions/file', _api.AGENT, {},
+                                via='hub-start')[1]
+        except Exception as e:      # noqa: BLE001 - the hub serves without the refile
+            self._say('filing answers at start failed: %s' % type(e).__name__)
+            return
+        for f in got.get('failed') or []:
+            self._say('%s not filed: %s' % (f.get('id'), f.get('message')), 'note')
 
     def _step(self, what, timeout, fn, *args):
         """One step of the close: True when fn(*args) answered True, which is how a step says
