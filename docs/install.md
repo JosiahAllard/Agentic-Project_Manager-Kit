@@ -86,7 +86,7 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    nothing into any repository but that machine config and the `-PmSettings` file, when you name
    one (a local settings file kept out of commits). Run it yourself: the guard refuses `-Apply`
    to agent sessions, since it stores the owner's email (docs/guard.md "Owner machine setup"). A
-   machine an earlier kit set up follows "Existing installs" below as well.
+   machine set up with the old home-folder layout follows "Existing installs" below as well.
 
    The settings every account shares (the guard's hook, the status line, the plugin's marketplace) can
    instead live once in Claude Code's machine-wide managed settings file, under
@@ -353,11 +353,10 @@ The rulings ledger is once per machine: set `ledger_dir` and `ledger_repos` (or 
 the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
 `templates/common/LEDGER.md` (docs/ledger.md "A new ledger"). Every ledger write needs git to run, since it places the write lock (docs/ledger.md "Write lock").
 
-## Existing installs: a machine an earlier kit set up
+## Existing installs: a machine with the old home-folder layout
 
 A new machine skips this section: steps 1 and 2 leave no machine config and no link in the home
-folder. A machine that an earlier kit, or an older machine setup, ran on can hold leftovers of the
-old layout; each is cleared once, after step 1:
+folder. A machine an older machine setup ran on can hold leftovers of the old layout; each is cleared once, after step 1:
 
 - **An older kit clone:** run machine setup with `-OldKit <that clone>` instead of the default
   mode (docs/machine-setup.md).
