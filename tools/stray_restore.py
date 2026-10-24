@@ -11,7 +11,8 @@ the same path (docs/stray-restore.md).
       lists what git status still shows. LEAVE paths are never touched.
 
 Exit 0 when nothing is LEAVE (after --apply: nothing is left), 1 when something is or when an
-error stopped --apply part way (the rest is LEAVE and the left lines still print), 2 on a usage
+error stopped --apply part way (the rest is LEAVE and the left lines still print) or the final
+git status failed (ERROR, and no left lines since git could not list them), 2 on a usage
 error, a refusal (the session's mark, a merge or rebase in progress) or a git failure before
 anything was touched. Run by the owner, the PM, a coordinator or the lander only (the session
 mark).

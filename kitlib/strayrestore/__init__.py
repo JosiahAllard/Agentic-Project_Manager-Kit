@@ -298,7 +298,10 @@ def _apply_one(r, top, common, qdir, item, environ):
         why = _restore_head(top, item.path, r.head)
         if why:
             return item._replace(verdict=LEAVE, reason=why), why
-        _log(common, record)
+        why = _log_safe(common, record)
+        if why:
+            # HEAD's file is back (nothing was lost) but no line records it: stop the run.
+            return item, why
         return item, None
     _after_check(full)
     held = os.path.join(qdir, *item.path.split('/'))
@@ -330,12 +333,25 @@ def _apply_one(r, top, common, qdir, item, environ):
             back = _put_back(held, full)
             return item._replace(verdict=LEAVE, match=None, reason=why + back), why
     record.update(bytes_blob=m.blob, match_ref=m.ref, match_commit=m.commit)
-    _log(common, record)
+    why = _log_safe(common, record)
+    if why:
+        # No line records the discard, so the moved copy stays where the reason says.
+        return item._replace(verdict=LEAVE, match=None, reason='%s; the stray is kept at %s'
+                             % (why, held)), why
     try:
         os.remove(held)
     except OSError:
         pass
     return item._replace(match=m), None
+
+
+def _log_safe(common, record):
+    """None when the log line is written, else why not."""
+    try:
+        _log(common, record)
+        return None
+    except OSError as exc:
+        return 'could not write the log: %s' % exc
 
 
 def _put_back(held, full):
@@ -353,7 +369,11 @@ def _mark(environ):
 
 
 def apply(path, environ=None):
-    """plan(), then discard each restorable path (module docstring). Returns Run with `left`."""
+    """plan(), then discard each restorable path (module docstring). Returns Run with `left`.
+
+    An error before anything is touched returns no items. An error part way stops the run: the
+    paths not reached are LEAVE (NOT_REACHED). A failing `git status` at the end sets `error`
+    with `left` None, whatever was done before it."""
     environ = os.environ if environ is None else environ
     run, r = _plan(path)
     if r is None:
@@ -361,7 +381,8 @@ def apply(path, environ=None):
     top = run.top
     common, why = repo.common_dir(top)
     if common is None:
-        return run._replace(error='git rev-parse --git-common-dir failed: %s' % why)
+        # Nothing has been touched: report no items, so none reads as done.
+        return run._replace(items=[], error='git rev-parse --git-common-dir failed: %s' % why)
     qdir = os.path.join(common, QUARANTINE, 'q-%s-%d' % (_stamp(), os.getpid()))
     done, error = [], None
     for item in run.items:

@@ -84,6 +84,30 @@ class TheCommandLine(Fixture):
             self.assertIn('left: %s (git status ' % p, out)
         self.assertEqual(self.get('z/new.md'), b'new\n')
 
+    def test_a_common_dir_failure_exits_2_and_reports_nothing_done(self):
+        self.branch('kit/a', {'docs/new.md': b'new text\n'})
+        self.put('docs/new.md', b'new text\n')
+        with mock.patch.object(sr.repo, 'common_dir', lambda *a: (None, 'boom')):
+            code, out = run(['-C', self.top, '--apply'])
+        self.assertEqual(code, 2, out)
+        self.assertIn('ERROR: git rev-parse --git-common-dir failed: boom', out)
+        self.assertNotIn('deleted', out)
+        self.assertEqual(self.get('docs/new.md'), b'new text\n')
+
+    def test_a_final_status_failure_exits_1_with_no_left_lines(self):
+        self.branch('kit/a', {'docs/new.md': b'new text\n'})
+        self.put('docs/new.md', b'new text\n')
+        real_status, calls = sr.refs.status, []
+
+        def status(*a, **k):
+            calls.append(1)
+            return real_status(*a, **k) if len(calls) == 1 else (None, 'boom')
+        with mock.patch.object(sr.refs, 'status', status):
+            code, out = run(['-C', self.top, '--apply'])
+        self.assertEqual(code, 1, out)
+        self.assertIn('ERROR: git status failed afterwards: boom', out)
+        self.assertNotIn('left:', out)
+
 
 @real_git(REASON)
 class Arguments(unittest.TestCase):

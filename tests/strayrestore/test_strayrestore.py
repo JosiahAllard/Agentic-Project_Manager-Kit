@@ -328,6 +328,26 @@ class AnError(Fixture):
         self.assertEqual(self.log_lines(), [])
         self.assertEqual(sorted(p for _xy, p in run.left), ['README.md', 'b.md', 'z/new.md'])
 
+    def test_a_log_write_failure_keeps_the_stray_and_stops_the_rest(self):
+        def no_log(_common, _record):
+            raise OSError('disk full')
+        with mock.patch.object(sr, '_log', no_log):
+            run = sr.apply(self.top, ENV)
+        self.assertIn('could not write the log', run.error)
+        first, rest = run.items[0], run.items[1:]
+        self.assertEqual((first.path, first.verdict), ('README.md', sr.LEAVE))
+        self.assertIn('kept at', first.reason)
+        for item in rest:
+            self.assertEqual(item.verdict, sr.LEAVE)
+            self.assertIn('not reached', item.reason)
+        kept = [os.path.join(r, f) for r, _d, files
+                in os.walk(os.path.join(self.r.common_dir(), sr.QUARANTINE)) for f in files]
+        self.assertEqual(len(kept), 1)
+        self.assertIn(os.path.normcase(kept[0]), os.path.normcase(first.reason))
+        with open(kept[0], 'rb') as fh:
+            self.assertEqual(fh.read(), b'branch text\n')
+        self.assertEqual((self.get('b.md'), self.get('z/new.md')), (b'branch bee\n', b'new\n'))
+
 
 @real_git(REASON)
 class Unmerged(Fixture):
