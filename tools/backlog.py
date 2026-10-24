@@ -10,11 +10,12 @@
           set ID [--<field> V]... [--unset K]... [--body-file F]
           block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
+          uncite [--apply]       (owner ruling and question ids -> words; a dry run without --apply)
           unblock ID [--on M] [--reason T]      (several blockers: --on and --reason)
           pull ID [--reason T] [--blocker ID]   release ID --reason T
           close ID --reason T                   retire ID --why T
           delete ID --why T                     clear-review ID --reason T
-          set-status ID parked --q Q-nnn        unpark ID
+          set-status ID parked [--q Q-nnn]      unpark ID
   start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
   repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
                                           run lists them, --apply commits the paths it names)
@@ -47,7 +48,7 @@ from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, IndexStale, Refusal, Usage  # noqa: E402
 from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_repo, open_store, planner,  # noqa: E402
-                                   retarget_dry)
+                                   retarget_dry, uncite_dry)
 
 
 def say(line=''):
@@ -131,6 +132,9 @@ def build_parser():
     v.add_argument('old')
     v.add_argument('new')
     v.add_argument('--apply', action='store_true', help='write; without it a dry run')
+    v = sub.add_parser('uncite')
+    v.add_argument('--apply', action='store_true',
+                   help='write; without it a dry run that lists the wording to check')
     v = sub.add_parser('unblock')
     v.add_argument('id')
     v.add_argument('--on', default=None)
@@ -157,7 +161,7 @@ def build_parser():
     v = sub.add_parser('set-status')
     v.add_argument('id')
     v.add_argument('status')
-    v.add_argument('--q', required=True)
+    v.add_argument('--q', default=None, help='the owner question it waits on, if one')
     v = sub.add_parser('unpark')
     v.add_argument('id')
     v = sub.add_parser('migrate')
@@ -348,10 +352,9 @@ def do_write(args, ctx, store):
     return 0
 
 
-def do_retarget_dry(args, ctx):
-    """`retarget` without `--apply`: prints the change it would write (kitlib/backlog/opener.py
-    `retarget_dry`); nothing is published."""
-    change = retarget_dry(args, ctx)
+def do_dry(change):
+    """`retarget` or `uncite` without `--apply`: prints the change it would write
+    (kitlib/backlog/opener.py `retarget_dry`, `uncite_dry`); nothing is published."""
     for line in change.lines:
         say(line)
     say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
@@ -444,10 +447,12 @@ def main(argv=None):
             return do_migrate(args, top, cfg, rules)
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
         store = ctx.store
-        if args.verb in WRITES or (args.verb == 'retarget' and args.apply):
+        if args.verb in WRITES or (args.verb in ('retarget', 'uncite') and args.apply):
             return do_write(args, ctx, store)
         if args.verb == 'retarget':
-            return do_retarget_dry(args, ctx)
+            return do_dry(retarget_dry(args, ctx))
+        if args.verb == 'uncite':
+            return do_dry(uncite_dry(ctx))
         if args.verb == 'catch-up':
             if args.apply is not None:
                 policy.check(args, ctx, None)    # the commit takes the `catch-up` row (roles.py)
