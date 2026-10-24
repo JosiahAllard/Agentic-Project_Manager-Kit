@@ -1,6 +1,6 @@
 """kitlib.lock.store.caller reads who is asking from this process's tree: a chain that runs into a
 shell that has exited, but that a handle keeps openable, is never the owner's on that account,
-and the owner's own chains still are. Fakes only
+nor is one WMI's provider host tops, and the owner's own chains still are. Fakes only
 (tests/proc/fakeproc.py): the process calls answer from a table, this process at its head."""
 import os
 import unittest
@@ -12,6 +12,7 @@ from tests.proc.fakeproc import FakeProc, patched
 
 ME = os.getpid()
 SHELL, HOST, PWSH, CONHOST, EXPLORER, USERINIT, WINLOGON = range(900002, 900009)
+CARRIER, WMI, SVCHOST, TERMINAL = range(900010, 900014)
 GONE = 900099                   # a pid that cannot be opened
 
 
@@ -95,6 +96,85 @@ class OwnersChain(unittest.TestCase):
                   WINLOGON: FakeProc(100, GONE, False, 'winlogon.exe')})
         self.assertEqual(me['role'], 'owner')
         self.assertIn([WINLOGON, 100], me['ancestors'])
+
+    def test_a_scheduled_tasks_chain_under_svchost_is_the_owners(self):
+        # OBSERVED 2026-10-24 on the kit machine: the hub (tools/hub.py serve) runs as python.exe
+        # under the carrier pythonw.exe, under svchost.exe 2808 (the Schedule service), which this
+        # user cannot open. svchost is no DETACHED_LAUNCHERS entry: the hub is the owner's.
+        me = who({ME: FakeProc(400, CARRIER, False, 'python.exe'),
+                  CARRIER: FakeProc(300, SVCHOST, False, 'pythonw.exe'),
+                  SVCHOST: FakeProc(100, GONE, False, 'svchost.exe', opens=False)})
+        self.assertEqual(me['role'], 'owner')
+
+    def test_a_shell_in_windows_terminal_under_svchost_is_the_owners(self):
+        # OBSERVED 2026-10-24: WindowsTerminal.exe -Embedding runs under svchost.exe (DcomLaunch).
+        me = who({ME: FakeProc(500, PWSH, False, 'python.exe'),
+                  PWSH: FakeProc(400, TERMINAL, False, 'powershell.exe'),
+                  TERMINAL: FakeProc(300, SVCHOST, False, 'WindowsTerminal.exe'),
+                  SVCHOST: FakeProc(100, GONE, False, 'svchost.exe', opens=False)})
+        self.assertEqual(me['role'], 'owner')
+
+
+class StartedByWmi(unittest.TestCase):
+    """A process Win32_Process.Create started (kitlib.lock.detach: a detached lock run, a
+    submitted landing) is under WMI's provider host, whoever asked WMI: never the owner.
+    OBSERVED 2026-10-24 on the kit machine: python.exe <- pythonw.exe (the carrier) <- WmiPrvSE.exe,
+    listed and not openable by this user, for submitted landings; caller() read them as the owner.
+    tests/lock/test_caller_wmi_real.py makes that chain on real processes."""
+
+    def test_a_chain_that_stops_below_wmis_host_is_an_agent(self):
+        me = who({ME: FakeProc(400, CARRIER, False, 'python.exe'),
+                  CARRIER: FakeProc(300, WMI, False, 'pythonw.exe'),
+                  WMI: FakeProc(100, GONE, False, 'WmiPrvSE.exe', opens=False)})
+        self.assertEqual(me['role'], 'agent')
+        self.assertIsNone(me['host'])
+        self.assertEqual(me['ancestors'], [[CARRIER, 300]])
+
+    def test_wmis_host_in_the_chain_is_an_agent_when_it_can_be_opened(self):
+        # An elevated caller can open WmiPrvSE, so the walk goes on to the svchost above it.
+        me = who({ME: FakeProc(400, CARRIER, False, 'python.exe'),
+                  CARRIER: FakeProc(300, WMI, False, 'pythonw.exe'),
+                  WMI: FakeProc(200, SVCHOST, False, 'WmiPrvSE.exe'),
+                  SVCHOST: FakeProc(100, GONE, False, 'svchost.exe', opens=False)})
+        self.assertEqual(me['role'], 'agent')
+        self.assertIn([WMI, 200], me['ancestors'])
+
+    def test_an_exited_carrier_under_wmis_host_is_an_agent(self):
+        # The step past an exited hop: its handle records WMI's host as its parent, which the
+        # walk cannot open, so it ends there not-exited, as it does at winlogon above userinit.
+        me = who({ME: FakeProc(400, CARRIER, False, 'python.exe'),
+                  CARRIER: FakeProc(300, WMI, True, None),
+                  WMI: FakeProc(100, GONE, False, 'WmiPrvSE.exe', opens=False)})
+        self.assertEqual(me['role'], 'agent')
+
+    def test_this_process_directly_under_wmis_host_is_an_agent(self):
+        me = who({ME: FakeProc(400, WMI, False, 'pythonw.exe'),
+                  WMI: FakeProc(100, GONE, False, 'WmiPrvSE.exe', opens=False)})
+        self.assertEqual(me['role'], 'agent')
+
+
+class LauncherRole(unittest.TestCase):
+    """store.tree_role on a detached run's launcher ancestry (MACHINE_LOCK_ORIGIN): a launcher that
+    itself ran under WMI recorded an ancestry that stops below WMI's host."""
+
+    def role(self, table, pairs):
+        with patched(table, ME), mock.patch.object(store, 'agent_hosts',
+                                                   lambda *a: frozenset({'claude.exe'})):
+            return store.tree_role(pairs)
+
+    def test_a_launcher_whose_ancestry_stops_below_wmis_host_is_an_agent(self):
+        table = {ME: FakeProc(500, GONE, False, 'python.exe'),
+                 PWSH: FakeProc(400, CARRIER, False, 'python.exe'),
+                 CARRIER: FakeProc(300, WMI, False, 'pythonw.exe'),
+                 WMI: FakeProc(100, GONE, False, 'WmiPrvSE.exe', opens=False)}
+        self.assertEqual(self.role(table, [(PWSH, 400), (CARRIER, 300)]), 'agent')
+
+    def test_a_launcher_under_the_schedulers_svchost_is_the_owners(self):
+        table = {ME: FakeProc(500, GONE, False, 'python.exe'),
+                 PWSH: FakeProc(400, CARRIER, False, 'python.exe'),
+                 CARRIER: FakeProc(300, SVCHOST, False, 'pythonw.exe'),
+                 SVCHOST: FakeProc(100, GONE, False, 'svchost.exe', opens=False)}
+        self.assertEqual(self.role(table, [(PWSH, 400), (CARRIER, 300)]), 'owner')
 
 
 if __name__ == '__main__':

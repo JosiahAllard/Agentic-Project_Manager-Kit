@@ -239,6 +239,28 @@ def chain_host(chain, names, hosts=None):
     return None
 
 
+# WMI's provider host: the parent of every process Win32_Process.Create starts (kitlib.lock.detach,
+# a detached lock run or a submitted landing). It is listed, but this user cannot open it, so a
+# walk ends below it at a running process, the same end as the owner's desktop chain; what
+# started the process is out of sight, so a chain it tops is never the owner's.
+DETACHED_LAUNCHERS = frozenset({"wmiprvse.exe"})
+
+
+def _walk_stop(top, parents):
+    """The pid the ancestry walk tried last above `top`, its last hop (this process when it has
+    none): the parent top's own handle records when top has exited (the walk's step past an
+    exited hop, kitlib.proc.process.ancestry), else the listing's. None when there is none."""
+    _ct, gone, recorded = process._ancestor(top)
+    return recorded if gone else parents.get(top)
+
+
+def detached_top(chain, me, parents, names):
+    """Whether a DETACHED_LAUNCHERS process is in chain ([(pid, ctime)], nearest first; process
+    me's ancestry) or is the parent the walk stopped at (_walk_stop), by its listed exe name."""
+    pids = [p for p, _c in chain] + [_walk_stop(chain[-1][0] if chain else me, parents)]
+    return any((names.get(p) or "").lower() in DETACHED_LAUNCHERS for p in pids if p)
+
+
 def caller(name=None, env=None):
     """Who is asking, from this process's tree, never from what a caller says: {role:
     owner | agent, host: [pid, ctime] of the nearest agent host above this process or None,
@@ -248,14 +270,18 @@ def caller(name=None, env=None):
     The walk goes on past an exited ancestor that a handle keeps openable (a shell that exited
     under its agent host, or the desktop's userinit), by the parent it records; one it cannot
     get past (that parent is gone or newer than it) makes the role agent too, as tree_role
-    reads an ancestor that can no longer be named."""
+    reads an ancestor that can no longer be named. So does a chain WMI's provider host tops
+    (detached_top): a process WMI started, whoever asked WMI to."""
     env = os.environ if env is None else env
     try:
         snap = process.snapshot()
-        chain, exited = process.ancestry(os.getpid(), process.own_ctime(),
-                                         {p: pp for p, pp, _n in snap}, through_exited=True)
-        host = chain_host(chain, {p: n for p, _pp, n in snap})
-        role = "agent" if host or not chain or exited else "owner"
+        parents = {p: pp for p, pp, _n in snap}
+        names = {p: n for p, _pp, n in snap}
+        me = os.getpid()
+        chain, exited = process.ancestry(me, process.own_ctime(), parents, through_exited=True)
+        host = chain_host(chain, names)
+        role = ("agent" if host or not chain or exited or detached_top(chain, me, parents, names)
+                else "owner")
     except Exception:
         chain, host, role = [], None, "agent"
     return {"role": role, HOST_KEY: host, "ancestors": sorted([p, c] for p, c in chain),
@@ -265,10 +291,14 @@ def caller(name=None, env=None):
 def tree_role(pairs):
     """owner or agent for a run started under the processes pairs ([pid, ctime], a detached
     run's launcher ancestry; for holds.admits): agent when any is a live agent host, when any can no
-    longer be named (it exited, or its pid now names another process), when there are none, or
-    when the processes or the host registry cannot be read (fail closed)."""
+    longer be named (it exited, or its pid now names another process), when there are none, when
+    any is WMI's provider host or is listed as its child (DETACHED_LAUNCHERS: a launcher that
+    itself ran under WMI, whose ancestry stops there), or when the processes or the host registry
+    cannot be read (fail closed)."""
     try:
-        names = {p: n for p, _pp, n in process.snapshot()}
+        snap = process.snapshot()
+        names = {p: n for p, _pp, n in snap}
+        parents = {p: pp for p, pp, _n in snap}
         if not pairs:
             return "agent"
         hosts = agent_hosts()
@@ -277,6 +307,8 @@ def tree_role(pairs):
             if n is None or process.proc_ctime(int(pid)) != int(ct):
                 return "agent"
             if n.lower() in hosts:
+                return "agent"
+            if {n.lower(), (names.get(parents.get(int(pid))) or "").lower()} & DETACHED_LAUNCHERS:
                 return "agent"
         return "owner"
     except Exception:
