@@ -8,7 +8,7 @@ from kitlib import strayrestore as sr
 from tests.realgit import real_git
 from tests.strayrestore.helpers import ENV, Fixture
 
-REASON = 'git restore, check-attr and cat-file --filters: the fake git lacks them'
+REASON = 'git restore, check-attr and attributes: the fake git lacks them'
 
 
 def by_path(run):
@@ -22,8 +22,7 @@ class Untracked(Fixture):
         commit, _wt = self.branch('kit/a', {'docs/new.md': b'new text\n'})
         self.put('docs/new.md', b'new text\n')
         item = by_path(sr.plan(self.top))['docs/new.md']
-        self.assertEqual((item.verdict, item.match.ref, item.match.form),
-                         (sr.DELETE, 'refs/heads/kit/a', 'raw'))
+        self.assertEqual((item.verdict, item.match.ref), (sr.DELETE, 'refs/heads/kit/a'))
         self.assertEqual(self.get('docs/new.md'), b'new text\n')
         self.assertEqual(self.log_lines(), [])
         run = sr.apply(self.top, ENV)
@@ -32,9 +31,9 @@ class Untracked(Fixture):
         self.assertFalse(os.path.exists(os.path.join(self.top, 'docs', 'new.md')))
         [rec] = self.log_lines()
         self.assertEqual((rec['path'], rec['status'], rec['action'], rec['match_ref'],
-                          rec['match_commit'], rec['bytes_blob'], rec['match_form']),
+                          rec['match_commit'], rec['bytes_blob']),
                          ('docs/new.md', '??', 'deleted', 'refs/heads/kit/a', commit,
-                          self.blob('%s:docs/new.md' % commit), 'raw'))
+                          self.blob('%s:docs/new.md' % commit)))
         self.assertFalse(os.listdir(os.path.join(self.r.common_dir(), sr.QUARANTINE)))
 
     def test_the_same_bytes_at_another_path_leave_it(self):
@@ -151,12 +150,15 @@ class Attributes(Fixture):
         self.r.git('add', '.gitattributes')
         self.r.git('commit', '-q', '-m', 'attributes')
 
-    def test_a_crlf_checkout_of_the_tip_blob_matches_in_worktree_form(self):
-        commit, _wt = self.branch('kit/a', {'a.txt': b'x\ny\n'})
+    def test_a_crlf_checkout_of_the_tip_blob_is_left(self):
+        # The CRLF bytes are in no git object: only the blob's own bytes count as held.
+        self.branch('kit/a', {'a.txt': b'x\ny\n'})
         self.put('a.txt', b'x\r\ny\r\n')
-        item = by_path(sr.plan(self.top))['a.txt']
-        self.assertEqual((item.verdict, item.match.form), (sr.DELETE, 'worktree'))
-        self.assertEqual(item.match.blob, self.blob('%s:a.txt' % commit))
+        run = sr.apply(self.top, ENV)
+        self.assertEqual(by_path(run)['a.txt'].verdict, sr.LEAVE)
+        self.assertIn('no branch tip', by_path(run)['a.txt'].reason)
+        self.assertEqual(self.get('a.txt'), b'x\r\ny\r\n')
+        self.assertEqual(self.log_lines(), [])
 
     def test_a_filter_attribute_is_left(self):
         self.branch('kit/a', {'f.dat': b'raw\n'})
@@ -165,6 +167,21 @@ class Attributes(Fixture):
         self.assertEqual(by_path(run)['f.dat'].verdict, sr.LEAVE)
         self.assertIn('filter', by_path(run)['f.dat'].reason)
         self.assertEqual(self.get('f.dat'), b'raw\n')
+
+
+@real_git(REASON)
+class StrayAttributes(Fixture):
+
+    def test_a_stray_gitattributes_restored_first_does_not_carry_a_crlf_file_with_it(self):
+        attrs = b'*.txt eol=crlf\n'
+        self.branch('kit/a', {'.gitattributes': attrs, 'a.txt': b'x\ny\n'})
+        self.put('.gitattributes', attrs)
+        self.put('a.txt', b'x\r\ny\r\n')
+        run = sr.apply(self.top, ENV)
+        self.assertEqual({p: i.verdict for p, i in by_path(run).items()},
+                         {'.gitattributes': sr.DELETE, 'a.txt': sr.LEAVE})
+        self.assertEqual(self.get('a.txt'), b'x\r\ny\r\n')
+        self.assertEqual([rec['path'] for rec in self.log_lines()], ['.gitattributes'])
 
 
 @real_git(REASON)
@@ -222,6 +239,44 @@ class Safety(Fixture):
                 for f in files]
         self.assertEqual(kept, [])
 
+    def test_the_restore_writes_the_logged_head_even_when_head_moves(self):
+        moved, _wt = self.branch('kit/b', {'README.md': b'moved\n'})
+        self.branch('kit/a', {'README.md': b'branch text\n'})
+        self.put('README.md', b'branch text\n')
+        planned = self.r.head()
+
+        def mover(_full):
+            self.r.git('update-ref', 'HEAD', moved)
+        with mock.patch.object(sr, '_after_check', mover):
+            run = sr.apply(self.top, ENV)
+        self.assertEqual(by_path(run)['README.md'].verdict, sr.RESTORE)
+        [rec] = self.log_lines()
+        self.assertEqual(rec['head'], planned)
+        self.assertEqual(rec['head_blob'], self.blob('%s:README.md' % planned))
+        self.assertEqual(self.get('README.md'), b'hello\n')
+
+    def test_something_written_at_the_path_after_the_move_keeps_the_stray(self):
+        self.branch('kit/a', {'README.md': b'branch text\n'})
+        self.put('README.md', b'branch text\n')
+        real_read = sr._read
+
+        def reader(full):
+            if sr.QUARANTINE in full:
+                self.put('README.md', b'written meanwhile\n')
+            return real_read(full)
+        with mock.patch.object(sr, '_read', reader):
+            run = sr.apply(self.top, ENV)
+        item = by_path(run)['README.md']
+        self.assertEqual(item.verdict, sr.LEAVE)
+        self.assertIn('something was written at the path', item.reason)
+        self.assertEqual(self.get('README.md'), b'written meanwhile\n')
+        kept = [os.path.join(r, f) for r, _d, files
+                in os.walk(os.path.join(self.r.common_dir(), sr.QUARANTINE)) for f in files]
+        self.assertEqual(len(kept), 1)
+        with open(kept[0], 'rb') as fh:
+            self.assertEqual(fh.read(), b'branch text\n')
+        self.assertEqual(self.log_lines(), [])
+
     def test_the_dry_run_writes_nothing(self):
         self.branch('kit/a', {'docs/new.md': b'new text\n', 'README.md': b'branch\n'})
         self.put('docs/new.md', b'new text\n')
@@ -242,6 +297,49 @@ class Safety(Fixture):
         self.assertEqual(os.path.normcase(run.top), os.path.normcase(os.path.normpath(self.top)))
         self.assertFalse(os.path.exists(os.path.join(self.top, 'docs', 'new.md')))
         self.assertTrue(os.path.exists(os.path.join(wt, 'docs', 'new.md')))
+
+
+@real_git(REASON)
+class AnError(Fixture):
+
+    def setUp(self):
+        super().setUp()
+        self.put('b.md', b'bee\n')
+        self.r.git('add', 'b.md')
+        self.r.git('commit', '-q', '-m', 'b')
+        self.branch('kit/a', {'README.md': b'branch text\n', 'b.md': b'branch bee\n',
+                              'z/new.md': b'new\n'})
+        self.put('README.md', b'branch text\n')
+        self.put('b.md', b'branch bee\n')
+        self.put('z/new.md', b'new\n')
+
+    def test_a_restore_failure_puts_the_file_back_and_stops_the_rest(self):
+        with mock.patch.object(sr, '_restore_head', lambda *a: 'boom'):
+            run = sr.apply(self.top, ENV)
+        self.assertEqual(run.error, 'boom')
+        self.assertEqual({p: i.verdict for p, i in by_path(run).items()},
+                         {'README.md': sr.LEAVE, 'b.md': sr.LEAVE, 'z/new.md': sr.LEAVE})
+        first, rest = run.items[0], run.items[1:]
+        self.assertIn('boom', first.reason)
+        for item in rest:
+            self.assertIn('not reached', item.reason)
+        self.assertEqual((self.get('README.md'), self.get('b.md'), self.get('z/new.md')),
+                         (b'branch text\n', b'branch bee\n', b'new\n'))
+        self.assertEqual(self.log_lines(), [])
+        self.assertEqual(sorted(p for _xy, p in run.left), ['README.md', 'b.md', 'z/new.md'])
+
+
+@real_git(REASON)
+class Unmerged(Fixture):
+
+    def test_an_unmerged_path_refuses_the_run(self):
+        self.branch('kit/a', {'s.txt': b's\n'})
+        self.put('s.txt', b's\n')
+        before = self.snapshot()
+        with mock.patch.object(sr.refs, 'status', lambda *a, **k: ([('UU', 's.txt')], None)):
+            run = sr.apply(self.top, ENV)
+        self.assertIn('unmerged', run.refused)
+        self.assertEqual(self.snapshot(), before)
 
 
 class Roles(unittest.TestCase):

@@ -12,7 +12,7 @@ from tests.realgit import real_git
 from tests.strayrestore.helpers import Fixture
 from tools import stray_restore
 
-REASON = 'git restore, check-attr and cat-file --filters: the fake git lacks them'
+REASON = 'git restore, check-attr and attributes: the fake git lacks them'
 
 
 def run(argv, environ=None):
@@ -62,6 +62,27 @@ class TheCommandLine(Fixture):
         self.assertEqual(code, 2, out)
         self.assertIn('ERROR: git for-each-ref failed: boom', out)
         self.assertEqual(self.get('README.md'), b'mine\n')
+
+    def test_an_error_part_way_lists_the_rest_as_left_and_exits_1(self):
+        self.put('b.md', b'bee\n')
+        self.r.git('add', 'b.md')
+        self.r.git('commit', '-q', '-m', 'b')
+        self.branch('kit/a', {'README.md': b'branch text\n', 'b.md': b'branch bee\n',
+                              'z/new.md': b'new\n'})
+        self.put('README.md', b'branch text\n')
+        self.put('b.md', b'branch bee\n')
+        self.put('z/new.md', b'new\n')
+        with mock.patch.object(sr, '_restore_head', lambda *a: 'boom'):
+            code, out = run(['-C', self.top, '--apply'])
+        self.assertEqual(code, 1, out)
+        self.assertIn('ERROR: boom', out)
+        self.assertNotIn('restored', out)
+        self.assertNotIn('deleted', out)
+        self.assertIn('LEAVE     b.md: not reached', out)
+        self.assertIn('LEAVE     z/new.md: not reached', out)
+        for p in ('README.md', 'b.md', 'z/new.md'):
+            self.assertIn('left: %s (git status ' % p, out)
+        self.assertEqual(self.get('z/new.md'), b'new\n')
 
 
 @real_git(REASON)

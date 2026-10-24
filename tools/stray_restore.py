@@ -10,9 +10,11 @@ the same path (docs/stray-restore.md).
       restored to HEAD), one log line each in <git common dir>/kit-stray-restore.jsonl, then
       lists what git status still shows. LEAVE paths are never touched.
 
-Exit 0 when nothing is LEAVE (after --apply: nothing is left), 1 when something is, 2 on a usage
-error, a refusal (the session's mark, a merge or rebase in progress) or a git failure. Run by the
-owner, the PM, a coordinator or the lander only (the session mark).
+Exit 0 when nothing is LEAVE (after --apply: nothing is left), 1 when something is or when an
+error stopped --apply part way (the rest is LEAVE and the left lines still print), 2 on a usage
+error, a refusal (the session's mark, a merge or rebase in progress) or a git failure before
+anything was touched. Run by the owner, the PM, a coordinator or the lander only (the session
+mark).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.strayrestore, prints and
 exits.
@@ -62,7 +64,7 @@ def line(item, applied):
     head = '%-9s %s' % (sr.ACTIONS[item.verdict] if applied else item.verdict, item.path)
     if item.match is None:
         return '%s = HEAD' % head
-    return '%s = %s %s (%s)' % (head, item.match.ref, item.match.commit[:12], item.match.form)
+    return '%s = %s %s' % (head, item.match.ref, item.match.commit[:12])
 
 
 def main(argv=None, environ=None):
@@ -80,9 +82,16 @@ def main(argv=None, environ=None):
         print_safe('main checkout: %s' % run.top)
     for item in run.items:
         print_safe(line(item, a.apply))
-    if run.error:
+    if run.error and not run.items:
         print_safe('ERROR: %s' % run.error)
         return USAGE
+    if run.error:
+        # An error part way through --apply: the items not reached are LEAVE, and what git
+        # status still shows is listed, so nothing is reported as done that was not.
+        print_safe('ERROR: %s' % run.error)
+        for xy, p in run.left or ():
+            print_safe('left: %s (git status %r)' % (p, xy))
+        return 1
     if not run.items:
         print_safe('main checkout clean: no stray untracked or uncommitted files')
         return 0

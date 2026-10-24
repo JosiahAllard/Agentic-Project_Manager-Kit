@@ -37,8 +37,9 @@ IN_PROGRESS = ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 
                'BISECT_LOG')
 LOG_NAME = 'kit-stray-restore.jsonl'
 QUARANTINE = 'kit-stray-restore'
+NOT_REACHED = 'not reached: an earlier error stopped the run'
 
-Match = collections.namedtuple('Match', 'ref commit blob form')
+Match = collections.namedtuple('Match', 'ref commit blob')
 Item = collections.namedtuple('Item', 'path xy verdict match reason')
 Run = collections.namedtuple('Run', 'top items refused left error')
 """`top` the main checkout; `items` [Item]; `refused` why the whole run was refused (nothing
@@ -70,7 +71,6 @@ class _Repo:
     def __init__(self, top):
         self.top = top
         self._trees = {}
-        self._smudged = {}
 
     def setup(self):
         """None, or why git could not answer."""
@@ -132,30 +132,15 @@ class _Repo:
             result[f[i]] = f[i + 2] not in ('unspecified', 'unset')
         return result
 
-    def smudged(self, blob, path):
-        """The bytes a checkout writes for `blob` at `path` (eol and encoding attributes applied),
-        or None."""
-        key = (blob, path)
-        if key not in self._smudged:
-            out, _why = cmd.run(['cat-file', '--filters', '--path=%s' % path, blob], self.top)
-            self._smudged[key] = out
-        return self._smudged[key]
-
     def match(self, data, path):
-        """The first Match of `data` at `path` in a branch tip, or None: raw (the blob id is the
-        tip's blob) before worktree form (the checkout bytes of the tip's blob are `data`)."""
+        """The first Match of `data` at `path` in a branch tip, or None. Only the raw form counts:
+        the blob id of `data` is the tip's blob there. Bytes that differ from every blob (a
+        checkout's eol or encoding form, say) are in no git object, so they are never matched."""
         bid = blob_id(data, self.fmt)
-        hits = []
         for name, sha in self.tips:
             e = self.entry(sha, path)
-            if e is None or e[0] not in FILE_MODES:
-                continue
-            if e[1] == bid:
-                return Match(name, sha, bid, 'raw')
-            hits.append((name, sha, e[1]))
-        for name, sha, blob in hits:
-            if self.smudged(blob, path) == data:
-                return Match(name, sha, blob, 'worktree')
+            if e is not None and e[0] in FILE_MODES and e[1] == bid:
+                return Match(name, sha, bid)
         return None
 
 
@@ -292,9 +277,10 @@ def _log(common, record):
         fh.write(json.dumps(record, sort_keys=True) + '\n')
 
 
-def _restore_head(top, path):
-    out, why = cmd.run(['restore', '--source=HEAD', '--worktree', '--', ':(literal)%s' % path],
-                       top)
+def _restore_head(top, path, commit):
+    """Write `commit`'s file at `path`: the commit the log names, not HEAD as it is now."""
+    out, why = cmd.run(['restore', '--source=%s' % commit, '--worktree', '--',
+                        ':(literal)%s' % path], top)
     return None if out is not None else (why or 'git restore failed')
 
 
@@ -305,11 +291,11 @@ def _apply_one(r, top, common, qdir, item, environ):
               'action': ACTIONS[item.verdict], 'head': r.head,
               'head_blob': (r.entry(r.head, item.path) or (None, None))[1],
               'mark': _mark(environ), 'session': (environ.get('PM_KIT_SESSION_NAME') or '-'),
-              'bytes_blob': None, 'match_ref': None, 'match_commit': None, 'match_form': None}
+              'bytes_blob': None, 'match_ref': None, 'match_commit': None}
     if item.verdict == UNDELETE:
         if os.path.lexists(full):
             return item._replace(verdict=LEAVE, reason='something is at the path again'), None
-        why = _restore_head(top, item.path)
+        why = _restore_head(top, item.path, r.head)
         if why:
             return item._replace(verdict=LEAVE, reason=why), why
         _log(common, record)
@@ -339,11 +325,11 @@ def _apply_one(r, top, common, qdir, item, environ):
         if os.path.lexists(full):
             return item._replace(verdict=LEAVE, match=None, reason='something was written at the '
                                  'path; the stray is kept at %s' % held), None
-        why = _restore_head(top, item.path)
+        why = _restore_head(top, item.path, r.head)
         if why:
             back = _put_back(held, full)
             return item._replace(verdict=LEAVE, match=None, reason=why + back), why
-    record.update(bytes_blob=m.blob, match_ref=m.ref, match_commit=m.commit, match_form=m.form)
+    record.update(bytes_blob=m.blob, match_ref=m.ref, match_commit=m.commit)
     _log(common, record)
     try:
         os.remove(held)
@@ -379,8 +365,11 @@ def apply(path, environ=None):
     qdir = os.path.join(common, QUARANTINE, 'q-%s-%d' % (_stamp(), os.getpid()))
     done, error = [], None
     for item in run.items:
-        if item.verdict == LEAVE or error:
+        if item.verdict == LEAVE:
             done.append(item)
+            continue
+        if error:
+            done.append(item._replace(verdict=LEAVE, match=None, reason=NOT_REACHED))
             continue
         item, error = _apply_one(r, top, common, qdir, item, environ)
         done.append(item)

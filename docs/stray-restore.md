@@ -11,13 +11,11 @@ python <kit>/tools/stray_restore.py -C <checkout> --apply    # discard what is p
 
 ## The proof
 
-- The tool reads each stray's work file once and hashes it in Python as a git blob (sha1, or sha256 for a sha256 repository). No git filter touches the bytes it hashes.
+- The tool reads each stray's work file and hashes it in Python as a git blob (sha1, or sha256 for a sha256 repository). No git filter touches the bytes it hashes. Under `--apply` it reads the file again after moving it aside, and the verdict comes from that second read ("How `--apply` discards a file").
 - The refs it compares against are the tips of `refs/heads/*` and `refs/remotes/*/*`, listed with one `git for-each-ref` and no fetch. Symbolic refs (`origin/HEAD`) are skipped.
   - Never counted: tags, `refs/stash`, any other ref namespace, a detached worktree HEAD, and history behind a tip.
 - Same path only: the blob must be at the stray's own path in the tip's tree, as a plain file (mode 100644 or 100755). The same bytes at another path do not count.
-- A stray matches in one of two forms. Both are exact byte comparisons:
-  - `raw`: the file's blob id is the tip's blob id.
-  - `worktree`: the file equals what a checkout would write for the tip's blob (`git cat-file --filters`), for example after a CRLF conversion.
+- Only the raw form counts: the file's blob id must be the tip's blob id. A file that equals what a checkout would write for the tip's blob, such as a CRLF copy of an LF blob, is LEAVE. Its bytes are in no git object, and getting them back would depend on the attributes and `core.autocrlf` at recovery time.
 - The match is recorded as the ref, its tip commit and the blob id.
 
 ## What each stray gets
@@ -40,10 +38,14 @@ The whole run is refused (exit 2, nothing touched) when the main checkout has an
 
 1. The file is moved (`os.replace`) into `<git common dir>/kit-stray-restore/q-<time>-<pid>/<path>`.
 2. The moved copy is read and matched again. A writer that changed the file after the first check cannot get new bytes past this second check.
-3. If the copy still matches, a RESTORE runs `git restore --source=HEAD --worktree` on the path, and a DELETE does nothing more. The log line is written, then the quarantine copy is deleted.
+3. If the copy still matches, a RESTORE runs `git restore --source=<head> --worktree` on the path, where `<head>` is the HEAD commit read at the start of the run, the one the log names. A DELETE does nothing more. The log line is written, then the quarantine copy is deleted.
 4. If the copy no longer matches, it is moved back. If something has been written at the path since, the copy stays in quarantine and the LEAVE line names where it is. The same happens when a file appears at the path before `git restore` runs.
 
+If a step fails (a `git restore` error, say), that path is put back and the run stops. Every path not yet reached is LEAVE ("not reached"), and the tool prints `ERROR:`, then the `left:` lines, and exits 1.
+
 Afterwards the tool lists what `git status` still shows (`left:` lines).
+
+A run killed part way (a crash, a closed terminal) can leave a stray in `<git common dir>/kit-stray-restore/q-*/<path>` with no log line. Look there after a killed run, and move each file back to its path in the main checkout (or delete it, when `git status` shows the path is already restored).
 
 ## The log
 
@@ -51,22 +53,24 @@ Afterwards the tool lists what `git status` still shows (`left:` lines).
 
 - `ts`, `top`, `path`, `status` (the porcelain XY) and `action` (deleted, restored or undeleted).
 - `match_ref`, `match_commit` and `bytes_blob`: the ref, its tip and the blob of the discarded bytes. All three are null for `undeleted`.
-- `match_form` (raw or worktree), `head` and `head_blob`.
+- `head` and `head_blob`: the HEAD commit read at the start of the run, which a RESTORE or UNDELETE writes from, and its blob at the path.
 - `mark`: the session mark. `session`: `PM_KIT_SESSION_NAME`, or `-`.
 
-To recover a discarded file: `git cat-file -p <bytes_blob>`. For a `worktree` match, use `git cat-file --filters --path=<path> <bytes_blob>`.
+To recover a discarded file: `git cat-file -p <bytes_blob> > <path>`. These are the exact bytes the tool discarded.
 
 ## Exit codes
 
 - 0: nothing is LEAVE. After `--apply`, nothing is left in `git status`.
-- 1: something is LEAVE or left.
-- 2: a usage error, a refusal (the session mark, an operation in progress) or a git failure.
+- 1: something is LEAVE or left, or an error stopped `--apply` part way.
+- 2: a usage error, a refusal (the session mark, an operation in progress) or a git failure before anything was touched.
 
 ## Who runs it
 
 The owner (an unmarked session), the PM, a coordinator or the lander. The tool reads the session mark (`kitlib/sessionmark.py`, `docs/guard.md` "Session mark") and refuses any other mark.
 
 A subagent shares its parent's mark, so a worker that a coordinator dispatches passes this check. Only the guard could tell such a worker apart. That is accepted on purpose: a restore loses nothing by design, because every discarded byte is kept in a branch tip.
+
+The mark itself can be dropped. As `kitlib/sessionmark.py` says, `PM_KIT_ROLE= python ...` runs a command unmarked, and an unmarked run counts as the owner, so any agent can pass `allowed()`. The check guards against mistakes, not against evasion. The tool's safety rests on the no-loss rule: it discards only bytes a branch tip holds, whoever runs it.
 
 The guard judges a `python <kit>/tools/stray_restore.py ...` run by the script's own file, and it never sees the tool's child git. So the run needs no guard rule.
 
