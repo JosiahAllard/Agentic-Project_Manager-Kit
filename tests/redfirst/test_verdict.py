@@ -94,25 +94,31 @@ class GradleCmdReparse(unittest.TestCase):
     one of cmd.exe's characters is refused before anything runs."""
 
     @unittest.skipUnless(os.name == 'nt', 'cmd.exe runs a .bat on Windows only')
-    def test_ampersand_filter_runs_no_second_command_through_gradlew_bat(self):
+    def test_injected_filter_runs_no_second_command_through_gradlew_bat(self):
         # The real shape: a scratch gradlew.bat run with the argv command() builds. Without the
-        # refusal cmd.exe splits the line at & and runs `echo INJECTED` itself.
+        # refusal cmd.exe splits the line at the & and runs the echo itself: a word with no blank
+        # is not quoted, and a quote in a quoted one (list2cmdline's \", which cmd.exe does not
+        # read as an escape) ends cmd.exe's quoting.
+        shapes = {'a&echo.INJECTED1': '&', 'x" & echo INJECTED2 & "y': '"'}
         with tempfile.TemporaryDirectory() as tw:
             with open(os.path.join(tw, 'gradlew.bat'), 'w', newline='\r\n') as fh:
                 fh.write('@echo off\necho ARGS %*\n')
-            try:
-                s = V.parse_selector('engine/core/src/test/FooTest.java::a&echo INJECTED', RUNNERS)
-                argv = V.command(s, tw, tw, 1)[0]
-            except V.Usage as e:
-                refused = str(e)
-            else:
-                out = subprocess.run(argv, cwd=tw, capture_output=True, text=True,
-                                     stdin=subprocess.DEVNULL, timeout=60).stdout
-                self.assertNotIn('\nINJECTED', '\n' + out, 'cmd.exe ran the injected command')
-                self.fail('the filter reached gradlew.bat: %r' % out)
-        self.assertIn("'a&echo INJECTED'", refused)
-        self.assertIn('holds &', refused)
-        self.assertIn('nothing was run', refused)
+            for n, (filt, char) in enumerate(shapes.items(), 1):
+                with self.subTest(filt=filt):
+                    try:
+                        s = V.parse_selector('engine/core/src/test/FooTest.java::' + filt, RUNNERS)
+                        argv = V.command(s, tw, tw, 1)[0]
+                    except V.Usage as e:
+                        refused = str(e)
+                    else:
+                        out = subprocess.run(argv, cwd=tw, capture_output=True, text=True,
+                                             stdin=subprocess.DEVNULL, timeout=60).stdout
+                        lines = [l.strip() for l in out.splitlines()]
+                        self.assertNotIn('INJECTED%d' % n, lines,
+                                         'cmd.exe ran the injected echo: %r' % out)
+                        self.fail('the filter reached gradlew.bat: %r' % out)
+                    self.assertIn('the filter %r holds %s' % (filt, char), refused)
+                    self.assertIn('nothing was run', refused)
 
     def test_every_cmd_character_in_the_filter_refuses(self):
         for c in '&|<>^%!()"\n':
