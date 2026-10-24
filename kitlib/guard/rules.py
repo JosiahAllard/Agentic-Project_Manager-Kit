@@ -482,8 +482,38 @@ def tool_run(inv):
     """(name, Words) for the file the invocation `inv` runs, or None: its program's base name
     (commands.base_name) and arguments; python's script (its first operand) or -m module (as
     <its last part>.py) and the words after it; PowerShell's .ps1 script; the file an opener
-    (Invoke-Item, explorer, Git Bash's start) opens. python -c, standard input and a program or
-    script the text does not show are None: the guard reads what a line runs, not what it builds."""
+    (Invoke-Item, explorer, Git Bash's start) opens. The kit command (`kit X`, tools/kit.py X,
+    -m tools.kit X) is read as the tool X it runs (kit_run). python -c, standard input and a
+    program or script the text does not show are None: the guard reads what a line runs, not
+    what it builds."""
+    return kit_run(_tool_run(inv))
+
+
+def kit_run(run):
+    """The (name, Words) `run` of tool_run, with the kit command read as the tool it runs
+    (commands.kit_tool): ('backlog.py', the Words after `backlog`) for `kit backlog ...`; None
+    for a computed tool name; `run` itself when it names no tool (kit -h) or is not the kit."""
+    if run is None or run[0] not in (cm.KIT, cm.KIT_SCRIPT):
+        return run
+    script, rest = cm.kit_tool(run[1])
+    if script is None:
+        return None
+    return (script, rest) if script else run
+
+
+def script_run(inv):
+    """tool_run, with runpy's module argument (`python -m runpy tools.X`) read as the script it
+    runs, the kit command's included (`-m runpy tools.kit X` is X.py)."""
+    run = tool_run(inv)
+    if run is not None and run[0] == 'runpy.py':
+        words = run[1]
+        if not words or words[0].dyn:
+            return None
+        run = kit_run((words[0].text.rsplit('.', 1)[-1].lower() + '.py', words[1:]))
+    return run
+
+
+def _tool_run(inv):
     if inv is None or inv.dyn:
         return None
     name, args = inv.name or '', list(inv.args)
@@ -930,15 +960,10 @@ def hub_texts(text):
 
 
 def hub_run_args(inv):
-    """The Words after the hub tool when `inv` runs it (tool_run: python with tools/hub.py as
+    """The Words after the hub tool when `inv` runs it (script_run: python with tools/hub.py as
     its script, or -m tools.hub; tools/hub.py run as the program itself; runpy's module argument,
-    `python -m runpy tools.hub`, read as the script), else None."""
-    run = tool_run(inv)
-    if run is not None and run[0] == 'runpy.py':
-        words = run[1]
-        if not words or words[0].dyn:
-            return None
-        run = words[0].text.rsplit('.', 1)[-1].lower() + '.py', words[1:]
+    `python -m runpy tools.hub`, read as the script; the kit command's `kit hub`), else None."""
+    run = script_run(inv)
     if run is None or run[0] != HUB_SCRIPT:
         return None
     return run[1]
@@ -3953,24 +3978,34 @@ def bare_wrapper(ctx, cmd, inv, cwd):
     runs from or no such file is there (a repository holds no copy of the kit's tools); a script
     that is there, such as the kit repository's own tools/gate.py, keeps its folder. from_dir is
     the directory the alternative must still run in (a lock run's program, or a gate run with a
-    subcommand), else None. (bare(cmd), from_dir) when the script word is not literal, or no
-    python runs one (a gate.py run as a program). When the directory it runs in is unknown (a
+    subcommand), else None. The kit command's run (`kit gate`, tools/kit.py gate) keeps its words
+    as written up to the tool's name, kit.py re-pathed as any script, and the -C goes after that
+    name. (bare(cmd), from_dir) when the script word is not literal, or no python runs one (a
+    gate.py run as a program). When the directory it runs in is unknown (a
     computed cd before it: cmd.cwd None) a relative script is kept as written, no -C is added and
     from_dir is None: wrapped_gate then says to run it from the worktree root."""
     where = cmd.cwd
-    found = cm.python_script(inv) if inv.via != 'start-process' else None
+    at = cm.tool_at(inv) if inv.via != 'start-process' else None
+    found = cm.python_script(inv) if at else None
     word = inv.args[found[0]] if found else None
-    if word is None or word.dyn or word.synth or not cmd.words or word.end > len(cmd.source):
+    name = inv.args[at[0]] if at and at[0] >= 0 else None      # the word that names the tool
+    if name is None or name.dyn or name.synth or not cmd.words or name.end > len(cmd.source) or \
+            word is not None and (word.dyn or word.synth):
         return bare(cmd), where
-    path = sh.resolve_path(word.text, where, cmd.shell, getattr(ctx, 'home', None))
-    if not path:
+    rest = at[2]
+    if rest and rest[0].synth and rest[0].start == name.start:  # the tool's name word holds more
         return bare(cmd), where
-    kit_tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
-    if paths.norm(os.path.dirname(path), real=True) == kit_tools or not os.path.isfile(path):
-        path = os.path.join(advice_kit(ctx), 'tools', ntpath.basename(path.replace('/', '\\')))
-    rest = inv.args[found[0] + 1:]
-    tail = cmd.source[word.end:cmd.words[-1].end] if rest else ''
-    head = cmd.source[cmd.words[0].start:word.start] + literal_word(path)
+    tail = cmd.source[name.end:cmd.words[-1].end] if rest else ''
+    if word is None:                                            # the kit command run as a program
+        head = cmd.source[cmd.words[0].start:name.end]
+    else:
+        path = sh.resolve_path(word.text, where, cmd.shell, getattr(ctx, 'home', None))
+        if not path:
+            return bare(cmd), where
+        kit_tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
+        if paths.norm(os.path.dirname(path), real=True) == kit_tools or not os.path.isfile(path):
+            path = os.path.join(advice_kit(ctx), 'tools', ntpath.basename(path.replace('/', '\\')))
+        head = cmd.source[cmd.words[0].start:word.start] + literal_word(path) + cmd.source[word.end:name.end]
     from_dir = where
     if cm.wrapper(inv) == 'gate' and not (rest and not rest[0].text.startswith('-')):    # no subcommand
         given = None
@@ -4007,10 +4042,10 @@ def wrapped_gate(event, ctx, cmd, inv, cwd, role):
 def lock_run_help(inv):
     """True when `machine_lock.py run` `inv` has exactly one word after run, a literal --help or -h:
     it prints its usage and runs nothing, so a pipe changes nothing the lock sees."""
-    found = cm.python_script(inv) if inv.name != 'machine_lock.py' else (-1, None)
+    found = cm.tool_at(inv)
     if not found:
         return False
-    rest = inv.args[found[0] + 2:]
+    rest = found[2][1:]
     return len(rest) == 1 and not rest[0].dyn and rest[0].text in ('--help', '-h')
 
 
@@ -4022,10 +4057,10 @@ def gate_runs_nothing(inv):
     reads land and wait-result only there) and has a literal -h, --help, --plan or --measure: it
     runs no gate step and takes no lock, so a pipe changes nothing (docs/guard-v2.md "Kit tools
     may be piped")."""
-    found = cm.python_script(inv) if inv.name not in ('gate.py', 'gate') else (-1, None)
+    found = cm.tool_at(inv)
     if not found:
         return False
-    rest = inv.args[found[0] + 1:]
+    rest = found[2]
     if not rest or rest[0].dyn or rest[0].synth or not rest[0].text.startswith('-'):
         return False
     return any(not a.dyn and not a.synth and a.text in GATE_NOTHING for a in rest)

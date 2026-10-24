@@ -6,8 +6,9 @@ The rules have already run on what it did read; check() then looks at the raw te
 unreadable line is never a way around a rule, and a plain line is never denied by it:
 
   - the owner's tools by name (NAMED), first, in every session but the owner's own: text naming
-    the hub tool (hub.py, tools.hub, -m hub) is refused as `hub-owner-verb`, text naming the lock
-    CLI (machine_lock.py, tools.machine_lock) as `owner-tool`, read verbs included, and text
+    the hub tool (hub.py, tools.hub, -m hub, kit hub) is refused as `hub-owner-verb`, text naming
+    the lock CLI (machine_lock.py, tools.machine_lock, kit machine_lock) as `owner-tool`, read
+    verbs included, and text
     naming the owner's delegation list (owner-delegations) as `owner-delegations`, reads included.
     The part of the line holding the name is read again first (named_reread): a hub owner verb, a
     lock owner-only write or a write of the list there gives that rule's own refusal; otherwise the reason says the line
@@ -75,6 +76,15 @@ XARGS_BARE_GIT = r'\bxargs\b[^|;&\n]*\bgit(?:\.exe)?[ \t]*(?=[|;&\n]|$)'
 # forms git-shared-ref reads (rules.git_shared_ref, git_shared_push, git_shared_ref_forms). A match
 # is only a reason to read the part again; the re-read rules decide.
 REST = r'[^|;&\n]*'                                   # the rest of the command
+# the kit command before the name of the tool it runs (kit, tools/kit.py, -m tools.kit, and kit
+# with each suffix commands.base_name takes off a program: kit.cmd, kit.com; docs/guard.md "The
+# kit command"), the name maybe quoted, after quotes or empty words (commands.kit_tool skips them)
+KIT_WORD = (r'(?:(?<![\w.-])kit(?:\.py|%s)?|\btools\.kit)["\']*(?:\s+["\']+)*\s+["\']*'
+            % '|'.join(re.escape(s) for s in cm.EXE_SUFFIXES))
+# the ANYWHERE rules re-read from the start of the part of the line holding the match, so the
+# words before the tool's name are read too, and then from the match itself when that gave
+# nothing: a computed program or an open quote at the part's start leaves the run unreadable there
+SEGMENT_RULES = ('owner-tool', 'wrapped-gate')
 SHARED_REF_PATTERNS = (
     G + r'update-ref\b',
     # a push whose repository may be this one: `.`, a file: URL, a path, --repo
@@ -123,10 +133,14 @@ ANYWHERE = (
     # git http-push and the remote helpers, run by hand, talk to a remote without the hook too
     ('git-push-pmdata', G + r'(?:http-push|remote-[\w-]+)\b'),
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-(?:send-pack|http-push|remote-[\w-]+)(?:\.exe)?\b'),
-    # machine setup run to act (rules.owner_tool): any session but the owner's own
+    # machine setup run to act (rules.owner_tool): any session but the owner's own. This and
+    # wrapped-gate re-read from the start of the part of the line holding the match (SEGMENT_RULES),
+    # so the kit command before the tool's name (`kit machine_setup --apply`) is read too, and then
+    # from the match (`$PY tools/machine_setup.py --apply`)
     ('owner-tool', r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup(?:\.py|\.ps1)?|new-repo\.ps1)(?![A-Za-z0-9_])'
                    r'[^|;&\n]*\s-{1,2}a'),
-    ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
+    ('wrapped-gate', r'(?:\bgate\.py\b|\bmachine_lock\.py\s+run\b|' + KIT_WORD
+                     + r'(?:gate|machine_lock\s+run)(?![\w.-]))[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
     ('root-search', r'(?i)\b(?:get-childitem|gci|ls|dir)\b[^|;&]*\s["\']?[A-Za-z]:[\\/]?["\']?(?=\s|$)[^|;&]*\s-r'),
     ('root-search', r'(?i)\b(?:get-childitem|gci|ls|dir)\b[^|;&]*\s-r[a-z]*\b[^|;&]*\s["\']?[A-Za-z]:[\\/]?["\']?(?=\s|$)'),
@@ -139,11 +153,12 @@ ANYWHERE = (
 # module joined or not, and maybe quoted
 PY_M = r'(?<![\w-])-[bBdEiIOPqsSuvx]*m\s*[\'"]?'
 NAMED = (
-    ('hub-owner-verb', re.compile(r'(?i)(?<![\w.-])hub\.py\b|\btools\.hub(?![\w.])|' + PY_M + r'hub(?![\w.])'),
+    ('hub-owner-verb', re.compile(r'(?i)(?<![\w.-])hub\.py\b|\btools\.hub(?![\w.])|' + PY_M + r'hub(?![\w.])|'
+                                  + KIT_WORD + r'hub(?![\w.-])'),
      'names the hub tool, and a part of it the guard cannot read may run one of its owner verbs: %s'
      % rules.HUB_OWNER_WHY),
     ('owner-tool', re.compile(r'(?i)(?<![\w.-])machine_lock\.py\b|\btools\.machine_lock(?![\w.])|' + PY_M
-                              + r'machine_lock(?![\w.])'),
+                              + r'machine_lock(?![\w.])|' + KIT_WORD + r'machine_lock(?![\w.-])'),
      'names the lock CLI, and a part of it the guard cannot read may run one of its owner-only writes, which '
      'the owner runs, not agents.'),
     ('owner-delegations', re.compile(r'(?i)owner-delegations'),
@@ -178,6 +193,11 @@ def segment(text, start):
     while seg and seg[-1] in '\'"' and seg.count(seg[-1]) % 2:
         seg = seg[:-1].rstrip()
     return seg
+
+
+def segment_start(text, pos):
+    """Where the part of `text` holding position `pos` starts: after the last ; | & or newline before it."""
+    return max(text.rfind(c, 0, pos) for c in ';|&\n') + 1
 
 
 def _dyn_commands(parsed):
@@ -236,7 +256,7 @@ def named_reread(event, ctx, text, shell, parsed, pos, cwd, role, rule):
     run there that runs an owner verb (rules.hub_owner_run), a lock CLI owner-only write
     (rules.owner_tool), or a write of the owner's delegation list (rules.owner_delegations); None
     when the part runs none of them."""
-    start = max(text.rfind(c, 0, pos) for c in ';|&\n') + 1
+    start = segment_start(text, pos)
     where = cwd_at(parsed, pos, cwd) or cwd
     p = cm.read(segment(text, start), shell, where, home=getattr(ctx, 'home', None))
     if rule == 'hub-owner-verb':
@@ -315,7 +335,11 @@ def check(event, ctx, text, cwd, role, parsed):
         if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
                 pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):
             continue
-        d = reread(m.start(), where or cwd)
+        d, first = None, segment_start(text, m.start()) if rule in SEGMENT_RULES else m.start()
+        if first != m.start():                  # the words before the name too (a kit command's)
+            d = reread(first, where or cwd)
+        if d is None:                           # from the match too: an unreadable start may hide the run
+            d = reread(m.start(), where or cwd)
         if ungated and d is None:
             continue                            # no push_block: only a delete or a forced push of main is refused
         d = answer(d, rule)

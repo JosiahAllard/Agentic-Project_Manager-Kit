@@ -1,8 +1,9 @@
 """The text of the land permission rules, and a reference matcher for them (docs/allow-rules.md).
 
-  allow_lines(kit, repo)         one PowerShell allow per script spelling
+  allow_lines(kit, repo)         one PowerShell allow per spelling: the two script spellings and
+                                 the kit command's `kit land`
   deny_lines(kit, repo)          a second -C, --log-dir, a bare --, and each shell metacharacter,
-                                 after the script
+                                 after each spelling (the kit command's also cmd's escape `^`)
   decide(lines, shell, command)  'allow', 'deny' or None under the matching model in the doc
 
 `decide` is a model of Claude Code's documented rule matching, written so the tests can pin what
@@ -17,6 +18,12 @@ SHELLS = ('Bash', 'PowerShell')
 # not glob arguments on Windows. Both shells get the deny lines.
 ALLOW_SHELLS = ('PowerShell',)
 SCRIPT = 'tools/land.py'
+# The kit command's spelling of the same land.py (tools/kit.py): it names no export folder, so its
+# lines outlive a plugin refresh. One allow line, the script lines' denies, and cmd's escape besides.
+KIT_COMMAND = 'kit land'
+# cmd.exe's escape character. If `kit` is a kit.cmd shim, cmd strips `^` before python reads the line,
+# so `-^C` would reach land.py as a second -C past the `* -C*` deny (INFERENCE until probed on the shim).
+CMD_ESCAPE = '^'
 # Shell metacharacters that redirect, chain, substitute, expand, quote, escape or cut the command
 # short: any of them in a land command is denied, so no `*` of an allow can carry one (`$` and `(`
 # stand for `$(`, `@(` and PowerShell's `(expr)`; quotes, the backslash, braces and the tab hide a
@@ -56,24 +63,31 @@ def scripts(kit):
     return (path, '"%s"' % path)
 
 
+def commands(kit):
+    """The spellings of the land command the lines name: each script spelling run by python, then
+    the kit command."""
+    return tuple('python %s' % script for script in scripts(kit)) + (KIT_COMMAND,)
+
+
 def allow_lines(kit, repo):
     """The allow rules: for each allowed shell and spelling, the plain submit."""
-    return ['%s(python %s -C %s * --expect-tip * --submit)' % (shell, script, repo)
-            for shell in ALLOW_SHELLS for script in scripts(kit)]
+    return ['%s(%s -C %s * --expect-tip * --submit)' % (shell, command, repo)
+            for shell in ALLOW_SHELLS for command in commands(kit)]
 
 
 def deny_lines(kit, repo):
     """The deny rules, for each shell and spelling: a -C after the first (spaced, or any text -C past
     the fixed `-C <repo>` prefix), --log-dir by its shortest prefix, a bare `--`, and each
-    metacharacter."""
+    metacharacter; the kit command's also cmd's escape `^`."""
     out = []
     for shell in SHELLS:
-        for script in scripts(kit):
-            out.append('%s(python %s * -C*)' % (shell, script))
-            out.append('%s(python %s -C %s *-C*)' % (shell, script, repo))
-            out.append('%s(python %s *%s*)' % (shell, script, LOG_DIR))
-            out.append('%s(python %s *%s*)' % (shell, script, END_OF_OPTIONS))
-            out += ['%s(python %s *%s*)' % (shell, script, c) for c in METACHARS]
+        for command in commands(kit):
+            chars = METACHARS + ((CMD_ESCAPE,) if command == KIT_COMMAND else ())
+            out.append('%s(%s * -C*)' % (shell, command))
+            out.append('%s(%s -C %s *-C*)' % (shell, command, repo))
+            out.append('%s(%s *%s*)' % (shell, command, LOG_DIR))
+            out.append('%s(%s *%s*)' % (shell, command, END_OF_OPTIONS))
+            out += ['%s(%s *%s*)' % (shell, command, c) for c in chars]
     return out
 
 

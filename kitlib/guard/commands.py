@@ -507,24 +507,87 @@ def python_script(inv):
     return None
 
 
-def wrapper(inv):
-    """'gate' for gate.py, 'lock-run' for `machine_lock.py run`, else None. These are the two
-    entry points that may run heavy programs (ARCHITECTURE.md "Guard rules")."""
+# The kit command (tools/kit.py, and the `kit` program on the PATH: kit, kit.cmd, kit.exe and a
+# path to one all have the base name KIT) runs the kit tool its first word names, so `kit X ...`
+# is read as `python <kit>/tools/X.py ...` (docs/guard.md "The kit command")
+KIT = 'kit'
+KIT_SCRIPT = 'kit.py'
+KIT_NAME_SPLIT_RE = re.compile(r'[\s"]+')
+
+
+def kit_tool(words):
+    """(script, Words) for the kit command given the Words `words` after it (_kit_name)."""
+    script, rest, _k = _kit_name(words)
+    return script, rest
+
+
+def _kit_name(words):
+    """(script, Words, k) for the kit command given the Words `words` after it: the tool its first
+    token names as a script name ('<name>.py'), the Words after that token, and the index in
+    `words` of the word holding it. The words are split at blanks and double quotes, empty tokens
+    skipped: Windows PowerShell 5.1 may pass a word holding a double quote on unescaped (so the
+    program splits it there or keeps the quote) and drops an empty word, so `kit '""hub' x`,
+    `kit 'hub" x'` and `kit '' hub x` all read as hub with x after it. A word that may hand on
+    more than one argument reads as its first token, the rest of the word split into Words of its
+    own: the guard reads every token the program may see as a tool or an argument, so it fails
+    closed. Script '' when no tool is named (no token, or a literal option first: tools/kit.py
+    runs no tool then) with `words` as given, None when the first word that holds a token is
+    computed (read as python reads a computed script: not at all)."""
+    for k, w in enumerate(words):
+        if w.dyn:
+            return None, list(words[k + 1:]), k
+        tokens = [t for t in KIT_NAME_SPLIT_RE.split(w.text) if t]
+        if not tokens:
+            continue
+        if tokens[0].startswith('-'):
+            return '', list(words), k
+        split = [sh.Word(t, w.dyn, w.start, w.end, synth=True) for t in tokens[1:]]
+        return tokens[0].lower() + '.py', split + list(words[k + 1:]), k
+    return '', list(words), len(words)
+
+
+def tool_at(inv):
+    """(i, script, Words) when the invocation `inv` runs a python script, kit tools by name
+    included: the script's base name ('gate.py'), the index in inv.args of the word that names
+    it (-1 when the program is the script itself: gate.py, machine_lock.py, gate) and the Words
+    after that word. The kit command reads as the tool it runs (kit_tool): `kit gate --full` is
+    (0, 'gate.py', [--full]), `python -u tools/kit.py gate --full` (2, 'gate.py', [--full]). None
+    when nothing names a script, or the kit command names no tool."""
     if inv is None:
         return None
-    if inv.name in ('gate.py', 'gate'):
-        return 'gate'
-    if inv.name == 'machine_lock.py':
-        return 'lock-run' if inv.args[:1] and inv.args[0].text == 'run' else None
+    name = inv.name or ''
+    if name == 'gate':
+        return -1, 'gate.py', list(inv.args)
+    if name in (KIT, KIT_SCRIPT):
+        return _kit_at(inv.args, 0)
+    if name.endswith('.py'):
+        return -1, name, list(inv.args)
     found = python_script(inv)
     if not found:
         return None
     k, script = found
+    if script == KIT_SCRIPT:
+        return _kit_at(inv.args, k + 1)
+    return k, script, list(inv.args[k + 1:])
+
+
+def _kit_at(args, i):
+    script, rest, k = _kit_name(args[i:])
+    return (i + k, script, rest) if script else None
+
+
+def wrapper(inv):
+    """'gate' for gate.py, 'lock-run' for `machine_lock.py run`, else None, the kit command's
+    `kit gate` and `kit machine_lock run` included (tool_at). These are the two entry points that
+    may run heavy programs (ARCHITECTURE.md "Guard rules")."""
+    found = tool_at(inv)
+    if not found:
+        return None
+    _, script, rest = found
     if script == 'gate.py':
         return 'gate'
     if script == 'machine_lock.py':
-        nxt = inv.args[k + 1:k + 2]
-        return 'lock-run' if nxt and nxt[0].text == 'run' else None
+        return 'lock-run' if rest[:1] and rest[0].text == 'run' else None
     return None
 
 

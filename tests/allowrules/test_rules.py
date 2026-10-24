@@ -23,6 +23,8 @@ K = 'X:/fake-export/' + SHA
 R = 'Y:/repo'
 P = 'python %s/tools/land.py' % K
 Q = 'python "%s/tools/land.py"' % K
+KC = 'kit land'                     # the kit command's spelling: it names no export folder
+SPELLINGS = (P, Q, KC)
 LINES = {'allow': rules.allow_lines(K, R), 'deny': rules.deny_lines(K, R)}
 ALLOW_ONLY = {'allow': LINES['allow'], 'deny': []}
 SHELLS = ('Bash', 'PowerShell')
@@ -43,6 +45,7 @@ class RuleTextTest(unittest.TestCase):
         want = []
         for script in ('%s/tools/land.py' % K, '"%s/tools/land.py"' % K):
             want.append('PowerShell(python %s -C Y:/repo * --expect-tip * --submit)' % script)
+        want.append('PowerShell(kit land -C Y:/repo * --expect-tip * --submit)')
         self.assertEqual(LINES['allow'], want)
         self.assertEqual(LINES['allow'][0], 'PowerShell(python X:/fake-export/0123456789ab/tools/land.py'
                                             ' -C Y:/repo * --expect-tip * --submit)')
@@ -59,19 +62,20 @@ class RuleTextTest(unittest.TestCase):
 
     def test_one_allow_per_spelling_each_ending_at_submit(self):
         got = rules.allow_lines(K, R)
-        self.assertEqual(len(got), 2)
-        self.assertEqual([l.rsplit(' ', 1)[-1] for l in got], ['--submit)', '--submit)'])
+        self.assertEqual(len(got), 3)
+        self.assertEqual([l.rsplit(' ', 1)[-1] for l in got], ['--submit)'] * 3)
         self.assertFalse([l for l in got if '--lane' in l])
 
     def test_deny_lines_exact(self):
         want = []
         for shell in SHELLS:
-            for script in ('%s/tools/land.py' % K, '"%s/tools/land.py"' % K):
-                want.append('%s(python %s * -C*)' % (shell, script))
-                want.append('%s(python %s -C Y:/repo *-C*)' % (shell, script))
-                want.append('%s(python %s *--lo*)' % (shell, script))
-                want.append('%s(python %s * -- *)' % (shell, script))
-                want += ['%s(python %s *%s*)' % (shell, script, c)
+            for command, extra in (('python %s/tools/land.py' % K, ()), ('python "%s/tools/land.py"' % K, ()),
+                                   ('kit land', ('^',))):
+                want.append('%s(%s * -C*)' % (shell, command))
+                want.append('%s(%s -C Y:/repo *-C*)' % (shell, command))
+                want.append('%s(%s *--lo*)' % (shell, command))
+                want.append('%s(%s * -- *)' % (shell, command))
+                want += ['%s(%s *%s*)' % (shell, command, c)
                          for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#', '@',
                                    '\t', '\r', '\n', '\0',
                                    '‘', '’', '‚', '‛', '“', '”', '„',
@@ -79,9 +83,9 @@ class RuleTextTest(unittest.TestCase):
                                    '\x0b', '\x0c', '\x85', '\xa0', ' ',
                                    ' ', ' ', ' ', ' ', ' ', ' ',
                                    ' ', ' ', ' ', ' ', ' ',
-                                   ' ', ' ', ' ', ' ', '　')]
+                                   ' ', ' ', ' ', ' ', '　') + extra]
         self.assertEqual(LINES['deny'], want)
-        self.assertEqual(len(want), 220)
+        self.assertEqual(len(want), 220 + 2 * 56)
 
 
 class AllowedTest(unittest.TestCase):
@@ -110,20 +114,29 @@ class AllowedTest(unittest.TestCase):
         self.assertEqual(decide(loud, 'PowerShell'), 'allow')
         self.assertIsNone(decide(loud, 'Bash'))
 
+    def test_kit_command_allowed(self):
+        """`kit land` runs the same land.py (the kit command): its one allow line, PowerShell only."""
+        for cmd in (submit(KC), submit('Kit Land'), submit(KC).upper(),
+                    '%s -C %s kit/a kit/b --expect-tip a1 --expect-tip b2 --summary x-and-y --submit' % (KC, R)):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(decide(cmd), 'allow')
+                self.assertIsNone(decide(cmd, 'Bash'))
+
 
 class DeniedTest(unittest.TestCase):
     def test_second_C_denied(self):
         for shell in SHELLS:
             for cmd in (submit(middle='kit/a -C Q:/other'), submit(tail=' -C Q:/other'),
-                        submit(Q, middle='-C Q:/other kit/a')):
+                        submit(Q, middle='-C Q:/other kit/a'), submit(KC, middle='kit/a -C Q:/other'),
+                        submit(KC, tail=' -C Q:/other')):
                 with self.subTest(shell=shell, cmd=cmd):
                     self.assertEqual(decide(cmd, shell), 'deny')
 
     def second_C(self, middle):
-        """`middle` carries a second -C past the fixed prefix: denied in both shells and both script
-        spellings, though the allow alone would match it (argparse keeps the last -C)."""
+        """`middle` carries a second -C past the fixed prefix: denied in both shells and every
+        spelling, though the allow alone would match it (argparse keeps the last -C)."""
         for shell in SHELLS:
-            for script in (P, Q):
+            for script in SPELLINGS:
                 cmd = submit(script, middle=middle)
                 with self.subTest(shell=shell, cmd=cmd):
                     self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
@@ -153,10 +166,22 @@ class DeniedTest(unittest.TestCase):
 
     def only_the_deny_closes(self, middle):
         for shell in SHELLS:
-            cmd = submit(middle=middle)
-            with self.subTest(shell=shell, cmd=cmd):
-                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
-                self.assertEqual(decide(cmd, shell), 'deny')
+            for script in (P, KC):
+                cmd = submit(script, middle=middle)
+                with self.subTest(shell=shell, cmd=cmd):
+                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
+                    self.assertEqual(decide(cmd, shell), 'deny')
+
+    def test_cmd_escape_denied_in_the_kit_spelling(self):
+        """`kit` may be a kit.cmd shim, and cmd.exe strips its escape `^` before python reads the line:
+        `-^C` would reach land.py as a second -C past the `* -C*` deny (INFERENCE until probed on the
+        shim). The allow alone matches it; the kit spelling's `^` deny closes it."""
+        for middle in ('kit/a -^C Q:/other', 'kit/a --l^og-dir Q:/x', 'kit/a -^- kit/b'):
+            for shell in SHELLS:
+                cmd = submit(KC, middle=middle)
+                with self.subTest(shell=shell, cmd=cmd):
+                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
+                    self.assertEqual(decide(cmd, shell), 'deny')
 
     def test_backslash_escaped_submit_denied(self):
         """`abc\\ --submit` is one word in Bash: --expect-tip takes "abc --submit" and land.py runs
@@ -208,7 +233,7 @@ class DeniedTest(unittest.TestCase):
             a = land.parser().parse_args(argv)
             self.assertFalse(a.submit, argv)
             self.assertIn('--submit', a.branches)
-            for script in (P, Q):
+            for script in SPELLINGS:
                 for shell in SHELLS:
                     cmd = '%s -C %s %s --expect-tip %s --submit%s' % (script, R, middle, tip, tail)
                     with self.subTest(shell=shell, cmd=cmd):
@@ -255,7 +280,7 @@ class DeniedTest(unittest.TestCase):
     def test_first_C_not_denied(self):
         deny_only = {'allow': [], 'deny': LINES['deny']}
         for shell in SHELLS:
-            for cmd in (submit(), submit(Q), submit(middle='kit/a--b')):
+            for cmd in (submit(), submit(Q), submit(middle='kit/a--b'), submit(KC), submit(KC, middle='kit/a--b')):
                 self.assertIsNone(decide(cmd, shell, deny_only))
 
     def test_two_spaces_before_first_C_denied_by_the_reference(self):
@@ -285,7 +310,7 @@ class DeniedTest(unittest.TestCase):
                     self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])   # the hole the deny closes
 
     def test_every_metachar_in_an_allowed_command_is_denied(self):
-        bases = [submit(), submit(Q)]
+        bases = [submit(), submit(Q), submit(KC)]
         for c in rules.METACHARS:
             for base in bases:
                 cmd = base.replace(' kit/a ', ' kit/a%sb ' % c)
@@ -322,6 +347,19 @@ class NoMatchTest(unittest.TestCase):
     def test_other_tool_no_match(self):
         self.assertIsNone(decide(submit(P.replace('land.py', 'gate.py'))))
         self.assertIsNone(decide(submit(P.replace('python ', 'py '))))
+
+    def test_other_kit_spelling_no_match(self):
+        """Only `kit land` is allowed: another spelling of the kit command, or another of its tools,
+        gets the normal prompt."""
+        for script in ('kit.cmd land', 'kit gate', 'kit  land', 'kit landx', 'python -m tools.kit land',
+                       'python %s/tools/kit.py land' % K, 'Y:/repo/kit land'):
+            with self.subTest(script=script):
+                self.assertIsNone(decide(submit(script)))
+
+    def test_kit_R_evil_no_match(self):
+        for cmd in (submit(KC).replace('-C Y:/repo ', '-C Y:/repo-evil '),
+                    submit(KC).replace('-C Y:/repo ', '-C Y:/repo/../x ')):
+            self.assertIsNone(decide(cmd))
 
     def test_chain_part_unmatched(self):
         for tail in (' && git push --force', '; git push --force', ' | tee x', ' |& tee x', '\ngit push --force',
@@ -382,8 +420,12 @@ class DeriveTest(unittest.TestCase):
         make_export(self.root, SHA)
         make_export(other, 'fedcba987654')
         a, b = allowrules.lines(self.derive()), allowrules.lines(self.derive(other))
-        self.assertTrue(all(SHA in l for l in a['allow'] + a['deny']))
-        self.assertTrue(all('fedcba987654' in l for l in b['allow'] + b['deny']))
+        for got, sha in ((a, SHA), (b, 'fedcba987654')):
+            script = [l for l in got['allow'] + got['deny'] if '(kit land ' not in l]
+            kit = [l for l in got['allow'] + got['deny'] if '(kit land ' in l]
+            self.assertTrue(script and kit)
+            self.assertTrue(all(sha in l for l in script))      # the script lines name the export
+            self.assertFalse([l for l in kit if sha in l])      # the kit command's name none
         src = os.path.join(TOP, 'kitlib', 'allowrules')
         for name in os.listdir(src):
             if name.endswith('.py'):
