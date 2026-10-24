@@ -120,6 +120,11 @@ ROWS = [
     # `--w` is `--worktree` to git; a long option the guard cannot pin may be it (fail closed)
     ('restore --staged --w in main', lambda w: bash('git restore --staged --w a.py', w.main), 'deny', 'git-restore', None),
     ('restore -S --no-staged in main', lambda w: ps('git restore -S --no-staged a.py', w.main), 'deny', 'git-restore', None),
+    ('restore --staged --wor in main', lambda w: bash('git restore --staged --wor a.py', w.main), 'deny', 'git-restore', None),
+    ('restore -S --no-st in main', lambda w: ps('git restore -S --no-st a.py', w.main), 'deny', 'git-restore', None),
+    ('restore --staged --no- in main', lambda w: bash('git restore --staged --no- a.py', w.main), 'deny', 'git-restore', None),
+    ('restore --staged --no in main', lambda w: ps('git restore --staged --no a.py', w.main), 'deny', 'git-restore', None),
+    ('restore --staged --no-ov in main', lambda w: bash('git restore --staged --no-ov a.py', w.main), None, None, None),
     ('restore --staged --quiet in main', lambda w: bash('git restore --staged --quiet a.py', w.main), None, None, None),
     ('restore in a worktree', lambda w: bash('git restore a.py', w.wt), None, None, None),
     ('subagent commit in main', lambda w: bash('git commit -m "two words"', w.main, sub=True), 'deny', 'git-main-history',

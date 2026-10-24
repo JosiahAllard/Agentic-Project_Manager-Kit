@@ -4149,18 +4149,24 @@ GIT_SHORT_VALUES = {'commit': 'mFCct', 'restore': 's', 'clean': 'e', 'push': 'o'
 
 def _canon_long(sub, body):
     """The long options `--body` selects for `sub`: itself when exact or unknown, the one it
-    abbreviates, or every one it could abbreviate (an ambiguous prefix fails closed)."""
+    abbreviates, or every one it could abbreviate (an ambiguous prefix fails closed). git reads
+    `--no-<prefix>` as the negation of an option too (`--no-st` is `--no-staged`), so `--no`,
+    `--no-` and `--no-<prefix>` also select `no-<name>` for each name the prefix abbreviates."""
     table = GIT_LONGS.get(sub, ())
     if body in table or len(body) < 2:
         return [body]
     hits = [n for n in table if n.startswith(body)]
+    if body.startswith('no-') or 'no-'.startswith(body):
+        hits += ['no-' + n for n in table if n.startswith(body[3:]) and not n.startswith('no-')
+                 and 'no-' + n not in hits]
     return hits or [body]
 
 
 def restore_index_only(short, longs):
     """Whether git restore with these options (_opts) writes the index alone: --staged (-S)
     without --worktree (-W), and every long option one GIT_LONGS names (fail closed: _canon_long
-    leaves a one-letter body as written, and `--w` is `--worktree` to git)."""
+    leaves a one-letter body as written, and `--w` is `--worktree` to git; `--no`, `--no-` and
+    `--no-st` can be `--no-staged`, which it names and the table does not)."""
     return (('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs)
             and longs <= set(GIT_LONGS['restore']))
 

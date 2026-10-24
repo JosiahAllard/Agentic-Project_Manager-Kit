@@ -224,11 +224,21 @@ class Rulebooks(unittest.TestCase):
         self.w.user_config({'ledger_path': self.w.ledger})
         f = self.folder
         for cmd, why in (('git restore --staged --w rules/alpha.md', BOOK), ('git restore -S --w STANDING.md', DIGEST),
-                         ('git restore --staged --no-staged STANDING.md', DIGEST)):
+                         ('git restore --staged --no-staged STANDING.md', DIGEST),
+                         # every prefix git takes for --worktree, or for a negation (`--no-st` is
+                         # `--no-staged`; `--no` and `--no-` may negate any option)
+                         ('git restore --staged --wor rules/alpha.md', BOOK),
+                         ('git restore --staged --work STANDING.md', DIGEST),
+                         ('git restore -S --workt STANDING.md', DIGEST),
+                         ('git restore --staged --no-st STANDING.md', DIGEST),
+                         ('git restore --staged --no STANDING.md', DIGEST),
+                         ('git restore -S --no- rules/alpha.md', BOOK),
+                         ('git restore --staged --no-w STANDING.md', DIGEST)):
             with self.subTest(cmd):
                 self.git_refused(bash(cmd, f, sub=True), why)
         # options the guard names in full or by a prefix it pins keep the index-only exception
-        for cmd in ('git restore --staged --quiet STANDING.md', 'git restore --sta --source HEAD STANDING.md'):
+        for cmd in ('git restore --staged --quiet STANDING.md', 'git restore --sta --source HEAD STANDING.md',
+                    'git restore --staged --no-ov STANDING.md'):
             with self.subTest(cmd):
                 d = decide(bash(cmd, f, sub=True), self.w.ctx())
                 self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
