@@ -21,6 +21,34 @@ def fwd(p):
     return p.replace('\\', '/')
 
 
+def short_name(path):
+    """The 8.3 short spelling of the existing `path` (GetShortPathNameW), or None when its volume
+    gives none (the long name back)."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.WinDLL('kernel32').GetShortPathNameW(path, buf, len(buf))
+    except (ImportError, OSError, AttributeError):
+        return None
+    short = buf.value if 0 < n < len(buf) else ''
+    return short if short and os.path.normcase(short) != os.path.normcase(path) else None
+
+
+def short_name_root():
+    """A temp folder on a volume that gives 8.3 short names (tempfile's folder, then
+    %LOCALAPPDATA%\\Temp), for World(root=...); None when neither does."""
+    for root in (tempfile.gettempdir(), os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Temp')):
+        if not os.path.isdir(root):
+            continue
+        probe = tempfile.mkdtemp(prefix='kit-guard-probe-', dir=root)
+        try:
+            if short_name(probe):
+                return root
+        finally:
+            shutil.rmtree(probe, ignore_errors=True)
+    return None
+
+
 class FakeGit(object):
     def __init__(self, world):
         self.w = world
@@ -57,10 +85,11 @@ class World(object):
     base/plain no checkout, base/unknown a place git cannot tell about. base/kit (kit_dir) stands
     for the kit checkout the guard runs from (Ctx.kit): the folder its advised lock tool is under.
     base/pmrepo (pm_repo) holds the machine config user_config writes, in its .pm-kit folder
-    (config_dir), as the PM repository's two files."""
+    (config_dir), as the PM repository's two files. `root` is the folder base is made in
+    (tempfile's own by default; short_name_root for a volume with 8.3 names)."""
 
-    def __init__(self, kit=None):
-        self.base = tempfile.mkdtemp(prefix='kit-guard-')
+    def __init__(self, kit=None, root=None):
+        self.base = tempfile.mkdtemp(prefix='kit-guard-', dir=root)
         self.main = os.path.join(self.base, 'repo')
         self.wt = os.path.join(self.main, '.claude', 'worktrees', 'wt')
         self.data = os.path.join(self.base, 'pmdata')

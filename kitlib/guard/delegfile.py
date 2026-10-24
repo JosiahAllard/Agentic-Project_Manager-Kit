@@ -182,6 +182,19 @@ def glob_config(ctx, w, where, shell):
     return rules.machine_config_folder(ctx, base) if base else None
 
 
+def glob_readings(text):
+    """The wildcard character sets the path `text` is read with as a wildcard: hub's GLOB_CHARS
+    when it has one of them, and rules.LEDGER_GLOB_CHARS (the DOS `<`, `>`, `"` too, which
+    FindFirstFile reads as wildcards) when it has a DOS one; empty for no wildcard. Each reading
+    only adds what the word can reach."""
+    out = []
+    if hubg.has_glob(text):
+        out.append(hubg.GLOB_CHARS)
+    if any(c in text for c in '<>"'):
+        out.append(rules.LEDGER_GLOB_CHARS)
+    return out
+
+
 def here_word(cmd, w):
     """True when the write `w` is a stand-in for the folder the program runs in (rules.here)."""
     return w.text == '.' and not w.dyn and cmd.source[w.start:w.end] != '.'
@@ -193,9 +206,13 @@ def word_reaches(ctx, w, where, shell, into=None):
     text = sh.home_text(w.text, ctx.home, w.dyn)
     if not text:
         return None
+    for chars in glob_readings(text):
+        f = glob_reaches(ctx, text, where, shell, chars)
+        if f is not None:
+            return f
     if hubg.has_glob(text):
-        return glob_reaches(ctx, text, where, shell)
-    try:
+        return None
+    try:                                        # a DOS wildcard is read as a literal name too
         p = sh.resolve_path(text, where, shell, ctx.home)
     except (OSError, ValueError):
         p = None
@@ -208,10 +225,11 @@ def word_reaches(ctx, w, where, shell, into=None):
     return None
 
 
-def glob_base(ctx, text, where, shell):
+def glob_base(ctx, text, where, shell, chars=hubg.GLOB_CHARS):
     """(folder, rest) of the wildcard path `text` read from `where`: the literal folder it starts
-    in, resolved (None when the guard cannot place it), and the text after it."""
-    first = min(text.index(c) for c in hubg.GLOB_CHARS if c in text)
+    in (before its first wildcard character, one of `chars`), resolved (None when the guard
+    cannot place it), and the text after it."""
+    first = min(text.index(c) for c in chars if c in text)
     cut = max(text.rfind('/', 0, first), text.rfind('\\', 0, first))
     lit, rest = (text[:cut + 1], text[cut + 1:]) if cut >= 0 else ('.', text)
     try:
@@ -221,17 +239,19 @@ def glob_base(ctx, text, where, shell):
     return base, rest
 
 
-def glob_reaches(ctx, text, where, shell):
+def glob_reaches(ctx, text, where, shell, chars=hubg.GLOB_CHARS):
     """The copy of the list the wildcard path `text`, read from `where`, can name: the file or a
     folder above it, each part of the wildcard matched (case folded, a leading dot like any
-    other character: fail closed) against the matching part of the copy's path below the literal
-    folder the wildcard starts in; `**` or `..` after the wildcard, any copy below that folder.
-    None when it can name none, or the guard cannot place that folder."""
-    base, rest = glob_base(ctx, text, where, shell)
+    other character: fail closed; a DOS wildcard as `*`, rules.DOS_WILDCARDS) against the
+    matching part of the copy's path below the literal folder the wildcard starts in (glob_base
+    with `chars`); `**` or `..` after the wildcard, any copy below that folder. None when it can
+    name none, or the guard cannot place that folder. A part matches the 8.3 short name too
+    (rules.glob_part), as FindFirstFile matches."""
+    base, rest = glob_base(ctx, text, where, shell, chars)
     if not base:
         return None
     b = jail.real(base)
-    parts = [x.lower() for x in re.split(r'[\\/]', rest) if x and x != '.']
+    parts = [x.lower().translate(rules.DOS_WILDCARDS) for x in re.split(r'[\\/]', rest) if x and x != '.']
     for f in files(ctx):
         r = jail.real(f)
         if r == b or not jail.inside(r, b):
@@ -239,7 +259,9 @@ def glob_reaches(ctx, text, where, shell):
         below = r[len(b.rstrip('\\/')) + 1:].split(os.sep)
         if any('**' in x or x == '..' for x in parts):
             return f
-        if parts and len(parts) <= len(below) and all(fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts)):
+        shorts = rules.short_parts(r, len(below))
+        if parts and len(parts) <= len(below) and all(
+                rules.glob_part(n, s, x) for n, s, x in zip(below, shorts, parts)):
             return f
     return None
 
@@ -323,7 +345,7 @@ def git(event, ctx, cmd, inv, role):
     top = tree_top(ctx, gc.dir, pointer)
     if top is None:
         return None
-    short, longs, pos = rules._opts(sub, args)
+    short, longs, pos = rules._opts(sub, args, wide=True)
     file_real = jail.real(copy)
     hit = any(covers(ctx, w, gc.dir, top, file_real) for w in pos)
     why = None
@@ -343,7 +365,7 @@ def git(event, ctx, cmd, inv, role):
         why = 'may overwrite it with another commit\'s version'
     elif sub == 'read-tree' and 'u' in short:
         why = 'may overwrite it'
-    elif sub == 'clean' and not ('n' in short or 'dry-run' in longs) and (hit or not pos):
+    elif sub == 'clean' and not rules.clean_dry_run(args) and (hit or not pos):
         why = 'may delete it'
     elif sub == 'stash' and not rules.stash_reads(args):
         why = 'may take it away or overwrite it'
@@ -376,7 +398,7 @@ def git_config(event, ctx, role, text, top, base, sub, short, longs, args, pos):
     elif sub == 'checkout':
         hit = lands(after_dashes(args))
     elif sub == 'clean':
-        hit = not ('n' in short or 'dry-run' in longs) and lands(pos)
+        hit = not rules.clean_dry_run(args) and lands(pos)
     else:
         hit = False
     if not hit:

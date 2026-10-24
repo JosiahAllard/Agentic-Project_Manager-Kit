@@ -832,11 +832,11 @@ def hub_path_texts(text):
     return []
 
 
-def glob_folder(text):
+def glob_folder(text, chars=hubg.GLOB_CHARS):
     """The literal folder a wildcard path `text` starts with (everything before the separator
-    ahead of its first wildcard character), or None when it has none: `<token folder>/o*` is in
-    the token folder whatever the wildcard matches."""
-    first = min(text.index(c) for c in hubg.GLOB_CHARS if c in text)
+    ahead of its first wildcard character, one of `chars`), or None when it has none:
+    `<token folder>/o*` is in the token folder whatever the wildcard matches."""
+    first = min(text.index(c) for c in chars if c in text)
     cut = max(text.rfind('/', 0, first), text.rfind('\\', 0, first))
     return text[:cut] if cut > 0 else None
 
@@ -889,7 +889,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
     no path into it, passes), and python or node code that names a token file or the folder
     (kitlib.guard.hub.INLINE_RE; docs/guard-v2.md W3: a parsed hub tool run of an agent verb piped into
     code given on the command line is that code's data, hub_run_verb). A wildcard path is read as the literal folder before its first
-    wildcard (glob_folder); the store and the word hub are not refused (the guard blocks only
+    wildcard (glob_folder); a DOS wildcard (LEDGER_GLOB_CHARS: `<`, `>`, `"`) is read both ways,
+    as that folder and as the literal path (hub_texts); the store and the word hub are not refused (the guard blocks only
     what it can place; an edit tool's write into the store is still hub_secret_edit's).
     A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
     %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
@@ -898,25 +899,34 @@ def hub_secret_shell(ctx, cmd, inv, places):
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
     for w in list(cmd.words) + targets:
         for text in hub_path_texts(w.text):
-            text = sh.home_text(text, ctx.home, w.dyn)
-            if text is not None and hubg.has_glob(text):
-                text = glob_folder(text)
-            if text is None:
-                continue
-            try:
-                p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
-            except (OSError, ValueError):
-                p = None
-            if not p:
-                continue
-            p_ = places()
-            if p_.where(p) == 'secret':
-                return 'reaches %s (%s)' % (p_.label('secret', p), w.text)
+            for text in hub_texts(sh.home_text(text, ctx.home, w.dyn)):
+                try:
+                    p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
+                except (OSError, ValueError):
+                    p = None
+                if not p:
+                    continue
+                p_ = places()
+                if p_.where(p) == 'secret':
+                    return 'reaches %s (%s)' % (p_.label('secret', p), w.text)
     for text in inline_code(cmd, inv, lambda c: hub_run_verb(c) == ''):
         m = hubg.INLINE_RE.search(text)
         if m:
             return 'runs code that names %s' % m.group(0)
     return None
+
+
+def hub_texts(text):
+    """The paths hub_secret_shell judges for one path text: a wildcard one as its literal folder
+    (glob_folder); one with a DOS wildcard (`<`, `>`, `"`: FindFirstFile reads them as wildcards)
+    also as the literal folder before the first of those, and, when it has no other wildcard, as
+    the literal path too (each reading only adds a path judged)."""
+    if text is None:
+        return []
+    out = [glob_folder(text) if hubg.has_glob(text) else text]
+    if any(c in text for c in '<>"'):
+        out.append(glob_folder(text, LEDGER_GLOB_CHARS))
+    return [t for t in out if t is not None]
 
 
 def hub_run_args(inv):
@@ -1080,7 +1090,7 @@ def ledger_guarded(ctx):
     return out
 
 
-def ledger_kind(ctx, target):
+def ledger_kind(ctx, target, above=False):
     r"""What of the ledger `target` is: 'log' for the ledger file, 'rulebook' for the rulebooks'
     folder or a `.md` file directly in it, 'digest' for the standing digest, else None. Names
     compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
@@ -1089,17 +1099,23 @@ def ledger_kind(ctx, target):
     character after its namespace prefix (a DOS one too, LEDGER_GLOB_CHARS), as a wildcard that is any of them it can match
     (ledger_glob; the prefix's own `?` is no wildcard). A `\??\` unprefixed leaves (no drive after
     it) is read both ways: as a prefix, and as a `??` wildcard folder (`<drive>:/??/STANDING.md`
-    names `<drive>:\pm\STANDING.md`)."""
+    names `<drive>:\pm\STANDING.md`). With `above`, a folder above a held path is that path's
+    kind too, and a wildcard that can name such a folder (ledger_glob): removing or moving the
+    folder writes what it holds."""
     full = file_key(target)
     for kind, real in ledger_guarded(ctx):
         if full == real or (kind == 'rulebook' and os.path.dirname(full) == real and full.endswith('.md')):
             return kind
+    if above:
+        for kind, real in ledger_guarded(ctx):
+            if jail.inside(real, full):
+                return kind
     bare_target = unprefixed(target)
     end = prefix_end(bare_target)
     starts = (end, 0) if end and not re.match(r'[\\/]{2}', bare_target) else (end,)
     for start in starts:
         if any(c in LEDGER_GLOB_CHARS for c in bare_target[start:]):
-            kind = ledger_glob(ctx, bare_target, start)
+            kind = ledger_glob(ctx, bare_target, start, above)
             if kind:
                 return kind
     return None
@@ -1118,7 +1134,7 @@ def prefix_end(path):
     return m.end() if m else 0
 
 
-def ledger_glob(ctx, target, start=0):
+def ledger_glob(ctx, target, start=0, above=False):
     """ledger_kind for the wildcard path `target`: the literal folder it starts in (file_key), and
     each part after it matched (case folded, a stream suffix dropped, as glob matching reads it)
     against the matching part of a held path below that folder. A file is matched by a wildcard
@@ -1127,7 +1143,10 @@ def ledger_glob(ctx, target, start=0):
     wildcard matches every held path below the folder. A part also matches a name it spells
     literally (`[PM]` the folder `[PM]`). A wildcard is searched for from `start` (past a namespace
     prefix, prefix_end, whose `?` is none); a DOS wildcard (LEDGER_GLOB_CHARS) is one too, matched
-    as `*`."""
+    as `*`. A part matches the 8.3 short name too (glob_part, short_parts), as FindFirstFile
+    matches: `A-LONG~?` names `a-long-folder`. With `above`, a wildcard shallower than a held
+    path whose parts each match the folders it passes through names a folder above it
+    (ledger_kind's `above`)."""
     first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
     cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
@@ -1141,11 +1160,49 @@ def ledger_glob(ctx, target, start=0):
         if real == b or not jail.inside(real, b):
             continue
         below = real[len(b.rstrip('\\/')) + 1:].split(os.sep)
+        shorts = short_parts(real, len(below))
         deeper = kind == 'rulebook' and len(parts) == len(below) + 1
-        if wide or ((len(parts) == len(below) or deeper) and
-                    all(n == x or fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts))):
+        shallower = above and len(parts) < len(below)
+        if wide or ((len(parts) == len(below) or deeper or shallower) and
+                    all(n == x or glob_part(n, s, x) for n, s, x in zip(below, shorts, parts))):
             return kind
     return None
+
+
+def glob_part(name, short, pattern):
+    """Whether the wildcard part `pattern` matches a path part, as FindFirstFile matches it: its
+    long name `name` or its 8.3 short name `short` (None when it has none), both case folded."""
+    return fnmatch.fnmatchcase(name, pattern) or (short is not None and fnmatch.fnmatchcase(short, pattern))
+
+
+def short_parts(real, depth):
+    """The last `depth` parts of the 8.3 short spelling of the path `real` (GetShortPathNameW),
+    case folded, to match a wildcard against as FindFirstFile does. A part that does not exist
+    yet (a held file not written) is None, and its nearest existing folder gives the parts above
+    it; None for every part when the volume gives none (the long names alone)."""
+    path, tail = real, 0
+    short = _short_path(path)
+    while short is None and tail < depth:
+        parent = os.path.dirname(path)
+        if not parent or parent == path:
+            break
+        path, tail = parent, tail + 1
+        short = _short_path(path)
+    need = depth - tail
+    parts = re.split(r'[\\/]', short.lower().rstrip('\\/')) if short else []
+    head = parts[-need:] if need > 0 and len(parts) >= need else [None] * need
+    return head + [None] * tail
+
+
+def _short_path(path):
+    """GetShortPathNameW of `path`, or None when it does not resolve (a missing path)."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.WinDLL('kernel32').GetShortPathNameW(path, buf, len(buf))
+    except (ImportError, OSError, AttributeError, ValueError):
+        return None
+    return buf.value if 0 < n < len(buf) else None
 
 
 def ledger_git(event, ctx, cmd, inv, cwd, role):
@@ -1159,29 +1216,61 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     directly in the rulebooks' folder (a wildcard there: its literal folder, that folder). A
     branch name is read as a path too (fail closed: `git checkout pm` from
     the folder above the ledger's). Paths read from elsewhere (git_every_path:
-    `--pathspec-from-file`, checkout-index `-a` or `--stdin`) reach every path of the tree."""
+    `--pathspec-from-file`, checkout-index `-a` or `--stdin`) reach every path of the tree.
+    In such a tree, for the sessions ledger_wide_binds names, the forms that rewrite the whole
+    tree are refused too (ledger_git_tree_form: checkout or switch that discards changes, reset
+    --hard, --merge or --keep, a stash that is not a read, a clean that is not a dry run with no
+    pathspec or one that reaches a held path); and a git call whose directory the guard cannot
+    place (a computed -C, GIT_DIR, --git-dir, --work-tree and the like: gc.blind) is refused in
+    any of those writing forms while a ledger is configured, since it can act on the ledger's
+    tree (fail closed); a read there passes."""
     gc = git_call_judged(inv)
-    if gc is None or gc.sub_dyn or not gc.dir or gc.unknown or gc.blind:
+    if gc is None or gc.sub_dyn:
         return None
     sub, args = gc.sub, gc.rest
-    if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout'):
-        return None
     held = ledger_guarded(ctx)
     if not held:
         return None
     from . import delegfile
-    short, longs, pos = _opts(sub, args)
+    short, longs, pos = _opts(sub, args, wide=True)
+    tree_form = ledger_git_tree_form(sub, args, short, longs)
+    if not gc.dir or gc.unknown or gc.blind:
+        if not ledger_wide_binds(event, ctx):
+            return None
+        form = tree_form or ledger_git_path_form(sub, args, short, longs, held)
+        if not form:
+            return None
+        kind = held[0][0]
+        return refuse('ledger', role, STANDING_WHY[kind] % (
+            '`%s` (%s, in a place the guard cannot tell: it can be the tree of the ledger)' % (bare(cmd), form)),
+            UNPLACED_BRANCH_INSTEAD if checkout_makes_branch(sub, short, longs) and not tree_form
+            else ledger_instead(ctx, kind))
+    if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout') and not tree_form:
+        return None
     if sub == 'restore' and restore_index_only(short, longs):
         return None                             # the index alone
-    if sub == 'checkout':
-        after = delegfile.after_dashes(args)
-        pos = after if after is not None else pos
     place = ctx.place(gc.dir)
     top = place.top if place.kind in (repo.MAIN, repo.LINKED) and place.top else gc.dir
     tree = jail.real(top)
     held = [(kind, real) for kind, real in held if jail.inside(real, tree)]
+    if not held:
+        return None
+    if sub == 'stash' and tree_form:
+        pos = delegfile.after_dashes(args) or []    # push's pathspecs after `--`; none: the tree
+    specs = sub in ('clean', 'stash') and tree_form and ledger_wide_binds(event, ctx)
+    if tree_form and ledger_wide_binds(event, ctx) and (not specs or not pos or all(
+            delegfile.spec_real(ctx, w, gc.dir, top) is False for w in pos)):
+        kind = held[0][0]                       # no pathspec, or exclusions alone: the tree
+        return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), tree_form)),
+                      ledger_instead(ctx, kind))
+    if sub == 'checkout':
+        after = delegfile.after_dashes(args)
+        pos = after if after is not None else pos
+    elif sub not in ('rm', 'mv', 'restore', 'checkout-index'):
+        if not specs:
+            return None                         # a tree form the session is not held to
     every = git_every_path(sub, short, longs)
-    if every and held:
+    if every:
         kind = held[0][0]
         return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), every)),
                       ledger_instead(ctx, kind))
@@ -1195,6 +1284,119 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
                 return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), w.text)),
                               ledger_instead(ctx, kind))
     return None
+
+
+def ledger_wide_binds(event, ctx):
+    """Whether the ledger rule's wider refusals hold the session of `event`: a folder above a held
+    path or a wildcard that can name one (ledger_rule's `above`), git that rewrites a tree holding
+    the ledger (ledger_git_tree_form), and a writing git call in a place the guard cannot tell.
+    The one place their sessions are chosen: a marked session but the PM's (marked_not_pm), so
+    a subagent, a `plain` or other agent's mark and an unknown mark are bound (fail closed); the
+    owner's unmarked session and the PM's pass. Whether to widen them is the owner's open
+    question: `return True` here binds every session, as the rest of the ledger rule does (only
+    ledger.py writes the ledger); that change is made here alone."""
+    return marked_not_pm(event, ctx)
+
+
+def marked_not_pm(event, ctx):
+    """True for a marked session but the PM's: a subagent, or a main session whose launcher mark
+    (without the kit plugin's prefix, case ignored) is anything but the owner's and `pm`, an
+    unknown mark included. False for the owner's unmarked session and the PM's."""
+    if subagent(event):
+        return True
+    who = agentname.bare_mark(str(ctx.session_role(event) or context.OWNER)).lower()
+    return who not in (context.OWNER, 'pm')
+
+
+def ledger_git_tree_form(sub, args, short, longs):
+    """The option or form of a git call (sub, its argument Words, and _opts(wide=True)) that
+    rewrites the work tree as a whole, discarding what is there: checkout or switch with -f or
+    --force (switch's --discard-changes; any abbreviation git could read as either, an
+    ambiguous one too: fail closed), reset --hard, --merge or --keep (delegfile.GIT_RESETS), a
+    stash that is not a read (stash_reads), a clean that is not a dry run (clean_dry_run). None
+    for any other call. ledger_git judges a clean's pathspecs, and a stash's after `--`, as a
+    path form's: one that misses the ledger passes; none, or exclusions alone, is the tree."""
+    from . import delegfile
+    if sub in ('checkout', 'switch'):
+        names = ('force', 'discard-changes') if sub == 'switch' else ('force',)
+        if 'f' in short:
+            return '-f'
+        for n in sorted(longs):
+            if n and any(name.startswith(n) for name in names):
+                return '--' + n
+        return None
+    if sub == 'reset':
+        hit = sorted(delegfile.GIT_RESETS & longs)
+        return '--' + hit[0] if hit else None
+    if sub == 'stash':
+        return None if stash_reads(args) else 'stash'
+    if sub == 'clean':
+        return None if clean_dry_run(args) else 'clean'
+    return None
+
+
+def ledger_git_path_form(sub, args, short, longs, held=()):
+    """The subcommand of a git call that writes the paths it names, where the guard cannot place
+    the tree: rm, mv, restore (not the index alone), checkout-index, and a checkout that can
+    write paths (checkout_branch_only is False). None for any other call."""
+    if sub in ('rm', 'mv', 'checkout-index'):
+        return sub
+    if sub == 'checkout' and not checkout_branch_only(args, short, longs, held):
+        return sub
+    if sub == 'restore' and not restore_index_only(short, longs):
+        return sub
+    return None
+
+
+def checkout_branch_only(args, short, longs, held=()):
+    """Whether a checkout (its argument Words, and _opts(wide=True)) can only switch to a branch
+    or a commit, the reading where the guard cannot place the tree; anything else fails closed.
+    True for no positional word, or exactly one that is a plain name: not `.`, not computed, no
+    wildcard or pathspec magic, no path separator (so `kit/x` stays refused: without the tree the
+    guard cannot tell a branch from a folder), no `~` short name, and not a part of a held path
+    (`LEDGER.md`, its folders, their 8.3 short names: git reads a word that names no branch as
+    a path), nor a `.md` name while a rulebooks' folder is held (a rulebook in it). False with `--`, paths read from elsewhere (git_every_path), -p or --patch (any
+    abbreviation git could read as it), or two or more positional words."""
+    from . import delegfile
+    if delegfile.after_dashes(args) is not None or git_every_path('checkout', short, longs):
+        return False
+    if 'p' in short or any(n and 'patch'.startswith(n) for n in longs):
+        return False
+    pos = _opts('checkout', args, wide=True)[2]
+    if not pos:
+        return True
+    if len(pos) > 1:
+        return False
+    w = pos[0]
+    t = w.text
+    if (getattr(w, 'dyn', False) or not t or t in ('.', '..') or t.startswith(':')
+            or any(c in t for c in '*?[]\\/~')):
+        return False
+    name = t.rstrip('. ').lower()
+    if name.endswith('.md') and any(kind == 'rulebook' for kind, _real in held):
+        return False                            # a rulebook: a `.md` file in the held folder
+    return name not in held_names(held)
+
+
+UNPLACED_BRANCH_INSTEAD = ('run it with a literal `git -C <worktree>` so the guard can place the tree, or create '
+                           'the branch with `git switch -c <branch> <start>`.')
+
+
+def checkout_makes_branch(sub, short, longs):
+    """Whether a checkout creates a branch (-b, -B, --orphan): its refusal's Instead names the
+    forms the guard can judge, not the ledger tool."""
+    return sub == 'checkout' and bool('b' in short or 'B' in short or 'orphan' in longs)
+
+
+def held_names(held):
+    """The lower-case names of every part of each held path ((kind, real) pairs) and of its 8.3
+    short name, trailing dots and spaces dropped as Windows drops them."""
+    out = set()
+    for _kind, real in held:
+        for p in (real, _short_path(real)):
+            if p:
+                out.update(n.rstrip('. ').lower() for n in re.split(r'[\\/]', p) if n)
+    return out
 
 
 def git_every_path(sub, short, longs):
@@ -1233,7 +1435,12 @@ STANDING_WHY = {
 }
 
 
-def ledger_rule(ctx, target, role, what):
+def ledger_rule(event, ctx, target, role, what, stand_in=False):
+    """The ledger rule over an edit of `target`: what of the ledger it is (ledger_kind), and, for
+    the sessions ledger_wide_binds names, a folder above a held path or a wildcard that can name
+    one (`above`), unless the target is a stand-in for what the guard cannot read (edit_target's
+    `stand_in`: the folder python runs in), as delegfile.reaches reads folders. A broken machine
+    config refuses every subagent write."""
     user = ctx.user()
     broken = user.get('broken')
     if broken and role == 'subagent':
@@ -1243,7 +1450,7 @@ def ledger_rule(ctx, target, role, what):
                       'python -m json.tool %s' % quote(ctx.config_location().path))
     if not target:
         return None
-    kind = ledger_kind(ctx, target)
+    kind = ledger_kind(ctx, target, above=not stand_in and ledger_wide_binds(event, ctx))
     if kind is None:
         return None
     return refuse('ledger', role, STANDING_WHY[kind] % what, ledger_instead(ctx, kind))
@@ -1386,7 +1593,7 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     `stand_in`, a target that stands for what the guard cannot read (the folder python runs in, the
     pipeline's paths), which counts as the owner's delegation list only when it is that file
     (delegfile.edit)."""
-    d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
+    d = ledger_rule(event, ctx, target, role, what, stand_in) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         delegations_edit(event, ctx, target, role, what, stand_in) or \
         machine_config(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
@@ -4146,6 +4353,10 @@ GIT_LONGS = {
     'stash': ('message', 'patch', 'staged', 'keep-index', 'no-keep-index', 'include-untracked', 'all', 'quiet',
               'pathspec-from-file', 'pathspec-file-nul', 'index'),
     'update-ref': ('no-deref', 'stdin', 'create-reflog', 'batch-updates'),
+    # --prefix and --stage take a value; left out of GIT_LONG_VALUES, the value is read as a path
+    # (fail closed)
+    'checkout-index': ('index', 'quiet', 'force', 'all', 'no-create', 'prefix', 'stage', 'temp',
+                       'ignore-skip-worktree-bits', 'stdin'),
 }
 GIT_LONGS['stage'] = GIT_LONGS['add']
 GIT_LONG_VALUES = {'message', 'file', 'author', 'date', 'template', 'reuse-message', 'reedit-message', 'fixup',
@@ -4181,9 +4392,20 @@ def restore_index_only(short, longs):
             and longs <= set(GIT_LONGS['restore']))
 
 
-def _opts(sub, args):
+def _one_letter(sub, body):
+    """The long option a one-letter `--body` abbreviates for `sub` when exactly one starts with it
+    (git reads `--h` as reset's `--hard`), else None (ambiguous or unknown: git rejects it)."""
+    hits = [n for n in GIT_LONGS.get(sub, ()) if len(body) == 1 and n.startswith(body)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _opts(sub, args, wide=False):
     """(short option letters, long option names, positional Words) of a git subcommand's
-    arguments, option values left out."""
+    arguments, option values left out. `wide` also names the long option a one-letter body
+    abbreviates (_one_letter) beside the body itself, for a check that refuses on that option:
+    the body stays, so a check that passes only on known options (restore_index_only) still
+    fails closed, and a caller that passes on an option it names (a listing, --no-deref) keeps
+    the narrow reading."""
     shorts, longs, pos = set(), set(), []
     values = GIT_SHORT_VALUES.get(sub, '')
     k = 0
@@ -4196,6 +4418,9 @@ def _opts(sub, args):
             body, eq, _v = t[2:].partition('=')
             names = _canon_long(sub, body)
             longs.update(names)
+            one = _one_letter(sub, body) if wide else None
+            if one:
+                longs.add(one)
             k += 1
             if not eq and len(names) == 1 and names[0] in GIT_LONG_VALUES:
                 k += 1
@@ -4644,6 +4869,47 @@ STASH_READS = ('list', 'show', 'create')        # no entry added or taken
 STASH_NAMED = ('apply', 'drop')                 # pass with the entry named: `apply <sha>`, `drop stash@{1}`
 
 
+def clean_dry_run(args):
+    """True when git clean with arguments `args` (the Words after `clean`) is a dry run, read in
+    order as git reads it: the last of `-n` (in a short cluster), `--dry-run` (an abbreviation of
+    two letters or more) and its negation `--no-dry-run` (`--no`, `--no-`, `--no-d`: git rejects
+    the ambiguous ones, and a refused line deletes nothing) wins; `-fn --no-dry-run` deletes. A
+    one-letter `--d` is `--dry-run` to git (-d has no long form), but is left unread: the line is
+    refused (fail closed). The value of `-e`/`--exclude` (any abbreviation, `--e` too) is skipped,
+    so `-f -e -n` is no dry run; a word the shell computes cancels one. Words after `--` are paths."""
+    dry = False
+    values = GIT_SHORT_VALUES['clean']
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        k += 1
+        if w.dyn:
+            dry = False                         # a word the shell computes may be --no-dry-run
+            continue
+        if t == '--':
+            break
+        if t.startswith('--'):
+            body, eq, _v = t[2:].partition('=')
+            if body.startswith('no') and 'no-dry-run'.startswith(body):
+                dry = False
+            elif not eq and len(body) > 1 and 'dry-run'.startswith(body):
+                dry = True
+            elif body and 'exclude'.startswith(body) and not eq:
+                k += 1
+            continue
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            for j, c in enumerate(body):
+                if c == 'n':
+                    dry = True
+                if c in values:
+                    if not body[j + 1:]:
+                        k += 1
+                    break
+    return dry
+
+
 def stash_reads(args):
     """True when git stash with arguments `args` (the Words after `stash`) only reads: `list` or
     `show` as the first word. git reads a verb only there: a line that starts with an option or
@@ -4707,7 +4973,7 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
     where = 'the main checkout %s' % place.top if place.kind == repo.MAIN else \
         'a checkout git cannot place (%s)' % place.detail
     top = place.top or '<main checkout>'
-    short, longs, pos = _opts(sub, args)
+    short, longs, pos = _opts(sub, args, wide=True)
     if writes_main(sub, short, longs):
         cfg = ctx.config(place.top or gc.dir)
         if not kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout'):
@@ -4742,7 +5008,7 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
         return refuse('git-reset-hard', role, '`%s` discards work in %s. Reset --keep refuses to drop uncommitted '
                       'changes:' % (text, where), 'git -C %s reset --keep %s' % (quote(top), rev))
     if sub == 'clean':
-        if 'n' in short or 'dry-run' in longs:
+        if clean_dry_run(args):
             return None
         return refuse('git-clean', role, '`%s` deletes untracked files in %s. Remove what must go one named path at a '
                       'time; to list them:' % (text, where), 'git -C %s clean -n' % quote(top))
@@ -6219,7 +6485,7 @@ def git_unplaced(ctx, cmd, gc, cwd, agent=False):
 
 
 def git_branch_delete(ctx, gc, role):
-    short, longs, pos = _opts('branch', gc.rest)
+    short, longs, pos = _opts('branch', gc.rest, wide=True)
     force = 'D' in short or (('delete' in longs or 'd' in short) and ('force' in longs or 'f' in short))
     if not force:
         return None
