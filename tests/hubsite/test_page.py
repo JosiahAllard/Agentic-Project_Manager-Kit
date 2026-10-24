@@ -2517,26 +2517,22 @@ HOLD_LOCK_WAIT = """
 class HomeTest(unittest.TestCase):
     """The Home view: what waits on the owner, and the machine line read from the lock's owner routes."""
 
-    def test_the_needs_you_list_merges_approvals_questions_and_todos_in_order(self):
+    def test_the_needs_you_list_is_grouped_decisions_approvals_hand_steps(self):
         got = dom("""
             await start();
-            const first = $$("#list article").map(a => a.id), head = text($("#need-head")), chips = $$("#list .chip").map(text);
-            // Not the first to-do of the list (T-3, urgent, is): the one picked is the one opened, not the list's first row.
-            await click(button($("#need-T-1"), "Open"));
+            const rows = $$("#list article").map(a => a.id), heads = $$("#list h3").map(text), chips = $$("#list .chip").map(text);
+            const open = $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id);
+            // Not the first row of the list (T-3, urgent, is the first hand step): the one picked is the one opened, and Home stays.
+            await click($("#row-T-1"));
             const todo = [$("#sections .sec[aria-selected=true]").dataset.s, location.hash,
                           $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id), !!$("#pane-detail #todo-T-1")];
-            await click($("#sections [data-s=home]"));
-            await click(button($("#need-Q-1"), "Open"));
-            const q = [$("#sections .sec[aria-selected=true]").dataset.s, location.hash, !!$("#q-Q-1")];
-            return { first, head, chips, todo, q };
+            return { rows, heads, chips, open, todo };
         """, snapshot(strong=True, collections=NEEDS), hash="#home")
-        # urgent first (an approval is always urgent), approvals before questions before to-dos, then the oldest first;
-        # a decided approval, an answered question and a done to-do are not on the list
-        self.assertEqual([i[len("need-"):] for i in got["first"]], ["A-1", "Q-3", "T-3", "Q-2", "Q-1", "T-1"])
-        self.assertEqual(got["head"], "Waiting on you (6)")
-        self.assertEqual(got["chips"], ["Approval", "Question", "To do", "Question", "Question", "To do"])
-        self.assertEqual(got["todo"], ["todo", "#todo", ["row-T-1"], True])
-        self.assertEqual(got["q"], ["questions", "#questions", True])
+        # grouped, each group urgent first then the oldest first; a decided approval, an answered question and a done to-do are not on it
+        self.assertEqual([i[len("row-"):] for i in got["rows"]], ["Q-3", "Q-2", "Q-1", "A-1", "T-3", "T-1"])
+        self.assertEqual(got["heads"], ["Decisions (3)", "Approvals (1)", "Hand steps (2)"])
+        self.assertEqual(got["open"], ["row-Q-3"])                          # the first item is already open in the detail pane
+        self.assertEqual(got["todo"], ["home", "#home", ["row-T-1"], True])
 
     def test_an_empty_list_says_so_and_before_the_first_read_says_waiting(self):
         got = dom("""
@@ -2644,29 +2640,74 @@ class HomeTest(unittest.TestCase):
                 self.assertNotIn("script", got["tags"])
                 self.assertNotIn("img", got["tags"])
 
-    def test_opening_an_approval_from_the_needs_you_list_shows_it_in_the_approvals_section(self):
+    def test_an_approval_row_opens_its_card_in_the_detail_pane_on_home(self):
         got = dom("""
             await start();
-            await click($("#need-open-A-1"));
-            return { sec: $("#sections .sec[aria-selected=true]").dataset.s, hash: location.hash, card: !!$("#approval-A-1"),
-                     af: $("#atabs .tab[aria-selected=true]").dataset.af };
+            await click($("#row-A-1"));
+            return { sec: $("#sections .sec[aria-selected=true]").dataset.s, hash: location.hash, card: !!$("#pane-detail #approval-A-1") };
         """, snapshot(strong=True, collections=NEEDS), hash="#home")
-        self.assertEqual(got, {"sec": "approvals", "hash": "#approvals", "card": True, "af": "waiting"})
+        self.assertEqual(got, {"sec": "home", "hash": "#home", "card": True})
 
-    def test_a_wait_that_changed_nothing_leaves_the_focus_on_the_open_button(self):
+    def test_a_wait_that_changed_nothing_leaves_the_focus_on_the_row(self):
         got = dom(HOLD_LOCK_WAIT + """
             server.route = c => c.path === "/lock/view" ? { status: 200, body: V5 } : undefined;
             await start(); await visible(true);
-            const open = $("#need-open-Q-1"); open.focus();
+            const open = $("#row-Q-1"); open.focus();
             held.shift()(answer(200, Object.assign({}, V5, { changed: false }))); await settle();
-            const quiet = { focus: document.activeElement.id, same: $("#need-open-Q-1") === open, waits: held.length };
+            const quiet = { focus: document.activeElement.id, same: $("#row-Q-1") === open, waits: held.length };
             held.shift()(answer(200, V6)); await settle();
             return { quiet, loud: { focus: document.activeElement.id, line: text($("#machine")) } };
         """.replace("V5", json.dumps(lock_view(5))).replace("V6", json.dumps(dict(lock_view(6, head="12 cpu slots"), changed=True))),
             snapshot(collections=NEEDS), hash="#home")
-        # nothing changed: the cards are the same nodes and the focus is where it was; a change redraws and the focus is found again
-        self.assertEqual(got["quiet"], {"focus": "need-open-Q-1", "same": True, "waits": 1})
-        self.assertEqual(got["loud"], {"focus": "need-open-Q-1", "line": "Machine · 12 cpu slots · nothing running."})
+        # nothing changed: the rows are the same nodes and the focus is where it was; a change redraws and the focus is found again
+        self.assertEqual(got["quiet"], {"focus": "row-Q-1", "same": True, "waits": 1})
+        self.assertEqual(got["loud"], {"focus": "row-Q-1", "line": "Machine · 12 cpu slots · nothing running."})
+
+    def test_the_title_is_today_and_the_date(self):
+        got = dom("""
+            Date.now = () => Date.parse("2026-10-07T12:00:00Z");
+            await start();
+            return text($("#home-title"));
+        """, snapshot(), hash="#home")
+        self.assertEqual(got, "Today Wed 7 Oct")
+
+    def test_replies_from_the_pm_are_the_last_seven_days_newest_first(self):
+        day = lambda n: "2026-10-%02dT12:00:00Z" % (7 - n)
+        done = lambda t, n, **kw: dict({"status": "done", "kind": "question", "text": "ask " + t, "reply": "answer " + t, "version": 1,
+                                         "created_at": "2026-09-01T00:00:00Z", "done_at": day(n)}, **kw)
+        collections = {"to_pm": {"P-1": done("in", 6), "P-2": dict(done("out", 0), done_at="2026-09-29T12:00:00Z"),
+                                 "P-3": done("new", 1), "P-4": done("silent", 2, reply=""), "P-5": dict(done("sent", 2), status="sent")}}
+        got = dom("""
+            Date.now = () => Date.parse("2026-10-07T12:00:00Z");
+            await start();
+            return { rows: $$("#list article").map(a => a.id), heads: $$("#list h3").map(text), detail: !!$("#pane-detail #pm-P-3") };
+        """, snapshot(collections=collections), hash="#home")
+        # P-1 is 6 days old (in), P-2 is 8 days old (out); a note with no reply text or not yet answered is not a reply
+        self.assertEqual(got["rows"], ["row-P-3", "row-P-1"])
+        self.assertEqual(got["heads"], ["Replies from the PM (2)"])
+        self.assertTrue(got["detail"])                                      # a reply opens its message and the PM's words
+
+    def test_the_first_item_is_not_opened_by_itself_on_a_phone(self):
+        got = dom("""
+            globalThis.matchMedia = q => ({ matches: true, media: q });
+            await start();
+            return { open: $$("#list article").filter(a => a.getAttribute("aria-current") === "true").length, detail: !!$("#pane-detail article"), rows: $$("#list article").length };
+        """, snapshot(collections=NEEDS), hash="#home")
+        self.assertEqual(got, {"open": 0, "detail": False, "rows": 6})
+
+    def test_the_machine_strip_draws_the_schedule_boxes_and_links_to_it(self):
+        cpu = [{"label": "alpha", "holder": "r1", "title": "run r1"}, {"label": "free"}]
+        view = lock_view(5)
+        view["view"]["cores"]["cpu"] = cpu
+        got = dom("""
+            server.route = c => c.path === "/lock/view" ? { status: 200, body: VIEW } : undefined;
+            await start(); await visible(true);
+            const home = $$("#machine .box").map(text);
+            const link = $("#machine a");
+            await click(link);
+            return { home, hash: location.hash, sec: $("#sections .sec[aria-selected=true]").dataset.s };
+        """.replace("VIEW", json.dumps(view)), snapshot(collections=NEEDS), hash="#home")
+        self.assertEqual(got, {"home": ["alpha", "free"], "hash": "#schedule", "sec": "schedule"})
 
     def test_the_watcher_keeps_running_when_home_is_left_and_moves_the_schedule_count(self):
         got = dom(HOLD_LOCK_WAIT + """
