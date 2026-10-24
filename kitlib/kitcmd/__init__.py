@@ -1,5 +1,5 @@
 """The `kit` command: `kit <tool> [arguments]` runs `<export>/tools/<tool>.py [arguments]` of the
-plugin export the machine uses now (KIT-TOOL-STUBS-REPLACE; tools/kit.py is the entry point).
+plugin export the machine uses now, in place of stubs (tools/kit.py is the entry point).
 
   resolve(here, settings)    (export folder, None) or (None, why): the folder the machine
                              config's plugin.export_dir holds and its marketplace names
