@@ -172,7 +172,7 @@ class ListenerCase(unittest.TestCase):
         self.owner = auth.read_token(self.tokens, auth.OWNER)
         self.agent = auth.read_token(self.tokens, auth.AGENT)
         self.api = api.Api(self.store, views=Views(), clock=CLOCK,
-                           schedule_repos=lambda: [], tick_seen=lambda: None)
+                           schedule_repos=lambda: [], tick_seen=lambda: None, tick_state=lambda: {})
         self.lines = []                 # (level, text) the listeners logged
 
     def log(self, level, text):

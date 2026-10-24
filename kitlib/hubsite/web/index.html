@@ -201,8 +201,17 @@ form.add select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid
 .row[aria-current="true"]{box-shadow:inset 0 0 0 2px var(--accent)}
 .row h2{font-size:1rem}
 .dview{display:grid;gap:14px;align-content:start}
-fieldset.days{display:flex;flex-wrap:wrap;gap:6px 14px}
-.sched label.fld{display:grid;gap:4px;font-size:.85rem;color:var(--muted)}
+fieldset.days{display:flex;flex-wrap:wrap;gap:6px}
+.sched .fld{display:grid;gap:4px;font-size:.85rem;color:var(--muted)}
+.segc{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;width:max-content}
+.segc button{font:inherit;padding:6px 14px;border:0;border-radius:0;background:var(--bg);color:var(--fg);cursor:pointer}
+.segc button[aria-checked=true]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+button.daychip{font:inherit;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+button.daychip[aria-pressed=true]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);font-weight:600}
+button.daychip[aria-pressed=true]::before{content:"\2713\00a0"}
+.lock{font-size:.8rem}
+.row.muted{opacity:.62}
+.row.pc{cursor:default}
 .sched input[type=time]{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:max-content}
 .q.queued{border-left:4px solid var(--line)}
 .q.sent{border-left:4px solid var(--accent)}
@@ -1683,8 +1692,25 @@ ul.hist .sch-line{display:block}
       ". No automatic task starts until it runs again: the machine-setup extra kit-automatic-tasks runs it" + every + ".";
   }
   const cadenceText = s => s.cadence === "off" ? "Off" : s.cadence === "weekly" ? (Array.isArray(s.days) ? s.days.join(", ") : "Weekly") + " at " + s.at : s.cadence === "daily" ? "Daily at " + s.at : String(s.cadence || "?");
-  const scheduleRow = s => rowCard("schedule", { ...s, title: taskName(s.task) + " for " + String(s.repo || "?") },
-    [el("span", {class: "chip" + (s.cadence === "off" ? "" : " ok"), text: cadenceText(s)})], s.set_at ? "set " + when(s.set_at) : "");
+  // The two sweeps the PC sets (machine setup registers them as Windows tasks): shown read-only, with a lock.
+  const PC_TASKS = ["worktree-sweep", "agent-temp-sweep"];
+  const lockIcon = () => el("span", {class: "lock", title: "Set on the PC", "aria-label": "Set on the PC", role: "img", text: "🔒"});
+  // last_run, last_outcome and next_due are the server's (api.py schedules_list); next_due is the hub machine's local time.
+  const lastRunText = s => s.last_run ? when(s.last_run) : s.last_outcome === "failed" ? "failed, the tick could not start it" : s.last_outcome === "skipped" ? "skipped, the tick passed it over" : "never";
+  const nextDueText = s => s.cadence === "off" ? "not scheduled (off)" : s.next_due ? when(s.next_due) + " (the hub machine's time)" : "not known";
+  const scheduleRow = s => {
+    const pc = PC_TASKS.includes(s.task);
+    const row = rowCard("schedule", { ...s, title: taskName(s.task) + " for " + String(s.repo || "?") },
+      [pc ? lockIcon() : null, el("span", {class: "chip" + (s.cadence === "off" ? "" : " ok"), text: cadenceText(s)}),
+       s.last_run ? el("span", {class: "chip", text: "ran " + when(s.last_run)}) : null,
+       s.last_outcome === "failed" ? el("span", {class: "chip need", text: "failed"}) : null], s.set_at ? "set " + when(s.set_at) : "");
+    return row;
+  };
+  // A sweep the hub holds no schedule for: a plain row, no times (the hub cannot know the PC's).
+  const pcStaticRow = t => el("article", {class: "q row pc", id: "row-pc-" + t},
+    el("div", {class: "meta"}, lockIcon(), el("span", {class: "chip", text: "Set on the PC"})),
+    el("h2", {text: taskName(t)}),
+    el("p", {class: "sch-line", text: "Registered with Windows by machine setup. The hub holds no schedule for it, so it shows no times."}));
   function renderAutotasks(){
     if (!sched.read && !sched.busy) readSchedules();
     const t = sched.tick;
@@ -1692,12 +1718,31 @@ ul.hist .sch-line{display:block}
       sched.err ? el("p", {class:"gone", role:"status", text: "The schedules could not be read: " + sched.err}) : null,
       el("p", {class: t && !t.running ? "gone" : "status", role:"status", id:"tick-line", text: tickText(t)}),
       el("div", {class:"act"}, el("button", {class:"primary", type:"button", id:"sched-new", text:"New schedule", disabled: !ready, onclick: () => pickRow("schedule", "new")}))];
-    const offered = sched.items.map(s => ["schedule", s]);
+    const mine = sched.items.filter(s => !PC_TASKS.includes(s.task)), pc = sched.items.filter(s => PC_TASKS.includes(s.task));
+    const offered = [...mine, ...pc].map(s => ["schedule", s]);
     if (state.sel && state.sel.kind === "schedule" && state.sel.id === "new") offered.push(["schedule", { id: "new" }]);
     const at = settle(offered);
-    show([], head, sched.items.length ? sched.items.map(s => drawn(scheduleRow, s))
-      : el("div", {class:"empty"}, el("strong", {text: !sched.read ? "Reading the schedules…" : "No automatic tasks scheduled"}), "Each schedule runs one of the kit's tasks for one repo, daily or on the days you pick."));
+    show([], head, el("h3", {class: "sch-group", text: "Schedules"}), mine.length ? mine.map(s => drawn(scheduleRow, s))
+      : el("div", {class:"empty"}, el("strong", {text: !sched.read ? "Reading the schedules…" : "No automatic tasks scheduled"}), "Each schedule runs one of the kit's tasks for one repo, daily or on the days you pick."),
+      sched.read ? [el("h3", {class: "sch-group", text: "Set on the PC"}), ...pc.map(s => drawn(scheduleRow, s)),
+        ...PC_TASKS.filter(t => !pc.some(s => s.task === t)).map(pcStaticRow)] : null);
     pickDetail(at);
+  }
+  // Last run and next due, from the schedule as the server holds it (not the form's unsaved edits).
+  function schedFacts(d){
+    const last = el("p", {class: "sch-line", id: "s-" + d.id + "-last"}), next = el("p", {class: "sch-line", id: "s-" + d.id + "-next"});
+    const paint = s => { last.textContent = "Last run: " + lastRunText(s); next.textContent = "Next due: " + nextDueText(s); };
+    paint(d);
+    return { nodes: [last, next], paint };
+  }
+  // A schedule the PC sets: read-only, nothing to save.
+  function pcScheduleCard(d){
+    const facts = schedFacts(d);
+    return el("article", {class: "q sched pc", id: "sched-" + d.id},
+      el("div", {class: "meta"}, lockIcon(), el("span", {class: "id", text: String(d.id)}), d.set_at ? el("span", {text: "set " + when(d.set_at) + (d.via ? " via " + d.via : "")}) : null),
+      el("h2", {text: taskName(d.task) + " for " + String(d.repo || "?")}),
+      el("p", {class: "sch-line", text: "Set on the PC: machine setup registers this task with Windows, so it is shown here and cannot be changed here."}),
+      el("p", {class: "sch-line", text: "Schedule: " + cadenceText(d)}), ...facts.nodes);
   }
   // A schedule's form. Task and repo name the schedule, so they are picked only for a new one.
   function scheduleCard(d){
@@ -1706,12 +1751,14 @@ ul.hist .sch-line{display:block}
     // until: the version a save of this form wrote. The form is kept until the list read holds that version, so a
     // redraw before the read after the save lands shows what was saved, not the row as it stood before.
     const isNew = d.id === "new";
+    if (!isNew && PC_TASKS.includes(d.task)) return pcScheduleCard(d);
     const told = sched.said.get(d.id);
     if (told && told.version != null && d.version != null && Number(d.version) !== told.version) sched.said.delete(d.id);
     let old = sched.forms.get(d.id);
     if (old && old.until != null && !old.saving && Number(d.version) >= old.until) { sched.forms.delete(d.id); old = null; }
     if (old && (old.dirty || (old.version === d.version && old.ready === ready))) {
       if (!old.saving) old.save.disabled = !ready;
+      if (old.paint && !isNew) old.paint(d);
       return old.node;
     }
     // what the owner picked on a new form refused because this schedule exists: drawn here, unsaved, at this version
@@ -1725,18 +1772,28 @@ ul.hist .sch-line{display:block}
     const onIt = () => state.section === "autotasks" && !!state.sel && state.sel.kind === "schedule" && String(state.sel.id) === String(d.id);
     const pick = (label, opts, v) => { const s = el("select", {"aria-label": label, id: "s-" + d.id + "-" + label.toLowerCase().replace(/ /g, "-"), onchange: touch}, opts.map(([val, txt]) => el("option", {value: val, text: txt}))); s.value = v; return s; };
     const repos = knownRepos();
-    const task = isNew ? pick("Task", TASKS, TASKS[0][0]) : null, repo = isNew ? pick("Repo", repos.map(r => [r, r]), repos[0] || "") : null;
-    const cad = pick("How often", [["daily", "Every day"], ["weekly", "On the days picked"], ["off", "Off"]], v0.cadence || "daily");
+    // A new schedule is for a task the owner sets; the two sweeps are set on the PC and are not offered here.
+    const task = isNew ? pick("Task", TASKS.filter(([t]) => !PC_TASKS.includes(t)), "maint-lint") : null, repo = isNew ? pick("Repo", repos.map(r => [r, r]), repos[0] || "") : null;
+    // How often: a segmented control (radio buttons), `cadence` is what it holds. Days: one chip per day, aria-pressed.
+    let cadence = ["off", "daily", "weekly"].includes(v0.cadence) ? v0.cadence : "daily";
+    const segs = [["off", "Off"], ["daily", "Daily"], ["weekly", "Weekly"]].map(([v, t]) => [v, el("button", {type:"button", role:"radio", id: "s-" + d.id + "-how-often-" + v, text: t, onclick: () => setCadence(v, true)})]);
+    const cad = el("div", {class:"segc", role:"radiogroup", "aria-label":"How often", id: "s-" + d.id + "-how-often"}, segs.map(([, b]) => b));
     const at = el("input", {type:"time", id: "s-" + d.id + "-at", "aria-label":"At", oninput: touch, onchange: touch}); at.value = v0.at || "03:00";
-    const boxes = WEEK.map(w => { const b = el("input", {type:"checkbox", id: "s-" + d.id + "-" + w, onchange: touch}); b.checked = Array.isArray(v0.days) && v0.days.includes(w); return [w, b]; });
-    const days = el("fieldset", {class:"days", hidden: cad.value !== "weekly"}, el("legend", {text:"Days"}), boxes.map(([w, b]) => el("label", {class:"urg", for: b.id}, b, " " + w)));
-    cad.addEventListener("change", () => { days.hidden = cad.value !== "weekly"; });
+    const chips = WEEK.map(w => { const b = el("button", {type:"button", class:"daychip", id: "s-" + d.id + "-" + w, "aria-pressed": Array.isArray(v0.days) && v0.days.includes(w) ? "true" : "false", text: w}); b.addEventListener("click", () => { b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true"); touch(); }); return [w, b]; });
+    const pickedDays = () => chips.filter(([, b]) => b.getAttribute("aria-pressed") === "true").map(([w]) => w);
+    const days = el("fieldset", {class:"days", hidden: cadence !== "weekly"}, el("legend", {text:"Days"}), chips.map(([, b]) => b));
+    function setCadence(v, user){
+      cadence = v; days.hidden = v !== "weekly";
+      segs.forEach(([x, b]) => b.setAttribute("aria-checked", x === v ? "true" : "false"));
+      if (user) touch();
+    }
+    setCadence(cadence, false);
     const st = el("span", {class:"status", role:"status", id: "s-" + d.id + "-status", text: (sched.said.get(d.id) || {}).text || ""}); f.st = st;
     const save = el("button", {class:"primary", type:"button", text:"Save", disabled: !ready}); f.save = save;
     save.addEventListener("click", async () => {
       if (!ready || f.saving) return;
-      const body = { task: isNew ? task.value : d.task, repo: isNew ? repo.value : d.repo, cadence: cad.value, at: at.value };
-      if (cad.value === "weekly") body.days = boxes.filter(([, b]) => b.checked).map(([w]) => w);
+      const body = { task: isNew ? task.value : d.task, repo: isNew ? repo.value : d.repo, cadence, at: at.value };
+      if (cadence === "weekly") body.days = pickedDays();
       f.dirty = true; f.saving = true; save.disabled = true; st.className = "status"; st.textContent = "Saving…";
       const sent = f.edits;
       let r;
@@ -1802,7 +1859,7 @@ ul.hist .sch-line{display:block}
       const line = keep ? "This task and repo already has a schedule: it is open here, with the changes you had not saved on it. Save sets them."
         : "This task and repo already has a schedule: it is open here, with what you picked, not saved yet. Save sets it.";
       // carried from the controls as they are now, so an edit made while the list was read goes with it
-      const picked = { cadence: cad.value, at: at.value, days: cad.value === "weekly" ? boxes.filter(([, b]) => b.checked).map(([w]) => w) : [] };
+      const picked = { cadence, at: at.value, days: cadence === "weekly" ? pickedDays() : [] };
       if (keep) { have.st.className = "status"; have.st.textContent = line; }
       else { sched.forms.delete(cid); sched.carry.set(cid, picked); }
       sched.said.set(cid, { text: line, version: Number(cur.version) > 0 ? Number(cur.version) : null });
@@ -1811,10 +1868,14 @@ ul.hist .sch-line{display:block}
       schedRedraw();
     }
     const fld = (label, c) => el("label", {class:"fld", for: c.id}, label, c);
+    const facts = isNew ? null : schedFacts(d);
+    if (facts) f.paint = facts.paint;
     f.node = el("article", {class:"q sched", id: "sched-" + d.id},
       el("div", {class:"meta"}, el("span", {class:"id", text: isNew ? "New schedule" : String(d.id)}), d.set_at ? el("span", {text: "set " + when(d.set_at) + (d.via ? " via " + d.via : "")}) : null),
       el("h2", {text: isNew ? "A new automatic task" : taskName(d.task) + " for " + String(d.repo || "?")}),
-      isNew ? fld("Task", task) : null, isNew ? fld("Repo", repo) : null, fld("How often", cad), fld("At (24-hour)", at), days,
+      isNew ? fld("Task", task) : null, isNew ? fld("Repo", repo) : null,
+      el("div", {class:"fld"}, el("span", {text:"How often"}), cad), days, fld("At (24-hour)", at),
+      ...(facts ? facts.nodes : []),
       el("div", {class:"act"}, save, st));
     return f.node;
   }
@@ -1889,6 +1950,7 @@ ul.hist .sch-line{display:block}
     const row = rowCard("finding", { id: d.id, title: d.target || "(no target)" }, findingChips(d),
       d.status != null ? (d.marked_at ? "marked " + when(d.marked_at) : "") : ageText(d.age));
     row.append(el("p", {class:"ctx", text: String(d.text || "")}));
+    if (d.status != null) row.classList.add("muted");
     return row;
   }
   // Each repo's last run, as context: its ledger as counts only, and a skip only when the skip marker is later than
@@ -1910,14 +1972,80 @@ ul.hist .sch-line{display:block}
     if (!lint.read && !lint.busy) readFindings();
     const open = lint.items.map(f => ({ ...f, id: f.fingerprint }));
     for (const [id, f] of [...lint.forms]) if (!f.saving && !f.reading && !open.some(x => x.id === id)) lint.forms.delete(id);
-    const all = [...open, ...lint.marks];
+    // New this run: the lint flags it `new` (its fingerprint was not in the repo's previous run). Still open: the rest.
+    // Handled: the marked ones, muted. A group with no rows is left out.
+    const groups = [["New this run", open.filter(d => d.new === true)], ["Still open", open.filter(d => d.new !== true)], ["Handled", lint.marks]].filter(g => g[1].length);
+    const all = groups.flatMap(g => g[1]);
     const at = settle(all.map(d => ["finding", d]));
     const head = [lint.err ? el("p", {class:"gone", role:"status", text: "Could not read " + lint.err + "."}) : null, ...runLines()];
-    show([], head, all.length ? all.map(d => drawn(findingRow, d))
+    show([], head, all.length ? groups.flatMap(([t, rows]) => [el("h3", {class:"sch-group", text: t + " (" + rows.length + ")"}), ...rows.map(d => drawn(findingRow, d))])
       : el("div", {class:"empty"}, el("strong", {text: !lint.read ? "Reading the findings…" : "No findings"}), "What the maintenance lint's last run of each repo found shows here, with what can be done about it."));
     pickDetail(at);
   }
   function goRecord(repo, id){ state.section = "backlog"; state.sfilter = "current"; state.repo = ""; $("#repo").value = ""; openRecord(canonRepo(repo) || String(repo || ""), id); }
+  // One record check's action, run in the finding's detail pane against the owner routes the record page uses: the record is
+  // read for its fields and version; an edit is pinned to that version, and Unblock and Retire (whose routes take none)
+  // read the record again first and refuse when its version moved. The ruling id appears only when the store asks for one.
+  function findingAct(d, id, f){
+    const act = FINDING_ACTS[d.check], repo = canonRepo(d.repo) || String(d.repo || "");
+    const path = "/records/" + seg(repo) + "/" + seg(id);
+    const box = el("div", {class:"pk", id: "fa-" + d.id + "-" + id}, el("h2", {text: act + " " + id}));
+    const st = el("span", {class:"status", role:"status", text:"Reading…"});
+    const say = (cls, t) => { st.className = cls; st.textContent = t; };
+    box.append(st);
+    (async () => {
+      let rec;
+      try { rec = await hub.call("GET", path); } catch (e) { say("status err", "Cannot read " + id + ": " + why(e)); return; }
+      if (rec.where !== "open") { say("status", id + " is " + rec.where + (rec.removed ? " (" + rec.removed.how + ")" : "") + ": there is nothing to change here."); return; }
+      const ruling = rulingField(); ruling.id = box.id + "-ruling";
+      const go = el("button", {class: act === "Retire" ? "danger" : "primary", type:"button", text: act === "Retire" ? "Retire " + id : "Save"});
+      const touched = () => { f.edits++; };
+      const same = async () => { const now = await hub.call("GET", path); if (now.version !== rec.version) throw new Error(id + " changed since it was read here (version " + rec.version + " to " + now.version + "). Close and open this again."); };
+      const field = (k) => rec.fields.filter(x => x[0] === k).map(x => x[1]);
+      let inputs, send;
+      if (act === "Set priority") {
+        const pr = el("input", {type:"text", "aria-label":"Priority", id: box.id + "-priority", oninput: touched}); pr.value = field("priority")[0] || "";
+        inputs = [pr];
+        send = async () => { const v = pr.value.trim(); if (!v) throw new Error("Give a priority."); if (v === (field("priority")[0] || "")) return null;
+          return write(path + "/edit", ruling.put({ version: rec.version, changes: { priority: [v] } })); };
+      } else if (act === "Edit scope") {
+        const sc = el("textarea", {"aria-label":"Scope: one path per line", id: box.id + "-scope", oninput: touched}); sc.value = field("scope").join("\n");
+        inputs = [sc];
+        send = async () => { const v = sc.value.split("\n").map(s => s.trim()).filter(Boolean); if (!v.length) throw new Error("Give at least one path.");
+          if (JSON.stringify(v) === JSON.stringify(field("scope"))) return null;
+          return write(path + "/edit", ruling.put({ version: rec.version, changes: { scope: v } })); };
+      } else if (act === "Unblock") {
+        const members = rec.blockers.map(b => b.value);
+        if (!members.length) { say("status", id + " is not blocked."); return; }
+        const on = el("select", {"aria-label":"Blocker to clear", id: box.id + "-on", onchange: touched}, ...members.map(m => el("option", {value: m, text: m})));
+        const named = d.target.trim().split(/\s+/)[1];                 // a dead-blocker finding names the member: "<id> <member>"
+        if (members.includes(named)) on.value = named;
+        const reason = el("input", {type:"text", placeholder:"Why it is clear", "aria-label":"Why it is clear", id: box.id + "-reason", oninput: touched});
+        inputs = [members.length > 1 ? on : null, reason];
+        send = async () => { await same(); return write(path + "/unblock", ruling.put({ ...(members.length > 1 ? { on: on.value } : {}), ...(reason.value.trim() ? { reason: reason.value.trim() } : {}) })); };
+      } else {
+        const why_ = el("input", {type:"text", placeholder:"Why retire it", "aria-label":"Why retire it", id: box.id + "-why", oninput: () => { touched(); check(); }});
+        const typed = el("input", {type:"text", placeholder:"Type " + id + " to confirm", "aria-label":"Type the id to confirm", id: box.id + "-confirm", oninput: () => { touched(); check(); }});
+        const check = () => { go.disabled = !(why_.value.trim() && typed.value.trim() === id); };
+        go.disabled = true; inputs = [why_, typed];
+        send = async () => { await same(); return write(path + "/delete", ruling.put({ why: why_.value.trim(), confirm: typed.value.trim() })); };
+      }
+      go.addEventListener("click", async () => {
+        if (go.disabled) return;
+        go.disabled = true; say("status", "Saving…");
+        let out;
+        try { out = await send(); } catch (e) { say("status err", "Not done: " + why(e)); ruling.ask(e); go.disabled = false; return; }
+        if (out === null) { say("status", "Nothing changed."); go.disabled = false; return; }
+        say("status", act + " done on " + id + ".");
+        lint.said.set(d.id, { text: act + " done on " + id + ".", kept: null });
+        try { await readFindings(); } catch (e) {}
+        lintRedraw();
+      });
+      st.textContent = "";
+      box.append(...inputs.filter(Boolean), ruling, el("div", {class:"act"}, go, st));
+    })();
+    return box;
+  }
   function findingCard(d){
     const told = lint.said.get(d.id);
     const say = told ? el("p", {class:"status", role:"status", id: "f-" + d.id + "-status", text: told.text}) : null;
@@ -1976,10 +2104,20 @@ ul.hist .sch-line{display:block}
       lint.forms.delete(d.id);
       lintRedraw();
     }
-    const recs = findingRecords(d).map(id => el("button", {class:"link", type:"button", text: FINDING_ACTS[d.check] + " " + id,
-      "aria-label": FINDING_ACTS[d.check] + " " + id + ": opens its record page", onclick: () => goRecord(d.repo, id)}));
+    // The record check's action runs here, in a panel under its button; "Open the record" is the way to its page.
+    const panels = el("div", {class:"pmf"});
+    const recs = findingRecords(d).map(id => {
+      const b = el("button", {class:"link", type:"button", text: FINDING_ACTS[d.check] + " " + id, "aria-label": FINDING_ACTS[d.check] + " " + id});
+      let panel = null;
+      b.addEventListener("click", () => {
+        f.edits++;                                  // an open panel keeps this card through a redraw
+        if (panel) { panel.hidden = !panel.hidden; return; }
+        panel = findingAct(d, id, f); panels.append(panel);
+      });
+      return [b, el("button", {class:"link", type:"button", text:"Open " + id, "aria-label":"Open the record " + id, onclick: () => goRecord(d.repo, id)})];
+    }).flat();
     f.ta = ta; f.st = st;
-    f.node = el("article", {class:"q", id: "finding-" + d.id}, ...facts, recs.length ? el("div", {class:"act"}, ...recs) : null,
+    f.node = el("article", {class:"q", id: "finding-" + d.id}, ...facts, recs.length ? el("div", {class:"act"}, ...recs) : null, recs.length ? panels : null,
       el("label", {class:"fld", for: ta.id}, "Note to the PM", ta), el("div", {class:"act"}, pass, dismiss, st));
     return f.node;
   }
