@@ -37,17 +37,20 @@ a constructor argument, and the defaults read this machine.
                      variable alone is never proof.
   gate_ok(root, sha) kitlib.gate.runner.verify_record: the record must name a config_rev in
                      sha's history and hash the gate config that commit holds
-  user()             the machine config (ledger_path and the guard_* keys), read
+  user()             the machine config (ledger_path, ledger_dir and the guard_* keys), read
                      tolerantly: files the strict reader refuses only for keys this kit does not
-                     know still yield their ledger_path and their string or string-list values,
-                     each key from its own file (kitlib.config.user POLICY_KEYS from config.json,
-                     LOCAL_KEYS from local.json) and a relative ledger_path read against the PM
-                     repository. A file that cannot be read or is not a JSON object, or a
-                     ledger_path that is not a path string, sets 'broken' (why), and the ledger
-                     rule then denies every subagent write. Missing files are an empty config, not
+                     know still yield their ledger_path, ledger_dir and their string or
+                     string-list values, each key from its own file (kitlib.config.user
+                     POLICY_KEYS from config.json, LOCAL_KEYS from local.json) and a relative
+                     ledger_path or ledger_dir read against the PM repository. A file that cannot
+                     be read or is not a JSON object, or a ledger_path or ledger_dir that is not a
+                     path string, sets 'broken' (why), and the ledger rule then denies every
+                     subagent write. Missing files are an empty config, not
                      a broken one. The files are the ones config_location() names; an UNMOVED or
                      BAD location sets 'broken' too (fail closed), and an UNMOVED one's home
                      leftover is still read, so its ledger_path stays protected.
+  ledger_files()     kitlib.ledger.files.of_config over user(): where the ledger's log files,
+                     standing digest and rulebooks' folder are (the ledger rule), or None
   config_location()  kitlib.config.user.locate(home) with the PM-repo pointer read once from the
                      registry (kitlib.config.pointer.read_raw; pm_repo_pointer shares that read)
                      and checked by kitlib.config.pointer.read with place()'s classify and the
@@ -91,6 +94,7 @@ from kitlib.guard import place as fsplace
 ROLE_ENV = sessionmark.ENV
 OWNER = 'owner'
 SUBAGENT = 'subagent'
+LEDGER_KEYS = ('ledger_path', 'ledger_dir')     # the paths the ledger rule protects (_tolerant)
 
 
 def default_session_role(action, environ):
@@ -402,6 +406,10 @@ class Ctx(object):
                 self._user = self._tolerant(str(e))
         return self._user
 
+    def ledger_files(self):
+        from kitlib.ledger import files
+        return files.of_config(self.user())
+
     def _tolerant(self, why):
         out = {k: None for k in kuser.SCHEMA}
         out['error'] = why
@@ -425,17 +433,19 @@ class Ctx(object):
                     out[k] = v
                 elif isinstance(v, list) and v and all(isinstance(x, str) and x.strip() for x in v):
                     out[k] = list(v)
-            if 'ledger_path' not in keys:
-                continue
-            lp = data.get('ledger_path')
-            if lp is not None and not isinstance(lp, str):
-                out['broken'] = 'ledger_path must be a string, not %r' % (lp,)
-            elif isinstance(lp, str) and lp.strip() and not os.path.isabs(lp):
-                if loc.pm:
-                    out['ledger_path'] = kuser.resolved({'ledger_path': lp}, loc.pm)['ledger_path']
-                else:
-                    out['broken'] = 'ledger_path must be an absolute path, not %r' % lp
-                    out['ledger_path'] = None
+            for k in LEDGER_KEYS:
+                if k not in keys:
+                    continue
+                lp = data.get(k)
+                if lp is not None and not isinstance(lp, str):
+                    out['broken'] = '%s must be a string, not %r' % (k, lp)
+                    out[k] = None
+                elif isinstance(lp, str) and lp.strip() and not os.path.isabs(lp):
+                    if loc.pm:
+                        out[k] = kuser.resolved({k: lp}, loc.pm)[k]
+                    else:
+                        out['broken'] = '%s must be an absolute path, not %r' % (k, lp)
+                        out[k] = None
         if loc.error:
             # UNMOVED: the home folder's leftover is read for its ledger_path, so the ledger stays
             # protected, and the config is still broken (every subagent write is denied)

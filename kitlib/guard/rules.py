@@ -39,7 +39,10 @@ Rules, in the order they are checked:
                    the guard cannot read where the verb could be counts), in any session but the
                    owner's own. Text that only names the hub tool (prose, a pipe of a run into
                    another program) is not read
-  ledger          an edit of the machine config's ledger_path, by anyone
+  ledger          an edit of the machine config's ledger_path, of the rulebooks' folder or a
+                   `.md` file directly in it, or of the standing digest (kitlib.ledger.files
+                   of_config: `rules` and STANDING.md in ledger_dir, else beside ledger_path), by
+                   anyone; with a broken machine config, every subagent write
   lock-state       an agent session's edit of a file in the machine lock's state folder
   machine-config   an edit of a file in the PM repository's machine config folder
                    (<pointer>/.pm-kit) or in a .pm-kit folder at the top of a checkout, in any
@@ -85,6 +88,7 @@ A command line the parser cannot read cleanly also goes through kitlib.guard.fal
 unreadable, is a warning by default).
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
+import fnmatch
 import json
 import ntpath
 import os
@@ -299,9 +303,9 @@ def shell_command(event, ctx, text, shell, cwd, role):
     hub_rules = HubShell(event, ctx, parsed)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, wrapped_gate,
-                     root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path, owner_identity,
-                     kill_by_name, shell_writes, git_plain_commit, interpreter_git):
+        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, ledger_git,
+                     wrapped_gate, root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path,
+                     owner_identity, kill_by_name, shell_writes, git_plain_commit, interpreter_git):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -1022,8 +1026,211 @@ def hub_mcp(event, ctx, tool, role):
 
 # ---------------------------------------------------------------- edits: ledger and main checkout
 
-def same_file(a, b):
-    return paths.norm(a, absolute=True) == paths.norm(b, absolute=True)
+def stream_free(path):
+    """`path` with an NTFS stream suffix (`:name`, `::$DATA`, `:name:$DATA`) dropped from each of
+    its parts after the drive: `STANDING.md::$DATA` opens STANDING.md itself."""
+    drive, rest = os.path.splitdrive(path)
+    parts = re.split(r'([\\/])', rest)
+    return drive + ''.join(p.split(':', 1)[0] if i % 2 == 0 else p for i, p in enumerate(parts))
+
+
+LONG_PREFIX = re.compile(r'[\\/]{2}[?.][\\/]|(?:[A-Za-z]:)?[\\/]\?\?[\\/]')
+
+
+def unprefixed(path):
+    r"""`path` without a Win32 namespace prefix (`\\?\`, `\\.\`, `\??\`, either slash), which
+    opens the same file: `\\?\<drive>:\pm\STANDING.md` is `<drive>:\pm\STANDING.md`, and
+    `\\?\UNC\host\share` is `\\host\share`. `\??\` is also dropped after a drive
+    (`<drive>:\??\<drive>:\pm`): abspath reads it as a
+    folder of the current drive, but Windows opens it as the NT name it is, and no folder is
+    named `??`. A prefixed name of another form (`\\?\Volume{...}\`) is left whole for realpath,
+    which gives the drive name of a file that exists."""
+    m = LONG_PREFIX.match(path)
+    if not m:
+        return path
+    rest = path[m.end():]
+    if rest[:4].lower() in ('unc\\', 'unc/'):
+        return '\\\\' + rest[4:]
+    return rest if re.match(r'[A-Za-z]:(?:[\\/]|$)', rest) else path
+
+
+def file_key(path):
+    """`path` as the filesystem opens it, to compare: a namespace prefix dropped (unprefixed),
+    absolute, a stream suffix dropped (stream_free), a trailing dot or space dropped (abspath:
+    `alpha.md.` is `alpha.md`), then links, junctions and 8.3 short names resolved and case folded
+    (jail.real), as lock_state compares; a prefix realpath keeps or gives (a volume GUID name) is
+    dropped from that too."""
+    return unprefixed(jail.real(os.path.abspath(stream_free(os.path.abspath(unprefixed(path))))))
+
+
+def ledger_guarded(ctx):
+    """[(kind, real path)] of what the ledger rule holds: 'log' for ledger_path, 'rulebook' for
+    the rulebooks' folder and 'digest' for the standing digest (kitlib.ledger.files.of_config over
+    the machine config, Ctx.ledger_files). Paths are file_key()ed."""
+    out = []
+    ledger = ctx.user().get('ledger_path')
+    if ledger:
+        out.append(('log', file_key(ledger)))
+    files = ctx.ledger_files()
+    if files is not None:
+        if files.rules:
+            out.append(('rulebook', file_key(files.rules)))
+        if files.digest:
+            out.append(('digest', file_key(files.digest)))
+    return out
+
+
+def ledger_kind(ctx, target):
+    r"""What of the ledger `target` is: 'log' for the ledger file, 'rulebook' for the rulebooks'
+    folder or a `.md` file directly in it, 'digest' for the standing digest, else None. Names
+    compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
+    space, a namespace prefix, links, junctions and 8.3 names), first as the literal name (an
+    edit's path is never a wildcard: `[PM]` is a folder name), then, when it has a wildcard
+    character after its namespace prefix (a DOS one too, LEDGER_GLOB_CHARS), as a wildcard that is any of them it can match
+    (ledger_glob; the prefix's own `?` is no wildcard). A `\??\` unprefixed leaves (no drive after
+    it) is read both ways: as a prefix, and as a `??` wildcard folder (`<drive>:/??/STANDING.md`
+    names `<drive>:\pm\STANDING.md`)."""
+    full = file_key(target)
+    for kind, real in ledger_guarded(ctx):
+        if full == real or (kind == 'rulebook' and os.path.dirname(full) == real and full.endswith('.md')):
+            return kind
+    bare_target = unprefixed(target)
+    end = prefix_end(bare_target)
+    starts = (end, 0) if end and not re.match(r'[\\/]{2}', bare_target) else (end,)
+    for start in starts:
+        if any(c in LEDGER_GLOB_CHARS for c in bare_target[start:]):
+            kind = ledger_glob(ctx, bare_target, start)
+            if kind:
+                return kind
+    return None
+
+
+# FindFirstFile also reads `<` (DOS_STAR), `>` (DOS_QM) and `"` (DOS_DOT) as wildcards: `cmd /c del
+# "STANDING<"` deletes STANDING.md. ledger_glob matches each as `*`, which matches all they can
+# (fail closed); no file name holds one, so none is read as a literal name.
+LEDGER_GLOB_CHARS = hubg.GLOB_CHARS | frozenset('<>"')
+DOS_WILDCARDS = str.maketrans('<>"', '***')
+
+
+def prefix_end(path):
+    r"""Where a namespace prefix unprefixed leaves (`\\?\Volume{...}\`) ends in `path`, else 0."""
+    m = LONG_PREFIX.match(path)
+    return m.end() if m else 0
+
+
+def ledger_glob(ctx, target, start=0):
+    """ledger_kind for the wildcard path `target`: the literal folder it starts in (file_key), and
+    each part after it matched (case folded, a stream suffix dropped, as glob matching reads it)
+    against the matching part of a held path below that folder. A file is matched by a wildcard
+    of the same depth; the rulebooks' folder also by one a part deeper (a file in it), and every
+    wildcard that starts in it is a rulebook (fail closed: `rules/*.txt`); `**` or `..` after the
+    wildcard matches every held path below the folder. A part also matches a name it spells
+    literally (`[PM]` the folder `[PM]`). A wildcard is searched for from `start` (past a namespace
+    prefix, prefix_end, whose `?` is none); a DOS wildcard (LEDGER_GLOB_CHARS) is one too, matched
+    as `*`."""
+    first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
+    cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
+    base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
+    b = file_key(base)
+    parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
+             if x and x != '.']
+    wide = any('**' in x or x == '..' for x in parts)
+    for kind, real in ledger_guarded(ctx):
+        if kind == 'rulebook' and b == real:
+            return kind
+        if real == b or not jail.inside(real, b):
+            continue
+        below = real[len(b.rstrip('\\/')) + 1:].split(os.sep)
+        deeper = kind == 'rulebook' and len(parts) == len(below) + 1
+        if wide or ((len(parts) == len(below) or deeper) and
+                    all(n == x or fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts))):
+            return kind
+    return None
+
+
+def ledger_git(event, ctx, cmd, inv, cwd, role):
+    """git run in a work tree that holds part of the ledger (outside git: run in a folder that
+    holds it) whose pathspec reaches that part (ledger_kind's files): rm and mv, restore (not
+    --staged alone, and only when every long option is one GIT_LONGS names: `--w` is
+    `--worktree` to git, and _canon_long leaves a one-letter body as written), checkout-index, and checkout of paths (after `--`, or every positional word
+    without one: git reads a word that names no branch as a path). A pathspec reaches a held path
+    as kitlib.guard.delegfile.covers reads it (the path, a folder above it, a wildcard whose
+    literal folder is above it; a computed word or unread magic always), or is a `.md` file
+    directly in the rulebooks' folder (a wildcard there: its literal folder, that folder). A
+    branch name is read as a path too (fail closed: `git checkout pm` from
+    the folder above the ledger's). Paths read from elsewhere (git_every_path:
+    `--pathspec-from-file`, checkout-index `-a` or `--stdin`) reach every path of the tree."""
+    gc = git_call_judged(inv)
+    if gc is None or gc.sub_dyn or not gc.dir or gc.unknown or gc.blind:
+        return None
+    sub, args = gc.sub, gc.rest
+    if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout'):
+        return None
+    held = ledger_guarded(ctx)
+    if not held:
+        return None
+    from . import delegfile
+    short, longs, pos = _opts(sub, args)
+    if sub == 'restore' and restore_index_only(short, longs):
+        return None                             # the index alone
+    if sub == 'checkout':
+        after = delegfile.after_dashes(args)
+        pos = after if after is not None else pos
+    place = ctx.place(gc.dir)
+    top = place.top if place.kind in (repo.MAIN, repo.LINKED) and place.top else gc.dir
+    tree = jail.real(top)
+    held = [(kind, real) for kind, real in held if jail.inside(real, tree)]
+    every = git_every_path(sub, short, longs)
+    if every and held:
+        kind = held[0][0]
+        return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), every)),
+                      ledger_instead(ctx, kind))
+    for w in pos:
+        spec = delegfile.spec_real(ctx, w, gc.dir, top)
+        if spec is False:
+            continue                            # an exclusion names nothing to write
+        for kind, real in held:
+            if spec is True or jail.inside(real, spec) or (
+                    kind == 'rulebook' and os.path.dirname(spec) == real and spec.endswith('.md')):
+                return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), w.text)),
+                              ledger_instead(ctx, kind))
+    return None
+
+
+def git_every_path(sub, short, longs):
+    """The option of a ledger_git call that takes its paths from where the guard cannot read
+    them, so they can be every path, else None: `--pathspec-from-file` (rm, restore, checkout; any
+    abbreviation git could read as it), and checkout-index's `-a`/`--all` and `--stdin`."""
+    if sub in ('rm', 'restore', 'checkout'):
+        for n in sorted(longs):
+            if len(n) > 1 and 'pathspec-from-file'.startswith(n):
+                return '--' + n
+    if sub == 'checkout-index':
+        if 'a' in short:
+            return '-a'
+        for n in sorted(longs):
+            if n and ('all'.startswith(n) or 'stdin'.startswith(n)):
+                return '--' + n
+    return None
+
+
+def ledger_instead(ctx, kind):
+    if kind == 'log':
+        return ('python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
+                '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
+    return 'python %s conflicts --repo <repo> --topic "<topic>" --key <key> --text "<rule>"' % kit_tool(ctx, 'ledger')
+
+
+STANDING_WHY = {
+    'log': '%s writes the rulings ledger, which only ledger.py writes. Add the entry with the kit\'s '
+           'tools/ledger.py add (docs/ledger.md).',
+    'rulebook': '%s writes a rulebook, which only ledger.py writes, each rule change paired with a log entry: read '
+                'the proposed rule against the others with conflicts, then add it with add --rule KEY --topic '
+                'TOPIC --checked HASH, or remove one with rule-drop (docs/ledger.md "Rulebooks").',
+    'digest': '%s writes the standing digest, which the rulebooks replace: it is read, never written, until it '
+              'goes, and a standing rule goes in a rulebook through ledger.py: conflicts, then add --rule '
+              '(docs/ledger.md "Rulebooks").',
+}
 
 
 def ledger_rule(ctx, target, role, what):
@@ -1034,13 +1241,12 @@ def ledger_rule(ctx, target, role, what):
                       'guard cannot tell where the rulings ledger is and refuses every subagent write. The owner '
                       'or the PM session fixes it.' % (what, ctx.config_location().display(), broken),
                       'python -m json.tool %s' % quote(ctx.config_location().path))
-    ledger = user.get('ledger_path')
-    if not ledger or not target or not same_file(target, ledger):
+    if not target:
         return None
-    return refuse('ledger', role, '%s writes the rulings ledger, which only ledger.py writes. '
-                  "Add the entry with the kit's tools/ledger.py add (docs/ledger.md)." % what,
-                  'python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
-                  '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
+    kind = ledger_kind(ctx, target)
+    if kind is None:
+        return None
+    return refuse('ledger', role, STANDING_WHY[kind] % what, ledger_instead(ctx, kind))
 
 
 def lock_state_dir(ctx):
@@ -3952,12 +4158,27 @@ GIT_SHORT_VALUES = {'commit': 'mFCct', 'restore': 's', 'clean': 'e', 'push': 'o'
 
 def _canon_long(sub, body):
     """The long options `--body` selects for `sub`: itself when exact or unknown, the one it
-    abbreviates, or every one it could abbreviate (an ambiguous prefix fails closed)."""
+    abbreviates, or every one it could abbreviate (an ambiguous prefix fails closed). git reads
+    `--no-<prefix>` as the negation of an option too (`--no-st` is `--no-staged`), so `--no`,
+    `--no-` and `--no-<prefix>` also select `no-<name>` for each name the prefix abbreviates."""
     table = GIT_LONGS.get(sub, ())
     if body in table or len(body) < 2:
         return [body]
     hits = [n for n in table if n.startswith(body)]
+    if body.startswith('no-') or 'no-'.startswith(body):
+        hits += ['no-' + n for n in table if n.startswith(body[3:]) and not n.startswith('no-')
+                 and 'no-' + n not in hits]
     return hits or [body]
+
+
+def restore_index_only(short, longs):
+    """Whether git restore with these options (_opts) writes the index alone: --staged (-S)
+    without --worktree (-W), and every long option one GIT_LONGS names (fail closed: _canon_long
+    leaves a one-letter body as written, and `--w` is `--worktree` to git; `--no-st` is
+    `--no-staged`, which it names and the table does not; `--no` and `--no-` git rejects as
+    ambiguous, and _canon_long's names for them are not in the table either)."""
+    return (('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs)
+            and longs <= set(GIT_LONGS['restore']))
 
 
 def _opts(sub, args):
@@ -4499,9 +4720,7 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
                           'main checkout. %s' % (text, where, how), instead)
     no_wt, wt = new_worktree(ctx, place.top)
     if sub == 'restore':
-        staged = 'S' in short or 'staged' in longs
-        worktree = 'W' in short or 'worktree' in longs
-        if not staged or worktree:
+        if not restore_index_only(short, longs):
             return refuse('git-restore', role, '`%s` overwrites working files in %s, where landers work. To undo a '
                           'change, make it in a worktree (%s). To unstage only:' % (text, where, WT_ADD % quote(top)),
                           'git -C %s restore --staged -- <path>' % quote(top)) if not no_wt else \
