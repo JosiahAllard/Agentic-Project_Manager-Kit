@@ -1,4 +1,4 @@
-"""git option spellings the guard reads as git does (KIT-GUARD-GIT-FLAG-CANON): a one-letter
+"""git option spellings the guard reads as git does: a one-letter
 abbreviation of a long option (`--h` is `--hard` to git when no other reset option starts with
 h), and clean's dry run read in order (`-n --no-dry-run` deletes: the last one wins)."""
 import os

@@ -1,4 +1,4 @@
-"""The ledger rule's wider reach (KIT-LEDGER-GUARD-WRITE-GAPS): a folder above a held path (and
+"""The ledger rule's wider reach: a folder above a held path (and
 a wildcard that can name one), git that rewrites a tree holding the ledger (checkout or switch
 that discards changes, reset --hard/--merge/--keep, a stash that is not a read, a clean that is
 not a dry run), and a writing git call in a place the guard cannot tell (GIT_DIR, --git-dir,

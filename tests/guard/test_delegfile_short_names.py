@@ -1,5 +1,5 @@
 """The owner-delegations rule matches a wildcard part against the 8.3 short name too
-(KIT-LEDGER-GUARD-SHORTNAME-TEST, delegfile.glob_reaches through rules.glob_part), as
+(delegfile.glob_reaches through rules.glob_part), as
 FindFirstFile does: `OWNER-~?.JSO` names owner-delegations.json. Run on a volume that gives short
 names (world.short_name_root); skipped when no temp folder has them."""
 import os

@@ -1,4 +1,4 @@
-"""The DOS wildcards `<`, `>` and `"` (KIT-GUARD-DOS-WILDCARDS): FindFirstFile reads them as
+"""The DOS wildcards `<`, `>` and `"`: FindFirstFile reads them as
 wildcards, so a path with one is read both ways, as a wildcard and as the literal name, by the
 owner-delegations rule (delegfile.word_reaches) and the hub-secrets rule (rules.hub_texts), as
 the ledger rule already does (rules.LEDGER_GLOB_CHARS). Each reading only adds a refusal."""
