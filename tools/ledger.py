@@ -687,7 +687,8 @@ def main(argv=None):
         sys.stderr.write('USAGE: %s\n' % e)
         return 2
     except Refused as e:
-        return fail('refused: %s' % e)
+        sys.stderr.write('REFUSED: %s\n' % e)
+        return 1
 
 
 if __name__ == '__main__':
