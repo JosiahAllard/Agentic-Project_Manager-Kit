@@ -2810,6 +2810,29 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(got["writer"], "Read only: " + why)
         self.assertTrue(all(d for _, d in got["btns"]), got["btns"])
 
+    def test_a_stale_end_ask_does_not_carry_to_another_row_or_survive_a_failed_write(self):
+        got = self.sch("""
+            await click($("#sch-end"));
+            const asked = !!$("#sch-end-go");
+            await click(document.getElementById("row-run:r2")); await click(document.getElementById("row-run:r1"));
+            const afterRows = text($("#sch-end"));
+            await click($("#sch-end")); await click($("#sch-end-go"));       // the default route answers 404: a failed write
+            return { asked, afterRows, failed: text($("#sch-end")), go: !!$("#sch-end-go") };""", sch_view(runs=[RUN1, RUN2]))
+        self.assertEqual(got, {"asked": True, "afterRows": "End run", "failed": "End run", "go": False})
+
+    def test_the_week_follows_the_pcs_clock_across_a_dst_change_inside_the_week(self):
+        # 1 Nov 2026 is the day New York leaves summer time: midnight is 04:00 UTC up to it and 05:00 UTC after.
+        view = sch_view(runs=[])
+        view["view"]["now"] = "2026-10-29T12:00:00-04:00"
+        got = self.sch("""
+            await click($("#sctab-week"));
+            const first = $$("#sch-grid tbody tr")[0].childNodes.filter(c => c.tagName === "TD").map(c => new Date(Number(c.getAttribute("data-t"))).toISOString());
+            const heads = $$("#sch-grid thead th").map(text).slice(1);
+            return { first, heads };""".replace("await click", "process.env.TZ = 'America/New_York'; await click", 1), view)
+        self.assertEqual([t[5:16] for t in got["first"]],
+                         ["10-29T04:00", "10-30T04:00", "10-31T04:00", "11-01T04:00", "11-02T05:00", "11-03T05:00", "11-04T05:00"])
+        self.assertEqual(got["heads"][3:5], ["Sun 1 Nov", "Mon 2 Nov"])
+
     def test_reserve_time_takes_two_clicks_on_the_week_grid_and_posts_the_window_in_utc(self):
         got = self.sch("""
             server.route = c => c.method === "POST" ? { status: 200, body: { ok: true, result: { hold: { scope: "whole", end: "2026-10-06T11:00:00+00:00" } } } } : undefined;

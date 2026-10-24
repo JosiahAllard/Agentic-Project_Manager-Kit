@@ -2088,12 +2088,18 @@ ul.hist .sch-line{display:block}
   const msOf = iso => { const t = Date.parse(iso || ""); return isNaN(t) ? null : t; };
   const p2 = n => String(n).padStart(2, "0");
   const schOff = () => { const m = /([+-])(\d\d):(\d\d)$/.exec((mach.view && mach.view.now) || ""); return m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : 0; };
-  const schPc = t => new Date(t + schOff() * 60000);                      // read with getUTC*: the PC's wall clock
+  // The PC's offset at instant t. The view carries only the offset now; where this browser is in that same zone
+  // right now (the usual case), its own rules give the offset at t, so a DST change inside the week is followed.
+  const schOffAt = t => { const n = schNow(); return -new Date(n).getTimezoneOffset() === schOff() ? -new Date(t).getTimezoneOffset() : schOff(); };
+  const schPc = t => new Date(t + schOffAt(t) * 60000);                   // read with getUTC*: the PC's wall clock
+  // A wall-clock reading (ms as if UTC, so calendar arithmetic is exact) back to the instant it names on the PC.
+  const schFromWall = w => { const t = w - schOff() * 60000; return w - schOffAt(t) * 60000; };
   const schHm = t => { const d = schPc(t); return p2(d.getUTCHours()) + ":" + p2(d.getUTCMinutes()); };
   const schDay = t => { const d = schPc(t); return SCH_WD[d.getUTCDay()] + " " + d.getUTCDate() + " " + SCH_MO[d.getUTCMonth()]; };
   const schWhen = iso => { const t = msOf(iso); return t == null ? "" : schDay(t) + " " + schHm(t); };
   const schNow = () => msOf(mach.view && mach.view.now) || Date.now();
-  const schToday = () => { const d = schPc(schNow()); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - schOff() * 60000; };
+  const schTodayWall = () => { const d = schPc(schNow()); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()); };
+  const schToday = () => schFromWall(schTodayWall());
   const schIso = t => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
   const schDur = s => { if (s == null || isNaN(s)) return ""; s = Math.round(Number(s)); if (s < 90) return s + " s"; const m = Math.round(s / 60); if (m < 90) return m + " min"; return Math.floor(m / 60) + " h " + p2(m % 60) + " min"; };
   const schMb = n => n == null ? "" : n >= 1024 ? (n / 1024).toFixed(1) + " GB" : Math.round(n) + " MB";
@@ -2117,7 +2123,7 @@ ul.hist .sch-line{display:block}
     const strip = objs(v.strip), byId = new Map(strip.filter(x => x.type === "run").map(x => [String(x.id), x]));
     const runs = objs(v.runs).filter(r => r.id != null).map(r => ["run:" + r.id, "run", r, byId.get(String(r.id)) || {}]);
     const queue = objs(v.queue_items).filter(q => q.id != null).map(q => ["q:" + q.id, "queue", q, {}]);
-    const day0 = schToday(), day1 = day0 + SCH_DAY;
+    const day0 = schToday(), day1 = schFromWall(schTodayWall() + SCH_DAY);
     const today = (h, i, kind) => { const s = msOf(h.start), e = msOf(h.end); return s != null && e != null && s < day1 && e > day0 ? [kind + ":" + (h.id != null ? h.id : i), kind, h, {}] : null; };
     const holds = [...objs(v.holds).map((h, i) => today(h, i, "hold")), ...objs(v.agent_holds).map((h, i) => today(h, i, "agenthold"))].filter(Boolean);
     return { runs, queue, holds };
@@ -2153,7 +2159,7 @@ ul.hist .sch-line{display:block}
       if (j && j.view && typeof j.view === "object") takeMachine(j);
       render();
       return true;
-    } catch (e) { s.busy = false; s.bad = true; s.status = schWhyNot(e || {}); render(); return false; }
+    } catch (e) { s.busy = false; s.bad = true; s.confirm = null; s.status = schWhyNot(e || {}); render(); return false; }
   }
   async function schStats(){
     const s = state.sch, rev = mach.rev;
@@ -2166,7 +2172,7 @@ ul.hist .sch-line{display:block}
   // ---- rows
   function schRow(key, chips, title, since, extra){
     const on = !!state.sel && state.sel.kind === "sch" && state.sel.id === key;
-    const open = () => { if (key === "hist") state.sch.histOpen = !state.sch.histOpen; state.sel = { kind: "sch", id: key }; render(); const c = $("#pane-detail article"); if (c && key !== "hist") { c.tabIndex = -1; c.focus(); } };
+    const open = () => { state.sch.confirm = null; if (key === "hist") state.sch.histOpen = !state.sch.histOpen; state.sel = { kind: "sch", id: key }; render(); const c = $("#pane-detail article"); if (c && key !== "hist") { c.tabIndex = -1; c.focus(); } };
     const row = el("article", { class: "q row sch-row", id: "row-" + key, tabindex: "0", role: "button", "aria-label": title, "aria-current": on ? "true" : null },
       el("div", { class: "meta" }, ...chips.filter(Boolean), since ? el("span", { text: since }) : null),
       el("h2", { text: title }), extra || null);
@@ -2298,13 +2304,15 @@ ul.hist .sch-line{display:block}
     return { s: Math.min(p.a, b), e: Math.max(p.a, b) + SCH_HALF, done: p.b != null };
   };
   function schWeek(){
-    const s = state.sch, base = schToday() + s.shift * SCH_DAY, now = schNow(), cover = schSpans(), pick = schPicked();
-    const head = el("tr", null, el("th", { text: "" }), Array.from({ length: SCH_DAYS }, (_, d) => el("th", { scope: "col", text: schDay(base + d * SCH_DAY) })));
+    // Each day and half hour is read from the PC's wall clock, so a DST change inside the week moves nothing off it.
+    const s = state.sch, baseWall = schTodayWall() + s.shift * SCH_DAY, now = schNow(), cover = schSpans(), pick = schPicked();
+    const base = schFromWall(baseWall), lastDay = schFromWall(baseWall + (SCH_DAYS - 1) * SCH_DAY + SCH_DAY / 2);
+    const head = el("tr", null, el("th", { text: "" }), Array.from({ length: SCH_DAYS }, (_, d) => el("th", { scope: "col", text: schDay(schFromWall(baseWall + d * SCH_DAY + SCH_DAY / 2)) })));
     const rows = [];
     for (let r = 0; r < SCH_ROWS; r++) {
       const cells = [];
       for (let d = 0; d < SCH_DAYS; d++) {
-        const t = base + d * SCH_DAY + r * SCH_HALF, e = t + SCH_HALF, on = cover.filter(x => x.s < e && x.e > t);
+        const t = schFromWall(baseWall + d * SCH_DAY + r * SCH_HALF), e = schFromWall(baseWall + d * SCH_DAY + (r + 1) * SCH_HALF), on = cover.filter(x => x.s < e && x.e > t);
         let kind = "";
         for (const x of on) if ((SCH_RANK[x.kind] || 0) > (SCH_RANK[kind] || 0)) kind = x.kind;
         const run = on.find(x => x.kind === "run");
@@ -2330,7 +2338,7 @@ ul.hist .sch-line{display:block}
     if (s.shift <= -SCH_BACK) nav.childNodes[0].disabled = true;
     if (s.shift === 0) nav.childNodes[1].disabled = true;
     if (s.shift + SCH_DAYS >= SCH_AHEAD) nav.childNodes[2].disabled = true;
-    const out = [el("p", { class: "sch-line", id: "sch-weekhead", text: schDay(base) + " to " + schDay(base + (SCH_DAYS - 1) * SCH_DAY) + ", PC time." }), nav, grid];
+    const out = [el("p", { class: "sch-line", id: "sch-weekhead", text: schDay(base + SCH_HALF) + " to " + schDay(lastDay) + ", PC time." }), nav, grid];
     if (pick) {
       const from = pick.s <= now ? "now" : schDay(pick.s) + " " + schHm(pick.s);
       const note = el("input", { type: "text", id: "sch-note", "aria-label": "Note for the reservation", value: s.note, maxlength: "200" });
@@ -2392,7 +2400,7 @@ ul.hist .sch-line{display:block}
   }
   $("#sctabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t || !t.dataset.sc) return;
-    state.sch.tab = t.dataset.sc; state.sel = null; render();
+    state.sch.tab = t.dataset.sc; state.sch.confirm = null; state.sel = null; render();
   });
 
   // ---- A pending approval (docs/action-hub.md "approvals/A-NNN"): the change an agent asks to make, as the diff the
