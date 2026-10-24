@@ -254,6 +254,10 @@ ul.hist .sch-line{display:block}
 .sch-grid td.run{background:var(--ok-soft)}
 .sch-grid td.now{outline:2px solid var(--warn);outline-offset:-2px}
 .sch-grid td.pick{outline:2px solid var(--accent);outline-offset:-2px}
+.sch-form{display:grid;gap:8px}
+.sch-fld{display:grid;gap:3px;font-size:.85rem;color:var(--muted)}
+.sch-fld input,.sch-form textarea{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box;min-width:0}
+.sch-form textarea{min-height:7em;font-family:var(--f-mono)}
 @media (prefers-reduced-motion:no-preference){.q{transition:border-color .15s}}
 </style>
 </head>
@@ -321,6 +325,7 @@ ul.hist .sch-line{display:block}
       <button class="tab" role="tab" data-sc="now" aria-selected="true" id="sctab-now">Now <span class="n" id="n-scnow">0</span></button>
       <button class="tab" role="tab" data-sc="week" aria-selected="false" id="sctab-week">Week</button>
       <button class="tab" role="tab" data-sc="holds" aria-selected="false" id="sctab-holds">Holds <span class="n" id="n-schold">0</span></button>
+      <button class="tab" role="tab" data-sc="settings" aria-selected="false" id="sctab-settings">Settings</button>
     </div>
     <div class="tabs" role="tablist" id="ftabs" data-for="info" hidden>
       <button class="tab" role="tab" data-nf="usage" aria-selected="true" id="ftab-usage">Usage <span class="n" id="n-u">–</span></button>
@@ -378,7 +383,9 @@ ul.hist .sch-line{display:block}
   const $ = s => document.querySelector(s);
   const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null,
     // The Schedule view: its tab, the History filters, the Week grid's pick and shift, the reserve note and the run asked once.
-    sch: { tab: "now", repo: "", kind: "", result: "", histOpen: false, shift: 0, pick: null, note: "", confirm: null, stats: null, statsRev: null, statsWhy: "", status: "", bad: false, busy: false } };
+    sch: { tab: "now", repo: "", kind: "", result: "", histOpen: false, shift: 0, pick: null, note: "", confirm: null, stats: null, days: 7, statsRev: null, statsWhy: "", status: "", bad: false, busy: false,
+      // The open forms, each holding what is typed so a redraw never loses it: New hold, a hold's Edit (by its id), the games list, the division.
+      hold: null, edit: null, games: null, div: null } };
   // The address's hash names a section (and, for some, the tab inside it): what each route sets in state. The
   // page opens on the route it is given, Back and Forward return to the section before, and a hash it does not
   // know leaves the page where it is.
@@ -2147,8 +2154,8 @@ ul.hist .sch-line{display:block}
   const homeReplyRow = x => rowCard("pm", { ...x, title: String(x.reply || "").trim().split("\n")[0].slice(0, 140), urgent: false },
     [el("span", {class:"chip", text:"Reply"}), x.repo ? el("span", {class:"chip", text: String(x.repo)}) : null], x.done_at ? "replied " + when(x.done_at) : "");
   const HOME_ROW = { q: questionRow, approval: approvalRow, todo: todoRow, pm: homeReplyRow };
-  // The machine lock, read from the owner routes GET /lock/view and GET /lock/wait (the same two calls the lock page
-  // makes). One watcher serves Home's machine line, the Schedule view and the Schedule count: it runs from the page's
+  // The machine lock, read from the owner routes GET /lock/view and GET /lock/wait (the lock's own two reads).
+  // One watcher serves Home's machine line, the Schedule view and the Schedule count: it runs from the page's
   // start, stops while the tab is hidden and reads again when it is shown. A failed read keeps the last good view and
   // says so; with none, it says why. writer and writes are what the route said of this login (the Schedule's gates).
   const mach = { view: null, rev: null, err: "", on: false, writer: null, writes: { lock: false, strong: false, why: "" } };
@@ -2215,9 +2222,11 @@ ul.hist .sch-line{display:block}
   }
 
   // ---- Schedule: the machine lock as the owner reads it (docs/action-hub.md "Schedule"). It draws from the one lock
-  // view `mach` holds (the watcher above keeps it current) and changes the lock only through the owner routes the lock
-  // page uses, whose answer carries the lock's view after the change. Now: what runs, what waits, today's holds, and a
-  // History of finished runs. Week: the half-hour grid, where two clicks pick a window to reserve. Holds: every hold.
+  // view `mach` holds (the watcher above keeps it current) and changes the lock only through the owner routes /lock/...,
+  // whose answer carries the lock's view after the change. Now: what runs, what waits, today's holds, and a History of
+  // finished runs with the run stats. Week: the half-hour grid, where two clicks pick a window to reserve. Holds: every
+  // hold, the owner's and the agents', with New hold and each hold's Edit and Release. Settings: Game mode with its
+  // games list, and the Division.
   // Times are the PC's: the view's `now` carries its offset from UTC, and every time here is read at that offset.
   // A control this login may not use is disabled and says why (the route's own `writes` answer).
   const SCH_DAY = 86400000, SCH_HALF = 1800000, SCH_DAYS = 7, SCH_ROWS = 48, SCH_BACK = 14, SCH_AHEAD = 28;
@@ -2300,10 +2309,11 @@ ul.hist .sch-line{display:block}
     } catch (e) { s.busy = false; s.bad = true; s.confirm = null; s.status = schWhyNot(e || {}); render(); return false; }
   }
   async function schStats(){
-    const s = state.sch, rev = mach.rev;
+    const s = state.sch, rev = mach.rev, days = s.days;
     s.statsRev = rev;
-    try { s.stats = await hub.call("GET", "/lock/stats?days=7"); s.statsWhy = ""; }
-    catch (e) { s.statsWhy = (e && e.message) || "no reason given"; }
+    try { const r = await hub.call("GET", "/lock/stats?days=" + days); if (days === s.days) { s.stats = r; s.statsWhy = ""; } }
+    catch (e) { if (days === s.days) s.statsWhy = (e && e.message) || "no reason given"; }
+    if (days !== s.days) s.statsRev = null;                                  // the days changed meanwhile: read them again
     if (state.section === "schedule" && state.sch.tab === "now") render();
   }
 
@@ -2376,7 +2386,8 @@ ul.hist .sch-line{display:block}
       el("div", { class: "meta" }, el("span", { class: "chip", text: kind === "agenthold" ? "Agent hold" : "Hold" }), h.id != null ? el("span", { class: "id", text: String(h.id) }) : null),
       el("h2", { text: schWho(h) + " " + schScope(h) }),
       schLine(schWhen(h.start) + " to " + schWhen(h.end)), h.note ? schLine(String(h.note)) : null,
-      schLine(h.lost && h.lost.cpu ? "lost " + schPools(h.lost) + " to " + (h.lost_to || []).join(", ") : h.state || (h.live ? "in force" : "booked")));
+      schLine(h.lost && h.lost.cpu ? "lost " + schPools(h.lost) + " to " + (h.lost_to || []).join(", ") : h.state || (h.live ? "in force" : "booked")),
+      schHoldActs(h), schStatus());
   }
   // The slot boxes of one pool (the lock view's cores.cpu or cores.gpu): the Schedule's machine card and Home's strip draw them.
   function schBoxes(list, id){
@@ -2398,7 +2409,7 @@ ul.hist .sch-line{display:block}
       schBoxes(cores.cpu, "sch-cpu"), schBoxes(cores.gpu, "sch-gpu"),
       m ? schLine(m.free_mb == null ? "Memory: " + schMb(m.total_mb) + " in all; free not measured yet" : "Memory: " + schMb(m.free_mb) + " free of " + schMb(m.total_mb)) : null,
       warns.length ? el("ul", { class: "warns" }, ...warns) : null,
-      rows ? el("p", { class: "sch-line", id: "sch-stats", text: "Last 7 days: " + sum("runs") + " runs, " + sum("done") + " done, " + (sum("failed") + sum("interrupted")) + " failed or stopped." })
+      rows ? el("p", { class: "sch-line", id: "sch-stats", text: "Last " + (s.days === 1 ? "day" : s.days + " days") + ": " + sum("runs") + " runs, " + sum("done") + " done, " + (sum("failed") + sum("interrupted")) + " failed or stopped." })
         : s.statsWhy ? el("p", { class: "sch-line", id: "sch-stats", text: "The run history could not be read: " + s.statsWhy }) : null);
   }
   // History: the view's finished runs, newest first. Failed or stopped is failed, cancelled and interrupted.
@@ -2425,7 +2436,23 @@ ul.hist .sch-line{display:block}
         return el("li", { "data-hist": String(it.id || ""), class: it.late ? "late" : null },
           el("strong", { text: schName(it) }), " ", el("span", { class: "chip" + (it.result === "ok" ? " ok" : schBad(it.result) ? " urgent" : ""), text: it.result === "ok" ? "Done" : it.result || "ended" }),
           el("span", { class: "sch-line", text: [it.kind, z != null ? "ended " + schDay(z) + " " + schHm(z) : "", took].filter(Boolean).join(" · ") }));
-      })) : el("p", { class: "sch-line", text: all.length ? "No finished run matches." : "No finished runs in the lock's history." }));
+      })) : el("p", { class: "sch-line", text: all.length ? "No finished run matches." : "No finished runs in the lock's history." }),
+      el("h3", { class: "sch-group", text: "What ran" }),
+      el("div", { class: "chips", role: "group", "aria-label": "Days of stats" }, ...[1, 7, 30, 90].map(d => el("button", { type: "button", class: "chip fchip", "data-days": String(d), "aria-pressed": String(s.days === d), text: d === 1 ? "1 day" : d + " days",
+        onclick: () => { s.days = d; s.stats = null; s.statsWhy = ""; s.statsRev = null; render(); } }))),
+      schStatsList());
+  }
+  // What ran in the days chosen, one entry per kind and repository (GET /lock/stats).
+  function schStatsList(){
+    const s = state.sch, rows = s.stats && Array.isArray(s.stats.rows) ? objs(s.stats.rows) : null, n = x => x == null ? "" : String(x);
+    if (s.statsWhy) return el("p", { class: "sch-line", role: "status", text: "The run history could not be read: " + s.statsWhy });
+    if (!rows) return el("p", { class: "sch-line", text: "Reading what ran…" });
+    if (!rows.length) return el("p", { class: "sch-line", text: "No run in the last " + (s.days === 1 ? "day" : s.days + " days") + "." });
+    return el("ul", { class: "hist", id: "sch-statslist" }, ...rows.map(r => { const h = r.held_s || {}, w = r.wait_s || {};
+      return el("li", { "data-kind": String(r.kind || ""), "data-repo": String(r.repo || "") }, el("strong", { text: [r.kind, r.repo].filter(Boolean).join(" · ") }),
+        el("span", { class: "sch-line", text: n(r.runs) + " runs: " + n(r.done) + " done, " + n(r.failed) + " failed, " + n(r.interrupted) + " stopped" }),
+        el("span", { class: "sch-line", text: "Held (median, p90, max) " + [schDur(h.median), schDur(h.p90), schDur(h.max)].join(" / ") + " · waited (median, max) " + [schDur(w.median), schDur(w.max)].join(" / ") }),
+        el("span", { class: "sch-line", text: "CPU time " + schDur(r.cpu_s) + " · peak " + n(r.peak_cpu_cores) + " cores · " + schMb(r.peak_mem_mb) })); }));
   }
 
   // ---- the Week tab
@@ -2478,12 +2505,12 @@ ul.hist .sch-line{display:block}
     if (s.shift <= -SCH_BACK) nav.childNodes[0].disabled = true;
     if (s.shift === 0) nav.childNodes[1].disabled = true;
     if (s.shift + SCH_DAYS >= SCH_AHEAD) nav.childNodes[2].disabled = true;
-    const out = [el("p", { class: "sch-line", id: "sch-weekhead", text: schDay(base + SCH_HALF) + " to " + schDay(lastDay) + ", PC time." }), nav, grid];
+    const out = [el("p", { class: "sch-line", id: "sch-weekhead", text: schDay(base + SCH_HALF) + " to " + schDay(lastDay) + ", PC time." }), nav, grid, schStatus()];
     if (pick) {
       const from = pick.s <= now ? "now" : schDay(pick.s) + " " + schHm(pick.s);
       const note = el("input", { type: "text", id: "sch-note", "aria-label": "Note for the reservation", value: s.note, maxlength: "200" });
       note.addEventListener("input", () => { s.note = note.value; });
-      const go = scope => () => schWrite("/lock/holds", { kind: "reserve", scope, start: schIso(pick.s), end: schIso(pick.e), note: s.note }, r => { const h = (r && r.hold) || {}; s.pick = null; s.note = ""; return "Held " + (h.scope === "half" ? "half the machine" : h.scope === "whole" ? "the whole machine" : "slots") + " to " + (schWhen(h.end) || "the end you gave") + "."; });
+      const go = scope => () => schWrite("/lock/holds", { kind: "reserve", scope, start: schIso(pick.s), end: schIso(pick.e), note: s.note }, r => { s.pick = null; s.note = ""; return schHeld(r); });
       const full = (text, scope, id) => { const b = schBtn(text, "strong", go(scope), { id }); if (!pick.done) b.disabled = true; return b; };
       out.push(el("article", { class: "q", id: "sch-pick" },
         el("p", { class: "sch-line", id: "sch-picked", text: pick.done ? "Reserve from " + from + " to " + schDay(pick.e) + " " + schHm(pick.e) + ", PC time." : "From " + from + ": now click the half hour the window ends in." }),
@@ -2494,15 +2521,131 @@ ul.hist .sch-line{display:block}
     return out;
   }
 
-  // ---- the Holds tab: every hold, then the agents' holds, as read-only cards
+  // ---- forms: a field keeps what is typed in the state's form object, so a redraw never loses it
+  function schInput(id, label, obj, key, attrs){
+    const i = el("input", { type: "text", id, value: obj[key] || "", ...(attrs || {}) });
+    i.addEventListener("input", () => { obj[key] = i.value; });
+    return el("label", { class: "sch-fld", for: id }, el("span", { text: label }), i);
+  }
+  const schStatus = () => el("p", { class: "status" + (state.sch.bad ? " err" : ""), role: "status", id: "sch-status", text: state.sch.status });
+  const schHeld = r => { const h = (r && r.hold) || {}; return "Held " + (h.scope === "half" ? "half the machine" : h.scope === "whole" ? "the whole machine" : "slots") + " to " + (schWhen(h.end) || "the end you gave") + "."; };
+  // Focus a field the form just drew: a redraw puts the focus back only on a field that had it.
+  const schFocus = id => { const f = document.getElementById(id); if (f && f.focus) f.focus(); };
+  // A hold's Edit and Release (Release asks once more before anything is sent), and the Edit form under them.
+  function schHoldActs(h){
+    const s = state.sch, id = String(h.id || ""), key = "hold:" + id;
+    if (!id) return null;
+    const e = s.edit && s.edit.id === id ? s.edit : null;
+    const acts = s.confirm === key
+      ? [schBtn("Release it", "strong", () => schWrite("/lock/holds/" + schSeg(id) + "/end", {}, () => { s.confirm = null; return "Released hold " + id + "."; }), { class: "stop", "data-act": "release-go" }),
+         schBtn("Keep it", null, () => { s.confirm = null; render(); }, { "data-act": "release-keep" })]
+      : [schBtn("Edit", "strong", () => { s.confirm = null; s.edit = { id, start: "", end: "", note: h.note || "" }; render(); schFocus("sch-eend"); }, { "data-act": "edit" }),
+         schBtn("Release", "strong", () => { s.confirm = key; render(); }, { "data-act": "release" })];
+    const form = !e ? null : el("div", { class: "sch-form", "data-form": "edit" },
+      schLine("Hold " + id + ", " + schWho(h) + " " + schScope(h) + ": " + schWhen(h.start) + " to " + schWhen(h.end) + ". Type times as for New hold; leave a field blank to keep it."),
+      schInput("sch-estart", "From (blank: keep)", e, "start"), schInput("sch-eend", "To (blank: keep)", e, "end"), schInput("sch-enote", "Note", e, "note", { maxlength: "200" }),
+      el("div", { class: "act" },
+        schBtn("Change the hold", "strong", async () => {
+          if (await schWrite("/lock/holds/" + schSeg(id) + "/edit", { start: e.start, end: e.end, note: e.note },
+            r => { const x = (r && r.hold) || {}; return "Changed hold " + id + ": " + (schWhen(x.start) || "now") + " to " + schWhen(x.end) + "."; })) { s.edit = null; render(); }
+        }, { class: "primary", "data-act": "edit-go" }),
+        schBtn("Cancel", null, () => { s.edit = null; render(); }, { "data-act": "edit-cancel" })));
+    return el("div", { class: "sch-form" }, el("div", { class: "act" }, ...acts), form);
+  }
+  // New hold: typed times (18:00, 2026-10-21 18:00, +30m; a blank From is now) for the whole machine, half, or named slots.
+  function schNewHold(){
+    const s = state.sch, f = s.hold;
+    if (!f) return el("div", { class: "act" }, schBtn("New hold", "strong", () => { s.hold = { scope: "whole", start: "", end: "", note: "", cpu: "", gpu: "" }; render(); schFocus("sch-hend"); }, { id: "sch-newhold" }));
+    const slots = f.scope === "slots";
+    return el("article", { class: "q sch-form", id: "sch-holdform" },
+      el("div", { class: "meta" }, el("span", { class: "chip", text: "New hold" })),
+      el("div", { class: "chips", role: "group", "aria-label": "What the hold takes" }, ...[["whole", "The whole machine"], ["half", "Half"], ["slots", "Named slots"]].map(([v, t]) =>
+        el("button", { type: "button", class: "chip fchip", "data-scope": v, "aria-pressed": String(f.scope === v), text: t, onclick: () => { f.scope = v; render(); } }))),
+      schInput("sch-hstart", "From (blank: now)", f, "start", { placeholder: "18:00, 2026-10-21 18:00 or +30m" }),
+      schInput("sch-hend", "To", f, "end", { placeholder: "20:00, 2026-10-21 20:00 or +2h" }),
+      slots ? schInput("sch-hcpu", "CPU slots", f, "cpu", { placeholder: "0-3, 6" }) : null,
+      slots ? schInput("sch-hgpu", "GPU slots", f, "gpu", { placeholder: "0" }) : null,
+      schInput("sch-hnote", "Note", f, "note", { maxlength: "200", placeholder: "reserve window" }),
+      el("div", { class: "act" },
+        schBtn("Make the hold", "strong", async () => {
+          if (await schWrite("/lock/holds", { kind: "hold", scope: f.scope, start: f.start, end: f.end, note: f.note, cpu: slots ? f.cpu : "", gpu: slots ? f.gpu : "" }, schHeld)) { s.hold = null; render(); }
+        }, { class: "primary", id: "sch-holdgo" }),
+        schBtn("Cancel", null, () => { s.hold = null; render(); }, { id: "sch-holdcancel" })));
+  }
+
+  // ---- the Settings tab: Game mode with its games list, and the Division
+  // The games list as the editor's text: the program, pin or nopin, then the name when it is not the program's.
+  const schGamesText = games => objs(games).map(g => [String(g.exe || ""), g.pin ? "pin" : "nopin", g.name && g.name !== g.exe ? String(g.name) : ""].filter(Boolean).join("  ") + "\n").join("");
+  function schGameCard(){
+    const s = state.sch, g = mach.view.game || {}, games = objs(g.games), on = g.enabled === true;
+    const run = g.running && typeof g.running === "object" ? g.running : null;
+    const held = on && (g.slots || []).length ? "It holds cpu slots " + schRanges(g.slots) + "." : !on && (g.would_take || []).length ? "Turned on, it would take cpu slots " + schRanges(g.would_take) + "." : "";
+    let area = null;
+    if (s.games != null) {
+      const ta = el("textarea", { id: "sch-gamestext", spellcheck: "false", "aria-label": "The games list" });
+      ta.value = s.games; ta.addEventListener("input", () => { s.games = ta.value; });
+      area = el("div", { class: "sch-form", "data-form": "games" },
+        el("label", { class: "sch-fld", for: "sch-gamestext", text: "One game a line: the program, then pin or nopin (pin: the game gets its own slots), then a name. A line that starts with # is skipped." }), ta,
+        el("div", { class: "act" },
+          schBtn("Save the games list", "lock", async () => {
+            if (await schWrite("/lock/games", { text: s.games }, r => { const n = (Array.isArray(r.games) ? r.games : []).length; return "The games list has " + n + (n === 1 ? " game." : " games."); })) { s.games = null; render(); }
+          }, { class: "primary", id: "sch-gamesgo" }),
+          schBtn("Cancel", null, () => { s.games = null; render(); }, { id: "sch-gamescancel" })));
+    }
+    return el("article", { class: "q", id: "sch-game" },
+      el("div", { class: "meta" }, el("span", { class: "chip", text: "Game mode" })),
+      el("h2", { text: "Game mode is " + (on ? "on" : "off") }),
+      held ? schLine(held) : null,
+      run ? schLine("Running now: " + (run.name || run.exe || "a game")) : null,
+      games.length ? el("ul", { class: "hist", id: "sch-games" }, ...games.map(x => el("li", null, el("strong", { text: String(x.name || x.exe || "") }),
+        el("span", { class: "sch-line", text: [x.exe, x.pin ? "pinned" : "", x.anti_cheat ? "anti-cheat" : ""].filter(Boolean).join(" · ") })))) : el("p", { class: "sch-line", text: "No games are listed." }),
+      el("div", { class: "act" },
+        schBtn(on ? "Turn game mode off" : "Turn game mode on", "lock", () => schWrite("/lock/game_mode", { enabled: !on }, r => "Game mode is " + ((typeof r.enabled === "boolean" ? r.enabled : !on) ? "on" : "off") + "."), { id: "sch-gametoggle" }),
+        schBtn("Change the games list", "lock", () => { s.games = schGamesText(g.games); render(); schFocus("sch-gamestext"); }, { id: "sch-gamesedit" })),
+      area);
+  }
+  const SCH_DIV = ["threads", "cpu_slot_threads", "cpu_slots", "gpu_share", "half_cpu_slots", "half_gpu_slots", "agent_cap", "medium_cores"];
+  const schShown = x => x == null ? "" : Array.isArray(x) ? x.join(", ") : String(x);
+  const schDivided = r => r.applied ? "The new division is in force." : "The new division waits: " + (r.reason || "it changes once nothing runs or waits") + ".";
+  function schDivCard(){
+    const s = state.sch, d = mach.view.division;
+    if (!d) return el("article", { class: "q", id: "sch-division" }, el("div", { class: "meta" }, el("span", { class: "chip", text: "Division" })), el("p", { class: "sch-line", text: "The lock did not say how the machine is divided." }));
+    const now = d.division || {}, def = d.default_division || {}, own = d.owner_division || {};
+    // Only the owner's own keys fill the fields; a blank one is the default, shown as a hint, so saving never turns a default into an owner-set value.
+    const open = () => { s.div = Object.fromEntries(SCH_DIV.map(k => [k, schShown(own[k])])); render(); schFocus("sch-div-" + SCH_DIV[0]); };
+    const form = !s.div ? null : el("div", { class: "sch-form", "data-form": "division" },
+      schLine("A blank field takes its default. gpu_share is one number, or one per card like 4, 2."),
+      ...SCH_DIV.map(k => schInput("sch-div-" + k, k, s.div, k, { placeholder: schShown(def[k] != null ? def[k] : now[k]), "data-key": k })),
+      el("div", { class: "act" },
+        schBtn("Save the division", "strong", async () => {
+          const fields = {};
+          for (const k of SCH_DIV) if (String(s.div[k] || "").trim()) fields[k] = s.div[k];
+          if (await schWrite("/lock/division", { fields }, schDivided)) { s.div = null; render(); }
+        }, { class: "primary", id: "sch-divgo" }),
+        schBtn("Cancel", null, () => { s.div = null; render(); }, { id: "sch-divcancel" })));
+    return el("article", { class: "q", id: "sch-division" },
+      el("div", { class: "meta" }, el("span", { class: "chip", text: "Division" })),
+      el("h2", { text: d.cpu_slots + " cpu slots, " + d.gpu_slots + " gpu slots" }),
+      schLine("An agent run takes at most " + d.agent_cap + "."),
+      d.changed || d.reason ? schLine("Waiting to change: " + (d.reason || "the division changes once nothing holds the slots.")) : null,
+      el("ul", { class: "hist", id: "sch-divlist" }, ...SCH_DIV.map(k => el("li", { "data-key": k }, el("strong", { text: k }),
+        el("span", { class: "sch-line", text: "in force " + (schShown(now[k]) || "-") + " · yours " + (schShown(own[k]) || "-") + " · default " + (schShown(def[k]) || "-") })))),
+      el("div", { class: "act" },
+        schBtn("Change the division", "strong", open, { id: "sch-divedit" }),
+        schBtn("Use the defaults", "strong", async () => { if (await schWrite("/lock/division", { defaults: true }, schDivided)) { s.div = null; render(); } }, { id: "sch-divdefaults" })),
+      form);
+  }
+
+  // ---- the Holds tab: New hold, then every hold, then the agents' holds, each with Edit and Release
   function schHolds(){
     const v = mach.view, mk = (h, agent) => el("article", { class: "q", "data-hold": String(h.id || "") },
       el("div", { class: "meta" }, el("span", { class: "chip", text: agent ? "Agent hold" : h.owner === "game" ? "Game" : "Hold" }), h.id != null ? el("span", { class: "id", text: String(h.id) }) : null),
       el("h2", { text: schWho(h) + " " + schScope(h) }),
       schLine(schWhen(h.start) + " to " + schWhen(h.end)), h.note ? schLine(String(h.note)) : null,
-      schLine(h.lost && h.lost.cpu ? "lost " + schPools(h.lost) + " to " + (h.lost_to || []).join(", ") : h.state || (h.live ? "in force" : "booked")));
+      schLine(h.lost && h.lost.cpu ? "lost " + schPools(h.lost) + " to " + (h.lost_to || []).join(", ") : h.state || (h.live ? "in force" : "booked")),
+      schHoldActs(h));
     const own = objs(v.holds), ag = objs(v.agent_holds);
-    return [el("h3", { class: "sch-group", text: "Holds (" + own.length + ")" }), ...(own.length ? own.map(h => drawn(x => mk(x, false), h)) : [el("p", { class: "sch-line", text: "No holds." })]),
+    return [schNewHold(), schStatus(), el("h3", { class: "sch-group", text: "Holds (" + own.length + ")" }), ...(own.length ? own.map(h => drawn(x => mk(x, false), h)) : [el("p", { class: "sch-line", text: "No holds." })]),
       el("h3", { class: "sch-group", text: "Agent holds (" + ag.length + ")" }), ...(ag.length ? ag.map(h => drawn(x => mk(x, true), h)) : [el("p", { class: "sch-line", text: "No agent holds." })])];
   }
 
@@ -2514,10 +2657,10 @@ ul.hist .sch-line{display:block}
     const writer = mach.writer === "agent" ? "Read only: " + (w.why || "the machine lock takes this hub for an agent.") : !w.lock ? "Read only: " + (w.why || "this login may not change the machine lock.") : !w.strong ? "Some changes are closed: " + w.why : "";
     const top = [mach.err ? el("p", { class: "gone", role: "status", text: "Out of date: the machine lock could not be read again (" + mach.err + ")." }) : null,
       writer ? el("p", { class: "status", id: "sch-writer", role: "status", text: writer }) : null];
-    const settings = el("p", { class: "sch-line" }, el("a", { href: "/lock.html", id: "sch-settings", text: "Machine settings (game mode, division, holds, stats)" }));
-    if (s.statsRev !== mach.rev && !s.statsBusy) { s.statsBusy = true; schStats().finally(() => { s.statsBusy = false; }); }
-    if (s.tab === "week") { show([], top, schWeek(), settings); return; }
-    if (s.tab === "holds") { show([], top, schHolds(), settings); return; }
+    if (s.statsRev !== mach.rev && !s.statsBusy) { s.statsBusy = true; schStats().finally(() => { s.statsBusy = false; if (s.statsRev !== mach.rev && state.section === "schedule") render(); }); }
+    if (s.tab === "week") { show([], top, schWeek()); return; }
+    if (s.tab === "holds") { show([], top, schHolds()); return; }
+    if (s.tab === "settings") { show([], top, drawn(schGameCard, null), drawn(schDivCard, null), schStatus()); return; }
     const it = schItems(), all = [...it.runs, ...it.queue, ...it.holds];
     const sel = state.sel && state.sel.kind === "sch" ? state.sel.id : null;
     let at = all.find(x => x[0] === sel) || null;
@@ -2529,7 +2672,7 @@ ul.hist .sch-line{display:block}
     const histN = objs(v.strip).filter(x => x.type === "hist").length;
     show([], top, group("Running now", it.runs, schRunRow), group("Next up", it.queue, schQueueRow), group("Holds today", it.holds, schHoldRow),
       !all.length ? el("div", { class: "empty" }, el("strong", { text: "Nothing is running or waiting" }), "Runs, the line behind them and today's holds appear here.") : null,
-      drawn(() => schRow("hist", [el("span", { class: "chip", text: "History" })], "History (" + histN + " finished runs)", s.histOpen ? "shown" : "hidden"), null), settings);
+      drawn(() => schRow("hist", [el("span", { class: "chip", text: "History" })], "History (" + histN + " finished runs)", s.histOpen ? "shown" : "hidden"), null));
     const kids = [];
     if (at) { const c = drawn(at[1] === "run" ? schRunCard : at[1] === "queue" ? schQueueCard : schHoldCard, at); c.tabIndex = -1; kids.push(c); openId = at[0]; }
     if (at || s.histOpen) {
