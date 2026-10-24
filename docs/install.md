@@ -124,6 +124,17 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 5. **Later:** turn on `repo.push_block` only after the repository has landed once through
    `<kit>/tools/land.py` or `gate.py land` (docs/go-live.md "Universal gate").
 
+### Backlog records and the rulings ledger
+
+`<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
+tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
+`--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
+"The fold-in guard").
+
+The rulings ledger is once per machine: set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file) in
+the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
+`templates/common/LEDGER.md` (docs/ledger.md "A new ledger"). Every ledger write needs git to run, since it places the write lock (docs/ledger.md "Write lock").
+
 ### What first use writes
 
 The first time the kit works in a repository (the PM's start, `tools/new_worktree.py`), the
@@ -341,17 +352,6 @@ Machine setup (`machine-setup.ps1 -Apply`, its default mode) does the same migra
 whose plugin is not enabled from the export: it makes the export, then runs the migrate steps for
 that folder through the same code (docs/machine-setup.md "Default mode"). The CLI also
 rewrites other keys of that `settings.json`, so the step backs the file up first.
-
-### Backlog records and the rulings ledger
-
-`<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
-tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
-`--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
-"The fold-in guard").
-
-The rulings ledger is once per machine: set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file) in
-the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
-`templates/common/LEDGER.md` (docs/ledger.md "A new ledger"). Every ledger write needs git to run, since it places the write lock (docs/ledger.md "Write lock").
 
 ## Existing installs: a machine with the old home-folder layout
 
