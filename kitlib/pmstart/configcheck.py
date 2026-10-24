@@ -3,15 +3,18 @@
 
   lines(loc, run, rules)   no line when all is well; otherwise what is wrong with the machine config
                            (kitlib.config.user.locate): no pointer, a pointer or file that cannot be
-                           read, a copy left in the home folder, the auto-tasks state left in the
-                           home folder, or a policy file that is not committed by the owner and
+                           read, a copy left in the home folder, an auto-tasks state folder git
+                           does not ignore, the auto-tasks state left in the home folder, or a
+                           policy file that is not committed by the owner and
                            unchanged (the integrity line)
 
 The leftover is the home folder's machine config FILE that locate() still finds beside the PM
 repo's (kitlib.config.user LEFTOVER): the machine config moved, so the kit stops reading it until
 the copy is gone, and the line names its remove command. The auto-tasks state still in the home
 folder (kitlib.autotasks.tick home_problem) stops the auto tasks the same way, and its line names
-the move. No line names an email address: the owner check compares the last author with the owner
+the move; so does a PM repository whose git does not ignore that state folder (tick unignored), and
+its line names the ignore line to add. The tick's own refusal reaches no one (it runs windowless),
+so these lines are where the owner sees it. No line names an email address: the owner check compares the last author with the owner
 rules and says only whether they match.
 
 Nothing here stops a session itself. A git call that fails is a "could not check machine_config"
@@ -45,6 +48,13 @@ def _git(run, args, cwd):
 def _rules(pm):
     from kitlib import config as kconfig
     return kconfig.load(pm).owner_rules()
+
+
+def _unignored(pm):
+    """The auto-tasks state folder's ignore problem in the PM repository `pm`, or None
+    (kitlib.autotasks.tick unignored: the tick refuses on it and its own lines reach no one)."""
+    from kitlib.autotasks import tick
+    return tick.unignored(pm)
 
 
 def integrity(loc, run=None, rules=None):
@@ -87,9 +97,9 @@ def lines(loc=None, run=None, rules=None):
         # PowerShell's single-quoted string: a ' in the path is written ''
         out.append(LEFTOVER % (loc.leftover, loc.display(), loc.leftover.replace("'", "''")))
     from kitlib.autotasks import tick
-    state = tick.home_problem(os.path.join(loc.folder, tick.DIR_NAME), loc.home)
-    if state:
-        out.append(PREFIX + state)
+    for state in (_unignored(loc.pm), tick.home_problem(os.path.join(loc.folder, tick.DIR_NAME), loc.home)):
+        if state:
+            out.append(PREFIX + state)
     try:
         line = integrity(loc, run, rules)
     except Exception as e:                      # the leftover line still shows

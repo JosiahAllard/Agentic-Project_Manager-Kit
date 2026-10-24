@@ -791,14 +791,14 @@ def config_dir(home=None):
 
 
 def config_file(home=None):
-    """The machine config's policy file locate() names, even for UNMOVED and BAD. Never raises."""
+    """The machine config's policy file locate() names, even for UNMOVED, LEFTOVER and BAD. Never raises."""
     return locate(home).path
 
 
 def readable_file(home=None):
     """The machine config's policy file a reader opens (locate()): the PM repository's
     config.json for OK, the known-absent home file for NONE. ConfigError when the config cannot
-    be read (UNMOVED, BAD): a reader that opens the file itself (pmstart, pmwatch, backloglint,
+    be read (UNMOVED, LEFTOVER, BAD): a reader that opens the file itself (pmstart, pmwatch, backloglint,
     ...) must not take a file it cannot use for an absent one."""
     loc = locate(home)
     if loc.error:
@@ -821,7 +821,7 @@ def key_file(home=None, key=None):
 def writable_file(home=None, key=None):
     """The file a writer of the machine config key `key` writes: for OK the PM repository's
     LOCAL_FILE_NAME when `key` is a LOCAL_KEYS key, else its FILE_NAME. ConfigError when the
-    config cannot be read (UNMOVED, BAD), for OK when `key` is one the PM repository's config
+    config cannot be read (UNMOVED, LEFTOVER, BAD), for OK when `key` is one the PM repository's config
     never holds (DROPPED_KEYS: `pm_data` is derived), and for NONE: with no pointer there is no
     file to write, and the home file is never made again (it would be a leftover, UNMOVED)."""
     loc = locate(home)

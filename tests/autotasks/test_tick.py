@@ -18,6 +18,7 @@ from tests import gitfixture
 from tests.home import machine_config, temp_home
 from tests.realgit import real_git
 
+UNIGNORED = T.unignored     # Base puts a fake in its place
 D = datetime.datetime
 NOW = D(2026, 10, 21, 12, 0)
 PY = 'C:\\Py\\python.exe'
@@ -188,6 +189,33 @@ class Place(Base):
         self.assertEqual((code, self.started), (T.EXIT_FAILED, []))
         self.assertEqual(lines, ['not ignored, add the line: nothing started'])
         self.assertFalse(os.path.lexists(os.path.join(self.pm_folder, 'auto-tasks')))
+
+    def test_an_unignored_folder_is_named_before_the_home_states_move(self):
+        # moving the home state into a folder git does not ignore leaves it untracked in the checkout
+        os.makedirs(self.home_state())
+        with mock.patch.object(T, 'unignored', lambda pm: 'not ignored, add the line'):
+            code, lines = self.go()
+        self.assertEqual((code, self.started), (T.EXIT_FAILED, []))
+        self.assertEqual(lines, ['not ignored, add the line: nothing started'])
+
+    def test_with_no_machine_config_folder_yet_the_home_state_says_to_make_it_not_to_copy(self):
+        os.makedirs(self.home_state())
+        gitfixture.rmtree(self.pm_folder)
+        with mock.patch.object(T, 'unignored', lambda pm: 'not ignored, add the line'):
+            code, lines = self.go()
+        self.assertEqual((code, self.started), (T.EXIT_FAILED, []))
+        self.assertEqual(lines, [T.HOME_NO_FOLDER % (self.pm_folder, self.home_state(), T.kuser.MOVE_DOC)
+                                 + ': nothing started'])
+        self.assertNotIn('Copy-Item', lines[0])
+        self.assertIn('config_move.py', lines[0])
+        self.assertFalse(os.path.lexists(self.pm_folder))
+
+    def test_git_that_cannot_tell_is_a_problem_saying_why(self):
+        from kitlib.config import move
+        with mock.patch.object(move, 'ignored', lambda pm, rels: (None, 'fatal: no repo')):
+            why = UNIGNORED(self.pm)
+        self.assertIn('git could not tell', why)
+        self.assertIn('fatal: no repo', why)
 
 
 @real_git('git check-ignore on the PM repo: the fake lacks check-ignore')

@@ -18,10 +18,16 @@ from tests import home as khome
 from tests import pmstart as tpm
 
 
-def clean_git(args, cwd):
-    """A kitlib.git.cmd.call fake for the integrity check: tracked, clean, committed by OWNER."""
-    out = {'ls-files': '.pm-kit/config.json', 'status': ''}.get(args[0], OWNER)
-    return Result(0, out.encode('utf-8'), '')
+def fake_git(status=''):
+    """A kitlib.git.cmd.call fake for the integrity check: tracked, `status` for status
+    --porcelain (default clean), committed by OWNER."""
+    def run(args, cwd):
+        out = {'ls-files': '.pm-kit/config.json', 'status': status}.get(args[0], OWNER)
+        return Result(0, out.encode('utf-8'), '')
+    return run
+
+
+clean_git = fake_git()
 
 
 OWNER = 'owner@example.com'
@@ -118,14 +124,47 @@ class SessionStartTest(Case):
         self.home_state = os.path.join(self.home, kuser.DIR_NAME, 'auto-tasks')
         self.pm_state = os.path.join(self.folder, 'auto-tasks')
 
-    def lines(self):
-        return tpm.REAL_CONFIG_LINES(kuser.locate(self.home), clean_git, self.rules)
+    def lines(self, run=clean_git):
+        return tpm.REAL_CONFIG_LINES(kuser.locate(self.home), run, self.rules)
 
-    def test_a_leftover_names_its_remove_command_and_the_integrity_check_still_runs(self):
+    def test_a_leftover_names_its_remove_command(self):
         left = self.leave()
         out = self.lines()
         self.assertEqual(out, [configcheck.LEFTOVER % (left, self.pm_file, left)])
         self.assertIn('stops until it is removed', out[0])
+
+    def test_with_a_leftover_the_integrity_check_still_runs(self):
+        left = self.leave()
+        out = self.lines(fake_git(status=' M .pm-kit/config.json'))
+        self.assertEqual(out, [configcheck.LEFTOVER % (left, self.pm_file, left),
+                               configcheck.DIRTY % (self.pm_file, self.pm, '.pm-kit/config.json')])
+
+    def test_a_state_folder_git_does_not_ignore_is_named_since_the_tick_says_it_to_no_one(self):
+        from unittest import mock
+        seen = []
+
+        def unignored(pm):
+            seen.append(pm)
+            return 'not ignored, add the line'
+        with mock.patch.object(configcheck, '_unignored', unignored):
+            out = self.lines()
+        self.assertEqual(out, [configcheck.PREFIX + 'not ignored, add the line'])
+        self.assertEqual(seen, [self.pm])
+
+    def test_the_ignore_line_comes_before_the_home_states_move(self):
+        from unittest import mock
+        os.makedirs(self.home_state)
+        with mock.patch.object(configcheck, '_unignored', lambda pm: 'not ignored'):
+            out = self.lines()
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0], configcheck.PREFIX + 'not ignored')
+        self.assertIn('Copy-Item', out[1])
+
+    def test_the_ignore_check_is_the_ticks(self):
+        from unittest import mock
+        from kitlib.autotasks import tick
+        with mock.patch.object(tick, 'unignored', lambda pm: 'tick says %s' % pm):
+            self.assertEqual(tpm.REAL_UNIGNORED(self.pm), 'tick says %s' % self.pm)
 
     def test_the_auto_tasks_state_in_the_home_folder_names_its_move(self):
         os.makedirs(self.home_state)

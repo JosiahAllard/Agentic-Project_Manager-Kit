@@ -96,6 +96,10 @@ HOME_MOVE = ("the auto-tasks state moved to the PM repository (%s); it is still 
 HOME_BOTH = ("the auto-tasks state is in the PM repository (%s) and an old copy is still in the home "
              "folder (%s); the tick starts nothing until it is gone: check it, then remove it "
              "(Remove-Item -LiteralPath '%s' -Recurse)")
+HOME_NO_FOLDER = ("the auto-tasks state moved to the PM repository's machine config folder (%s), "
+                  "which is not there yet; the state is still in the home folder (%s) and the tick "
+                  "starts nothing until it is moved: make that folder first (tools/config_move.py, "
+                  "%s), then the tick names the move")
 UNIGNORED = ("git does not ignore the auto-tasks state folder in %s: add the line auto-tasks/ to %s "
              "and commit it")
 
@@ -127,10 +131,14 @@ def _quoted(path):
 
 def home_problem(folder, home=None):
     """None when the retired home state folder (home_state_dir) is not there; else the line that
-    names its move to `folder` (state_dir's) or, when `folder` is there too, its removal."""
+    names its move to `folder` (state_dir's) or, when `folder` is there too, its removal. When
+    the PM repository's machine config folder (`folder`'s parent) is not there yet, the line says
+    to make it first: a copy into it would fail."""
     old = home_state_dir(home)
     if not os.path.lexists(old):
         return None
+    if not os.path.isdir(os.path.dirname(folder)):
+        return HOME_NO_FOLDER % (os.path.dirname(folder), old, kuser.MOVE_DOC)
     if os.path.lexists(folder):
         return HOME_BOTH % (folder, old, _quoted(old))
     return HOME_MOVE % (folder, old, _quoted(old), _quoted(folder), _quoted(old))
@@ -146,6 +154,15 @@ def unignored(pm):
     if left:
         return UNIGNORED % (pm, os.path.join(pm, kuser.DIR_NAME, '.gitignore'))
     return None
+
+
+def place_problem(folder, home=None):
+    """None when the tick may use the state folder `folder` (state_dir's); else its problem. The
+    ignore check comes before the home state's move, so a state copied in is never left untracked
+    in the PM checkout; with no machine config folder yet, the home state's line says to make it."""
+    if not os.path.isdir(os.path.dirname(folder)):
+        return home_problem(folder, home) or unignored(os.path.dirname(os.path.dirname(folder)))
+    return unignored(os.path.dirname(os.path.dirname(folder))) or home_problem(folder, home)
 
 
 def read_state(path):
@@ -281,7 +298,7 @@ def tick(home=None, kit=None, now=None, fetch=None, start=None, repos=None, pyth
         folder = state_dir(home)
     except ConfigError as e:
         return EXIT_FAILED, ['%s: nothing started' % e]
-    problem = home_problem(folder, home) or unignored(os.path.dirname(os.path.dirname(folder)))
+    problem = place_problem(folder, home)
     if problem:
         return EXIT_FAILED, ['%s: nothing started' % problem]
     try:
