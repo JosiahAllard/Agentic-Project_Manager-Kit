@@ -1143,8 +1143,10 @@ def ledger_glob(ctx, target, start=0, above=False):
     wildcard matches every held path below the folder. A part also matches a name it spells
     literally (`[PM]` the folder `[PM]`). A wildcard is searched for from `start` (past a namespace
     prefix, prefix_end, whose `?` is none); a DOS wildcard (LEDGER_GLOB_CHARS) is one too, matched
-    as `*`. With `above`, a wildcard shallower than a held path whose parts each match the
-    folders it passes through names a folder above it (ledger_kind's `above`)."""
+    as `*`. A part matches the 8.3 short name too (glob_part, short_parts), as FindFirstFile
+    matches: `A-LONG~?` names `a-long-folder`. With `above`, a wildcard shallower than a held
+    path whose parts each match the folders it passes through names a folder above it
+    (ledger_kind's `above`)."""
     first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
     cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
@@ -1158,12 +1160,35 @@ def ledger_glob(ctx, target, start=0, above=False):
         if real == b or not jail.inside(real, b):
             continue
         below = real[len(b.rstrip('\\/')) + 1:].split(os.sep)
+        shorts = short_parts(real, len(below))
         deeper = kind == 'rulebook' and len(parts) == len(below) + 1
         shallower = above and len(parts) < len(below)
         if wide or ((len(parts) == len(below) or deeper or shallower) and
-                    all(n == x or fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts))):
+                    all(n == x or glob_part(n, s, x) for n, s, x in zip(below, shorts, parts))):
             return kind
     return None
+
+
+def glob_part(name, short, pattern):
+    """Whether the wildcard part `pattern` matches a path part, as FindFirstFile matches it: its
+    long name `name` or its 8.3 short name `short` (None when it has none), both case folded."""
+    return fnmatch.fnmatchcase(name, pattern) or (short is not None and fnmatch.fnmatchcase(short, pattern))
+
+
+def short_parts(real, depth):
+    """The last `depth` parts of the 8.3 short spelling of the existing path `real`
+    (GetShortPathNameW), case folded, to match a wildcard against as FindFirstFile does; [None]
+    * depth when the volume gives none or the path does not resolve (its long names alone)."""
+    short = None
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.WinDLL('kernel32').GetShortPathNameW(real, buf, len(buf))
+        short = buf.value if 0 < n < len(buf) else None
+    except (ImportError, OSError, AttributeError, ValueError):
+        short = None
+    parts = re.split(r'[\\/]', short.lower().rstrip('\\/')) if short else []
+    return parts[-depth:] if depth and len(parts) >= depth else [None] * depth
 
 
 def ledger_git(event, ctx, cmd, inv, cwd, role):

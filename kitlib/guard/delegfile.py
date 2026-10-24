@@ -245,7 +245,8 @@ def glob_reaches(ctx, text, where, shell, chars=hubg.GLOB_CHARS):
     other character: fail closed; a DOS wildcard as `*`, rules.DOS_WILDCARDS) against the
     matching part of the copy's path below the literal folder the wildcard starts in (glob_base
     with `chars`); `**` or `..` after the wildcard, any copy below that folder. None when it can
-    name none, or the guard cannot place that folder."""
+    name none, or the guard cannot place that folder. A part matches the 8.3 short name too
+    (rules.glob_part), as FindFirstFile matches."""
     base, rest = glob_base(ctx, text, where, shell, chars)
     if not base:
         return None
@@ -258,7 +259,9 @@ def glob_reaches(ctx, text, where, shell, chars=hubg.GLOB_CHARS):
         below = r[len(b.rstrip('\\/')) + 1:].split(os.sep)
         if any('**' in x or x == '..' for x in parts):
             return f
-        if parts and len(parts) <= len(below) and all(fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts)):
+        shorts = rules.short_parts(r, len(below))
+        if parts and len(parts) <= len(below) and all(
+                rules.glob_part(n, s, x) for n, s, x in zip(below, shorts, parts)):
             return f
     return None
 
