@@ -9,11 +9,12 @@ and refuses, outside ALLOWED:
   - a '~/...' format string filled with the config folder's name (`'~/%s' % user.DIR_NAME`, an
     f-string);
   - a call, a `.joinpath` or a `/` join whose later parts hold the config folder (`'.pm-kit'`,
-    `user.DIR_NAME`, `kuser.DIR_NAME`, `kitlib.config.user.DIR_NAME`, an import alias of it, or a
-    name the module assigns from one, as `FOLDER = user.DIR_NAME`) and whose first part (a
-    joinpath's receiver) comes from the home folder: a name in it says so (home, USERPROFILE,
-    expanduser, home_dir, Path.home, an 'USERPROFILE' or 'HOME' key), or a name assigned from it,
-    in the same function or a scope around it (`h = home_dir(); join(h, DIR_NAME)`, a module's
+    `user.DIR_NAME`, `kuser.DIR_NAME`, `kitlib.config.user.DIR_NAME`, an import alias of it or of
+    kitlib.config.user (`KU.DIR_NAME`), or a name the module assigns from one, as
+    `FOLDER = user.DIR_NAME`) and whose first part (a joinpath's receiver) comes from the home
+    folder: a name in it says so (home, USERPROFILE, expanduser, home_dir, Path.home, a keyword
+    `home=`, a string naming USERPROFILE or HOME), or a name assigned from it, in the same
+    function or a scope around it (`h = home_dir(); join(h, DIR_NAME)`, a module's
     `BASE = os.path.expanduser('~')` used in a function), lambdas included;
   - a PowerShell line, not a comment, naming `.pm-kit` with USERPROFILE, HOME or `~`, or with a
     variable an earlier line set from one (`$h = $env:USERPROFILE`).
@@ -55,7 +56,6 @@ ALLOWED = {
 
 SPELLED = re.compile(r'(?i)(?:~|%USERPROFILE%|\$env:USERPROFILE|\$HOME)[/\\]\.pm-kit(?![\w-])')
 HOMEISH = re.compile(r'(?i)home|USERPROFILE|expanduser')
-HOME_KEYS = re.compile(r'(?i)^(?:USERPROFILE|HOME|HOMEDRIVE|HOMEPATH)$')
 SHELL_HOME = re.compile(r'(?i)USERPROFILE|\$HOME\b|~[/\\]')
 SHELL_SET = re.compile(r'^\s*\$(\w+)\s*=(.*)$')
 SHELL_VAR = re.compile(r'\$(\w+)')
@@ -75,14 +75,14 @@ def _docstrings(tree):
 
 def _is_config(node, aliases=()):
     """Whether `node` is the config folder's name: the literal, kitlib.config.user.DIR_NAME (as
-    `user.`, `kuser.` or the full dotted name), or a name in `aliases` (one the module gives it)."""
+    `user.`, `kuser.`, a module alias or the full dotted name), or a name in `aliases` (one the module gives it)."""
     if isinstance(node, ast.Constant):
         return node.value == CONFIG
     if isinstance(node, ast.Name):
         return node.id == 'DIR_NAME' or node.id in aliases
     if isinstance(node, ast.Attribute) and node.attr == 'DIR_NAME':
         v = node.value
-        return ((isinstance(v, ast.Name) and v.id in CONFIG_NAMES)
+        return ((isinstance(v, ast.Name) and (v.id in CONFIG_NAMES or ('module', v.id) in aliases))
                 or (isinstance(v, ast.Attribute) and v.attr == 'user'))
     return False
 
@@ -104,11 +104,18 @@ def _target_names(targets):
 
 def _config_aliases(tree):
     """The names a module gives the config folder's name, anywhere in it: `FOLDER = user.DIR_NAME`
-    and `from kitlib.config.user import DIR_NAME as D`."""
+    and `from kitlib.config.user import DIR_NAME as D`; and, as ('module', name), the names it
+    gives kitlib.config.user (`import kitlib.config.user as KU`)."""
     aliases, assigns = set(), []
     for a in ast.walk(tree):
         if isinstance(a, ast.ImportFrom):
             aliases.update(al.asname for al in a.names if al.name == 'DIR_NAME' and al.asname)
+            if a.module == 'kitlib.config':
+                aliases.update(('module', al.asname) for al in a.names
+                               if al.name == 'user' and al.asname)
+        elif isinstance(a, ast.Import):
+            aliases.update(('module', al.asname) for al in a.names
+                           if al.name == 'kitlib.config.user' and al.asname)
         elif isinstance(a, ast.Assign):
             assigns.append(a)
     grew = True
@@ -124,8 +131,8 @@ def _config_aliases(tree):
 
 def _homeish(node, held=()):
     """Whether `node` comes from the home folder, by the names in it: one that says so (home,
-    home_dir, Path.home, expanduser, USERPROFILE), an environment key naming it ('USERPROFILE',
-    'HOME'), or a name in `held` (one assigned from the home folder). It reads names, never the
+    home_dir, Path.home, expanduser, USERPROFILE), a keyword or a string naming it (`home=True`,
+    '%USERPROFILE%', '$HOME'), or a name in `held` (one assigned from the home folder). It reads names, never the
     source text, so a file is split once (ast.parse), not once per node."""
     for n in ast.walk(node):
         if isinstance(n, ast.Name):
@@ -134,7 +141,10 @@ def _homeish(node, held=()):
         elif isinstance(n, ast.Attribute):
             if HOMEISH.search(n.attr):
                 return True
-        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and HOME_KEYS.match(n.value):
+        elif isinstance(n, ast.keyword):
+            if n.arg and HOMEISH.search(n.arg):
+                return True
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and HOMEISH.search(n.value):
             return True
     return False
 
@@ -362,6 +372,21 @@ class NoHomeConfigPathTest(unittest.TestCase):
             "from kitlib.config.user import DIR_NAME as D\np = os.path.join(home_dir(), D)\n": 1,
             "p = os.path.join(home_dir(), kitlib.config.user.DIR_NAME)\n": 1,
             "f = lambda: os.path.join(home_dir(), DIR_NAME)\n": 1,
+        }
+        for src, want in cases.items():
+            self.assertEqual(len(python_findings(src)), want, src)
+
+    def test_an_expanded_variable_a_keyword_and_a_module_alias_are_caught(self):
+        cases = {
+            "p = os.path.join(os.path.expandvars('%USERPROFILE%'), DIR_NAME)\n": 1,
+            "p = os.path.join(expandvars('$HOME'), DIR_NAME)\n": 1,
+            "def f():\n    h = os.path.expandvars('%USERPROFILE%')\n    return join(h, DIR_NAME)\n": 1,
+            "p = os.path.join(paths(home=True), DIR_NAME)\n": 1,
+            "import kitlib.config.user as KU\np = os.path.join(home_dir(), KU.DIR_NAME)\n": 1,
+            "from kitlib.config import user as KU\np = os.path.join(home_dir(), KU.DIR_NAME)\n": 1,
+            "p = os.path.join(os.path.expandvars('%PM_REPO%'), DIR_NAME)\n": 0,
+            "p = os.path.join(paths(repo=True), DIR_NAME)\n": 0,
+            "import kitlib.config.user as KU\np = os.path.join(home_dir(), KU)\n": 0,
         }
         for src, want in cases.items():
             self.assertEqual(len(python_findings(src)), want, src)
