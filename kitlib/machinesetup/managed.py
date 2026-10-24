@@ -27,6 +27,8 @@ is not a JSON object or has a key at any depth the rendered template lacks (name
 path: add it to the template; values inside lists are not walked). The write keeps the key order
 the existing file has, so the diff shows only real changes. A replaced file is copied to a .bak
 beside it first, and the write is refused when the file changed since the survey or is a link.
+A key the template dropped on purpose is listed in RETIRED: the replace may drop it, and the plan
+line and the diff name it.
 
 survey_live() reads the managed file as it is, for the default mode and the older-kit switch: when
 it carries this kit's guard entry, no account settings.json gains one (settings). The plugin step
@@ -48,6 +50,13 @@ OVERLAY = 'managed-settings.json'
 SECTION = 'managed'
 PLACEHOLDER = re.compile(r'\{(kit|pythonw|plugin_export)\}')
 COMMAND = 'tools/machine_setup.py'
+# Dotted paths the template once held and dropped: a managed file that still has one may lose it in
+# the replace (named in the diff and the plan line); any other key the template and overlay lack
+# still refuses. Add a path here in the same commit that drops it from the template.
+RETIRED = (
+    'effortLevel',      # dropped by 28ec2ad6a "Managed settings: drop effortLevel and modelSettings"
+    'modelSettings',    # the same commit (it held claude-opus-5-5.autoCompactWindow)
+)
 
 
 class ManagedError(Exception):
@@ -214,12 +223,12 @@ def guard_where(data, kit, home):
 
 
 def _target(plan, path, data):
-    """(raw, layout, parsed) of the managed file at `path`; (None, NEW_LAYOUT, None) when there is
-    none; None after a refusal. An existing file is replaced whole, so it is refused when it is no
-    JSON object or holds a key at any depth that `data` (the rendered template, overlay included)
-    lacks (_extra_paths)."""
+    """(raw, layout, parsed, retired) of the managed file at `path`; (None, NEW_LAYOUT, None, [])
+    when there is none; None after a refusal. An existing file is replaced whole, so it is refused
+    when it is no JSON object or holds a key at any depth that `data` (the rendered template,
+    overlay included) lacks (_extra_paths), except a RETIRED one: those are returned as `retired`."""
     if not os.path.lexists(path):
-        return None, dict(settings.NEW_LAYOUT), None
+        return None, dict(settings.NEW_LAYOUT), None, []
     if is_link(path) or not os.path.isfile(path):
         plan.refuse('%s is a link or not a file; this step replaces only a plain file' % path)
         return None
@@ -238,12 +247,14 @@ def _target(plan, path, data):
         plan.refuse('%s does not hold a JSON object' % path)
         return None
     extra = _extra_paths(have, data)
+    retired = [k for k in extra if k in RETIRED]
+    extra = [k for k in extra if k not in RETIRED]
     if extra:
         plan.refuse('%s has keys that are neither in the kit template nor in the overlay, and replacing '
                     'the file would drop them: %s; add them to the template (%s)'
                     % (path, ', '.join(extra), source()))
         return None
-    return raw, layout, have
+    return raw, layout, have, retired
 
 
 def _extra_paths(have, data, prefix=''):
@@ -327,7 +338,7 @@ def survey(ctx, apply=False):
     got = _target(plan, path, data)
     if got is None:
         return plan
-    raw, layout, have = got
+    raw, layout, have, retired = got
     new = settings.write(layout, _ordered_like(data, have))
     if new == raw:
         plan.note(SECTION, '%s is in sync with the kit template' % path)
@@ -341,7 +352,9 @@ def survey(ctx, apply=False):
                  undo='delete "%s"' % path, detail=diff)
         return plan
     bak = free_name('%s.machine-setup-%s.bak' % (path, ctx.today))
-    plan.add(SECTION, '%s: replace it with the rendered %s (backup: %s)' % (path, source(), os.path.basename(bak)),
+    dropped = ' and drops the retired key(s) %s' % ', '.join(retired) if retired else ''
+    plan.add(SECTION, '%s: replace it with the rendered %s%s (backup: %s)'
+             % (path, source(), dropped, os.path.basename(bak)),
              lambda: settings._write(path, raw, new, bak), undo='copy "%s" over "%s"' % (bak, path),
              detail=diff)
     return plan
