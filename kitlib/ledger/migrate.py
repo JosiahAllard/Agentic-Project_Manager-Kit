@@ -58,6 +58,7 @@ Raw = collections.namedtuple('Raw', 'repo topic text ids')
 Change = collections.namedtuple('Change', 'repo key topic text ids line')
 
 HEADING = re.compile(r'^(#{2,})\s+(.*\S)\s*$')
+CITES = re.compile(r'\b(?:%s|Q-\d+)\b' % ID)
 DIGEST_LINE = re.compile(r'^- ((?:%s)(?:\s*,\s*(?:%s))*)\s*:\s*(.+?)\s*$' % (ID, ID))
 SHARED_NAMES = ('shared', 'all')
 
@@ -284,6 +285,9 @@ def plan(report_text, current_basis, split=False):
         if split and rulebook.normal(it.repo) == rulebook.SHARED:
             errs.append('line %d: shared rule %s: with ledger_dir set no writer path reaches all.md '
                         'yet; leave it for later' % (it.line, it.key))
+        if CITES.search(it.text):
+            errs.append("line %d: rule %s cites a ruling or question id in its text; the id belongs in "
+                        "the entry's question only, so say the reason instead" % (it.line, it.key))
         c = Change(it.repo, it.key, it.topic, it.text, tuple(it.ids), it.line)
         changes.append(c)
         if it.tag == 'MERGE':

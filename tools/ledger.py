@@ -404,8 +404,11 @@ def do_rules(a, found):
     return 0 if shown or not a.topic else 1
 
 
-def same_file(a, b):
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+def under(path, folder):
+    """True when `path` is `folder` or anywhere below it (spelling, case and `..` resolved)."""
+    f = os.path.normcase(os.path.abspath(folder))
+    p = os.path.normcase(os.path.abspath(path))
+    return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
 
 
 def do_migrate_report(a, found):
@@ -425,12 +428,14 @@ def do_migrate_report(a, found):
     if a.out is None:
         sys.stdout.write(report)
         return 0
-    protected = [p for _, p in files.readable(found)] + [found.digest]
-    if any(same_file(a.out, p) for p in protected) or \
-            same_file(os.path.dirname(os.path.abspath(a.out)), found.rules):
+    protected = [p for _, p in files.readable(found)] + [found.digest, digest_path]
+    if any(files._same(a.out, p) for p in protected) or (found.rules and under(a.out, found.rules)):
         raise Usage('--out must not be a ledger file, the digest or in the rules folder')
-    with open(a.out, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(report)
+    try:
+        with open(a.out, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(report)
+    except OSError as e:
+        return fail('cannot write %s: %s' % (a.out, e))
     print('wrote %s' % a.out)
     return 0
 
@@ -452,9 +457,15 @@ def do_rule_apply(a, found, repos):
         return fail(why or 'no standing digest at %s' % found.digest)
     changes, errs = migrate.plan(report, migrate.basis(digest, retired), found.split)
     books = write.load_books(found.rules)
-    todo = []
+    todo, landing = [], {}
     for c in changes:
         state = migrate.status(books, c)
+        spot = (rulebook.target(books, c.repo), c.key)
+        if spot in landing:
+            errs.append('line %d: rule %s lands in %s, as line %d does too; give one a new key'
+                        % (c.line, c.key, rulebook.file_name(spot[0]), landing[spot]))
+            continue
+        landing[spot] = c.line
         if not found.split:
             bad = fmt.repo_problem(c.repo, repos)
         elif c.repo in found.repos:

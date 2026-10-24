@@ -2,10 +2,15 @@
 merge grouping, report text and plan, and tools/ledger.py's migrate-report and rule-apply. Every
 line and id is made up; ids are placeholders built by rid(n)."""
 import os
+import subprocess
+import sys
+import tempfile
 import unittest
 
 from kitlib.ledger import migrate, rulebook
-from tests.ledger.test_rulebook import Base, R1, R2, R3, rid
+from tests.home import machine_config
+from tests.ledger.test_cli_split import frozen_text
+from tests.ledger.test_rulebook import Base, R1, R2, R3, TOOL, rid
 
 DIGEST = f'''# Standing
 
@@ -59,7 +64,8 @@ class ClassifyTest(unittest.TestCase):
 
     def test_a_ruling_or_question_id_is_not_a_record(self):
         for text in ('Agents never reopen R-' + '0012.', 'Agents never reopen Q-12.',
-                     'Agents never reopen H-kit-' + '0007.', 'Agents never reopen H-kit-' + '0007 or UTF-8 files.'):
+                     'Agents never reopen H-kit-' + '0007.', 'Agents never reopen H-kit-' + '0007 or UTF-8 files.',
+                     'Agents never reopen X-AB-12.'):
             self.assertEqual(item(text)[0], 'KEEP', text)
 
 
@@ -170,6 +176,21 @@ class PlanTest(unittest.TestCase):
             'CUT | all', 'KEEP | all'), self.basis)
         self.assertTrue(any('is already on line' in e for e in errs), errs)
 
+    def test_a_merge_group_across_repos_is_refused(self):
+        items = [migrate.Item('MERGE', 'g1', True, 'kit', 'a.one', 'T', 'Agents never guess.', (R1,), 'r', 0),
+                 migrate.Item('MERGE', 'g1', True, 'pm', 'a.two', 'T', 'Agents never guess at all.', (R2,), 'r', 0)]
+        _, errs = migrate.plan(migrate.render(items, self.basis, 's'), self.basis)
+        self.assertEqual(len(errs), 1, errs)
+        self.assertIn('MERGE g1 joins repo pm', errs[0])
+
+    def test_a_rule_text_citing_a_ruling_or_question_id_is_refused(self):
+        for cite in ('R-' + '9999', 'H-kit-' + '0003', 'Q-' + '12'):
+            items = [migrate.Item('KEEP', '', True, 'kit', 'a.one', 'T', 'Agents never reopen %s.' % cite,
+                                  (R1,), 'r', 0)]
+            _, errs = migrate.plan(migrate.render(items, self.basis, 's'), self.basis)
+            self.assertEqual(len(errs), 1, (cite, errs))
+            self.assertIn('cites a ruling or question id', errs[0])
+
     def test_shared_lines_are_refused_in_the_split_layout_only(self):
         _, errs = migrate.plan(reviewed(self.text), self.basis, split=True)
         self.assertEqual(len(errs), 1)
@@ -210,9 +231,56 @@ class CliTest(Base):
         self.assertEqual((self.read(self.log), self.read(self.digest)), (log, digest))
         self.assertEqual(os.listdir(os.path.join(self.dir, 'rules')), [])
 
-    def test_out_refuses_a_ledger_file(self):
-        r = self.run_tool('migrate-report', '--out', self.log)
+    def out_from(self, cwd, *args):
+        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home)
+        return subprocess.run([sys.executable, TOOL, 'migrate-report'] + list(args), capture_output=True,
+                              text=True, env=env, timeout=60, cwd=cwd)
+
+    def test_out_refuses_a_ledger_file_in_every_spelling(self):
+        log = self.read(self.log)
+        rules = os.path.join(self.dir, 'rules')
+        for cwd, out in ((self.dir, 'LEDGER.md'), (self.dir, self.log.upper()),
+                         (self.dir, os.path.join(rules, '..', 'LEDGER.md')),
+                         (rules, os.path.join('..', 'LEDGER.md'))):
+            r = self.out_from(cwd, '--out', out)
+            self.assertEqual(r.returncode, 2, (out, r.stderr))
+        self.assertEqual(self.read(self.log), log)
+
+    def test_out_refuses_the_digest_and_the_digest_actually_read(self):
+        before = self.read(self.digest)
+        self.assertEqual(self.out_from(self.dir, '--out', self.digest).returncode, 2)
+        other = os.path.join(self.dir, 'elsewhere.md')
+        self.put(other, DIGEST)
+        r = self.out_from(self.dir, '--digest', other, '--out', other)
         self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual((self.read(self.digest), self.read(other)), (before, DIGEST))
+
+    def test_out_refuses_the_rules_folder_and_anything_under_it(self):
+        rules = os.path.join(self.dir, 'rules')
+        os.makedirs(os.path.join(rules, 'sub'))
+        for out in (rules, os.path.join(rules, 'new.md'), os.path.join(rules, 'sub', 'x.md'),
+                    os.path.join(rules, '..', 'rules', 'y.md')):
+            r = self.out_from(self.dir, '--out', out)
+            self.assertEqual(r.returncode, 2, (out, r.stderr))
+            self.assertNotIn('Traceback', r.stderr)
+        self.assertEqual(os.listdir(os.path.join(rules, 'sub')), [])
+
+    def test_an_unwritable_out_is_a_clean_failure(self):
+        r = self.out_from(self.dir, '--out', os.path.join(self.dir, 'no-such-folder', 'r.md'))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn('cannot write', r.stderr)
+        self.assertNotIn('Traceback', r.stderr)
+
+    def test_a_rule_citing_an_id_is_refused_before_any_write(self):
+        self.make_report()
+        self.put(self.report, self.read(self.report).replace(
+            'Workers never edit files outside their own worktree.',
+            'Workers never edit files outside their own worktree (R-' + '9999).'))
+        log = self.read(self.log)
+        r = self.apply(*self.write_flags())
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn('cites a ruling or question id', r.stderr)
+        self.assertEqual(self.read(self.log), log)
 
     def test_an_unedited_report_is_refused_and_nothing_is_written(self):
         self.make_report(edit=False)
@@ -284,6 +352,98 @@ class CliTest(Base):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn('stale', r.stderr)
         self.assertEqual(self.read(self.log), log)
+
+
+SPLIT_DIGEST = f'''# Standing
+
+## Alpha
+### Landing
+- {R1}: Agents never merge an unreviewed branch.
+
+## Pm
+### Landing
+- {R2}: Agents never merge an unreviewed plan.
+
+## Zeta
+### Landing
+- {R1}: Agents never merge an unreviewed zeta.
+'''
+
+
+class SplitTest(unittest.TestCase):
+    """The split layout (ledger_dir set): the repo checks of do_rule_apply, through the verb."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = self.tmp.name
+        self.dir = os.path.join(self.home, 'rulings')
+        os.makedirs(os.path.join(self.dir, 'rules'))
+        self.frozen = os.path.join(self.dir, 'LEDGER.md')
+        self.put(self.frozen, frozen_text())
+        self.put(os.path.join(self.dir, 'STANDING.md'), SPLIT_DIGEST)
+        machine_config(self.home, {'ledger_dir': self.dir, 'ledger_repos': ['alpha', 'pm'],
+                                   'ledger_path': self.frozen}, case=self)
+        self.report = os.path.join(self.home, 'report.md')
+
+    def put(self, path, text):
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+
+    def read(self, path):
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+
+    def run_tool(self, *args):
+        env = dict(os.environ, USERPROFILE=self.home, HOME=self.home, CLAUDE_AGENT_MODEL='')
+        return subprocess.run([sys.executable, TOOL] + list(args), capture_output=True, text=True,
+                              env=env, timeout=60)
+
+    def make_report(self, edit=lambda t: t):
+        r = self.run_tool('migrate-report', '--out', self.report)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.put(self.report, edit(reviewed(self.read(self.report))))
+
+    def apply(self, *more):
+        return self.run_tool('rule-apply', self.report, *more)
+
+    def test_a_repo_not_in_ledger_repos_is_refused_and_nothing_is_written(self):
+        self.make_report()
+        r = self.apply('--write', '--prov', 'selected', '--source', 'test')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn('not one of ledger_repos', r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'alpha.md')))
+        self.assertEqual(os.listdir(os.path.join(self.dir, 'rules')), [])
+
+    def test_known_repos_write_to_their_own_files(self):
+        self.make_report(lambda t: t.replace('KEEP | zeta', 'CUT | zeta'))
+        dry = self.apply()
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertIn('dry run: 2 rule(s)', dry.stdout)
+        r = self.apply('--write', '--prov', 'selected', '--source', 'test')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.split(), ['H-alpha-' + '0001', 'H-pm-' + '0001'])
+        self.assertTrue(os.path.exists(os.path.join(self.dir, 'rules', 'alpha.md')))
+        c = self.run_tool('check')
+        self.assertEqual(c.returncode, 0, c.stdout + c.stderr)
+
+    def test_a_shared_rule_is_refused_through_the_verb(self):
+        self.make_report(lambda t: t.replace('| alpha |', '| all |', 1))
+        r = self.apply()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn('shared rule', r.stderr)
+
+    def test_two_repos_of_one_book_proposing_one_key_are_refused_before_any_write(self):
+        self.put(os.path.join(self.dir, 'rules', 'pm.md'), '# T\nRepos: alpha, pm\n')
+
+        def same_key(t):
+            keys = [l.split(' | ')[2] for l in t.splitlines() if l.startswith('KEEP')]
+            return t.replace(keys[1], keys[0]).replace('KEEP | zeta', 'CUT | zeta')
+        self.make_report(same_key)
+        r = self.apply('--write', '--prov', 'selected', '--source', 'test')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn('lands in pm.md', r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'alpha.md')))
 
 
 if __name__ == '__main__':
