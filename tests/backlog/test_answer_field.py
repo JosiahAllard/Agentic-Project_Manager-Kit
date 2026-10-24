@@ -135,6 +135,13 @@ class States(AnswerCase):
         self.assertEqual((r.get('state'), r.all('blocked_on')), ('blocked', ['item:BAR']))
         self.assertFalse(r.has('owner_ask'))
 
+    def test_a_minus_one_hold_keeps_its_owner_ask(self):
+        self.seed(held('FOO', priority='-1', priority_by='-'))
+        self.answer('FOO')
+        r = self.get('FOO')
+        self.assertEqual((r.get('state'), r.get('priority')), ('open', '-1'))
+        self.assertEqual(r.get('owner_ask'), 'Q-101: keep the cap?')
+
     def test_clearing_the_owner_needs_the_role_check(self):
         self.seed(held('FOO'))
         with self.assertRaises(Refusal) as cm:
