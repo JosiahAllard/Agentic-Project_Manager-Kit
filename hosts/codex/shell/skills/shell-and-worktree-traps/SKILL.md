@@ -15,6 +15,8 @@ description: Use before running shell commands on the Windows machine (Git Bash 
 8. Test output: tee the whole output to a file (or `dotnet test --logger trx`), then read the file; never grep it live (a case-sensitive filter once matched the pass banner but not the failure text). Never pipe a gate or locked run through a truncating reader.
 9. One foreground gate per worktree, on its assigned ports; never background one with a stray `&` (two at once fought over the same build).
 10. Cleanup goes through the kit's tools (`python <kit>/tools/worktree_remove.py -C <main checkout> <worktree>`), only for a worktree that is yours to remove; otherwise report it to the lander or coordinator.
+11. Read a tool's usage with `<tool> --help` alone, or into a file you read with Read; never pipe it to `head`, `tail` or `grep`.
+12. Wait on a background run as <kit>/docs/gate.md "Waiting on a gate: who arms what" says (a run of your own: `run_in_background` and its exit notice), never with a foreground `sleep` or a poll loop.
 
 ## Never
 
