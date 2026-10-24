@@ -58,7 +58,7 @@ pane stacks under the list instead of beside it.
   carries (priority, status, branch, session, question) and three buttons that open its record
   page: Edit fields and Edit body open that section's editor, and Retire opens the page with its
   delete form open (the delete still asks for a reason and the typed id; there is no other
-  retire route). The view carries no effort, scope or body: the record page has them. A completed
+  retire route). The backlog view carries no effort, scope or body, so the detail reads the record (`GET /records/<repo>/<id>`, the route the record page uses) when it opens and adds Effort, Scope (one line per path) and Body; if that read fails it says so and the buttons stay. A completed
   row's detail has Open the record. Open also shows your
   stories: those in progress above the table, those filed or closed below it, with Withdraw while
   a story is still submitted; the Backlog button counts the stories in progress (highlighted when

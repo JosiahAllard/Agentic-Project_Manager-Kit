@@ -1752,7 +1752,7 @@ class RecordPageTest(unittest.TestCase):
             out.back = !$("#list .rec") && !!document.getElementById("row-alpha:B-1") && !!button($("#pane-detail"), "Edit fields");
             return out;
         """, AFTER=after, REFUSED=self.refusal("invalid", self.ASKS), RULING=self.RULING)
-        self.assertEqual(got["reads"], ["GET /records/alpha/B-1"])
+        self.assertEqual(got["reads"], ["GET /records/alpha/B-1"] * 2)                  # the detail reads it for Effort, Scope and Body, then the record page
         self.assertEqual(got["heads"], ["Fields", "Blocker or hold", "Body", "Branch", "Delete"])
         self.assertTrue(got["open"])
         self.assertIn("summary: one", got["shown"])
@@ -1776,7 +1776,7 @@ class RecordPageTest(unittest.TestCase):
             await click(button($("#pane-detail"), "Edit fields"));
             return { reads: calls.filter(c => c.path.startsWith("/records")).map(c => c.method + " " + c.path), page: !!$("#list .rec") };
         """.replace("REC", json.dumps(record(id="B-4", fields=[["id", "B-4"], ["summary", "waits"]]))), snapshot(views=views))
-        self.assertEqual(got["reads"], ["GET /records/alpha/B-4"])
+        self.assertEqual(got["reads"], ["GET /records/alpha/B-4"] * 3)                  # the detail (drawn twice), then the record page
         self.assertTrue(got["page"])
 
     def test_delete_waits_for_a_reason_and_the_typed_id_then_shows_the_record_deleted(self):
@@ -1838,7 +1838,7 @@ class RecordPageTest(unittest.TestCase):
         body = json.dumps({"id": "B-7", "summary": "a new one", "scope": ["tools/a.py", "tools/b.py"], "effort": "s"},
                           separators=(",", ":"))
         self.assertEqual(got["sent"], ["/records/alpha " + body] * 2)
-        self.assertEqual(got["reads"], ["/records/alpha/new", "/records/alpha/B-7"])
+        self.assertEqual(got["reads"], ["/records/alpha/B-1", "/records/alpha/new", "/records/alpha/B-7"])   # B-1: the first row's detail
 
 
 DOC_CSP = ("<meta http-equiv=\"Content-Security-Policy\" "
@@ -3609,7 +3609,7 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/pages", "/records", "/schedules", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/pages", "/records", "/records", "/schedules", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
                                  "/finding_marks"})
@@ -3816,6 +3816,44 @@ class TriageViewsTest(unittest.TestCase):
         self.assertTrue(got["Body"])
         self.assertFalse(got["Fields"])
         self.assertFalse(got["Delete"])
+
+    def test_the_backlog_detail_shows_effort_each_scope_path_and_the_body_of_the_record(self):
+        rec = record(fields=[["id", "B-1"], ["summary", "one"], ["scope", "tools/x.py"], ["scope", "kitlib/y/"], ["effort", "m"]],
+                     body="First body line.\nSecond <b>line</b>.\n")
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path === "/records/alpha/B-1" ? { status: 200, body: REC } : undefined;
+            await start();
+            await click($("#sections [data-s=backlog]"));
+            const rf = $("#pane-detail #rf-B-1");
+            return { text: text(rf), scope: [...rf.querySelectorAll("li")].map(text), body: text(rf.querySelector("pre")) };
+        """.replace("REC", json.dumps(rec)), snapshot(views=self.VIEWS))
+        self.assertIn("Effort: m", got["text"])
+        self.assertEqual(got["scope"], ["tools/x.py", "kitlib/y/"])                          # each scope path on its own line
+        self.assertEqual(got["body"], "First body line.\nSecond <b>line</b>.")              # the body, as text
+
+    def test_the_backlog_detail_says_so_when_the_record_cannot_be_read(self):
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path.startsWith("/records/") ? { status: 404, body: { ok: false, error: { code: "not_found", message: "gone", field: "id" } } } : undefined;
+            await start();
+            await click($("#sections [data-s=backlog]"));
+            return { rf: text($("#pane-detail #rf-B-1")), buttons: $$("#pane-detail button").map(text) };
+        """, snapshot(views=self.VIEWS))
+        self.assertIn("Cannot read the record", got["rf"])
+        self.assertIn("Edit fields", got["buttons"])                                          # the buttons stay
+
+    def test_a_completed_rows_detail_shows_the_records_effort_scope_and_body(self):
+        rec = record(id="B-0", fields=[["id", "B-0"], ["scope", "docs/z.md"], ["effort", "l"]], body="Done body.\n", where="completed")
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path === "/records/alpha/B-0" ? { status: 200, body: REC } : undefined;
+            await start();
+            await click($("#sections [data-s=backlog]"));
+            await click($("#stabs [data-sf=done]"));
+            const rf = $("#pane-detail #rf-B-0");
+            return { text: text(rf), scope: [...rf.querySelectorAll("li")].map(text), body: text(rf.querySelector("pre")) };
+        """.replace("REC", json.dumps(rec)), snapshot(views=self.VIEWS))
+        self.assertIn("Effort: l", got["text"])
+        self.assertEqual(got["scope"], ["docs/z.md"])
+        self.assertEqual(got["body"], "Done body.")
 
     def test_documents_are_grouped_this_week_and_earlier_and_ask_the_pm_keeps_typed_text(self):
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
