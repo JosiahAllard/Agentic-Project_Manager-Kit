@@ -1336,31 +1336,42 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     pathspec or one that reaches a held path); and a git call whose directory the guard cannot
     place (a computed -C, GIT_DIR, --git-dir, --work-tree and the like: gc.blind) is refused in
     any of those writing forms while a ledger is configured, since it can act on the ledger's
-    tree (fail closed); a read there passes."""
+    tree (fail closed); a read there passes.
+    A subcommand the shell computes (`git $x LEDGER.md`), or the one xargs appends to a bare
+    `xargs git`, is unread: a tree form (it can be reset --hard), and in a placed tree its words
+    are judged as paths. git that xargs runs takes arguments the guard cannot read: a path
+    subcommand's are every path (git_every_path's reading), and checkout, switch, reset or clean
+    with them is a tree form. In a placed tree, for the same sessions, git that moves the tree
+    to other content is a tree form too (ledger_git_moves: switch, merge, pull, apply that writes
+    the tree, read-tree -u)."""
     gc = git_call_judged(inv)
-    if gc is None or gc.sub_dyn:
+    if gc is None:
         return None
     sub, args = gc.sub, gc.rest
     held = ledger_guarded(ctx)
     if not held:
         return None
     from . import delegfile
+    xargs = gc.inv is not None and gc.inv.via == 'xargs'
+    unread = ('a git subcommand the shell computes' if gc.sub_dyn
+              else 'the subcommand xargs appends' if xargs and not sub else None)
     short, longs, pos = _opts(sub, args, wide=True)
-    tree_form = ledger_git_tree_form(sub, args, short, longs)
-    if not gc.dir or gc.unknown or gc.blind:
+    tree_form = unread or ledger_git_tree_form(sub, args, short, longs, xargs)
+    if not gc.dir or gc.blind or (gc.unknown and not gc.sub_dyn):
         if not ledger_wide_binds(event, ctx):
             return None
-        form = tree_form or ledger_git_path_form(sub, args, short, longs, held)
+        form = tree_form or ledger_git_path_form(sub, args, short, longs, held, xargs)
         if not form:
             return None
         kind = held[0][0]
-        return refuse('ledger', role, STANDING_WHY[kind] % (
-            '`%s` (%s, in a place the guard cannot tell: it can be the tree of the ledger)' % (bare(cmd), form)),
-            UNPLACED_BRANCH_INSTEAD if checkout_makes_branch(sub, short, longs) and not tree_form
-            else ledger_instead(ctx, kind))
+        where = '`%s` (%s, in a place the guard cannot tell: it can be the tree of the ledger)' % (bare(cmd), form)
+        if checkout_makes_branch(sub, short, longs) and not tree_form:
+            return refuse('ledger', role, UNPLACED_BRANCH_WHY % where, unplaced_branch_instead(gc))
+        return refuse('ledger', role, STANDING_WHY[kind] % where, ledger_instead(ctx, kind))
+    tree_form = tree_form or ledger_git_moves(sub, args, short, longs)
     if sub not in ('rm', 'mv', 'restore', 'checkout-index', 'checkout') and not tree_form:
         return None
-    if sub == 'restore' and restore_index_only(short, longs):
+    if sub == 'restore' and restore_index_only(short, longs) and not xargs:
         return None                             # the index alone
     place = ctx.place(gc.dir)
     top = place.top if place.kind in (repo.MAIN, repo.LINKED) and place.top else gc.dir
@@ -1371,7 +1382,7 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     if sub == 'stash' and tree_form:
         pos = delegfile.after_dashes(args) or []    # push's pathspecs after `--`; none: the tree
     specs = sub in ('clean', 'stash') and tree_form and ledger_wide_binds(event, ctx)
-    if tree_form and ledger_wide_binds(event, ctx) and (not specs or not pos or all(
+    if tree_form and ledger_wide_binds(event, ctx) and (not specs or not pos or xargs or all(
             delegfile.spec_real(ctx, w, gc.dir, top) is False for w in pos)):
         kind = held[0][0]                       # no pathspec, or exclusions alone: the tree
         return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), tree_form)),
@@ -1379,10 +1390,12 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     if sub == 'checkout':
         after = delegfile.after_dashes(args)
         pos = after if after is not None else pos
-    elif sub not in ('rm', 'mv', 'restore', 'checkout-index'):
+    elif sub not in ('rm', 'mv', 'restore', 'checkout-index') and not unread:
         if not specs:
             return None                         # a tree form the session is not held to
-    every = git_every_path(sub, short, longs)
+    every = git_every_path(sub, short, longs) or (
+        'the paths xargs appends' if xargs and (unread or sub in ('rm', 'mv', 'restore', 'checkout-index',
+                                                                 'checkout')) else None)
     if every:
         kind = held[0][0]
         return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), every)),
@@ -1421,15 +1434,24 @@ def marked_not_pm(event, ctx):
     return who not in (context.OWNER, 'pm')
 
 
-def ledger_git_tree_form(sub, args, short, longs):
+def ledger_git_tree_form(sub, args, short, longs, xargs=False):
     """The option or form of a git call (sub, its argument Words, and _opts(wide=True)) that
     rewrites the work tree as a whole, discarding what is there: checkout or switch with -f or
     --force (switch's --discard-changes; any abbreviation git could read as either, an
     ambiguous one too: fail closed), reset --hard, --merge or --keep (delegfile.GIT_RESETS), a
     stash that is not a read (stash_reads), a clean that is not a dry run (clean_dry_run). None
     for any other call. ledger_git judges a clean's pathspecs, and a stash's after `--`, as a
-    path form's: one that misses the ledger passes; none, or exclusions alone, is the tree."""
+    path form's: one that misses the ledger passes; none, or exclusions alone, is the tree.
+    Checkout, switch or reset with a word the shell computes before `--` (not the value of an
+    option that names a branch, commands.GIT_SUB_VALUES) can be any of these (`git reset "$m"`),
+    and so can checkout, switch, reset or clean that xargs runs (`xargs`: it appends words)."""
     from . import delegfile
+    if xargs and sub in ('checkout', 'switch', 'reset', 'clean'):
+        return 'arguments xargs appends'
+    if sub in ('checkout', 'switch', 'reset'):
+        dyn = computed_option_word(sub, args)
+        if dyn:
+            return 'a word the shell computes (%s)' % dyn
     if sub in ('checkout', 'switch'):
         names = ('force', 'discard-changes') if sub == 'switch' else ('force',)
         if 'f' in short:
@@ -1448,15 +1470,63 @@ def ledger_git_tree_form(sub, args, short, longs):
     return None
 
 
-def ledger_git_path_form(sub, args, short, longs, held=()):
+def computed_option_word(sub, args):
+    """The text of the first word the shell computes among a git call's arguments `args` before
+    a literal `--`, skipping the value of an option commands.GIT_SUB_VALUES names for `sub` (a
+    branch name: `checkout -b "$b"`), else None."""
+    values = cm.GIT_SUB_VALUES.get(sub, ())
+    k = 0
+    while k < len(args):
+        w = args[k]
+        if w.text == '--' and not w.dyn:
+            return None
+        if w.dyn:
+            return w.text or '?'
+        k += 2 if w.text in values else 1
+    return None
+
+
+def ledger_git_moves(sub, args, short, longs):
+    """The form of a git call (sub, its argument Words, and _opts(wide=True)) that moves a placed
+    work tree to other content, which can overwrite or take away the ledger's files there:
+    switch (but `-c`/`-C <branch>` with no start, which keeps the tree as it is), merge, pull,
+    apply unless it only reads the patch or writes the index alone (--check, --stat, --numstat,
+    --summary, --cached; any other option, -3 or an abbreviation fails closed), and read-tree
+    -u. None for any other call. ledger_git judges it only where it can place the tree:
+    unplaced, `git switch main` is a plain switch the guard cannot tell from one in another
+    repository."""
+    if sub == 'switch' and switch_creates_here(args):
+        return None
+    if sub in ('switch', 'merge', 'pull'):
+        return sub
+    if sub == 'apply':
+        reads = {'check', 'stat', 'numstat', 'summary'}
+        if longs <= reads | {'cached'} and longs & (reads | {'cached'}) and '3' not in short:
+            return None
+        return 'apply'
+    if sub == 'read-tree' and 'u' in short:
+        return 'read-tree -u'
+    return None
+
+
+def switch_creates_here(args):
+    """Whether git switch with arguments `args` only creates a branch at HEAD: exactly `-c`,
+    `-C`, `--create` or `--force-create` and its literal name, nothing else (a start point, any
+    other option, a computed word: False)."""
+    return (len(args) == 2 and not any(w.dyn for w in args)
+            and args[0].text in ('-c', '-C', '--create', '--force-create') and not args[1].text.startswith('-'))
+
+
+def ledger_git_path_form(sub, args, short, longs, held=(), xargs=False):
     """The subcommand of a git call that writes the paths it names, where the guard cannot place
     the tree: rm, mv, restore (not the index alone), checkout-index, and a checkout that can
-    write paths (checkout_branch_only is False). None for any other call."""
+    write paths (checkout_branch_only is False). With `xargs` (git that xargs runs, appending
+    words the guard cannot read) a checkout or a restore always can. None for any other call."""
     if sub in ('rm', 'mv', 'checkout-index'):
         return sub
-    if sub == 'checkout' and not checkout_branch_only(args, short, longs, held):
+    if sub == 'checkout' and (xargs or not checkout_branch_only(args, short, longs, held)):
         return sub
-    if sub == 'restore' and not restore_index_only(short, longs):
+    if sub == 'restore' and (xargs or not restore_index_only(short, longs)):
         return sub
     return None
 
@@ -1491,14 +1561,31 @@ def checkout_branch_only(args, short, longs, held=()):
     return name not in held_names(held)
 
 
+UNPLACED_BRANCH_WHY = ('%s creates a branch and checks out its start, which can rewrite the files of the rulings '
+                       'ledger or a rulebook there; only ledger.py writes those, so the guard refuses it where it '
+                       'cannot see the tree.')
 UNPLACED_BRANCH_INSTEAD = ('run it with a literal `git -C <worktree>` so the guard can place the tree, or create '
                            'the branch with `git switch -c <branch> <start>`.')
+BLIND_BRANCH_INSTEAD = ('drop %s (a -C does not undo it, so the guard cannot place the tree), then run it with a '
+                        'literal `git -C <worktree>`, or create the branch with `git -C <worktree> switch -c <branch> '
+                        '<start>`.')
+
+
+def unplaced_branch_instead(gc):
+    """The Instead of an unplaced checkout that creates a branch (checkout_makes_branch): with
+    what points git at a place the text does not show (gc.blind: GIT_DIR, --git-dir and the like),
+    drop that first, since a -C cannot undo it; else UNPLACED_BRANCH_INSTEAD."""
+    if gc.blind:
+        return BLIND_BRANCH_INSTEAD % gc.blind
+    return UNPLACED_BRANCH_INSTEAD
 
 
 def checkout_makes_branch(sub, short, longs):
-    """Whether a checkout creates a branch (-b, -B, --orphan): its refusal's Instead names the
-    forms the guard can judge, not the ledger tool."""
-    return sub == 'checkout' and bool('b' in short or 'B' in short or 'orphan' in longs)
+    """Whether a checkout creates a branch (-b, -B, --orphan, any abbreviation of two letters or
+    more git reads as it: `--orph`): its refusal names that, and its Instead the forms the guard
+    can judge, not the ledger tool."""
+    return sub == 'checkout' and bool('b' in short or 'B' in short or any(
+        len(n) > 1 and 'orphan'.startswith(n) for n in longs))
 
 
 def held_names(held):
@@ -1566,7 +1653,16 @@ def ledger_rule(event, ctx, target, role, what, stand_in=False):
     kind = ledger_kind(ctx, target, above=not stand_in and ledger_wide_binds(event, ctx))
     if kind is None:
         return None
-    return refuse('ledger', role, STANDING_WHY[kind] % what, ledger_instead(ctx, kind))
+    return refuse('ledger', role, STANDING_WHY[kind] % ledger_what(what), ledger_instead(ctx, kind))
+
+
+def ledger_what(what):
+    """`what` for STANDING_WHY, which says what is written: "`cmd` writes X" becomes "`cmd` (X)",
+    so the reason does not say "writes" twice; any other `what` is kept."""
+    i = what.rfind('` writes ')
+    if what.startswith('`') and i > 0:
+        return '%s (%s)' % (what[:i + 1], what[i + len('` writes '):])
+    return what
 
 
 def lock_state_dir(ctx):
