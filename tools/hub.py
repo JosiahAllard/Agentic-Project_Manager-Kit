@@ -97,18 +97,21 @@ the server alone decides what a role may do.
 
   hub.py questions [--status S] [--repo R]          `Q-1 v2 open [repo] title` for each
   hub.py questions add --title T [--repo R] [--context-file F] [--option "label::description"
-        ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from KEY]
-                                                     `ASKED Q-2`, then a line for each warning;
+        ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID]
+        [--from KEY]                                 `ASKED Q-2`, then a line for each warning;
                                                      --from: the asker's launcher session key
                                                      (default pm), refused when the hub does
-                                                     not know it
+                                                     not know it; --record: the open backlog
+                                                     record it is about, refused unless the
+                                                     hub reads it now in that configured repo
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
   hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
                                                      that needs no ruling
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
-        [--urgent | --no-urgent]                     `EDITED Q-1`; an --option list replaces
-                                                     the old one
+        [--urgent | --no-urgent] [--record REPO:ID | --no-record]
+                                                     `EDITED Q-1`; an --option list replaces
+                                                     the old one; --no-record unbinds it
   hub.py questions withdraw Q-1 --from KEY --if-version V    `WITHDRAWN Q-1`
                                                      edit and withdraw: an open question whose
                                                      from is KEY (pm when it has none)
@@ -293,6 +296,16 @@ def _option(text):
     return {'label': label.strip(), 'description': description.strip()}
 
 
+def _record(text):
+    """--record's value: "REPO:ID", split at the first ':' (a repository name holds none), as
+    the {repo, id} the server checks against its configured repositories."""
+    repo, sep, rid = text.partition(':')
+    if not sep or not repo.strip() or not rid.strip():
+        raise argparse.ArgumentTypeError('a record is REPO:ID (a configured repository and one '
+                                         'of its record ids), not %r' % text)
+    return {'repo': repo.strip(), 'id': rid.strip()}
+
+
 def _asks(p):
     """The two arguments of every parser whose verb asks the server. No default is set: a
     sub-verb's parser would put its own over what the verb before it was given."""
@@ -355,6 +368,8 @@ def _client_verbs(sub):
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action='store_true')
     x.add_argument('--story', metavar='S-n')
+    x.add_argument('--record', type=_record, metavar='REPO:ID',
+                   help='the backlog record the question is about (checked by the hub)')
     x.add_argument('--from', dest='who', metavar='KEY',
                    help='your launcher session key: the answer comes back to it (default: pm)')
     x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
@@ -377,6 +392,11 @@ def _client_verbs(sub):
                    help='the place of the recommended option (counts from 0)')
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action=argparse.BooleanOptionalAction, default=None)
+    bind = x.add_mutually_exclusive_group()
+    bind.add_argument('--record', type=_record, metavar='REPO:ID',
+                      help='bind the question to this backlog record (checked by the hub)')
+    bind.add_argument('--no-record', dest='no_record', action='store_true',
+                      help='bind the question to no record')
     _creator(_leaf(q, 'withdraw', 'remove an open question you asked'), 'KEY')
 
     x = _asks(sub.add_parser('answer', help='answer a question (the owner)'))
@@ -978,7 +998,7 @@ def _questions(a, stop):
         got = hub.post('/questions', client.AGENT, _body(
             title=a.title, repo=getattr(a, 'repo', None), context=context, options=a.options,
             recommended=a.recommended, refs=a.refs, urgent=a.urgent, story=a.story,
-            **{'from': a.who}))
+            record=a.record, **{'from': a.who}))
         return _wrote(a, got, 'ASKED %s' % got.get('id'))
     if a.sub == 'log':
         got = hub.post(_one('questions', a) + '/log', client.AGENT,
@@ -990,9 +1010,11 @@ def _questions(a, stop):
         return _wrote(a, got, 'DONE %s' % got.get('id'))
     if a.sub == 'edit':
         context = _text_of(a.context_file, 'context') if a.context_file else None
-        got = hub.post(_one('questions', a) + '/edit', client.AGENT, _edits(a, _body(
-            title=a.title, context=context, options=a.options, recommended=a.recommended,
-            refs=a.refs)))
+        body = _body(title=a.title, context=context, options=a.options,
+                     recommended=a.recommended, refs=a.refs, record=a.record)
+        if a.no_record:
+            body['record'] = None
+        got = hub.post(_one('questions', a) + '/edit', client.AGENT, _edits(a, body))
         return _wrote(a, got, 'EDITED %s' % got.get('id'))
     if a.sub == 'withdraw':
         got = hub.post(_one('questions', a) + '/delete', client.AGENT, _edits(a, {}))

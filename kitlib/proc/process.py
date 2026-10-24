@@ -98,16 +98,51 @@ def alive(pid, ctime):
 
 
 def _ancestor(pid):
-    """(creation FILETIME or None, exited) of pid, both from one handle. exited is True only when
-    a wait shows the process has ended; a process that can be queried but not waited on counts as
-    running."""
+    """(creation FILETIME or None, exited, recorded parent pid or None) of pid, all from one
+    handle. exited is True only when a wait shows the process has ended; a process that can be
+    queried but not waited on counts as running. The recorded parent is read for an exited one
+    only (parent_pid), else None."""
     h = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE)
     if not h:
-        return proc_ctime(pid), False
+        return proc_ctime(pid), False, None
     try:
-        return handle_ctime(h), K32.WaitForSingleObject(h, 0) == win32.WAIT_OBJECT_0
+        exited = K32.WaitForSingleObject(h, 0) == win32.WAIT_OBJECT_0
+        return handle_ctime(h), exited, parent_pid(h) if exited else None
     finally:
         K32.CloseHandle(h)
+
+
+def ancestry(pid, ctime, parents=None, limit=64, through_exited=False):
+    """(ancestors, exited): ancestors_of's [(pid, ctime)] and whether its last one has exited.
+
+    through_exited: an exited ancestor (a handle keeps it openable) does not end the walk; its
+    parent is the one its own handle records, not the listing's, and the walk goes on from there.
+    The same bounds hold: `limit` hops, and a parent created after its child (a reused pid) or
+    one that cannot be opened ends it. exited is then True only when the walk could go no
+    further past an exited ancestor: its parent is gone (not opened, not listed) or newer than
+    it. A parent the listing names but that cannot be opened (winlogon above the desktop's exited
+    userinit) is taken as running. Known limit: its creation time cannot be checked, so a reused
+    pid there, or a listing that still names a process that has just exited, reads as running."""
+    parents = process_parents() if parents is None else parents
+    out, cur, cur_ct, exited = [], int(pid), ctime, False
+    pp = parents.get(cur)
+    for _ in range(limit):
+        if not pp or pp == cur:
+            break
+        pct, gone, recorded = _ancestor(pp)
+        if pct is None or (cur_ct is not None and pct > cur_ct):
+            if exited and pct is None and pp in parents:
+                # A listed process this user cannot open (winlogon, above the desktop's exited
+                # userinit): the walk ends below a running one, as it does above a running hop.
+                exited = False
+            break
+        out.append((pp, pct))
+        exited = gone
+        if gone and not through_exited:
+            break
+        cur, cur_ct = pp, pct
+        pp = recorded if gone else parents.get(cur)
+    return out, exited
 
 
 def ancestors_of(pid, ctime, parents=None, limit=64):
@@ -116,20 +151,7 @@ def ancestors_of(pid, ctime, parents=None, limit=64):
     has exited, but that a handle keeps openable, is the last one: a listing can still name it
     just after its exit (or name it from before), and the parent it records says nothing about
     the processes above it now."""
-    parents = process_parents() if parents is None else parents
-    out, cur, cur_ct = [], int(pid), ctime
-    for _ in range(limit):
-        pp = parents.get(cur)
-        if not pp or pp == cur:
-            break
-        pct, exited = _ancestor(pp)
-        if pct is None or (cur_ct is not None and pct > cur_ct):
-            break
-        out.append((pp, pct))
-        if exited:
-            break
-        cur, cur_ct = pp, pct
-    return out
+    return ancestry(pid, ctime, parents, limit)[0]
 
 
 def own_ancestors():

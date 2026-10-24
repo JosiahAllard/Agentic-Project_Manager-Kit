@@ -93,6 +93,19 @@ class AddTest(Base):
         self.assertIn('not an earlier owner entry', r.stderr)
 
 
+    def test_supersedes_names_a_frozen_or_earlier_entry_and_refuses_an_unknown_one(self):
+        self.assertEqual(self.ok(*add_args('alpha', 'New.', 'selected', 'chat', '--supersedes', rid(2))).strip(),
+                         hid('alpha', 1))
+        self.assertEqual(self.ok(*add_args('alpha', 'Newer.', 'selected', 'chat',
+                                           '--supersedes', hid('alpha', 1))).strip(), hid('alpha', 2))
+        r = self.run_tool(*add_args('alpha', 'No.', 'selected', 'chat', '--supersedes', rid(9)))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertTrue(r.stderr.startswith('REFUSED:'), r.stderr)
+        self.assertIn('supersedes %s' % rid(9), r.stderr)
+        self.assertEqual(self.read(self.frozen), frozen_text())
+        self.assertEqual(self.read(self.path('alpha')).count('\n## '), 2)
+
+
 class ReadTest(Base):
     def setUp(self):
         super().setUp()

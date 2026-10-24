@@ -1,23 +1,32 @@
-/* The Action Hub's shared look: the colour and font tokens (light, and dark by the system setting or data-theme) and the
-   shell rules index.html uses. The page's own rules, and the few tokens that differ from these,
-   stay in its <style>, which comes after this sheet. Nothing here is loaded from the network. */
+/* The Action Hub's shared look: the colour, font and shape tokens (light, and dark by the system setting or data-theme)
+   and the shell rules index.html uses. The page's own rules stay in its <style>, which comes after this sheet.
+   Nothing here is loaded from the network: the fonts named are used only where the machine has them.
+   The look is the Triage direction's: warm greys, one indigo accent, Segoe UI Variable at 14px, 10px corners.
+   Status colours (--ok done, --warn failed or urgent, --rec late or stopped) always come with a glyph and a word. */
 :root{
-  --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d9dfe6;
-  --accent:#1f5f8b; --rec:#8a5a00;
-  --ok:#2c7a4b; --ok-soft:#e2f2e8; --warn:#a33b2b; --warn-soft:#f9e3df;
-  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --f-mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  --bg:#f6f6f4; --surface:#ffffff; --fg:#1c1c1e; --muted:#5e5d58; --line:#e2e1dc;
+  --accent:#4a44d4; --accent-soft:#ececfc; --rec:#875600; --rec-soft:#f8eed9;
+  --ok:#1d6b3a; --ok-soft:#e7f3ea; --warn:#b42318; --warn-soft:#fbeae8;
+  --hover:#ededea;
+  --f-body:"Segoe UI Variable Text","Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;
+  --f-mono:"Cascadia Mono","Cascadia Code",ui-monospace,Consolas,monospace;
+  /* Corners: cards and panes, then the small controls (inputs, buttons, chips). */
+  --r:10px; --r-s:6px;
   /* The Triage shell: the sidebar's width and its own background, a step off the page's. */
-  --side-w:236px; --side:#e8ecf0;
+  --side-w:236px; --side:#eeeeec;
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
-  --accent:#6fb0de; --rec:#e9b55a;
-  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; --side:#151c24; color-scheme:dark}}
+  --bg:#131315; --surface:#1e1e22; --fg:#ececf0; --muted:#a6a6ae; --line:#34343b;
+  --accent:#a9a5ff; --accent-soft:#2a2850; --rec:#f0b85c; --rec-soft:#3a2e17;
+  --ok:#7fd69b; --ok-soft:#1b2e21; --warn:#ff9a8d; --warn-soft:#3d1f1c;
+  --hover:#26262b; --side:#18181a; color-scheme:dark}}
 :root[data-theme="dark"]{
-  --bg:#11161c; --surface:#19212a; --fg:#e4e9ef; --muted:#93a1b0; --line:#2b3642;
-  --accent:#6fb0de; --rec:#e9b55a;
-  --ok:#6cc995; --ok-soft:#173527; --warn:#ef8a7a; --warn-soft:#3d1d18; --side:#151c24; color-scheme:dark}
-body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--f-body);margin:0}
+  --bg:#131315; --surface:#1e1e22; --fg:#ececf0; --muted:#a6a6ae; --line:#34343b;
+  --accent:#a9a5ff; --accent-soft:#2a2850; --rec:#f0b85c; --rec-soft:#3a2e17;
+  --ok:#7fd69b; --ok-soft:#1b2e21; --warn:#ff9a8d; --warn-soft:#3d1f1c;
+  --hover:#26262b; --side:#18181a; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-body);margin:0}
 header{display:grid;gap:4px}
 .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+/* One focus ring on every control: 2px of the accent, 2px from the edge. */
+a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}

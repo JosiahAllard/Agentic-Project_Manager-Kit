@@ -100,6 +100,18 @@ class WriterTest(Base):
             self.add('alpha', supersedes=hid('beta-2', 1))
         self.assertIn('supersedes %s' % hid('beta-2', 1), str(cm.exception))
 
+    def test_supersedes_may_name_a_frozen_entry(self):
+        frozen = '# Ledger\n\n' + entry(rid(5), 'alpha')
+        before = frozen
+        self.assertEqual(self.add('alpha', supersedes=rid(5), others=[frozen]).id, hid('alpha', 1))
+        self.assertIn('Supersedes: %s' % rid(5), self.text('alpha'))
+        self.assertEqual(frozen, before)
+        for unknown in (rid(9), hid('beta-2', 1)):
+            with self.subTest(unknown=unknown), self.assertRaises(Refused) as cm:
+                self.add('alpha', supersedes=unknown, others=[frozen])
+            self.assertIn('supersedes %s' % unknown, str(cm.exception))
+        self.assertEqual(write.count(self.text('alpha')), 1)
+
     def test_under_may_name_an_owner_entry_in_any_file(self):
         self.add('alpha')                                     # an owner entry
         self.add('beta-2', prov='delegated', source='under %s' % hid('alpha', 1),
