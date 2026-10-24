@@ -536,13 +536,14 @@ class ScopedDocsOnly(ScopedCase):
     route); one that touches none lands on its docs record as before."""
     GATE = {'docs_only': {'globs': ['*.md'], 'steps': ['scrub']},
             'steps': [_step('unit'), _step('scrub', always=False, globs=['*.md'])]}
-    KIT = dict(ScopedCase.KIT, landing={'shared_paths': ['content/*']})
+    # not content/skills/**: a strict path, which reuse.docs_only_change already bars
+    KIT = dict(ScopedCase.KIT, landing={'shared_paths': ['shared/*']})
 
     def test_a_docs_record_touching_a_shared_path_is_refused(self):
-        wt, tip, rec = self.gated({'content/skills/x/SKILL.md': 'words\n'})
+        wt, tip, rec = self.gated({'shared/x.md': 'words\n'})
         self.assertEqual(gate_ok.mode_of(rec), 'docs')
         self.refused(wt, tip, 'without --full',
-                     'the tip changes shared path content/skills/x/SKILL.md ("landing".shared_paths)')
+                     'the tip changes shared path shared/x.md ("landing".shared_paths)')
 
     def test_a_docs_record_off_the_shared_paths_lands(self):
         _, tip, rec = self.gated({'docs/guide.md': 'words\n'})
