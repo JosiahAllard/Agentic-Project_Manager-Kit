@@ -481,7 +481,7 @@ class FolderWildcards(unittest.TestCase):
         with mock.patch.object(delegfile, 'WALK_LIMIT', 3):
             self.assert_config(lambda sub: bash('rm */x/*.log', self.w.wt, sub), 'past the limit')
             d = self.decide(bash('rm */x/*.log', self.w.wt, True), {})
-            self.assertIn('stopped resolving after 3 names', d.reason)
+            self.assertIn('read more than 3 names', d.reason)
         self.assert_not_config(lambda sub: bash('rm */x/*.log', self.w.wt, sub), 'under the limit')
 
 
@@ -514,7 +514,7 @@ class WalkLimitText(unittest.TestCase):
                     self.assertIsNotNone(d, 'allowed')
                     self.assertEqual((d.verdict, d.rule), ('deny', rules.MACHINE_CONFIG), d.reason)
                     self.assertIn('too wide for the guard to check', d.reason)
-                    self.assertIn('narrow it, or name the files', d.reason)
+                    self.assertIn('Narrow it, or name the files', d.reason)
                     self.assertNotIn('Ask the owner', d.reason)
                     self.assertNotIn(rules.MACHINE_CONFIG_WHY, d.reason)
                     self.assertEqual(d.instead, 'Get-ChildItem -Force -Name "%s"' % folder)

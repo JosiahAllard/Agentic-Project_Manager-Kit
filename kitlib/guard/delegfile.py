@@ -169,13 +169,24 @@ def shell_paths(event, ctx, cmd, inv, role):
     if config is not None:
         w, folder, over = config
         if over:
-            return rules.machine_config_refusal(event, ctx, role, (
-                '`%s` writes %s, a wildcard the guard stopped resolving after %d names in and below %s, so it '
-                'may name a machine config folder (fail closed); name the paths without a wildcard, or with '
-                'one that starts deeper') % (rules.bare(cmd), w.text, WALK_LIMIT, rules.quote(folder)), folder)
+            return walk_limit_refusal(role, rules.bare(cmd), w.text, folder)
         return rules.machine_config_refusal(event, ctx, role, '`%s` writes %s, a wildcard in %s' % (
             rules.bare(cmd), w.text, rules.quote(folder)), folder)
     return None
+
+
+def walk_limit_refusal(role, bare, word, folder):
+    """The machine-config refusal of a wildcard write target `word` whose match read past
+    WALK_LIMIT names in and below `folder` (glob_config's over): the guard could not check it, so
+    the advice is to narrow the word or name the files, not the machine config folder's own
+    wording, which would be wrong where no .pm-kit is near (rule and mode as
+    rules.machine_config_refusal)."""
+    return rules.refuse(rules.MACHINE_CONFIG, role, (
+        '`%s` writes %s, a wildcard too wide for the guard to check: it read more than %d names in and '
+        'below %s and stopped, so it cannot tell whether the wildcard names a machine config folder (fail '
+        'closed). Narrow it, or name the files: start the wildcard in a deeper folder, or list the folder '
+        'and name the files the command writes. To list the folder:') % (
+            bare, word, WALK_LIMIT, rules.quote(folder)), 'Get-ChildItem -Force -Name %s' % rules.quote(folder))
 
 
 def glob_config(ctx, w, where, shell):
