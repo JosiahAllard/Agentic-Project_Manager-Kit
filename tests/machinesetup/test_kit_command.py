@@ -137,6 +137,22 @@ class Steps(unittest.TestCase):
         self.assertTrue(any('was not written by machine setup' in n for n in plan.notes['extras']), plan.notes)
         self.assertEqual(self.host.reads, 0)
 
+    def test_a_path_that_cannot_be_read_is_a_note_and_the_launcher_still_planned(self):
+        for error in (PermissionError(5, 'Access is denied'),
+                      ValueError('HKCU\\Environment Path is not a string (type 7)')):
+            with self.subTest(error=error):
+                self.host = PathHost()
+                self.host.user_path = mock.Mock(side_effect=error)
+                plan = self.plan()
+                self.assertEqual([c.text.split(' ')[0] for c in plan.changes], ['write'])
+                self.assertTrue(any('could not be read (%s); its step is skipped' % error in n
+                                    for n in plan.notes['extras']), plan.notes)
+                code, out = carry_out(plan, apply=True)
+                self.assertEqual(code, M.EXIT_OK, out)
+                self.assertTrue(os.path.isfile(self.path))
+                self.assertEqual(self.host.writes, [])
+                os.remove(self.path)
+
     def test_a_path_that_is_not_ascii_plans_nothing(self):
         plan = M.Plan()
         K.plan_steps(plan, self.host, 'C:\\k\u00e9t', self.folder)
@@ -158,6 +174,20 @@ class Launcher(unittest.TestCase):
         r = subprocess.run([path, 'gate', '-C', 'a b'], cwd=tmp, env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 7, r.stderr)
         self.assertEqual(r.stdout.strip(), "['gate', '-C', 'a b'] %s" % tmp)
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'HKCU is Windows')
+class RealPathRead(unittest.TestCase):
+    def test_the_real_user_path_reads_as_a_string_of_a_string_type_or_unset(self):
+        """Reads HKCU\\Environment Path only; nothing is written."""
+        from kitlib.machinesetup import extras
+        with mock.patch.object(extras.Host, 'set_user_path', side_effect=AssertionError('no write')):
+            raw, kind = extras.Host().user_path()
+        if raw is None:
+            self.assertIsNone(kind)
+        else:
+            self.assertIsInstance(raw, str)
+            self.assertIn(kind, (K.REG_SZ, K.REG_EXPAND_SZ))
 
 
 class Survey(WS.StepBase):

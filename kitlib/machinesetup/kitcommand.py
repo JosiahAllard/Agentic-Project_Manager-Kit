@@ -130,7 +130,12 @@ def plan_steps(plan, host, root, folder):
                  % ('write' if have is None else 'rewrite', path, os.path.join(root, TOOL)),
                  lambda: write_launcher(path, text),
                  undo=('delete "%s"' % path) if have is None else 'its old text was: %r' % have)
-    raw, kind = host.user_path()
+    try:
+        raw, kind = host.user_path()
+    except (OSError, ValueError) as e:  # a denied OpenKey; a Path that is not a string
+        plan.note('extras', 'kit command: the user PATH (%s) could not be read (%s); its step is skipped, '
+                            'so add %s to it by hand' % (PATH_KEY, e, folder))
+        return
     if path_has(raw, folder):
         return
     new = path_with(raw, folder)
