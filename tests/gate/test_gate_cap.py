@@ -25,6 +25,10 @@ OTHER = {'role': 'agent', 'host': OTHER_HOST, 'ancestors': [OTHER_HOST], 'sessio
          'name': 't'}
 # The owner: no agent host above it, and the same (untrusted) session id as the agent's runs.
 OWNER = {'role': 'owner', 'host': None, 'ancestors': [], 'session': 'S1', 'name': 't'}
+# An agent whose host cannot be read (kitlib.lock.store.caller: a detached run, or a tree or
+# registry it could not read): role agent, no host.
+HOSTLESS = {'role': 'agent', 'host': None, 'ancestors': [[912347, 79]], 'session': 'S1',
+            'name': 't'}
 
 
 class Wrongful(Exception):
@@ -172,6 +176,39 @@ class BranchGateWaits(CapCase):
         with mock.patch.object(gatecap, 'actor', side_effect=AssertionError('caller read')), \
                 mock.patch.object(gatecap, 'configured', side_effect=AssertionError('config read')):
             gatecap.wait_turn(self.store, self.name, lambda t: None, sleep=never)
+
+
+class HostlessAgentCountsAll(CapCase):
+    """An agent with no readable host cannot tell its session's runs from another's: every gate
+    run of the repository counts (fail closed). A cap that skips every caller with no host, as
+    it did for the owner, fails these."""
+
+    def test_every_gate_run_of_the_repo_counts(self):
+        counted = [self.run_rec(), self.run_rec(host=OTHER_HOST)]
+        self.run_rec(priority='land')                   # a landing's run: still not counted
+        self.run_rec(repo='another-repo')
+        self.run_rec(gate=False)
+        for who in (HOSTLESS, dict(HOSTLESS, host=[1]), {'host': None, 'ancestors': []}):
+            got = [r['id'] for r in gatecap.in_flight(self.store, who, self.name)]
+            self.assertEqual(got, counted, who)
+
+    def test_at_the_cap_its_branch_gate_waits(self):
+        for _ in range(2):
+            self.run_rec()
+        for _ in range(2):
+            self.run_rec(host=OTHER_HOST)
+        lines = []
+        with self.capped(who=HOSTLESS), self.assertRaises(Wrongful):
+            self.branch_gate(say=lines.append)
+        waits = [t for t in lines if 'session gate cap' in t]
+        self.assertEqual(len(waits), 1, lines)
+        self.assertIn("4 of 4 gate runs (all counted: this agent's host cannot be read)", waits[0])
+        self.assertEqual(self.book_calls, [])           # nothing booked while it waits
+
+    def test_a_run_it_is_inside_is_not_counted(self):
+        self.run_rec()
+        inside = dict(HOSTLESS, ancestors=[[os.getpid(), process.own_ctime()]])
+        self.assertEqual(gatecap.in_flight(self.store, inside, self.name), [])
 
 
 class NeverWaits(CapCase):

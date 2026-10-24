@@ -3,8 +3,9 @@ machine-lock run, it waits while its agent session already has the configured nu
 of the same repository in flight (booked, waiting or held).
 
 A run is the session's when its recorded ancestors hold the session's nearest agent host
-(kitlib.lock.store.owns): a coordinator and its in-process subagents share one host. The owner's
-own runs (no agent host above the caller) are never counted and never wait. A landing's runs
+(kitlib.lock.store.owns): a coordinator and its in-process subagents share one host. The owner
+(role owner, no agent host above the caller) counts nothing and never waits. An agent with no
+readable host counts every gate run of the repository (fail closed). A landing's runs
 (priority "land") are not counted; a landing and the daily full run never call wait_turn
 (kitlib.gate.runner `gated`, with capped=True from `_gate_checkout` only, is the one caller).
 
@@ -60,15 +61,25 @@ def _gate_runs(runs, repo):
             and str(r.get('repo') or '').lower() == want]
 
 
+def _hosted(who):
+    """Whether the caller carries an agent host [pid, ctime] that owns() can match."""
+    host = lockstore.actor_host(who)
+    return isinstance(host, (list, tuple)) and len(host) == 2
+
+
 def in_flight(store, who, repo, runs=None):
-    """The session's live gate runs of repo (records), oldest first. [] for the owner (no agent
-    host). A run this process is inside (its wrapper is among the caller's ancestors) is not
-    counted: a gate nested in it never waits for itself."""
-    if not lockstore.actor_host(who):
+    """The session's live gate runs of repo (records), oldest first. [] for the owner (role owner,
+    no agent host). An agent whose host cannot be read (a detached run, a tree or host registry
+    that could not be read: kitlib.lock.store.caller) cannot tell its session's runs from
+    another's, so every gate run of repo counts as its own (fail closed). A run this process is
+    inside (its wrapper is among the caller's ancestors) is not counted: a gate nested in it
+    never waits for itself."""
+    hosted = _hosted(who)
+    if not hosted and isinstance(who, dict) and who.get('role') == 'owner':
         return []
     runs = _gate_runs(store.live_runs() if runs is None else runs, repo)
-    inside = [list(a) for a in who.get('ancestors') or []]
-    return [r for r in runs if lockstore.owns(who, r)
+    inside = [list(a) for a in (who.get('ancestors') if isinstance(who, dict) else None) or []]
+    return [r for r in runs if (lockstore.owns(who, r) if hosted else True)
             and [r.get('pid'), r.get('ctime')] not in inside]
 
 
@@ -88,9 +99,11 @@ def wait_turn(store, repo, say, cap=None, who=None, home=None, poll_s=None, slee
             say(warning)
     if not cap or len(mine) < cap:
         return
-    say('the gate waits for the session gate cap: %d of %d gate runs of this session in %s are '
+    whose = ('of this session' if _hosted(who) else
+             '(all counted: this agent\'s host cannot be read)')
+    say('the gate waits for the session gate cap: %d of %d gate runs %s in %s are '
         'in flight (%s); it books when one ends' % (
-            len(mine), cap, repo, ', '.join(str(r.get('id')) for r in mine)))
+            len(mine), cap, whose, repo, ', '.join(str(r.get('id')) for r in mine)))
     interval = max(poll_s or POLL_S, store.settings.queue_poll_s)
     sleep = sleep or time.sleep
     while True:
