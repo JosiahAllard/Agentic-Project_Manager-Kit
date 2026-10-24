@@ -341,7 +341,7 @@ class UsageAndTarget(SyncCase):
         self.assertEqual(self.head(), head)
 
     def test_no_model_refuses_with_commit_pys_own_text(self):
-        """KIT-SKILL-MODEL-ARG: the two tools once refused a missing --model in two wordings;
+        """The two tools once refused a missing --model in two wordings;
         an agent fixing one form from the other's text got it wrong."""
         done = self.cli(self.stage_clean(), '--host', 'claude')
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

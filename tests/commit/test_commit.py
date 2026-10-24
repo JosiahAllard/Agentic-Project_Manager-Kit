@@ -513,7 +513,7 @@ class UsageMistakesAreUsageErrors(LinkedCase):
         self.assert_usage('--model is required', 'a.py', model=None, env={})
 
     def test_the_missing_model_refusal_names_only_the_chosen_hosts_variable(self):
-        """KIT-SKILL-MODEL-ARG: a host with no model variable (codex) was told to set the default
+        """A host with no model variable (codex) was told to set the default
         host's, another host's environment (skill builder: never infer the model from it)."""
         claude = C.missing_model('claude')
         self.assertIn('--model "<model name>"', claude)
