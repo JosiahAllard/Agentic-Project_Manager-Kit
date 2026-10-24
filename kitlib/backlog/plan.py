@@ -34,6 +34,8 @@ WRITTEN_BY = {
     'q': '`set-status parked [--q Q-nnn]`', 'parked_at': '`set-status parked [--q Q-nnn]`',
     'review': '`add` from the Action Hub (the library\'s `review=`); a coordinator clears it with '
               '`clear-review ID --reason T`',
+    'answer': 'the Action Hub, filing the owner\'s answer to a question bound to the record '
+              '(the library\'s `plan_answer`)',
 }
 # Keys no verb writes any more: an owner gate is a role (kitlib/backlog/roles.py), not a cited
 # id. A record that carries one keeps it until `set ID --unset K` clears it (a price move drops
@@ -1031,6 +1033,105 @@ def plan_clear_review(snap, ctx, rid, reason):
                   ['CLEARED the review mark on %s (was: %s)' % (rid, mark),
                    '  state: %s, priority: %s; `pull` and `next` now treat it as any other record'
                    % (rec.get('state'), rec.get('priority'))])
+
+
+# --- the owner's answer ---------------------------------------------------------------------------
+
+ANSWER_REVIEW = 'owner-answer'
+ASKED_Q = re.compile(r'(?<![A-Za-z0-9-])Q-[0-9]{3,}(?![A-Za-z0-9_])')
+
+
+def _waits_on(rec):
+    """The questions the record's own wait names: `q` on a parked record, the Q-ids `owner_ask`
+    cites on one blocked on the owner. Empty: nothing binds the wait to a question."""
+    state = rec.get('state')
+    if state == 'parked':
+        return [rec.get('q')] if rec.get('q') else []
+    if state == 'blocked' and 'owner' in rec.all('blocked_on'):
+        return ASKED_Q.findall(rec.get('owner_ask') or '')
+    return []
+
+
+def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, other=False,
+                waiting=(), role_checked=False):
+    """File the owner's answer to question `qid` (answered at `at`, the hub's timestamp) into
+    the record it is bound to, in one write: an `answer: <qid> <at>` line (one per question; a
+    re-answer replaces its line) and a `## Owner answer (Action Hub, <at>)` body section with
+    `title`, the choice `label` and `note` verbatim, and `via`. Only the Action Hub calls it
+    (WRITTEN_BY: `set` neither writes nor unsets `answer`).
+
+    The record's wait ends only on the last answer: when `waiting` (the other questions bound to
+    the record, still unanswered; the hub knows them) is empty and every question the wait names
+    (_waits_on) has an answer line, a parked record is unparked (as plan_unpark) and the `owner`
+    blocker is cleared (as plan_unblock: other blockers stay, `owner_ask` goes unless
+    `priority: -1`), which is the `unblock-owner` row, so it needs `role_checked`
+    (refuse_top). A pulled or open record, or a wait no question names, only gets the answer.
+    `other` (a free-text answer) also writes the review mark `review: owner-answer <date>`
+    unless one stands, so `pull` refuses the record and `next` lists it to review until a
+    coordinator's `clear-review`. The same `qid` and `at` again changes nothing. A record that
+    is gone is NotFound: the hub leaves the answer to the PM."""
+    err = rmod._question(qid) if qid else 'no question id'
+    if err:
+        raise Usage('bad question `%s`: %s' % (qid, err))
+    line = '%s %s' % (qid, at)
+    err = rmod._answer(line)
+    if err:
+        raise Usage('bad answer time: %s' % err)
+    if not (title or '').strip() or not (label or '').strip():
+        raise Usage('an owner answer needs the question\'s title and the choice\'s label')
+    for w in waiting:
+        if rmod._question(w):
+            raise Usage('bad waiting question `%s`: %s' % (w, rmod._question(w)))
+    refuse_machine_paths('answer', title, label, note, via)
+    rec = require(snap, rid)
+    subject = 'backlog: owner answer %s on %s' % (rid, qid)
+    if line in rec.all('answer'):
+        return Change({}, subject, ['ANSWERED %s on %s (%s)' % (rid, qid, at), '  (no change)'])
+    others = [v for v in rec.all('answer') if v.partition(' ')[0] != qid]
+    pairs = rmod.apply_changes(rec.pairs(), [('answer', others + [line])])
+    lines = ['ANSWERED %s on %s (%s): %s' % (rid, qid, at, ' '.join(label.split()))]
+    done = set(rmod.answered(rec)) | {qid}
+    asked = _waits_on(rec)
+    state = rec.get('state')
+    pending = [q for q in asked if q not in done] + [w for w in waiting if w not in done]
+    if not asked:
+        lines.append('  state: %s, unchanged: its wait names no question' % state)
+    elif pending:
+        lines.append('  state: %s, unchanged: still waits on %s' % (state, ', '.join(pending)))
+    elif state == 'parked':
+        pairs = [(k, v) for k, v in pairs if k not in rmod.PARK_KEYS]
+        pairs = rmod.apply_changes(pairs, [('state', ['open'])])
+        lines.append('  UNPARKED - state: open (was parked on %s)' % rec.get('q'))
+    else:
+        if not role_checked:
+            refuse_top(rid, 'answer', ['unblock-owner'])
+        left = [m for m in rec.all('blocked_on') if m != 'owner']
+        if rec.get('priority') != rmod.OWNER_PRIORITY:
+            pairs = [(k, v) for k, v in pairs if k != 'owner_ask']
+        changes = [('blocked_on', left)] if left else [('state', ['open']),
+                                                         ('blocked_on', ['-'])]
+        pairs = rmod.apply_changes(pairs, changes)
+        lines.append('  owner blocker cleared - %s' % ('still blocked on %s' % ', '.join(left)
+                                                       if left else 'state: open'))
+    marked = other and not rec.has('review')
+    if marked:
+        mark = '%s %s' % (ANSWER_REVIEW, ctx.date())
+        pairs = rmod.apply_changes(pairs, [('review', [mark])])
+        lines.append('  review: %s - a free-text answer: `pull` refuses it until a coordinator '
+                     'reads it and runs `clear-review %s --reason T`' % (mark, rid))
+    section = ['## Owner answer (Action Hub, %s)' % at, '',
+               'Question: %s, %s' % (qid, ' '.join(title.split())), 'Answer: %s' % label]
+    if note:
+        section.append('Note: %s' % note)
+    if via:
+        section.append('Via: %s' % via)
+    if marked:
+        section.append('Marked for review: a free-text answer, read by a coordinator before '
+                       'anyone pulls the record.')
+    body = (rec.body or '').rstrip('\n')
+    body = (body + '\n\n' if body.strip() else '') + '\n'.join(section) + '\n'
+    lines.append('  body: section `## Owner answer (Action Hub, %s)` appended' % at)
+    return Change({rid: _text(pairs, body)}, subject, lines)
 
 
 # --- pull / release -------------------------------------------------------------------------------

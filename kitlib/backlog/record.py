@@ -221,6 +221,32 @@ def _review(v, rules=None):
     return _date(date)
 
 
+def _answer(v, rules=None):
+    """`<Q-nnn> <at>`: the owner's answer to that question, filed by the Action Hub at `at`, an
+    ISO timestamp with its UTC offset and no space (docs/backlog.md "Records"). One line per
+    question (_cross_field)."""
+    qid, _, at = v.partition(' ')
+    shape = ('`%s` is not an answer line - `<Q-nnn> <at>`, `at` a timestamp with its offset '
+             '(YYYY-MM-DDTHH:MM:SS+HH:MM)' % v)
+    if not QUESTION_RE.match(qid) or not at or ' ' in at or 'T' not in at:
+        return shape
+    try:
+        when = datetime.datetime.fromisoformat(at)
+    except ValueError:
+        return shape
+    return shape if when.tzinfo is None else None
+
+
+def answered(rec):
+    """{question id: at} of the record's `answer:` lines (a malformed line is left out)."""
+    out = {}
+    for v in rec.all('answer'):
+        if _answer(v) is None:
+            qid, _, at = v.partition(' ')
+            out.setdefault(qid, at)
+    return out
+
+
 # key -> (cardinality, validator), in the order a new key is inserted.
 FIELDS = collections.OrderedDict([
     ('id', (ONE, _id)),
@@ -239,6 +265,7 @@ FIELDS = collections.OrderedDict([
     ('parked_at', (AT_MOST_ONE, _date)),
     ('resume', (AT_MOST_ONE, _ruling)),
     ('review', (AT_MOST_ONE, _review)),
+    ('answer', (ANY, _answer)),
     ('scope', (ONE_PLUS, _scope)),
     ('files', (ANY, _path)),
     ('files_at', (AT_MOST_ONE, _free)),
@@ -452,6 +479,14 @@ def _cross_field(rec):
     if rec.has('displaced') and not rec.has('preempt'):
         add(Finding(SCHEMA, path, rec.line_of('displaced'), '`displaced` without `preempt` - '
                     'written only by an out-of-order `pull`'))
+    seen_q = set()
+    for n, key, value in rec.entries:
+        qid = value.partition(' ')[0]
+        if key == 'answer' and _answer(value) is None:
+            if qid in seen_q:
+                add(Finding(SCHEMA, path, n, '`answer` holds one line per question, and %s has '
+                            'more than one; a re-answer replaces its line' % qid))
+            seen_q.add(qid)
     if scopemod.NONE in scopes and len(scopes) > 1:
         add(Finding(SCHEMA, path, rec.line_of('scope'), '`scope: none` touches no tracked file, '
                     'so it cannot sit beside other members'))
