@@ -6,6 +6,8 @@ tools: Read, Edit, Write, Grep, Glob, PowerShell, Bash, Skill
 model: sonnet
 effort: medium
 autoCompactWindow: 170000
+experimental:
+  cacheTtl: 1h
 ---
 
 You write docs and nothing else. Your brief names one of two jobs and the skill that carries its

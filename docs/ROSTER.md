@@ -70,8 +70,9 @@ Model choices rest on measured A/B runs: docs/model-ab.md.
 
 ## The one-hour prompt cache
 
-content/roles/strong-worker.md says `cache: long`, which this table does not show; Claude's
-renderer writes it into hosts/claude/shell/agents/strong-worker.md as a second frontmatter setting (docs/content.md):
+content/roles/strong-worker.md, content/roles/worker.md, content/roles/docs-writer.md and
+content/roles/weak-worker.md say `cache: long`, which this table does not show; Claude's renderer
+writes it into each one's hosts/claude/shell/agents/ file as a second frontmatter setting (docs/content.md):
 
 ```yaml
 experimental:
@@ -85,11 +86,12 @@ experimental:
 - Limits, same source: client 2.1.248 or later; ignored while the subscription draws on usage
   credits; read only from subagent files. That a plugin's agent file is read like a project's is
   inferred, not stated there.
-- Only this row has it (tests/agents/test_agents.py,
-  `test_only_strong_worker_asks_for_the_one_hour_prompt_cache`). Why this row: the untested pricing
-  computation in docs/agent-review.md, "Context and cache findings", made for the opus/medium default
-  coder, which was senior-worker (opus-worker before it) until the two roles swapped charters on
-  2026-10-15; the setting moved with the charter.
+- Only these four rows have it (tests/agents/test_agents.py,
+  `test_only_the_long_cache_roles_ask_for_the_one_hour_prompt_cache`): strong-worker, worker,
+  docs-writer and weak-worker. The owner asked for the last three after a prompt-cache audit. The
+  pricing computation in docs/agent-review.md, "Context and cache findings", was made for the
+  opus/medium default coder, which was senior-worker (opus-worker before it) until the two roles
+  swapped charters on 2026-10-15, and for worker; it does not cover docs-writer or weak-worker.
 - Check it took: in one strong-worker run's usage block, the cache-creation split counts tokens
   in the one-hour field and none in the five-minute field. Not yet observed for this file.
 
