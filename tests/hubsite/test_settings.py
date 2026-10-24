@@ -61,7 +61,6 @@ class DefaultsTest(HomeCase):
         self.assertIs(s.push, False)
         self.assertEqual(s.access, settings.Access('', '', ()))
         self.assertEqual(s.access.allowed_emails, frozenset())
-        self.assertIsNone(s.relay)
 
     def test_a_machine_config_without_the_key_gives_the_defaults(self):
         self.write({'pm_start': {}})
@@ -94,19 +93,23 @@ class ValuesTest(HomeCase):
                     'hub': {'port': 9001, 'tunnel_port': 9002, 'store': store, 'commit_every_s': 5,
                             'push': False, 'backlog_refresh_s': 600,
                             'access': {'team': 'example-team', 'aud': 'abc123',
-                                       'emails': ['a@example.invalid']},
-                            'relay': {'source': 'https://example.invalid/a'}}})
+                                       'emails': ['a@example.invalid']}}})
         s = settings.load(home=self.home)
         self.assertEqual(s, settings.Settings(
             9001, 9002, store, 5, False, 600,
-            settings.Access('example-team', 'abc123', ('a@example.invalid',)),
-            'https://example.invalid/a'))
+            settings.Access('example-team', 'abc123', ('a@example.invalid',))))
+
+    def test_a_leftover_relay_key_of_the_retired_setting_is_ignored(self):
+        for relay in ({'source': 'https://example.invalid/a'}, {'source': None}, None, True):
+            self.write({'hub': {'port': 9001, 'relay': relay}})
+            s = settings.load(home=self.home)
+            self.assertEqual(s, settings.settings({'port': 9001}))
+            self.assertFalse(hasattr(s, 'relay'))
 
     def test_a_null_is_unset_where_unset_has_a_meaning(self):
-        self.write({'hub': {'store': None, 'push': None, 'access': None, 'relay': None}})
+        self.write({'hub': {'store': None, 'push': None, 'access': None}})
         self.assertEqual(settings.load(home=self.home), settings.settings(None))
-        self.write({'hub': {'access': {'team': None, 'aud': None, 'emails': None},
-                            'relay': {'source': None}}})
+        self.write({'hub': {'access': {'team': None, 'aud': None, 'emails': None}}})
         self.assertEqual(settings.load(home=self.home), settings.settings(None))
         self.refused({'port': None}, 'port must be a whole number')
 
@@ -206,13 +209,11 @@ class RefusalTest(HomeCase):
         for bad in ('a.example.invalid', 'team/x', 'team:443', 'a@b', '-team', 'team-', ' team', ''):
             self.refused({'access': {'team': bad}}, 'access.team must be')
 
-    def test_a_bad_audience_access_or_relay_is_refused(self):
+    def test_a_bad_audience_or_access_is_refused(self):
         self.refused({'access': {'aud': 'a b'}}, 'access.aud must be')
         self.refused({'access': {'aud': ''}}, 'access.aud must be')
         self.refused({'access': {'token': 'x'}}, 'unknown key(s) token')
         self.refused({'access': []}, 'access must be an object')
-        self.refused({'relay': True}, 'relay must be an object')
-        self.refused({'relay': {'url': 'x'}}, 'unknown key(s) url')
 
     def test_every_problem_is_named_at_once(self):
         self.write({'hub': {'port': 0, 'bind': 'x'}})

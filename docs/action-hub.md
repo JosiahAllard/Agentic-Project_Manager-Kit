@@ -186,7 +186,7 @@ shows as Act, its edit offers no kind, and the server's refusal shows in its own
 
 The machine config's `hub` key: docs/kit-json.md "Machine config keys". Its settings are `port`,
 `tunnel_port`, `store` (an absolute path), `commit_every_s`, `push`, `backlog_refresh_s`,
-`access` and `relay`; an unknown key is refused.
+and `access`; an unknown key is refused, except a leftover `relay` (a retired setting), which is ignored.
 
 Exit codes of every verb: 0 ok, 1 refused (also a Ctrl+C other than the one that closes a
 running server, or a server that did not close cleanly), 2 usage error or an unreadable machine
