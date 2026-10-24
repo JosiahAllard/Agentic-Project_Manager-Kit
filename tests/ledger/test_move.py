@@ -305,7 +305,7 @@ class CliTest(unittest.TestCase):
         put(self.L.new_digest, 'x\n')
         r = self.run_tool()
         self.assertEqual(r.returncode, 1)
-        self.assertIn('ledger.py: refused: ', r.stderr)
+        self.assertIn('REFUSED: ', r.stderr)
         self.assertIn('nothing was moved', r.stderr)
         self.assertEqual(self.run_tool('--appl').returncode, 2)
         self.assertTrue(os.path.isdir(self.L.old_rules))
