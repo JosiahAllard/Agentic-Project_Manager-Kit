@@ -2689,6 +2689,211 @@ class HomeTest(unittest.TestCase):
         self.assertTrue(got[1].startswith("Read from the hub server "), got)
 
 
+LOCK_NOW = "2026-10-05T12:00:00+00:00"
+
+
+def sch_view(rev=5, writer="owner", writes=None, **view):
+    """What GET /lock/view answers for the Schedule view: runs, the line behind them, holds and the strip's finished runs."""
+    base = {"now": LOCK_NOW, "cores": {"head": "12 cpu slots, 2 gpu slots", "cpu": [], "gpu": []}, "strip": [], "warnings": [],
+            "runs": [], "queue_items": [], "holds": [], "agent_holds": []}
+    base.update(view)
+    return {"ok": True, "lock_revision": rev, "writer": writer,
+            "writes": writes or {"lock": True, "strong": True, "why": ""}, "view": base}
+
+
+RUN1 = {"id": "r1", "repo": "alpha", "slug": "s1", "kind": "build", "state": "running", "cores": [0, 1], "gpus": [],
+        "held_since": "2026-10-05T11:00:00+00:00", "expected_end": "2026-10-05T13:00:00+00:00"}
+RUN2 = {"id": "r2", "repo": "beta", "slug": "s2", "kind": "test", "state": "running", "cores": [2], "gpus": [], "overrun": True,
+        "held_since": "2026-10-05T10:00:00+00:00", "expected_end": "2026-10-05T11:30:00+00:00"}
+QUEUE1 = {"id": "q1", "position": 1, "repo": "alpha", "slug": "s3", "kind": "build", "needs_cpu": 4, "needs_gpu": 0,
+          "est_start": "2026-10-05T14:00:00+00:00", "since": "2026-10-05T11:50:00+00:00", "backfill": False, "parked": False, "why": ""}
+HOLD1 = {"id": "h-1", "owner": "owner", "kind": "reserve", "scope": "whole", "start": "2026-10-05T18:00:00+00:00",
+         "end": "2026-10-05T20:00:00+00:00", "note": "game night"}
+HIST_OK = {"type": "hist", "id": "x1", "repo": "alpha", "slug": "s0", "kind": "build", "result": "ok",
+           "start": "2026-10-05T08:00:00+00:00", "end": "2026-10-05T08:40:00+00:00", "expect_end": "2026-10-05T08:30:00+00:00"}
+HIST_BAD = {"type": "hist", "id": "x2", "repo": "beta", "slug": "s9", "kind": "test", "result": "failed",
+            "start": "2026-10-05T09:00:00+00:00", "end": "2026-10-05T09:10:00+00:00"}
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class ScheduleTest(unittest.TestCase):
+    """The Schedule view (Now, Week, Holds) on the action hub page, drawn from the owner route GET /lock/view."""
+
+    def sch(self, body, view, hash="#schedule"):
+        """Run `body` with the lock answering `view` and the tab shown, so the watcher has read it."""
+        return dom("server.lock = %s; await start(); await visible(true);\n%s" % (json.dumps(view), body), snapshot(strong=True), hash=hash)
+
+    def test_the_hash_opens_the_view_and_the_section_is_remembered(self):
+        got = self.sch("""await click($("#sec-home")); await click($("#sec-schedule"));
+                          return { sec: $("#sections .sec[aria-selected=true]").dataset.s, tb: $("#tabbar .tb[aria-selected=true]").dataset.s,
+                                    saved: localStorage.getItem("oq.section"), repo: $("#repo").hidden, tabs: $("#sctabs").hidden };""", sch_view())
+        self.assertEqual(got, {"sec": "schedule", "tb": "schedule", "saved": "schedule", "repo": True, "tabs": False})
+        back = dom("localStorage.setItem('oq.section', 'schedule'); await start(); return $('#sections .sec[aria-selected=true]').dataset.s;", snapshot())
+        self.assertEqual(back, "schedule")
+
+    def test_running_runs_come_first_then_the_line_then_todays_holds_then_the_history_row(self):
+        got = self.sch("""return { rows: $$("#list article").map(a => a.id), heads: $$("#list .sch-group").map(text),
+                                    late: $$("#list .chip.urgent").map(text), prog: $$("#list .sch-prog .pct").map(text),
+                                    card: text($("#sch-card h2")) };""",
+                       sch_view(runs=[RUN1, RUN2], queue_items=[QUEUE1], holds=[HOLD1]))
+        self.assertEqual(got["rows"], ["row-run:r1", "row-run:r2", "row-q:q1", "row-hold:h-1", "row-hist"])
+        self.assertEqual(got["heads"], ["Running now", "Next up", "Holds today"])
+        self.assertEqual(got["late"], ["Late"])                                     # r2 only
+        self.assertEqual(got["prog"], ["50% of the time expected", "100% of the time expected, past it"])
+        self.assertEqual(got["card"], "alpha/s1")                                   # the first run is open on a wide window
+
+    def test_the_sidebar_count_is_the_runs_now_and_the_tab_bar_copies_it(self):
+        got = self.sch("""return { n: text($("#n-sch")), hot: $("#n-sch").classList.contains("hot"), copy: text($("#tabbar [data-of=n-sch]")),
+                                    now: text($("#n-scnow")), holds: text($("#n-schold")) };""",
+                       sch_view(runs=[RUN1, RUN2], queue_items=[QUEUE1], holds=[HOLD1], agent_holds=[dict(HOLD1, id="a-1")]))
+        self.assertEqual(got, {"n": "2", "hot": True, "copy": "2", "now": "2", "holds": "2"})
+        quiet = self.sch("""return [text($("#n-sch")), $("#n-sch").classList.contains("hot")];""", sch_view())
+        self.assertEqual(quiet, ["0", False])
+
+    def test_the_history_is_closed_until_asked_and_filters_to_failed_or_stopped(self):
+        got = self.sch("""
+            const closed = { card: !!$("#sch-history"), row: text($("#row-hist h2")) };
+            await click($("#row-hist"));
+            const all = $$("#sch-history li").map(text);
+            await click($("#sch-history [data-key=result][data-val=bad]"));
+            const bad = $$("#sch-history li").map(text), line = text($("#sch-history p.sch-line"));
+            return { closed, all, bad, line };""", sch_view(strip=[HIST_OK, HIST_BAD]))
+        self.assertEqual(got["closed"], {"card": False, "row": "History (2 finished runs)"})
+        self.assertEqual(len(got["all"]), 2)
+        self.assertTrue(any("alpha/s0" in t and "Took 40 min of 30 min expected" in t for t in got["all"]), got["all"])
+        self.assertEqual(len(got["bad"]), 1)
+        self.assertIn("beta/s9", got["bad"][0])                                      # the slug the history now carries
+        self.assertIn("failed", got["bad"][0])
+        self.assertEqual(got["line"], "Showing 1 of 2 finished runs.")
+
+    def test_ending_a_run_asks_twice_and_then_posts_the_confirm_the_route_wants(self):
+        got = self.sch("""
+            server.route = c => c.method === "POST" ? { status: 200, body: { ok: true, result: { id: "r1" } } } : undefined;
+            const before = calls.length;
+            await click($("#sch-end"));
+            const asked = { go: text($("#sch-end-go")), keep: text($("#sch-end-keep")), posted: calls.length - before };
+            await click($("#sch-end-go"));
+            return { asked, posts: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]), status: text($("#sch-status")) };""",
+                       sch_view(runs=[RUN1]))
+        self.assertEqual(got["asked"], {"go": "End run r1", "keep": "Let it run", "posted": 0})
+        self.assertEqual(got["posts"], [["/lock/runs/r1/end", {"confirm": "r1"}]])
+        self.assertIn("Asked run r1 to end.", got["status"])
+
+    def test_letting_it_run_posts_nothing(self):
+        got = self.sch("""
+            await click($("#sch-end")); await click($("#sch-end-keep"));
+            return { posts: calls.filter(c => c.method === "POST").length, again: text($("#sch-end")) };""", sch_view(runs=[RUN1]))
+        self.assertEqual(got, {"posts": 0, "again": "End run"})
+
+    def test_move_to_top_posts_to_the_runs_top_route(self):
+        got = self.sch("""
+            server.route = c => c.method === "POST" ? { status: 200, body: { ok: true, result: { id: "q1" } } } : undefined;
+            await click(document.getElementById("row-q:q1")); await click($("#sch-top"));
+            return calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);""", sch_view(runs=[RUN1], queue_items=[QUEUE1]))
+        self.assertEqual(got, [["/lock/runs/q1/top", {}]])
+
+    def test_a_control_this_login_may_not_use_is_disabled_and_says_why(self):
+        why = "this hub is not a strong session"
+        got = self.sch("""return { end: [$("#sch-end").disabled, $("#sch-end").getAttribute("title")], writer: text($("#sch-writer")),
+                                    reserve: $("#sch-reserve-time").disabled };""",
+                       sch_view(runs=[RUN1], writes={"lock": False, "strong": False, "why": why}))
+        self.assertEqual(got["end"], [True, why])
+        self.assertEqual(got["writer"], "Read only: " + why)
+        self.assertFalse(got["reserve"])                                              # it only opens the Week tab
+
+    def test_an_agent_writer_gets_a_read_only_banner_and_no_enabled_write(self):
+        why = "the machine lock takes this hub for an agent"
+        got = self.sch("""
+            await click($("#sctab-week"));
+            return { writer: text($("#sch-writer")), btns: $$("button[data-need]").map(b => [b.id, b.disabled]) };""",
+                       sch_view(writer="agent", runs=[RUN1], writes={"lock": False, "strong": False, "why": why}))
+        self.assertEqual(got["writer"], "Read only: " + why)
+        self.assertTrue(all(d for _, d in got["btns"]), got["btns"])
+
+    def test_reserve_time_takes_two_clicks_on_the_week_grid_and_posts_the_window_in_utc(self):
+        got = self.sch("""
+            server.route = c => c.method === "POST" ? { status: 200, body: { ok: true, result: { hold: { scope: "whole", end: "2026-10-06T11:00:00+00:00" } } } } : undefined;
+            await click($("#sch-reserve-time"));
+            const week = { tab: $("#sctab-week").getAttribute("aria-selected"), grid: !!$("#sch-grid"), rows: $$("#sch-grid tbody tr").length,
+                           pick: !!$("#sch-reserve-whole") };
+            const t1 = Date.UTC(2026, 9, 6, 10, 0), t2 = t1 + 1800000;
+            await click($("#sch-grid td[data-t=" + t1 + "]"));
+            const first = { say: text($("#sch-picked")), whole: $("#sch-reserve-whole").disabled };
+            await click($("#sch-grid td[data-t=" + t2 + "]"));
+            const second = { say: text($("#sch-picked")), whole: $("#sch-reserve-whole").disabled, marked: $$("#sch-grid td.pick").length };
+            $("#sch-note").value = "long build"; await fire($("#sch-note"), "input");
+            await click($("#sch-reserve-whole"));
+            return { week, first, second, posts: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]) };""",
+                       sch_view(runs=[RUN1]))
+        self.assertEqual(got["week"], {"tab": "true", "grid": True, "rows": 48, "pick": False})
+        self.assertEqual(got["first"]["whole"], True)                                 # one click is not a window yet
+        self.assertEqual(got["second"]["whole"], False)
+        self.assertEqual(got["second"]["marked"], 2)
+        self.assertEqual(got["posts"], [["/lock/holds", {"kind": "reserve", "scope": "whole", "start": "2026-10-06T10:00:00Z",
+                                                          "end": "2026-10-06T11:00:00Z", "note": "long build"}]])
+
+    def test_the_week_grid_marks_a_hold_and_the_holds_tab_lists_holds_and_agent_holds(self):
+        got = self.sch("""
+            await click($("#sctab-week"));
+            const own = $$("#sch-grid td.own").length;
+            await click($("#sctab-holds"));
+            return { own, heads: $$("#list .sch-group").map(text), cards: $$("#list [data-hold]").map(c => c.dataset.hold), n: text($("#n-schold")) };""",
+                       sch_view(holds=[HOLD1], agent_holds=[dict(HOLD1, id="a-1", owner="agent", repo="alpha", slug="s1")]))
+        self.assertEqual(got["own"], 4)                                               # 18:00 to 20:00 is four half hours
+        self.assertEqual(got["heads"], ["Holds (1)", "Agent holds (1)"])
+        self.assertEqual(got["cards"], ["h-1", "a-1"])
+        self.assertEqual(got["n"], "2")
+
+    def test_the_home_machine_line_links_to_the_schedule(self):
+        got = dom("""
+            server.lock = LOCK; await start(); await visible(true);
+            const link = $("#machine a");
+            const out = { href: link.getAttribute("href"), text: text(link) };
+            await click(link);
+            out.sec = $("#sections .sec[aria-selected=true]").dataset.s; out.hash = location.hash;
+            return out;""".replace("LOCK", json.dumps(sch_view(runs=[RUN1]))), snapshot(collections=NEEDS), hash="#home")
+        self.assertEqual(got["href"], "#schedule")
+        self.assertTrue(got["text"].startswith("Machine"), got)
+        self.assertEqual((got["sec"], got["hash"]), ("schedule", "#schedule"))
+
+    def test_the_settings_link_is_the_one_way_to_the_old_page(self):
+        got = self.sch("""const a = $("#sch-settings"); return [a.getAttribute("href"), text(a), $$("a").length];""", sch_view())
+        self.assertEqual(got, ["/lock.html", "Machine settings (game mode, division, holds, stats)", 1])
+
+    def test_one_watcher_serves_every_view_and_a_change_moves_the_view_that_is_open(self):
+        got = self.sch("""
+            await answerLock(200, Object.assign(%s, { changed: true }));
+            return { rows: $$("#list article").map(a => a.id), n: text($("#n-sch")),
+                     lock: calls.filter(c => c.path.startsWith("/lock/")).map(c => c.path.split("?")[0]) };""" % json.dumps(sch_view(rev=6, runs=[RUN1, RUN2])),
+                       sch_view(rev=5, runs=[RUN1]))
+        self.assertEqual(got["rows"], ["row-run:r1", "row-run:r2", "row-hist"])
+        self.assertEqual(got["n"], "2")
+        self.assertEqual(got["lock"].count("/lock/view"), 1)                          # read once, then only waited on
+
+    def test_an_unreadable_lock_is_said_and_read_again_after_the_back_off(self):
+        got = dom("""
+            server.route = c => c.path === "/lock/view" ? { status: 500, body: { ok: false, error: { message: "lock store gone" } } } : undefined;
+            await start(); await visible(true);
+            return { say: text($("#sch-wait")), sleeps: sleeps(), n: text($("#n-sch")) };""", snapshot(), hash="#schedule")
+        self.assertEqual(got["say"], "The machine lock could not be read (lock store gone).")
+        self.assertEqual(got["sleeps"], [2000])
+        self.assertEqual(got["n"], "–")                                          # no count is made up
+
+    def test_server_text_in_the_schedule_is_drawn_as_text(self):
+        bad = mark("repo")
+        got = self.sch("""
+            await click($("#row-hist"));
+            const attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || ["href", "src", "srcdoc", "style"].includes(k)).map(k => e.tag + " " + k));
+            return { shown: text($("#list")) + text($("#pane-detail")), sinks, attrs, tags: [...new Set(created)] };""",
+                       sch_view(runs=[dict(RUN1, repo=bad)], queue_items=[dict(QUEUE1, repo=bad)], holds=[dict(HOLD1, note=bad)],
+                                strip=[dict(HIST_OK, repo=bad)]))
+        self.assertIn(bad, got["shown"])
+        self.assertEqual(got["sinks"], [])
+        self.assertEqual(got["attrs"], ["a href"])                                    # the settings link only
+        self.assertNotIn("script", got["tags"])
+        self.assertNotIn("img", got["tags"])
+
+
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class TriageListTest(unittest.TestCase):
     """Questions, To-dos and Approvals as rows in the list pane and one full card in the detail pane."""
