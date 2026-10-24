@@ -104,8 +104,7 @@ the server alone decides what a role may do.
                                                      not know it
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
   hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
-                                                     that needs no ruling (not one bound to
-                                                     a record)
+                                                     that needs no ruling
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
         [--urgent | --no-urgent]                     `EDITED Q-1`; an --option list replaces
@@ -190,8 +189,8 @@ the server alone decides what a role may do.
       a finding is an error.
 
 `--choice N` and `--recommended N` are the option's place in the question's list, counted from
-0 as the api counts it. `questions log`, `stories set` and each `edit` and `withdraw` need
---if-version V: the version of the document the caller read and decided on, which the `questions`
+0 as the api counts it. `questions log`, `questions done`, `stories set` and each `edit` and
+`withdraw` need --if-version V: the version of the document the caller read and decided on, which the `questions`
 and `stories` lines show as `v2` and --json (`todos --json` too) as `version`. Without it the verb is a usage error and asks nothing; with a version
 the document no longer has, the server refuses the write (`REFUSED conflict`).
 

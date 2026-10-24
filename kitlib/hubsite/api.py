@@ -986,8 +986,7 @@ def questions_log(api, req):
 def questions_done(api, req):
     """The PM marks an answered question handled with no ruling (a one-off go the ledger keeps
     out): status `done`, terminal, so it is no longer pending and its push ends. Refused
-    (`invalid`) for a question that is not answered, one bound to a record (`record`: its answer
-    is filed to the record, not marked done here) and a blank why."""
+    (`invalid`) for a question that is not answered and for a blank why."""
     b = _fields(req, ('why', 'if_version'), required=('why',))
     _pin(b, required=True)
     why = _text(b, 'why').strip()
@@ -998,9 +997,6 @@ def questions_done(api, req):
     if d.get('status') != 'answered':
         raise _invalid('%s is %s: only an answered question is marked done'
                        % (doc_id, d.get('status')), 'status')
-    if d.get('record'):
-        raise _invalid('%s is bound to a record: its answer is filed to the record, not marked '
-                       'done' % doc_id, 'record')
     return api.change('questions', doc_id, d,
                       {'status': 'done', 'done_why': why, 'done_at': api.clock()}, req,
                       {'status': 'done'})

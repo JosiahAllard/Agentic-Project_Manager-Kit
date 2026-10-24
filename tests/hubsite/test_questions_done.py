@@ -11,6 +11,7 @@ from kitlib.hubsite import api
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import Store
 from tests.hubsite import test_hub_cli as cli
+from tests.hubsite import test_page as page
 from tests.hubsite import test_push as pushfix
 
 NOW = '2026-01-02T03:04:05+00:00'
@@ -116,12 +117,6 @@ class RefusedTest(DoneCase):
                            {'why': 'again', 'if_version': self.version(qid)})
         self.assertIn('is done', obj['error']['message'])
 
-    def test_a_question_bound_to_a_record_is_refused(self):
-        qid = self.answered()
-        self.store.update('questions', qid, {'record': {'repo': 'kit', 'id': 'KIT-X'}})
-        self.refused('invalid', 'record', qid, {'why': 'w', 'if_version': self.version(qid)})
-        self.assertEqual(self.store.get('questions', qid)['status'], 'answered')
-
     def test_a_version_the_question_no_longer_has_is_a_conflict(self):
         qid = self.answered()
         self.refused('conflict', 'if_version', qid,
@@ -178,6 +173,42 @@ class CliTest(cli.VerbCase):
                 code, out, err = self.run_cli(*(argv + ('--port', self.port)))
                 self.assertEqual((code, out), (2, ''), err)
                 self.assertIn('USAGE: the following arguments are required: %s' % missing, err)
+
+
+@unittest.skipUnless(page.NODE, "node is needed to run the page's logic")
+class PageTest(unittest.TestCase):
+    """kitlib/hubsite/web/index.html shows a done question as handled, with logged, labelled done."""
+
+    def test_a_done_question_is_drawn_as_handled_and_labelled_done(self):
+        ans = {"choice": 0, "label": "one", "note": "", "at": page.NOW}
+        q = page.LISTS["questions"]["Q-1"]
+        lists = {"stories": {"S-1": {"status": "questions", "title": "mine", "story": "x", "repo": "alpha",
+                                     "version": 1}},
+                 "questions": {"Q-1": dict(q, status="done", version=3, answer=ans, story="S-1", urgent=True,
+                                           done_why="a one-off go", done_at=page.NOW),
+                               "Q-2": dict(q, status="logged", version=3, answer=ans, ruling="D-7")}}
+        got = page.dom("""
+            await start();
+            const counts = {};
+            for (const n of ["open", "answered", "logged", "other"]) counts[n] = text($("#n-" + n));
+            await click($("#tabs [data-f=logged]"));
+            const card = $("#q-Q-1");
+            const out = { counts, card: card ? text(card) : null, cls: card ? card.className : null,
+                          ok: $$("#row-Q-1 .chip.ok").map(text) };
+            await click(button(card, "story: "));
+            out.link = $$("#story-S-1 button").map(text).filter(t => t.startsWith("Q-1"));
+            return out;
+        """, page.snapshot(collections=lists, views={"repos": [{"name": "alpha"}], "backlog": page.BACKLOG}))
+        self.assertEqual(got["counts"], {"open": "0", "answered": "0", "logged": "2", "other": "0"})
+        self.assertIn("done, no ruling needed", got["card"])
+        self.assertNotIn("waiting for the PM", got["card"])
+        self.assertNotIn("status: done", got["card"])        # not the unknown-status chip
+        self.assertEqual(got["ok"], ["done"])                # the row's chip, as logged has
+        self.assertEqual(got["cls"], "q done urgent")
+        self.assertEqual(got["link"], ["Q-1 (done)"])
+
+    def test_an_urgent_done_question_loses_the_urgent_border_as_a_logged_one_does(self):
+        self.assertIn(".q.urgent:not(.logged):not(.done)", page.page())
 
 
 if __name__ == '__main__':

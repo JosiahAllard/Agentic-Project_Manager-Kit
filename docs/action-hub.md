@@ -265,8 +265,8 @@ it has acted on it; it hands every other step (notes, stories) to the PM. Who ha
 item: "Who handles a pending item" below. For a question, the server takes `--from` only when it is `pm` or a
 key of the launcher's sessions.json, read again on each add; any other value is refused, and a
 question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
-until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), as
-for any other answer, so a plain wait would print the same answer again at once: the
+until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), or
+marks it done when it needs no ruling (`questions done`), as for any other answer, so a plain wait would print the same answer again at once: the
 coordinator restarts its wait with `--except` and every id it has acted on (`wait --pending --for
 <its key> --except Q-7 T-3`), which leaves those ids out and ends only on another item. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
@@ -282,6 +282,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
 | `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from KEY]` | `ASKED Q-2`, then any warning lines |
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
+| `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
 | `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent]` | `EDITED Q-1` |
 | `questions withdraw Q-1 --from KEY --if-version V` | `WITHDRAWN Q-1` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
@@ -309,9 +310,9 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 
 Notes on the table:
 - `todos` lines carry no version; `todos --json` gives each to-do's `version`.
-- `questions add --story` is the story a follow-up belongs to; `stories set`, `questions log` and
-  every `edit` and `withdraw` require `--if-version`.
-- `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
+- `questions add --story` is the story a follow-up belongs to; `stories set`, `questions log`,
+  `questions done` and every `edit` and `withdraw` require `--if-version`.
+- `hub.py pending` lists the owner input not yet handled: questions answered and not logged or done,
   stories submitted, To PM items sent, to-dos done or added by the owner without `pm_ack`, and
   approvals the owner decided that are not consumed (`kitlib.hubsite.store.pending_items`; an
   approved one until it is consumed or expires 24 hours after the decision, a denied one for 24
@@ -361,7 +362,7 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
   an answered question stays pending until the PM logs it (`questions log`) or, when it needs no
   ruling (a one-off go such as a landing or archive go, which the ledger keeps out), marks it
   done (`questions done <id> --why <text> --if-version V`; status `done`, with `done_why` and
-  `done_at`; refused for a question bound to a record). A done question is no longer pending and
+  `done_at`). A done question is no longer pending and
   its push ends (`kitlib/hubsite/api.py` `questions_done`).
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
   logs each ruling, and every decided approval. A PM wait is also woken when an item turns to the
