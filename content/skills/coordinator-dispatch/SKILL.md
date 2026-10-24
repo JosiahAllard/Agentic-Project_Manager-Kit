@@ -27,7 +27,7 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
   owns it, or by a fresh agent dispatched into that worktree; never by you with `-C` from outside.
   Only for new work: a refused command is never rerouted this way.
 - Non-trivial: plan read-only -> your approval or correction -> build.
-- Slicing a redesign or mockup-built record: walk the mockups into an element checklist on the umbrella (one line per sidebar entry, view, control, state, each owned by a slice); it closes when every element is ticked against a landed slice, not when every slice has landed (`docs/backlog.md` "Umbrella records").
+- Slicing a redesign or mockup-built record: walk the mockups into an element checklist on the umbrella (one line per sidebar entry, view, control, state, each owned by a slice); it closes when every element is ticked against a landed slice, not when every slice has landed (`<kit>/docs/backlog.md` "Umbrella records").
 - A change to `.kit.json` or any other owner-only path (`--find kit-json`, key `owner.paths`) is
   never dispatched to a builder: it goes to the owner, through the PM.
 
