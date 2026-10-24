@@ -160,8 +160,9 @@ class Line(unittest.TestCase):
                          ('  . It checks U1', False))
 
     def test_what_is_not_an_owner_cite_is_untouched(self):
+        # (a `Blocked on` line's reason is worded: tests/backlog/test_uncite_fields.py)
         for line in ('T-1234 and item:FOO and R-12 stay.', 'XR-9033 and R-9033x-1', '',
-                     'Blocked on owner (2026-01-01): per R-9033'):
+                     'Blocked on owner (2026-01-01): T-1234 first'):
             self.assertEqual(pmod.uncite_line(line), (line, False), line)
 
 
@@ -229,11 +230,15 @@ class Store(StoreCase):
         a, b = self.get('AAA'), self.get('BBB')
         self.assertIsNone(a.get('priority_ruling'))
         self.assertIsNone(b.get('hold_ruling'))
+        # AAA's `Blocked on` reason cites one as a subject (`R-9035 says`), which no rule words:
+        # it is left for a hand edit, not kept because it is a `Blocked on` line
         self.assertEqual(a.body.strip().split('\n'),
                          ['Per an owner ruling, the hub moves.', '',
                           'Blocked on owner (2026-01-01): R-9035 says wait'])
         self.assertEqual(b.body.strip().split('\n'), ['- Which one?', '- T-1234 stays'])
-        # what uncite keeps, byte for byte
+        # unchanged, byte for byte: `summary` and `ref` only because no seed value cites one that
+        # a rule words (BBB's `ref: R-9004 notes` is left for a hand edit; uncite words the
+        # others: tests/backlog/test_uncite_fields.py); the other keys uncite never rewrites
         for key in ('summary', 'ref', 'owner_ask', 'q', 'parked_at', 'resume', 'priority',
                     'priority_by', 'state', 'scope'):
             for rid in ('AAA', 'BBB'):
@@ -243,14 +248,17 @@ class Store(StoreCase):
     def test_the_output_counts_and_lists_each_change(self):
         self.seed_three()
         out = '\n'.join(self.verb('uncite').lines)
+        # AAA's `Blocked on` reason (`R-9035 says wait`) and BBB's `ref` (`R-9004 notes`) cite
+        # one as a subject, which no rule words
         self.assertIn('UNCITE: 3 cite(s) in 2 record(s): 3 body line(s) rewritten, '
-                      '2 header line(s) dropped, 0 line(s) left for a hand edit', out)
+                      '0 field(s) rewritten, 2 header line(s) dropped, 2 line(s) left for a '
+                      'hand edit', out)
         self.assertIn('    - Per R-9033, the hub moves.', out)
         self.assertIn('    + Per an owner ruling, the hub moves.', out)
         self.assertIn('    - See R-9034.\n    + (line removed)', out)
         self.assertIn('    dropped priority_ruling: R-9001', out)
         self.assertIn('    dropped hold_ruling: R-9002', out)
-        self.assertNotIn('NEEDS HAND EDIT', out)
+        self.assertIn('NEEDS HAND EDIT (2 line(s)', out)
 
     def test_a_line_no_rule_words_is_left_and_listed_for_a_hand_edit(self):
         self.seed(rec('AAA', body='Per R-9033, the hub moves.\nOne R-9508 debug run first.'),

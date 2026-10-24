@@ -194,6 +194,8 @@ ROWS = {
     ('POST', '/questions/{id}/answer'): (seed_question, {'choice': 0}, None),
     ('POST', '/questions/{id}/log'): (lambda s: seed_question(s, 'answered'),
                                       {'ruling': 'decision-7', 'if_version': 1}, None),
+    ('POST', '/questions/{id}/done'): (lambda s: seed_question(s, 'answered'),
+                                       {'why': 'a one-off go', 'if_version': 1}, None),
     ('GET', '/todos'): (None, None, None),
     ('POST', '/todos'): (None, {'title': 't', 'commands': ['dir']}, None),
     ('POST', '/todos/{id}/done'): (seed_todo, {'done': True}, None),
@@ -343,7 +345,8 @@ class RolesCase(unittest.TestCase):
 
     def test_the_roles_the_design_names(self):
         want = {('POST', '/questions'): AGENT, ('POST', '/questions/{id}/answer'): OWNER,
-                ('POST', '/questions/{id}/log'): AGENT, ('POST', '/todos'): ANY,
+                ('POST', '/questions/{id}/log'): AGENT, ('POST', '/questions/{id}/done'): AGENT,
+                ('POST', '/todos'): ANY,
                 ('POST', '/todos/{id}/done'): OWNER, ('POST', '/todos/{id}/ack'): AGENT,
                 ('POST', '/questions/{id}/edit'): AGENT, ('POST', '/questions/{id}/delete'): ANY,
                 ('POST', '/todos/{id}/edit'): ANY, ('POST', '/todos/{id}/delete'): ANY,

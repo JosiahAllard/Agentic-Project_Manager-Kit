@@ -338,7 +338,7 @@ class QuestionTest(ApiCase):
         self.assertEqual(ids({'unknown': 'x'}), [a, b])
         item = self.ok('GET', '/questions', OWNER)['items'][0]
         self.assertEqual((item['title'], item['version'], item['status']), ('t', 1, 'open'))
-        self.refused('invalid', 'status', 'GET', '/questions', OWNER, None, {'status': 'done'})
+        self.refused('invalid', 'status', 'GET', '/questions', OWNER, None, {'status': 'closed'})
         self.refused('invalid', 'since', 'GET', '/questions', OWNER, None, {'since': 'monday'})
         self.refused('invalid', 'since', 'GET', '/questions', OWNER, None,
                      {'since': '2026-01-02T03:04:05'})

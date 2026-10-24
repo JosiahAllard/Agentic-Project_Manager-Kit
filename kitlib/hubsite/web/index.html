@@ -170,7 +170,7 @@ form.add{display:grid;gap:8px;background:var(--surface);border:1px solid var(--l
 form.add input[type=text]{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box}
 form.add textarea{min-height:44px}
 .chip.urgent{background:var(--warn-soft);color:var(--warn)}
-.q.urgent:not(.logged),.t.urgent:not(.done){border-left:4px solid var(--warn)}
+.q.urgent:not(.logged):not(.done),.t.urgent:not(.done){border-left:4px solid var(--warn)}
 .sec .n.hot{background:var(--warn-soft);color:var(--warn)}
 .urg{display:inline-flex;gap:6px;align-items:center;font-size:.85rem;color:var(--muted);cursor:pointer}
 .urg input{accent-color:var(--warn)}
@@ -774,8 +774,9 @@ ul.hist .sch-line{display:block}
   }
   // A todo's commands as a list: an array, a lone string, or the older `command`.
   const pmCommands = t => Array.isArray(t.commands) ? t.commands.filter(c => typeof c === "string" && c.trim()) : typeof t.commands === "string" && t.commands.trim() ? [t.commands] : typeof t.command === "string" && t.command.trim() ? [t.command] : [];
-  // The question tab a doc belongs to; an unknown or missing status lands in "other".
-  const pmQBucket = d => d.status === "open" || d.status === "answered" || d.status === "logged" ? d.status : "other";
+  // The question tab a doc belongs to: a done one (no ruling needed) sits with logged, and an
+  // unknown or missing status lands in "other".
+  const pmQBucket = d => d.status === "open" || d.status === "answered" || d.status === "logged" ? d.status : d.status === "done" ? "logged" : "other";
   // How current a view the server reads is, from its rows' posted_at (stale after 3 days).
   function pmFresh(items, now){
     const t = items.map(x => x.posted_at).filter(Boolean).sort().pop();
@@ -1359,7 +1360,7 @@ ul.hist .sch-line{display:block}
     if (st.review_note) parts.push(el("div", {class:"ans"}, el("div", {}, el("b", {text: "Coordinator: "}), st.review_note)));
     const qs = storyQs(st.id);
     if (qs.length) parts.push(el("div", {class:"links"}, el("span", {class:"status", text:"Follow-ups:"}),
-      ...qs.map(d => el("button", {class:"link", type:"button", text: d.id + (d.status === "open" ? " (answer)" : d.status === "answered" ? " (submitted)" : " (logged)"), onclick: () => goQuestion(d.id)}))));
+      ...qs.map(d => el("button", {class:"link", type:"button", text: d.id + (d.status === "open" ? " (answer)" : d.status === "answered" ? " (submitted)" : d.status === "done" ? " (done)" : " (logged)"), onclick: () => goQuestion(d.id)}))));
     if (st.status === "submitted") {
       const status = el("span", {class:"status", role:"status"});
       const w = el("button", {class:"link", type:"button", text:"Withdraw"});
@@ -1531,7 +1532,7 @@ ul.hist .sch-line{display:block}
       const msg = {
         open: ["No open questions", "New questions from the PM appear here, oldest first."],
         answered: ["Nothing waiting to be logged", "Answers you submit move here until the PM files them."],
-        logged: ["No logged answers yet", "Once the PM files an answer, it shows here."],
+        logged: ["No logged answers yet", "Once the PM files an answer, or marks it done, it shows here."],
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
       if (ready && state.idq.trim()) { msg[0] = "No match for \"" + state.idq.trim() + "\""; msg[1] = "Clear the id box to see every question in this tab."; }
@@ -1602,7 +1603,7 @@ ul.hist .sch-line{display:block}
   const approvalRow = d => rowCard("approval", d, [el("span", {class:"chip need", text: d.kind === "op" ? "Run approval" : "Approval"}), d.status !== "pending" ? el("span", {class:"chip " + (d.status === "denied" || d.status === "expired" ? "" : "ok"), text: APPROVAL_SAID[d.status] || String(d.status)}) : null],
     d.status !== "pending" && d.decided_at ? "decided " + when(d.decided_at) : d.created_at ? "asked " + when(d.created_at) : "");
   const questionRow = d => rowCard("q", d, [d.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
-    d.status !== "open" ? el("span", {class:"chip " + (d.status === "logged" ? "ok" : ""), text: d.status === "answered" ? "Submitted" : String(d.status)}) : null], d.asked_at ? "asked " + when(d.asked_at) : "");
+    d.status !== "open" ? el("span", {class:"chip " + (d.status === "logged" || d.status === "done" ? "ok" : ""), text: d.status === "answered" ? "Submitted" : String(d.status)}) : null], d.asked_at ? "asked " + when(d.asked_at) : "");
   const todoRow = t => rowCard("todo", t, [t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: String(t.repo)}) : null,
     t.status === "done" ? el("span", {class:"chip ok", text:"Done"}) : null, t.from === "you" && state.todoEdit.has(t.id) ? el("span", {class:"chip need", text:"Editing"}) : null], t.added_at ? "added " + when(t.added_at) : "");
   // Settles what is open among the rows the view offers ([kind, item] pairs, in list order), before the rows are drawn
@@ -2665,7 +2666,7 @@ ul.hist .sch-line{display:block}
       parts.push(el("div", {class:"ans"},
         el("div", {}, el("b", {text: "Your answer: "}), pick, a.choice === rec ? " (the recommendation)" : ""),
         a.note ? el("div", {text: a.note}) : null,
-        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : " · waiting for the PM to log it")})
+        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : " · waiting for the PM to log it")})
       ));
       if (d.status === "answered") parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Change answer", onclick: () => { state.editing.add(d.id); render(); }})));
     }

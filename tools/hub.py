@@ -103,6 +103,8 @@ the server alone decides what a role may do.
                                                      (default pm), refused when the hub does
                                                      not know it
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
+  hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
+                                                     that needs no ruling
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
         [--urgent | --no-urgent]                     `EDITED Q-1`; an --option list replaces
@@ -190,8 +192,8 @@ the server alone decides what a role may do.
       a finding is an error.
 
 `--choice N` and `--recommended N` are the option's place in the question's list, counted from
-0 as the api counts it. `questions log`, `stories set` and each `edit` and `withdraw` need
---if-version V: the version of the document the caller read and decided on, which the `questions`
+0 as the api counts it. `questions log`, `questions done`, `stories set` and each `edit` and
+`withdraw` need --if-version V: the version of the document the caller read and decided on, which the `questions`
 and `stories` lines show as `v2` and --json (`todos --json` too) as `version`. Without it the verb is a usage error and asks nothing; with a version
 the document no longer has, the server refuses the write (`REFUSED conflict`).
 
@@ -339,7 +341,8 @@ def _leaf(subs, name, what):
 def _client_verbs(sub):
     S = hubvalidate.STATUSES
     q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
-                'edit, withdraw: change or remove one you asked', S['questions'])
+                'done: handled with no ruling; edit, withdraw: change or remove one you asked',
+                S['questions'])
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
     _repo(x)
@@ -357,6 +360,10 @@ def _client_verbs(sub):
     x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
     x.add_argument('id')
     x.add_argument('ruling', metavar='ruling-id')
+    _pins(x, required=True)
+    x = _leaf(q, 'done', 'mark an answered question handled with no ruling (a one-off go)')
+    x.add_argument('id')
+    x.add_argument('--why', required=True, help='why the answer needs no ruling')
     _pins(x, required=True)
     x = _leaf(q, 'edit', 'change an open question you asked')
     _creator(x, 'KEY')
@@ -977,6 +984,10 @@ def _questions(a, stop):
         got = hub.post(_one('questions', a) + '/log', client.AGENT,
                        {'ruling': a.ruling, 'if_version': a.if_version})
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
+    if a.sub == 'done':
+        got = hub.post(_one('questions', a) + '/done', client.AGENT,
+                       {'why': a.why, 'if_version': a.if_version})
+        return _wrote(a, got, 'DONE %s' % got.get('id'))
     if a.sub == 'edit':
         context = _text_of(a.context_file, 'context') if a.context_file else None
         got = hub.post(_one('questions', a) + '/edit', client.AGENT, _edits(a, _body(
