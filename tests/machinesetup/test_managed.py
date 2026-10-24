@@ -165,6 +165,45 @@ class ManagedMode(ManagedBase):
         self.assertIn('add them to the template', out)
         self.assertEqual(T.readb(self.target), before)
 
+    def test_retired_keys_are_dropped_and_named_in_the_plan_and_diff(self):
+        have = dict(self.rendered(), effortLevel='high',
+                    modelSettings={'claude-opus-5-5': {'autoCompactWindow': 400000}})
+        dump(self.target, have)
+        code, out = self.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('drops the retired key(s) effortLevel, modelSettings', out)
+        self.assertIn('-  "effortLevel": "high"', out.replace('\r', ''))
+        self.assertIn('-  "modelSettings"', out.replace('\r', ''))
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(load(self.target), self.rendered())
+        self.assertIn('managed-settings: nothing to do', self.run_it()[1])
+
+    def test_an_unknown_key_beside_retired_ones_still_refuses_and_keeps_the_file(self):
+        have = dict(self.rendered(), effortLevel='high', model='opus')
+        dump(self.target, have)
+        before = T.readb(self.target)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn(': model;', out)
+        self.assertNotIn('effortLevel,', out)
+        self.assertEqual(T.readb(self.target), before)
+
+    def test_a_retired_name_nested_elsewhere_is_not_retired(self):
+        have = self.rendered()
+        have['autoMode'] = {'allow': ['x'], 'effortLevel': 'high'}
+        dump(self.target, have)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('autoMode.effortLevel', out)
+
+    def test_every_retired_key_is_absent_from_the_committed_template(self):
+        with open(os.path.join(os.path.dirname(__file__), '..', '..', 'hosts', 'claude',
+                               'managed-settings.json'), 'rb') as f:
+            tpl = json.loads(f.read().decode('utf-8-sig'))
+        for k in managed.RETIRED:
+            self.assertNotIn(k, tpl)
+
     def test_a_nested_key_the_overlay_holds_is_not_refused(self):
         self.overlay({'autoMode': {'environment': ['here']}})
         have = self.rendered()
