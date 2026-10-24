@@ -35,7 +35,7 @@ ERROR, WARN, NOTE = 'error', 'warn', 'note'
 # status values per collection (docs/action-hub.md: questions, stories, todos, to_pm, finding_marks;
 # approvals: kitlib.hubsite.approvals)
 STATUSES = {
-    'questions': ('open', 'answered', 'logged'),
+    'questions': ('open', 'answered', 'logged', 'done'),
     'stories': ('submitted', 'review', 'questions', 'added', 'declined', 'withdrawn'),
     'todos': ('open', 'done'),
     'to_pm': ('queued', 'sent', 'done'),

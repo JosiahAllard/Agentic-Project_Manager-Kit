@@ -1807,9 +1807,31 @@ def uncite_line(line, opens=True):
     indentation the rewrite left. Such a line is listed for a hand edit and never rewritten: no
     rewrite says `the owner` or `the owner's`. `opens`: the line starts a sentence (the line before
     it is blank, absent, or ends a sentence). A line left opening on a mark (`, then x`, after a
-    parenthesis went) is the body's to join (_uncite_body). Idempotent: a line with no cite comes
-    back as it was."""
-    if line.startswith(rmod.BLOCK_NOTE) or not (CITED.search(line) or GLUED.search(line)):
+    parenthesis went) is the body's to join (_uncite_body). A `Blocked on M (date): T` line
+    (record.BLOCK_NOTE, written by plan_block) has only its reason T worded, as a line that opens
+    a sentence; one whose reason would be left empty or opening on a mark, or that has no such
+    prefix, is left for a hand edit. Idempotent: a line with no cite comes back as it was."""
+    if not (CITED.search(line) or GLUED.search(line)):
+        return line, False
+    if line.startswith(rmod.BLOCK_NOTE):
+        head = _BLOCK_HEAD.match(line)
+        if not head:
+            return line, True
+        reason, hand = _uncite_text(line[head.end():], True)
+        if hand or not reason.strip() or re.match(r'[,;.:]', reason):
+            return line, True
+        return head.group(0) + reason, False
+    return _uncite_text(line, opens)
+
+
+# The prefix of the body line plan_block writes for `--reason`: `Blocked on M (yyyy-mm-dd): `.
+_BLOCK_HEAD = re.compile(re.escape(rmod.BLOCK_NOTE) + r'[^()]*\([0-9]{4}-[0-9]{2}-[0-9]{2}\): ')
+
+
+def _uncite_text(line, opens):
+    """uncite_line for one line of text that is not a `Blocked on` line: a body line, or a
+    `summary` or `ref` value (plan_uncite)."""
+    if not (CITED.search(line) or GLUED.search(line)):
         return line, False
     if GLUED.search(line):
         return line, True
@@ -1829,11 +1851,12 @@ def uncite_line(line, opens=True):
     return after, False
 
 
-def _uncite_body(body):
+def _uncite_body(body, keep_block=False):
     """`(new body, rewritten, hand)`: `rewritten` the `[before, after]` of each line the rewrite
     changed, in order (`after` None for a line that was only cites and goes); `hand` the
     `(n, line)` of each line uncite_line left for a hand edit, `n` its 1-based place in the new
-    body. A rewritten line left opening on a stray mark (`, not this one.` once a parenthesis of
+    body. `keep_block`: each `Blocked on` line that cites one is left for a hand edit unworded
+    (it is a hold's only citation: plan_uncite). A rewritten line left opening on a stray mark (`, not this one.` once a parenthesis of
     cites went) gives the mark to the line above it, or drops it where that line is blank, a
     heading or already ends on a mark, capitalising what is left after a blank line, a heading or
     a finished sentence; it is left for a hand edit when the line above is one."""
@@ -1843,7 +1866,10 @@ def _uncite_body(body):
     for line in (body or '').split('\n'):
         opens = not prev.strip() or prev.rstrip()[-1:] in '.!?:'
         prev = line
-        after, needs = uncite_line(line, opens)
+        if keep_block and line.startswith(rmod.BLOCK_NOTE) and CITED.search(line):
+            after, needs = line, True
+        else:
+            after, needs = uncite_line(line, opens)
         stray = re.match(r'(\s*)([,;.:])\s*', after)
         if stray and not needs and after != line and not re.match(r'\s*[,;.:]', line):
             above = out[-1] if out else ''
@@ -1879,27 +1905,85 @@ def _uncite_body(body):
     return '\n'.join(out), rewritten, hand
 
 
+UNCITED_FIELDS = ('summary', 'ref')     # the header values uncite words as it words a body line
+
+
+def _uncite_fields(pairs):
+    """`(pairs, worded, hand)` for one record's header pairs: each UNCITED_FIELDS value that cites
+    one worded as a line that opens a sentence (_uncite_text). `worded` the `(key, before,
+    after)` of each value changed, `after` None for a `ref` of only cites, which is dropped;
+    `hand` the `(n, key, value)` of each value kept for a hand edit, `n` its line in the written
+    record: one no rule words cleanly, a `summary` of only cites (it is required) and a value
+    left opening on a mark."""
+    out, worded, hand = [], [], []
+    for key, value in pairs:
+        if key in UNCITED_FIELDS and (CITED.search(value) or GLUED.search(value)):
+            after, needs = _uncite_text(value, True)
+            if key == 'ref' and re.fullmatch(r'\s*' + _KEY + _GP + r'\s*\.?\s*', value):
+                after, needs = '', False         # only cites: no rule takes a bare one
+            if not needs and not after.strip() and key == 'ref':
+                worded.append((key, value, None))
+                continue
+            if needs or not after.strip() or re.match(r'\s*[,;.:]', after):
+                hand.append((len(out) + 1, key, value))
+            else:
+                worded.append((key, value, after.strip()))
+                value = after.strip()
+        out.append((key, value))
+    return out, worded, hand
+
+
+def _hold_needs_block_lines(rec, body):
+    """Whether `rec` is a blocked record with a `deliberate` or `owner` hold whose citations
+    (record.hold_citations) would all be gone with its `Blocked on` lines worded as in `body`:
+    nothing in `q`, `owner_ask` or `blocked_on` cites one, and no `Blocked on` line of `body`
+    does. Its `Blocked on` lines that cite one are then kept for a hand edit, so `check`'s hold
+    citations still read the hold."""
+    if rec.get('state') != 'blocked' or not any(
+            m in rmod.UNCITED_KINDS for m in rec.all('blocked_on')):
+        return False
+    if any(rmod.cites(v) for key in ('q', 'owner_ask', 'blocked_on') for v in rec.all(key)):
+        return False
+    return not any(rmod.cites(line) for line in (body or '').split('\n')
+                   if line.startswith(rmod.BLOCK_NOTE))
+
+
 def plan_uncite(snap, ctx):
-    """Rewrite every owner ruling and question id (CITE_ID) cited in the readable records' bodies
-    into plain words (uncite_line), and drop the header keys that hold only one (UNCITED_KEYS),
-    in one store commit. `summary`, `ref`, `owner_ask`, `q`, `resume`, `priority_per`,
-    `requires` and the `Blocked on` lines are kept as they are. A line no rule words cleanly is
-    left as it was and listed under NEEDS HAND EDIT, with the store, the record and its line in
-    the written record, in the dry run and in the `--apply` output alike. A second run rewrites
+    """Rewrite every owner ruling and question id (CITE_ID) cited in the readable records' bodies,
+    their `Blocked on` lines' reasons among them, and in their `summary` and `ref` values
+    (UNCITED_FIELDS) into plain words (uncite_line), and drop the header keys that hold only one
+    (UNCITED_KEYS), in one store commit. `owner_ask`, `q`, `resume`, `priority_per` and
+    `requires` are kept as they are, and so is a `Blocked on` line that is a deliberate or owner
+    hold's only citation (_hold_needs_block_lines). A line or value no rule words cleanly is left
+    as it was and listed under NEEDS HAND EDIT, with the store, the record and its line in the
+    written record, in the dry run and in the `--apply` output alike. A second run rewrites
     nothing; it lists the lines still left for a hand edit."""
     writes, out, hands = {}, [], []
-    cites = body_lines = headers = 0
+    cites = body_lines = fields = headers = 0
     for rec in snap.readable:
         body, rewritten, hand = _uncite_body(rec.body)
+        only = _hold_needs_block_lines(rec, body)
+        if only:
+            body, rewritten, hand = _uncite_body(rec.body, keep_block=True)
         drop = [(k, rec.get(k)) for k in UNCITED_KEYS if rec.has(k)]
-        pairs = [(k, v) for k, v in rec.pairs() if k not in UNCITED_KEYS]
+        pairs, worded, field_hand = _uncite_fields(
+            [(k, v) for k, v in rec.pairs() if k not in UNCITED_KEYS])
+        hands += ['  %s %s line %d (%s): %s' % (snap.where, rec.stem, n, key, value.strip())
+                  for n, key, value in field_hand]
         # the header, its blank line, then the body: line n of the body is line len(pairs)+1+n
-        hands += ['  %s %s line %d: %s' % (snap.where, rec.stem, len(pairs) + 1 + n, line.strip())
-                  for n, line in hand]
-        if not rewritten and not drop:
+        hands += ['  %s %s line %d: %s%s' % (
+            snap.where, rec.stem, len(pairs) + 1 + n, line.strip(),
+            " (the hold's only citation)" if only and line.startswith(rmod.BLOCK_NOTE) else '')
+            for n, line in hand]
+        if not rewritten and not drop and not worded:
             continue
         writes[rec.stem] = _text(pairs, body if rewritten else rec.body)
         out.append('  %s' % rec.stem)
+        for key, before, after in worded:
+            cites += len(CITED.findall(before))
+            out += ['    - %s: %s' % (key, before),
+                    '    + %s: %s' % (key, after if after is not None else '(dropped)')]
+        fields += len(worded)
         for before, after in rewritten:
             cites += len(CITED.findall(before))
             out += ['    - %s' % before.strip(),
@@ -1914,8 +1998,8 @@ def plan_uncite(snap, ctx):
         return Change({}, 'backlog: uncite', ['UNCITE: nothing to rewrite in %s%s' % (
             snap.where, '; %d line(s) still cite one' % len(hands) if hands else
             ': no owner ruling or question id is cited')] + tail)
-    lines = ['UNCITE: %d cite(s) in %d record(s): %d body line(s) rewritten, %d header line(s) '
-             'dropped, %d line(s) left for a hand edit' % (cites, len(writes), body_lines, headers,
-                                                          len(hands))] + out + tail
+    lines = ['UNCITE: %d cite(s) in %d record(s): %d body line(s) rewritten, %d field(s) '
+             'rewritten, %d header line(s) dropped, %d line(s) left for a hand edit'
+             % (cites, len(writes), body_lines, fields, headers, len(hands))] + out + tail
     return Change(writes, 'backlog: uncite %d cite(s) in %d record(s)' % (cites, len(writes)),
                   lines)
