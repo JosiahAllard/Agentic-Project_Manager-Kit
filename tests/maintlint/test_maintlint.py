@@ -570,7 +570,8 @@ class Cli(StoreCase):
         # (kitlib.maintlint.publish): both stubbed here, never booked and never sent.
         sent = kw.get('publish') or mock.Mock(return_value=(None, []))
         with redirect_stdout(out), redirect_stderr(err), \
-                mock.patch.object(maint_lint.slot, 'take', return_value=nullcontext()), \
+                mock.patch.object(maint_lint.slot, 'take',
+                                  return_value=kw.get('held') or nullcontext()), \
                 mock.patch.object(maint_lint.publish, 'publish', sent):
             code = maint_lint.main(list(argv))
         return code, out.getvalue(), err.getvalue()
@@ -589,6 +590,29 @@ class Cli(StoreCase):
         with open(os.path.join(folder, 'page.html'), encoding='utf-8') as fh:
             self.assertEqual(doc, fh.read())
         self.assertIn('PUBLISHED maint-lint-x v3\n', out)
+
+    def test_a_plain_run_publishes_only_after_the_slot_is_given_back(self):
+        kit_json_ref(self.repo)
+        self.seed(priced('AAA'))
+        folder = temp_dir(self)
+        state = {'held': False, 'entered': 0}
+        seen = []
+
+        class Held(object):
+            def __enter__(self):
+                state['held'] = True
+                state['entered'] += 1
+
+            def __exit__(self, *exc):
+                state['held'] = False
+
+        def sent(res, doc):
+            seen.append(state['held'])
+            return None, []
+        code, out, _ = self.main('-C', self.repo.root, '--result',
+                                 os.path.join(folder, 'result.json'), publish=sent, held=Held())
+        self.assertEqual(code, 0, out)
+        self.assertEqual((state['entered'], seen), (1, [False]))
 
     def test_dry_run_never_publishes(self):
         kit_json_ref(self.repo)

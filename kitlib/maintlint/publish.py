@@ -53,7 +53,9 @@ def publish(res, html, client=None):
     try:
         hub = client if client is not None else hub_client()
         pin = None
-        for card in hub.listing('pages', status='all'):
+        # The agent token only: role ANY would fall back to the owner's token when the agent's
+        # token file is missing.
+        for card in hub.listing('pages', status='all', role=cmod.AGENT):
             if card.get('id') == doc_id:
                 pin = card.get('version')
         body = {'id': doc_id, 'title': 'Maintenance lint: %s' % repo, 'html': html,

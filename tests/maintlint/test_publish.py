@@ -21,7 +21,7 @@ class FakeHub(object):
                                                      'version': 1}
 
     def listing(self, collection, status=None, repo=None, role=client.ANY):
-        self.calls.append(('listing', collection, status))
+        self.calls.append(('listing', collection, status, role))
         return self.pages
 
     def post(self, path, role, body):
@@ -50,12 +50,20 @@ class Publish(unittest.TestCase):
         self.assertIsNone(pagecheck.check(doc))
         line, notes = publish.publish(RES, doc, hub)
         self.assertEqual((line, notes), ('PUBLISHED maint-lint-demo v1', []))
-        self.assertEqual(hub.calls[0], ('listing', 'pages', 'all'))
+        self.assertEqual(hub.calls[0], ('listing', 'pages', 'all', client.AGENT))
         (_, path, role, body), = hub.posts()
         self.assertEqual((path, role), ('/pages', client.AGENT))
         self.assertEqual(body, {'id': 'maint-lint-demo', 'title': 'Maintenance lint: demo',
                                 'html': doc, 'repo': 'demo', 'from': 'maint-lint',
                                 'summary': '2 finding(s), 1 new, 1 note(s)'})
+
+    def test_the_pages_listing_is_read_with_the_agent_token_only(self):
+        # Role ANY would fall back to the owner's token when the agent's token file is missing.
+        hub = FakeHub()
+        publish.publish(RES, html(), hub)
+        roles = [c[3] for c in hub.calls if c[0] == 'listing']
+        self.assertEqual(roles, [client.AGENT])
+        self.assertNotEqual(client.AGENT, client.ANY)
 
     def test_a_republish_sends_the_cards_version_as_if_version(self):
         hub = FakeHub(pages=[{'id': 'maint-lint-other', 'version': 9},
