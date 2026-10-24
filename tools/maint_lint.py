@@ -1,13 +1,17 @@
-"""maint_lint.py: the maintenance lint of one repository, read-only (docs/maint-lint.md).
+"""maint_lint.py: the maintenance lint of one repository (docs/maint-lint.md). It writes only the
+gate-time record, in a plain run.
 
   maint_lint.py [-C DIR] [--dry-run] [--result FILE] [--out FILE]
 
 Runs every check of kitlib.maintlint on the checkout DIR: keyword holds, unpriced records, dead
 pulls, dead blockers, duplicates, parked records whose hub question is answered, the backlog
 audit (7 days, no fetch) as counts, body, files and scope paths, the worktrees the nightly sweep
-leaves, and the decision ledger as counts. No check flags anything for its age
-alone. Every finding prints the command that fixes it; nothing is run, and no record, ledger,
-worktree or git ref is written.
+leaves, the decision ledger as counts, and each gate step's median time over full gates against
+"maint_lint".gate_time.bound_s (kitlib.maintlint.gatetime). No check flags anything for its age
+alone. Every finding prints the command that fixes it; nothing is run, and no ledger entry,
+worktree or git ref is written. The one write: a plain run files a backlog record for each step
+over the bound, when "maint_lint".gate_time.prefix is set and no live record of that step is in
+the store (one `gate time:` line each); --dry-run files nothing.
 
 Without --dry-run it writes the result (default `<pm_data>/maint-lint/<repo>/result.json`, beside
 the backlog's audit/ folder) and the page (--out, default page.html beside the result), and prints
@@ -33,7 +37,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import maintlint                                       # noqa: E402
-from kitlib.maintlint import page, publish, result as rmod, slot   # noqa: E402
+from kitlib.maintlint import gatetime, page, publish, result as rmod, slot   # noqa: E402
 
 # An unexpected error (any Exception other than the lock's refusals): none of 0-4, nor a lock code.
 EXIT_ERROR = 5
@@ -49,7 +53,8 @@ def _counts(res):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='The maintenance lint of one repository (read-only).')
+    ap = argparse.ArgumentParser(description='The maintenance lint of one repository (it writes '
+                                             'only the gate-time record, in a plain run).')
     ap.add_argument('-C', dest='root', default='.', help='the checkout to lint')
     ap.add_argument('--dry-run', action='store_true',
                     help='write only the page, to --out; never result.json')
@@ -105,6 +110,9 @@ def _run(root, path, a):
     line, notes = publish.publish(res, html)
     if line:
         print(line)
+    # The one write, outside the slot like the page: a record per gate step over its bound.
+    for said in gatetime.file(root, res):
+        print(said)
     return _report(dict(res, notes=res['notes'] + notes))
 
 

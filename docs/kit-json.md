@@ -112,6 +112,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `machine_paths.known_binary` (map path -> string, default {}): binary file -> why it may hold paths
 - `machine_paths.scan` (list of string, default ["*"]): globs scanned
 - `machine_paths.fallback_vars` (list of string, default []): environment variables a machine path may fall back to
+- `maint_lint.gate_time` ({prefix, bound_s, session}): the gate-time check of tools/maint_lint.py (docs/maint-lint.md "Gate time"): bound_s (1 to 86400, default 900) the seconds a gate step's median time over full gates may reach; prefix the id prefix of the record a plain run files for a step over it (unset: none is filed); session the session that record carries; unset: the check runs at 900 s and files nothing
 - `pieces`: a table the kit passes through unchecked (a file path or an object)
 - `preflight.engines` (list of string, default []): process-name prefixes listed as running engines
 - `preflight.report_hooks` (list of "module:function", default []): module:function report hooks

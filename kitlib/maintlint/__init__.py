@@ -1,4 +1,4 @@
-"""kitlib.maintlint: the maintenance lint, read-only (docs/maint-lint.md). Every check flags on
+"""kitlib.maintlint: the maintenance lint (docs/maint-lint.md). Every check flags on
 evidence that something is spent or wrong (a duplicate, a path gone, a blocker that names no live
 record, a pull with no branch, a landed tree), never on a record's or a tree's age alone.
 
@@ -13,7 +13,8 @@ record, a pull with no branch, a landed tree), never on a record's or a tree's a
   run(root, home, now, previous)  the whole lint of the repository at `root`, as a result dict
                                   (kitlib.maintlint.result writes it)
 
-Nothing here writes a record, the ledger, a worktree or git.
+run() writes no record, ledger entry, worktree or git ref. maint_lint writes only the gate-time
+record, in a plain run (kitlib.maintlint.gatetime.file, which tools/maint_lint.py calls).
 """
 import collections
 import datetime
@@ -29,13 +30,13 @@ from kitlib.backlog.opener import open_store
 
 Finding = collections.namedtuple('Finding', 'check key text fix age', defaults=(None,))
 
-from . import backlog, holds, ledger, result, verify, worktrees     # noqa: E402 (they use Finding)
+from . import backlog, gatetime, holds, ledger, result, verify, worktrees  # noqa: E402 (they use Finding)
 
 VERSION = 1
 CHECKS = ('keyword-hold', 'unpriced', 'dead-pull', 'dead-blocker', 'duplicate', 'audit',
           'body-path-gone', 'file-moved', 'scope-path-gone', 'worktree-A', 'worktree-B',
           'worktree-C', 'worktree-E', 'worktree-O', 'landed-still-pulled', 'closed-unlanded',
-          'answered-question', 'ledger-stale-cites', 'ledger-superseded-live')
+          'answered-question', 'ledger-stale-cites', 'ledger-superseded-live', 'gate-time')
 # The store history closed-unlanded reads: the audit's window.
 CLOSE_DAYS = backlog.AUDIT_DAYS
 
@@ -125,6 +126,9 @@ def run(root, home=None, now=None, previous=None, questions=None):
     notes = []
     findings = _backlog_checks(root, home, now, notes, questions)
     found, more = worktrees.findings(root)
+    findings += found
+    notes += more
+    found, more = gatetime.findings(code_checkout(root), now)
     findings += found
     notes += more
     counts_ledger, more = ledger.counts(home)
