@@ -1034,12 +1034,32 @@ def stream_free(path):
     return drive + ''.join(p.split(':', 1)[0] if i % 2 == 0 else p for i, p in enumerate(parts))
 
 
+LONG_PREFIX = re.compile(r'[\\/]{2}[?.][\\/]|(?:[A-Za-z]:)?[\\/]\?\?[\\/]')
+
+
+def unprefixed(path):
+    r"""`path` without a Win32 namespace prefix (`\\?\`, `\\.\`, `\??\`, either slash), which
+    opens the same file: `\\?\Z:\pm\STANDING.md` is `Z:\pm\STANDING.md`, and `\\?\UNC\host\share`
+    is `\\host\share`. `\??\` is also dropped after a drive (`Z:\??\Z:\pm`): abspath reads it as a
+    folder of the current drive, but Windows opens it as the NT name it is, and no folder is
+    named `??`. A prefixed name of another form (`\\?\Volume{...}\`) is left whole for realpath,
+    which gives the drive name of a file that exists."""
+    m = LONG_PREFIX.match(path)
+    if not m:
+        return path
+    rest = path[m.end():]
+    if rest[:4].lower() in ('unc\\', 'unc/'):
+        return '\\\\' + rest[4:]
+    return rest if re.match(r'[A-Za-z]:(?:[\\/]|$)', rest) else path
+
+
 def file_key(path):
-    """`path` as the filesystem opens it, to compare: absolute, a stream suffix dropped
-    (stream_free), a trailing dot or space dropped (abspath: `alpha.md.` is `alpha.md`), then
-    links, junctions and 8.3 short names resolved and case folded (jail.real), as lock_state
-    compares."""
-    return jail.real(os.path.abspath(stream_free(os.path.abspath(path))))
+    """`path` as the filesystem opens it, to compare: a namespace prefix dropped (unprefixed),
+    absolute, a stream suffix dropped (stream_free), a trailing dot or space dropped (abspath:
+    `alpha.md.` is `alpha.md`), then links, junctions and 8.3 short names resolved and case folded
+    (jail.real), as lock_state compares; a prefix realpath keeps or gives (a volume GUID name) is
+    dropped from that too."""
+    return unprefixed(jail.real(os.path.abspath(stream_free(os.path.abspath(unprefixed(path))))))
 
 
 def ledger_guarded(ctx):
@@ -1063,14 +1083,15 @@ def ledger_kind(ctx, target):
     """What of the ledger `target` is: 'log' for the ledger file, 'rulebook' for the rulebooks'
     folder or a `.md` file directly in it, 'digest' for the standing digest, else None. Names
     compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
-    space, links, junctions and 8.3 names). A wildcard path is any of them it can match
-    (ledger_glob)."""
-    if hubg.has_glob(target):
-        return ledger_glob(ctx, target)
+    space, a namespace prefix, links, junctions and 8.3 names), first as the literal name (an
+    edit's path is never a wildcard: `[PM]` is a folder name), then, when it has a wildcard
+    character, as a wildcard that is any of them it can match (ledger_glob)."""
     full = file_key(target)
     for kind, real in ledger_guarded(ctx):
         if full == real or (kind == 'rulebook' and os.path.dirname(full) == real and full.endswith('.md')):
             return kind
+    if hubg.has_glob(target):
+        return ledger_glob(ctx, target)
     return None
 
 
@@ -1080,7 +1101,8 @@ def ledger_glob(ctx, target):
     against the matching part of a held path below that folder. A file is matched by a wildcard
     of the same depth; the rulebooks' folder also by one a part deeper (a file in it), and every
     wildcard that starts in it is a rulebook (fail closed: `rules/*.txt`); `**` or `..` after the
-    wildcard matches every held path below the folder."""
+    wildcard matches every held path below the folder. A part also matches a name it spells
+    literally (`[PM]` the folder `[PM]`)."""
     first = min(target.index(c) for c in hubg.GLOB_CHARS if c in target)
     cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
@@ -1095,7 +1117,7 @@ def ledger_glob(ctx, target):
         below = real[len(b.rstrip('\\/')) + 1:].split(os.sep)
         deeper = kind == 'rulebook' and len(parts) == len(below) + 1
         if wide or ((len(parts) == len(below) or deeper) and
-                    all(fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts))):
+                    all(n == x or fnmatch.fnmatchcase(n, x) for n, x in zip(below, parts))):
             return kind
     return None
 
@@ -1109,7 +1131,8 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     literal folder is above it; a computed word or unread magic always), or is a `.md` file
     directly in the rulebooks' folder (a wildcard there: its literal folder, that folder). A
     branch name is read as a path too (fail closed: `git checkout pm` from
-    the folder above the ledger's)."""
+    the folder above the ledger's). Paths read from elsewhere (git_every_path:
+    `--pathspec-from-file`, checkout-index `-a` or `--stdin`) reach every path of the tree."""
     gc = git_call_judged(inv)
     if gc is None or gc.sub_dyn or not gc.dir or gc.unknown or gc.blind:
         return None
@@ -1130,6 +1153,11 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
     top = place.top if place.kind in (repo.MAIN, repo.LINKED) and place.top else gc.dir
     tree = jail.real(top)
     held = [(kind, real) for kind, real in held if jail.inside(real, tree)]
+    every = git_every_path(sub, short, longs)
+    if every and held:
+        kind = held[0][0]
+        return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), every)),
+                      ledger_instead(ctx, kind))
     for w in pos:
         spec = delegfile.spec_real(ctx, w, gc.dir, top)
         if spec is False:
@@ -1139,6 +1167,23 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
                     kind == 'rulebook' and os.path.dirname(spec) == real and spec.endswith('.md')):
                 return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), w.text)),
                               ledger_instead(ctx, kind))
+    return None
+
+
+def git_every_path(sub, short, longs):
+    """The option of a ledger_git call that takes its paths from where the guard cannot read
+    them, so they can be every path, else None: `--pathspec-from-file` (rm, restore, checkout; any
+    abbreviation git could read as it), and checkout-index's `-a`/`--all` and `--stdin`."""
+    if sub in ('rm', 'restore', 'checkout'):
+        for n in sorted(longs):
+            if len(n) > 1 and 'pathspec-from-file'.startswith(n):
+                return '--' + n
+    if sub == 'checkout-index':
+        if 'a' in short:
+            return '-a'
+        for n in sorted(longs):
+            if n and ('all'.startswith(n) or 'stdin'.startswith(n)):
+                return '--' + n
     return None
 
 

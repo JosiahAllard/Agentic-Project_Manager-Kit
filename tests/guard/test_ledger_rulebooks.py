@@ -200,6 +200,68 @@ class Rulebooks(unittest.TestCase):
         d = decide(bash('git rm "$f"', self.w.wt, sub=True), self.w.ctx())
         self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
 
+    def test_git_that_takes_its_paths_from_elsewhere_is_refused(self):
+        # a path list the guard cannot read can name every path, the books included: fail closed
+        self.w.user_config({'ledger_path': self.w.ledger})
+        f = self.folder
+        for cmd in ('git rm --pathspec-from-file=list.txt', 'git rm -r --pathspec-from-file - < list.txt',
+                    'git rm --pathspec-fr=list.txt', 'git restore --pathspec-from-file=list.txt',
+                    'git restore --staged --worktree --pathspec-from-file=list.txt',
+                    'git checkout --pathspec-from-file=list.txt', 'git checkout HEAD --pathspec-from-file list.txt',
+                    'git checkout-index -a', 'git checkout-index -f -a', 'git checkout-index -af',
+                    'git checkout-index --all', 'git checkout-index --al', 'git checkout-index --stdin < list.txt'):
+            with self.subTest(cmd):
+                self.git_refused(bash(cmd, f, sub=True), LOG)
+        self.git_refused(ps('git checkout-index --all', f, sub=True), LOG)
+        for cmd, cwd in (('git restore --staged --pathspec-from-file=list.txt', f),
+                         ('git checkout-index -a', self.w.wt), ('git rm --pathspec-from-file=list.txt', self.w.wt)):
+            with self.subTest(cmd, cwd=cwd):
+                d = decide(bash(cmd, cwd, sub=True), self.w.ctx())
+                self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+
+    def test_a_bracket_in_a_folder_name_is_that_name(self):
+        # an edit's path is never a wildcard: `[PM]` names the folder, not the letter P or M
+        folder = os.path.join(self.w.base, '[PM]', 'rulings')
+        os.makedirs(os.path.join(folder, 'rules'))
+        ledger = os.path.join(folder, 'LEDGER.md')
+        self.w.user_config({'ledger_path': ledger})
+        for path, why in ((os.path.join(folder, 'STANDING.md'), DIGEST), (os.path.join(folder, 'rules', 'kit.md'), BOOK),
+                          (ledger, LOG)):
+            for sub in (True, False):
+                with self.subTest(path, sub=sub):
+                    self.refused(event('Write', {'file_path': path, 'content': ''}, folder, sub=sub), why)
+        self.refused(bash("rm '[PM]/rulings/STANDING.md'", self.w.base, sub=True), DIGEST)
+        self.refused(bash("rm '[PM]'/rulings/*", self.w.base, sub=True), LOG)
+        self.allowed(event('Write', {'file_path': os.path.join(folder, 'NOTES.md'), 'content': ''}, folder, sub=True))
+
+    def test_a_namespace_prefix_is_the_file_itself(self):
+        self.w.user_config({'ledger_path': self.w.ledger})
+        for pre in ('\\\\?\\', '//?/', '\\\\.\\', '\\??\\'):
+            for path, why in ((self.digest, DIGEST), (self.book(), BOOK), (self.w.ledger, LOG)):
+                for sub in (True, False):
+                    with self.subTest(pre + path, sub=sub):
+                        self.refused(event('Write', {'file_path': pre + path, 'content': ''}, self.folder, sub=sub),
+                                     why)
+        self.refused(bash("echo x > '//?/%s'" % W.fwd(self.digest), self.folder, sub=True), DIGEST)
+        self.refused(ps("Set-Content -LiteralPath '\\\\?\\%s' -Value x" % self.book(), self.folder, sub=True))
+        # a volume GUID name: realpath gives the drive's name
+        import ctypes
+        buf = ctypes.create_unicode_buffer(100)
+        drive = os.path.splitdrive(self.folder)[0] + os.sep
+        if ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW(drive, buf, 100):
+            for path, why in ((self.digest, DIGEST), (self.book('new.md'), BOOK)):
+                volume = buf.value + os.path.splitdrive(path)[1].lstrip('\\')
+                with self.subTest(volume):
+                    self.refused(event('Write', {'file_path': volume, 'content': ''}, self.w.plain), why)
+        # (a subagent's prefixed write is the write jail's to refuse; the owner's here is no one's)
+        self.allowed(event('Write', {'file_path': '\\\\?\\' + os.path.join(self.folder, 'NOTES.md'), 'content': ''},
+                           self.w.plain))
+        from kitlib.guard import rules
+        self.assertEqual(rules.unprefixed('\\\\?\\UNC\\host\\share\\STANDING.md'), '\\\\host\\share\\STANDING.md')
+        self.assertEqual(rules.unprefixed('//?/unc/host/share/x'), '\\\\host/share/x')
+        self.assertEqual(rules.unprefixed('Z:\\pm\\x'), 'Z:\\pm\\x')
+        self.assertEqual(rules.unprefixed('C:\\??\\Z:\\pm\\x'), 'Z:\\pm\\x')
+
     def test_git_in_a_work_tree_that_holds_a_split_ledger(self):
         split = os.path.join(self.w.wt, 'ledger')
         os.makedirs(os.path.join(split, 'rules'))
