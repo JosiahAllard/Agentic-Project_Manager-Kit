@@ -97,7 +97,7 @@ class Verbs(Base):
         self.assertIn('worker', d.reason)
 
     def test_a_dry_run_is_a_read(self):
-        for args in ('retarget A B', 'migrate --to main --dry-run'):
+        for args in ('retarget A B',):
             with self.subTest(args):
                 self.allowed(self.cmd(self.bl(args)))
 
@@ -583,15 +583,14 @@ class DryRuns(Base):
     """A dry run is a read only when every word reads: an unread word could be the --apply."""
 
     def test_an_unread_word_on_a_dry_run_is_not_a_read(self):
-        for args in ('retarget A B $X', 'retarget A B "$X"', 'catch-up $X p', 'catch-up "$X" p',
-                     'migrate --to main --dry-run $X', 'migrate --to main --dry-run "$X"'):
+        for args in ('retarget A B $X', 'retarget A B "$X"', 'catch-up $X p', 'catch-up "$X" p'):
             with self.subTest(args):
                 d = self.refused(self.cmd('python "%s" -C . %s' % (self.tool, args), agentname.PREFIX + 'worker',
                                           cwd=self.w.wt))
                 self.assertIn('write them out', d.reason)
 
     def test_a_written_dry_run_still_reads(self):
-        for args in ('retarget A B', 'catch-up p', 'migrate --to main --dry-run'):
+        for args in ('retarget A B', 'catch-up p'):
             with self.subTest(args):
                 self.allowed(self.cmd('python "%s" -C . %s' % (self.tool, args), agentname.PREFIX + 'worker',
                                       cwd=self.w.wt))

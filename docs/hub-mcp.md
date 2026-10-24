@@ -57,9 +57,9 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 
 | tool | arguments (required first) | endpoint |
 |---|---|---|
-| `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story` | `POST /questions` |
+| `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story`, `record` | `POST /questions` |
 | `hub_question_log` | `id`, `ruling`, `if_version` | `POST /questions/<id>/log` |
-| `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent` | `POST /questions/<id>/edit` |
+| `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent`, `record` | `POST /questions/<id>/edit` |
 | `hub_question_withdraw` | `id`, `from`, `if_version` | `POST /questions/<id>/delete` |
 | `hub_todo_add` | `title`; `detail`, `commands`, `steps` ("To-do steps"), `repo`, `refs`, `urgent`, `from` | `POST /todos` |
 | `hub_todo_ack` | `id`; `if_version` | `POST /todos/<id>/ack` |
@@ -103,6 +103,13 @@ the default when it is absent or blank. The hub refuses any other value, a free-
 included (`invalid`, field `from`, status 400: `kitlib/hubsite/api.py` `questions_add`;
 `LiveKeys.test_a_question_comes_from_a_session_key_or_pm_only`). The `from` of `hub_todo_add`
 and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
+
+The `record` of `hub_ask` and `hub_question_edit` is `{repo, id}`, both required: the backlog
+record the question is about (the kit's own records are repo `pm`); `null` on `hub_question_edit`
+unbinds it. A `record` that is no object is refused before any call (`invalid`, field `record`);
+the hub then reads the record and refuses what it cannot bind, failing closed when it cannot read
+it (docs/action-hub.md "A question bound to a record";
+`Creator.test_a_record_is_passed_to_the_hub_as_given_and_null_unbinds`).
 
 The four edit and withdraw tools change only an open item the caller added: `from` must be the
 item's own (`pm` for one with none), checked as a claim because all agents share one token

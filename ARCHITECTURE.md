@@ -27,7 +27,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 
 ## Details
 
-- The ledger location comes only from the user-profile machine config (`ledger_dir` with `ledger_repos`, or `ledger_path` for one file; docs/kit-json.md "Machine config keys"), which the installer writes once. Nothing overrides it, not `.kit.json` and not env, and guard.py denies agent edits to it. The kit holds no machine paths.
+- The ledger location comes only from the user-profile machine config (`ledger_dir` with `ledger_repos`, or `ledger_path` for one file; docs/kit-json.md "Machine config keys"), which the owner sets once (docs/install.md "Backlog records and the rulings ledger"). Nothing overrides it, not `.kit.json` and not env, and guard.py denies agent edits to it. The kit holds no machine paths.
 - `slot()` takes the lock's Win32 mutex on the thread that releases it (the owning thread). It prints nothing; entry points print.
 - Tests live in `tests/<pkg>/` as unittest tests and target the library directly; the entry-point tests cover only arguments and exit codes.
 - Tests run on an in-process fake git (kitlib/git/fake), except the classes marked `real_git` (docs/test-tools.md "Fake git").
@@ -47,7 +47,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
 - **Boot:** every host entry runs the stdlib-only `boot/kitboot.py` before importing kitlib. It verifies the pinned release, or uses the source checkout when nothing is pinned.
 - **Hooks:** one hook entry for every host, `boot/hook.py <host> <event> [<part>]` (plan decision 20). Before the kit boots it reads the host's `hosts.json` `hook` data with json alone and allows a call to a tool not in `guarded_tools` (in every session, or only an unmarked one: `fast_path`); then it boots and hands the event to `kitlib.host.hookmain.dispatch` with the adapter `hosts.json` names: the guard, failing closed, or a start event's context. Each host's shell registers its hooks in a rendered manifest that runs it; on Claude the kit header (SessionStart and SubagentStart: the kit's folder, what `<kit>` and the placeholders mean) and the coordinator SessionStart hook ship in the plugin, and the guard (`boot/hook.py claude PreToolUse`) stays in each account's settings. The PM session-start checklist (`boot/hook.py claude SessionStart pm`) stays in the PM repo's settings by decision, not in the plugin. A plugin whose root is not the kit (Codex) ships a byte copy of `boot/` and its own `hosts.json` entry, since a plugin cache holds the plugin folder alone.
 - **Bundled per host:** the rendered agents, skills and instructions, the lock MCP server and the host's hooks. On Claude the owner installs it from the local marketplace `pm-kit` as `pm-kit@pm-kit`, in each account folder, from the kit's export of pushed main (docs/install.md "Plugin install (local marketplace)").
-- **Skills:** landing, red-first, ledger, backlog, machine-lock, refusal, handoff and action-hub. Profiles and instruction files become pointers to these skills.
+- **Skills:** one folder each under `content/skills/` (docs/shipping.md lists them). Profiles and instruction files become pointers to these skills.
 - **Instructions:** `AGENTS.md` is canonical; `CLAUDE.md` imports it. The repo profile is the neutral `docs/agent-profile.md`; each host's own-folder stub (`.claude/agent-profile.md`, `.codex/agent-profile.md`, the path its rendered roles name) points to it.
 - **Code:** tools and kitlib stay Python. Skills explain them, and enforcement stays in the hooks and the gate.
 - **Git hooks:** `githooks/` holds the kit's git hooks: `pre-push`, and the opt-in `pre-commit`, which runs its checks through `kitlib/githooks` (the render step, then the ledger check).
@@ -71,7 +71,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
 ## Action Hub
 - A local website served by `tools/hub.py serve` (formerly the Owner Inbox) holds the owner's questions, to-do list and story intake, and later the reservations. It has an HTTP API and a CLI (`tools/hub.py`), and is reachable remotely only through the Cloudflare Access tunnel listener. Stories go to the chosen repo's coordinator for review before they reach its backlog. The PM posts and reads them through the CLI; nothing waits on an answer.
 - Push notifications: when the owner answers a question or marks a to-do done, the server tells the session that asked and the PM through the host's delivery (`kitlib/hubsite/push.py` decides what and when; the host adapter's `push()` sends, on Claude Code to the session's peer pipe; the launcher records each session's pipe as a hint, `kitlib/launcher/pipes.py`). Without a delivery the hub serves as before (docs/action-hub.md "Push notifications").
-- The store schema and the PM's steps are in docs/action-hub.md. The action-hub skill wraps them in the plugin.
+- The store schema and the PM's steps are in docs/action-hub.md. The hub-ops skill wraps them in the plugin.
 
 ## PM session start
 - `kitlib/pmstart` builds the checklist that `boot/hook.py claude SessionStart pm` injects at PM session start; see docs/pm-start.md.

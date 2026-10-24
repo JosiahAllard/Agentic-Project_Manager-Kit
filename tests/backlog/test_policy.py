@@ -27,8 +27,6 @@ class Sort(unittest.TestCase):
             self.assertEqual(policy.sort(verb), ['read'], verb)
         self.assertEqual(policy.sort('retarget', {}), ['read'])
         self.assertEqual(policy.sort('retarget', {'apply': True}), ['retarget'])
-        self.assertEqual(policy.sort('migrate', {'dry_run': True}), ['read'])
-        self.assertEqual(policy.sort('migrate', {}), ['retarget'])
         self.assertEqual(policy.sort('uncite', {}), ['read'])
         self.assertEqual(policy.sort('uncite', {'apply': False}), ['read'])
 
@@ -323,7 +321,6 @@ class CliRole(unittest.TestCase):
         out = self.refused('plain', 'add', 'BAR', '--summary', 'x', '--scope', 'tools/z.py', *ADD_FLAGS)
         self.assertIn('unlisted (only risk none)', out)
         self.assertIn('FOO', self.ok('plain', 'show', 'FOO'))
-        self.refused('coordinator', 'migrate', '--to', 'branch')
         self.assertIn('scope:', self.ok(None, 'show', 'FOO'))
 
     def test_catch_up_apply_is_for_the_leads_and_the_plain_listing_for_everyone(self):

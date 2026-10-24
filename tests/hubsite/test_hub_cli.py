@@ -1470,6 +1470,12 @@ class WriteCase(VerbCase):
                                  '--if-version', '2'), ['WITHDRAWN T-001'])
         self.assertEqual(self.direct('/todos?status=all')['items'], [])
 
+    def test_a_record_the_hub_cannot_check_is_refused_and_nothing_is_asked(self):
+        err = self.refused('questions', 'add', '--title', 't', '--record', 'kit:EX-1')
+        self.assertTrue(err.startswith('REFUSED unavailable: record kit:EX-1 could not be '
+                                       'checked'), err)
+        self.assertEqual(self.direct('/questions')['items'], [])
+
     def test_edit_and_withdraw_need_from_and_a_version(self):
         for argv in (('questions', 'edit', 'Q-1000', '--if-version', '1', '--title', 't'),
                      ('questions', 'edit', 'Q-1000', '--from', 'pm', '--title', 't'),
@@ -1717,8 +1723,63 @@ class DirectQuestionCase(VerbCase):
         self.assertIn('USAGE: --except leaves out pending items', err)
 
 
+class RecordArgumentCase(CliCase):
+    """questions add and edit --record REPO:ID and edit --no-record: what each sends the hub,
+    and the forms that are a usage error before anything is sent."""
+
+    def setUp(self):
+        CliCase.setUp(self)
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        self.sent = []
+
+    def ask(self, port, method, path, token=None, body=None, *more, **kw):
+        self.sent.append(body)
+        return 200, {'ok': True, 'id': 'Q-1000', 'version': 2, 'revision': 3, 'warnings': []}
+
+    def run_asking(self, *argv):
+        with mock.patch.object(serve, 'ask', self.ask):
+            return self.run_cli(*(argv + ('--port', '8791')))
+
+    def test_record_is_sent_as_repo_and_id(self):
+        for argv, line in ((('questions', 'add', '--title', 't', '--record', 'pm:KIT-A:B'),
+                            'ASKED Q-1000'),
+                           (('questions', 'edit', 'Q-1000', '--from', 'pm', '--if-version', '1',
+                             '--record', ' kit : EX-1 '), 'EDITED Q-1000')):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_asking(*argv)
+                self.assertEqual((code, out.splitlines(), err), (0, [line], ''))
+        self.assertEqual([b['record'] for b in self.sent],
+                         [{'repo': 'pm', 'id': 'KIT-A:B'}, {'repo': 'kit', 'id': 'EX-1'}])
+
+    def test_no_record_sends_null_and_no_flag_sends_nothing(self):
+        code, out, err = self.run_asking('questions', 'edit', 'Q-1000', '--from', 'pm',
+                                         '--if-version', '1', '--no-record')
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('record', self.sent[-1])
+        self.assertIsNone(self.sent[-1]['record'])
+        for argv in (('questions', 'add', '--title', 't'),
+                     ('questions', 'edit', 'Q-1000', '--from', 'pm', '--if-version', '1',
+                      '--title', 'x')):
+            self.assertEqual(self.run_asking(*argv)[0], 0)
+            self.assertNotIn('record', self.sent[-1])
+
+    def test_a_record_that_is_not_repo_colon_id_or_both_forms_is_a_usage_error(self):
+        for argv in (('questions', 'add', '--title', 't', '--record', 'EX-1'),
+                     ('questions', 'add', '--title', 't', '--record', ':EX-1'),
+                     ('questions', 'add', '--title', 't', '--record', 'kit:'),
+                     ('questions', 'add', '--title', 't', '--record', ' : '),
+                     ('questions', 'add', '--title', 't', '--no-record'),
+                     ('questions', 'edit', 'Q-1000', '--from', 'pm', '--if-version', '1',
+                      '--record', 'kit:EX-1', '--no-record')):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_asking(*argv)
+                self.assertEqual((code, out), (2, ''))
+                self.assertIn('USAGE: ', err)
+        self.assertEqual(self.sent, [])
+
+
 class ArgumentCase(CliCase):
-    VERBS = (('questions',), ('questions', 'add', '--title', 't'),
+    VERBS =(('questions',), ('questions', 'add', '--title', 't'),
              ('questions', 'log', 'Q-001', 'D-7', '--if-version', '1'),
              ('answer', 'Q-001', '--choice', '0'),
              ('todos',), ('todos', 'add', '--title', 't'), ('todos', 'done', 'T-001'),

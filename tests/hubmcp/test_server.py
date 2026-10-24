@@ -577,6 +577,36 @@ class Creator(Case):
                                  ("POST", api.BASE + path, self.agent))
                 self.assertEqual(call["body"], {k: v for k, v in args.items() if k != "id"})
 
+    def test_a_record_is_passed_to_the_hub_as_given_and_null_unbinds(self):
+        bind = {"repo": "pm", "id": "KIT-X"}
+        for name, args in (("hub_ask", {"title": "t", "record": bind}),
+                           ("hub_question_edit", {"id": "Q-1", "from": "pm", "if_version": 2,
+                                                  "record": bind}),
+                           ("hub_question_edit", {"id": "Q-1", "from": "pm", "if_version": 2,
+                                                  "record": None})):
+            with self.subTest(name=name, record=args["record"]):
+                payload, is_error = self.rpc(self.server(), name, args)
+                self.assertFalse(is_error, payload)
+                self.assertIn("record", self.ask.calls[-1]["body"])
+                self.assertEqual(self.ask.calls[-1]["body"]["record"], args["record"])
+        said = srv.TOOLS["hub_ask"][1]["properties"]["record"]
+        self.assertEqual((said["type"], said["required"]), ("object", ["repo", "id"]))
+        self.assertIn("pm", said["description"])
+        self.assertIn("null unbinds",
+                      srv.TOOLS["hub_question_edit"][1]["properties"]["record"]["description"])
+
+    def test_a_record_that_is_no_object_never_reaches_the_hub(self):
+        for name, args in (("hub_ask", {"title": "t", "record": "pm:KIT-X"}),
+                           ("hub_ask", {"title": "t", "record": None}),
+                           ("hub_question_edit", {"id": "Q-1", "from": "pm", "if_version": 2,
+                                                  "record": "pm:KIT-X"})):
+            with self.subTest(name=name, record=args["record"]):
+                payload, is_error = self.rpc(self.server(), name, args)
+                self.assertTrue(is_error)
+                self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                                 ("invalid", "record"))
+        self.assertEqual(self.ask.calls, [])
+
     def test_a_to_do_edit_the_hub_would_refuse_never_reaches_it(self):
         for args, field in (({"commands": ["git worktree add x"]}, "commands"),
                             ({"detail": "Open it and apply the change."}, "detail")):

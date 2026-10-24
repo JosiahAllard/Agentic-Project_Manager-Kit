@@ -15,7 +15,7 @@ from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal
 
-from tests.backlog.helpers import ADD_FLAGS, priced, record_text
+from tests.backlog.helpers import ADD_FLAGS, priced
 from tests.gitfixture import TempRepo, fixture_env
 from tests.home import temp_home
 
@@ -40,8 +40,8 @@ class DefaultRef(unittest.TestCase):
         with open(os.path.join(root or self.root, '.kit.json'), 'w', encoding='utf-8') as f:
             json.dump(data, f)
 
-    def backend(self, store=None):
-        return smod.open_backend(self.root, kconfig.load(self.root), fetch=False, store=store)
+    def backend(self):
+        return smod.open_backend(self.root, kconfig.load(self.root), fetch=False)
 
     def publish(self, backend, *records):
         writes = {}
@@ -72,11 +72,6 @@ class DefaultRef(unittest.TestCase):
         self.kit_json({'backlog': {'store': 'ref'}})
         tip = self.publish(self.backend(), priced('FOO'))
         self.assertEqual(self.ref_tip(), (tip, '%s\t%s' % (tip, smod.STORE_REF)))
-
-    def test_a_store_given_by_the_caller_is_written(self):
-        """`migrate --to ref` names the store itself."""
-        tip = self.publish(self.backend(store='ref'), priced('FOO'))
-        self.assertEqual(self.ref_tip()[0], tip)
 
     def test_the_default_store_still_reads(self):
         named = smod.RefBackend(self.root, 'origin', smod.STORE_REF, smod.STORE_REF, fetch=False)
@@ -149,7 +144,7 @@ class DefaultRef(unittest.TestCase):
         test_default_store_warn.py), so no refusal of its reaches the advice."""
         act = at_landing._Act('FOO', 'kit/x', 'abc')
         args = ['close', 'FOO', '--reason', '"landed abc"']
-        named = self.backend(store='ref')
+        named = smod.RefBackend(self.root, 'origin', smod.STORE_REF, smod.STORE_REF, fetch=False)
         said = at_landing._refused_advice(Refusal('busy'), named, self.root, act, args,
                                           lambda *a: 'PLAIN ' + ' '.join(a))
         self.assertEqual(said, 'close it with: PLAIN close FOO --reason "landed abc"')
@@ -177,19 +172,6 @@ class DefaultRef(unittest.TestCase):
         rc, out = self.run_tool(*add)
         self.assertEqual(rc, 0, out)
         self.assertIn('ADDED FOO', out)
-
-    def test_a_bare_migrate_onto_the_default_store_is_refused_and_so_is_its_dry_run(self):
-        """`migrate` without `--to` and no store named would build the whole store and be refused
-        at publish, while its dry run passed: both are refused before anything is read."""
-        self.repo.write('docs/backlog/FOO.md', record_text(id='FOO'))
-        self.repo.commit('records', 'docs/backlog/FOO.md')
-        self.repo.git('push', '-q', 'origin', 'main')
-        for args in (('migrate', '--dry-run'), ('migrate',)):
-            rc, out = self.run_tool(*args)
-            self.assertEqual(rc, 2, out)
-            self.assertTrue(out.startswith('REFUSED: ' + HEAD), out)
-            self.assertNotIn('DRY RUN', out)
-        self.assertEqual(self.ref_tip(), ('', ''))
 
 
 if __name__ == '__main__':
