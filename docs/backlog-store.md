@@ -63,19 +63,15 @@ the hub's backlog snapshot (`kitlib.hubbacklog`), kit pmstart/coordinatorstart, 
 ## Migration (per repo, at go-live)
 
 1. Land or port every in-flight records branch first.
-2. `backlog.py migrate`: copy `docs/backlog/*.md` at main's tip into the store as its first commit, citing that sha. One-off steps for an older record layout run here: tombstone files are not copied (their ids stay checkable through git history), `migrated` is stripped, anchor and artefact fold into the body, and `reref` is dropped.
-   - Built: kitlib/backlog/migrate.py; docs/backlog.md "Commands" has the verb. It only starts a store: an existing one, or one created while it runs, is REFUSED. Files that are not `*.md` are named and not copied. An unreadable record stops it before any write. FAIL findings are printed and copied as they are.
-   - Try it on a scratch clone first (no real store written; the repo's `.kit.json` cut to `repo` and `backlog`): `backlog.py -C <scratch clone> migrate --dry-run`, then `migrate` (`--to ref` for a repo whose store is a folder or whose `.kit.json` names no store: the default `ref` is read-only, and both runs are refused without it), then `check`; the clone's origin is a bare scratch copy.
-3. One normal branch in the repo: delete `docs/backlog`, set `.kit.json` backlog.store, update hooks. Its coordinator builds and lands it.
-4. Old record history stays in main's git log.
+2. One normal branch in the repo: delete `docs/backlog`, set `.kit.json` backlog.store, update hooks. Its coordinator builds and lands it.
+3. Old record history stays in main's git log.
 
 ## Build order
 
 1. kitlib/backlog rewrite with the store layer and three backends. The write path is compare-and-swap concurrency: senior-worker.
 2. Landing close and the ancestry refusal in kitlib/gate land. Built on kit/store-landing.
 3. The hub's backlog view (`kitlib.hubbacklog`) reads the store.
-4. migrate verb, tested on a scratch clone of each repo. Built on kit/store-landing.
-5. Joint review, then per-repo switch-over.
+4. Joint review, then per-repo switch-over.
 
 ## Rules that end at switch-over
 
