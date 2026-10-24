@@ -61,6 +61,38 @@ class FolderTest(NoPointerCase):
         self.assertIn('--pm-repo', str(got.exception))
         self.assertFalse(os.path.exists(os.path.join(self.home_config_dir(), auth.FOLDER_NAME)))
 
+    def test_with_a_pointer_a_config_still_in_the_home_folder_is_refused(self):
+        pm = pm_repo(self)
+        os.makedirs(self.home_config_dir())
+        with open(os.path.join(self.home_config_dir(), user.FILE_NAME), 'w', encoding='utf-8') as f:
+            f.write('{}')
+        self.assertEqual(user.locate(self.home).state, user.UNMOVED)
+        with self.assertRaises(ConfigError) as got:
+            auth.folder(self.home)
+        self.assertIn('config_move.py', str(got.exception))
+        self.assertFalse(os.path.exists(os.path.join(self.home_config_dir(), auth.FOLDER_NAME)))
+        self.assertFalse(os.path.exists(os.path.join(pm, user.DIR_NAME)))
+
+    def test_with_a_pointer_a_config_folder_that_is_a_file_is_refused(self):
+        pm = pm_repo(self)
+        with open(os.path.join(pm, user.DIR_NAME), 'w', encoding='utf-8') as f:
+            f.write('')
+        self.assertEqual(user.locate(self.home).state, user.BAD)
+        with self.assertRaises(ConfigError) as got:
+            auth.folder(self.home)
+        self.assertIn('is not a folder', str(got.exception))
+        self.assertFalse(os.path.exists(self.home_config_dir()))
+
+    def test_a_pointer_that_cannot_be_used_is_refused(self):
+        missing = os.path.join(self.home, 'no-such-pm-repo')
+        os.environ[PM_REPO_FENCE_ENV] = missing
+        user.forget()
+        self.assertEqual(user.locate(self.home).state, user.BAD)
+        with self.assertRaises(ConfigError) as got:
+            auth.folder(self.home)
+        self.assertIn('pointer', str(got.exception))
+        self.assertFalse(os.path.exists(self.home_config_dir()))
+
     def test_with_a_pointer_the_folder_is_in_the_pm_repository(self):
         pm = pm_repo(self)
         self.assertEqual(os.path.normcase(auth.folder(self.home)),
