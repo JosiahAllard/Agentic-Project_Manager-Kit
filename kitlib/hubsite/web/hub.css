@@ -1,6 +1,6 @@
 /* The Action Hub's shared look: the colour and font tokens (light, and dark by the system setting or data-theme) and the
-   shell rules index.html and lock.html both use. Each page's own rules, and the few tokens that differ between the
-   pages, stay in that page's <style>, which comes after this sheet. Nothing here is loaded from the network. */
+   shell rules index.html uses. The page's own rules, and the few tokens that differ from these,
+   stay in its <style>, which comes after this sheet. Nothing here is loaded from the network. */
 :root{
   --bg:#f3f5f7; --surface:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d9dfe6;
   --accent:#1f5f8b; --rec:#8a5a00;
