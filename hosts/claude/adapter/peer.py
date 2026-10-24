@@ -55,7 +55,7 @@ from kitlib.launcher.settings import LaunchError
 PIPE = re.compile(r'\\\\\.\\pipe\\(?:(LOCAL)\\)?(cc-msg-[A-Za-z0-9_-]+)\Z', re.I)
 LOCAL_PIPE = re.compile(r'\\\\\.\\pipe\\(?:LOCAL\\)?[A-Za-z0-9_-]{1,160}\Z', re.I)
 SOURCE_PREFIX = r'\\.\pipe\LOCAL\cc-msg-kit-hub-'
-PM_NAMES = ('Project Manager', 'pm-session')    # kitlib.launcher.start.PM_NAME, stop.PM_RC_NAME
+PM_NAMES = ('Project Manager', 'pm-session')    # kitlib.launcher.start.PM_DESKTOP_NAME, stop.PM_RC_NAME
 TOKEN_LEN = 32
 MAX_PACKET_BYTES = 256 * 1024
 MAX_RESULT_BYTES = 2048
