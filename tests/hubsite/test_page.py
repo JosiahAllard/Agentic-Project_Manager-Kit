@@ -848,7 +848,7 @@ class DomTest(unittest.TestCase):
             const no = () => answerWait(500, { ok: false, error: { code: "internal", message: "store unreadable", field: "" } });
             await start();
             const seen = [];
-            for (let i = 0; i < 3; i++) { await no(); seen.push(sleeps().slice(-1)[0]); await fireTimers(); }
+            for (let i = 0; i < 3; i++) { await no(); seen.push(sleeps()); await fireTimers(); }
             const reads = calls.filter(c => c.path === "/snapshot").length;
             await wake();                                   // a wait that answers ends the run of failures
             await no();
@@ -2989,7 +2989,7 @@ def game(**kw):
 class ScheduleChangesTest(unittest.TestCase):
     """The Schedule's New hold, hold Edit and Release, Game mode, Division and run stats: each change is one POST to its
     lock route with the body the lock door reads, the answer's view drawn at once, a refusal said in the owner's words
-    with the form kept. (Ported from the old /lock.html page's tests, onto the Schedule's own ids.)"""
+    with the form kept. (Taken over from the old /lock.html page's tests, onto the Schedule's own ids.)"""
 
     PRE = """
         let VIEW = %s, RESULT = {};
@@ -3241,7 +3241,7 @@ HISTORY = [hist_run("r-1", "alpha", "build", "ok", "2026-10-05T10:00:00+00:00"),
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class ScheduleHistoryFilterTest(unittest.TestCase):
-    """The Schedule's History card: narrowed in the client by repository, kind and result. (Ported from /lock.html.)"""
+    """The Schedule's History card: narrowed in the client by repository, kind and result. (Taken over from the old /lock.html page's tests.)"""
 
     def run_(self, body, view, hash="#schedule"):
         return dom("server.lock = %s; await start(); await visible(true); await click($('#row-hist'));\n%s" % (json.dumps(view), body),
@@ -3302,7 +3302,7 @@ class ScheduleHistoryFilterTest(unittest.TestCase):
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class ScheduleFollowTest(unittest.TestCase):
     """The Schedule view follows the lock through the one watcher: what a failed read, a busy lock, an unpaired browser
-    and an answer with no view show. (Ported from /lock.html; the watcher's success paths are in HomeTest.)"""
+    and an answer with no view show. (Taken over from the old /lock.html page's tests; the watcher's success paths are in HomeTest.)"""
 
     def run_(self, body, route, view=None):
         return dom("server.lock = %s; server.route = %s; await start(); await visible(true);\n%s" % (json.dumps(view or sch_view(runs=[RUN1])), route, body),
