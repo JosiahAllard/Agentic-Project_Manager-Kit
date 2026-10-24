@@ -12,6 +12,14 @@ So the program WMI starts is `pythonw.exe` (no console) running the carrier tool
 CREATE_NO_WINDOW: a console with no window, which the run's commands share. The carrier waits
 for that python and ends with its exit code. Nothing here relies on ShowWindow.
 
+Why the marker: WMI's provider host exits when idle, and its pid may then be gone or reused
+while the run goes on, so the process tree alone stops showing that WMI started it. `create`
+marks the process it starts (store.DETACHED_ENV, inherited by everything under it), and
+store.caller reads a marked process as an agent's. When the environment it is given is marked
+already, the launcher is itself inside such a start: the ancestry it recorded in
+MACHINE_LOCK_ORIGIN stops at WMI and tells nothing, so `create` drops it, and the new run's role
+from its launcher (store.tree_role, over no ancestry) is agent. Both only ever lower a role.
+
 `command` builds the argv, `create` asks WMI, `wrapper_pid` finds the python the carrier
 started (the run's wrapper, whose pid the run record holds). Nothing here prints. The carrier's
 line when it cannot start its program is kitlib.proc.console.note_carrier_failure, the one
@@ -22,6 +30,8 @@ import os
 import subprocess
 import time
 
+from kitlib.lock.run import ORIGIN_ENV
+from kitlib.lock.store import DETACHED_ENV
 from kitlib.proc import process, spawn
 
 
@@ -66,9 +76,21 @@ def missing(argv):
     return None
 
 
+def marked(env):
+    """A copy of `env` (a dict) for a detached start: DETACHED_ENV set, and ORIGIN_ENV dropped
+    when `env` was marked already (the launcher is inside a detached start itself)."""
+    out = dict(env)
+    if out.get(DETACHED_ENV):
+        out.pop(ORIGIN_ENV, None)
+    out[DETACHED_ENV] = '1'
+    return out
+
+
 def create(argv, cwd, env, run=None, timeout=CREATE_TIMEOUT_S):
     """(pid, None) of the process Win32_Process.Create started for `argv` in `cwd` with `env`
-    (a dict), else (None, why). run: the tests' stand-in for spawn.run (looked up at call time)."""
+    (a dict, marked as a detached start: `marked`), else (None, why). run: the tests' stand-in for
+    spawn.run (looked up at call time)."""
+    env = marked(env)
     data = {'cmd': subprocess.list2cmdline(argv), 'cwd': cwd,
             'env': ['%s=%s' % kv for kv in env.items()]}
     try:
