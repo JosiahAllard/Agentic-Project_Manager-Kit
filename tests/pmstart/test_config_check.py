@@ -105,7 +105,7 @@ class LinesTest(ConfigCheckCase):
         self.assertIn("Remove-Item -LiteralPath '%s'" % left, line)
 
     def test_the_home_folder_without_a_config_file_is_no_leftover(self):
-        os.makedirs(os.path.join(self.home, kuser.DIR_NAME, 'auto-tasks'))
+        os.makedirs(os.path.join(self.home, kuser.DIR_NAME, 'hub'))
         self.assertEqual(self.lines(), [])
 
     def test_a_leftover_and_a_dirty_file_are_two_lines(self):

@@ -525,7 +525,7 @@ These are general behaviour the kit gate leaves out, or repo-specific behaviour,
 ## Go-live notes
 
 - A repo's Python tests must be steps (no gate key runs them).
-- Turn on `push_block` only after the repo lands through `gate.py land`.
+- Turn on `push_block` only after the repo lands through `land.py` (`gate.py land` is its one-branch form).
 - Once switched, delete the retired tools (ARCHITECTURE.md "Details").
 - In a landing, only the hook module's own file comes from the base (Landing, step 4); a hook module that imports sibling files from its tools folder is not supported there (kitlib/gate/hookrev.py). Its `__file__` is its path in the merged checkout, so a hook that reaches files beside itself through `__file__` reads the merged tree's copies, not the base's; its tracebacks and GATE_CHECKS errors name `<rev10>:<path>`.
 - A `landing.log_dir` inside the repo must be gitignored. Otherwise the gate's logs are untracked files: a branch gate writes no record, and a landing, which writes them in the main checkout, not in its landing tree, leaves that checkout not clean, so the next landing is REFUSED (Landing, steps 4 and 7).

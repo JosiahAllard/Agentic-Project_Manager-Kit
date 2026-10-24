@@ -4,8 +4,9 @@ tools/machine_paths.py).
 Machine paths stay out of the tree's text so the repository and the owner's folders can
 move drives without a tree-wide edit: code reads a location from configuration or an environment
 variable, and prose writes `%VAR%\...`. This rule keeps a new literal from creeping back. Every
-tracked file, and every untracked file git does not ignore, is read from the WORKING TREE (so work
-in progress counts) and searched for
+file git tracks (tracked_files; an untracked file is never searched, so a local note beside the
+checkout cannot fail it) is read from the WORKING TREE (so an edit in progress counts) and
+searched for
 
   - a drive-rooted machine folder: `<drive>:` then `\`, `\\` or `/`, then one of the folder
     names folders() gives - the machine config's `machine_path_folders` (kitlib.config.user).
@@ -168,11 +169,22 @@ class ListError(Exception):
     timeout, or why git could not start)."""
 
 
+def tracked_files(root):
+    """Every file git tracks (the index), sorted, from one `ls-files --cached`: the files the
+    tree sweep searches. ListError when git cannot list them."""
+    return _listed(root, ['ls-files', '-z', '--cached'])
+
+
 def tree_files(root):
     """Every tracked file plus every untracked one not ignored, sorted, from one `ls-files -co`
     (`--exclude-standard` filters only the untracked half, so a tracked file a .gitignore pattern
-    matches is still listed); ListError when git cannot list them."""
-    args = ['ls-files', '-z', '--cached', '--others', '--exclude-standard']
+    matches is still listed); ListError when git cannot list them. The tree sweep does not use
+    it (tracked_files); the guards in tests/proc do."""
+    return _listed(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
+
+
+def _listed(root, args):
+    """The sorted, de-duplicated paths `git <args>` prints NUL-separated; ListError on failure."""
     r = cmd.call(args, root, timeout=GIT_TIMEOUT)
     shown = 'git %s' % ' '.join(args)
     if r.rc is None:
@@ -229,7 +241,7 @@ def scan(root, cfg=None):
     ListError when git could not list it. `cfg` defaults to load_config(root)."""
     cfg = cfg or load_config(root)
     hits, used, read, skipped = [], set(), [], []
-    for rel in tree_files(root):
+    for rel in tracked_files(root):
         if not searched(cfg, rel):
             continue
         path = os.path.join(root, rel)

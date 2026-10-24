@@ -66,19 +66,29 @@ def _no_config_lines(loc=None, run=None, rules=None):
     return []
 
 
+def _no_ignore_problem(pm):
+    return None
+
+
 REAL_CONFIG_LINES = None
+REAL_UNIGNORED = None
 
 
 def stub_config_lines():
     """For a test package's __init__: the session-start machine config check
     (kitlib.pmstart.configcheck.lines) gives no line, reading no home folder, pointer or PM
     repository, in every test that does not put the real one back (REAL_CONFIG_LINES, as
-    tests/pmstart/test_config_check.py does). Once per process; never undone."""
-    global REAL_CONFIG_LINES
+    tests/pmstart/test_config_check.py does). Its auto-tasks ignore check (configcheck._unignored)
+    finds no problem even then, since the fake git has no check-ignore (REAL_UNIGNORED is the real
+    one). Once per process; never undone."""
+    global REAL_CONFIG_LINES, REAL_UNIGNORED
     from kitlib.pmstart import configcheck
     if configcheck.lines is not _no_config_lines:
         REAL_CONFIG_LINES = configcheck.lines
         configcheck.lines = _no_config_lines
+    if configcheck._unignored is not _no_ignore_problem:
+        REAL_UNIGNORED = configcheck._unignored
+        configcheck._unignored = _no_ignore_problem
 
 
 stub_config_lines()

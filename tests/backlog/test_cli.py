@@ -227,29 +227,15 @@ class Cli(unittest.TestCase):
         rc, out = self.run_tool('add', 'BAZ', '--summary', 'more', '--scope', 'x/**', *ADD_FLAGS)
         self.assertEqual(rc, 0, out)
 
-    def test_migrate_dry_run_then_copy_then_refuse(self):
-        self.repo.write('docs/backlog/FOO.md', 'id: FOO\narea: xx\npriority: 2\npriority_by: agent\n'
-                        'effort: s\nstate: open\nblocked_on: -\nscope: tools/x.py\n'
-                        'summary: a thing to do\nmigrated: 12\n')
-        self.repo.write('docs/backlog/OLD.md', 'id: OLD\nsummary: done\nclosed: 2026-09-24\n')
-        src = self.repo.commit('records', 'docs/backlog/FOO.md', 'docs/backlog/OLD.md')
-        self.repo.git('push', '-q', 'origin', 'main')
-        out = self.ok('migrate', '--dry-run')
-        self.assertIn(src, out)
-        self.assertIn('DRY RUN', out)
+    def test_migrate_is_gone_and_exits_as_an_unknown_verb(self):
+        """The one-shot store migration is removed: `migrate` is a usage error, and writes
+        nothing."""
+        for args in (('migrate',), ('migrate', '--dry-run')):
+            with self.subTest(args):
+                rc, out = self.run_process(*args)
+                self.assertEqual(rc, 2, out)
+                self.assertIn("invalid choice: 'migrate'", out)
         self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), '')
-        out = self.ok('migrate')
-        self.assertIn('MIGRATED', out)
-        self.assertIn('1 tombstone', out)
-        tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF).split('\t')[0]
-        self.assertTrue(tip)
-        self.assertNotIn('migrated', self.ok('show', 'FOO'))
-        rc, out = self.run_tool('show', 'OLD')
-        self.assertEqual(rc, 1, out)
-        rc, out = self.run_tool('migrate')
-        self.assertEqual(rc, 2, out)
-        self.assertIn('REFUSED', out)
-        self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF).split('\t')[0], tip)
         self.assertEqual(self.repo.git('status', '--porcelain'), '')
 
 

@@ -40,16 +40,16 @@ CONFIG = '.pm-kit'
 ALLOWED = {
     ('kitlib/config/user.py', 'home_location'): 'the home folder\'s config, the move\'s source '
                                                 '(kitlib.config.move), never what the kit reads',
-    ('kitlib/config/user.py', 'locate'): 'the leftover check: a home-folder copy is reported '
-                                         '(Location.leftover), never read',
+    ('kitlib/config/user.py', 'locate'): 'the leftover check: a home-folder copy is an error '
+                                         '(LEFTOVER, UNMOVED), never read',
     ('kitlib/delegations/load.py', 'delegations_file'): 'the home folder\'s delegations copy, the '
                                                         'move\'s source, which the guard still holds',
     ('kitlib/guard/jail.py', 'home_config_dirs'): 'no write root may be on a leftover home config '
                                                   'folder',
     ('kitlib/guard/rules.py', 'hub_secret_folders'): 'guards the leftover home token folder the '
                                                      'move leaves as its source',
-    ('kitlib/autotasks/tick.py', 'state_dir'): 'the auto-tasks state, machine-local; an owner '
-                                               'question on where it belongs is open',
+    ('kitlib/autotasks/tick.py', 'home_state_dir'): 'the retired auto-tasks state, refused with '
+                                                    'its move command, never read',
 }
 
 SPELLED = re.compile(r'(?i)(?:~|%USERPROFILE%|\$env:USERPROFILE|\$HOME)[/\\]\.pm-kit(?![\w-])')
