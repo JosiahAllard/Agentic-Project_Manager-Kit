@@ -244,6 +244,12 @@ def chain_host(chain, names, hosts=None):
 # walk ends below it at a running process, the same end as the owner's desktop chain; what
 # started the process is out of sight, so a chain it tops is never the owner's.
 DETACHED_LAUNCHERS = frozenset({"wmiprvse.exe"})
+# The kit's own detached starts (kitlib.lock.detach.create) also mark the process they start, and
+# so everything under it, with this variable: the provider host exits when idle, and its pid may
+# then be gone or reused while the run goes on, so the chain alone no longer shows it. A marker can
+# only make the role agent, never owner, so setting it is no gain and dropping it no worse than a
+# start the kit did not make (docs/lock-api.md "Known limits").
+DETACHED_ENV = "MACHINE_LOCK_DETACHED"
 
 
 def _walk_stop(top, parents):
@@ -271,7 +277,8 @@ def caller(name=None, env=None):
     under its agent host, or the desktop's userinit), by the parent it records; one it cannot
     get past (that parent is gone or newer than it) makes the role agent too, as tree_role
     reads an ancestor that can no longer be named. So does a chain WMI's provider host tops
-    (detached_top): a process WMI started, whoever asked WMI to."""
+    (detached_top): a process WMI started, whoever asked WMI to; and so does DETACHED_ENV in env
+    (default os.environ), which the kit's detached starts set, for once that host has exited."""
     env = os.environ if env is None else env
     try:
         snap = process.snapshot()
@@ -280,8 +287,8 @@ def caller(name=None, env=None):
         me = os.getpid()
         chain, exited = process.ancestry(me, process.own_ctime(), parents, through_exited=True)
         host = chain_host(chain, names)
-        role = ("agent" if host or not chain or exited or detached_top(chain, me, parents, names)
-                else "owner")
+        role = ("agent" if host or not chain or exited or env.get(DETACHED_ENV)
+                or detached_top(chain, me, parents, names) else "owner")
     except Exception:
         chain, host, role = [], None, "agent"
     return {"role": role, HOST_KEY: host, "ancestors": sorted([p, c] for p, c in chain),

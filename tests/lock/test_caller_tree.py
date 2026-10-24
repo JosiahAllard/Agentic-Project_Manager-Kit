@@ -16,10 +16,10 @@ CARRIER, WMI, SVCHOST, TERMINAL = range(900010, 900014)
 GONE = 900099                   # a pid that cannot be opened
 
 
-def who(table):
+def who(table, env=None):
     with patched(table, ME), mock.patch.object(store, 'agent_hosts',
                                                lambda *a: frozenset({'claude.exe'})):
-        return store.caller(env={})
+        return store.caller(env=env or {})
 
 
 class ExitedShell(unittest.TestCase):
@@ -151,6 +151,36 @@ class StartedByWmi(unittest.TestCase):
         me = who({ME: FakeProc(400, WMI, False, 'pythonw.exe'),
                   WMI: FakeProc(100, GONE, False, 'WmiPrvSE.exe', opens=False)})
         self.assertEqual(me['role'], 'agent')
+
+
+class WmisHostHasExited(unittest.TestCase):
+    """WMI's provider host exits when idle, while the run it started goes on: its pid is then
+    missing from the listing (or names a newer process), and the chain no longer shows WMI. The
+    kit's own detached starts mark the process (store.DETACHED_ENV, set by kitlib.lock.detach.create),
+    and the marker makes it an agent; a start the kit did not make is not marked, and reads as the
+    owner then (docs/lock-api.md "Known limits")."""
+
+    CHAIN = {ME: FakeProc(400, CARRIER, False, 'python.exe'),
+             CARRIER: FakeProc(300, WMI, False, 'pythonw.exe')}       # WMI: not listed
+
+    def test_a_marked_carrier_whose_wmi_host_has_exited_is_an_agent(self):
+        me = who(self.CHAIN, {store.DETACHED_ENV: '1'})
+        self.assertEqual(me['role'], 'agent')
+        self.assertIsNone(me['host'])
+
+    def test_a_marked_carrier_whose_wmi_hosts_pid_was_reused_is_an_agent(self):
+        table = {**self.CHAIN, WMI: FakeProc(350, GONE, False, 'svchost.exe', opens=False)}
+        self.assertEqual(who(table, {store.DETACHED_ENV: '1'})['role'], 'agent')
+
+    def test_an_unmarked_carrier_whose_wmi_host_has_exited_reads_as_the_owner(self):
+        # The named limit, pinned: nothing in the tree or the environment shows WMI any more.
+        self.assertEqual(who(self.CHAIN)['role'], 'owner')
+
+    def test_the_marker_never_makes_the_owner(self):
+        # Demote-only: an agent host's chain stays an agent's and names its host, marked or not.
+        me = who({ME: FakeProc(400, HOST, False, 'python.exe'),
+                  HOST: FakeProc(300, GONE, False, 'claude.exe')}, {store.DETACHED_ENV: '1'})
+        self.assertEqual((me['role'], me['host']), ('agent', [HOST, 300]))
 
 
 class LauncherRole(unittest.TestCase):
