@@ -520,7 +520,7 @@ class DomTest(unittest.TestCase):
             self.assertIn(m[name], got["shown"], name)
         self.assertNotIn(mark("d-body"), got["shown"])                       # a body is never drawn into the page
         self.assertEqual(got["sinks"], [])
-        self.assertEqual(got["attrs"], ["a href", "a href"])                 # the two fixed links to lock.html: the sidebar's and the tab bar's
+        self.assertEqual(got["attrs"], [])                                   # no link is drawn off Home: the page's fixed ones are in code
         self.assertEqual(got["err"], "")
         made = set(got["tags"])
         self.assertIn("article", made)
@@ -1334,8 +1334,8 @@ class DomTest(unittest.TestCase):
             out.none = on(); out.empty = text($("#list"));
             return out;
         """, snapshot(views=views))
-        # The sidebar's order is its groups' (Machine schedule is the link to lock.html, which has no section).
-        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", None, "docs", "topm", "info", "findings", "autotasks"])
+        # The sidebar's order is its groups'.
+        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", "schedule", "docs", "topm", "info", "findings", "autotasks"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -2425,8 +2425,8 @@ class ShellTest(unittest.TestCase):
         self.assertEqual(got["reading"], [first, False])
 
     def test_the_tab_bar_is_the_sidebar_on_a_phone(self):
-        """Three of the phone's five tabs are sidebar sections (Home, Questions, Approvals), the fourth is the link to the
-        machine schedule and the fifth is More; each tab's count is a copy of the sidebar's."""
+        """Four of the phone's five tabs are sidebar sections (Home, Questions, Approvals, Schedule) and the fifth is More;
+        each tab's count is a copy of the sidebar's."""
         got = dom("""
             await start();
             const tabs = $$("#tabbar .tb").map(b => [b.dataset.s || null, b.getAttribute("role"), b.attrs.href || null]);
@@ -2437,19 +2437,19 @@ class ShellTest(unittest.TestCase):
             const approvals = { sec: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
                      tb: $$("#tabbar .tb").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s), hash: location.hash,
                      section: localStorage.getItem("oq.section") };
-            await click($("#tabbar #tb-schedule"));                                      // a link: it picks no section
-            return { tabs, secs, counts, approvals, afterLink: location.hash };
+            await click($("#tabbar #tb-schedule"));                                      // a section like the others
+            return { tabs, secs, counts, approvals, afterSchedule: location.hash };
         """, snapshot(strong=True, collections=NEEDS))
-        self.assertEqual(got["tabs"], [["home", "tab", None], ["questions", "tab", None], ["approvals", "tab", None], [None, None, "/lock.html"], ["more", "tab", None]])
+        self.assertEqual(got["tabs"], [["home", "tab", None], ["questions", "tab", None], ["approvals", "tab", None], ["schedule", "tab", None], ["more", "tab", None]])
         for t in got["tabs"]:
-            if t[0] in ("home", "questions", "approvals"): self.assertIn(t, got["secs"])        # the same section and role, and no link
-        self.assertIn([None, None, "/lock.html"], got["secs"])                                  # the sidebar has the same link
-        self.assertEqual([c[0] for c in got["counts"]], ["n-q", "n-ap"])
+            if t[0] in ("home", "questions", "approvals", "schedule"): self.assertIn(t, got["secs"])   # the same section and role, and no link
+        self.assertNotIn("/lock.html", [s[2] for s in got["secs"]])                             # the sidebar links nowhere else
+        self.assertEqual([c[0] for c in got["counts"]], ["n-q", "n-ap", "n-sch"])
         for of, shown, cls, src, src_cls in got["counts"]:
             self.assertEqual((shown, cls), (src, src_cls), of)
         self.assertEqual(dict((c[0], c[1]) for c in got["counts"])["n-ap"], "1")
         self.assertEqual(got["approvals"], {"sec": ["approvals"], "tb": ["approvals"], "hash": "#approvals", "section": "approvals"})
-        self.assertEqual(got["afterLink"], "#approvals")
+        self.assertEqual(got["afterSchedule"], "#schedule")
 
     def test_a_backlog_address_leaves_parked_whichever_backlog_hash_it_is(self):
         """Back or a typed #stories from Parked shows the current list, as #backlog does."""
@@ -2554,7 +2554,7 @@ class HomeTest(unittest.TestCase):
               if (c.path === "/lock/view") return { status: 200, body: VIEW1 };
               if (c.path.startsWith("/lock/wait")) return ++waits === 1 ? { status: 200, body: VIEW2 } : undefined;
             };
-            await start();
+            await start(); await visible(true);
             return { line: text($("#machine")), cls: $("#machine").className,
                      lock: calls.filter(c => c.path.startsWith("/lock/")).map(c => c.method + " " + c.path) };
         """.replace("VIEW1", json.dumps(lock_view(5, strip=["alpha/s1 build"], warnings=["w"])))
@@ -2565,13 +2565,13 @@ class HomeTest(unittest.TestCase):
         self.assertEqual(got["cls"], "status machine")
         one = dom("""
             server.route = c => c.path === "/lock/view" ? { status: 200, body: VIEW1 } : undefined;
-            await start();
+            await start(); await visible(true);
             return text($("#machine"));
         """.replace("VIEW1", json.dumps(lock_view(5, strip=["alpha/s1 build"], warnings=["w", "x"]))), snapshot(), hash="#home")
         self.assertEqual(one, "Machine · 12 cpu slots, 2 gpu slots · running: alpha/s1 build · 2 warnings.")
         idle = dom("""
             server.route = c => c.path === "/lock/view" ? { status: 200, body: VIEW1 } : undefined;
-            await start();
+            await start(); await visible(true);
             return text($("#machine"));
         """.replace("VIEW1", json.dumps(lock_view(5))), snapshot(), hash="#home")
         self.assertEqual(idle, "Machine · 12 cpu slots, 2 gpu slots · nothing running.")
@@ -2580,7 +2580,7 @@ class HomeTest(unittest.TestCase):
         got = dom("""
             let broken = true;
             server.route = c => c.path === "/lock/view" ? (broken ? { status: 500, body: { ok: false, error: { message: "lock store gone" } } } : { status: 200, body: GOOD }) : undefined;
-            await start();
+            await start(); await visible(true);
             const down = { line: text($("#machine")), cls: $("#machine").className, sleeps: sleeps(), list: $$("#list article").length };
             broken = false;
             const t = timers.find(x => x.ms === 2000); timers.splice(timers.indexOf(t), 1); t.fn(); await settle();
@@ -2597,21 +2597,30 @@ class HomeTest(unittest.TestCase):
         got = dom("""
             server.route = c => c.path === "/lock/view" ? { status: 200, body: GOOD }
               : c.path.startsWith("/lock/wait") ? { status: 503, body: { ok: false, error: { message: "busy" } } } : undefined;
-            await start();
+            await start(); await visible(true);
             return { line: text($("#machine")), cls: $("#machine").className };
         """.replace("GOOD", json.dumps(lock_view(5))), snapshot(), hash="#home")
         self.assertEqual(got["line"], "Machine · 12 cpu slots, 2 gpu slots · nothing running. Out of date: The machine lock could not be read (busy).")
         self.assertEqual(got["cls"], "gone")
 
-    def test_no_lock_call_is_made_off_the_home_view(self):
+    def test_no_lock_call_is_made_while_the_tab_is_hidden_and_it_reads_again_when_shown(self):
         got = dom("""
             server.route = c => c.path === "/lock/view" ? { status: 200, body: GOOD } : undefined;
             await start();
-            const off = calls.filter(c => c.path.startsWith("/lock/")).length;
-            await click($("#sections [data-s=home]"));
-            return { off, on: calls.filter(c => c.path.startsWith("/lock/")).length > 0 };
+            const lock = () => calls.filter(c => c.path.startsWith("/lock/")).map(c => c.path.split("?")[0]);
+            const hidden = lock();
+            await visible(true);
+            const shown = lock();
+            await visible(false);
+            await answerLock(200, Object.assign({}, GOOD, { lock_revision: 6, changed: true }));      // the wait in flight ends
+            const parked = lock();
+            await visible(true);
+            return { hidden, shown, parked, back: lock() };
         """.replace("GOOD", json.dumps(lock_view(5))), snapshot())
-        self.assertEqual(got, {"off": 0, "on": True})
+        self.assertEqual(got["hidden"], [])
+        self.assertEqual(got["shown"], ["/lock/view", "/lock/wait"])
+        self.assertEqual(got["parked"], ["/lock/view", "/lock/wait"])           # hidden: the answer asks for nothing more
+        self.assertEqual(got["back"], ["/lock/view", "/lock/wait", "/lock/view", "/lock/wait"])   # shown again: read afresh, then waits
 
     def test_server_text_on_home_is_drawn_as_text(self):
         m = {n: mark(n) for n in ("a-title", "q-title", "t-title", "head", "strip", "warn", "err")}
@@ -2623,7 +2632,7 @@ class HomeTest(unittest.TestCase):
                             ("error", "{ status: 500, body: { ok: false, error: { message: %s } } }" % json.dumps(m["err"]))):
             got = dom("""
                 server.route = c => c.path === "/lock/view" ? ROUTE : undefined;
-                await start();
+                await start(); await visible(true);
                 const attrs = all().flatMap(e => Object.keys(e.attrs).filter(k => k.startsWith("on") || ["href", "src", "srcdoc", "style"].includes(k)).map(k => e.tag + " " + k));
                 return { shown: text($("#list")), sinks, attrs, tags: [...new Set(created)] };
             """.replace("ROUTE", route), snapshot(strong=True, collections=needs), hash="#home")
@@ -2631,7 +2640,7 @@ class HomeTest(unittest.TestCase):
                 for n in ("a-title", "q-title", "t-title") + (("head", "strip") if name == "view" else ("err",)):
                     self.assertIn(m[n], got["shown"], n)
                 self.assertEqual(got["sinks"], [])
-                self.assertEqual(got["attrs"], ["a href", "a href"])     # the sidebar's and the tab bar's own links to the lock page
+                self.assertEqual(got["attrs"], ["a href"])               # the machine line's own link, to #schedule
                 self.assertNotIn("script", got["tags"])
                 self.assertNotIn("img", got["tags"])
 
@@ -2647,7 +2656,7 @@ class HomeTest(unittest.TestCase):
     def test_a_wait_that_changed_nothing_leaves_the_focus_on_the_open_button(self):
         got = dom(HOLD_LOCK_WAIT + """
             server.route = c => c.path === "/lock/view" ? { status: 200, body: V5 } : undefined;
-            await start();
+            await start(); await visible(true);
             const open = $("#need-open-Q-1"); open.focus();
             held.shift()(answer(200, Object.assign({}, V5, { changed: false }))); await settle();
             const quiet = { focus: document.activeElement.id, same: $("#need-open-Q-1") === open, waits: held.length };
@@ -2659,22 +2668,20 @@ class HomeTest(unittest.TestCase):
         self.assertEqual(got["quiet"], {"focus": "need-open-Q-1", "same": True, "waits": 1})
         self.assertEqual(got["loud"], {"focus": "need-open-Q-1", "line": "Machine · 12 cpu slots · nothing running."})
 
-    def test_the_watcher_stops_when_home_is_left_and_starts_again_on_return(self):
+    def test_the_watcher_keeps_running_when_home_is_left_and_moves_the_schedule_count(self):
         got = dom(HOLD_LOCK_WAIT + """
             server.route = c => c.path === "/lock/view" ? { status: 200, body: V5 } : undefined;
-            await start();
+            await start(); await visible(true);
             const lock = () => calls.filter(c => c.path.startsWith("/lock/")).map(c => c.path.split("?")[0]);
-            const onHome = lock();
             await click($("#sections [data-s=todo]"));
+            const before = text($("#n-sch"));
             held.shift()(answer(200, V6)); await settle();
-            const left = lock();
-            await click($("#sections [data-s=home]"));
-            return { onHome, left, back: lock() };
-        """.replace("V5", json.dumps(lock_view(5))).replace("V6", json.dumps(dict(lock_view(6), changed=True))),
+            return { left: lock(), before, after: text($("#n-sch")), copy: text($("#tabbar [data-of=n-sch]")) };
+        """.replace("V5", json.dumps(lock_view(5))).replace("V6", json.dumps(dict(lock_view(6, strip=["a"]), changed=True, view=dict(lock_view(6)["view"], runs=[{"id": "r1"}])))),
             snapshot(collections=NEEDS), hash="#home")
-        self.assertEqual(got["onHome"], ["/lock/view", "/lock/wait"])
-        self.assertEqual(got["left"], ["/lock/view", "/lock/wait"])              # the answer that came after leaving asks for nothing more
-        self.assertEqual(got["back"], ["/lock/view", "/lock/wait", "/lock/view", "/lock/wait"])
+        self.assertEqual(got["left"], ["/lock/view", "/lock/wait", "/lock/wait"])         # it asks again after leaving Home
+        self.assertEqual(got["before"], "0")
+        self.assertEqual((got["after"], got["copy"]), ("1", "1"))                          # the sidebar's count and the tab bar's copy
 
     def test_the_sidebar_foot_says_when_the_hub_was_read(self):
         got = dom("const before = text($('#sidefoot')); await start(); return [before, text($('#sidefoot'))];", snapshot())
@@ -3771,14 +3778,16 @@ class PageTextTest(unittest.TestCase):
 
     def test_no_attribute_that_loads_or_navigates_is_ever_set(self):
         """The page builds no link, image or frame, so no server value can become an address the browser follows. Its
-        markup has two fixed links, the sidebar's and the tab bar's, both to the machine lock's page."""
+        markup has no link but the stylesheet; the script has two fixed ones, the Home machine line's (to #schedule) and the
+        Schedule view's to the machine lock's page."""
         keys = r"(?:href|src|srcset|srcdoc|action|formaction|poster|background|ping|xlink:href)"
-        self.assertEqual(re.findall(r'[{,\s]"?%s"?\s*:' % keys, self.script), [])           # an el() attribute
+        self.assertEqual([re.sub(r"[\s{,]", "", m) for m in re.findall(r'[{,\s]"?%s"?\s*:\s*"[^"]*"' % keys, self.script)], ['href:"#schedule"', 'href:"/lock.html"'])
+        self.assertEqual(re.findall(r'[{,\s]"?%s"?\s*:\s*[^"\s]' % keys, self.script), [])    # and no other: every value is a literal
         self.assertEqual(re.findall(r'setAttribute\(\s*"%s"' % keys, self.script), [])
         # A property set: none, but the reader frame's one body (test_the_reader_is_one_locked_frame).
         self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys.replace("srcdoc|", ""), self.script), [])
         self.assertEqual(re.findall(r"\.srcdoc\s*=[^=]", self.script), [".srcdoc = "])
-        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<link rel="stylesheet" href="hub.css">', '<a class="sec" href="/lock.html" id="sec-schedule">', '<a class="tb" href="/lock.html" id="tb-schedule">'])
+        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<link rel="stylesheet" href="hub.css">'])
         self.assertNotIn("location.assign", self.script)
         self.assertNotIn("location.replace", self.script)
         self.assertNotIn("window.open", self.script)
@@ -3805,7 +3814,7 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/pages", "/records", "/records", "/schedules", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|writeQuick|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
                                  "/finding_marks"})
@@ -3834,7 +3843,7 @@ class PageTextTest(unittest.TestCase):
         self.assertEqual(n, 5)
         self.assertIn("repeat(%d,minmax(0,1fr))" % n, style)
         self.assertEqual(re.findall(r'<(?:button|a) class="tb" [^>]*?(?:data-s="(\w+)"|href="([^"]+)")', self.markup),
-                         [("home", ""), ("questions", ""), ("approvals", ""), ("", "/lock.html"), ("more", "")])
+                         [("home", ""), ("questions", ""), ("approvals", ""), ("schedule", ""), ("more", "")])
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
@@ -3856,8 +3865,9 @@ class TriageShellTest(unittest.TestCase):
         self.assertEqual(heads, ["Your work", "Projects", "More", "Upkeep"])
         for label in ("Message the PM", "Usage and agents", "Lint findings", "Automatic tasks", "Schedule", "Approvals"):
             self.assertIn(label, side)
-        self.assertIn('id="sec-schedule">Schedule<', side)                  # the owner's word, not "Machine schedule"
-        self.assertIn('id="tb-schedule">Schedule<', self.markup)
+        self.assertRegex(side, r'<button class="sec" role="tab" data-s="schedule"[^>]*id="sec-schedule">Schedule <span class="n" id="n-sch">0</span></button>')
+        self.assertRegex(self.markup, r'id="tb-schedule">Schedule <span class="n" data-of="n-sch">0</span></button>')   # the owner's word, not "Machine schedule"
+        self.assertNotIn('href="/lock.html"', self.markup)
         self.assertNotIn("Machine schedule", self.markup)
         self.assertNotIn(">Findings", side)                                  # renamed Lint findings
         self.assertNotIn("Message to the PM", self.markup)
