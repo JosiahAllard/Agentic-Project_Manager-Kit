@@ -50,7 +50,7 @@
 #
 # Exit: 0 dry run printed, changes made or nothing to do; 1 refused or stopped; 2 usage (both -OldKit
 # and -Fresh, -ManagedSettings with -OldKit or -Fresh (the tool refuses its other options), -PmRepo
-# with any parameter but -Python and -Apply, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
+# empty or with any parameter but -Python and -Apply, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
 # file, no python on PATH, no tools\machine_setup.py).
 param(
     [string]$OldKit = '',
@@ -85,7 +85,12 @@ if ($OldKit -and $Fresh) {
 if ($ManagedSettings -and ($OldKit -or $Fresh)) {
     Write-Host 'machine-setup: usage - -ManagedSettings is a mode of its own: not with -OldKit or -Fresh'; exit 2
 }
-if ($PmRepo -and ($OldKit -or $Fresh -or $ManagedSettings -or $OwnerEmail -or $PmSettings -or $ConfigDir.Count -or $AgentTemp -or
+# -PmRepo given at all is its mode, so `-PmRepo ''` is refused here, never taken for the default mode.
+$pmRepoMode = $PSBoundParameters.ContainsKey('PmRepo')
+if ($pmRepoMode -and -not "$PmRepo".Trim()) {
+    Write-Host 'machine-setup: usage - -PmRepo needs the PM repository folder, not an empty value'; exit 2
+}
+if ($pmRepoMode -and ($OldKit -or $Fresh -or $ManagedSettings -or $OwnerEmail -or $PmSettings -or $ConfigDir.Count -or $AgentTemp -or
                    $HomeDir -or $Desktop -or $NoSweepTask -or $RegisterSweepTask -or $Shortcut -or $Procwatch -or $ProcwatchKill)) {
     Write-Host 'machine-setup: usage - -PmRepo is a mode of its own: it takes only -Python and -Apply'; exit 2
 }
@@ -106,7 +111,7 @@ if ($Python) {
 
 $argv = @($tool, '--kit', $kit)
 if ($ManagedSettings) { $argv += '--managed-settings' }
-if ($PmRepo) { $argv += @('--pm-repo', $PmRepo) }
+if ($pmRepoMode) { $argv += @('--pm-repo', $PmRepo) }
 if ($OldKit) { $argv += @('--old-kit', $OldKit) }
 if ($OwnerEmail) { $argv += @('--owner-email', $OwnerEmail) }
 if ($PmSettings) { $argv += @('--pm-settings', $PmSettings) }
