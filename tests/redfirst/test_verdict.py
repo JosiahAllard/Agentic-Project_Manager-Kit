@@ -1,5 +1,6 @@
 """kitlib.redfirst.verdict: runner matching, command building and the verdicts (pure)."""
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -86,6 +87,63 @@ class Commands(unittest.TestCase):
     def test_dotnet_expression_filter_kept(self):
         s = V.parse_selector('server/App.Tests/FooTests.cs::Name=X', RUNNERS)
         self.assertIn('Name=X', V.command(s, 'TW', 'LOGS', 1)[0])
+
+
+class GradleCmdReparse(unittest.TestCase):
+    """gradlew.bat runs in cmd.exe, which reads its command line again: a gradle word holding
+    one of cmd.exe's characters is refused before anything runs."""
+
+    @unittest.skipUnless(os.name == 'nt', 'cmd.exe runs a .bat on Windows only')
+    def test_ampersand_filter_runs_no_second_command_through_gradlew_bat(self):
+        # The real shape: a scratch gradlew.bat run with the argv command() builds. Without the
+        # refusal cmd.exe splits the line at & and runs `echo INJECTED` itself.
+        with tempfile.TemporaryDirectory() as tw:
+            with open(os.path.join(tw, 'gradlew.bat'), 'w', newline='\r\n') as fh:
+                fh.write('@echo off\necho ARGS %*\n')
+            try:
+                s = V.parse_selector('engine/core/src/test/FooTest.java::a&echo INJECTED', RUNNERS)
+                argv = V.command(s, tw, tw, 1)[0]
+            except V.Usage as e:
+                refused = str(e)
+            else:
+                out = subprocess.run(argv, cwd=tw, capture_output=True, text=True,
+                                     stdin=subprocess.DEVNULL, timeout=60).stdout
+                self.assertNotIn('\nINJECTED', '\n' + out, 'cmd.exe ran the injected command')
+                self.fail('the filter reached gradlew.bat: %r' % out)
+        self.assertIn("'a&echo INJECTED'", refused)
+        self.assertIn('holds &', refused)
+        self.assertIn('nothing was run', refused)
+
+    def test_every_cmd_character_in_the_filter_refuses(self):
+        for c in '&|<>^%!()"\n':
+            with self.assertRaisesRegex(V.Usage, 'cmd.exe reads again', msg=repr(c)):
+                V.parse_selector('engine/core/src/test/FooTest.java::a%sb' % c, RUNNERS)
+
+    def test_line_break_is_named(self):
+        with self.assertRaisesRegex(V.Usage, 'holds a line break'):
+            V.parse_selector('engine/core/src/test/FooTest.java::a\nwhoami', RUNNERS)
+
+    def test_default_filter_from_a_file_name_with_a_cmd_character_refuses(self):
+        with self.assertRaisesRegex(V.Usage, r"default filter '\*\.a&whoami' \(from the file name\) holds &"):
+            V.parse_selector('engine/core/src/test/a&whoami.java', RUNNERS)
+
+    def test_runner_args_and_project_with_a_cmd_character_refuse(self):
+        bad_args = dict(GRADLE, args=['-Px=a|b'])
+        with self.assertRaisesRegex(V.Usage, r'"args" word .*holds \|'):
+            V.parse_selector('engine/core/src/test/FooTest.java', [bad_args])
+        bad_project = dict(GRADLE, project=':core&x')
+        with self.assertRaisesRegex(V.Usage, 'the project .*holds &'):
+            V.parse_selector('engine/core/src/test/FooTest.java', [bad_project])
+
+    def test_real_gradle_filters_pass(self):
+        for filt in ('com.x.FooTest', 'com.x.FooTest.bar*', '*Outer$Inner*', 'a_b-c.d', '*.my test*'):
+            s = V.parse_selector('engine/core/src/test/FooTest.java::' + filt, RUNNERS)
+            self.assertEqual(V.command(s, 'TW', 'LOGS', 1)[0][4], filt)
+
+    def test_python_and_dotnet_filters_are_not_checked(self):
+        # neither runs through a batch file: a dotnet filter's & and | are its own operators
+        s = V.parse_selector('server/App.Tests/FooTests.cs::Name=A|Name=B', RUNNERS)
+        self.assertIn('Name=A|Name=B', V.command(s, 'TW', 'LOGS', 1)[0])
 
 
 class Verdicts(unittest.TestCase):
