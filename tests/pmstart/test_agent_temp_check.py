@@ -125,7 +125,11 @@ class CDriveCheck(unittest.TestCase):
                 self.assertEqual(out[0].count(" (C:"), 1, out)
                 self.assertIn("%s (C:\\x" % label if var != "CLAUDE_CONFIG_DIR" else
                               "agent transcripts (C:\\x\\projects", out[0])
-                self.assertIn("set %s)" % var, out[0])
+                if var == "CLAUDE_CONFIG_DIR":      # already set: move the folder it names
+                    self.assertIn("; move the folder %s names)" % var, out[0])
+                    self.assertNotIn("set %s" % var, out[0])
+                else:
+                    self.assertIn("set %s)" % var, out[0])
 
     def test_defaults_apply_when_the_overrides_are_unset(self):
         out = self.lines(PIP_CACHE_DIR=None, npm_config_cache=None, NUGET_PACKAGES=None, CLAUDE_CONFIG_DIR=None,
@@ -167,7 +171,8 @@ class CDriveCheck(unittest.TestCase):
 
     def test_a_claude_folder_linked_onto_c_is_a_hit(self):
         out = pmstart.cdrive_lines(environ=dict(D_ENV), realpath=lambda p: "C:\\real")
-        self.assertEqual(out, ["on the C: drive: agent transcripts (C:\\real\\projects; set CLAUDE_CONFIG_DIR)"])
+        self.assertEqual(out, ["on the C: drive: agent transcripts (C:\\real\\projects; "
+                               "move the folder CLAUDE_CONFIG_DIR names)"])
 
     def test_the_machine_scope_environment_is_not_read(self):
         with mock.patch("kitlib.launcher.host._user_env", return_value="C:\\WINDOWS\\TEMP") as user_env, \
