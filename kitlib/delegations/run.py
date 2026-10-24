@@ -449,7 +449,11 @@ def used(texts, anchor, trigger):
 # --- The order --------------------------------------------------------------------------------
 
 def hub_order(op, qid, line, hub, texts, now):
-    """The Order of a hub question; RunRefused unless the owner chose the run line on it."""
+    """The Order of a hub question; RunRefused unless the owner chose the run line on it.
+
+    The question must be logged: its ruling is what binds the run. A question bound to a
+    record goes from answered to filed, and only its asker's `hub.py questions log` binds a
+    ruling to it, so a filed question is refused with that step named."""
     if 'hub-answer' not in op.trigger:
         raise RunRefused('%s does not take a hub answer (its triggers: %s)' % (op.id, ', '.join(op.trigger)))
     if not op.reversible:
@@ -457,10 +461,15 @@ def hub_order(op, qid, line, hub, texts, now):
     if hub is None:
         raise RunRefused('no hub to read %s from' % qid)
     try:
-        items = hub.listing('questions', status='logged', role=hubclient.AGENT)
+        items = hub.listing('questions', status='all', role=hubclient.AGENT)
     except (hubserve.ServeError, OSError, ValueError) as e:
         raise RunRefused('cannot read %s from the hub: %s' % (qid, e))
-    q = next((d for d in items if isinstance(d, dict) and d.get('id') == qid), None)
+    q = next((d for d in items if isinstance(d, dict) and d.get('id') == qid
+              and d.get('status') in ('logged', 'filed')), None)
+    if q is not None and q.get('status') == 'filed':
+        raise RunRefused('%s is filed in its record but not logged: its asker logs the answer '
+                         'in the ledger first, then it runs; log it first: `hub.py questions log '
+                         '%s <ruling id>`' % (qid, qid))
     if q is None:
         raise RunRefused('%s is not a logged hub question: the owner answers it, the PM logs the '
                          'answer in the ledger and on the hub, then it runs' % qid)

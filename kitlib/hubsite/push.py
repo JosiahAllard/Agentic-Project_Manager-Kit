@@ -12,11 +12,12 @@ item itself is read through the hub. Nothing here imports a host: the delivery o
                        within STOP_S, so Hub.close's join outlasts one in flight.
   is_pm(recipient)     the recipient is the PM's own session
 
-What fires (a fingerprint per item: a question's status, answer.at and a digest of its answer,
+What fires (a fingerprint per item: a question's status, with `filed` read as `answered` so
+filing it into its record changes nothing, answer.at and a digest of its answer,
 a to-do's status and done_at, an approval's status, decided_at and phase, a story's status and
 submitted_at, a note to the PM's status and sent_at; only a changed fingerprint fires, so a
 pm_ack, which leaves them alone, never does):
-  answered    a question answered or answered again
+  answered    a question answered or answered again (filed or not)
   done        a to-do marked done or done again
   reopened    a done to-do back to open: informational, acknowledged by the first written
   added       a to-do the owner added (from: you): to the PM only
@@ -39,9 +40,11 @@ once: the first written try acknowledges it, as does any change of its fingerpri
 
 Each recipient is sent each item until it is acknowledged:
   from-session, question   Api.handed_to names its key (its own `hub pending --for` or `wait`
-                           picked it up), or the question is no longer answered
+                           picked it up), or the question is no longer answered or filed
   from-session, to-do      the same, or pm_ack, or the to-do is no longer done
-  PM, question             the question is no longer answered (logged, or done: no ruling)
+  PM, question             the question is no longer answered or filed (logged, or done: no
+                           ruling), or it is filed and another session asked it (that asker
+                           reads it; it is the PM's again in `pending --for pm` once routed so)
   PM, to-do                pm_ack, or no longer done (an owner-added one: pm_ack)
   PM, story or note        its status changed (hub stories set, hub to-pm reply)
   either                   the item is withdrawn, or a newer fingerprint replaces the push
@@ -128,6 +131,7 @@ OUTBOX = 'push-outbox.json'
 UNDELIVERED = 'push-undelivered.jsonl'
 COLLECTIONS = {'questions': 'question', 'todos': 'todo', 'approvals': 'approval',
                'stories': 'story', 'to_pm': 'to_pm'}
+ANSWERED = ('answered', 'filed')          # a question's statuses that hold an unread answer
 EVENTS = ('answered', 'done', 'reopened', 'added', 'decided', 'expiring', 'submitted', 'sent')
 EXPIRING_S = 20 * 3600                      # after decided_at: an approved one's reminder
 WATCHER_STALE_S = 300                       # a heartbeat older than this: the watcher is down
@@ -182,7 +186,8 @@ def fingerprint(kind, doc, now=None):
     if kind == 'question':
         ans = doc.get('answer') if isinstance(doc.get('answer'), dict) else {}
         said = json.dumps(ans, sort_keys=True, default=str).encode('utf-8')
-        return [doc.get('status'), ans.get('at'), hashlib.sha256(said).hexdigest()[:16]]
+        status = 'answered' if doc.get('status') == 'filed' else doc.get('status')
+        return [status, ans.get('at'), hashlib.sha256(said).hexdigest()[:16]]
     if kind == 'story':
         return [doc.get('status'), doc.get('submitted_at')]
     if kind == 'to_pm':
@@ -197,7 +202,7 @@ def trigger(kind, doc, old, now=None):
         return approval_phase(doc, now if now is not None else _utc_now())
     status = doc.get('status')
     if kind == 'question':
-        return 'answered' if status == 'answered' else None
+        return 'answered' if status in ANSWERED else None
     if kind == 'story':
         return 'submitted' if status == 'submitted' else None
     if kind == 'to_pm':
@@ -491,7 +496,8 @@ class PushWorker(object):
         if event != 'added' and sender and sender not in (PM_KEY, OWNER_FROM) and not self._is_pm(sender):
             keys.insert(0, sender)
         now = self.clock()
-        first = old is None or old[0] != doc.get('status')     # not a re-answer or a re-done
+        fp = self._print(kind, doc, now_at)
+        first = old is None or old[0] != fp[0]      # not a re-answer or a re-done
         recipients = {}
         for r in keys:
             held = r != PM_KEY and self._handed(kind, doc_id) == r
@@ -500,11 +506,17 @@ class PushWorker(object):
             recipients[r] = {'attempt': 0, 'next_at': now, 'last': None,
                              'once': event == 'reopened' or held or kind == 'approval'}
         self._outbox[key] = {'kind': kind, 'id': doc_id, 'event': event,
-                             'fingerprint': self._print(kind, doc, now_at),
+                             'fingerprint': fp,
                              'status': doc.get('status'),
                              'repo': doc.get('repo') if isinstance(doc.get('repo'), str) else '',
                              'from': sender, 'first_at': None, 'recipients': recipients}
         self._dirty = True
+
+    def _asked_by(self, entry):
+        """True when the entry's item is from a session other than the PM's (a recipient)."""
+        sender = entry.get('from')
+        return (isinstance(sender, str) and sender not in ('', PM_KEY, OWNER_FROM)
+                and not self._is_pm(sender))
 
     def _is_pm(self, key):
         try:
@@ -555,7 +567,11 @@ class PushWorker(object):
         picked = (recipient != PM_KEY and not entry['recipients'][recipient].get('once')
                   and self._handed(kind, entry['id']) == recipient)
         if kind == 'question':
-            return doc.get('status') != 'answered' or picked
+            if doc.get('status') not in ANSWERED:
+                return True
+            if doc.get('status') == 'filed' and recipient == PM_KEY and self._asked_by(entry):
+                return True             # filed into its record: its asker reads it, not the PM
+            return picked
         if doc.get('pm_ack'):
             return True
         if entry['event'] == 'done' and doc.get('status') != 'done':

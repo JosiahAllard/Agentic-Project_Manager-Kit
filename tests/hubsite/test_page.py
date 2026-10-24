@@ -1398,6 +1398,29 @@ class DomTest(unittest.TestCase):
         self.assertTrue(got["open"])
         self.assertNotIn("changed on the hub server", got["again"])
 
+    def test_a_filed_answer_names_who_reads_it_and_can_be_changed(self):
+        def filed(**kw):
+            return dict({"status": "filed", "title": "which", "version": 3, "asked_at": NOW,
+                         "options": [{"label": "one"}, {"label": "two"}], "record": {"repo": "kit", "id": "EX-1"},
+                         "answer": {"choice": 0, "label": "one", "note": "", "at": NOW}, "filed_at": NOW}, **kw)
+        got = dom("""
+            await start();
+            await click($("#tabs [data-f=other]"));
+            const asker = text($("#q-Q-1"));
+            await click(button($("#q-Q-1"), "Change answer"));
+            return { asker, save: !!button($("#q-Q-1"), "Save new answer"), cancel: !!button($("#q-Q-1"), "Cancel"),
+                     withdraw: !!button($("#q-Q-1"), "Withdraw") };
+        """, snapshot(collections={"questions": {"Q-1": filed(**{"from": "kit-1"})}}))
+        got["pm"] = dom("""
+            await start();
+            await click($("#tabs [data-f=other]"));
+            return text($("#q-Q-2"));
+        """, snapshot(collections={"questions": {"Q-2": filed(**{"from": "pm"})}}))
+        self.assertIn("filed in EX-1 · waiting for kit-1 to read it", got["asker"])
+        self.assertNotIn("waiting for the PM", got["asker"])
+        self.assertIn("filed in EX-1 · waiting for the PM to read it", got["pm"])
+        self.assertEqual((got["save"], got["cancel"], got["withdraw"]), (True, True, False))
+
     DOWN = {"status": 500, "body": {"ok": False, "error": {"code": "internal", "message": "store unreadable", "field": ""}}}
 
     def test_an_answer_that_was_sent_and_not_read_back_says_it_was_sent_and_is_not_sent_twice(self):

@@ -189,8 +189,10 @@ the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which
                                             bound to (recordwrite answer; file_answer)
 An answer to a question bound to a record is filed by POST questions/{id}/answer as soon as it is
 stored, and again by POST questions/file (AGENT, optional {id}) and at hub start for every
-answered one not filed yet: file_answer. A filed question has status `filed`, which no pending
-list carries; one that failed stays `answered` with `filing`, for the PM.
+answered one not filed yet: file_answer. A filed question has status `filed` and stays pending,
+with `filed` true, until its asker logs it or marks it done (POST questions/{id}/log or done), so
+an asker between waits still reads the answer; the PM's list carries it only when it is the PM's
+or routed to `pm` (Routes). One that failed stays `answered` with `filing`, for the PM.
 
 Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
 through `lock`: a door object (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this
@@ -271,7 +273,8 @@ Pending for one session. Every pending item carries `from`, the session key it i
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
 coordinator is not woken by another session's answer. A filtered read changes nothing: the
 items it leaves out, and the ones it lists, stay pending for every reader until they are
-handled (a question until it is logged, or marked done when it needs no ruling). Without `for` every item is listed, as before.
+handled (a question, answered or filed, until it is logged, or marked done when it needs no
+ruling). Without `for` every item is listed, as before.
 GET wait (with pending=1) also takes `except=<id>,<id>`: the ids the caller has already acted
 on are left out, and such a wait is woken only by another item, so an answer that waits for the
 PM's log is not returned again at once. It too only hides: nothing is marked.
@@ -286,7 +289,8 @@ reachable: a wait `for` it is blocked now, one started or ended within REACH_GRA
 written to it within ACK_WINDOW_S (Api.pushed, which the push worker calls for each written try
 to a key other than `pm`), so a session told by push with no wait open keeps its items. `for=pm`
 lists the items routed to `pm`, every answered question, whoever it is from (the PM logs each
-ruling), and every decided approval. An approval has no `from`: it is for the coordinator of its
+ruling), and every decided approval; a filed question only when it is routed to `pm` (its asker
+reads it). An approval has no `from`: it is for the coordinator of its
 repository, the session key named as the configured repository whose origin remote is the
 approval's `repo` (Api's repo_name), while that key is in sessions.json, else for `pm`. A wait
 `for=pm` is also woken when an item's route turns to `pm` with no write. All of
@@ -535,13 +539,15 @@ def launcher_keys():
 
 
 def _for(d, for_key):
-    """Whether pending item d (with `from` and `route`) is listed for for_key: every item with
-    none; for AGENT_FROM, the ones routed to it, every question (the PM logs each ruling) and
-    every approval (the owner's decision); for another key, its own."""
+    """Whether pending item d (with `from`, `route` and `note`) is listed for for_key: every
+    item with none; for AGENT_FROM, the ones routed to it, every question not filed (the PM logs
+    each ruling; a filed answer is its asker's while the asker can be reached) and every approval
+    (the owner's decision); for another key, its own."""
     if not for_key:
         return True
     if for_key == AGENT_FROM:
-        return d['route'] == AGENT_FROM or d['kind'] in ('question', 'approval')
+        return (d['route'] == AGENT_FROM or d['kind'] == 'approval'
+                or (d['kind'] == 'question' and d.get('note') != 'filed'))
     return d['from'] == for_key
 
 
@@ -1124,23 +1130,29 @@ def questions_file(api, req):
     return {'ok': True, 'filed': filed, 'failed': failed}
 
 
+# The statuses a question is logged or marked done from: an answer the PM handles, and one filed
+# into its record that its asker has not yet read and closed.
+HANDLED_FROM = ('answered', 'filed')
+
+
 def questions_log(api, req):
     b = _fields(req, ('ruling', 'if_version'), required=('ruling',))
     _pin(b, required=True)
     ruling = _text(b, 'ruling').strip()
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
-    if d.get('status') != 'answered':
-        raise _invalid('%s is %s: only an answered question is logged'
+    if d.get('status') not in HANDLED_FROM:
+        raise _invalid('%s is %s: only an answered or filed question is logged'
                        % (doc_id, d.get('status')), 'status')
     return api.change('questions', doc_id, d, {'status': 'logged', 'ruling': ruling}, req,
                       {'status': 'logged'})
 
 
 def questions_done(api, req):
-    """The PM marks an answered question handled with no ruling (a one-off go the ledger keeps
-    out): status `done`, terminal, so it is no longer pending and its push ends. Refused
-    (`invalid`) for a question that is not answered and for a blank why."""
+    """The PM, or the asker of a filed question, marks an answered or filed question handled
+    with no ruling (a one-off go the ledger keeps out; an answer the record already holds):
+    status `done`, terminal, so it is no longer pending and its push ends. Refused (`invalid`)
+    for a question that is neither and for a blank why."""
     b = _fields(req, ('why', 'if_version'), required=('why',))
     _pin(b, required=True)
     why = _text(b, 'why').strip()
@@ -1148,8 +1160,8 @@ def questions_done(api, req):
         raise _invalid('why says why the answer needs no ruling: it cannot be blank', 'why')
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
-    if d.get('status') != 'answered':
-        raise _invalid('%s is %s: only an answered question is marked done'
+    if d.get('status') not in HANDLED_FROM:
+        raise _invalid('%s is %s: only an answered or filed question is marked done'
                        % (doc_id, d.get('status')), 'status')
     return api.change('questions', doc_id, d,
                       {'status': 'done', 'done_why': why, 'done_at': api.clock()}, req,
@@ -1738,9 +1750,12 @@ def _unpath_pending(api, items, req):
     """Pending items (fresh dicts from api.pending) with an act note's title, its text's first
     line, cut as _unpathed but for the local owner (Request.full), as GET to_pm cuts its text.
     The note's kind is the one read with the item (its `note`, dropped here for every caller),
-    never read again: a note deleted since is still known for what it was."""
+    never read again: a note deleted since is still known for what it was. A question filed
+    into its record says so: `filed` true."""
     for d in items:
         note = d.pop('note', '')
+        if d.get('kind') == 'question' and note == 'filed':
+            d['filed'] = True
         if (not req.full and d.get('kind') == 'to_pm' and note == 'act'
                 and isinstance(d.get('title'), str)):
             d['title'] = _unpathed(d['title'])

@@ -304,6 +304,43 @@ class AckTest(PushCase):
         self.later(3 * 3600)
         self.assertEqual((self.attempts('kit'), self.attempts('pm')), ([1], [1]))
 
+    def test_a_filed_question_goes_on_pushing_its_asker_until_it_is_picked_up_or_logged(self):
+        # red proof: the fingerprint's raw status (answered -> filed fires nothing and drops the
+        # push) or a question acknowledged once it is no longer `answered`
+        qid = self.ask(**{'from': 'kit'})
+        self.answer(qid)
+        self.worker.poll()
+        self.store.update('questions', qid, {'status': 'filed'})
+        self.later(push.SCHEDULE_S[0])
+        self.assertEqual(self.attempts('kit'), [1, 2], 'its asker reads it')
+        self.assertEqual(self.attempts('pm'), [1], 'the asker, not the PM, handles it')
+        self.store.update('questions', qid, {'status': 'logged'})
+        self.later(3 * 3600)
+        self.assertEqual((self.attempts('kit'), self.attempts('pm')), ([1, 2], [1]))
+
+    def test_a_question_filed_before_the_worker_saw_it_answered_still_pushes_its_asker(self):
+        qid = self.ask(**{'from': 'kit'})
+        self.worker.poll()
+        self.answer(qid)
+        self.store.update('questions', qid, {'status': 'filed'})
+        self.worker.poll()
+        self.assertEqual([r for r, _ in self.push.calls], ['kit'])
+        self.assertIn('question %s filed repo:kit from:kit route:kit' % qid, self.push.calls[0][1])
+        self.pick_up('kit')
+        self.later(3 * 3600)
+        self.assertEqual(self.attempts('kit'), [1], 'picked up: the pushes end')
+
+    def test_the_pms_own_filed_question_goes_on_pushing_the_pm_until_done(self):
+        qid = self.ask()
+        self.answer(qid)
+        self.store.update('questions', qid, {'status': 'filed'})
+        self.worker.poll()
+        self.later(push.SCHEDULE_S[0])
+        self.assertEqual(self.attempts('pm'), [1, 2])
+        self.store.update('questions', qid, {'status': 'done'})
+        self.later(3 * 3600)
+        self.assertEqual(self.attempts('pm'), [1, 2])
+
     def test_a_newer_answer_supersedes_the_push_in_flight(self):
         qid = self.ask(**{'from': 'kit'})
         self.answer(qid)

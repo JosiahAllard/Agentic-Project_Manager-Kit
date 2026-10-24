@@ -373,9 +373,13 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
   done (`questions done <id> --why <text> --if-version V`; status `done`, with `done_why` and
   `done_at`). A done question is no longer pending and
   its push ends (`kitlib/hubsite/api.py` `questions_done`). A question bound to a record whose
-  answer the hub filed (status `filed`, "Filing the answer") is not pending either.
+  answer the hub filed (status `filed`, "Filing the answer") stays pending, with `filed` true on
+  the item, until its asker logs it or marks it done: both take a filed question as they take an
+  answered one.
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
-  logs each ruling, and every decided approval. A PM wait is also woken when an item turns to the
+  logs each ruling, and every decided approval. A filed question is on it only while it is the
+  PM's: the PM asked it, or its asker cannot be reached (the rules above), so an answer filed
+  while its asker is gone still reaches someone. A PM wait is also woken when an item turns to the
   PM with no write.
 - A decided approval is for its repository's coordinator (`hub.py pending` above) and listed for
   the PM too. It stops being pending with no write: once consumed, at its expiry, or 24 hours
@@ -419,12 +423,15 @@ It is not the store's git push (the `push` setting).
 - Until when: each recipient is sent each item until it is acknowledged. The asking session
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
-  `questions log` or `questions done` (no ruling) for a question, or the hub's own filing of a
-  bound one (status `filed`, "Filing the answer"); for a story, any change of its status (`stories set`), and for a
+  `questions log` or `questions done` (no ruling) for a question; for a question the hub filed
+  into its record (status `filed`, "Filing the answer") asked by another session, by the filing
+  itself, since its asker reads it; for a story, any change of its status (`stories set`), and for a
   note to the PM, its reply (`to-pm reply`). An approval's push is sent once to each: the first written
   try acknowledges it. An item withdrawn, reopened or answered again replaces or
   ends its push. A session that picked up a first answer or done mark before the worker saw it
-  is not sent it. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
+  is not sent it. The filing does not change a question's fingerprint (`filed` counts as
+  `answered`), so an answer filed before the worker saw it still fires one `answered` push, with
+  `filed` in its header, and its asker is sent it until it picks it up, logs it or marks it done. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
   the rest wait for the next slot. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
   day after the first try with one `gave-up` line (`push.SCHEDULE_S`, `push.GIVE_UP_S`). A write
   whose end is unknown waits for the next slot like any other outcome.
@@ -491,7 +498,7 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 ## questions/Q-NNN
 | Field | Written by | Meaning |
 |---|---|---|
-| status | PM, owner, hub | `open`, then `answered` (owner), then `logged` (PM), or `done` (PM: no ruling needed, `questions done`), or `filed` (hub: the answer was filed into the bound record, "Filing the answer") |
+| status | PM, owner, hub | `open`, then `answered` (owner), then `logged` (PM), or `done` (PM: no ruling needed, `questions done`), or `filed` (hub: the answer was filed into the bound record, "Filing the answer"), then `logged` or `done` (its asker) |
 | repo, from, asked_at | PM, coordinator | where it came from; `from` is `pm` or the asking coordinator's launcher session key, the session its answer goes back to; asked_at is ISO time |
 | title | PM | the question itself |
 | context | PM | everything needed to answer; nothing is assumed from chat |
@@ -538,7 +545,14 @@ The hub files the owner's answer to a bound question into the record itself, in 
    race. The same question and `at` again changes nothing, and an older `at` never overwrites a
    newer answer, so this step can be repeated after a crash.
 3. The question is marked `filed`, with `filed_at`, pinned to the version of step 1. A filed
-   question is not pending: the PM neither logs it nor marks it done.
+   question stays pending for its asker, with `filed` true, until the asker logs it (`questions
+   log`, where a ruling is bound) or marks it done (`questions done`), so an asker between waits
+   when the owner answers still finds the answer on its next `wait --pending --for KEY`. It is the
+   PM's only when the PM asked it or its asker cannot be reached ("Who handles a pending item").
+   The page shows a filed card as `filed in <record id> · waiting for <asker> to read it` (the PM
+   for its own question) and keeps its Change answer button: a re-answer files again.
+   A delegation run line answered on a bound question waits for the asker's log step too: a
+   filed question is refused until it is logged (`kitlib.delegations.run` `hub_order`).
 
 When step 2 fails the question stays `answered`, so it stays pending for the PM, and gains
 `filing` `{at, code, message}`: `not_found` (the record is completed or gone) and `invalid` (the
@@ -556,13 +570,11 @@ step 2 is mended there. The answer route's own answer carries `filing` (`{id, fi
 revision}`, `{id, filed: false, code, message}`, or `{id, filed: false, moved: true}`), and its
 `status`, `version` and `revision` are those of the last write. An unbound question is never
 filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
-`AnswerStoreTest`; tests/hubsite/test_record_write.py `Answer`.
+`AnswerStoreTest`; tests/hubsite/test_record_write.py `Answer`; tests/hubsite/test_push.py
+`AckTest`; tests/delegations/test_run.py `HubTrigger`.
 
 Known limits:
 - The page has no tab for `filed`: a filed question shows under Other.
-- The answer's `answered` push can fire before the filing ends, and once the question is `filed`
-  the push worker takes it as handled, so a push not delivered by then is dropped (the push
-  rework is a later slice).
 - After the store reports an Uncommitted error the line is already in the record, so the retry
   changes nothing and marks the question `filed` before the store's catch-up applies it (the
   answer audit of a later slice allows for this).

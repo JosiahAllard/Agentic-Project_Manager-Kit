@@ -3822,6 +3822,10 @@ class FilingTest(ApiCase):
     def pending(self):
         return [p['id'] for p in self.ok('GET', '/pending', AGENT)['items']]
 
+    def filed_pending(self):
+        """The pending questions that say they are filed (the asker still reads them)."""
+        return [p['id'] for p in self.ok('GET', '/pending', AGENT)['items'] if p.get('filed')]
+
     def test_a_crash_after_the_answer_is_stored_is_filed_by_the_retry(self):
         qid = self.bound()
         with mock.patch.object(api, 'file_answer', side_effect=Crash):
@@ -3834,10 +3838,10 @@ class FilingTest(ApiCase):
         self.assertEqual((got['filed'], got['failed']), ([qid], []))
         self.assertEqual(self.views.lines, {('EX-1', qid): self.doc(qid)['answer']['at']})
         self.assertEqual(self.doc(qid)['status'], 'filed')
-        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.filed_pending(), [qid], 'pending for its asker, as filed')
         self.assertEqual(self.refile()['filed'], [], 'a filed question is not filed again')
 
-    def test_an_answer_is_filed_at_once_and_leaves_the_pending_list(self):
+    def test_an_answer_is_filed_at_once_and_stays_pending_as_filed(self):
         other = self.bound()
         qid = self.bound()
         self.tick()
@@ -3849,11 +3853,39 @@ class FilingTest(ApiCase):
         self.assertEqual(got['revision'], self.store.revision)
         self.assertEqual(self.views.filed, [('kit', 'EX-1', qid, self.now, 't', 'first', 'why',
                                              'api', False, [other])])
-        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.filed_pending(), [qid])
         self.assertEqual([q['id'] for q in self.ok('GET', '/questions', AGENT,
                                                    query={'status': 'filed'})['items']], [qid])
         self.answer(other, 'other', note='neither')
         self.assertEqual(self.views.filed[-1][5:], ('Other', 'neither', 'api', True, []))
+
+    def test_a_filed_answer_stays_for_its_asker_until_it_is_done_or_logged(self):
+        # no wait of the asker's is blocked when the owner answers: a later one still gets it
+        mono = [1000.0]
+        self.api = api.Api(self.store, views=self.views, clock=lambda: self.now,
+                           session_keys=lambda: {'kit-1'}, now=lambda: mono[0])
+        logs, dones = (self.question(**{'from': 'kit-1', 'record': {'repo': 'kit', 'id': rid}})
+                       for rid in ('EX-1', 'EX-2'))
+        mine = self.bound('EX-1')
+        for qid in (logs, dones, mine):
+            self.answer(qid)
+            self.assertEqual(self.doc(qid)['status'], 'filed')
+
+        def wait(key):
+            got = self.ok('GET', '/wait', AGENT, query={'pending': '1', 'for': key, 'timeout': '0'})
+            return [(p['id'], p.get('filed')) for p in got['pending']]
+        self.assertEqual(wait('kit-1'), [(logs, True), (dones, True)])
+        # the PM: its own filed question; the asker's only once the asker cannot be reached
+        self.assertEqual(wait('pm'), [(mine, True)])
+        mono[0] += api.ACK_WINDOW_S
+        self.assertEqual(wait('pm'), [(logs, True), (dones, True), (mine, True)])
+        self.ok('POST', '/questions/%s/log' % logs, AGENT,
+                {'ruling': 'R-7', 'if_version': self.doc(logs)['version']})
+        self.ok('POST', '/questions/%s/done' % dones, AGENT,
+                {'why': 'filed in EX-2', 'if_version': self.doc(dones)['version']})
+        self.assertEqual((self.doc(logs)['status'], self.doc(dones)['status']), ('logged', 'done'))
+        self.assertEqual(wait('kit-1'), [])
+        self.assertEqual(wait('pm'), [(mine, True)])
 
     def test_a_crash_after_the_record_write_is_mended_by_the_retry(self):
         qid = self.bound()
