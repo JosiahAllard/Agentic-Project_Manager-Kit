@@ -64,15 +64,18 @@ class ConfigLineTest(unittest.TestCase):
         self.put({'owner_email': SECRET + '@example.com'}, name=user.LOCAL_FILE_NAME)
         self.assertEqual(self.line(), 'config    %s (config.json, local.json)' % self.shown)
 
-    def test_a_home_file_beside_the_pm_repositorys_is_a_warning_to_retire(self):
+    def test_a_home_file_beside_the_pm_repositorys_is_broken_naming_its_removal(self):
         self.put({})
-        for name, shown in ((migration.OLD_DIR_NAME, self.old_name), (user.DIR_NAME, self.home_name)):
+        for name in (migration.OLD_DIR_NAME, user.DIR_NAME):
             with self.subTest(name):
                 self.put_home({'pending_path': os.path.join(self.home, SECRET)}, name)
                 out = self.line()
-                self.assertEqual(out, 'config    WARN %s (config.json) is read; %s is still in the home '
-                                 'folder and ignored - retire it once the move is checked (%s)'
-                                 % (self.shown, shown, user.MOVE_DOC))
+                self.assertTrue(out.startswith('config    BROKEN the machine config moved to the PM '
+                                               'repository'), out)
+                # DIR_NAME's file, once there, is the one named (kitlib.config.user _leftover)
+                left = os.path.join(self.home, name, user.FILE_NAME)
+                self.assertIn("Remove-Item -LiteralPath '%s'" % left, out)
+                self.assertNotIn(SECRET, out)
 
     def test_a_home_file_that_was_never_moved_is_broken(self):
         self.put_home({'pending_path': os.path.join(self.home, SECRET)})

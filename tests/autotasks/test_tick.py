@@ -133,7 +133,7 @@ class State(Base):
 
 class Place(Base):
     """Where the state lives: the PM repository's git-ignored machine config folder, never the
-    home folder (KIT-CONFIG-HOME-RETIRE)."""
+    home folder."""
 
     def home_state(self):
         return os.path.join(self.home, '.pm-kit', 'auto-tasks')

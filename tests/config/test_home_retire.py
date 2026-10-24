@@ -1,4 +1,4 @@
-"""The home folder's machine config is retired (KIT-CONFIG-HOME-RETIRE; docs/kit-json.md "Moving
+"""The home folder's machine config is retired (docs/kit-json.md "Moving
 the machine config folder"): with a good PM-repo pointer, a config.json still in the home folder
 beside the PM repository's is LEFTOVER (kitlib.config.user.locate), an error naming its remove
 command for every reader, never a warning beside a config that is read. The preflight `config`
