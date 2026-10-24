@@ -11,6 +11,7 @@ from kitlib import coordinatorstart
 from kitlib.config import ConfigError
 from kitlib.lockmcp import PLUGIN_NAME
 from kitlib.lock import api
+from kitlib.records import landing
 from tests.home import machine_config
 from tests.lock.helpers import OWNER, StoreCase
 
@@ -214,8 +215,8 @@ class MachineTest(StatusCase):
                                api.utc_now() + datetime.timedelta(hours=9)), "for_s": 3600})
         [soon, later] = snap["holds"]
         run, calls = self.run_fake(snap)
-        read = reader({os.path.join(ROOT + "/alpha/.git", "alpha-landing.lock"): json.dumps(LOCK)})
-        out = coordinatorstart.machine(ENTRY, run, read, api.utc_now(), "H", ROOT, "alpha-landing.lock")
+        read = reader({os.path.join(ROOT + "/alpha/.git", landing.LOCK_NAME): json.dumps(LOCK)})
+        out = coordinatorstart.machine(ENTRY, run, read, api.utc_now(), "H", ROOT)
         self.assertEqual(out[0], "machine: owner hold %s-%s: gaming" % (soon["start_local"], soon["end_local"]))
         self.assertNotIn(later["start_local"] + "-", out[0])
         (gf, gn), (cf, cn) = self.free(snap, "gpu"), self.free(snap, "cpu")
@@ -238,21 +239,12 @@ class MachineTest(StatusCase):
         with self.assertRaises(ValueError):
             coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H")
 
-    def test_lock_free_and_no_landing_lock_configured(self):
+    def test_lock_free_and_no_repos_root(self):
         run, _ = self.run_fake(self.status())
-        out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", ROOT, "alpha-landing.lock")
+        out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", ROOT)
         self.assertIn("no owner or agent hold within 4 h", out[0])
         self.assertEqual(out[2], "landing lock (alpha): free")
-        for root, lock_file in ((ROOT, None), (None, "alpha-landing.lock")):
-            out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", root, lock_file)
-            self.assertEqual(len(out), 2)
-
-    def test_lock_file_for_reads_the_config(self):
-        cfg = {"landing_lock": {"alpha": "alpha-landing.lock"}}
-        self.assertEqual(coordinatorstart.lock_file_for(cfg, "alpha"), "alpha-landing.lock")
-        self.assertEqual(coordinatorstart.lock_file_for(cfg, "Alpha"), "alpha-landing.lock")
-        self.assertIsNone(coordinatorstart.lock_file_for(cfg, "beta"))
-        self.assertIsNone(coordinatorstart.lock_file_for({}, "alpha"))
+        self.assertEqual(len(coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", None)), 2)
 
     def test_runner_failure_propagates(self):
         def run(args, timeout=10):
@@ -315,6 +307,23 @@ class ContextTest(unittest.TestCase):
         self.assertIn("- machine: free gpu slots %d of %d" % (gf, gn), text)
         self.assertNotIn("also running", text)
         self.assertNotIn("usage", text.lower())
+
+    def test_the_landing_lock_line_reads_the_kits_lock_file_whatever_the_config_names(self):
+        # a retired "landing_lock" naming a wrong file is ignored: kit-landing.lock held reads HELD
+        common = ROOT + "/alpha/.git"
+        status = idle_status()
+
+        def run(args, timeout=10):
+            return json.dumps(status) if "machine_lock.py" in args[1] else common
+        held = {"S.json": json.dumps({"alpha": ENTRY}),
+                os.path.join(common, landing.LOCK_NAME): json.dumps(LOCK)}
+        for cfg in ({"landing_lock": {"alpha": "wrong.lock"}}, {}):
+            with self.subTest(cfg=cfg):
+                text = self.build(cfg, run=run, read=reader(held))
+                self.assertIn("- landing lock (alpha): HELD - branches b1", text)
+        free = self.build({"landing_lock": {"alpha": "wrong.lock"}}, run=run,
+                          read=reader({"S.json": json.dumps({"alpha": ENTRY})}))
+        self.assertIn("- landing lock (alpha): free", free)
 
     def test_the_machine_check_runs_the_named_kits_lock_tool(self):
         calls, status = [], idle_status()
@@ -425,7 +434,8 @@ class NoRulingsCheckTest(unittest.TestCase):
             seen.append(p)
             return files[p]
         ContextTest().build(dict(self.CAP, ledger="L.md"), read=read)
-        self.assertEqual(seen, ["S.json"])
+        # the landing lock file is also read (never the ledger or the state note)
+        self.assertEqual([p for p in seen if not p.endswith(landing.LOCK_NAME)], ["S.json"])
 
     def test_the_reader_and_its_limits_are_gone(self):
         for name in ("rulings", "ledger_file", "LEDGER_CAP", "DECIDES_CHARS", "safepath"):
@@ -480,7 +490,8 @@ class LedgerLineTest(unittest.TestCase):
             return files[p]
         text = ContextTest().build(self.CAP, read=read, machine_cfg=self.SPLIT)
         self.assertIn("- ledger (reference", text)
-        self.assertEqual(seen, ["S.json"])
+        # the landing lock file is also read (never the ledger or the state note)
+        self.assertEqual([p for p in seen if not p.endswith(landing.LOCK_NAME)], ["S.json"])
 
     def test_no_line_when_not_live(self):
         self.assertNotIn("ledger", coordinatorstart.context(dict(self.CAP, standing=["s"]), live=False,
