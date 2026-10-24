@@ -310,7 +310,7 @@ class CliRole(unittest.TestCase):
         self.seed()
         self.ok(None, 'set', 'FOO', '--body-file', self.body_file('Per R-9033, keep it.'))
         self.ok(None, 'uncite', '--apply')
-        self.assertIn("Per the owner's ruling, keep it.", self.ok(None, 'show', 'FOO'))
+        self.assertIn("Per an owner ruling, keep it.", self.ok(None, 'show', 'FOO'))
         self.assertIn('nothing to rewrite', self.ok('plain', 'uncite'))
 
     def test_a_role_may_not_take_a_row_roles_py_does_not_give_it(self):

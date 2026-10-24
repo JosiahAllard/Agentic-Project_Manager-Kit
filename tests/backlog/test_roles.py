@@ -50,8 +50,8 @@ DESIGN = {
 VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'add', 'set', 'block', 'unblock',
          'pull', 'release', 'close', 'retire', 'delete', 'clear-review', 'set-status', 'unpark',
          'retarget', 'migrate', 'catch-up'}
-# `uncite --apply` takes the retarget row once the owner approves roles.py naming it (an owner path):
-# until then no row names it, so its --apply is refused for every role (fails closed).
+# `uncite --apply` takes the retarget row; roles.py's row names it, so the owner and the PM may apply it.
+# The flag stays so a roles.py whose row lacks it still fails closed (no role may apply it).
 UNCITE_ROW = 'uncite' in R.ACTIONS['retarget'].verbs
 if UNCITE_ROW:
     VERBS.add('uncite')
