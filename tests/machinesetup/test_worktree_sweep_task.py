@@ -508,13 +508,16 @@ class PmStartCheck(unittest.TestCase):
 
     def test_the_checklist_carries_the_line(self):
         temp_home(self)
-        fakes = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+        handoff = {"globber": lambda p: [], "exists": lambda p: True, "pm_repo": lambda c: "X:/pm"}  # one file, no strays
+        fakes = dict(pm_data=lambda: None, handoff=handoff, reminders={"read": lambda p: "[]"},
                      liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
                      watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0},
                      worktree_sweep={'repos': {'demo': self.repo.root}, 'read': lambda: [],
                                      'plugin': lambda: self.settings})
         text = pmstart.checklist({}, datetime.datetime(2026, 10, 20, 9, 0), procs=[], **fakes)
         self.assertIn("- worktree sweep task %s (demo) is not registered" % self.task, text)
+        self.assertIn("- read first: ", text)
+        self.assertNotIn("could not check handoff", text)
 
 
 if __name__ == '__main__':

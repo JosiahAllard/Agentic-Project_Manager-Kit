@@ -21,7 +21,10 @@ LOG = 'writes the rulings ledger, which only ledger.py writes'
 
 class Rulebooks(unittest.TestCase):
     def setUp(self):
-        self.w = W.World()
+        self.build(W.World())
+
+    def build(self, world):
+        self.w = world
         self.addCleanup(self.w.cleanup)
         self.folder = os.path.dirname(self.w.ledger)
         self.rules = os.path.join(self.folder, 'rules')
@@ -108,6 +111,7 @@ class Rulebooks(unittest.TestCase):
                            sub=True))
 
     def test_a_short_name_still_reaches_them(self):
+        self.short_world()
         self.w.user_config({'ledger_path': self.w.ledger})
         book = self.book('a-long-rulebook-name.md')
         open(book, 'w').close()
@@ -116,13 +120,53 @@ class Rulebooks(unittest.TestCase):
         short_digest = os.path.join(self.short(self.folder), 'STANDING.md')
         self.refused(event('Write', {'file_path': short_digest, 'content': ''}, self.folder, sub=True), DIGEST)
 
+    def test_a_short_name_wildcard_reaches_them(self):
+        # FindFirstFile matches a wildcard part against the 8.3 short name too
+        # (rules.short_parts): `A-LONG~?` names the folder `a-long-ledger-folder`
+        self.short_world()
+        folder = os.path.join(self.w.base, 'a-long-ledger-folder')
+        os.makedirs(os.path.join(folder, 'rules'))
+        ledger = os.path.join(folder, 'LEDGER.md')
+        open(ledger, 'w').close()
+        open(os.path.join(folder, 'STANDING.md'), 'w').close()
+        self.w.user_config({'ledger_path': ledger})
+        short = os.path.basename(self.short(folder))
+        for sub in (True, False):
+            for text, why in (('rm A-LONG~?/LEDGER.md', LOG), ('rm a-long~?/STANDING.md', DIGEST),
+                              ('rm "%s/LEDGER.md"' % short, LOG)):
+                with self.subTest(text, sub=sub):
+                    self.refused(bash(text, self.w.base, sub=sub), why)
+        # the folder above binds marked sessions but the PM's (rules.ledger_wide_binds): the owner passes
+        self.refused(bash('rm -r A-LONG~?', self.w.base, sub=True), LOG)
+        d = decide(bash('rm -r A-LONG~?', self.w.base, sub=False), self.w.ctx())
+        self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+        d = decide(bash('rm -f A-LONG~?/NOTES.md', self.w.base, sub=False), self.w.ctx())
+        self.assertTrue(d is None or d.rule != 'ledger', d and d.reason)
+
+    def test_a_short_name_wildcard_reaches_a_file_not_written_yet(self):
+        # the held file is missing: its folder's short name still matches (rules.short_parts walks
+        # to the nearest existing folder)
+        self.short_world()
+        folder = os.path.join(self.w.base, 'a-long-ledger-folder')
+        os.makedirs(folder)
+        self.w.user_config({'ledger_path': os.path.join(folder, 'LEDGER.md')})
+        self.short(folder)
+        for sub in (True, False):
+            with self.subTest(sub=sub):
+                self.refused(bash('rm A-LONG~?/LEDGER.md', self.w.base, sub=sub), LOG)
+
+    def short_world(self):
+        """Rebuild the world on a volume with 8.3 short names (W.short_name_root); skipped when
+        no temp folder has them."""
+        root = W.short_name_root()
+        if root is None:
+            self.skipTest('no temp folder\'s volume gives short (8.3) names')
+        self.build(W.World(root=root))
+
     def short(self, path):
         """The short (8.3) spelling of `path`; the test is skipped when its volume gives none."""
-        import ctypes
-        buf = ctypes.create_unicode_buffer(1024)
-        n = ctypes.WinDLL('kernel32').GetShortPathNameW(path, buf, len(buf))
-        short = buf.value if 0 < n < len(buf) else ''
-        if not short or os.path.normcase(short) == os.path.normcase(path):
+        short = W.short_name(path)
+        if not short:
             self.skipTest('the temp folder\'s volume gives no short (8.3) names')
         return short
 

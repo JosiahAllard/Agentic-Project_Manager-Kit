@@ -249,9 +249,13 @@ running server, or a server that did not close cleanly), 2 usage error or an unr
 config, 3 the server is not running (the start command is printed), or a `restart` that started
 nothing (no task, a disabled one, or a server started by hand: it says which and prints the
 start command), 4 a `wait --timeout` that ran out, or a `stop` or `restart` that ran out of time
-(nothing was killed). A `wait` whose server closes mid-wait ends with 3 and the start command when the next poll
-is refused, or with 1 (`REFUSED: port N did not answer as the hub does: ...`) when the
-connection dropped mid-request.
+(nothing was killed). A `wait` whose server goes down after one of its polls was answered (a
+restart: the port refuses the connection, or the hub answers `REFUSED store`) asks again each
+second (`client.RETRY_PAUSE_S`) from the revision it last had, within its `--timeout`, or for up to
+600 s down in a row (`client.RESTART_WAIT_S`) when it has none; then it ends with that reason: 3
+and the start command, or 1 (`REFUSED store: ...`). A server already down at the wait's first poll
+ends it at once the same way. A connection dropped mid-request still ends it with 1
+(`REFUSED: port N did not answer as the hub does: ...`) (`kitlib.hubsite.client.Client.wait`).
 
 ## For the PM
 
