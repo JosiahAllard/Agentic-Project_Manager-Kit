@@ -184,6 +184,15 @@ Both are read now, never cached, and neither is part of GET snapshot.
   record_unblock(repo, id, on, reason, ruling)                     recordwrite)
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
+  record_answer(repo, id, qid, at, title, label, note, via, other, waiting)
+                                            files a question's answer into the record it is
+                                            bound to (recordwrite answer; file_answer)
+An answer to a question bound to a record is filed by POST questions/{id}/answer as soon as it is
+stored, and again by POST questions/file (AGENT, optional {id}) and at hub start for every
+answered one not filed yet: file_answer. A filed question has status `filed` and stays pending,
+with `filed` true, until its asker logs it or marks it done (POST questions/{id}/log or done), so
+an asker between waits still reads the answer; the PM's list carries it only when it is the PM's
+or routed to `pm` (Routes). One that failed stays `answered` with `filing`, for the PM.
 
 Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
 through `lock`: a door object (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this
@@ -264,7 +273,8 @@ Pending for one session. Every pending item carries `from`, the session key it i
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
 coordinator is not woken by another session's answer. A filtered read changes nothing: the
 items it leaves out, and the ones it lists, stay pending for every reader until they are
-handled (a question until it is logged, or marked done when it needs no ruling). Without `for` every item is listed, as before.
+handled (a question, answered or filed, until it is logged, or marked done when it needs no
+ruling). Without `for` every item is listed, as before.
 GET wait (with pending=1) also takes `except=<id>,<id>`: the ids the caller has already acted
 on are left out, and such a wait is woken only by another item, so an answer that waits for the
 PM's log is not returned again at once. It too only hides: nothing is marked.
@@ -279,7 +289,8 @@ reachable: a wait `for` it is blocked now, one started or ended within REACH_GRA
 written to it within ACK_WINDOW_S (Api.pushed, which the push worker calls for each written try
 to a key other than `pm`), so a session told by push with no wait open keeps its items. `for=pm`
 lists the items routed to `pm`, every answered question, whoever it is from (the PM logs each
-ruling), and every decided approval. An approval has no `from`: it is for the coordinator of its
+ruling), and every decided approval; a filed question only when it is routed to `pm` (its asker
+reads it). An approval has no `from`: it is for the coordinator of its
 repository, the session key named as the configured repository whose origin remote is the
 approval's `repo` (Api's repo_name), while that key is in sessions.json, else for `pm`. A wait
 `for=pm` is also woken when an item's route turns to `pm` with no write. All of
@@ -528,13 +539,15 @@ def launcher_keys():
 
 
 def _for(d, for_key):
-    """Whether pending item d (with `from` and `route`) is listed for for_key: every item with
-    none; for AGENT_FROM, the ones routed to it, every question (the PM logs each ruling) and
-    every approval (the owner's decision); for another key, its own."""
+    """Whether pending item d (with `from`, `route` and `note`) is listed for for_key: every
+    item with none; for AGENT_FROM, the ones routed to it, every question not filed (the PM logs
+    each ruling; a filed answer is its asker's while the asker can be reached) and every approval
+    (the owner's decision); for another key, its own."""
     if not for_key:
         return True
     if for_key == AGENT_FROM:
-        return d['route'] == AGENT_FROM or d['kind'] in ('question', 'approval')
+        return (d['route'] == AGENT_FROM or d['kind'] == 'approval'
+                or (d['kind'] == 'question' and d.get('note') != 'filed'))
     return d['from'] == for_key
 
 
@@ -992,8 +1005,8 @@ def questions_answer(api, req):
     note = (_text(b, 'note') or '').strip()
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
-    if d.get('status') not in ('open', 'answered'):
-        raise _invalid('%s is %s: only an open or an answered question takes an answer'
+    if d.get('status') not in ('open', 'answered', 'filed'):
+        raise _invalid('%s is %s: only an open, an answered or a filed question takes an answer'
                        % (doc_id, d.get('status')), 'status')
     choice = b['choice']
     options = d.get('options') if isinstance(d.get('options'), list) else []
@@ -1009,8 +1022,117 @@ def questions_answer(api, req):
                        % (len(options), choice), 'choice')
     answer = {'choice': choice, 'label': label, 'note': note, 'at': api.clock(),
               'via': _via(req)}
-    return api.change('questions', doc_id, d, {'status': 'answered', 'answer': answer}, req,
-                      {'status': 'answered', 'answer': answer})
+    changes = {'status': 'answered', 'answer': answer}
+    if d.get('filing') is not None or d.get('filed_at') is not None:
+        changes.update(filing=None, filed_at=None)      # a re-answer is filed afresh
+    out = api.change('questions', doc_id, d, changes, req,
+                     {'status': 'answered', 'answer': answer})
+    if isinstance(d.get('record'), dict):
+        got = file_answer(api, doc_id, _via(req), full=req.full)
+        if got is not None:
+            out['filing'] = got
+            if 'version' in got:        # the mark is the last write: its version and revision
+                out.update(version=got['version'], revision=got['revision'])
+            if got.get('filed'):
+                out['status'] = 'filed'
+    return out
+
+
+# what a question's `filing` says, by the code its filing failed with: fixed phrases, since the
+# store's own text can name a path and the document goes over the tunnel (GET snapshot)
+FILING_SAYS = {
+    'not_found': 'the record is completed or gone: the PM handles this answer',
+    'invalid': 'the backlog store refused this answer: the PM handles it',
+    'store': 'the backlog store could not be written now: the hub tries again',
+    'unavailable': 'this hub cannot write a backlog store: the hub tries again',
+}
+
+
+def _waiting(api, doc_id, record):
+    """The other questions bound to `record` that are still open, in id order."""
+    return sorted((i for i, q in api.store.docs('questions').items()
+                   if i != doc_id and q.get('status') == 'open' and q.get('record') == record),
+                  key=_natural)
+
+
+def file_answer(api, doc_id, via='api', full=False):
+    """File the stored answer of question doc_id into the record it is bound to, through the
+    `record_answer` view, then mark the question (docs/action-hub.md "A question bound to a
+    record"): status `filed` with `filed_at`, or, when the view refused, status `answered` kept
+    with `filing` {at, code, message} (message a fixed phrase of FILING_SAYS), so the PM still
+    sees it pending. Both marks are pinned to the version read first: a question that moved
+    meanwhile (answered again, logged, done) is left as it is, and the answer that moved it is
+    filed by its own call. None for a question that is not answered or is bound to no record;
+    else {id, filed, version, revision} or {id, filed: false, code, message} (message the
+    view's own text when `full`) and the version and revision of each mark written, or {id,
+    filed: false, moved: true}. A mark the hub store refuses otherwise is given as a failure with
+    that code, nothing marked. The record write is
+    idempotent (kitlib.hubsite.recordwrite answer), so a crash anywhere in between is mended by
+    filing again."""
+    d = api.store.get('questions', doc_id)
+    if d is None or d.get('status') != 'answered':
+        return None
+    record, ans = d.get('record'), d.get('answer')
+    if not isinstance(record, dict) or not isinstance(ans, dict):
+        return None
+    version = _version(d)
+    try:
+        api._view('record_answer')(
+            record.get('repo'), record.get('id'), doc_id, ans.get('at'), d.get('title'),
+            ans.get('label'), ans.get('note'), ans.get('via'), ans.get('choice') == 'other',
+            _waiting(api, doc_id, record))
+    except HubError as e:
+        code, said = e.code, e.message
+    except Exception as e:          # noqa: BLE001 - a view is another module's code
+        code, said = 'internal', _reason(e)
+    else:
+        code = said = None
+    if code is None:
+        changes = {'status': 'filed', 'filed_at': api.clock(), 'filing': None}
+    else:
+        message = FILING_SAYS.get(code, 'the answer could not be filed (%s)' % code)
+        changes = {'filing': {'at': api.clock(), 'code': code, 'message': message}}
+    try:
+        r = api.store.update('questions', doc_id, dict(changes, via=via), if_version=version)
+    except HubError as e:
+        if e.code == 'conflict':
+            return {'id': doc_id, 'filed': False, 'moved': True}
+        return {'id': doc_id, 'filed': False, 'code': e.code,
+                'message': e.message if full else AGENT_SAYS.get(e.code, e.message)}
+    marked = {'id': doc_id, 'version': r.version, 'revision': r.revision}
+    if code is None:
+        return dict(marked, filed=True)
+    return dict(marked, filed=False, code=code,
+                message=said if full else changes['filing']['message'])
+
+
+def questions_file(api, req):
+    """File every answered question bound to a record (or only `id`) that is not filed yet:
+    {ok, filed: [ids], failed: [{id, code, message}]}; a question that moved meanwhile is in
+    neither. An unknown `id` is `not_found`; one that is not answered or has no record files
+    nothing."""
+    b = _fields(req, ('id',))
+    one = _text(b, 'id')
+    if one is not None:
+        api.doc('questions', one)
+        ids = [one]
+    else:
+        ids = sorted(api.store.docs('questions'), key=_natural)
+    filed, failed = [], []
+    for doc_id in ids:
+        got = file_answer(api, doc_id, _via(req), full=req.full)
+        if got is None or got.get('moved'):
+            continue
+        if got['filed']:
+            filed.append(doc_id)
+        else:
+            failed.append({'id': doc_id, 'code': got['code'], 'message': got['message']})
+    return {'ok': True, 'filed': filed, 'failed': failed}
+
+
+# The statuses a question is logged or marked done from: an answer the PM handles, and one filed
+# into its record that its asker has not yet read and closed.
+HANDLED_FROM = ('answered', 'filed')
 
 
 def questions_log(api, req):
@@ -1019,17 +1141,18 @@ def questions_log(api, req):
     ruling = _text(b, 'ruling').strip()
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
-    if d.get('status') != 'answered':
-        raise _invalid('%s is %s: only an answered question is logged'
+    if d.get('status') not in HANDLED_FROM:
+        raise _invalid('%s is %s: only an answered or filed question is logged'
                        % (doc_id, d.get('status')), 'status')
     return api.change('questions', doc_id, d, {'status': 'logged', 'ruling': ruling}, req,
                       {'status': 'logged'})
 
 
 def questions_done(api, req):
-    """The PM marks an answered question handled with no ruling (a one-off go the ledger keeps
-    out): status `done`, terminal, so it is no longer pending and its push ends. Refused
-    (`invalid`) for a question that is not answered and for a blank why."""
+    """The PM, or the asker of a filed question, marks an answered or filed question handled
+    with no ruling (a one-off go the ledger keeps out; an answer the record already holds):
+    status `done`, terminal, so it is no longer pending and its push ends. Refused (`invalid`)
+    for a question that is neither and for a blank why."""
     b = _fields(req, ('why', 'if_version'), required=('why',))
     _pin(b, required=True)
     why = _text(b, 'why').strip()
@@ -1037,8 +1160,8 @@ def questions_done(api, req):
         raise _invalid('why says why the answer needs no ruling: it cannot be blank', 'why')
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
-    if d.get('status') != 'answered':
-        raise _invalid('%s is %s: only an answered question is marked done'
+    if d.get('status') not in HANDLED_FROM:
+        raise _invalid('%s is %s: only an answered or filed question is marked done'
                        % (doc_id, d.get('status')), 'status')
     return api.change('questions', doc_id, d,
                       {'status': 'done', 'done_why': why, 'done_at': api.clock()}, req,
@@ -1627,9 +1750,12 @@ def _unpath_pending(api, items, req):
     """Pending items (fresh dicts from api.pending) with an act note's title, its text's first
     line, cut as _unpathed but for the local owner (Request.full), as GET to_pm cuts its text.
     The note's kind is the one read with the item (its `note`, dropped here for every caller),
-    never read again: a note deleted since is still known for what it was."""
+    never read again: a note deleted since is still known for what it was. A question filed
+    into its record says so: `filed` true."""
     for d in items:
         note = d.pop('note', '')
+        if d.get('kind') == 'question' and note == 'filed':
+            d['filed'] = True
         if (not req.full and d.get('kind') == 'to_pm' and note == 'act'
                 and isinstance(d.get('title'), str)):
             d['title'] = _unpathed(d['title'])
@@ -2368,6 +2494,7 @@ ROUTES = (
     _r('GET', '/questions', ANY, questions_list),
     _r('POST', '/questions', AGENT, questions_add),
     _r('POST', '/questions/{id}/answer', OWNER, questions_answer),
+    _r('POST', '/questions/file', AGENT, questions_file),
     _r('POST', '/questions/{id}/log', AGENT, questions_log),
     _r('POST', '/questions/{id}/done', AGENT, questions_done),
     _r('POST', '/questions/{id}/edit', AGENT, questions_edit),
