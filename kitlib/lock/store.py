@@ -244,14 +244,18 @@ def caller(name=None, env=None):
     owner | agent, host: [pid, ctime] of the nearest agent host above this process or None,
     ancestors: [[pid, ctime]], session: the host's session id (session_of; shown, never trusted),
     name}. The role is agent when any ancestor is an agent host (agent_hosts), whatever the
-    environment says, and when the tree or the host registry cannot be read (fail closed)."""
+    environment says, and when the tree or the host registry cannot be read (fail closed).
+    The walk goes on past an exited ancestor that a handle keeps openable (a shell that exited
+    under its agent host, or the desktop's userinit), by the parent it records; one it cannot
+    get past (that parent is gone or newer than it) makes the role agent too, as tree_role
+    reads an ancestor that can no longer be named."""
     env = os.environ if env is None else env
     try:
         snap = process.snapshot()
-        chain = process.ancestors_of(os.getpid(), process.own_ctime(),
-                                     {p: pp for p, pp, _n in snap})
+        chain, exited = process.ancestry(os.getpid(), process.own_ctime(),
+                                         {p: pp for p, pp, _n in snap}, through_exited=True)
         host = chain_host(chain, {p: n for p, _pp, n in snap})
-        role = "agent" if host or not chain else "owner"
+        role = "agent" if host or not chain or exited else "owner"
     except Exception:
         chain, host, role = [], None, "agent"
     return {"role": role, HOST_KEY: host, "ancestors": sorted([p, c] for p, c in chain),
