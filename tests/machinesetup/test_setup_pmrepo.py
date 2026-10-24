@@ -30,7 +30,7 @@ class PmRepoWrapper(unittest.TestCase):
     def run_ps1(self, *params):
         cmd = [PS, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PS1,
                '-Python', self.fake] + list(params)
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         return r.returncode, r.stdout + r.stderr
 
     def passed(self):
@@ -40,13 +40,18 @@ class PmRepoWrapper(unittest.TestCase):
         with open(self.args, encoding='ascii', errors='replace') as f:
             return f.read().strip()
 
+    def assert_pm_repo(self, got):
+        """--pm-repo with the folder, bare or quoted (a TEMP folder with a space is quoted)."""
+        forms = ('--pm-repo %s' % self.pm, '--pm-repo "%s"' % self.pm)
+        self.assertTrue(any(f in got for f in forms), got)
+
     def test_it_passes_pm_repo_and_nothing_else_on_a_dry_run(self):
         code, out = self.run_ps1('-PmRepo', self.pm)
         self.assertEqual(code, M.EXIT_OK, out)
         got = self.passed()
         self.assertIsNotNone(got, out)
         self.assertIn('machine_setup.py', got)
-        self.assertIn('--pm-repo %s' % self.pm, got)
+        self.assert_pm_repo(got)
         self.assertNotIn('--apply', got)
         for flag in ('--old-kit', '--owner-email', '--managed-settings', '--home', '--config-dir'):
             self.assertNotIn(flag, got)
@@ -55,7 +60,7 @@ class PmRepoWrapper(unittest.TestCase):
         code, out = self.run_ps1('-PmRepo', self.pm, '-Apply')
         self.assertEqual(code, M.EXIT_OK, out)
         got = self.passed() or ''
-        self.assertIn('--pm-repo %s' % self.pm, got)
+        self.assert_pm_repo(got)
         self.assertIn('--apply', got)
 
     def test_every_other_mode_or_option_is_usage_and_runs_nothing(self):
@@ -63,7 +68,7 @@ class PmRepoWrapper(unittest.TestCase):
                   ['-OwnerEmail', 'a@example.invalid'], ['-PmSettings', self.tmp],
                   ['-ConfigDir', self.tmp], ['-AgentTemp', self.tmp], ['-HomeDir', self.tmp],
                   ['-Desktop', self.tmp], ['-NoSweepTask'], ['-RegisterSweepTask'], ['-Shortcut'],
-                  ['-Procwatch'])
+                  ['-Procwatch'], ['-ProcwatchKill'])
         for extra in others:
             code, out = self.run_ps1('-PmRepo', self.pm, *extra)
             self.assertEqual(code, M.EXIT_USAGE, '%s: %s' % (extra, out))
