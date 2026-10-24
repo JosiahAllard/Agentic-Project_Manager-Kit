@@ -34,7 +34,7 @@ class Field(unittest.TestCase):
         self.assertEqual(messages(answer=['Q-101 %s' % AT, 'Q-102 %s' % AT2]), [])
 
     def test_a_malformed_answer_fails_check(self):
-        for bad in ('Q-101', 'Q-1 %s' % AT, 'R-1234 %s' % AT, 'Q-101 2026-10-24',
+        for bad in ('Q-101', 'Q-1 %s' % AT, 'Q101 %s' % AT, 'Q-101 2026-10-24',
                     'Q-101 2026-10-24T04:40:00', 'Q-101 %s x' % AT, 'Q-101  %s' % AT,
                     'Q-101 yesterday'):
             self.assertTrue(messages(answer=bad), bad)
@@ -211,7 +211,7 @@ class Refusals(AnswerCase):
 
     def test_bad_arguments_are_usage_and_write_nothing(self):
         self.seed(parked('FOO'))
-        for kw in (dict(qid='R-1234'), dict(at='2026-10-24'), dict(label=' '),
+        for kw in (dict(qid='Q101'), dict(at='2026-10-24'), dict(label=' '),
                    dict(waiting=('soon',))):
             with self.assertRaises(Usage, msg=kw):
                 self.answer('FOO', **kw)
