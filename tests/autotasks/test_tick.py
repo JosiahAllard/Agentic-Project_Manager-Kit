@@ -313,6 +313,19 @@ class DoubleStart(Base):
 
 
 class Launch(unittest.TestCase):
+    @staticmethod
+    def wait_for_exit(pid, seconds=60):
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+        k32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        k32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        handle = k32.OpenProcess(0x00100000, False, pid)    # SYNCHRONIZE; None: it already exited
+        if handle:
+            k32.WaitForSingleObject(handle, seconds * 1000)
+            k32.CloseHandle(handle)
+
     def test_a_real_start_writes_its_output_to_the_log(self):
         import sys
         import time
@@ -324,6 +337,7 @@ class Launch(unittest.TestCase):
             warnings.simplefilter('ignore', ResourceWarning)
             pid = T.launch([sys.executable, '-c', 'import os; print("ran in", os.getcwd())'], log, folder)
         self.assertIsInstance(pid, int)
+        self.addCleanup(self.wait_for_exit, pid)    # runs before the rmtree: the child holds x.log until it exits
         deadline = time.monotonic() + 60
         text = ''
         while time.monotonic() < deadline:
