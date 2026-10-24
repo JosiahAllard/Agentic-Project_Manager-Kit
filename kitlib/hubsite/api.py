@@ -217,7 +217,9 @@ this caller may change (lock: the LOCK_WRITE routes, strong: the APPROVER ones t
 one is false, why (WRITES_WHY); a hub the lock takes for an agent may change nothing.
 GET lock/view gives the view; `remote` is true only for the tunnel listener's calls (via
 TUNNEL_VIA), whose warnings and refusals that can name a file are fixed phrases
-(model.REMOTE_SAYS, lockdoor.REMOTE_SAYS); every listener gets the same allow-listed keys. GET
+(model.REMOTE_SAYS, lockdoor.REMOTE_SAYS); every listener gets the same allow-listed keys. The view
+carries `queue_items` (the line behind the runs, with each one's position and why it waits) and its
+finished runs carry `slug`; the action hub page's Schedule view (web/index.html) draws them. GET
 lock/stats takes days (1 to 366), since and until (ISO times with their offset). GET lock/wait
 takes since (a lock revision; default the one now) and timeout (seconds, at most WAIT_MAX_S) and
 answers the view plus `changed` once the lock's revision differs from since, or at the timeout
