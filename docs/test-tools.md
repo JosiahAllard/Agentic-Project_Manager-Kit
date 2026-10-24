@@ -1,6 +1,6 @@
 # Test tools
 
-Three tools for a checkout's own test runs: `tools/testlist.py`, `tools/tool_deps.py` and `tools/pytests.py`. All three are ported from the PM kit (kit/pid-hold d151596) and are not live. Each one takes `-C DIR`, the checkout, default here. Each exits 2 on USAGE or on a refused configuration or checkout. Their keys are `.kit.json` "testlist" and "tool_tests"; the defaults are in `kitlib/config/schema.py`, and docs/kit-json.md lists them.
+Three tools for a checkout's own test runs: `tools/testlist.py`, `tools/tool_deps.py` and `tools/pytests.py`. All three are ported from the PM kit and are not live. Each one takes `-C DIR`, the checkout, default here. Each exits 2 on USAGE or on a refused configuration or checkout. Their keys are `.kit.json` "testlist" and "tool_tests"; the defaults are in `kitlib/config/schema.py`, and docs/kit-json.md lists them.
 
 ## testlist
 
@@ -93,7 +93,7 @@ Any other path is unmapped and runs the full suite: unmapped never means skip.
 
 ## Fake git
 
-kitlib/git/fake answers git inside the test process (`fake.run(args, cwd, stdin, env)`), reading and writing the real on-disk repository (objects, packs, refs, index, config), so real git can carry on in a repository it touched. It exists to cut the suite's process starts, most of which were git: the full suite at 12 jobs went from 24848 process starts (24021 git) in 278 s to 1972 (1131 git) in 89 s (machine-lock runs r-20261010T120203Z-07ff66 at d4d6921 and r-20261010T123449Z-d7787a on kit/fake-git, each start logged by a sitecustomize audit hook).
+kitlib/git/fake answers git inside the test process (`fake.run(args, cwd, stdin, env)`), reading and writing the real on-disk repository (objects, packs, refs, index, config), so real git can carry on in a repository it touched. It exists to cut the suite's process starts, most of which were git: the full suite at 12 jobs went from 24848 process starts (24021 git) in 278 s to 1972 (1131 git) in 89 s (two machine-lock runs, before and after the fake git, each start logged by a sitecustomize audit hook).
 
 - It is on while `KIT_FAKE_GIT=1` (kitlib.git.cmd `fake_active`). kit_tests gives the units 1 unless the environment sets it (`--real-git` gives 0); tests/__init__.py does the same for a direct `python -m unittest` run. Production never sets it.
 - Routed to it: `cmd.call` and `cmd.run`, `cmd.spawner()`, `cmd.subprocess_run` (kit code that starts git itself) and kitlib.git.batch's cat-file. A test that swapped `cmd._run` or `subprocess.Popen` keeps its stub. `cmd.genuine()` is false under the fake, so kitlib.git.cache keeps none of its answers.

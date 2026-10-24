@@ -1,5 +1,5 @@
 """kitlib.tooldeps and tools/tool_deps.py: the scan, both selection modes ("path", one repository's;
-"tokens", another's py_select), every `.kit.json` "tool_tests" key, and the audit a repository
+"tokens", an invented repository's), every `.kit.json` "tool_tests" key, and the audit a repository
 runs on its own tools. Ported from the PM kit's test_tool_deps.py: the
 configuration and the checkout root are passed explicitly (the PM kit cleared KIT_CONFIG and
 patched tool_deps.ROOT), and the pieces tables are tests/tooldeps/piecetable.py's stand-ins.
@@ -31,7 +31,7 @@ _spec.loader.exec_module(cli)
 TESTCASE = 'import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n        pass\n'
 
 # A repository's "tool_tests" section (its TOOLS_EXTRA, TOOLS_PINNED_ROOT + PINNED_IN_PIECES + the
-# solution pin, BUILD_GRAPH / TEST_SOURCE, WHOLE_TREE, UNTESTED at 8bae70b33): the selection tests
+# solution pin, BUILD_GRAPH / TEST_SOURCE, WHOLE_TREE, UNTESTED): the selection tests
 # below are its own tests, run against its own values.
 BUILD_GRAPH = (r'(?:^|/)(?:build\.gradle\.kts|settings\.gradle\.kts|[^/]+\.csproj|'
                r'Directory\.[^/]+\.props|[^/]+\.slnx)$')
@@ -64,19 +64,19 @@ R_DATA = {
     'whole_tree': {'test_gate.BuildGraphOracle': 'the scope covers every input; tree-shape'},
     'untested': ['cacheregions', 'check', 'codemap'],
 }
-# Another repository's (py_select.py FULL_TRIGGERS, PS1_SCANNER/KILL_SCANNER, gate.DOC_SCAN_TESTS,
-# tool_files/is_source/relevant at bd5620a3).
-DOC_SCANS = ['test_machine_paths']
+# An invented repository's "tokens" mode: full-suite trigger files, a .ps1 scanner and a kill-site
+# scanner that any .ps1 change adds, doc scans that always run, its sources, skips and ignores.
+DOC_SCANS = ['test_ex_doc_scan']
 G_DATA = {
     'mentions': 'tokens',
-    'selector_files': ['tool_deps.py', 'pytests.py', 'gate.py', '_repo_guard.py'],
-    'patterns': [{'regex': r'\.ps1$', 'modules': ['test_ps1_param_shadow', 'test_process_tree']}],
+    'selector_files': ['tool_deps.py', 'pytests.py', 'gate.py', 'ex_guard.py'],
+    'patterns': [{'regex': r'\.ps1$', 'modules': ['test_ex_ps1_scan', 'test_ex_kill_scan']}],
     'always_run': DOC_SCANS,
     'guard_tests': [],
     'unmapped_tool': 'all',
     'sources': ['tools/**/*.py', 'tools/**/*.ps1', 'tools/**/*.cmd', 'tools/**/*.bat', 'tools/hooks/*',
                 'test.bat'],
-    'skip_dirs': ['__pycache__', '_sfx_dumps', '_ui_previews'],
+    'skip_dirs': ['__pycache__', '_ex_dumps', '_ex_previews'],
     'ignore': ['tools/**/*.md', 'tools/**/*.txt'],
 }
 
@@ -388,7 +388,7 @@ class PinnedInPieces(unittest.TestCase):
 
 
 class Tokens(unittest.TestCase):
-    """The "tokens" repository's py_select tests ("tokens" mode), on its own values. Its fixture test modules
+    """The "tokens" mode's tests, on the invented repository's G_DATA values. Its fixture test modules
     carry a TestCase here: the kit counts a test module by its TestCase, not by its name."""
 
     FILES = {
@@ -468,13 +468,13 @@ class Tokens(unittest.TestCase):
         self.assertNotIn('full suite', why)
 
     def test_any_ps1_change_adds_the_ps1_scanner(self):
-        self.assertIn('test_ps1_param_shadow', self.pick('tools/outer.ps1'))
-        self.assertNotIn('test_ps1_param_shadow', self.pick('tools/lib.py'))
+        self.assertIn('test_ex_ps1_scan', self.pick('tools/outer.ps1'))
+        self.assertNotIn('test_ex_ps1_scan', self.pick('tools/lib.py'))
 
     def test_any_ps1_change_adds_the_kill_scanner(self):
-        # A new kill site in a .ps1 that no test names must still meet EveryKillSiteUsesIt.
-        self.assertIn('test_process_tree', self.pick('tools/outer.ps1'))
-        self.assertNotIn('test_process_tree', self.pick('tools/lib.py'))
+        # A new kill site in a .ps1 that no test names must still meet the kill-site scanner.
+        self.assertIn('test_ex_kill_scan', self.pick('tools/outer.ps1'))
+        self.assertNotIn('test_ex_kill_scan', self.pick('tools/lib.py'))
 
     def test_doc_scans_always_run_and_docs_select_nothing_else(self):
         names, _ = self.selection('tools/notes.md', 'docs/x.md')
@@ -492,12 +492,12 @@ class Tokens(unittest.TestCase):
         self.assertNotIn('test_mid', self.pick('test.bat'))
 
     def test_skip_dirs_are_never_scanned(self):
-        os.makedirs(os.path.join(self.root, 'tools', '_sfx_dumps'))
-        with open(os.path.join(self.root, 'tools', '_sfx_dumps', 'dump.py'), 'w') as fh:
+        os.makedirs(os.path.join(self.root, 'tools', '_ex_dumps'))
+        with open(os.path.join(self.root, 'tools', '_ex_dumps', 'dump.py'), 'w') as fh:
             fh.write('import lib\n')
-        self.assertNotIn('tools/_sfx_dumps/dump.py', self.graph().sources)
+        self.assertNotIn('tools/_ex_dumps/dump.py', self.graph().sources)
         self.cfg = tool_deps.config(data=dict(G_DATA, skip_dirs=['__pycache__']))
-        self.assertIn('tools/_sfx_dumps/dump.py', self.graph().sources)
+        self.assertIn('tools/_ex_dumps/dump.py', self.graph().sources)
 
     def test_the_tokens_mode_still_builds_the_path_graph_for_the_audit(self):
         g = self.graph()

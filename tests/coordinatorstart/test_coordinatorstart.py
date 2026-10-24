@@ -294,7 +294,7 @@ class ContextTest(unittest.TestCase):
 
         def run(args, timeout=10):
             return json.dumps(status) if "machine_lock.py" in args[1] else "G"
-        base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-account2"}, cwd=ROOT + "/alpha", now=NOW,
+        base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-ex2"}, cwd=ROOT + "/alpha", now=NOW,
                     procs=[], run=run, read=reader(files), kit="H", pid=1, pm_cfg=self.PM, machine_cfg={})
         base.update(kw)
         return coordinatorstart.context(dict(dict(repos_root=ROOT), **cfg), **base)
