@@ -29,12 +29,10 @@ from .migration import OLD_DIR_NAME
 from .types import ConfigError, Email, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
-# the folder from config_dir() and messages from DISPLAY or display(), so a new name changes this
+# the folder from config_dir() and messages from display(), so a new name changes this
 # line only.
 DIR_NAME = '.pm-kit'
 FILE_NAME = 'config.json'
-# How help text names the machine config file; display() names the file actually read.
-DISPLAY = '~/%s/%s' % (DIR_NAME, FILE_NAME)
 
 # The PM repository's git-ignored machine config file, beside FILE_NAME (LOCAL_KEYS there).
 LOCAL_FILE_NAME = 'local.json'
