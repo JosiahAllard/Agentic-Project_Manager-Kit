@@ -15,7 +15,7 @@ every plugin refresh replaces, stands for the main checkout its marker records, 
 read there and the guard hook and status line name a path that outlives the refresh. In every
 string, {kit} becomes that folder (forward slashes), {pythonw} the guard entry's interpreter (extras.Host.guard_entry) and {plugin_export} the
 plugin export root (kitlib.pluginsource). Then the overlay, OVERLAY in the machine config folder
-(`~/.pm-kit/managed-settings.json`, absent by default), is merged over it: objects key by key,
+(`<PM repo>/.pm-kit/managed-settings.json`, kitlib.config.user.config_dir; absent by default), is merged over it: objects key by key,
 anything else replaced. The overlay holds what the committed template must not: the agents' git
 identity (env GIT_*), and the auto-mode lines that name the owner, accounts or home paths. Last, a
 hook or statusLine path through `<config>/tools/<link>` is re-pointed to the kit's own file

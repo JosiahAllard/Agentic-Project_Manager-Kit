@@ -19,6 +19,7 @@ from kitlib.hubsite.store import HubError, Store
 from kitlib.maintlint import result as lint_result
 from tests.backlog.helpers import rec
 from tests.gitfixture import TempRepo
+from tests.home import pm_repo
 from tests.hubsite import test_record_write as trw
 from tests.hubsite.test_notify_creator import RouteCase
 
@@ -3490,6 +3491,7 @@ class FindingsSourceTest(unittest.TestCase):
         home = os.path.join(self.root, 'home')
         os.makedirs(home)
         pm = os.path.join(self.root, 'pm')
+        pm_repo(self, record=False)          # the hub's token folder needs the PM-repo pointer
         with mock.patch.object(serve.pmdata, 'machine_settings', lambda h: {'path': pm}):
             src = serve.machine_sources(home, sync=False)
         self.assertEqual(src.findings, os.path.join(pm, lint_result.FOLDER))

@@ -23,7 +23,8 @@ from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
 from kitlib.proc import process
-from tests.home import machine_config
+from kitlib.config import user
+from tests.home import PM_REPO_FENCE_ENV, machine_config, pm_repo
 from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
@@ -1810,9 +1811,22 @@ class MachineCase(unittest.TestCase):
         """The machine config `obj`, in the fenced PM repository's two files: their folder."""
         return machine_config(self.home, obj, case=self)
 
+    def test_a_machine_with_no_pointer_has_no_sources(self):
+        # no token folder without the PM-repo pointer: hub.py serve refuses, never a home folder
+        with mock.patch.dict(os.environ):
+            os.environ.pop(PM_REPO_FENCE_ENV, None)
+            user.forget()
+            self.addCleanup(user.forget)
+            with self.assertRaises(ConfigError) as got:
+                serve.machine_sources(self.home)
+        self.assertIn('--pm-repo', str(got.exception))
+        self.assertEqual(os.listdir(self.home), [], 'reading the sources wrote something')
+
     def test_a_machine_with_no_config_serves_on_defaults(self):
+        pm = pm_repo(self, record=False)
         src = serve.machine_sources(self.home)
-        self.assertEqual(src.tokens, os.path.join(self.home, '.pm-kit', 'hub'))
+        self.assertEqual(os.path.normcase(src.tokens),
+                         os.path.normcase(os.path.join(pm, user.DIR_NAME, auth.FOLDER_NAME)))
         self.assertEqual((src.pm_data, src.notices, src.repos, src.usage, src.backlog),
                          (None, None, None, None, None))
         self.assertIs(src.sync, gitsync.GitSync)
