@@ -276,7 +276,15 @@ def watched_sessions(sessions):
                    and v.get("autostart") is not False})
 
 
-_STOP_LINE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) stopped '(.*)' claude PID .*; successor '(.*?)'")
+_STOP_MARK, _SUCC_MARK = " stopped '", "; successor '"
+
+
+def _stop_entry(line):
+    """(stamp, name, successor) of a stop.log line kitlib.launcher.stop wrote, else None."""
+    if line[19:19 + len(_STOP_MARK)] != _STOP_MARK or _SUCC_MARK not in line:
+        return None
+    name = line[19 + len(_STOP_MARK):].split("'", 1)[0]
+    return line[:19], name, line.rsplit(_SUCC_MARK, 1)[1].split("'", 1)[0]
 
 
 def stop_log_reader(sessions):
@@ -285,6 +293,8 @@ def stop_log_reader(sessions):
     one line per stop: "<stamp> stopped '<name>' ...; successor '<name or ->'"). Only the newest stop
     of the name counts, and only when it is not older than `mtime`, the session's newest
     activity: later activity means it was started again. A missing or unreadable log gives None."""
+    if not sessions:
+        return lambda name, mtime: None
     log = os.path.join(os.path.dirname(os.path.abspath(sessions)), "stop.log")
 
     def stopped(name, mtime):
@@ -292,9 +302,9 @@ def stop_log_reader(sessions):
         try:
             with open(log, encoding="utf-8-sig") as f:
                 for line in f:
-                    m = _STOP_LINE.match(line)
-                    if m and m.group(2) == name:
-                        last = (m.group(1), m.group(3))
+                    e = _stop_entry(line)
+                    if e and e[1] == name:
+                        last = (e[0], e[2])
         except OSError:
             return None
         if last is None or last[1] != "-":
