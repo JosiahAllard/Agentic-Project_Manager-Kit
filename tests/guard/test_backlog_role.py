@@ -407,7 +407,7 @@ class HeldStore(Base):
 
 
 class OwnPullInstead(HeldStore):
-    """KIT-GUARD-OWN-PULL-INSTEAD-STORE: a builder's `set` on its own pull of a folder store, run
+    """A builder's `set` on its own pull of a folder store, run
     with -C its worktree, reads the worktree's store (refs/backlog/main), finds no record and is
     refused; the refusal named `-C <worktree> --as <your branch>`, which reads the same store and
     is refused again. The Instead is now the run written out against the store that holds the

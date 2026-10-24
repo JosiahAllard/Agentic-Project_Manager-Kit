@@ -1,5 +1,4 @@
-"""Every Instead the guard prints passes the guard for the same role (KIT-GUARD-INSTEAD-FORMS-PASS;
-docs/guard.md "Rules": an alternative is a command to run as written). Each refusal's Instead is
+"""Every Instead the guard prints passes the guard for the same role (docs/guard.md "Rules": an alternative is a command to run as written). Each refusal's Instead is
 run again with the refused call's payload (its session, agent and folder; a file tool's call as a
 Bash one) and context, and must be allowed. An Instead with a placeholder (`<worktree>`,
 `<subject>`) is a form to fill, not a command: the test_rules rows skip it; the table below fills
@@ -8,8 +7,8 @@ the ones it names. A bare `cd <folder>` does nothing, so it counts as a failure.
 KNOWN_FAILS names each form that is refused again today, with why; it is checked both ways, so a
 new failing form fails the test and so does a known one that now passes (take it off the list).
 DecisionPins pins the refusal itself for every input whose Instead this branch changed: the same
-(verdict, rule) before and after (KIT-GUARD-OWN-PULL-INSTEAD-STORE; the own-pull rows are pinned
-in test_backlog_role.OwnPullDecision)."""
+(verdict, rule) before and after (the own-pull rows are pinned in
+test_backlog_role.OwnPullDecision)."""
 import copy
 import os
 import re
