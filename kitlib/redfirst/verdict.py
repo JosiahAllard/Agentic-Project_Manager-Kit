@@ -11,6 +11,11 @@ case-blind, `*` crosses `/`). Kinds:
   dotnet   `dotnet test <csproj> --filter <filter>` (a bare name is `FullyQualifiedName~<name>`; no
            filter: `FullyQualifiedName~<FileName>`); the verdict from its .trx
 A runner's `args` are appended to its command (a gradle or dotnet no-reuse switch, say).
+
+gradlew.bat is a batch file, so Windows runs it in cmd.exe, which reads its command line again
+before gradle sees it: `--tests a&whoami` runs whoami. A gradle word after the program that holds
+one of cmd.exe's characters (kitlib.guard.shell.CMD_REPARSE: & | < > ^ % ! ( ) " CR LF) is
+refused when the selector is parsed (gradle_args), before anything is made or run.
 """
 import fnmatch
 import glob
@@ -18,6 +23,8 @@ import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+
+from kitlib.guard.shell import cmd_unsafe
 
 RED, GREEN, NONE, ERROR = 'RED', 'GREEN', 'NONE', 'ERROR'
 EXIT_RED, EXIT_GREEN, EXIT_USAGE, EXIT_UNDECIDED, EXIT_LEFTOVER = 0, 1, 2, 3, 4
@@ -81,9 +88,39 @@ def parse_selector(text, runners):
                 raise Usage('usage: --tests %r: not a .py file under %s, so no unittest module'
                             % (text, r.get('pythonpath') or '.'))
             return Selector(text, path, filt, r, mod)
-        return Selector(text, path, filt, r, r['project'] if r['kind'] == 'gradle' else r['csproj'])
+        sel = Selector(text, path, filt, r, r['project'] if r['kind'] == 'gradle' else r['csproj'])
+        if sel.kind == 'gradle':
+            gradle_args(sel)                 # refuses here, before anything is made
+        return sel
     raise Usage('usage: --tests %r: no runner takes it (.kit.json "redfirst".runners: %s)'
                 % (text, ', '.join(r['glob'] for r in runners) or 'none'))
+
+
+_CMD_CHAR_NAMES = {'\r': 'a carriage return', '\n': 'a line break'}
+
+
+def gradle_args(sel):
+    """The words after gradlew for a gradle selector, or Usage when one holds a character cmd.exe
+    reads again (cmd_unsafe): gradlew.bat runs in cmd.exe, so `a&whoami` would run whoami."""
+    filt = sel.filter or '*.' + stem(sel.path)
+    task = '%s:test' % sel.target
+    extra = list(sel.runner.get('args') or [])
+    runner = 'of the runner for %r in `.kit.json` "redfirst".runners' % sel.runner.get('glob')
+    fix_filter = ('a gradle filter needs none of & | < > ^ %% ! ( ) " or a line break: write the '
+                  'wildcard * in its place')
+    fix_runner = 'change that runner'
+    words = [(task, 'the project %r %s' % (sel.target, runner), fix_runner),
+             (filt, ('the filter %r' if sel.filter else 'the default filter %r (from the file name)')
+              % filt, fix_filter)]
+    words += [(a, 'the "args" word %r %s' % (a, runner), fix_runner) for a in extra]
+    for word, what, fix in words:
+        c = cmd_unsafe(word)
+        if c is not None:
+            raise Usage(('refused: --tests %r: %s holds %s, which cmd.exe reads again: gradlew.bat '
+                         'runs in cmd.exe, so the word could run another command; nothing was run. '
+                         'Instead: ' + fix)
+                        % (sel.text, what, _CMD_CHAR_NAMES.get(c, c)))
+    return [task, '--offline', '--tests', filt] + extra
 
 
 def trx_path(sel, log_dir, n):
@@ -92,11 +129,10 @@ def trx_path(sel, log_dir, n):
 
 def command(sel, tw, log_dir, n, python=sys.executable):
     """(argv, cwd, env extra) for one selector run in the throwaway tree `tw`. Pure."""
-    extra = list(sel.runner.get('args') or [])
     if sel.kind == 'gradle':
         gradlew = os.path.join(tw, 'gradlew.bat' if os.name == 'nt' else 'gradlew')
-        return ([gradlew, '%s:test' % sel.target, '--offline', '--tests',
-                 sel.filter or '*.' + stem(sel.path)] + extra, tw, {})
+        return [gradlew] + gradle_args(sel), tw, {}
+    extra = list(sel.runner.get('args') or [])
     if sel.kind == 'dotnet':
         filt = sel.filter or stem(sel.path)
         if not re.search(r'[=~!&|]', filt):

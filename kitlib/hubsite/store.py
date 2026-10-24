@@ -95,8 +95,9 @@ Result = collections.namedtuple('Result', 'id version revision warnings')
 Event = collections.namedtuple('Event', 'rev collection id op status')
 Changes = collections.namedtuple('Changes', 'revision events reset')
 # sender: the document's own `from` as stored ('' when it has none); the api routes on it.
-# note: a to_pm note's own `kind` as stored ('' for the rest); the api cuts an act note's title
-# on it, and no caller is sent it
+# note: a to_pm note's own `kind` as stored, 'filed' for a question filed into its record ('' for
+# the rest); the api cuts an act note's title and routes a filed question on it, and no caller is
+# sent it
 Pending = collections.namedtuple('Pending', 'kind id title repo at sender note',
                                  defaults=('', ''))
 
@@ -515,7 +516,8 @@ def approval_decided(doc, now):
 
 def pending_items(docs, now=None):
     """[Pending] of owner input not yet handled in docs ({collection: {id: document}}), oldest
-    first: questions answered and not logged, stories submitted, to_pm items sent, to-dos done
+    first: questions answered or filed and not yet logged or done (a filed one's `note` is
+    'filed': its asker still reads the answer), stories submitted, to_pm items sent, to-dos done
     or added by the owner (`from: you`) with no pm_ack, and approvals decided and not consumed
     (approval_decided at `now`, an aware datetime; the current time when None). Inbox reads are
     not pending. A question's and a to-do's `sender` is its stored `from`; a story's, a note's
@@ -524,10 +526,11 @@ def pending_items(docs, now=None):
         now = datetime.datetime.now(datetime.timezone.utc)
     out = []
     for doc_id, d in docs.get('questions', {}).items():
-        if d.get('status') == 'answered':
+        if d.get('status') in ('answered', 'filed'):
             ans = d.get('answer') if isinstance(d.get('answer'), dict) else {}
             out.append(Pending('question', doc_id, _s(d.get('title')), _s(d.get('repo')),
-                               _s(ans.get('at')), _s(d.get('from'))))
+                               _s(ans.get('at')), _s(d.get('from')),
+                               'filed' if d.get('status') == 'filed' else ''))
     for doc_id, d in docs.get('stories', {}).items():
         if d.get('status') == 'submitted':
             out.append(Pending('story', doc_id, _s(d.get('title')), _s(d.get('repo')),

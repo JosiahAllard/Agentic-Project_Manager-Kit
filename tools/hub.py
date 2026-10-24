@@ -107,6 +107,10 @@ the server alone decides what a role may do.
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
   hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
                                                      that needs no ruling
+  hub.py questions file [Q-1]                       `FILED Q-1`, `NOT FILED Q-1: <why> (<code>)`
+                                                     or `nothing to file`: each answer to a
+                                                     question bound to a record not filed yet,
+                                                     filed into its record again
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
         [--urgent | --no-urgent] [--record REPO:ID | --no-record]
@@ -354,8 +358,8 @@ def _leaf(subs, name, what):
 def _client_verbs(sub):
     S = hubvalidate.STATUSES
     q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
-                'done: handled with no ruling; edit, withdraw: change or remove one you asked',
-                S['questions'])
+                'done: handled with no ruling; edit, withdraw: change or remove one you asked; '
+                'file: file answers into their records again', S['questions'])
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
     _repo(x)
@@ -380,6 +384,9 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('--why', required=True, help='why the answer needs no ruling')
     _pins(x, required=True)
+    x = _leaf(q, 'file', 'file each answer to a question bound to a record that is not filed '
+              'yet into its record (the hub does at once and at start)')
+    x.add_argument('id', nargs='?', help='only this question')
     x = _leaf(q, 'edit', 'change an open question you asked')
     _creator(x, 'KEY')
     x.add_argument('--title')
@@ -1008,6 +1015,12 @@ def _questions(a, stop):
         got = hub.post(_one('questions', a) + '/done', client.AGENT,
                        {'why': a.why, 'if_version': a.if_version})
         return _wrote(a, got, 'DONE %s' % got.get('id'))
+    if a.sub == 'file':
+        got = hub.post('/questions/file', client.AGENT, _body(id=a.id))
+        lines = ['FILED %s' % i for i in got.get('filed') or []]
+        lines += ['NOT FILED %s: %s (%s)' % (f.get('id'), f.get('message'), f.get('code'))
+                  for f in got.get('failed') or [] if isinstance(f, dict)]
+        return _show(a, got, lines or ['nothing to file'])
     if a.sub == 'edit':
         context = _text_of(a.context_file, 'context') if a.context_file else None
         body = _body(title=a.title, context=context, options=a.options,
