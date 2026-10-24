@@ -25,33 +25,61 @@ or after an unpair or a session that ran out) is told so on the page and to run
 `python tools/hub.py open` in the kit folder and open the link it prints. The server's health is
 `GET /api/v1/health`.
 
-- **Inbox.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
+The sidebar lists the sections in groups under small headings: Home on its own; Your work (Questions,
+To-dos, Approvals); Projects (Backlog, Schedule, Docs); More (Message the PM, Usage and agents);
+Upkeep (Lint findings, Automatic tasks). A count sits at the right edge of its entry, and is highlighted
+for what waits on you: any pending approval, urgent question or to-do. Lint findings shows a dash until
+the page has read `GET /api/v1/findings` once (at the start and after each wait wake, without drawing the
+section), then the number of open findings. On a phone the sidebar becomes a bar of five tabs: Home,
+Questions, Approvals, Schedule (the link to the machine schedule) and More, a page of the other sections
+with their counts (`#more`; a wider window opens Home instead). Between 761 and 1100 pixels the detail
+pane stacks under the list instead of beside it.
+
+- **Questions.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
   Submitted (answered, not yet logged by the PM), Logged, and Other, which shows only when a
   question has another status. Answers: the PM's replies to what you asked in a note, in Unread
   and Read tabs.
-- **To PM.** Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
+- **Message the PM** (the `#topm` section). Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
   item at once. Tabs: Queued (you can edit or delete), Sent (waiting on the PM), Done (the PM's
-  reply; the last 30 days, with Show older).
-- **To do.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
+  reply; the last 30 days, with Show older). Each message is a short row (its first line, and
+  Urgent, its type and its repository as chips); the row opens the whole message in the detail
+  pane, with Edit and Delete on a queued one and the PM's reply on a done one.
+- **Approvals.** What an agent asked to run or change. Two tabs: Waiting (pending approvals, each
+  with Approve and Deny, which need a strong session) and Decided (approved, denied, used or expired
+  ones from the snapshot, newest first, with the decision and no buttons). The tab is not an address.
+  The Approvals count is the pending ones; Questions no longer lists approvals.
+- **To-dos.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
   done. You can add, edit and delete your own. Tabs: To do and Done.
-- **Backlog.** Three tabs: Current backlog (each repository's open work, with priority, status
-  and text filters), Parked (backlog items a coordinator has parked waiting on you, with their
-  question, branch and age) and Completed (1, 7, 30 or 90 days). Current backlog also shows your
+- **Backlog.** Three tabs: Open (each repository's open work under a heading per priority, with
+  priority, status and text filters, which stay chips), Parked (backlog items a coordinator has
+  parked waiting on you, by repository, with their age) and Completed (1, 7, 30 or 90 days). Each
+  item is a short row; a row opens its detail beside the list: the fields the backlog view
+  carries (priority, status, branch, session, question) and three buttons that open its record
+  page: Edit fields and Edit body open that section's editor, and Retire opens the page with its
+  delete form open (the delete still asks for a reason and the typed id; there is no other
+  retire route). The backlog view carries no effort, scope or body, so the detail reads the record (`GET /records/<repo>/<id>`, the route the record page uses) when it opens and adds Effort, Scope (one line per path) and Body; if that read fails it says so and the buttons stay. A completed
+  row's detail has Open the record. Open also shows your
   stories: those in progress above the table, those filed or closed below it, with Withdraw while
   a story is still submitted; the Backlog button counts the stories in progress (highlighted when
-  one has questions for you). A row's id in any of the three tabs opens its record page, and the
-  New story button opens a blank one ("The record page" below). The New story tab and its form
+  one has questions for you). The New story button opens a blank record page ("The record page" below). The New story tab and its form
   are gone; `stories add` still files a story.
-- **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
-  store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here reads the
+- **Docs.** The agents' documents (a plan, research, a visual choice), newest first in two groups,
+  This week and Earlier (by the document's last change; one with no time is Earlier), from the
+  store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). A row opens the
+  document's detail: its summary as the excerpt (the body is not read for it), its refs, and the
+  buttons. Ask the PM about it puts a line about the document in the Message the PM form, under
+  anything already typed there, and opens that section; it sends nothing. Read full screen reads the
   document's body from the server and opens it in a full-screen reader; Close shuts it, and so does
   Esc while the focus is outside the document. A ref on any card (a question, a to-do, a note or
   a document) that names a listed document is a button that opens it the same way
   (`test_a_page_id_in_a_question_or_a_to_do_opens_the_reader`). Delete (pressed twice) removes a document; the page writes
   none, agents publish them.
-- **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
-- **Machine schedule.** A link under the header opens `/lock.html`, the machine lock's own page
+- **Usage and agents** (`#info`). Usage (each account's plan usage), Agents (each agent's model and
+  effort) and Lock notices. Usage and Agents are rows (an account with its 5-hour and weekly
+  percentages, an agent with its model and effort); a row opens the account's meters or the agent's
+  definition in the detail pane. Lock notices stay a list.
+- **Schedule.** A link in the sidebar's Projects group (and the phone's Schedule tab) opens `/lock.html`, the machine lock's own page
   ("Machine lock routes" below): what holds the PC's slots now, a week of half hours (back two
   weeks, on four), the holds, runs and queue, game mode, the division, and what ran over 1, 7, 30
   or 90 days. It follows the lock as it changes. Times are the PC's local time, labelled with its
@@ -70,13 +98,13 @@ or after an unpair or a session that ran out) is told so on the page and to run
   strong owner; a hub started under an agent session changes nothing
   (`tests/hubsite/test_lock_page.py`, `WriteTest`).
 
-Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
+In the sidebar's foot (when the hub was read, then the PM line and the push line) a line says whether a PM is listening: "A PM is listening." while a PM holds a
 `wait` open, else "Push delivery reaches the PM." while the snapshot's `push` state is `up` and
 its `last` is `written` (a try to the PM was written), else when one last asked; another session's wait `--for` its own key does not count (`Api.seen` in
 `kitlib/hubsite/api.py`). With a push worker running, the line ends with the PM watcher's
 heartbeat from the snapshot's `watcher` field ("Push notifications"): "The PM's watcher is
 running.", "The PM's watcher has stopped: its last heartbeat is <age> old." or "No PM watcher
-heartbeat is found." (`pmSeenText` in `kitlib/hubsite/web/index.html`). A second line gives the push notifications'
+heartbeat is found." (`pmSeenText` in `kitlib/hubsite/web/index.html`). On a phone the header also shows a pill, "PM listening" or "No PM listening". A second line gives the push notifications'
 status from the snapshot's `push` field ("Push notifications"): "Push delivery is up" or "is
 down" (with the state of the latest try to the PM), and how many items are undelivered, or "Push notifications
 are off on this hub server." when the server runs no push worker. The page reads everything at once
@@ -84,12 +112,12 @@ are off on this hub server." when the server runs no push worker. The page reads
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
+Links ending `#inbox`, `#approvals`, `#more`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks`, `#findings` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
 repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
 ("schedules/") with the tick's last run, and sets, edits or turns one off.
 
-Findings (Lint in the phone tab bar) lists the maintenance lint's findings, read from `GET
+Lint findings (the Upkeep group, and the More page on a phone) lists the maintenance lint's findings, read from `GET
 /api/v1/findings` and `GET /api/v1/finding_marks` each time the section is shown and after each
 mark (`renderFindings` and `findingCard` in `kitlib/hubsite/web/index.html`). A row gives the check,
 the repo, the target and the finding's text, with its age as context; a marked one stays listed with
@@ -681,7 +709,7 @@ JSON encoding about doubles it (mostly quotes, backslashes or escaped non-ASCII)
 
 `GET /api/v1/snapshot` carries the cards and leaves every body out
 (`test_snapshot_carries_the_cards_but_not_the_bodies` in `tests/hubsite/test_api.py`). Every card
-has a live Read here: the reader asks `GET /api/v1/pages/<id>` when it opens and says "This
+has a live Read full screen: the reader asks `GET /api/v1/pages/<id>` when it opens and says "This
 document has no body on the hub server." on a 404 (`DocsTest` in `tests/hubsite/test_page.py`).
 
 The body is agent-written html. The page draws it nowhere but in the reader's one frame, made in
@@ -941,8 +969,8 @@ comes from the caller.
   `store`: the owner sees the store's text, an agent or the tunnel the fixed phrase.
 
 On the page (the record page block in `kitlib/hubsite/web/index.html`, `RecordPageTest` in
-`tests/hubsite/test_page.py`), a row's id in Current backlog, Parked or Completed opens the record, and
-Back to the backlog returns. The record shows its id, repository and where it is (`open` or
+`tests/hubsite/test_page.py`), a backlog row's detail in Open, Parked or Completed opens the record (Edit fields, Edit body, Retire
+or Open the record), and Back to the backlog returns. The record shows its id, repository and where it is (`open` or
 `completed`), then four sections:
 - Fields: every header field except the hold keys, one `key: value` line per value.
 - Blocker or hold: each `blocked_on` (with a button that opens the record it names), `owner_ask`,

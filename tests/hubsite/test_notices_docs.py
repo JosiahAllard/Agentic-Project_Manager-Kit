@@ -106,7 +106,7 @@ class NoticeTabTest(unittest.TestCase):
         for part in ("id", "title", "text", "repo"):
             self.assertIn(mark(part), got["shown"], part)
         self.assertEqual(got["sinks"], [])
-        self.assertEqual(got["attrs"], ["a href"])                    # the header's one fixed link, to lock.html
+        self.assertEqual(got["attrs"], ["a href", "a href"])          # the sidebar's and the tab bar's fixed links, to lock.html
         self.assertEqual(set(got["tags"]) & {"img", "script", "iframe", "a"}, set())
 
     def test_the_hash_opens_the_tab_and_back_returns(self):

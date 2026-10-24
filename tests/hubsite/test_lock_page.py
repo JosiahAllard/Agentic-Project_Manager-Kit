@@ -105,8 +105,11 @@ class ServedTest(httpfix.ListenerCase):
     def test_the_action_hub_page_links_to_it_and_it_links_back(self):
         with open(INDEX, encoding="utf-8") as f:
             index = f.read()
-        head = index.split("</header>")[0]
-        self.assertEqual(re.findall(r'<a href="([^"]*)"', head), ["/lock.html"])
+        # The Schedule link is not in the header: it is the sidebar entry and the phone-bar tab, and nowhere else.
+        self.assertEqual(re.findall(r'<a [^>]*href="([^"]*lock[^"]*)"[^>]*id="([^"]*)"', index),
+                         [("/lock.html", "sec-schedule"), ("/lock.html", "tb-schedule")])
+        self.assertEqual(index.count("/lock.html"), 2)
+        self.assertEqual(re.findall(r'<a href="([^"]*)"', index.split("</header>")[0]), [])
         self.assertEqual(re.findall(r'<a href="([^"]*)"', page().split("</header>")[0]), ["/"])
 
 
