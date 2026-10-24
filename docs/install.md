@@ -63,7 +63,8 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    ```
 
    It writes that file from the kit's template `hosts/claude/managed-settings.json`, merged with
-   your own lines from `~/.pm-kit/managed-settings.json` when that file is there
+   your own lines from `managed-settings.json` in the machine config folder (the PM repository's
+   `.pm-kit`) when that file is there
    (docs/machine-setup.md "Managed settings"). A file already there is not merged: it is replaced
    whole, so the run is refused when it is not JSON or has keys that neither the template nor your
    overlay holds (they are named; add them to the template). With it in place the default mode adds

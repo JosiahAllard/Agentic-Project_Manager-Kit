@@ -242,5 +242,42 @@ class DocTest(unittest.TestCase):
             self.assertIn('`%s' % name, lines)
 
 
+
+class MoveDocTest(unittest.TestCase):
+    """docs/kit-json.md "Moving the machine config folder" and "The PM repo pointer" say what the
+    kit does now: the PM repository is read, the session start names a home leftover with its
+    remove command and the integrity line, and a copy that still reads the home folder is listed."""
+
+    def sections(self):
+        with open(DOC, encoding='utf-8') as f:
+            text = f.read()
+        out, current = {}, None
+        for line in text.splitlines():
+            if line.startswith('## '):
+                current = line[3:].strip()
+                out[current] = []
+            elif current:
+                out[current].append(line)
+        return {k: '\n'.join(v) for k, v in out.items()}
+
+    def test_the_move_section_names_the_session_start_lines(self):
+        from kitlib.config import copies
+        from kitlib.pmstart import configcheck
+        move = self.sections()['Moving the machine config folder']
+        self.assertIn('`kitlib.pmstart.configcheck`', move)
+        self.assertIn(configcheck.LEFTOVER.split(' (')[0], move)
+        self.assertIn("Remove-Item -LiteralPath '<file>'", move)
+        for line in (configcheck.NEVER, configcheck.DIRTY, configcheck.NOT_OWNER):
+            self.assertIn(line.split('%s ', 1)[1].split(':')[0], move)
+        self.assertIn('never names an address', move)
+        self.assertIn(copies.HOME_READER.split('): ', 1)[1], move)
+        self.assertNotIn('FALLBACK', move)
+
+    def test_the_pointer_section_says_the_kit_reads_through_it(self):
+        pointer = self.sections()['The PM repo pointer']
+        self.assertNotIn('Nothing reads it for config yet', pointer)
+        self.assertIn('The kit reads the machine config through it', pointer)
+
+
 if __name__ == '__main__':
     unittest.main()

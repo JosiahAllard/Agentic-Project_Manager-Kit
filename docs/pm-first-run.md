@@ -22,7 +22,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    knowledge").
    Success: `ListSkills` shows each skill named in docs/shipping.md once.
 
-4. **Write the user config.** Create `<config-dir>/config.json` (docs/kit-json.md "Machine config keys") holding a JSON object,
+4. **Write the user config.** Create `<config-dir>/config.json`, in the PM repository's `.pm-kit` (docs/kit-json.md "Machine config keys"), holding a JSON object,
    with `ledger_dir` (the folder for the owner's rulings) and `ledger_repos` set, or `ledger_path` for one file (docs/ledger.md "Configuration"). Paths must be
    absolute; in JSON write Windows paths with `/` or `\\`.
    Success: `python -c "from kitlib.config import user;user.user_config()"`, run in `<kit>`,

@@ -8,6 +8,7 @@ import os
 
 from kitlib import coordinatorstart, pmstart
 from kitlib.config import user as kuser
+from kitlib.pmstart import configcheck
 
 
 def _rows(checks):
@@ -59,18 +60,22 @@ def machine_lines(snapshot):
 
 
 def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_config=None,
-                  coordinator_config=None, lock_reader=None, session_host=None, machine_config=None):
+                  coordinator_config=None, lock_reader=None, session_host=None, machine_config=None,
+                  config_lines=None):
     """A tuple of check lines. Missing connections/configuration are reported, never guessed.
     `machine_config`: the machine config the coordinator's ledger line reads (default
     kitlib.config.user.user_config(), read only for a coordinator with a repo_name; one that
-    cannot be read adds no row, and any other error reading it is a 'could not check ledger' row)."""
+    cannot be read adds no row, and any other error reading it is a 'could not check ledger' row).
+    `config_lines`: the machine config check, right after the standing lines for both roles (default
+    kitlib.pmstart.configcheck.lines)."""
     if role not in {'pm', 'coordinator'}:
         return ()
     now = now or datetime.datetime.now().astimezone()
     rows, checks = [], []
+    config_check = ('machine_config', config_lines or configcheck.lines)
     if role == 'pm':
         cfg = pm_config if pm_config is not None else _config(pmstart.load_config, 'PM', rows)
-        checks += [('standing', lambda: pmstart.standing(cfg)),
+        checks += [('standing', lambda: pmstart.standing(cfg)), config_check,
                    ('eng_review', lambda: pmstart.eng_review(cfg))]
         if cfg.get('memory_dir'):
             checks.append(('handoff', lambda: pmstart.handoff(cfg)))
@@ -78,7 +83,8 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
             checks.append(('reminders', lambda: pmstart.reminders(cfg, now.date())))
     else:
         cfg = coordinator_config if coordinator_config is not None else _config(coordinatorstart.load_config, 'coordinator', rows)
-        checks.append(('standing', lambda: coordinatorstart.context(cfg, live=False).splitlines()))
+        checks += [('standing', lambda: coordinatorstart.context(cfg, live=False).splitlines()),
+                   config_check]
         if repo_name:
             checks.append(('cap', lambda: coordinatorstart.cap(cfg, repo_name, now.date())))
             checks.append(('ledger', lambda: coordinatorstart.ledger_lines(
