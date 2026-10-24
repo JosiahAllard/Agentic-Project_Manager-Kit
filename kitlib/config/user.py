@@ -29,12 +29,10 @@ from .migration import OLD_DIR_NAME
 from .types import ConfigError, Email, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
-# the folder from config_dir() and messages from DISPLAY or display(), so a new name changes this
+# the folder from config_dir() and messages from display(), so a new name changes this
 # line only.
 DIR_NAME = '.pm-kit'
 FILE_NAME = 'config.json'
-# How help text names the machine config file; display() names the file actually read.
-DISPLAY = '~/%s/%s' % (DIR_NAME, FILE_NAME)
 
 # The PM repository's git-ignored machine config file, beside FILE_NAME (LOCAL_KEYS there).
 LOCAL_FILE_NAME = 'local.json'
@@ -72,6 +70,13 @@ class AbsPath(Str):
 
     def describe(self):
         return 'absolute path'
+
+
+class PmRepoPath(AbsPath):
+    """A RELATIVE_KEYS path: absolute, or written relative to the PM repository (resolved on read)."""
+
+    def describe(self):
+        return 'absolute path, or relative to the PM repo'
 
 
 class Owned(T):
@@ -144,10 +149,10 @@ RETIRED = ('ledger_refs',)
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
     'owner_email': Field(Email(), None, 'the author email of the owner\'s own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner\'s, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key'),
-    'ledger_dir': Field(AbsPath(), None, 'the rulings ledger folder: one file `<ledger_dir>/<repo>.md` per `ledger_repos` name, which it needs; set here only (docs/ledger.md "Files"); older kit copies reject the key; set it only after every folder runs a kit that knows it'),
+    'ledger_dir': Field(PmRepoPath(), None, 'the rulings ledger folder: one file `<ledger_dir>/<repo>.md` per `ledger_repos` name, which it needs; set here only (docs/ledger.md "Files"); older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repos `ledger.py add --repo` writes; `pm` is the machine-wide one; a repository\'s name is its folder name lower-cased with `_` as `-` (`My_Tools-Repo` is `my-tools-repo`); with `ledger_dir`, each name once, and never `all`, `standing` or the frozen file\'s name; without it, the one-file ledger\'s repo columns besides `all`, and unset: any lower-case name (docs/ledger.md)'),
-    'ledger_path': Field(AbsPath(), None, 'the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split'),
-    'pending_path': Field(AbsPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
+    'ledger_path': Field(PmRepoPath(), None, 'the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split'),
+    'pending_path': Field(PmRepoPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
     'standing_delegation': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that'),
     'daily_red_ruling': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'the ruling the daily full run\'s bisect files its red record under: priority 1, priority_by pm (docs/daily-full.md "Bisect"); unset: priority 2, priority_by agent, and the run\'s result.json says so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
