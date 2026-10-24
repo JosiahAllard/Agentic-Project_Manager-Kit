@@ -178,7 +178,19 @@ class MoveTest(unittest.TestCase):
         with self.assertRaises(Refused) as cm:
             move.apply(self.L.cfg, rename=rename)
         self.assertIn('another volume', str(cm.exception))
+        self.assertIn('the owner moves it by hand', str(cm.exception))
         self.assertIn('nothing was moved', str(cm.exception))
+
+    def test_a_ledger_dir_inside_the_old_rules_folder_is_refused_before_anything_is_made(self):
+        for inside in (self.L.old_rules, os.path.join(self.L.old_rules, 'split').upper()):
+            cfg = dict(self.L.cfg, ledger_dir=inside)
+            for call in (move.plan, move.apply):
+                with self.assertRaises(Refused) as cm:
+                    call(cfg)
+                self.assertIn('lies inside', str(cm.exception))
+                self.assertIn('nothing was moved', str(cm.exception))
+        self.assertEqual(sorted(os.listdir(self.L.old_rules)), ['alpha.md', 'notes.txt'])
+        self.assertTrue(os.path.isfile(self.L.old_digest))
 
     def test_outside_git_no_lock_file_is_made(self):
         self.assertEqual(move.lock_paths(move.plan(self.L.cfg)), [])
@@ -225,14 +237,32 @@ class GitMoveTest(unittest.TestCase):
         move.apply(self.L.cfg)
         self.assertTrue(os.path.isfile(book))
 
-    def test_the_git_step_names_the_old_and_new_paths(self):
-        got, _ = move.apply(self.L.cfg)
+    def steps(self, got):
         steps = move.git_steps(got)
         self.assertEqual(len(steps), 1)
         top, paths = steps[0]
         self.assertTrue(files._same(top, self.repo.root))
-        self.assertEqual(paths, ['pm/rulings/rules', 'pm/rulings/split/rules',
-                                 'pm/rulings/STANDING.md', 'pm/rulings/split/STANDING.md'])
+        return paths
+
+    def test_the_git_step_names_the_old_and_new_paths(self):
+        self.repo.commit('the old layout', 'pm')
+        got, _ = move.apply(self.L.cfg)
+        self.assertEqual(self.steps(got), ['pm/rulings/rules', 'pm/rulings/split/rules',
+                                           'pm/rulings/STANDING.md', 'pm/rulings/split/STANDING.md'])
+
+    def test_the_git_step_leaves_out_old_paths_never_committed(self):
+        got, _ = move.apply(self.L.cfg)
+        self.assertEqual(self.steps(got), ['pm/rulings/split/rules', 'pm/rulings/split/STANDING.md'])
+
+    def test_the_git_step_leaves_out_an_old_path_whose_removal_is_committed(self):
+        self.repo.commit('the old layout', 'pm')
+        os.makedirs(self.L.new)
+        os.rename(self.L.old_rules, self.L.new_rules)
+        self.repo.git('add', '-A', '--', 'pm/rulings/rules', 'pm/rulings/split/rules')
+        self.repo.git('commit', '-q', '-m', 'rules moved')
+        got, _ = move.apply(self.L.cfg)
+        self.assertEqual(self.steps(got), ['pm/rulings/split/rules', 'pm/rulings/STANDING.md',
+                                           'pm/rulings/split/STANDING.md'])
 
 
 class CliTest(unittest.TestCase):
@@ -279,6 +309,46 @@ class CliTest(unittest.TestCase):
         self.assertIn('nothing was moved', r.stderr)
         self.assertEqual(self.run_tool('--appl').returncode, 2)
         self.assertTrue(os.path.isdir(self.L.old_rules))
+
+
+class CliGitTest(unittest.TestCase):
+    """The layout in a git checkout: the printed git step, and a rerun that still prints it."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = os.path.realpath(tmp.name)
+        self.repo = TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        self.L = Layout(self.repo.path('pm'))
+        self.repo.commit('the old layout', 'pm')
+        machine_config(self.home, self.L.cfg, case=self)
+
+    run_tool = CliTest.run_tool
+
+    def step(self, *paths):
+        return 'next: ' + subprocess.list2cmdline(['git', '-C', self.repo.root, 'add', '-A', '--'] + list(paths))
+
+    def test_a_rerun_after_a_lost_apply_still_prints_the_git_step(self):
+        everything = ['pm/rulings/rules', 'pm/rulings/split/rules', 'pm/rulings/STANDING.md',
+                      'pm/rulings/split/STANDING.md']
+        r = self.run_tool('--apply')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines()[2], self.step(*everything))
+        for args in (('--apply',), ()):               # its output lost: the rerun says it again
+            r = self.run_tool(*args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            lines = r.stdout.splitlines()
+            self.assertEqual(lines[:4], [
+                'done    %s (already in ledger_dir)' % self.L.new_rules,
+                'done    %s (already in ledger_dir)' % self.L.new_digest,
+                'nothing to move', self.step(*everything)])
+            self.assertTrue(lines[4].startswith('then commit those paths, then run python "'), lines)
+        self.repo.git('add', '-A', '--', *everything)
+        self.repo.git('commit', '-q', '-m', 'the move')
+        r = self.run_tool()
+        self.assertEqual(r.stdout.splitlines()[3],
+                         self.step('pm/rulings/split/rules', 'pm/rulings/split/STANDING.md'))
 
 
 class GuardTest(unittest.TestCase):

@@ -597,13 +597,19 @@ def do_split_move(a, cfg):
     for item in got.items:
         print(split_move_line(item, item in moved))
     todo = [i for i in got.items if i.state == move.MOVE]
-    if not todo:
+    if not todo and not moved:
         print('nothing to move')
-        return 0
-    if not a.apply:
+        if not any(i.state == move.DONE for i in got.items):
+            return 0
+        # Every item already in ledger_dir: an --apply whose output was lost still has its git step.
+        steps = move.git_steps(got)
+        if not steps:
+            return 0
+    elif not a.apply:
         print('dry run: %d to move; add --apply to move them' % len(todo))
         return 0
-    steps = move.git_steps(got)
+    else:
+        steps = move.git_steps(got)
     for top, paths in steps:
         print('next: %s' % subprocess.list2cmdline(['git', '-C', top, 'add', '-A', '--'] + paths))
     tail = 'then commit those paths, then run ' if steps else 'then run '

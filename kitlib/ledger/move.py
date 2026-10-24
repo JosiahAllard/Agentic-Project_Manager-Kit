@@ -25,6 +25,7 @@ import contextlib
 import errno
 import os
 
+from kitlib.git import cmd as gitcmd
 from kitlib.git import repo as gitrepo
 
 from . import files, rulebook, safepath, standing, write
@@ -45,6 +46,15 @@ NEEDS = ('split-move runs after the owner adds ledger_dir and ledger_repos to th
 
 def _same(a, b):
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def _within(path, folder):
+    """True when `path` is `folder` or lies under it (case-blind, as Windows paths are)."""
+    a, b = (os.path.normcase(os.path.abspath(x)) for x in (path, folder))
+    try:
+        return os.path.commonpath([a, b]) == b
+    except ValueError:                    # different drives
+        return False
 
 
 def _safe(path):
@@ -71,6 +81,10 @@ def plan(cfg):
     new = os.path.abspath(folder)
     if _same(old, new):
         return Plan([], True, old, new)
+    old_rules = os.path.join(old, rulebook.FOLDER)
+    if _within(new, old_rules):
+        raise Refused('ledger_dir %s lies inside %s, the rules folder it would move into it; set '
+                      'ledger_dir outside it; nothing was moved' % (new, old_rules))
     if os.path.lexists(new) and not os.path.isdir(new):
         raise Refused('ledger_dir %s is not a folder; nothing was moved' % new)
     _safe(new)
@@ -153,8 +167,9 @@ def apply(cfg, wait=None, rename=os.rename):
                 done = ('moved %s; ' % ', '.join('%s -> %s' % (m.src, m.dst) for m in moved)
                         if moved else 'nothing was moved; ')
                 if _cross_volume(e):
-                    fix = ('it is on another volume than ledger_dir: move it by hand, then run '
-                           'split-move again')
+                    fix = ('it is on another volume than ledger_dir: the owner moves it by hand '
+                           "(the guard refuses an agent's move into ledger_dir), then split-move "
+                           'runs again')
                 elif isinstance(e, FileExistsError):
                     fix = '%s appeared meanwhile: keep one, then run split-move again' % item.dst
                 else:
@@ -165,10 +180,19 @@ def apply(cfg, wait=None, rename=os.rename):
     return now, moved
 
 
+def _in_index(top, rel):
+    """True when git's index at work tree `top` lists something at or under `rel`, or when git
+    cannot say (the path is then kept, and git's own pathspec error is the answer)."""
+    out, _ = gitcmd.run(['ls-files', '-z', '--', rel], top)
+    return out is None or bool(out.strip(b'\0'))
+
+
 def git_steps(p):
-    """`[(work tree, [paths relative to it, forward slashes])]` to stage after the move: the old
-    and new path of every item moved or already done, grouped by checkout; paths outside any
-    checkout are left out (nothing to stage there)."""
+    """`[(work tree, [paths relative to it, forward slashes])]` to stage after the move: the new
+    path of every item moved or already done, and its old path while git's index still lists
+    something there (one gone from disk and from the index, never committed or its removal
+    already committed, would fail `git add`'s pathspec and stage nothing), grouped by checkout;
+    paths outside any checkout are left out (nothing to stage there)."""
     tops = collections.OrderedDict()
     for item in p.items:
         if item.state not in (MOVE, DONE):
@@ -178,5 +202,7 @@ def git_steps(p):
             if place.kind not in (gitrepo.MAIN, gitrepo.LINKED) or not place.top:
                 continue
             rel = os.path.relpath(path, place.top).replace(os.sep, '/')
+            if path == item.src and not os.path.lexists(path) and not _in_index(place.top, rel):
+                continue
             tops.setdefault(place.top, []).append(rel)
     return list(tops.items())
