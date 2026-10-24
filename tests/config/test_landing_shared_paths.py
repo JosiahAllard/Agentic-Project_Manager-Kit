@@ -1,6 +1,6 @@
 """kitlib.config.schema: "landing".shared_paths, the globs whose change makes a landing need a
 --full record of a tip (docs/gate.md "Shared paths"): unset by default, a non-empty list of
-strings when set, and left out of the gate config a gate-OK record hashes."""
+whole-path globs (none ending in "/") when set, and left out of the gate config a gate-OK record hashes."""
 import unittest
 
 from kitlib import config
@@ -33,6 +33,13 @@ class SharedPaths(unittest.TestCase):
 
     def test_a_string_is_a_config_error(self):
         self.assertIn('"landing".shared_paths', self.refused({'landing': {'shared_paths': 'tools/*'}}))
+
+    def test_a_folder_entry_ending_in_a_slash_is_a_config_error(self):
+        # "api/" would match no path under the folder: entries are whole-path globs
+        for entry in ('api/', 'api\\'):
+            why = self.refused({'landing': {'shared_paths': ['tools/*', entry]}})
+            self.assertIn('"landing".shared_paths', why)
+            self.assertIn('api/*', why)
 
     def test_it_does_not_change_the_gate_config_hash(self):
         gate = {'steps': [{'name': 's', 'always': True, 'cmd': ['x']}]}

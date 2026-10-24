@@ -528,3 +528,38 @@ class ScopedWithSmoke(ScopedCase):
         self.assertEqual([s['name'] for s in rec['steps']], ['unit', 'boot'])
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
+
+
+class ScopedDocsOnly(ScopedCase):
+    """A base that sets both "gate".docs_only and "landing".shared_paths: a docs-only change that
+    touches a shared path needs a --full record (the shared check runs before the docs-only
+    route); one that touches none lands on its docs record as before."""
+    GATE = {'docs_only': {'globs': ['*.md'], 'steps': ['scrub']},
+            'steps': [_step('unit'), _step('scrub', always=False, globs=['*.md'])]}
+    KIT = dict(ScopedCase.KIT, landing={'shared_paths': ['content/*']})
+
+    def test_a_docs_record_touching_a_shared_path_is_refused(self):
+        wt, tip, rec = self.gated({'content/skills/x/SKILL.md': 'words\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'docs')
+        self.refused(wt, tip, 'without --full',
+                     'the tip changes shared path content/skills/x/SKILL.md ("landing".shared_paths)')
+
+    def test_a_docs_record_off_the_shared_paths_lands(self):
+        _, tip, rec = self.gated({'docs/guide.md': 'words\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'docs')
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+
+
+class ScopedStrictUnreadable(ScopedCase):
+    """A base whose strict list cannot be read refuses a scoped record in the tip check
+    (Lander.shared_refusal), before the strict check would."""
+
+    def test_a_scoped_record_is_refused_when_the_strict_paths_cannot_be_read(self):
+        self.repo.write('kitlib/gate/strict_defaults.py', 'STRICT_DEFAULTS = list()\n')
+        self.main = self.repo.commit('unreadable strict list', 'kitlib/gate/strict_defaults.py')
+        self.repo.git('push', '-q', 'origin', 'main')
+        wt, tip, rec = self.gated({'a.py': 'x = 1\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'select')
+        self.refused(wt, tip, 'without --full', 'cannot read the strict paths from main at %s'
+                     % self.main[:10])
