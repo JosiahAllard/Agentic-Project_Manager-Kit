@@ -86,7 +86,7 @@ the title.
   percentages, an agent with its model and effort); a row opens the account's meters or the agent's
   definition in the detail pane. Lock notices stay a list.
 - **Schedule.** A section of its own (the sidebar's Projects group and the phone's Schedule tab; the
-  hash `#schedule`), drawn from `GET /lock/view` ("Machine lock routes" below), with three tabs:
+  hash `#schedule`), drawn from `GET /lock/view` ("Machine lock routes" below), with four tabs:
   - Now lists the runs now (each with a progress line against the time expected, and a Late chip
     past it), the line behind them (Next up, from `queue_items`), today's holds, and a closed
     History row that opens the finished runs, filterable to those that failed or were stopped. A
@@ -95,19 +95,23 @@ the title.
   - Week is the week of half hours (back two weeks, on four). Reserve time on a card opens it in
     pick mode: the half hour a window starts in, then the one it ends in, then Reserve the whole
     machine or half, with a note.
-  - Holds lists the owner's holds and the agents' holds.
+  - Holds lists the owner's holds and the agents' holds. New hold opens a form (the whole machine,
+    half, or named slots, with typed times); Edit changes a hold's window or note and Release (asked
+    twice) ends it, whoever made it.
+  - Settings has the Game mode card (on or off, and the games list) and the Division card (what is in
+    force, what the owner set, the default for each key; change it or use the defaults).
+  - History (under Now) also shows what ran over the last 1, 7, 30 or 90 days.
 
   One watcher reads the lock for every view (the Home machine strip, the count, this section): it
   waits on `GET /lock/wait`, stops while the browser tab is hidden and reads again when shown,
-  backing off like the other waits. Home's machine strip (the slot boxes drawn by the same `schBoxes` as the Schedule's machine card, and a summary line) is one link to `#schedule`. The Schedule view has
-  one link, "Machine settings (game mode, division, holds, stats)", to `/lock.html`, which stays served
-  with every other control (hold editing, game mode, the division, stats). Times are the PC's local
+  backing off like the other waits. Home's machine strip (the slot boxes drawn by the same `schBoxes` as the Schedule's machine card, and a summary line) is one link to `#schedule`. Every control of the
+  old lock page now lives on the Schedule; `/lock.html` is removed and answers 404, with no redirect
+  (`tests/hubsite/test_page.py`, `ServedTest`). Times are the PC's local
   time and a reserved window is sent in UTC.
 
   A control this login may not use is disabled and says why (a "Read only" line gives the reason):
   holds and the division need the strong owner; a hub started under an agent session changes
-  nothing (`tests/hubsite/test_page.py`, `ScheduleTest`; `tests/hubsite/test_lock_page.py`,
-  `WriteTest`). The lock routes themselves stay the owner's: an agent is refused them
+  nothing (`tests/hubsite/test_page.py`, `ScheduleTest`; `ScheduleChangesTest`). The lock routes themselves stay the owner's: an agent is refused them
   (`tests/hubsite/test_api_roles.py`, `tests/hubsite/test_lockdoor.py`).
 
 In the sidebar's foot (when the hub was read, then the PM line and the push line) a line says whether a PM is listening: "A PM is listening." while a PM holds a
@@ -284,10 +288,10 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | Verb | Prints |
 |---|---|
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
-| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from KEY]` | `ASKED Q-2`, then any warning lines |
+| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID] [--from KEY]` | `ASKED Q-2`, then any warning lines |
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
-| `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent]` | `EDITED Q-1` |
+| `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent] [--record REPO:ID \| --no-record]` | `EDITED Q-1` |
 | `questions withdraw Q-1 --from KEY --if-version V` | `WITHDRAWN Q-1` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
 | `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
@@ -495,6 +499,26 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 | answer | owner | `{choice: index or "other", label, note, at}` |
 | ruling | PM | the ruling id it was logged as |
 | done_why, done_at | PM | why the answer needed no ruling, and when it was marked done (ISO time) |
+| record | PM, coordinator | `{repo, id}`: the backlog record the question is about; absent or null on an unbound question (every question asked before the field existed reads so) |
+
+### A question bound to a record
+`record` is given when the question is asked (`questions add --record REPO:ID`, MCP `hub_ask`
+`record`) or by an edit while it is open (`questions edit --record REPO:ID`, `--no-record` or a null
+`record` to unbind it). The hub reads the record then, through the record view the record page
+uses (`kitlib.hubsite.backlog` `Views.record`: the configured repositories only, read now with no
+fetch), and stores `repo` as the configured name. The kit's own records are repo `pm`. Each of
+these is refused, field `record`, and nothing is written (`kitlib.hubsite.api` `_bound`):
+- `invalid`: a `record` that is not exactly `{repo, id}` with two non-blank strings, a name that
+  can be no repository or record id, or a record that is completed (closed, retired or taken out
+  of the store);
+- `not_found`: a repo the hub has not configured, or an id that repo's backlog does not have;
+- `unavailable`: a record the hub cannot check (a server with no backlog views, no checkout of the
+  repo on this machine, a store that cannot be read). It fails closed: an answer is meant to be
+  filed into its record, so a binding nobody checked is never stored. Ask again, or ask unbound.
+
+An edit checks its asker and its status first, so a refused edit reads no backlog. Tests:
+tests/hubsite/test_api.py `QuestionRecordTest`, tests/hubsite/test_hub_cli.py
+`RecordArgumentCase`.
 
 The PM files each answer, then logs it (`questions log`), pinning `--if-version`; an answer to a
 coordinator's question too, which the coordinator has already acted on.

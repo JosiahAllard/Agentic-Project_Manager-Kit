@@ -17,10 +17,13 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   text). Done: the copy-in, the verb and their tests are gone. The read-only half `hub.py
   validate` uses is kept as `kitlib/hubsite/storecheck.py`, with its tests and the
   `recommended` rule's cases in `tests/hubsite/test_storecheck.py`.
-- **Candidate 2, REMOVE** (kitlib/backlog, tools/backlog.py). `kitlib/backlog/migrate.py`, the
+- **Candidate 2, DONE** (kitlib/backlog, tools/backlog.py). `kitlib/backlog/migrate.py`, the
   `backlog.py migrate` verb, `policy.py:85-90` and `:253`, `roles.py:98`, `backlog/__init__.py:17`,
   `store.py:1362`. Why: all stores migrated. Size: ~256 + 324 test lines. Risk: L-M. Keep the
-  `migrate: ` prefix in `audit_check.py:53-56` (old store history).
+  `migrate: ` prefix in `audit_check.py:53-56` (old store history). Done: the module, the verb
+  and their tests are gone; `backlog.py migrate` is a usage error (`tests/backlog/test_cli.py`).
+  Kept: the `migrate: ` subject in `kitlib/backlog/audit_check.py` and the `migrate` verb in
+  `roles.py`'s `retarget` row (the owner's map, not changed here).
 - **Candidate 3, DONE** (kitlib/gate, records, allowrules, tools). `landing.lanes` and
   `--lane`: `land.py` 7-33, 473-477, 591-613, 631-636, 761-772, 1623-1636, 2390-2399; the
   lane-keyed lock in `records/landing.py`; allowrules `repo_lanes`/`FULL`; `--lane` in `land.py`
