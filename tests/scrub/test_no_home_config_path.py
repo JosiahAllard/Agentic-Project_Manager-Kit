@@ -38,8 +38,6 @@ CONFIG = '.pm-kit'
 # home-path code elsewhere in the same file is still refused. Only scopes the check finds
 # something in are listed (test_every_allowed_scope_still_needs_it).
 ALLOWED = {
-    ('kitlib/config/user.py', 'DISPLAY'): 'the old home config\'s name, for messages about a '
-                                          'leftover',
     ('kitlib/config/user.py', 'home_location'): 'the home folder\'s config, the move\'s source '
                                                 '(kitlib.config.move), never what the kit reads',
     ('kitlib/config/user.py', 'locate'): 'the leftover check: a home-folder copy is reported '

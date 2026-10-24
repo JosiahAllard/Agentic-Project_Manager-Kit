@@ -17,10 +17,10 @@ from kitlib.pmstart import fglock
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import auth, serve, settings
 from tests.home import machine_config, pm_repo
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+FAKES = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
 SET = settings.settings({"port": 4321})
 TOKEN = "secret_token_value_" + "x" * auth.MIN_TOKEN

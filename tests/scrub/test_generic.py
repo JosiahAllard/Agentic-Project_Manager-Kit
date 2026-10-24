@@ -261,7 +261,7 @@ class Generic(unittest.TestCase):
         if not pats:
             from kitlib.config import user
             print('scrub: no install names configured; set "scrub_patterns" in the machine config '
-                  '(%s) to a list of case-insensitive patterns for the ' % user.DISPLAY +
+                  '(%s) to a list of case-insensitive patterns for the ' % user.display() +
                   "install's own names (repositories, owner, accounts)")
             self.skipTest('no install names configured')
         found, stale = scan(tracked_files(), read_text, pats, NAMES_ALLOWED, excluded=())

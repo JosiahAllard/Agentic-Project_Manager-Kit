@@ -17,14 +17,14 @@ from kitlib import pluginsource, pmstart
 from kitlib.pmstart import consoletasks as ct
 from kitlib.proc import spawn
 from tests.home import temp_home
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
 
 REAL_READ = ct.read_tasks      # before setUpModule patches it off this machine
 NOW = datetime.datetime(2026, 10, 13, 9, 0)
 KIT = r"Q:\kit"
 PYW = r"C:\Py\pythonw.exe"
 CARRIED = '"Q:\\kit\\tools\\no_window.py" python "Q:\\kit\\tools\\daily_full.py" -C "Q:\\repo"'
-FAKES = dict(pm_data=lambda: None, handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+FAKES = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
              watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0})
 

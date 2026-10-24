@@ -5,11 +5,11 @@ import unittest
 from kitlib import pmstart
 from kitlib.pmstart import fglock
 from tests.home import temp_home
-from tests.pmstart import keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
 
 CFG = {}
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-FAKES = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+FAKES = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
              liveness={"read": lambda p: "{}"})
 
 
