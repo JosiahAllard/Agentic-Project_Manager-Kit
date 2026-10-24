@@ -91,7 +91,28 @@ class Create(unittest.TestCase):
         self.assertNotIn("ShowWindow", args[-1])
         data = json.loads(kw["input"])
         self.assertEqual(data, {"cmd": subprocess.list2cmdline(argv), "cwd": r"C:\w",
-                                "env": ["A=1"]})
+                                "env": ["A=1", "MACHINE_LOCK_DETACHED=1"]})
+
+    def test_the_started_process_is_marked_and_keeps_its_launchers_origin(self):
+        run = FakeRun()
+        dt.create(["x"], "C:\\", {"MACHINE_LOCK_ORIGIN": "7:70;8:80"}, run=run)
+        env = json.loads(run.calls[0][1]["input"])["env"]
+        self.assertEqual(sorted(env), ["MACHINE_LOCK_DETACHED=1", "MACHINE_LOCK_ORIGIN=7:70;8:80"])
+
+    def test_a_launcher_inside_a_detached_start_passes_no_origin(self):
+        # Its ancestry stops at WMI's provider host: no origin, so tree_role reads an agent.
+        run = FakeRun()
+        given = {"MACHINE_LOCK_DETACHED": "1", "MACHINE_LOCK_ORIGIN": "7:70"}
+        dt.create(["x"], "C:\\", given, run=run)
+        env = json.loads(run.calls[0][1]["input"])["env"]
+        self.assertEqual(env, ["MACHINE_LOCK_DETACHED=1"])
+        self.assertEqual(given, {"MACHINE_LOCK_DETACHED": "1", "MACHINE_LOCK_ORIGIN": "7:70"})
+
+    def test_the_names_are_the_ones_the_lock_reads(self):
+        from kitlib.lock import run as lockrun, store
+        self.assertEqual((store.DETACHED_ENV, lockrun.ORIGIN_ENV),
+                         ("MACHINE_LOCK_DETACHED", "MACHINE_LOCK_ORIGIN"))
+        self.assertEqual(store.tree_role([]), "agent")
 
     def test_failures_are_a_reason_and_no_pid(self):
         for run in (FakeRun(stdout="9 0"), FakeRun(code=1, stderr="boom"), FakeRun(stdout=""),

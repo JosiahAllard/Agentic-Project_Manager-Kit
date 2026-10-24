@@ -298,7 +298,8 @@ def caller(name=None, env=None):
 def tree_role(pairs):
     """owner or agent for a run started under the processes pairs ([pid, ctime], a detached
     run's launcher ancestry; for holds.admits): agent when any is a live agent host, when any can no
-    longer be named (it exited, or its pid now names another process), when there are none, when
+    longer be named (it exited, or its pid now names another process), when there are none (as for
+a launcher that was itself inside a kit detached start: kitlib.lock.detach.marked), when
     any is WMI's provider host or is listed as its child (DETACHED_LAUNCHERS: a launcher that
     itself ran under WMI, whose ancestry stops there), or when the processes or the host registry
     cannot be read (fail closed)."""

@@ -2,8 +2,9 @@
 run or a submitted landing has (kitlib.lock.detach: Win32_Process.Create starts pythonw.exe running
 the carrier tools/no_window.py, which starts python.exe). WMI's provider host, WmiPrvSE.exe, is
 listed but this user cannot open it, so the walk ends below it at the running carrier; that read
-as the owner, and must read as an agent. tests/lock/test_caller_tree.py
-has the same rule on fakes."""
+as the owner, and must read as an agent: by the chain (caller with no environment), and by the
+marker detach.create sets (caller with the child's own), which still holds once WMI's host has
+exited, a case this test cannot wait for. tests/lock/test_caller_tree.py has both on fakes."""
 import json
 import os
 import shutil
@@ -18,7 +19,8 @@ from kitlib.proc import process, spawn
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WAIT_S = 90.0
 
-# The child: who caller() says it is, and the names of its parent and grandparent as the listing
+# The child: who caller() says it is, from its tree alone and with its own environment, the
+# marker it was given, and the names of its parent and grandparent as the listing
 # gives them, written to argv[1] in one replace.
 CHILD = r'''
 import json, os, sys
@@ -32,7 +34,8 @@ try:
     parents = {p: pp for p, pp, _n in snap}
     me = store.caller(env={})
     up = parents.get(os.getpid())
-    got = {'role': me['role'], 'host': me['host'], 'parent': names.get(up),
+    got = {'role': me['role'], 'host': me['host'], 'own_env_role': store.caller()['role'],
+           'marker': os.environ.get(store.DETACHED_ENV), 'parent': names.get(up),
            'grandparent': names.get(parents.get(up))}
 except Exception as e:
     got = {'error': repr(e)}
@@ -78,6 +81,8 @@ class UnderWmi(unittest.TestCase):
         self.assertEqual((got['grandparent'] or '').lower(), 'wmiprvse.exe', got)
         self.assertEqual(got['role'], 'agent', got)
         self.assertIsNone(got['host'], got)
+        self.assertEqual(got['marker'], '1', got)
+        self.assertEqual(got['own_env_role'], 'agent', got)
 
 
 if __name__ == '__main__':
