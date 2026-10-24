@@ -1081,20 +1081,27 @@ def ledger_guarded(ctx):
 
 
 def ledger_kind(ctx, target):
-    """What of the ledger `target` is: 'log' for the ledger file, 'rulebook' for the rulebooks'
+    r"""What of the ledger `target` is: 'log' for the ledger file, 'rulebook' for the rulebooks'
     folder or a `.md` file directly in it, 'digest' for the standing digest, else None. Names
     compare as the filesystem opens them (file_key: case, a stream suffix, a trailing dot or
     space, a namespace prefix, links, junctions and 8.3 names), first as the literal name (an
     edit's path is never a wildcard: `[PM]` is a folder name), then, when it has a wildcard
     character after its namespace prefix, as a wildcard that is any of them it can match
-    (ledger_glob; the prefix's own `?` is no wildcard)."""
+    (ledger_glob; the prefix's own `?` is no wildcard). A `\??\` unprefixed leaves (no drive after
+    it) is read both ways: as a prefix, and as a `??` wildcard folder (`<drive>:/??/STANDING.md`
+    names `<drive>:\pm\STANDING.md`)."""
     full = file_key(target)
     for kind, real in ledger_guarded(ctx):
         if full == real or (kind == 'rulebook' and os.path.dirname(full) == real and full.endswith('.md')):
             return kind
     bare_target = unprefixed(target)
-    if hubg.has_glob(bare_target[prefix_end(bare_target):]):
-        return ledger_glob(ctx, bare_target)
+    end = prefix_end(bare_target)
+    starts = (end, 0) if end and not re.match(r'[\\/]{2}', bare_target) else (end,)
+    for start in starts:
+        if hubg.has_glob(bare_target[start:]):
+            kind = ledger_glob(ctx, bare_target, start)
+            if kind:
+                return kind
     return None
 
 
@@ -1104,15 +1111,15 @@ def prefix_end(path):
     return m.end() if m else 0
 
 
-def ledger_glob(ctx, target):
+def ledger_glob(ctx, target, start=0):
     """ledger_kind for the wildcard path `target`: the literal folder it starts in (file_key), and
     each part after it matched (case folded, a stream suffix dropped, as glob matching reads it)
     against the matching part of a held path below that folder. A file is matched by a wildcard
     of the same depth; the rulebooks' folder also by one a part deeper (a file in it), and every
     wildcard that starts in it is a rulebook (fail closed: `rules/*.txt`); `**` or `..` after the
     wildcard matches every held path below the folder. A part also matches a name it spells
-    literally (`[PM]` the folder `[PM]`). A namespace prefix (prefix_end) is not searched for one."""
-    start = prefix_end(target)
+    literally (`[PM]` the folder `[PM]`). A wildcard is searched for from `start` (past a namespace
+    prefix, prefix_end, whose `?` is none)."""
     first = min(target.index(c, start) for c in hubg.GLOB_CHARS if c in target[start:])
     cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
@@ -1155,9 +1162,8 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
         return None
     from . import delegfile
     short, longs, pos = _opts(sub, args)
-    if (sub == 'restore' and ('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs)
-            and longs <= set(GIT_LONGS['restore'])):
-        return None                             # the index alone; a long option not pinned may be --worktree
+    if sub == 'restore' and restore_index_only(short, longs):
+        return None                             # the index alone
     if sub == 'checkout':
         after = delegfile.after_dashes(args)
         pos = after if after is not None else pos
@@ -4151,6 +4157,14 @@ def _canon_long(sub, body):
     return hits or [body]
 
 
+def restore_index_only(short, longs):
+    """Whether git restore with these options (_opts) writes the index alone: --staged (-S)
+    without --worktree (-W), and every long option one GIT_LONGS names (fail closed: _canon_long
+    leaves a one-letter body as written, and `--w` is `--worktree` to git)."""
+    return (('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs)
+            and longs <= set(GIT_LONGS['restore']))
+
+
 def _opts(sub, args):
     """(short option letters, long option names, positional Words) of a git subcommand's
     arguments, option values left out."""
@@ -4690,9 +4704,7 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
                           'main checkout. %s' % (text, where, how), instead)
     no_wt, wt = new_worktree(ctx, place.top)
     if sub == 'restore':
-        staged = 'S' in short or 'staged' in longs
-        worktree = 'W' in short or 'worktree' in longs
-        if not staged or worktree:
+        if not restore_index_only(short, longs):
             return refuse('git-restore', role, '`%s` overwrites working files in %s, where landers work. To undo a '
                           'change, make it in a worktree (%s). To unstage only:' % (text, where, WT_ADD % quote(top)),
                           'git -C %s restore --staged -- <path>' % quote(top)) if not no_wt else \

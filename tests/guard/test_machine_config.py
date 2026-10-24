@@ -230,7 +230,7 @@ class PointerGit(Base):
         'checkout HEAD~1 -- .pm-kit/config.json', 'rm .pm-kit/config.json', 'rm -r --cached .pm-kit/sub',
         'mv .pm-kit/config.json x.json', 'restore .pm-kit/local.json', 'restore -s HEAD~1 -W .pm-kit/config.json',
         'checkout-index -f .pm-kit/config.json', 'clean -f .pm-kit/sub', 'clean -fdx .pm-kit/sub',
-        'rm ":(top).pm-kit/config.json"',
+        'rm ":(top).pm-kit/config.json"', 'restore --staged --w .pm-kit/config.json',    # `--w` is `--worktree`
     )
     OPEN = (
         'restore --staged .pm-kit/config.json', 'clean -n .pm-kit', 'clean --dry-run -f .pm-kit',

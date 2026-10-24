@@ -302,6 +302,22 @@ class Rulebooks(unittest.TestCase):
                         self.refused(maker(cmd, self.w.plain), why)
         self.allowed(ps("Remove-Item -Path '\\\\?\\%s'" % os.path.join(self.folder, 'NOTES*'), self.w.plain))
 
+    def test_a_question_mark_folder_after_the_drive_root_is_a_wildcard(self):
+        # `<drive>:/??/` spells the NT prefix `\??\` too, but with no drive after it it is a `??`
+        # wildcard folder of the drive root: it names a two-letter folder there (nothing is written)
+        drive = os.path.splitdrive(self.w.plain)[0]
+        for ledger, rest in ((os.path.join(drive + os.sep, 'q7', 'LEDGER.md'), '??'),
+                             (os.path.join(drive + os.sep, 'q7', 'pm', 'LEDGER.md'), '??\\*')):
+            self.w.user_config({'ledger_path': ledger})
+            for name, why in (('STANDING.md', DIGEST), ('rules\\alpha.md', BOOK), ('LEDGER.md', LOG)):
+                path = rest + '\\' + name
+                for maker, cmd in ((bash, 'rm %s:/%s' % (drive[0], path.replace('\\', '/'))),
+                                   (ps, 'Remove-Item %s\\%s' % (drive, path)), (ps, 'cmd /c del %s\\%s' % (drive, path)),
+                                   (ps, 'Remove-Item \\%s' % path)):
+                    with self.subTest(cmd, ledger=ledger):
+                        self.refused(maker(cmd, self.w.plain), why)
+            self.allowed(ps('Remove-Item %s\\%s\\NOTES.md' % (drive, rest), self.w.plain))
+
     def test_git_in_a_work_tree_that_holds_a_split_ledger(self):
         split = os.path.join(self.w.wt, 'ledger')
         os.makedirs(os.path.join(split, 'rules'))

@@ -277,6 +277,7 @@ class OwnerDelegations(unittest.TestCase):
         'checkout main', 'checkout HEAD~1 -- .pm-kit/owner-delegations.json', 'checkout -- .',
         'switch other', 'switch -c new',
         'restore .pm-kit/owner-delegations.json', 'restore --source HEAD~1 :/', 'restore -SW .pm-kit',
+        'restore --staged --w .pm-kit/owner-delegations.json',     # `--w` is `--worktree` to git
         'checkout-index -a -f', 'checkout-index -f .pm-kit/owner-delegations.json',
         'reset --hard', 'reset --hard HEAD~1', 'reset --merge', 'reset --keep HEAD~1',
         'clean -fdx', 'clean -f .pm-kit', 'stash', 'stash push', 'stash pop', 'stash drop',
