@@ -516,6 +516,8 @@ class PmStartCheck(unittest.TestCase):
                                      'plugin': lambda: self.settings})
         text = pmstart.checklist({}, datetime.datetime(2026, 10, 20, 9, 0), procs=[], **fakes)
         self.assertIn("- worktree sweep task %s (demo) is not registered" % self.task, text)
+        self.assertIn("- read first: ", text)
+        self.assertNotIn("could not check handoff", text)
 
 
 if __name__ == '__main__':
