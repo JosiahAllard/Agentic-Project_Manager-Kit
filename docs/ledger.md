@@ -70,7 +70,7 @@ python tools/ledger.py rules (--repo FOLDER | --all) [--sources] [--topic WORD]
 
 ## Path checks
 
-Before a ledger file, or the standing digest, is read or written, `kitlib/ledger/safepath.py` (`refusal`) checks its path. This is defence in depth beside the guard, which refuses only a direct edit of the ledger file. It is not a lock: the check and the open are separate calls, so a swap made between them is not caught. Three checks:
+Before a ledger file, or the standing digest, is read or written, `kitlib/ledger/safepath.py` (`refusal`) checks its path. This is defence in depth beside the guard's `ledger` rule (docs/guard.md), which refuses an agent's edit, shell write, or git remove, move or restore of the `ledger_path` file, the rulebooks and the standing digest, but not of the per-repository files under `ledger_dir`. It is not a lock: the check and the open are separate calls, so a swap made between them is not caught. Three checks:
 
 - **Reparse points.** The file and every existing folder above it, except the drive root, must not be a reparse point (a junction, a symlink or any other tag; `os.lstat` `st_file_attributes`).
 - **Hard links.** The file must have one link (`st_nlink`). Through another name, an edit would reach the ledger by a path the guard does not watch. The writer's atomic replace leaves one link. Only a link present when the check runs is seen.
@@ -102,7 +102,7 @@ The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
 Set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file); the first `add` for a repository creates its file from `templates/common/LEDGER.md`.
 
-**Moving from one file.** First retire, or supersede in the one file, each R-nnnn entry the owner means to end: after the split `retire R-nnnn` is refused, and `--supersedes` names only an earlier entry of the same file. Then the owner edits the machine config: add `ledger_dir` and `ledger_repos` (including `pm`, since `--repo all` is refused once `ledger_dir` is set), and keep `ledger_path`, which is then the frozen file ("Files"). Older kit copies reject `ledger_dir`, so set it only after every folder runs a kit that knows it. No entry is copied, but the standing digest moves: STANDING.md, beside the `ledger_path` file without `ledger_dir`, is read from `ledger_dir` with it, so move it there, with one `## <repo>` section per repository. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable in the frozen file for one release. The guard's ledger rule protects only the `ledger_path` file, so the files under `ledger_dir` are not guarded yet.
+**Moving from one file.** First retire, or supersede in the one file, each R-nnnn entry the owner means to end: after the split `retire R-nnnn` is refused, and `--supersedes` names only an earlier entry of the same file. Then the owner edits the machine config: add `ledger_dir` and `ledger_repos` (including `pm`, since `--repo all` is refused once `ledger_dir` is set), and keep `ledger_path`, which is then the frozen file ("Files"). Older kit copies reject `ledger_dir`, so set it only after every folder runs a kit that knows it. No entry is copied. The standing digest and the rulebooks, beside the `ledger_path` file without `ledger_dir`, are read from `ledger_dir` with it (the digest with one `## <repo>` section per repository), and the guard's ledger rule refuses an agent's move of them, so moving STANDING.md and `rules/` into `ledger_dir` at the split waits on a ledger tool verb that does not exist yet. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable in the frozen file for one release. The guard's ledger rule holds the `ledger_path` file, the digest and the rulebooks; the per-repository files under `ledger_dir` are not guarded yet.
 
 To commit the ledger, put its folder inside a git work tree whose `.kit.json` names the main branch.
 
@@ -144,13 +144,13 @@ One writer per ledger file at a time. `add` and `retire` hold the file's write l
 
 The ledger is the PM's private record. No repository, tool or text cites its ids; the PM relays a decision in words.
 
-The guard denies a direct edit of the `ledger_path` file (docs/guard.md, rule `ledger`); `add` and `retire` are the only writers.
+The guard denies an agent's edit, shell write, or git remove, move or restore of the `ledger_path` file (docs/guard.md, rule `ledger`), and of the rulebooks and the digest; it does not cover the per-repository files under `ledger_dir` yet. `add` and `retire` are the only writers.
 
 ## Standing digest
 
 Logic: `kitlib/ledger/standing.py`.
 
-`STANDING.md` lists the rules still in force: one `- <id>: <rule>` line each, under `##` (and deeper) headings for repository and topic. It sits in `ledger_dir`, or beside the one-file ledger; with `ledger_dir` it keeps one `## <repo>` section per repository. It is written by hand; the ledger tool only reads it. No digest is no finding.
+`STANDING.md` lists the rules still in force: one `- <id>: <rule>` line each, under `##` (and deeper) headings for repository and topic. It sits in `ledger_dir`, or beside the one-file ledger; with `ledger_dir` it keeps one `## <repo>` section per repository. The ledger tool only reads it, and the guard's `ledger` rule refuses an agent's write to it, so the owner edits it by hand. No digest is no finding.
 
 - `check` fails on each line citing an id that is retired or not in any ledger file.
 - `standing WORD` matches, ignoring case, a rule line holding the word or sitting under a heading that holds it. Each heading prints once. `--repo` first cuts the digest to that repository's section (`standing.section`).
