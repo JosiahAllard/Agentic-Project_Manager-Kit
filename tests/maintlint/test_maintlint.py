@@ -273,6 +273,121 @@ class LedgerCounts(unittest.TestCase):
         self.assertEqual(ledger.counts(user_config=lambda home: {}),
                          (None, ['ledger NOT CHECKED: the machine config names no ledger']))
 
+    def test_each_count_above_0_is_a_finding_for_the_pm_with_numbers_only(self):
+        got = ledger.findings({'stale_cites': 2, 'superseded_live': 1, 'superseded': 3})
+        self.assertEqual([(f.check, f.key) for f in got],
+                         [('ledger-stale-cites', 'stale_cites'),
+                          ('ledger-superseded-live', 'superseded_live')])
+        self.assertIn('2 citation(s)', got[0].text)
+        self.assertIn('ledger.py" check', got[0].fix)
+        self.assertEqual(got[1].text, '1 of 3 superseded entry not retired')
+        self.assertIn('ledger.py" retire <id>', got[1].fix)
+        for f in got:
+            self.assertIn('the PM', f.fix)
+            self.assertNotIn('R-', f.text + f.fix)
+
+    def test_no_count_above_0_and_an_unchecked_ledger_are_no_finding(self):
+        self.assertEqual(ledger.findings({'stale_cites': 0, 'superseded_live': 0,
+                                          'superseded': 4}), [])
+        self.assertEqual(ledger.findings(None), [])
+
+
+Change = audit_check.Change
+
+
+class LandingChecks(StoreCase):
+    """verify.code_base, landed_pulls and closed_unlanded on a real repository: a branch has
+    landed when its tip is in the pushed main and off its first-parent chain."""
+
+    def side_commit(self, branch, name):
+        self.repo.git('checkout', '-q', '-b', branch)
+        self.repo.write(name, name + '\n')
+        tip = self.repo.commit('work on ' + branch, name)
+        self.repo.git('checkout', '-q', 'main')
+        return tip
+
+    def land(self, branch, push=True):
+        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge ' + branch, branch)
+        if push:
+            self.repo.git('push', '-q', 'origin', 'main')
+        return self.repo.head()
+
+    def base(self):
+        got, why = verify.code_base(self.repo.root, 'origin', 'main')
+        self.assertIsNone(why)
+        return got
+
+    def pulled(self, stem, branch):
+        return priced(stem, state='pulled', pulled_at='2026-10-01', pulled_by=branch)
+
+    def test_a_pull_whose_branch_landed_is_a_finding_and_a_fresh_or_unpushed_one_is_not(self):
+        self.side_commit('kit/done', 'a.txt')
+        self.land('kit/done')
+        self.side_commit('kit/local', 'b.txt')
+        self.land('kit/local', push=False)        # merged on the local main only: not pushed
+        self.side_commit('kit/open', 'c.txt')     # never merged
+        s = snap(self.pulled('AAA', 'kit/done'), self.pulled('BBB', BRANCH),
+                 self.pulled('CCC', 'kit/local'), self.pulled('DDD', 'kit/open'),
+                 self.pulled('EEE', 'kit/no-such-branch'))
+        base = self.base()
+        self.assertEqual(base[0], 'refs/remotes/origin/main')
+        got, notes = verify.landed_pulls(s, self.repo.root, 'origin', base, CMD)
+        self.assertEqual(notes, [])
+        self.assertEqual([(f.check, f.key) for f in got], [('landed-still-pulled', 'AAA')])
+        self.assertIn('kit/done is in refs/remotes/origin/main', got[0].text)
+        self.assertTrue(got[0].fix.startswith(CMD + ' close AAA --reason "landed <merge>"'))
+        self.assertIn('--as kit/done release AAA', got[0].fix)
+
+    def test_a_branch_known_only_on_the_remote_is_read_there(self):
+        self.side_commit('kit/done', 'a.txt')
+        self.land('kit/done')
+        self.repo.git('push', '-q', 'origin', 'kit/done')
+        self.repo.git('fetch', '-q', 'origin')
+        self.repo.git('branch', '-q', '-D', 'kit/done')
+        got, _ = verify.landed_pulls(snap(self.pulled('AAA', 'kit/done')), self.repo.root,
+                                     'origin', self.base(), CMD)
+        self.assertEqual([f.key for f in got], ['AAA'])
+
+    def test_a_branch_listing_git_cannot_give_is_a_note(self):
+        got, notes = verify.landed_pulls(snap(self.pulled('AAA', 'kit/x')), self.repo.root,
+                                         'origin', self.base(), CMD,
+                                         tips=lambda root, remote: (None, 'git failed'))
+        self.assertEqual((got, notes), ([], ['landed pulls NOT CHECKED: git failed']))
+
+    def test_with_no_main_to_measure_against_code_base_says_why(self):
+        got, why = verify.code_base(self.repo.root, 'origin', 'no-such-main')
+        self.assertIsNone(got)
+        self.assertIn('no-such-main', why)
+
+    def close(self, rid, sha, epoch=0):
+        return Change('f' * 40, epoch, 'closes %s: landed %s' % (rid, sha), '', [])
+
+    def test_a_close_as_landed_by_a_commit_the_base_lacks_is_a_finding(self):
+        unlanded = self.side_commit('kit/open', 'c.txt')
+        self.side_commit('kit/done', 'a.txt')
+        merge = self.land('kit/done')
+        changes = [self.close('AAA', unlanded), self.close('BBB', merge),
+                   self.close('CCC', 'e' * 40),                     # no such commit here
+                   self.close('DDD', unlanded),                     # back in the store: reopened
+                   self.close('FFF', merge), self.close('FFF', unlanded),  # newest first: landed
+                   Change('f' * 40, 0, 'closes GGG: the work is finished', '', [])]
+        got, notes = verify.closed_unlanded(changes, snap(priced('DDD')), self.repo.root,
+                                            self.base(), CMD)
+        self.assertEqual([(f.check, f.key) for f in got], [('closed-unlanded', 'AAA')])
+        self.assertIn('closed as landed by %s, which refs/remotes/origin/main does not hold'
+                      % unlanded[:12], got[0].text)
+        self.assertTrue(got[0].fix.startswith(CMD + ' add AAA --reopen --summary'))
+        self.assertEqual(notes, ['closed-unlanded: 1 close(s) name a commit this checkout does'
+                                 ' not have (another repository\'s, or not fetched): NOT CHECKED'])
+
+    def test_with_no_close_to_check_git_is_not_asked(self):
+        def never(*a, **k):
+            raise AssertionError('asked git')
+        merge = self.side_commit('kit/done', 'a.txt') and self.land('kit/done')
+        self.assertEqual(verify.closed_unlanded([self.close('AAA', merge)], snap(),
+                                                self.repo.root, self.base(), CMD,
+                                                commits=never), ([], []))
+
 
 class PageAndResult(unittest.TestCase):
 
@@ -396,6 +511,32 @@ class WholeRun(StoreCase):
         third = self.run_lint(previous={'findings': dup})
         self.assertEqual(sorted((f['check'], f['new']) for f in third['findings']),
                          [('dead-blocker', True), ('duplicate', False)])
+
+
+    def test_a_landed_pull_and_a_close_of_unlanded_work_are_flagged_once_each(self):
+        kit_json_ref(self.repo)
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.repo.git('checkout', '-q', '-b', 'kit/done')
+        self.repo.write('a.txt', 'a\n')
+        self.repo.commit('work', 'a.txt')
+        self.repo.git('checkout', '-q', '-b', 'kit/open')
+        self.repo.write('b.txt', 'b\n')
+        unlanded = self.repo.commit('more work', 'b.txt')
+        self.repo.git('checkout', '-q', 'main')
+        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge kit/done', 'kit/done')
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.seed(priced('AAA', state='pulled', pulled_at='2026-10-01', pulled_by='kit/done'),
+                  priced('BBB', summary='work that never landed'))
+        self.verb('close', 'BBB', 'landed %s' % unlanded)
+        # The A worktree list names AAA too: one finding, not two.
+        claim = Finding('landed-still-pulled', 'AAA', 'from the worktree list', 'fix')
+        with mock.patch.object(maintlint.worktrees, 'findings', return_value=([claim], [])):
+            res = self.run_lint()
+        got = sorted((f['check'], f['target']) for f in res['findings'])
+        self.assertEqual(got, [('closed-unlanded', 'BBB'), ('landed-still-pulled', 'AAA')],
+                         res['notes'])
+        self.assertEqual(res['counts']['landed-still-pulled'], 1)
+        self.assertEqual(res['counts']['closed-unlanded'], 1)
 
 
 class Cli(StoreCase):

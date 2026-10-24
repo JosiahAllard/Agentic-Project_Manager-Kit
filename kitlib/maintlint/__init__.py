@@ -22,7 +22,8 @@ import os
 import time
 
 from kitlib import kitroot
-from kitlib.backlog.errors import Refusal
+from kitlib.backlog import audit_check
+from kitlib.backlog.errors import Failure, Refusal
 from kitlib.backlog import pull_branch as pullmod
 from kitlib.backlog.opener import open_store
 
@@ -33,7 +34,10 @@ from . import backlog, holds, ledger, result, verify, worktrees     # noqa: E402
 VERSION = 1
 CHECKS = ('keyword-hold', 'unpriced', 'dead-pull', 'dead-blocker', 'duplicate', 'audit',
           'body-path-gone', 'file-moved', 'scope-path-gone', 'worktree-A', 'worktree-B',
-          'worktree-C', 'worktree-E', 'worktree-O', 'landed-still-pulled', 'answered-question')
+          'worktree-C', 'worktree-E', 'worktree-O', 'landed-still-pulled', 'closed-unlanded',
+          'answered-question', 'ledger-stale-cites', 'ledger-superseded-live')
+# The store history closed-unlanded reads: the audit's window.
+CLOSE_DAYS = backlog.AUDIT_DAYS
 
 
 def fingerprint(repo, f):
@@ -77,10 +81,38 @@ def _backlog_checks(root, home, now, notes, questions):
                  lambda: backlog.answered(snap, cmd, questions),
                  lambda: backlog.audit(ctx.root, cmd, home=home, now=now),
                  lambda: verify.paths(snap, code_root, cmd, ctx.date()),
-                 lambda: verify.scopes(snap, code_root, ctx.code_main, cmd)):
+                 lambda: verify.scopes(snap, code_root, ctx.code_main, cmd),
+                 lambda: _landing(ctx, snap, code_root, cmd, now)):
         found, more = step()
         out += found
         notes += more
+    return out
+
+
+def _landing(ctx, snap, code_root, cmd, now):
+    """landed-still-pulled and closed-unlanded against the code base (kitlib.maintlint.verify)."""
+    base, why = verify.code_base(code_root, ctx.code_remote, ctx.code_main)
+    if base is None:
+        return [], ['landing checks NOT CHECKED: %s' % ' '.join(str(why).split())]
+    out, notes = verify.landed_pulls(snap, code_root, ctx.code_remote, base, cmd)
+    try:
+        root, rev, rel = audit_check.store_place(ctx.store.backend, ctx.store.rules)
+        changes = (audit_check.history(root, rev, rel, now.timestamp() - CLOSE_DAYS * 86400)
+                   if rev else [])
+    except (audit_check.NotChecked, Failure, Refusal, OSError) as exc:
+        return out, notes + ['closed-unlanded NOT CHECKED: %s' % ' '.join(str(exc).split())]
+    found, more = verify.closed_unlanded(changes, snap, code_root, base, cmd)
+    return out + found, notes + more
+
+
+def _first_of_each(findings):
+    """One finding per (check, key): the first (landed-still-pulled comes from the store's pulls
+    and again from an A worktree)."""
+    seen, out = set(), []
+    for f in findings:
+        if (f.check, f.key) not in seen:
+            seen.add((f.check, f.key))
+            out.append(f)
     return out
 
 
@@ -97,6 +129,7 @@ def run(root, home=None, now=None, previous=None, questions=None):
     notes += more
     counts_ledger, more = ledger.counts(home)
     notes += more
+    findings = _first_of_each(findings + ledger.findings(counts_ledger))
     seen = result.previous_fingerprints(previous)
     repo = repo_name(root)
     rows = []
