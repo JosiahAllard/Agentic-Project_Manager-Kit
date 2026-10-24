@@ -127,16 +127,19 @@ class APlantedHitFails(PlantedTree):
         rc, out = self.run_guard()
         self.assertEqual(rc, 0, out)
 
-    def test_work_in_progress_counts_untracked_and_ignored_does_not(self):
-        self.write('.gitignore', 'ignored.md\n')
-        self.write('ignored.md', GITHUB + '\n', track=False)
+    def test_an_untracked_file_is_not_searched_and_a_tracked_one_is(self):
+        # A local note beside the checkout (untracked, not ignored) never fails the sweep; the
+        # same text in a tracked file does, read from the working tree.
+        self.write('note.local.md', PROFILE + '\n', track=False)
         rc, out = self.run_guard()
         self.assertEqual(rc, 0, out)
-        self.write('fresh.md', GITHUB + '\n', track=False)
+        self.assertNotIn('note.local.md', out)
+        self.write('fresh.md', 'clean\n')
+        self.repo.write('fresh.md', PROFILE + '\n')      # tracked; the hit is unstaged work
         rc, out = self.run_guard()
         self.assertEqual(rc, 1, out)
         self.assertIn('fresh.md:1:', out)
-        self.assertNotIn('ignored.md', out)
+        self.assertNotIn('note.local.md', out)
 
     def test_the_research_tree_and_agent_temp_are_caught(self):
         self.write('notes.md', 'a %s\nb %s\nc tools%sresearch and %%DEV_ROOT%%%sresearch\n'
@@ -223,6 +226,14 @@ class TheTreeIsListedByOneGitProcess(PlantedTree):
             files = M.tree_files(self.root)
         self.assertEqual(files, ['.gitignore', 'README.md', 'kept.log', 'new.txt'])
         self.assertEqual(len(calls), 1, calls)
+
+    def test_the_sweep_lists_tracked_files_only(self):
+        self.write('.gitignore', '*.log\n')
+        self.write('kept.log', 'tracked although ignored\n', track=False)
+        self.git('add', '-f', 'kept.log')
+        self.write('new.txt', 'untracked\n', track=False)
+        self.write('skip.log', 'untracked and ignored\n', track=False)
+        self.assertEqual(M.tracked_files(self.root), ['.gitignore', 'README.md', 'kept.log'])
 
     def test_outside_a_repository_reports_the_git_failure(self):
         outside = tempfile.mkdtemp(prefix='machine-paths-outside-')
