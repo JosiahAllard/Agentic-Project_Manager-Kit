@@ -1539,23 +1539,28 @@ def switch_creates_here(args):
 def checkout_moves(args, longs):
     """The form of a git checkout (its argument Words, and _opts(wide=True)'s long names) that
     moves the tree as switch does, else None: `--orphan` (any abbreviation of two letters or
-    more), or exactly one positional word before any `--` once the values of -b and -B are left
-    out (`checkout main`, `-`, `-b new main`; a word that names no branch fails closed). None
-    with `--` or two or more positional words (a tree-ish and paths, judged as paths), and with
-    none (`checkout`, `-b new`: a branch at HEAD keeps the tree, as switch -c does)."""
+    more), whatever follows it, or exactly one positional word before any `--` once the values
+    of -b, -B and --conflict (any abbreviation) are left out (`checkout main`, `-`, `-b new
+    main`, `-t origin/x`; a word that names no branch fails closed). A `--` with nothing after
+    it is no `--` (`checkout main --` moves the tree). None with paths after `--` or two or more
+    positional words (a tree-ish and paths, judged as paths), and with none (`checkout`,
+    `-b new`: a branch at HEAD keeps the tree, as switch -c does)."""
     from . import delegfile
-    if delegfile.after_dashes(args) is not None:
-        return None
     if any(len(n) > 1 and 'orphan'.startswith(n) for n in longs):
         return 'checkout --orphan'
+    if delegfile.after_dashes(args):
+        return None
     pos, k = 0, 0
     while k < len(args):
         t = args[k].text
         k += 1
+        if t == '--':
+            break
         if t.startswith('--'):
             body, eq, _v = t[2:].partition('=')
             names = _canon_long('checkout', body)
-            k += not eq and len(names) == 1 and names[0] in GIT_LONG_VALUES   # --conflict <style>
+            k += bool(not eq and ((len(names) == 1 and names[0] in GIT_LONG_VALUES)
+                                  or (body and 'conflict'.startswith(body))))   # --conflict <style>, --conf too
             continue
         if not t.startswith('-') or t == '-':
             pos += 1

@@ -122,7 +122,10 @@ class OutsideGit(Base):
                                  (f, 'git checkout -qb new main'), (f, 'git checkout -B new main'),
                                  (f, 'git checkout --orphan new'), (f, 'git checkout --orphan=new'),
                                  (f, 'git checkout --orph new main'), (f, 'git checkout -p main'),
-                                 (f, 'git checkout --conflict merge main')))
+                                 (f, 'git checkout --conflict merge main'), (f, 'git checkout main --'),
+                                 (f, 'git checkout -b new main --'), (f, 'git checkout --orphan new --'),
+                                 (f, 'git checkout --conf merge main'), (f, 'git checkout --c diff3 main'),
+                                 (f, 'git checkout -t origin/x'), (f, 'git checkout --track origin/x')))
         # as switch -c <branch>: a new branch at HEAD keeps the tree; path forms are judged as paths
         self.rows(self.not_ledger, ((f, 'git checkout'), (f, 'git checkout -b new'), (f, 'git checkout -B new'),
                                     (f, 'git checkout -- other'), (f, 'git checkout main -- other'),
