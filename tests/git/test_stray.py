@@ -139,7 +139,7 @@ class Check(Fixture):
     STRAY_ADVICE = 'a write went to the main checkout; first ' + RESTORE_POINTER
 
     def test_the_fail_line_points_at_the_safe_restore_before_a_delete(self):
-        # KIT-STRAY-FAIL-RESTORE-POINTER: tools/stray_restore.py discards only what a branch tip
+        # tools/stray_restore.py discards only what a branch tip
         # holds, so the FAIL line names it, and its real form, ahead of a plain delete.
         self.stray('x', name='oops.txt')
         code, out = self.check(self.w)
