@@ -18,7 +18,7 @@ from tests.gitfixture import rmtree
 from tools import maint_lint
 
 NOW = datetime.datetime(2026, 10, 24, 12, 0, tzinfo=datetime.timezone.utc)
-FILING = {'maint_lint': {'gate_time': {'prefix': 'KIT'}}}
+FILING = {'maint_lint': {'gate_time': {'prefix': 'EX'}}}
 
 
 class GateTimeCase(StoreCase):
@@ -61,8 +61,8 @@ class Filing(GateTimeCase):
         self.assertEqual(self.checks(res), [('gate-time', 'kit-suite')], res['notes'])
         self.assertEqual(res['counts']['gate-time'], 1)
         lines = gatetime.file(self.root, res, NOW)
-        self.assertEqual(self.gate_records(), ['KIT-GATE-TIME-KIT-SUITE-20261024'], lines)
-        rec = self.store.load().get('KIT-GATE-TIME-KIT-SUITE-20261024')
+        self.assertEqual(self.gate_records(), ['EX-GATE-TIME-KIT-SUITE-20261024'], lines)
+        rec = self.store.load().get('EX-GATE-TIME-KIT-SUITE-20261024')
         self.assertEqual(rec.get('ref'), 'maint-lint gate-time kit-suite')
         self.assertIn('median 1000 s', rec.get('summary'))
 
@@ -72,18 +72,18 @@ class Filing(GateTimeCase):
         gatetime.file(self.root, self.lint(), NOW)
         later = NOW + datetime.timedelta(days=1)
         lines = gatetime.file(self.root, self.lint(later), later)
-        self.assertEqual(self.gate_records(), ['KIT-GATE-TIME-KIT-SUITE-20261024'])
-        self.assertIn('gate time: KIT-GATE-TIME-KIT-SUITE-20261024 is already filed for gate '
+        self.assertEqual(self.gate_records(), ['EX-GATE-TIME-KIT-SUITE-20261024'])
+        self.assertIn('gate time: EX-GATE-TIME-KIT-SUITE-20261024 is already filed for gate '
                       'step kit-suite', lines)
 
     def test_once_the_record_is_closed_a_later_run_files_a_new_one(self):
         kit_json_ref(self.repo, FILING)
         self.gates(6, 1000)
         gatetime.file(self.root, self.lint(), NOW)
-        self.verb('close', 'KIT-GATE-TIME-KIT-SUITE-20261024', 'the step was made faster')
+        self.verb('close', 'EX-GATE-TIME-KIT-SUITE-20261024', 'the step was made faster')
         later = NOW + datetime.timedelta(days=1)
         gatetime.file(self.root, self.lint(later), later)
-        self.assertEqual(self.gate_records(), ['KIT-GATE-TIME-KIT-SUITE-20261025'])
+        self.assertEqual(self.gate_records(), ['EX-GATE-TIME-KIT-SUITE-20261025'])
 
     def test_a_step_under_the_bound_files_nothing(self):
         kit_json_ref(self.repo, FILING)
@@ -104,7 +104,7 @@ class Filing(GateTimeCase):
         self.assertEqual(self.gate_records(), [])
 
     def test_the_bound_comes_from_kit_json(self):
-        kit_json_ref(self.repo, {'maint_lint': {'gate_time': {'prefix': 'KIT', 'bound_s': 1500}}})
+        kit_json_ref(self.repo, {'maint_lint': {'gate_time': {'prefix': 'EX', 'bound_s': 1500}}})
         self.gates(6, 1000)
         self.assertEqual(self.checks(self.lint()), [])
 
