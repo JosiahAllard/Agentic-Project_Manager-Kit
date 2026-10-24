@@ -415,3 +415,152 @@ class BranchGateRecord(TipCase):
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertIsNone(out.facts['record'])      # --only writes no record at all
         self.assertIs(gate_ok.read(self.repo.root, tip)[0]['full'], True)
+
+
+# ---------------------------------------------------------------- "landing".shared_paths
+
+SCOPED_GATE = {'steps': [_step('unit'), _step('api', always=False, globs=['api/*'])]}
+SHARED = ['api/*']
+STRICT_FILE = 'kitlib/gate/x.py'        # a strict path (strict_defaults.STRICT_DEFAULTS)
+
+
+class ScopedCase(TipCase):
+    """A base that sets "landing".shared_paths (docs/gate.md "Shared paths"): a default-mode
+    (scoped) record lands a tip that changes no shared path and no strict path, with no
+    "gate".smoke_steps; a tip that changes one needs a --full record. The merged gate still
+    runs every step that is not manual."""
+    GATE = SCOPED_GATE
+    OWNER = 'owner@example.invalid'
+    KIT = dict(test_land.LandCase.KIT, owner={'email': OWNER}, landing={'shared_paths': SHARED})
+
+    def gated(self, files, **kw):
+        wt, tip = self.branch('feature', files)
+        self.gate(wt, **kw)
+        rec, why = gate_ok.verify(self.repo.root, tip)
+        self.assertIsNone(why)
+        return wt, tip, rec
+
+    def refused(self, wt, tip, *says):
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assert_refused(out, BRANCH, tip, wt, *says)
+        return out
+
+
+class ScopedRecords(ScopedCase):
+    def test_a_scoped_record_of_a_plain_branch_lands(self):
+        wt, tip, rec = self.gated({'a.py': 'x = 1\n'})
+        self.assertEqual((gate_ok.mode_of(rec), [s['name'] for s in rec['steps']]),
+                         ('select', ['unit']))
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+
+    def test_the_merged_gate_still_runs_every_step(self):
+        # the branch gate ran only unit; the merged gate runs api too, as without the setting
+        _, tip, _ = self.gated({'a.py': 'x = 1\n'})
+        said = []
+        out = self.lander(BRANCH, self.main, tip, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        merged = gate_ok.read(self.repo.root, out.merge)[0]
+        self.assertEqual((gate_ok.mode_of(merged), [s['name'] for s in merged['steps']]),
+                         ('select', ['unit', 'api']))
+        line = [l for l in said if l.startswith('merged-tree gate at ')]
+        self.assertTrue(line and line[0].endswith(': unit, api'), said)
+
+    def test_a_scoped_record_touching_a_shared_path_is_refused(self):
+        wt, tip, rec = self.gated({'api/x.py': 'x = 1\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'select')
+        self.refused(wt, tip, 'without --full',
+                     'the tip changes shared path api/x.py ("landing".shared_paths)')
+
+    def test_a_scoped_record_of_a_strict_branch_is_refused(self):
+        wt, tip, rec = self.gated({STRICT_FILE: 'x = 1\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'select')
+        self.refused(wt, tip, 'without --full', 'the tip changes strict path %s' % STRICT_FILE)
+
+    def test_a_scoped_record_that_changes_the_gate_config_is_refused(self):
+        wt = self.repo.worktree('feature')
+        kit = dict(self.KIT, gate=dict(SCOPED_GATE, steps=SCOPED_GATE['steps'] + [_step('lint')]))
+        self.repo.write('.kit.json', json.dumps(kit, indent=1), root=wt)
+        self.repo.git('add', '.kit.json', cwd=wt)
+        self.repo.git('-c', 'user.email=%s' % self.OWNER, 'commit', '-q', '-m', 'gate', cwd=wt)
+        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        self.gate(wt)
+        self.assertEqual(gate_ok.mode_of(gate_ok.read(self.repo.root, tip)[0]), 'select')
+        self.refused(wt, tip, "the tip changes the gate's config (.kit.json)")
+
+    def test_a_full_record_of_a_shared_path_lands(self):
+        _, tip, _ = self.gated({'api/x.py': 'x = 1\n'}, full=True)
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+
+
+class ScopedNoSetting(ScopedCase):
+    """With no "landing".shared_paths and no smoke_steps, as before: only a --full record lands."""
+    KIT = dict(test_land.LandCase.KIT)
+
+    def test_without_the_setting_a_scoped_record_is_refused(self):
+        wt, tip, rec = self.gated({'a.py': 'x = 1\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'select')
+        out = self.refused(wt, tip, 'without --full', 'sets no "gate".smoke_steps or '
+                                     '"gate".docs_only, so only a --full record lands')
+        self.assertNotIn('shared path', out.lines[0])
+
+
+class ScopedWithSmoke(ScopedCase):
+    """A base that sets both "gate".smoke_steps and "landing".shared_paths: a smoke select record
+    of a tip that changes a shared or a strict path is refused too; one of a plain tip lands once
+    its smoke steps passed."""
+    GATE = dict(SCOPED_GATE, smoke_steps=['boot'],
+                steps=SCOPED_GATE['steps'] + [_step('boot', always=False, manual=True)])
+
+    def test_a_smoke_record_touching_a_shared_path_is_refused(self):
+        wt, tip, rec = self.gated({'api/x.py': 'x = 1\n'})
+        self.assertIn('boot', [s['name'] for s in rec['steps']])
+        self.refused(wt, tip, 'the tip changes shared path api/x.py')
+
+    def test_a_smoke_record_of_a_strict_branch_is_refused(self):
+        wt, tip, rec = self.gated({STRICT_FILE: 'x = 1\n'})
+        self.assertIn('boot', [s['name'] for s in rec['steps']])
+        self.refused(wt, tip, 'the tip changes strict path %s' % STRICT_FILE)
+
+    def test_a_smoke_record_of_a_plain_branch_lands(self):
+        _, tip, rec = self.gated({'a.py': 'x = 1\n'})
+        self.assertEqual([s['name'] for s in rec['steps']], ['unit', 'boot'])
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+
+
+class ScopedDocsOnly(ScopedCase):
+    """A base that sets both "gate".docs_only and "landing".shared_paths: a docs-only change that
+    touches a shared path needs a --full record (the shared check runs before the docs-only
+    route); one that touches none lands on its docs record as before."""
+    GATE = {'docs_only': {'globs': ['*.md'], 'steps': ['scrub']},
+            'steps': [_step('unit'), _step('scrub', always=False, globs=['*.md'])]}
+    # not content/skills/**: a strict path, which reuse.docs_only_change already bars
+    KIT = dict(ScopedCase.KIT, landing={'shared_paths': ['shared/*']})
+
+    def test_a_docs_record_touching_a_shared_path_is_refused(self):
+        wt, tip, rec = self.gated({'shared/x.md': 'words\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'docs')
+        self.refused(wt, tip, 'without --full',
+                     'the tip changes shared path shared/x.md ("landing".shared_paths)')
+
+    def test_a_docs_record_off_the_shared_paths_lands(self):
+        _, tip, rec = self.gated({'docs/guide.md': 'words\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'docs')
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+
+
+class ScopedStrictUnreadable(ScopedCase):
+    """A base whose strict list cannot be read refuses a scoped record in the tip check
+    (Lander.shared_refusal), before the strict check would."""
+
+    def test_a_scoped_record_is_refused_when_the_strict_paths_cannot_be_read(self):
+        self.repo.write('kitlib/gate/strict_defaults.py', 'STRICT_DEFAULTS = list()\n')
+        self.main = self.repo.commit('unreadable strict list', 'kitlib/gate/strict_defaults.py')
+        self.repo.git('push', '-q', 'origin', 'main')
+        wt, tip, rec = self.gated({'a.py': 'x = 1\n'})
+        self.assertEqual(gate_ok.mode_of(rec), 'select')
+        self.refused(wt, tip, 'without --full', 'cannot read the strict paths from main at %s'
+                     % self.main[:10])
