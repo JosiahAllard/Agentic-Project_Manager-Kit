@@ -4146,6 +4146,10 @@ GIT_LONGS = {
     'stash': ('message', 'patch', 'staged', 'keep-index', 'no-keep-index', 'include-untracked', 'all', 'quiet',
               'pathspec-from-file', 'pathspec-file-nul', 'index'),
     'update-ref': ('no-deref', 'stdin', 'create-reflog', 'batch-updates'),
+    # --prefix and --stage take a value; left out of GIT_LONG_VALUES, the value is read as a path
+    # (fail closed)
+    'checkout-index': ('index', 'quiet', 'force', 'all', 'no-create', 'prefix', 'stage', 'temp',
+                       'ignore-skip-worktree-bits', 'stdin'),
 }
 GIT_LONGS['stage'] = GIT_LONGS['add']
 GIT_LONG_VALUES = {'message', 'file', 'author', 'date', 'template', 'reuse-message', 'reedit-message', 'fixup',
@@ -4181,9 +4185,20 @@ def restore_index_only(short, longs):
             and longs <= set(GIT_LONGS['restore']))
 
 
-def _opts(sub, args):
+def _one_letter(sub, body):
+    """The long option a one-letter `--body` abbreviates for `sub` when exactly one starts with it
+    (git reads `--h` as reset's `--hard`), else None (ambiguous or unknown: git rejects it)."""
+    hits = [n for n in GIT_LONGS.get(sub, ()) if len(body) == 1 and n.startswith(body)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _opts(sub, args, wide=False):
     """(short option letters, long option names, positional Words) of a git subcommand's
-    arguments, option values left out."""
+    arguments, option values left out. `wide` also names the long option a one-letter body
+    abbreviates (_one_letter) beside the body itself, for a check that refuses on that option:
+    the body stays, so a check that passes only on known options (restore_index_only) still
+    fails closed, and a caller that passes on an option it names (a listing, --no-deref) keeps
+    the narrow reading."""
     shorts, longs, pos = set(), set(), []
     values = GIT_SHORT_VALUES.get(sub, '')
     k = 0
@@ -4196,6 +4211,9 @@ def _opts(sub, args):
             body, eq, _v = t[2:].partition('=')
             names = _canon_long(sub, body)
             longs.update(names)
+            one = _one_letter(sub, body) if wide else None
+            if one:
+                longs.add(one)
             k += 1
             if not eq and len(names) == 1 and names[0] in GIT_LONG_VALUES:
                 k += 1
@@ -4644,6 +4662,47 @@ STASH_READS = ('list', 'show', 'create')        # no entry added or taken
 STASH_NAMED = ('apply', 'drop')                 # pass with the entry named: `apply <sha>`, `drop stash@{1}`
 
 
+def clean_dry_run(args):
+    """True when git clean with arguments `args` (the Words after `clean`) is a dry run, read in
+    order as git reads it: the last of `-n` (in a short cluster), `--dry-run` (an abbreviation of
+    two letters or more) and its negation `--no-dry-run` (`--no`, `--no-`, `--no-d`: git rejects
+    the ambiguous ones, and a refused line deletes nothing) wins; `-fn --no-dry-run` deletes. A
+    one-letter `--d` is `--dry-run` to git (-d has no long form), but is left unread: the line is
+    refused (fail closed). The value of `-e`/`--exclude` (any abbreviation, `--e` too) is skipped,
+    so `-f -e -n` is no dry run; a word the shell computes cancels one. Words after `--` are paths."""
+    dry = False
+    values = GIT_SHORT_VALUES['clean']
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        k += 1
+        if w.dyn:
+            dry = False                         # a word the shell computes may be --no-dry-run
+            continue
+        if t == '--':
+            break
+        if t.startswith('--'):
+            body, eq, _v = t[2:].partition('=')
+            if body.startswith('no') and 'no-dry-run'.startswith(body):
+                dry = False
+            elif not eq and len(body) > 1 and 'dry-run'.startswith(body):
+                dry = True
+            elif body and 'exclude'.startswith(body) and not eq:
+                k += 1
+            continue
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            for j, c in enumerate(body):
+                if c == 'n':
+                    dry = True
+                if c in values:
+                    if not body[j + 1:]:
+                        k += 1
+                    break
+    return dry
+
+
 def stash_reads(args):
     """True when git stash with arguments `args` (the Words after `stash`) only reads: `list` or
     `show` as the first word. git reads a verb only there: a line that starts with an option or
@@ -4707,7 +4766,7 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
     where = 'the main checkout %s' % place.top if place.kind == repo.MAIN else \
         'a checkout git cannot place (%s)' % place.detail
     top = place.top or '<main checkout>'
-    short, longs, pos = _opts(sub, args)
+    short, longs, pos = _opts(sub, args, wide=True)
     if writes_main(sub, short, longs):
         cfg = ctx.config(place.top or gc.dir)
         if not kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout'):
@@ -4742,7 +4801,7 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
         return refuse('git-reset-hard', role, '`%s` discards work in %s. Reset --keep refuses to drop uncommitted '
                       'changes:' % (text, where), 'git -C %s reset --keep %s' % (quote(top), rev))
     if sub == 'clean':
-        if 'n' in short or 'dry-run' in longs:
+        if clean_dry_run(args):
             return None
         return refuse('git-clean', role, '`%s` deletes untracked files in %s. Remove what must go one named path at a '
                       'time; to list them:' % (text, where), 'git -C %s clean -n' % quote(top))
@@ -6219,7 +6278,7 @@ def git_unplaced(ctx, cmd, gc, cwd, agent=False):
 
 
 def git_branch_delete(ctx, gc, role):
-    short, longs, pos = _opts('branch', gc.rest)
+    short, longs, pos = _opts('branch', gc.rest, wide=True)
     force = 'D' in short or (('delete' in longs or 'd' in short) and ('force' in longs or 'f' in short))
     if not force:
         return None

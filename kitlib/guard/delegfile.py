@@ -323,7 +323,7 @@ def git(event, ctx, cmd, inv, role):
     top = tree_top(ctx, gc.dir, pointer)
     if top is None:
         return None
-    short, longs, pos = rules._opts(sub, args)
+    short, longs, pos = rules._opts(sub, args, wide=True)
     file_real = jail.real(copy)
     hit = any(covers(ctx, w, gc.dir, top, file_real) for w in pos)
     why = None
@@ -343,7 +343,7 @@ def git(event, ctx, cmd, inv, role):
         why = 'may overwrite it with another commit\'s version'
     elif sub == 'read-tree' and 'u' in short:
         why = 'may overwrite it'
-    elif sub == 'clean' and not ('n' in short or 'dry-run' in longs) and (hit or not pos):
+    elif sub == 'clean' and not rules.clean_dry_run(args) and (hit or not pos):
         why = 'may delete it'
     elif sub == 'stash' and not rules.stash_reads(args):
         why = 'may take it away or overwrite it'
@@ -376,7 +376,7 @@ def git_config(event, ctx, role, text, top, base, sub, short, longs, args, pos):
     elif sub == 'checkout':
         hit = lands(after_dashes(args))
     elif sub == 'clean':
-        hit = not ('n' in short or 'dry-run' in longs) and lands(pos)
+        hit = not rules.clean_dry_run(args) and lands(pos)
     else:
         hit = False
     if not hit:
