@@ -153,6 +153,8 @@ button:disabled{opacity:.5;cursor:default}
 .morerow>.n{margin-left:auto;font:600 .75rem var(--f-mono);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:1px 7px}
 .morerow>.n.hot{background:var(--warn-soft);color:var(--warn)}
 .machine{margin:0}
+.home-title{margin:0 0 8px;font-size:1.25rem}
+#machine a{display:block;color:inherit;text-decoration:none}
 .sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .t{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;min-width:0}
 .t.done{opacity:.72}
@@ -2123,33 +2125,27 @@ ul.hist .sch-line{display:block}
   }
 
   const sleep = ms => new Promise(done => setTimeout(done, ms));
-  // ---- Home: what waits on the owner, then the machine in one line.
-  // The needs-you list merges the pending approvals, the open questions and the open to-dos (each as the other
-  // sections count them), urgent first, then approvals before questions before to-dos, then the oldest first;
-  // an item with no time comes last of its kind.
-  const NEED_RANK = { approval: 0, question: 1, todo: 2 };
-  function needsYou(){
-    const out = [];
-    for (const a of state.approvals) out.push({ kind: "approval", id: a.id, title: a.title, at: a.created_at, urgent: true });
-    for (const d of state.docs) if (d.status === "open") out.push({ kind: "question", id: d.id, title: d.title, at: d.asked_at, urgent: !!d.urgent });
-    for (const t of state.todos) if (t.status !== "done") out.push({ kind: "todo", id: t.id, title: t.title, at: t.added_at, urgent: !!t.urgent });
-    const key = n => n.at ? String(n.at) : "\uffff";
-    return out.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || NEED_RANK[a.kind] - NEED_RANK[b.kind] || key(a).localeCompare(key(b)));
+  // ---- Home: "Today <date>", the machine strip, then what waits on the owner in four groups. The first row is open in
+  // the detail pane (a wide screen; none on a phone), as in the other views. Decisions are the open questions, Approvals
+  // the pending ones, Hand steps the open to-dos and Replies from the PM the owner's notes the PM has answered.
+  // A reply counts for HOME_REPLY_DAYS days from its done_at: it stands in for a read marker the snapshot doesn't have.
+  const HOME_REPLY_DAYS = 7;
+  function homeGroups(){
+    const key = n => n.at ? String(n.at) : "￿";
+    const sorted = list => list.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || key(a).localeCompare(key(b))).map(n => n.pair);
+    const since = schNow() - HOME_REPLY_DAYS * 86400000;
+    const replies = state.topm.filter(x => x.status === "done" && x.reply && msOf(x.done_at) != null && msOf(x.done_at) >= since)
+      .sort((a, b) => msOf(b.done_at) - msOf(a.done_at));
+    return [
+      ["Decisions", sorted(state.docs.filter(d => d.status === "open").map(d => ({ at: d.asked_at, urgent: !!d.urgent, pair: ["q", d] })))],
+      ["Approvals", sorted(state.approvals.map(d => ({ at: d.created_at, urgent: true, pair: ["approval", d] })))],
+      ["Hand steps", sorted(state.todos.filter(t => t.status !== "done").map(t => ({ at: t.added_at, urgent: !!t.urgent, pair: ["todo", t] })))],
+      ["Replies from the PM", replies.map(x => ["pm", x, "done"])]
+    ].filter(g => g[1].length);
   }
-  function goNeed(n){
-    state.repo = ""; $("#repo").value = "";
-    if (n.kind === "question") return goQuestion(n.id);
-    state.section = n.kind === "todo" ? "todo" : "approvals"; state.afilter = "waiting"; state.tfilter = "open"; state.sel = { kind: n.kind === "todo" ? "todo" : "approval", id: n.id };
-    render();
-    const x = document.getElementById((n.kind === "todo" ? "todo-" : "approval-") + n.id); if (x) x.scrollIntoView({block:"start"});
-  }
-  function needCard(n){
-    return el("article", {class: n.urgent ? "q urgent" : "q", id: "need-" + n.id},
-      el("div", {class:"meta"}, el("span", {class: n.urgent ? "chip need" : "chip", text: n.kind === "approval" ? "Approval" : n.kind === "question" ? "Question" : "To do"}),
-        el("span", {class:"id", text: String(n.id)}), n.at ? el("span", {text: "since " + when(n.at)}) : null),
-      el("h2", {text: n.title ? String(n.title) : "(untitled)"}),
-      el("div", {class:"act"}, el("button", {class:"primary", type:"button", id: "need-open-" + n.id, text:"Open", onclick: () => goNeed(n)})));
-  }
+  const homeReplyRow = x => rowCard("pm", { ...x, title: String(x.reply || "").trim().split("\n")[0].slice(0, 140), urgent: false },
+    [el("span", {class:"chip", text:"Reply"}), x.repo ? el("span", {class:"chip", text: String(x.repo)}) : null], x.done_at ? "replied " + when(x.done_at) : "");
+  const HOME_ROW = { q: questionRow, approval: approvalRow, todo: todoRow, pm: homeReplyRow };
   // The machine lock, read from the owner routes GET /lock/view and GET /lock/wait (the same two calls the lock page
   // makes). One watcher serves Home's machine line, the Schedule view and the Schedule count: it runs from the page's
   // start, stops while the tab is hidden and reads again when it is shown. A failed read keeps the last good view and
@@ -2200,18 +2196,21 @@ ul.hist .sch-line{display:block}
     return ["Machine", head, run.length ? "running: " + run.slice(0, 3).join("; ") + (run.length > 3 ? "; and " + (run.length - 3) + " more" : "") : "nothing running",
       warn ? warn + (warn === 1 ? " warning" : " warnings") : ""].filter(Boolean).join(" · ") + "." + (bad ? " Out of date: " + bad : "");
   }
+  // The machine strip: the Schedule view's slot boxes and the summary line, all one link to the Schedule view.
   function machineLine(){
     const v = mach.view, bad = mach.err ? "The machine lock could not be read (" + mach.err + ")." : "";
-    // The line is a link to the Schedule view, which says all of it.
-    const link = el("a", {href:"#schedule", text: machineText(), onclick: e => { if (e && e.preventDefault) e.preventDefault(); pickSection("schedule"); }});
-    if (!v) return el("p", {class: bad ? "gone" : "status", id:"machine", role:"status"}, link);
-    return el("p", {class: bad ? "gone" : "status machine", id:"machine", role:"status"}, link);
+    const cores = (v && v.cores) || {};
+    const link = el("a", {href:"#schedule", onclick: e => { if (e && e.preventDefault) e.preventDefault(); pickSection("schedule"); }},
+      v ? [schBoxes(cores.cpu, "home-cpu"), schBoxes(cores.gpu, "home-gpu")] : null, el("span", {text: machineText()}));
+    return el("div", {class: !v ? (bad ? "gone" : "status") : bad ? "gone" : "status machine", id:"machine", role:"status"}, link);
   }
   function renderHome(){
-    const items = ready ? needsYou() : [];
-    show([], machineLine(), ready ? el("h2", {id:"need-head", text: items.length ? "Waiting on you (" + items.length + ")" : "Waiting on you"}) : null,
-      items.length ? items.map(n => drawn(needCard, n))
-        : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing waits on you" : NOT_READY}), ready ? "Approvals, open questions and open to-dos appear here." : NOT_READY_WHY));
+    const groups = ready ? homeGroups() : [];
+    const at = settle(groups.flatMap(g => g[1]));
+    show([], el("h1", {id:"home-title", class:"home-title", text: "Today " + schDay(schNow())}), machineLine(),
+      groups.length ? groups.flatMap(([title, rows]) => [el("h3", {class:"sch-group", text: title + " (" + rows.length + ")"}), ...rows.map(r => drawn(HOME_ROW[r[0]], r[1]))])
+        : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing waits on you" : NOT_READY}), ready ? "Open questions, approvals, hand steps and the PM's recent replies appear here." : NOT_READY_WHY));
+    pickDetail(at);
   }
 
   // ---- Schedule: the machine lock as the owner reads it (docs/action-hub.md "Schedule"). It draws from the one lock
@@ -2378,22 +2377,24 @@ ul.hist .sch-line{display:block}
       schLine(schWhen(h.start) + " to " + schWhen(h.end)), h.note ? schLine(String(h.note)) : null,
       schLine(h.lost && h.lost.cpu ? "lost " + schPools(h.lost) + " to " + (h.lost_to || []).join(", ") : h.state || (h.live ? "in force" : "booked")));
   }
-  function schMachineCard(){
-    const v = mach.view, cores = v.cores || {}, s = state.sch;
-    const box = d => {
+  // The slot boxes of one pool (the lock view's cores.cpu or cores.gpu): the Schedule's machine card and Home's strip draw them.
+  function schBoxes(list, id){
+    return el("div", { class: "boxes", id }, ...(Array.isArray(list) ? objs(list) : []).map(d => {
       const b = el("div", { class: ["box", d.holder ? "held" : "free", d.background ? "bg" : "", d.outline ? "o-" + d.outline : ""].filter(Boolean).join(" "),
         title: [d.title, d.holder ? "run " + d.holder : "", d.hold ? "hold " + d.hold : "", d.background ? "background run" : ""].filter(Boolean).join(", "), text: String(d.label || "") });
       if (schColour(d.holder)) b.style.borderLeftColor = schColour(d.holder);
       return b;
-    };
+    }));
+  }
+  function schMachineCard(){
+    const v = mach.view, cores = v.cores || {}, s = state.sch;
     const m = v.memory, rows = s.stats && Array.isArray(s.stats.rows) ? objs(s.stats.rows) : null;
     const sum = k => rows.reduce((n, r) => n + (Number(r[k]) || 0), 0);
     const warns = (Array.isArray(v.warnings) ? v.warnings : []).map(t => el("li", { text: String(t) }));
     return el("article", { class: "q", id: "sch-machine" },
       el("div", { class: "meta" }, el("span", { class: "chip", text: "Machine" })),
       el("h2", { text: cores.head ? String(cores.head) : "The machine" }),
-      el("div", { class: "boxes", id: "sch-cpu" }, ...(Array.isArray(cores.cpu) ? objs(cores.cpu) : []).map(box)),
-      el("div", { class: "boxes", id: "sch-gpu" }, ...(Array.isArray(cores.gpu) ? objs(cores.gpu) : []).map(box)),
+      schBoxes(cores.cpu, "sch-cpu"), schBoxes(cores.gpu, "sch-gpu"),
       m ? schLine(m.free_mb == null ? "Memory: " + schMb(m.total_mb) + " in all; free not measured yet" : "Memory: " + schMb(m.free_mb) + " free of " + schMb(m.total_mb)) : null,
       warns.length ? el("ul", { class: "warns" }, ...warns) : null,
       rows ? el("p", { class: "sch-line", id: "sch-stats", text: "Last 7 days: " + sum("runs") + " runs, " + sum("done") + " done, " + (sum("failed") + sum("interrupted")) + " failed or stopped." })
