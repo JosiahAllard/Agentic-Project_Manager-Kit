@@ -39,7 +39,10 @@ Rules, in the order they are checked:
                    the guard cannot read where the verb could be counts), in any session but the
                    owner's own. Text that only names the hub tool (prose, a pipe of a run into
                    another program) is not read
-  ledger          an edit of the machine config's ledger_path, by anyone
+  ledger          an edit of the machine config's ledger_path, of the rulebooks' folder or a
+                   `.md` file directly in it, or of the standing digest (kitlib.ledger.files
+                   of_config: `rules` and STANDING.md in ledger_dir, else beside ledger_path), by
+                   anyone; with a broken machine config, every subagent write
   lock-state       an agent session's edit of a file in the machine lock's state folder
   machine-config   an edit of a file in the PM repository's machine config folder
                    (<pointer>/.pm-kit) or in a .pm-kit folder at the top of a checkout, in any
@@ -1026,6 +1029,32 @@ def same_file(a, b):
     return paths.norm(a, absolute=True) == paths.norm(b, absolute=True)
 
 
+def standing_file(ctx, target):
+    """What of the standing rules `target` is: 'rulebook' for the rulebooks' folder or a `.md` file
+    directly in it (any case: the filesystem folds it), 'digest' for the standing digest, else
+    None. Both from kitlib.ledger.files.of_config over the machine config (Ctx.ledger_files)."""
+    files = ctx.ledger_files()
+    if files is None:
+        return None
+    rules_dir = files.rules
+    if rules_dir and (same_file(target, rules_dir) or (
+            same_file(os.path.dirname(os.path.abspath(target)), rules_dir) and target.lower().endswith('.md'))):
+        return 'rulebook'
+    if files.digest and same_file(target, files.digest):
+        return 'digest'
+    return None
+
+
+STANDING_WHY = {
+    'rulebook': '%s writes a rulebook, which only ledger.py writes, each rule change paired with a log entry: read '
+                'the proposed rule against the others with conflicts, then add it with add --rule KEY --topic '
+                'TOPIC --checked HASH, or remove one with rule-drop (docs/ledger.md "Rulebooks").',
+    'digest': '%s writes the standing digest, which the rulebooks replace: it is read, never written, until it '
+              'goes, and a standing rule goes in a rulebook through ledger.py: conflicts, then add --rule '
+              '(docs/ledger.md "Rulebooks").',
+}
+
+
 def ledger_rule(ctx, target, role, what):
     user = ctx.user()
     broken = user.get('broken')
@@ -1034,13 +1063,20 @@ def ledger_rule(ctx, target, role, what):
                       'guard cannot tell where the rulings ledger is and refuses every subagent write. The owner '
                       'or the PM session fixes it.' % (what, ctx.config_location().display(), broken),
                       'python -m json.tool %s' % quote(ctx.config_location().path))
-    ledger = user.get('ledger_path')
-    if not ledger or not target or not same_file(target, ledger):
+    if not target:
         return None
-    return refuse('ledger', role, '%s writes the rulings ledger, which only ledger.py writes. '
-                  "Add the entry with the kit's tools/ledger.py add (docs/ledger.md)." % what,
-                  'python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
-                  '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
+    ledger = user.get('ledger_path')
+    if ledger and same_file(target, ledger):
+        return refuse('ledger', role, '%s writes the rulings ledger, which only ledger.py writes. '
+                      "Add the entry with the kit's tools/ledger.py add (docs/ledger.md)." % what,
+                      'python %s add --repo <repo> --prov <prov> --q "<question>" --a "<answer>" '
+                      '--decides "<what it decides>" --source "<source>"' % kit_tool(ctx, 'ledger'))
+    kind = standing_file(ctx, target)
+    if kind is None:
+        return None
+    return refuse('ledger', role, STANDING_WHY[kind] % what,
+                  'python %s conflicts --repo <repo> --topic "<topic>" --key <key> --text "<rule>"'
+                  % kit_tool(ctx, 'ledger'))
 
 
 def lock_state_dir(ctx):
