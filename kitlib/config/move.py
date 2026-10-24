@@ -54,7 +54,7 @@ IGNORE_FILE = '.gitignore'
 DELEGATIONS_FILE = 'owner-delegations.json'      # kitlib.delegations.load.FILE_NAME
 MANAGED_FILE = 'managed-settings.json'           # kitlib.machinesetup.managed.OVERLAY
 HUB_DIR = 'hub'                                  # kitlib.hubsite.auth.FOLDER_NAME
-GITIGNORE = 'local.json\nhub/\nmanaged-settings.json\n*.bak*\n*%s\n' % TMP_SUFFIX
+GITIGNORE = 'local.json\nhub/\nauto-tasks/\nmanaged-settings.json\n*.bak*\n*%s\n' % TMP_SUFFIX
 NEVER_COPIED = ('*.bak*', 'hub_backlog_state*.json')
 COMMIT_MESSAGE = 'Move the machine config into the PM repo'
 

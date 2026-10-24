@@ -1,8 +1,8 @@
 """machine_paths.py: refuse a hard-coded machine path anywhere in the tree (docs/commit.md).
 
   machine_paths.py [-C DIR]
-      search every tracked file, and every untracked one git does not ignore, of the work tree DIR
-      is in (default: here) for a drive-rooted machine folder (the machine config's
+      search every file git tracks (never an untracked one) in the work tree DIR is in
+      (default: here) for a drive-rooted machine folder (the machine config's
       machine_path_folders; unset: none, and a NOTE says so) or user profile, against the
       .kit.json "machine_paths" allow-list
 

@@ -1,7 +1,8 @@
 """preflight's `config` line: which machine config files are read (kitlib.config.user.locate: the
-PM repository's `.pm-kit` folder with a good PM-repo pointer), a machine config still in the home
-folder (docs/kit-json.md "Moving the machine config into the PM repo"), and why the config cannot
-be read. It names files and keys, never a value.
+PM repository's `.pm-kit` folder with a good PM-repo pointer), or why the config cannot be read
+(BROKEN), a machine config still in the home folder among them (kitlib.config.user LEFTOVER and
+UNMOVED; docs/kit-json.md "Moving the machine config into the PM repo"). It names files and keys,
+never a value.
 
 The `pointer` line (pointer_line) names the PM repository the PM-repo pointer gives
 (kitlib.config.pointer), or why it gives none.
@@ -84,10 +85,6 @@ def line(home=None):
                                        % _shown(loc.path))
     shown = '%s (%s)' % (_shown(loc.folder), ', '.join(names) if names else
                          'no file yet: every key has its default')
-    if loc.leftover:
-        return PREFIX + ('WARN %s is read; %s is still in the home folder and ignored - retire it '
-                         'once the move is checked (%s)' % (shown, loc.display(loc.leftover),
-                                                             user.MOVE_DOC))
     return PREFIX + shown
 
 
