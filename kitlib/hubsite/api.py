@@ -264,7 +264,7 @@ Pending for one session. Every pending item carries `from`, the session key it i
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
 coordinator is not woken by another session's answer. A filtered read changes nothing: the
 items it leaves out, and the ones it lists, stay pending for every reader until they are
-handled (a question until it is logged). Without `for` every item is listed, as before.
+handled (a question until it is logged, or marked done when it needs no ruling). Without `for` every item is listed, as before.
 GET wait (with pending=1) also takes `except=<id>,<id>`: the ids the caller has already acted
 on are left out, and such a wait is woken only by another item, so an answer that waits for the
 PM's log is not returned again at once. It too only hides: nothing is marked.
@@ -981,6 +981,29 @@ def questions_log(api, req):
                        % (doc_id, d.get('status')), 'status')
     return api.change('questions', doc_id, d, {'status': 'logged', 'ruling': ruling}, req,
                       {'status': 'logged'})
+
+
+def questions_done(api, req):
+    """The PM marks an answered question handled with no ruling (a one-off go the ledger keeps
+    out): status `done`, terminal, so it is no longer pending and its push ends. Refused
+    (`invalid`) for a question that is not answered, one bound to a record (`record`: its answer
+    is filed to the record, not marked done here) and a blank why."""
+    b = _fields(req, ('why', 'if_version'), required=('why',))
+    _pin(b, required=True)
+    why = _text(b, 'why').strip()
+    if not why:
+        raise _invalid('why says why the answer needs no ruling: it cannot be blank', 'why')
+    doc_id = req.params['id']
+    d = api.doc('questions', doc_id, b)
+    if d.get('status') != 'answered':
+        raise _invalid('%s is %s: only an answered question is marked done'
+                       % (doc_id, d.get('status')), 'status')
+    if d.get('record'):
+        raise _invalid('%s is bound to a record: its answer is filed to the record, not marked '
+                       'done' % doc_id, 'record')
+    return api.change('questions', doc_id, d,
+                      {'status': 'done', 'done_why': why, 'done_at': api.clock()}, req,
+                      {'status': 'done'})
 
 
 def todos_list(api, req):
@@ -2301,6 +2324,7 @@ ROUTES = (
     _r('POST', '/questions', AGENT, questions_add),
     _r('POST', '/questions/{id}/answer', OWNER, questions_answer),
     _r('POST', '/questions/{id}/log', AGENT, questions_log),
+    _r('POST', '/questions/{id}/done', AGENT, questions_done),
     _r('POST', '/questions/{id}/edit', AGENT, questions_edit),
     _r('POST', '/questions/{id}/delete', ANY, questions_delete),
     _r('GET', '/todos', ANY, todos_list),

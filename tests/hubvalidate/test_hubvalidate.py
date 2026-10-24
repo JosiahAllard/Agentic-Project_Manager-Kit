@@ -113,7 +113,7 @@ class CheckTest(unittest.TestCase):
             self.assertIn(('todos/T-1', 'commands-type'), codes(f, V.ERROR), msg=bad)
 
     def test_statuses(self):
-        f = V.validate({'questions': {'Q-1': question(status='done'), 'Q-2': question(status=None)},
+        f = V.validate({'questions': {'Q-1': question(status='closed'), 'Q-2': question(status=None)},
                         'stories': {'S': {'status': 'added'}}, 'to_pm': {'P-001': {'status': 'sent'}}})
         self.assertEqual(codes(f), [('questions/Q-1', 'status-unknown'),
                                     ('questions/Q-2', 'status-missing')])
