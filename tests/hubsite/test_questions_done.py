@@ -137,7 +137,8 @@ class RefusedTest(DoneCase):
         qid = self.answered()
         status, obj = self.call('POST', '/questions/%s/done' % qid, OWNER,
                                 {'why': 'w', 'if_version': self.version(qid)})
-        self.assertNotEqual(status, 200, obj)
+        self.assertEqual((status, obj['error']['code'], obj['error']['field']),
+                         (403, 'forbidden', 'role'), obj)
         self.assertEqual(self.store.get('questions', qid)['status'], 'answered')
 
 
@@ -170,13 +171,13 @@ class CliTest(cli.VerbCase):
             'questions', 'done', 'Q-1000', '--why', 'again', '--if-version', '3'))
 
     def test_the_why_and_the_version_are_required(self):
-        for argv in (('questions', 'done', 'Q-1000', '--why', 'w'),
-                     ('questions', 'done', 'Q-1000', '--if-version', '1'),
-                     ('questions', 'done', '--why', 'w', '--if-version', '1')):
+        for argv, missing in ((('questions', 'done', 'Q-1000', '--why', 'w'), '--if-version'),
+                              (('questions', 'done', 'Q-1000', '--if-version', '1'), '--why'),
+                              (('questions', 'done', '--why', 'w', '--if-version', '1'), 'id')):
             with self.subTest(argv=argv):
                 code, out, err = self.run_cli(*(argv + ('--port', self.port)))
                 self.assertEqual((code, out), (2, ''), err)
-                self.assertIn('USAGE: ', err)
+                self.assertIn('USAGE: the following arguments are required: %s' % missing, err)
 
 
 if __name__ == '__main__':
