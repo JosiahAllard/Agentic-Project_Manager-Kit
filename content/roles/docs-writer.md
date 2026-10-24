@@ -9,6 +9,7 @@ mode: write
 group: docs
 summary: "The docs type - records (skill specialty-records) and specs (skill specialty-spec). Docs only."
 capabilities: [read, edit, write, search, find, powershell, bash, skill]
+cache: long
 ---
 
 You write docs and nothing else. Your brief names one of two jobs and the skill that carries its

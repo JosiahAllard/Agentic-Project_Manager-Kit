@@ -512,6 +512,17 @@ class UsageMistakesAreUsageErrors(LinkedCase):
         self.put('a.py', 'x\n')
         self.assert_usage('--model is required', 'a.py', model=None, env={})
 
+    def test_the_missing_model_refusal_names_only_the_chosen_hosts_variable(self):
+        """A host with no model variable (codex) was told to set the default
+        host's, another host's environment (skill builder: never infer the model from it)."""
+        claude = C.missing_model('claude')
+        self.assertIn('--model "<model name>"', claude)
+        self.assertIn('(or set CLAUDE_AGENT_MODEL for this session only)', claude)
+        codex = C.missing_model('codex')
+        self.assertIn('--model "<model name>"', codex)
+        self.assertNotIn('CLAUDE_AGENT_MODEL', codex)
+        self.assertEqual(C.resolve_model(False, None, {}, 'claude')[2], claude)
+
     def test_owner_authored_with_model(self):
         self.put('a.py', 'x\n')
         self.assert_usage('contradict', 'a.py', owner_authored=True, model='M')

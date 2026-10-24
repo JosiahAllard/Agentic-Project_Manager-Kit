@@ -40,6 +40,22 @@ def ps_dashed(text):
     return '-' + text[1:] if text[:1] in PS_DASHES else text
 
 
+# What cmd.exe reads in a batch file's arguments when it runs the line again (a .cmd or .bat run
+# through cmd /c: `python x.py %*` substitutes the caller's words as text, docs/guard.md "Batch
+# files and cmd.exe"): % expands (phase 1); ^ escapes and " toggles quoting, which un-hides the
+# operators & | < > after it (phase 2); ( ) open and close a block; ! expands under delayed
+# expansion (off under cmd /c unless the Command Processor DelayedExpansion registry value turns
+# it on); CR and LF end the line, dropping every word after them. , ; = and blanks only split
+# %1..%9, and %* passes them on as written.
+CMD_REPARSE = '&|<>^%"()!\r\n'
+
+
+def cmd_unsafe(text):
+    """The first character of `text` cmd.exe would read again in a batch file's argument
+    (CMD_REPARSE), or None."""
+    return next((c for c in text if c in CMD_REPARSE), None)
+
+
 BASH_ESC = ' \t"\'\\$`&|;<>(){}#*?[]!~'
 CD_VERBS = {'cd', 'chdir', 'set-location', 'sl', 'push-location', 'pushd'}
 CD_UNKNOWN = {'popd', 'pop-location'}

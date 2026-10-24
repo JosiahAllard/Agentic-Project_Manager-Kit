@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kitlib import attribution, syncbase                            # noqa: E402
+from kitlib import commit as kcommit, syncbase                      # noqa: E402
 from kitlib.host import registry                                    # noqa: E402
 
 
@@ -67,10 +67,7 @@ def main(argv=None):
     except ValueError as error:
         p.error(str(error))
     if model is None:
-        env = attribution.model_environment(host)       # the chosen host's, not the default's
-        p.error('--model is required: name the model you are running on, --model "<model name>"%s; '
-                'it goes in the merge commit\'s Co-Authored-By trailer. If you do not know it, say so '
-                'and stop.' % (' (or set %s for this session only)' % env if env else ''))
+        p.error(kcommit.missing_model(host))            # the chosen host's variable, not the default's
     try:
         out = syncbase.sync(a.root, a.hash, model, source, a.base, wait=a.wait,
                             say=lambda line: print(line, flush=True), provider=host)

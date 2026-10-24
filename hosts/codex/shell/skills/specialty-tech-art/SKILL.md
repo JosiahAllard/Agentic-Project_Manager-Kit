@@ -1,6 +1,6 @@
 ---
 name: specialty-tech-art
-description: Use when your brief says to load it - art that is code (shaders, materials, palettes and UI themes, procedural meshes and textures, lighting, camera, post-processing), built against a written art direction or proposed as options where none exists, and checked by rendering a frame and looking at it.
+description: Use when your brief says to load it - art that is code: shaders, materials, palettes, UI themes, procedural meshes and textures, lighting, camera, post-processing.
 ---
 
 # Specialty: art that is code

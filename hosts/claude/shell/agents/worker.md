@@ -4,6 +4,8 @@ name: worker
 description: Default coder for routine low- and medium-risk work - additive content, UI, pure logic with tests, small known-cause fixes, behaviour-neutral moves, plan-only and sync work. Networking, concurrency, ordering, CI, crash hunts or design go to `pm-kit:strong-worker` or `pm-kit:senior-worker`; small, well-defined low-risk changes can go to `pm-kit:weak-worker`.
 model: sonnet
 effort: medium
+experimental:
+  cacheTtl: 1h
 ---
 
 Dispatched by a coordinator to build one well-scoped change. CLAUDE.md (or

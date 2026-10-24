@@ -145,15 +145,16 @@ class AgentFilesTest(unittest.TestCase):
                 fm = frontmatter("---\nname: x\ntools: Read\nx:\n%stools: Skill\n---\nbody\n" % indent)
                 self.assertEqual(fm, {"name": "x", "tools": "Read", "x": ""})
 
-    def test_only_strong_worker_asks_for_the_one_hour_prompt_cache(self):
-        """The one-hour cache lifetime is one agent's setting (docs/ROSTER.md, "The one-hour prompt
+    def test_only_the_long_cache_roles_ask_for_the_one_hour_prompt_cache(self):
+        """The one-hour cache lifetime is set per agent (docs/ROSTER.md, "The one-hour prompt
         cache"); the client reads `cacheTtl` only inside the `experimental` map of a subagent file."""
+        long_cache = {"strong-worker", "worker", "docs-writer", "weak-worker"}
         for p in sorted(AGENTS.glob("*.md")):
             with self.subTest(agent=p.name):
                 text = p.read_text(encoding="utf-8")
                 fm, _ = strict_frontmatter(text)
                 head = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", text, re.S).group(1)
-                if p.stem == "strong-worker":
+                if p.stem in long_cache:
                     self.assertEqual(fm.get("experimental"), {"cacheTtl": "1h"})
                     self.assertEqual(head.count("cacheTtl"), 1)
                 else:
