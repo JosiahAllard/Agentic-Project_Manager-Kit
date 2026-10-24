@@ -5076,5 +5076,92 @@ class TriageViewsTest(unittest.TestCase):
         self.assertIn("plans", got["agents"]["detail"][0][1])
 
 
+def css_tokens(css, head):
+    """The custom properties of the token block that starts with `head` in hub.css, as a dict."""
+    i = css.index(head)
+    body = css[i + len(head):css.index("}", i)]
+    return dict(re.findall(r"--([\w-]+):\s*([^;}]+?)\s*(?=;|$)", body))
+
+
+def luminance(hex_):
+    c = [int(hex_[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    c = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def contrast(a, b):
+    la, lb = sorted((luminance(a), luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+class VisualStyleTest(unittest.TestCase):
+    """The Triage direction's look (KIT-HUB-TRIAGE-VISUAL-STYLE): its tokens, contrast, focus ring, motion and status glyphs."""
+
+    LIGHT = ":root{"
+    DARK_SYSTEM = ':root:not([data-theme="light"]){'
+    DARK_CHOSEN = ':root[data-theme="dark"]{'
+
+    def setUp(self):
+        with open(os.path.join(WEB, "hub.css"), encoding="utf-8") as f:
+            self.css = f.read()
+        self.style = re.search(r"<style>(.*?)</style>", page(), re.S).group(1)
+
+    def test_the_tokens_are_the_triage_directions_in_light_and_dark(self):
+        light = css_tokens(self.css, self.LIGHT)
+        self.assertEqual(light["r"], "10px")
+        self.assertTrue(light["f-body"].startswith('"Segoe UI Variable Text","Segoe UI Variable"'), light["f-body"])
+        self.assertEqual(light["accent"], "#4a44d4")                                   # indigo
+        for name in ("bg", "surface", "side", "line", "hover"):                       # warm greys: red at least blue
+            v = light[name]
+            self.assertGreaterEqual(int(v[1:3], 16), int(v[5:7], 16), (name, v))
+        system, chosen = css_tokens(self.css, self.DARK_SYSTEM), css_tokens(self.css, self.DARK_CHOSEN)
+        self.assertEqual(system, chosen)                                               # one dark, by setting or by choice
+        self.assertEqual(set(system), {k for k in light if k not in ("r", "r-s", "f-body", "f-mono", "side-w")})
+        self.assertRegex(self.css, r"(?m)^body\{[^}]*font:14px/1\.5 var\(--f-body\)")
+
+    def test_every_text_colour_reads_at_4_5_to_1_on_every_ground_in_both_themes(self):
+        pairs = [(t, g) for t in ("fg", "muted", "accent", "ok", "warn", "rec") for g in ("bg", "surface", "side", "hover")]
+        pairs += [("accent", "accent-soft"), ("fg", "accent-soft"), ("muted", "accent-soft"), ("ok", "ok-soft"),
+                  ("warn", "warn-soft"), ("rec", "rec-soft"), ("surface", "accent")]
+        for head in (self.LIGHT, self.DARK_CHOSEN):
+            t = css_tokens(self.css, head)
+            for fg, bg in pairs:
+                with self.subTest(theme=head, text=fg, ground=bg):
+                    self.assertGreaterEqual(contrast(t[fg], t[bg]), 4.5)
+
+    def test_one_focus_ring_of_2px_accent_covers_every_control(self):
+        m = re.search(r"(?m)^([^{}\n]*:focus-visible[^{}\n]*)\{outline:2px solid var\(--accent\);outline-offset:2px\}", self.css)
+        self.assertIsNotNone(m)
+        sel = {s.strip() for s in m.group(1).split(",")}
+        self.assertEqual(sel, {x + ":focus-visible" for x in ("a", "button", "select", "input", "textarea", "[tabindex]")})
+
+    def test_nothing_moves_unless_the_owner_allows_motion(self):
+        for name, text in (("hub.css", self.css), ("index.html", self.style)):
+            outside = re.sub(r"@media \(prefers-reduced-motion:no-preference\)\{(?:[^{}]*\{[^{}]*\})*\s*\}", "", text)
+            self.assertIsNone(re.search(r"transition|animation|@keyframes", outside), name)
+        self.assertRegex(self.style, r"@media \(prefers-reduced-motion:no-preference\)\{[^@]*transition:background-color")
+
+    def test_list_rows_are_44px_and_each_status_draws_a_glyph_a_reader_skips(self):
+        self.assertRegex(self.style, r"(?m)^#list article\.row\{min-height:44px;box-sizing:border-box\}")
+        for st, glyph in (("done", r"\2713"), ("failed", r"\2715"), ("stopped", r"\25A0"), ("late", r"\25B2"), ("urgent", r"\26A0\FE0E")):
+            rule = '.st-%s::before{content:"%s";content:"%s" / ""}' % (st, glyph, glyph)
+            self.assertIn(rule, self.style, st)
+
+    @unittest.skipUnless(NODE, "node is needed to run the page's logic")
+    def test_the_schedules_finished_and_late_runs_carry_a_status_class_and_keep_their_words(self):
+        view = sch_view(runs=[RUN1, RUN2], strip=HISTORY)
+        got = dom("""server.lock = %s; await start(); await visible(true);
+            const late = $$("#list .chip.st-late").map(text);
+            await click($("#row-hist"));
+            const chips = id => $$("#sch-history li[data-hist=" + id + "] .chip").map(c => [c.className, text(c)]);
+            return { late, ok: chips("r-1"), failed: chips("r-2"), cancelled: chips("r-3") };""" % json.dumps(view),
+                  snapshot(strong=True), hash="#schedule")
+        self.assertEqual(got["late"], ["Late"])
+        for key, st, word in (("ok", "st-done", "Done"), ("failed", "st-failed", "failed"), ("cancelled", "st-stopped", "cancelled")):
+            with self.subTest(result=key):
+                marked = [c for c in got[key] if st in c[0].split()]
+                self.assertEqual([c[1] for c in marked], [word], got[key])
+
+
 if __name__ == "__main__":
     unittest.main()
