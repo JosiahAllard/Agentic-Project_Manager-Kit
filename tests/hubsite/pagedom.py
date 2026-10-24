@@ -170,8 +170,8 @@ globalThis.fetch = (url, init) => {
   // A long-poll (the hub's, or the machine lock's) hangs until the test answers it, or until the page gives up on it
   // through its signal.
   // On the action hub page (a snapshot is given) the machine lock's own long-poll is kept apart (lockWaits): the
-  // page's one lock watcher starts with the page, and the hub's wake() must still find the hub's. The lock page
-  // (no snapshot) has the one long-poll, in waits.
+  // page's one lock watcher starts with the page, and the hub's wake() must still find the hub's. With no
+  // snapshot there is one long-poll, in waits.
   if (/^\/(lock\/)?wait/.test(path)) return new Promise((done, fail) => {
     const q = OPTS.lockSplit && path.startsWith("/lock/") ? lockWaits : waits;
     q.push(done);
