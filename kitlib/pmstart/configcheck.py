@@ -7,6 +7,7 @@
                            does not ignore, the auto-tasks state left in the home folder, or a
                            policy file that is not committed by the owner and
                            unchanged (the integrity line)
+  appended(text, check)    `text` and those lines, each as "\\n- <line>"; never raises
 
 The leftover is the home folder's machine config FILE that locate() still finds beside the PM
 repo's (kitlib.config.user LEFTOVER): the machine config moved, so the kit stops reading it until
@@ -82,6 +83,18 @@ def integrity(loc, run=None, rules=None):
     if not rules.is_owner(author):
         return NOT_OWNER % (shown, pm, rel)
     return None
+
+
+def appended(text, check=None):
+    """`text` and then each line of the machine config check (`check`, default lines) as a
+    "\\n- <line>": for a start text with no checklist to run it in (the PM part of the claude host
+    with no pm_start config). A check that raises is one "could not check machine_config" line;
+    this never raises."""
+    try:
+        extra = (check or lines)()
+    except Exception as e:
+        extra = ['could not check machine_config: %s: %s' % (type(e).__name__, e)]
+    return text + ''.join('\n- ' + l for l in extra)
 
 
 def lines(loc=None, run=None, rules=None):
