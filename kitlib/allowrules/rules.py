@@ -3,7 +3,7 @@
   allow_lines(kit, repo)         one PowerShell allow per spelling: the two script spellings and
                                  the kit command's `kit land`
   deny_lines(kit, repo)          a second -C, --log-dir, a bare --, and each shell metacharacter,
-                                 after each spelling (the kit command's also cmd's escape `^`)
+                                 after each spelling (the kit command's also cmd's `^` and `!`)
   decide(lines, shell, command)  'allow', 'deny' or None under the matching model in the doc
 
 `decide` is a model of Claude Code's documented rule matching, written so the tests can pin what
@@ -19,11 +19,14 @@ SHELLS = ('Bash', 'PowerShell')
 ALLOW_SHELLS = ('PowerShell',)
 SCRIPT = 'tools/land.py'
 # The kit command's spelling of the same land.py (tools/kit.py): it names no export folder, so its
-# lines outlive a plugin refresh. One allow line, the script lines' denies, and cmd's escape besides.
+# lines outlive a plugin refresh. One allow line, the script lines' denies, and cmd's own besides.
 KIT_COMMAND = 'kit land'
-# cmd.exe's escape character. If `kit` is a kit.cmd shim, cmd strips `^` before python reads the line,
-# so `-^C` would reach land.py as a second -C past the `* -C*` deny (INFERENCE until probed on the shim).
-CMD_ESCAPE = '^'
+# What cmd.exe reads that METACHARS does not hold, denied in the kit spelling only: `kit` on the
+# PATH is a kit.cmd shim, which cmd.exe reads before python does. `^` is its escape: cmd strips it,
+# so `-^C` reaches land.py as a second -C past the `* -C*` deny (probed on a kit.cmd: `-^C` came
+# out as -C). `!` expands a variable under delayed expansion, off under cmd /c unless the Command
+# Processor DelayedExpansion registry value turns it on (the guard's shell.CMD_REPARSE holds both).
+CMD_CHARS = ('^', '!')
 # Shell metacharacters that redirect, chain, substitute, expand, quote, escape or cut the command
 # short: any of them in a land command is denied, so no `*` of an allow can carry one (`$` and `(`
 # stand for `$(`, `@(` and PowerShell's `(expr)`; quotes, the backslash, braces and the tab hide a
@@ -78,11 +81,11 @@ def allow_lines(kit, repo):
 def deny_lines(kit, repo):
     """The deny rules, for each shell and spelling: a -C after the first (spaced, or any text -C past
     the fixed `-C <repo>` prefix), --log-dir by its shortest prefix, a bare `--`, and each
-    metacharacter; the kit command's also cmd's escape `^`."""
+    metacharacter; the kit command's also CMD_CHARS."""
     out = []
     for shell in SHELLS:
         for command in commands(kit):
-            chars = METACHARS + ((CMD_ESCAPE,) if command == KIT_COMMAND else ())
+            chars = METACHARS + (CMD_CHARS if command == KIT_COMMAND else ())
             out.append('%s(%s * -C*)' % (shell, command))
             out.append('%s(%s -C %s *-C*)' % (shell, command, repo))
             out.append('%s(%s *%s*)' % (shell, command, LOG_DIR))

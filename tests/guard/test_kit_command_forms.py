@@ -64,11 +64,13 @@ class Backlog(BR.Base):
 
     def test_what_kit_runs_no_tool_for_is_not_read_as_one(self):
         # kit refuses an option before the tool's name, a name it has no tool for, and itself;
-        # a computed name is read as python reads a computed script: not at all
+        # a computed name is read as python reads a computed script: not at all (the bare kit
+        # command is kit.cmd, so a computed word to it is cmd-reparse's: test_kit_cmd_reparse.py)
         for text in ('kit -h', 'kit', 'kit --x backlog close X-1', 'kit backlogx close X-1',
-                     'kit kit backlog close X-1', 'kit $t close X-1', 'python tools/kit.py -h'):
+                     'kit kit backlog close X-1', 'python tools/kit.py $t close X-1', 'python tools/kit.py -h'):
             with self.subTest(text):
                 self.allowed(self.cmd(text))
+        self.refused(self.cmd('kit $t close X-1'), 'cmd-reparse')
 
 
 class GateAllow(unittest.TestCase):

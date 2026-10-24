@@ -81,6 +81,9 @@ Rules, in the order they are checked:
                    entry or takes one it does not name (bare stash, pop, save, clear)
   owner-identity   the owner's email given to a commit, in any session but the owner's own
   kill-by-name     an agent session ending processes by name (taskkill /IM, Stop-Process -Name)
+  cmd-reparse      a batch file run (.cmd, .bat, the bare kit command) with an argument cmd.exe
+                   would read again (shell.CMD_REPARSE), a computed one, a splat or xargs' input,
+                   in any session (the shell rules' last)
   busy-wait        (off by default) a foreground sleep loop with no counter, clock or timeout bounding it
   git-alias        (a warning by default) a git alias defined on the command line (-c alias.<name>=...)
 A rule's mode (deny, warn or off) is kitlib.guard.modes'; a rule it does not name is deny.
@@ -301,6 +304,7 @@ def judge(event, ctx):
 def shell_command(event, ctx, text, shell, cwd, role):
     parsed = cm.read(text, shell, cwd, home=ctx.home)
     hub_rules = HubShell(event, ctx, parsed)
+    late = None             # cmd-reparse's, judged last: every other rule's refusal, the fallback's too, comes first
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, ledger_git,
@@ -309,6 +313,7 @@ def shell_command(event, ctx, text, shell, cwd, role):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
+        late = late or cmd_reparse(event, ctx, cmd, inv, cwd, role)
     d = brace_limit(parsed, role)
     if d:
         return d
@@ -317,8 +322,10 @@ def shell_command(event, ctx, text, shell, cwd, role):
         return d
     if not parsed.clean:
         from . import fallback
-        return fallback.check(event, ctx, text, cwd, role, parsed)
-    return None
+        d = fallback.check(event, ctx, text, cwd, role, parsed)
+        if d:
+            return d
+    return late
 
 
 def brace_limit(parsed, role):
@@ -341,6 +348,57 @@ def brace_limit(parsed, role):
 
 
 BRACE_NAMES = '<its names, written out or in brace words of at most %d each>'
+
+
+CMD_CHAR_NAMES = {'\r': 'a carriage return', '\n': 'a line break'}
+
+
+def cmd_reparse(event, ctx, cmd, inv, cwd, role):
+    """A batch file run (commands.batch_run: a .cmd or .bat, cmd's call of one, the bare kit
+    command) whose arguments cmd.exe would read again before the program does (rule cmd-reparse,
+    every session; docs/guard.md "Batch files and cmd.exe"): an argument holding one of
+    shell.CMD_REPARSE, a computed one (cmd.exe reads the value it gets), a PowerShell splat, or
+    arguments xargs gives it. The kit command's alternative is the same words through python and
+    tools/kit.py, which no cmd.exe reads; another batch file's is to run what it runs directly."""
+    found = cm.batch_run(cmd, inv)
+    if found is None:
+        return None
+    prog, args = found
+    ps = cmd.shell == sh.PS
+    why = 'xargs gives it arguments the guard cannot read' if inv.via == 'xargs' else None
+    for w in args:
+        if why:
+            break
+        shown = w.text.replace('\r', '\\r').replace('\n', '\\n')
+        shown = shown if len(shown) <= 60 else shown[:57] + '...'
+        if w.dyn:
+            why = 'its argument %s is computed, and cmd.exe reads the value it gets' % shown
+        elif ps and w.start is not None and cm.PS_SPLAT_RE.match(w.text) and not cm.quoted(cmd, w):
+            why = 'its argument %s is a splat, whose values the guard cannot read' % shown
+        else:
+            c = sh.cmd_unsafe(w.text)
+            if c is not None:
+                why = 'its argument %s holds %s, which cmd.exe reads' % (shown, CMD_CHAR_NAMES.get(c, c))
+    if why is None:
+        return None
+    what = ('This runs the batch file %s, and Windows runs a batch file in cmd.exe, which reads its '
+            'command line again before the program sees it: %s (& | < > run or redirect another '
+            'command, ^ and quotes change the words, %% and ! expand variables, a line break drops '
+            'the words after it).' % (prog, why))
+    if cm.base_name(prog.rstrip('. ')) == cm.KIT:
+        words = []
+        for w in args:
+            if ps and w.text == '--%' and not w.dyn:
+                continue
+            unsure = (w.dyn or '\r' in w.text or '\n' in w.text
+                      or (ps and w.start is not None and cm.PS_SPLAT_RE.match(w.text) and not cm.quoted(cmd, w)))
+            words.append('<value>' if unsure else shell_word(w.text))
+        instead = ' '.join(['python', kit_tool(ctx, 'kit')] + words)
+    else:
+        instead = ('run the program %s runs directly (python, node, the exe it starts), so no cmd.exe '
+                   'reads the words again, or give it words without cmd.exe\'s characters '
+                   '(& | < > ^ %% ! ( ) " and line breaks).' % prog)
+    return refuse('cmd-reparse', role, what, instead)
 
 
 def backlog_shell(event, ctx, cmd, inv, cwd, role):

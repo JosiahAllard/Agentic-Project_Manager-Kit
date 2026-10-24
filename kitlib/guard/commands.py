@@ -457,6 +457,31 @@ def cmd_invocation(cmd, inv):
     return Invocation(base_name(t), t, words[i + 1:], cmd, w.dyn, i, via=inv.via, word=w)
 
 
+BATCH_SUFFIXES = ('.cmd', '.bat')
+
+
+def batch_run(cmd, inv):
+    """(program text, its argument Words) when `inv` runs a batch file, which CreateProcess hands
+    to cmd.exe (docs/guard.md "Batch files and cmd.exe"): a program named with .cmd or .bat (any
+    case, any path, the trailing dots and blanks Windows drops dropped), cmd's `call` of one, and
+    the kit command named without an extension (`kit`, any path), which machine setup puts on the
+    PATH as kit.cmd. It is read from the text alone, no file looked up, so a bare `kit` counts
+    whether or not a kit.cmd is there (it fails closed). None otherwise, and for a computed
+    program."""
+    inv = cmd_invocation(cmd, inv)
+    if inv is None or inv.dyn:
+        return None
+    prog, args = inv.path, list(inv.args)
+    if cmd.shell == sh.CMD and inv.name == 'call':
+        if not args or args[0].dyn:
+            return None
+        prog, args = args[0].text, args[1:]
+    b = ntpath.basename(prog.replace('/', '\\')).lower().rstrip('. ')
+    if b.endswith(BATCH_SUFFIXES) or b == KIT:
+        return prog, args
+    return None
+
+
 ENV_VALUE_OPTS = ('-u', '--unset')
 
 
