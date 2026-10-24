@@ -184,16 +184,54 @@ class WatcherTest(unittest.TestCase):
 
 
 class HandoffTest(unittest.TestCase):
-    def test_newest_by_mtime(self):
-        times = {"M/pm-handoff-a.md": 1, "M/pm-handoff-b.md": 5}
-        seen = []
-        out = pmstart.handoff(CFG, globber=lambda p: seen.append(p) or list(times), mtime=times.get)
-        self.assertEqual(out, ["read first: M/pm-handoff-b.md"])
-        self.assertTrue(seen[0].endswith("pm-handoff-*.md"))
+    TOP = os.path.normpath("X:/pm")
 
-    def test_none(self):
-        (s,) = pmstart.handoff(CFG, globber=lambda p: [])
-        self.assertIn("no handoff", s)
+    def run_handoff(self, cfg=CFG, files=(), strays=(), seen=None):
+        def globber(p):
+            if seen is not None:
+                seen.append(p)
+            return list(strays)
+        return pmstart.handoff(cfg, globber=globber, exists=lambda p: p in files, pm_repo=lambda c: self.TOP)
+
+    def test_the_one_file_in_the_pm_repo_is_read_first(self):
+        path = os.path.join(self.TOP, "HANDOFF.md")
+        self.assertEqual(self.run_handoff(files=[path]), ["read first: %s" % path])
+
+    def test_handoff_file_names_another_file_relative_or_absolute(self):
+        rel = os.path.join(self.TOP, "notes", "H.md")
+        self.assertEqual(self.run_handoff(dict(CFG, handoff_file="notes/H.md"), files=[rel]),
+                         ["read first: %s" % rel])
+        ab = os.path.abspath("Q:/h/HAND.md")
+        self.assertEqual(self.run_handoff(dict(CFG, handoff_file=ab), files=[ab]), ["read first: %s" % ab])
+
+    def test_a_missing_file_is_a_line_that_names_it(self):
+        (s,) = self.run_handoff()
+        self.assertIn("no hand-off file " + os.path.join(self.TOP, "HANDOFF.md"), s)
+
+    def test_stray_notes_in_memory_dir_are_told_to_merge_and_delete(self):
+        path = os.path.join(self.TOP, "HANDOFF.md")
+        seen = []
+        got = self.run_handoff(files=[path], strays=["M/pm-handoff-b.md", "M/pm-handoff-a.md"], seen=seen)
+        self.assertEqual(got, ["read first: %s" % path,
+                               "hand-off notes belong in %s: merge and delete M/pm-handoff-a.md, M/pm-handoff-b.md"
+                               % path])
+        self.assertTrue(seen[0].endswith("pm-handoff*.md"))
+        self.assertEqual(seen[0], os.path.join("M", "pm-handoff*.md"))
+
+    def test_a_missing_file_and_strays_give_both_lines(self):
+        got = self.run_handoff(strays=["M/pm-handoff-a.md"])
+        self.assertEqual(len(got), 2)
+        self.assertIn("no hand-off file", got[0])
+        self.assertIn("merge and delete", got[1])
+
+    def test_no_memory_dir_looks_for_no_strays(self):
+        seen = []
+        self.run_handoff({k: v for k, v in CFG.items() if k != "memory_dir"}, seen=seen)
+        self.assertEqual(seen, [])
+
+    def test_a_relative_file_with_no_pm_repo_is_refused(self):
+        with self.assertRaises(KeyError):
+            pmstart.handoff(CFG, pm_repo=lambda c: None)
 
 
 class RemindersTest(unittest.TestCase):
@@ -280,11 +318,12 @@ class ChecklistTest(unittest.TestCase):
     def test_all_pass(self):
         procs = [proc("python.exe", "python pm_watch.py")]
         txt = pmstart.checklist(CFG, NOW, procs=procs,
-                                handoff={"globber": lambda p: ["h.md"], "mtime": lambda f: 1},
+                                handoff={"globber": lambda p: [], "exists": lambda p: True,
+                                         "pm_repo": lambda c: "X:/pm"},
                                 reminders={"read": lambda p: "[]"},
                                 liveness={"read": lambda p: "{}"})
         self.assertIn(HUB_KEPT_OFF, txt)
-        self.assertIn("read first: h.md", txt)
+        self.assertIn("read first: " + os.path.normpath("X:/pm/HANDOFF.md"), txt)
         self.assertNotIn("could not check", txt)
 
     def test_failures_isolated(self):

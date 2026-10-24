@@ -4,7 +4,7 @@
 `additionalContext`; logic `kitlib/pmstart`). A hook cannot call tools, so it lists steps for the
 PM. It always exits 0; a failed check becomes one "could not check X: reason" line.
 
-Checks: standing rules, eng_review flags, the hub, `pm_watch.py` running, the newest handoff file, reminders due, and coordinators not running (no `claude.exe`
+Checks: standing rules, eng_review flags, the hub, `pm_watch.py` running, the hand-off file ("Hand-off file"), reminders due, and coordinators not running (no `claude.exe`
 with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/lookup.py`); each such line names the
 `launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). A repository in sessions.json with no live `consultant-<repo>` session (and no consultant entry of its own) gets one `consultant-<repo> is not running: launch.py consultant --repo <repo> --repo-path <folder>` line, the folder from the machine config's `launcher.repos` or `<its checkout>` when it is not there (`kitlib.pmstart` `_consultants_missing`; no config switch). `<n>` is the account
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
@@ -185,6 +185,16 @@ since `schtasks /Query /XML` declares `encoding="UTF-16"` over single-byte text 
 limit, no `schtasks`) is one `could not check console_tasks: ...` line. Code:
 `kitlib/pmstart/consoletasks.py`; tests: `tests/pmstart/test_console_tasks.py`.
 
+## Hand-off file
+
+The PM keeps one hand-off file in the PM repository and edits it in place, never a dated copy
+(`kitlib.pmstart` `handoff`; tests `HandoffTest` in `tests/pmstart/test_pmstart.py`). The check reads
+only the file `pm_start.handoff_file` names and prints `read first: <file>`, or `no hand-off file
+<file>: create it ...` when it is not there. When `pm_start.memory_dir` is set and holds any
+`pm-handoff*.md`, one more line says `hand-off notes belong in <file>: merge and delete <those files>`.
+A relative `handoff_file` with no PM repository found (no readable `sessions_file`) is one `could not
+check handoff` line. The former `handoff_glob` key is not read.
+
 ## Config
 
 The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; without it the checklist says it is skipped.
@@ -194,13 +204,16 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 {"pm_start": {
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py --stream",
   "memory_dir": "<repo drive>/Agent-memory/<pm-repo>",
-  "handoff_glob": "pm-handoff-*.md",
+  "handoff_file": "HANDOFF.md",
   "reminders_file": "<config-dir>/reminders.json",
   "sessions_file": "<launcher state_dir>/sessions.json",
   "eng_review": ["EX-API-*"]
 }}
 ```
 
+- `handoff_file` (optional): the PM's one hand-off file, default `HANDOFF.md` in the PM repository's
+  main checkout (the repository holding `sessions_file`, `kitlib.pmstart` `pm_memory_repo`); an absolute
+  path is used as is. See "Hand-off file".
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.
