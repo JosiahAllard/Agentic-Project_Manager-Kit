@@ -5,7 +5,7 @@
 - The test files must be committed at `--head` (default HEAD). They are checked out into a throwaway detached worktree at `--base`, `<main checkout>/<worktrees_dir>/redfirst-<base10>-<pid>`. The default base is the merge-base with `<remote>/<main branch>`. The caller's worktree is only read. A main checkout is refused. It reads no landing lock and does no fetch, and the branch under test need not be pushed (`tests/redfirst/test_run.py`, `Runs.test_red_with_the_landing_lock_held_and_the_head_unpushed`); `new_worktree.py` points here when it refuses a `--base` with no pushed branch.
 - `.kit.json` "redfirst".runners picks the runner. The first entry whose `glob` matches the path (case-blind) wins. Kinds:
   - `python`: `python -m unittest` with `PYTHONPATH=<pythonpath>`;
-  - `gradle`: `<dir>/gradlew <project>:test --offline --tests <filter>`;
+  - `gradle`: `<dir>/gradlew <project>:test --offline --tests <filter>`. gradlew.bat runs in cmd.exe, which reads its command line again, so a gradle word that holds a cmd.exe character (`& | < > ^ % " ( ) !`, CR or LF) is refused, exit 2, before any tree is made. The four words checked are the filter, the default `*.<stem>`, the runner's `project` and its `args` (`verdict.py`, `gradle_args`; `tests/redfirst/test_verdict.py`, `GradleCmdReparse`);
   - `dotnet`: `dotnet test <csproj>` with a trx log.
   
   A runner's `args` are appended. The keys are listed in docs/kit-json.md under "`.kit.json` keys".

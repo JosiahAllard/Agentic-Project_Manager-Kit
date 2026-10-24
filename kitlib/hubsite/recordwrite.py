@@ -5,11 +5,20 @@ add, edit, delete and unblock from the record page (docs/action-hub.md "The reco
   edit(root, rid, version, changes, unset=(), body=None, ruling=None) -> {"lines"}
   delete(root, rid, why, ruling=None)                           -> {"lines"}
   unblock(root, rid, on=None, reason=None, ruling=None)         -> {"lines"}
+  answer(root, rid, qid, at, title, label, note=None, via=None, other=False, waiting=())
+                                                                -> {"lines"}
 
 Each opens the store `.kit.json` in `root` names (kitlib.backlog.opener open_store, fetched first)
 and writes through Store.write with the plan functions backlog.py runs (kitlib.backlog.plan
-plan_add, plan_set, plan_delete, plan_unblock), so every store check applies. "lines" is what the store said
-about the write, its notes included.
+plan_add, plan_set, plan_delete, plan_unblock, plan_answer), so every store check applies.
+"lines" is what the store said about the write, its notes included.
+
+answer files the owner's answer to hub question `qid` (answered at `at`) into the record the
+question is bound to (docs/action-hub.md "A question bound to a record"): the hub calls it after
+the answer is stored, and again on a retry, so the same `qid` and `at` changes nothing and an
+older `at` never overwrites a newer answer (plan_answer). `waiting` is the hub's other questions
+on the record still open. It runs with the role check made (role_checked): the hub files only the
+answer the owner gave, whoever's call starts the filing.
 
 add writes the review mark `owner-hub <date>`, found on no branch: pull and next refuse the record
 until a coordinator clears it. edit is pinned to the record text the page read: `version` is
@@ -106,3 +115,10 @@ def unblock(root, rid, on=None, reason=None, ruling=None):
                                'give a reason' % (rid, ', '.join(members)), 'on')
         return pmod.plan_unblock(s, ctx, rid, on, reason, role_checked=True)   # an OWNER route
     return _write(root, plan)
+
+
+def answer(root, rid, qid, at, title, label, note=None, via=None, other=False, waiting=()):
+    # the owner's stored answer (module docstring), so the unblock-owner row's check is made
+    return _write(root, lambda s, ctx: pmod.plan_answer(
+        s, ctx, rid, qid, at, title, label, note or None, via or None, other, list(waiting),
+        role_checked=True))
