@@ -455,7 +455,9 @@ It is not the store's git push (the `push` setting).
   at once. The snapshot and `GET /api/v1/health` also carry `watcher`: null with no worker, else
   `PushWorker.watcher_status()`, `{"state": "up"|"down"|"none", "age": <seconds or null>}` at the
   worker's latest read (a status that raises is `down` with a null age). The health answer
-  through the tunnel leaves it out ("Serving it").
+  through the tunnel leaves it out ("Serving it"). `GET /api/v1/health` also carries `push`, the
+  snapshot's value from `Api.push_seen`: null with no worker, else `{"state", "last", "undelivered"}`
+  (`state` `down` once the worker thread has ended or its status raises).
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
   joins it after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take
   (Claude: `peer.WRITE_TIMEOUT_S` plus the helper's reap and pump joins), so the last outbox
