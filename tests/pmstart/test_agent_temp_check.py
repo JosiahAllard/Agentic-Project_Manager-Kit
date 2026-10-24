@@ -97,7 +97,9 @@ class AgentTempCheck(unittest.TestCase):
 
 D_ENV = {"TEMP": "D:\\t", "TMP": "D:\\t", "PIP_CACHE_DIR": "D:\\pip", "npm_config_cache": "D:\\npm",
          "NUGET_PACKAGES": "D:\\nuget", "DOTNET_CLI_HOME": "D:\\dotnet", "CLAUDE_CONFIG_DIR": "D:\\claude",
+         "NUGET_HTTP_CACHE_PATH": "D:\\nh", "GRADLE_USER_HOME": "D:\\gr", "UV_CACHE_DIR": "D:\\uv",
          "LOCALAPPDATA": "D:\\local", "USERPROFILE": "D:\\home"}
+SAME = lambda p: p      # a realpath that follows no link: the tests never read this machine's folders
 
 
 class CDriveCheck(unittest.TestCase):
@@ -105,7 +107,8 @@ class CDriveCheck(unittest.TestCase):
     def lines(self, **over):
         env = dict(D_ENV)
         env.update(over)
-        return pmstart.cdrive_lines(environ={k: v for k, v in env.items() if v is not None})
+        return pmstart.cdrive_lines(environ={k: v for k, v in env.items() if v is not None},
+                                  realpath=SAME)
 
     def test_nothing_on_c_is_no_line(self):
         self.assertEqual(self.lines(), [])
@@ -113,7 +116,9 @@ class CDriveCheck(unittest.TestCase):
     def test_each_item_alone_on_c_names_itself_and_its_variable(self):
         for var, label in (("TEMP", "TEMP"), ("TMP", "TMP"), ("PIP_CACHE_DIR", "pip cache"),
                            ("npm_config_cache", "npm cache"), ("NUGET_PACKAGES", "nuget packages"),
-                           ("DOTNET_CLI_HOME", "dotnet CLI home"), ("CLAUDE_CONFIG_DIR", "Claude transcripts")):
+                           ("DOTNET_CLI_HOME", "dotnet CLI home"), ("CLAUDE_CONFIG_DIR", "Claude transcripts"),
+                           ("NUGET_HTTP_CACHE_PATH", "nuget http cache"), ("GRADLE_USER_HOME", "gradle home"),
+                           ("UV_CACHE_DIR", "uv cache")):
             with self.subTest(var=var):
                 out = self.lines(**{var: "C:\\x"})
                 self.assertEqual(len(out), 1)
@@ -123,12 +128,14 @@ class CDriveCheck(unittest.TestCase):
                 self.assertIn("set %s)" % var, out[0])
 
     def test_defaults_apply_when_the_overrides_are_unset(self):
-        out = self.lines(PIP_CACHE_DIR=None, npm_config_cache=None, NUGET_PACKAGES=None,
-                         CLAUDE_CONFIG_DIR=None, LOCALAPPDATA="C:\\L", USERPROFILE="C:\\U")
+        out = self.lines(PIP_CACHE_DIR=None, npm_config_cache=None, NUGET_PACKAGES=None, CLAUDE_CONFIG_DIR=None,
+                         NUGET_HTTP_CACHE_PATH=None, GRADLE_USER_HOME=None, UV_CACHE_DIR=None, LOCALAPPDATA="C:\\L", USERPROFILE="C:\\U")
         self.assertEqual(len(out), 1)
         for part in ("pip cache (C:\\L\\pip\\Cache; set PIP_CACHE_DIR)", "npm cache (C:\\L\\npm-cache; set npm_config_cache)",
                      "nuget packages (C:\\U\\.nuget\\packages; set NUGET_PACKAGES)",
-                     "Claude transcripts (C:\\U\\.claude\\projects; set CLAUDE_CONFIG_DIR)"):
+                     "Claude transcripts (C:\\U\\.claude\\projects; set CLAUDE_CONFIG_DIR)",
+                     "nuget http cache (C:\\L\\NuGet\\v3-cache; set NUGET_HTTP_CACHE_PATH)",
+                     "gradle home (C:\\U\\.gradle; set GRADLE_USER_HOME)", "uv cache (C:\\L\\uv\\cache; set UV_CACHE_DIR)"):
             self.assertIn(part, out[0])
         self.assertNotIn("TEMP", out[0])
 
@@ -146,6 +153,27 @@ class CDriveCheck(unittest.TestCase):
 
     def test_a_relative_path_is_skipped(self):
         self.assertEqual(pmstart.cdrive_lines(environ={"TEMP": "tmp"}), [])
+
+    def test_a_claude_folder_linked_to_another_drive_is_not_a_hit(self):
+        asked = []
+
+        def realpath(p):
+            asked.append(p)
+            return "Z:\\claude" if p == "C:\\U\\.claude" else p
+        env = dict(D_ENV, USERPROFILE="C:\\U")
+        del env["CLAUDE_CONFIG_DIR"]
+        self.assertEqual(pmstart.cdrive_lines(environ=env, realpath=realpath), [])
+        self.assertEqual(asked, ["C:\\U\\.claude"])
+
+    def test_a_claude_folder_linked_onto_c_is_a_hit(self):
+        out = pmstart.cdrive_lines(environ=dict(D_ENV), realpath=lambda p: "C:\\real")
+        self.assertEqual(out, ["on the C: drive: Claude transcripts (C:\\real\\projects; set CLAUDE_CONFIG_DIR)"])
+
+    def test_the_machine_scope_environment_is_not_read(self):
+        with mock.patch("kitlib.launcher.host._user_env", return_value="C:\\WINDOWS\\TEMP") as user_env, \
+                mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(pmstart.cdrive_lines(realpath=SAME), [])
+        user_env.assert_not_called()
 
     def test_the_checklist_carries_the_line(self):
         temp_home(self)
