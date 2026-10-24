@@ -12,6 +12,9 @@ from tests import pmstart as tpm
 from tests.coordinatorstart import test_coordinatorstart as tc
 
 
+COORD = {"PM_KIT_ROLE": coordinatorstart.ROLE}   # never this shell's own role
+
+
 def setUpModule():
     p = mock.patch.object(configcheck, 'lines', tpm.REAL_CONFIG_LINES)
     p.start()
@@ -32,7 +35,7 @@ class MachineConfigTest(unittest.TestCase):
         self.assertIn("could not check cap", text)
 
     def test_with_no_config_the_skip_line_still_shows_the_machine_config_line(self):
-        text = coordinatorstart.render(path=khome.temp_home(self) + "/none.json")
+        text = coordinatorstart.render(env=COORD, path=khome.temp_home(self) + "/none.json")
         lines = text.split("\n")
         self.assertIn("no coordinator_start config", lines[0])
         self.assertEqual(lines[1:], ["- " + configcheck.NO_POINTER])
@@ -40,11 +43,11 @@ class MachineConfigTest(unittest.TestCase):
     def test_with_no_config_a_failing_check_is_one_line(self):
         def boom():
             raise OSError("disk gone")
-        text = coordinatorstart.render(path=khome.temp_home(self) + "/none.json", config_lines=boom)
+        text = coordinatorstart.render(env=COORD, path=khome.temp_home(self) + "/none.json", config_lines=boom)
         self.assertEqual(text.split("\n")[1], "- could not check machine_config: OSError: disk gone")
 
     def test_with_no_config_and_all_well_the_skip_line_stands_alone(self):
-        text = coordinatorstart.render(path=khome.temp_home(self) + "/none.json", config_lines=lambda: [])
+        text = coordinatorstart.render(env=COORD, path=khome.temp_home(self) + "/none.json", config_lines=lambda: [])
         self.assertEqual(len(text.split("\n")), 1)
 
 
