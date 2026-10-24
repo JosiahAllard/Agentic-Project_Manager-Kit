@@ -227,6 +227,18 @@ class Place(Base):
         self.assertIn('git could not tell', why)
         self.assertIn('OSError: git.exe not found', why)
 
+    def test_a_base_exception_is_not_swallowed(self):
+        # KeyboardInterrupt/SystemExit must pass, and the fake git's Unsupported (a BaseException)
+        # is a test trap that must stay loud rather than read as "git could not tell"
+        from kitlib.config import move
+        from kitlib.git.fake.errors import Unsupported
+        for exc in (Unsupported('check-ignore'), KeyboardInterrupt(), SystemExit(2)):
+            def boom(pm, rels, exc=exc):
+                raise exc
+            with mock.patch.object(move, 'ignored', boom):
+                with self.assertRaises(type(exc)):
+                    UNIGNORED(self.pm)
+
 
 @real_git('git check-ignore on the PM repo: the fake lacks check-ignore')
 class Ignored(unittest.TestCase):

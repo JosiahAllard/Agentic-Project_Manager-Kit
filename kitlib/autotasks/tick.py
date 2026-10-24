@@ -147,7 +147,10 @@ def home_problem(folder, home=None):
 def unignored(pm):
     """None when git ignores the state folder in the PM repository `pm`; else the problem: the
     line its .pm-kit/.gitignore lacks, or why git could not tell (a git that cannot run included:
-    the session-start lines call this too, and must never fail on it)."""
+    the session-start lines call this too, and must never fail on it). Every Exception git can
+    raise (OSError, a subprocess error) is a problem line; a BaseException is not caught, so
+    KeyboardInterrupt and SystemExit pass, and so does the fake git's Unsupported (a test trap,
+    loud on purpose)."""
     from kitlib.config import move
     try:
         left, why = move.ignored(pm, [DIR_NAME + '/' + STATE_NAME])
