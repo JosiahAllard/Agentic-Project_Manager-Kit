@@ -44,12 +44,18 @@ a constructor argument, and the defaults read this machine.
                      POLICY_KEYS from config.json, LOCAL_KEYS from local.json) and a relative
                      ledger_path or ledger_dir read against the PM repository. A file that cannot
                      be read or is not a JSON object, or a ledger_path or ledger_dir that is not a
-                     path string, sets 'broken' (why), and the ledger rule then denies every
-                     subagent write. Missing files are an empty config, not
+                     path string or is blank (the key is then unset), or that is not absolute
+                     once read (`C:books`), or a ledger_dir that exists and is not a folder (both
+                     still held as given),
+                     sets 'broken' (why), and the ledger rule then denies every subagent write
+                     (_ledger_checked, on the strict answer too). A ledger_dir not made yet, or
+                     outside the PM repository, is accepted. Missing files are an empty config, not
                      a broken one. The files are the ones config_location() names; an UNMOVED,
                      LEFTOVER or BAD location sets 'broken' too (fail closed); an UNMOVED one's
                      home leftover is still read, and a LEFTOVER one's PM repository config.json
-                     for its ledger_path and ledger_dir only, so the ledger stays protected.
+                     for its ledger_path and ledger_dir only, so the ledger stays protected; a
+                     BAD one's are read the same way from <pointer>/.pm-kit/config.json when
+                     the PM-repo pointer's value is absolute (_bad_ledger_keys).
   ledger_files()     kitlib.ledger.files.of_config over user(): where the ledger's log files,
                      standing digest and rulebooks' folder are (the ledger rule), or None
   config_location()  kitlib.config.user.locate(home) with the PM-repo pointer read once from the
@@ -148,6 +154,64 @@ def _tolerant_read(path):
     if not isinstance(data, dict):
         return {}, 'it must be an object, not %s' % type(data).__name__
     return data, None
+
+
+def _placed(path):
+    """`path` names one place whatever folder the hook runs in: absolute, with a drive or a UNC
+    share (`C:books` and a rooted `/books` depend on the current folder)."""
+    return os.path.isabs(path) and bool(os.path.splitdrive(path)[0])
+
+
+def _not_a_folder(path):
+    """`path` exists and is not a folder, read without its trailing separators (with one, Windows
+    answers a file as absent); a drive root keeps its own."""
+    bare = path.rstrip('\\/')
+    if not bare or bare.endswith(':'):
+        bare = path
+    return os.path.exists(bare) and not os.path.isdir(bare)
+
+
+def _ledger_keys(data, pm, out):
+    """LEDGER_KEYS of the JSON object `data` into `out`: a relative path read against the PM
+    repository `pm`; a value that is not a path string, is blank, or is relative with no `pm`
+    leaves the key unset and sets 'broken' (why)."""
+    for k in LEDGER_KEYS:
+        v = data.get(k)
+        if v is None:
+            continue
+        if not isinstance(v, str):
+            out['broken'], out[k] = '%s must be a string, not %r' % (k, v), None
+        elif not v.strip():
+            out['broken'], out[k] = '%s must be a non-empty path, not %r' % (k, v), None
+        elif os.path.isabs(v):
+            out[k] = v
+        elif pm:
+            out[k] = kuser.resolved({k: v}, pm)[k]
+        else:
+            out['broken'], out[k] = '%s must be an absolute path, not %r' % (k, v), None
+
+
+def _ledger_checked(u):
+    """`u` (a user() answer) with each ledger key checked: a blank one is unset (nothing to hold)
+    and sets 'broken'; one that is not absolute once read (`C:books`) and a ledger_dir that exists
+    and is not a folder (a trailing separator dropped first: `<ledger_dir>\\` names the
+    file `<ledger_dir>`) set 'broken' and are still held as given, so no session writes what the guard
+    held before. A folder not made yet (ledger.py makes it) or outside the PM repository is
+    accepted. An earlier 'broken' is kept: it is the first cause."""
+    for k in LEDGER_KEYS:
+        v = u.get(k)
+        why = None
+        if v is None:
+            continue
+        if not isinstance(v, str) or not v.strip():
+            why, u[k] = '%s must be a non-empty path, not %r' % (k, v), None
+        elif not _placed(v):
+            why = '%s must be an absolute path, not %r' % (k, v)
+        elif k == 'ledger_dir' and _not_a_folder(v):
+            why = 'ledger_dir %s is not a folder' % v
+        if why and not u.get('broken'):
+            u['broken'] = why
+    return u
 
 
 def _same_dir(a, b):
@@ -405,6 +469,7 @@ class Ctx(object):
                 self._user = kuser.user_config(self.home, location=self.config_location())
             except kconfig.ConfigError as e:
                 self._user = self._tolerant(str(e))
+            self._user = _ledger_checked(self._user)
         return self._user
 
     def ledger_files(self):
@@ -416,6 +481,8 @@ class Ctx(object):
         out['error'] = why
         loc = self.config_location()
         if loc.error and loc.state not in (kuser.UNMOVED, kuser.LEFTOVER):
+            if loc.state == kuser.BAD:
+                self._bad_ledger_keys(out)
             out['broken'] = loc.error
             return out
         if loc.state == kuser.OK:
@@ -438,19 +505,8 @@ class Ctx(object):
                     out[k] = v
                 elif isinstance(v, list) and v and all(isinstance(x, str) and x.strip() for x in v):
                     out[k] = list(v)
-            for k in LEDGER_KEYS:
-                if k not in keys:
-                    continue
-                lp = data.get(k)
-                if lp is not None and not isinstance(lp, str):
-                    out['broken'] = '%s must be a string, not %r' % (k, lp)
-                    out[k] = None
-                elif isinstance(lp, str) and lp.strip() and not os.path.isabs(lp):
-                    if loc.pm:
-                        out[k] = kuser.resolved({k: lp}, loc.pm)[k]
-                    else:
-                        out['broken'] = '%s must be an absolute path, not %r' % (k, lp)
-                        out[k] = None
+            if set(LEDGER_KEYS) & set(keys):
+                _ledger_keys(data, loc.pm, out)
         if loc.error:
             # UNMOVED (the home folder's file) and LEFTOVER (the PM repository's) are read for their
             # ledger keys, so the ledger stays protected, and the config is still broken (every
@@ -458,6 +514,18 @@ class Ctx(object):
             out['broken'] = loc.error
         out['pm_data'] = loc.pm_data
         return out
+
+    def _bad_ledger_keys(self, out):
+        """Under a BAD location, LEDGER_KEYS (no other key) of `<pointer>/.pm-kit`'s policy file
+        into `out`, relative ones read against the pointer, when the pointer's value is absolute:
+        the guard then holds the ledger that folder names, for main sessions too. It only adds
+        held paths; the config stays broken, so every subagent write is still refused."""
+        pm = self.pm_repo_pointer()
+        if not isinstance(pm, str) or not _placed(pm):
+            return
+        data, why = _tolerant_read(os.path.join(pm, kuser.DIR_NAME, kuser.FILE_NAME))
+        if not why:
+            _ledger_keys(data, pm, out)
 
     def session_role(self, event):
         return self._role(event, self.environ)
