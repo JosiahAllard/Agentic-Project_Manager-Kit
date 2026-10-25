@@ -140,12 +140,28 @@ class Safety(unittest.TestCase):
                 canary._remove_result_folder(str(Path(folder)))
             self.assertTrue((other / 'gate.json').exists())
 
-    def test_result_folder_cleanup_refuses_dotdot_and_foreign_parents(self):
+    def test_result_folder_cleanup_refuses_the_root_and_a_folder_outside_it(self):
         with tempfile.TemporaryDirectory() as folder:
             root, mine, other = self._results(folder)
             with mock.patch('kitlib.gate.result.machine_root', return_value=str(root)):
-                canary._remove_result_folder(str(root / '..'))
-                canary._remove_result_folder(str(mine / '..'))
+                canary._remove_result_folder(str(root / '..'))      # the root's parent
+                canary._remove_result_folder(str(mine / '..'))      # the root itself
+                canary._remove_result_folder(str(mine / 'deeper'))  # not a child of the root
+            self.assertTrue((other / 'gate.json').exists())
+            self.assertTrue((mine / 'gate.json').exists())
+
+    def test_result_folder_cleanup_unlinks_a_junction_inside_without_emptying_its_target(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as folder:
+            root, mine, other = self._results(folder)
+            link = mine / 'inner'
+            made = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(other)],
+                                  capture_output=True, text=True)
+            if made.returncode:
+                self.skipTest('no junction: ' + made.stderr)
+            with mock.patch('kitlib.gate.result.machine_root', return_value=str(root)):
+                canary._remove_result_folder(str(mine))
+            self.assertFalse(mine.exists())
             self.assertTrue((other / 'gate.json').exists())
 
     def test_result_folder_cleanup_never_follows_a_junction(self):

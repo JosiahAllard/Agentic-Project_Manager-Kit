@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import shutil
+import stat
 import sys
 import threading
 import time
@@ -250,21 +250,49 @@ def _prepare_or_isolate(task, coordinator, env):
     return dict(prepared, native_prepare=True, native_claim=True)
 
 
+def _purge(path):
+    """Remove the folder `path` and what is in it, best effort, without following a link: a
+    symlink or junction inside is removed itself, never its target (shutil.rmtree before Python
+    3.12 can walk into a junction)."""
+    from kitlib.machinesetup.common import is_link
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if is_link(entry.path):
+                try:
+                    os.rmdir(entry.path)        # a junction or directory symlink
+                except OSError:
+                    os.unlink(entry.path)       # a file symlink
+            elif entry.is_dir(follow_symlinks=False):
+                _purge(entry.path)
+            else:
+                os.chmod(entry.path, stat.S_IWRITE)
+                os.unlink(entry.path)
+        except OSError:
+            pass
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
 def _remove_result_folder(folder):
     """Best effort: remove the fixture's own per-repository result folder (result.result_dir),
     only when it is a plain folder directly inside the machine result root (never the root, a
-    `.` or `..` name, a symlink or a junction). None, a missing folder or an error is ignored."""
+    folder elsewhere, a symlink or a junction), and never through a link inside it. None, a
+    missing folder or an error is ignored."""
     if not folder:
         return
     try:
         from kitlib.gate import result
         from kitlib.machinesetup.common import is_link
         target = os.path.normpath(folder)
-        name = os.path.basename(target)
-        if name in ('', '.', '..') or os.path.normcase(os.path.dirname(target)) != \
-                os.path.normcase(os.path.normpath(result.machine_root())) or is_link(target):
+        if os.path.normcase(os.path.dirname(target)) !=                 os.path.normcase(os.path.normpath(result.machine_root())) or is_link(target):
             return
-        shutil.rmtree(target, ignore_errors=True)
+        _purge(target)
     except Exception:       # noqa: BLE001 - cleanup only: nothing here may hide the probe's own outcome
         pass
 
