@@ -1,6 +1,7 @@
 """The unit tier runs on the fake git (docs/test-tools.md "Fake git"): a fixture repository, the
 kit's git calls and a tool process the test starts all answer git without starting it; what the
 fake cannot do fails loudly, never by starting real git."""
+import hashlib
 import os
 import shutil
 import struct
@@ -14,6 +15,7 @@ from unittest import mock
 from kitlib.config import user as kuser
 from kitlib.git import batch, cmd
 from tests import gitfixture, home
+from tests.realgit import real_git
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -614,6 +616,48 @@ class FakeHomeFence(unittest.TestCase):
         with self.assertRaises(Unsupported) as c:
             wt.Convert(repo).guard()
         self.assertIn(d.replace('\\', '/'), str(c.exception))
+
+
+@real_git('differential: the fake against real git, which the unit tier never starts')
+class FakeHashObjectPath(unittest.TestCase):
+    """`hash-object --path=<path> --stdin` on the fake answers what real git answers for the same
+    bytes and path (with no attributes file: the fake raises Unsupported for one)."""
+    DATA = [b'', b'hello\n', b'a\r\nb\n', b'a\nb\n', b'a\r\nb\nc', b'bin\x00\r\n\xff']
+
+    def setUp(self):
+        home.temp_home(self)
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+        self.env = gitfixture.fixture_env(cmd.LOCALE_ENV)
+
+    def both(self, data, *extra):
+        from kitlib.git import fake
+        args = ['hash-object'] + list(extra) + ['--path=sub/f.txt', '--stdin']
+        rc, out, _ = fake.run(args, self.r.root, data, self.env)
+        real = subprocess.run(['git'] + args, cwd=self.r.root, input=data, env=self.env,
+                              capture_output=True)
+        self.assertEqual((rc, out), (real.returncode, real.stdout), (data, args))
+        return out
+
+    def test_with_no_filters_it_is_the_plain_blob_hash(self):
+        for data in self.DATA:
+            blob = hashlib.sha1(b'blob %d\x00' % len(data) + data).hexdigest()
+            self.assertEqual(self.both(data), (blob + '\n').encode())
+
+    def test_core_autocrlf_converts_as_real_git_does(self):
+        for mode in ('true', 'input', 'false'):
+            self.r.git('config', 'core.autocrlf', mode)
+            for data in self.DATA:
+                self.both(data)
+
+    def test_path_and_no_filters_together_die_as_git_does(self):
+        from kitlib.git import fake
+        rc, out, err = fake.run(['hash-object', '--no-filters', '--path=x', '--stdin'],
+                                self.r.root, b'x', self.env)
+        real = subprocess.run(['git', 'hash-object', '--no-filters', '--path=x', '--stdin'],
+                              cwd=self.r.root, input=b'x', env=self.env, capture_output=True)
+        self.assertEqual((rc, out), (real.returncode, real.stdout))
+        self.assertNotEqual(rc, 0)
 
 
 if __name__ == '__main__':

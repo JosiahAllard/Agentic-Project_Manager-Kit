@@ -15,6 +15,7 @@ task_state() reads the task's state and start_task() starts it, for hub.py resta
 import os
 import subprocess
 
+from kitlib import pluginsource
 from kitlib.hubsite.serve import ServeError
 from kitlib.launcher import pythonw as pythonw_mod
 from kitlib.launcher import window
@@ -65,6 +66,12 @@ def refusals(hub_py, python=None, isfile=os.path.isfile):
     if in_worktree(hub_py):
         out.append('install it from the main kit checkout, not a worktree: the task would run a '
                    'hub.py that goes when the worktree does (%s)' % hub_py)
+    elif os.path.isfile(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(hub_py))),
+                             pluginsource.MARKER)):
+        out.append('install it from the main kit checkout, not a plugin export folder: an export '
+                   "never changes when a branch lands, so the hub's stale-code warning would never "
+                   'fire. Run hub.py setup --autostart from the main checkout\'s tools/hub.py (%s)'
+                   % hub_py)
     pythonw = spawn.pythonw_beside(python)
     if pythonw_mod.under_windows_apps(pythonw):
         out.append(pythonw_mod.refusal(pythonw, isfile))
