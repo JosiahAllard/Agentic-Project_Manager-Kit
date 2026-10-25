@@ -136,11 +136,11 @@ def file_stem(branch):
     return stem
 
 
-def machine_root(home=None):
+def machine_root():
     """`<dev_drive>/pm-kit/kit-gate-result`: the folder every repository's result folder is in.
     ResultError when the machine config cannot be read or sets no dev_drive."""
     try:
-        cfg = kuser.user_config(home)
+        cfg = kuser.user_config()
     except Exception as e:      # noqa: BLE001 - ConfigError, OSError: no folder, and why
         raise ResultError('the machine config cannot be read, so there is no result folder: %s'
                           % e)
