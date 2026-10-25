@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import threading
 import time
@@ -249,6 +250,53 @@ def _prepare_or_isolate(task, coordinator, env):
     return dict(prepared, native_prepare=True, native_claim=True)
 
 
+def _purge(path):
+    """Remove the folder `path` and what is in it, best effort, without following a link: a
+    symlink or junction inside is removed itself, never its target (shutil.rmtree before Python
+    3.12 can walk into a junction)."""
+    from kitlib.machinesetup.common import is_link
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if is_link(entry.path):
+                try:
+                    os.rmdir(entry.path)        # a junction or directory symlink
+                except OSError:
+                    os.unlink(entry.path)       # a file symlink
+            elif entry.is_dir(follow_symlinks=False):
+                _purge(entry.path)
+            else:
+                os.chmod(entry.path, stat.S_IWRITE)
+                os.unlink(entry.path)
+        except OSError:
+            pass
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def _remove_result_folder(folder):
+    """Best effort: remove the fixture's own per-repository result folder (result.result_dir),
+    only when it is a plain folder directly inside the machine result root (never the root, a
+    folder elsewhere, a symlink or a junction), and never through a link inside it. None, a
+    missing folder or an error is ignored."""
+    if not folder:
+        return
+    try:
+        from kitlib.gate import result
+        from kitlib.machinesetup.common import is_link
+        target = os.path.normpath(folder)
+        if os.path.normcase(os.path.dirname(target)) !=                 os.path.normcase(os.path.normpath(result.machine_root())) or is_link(target):
+            return
+        _purge(target)
+    except Exception:       # noqa: BLE001 - cleanup only: nothing here may hide the probe's own outcome
+        pass
+
+
 def probe(codex_exe=None, profile=None, fixture_root=None):
     """Use real kit CLIs/native bindings; this gate checks only the tiny fixture."""
     profile = profile or discover()
@@ -261,6 +309,7 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
         raise RuntimeError('native executable version could not be verified')
     directory = destination / ('pmkit-native-fixtures-' + uuid.uuid4().hex)
     directory.mkdir()
+    result_folder = None
     try:
         temporary = directory / 'temp'
         temporary.mkdir()
@@ -276,6 +325,12 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
             _, _, coordinator = _start(stack, exe, directory, 'coordinator', task.coordinator,
                                         profile, env, (str(main / FIXTURE_FOLDER / 'worktrees'), str(origin), str(temporary)))
             prepared = _prepare_or_isolate(task, coordinator, env)
+            # Taken here, once the worktree exists, so a later failure still cleans it up (the
+            # folder is under the real machine dev_drive: the machine config the registry's
+            # PM-repo pointer names, which the gate child reads too; the fixture repo's key
+            # keeps it apart from every real repository's).
+            from kitlib.gate import result
+            result_folder = result.result_dir(task.worker)
             _, _, worker = _start(stack, exe, directory, 'worker', task.worker, profile, env,
                                   (str(temporary),))
             _, _, tester = _start(stack, exe, directory, 'test-runner', task.worker, profile, env,
@@ -317,7 +372,6 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
             record, why = gate_ok.verify(task.worker, tip, gate_config=gate_config(load(task.worker)))
             if not record or why or record.get('base') != task.base:
                 raise RuntimeError('real fixture gate proof does not cover the exact tip/base')
-            from kitlib.gate import result
             gate_result, error = result.read(task.worker, task.branch)
             if error or not gate_result or gate_result.get('verdict') != 'pass':
                 raise RuntimeError('real gate result record is missing')
@@ -341,4 +395,7 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
                     'native_remaining_operations': ['assigned edit', 'commit', 'gate', 'review_pack'],
                     'remaining_operations_verified': True}
     finally:
-        _remove_fixtures(directory, destination)
+        try:
+            _remove_result_folder(result_folder)
+        finally:
+            _remove_fixtures(directory, destination)

@@ -131,6 +131,7 @@ Error codes:
 ## Defaults the owner may swap
 
 - **Overrun (owner decision):** a holder past its expected end is planned to end at now plus half its expected time, re-checked on every pass. The decision lives in `kitlib.lock.queue.holder_end`.
+- **Expected time:** a run without `--expect` expects the median held time of the finished runs of its repo, kind and mode (`Store.history_expect`, `Store.run_mode`): `land` (priority land), `branch` (a gate that names its branch) or `other` (also every history line written before a gate named its branch). A mode with fewer than `history_min_runs` finished runs has no history and uses the kind's `warn_min` (`expect_from` "guide"), never another mode's median. Only `kitlib.lock.run.book` calls it; the queue and the lock window read `expect_s` from the records.
 - **Whole holds (owner decision):** every hold names its job, and a whole hold is the owner's (job `OWNER`). Only a run the owner started may run inside it: the run record's `role`, read from its process tree (`kitlib.lock.run.run_role`). The earlier open whole hold for agents' runs is gone. The one place this is decided is `kitlib.lock.holds.admits`.
 
 ## Giving back slots

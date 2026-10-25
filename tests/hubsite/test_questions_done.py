@@ -99,6 +99,21 @@ class DoneTest(DoneCase):
         self.assertEqual(self.store.get('questions', qid)['status'], 'done')
 
 
+    def test_the_asker_marks_its_own_question_done(self):
+        qid = self.answered(**{'from': 'kit'})
+        self.ok('POST', '/questions/%s/done' % qid, AGENT,
+                {'why': 'w', 'from': 'kit', 'if_version': self.version(qid)})
+        self.assertEqual(self.store.get('questions', qid)['status'], 'done')
+
+    def test_the_pm_marks_any_question_done_named_or_not(self):
+        first, second = self.answered(**{'from': 'kit'}), self.answered(**{'from': 'kit'})
+        self.ok('POST', '/questions/%s/done' % first, AGENT,
+                {'why': 'w', 'from': 'pm', 'if_version': self.version(first)})
+        self.done(second)
+        for qid in (first, second):
+            self.assertEqual(self.store.get('questions', qid)['status'], 'done')
+
+
 class RefusedTest(DoneCase):
     def test_an_open_question_is_refused(self):
         qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS})['id']
@@ -127,6 +142,14 @@ class RefusedTest(DoneCase):
         self.refused('invalid', 'if_version', qid, {'why': 'w'})
         self.refused('invalid', 'why', qid, {'if_version': self.version(qid)})
         self.refused('invalid', 'why', qid, {'why': '  ', 'if_version': self.version(qid)})
+
+    def test_another_session_key_is_refused_and_the_question_is_unchanged(self):
+        qid = self.answered(**{'from': 'kit'})
+        before = self.store.get('questions', qid)
+        obj = self.refused('forbidden', 'from', qid,
+                           {'why': 'w', 'from': 'other', 'if_version': self.version(qid)})
+        self.assertIn('only its asker or pm', obj['error']['message'])
+        self.assertEqual(self.store.get('questions', qid), before)
 
     def test_the_owner_cannot_mark_one_done(self):
         qid = self.answered()
