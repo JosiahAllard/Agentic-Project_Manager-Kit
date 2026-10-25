@@ -166,8 +166,8 @@ def unsafe_dir(d, home, kit=None):
     if is_any_link(d):
         return '%s is a link' % d
     h = os.path.abspath(home)
-    roots = (('the home folder', h), ('the kit checkout', kit),
-             ('the machine config folder', kuser.config_dir(h)))
+    roots = [('the home folder', h), ('the kit checkout', kit)]
+    roots += [('the machine config folder', c) for c in kuser.keep_clear_dirs(h)]
     for p in _forms(d):
         shown = d if p == d else '%s (real path %s)' % (d, p)
         if os.path.dirname(p) == p:

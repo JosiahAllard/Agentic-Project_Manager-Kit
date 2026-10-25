@@ -254,7 +254,7 @@ class OwnerEmail(Case):
 
     def test_a_broken_machine_config_proves_nothing(self):
         r = self.repo()
-        write(os.path.join(user.config_dir(r.home), user.FILE_NAME), '{')
+        write(os.path.join(r.home, user.DIR_NAME, user.FILE_NAME), '{')
         rules = r.load().owner_rules()
         self.assertIsNotNone(rules.identity_problem())
         self.assertFalse(rules.is_owner('owner@example.com'))
@@ -271,7 +271,7 @@ class OwnerEmail(Case):
 
     def test_the_machine_config_is_read_only_when_an_identity_is_judged(self):
         r = self.repo()
-        write(os.path.join(user.config_dir(r.home), user.FILE_NAME), '{')
+        write(os.path.join(r.home, user.DIR_NAME, user.FILE_NAME), '{')
         rules = r.load().owner_rules()
         self.assertTrue(rules.is_locked('.kit.json'))        # paths need no identity
 
