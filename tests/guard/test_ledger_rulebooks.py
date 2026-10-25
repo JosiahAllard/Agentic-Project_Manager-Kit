@@ -454,8 +454,9 @@ class Rulebooks(unittest.TestCase):
                     self.assertEqual(d.rule, 'ledger', d.reason)
                     self.assertIn('The owner or the PM session fixes it. Instead: python -m json.tool "%s"'
                                   % W.fwd(self.w.config_file), d.reason)
-                self.assertIsNone(decide(event('Write', {'file_path': target, 'content': ''}, self.w.wt),
-                                         self.w.ctx()))
+                # the main session is asked: the rulebooks may be at any path (rules.ledger_unread)
+                d = decide(event('Write', {'file_path': target, 'content': ''}, self.w.wt), self.w.ctx())
+                self.assertEqual((d.verdict, d.rule), ('ask', 'ledger'), d.reason)
 
     def test_a_strict_reader_refusal_still_yields_the_rulebooks(self):
         # a key this kit's schema does not know: the tolerant read, with ledger_dir relative to the

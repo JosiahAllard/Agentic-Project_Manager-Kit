@@ -1,6 +1,5 @@
 """The nightly sweep: remove every registered worktree that has landed, has been idle
-`idle_s` (24 h) and that nothing holds; a dry run unless `apply` (ported from the PM kit's
-`worktree_remove.py --sweep-merged`; docs/worktree-remove.md). Returns Outcome(code, lines).
+`idle_s` (24 h) and that nothing holds; a dry run unless `apply` (docs/worktree-remove.md). Returns Outcome(code, lines).
 
 Run-wide, each failing closed (exit 1, nothing removed), in this order: the landing lock free
 (`landing_hold`: a landing moves the base, so it is read before anything is fetched); `git fetch`

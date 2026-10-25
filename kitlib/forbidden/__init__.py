@@ -1,6 +1,6 @@
 """Refuse a forbidden token anywhere in the tree, without writing it down (docs/repo-checks.md).
 
-Ported from the PM kit's tools/forbidden.py. Some repositories must never contain a word - a
+Some repositories must never contain a word - a
 former product name, a client's name, a term the owner ruled out - while the history still
 carries it. A grep-based checker would have to contain the string it forbids, so this holds
 salted SHA-256 digests in a token store and hashes every window of the scanned text instead. The

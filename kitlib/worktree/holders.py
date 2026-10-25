@@ -1,5 +1,4 @@
-r"""What holds a worktree, and the walks that read one without leaving it (ported from the PM kit's
-tools/worktree_remove.py; docs/worktree-remove.md).
+r"""What holds a worktree, and the walks that read one without leaving it (docs/worktree-remove.md).
 
 Why this exists: on Windows `git worktree remove` is DESTRUCTIVE ON FAILURE. Measured in the PM kit
 2026-09-22 (git 2.38.1.windows.1): git deletes the worktree's `.git` file and its

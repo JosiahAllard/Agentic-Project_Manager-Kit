@@ -1,6 +1,5 @@
 """Remove a workstream's worktree only when its work has landed and nothing holds it, or abandon
-unlanded work under a tag (ported from the PM kit's tools/worktree_remove.py;
-docs/worktree-remove.md). tools/worktree_remove.py is the entry point.
+unlanded work under a tag (docs/worktree-remove.md). tools/worktree_remove.py is the entry point.
 
 `remove(top, argument)`, `abandon(top, argument, why)` and `check(top)` act on the MAIN checkout of
 the repository `top` is in (the main checkout or any linked worktree) and return Outcome(code,

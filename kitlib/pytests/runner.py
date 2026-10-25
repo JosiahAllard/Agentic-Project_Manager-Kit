@@ -1,5 +1,4 @@
-"""The parent side of the parallel tools-test runner. Ported from the PM kit's
-tools/pytests.py; every function takes the checkout root explicitly (there is no module ROOT) and
+"""The parent side of the parallel tools-test runner. Every function takes the checkout root explicitly (there is no module ROOT) and
 writes its log to the stream it is given.
 
 A test module is a `test*.py` of the tools folder (`.kit.json` "repo".tools_dir) that

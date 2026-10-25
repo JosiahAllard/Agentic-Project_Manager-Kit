@@ -349,8 +349,9 @@ class Ledger(unittest.TestCase):
                     self.assertIn('The owner or the PM session fixes it. Instead: python -m json.tool "%s" '
                                   % W.fwd(self.w.config_file), d.reason)
                     self.assertIn(why, d.reason)
-                # the main session and reads stay open
-                self.assertIsNone(decide(event('Write', {'file_path': target, 'content': ''}, self.w.wt), self.w.ctx()))
+                # the main session is asked (the ledger may be at any path: rules.ledger_unread); reads stay open
+                d = decide(event('Write', {'file_path': target, 'content': ''}, self.w.wt), self.w.ctx())
+                self.assertEqual((d.verdict, d.rule), ('ask', 'ledger'), d.reason)
                 self.assertIsNone(decide(bash('git status', self.w.wt, sub=True), self.w.ctx()))
 
     def test_a_relative_ledger_path_is_read_against_the_pm_repository(self):

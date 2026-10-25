@@ -153,6 +153,15 @@ class Edits(Base):
         self.denied(a, 'role-edit', environ={context.ROLE_ENV: 'coordinator'})
         self.allowed(a, environ={})                      # the owner's own: no role, no mode
 
+    def test_a_role_refusal_wins_over_the_unread_ledger_ask(self):
+        # a blank ledger key: the shared rules ask (rules.ledger_unread); the role policy still judges
+        self.w.user_config({'ledger_path': ''})
+        a = self.edit(os.path.join(self.w.wt, 'worker.py'), role=None)
+        self.assertTrue(self.w.ctx(environ={context.ROLE_ENV: 'coordinator'}).user().get('ledger_unread'))
+        self.denied(a, 'role-edit', environ={context.ROLE_ENV: 'coordinator'})
+        d = self.decide(a, environ={})                   # the owner's own: no mode, the ask stands
+        self.assertEqual((d.verdict, d.rule), ('ask', 'ledger'), d.reason)
+
 
 class OwnerPaths(Base):
     def test_a_shell_write_to_one_is_read_only_for_read_test_and_lander(self):

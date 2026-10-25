@@ -1,6 +1,6 @@
 """What runs inside one unit's process (kitlib.pytests.runner starts it as `tools/pytests.py
 --child`): the unittest run of one module, class or shard, the `PY SKIP` lines, and the --audit
-hook. Ported from the PM kit's tools/pytests.py; the checkout root and its tools folder are passed
+hook. The checkout root and its tools folder are passed
 in, and the log goes to the stream given.
 
 --audit: the child records every file its tests open or list under the checkout, outside
