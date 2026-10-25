@@ -1234,6 +1234,128 @@ def questions_file(api, req):
     return {'ok': True, 'filed': filed, 'failed': failed}
 
 
+def _asked(text):
+    """The number of a question id (`Q-12`, `Q-012`), or None."""
+    m = re.match(r'Q-(\d+)\Z', text or '')
+    return int(m.group(1)) if m else None
+
+
+def _cited(api, repo, item):
+    """([question numbers a record's hold cites, in order, once each], why it is not one to read
+    or None) for an open item of the backlog view: a parked record's `q:` line, an owner-blocked
+    record's `owner_ask`, `q`, `blocked_on` members and `Blocked on` body lines (the record
+    view, read now). (None, None) for any other record."""
+    from kitlib.backlog import record as brecord
+    texts = []
+    if item.get('s') == 'parked':
+        texts.append(item.get('q') or '')
+    elif item.get('s') == 'blocked':
+        try:
+            got = api._view('record')(repo, item.get('id'))
+        except Exception as e:      # noqa: BLE001 - a view is another module's code
+            return None, 'the record could not be read (%s)' % _reason(e)
+        got = got if isinstance(got, dict) else {}
+        if not any(b.get('kind') == 'owner' for b in got.get('blockers') or []
+                   if isinstance(b, dict)):
+            return None, None
+        hold = got.get('hold') if isinstance(got.get('hold'), dict) else {}
+        texts += [hold.get('owner_ask') or '', hold.get('q') or '']
+        texts += [b.get('value') or '' for b in got.get('blockers') or [] if isinstance(b, dict)]
+        texts += [l for l in (got.get('body') or '').split('\n') if l.startswith(brecord.BLOCK_NOTE)]
+    else:
+        return None, None
+    nums = []
+    for text in texts:
+        for c in brecord.cites(text):
+            n = _asked(c)
+            if n is not None and n not in nums:
+                nums.append(n)
+    return nums, None
+
+
+def questions_bind(api, req):
+    """POST questions/bind, the PM's alone (`from` pm, as questions_done checks a claim): pair
+    each parked record's `q` and each owner-blocked record's cited question with an open hub
+    question of the same number, and with `apply` true bind them (set `record`). The backlog is
+    read fresh with `apply` (a fetch round) and from the held snapshot without, every configured
+    repository. A pair whose record fails its check is in `failed` only. Nothing but an open, unbound question is written; an
+    answered or closed one is a miss. Answers {ok, applied, pairs: [{question, record, bound}],
+    misses: [{record, why}], multi: [{record, questions}], skipped: [{question, why}],
+    failed: [{question, code, message}]}: `multi` are records citing several questions, left
+    alone; `skipped` a question already bound elsewhere or wanted by two records."""
+    b = _fields(req, ('from', 'apply'), flags=('apply',))
+    _text(b, 'from')
+    claimed = (b.get('from') or '').strip() or AGENT_FROM
+    if claimed != AGENT_FROM:
+        raise HubError('forbidden', 'questions bind is the PM\'s: from is %s (%s was given)'
+                       % (AGENT_FROM, ascii(claimed)), 'from')
+    apply = _flag(b, 'apply', False)
+    docs = api.store.docs('questions')
+    numbered = {}
+    for qid in docs:
+        if _asked(qid) is not None:
+            numbered[_asked(qid)] = qid
+    found = []                      # (record, the one question number it cites)
+    cites = collections.Counter()   # records citing each question number
+    misses, multi = [], []
+    for entry in api.shown('backlog', repo='', state='', fresh=apply):
+        repo = entry.get('repo')
+        if entry.get('error'):
+            misses.append({'record': {'repo': repo, 'id': None},
+                           'why': 'the repository could not be read'})
+            continue
+        for item in entry.get('items') or []:
+            rec = {'repo': repo, 'id': item.get('id')}
+            nums, why = _cited(api, repo, item)
+            cites.update(nums or ())
+            if why:
+                misses.append({'record': rec, 'why': why})
+            elif nums is None:
+                continue
+            elif not nums:
+                if item.get('s') == 'parked':
+                    misses.append({'record': rec, 'why': 'cites no question'})
+            elif len(nums) > 1:
+                multi.append({'record': rec, 'questions': [numbered.get(n, 'Q-%d' % n)
+                                                           for n in nums]})
+            else:
+                found.append((rec, nums[0]))
+    pairs, skipped = [], []
+    for rec, n in found:
+        qid = numbered.get(n)
+        d = docs.get(qid) if qid else None
+        if d is None:
+            misses.append({'record': rec, 'why': 'Q-%d is not a hub question' % n})
+        elif d.get('status') != 'open':
+            misses.append({'record': rec, 'why': '%s is %s, not open' % (qid, d.get('status'))})
+        elif cites[n] > 1:
+            skipped.append({'question': qid, 'why': 'cited by more than one record'})
+        elif d.get('record') == rec:
+            skipped.append({'question': qid, 'why': 'already bound to this record'})
+        elif d.get('record'):
+            skipped.append({'question': qid, 'why': 'bound to another record'})
+        else:
+            pairs.append({'question': qid, 'record': rec, 'bound': False})
+    failed = []
+    if apply:
+        for p in pairs:
+            d = api.store.docs('questions').get(p['question'])
+            try:
+                if d is None or d.get('status') != 'open' or d.get('record'):
+                    raise HubError('conflict', '%s moved meanwhile' % p['question'], 'id')
+                bound = _bound(api, p['record'])
+                api.change('questions', p['question'], d, {'record': bound}, req)
+                p['bound'] = True
+            except HubError as e:
+                failed.append({'question': p['question'], 'code': e.code,
+                               'message': e.message if req.full else AGENT_SAYS.get(
+                                   e.code, e.message)})
+        lost = set(f['question'] for f in failed)
+        pairs = [p for p in pairs if p['question'] not in lost]
+    return {'ok': True, 'applied': apply, 'pairs': pairs, 'misses': misses, 'multi': multi,
+            'skipped': skipped, 'failed': failed}
+
+
 # The statuses a question is logged or marked done from: an answer the PM handles, and one filed
 # into its record that its asker has not yet read and closed.
 HANDLED_FROM = ('answered', 'filed')
@@ -2665,6 +2787,7 @@ ROUTES = (
     _r('POST', '/questions', AGENT, questions_add),
     _r('POST', '/questions/{id}/answer', OWNER, questions_answer),
     _r('POST', '/questions/file', AGENT, questions_file),
+    _r('POST', '/questions/bind', AGENT, questions_bind),
     _r('POST', '/questions/{id}/log', AGENT, questions_log),
     _r('POST', '/questions/{id}/done', AGENT, questions_done),
     _r('POST', '/questions/{id}/edit', AGENT, questions_edit),

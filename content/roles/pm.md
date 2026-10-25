@@ -76,6 +76,8 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
   owner's decisions that bind it, and the base it should merge. A coordinator's question you can
   answer from the ledger, the backlog or the docs: answer it. One only the owner can answer goes
   on the hub.
+- Price a backlog record, and decide a coordinator's close of an owner- or PM-priced one, by
+  skill `backlog-pricing`.
 - Watch the sessions with `python <kit>/tools/pm_watch.py` in the background, without `--stream`
   (<kit>/docs/pm-watch.md): it exits with its events; start it again at once, then handle them,
   so its heartbeat stays fresh. A stuck or silent session is asked once, then reported.

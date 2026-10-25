@@ -1850,6 +1850,33 @@ class RecordArgumentCase(CliCase):
                 self.assertIn('USAGE: ', err)
         self.assertEqual(self.sent, [])
 
+    def test_questions_bind_needs_a_mode_and_prints_what_the_hub_answers(self):
+        code, out, err = self.run_asking('questions', 'bind')
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('USAGE: ', err)
+        self.assertEqual(self.run_asking('questions', 'bind', '--dry-run', '--apply')[0], 2)
+        self.assertEqual(self.sent, [])
+        answer = {'ok': True, 'pairs': [{'question': 'Q-1000', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-1'}}],
+                  'failed': [{'question': 'Q-1001', 'code': 'not_found', 'message': 'gone'}],
+                  'misses': [{'record': {'repo': 'kit', 'id': 'EX-3'}, 'why': 'cites no question'},
+                             {'record': {'repo': 'down', 'id': None},
+                              'why': 'the repository could not be read'}],
+                  'multi': [{'record': {'repo': 'kit', 'id': 'EX-4'},
+                             'questions': ['Q-1002', 'Q-1003']}],
+                  'skipped': [{'question': 'Q-1004', 'why': 'bound to another record'}]}
+        self.ask = lambda port, method, path, token=None, body=None, *m, **kw: (
+            self.sent.append((path, body)) or (200, answer))
+        code, out, err = self.run_asking('questions', 'bind', '--apply')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out.splitlines(), [
+            'BOUND Q-1000 kit:EX-1', 'NOT BOUND Q-1001: gone (not_found)',
+            'MISS kit:EX-3: cites no question', 'MISS down: the repository could not be read',
+            'MULTI kit:EX-4 cites Q-1002 Q-1003',
+            'SKIP Q-1004: bound to another record'])
+        self.assertTrue(self.sent[-1][0].endswith('/questions/bind'))
+        self.assertEqual(self.sent[-1][1], {'from': 'pm', 'apply': True})
+
 
 class ArgumentCase(CliCase):
     VERBS =(('questions',), ('questions', 'add', '--title', 't'),
