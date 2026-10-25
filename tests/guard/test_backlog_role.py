@@ -718,6 +718,30 @@ class HubWriterCode(Base):
             with self.subTest(text):
                 self.allowed(self.cmd(text, sub=False, env=PM))
 
+    # code that only reads the writer's file, by its path (seen refused live as backlog-raw-write)
+    READS = ("python - <<'EOF'\nimport pathlib\n"
+             "t = pathlib.Path('kitlib/hubsite/recordwrite.py').read_text(encoding='utf-8')\n"
+             "print(t[:400])\nEOF",
+             "python - <<'EOF'\n"
+             "t = open(r'Z:\\src\\kit\\kitlib\\hubsite\\recordwrite.py').read()\n"
+             "print(t.count('def '))\nEOF",
+             'python -c "print(open(\'kitlib/hubsite/recordwrite.py\').read()[:200])"')
+
+    def test_code_that_only_reads_the_writer_s_file_passes(self):
+        for text in self.READS:
+            for who, kw in (('pm', dict(sub=False, env=PM)), ('coordinator', dict(sub=False, env=COORDINATOR)),
+                            ('subagent', dict())):
+                with self.subTest(text=text, who=who):
+                    self.allowed(self.cmd(text, **kw))
+
+    def test_a_read_that_also_imports_the_writer_is_refused(self):
+        text = ("python - <<'EOF'\nimport pathlib\n"
+                "print(pathlib.Path('kitlib/hubsite/recordwrite.py').stat().st_size)\n"
+                "from kitlib.hubsite import recordwrite\nrecordwrite.answer(1)\nEOF")
+        for who, kw in (('pm', dict(sub=False, env=PM)), ('subagent', dict())):
+            with self.subTest(who=who):
+                self.refused(self.cmd(text, **kw), 'backlog-raw-write')
+
     def test_a_subagent_keeps_the_backlog_code_refusal(self):
         d = self.refused(self.cmd('python -c "from kitlib.backlog.plan import plan_answer"'), 'backlog-raw-write')
         self.assertIn('backlog.py', d.instead)
