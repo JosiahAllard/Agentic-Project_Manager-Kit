@@ -29,7 +29,7 @@ class Classifier(unittest.TestCase):
 
     def test_readers_and_other_commands_do_not(self):
         rx = TC.command_regex()
-        for cmd in ("grep -r dotnet test .", "git log", "cat tools/gate.py", "python tools/board.py"):
+        for cmd in ("grep -r dotnet test .", "git log", "cat tools/gate.py", "python tools/preflight.py"):
             self.assertFalse(TC.is_test_command(cmd, rx), cmd)
 
     def test_extra_pattern(self):

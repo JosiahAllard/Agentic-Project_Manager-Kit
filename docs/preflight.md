@@ -1,12 +1,12 @@
-# Preflight, board and checkout guard
+# Preflight (with its board) and checkout guard
 
-Three read-only tools a session or coordinator runs to see where it stands. Each is a thin entry point; the logic lives in `kitlib/preflight`, `kitlib/board` and `kitlib/git/stray.py`.
+Two read-only tools a session or coordinator runs to see where it stands: `preflight.py`, which with `--board` also prints the coordinator's board, and `checkout_guard.py`. Each is a thin entry point; the logic lives in `kitlib/preflight` and `kitlib/git/stray.py`. There is no separate board tool: `tools/board.py` was merged into `preflight.py --board`.
 
-One rule runs through all three: a reading that failed is printed as `?`, `UNKNOWN`, `unknown (<why>)` or `NOT CHECKED`. It is never printed as a value such as `0`, `-`, `free` or `(equal)`.
+One rule runs through both: a reading that failed is printed as `?`, `UNKNOWN`, `unknown (<why>)` or `NOT CHECKED`. It is never printed as a value such as `0`, `-`, `free` or `(equal)`.
 
 ## preflight.py
 
-`python tools/preflight.py [-C DIR] [--fetch] [--base REV]` is the first command of a task. `kitlib.preflight.report.report` prints the following lines, in this order:
+`python tools/preflight.py [-C DIR] [--fetch] [--base REV] [--board [--write-state]]` is the first command of a task. `kitlib.preflight.report.report` prints the following lines, in this order:
 
 - **fetch**: only with `--fetch`, and only when `git fetch <remote>` failed.
 - **repo, branch, base**: the base against `<remote>/<base>`, marked `(equal)` only when both refs were read and match.
@@ -59,28 +59,26 @@ A queue or holds file the lock could not read is shown as `queue unreadable: <er
 
 A folder in no git work tree, or no absolute folder in the hook payload, is one `checkout  NOT CHECKED` line. It never fetches and runs no git command that reaches a remote. It never raises: a failure is a `could not check` line, and each host's call site turns an exception that escapes anyway into one such line after the header (`_agent_start` in hosts/claude/adapter/host.py, `text` in hosts/codex/adapter/start.py). The hook waits at most 1 s (`agentstart.BUDGET`): the reading runs on a daemon thread, each git call it makes itself is given what is left of the budget as its timeout (`repo.classify` and `stray.check` keep their own), and what is not done in time is one `NOT CHECKED - the rest: over the 1.0 s budget` line.
 
-## board.py
+## --board
 
-`python tools/board.py [-C DIR] [--base REV] [--write-state]` prints the coordinator's whole board. `kitlib.board.report.lines` produces, in order:
+`python tools/preflight.py --board [-C DIR] [--base REV] [--write-state]` prints the whole report above, then the coordinator's board. `kitlib.preflight.board.lines` produces, in order (the base, lock and engines/ports lines are the report's own and are not repeated):
 
-1. The base against `<remote>/<base>`. When they differ and no `--base` was given, the rows are measured against `<remote>/<base>`, and the line says so.
-2. One row per worktree that is on a branch other than the base: `branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched`. The `dirty` column counts tracked files only, and the owner-only paths come from `.kit.json` `owner`.
-3. `machine: lock <the lock line above>`.
-4. `docs:` with the last line of `<kit>/tools/doc_index.py --stale -C <checkout>`.
-5. `machine: engines ... | ports ...`, when configured.
+1. When the local base differs from `<remote>/<base>` and no `--base` was given, the rows are measured against `<remote>/<base>` and the board says so: `board     rows measured against <remote>/<base> (local <base> differs)`. (The report's `vs base` line says it too, but only off the base branch.) No such line when they match.
+2. The header `branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched`, then one row per worktree that is on a branch other than the base. The `dirty` column counts tracked files only, and the owner-only paths come from `.kit.json` `owner`.
+3. `docs:` with the last line of `<kit>/tools/doc_index.py --stale -C <checkout>`.
 
 In a row, `?` means git could not answer. `-` means "no owner-only paths", and `has base tip` is `yes` or `NO` only when git answered.
 
-A worktree that git cannot read as its own work tree is a row of `?`, ending `? (not its own work tree: git cannot read it)`. The check is `kitlib.board.report._own_tree`. The case it guards against is a half-deleted worktree under `.claude/worktrees/`: git, asked inside it, walks up and answers for the main checkout.
+A worktree that git cannot read as its own work tree is a row of `?`, ending `? (not its own work tree: git cannot read it)`. The check is `kitlib.preflight.board._own_tree`. The case it guards against is a half-deleted worktree under `.claude/worktrees/`: git, asked inside it, walks up and answers for the main checkout.
 
-`--write-state` writes the board into the state file and changes nothing else. kitlib/board/state.py chooses the file, in the main checkout's git common dir, so that no untracked file is left in the work tree (a dirty main checkout refuses `gate.py land`):
+`--write-state` (only with `--board`; alone it is a usage error, exit 2) writes the report's `base` line, the board lines, then the report's `lock`, `engines` and `ports` lines (`kitlib.preflight.board.state_lines`) into the state file, so the lock snapshot is kept, and changes nothing else. kitlib/preflight/state.py chooses the file, in the main checkout's git common dir, so that no untracked file is left in the work tree (a dirty main checkout refuses `gate.py land`):
 
 1. `<git common dir>/kit/board-state.md` by default.
-2. `.kit.json` `board.state_file`, when set and when it lies under the git dir (for example `.git/kit/board-state.md`). Any other value is in the work tree: `board: refused: "board".state_file <path> is inside the work tree...`, exit 2, nothing written.
+2. `.kit.json` `board.state_file`, when set and when it lies under the git dir (for example `.git/kit/board-state.md`). Any other value is in the work tree: `preflight: refused: "board".state_file <path> is inside the work tree...`, exit 2, nothing written.
 
 Only the block between `<!-- board:begin -->` and `<!-- board:end -->` is rewritten. A missing file is created from a template.
 
-Exit codes are the same as preflight's: 0 for the board, 2 for a usage error or a bad `.kit.json` (`board: refused: kit configuration: <why>`).
+Exit codes are preflight's own, above.
 
 ## checkout_guard.py
 
@@ -112,7 +110,6 @@ All of these keys are in docs/kit-json.md.
   - `engines`: process-name prefixes, matched case-blind.
   - `udp_ports`: `[low, high]`.
   
-  The board reads `engines` and `udp_ports` too. A bad value refuses both tools.
 - `board.state_file`.
 - `owner`: the owner-only paths, through `Config.owner_rules`.
 

@@ -1351,6 +1351,32 @@ class WriteCase(VerbCase):
         self.assertEqual(json.loads(self.ok('questions', '--status', 'all', '--json')[0]),
                          self.direct('/questions?status=all'))
 
+    def test_questions_show_prints_one_question_with_its_answer_and_note(self):
+        self.ask()
+        self.ask('another')
+        out = self.ok('questions', 'show', 'Q-1000')
+        self.assertEqual(out[0], 'Q-1000 v1 open [kit] which way')
+        self.assertIn('option 1: right - go right', out)
+        self.assertFalse([l for l in out if l.startswith('answer')])
+        self.ok('answer', 'Q-1000', '--choice', '0', '--note', 'as planned')
+        out = self.ok('questions', 'show', 'Q-1000')
+        self.assertEqual((out[0], out[-2:]), ('Q-1000 v2 answered [kit] which way',
+                                              ['answer: left', 'note: as planned']))
+        doc = json.loads(self.ok('questions', 'show', 'Q-1000', '--json')[0])
+        self.assertEqual(doc['answer']['note'], 'as planned')
+        self.assertIn('REFUSED: Q-9 is not a question', self.refused('questions', 'show', 'Q-9'))
+
+    def test_questions_show_marks_the_recommended_option_and_prints_context_and_other(self):
+        self.ok('questions', 'add', '--title', 'which road', '--context-file',
+                self.file('context.md', 'why it matters'), '--option', 'up::go up',
+                '--option', 'down::go down', '--recommended', '1')
+        out = self.ok('questions', 'show', 'Q-1000')
+        self.assertIn('option 1: down (recommended) - go down', out)
+        self.assertIn('option 0: up - go up', out)
+        self.assertIn('context: why it matters', out)
+        self.ok('answer', 'Q-1000', '--choice', 'other', '--note', 'neither')
+        self.assertEqual(self.ok('questions', 'show', 'Q-1000')[-2:], ['answer: Other', 'note: neither'])
+
     def test_other_needs_a_note_and_a_stale_version_is_refused(self):
         self.ask()
         self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-1000', '--choice', 'other'))
@@ -1811,7 +1837,7 @@ class RecordArgumentCase(CliCase):
 
 class ArgumentCase(CliCase):
     VERBS =(('questions',), ('questions', 'add', '--title', 't'),
-             ('questions', 'log', 'Q-001', 'D-7', '--if-version', '1'),
+             ('questions', 'show', 'Q-001'), ('questions', 'log', 'Q-001', 'D-7', '--if-version', '1'),
              ('answer', 'Q-001', '--choice', '0'),
              ('todos',), ('todos', 'add', '--title', 't'), ('todos', 'done', 'T-001'),
              ('todos', 'ack', 'T-001'), ('stories',),

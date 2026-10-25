@@ -1,5 +1,5 @@
 """The engines and UDP ports readings (`.kit.json` "preflight".engines / udp_ports), for
-preflight's two lines and the board's one `machine:` line.
+preflight's two lines.
 
 A failed tasklist or netstat is UNKNOWN, never a count of 0: a measurement nobody took.
 """
@@ -66,19 +66,3 @@ def preflight_lines(s):
         else:
             out.append('ports     %d-%d in use: %s' % (lo, hi, ports or 'none'))
     return out
-
-
-def board_line(s):
-    """The board's `machine: engines running N | ports lo-hi in use [...]`, or None when
-    `.kit.json` "preflight" sets neither."""
-    parts = []
-    if s['engines']:
-        procs, _why = engines(s['engines'])
-        parts.append('engines UNKNOWN (tasklist failed)' if procs is None
-                     else 'engines running %d' % len(procs))
-    if s['udp_ports']:
-        lo, hi = s['udp_ports']
-        ports, _why = udp_ports(lo, hi)
-        parts.append('ports %d-%d UNKNOWN (netstat failed)' % (lo, hi) if ports is None
-                     else 'ports %d-%d in use %s' % (lo, hi, ports or 'none'))
-    return 'machine: ' + ' | '.join(parts) if parts else None

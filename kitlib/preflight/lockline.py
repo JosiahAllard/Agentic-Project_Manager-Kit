@@ -1,6 +1,5 @@
 """The machine lock in one line, from the kit lock's own status (`tools/machine_lock.py status
---json`, kitlib.lock.api.snapshot; docs/lock-api.md, Snapshot), for preflight's `lock` line and
-the board's `machine: lock` line.
+--json`, kitlib.lock.api.snapshot; docs/lock-api.md, Snapshot), for preflight's `lock` line.
 
 The snapshot is read through the CLI, as any client reads it, never through lock internals: a
 reading that fails or does not have the shape this module reads is `unknown (<why>)`, never
