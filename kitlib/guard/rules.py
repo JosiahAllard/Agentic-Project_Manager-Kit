@@ -5226,7 +5226,8 @@ def commit_alternative(ctx, gc, where):
     if not makes:
         return None
     top = quote(where)
-    commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), top)
+    commit = 'python %s -C %s -m "<subject>" --model "<your model>" <each path you changed>' % (
+        kit_tool(ctx, 'commit'), top)
     words = {w.text for w in gc.rest}
     one = 'git -C %s apply --index <patch>' % top if sub == 'am' else \
         'git -C %s %s --no-commit <commit>' % (top, sub)
@@ -5317,7 +5318,8 @@ def interpreter_git(event, ctx, cmd, inv, cwd, role):
     verbs = {m.group(1) for t in texts for m in INTERPRETER_VERB_RE.finditer(t)}
     top = own_worktree(ctx, cwd)
     wt = quote(top) if top else '"<worktree>"'
-    commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), wt)
+    commit = 'python %s -C %s -m "<subject>" --model "<your model>" <each path you changed>' % (
+        kit_tool(ctx, 'commit'), wt)
     sync = 'python %s -C %s <hash> --model "<your model>"' % (kit_tool(ctx, 'sync_base'), wt)
     which = 'node' if inv.name == 'node' else 'python'
     why = ('`%s` runs git from %s code. The guard reads git only as a typed shell command, so none of its git '
@@ -5430,7 +5432,8 @@ def stash_alternative(ctx, where):
     takes the place of a shared stash entry (git_stash_shared)."""
     return ('Set the work aside as a WIP commit on your branch with the kit tool, which stages each path you name, '
             'a new file too, and adds the trailer:',
-            'python %s -C %s -m "WIP: <what>" <each path you changed>' % (kit_tool(ctx, 'commit'), quote(where)))
+            'python %s -C %s -m "WIP: <what>" --model "<your model>" <each path you changed>'
+            % (kit_tool(ctx, 'commit'), quote(where)))
 
 
 def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):

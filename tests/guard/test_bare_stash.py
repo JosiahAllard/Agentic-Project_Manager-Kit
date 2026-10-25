@@ -50,7 +50,7 @@ class Sessions(unittest.TestCase):
         # the WIP commit is commit.py's, which stages the paths it names (a new file too) and adds the trailer
         self.assertIn('a WIP commit on your branch with the kit tool, which stages each path you name, a new file '
                       'too, and adds the trailer:', d.reason)
-        self.assertIn('/tools/commit.py" -C "%s" -m "WIP: <what>" <each path you changed> [kit guard:' % wt, d.reason)
+        self.assertIn('/tools/commit.py" -C "%s" -m "WIP: <what>" --model "<your model>" <each path you changed> [kit guard:' % wt, d.reason)
 
 
 class MainCheckoutUnchanged(unittest.TestCase):

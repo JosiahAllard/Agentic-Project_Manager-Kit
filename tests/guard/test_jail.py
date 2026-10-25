@@ -749,7 +749,7 @@ class ShellForms(Base):
         self.assertIn('Instead: git -C "%s" rm -q x' % W.fwd(self.w.wt), d.reason)
         # a commit: plain git in the worktree is refused too (git-plain-commit), so the kit's commit tool there
         d = self.jailed(self.run_bash('git -C "%s" commit -m x' % W.fwd(self.w.plain)))
-        self.assertIn('Instead: python %s -C "%s" -m "<subject>" <each path you changed>'
+        self.assertIn('Instead: python %s -C "%s" -m "<subject>" --model "<your model>" <each path you changed>'
                       % (rules.kit_tool(self.w.ctx(), 'commit'), W.fwd(self.w.wt)), d.reason)
 
 
@@ -1432,7 +1432,7 @@ class UnplacedGit(MainGit):
                 # in the worktree plain git's commit is refused too (git-plain-commit): the kit's tool
                 d = self.jailed(self.git(text, 'worker'), 'git-main-history')
                 self.assertIn(cause, d.reason)
-                self.assertIn('Instead: python %s -C "%s" -m "<subject>" <each path you changed> ['
+                self.assertIn('Instead: python %s -C "%s" -m "<subject>" --model "<your model>" <each path you changed> ['
                               % (rules.kit_tool(self.w.ctx(), 'commit'), wt), d.reason)
 
     def test_an_unplaceable_git_grep_reads_with_or_without_a_pager(self):

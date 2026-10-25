@@ -8,8 +8,8 @@ from .world import bash, ps
 
 BS = chr(92)
 LOCK = 'python "{kit}/tools/machine_lock.py" run'
-WIP = 'python "{kit}/tools/commit.py" -C "{wt}" -m "WIP: <what>" <each path you changed>'   # git-stash-shared's
-COMMIT = 'python "{kit}/tools/commit.py" -C "{wt}" -m "<subject>" <each path you changed>'   # git-plain-commit's
+WIP = 'python "{kit}/tools/commit.py" -C "{wt}" -m "WIP: <what>" --model "<your model>" <each path you changed>'   # git-stash-shared's
+COMMIT = 'python "{kit}/tools/commit.py" -C "{wt}" -m "<subject>" --model "<your model>" <each path you changed>'   # git-plain-commit's
 
 
 def win(*parts):
@@ -564,7 +564,7 @@ ROWS = [
     ('subagent stash list in main reads', lambda w: bash('git stash list --oneline', w.main, sub=True), None, None, None),
     ('subagent stash -- show in another checkout is a push',
      lambda w: bash('git -C "%s" stash -- show' % W.fwd(w.plain), w.wt, sub=True), 'deny', 'write-jail',
-     'python "{kit}/tools/commit.py" -C "{wt}" -m "WIP: <what>" <each path you changed>'),
+     'python "{kit}/tools/commit.py" -C "{wt}" -m "WIP: <what>" --model "<your model>" <each path you changed>'),
     ('subagent stash -- show where -C is computed', lambda w: bash('git -C $x stash -- show', w.wt, sub=True),
      'deny', 'unplaced', 'git -C "<main checkout>" worktree add .claude/worktrees/<slug> -b <branch>'),
     ('subagent stash -- list in a place git cannot tell',
