@@ -230,6 +230,65 @@ class AdviceKit(unittest.TestCase):
         self.assertIn('python "%s/tools/machine_lock.py" run ' % W.fwd(old),
                       decide(bash('python x.py', self.w.wt, sub=True), self.w.ctx(kit=old)).instead)
 
+    def assert_names_own_folder(self, old):
+        """An export-run guard that cannot tie the current export to its own checkout names the
+        folder it runs from (rules.advice_kit fails closed)."""
+        d = decide(bash('python x.py', self.w.wt, sub=True), self.w.ctx(kit=old))
+        self.assertEqual(d.rule, 'heavy')
+        self.assertIn('python "%s/tools/machine_lock.py" run ' % W.fwd(old), d.instead)
+        self.assertNotIn(W.fwd(self.export), d.instead)
+
+    def test_an_export_run_guard_whose_marker_is_not_json_names_its_own_folder(self):
+        old = self.own_export({})
+        with open(os.path.join(old, '.pm-kit-export'), 'w', encoding='utf-8') as f:
+            f.write('{"checkout": ')
+        self.assert_names_own_folder(old)
+
+    def test_an_export_run_guard_whose_marker_names_a_checkout_without_git_names_its_own_folder(self):
+        gone = os.path.join(self.w.base, 'moved-kit')
+        os.makedirs(gone)
+        self.assert_names_own_folder(self.own_export({'checkout': gone}))
+
+    def test_an_export_run_guard_under_a_corrupt_marketplace_names_its_own_folder(self):
+        old = self.own_export({'checkout': self.w.kit_dir})
+        with open(os.path.join(self.plugin, '.claude-plugin', 'marketplace.json'), 'w', encoding='utf-8') as f:
+            f.write('{"plugins": [')
+        self.assert_names_own_folder(old)
+
+    def test_an_export_run_guard_under_an_unreadable_marketplace_names_its_own_folder(self):
+        old = self.own_export({'checkout': self.w.kit_dir})
+        market = os.path.join(self.plugin, '.claude-plugin', 'marketplace.json')
+        os.remove(market)
+        os.makedirs(market)                      # a folder in its place: open() raises OSError
+        self.assert_names_own_folder(old)
+
+    def test_an_export_run_guard_whose_current_export_names_a_checkout_without_git_names_its_own_folder(self):
+        old = self.own_export({'checkout': self.w.kit_dir})
+        gone = os.path.join(self.w.base, 'moved-kit')
+        os.makedirs(gone)
+        self.write(os.path.join(self.export, '.pm-kit-export'), {'checkout': gone})
+        self.assert_names_own_folder(old)
+
+    def test_the_header_line_reads_the_machine_config_for_a_guard_run_from_a_replaced_export(self):
+        # no mock: headerfollow.line takes advice_kit through _Ctx, which reads the machine config
+        # from the home its environment names, in the PM repository the test fence's pointer names
+        from kitlib.config import user
+        from kitlib.host import headerfollow
+        from tests.home import pm_repo, temp_home
+        home, pm = temp_home(self), pm_repo(self, record=False)
+        os.makedirs(os.path.join(pm, user.DIR_NAME))
+        self.write(os.path.join(pm, user.DIR_NAME, user.FILE_NAME), {'plugin': {'export_dir': self.plugin}})
+        old = self.own_export({'checkout': self.w.kit_dir})
+        payload, env = {'session_id': 's1'}, {'USERPROFILE': home}
+        record = os.path.join(self.plugin, headerfollow.HEADERS, headerfollow.key(payload))
+        os.makedirs(os.path.dirname(record))
+        with open(record, 'w', encoding='utf-8') as f:
+            f.write(old)                         # the session's header named the replaced export A
+        self.assertEqual(headerfollow.line(old, payload, environ=env), headerfollow.text(self.export))
+        with open(record, encoding='utf-8') as f:
+            self.assertEqual(os.path.normcase(f.read().strip()), os.path.normcase(os.path.normpath(self.export)))
+        self.assertIsNone(headerfollow.line(old, payload, environ=env))   # once per refresh
+
 
 class NoSleepWait(unittest.TestCase):
     """A python -c that only sleeps is code like any other: no sleep-wait reason of its own."""
