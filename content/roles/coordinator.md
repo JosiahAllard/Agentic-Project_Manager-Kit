@@ -172,12 +172,13 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   gate or landing step written in an indexed doc counts), and for CI triggers, permissions,
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
 - Tracked `{{owner_folder}}` files and {{instructions_file}} are owner-only: no session or agent edits them.
-- Message the PM only for: a decision you need (owner or PM); a failed landing; a landing that
-  carries a decision, a follow-up for the PM to price, or is the last of a batch (no other
-  landing you submitted is still queued or running; one message naming every landing since your
-  last); a refusal (Never); or something the owner must do or know (main or CI broken, a lock or
-  resource stuck, a usage limit); plus the start check-in (step 3) and the ready-to-restart,
-  ready-to-stop and hand-off messages, which name every landing not yet reported. Never a message that only acknowledges or informs,
+- Message the PM only for: a decision you need (owner or PM); any landing result other than a
+  pass; a pass that carries a decision, a follow-up for the PM to price, or is the last of a batch
+  (no other landing you submitted is still queued or running); a refusal (Never); or something
+  the owner must do or know (main or CI broken, a lock or resource stuck, a usage limit); plus the
+  start check-in (step 3) and the ready-to-restart, ready-to-stop and hand-off replies, whose state
+  note lists every landing not yet reported. Each landing message names every pass not yet
+  reported. Never a message that only acknowledges or informs,
   and never forward an agent's notice. Small facts ride in the state note and your next real message. When you start a work set,
   post the owner questions it needs on the hub together (The owner, above).
 - **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
