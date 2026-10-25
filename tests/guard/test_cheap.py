@@ -309,7 +309,7 @@ class InlineAliasJudged(unittest.TestCase):
         return guard.decide(action(W.bash(text, self.w.wt, sub=True)), self.w.ctx())
 
     def test_the_command_an_inline_alias_runs_is_judged(self):
-        self.assertFalse(os.path.exists(os.path.join(user.config_dir(self.w.home), 'config.json')))
+        self.assertFalse(os.path.exists(os.path.join(os.path.join(self.w.home, user.DIR_NAME), 'config.json')))
         for text, plain, rule in self.ROWS:
             with self.subTest(text):
                 d = self.decide(plain)

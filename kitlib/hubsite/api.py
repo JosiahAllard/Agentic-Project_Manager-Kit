@@ -135,8 +135,9 @@ Creators. An agent edits (POST questions/{id}/edit, todos/{id}/edit) or withdraw
 questions/{id}/delete, todos/{id}/delete) only an open item it added: the body gives the item's
 own `from` (`pm` matches an item with none) and the `if_version` it read, both required, and an
 owner's to-do (`from: you`) is never an agent's. A wrong `from` is `forbidden`, an item no longer
-open is `conflict`, field status, and neither changes it. Every agent shares one token, so the
-`from` is a claim: the check stops a mistake, not an agent that gives another's name. An agent's
+open is `conflict`, field status, and neither changes it. POST questions/{id}/done takes an
+optional `from` (default `pm`) and is `forbidden`, field from, unless it is the question's own
+`from` or `pm`. Every agent shares one token, so the `from` is a claim: the check stops a mistake, not an agent that gives another's name. An agent's
 to-do edit is judged by the owner's to-do rules (todo_steps), the changed fields only; it takes
 no `steps`. The owner edits only a to-do of their own (any status) and deletes one of their own
 at any status, or any open question or open to-do; the owner never edits an agent's item. A
@@ -1094,6 +1095,8 @@ FILING_SAYS = {
     'invalid': 'the backlog store refused this answer: the PM handles it',
     'store': 'the backlog store could not be written now: the hub tries again',
     'unavailable': 'this hub cannot write a backlog store: the hub tries again',
+    'no_store': 'this repository names no backlog store the hub may write (.kit.json '
+                '"backlog".store): the PM handles this answer',
 }
 
 
@@ -1149,7 +1152,8 @@ def file_answer(api, doc_id, via='api', full=False):
     else {id, filed, version, revision} or {id, filed: false, code, message} (message the
     view's own text when `full`) and the version and revision of each mark written, or {id,
     filed: false, moved: true}. A mark the hub store refuses otherwise is given as a failure with
-    that code, nothing marked. The record write is
+    that code, nothing marked. A failure with the code and phrase the question's `filing` has
+    already writes nothing: its version and revision are those it has. The record write is
     idempotent (kitlib.hubsite.recordwrite answer), so a crash anywhere in between is mended by
     filing again."""
     d = api.store.get('questions', doc_id)
@@ -1176,6 +1180,15 @@ def file_answer(api, doc_id, via='api', full=False):
                    'filed_as': _filed_as(before, _record_state(api, record))}
     else:
         message = FILING_SAYS.get(code, 'the answer could not be filed (%s)' % code)
+        was = d.get('filing')
+        if isinstance(was, dict) and (was.get('code'), was.get('message')) == (code, message):
+            # failed as it failed before: the mark it has stays, its first `at` kept, so a retry
+            # moves no version an asker's --if-version holds
+            now = api.store.get('questions', doc_id)
+            if now is None or _version(now) != version:
+                return {'id': doc_id, 'filed': False, 'moved': True}
+            return {'id': doc_id, 'filed': False, 'code': code, 'version': version,
+                    'revision': api.store.revision, 'message': said if full else message}
         changes = {'filing': {'at': api.clock(), 'code': code, 'message': message}}
     try:
         r = api.store.update('questions', doc_id, dict(changes, via=via), if_version=version)
@@ -1236,15 +1249,25 @@ def questions_log(api, req):
 def questions_done(api, req):
     """The PM, or the asker of a filed question, marks an answered or filed question handled
     with no ruling (a one-off go the ledger keeps out; an answer the record already holds):
-    status `done`, terminal, so it is no longer pending and its push ends. Refused (`invalid`)
-    for a question that is neither, for a blank why and for a standing rule (the PM logs it)."""
-    b = _fields(req, ('why', 'if_version'), required=('why',))
+    status `done`, terminal, so it is no longer pending and its push ends. `from` is the
+    caller's session key (AGENT_FROM, the PM, when none): refused `forbidden` (field from)
+    unless it is the question's own `from` or the PM's, and before anything else about the
+    question is said or written. Like _creator it is a claim checked against the item, not
+    proof (all agents share one token). Refused (`invalid`) for a question that is neither
+    answered nor filed, for a blank why and for a standing rule (the PM logs it)."""
+    b = _fields(req, ('why', 'from', 'if_version'), required=('why',))
     _pin(b, required=True)
+    _text(b, 'from')
     why = _text(b, 'why').strip()
     if not why:
         raise _invalid('why says why the answer needs no ruling: it cannot be blank', 'why')
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
+    claimed = (b.get('from') or '').strip() or AGENT_FROM
+    asker = d.get('from') or AGENT_FROM
+    if claimed not in (asker, AGENT_FROM):
+        raise HubError('forbidden', '%s is from %s: only its asker or %s can mark it done '
+                       '(%s was given)' % (doc_id, asker, AGENT_FROM, ascii(claimed)), 'from')
     if d.get('status') not in HANDLED_FROM:
         raise _invalid('%s is %s: only an answered or filed question is marked done'
                        % (doc_id, d.get('status')), 'status')

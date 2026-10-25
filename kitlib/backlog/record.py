@@ -1,5 +1,4 @@
-"""One record: parse, the schema, record-local validation, rendering (ported from an earlier
-tools/backlog.py, the keys the kit dropped removed).
+"""One record: parse, the schema, record-local validation, rendering.
 
 A record is a `key: value` header, one blank line, then a free Markdown body. The header ends at
 the first whitespace-only line. Nothing is defaulted and nothing is inferred.

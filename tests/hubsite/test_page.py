@@ -5280,6 +5280,11 @@ class VisualStyleTest(unittest.TestCase):
         sel = {s.strip() for s in m.group(1).split(",")}
         self.assertEqual(sel, {x + ":focus-visible" for x in ("a", "button", "select", "input", "textarea", "[tabindex]")})
 
+    def test_a_disabled_button_is_greyed_with_tokens_not_faded_and_a_lint_check_chip_is_amber(self):
+        self.assertIn("button:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}", self.style)
+        self.assertNotRegex(self.style, r"button:disabled\{[^}]*opacity")
+        self.assertIn('el("span", {class:"chip rec", text: String(d.check || "?")})', page())
+
     def test_nothing_moves_unless_the_owner_allows_motion(self):
         for name, text in (("hub.css", self.css), ("index.html", self.style)):
             outside = re.sub(r"@media \(prefers-reduced-motion:no-preference\)\{(?:[^{}]*\{[^{}]*\})*\s*\}", "", text)

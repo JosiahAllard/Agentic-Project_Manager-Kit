@@ -38,7 +38,7 @@ What it refuses (`kitlib/commit/__init__.py`, `_commit`):
 - **Machine paths.** A machine path in the subject or body is refused (`kitlib.machinepaths.find`), unless the commit is `--owner-authored`.
   - A machine path in the staged copy of any file being committed is refused too, under the repository's own `"machine_paths"` config. There is no owner exemption here. This check fails closed.
   - Either refusal unstages what this call staged.
-- **Owner-only paths** (`"owner"`, `kitlib/config/owner.py`) are committed only by the owner, with `--owner-authored`.
+- **Owner-only paths** (the `owner` section; the rule is in `kitlib/config/owner.py`) are committed only by the owner, with `--owner-authored`.
   - `--owner-authored` requires the author identity git will record (`git var GIT_AUTHOR_IDENT`) to be `"owner".email`. It must not be in `"owner".agent_emails`.
   - `--owner-approved` is required only when an owner-only path is in the commit.
   - Every `--owner-approved` value must be a blanket entry or a committed path. It is written in its canonical spelling under `"owner".trailer`.

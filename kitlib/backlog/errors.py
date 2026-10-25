@@ -1,4 +1,4 @@
-"""The four ways a backlog verb stops (ported from an earlier tools/backlog.py). Each fixes the
+"""The four ways a backlog verb stops. Each fixes the
 label the CLI prints and its exit code; nothing was written when one is raised, except
 Uncommitted (an Overtaken only for the paths in its `left`) and IndexStale (each a Failure). IndexStale's write is committed, so tools/backlog.py
 reports it as written, with a WARNING line and exit 0, not by this label and code. Dirty and

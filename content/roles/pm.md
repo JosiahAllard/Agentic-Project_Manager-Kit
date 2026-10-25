@@ -61,6 +61,7 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
   never change them from here.
 - Every question for the owner goes on the hub (hub.py questions), with a one-line chat notice. Never put it to the owner as a chat prompt (AskUserQuestion, or a wrap-up ask), because the owner may not be watching the chat.
 - Before recording a rule, check the existing rules and guidelines: the ledger's standing rules, the role files and the docs. Ask the owner follow-up questions until the rule is clear. A passing remark or suggestion is not a rule.
+- The start checklist's `rulebooks` line names the standing rules and the command that reads them.
 
 ## Coordinators and sessions
 

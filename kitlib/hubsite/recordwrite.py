@@ -34,7 +34,9 @@ What is raised is a HubError: NotFound `not_found`; Usage and any other refusal 
 store's own text; a Failure (git, a publish, a folder store outside a linked worktree) `store`,
 whose text the Api gives the local owner only (kitlib.hubsite.api "What an agent is told"). The
 implicit `ref` store (no "backlog".store in `.kit.json`) is refused as `store` before any write,
-since its refusal names the PM data worktree's path. Anything else is raised as it is.
+since its refusal names the PM data worktree's path; answer refuses it as `no_store` instead, a
+code the hub's filing alone reads (kitlib.hubsite.api file_answer, which leaves that answer to
+the PM). Anything else is raised as it is.
 """
 import hashlib
 
@@ -51,19 +53,20 @@ NOT_FOLDED = 'added by the owner from the Action Hub'
 STALE = 'the record changed since this page read it: read it again'
 
 
-def _open(root):
+def _open(root, no_store='store'):
     try:
         ctx = opener.open_store(root, fetch=True, session=SESSION)
     except Failure as e:
         raise HubError('store', str(e), 'repo')
     if getattr(ctx.store.backend, 'implicit', False):
-        raise HubError('store', bstore.default_store_refusal(ctx.root), 'repo')
+        raise HubError(no_store, bstore.default_store_refusal(ctx.root), 'repo')
     return ctx
 
 
-def _write(root, plan):
-    """Store.write(plan(snapshot, ctx)) on the store at root, its errors as HubErrors."""
-    ctx = _open(root)
+def _write(root, plan, no_store='store'):
+    """Store.write(plan(snapshot, ctx)) on the store at root, its errors as HubErrors; the
+    implicit store is refused with the code `no_store`."""
+    ctx = _open(root, no_store)
     try:
         change, _tip = ctx.store.write(lambda s: plan(s, ctx))
     except NotFound as e:
@@ -121,4 +124,4 @@ def answer(root, rid, qid, at, title, label, note=None, via=None, other=False, w
     # the owner's stored answer (module docstring), so the unblock-owner row's check is made
     return _write(root, lambda s, ctx: pmod.plan_answer(
         s, ctx, rid, qid, at, title, label, note or None, via or None, other, list(waiting),
-        role_checked=True))
+        role_checked=True), no_store='no_store')

@@ -63,8 +63,9 @@ def _number(v):
 
 
 def write_heartbeat(path, pid, now, stream, started=None):
-    """Record that pm_watch `pid` polled at `now` (epoch seconds); `stream` is its --stream flag and
-    `started` its process start time (epoch seconds, None when unknown), so a reused pid is not
+    """Record that pm_watch `pid` polled at `now` (epoch seconds); `stream` is its --stream flag
+    (the PM start no longer passes it: docs/pm-watch.md) and `started` its process start time
+    (epoch seconds, None when unknown), so a reused pid is not
     taken for the watcher. kitlib.pmstart.watcher reads it to tell a live watcher from a hung or
     exited one."""
     save_state(path, {"pid": pid, "beat": now, "stream": bool(stream), "started": started})
@@ -109,8 +110,9 @@ POLL_SLEEP = 60       # seconds between passes; well inside kitlib.pmstart BEAT_
 def run(w, clock, sleep, save, emit, beat, once=False, stream=False):
     """The watcher loop over Watcher `w`. Each pass polls, saves the state (`save(state)`) and,
     except with `once`, calls `beat(now)`. Events go to `emit` as one text. Without `stream` the
-    first events end the run (the PM relaunches it); with `stream` it keeps polling, for a run
-    under Monitor. `once`: one pass, then 0. Returns the exit code. A beat that raises OSError
+    first events end the run (the PM relaunches it); with `stream` it keeps polling and never
+    exits, and the PM start no longer passes --stream (docs/pm-watch.md). `once`: one pass, then 0.
+    Returns the exit code. A beat that raises OSError
     (a locked or read-only heartbeat file, os.replace refused) is skipped, never fatal: the
     heartbeat goes stale and the PM start check says so, while the events keep flowing."""
     w.start(clock())

@@ -6,8 +6,9 @@ open, a reused parent pid) is one table.
 Each process is FakeProc(ctime, parent, exited, listed, opens=True): `parent` is the parent pid
 its handle records; `listed` is the exe name the listing gives it, or None when the listing no
 longer names it; `opens` False is a process this user cannot open (another user's or the
-system's). The listing's parent of a listed process is its recorded one. A pid not in the table
-cannot be opened."""
+system's). The listing's parent of a listed process is its recorded one, and the system's
+process listing (process.system_processes) gives it its ctime. A pid not in the table cannot be
+opened."""
 import collections
 import contextlib
 from unittest import mock
@@ -42,6 +43,8 @@ def patched(table, me):
 
     fakes = {
         'snapshot': lambda: listing(table),
+        'system_processes': lambda: [(pid, p.ctime, p.listed)
+                                     for pid, p in table.items() if p.listed],
         'own_ctime': lambda: table[me].ctime,
         'open_process': lambda pid, access=None: int(pid) if opens(pid) else None,
         'handle_ctime': lambda h: table[h].ctime,

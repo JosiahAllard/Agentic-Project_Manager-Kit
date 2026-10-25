@@ -383,11 +383,13 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
   is then the key's for `ACK_WINDOW_S` (30 minutes) from the first hand-over, and the PM's after
   that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
   an answered question stays pending until the PM logs it (`questions log`) or, when it needs no
-  ruling (a one-off go such as a landing or archive go, which the ledger keeps out), marks it
+  ruling (a one-off go such as a landing or archive go, which the ledger and the rulebooks keep out), marks it
   done (`questions done <id> --why <text> --if-version V`; status `done`, with `done_why` and
-  `done_at`). A done question is no longer pending and
-  its push ends (`kitlib/hubsite/api.py` `questions_done`). A question bound to a record whose
-  answer the hub filed (status `filed`, "Filing the answer") stays pending, with `filed` true on
+  `done_at`). Only the asker (the question's `from`) or the PM (`pm`) marks it done: the body's
+  optional `from` (default `pm`) must be one of the two, else `forbidden` (field `from`) and the
+  question is unchanged; like the edit check it is a claim, since agents share one token. A done
+  question is no longer pending and its push ends (`kitlib/hubsite/api.py` `questions_done`). A
+  question bound to a record whose answer the hub filed (status `filed`, "Filing the answer") stays pending, with `filed` true on
   the item, until its asker logs it or marks it done: both take a filed question as they take an
   answered one.
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
@@ -614,22 +616,29 @@ The hub files the owner's answer to a bound question into the record itself, in 
 
 When step 2 fails the question stays `answered`, so it stays pending for the PM, and gains
 `filing` `{at, code, message}`: `not_found` (the record is completed or gone) and `invalid` (the
-store refused the answer) leave the answer to the PM, who handles it as an unbound one; `store`
-and `unavailable` are tried again. `message` is a fixed phrase (`FILING_SAYS`), never the store's
-text, which can name a path; the local owner's answer route alone carries that text, in its
-`filing`. A mark (step 3, or `filing`) whose pin no longer holds writes nothing: the question was
-answered again, logged or marked done meanwhile, and the call that moved it does its own filing.
+store refused the answer) leave the answer to the PM, who handles it as an unbound one, and so
+does `no_store` (the repository's `.kit.json` names no `"backlog".store`, so the hub may write
+none: `kitlib.hubsite.recordwrite` `answer` refuses the implicit store with that code); `store`
+and `unavailable` say the hub tries again. Every code is tried again by the next filing call
+below, which files the answer once what made it fail is mended (a record reopened, a store
+named). `message` is a fixed phrase (`FILING_SAYS`), never the store's text, which can name a
+path; the local owner's answer route alone carries that text, in its `filing`. A retry that fails
+the same way (the code and phrase `filing` already has) writes nothing and keeps the first `at`,
+so it moves no version an asker's `--if-version` holds. A mark
+(step 3, or `filing`) whose pin no longer holds writes nothing: the question was answered again,
+logged or marked done meanwhile, and the call that moved it does its own filing.
 
 Every answered, bound question not filed yet is filed again by `hub.py questions file [Q-1]`
 (`POST /api/v1/questions/file`, agent, optional `{id}`; it answers `{filed: [ids], failed: [{id,
 code, message}]}`) and once at each hub start, on a thread after the listeners start (`kitlib.
-hubsite.serve` `Hub._refile`, which logs each failure as a note). A crash after step 1 or after
-step 2 is mended there. The answer route's own answer carries `filing` (`{id, filed, version,
-revision}`, `{id, filed: false, code, message}`, or `{id, filed: false, moved: true}`), and its
+hubsite.serve` `Hub._refile`, which logs each failure as a note), whatever code its last
+filing failed with. A crash after step 1 or after step 2 is mended there. The answer route's
+own answer carries `filing` (`{id, filed, version, revision}`, `{id, filed: false, code,
+message}`, or `{id, filed: false, moved: true}`), and its
 `status`, `version` and `revision` are those of the last write. An unbound question is never
 filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
-`AnswerStoreTest`, `FiledAsTest`; tests/hubsite/test_record_write.py `Answer`;
-tests/hubsite/test_push.py `AckTest`; tests/delegations/test_run.py `HubTrigger`.
+`AnswerStoreTest`, `AnswerNoStoreTest`, `FiledAsTest`; tests/hubsite/test_record_write.py
+`Answer`; tests/hubsite/test_push.py `AckTest`; tests/delegations/test_run.py `HubTrigger`.
 
 Known limits:
 - A filed question has its own Filed tab on the page (no attention chip), and `hub.py pending` and

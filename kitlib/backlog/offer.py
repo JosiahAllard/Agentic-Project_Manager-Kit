@@ -1,5 +1,4 @@
-"""The partition, the rank order and the offer (ported from earlier per-repository
-tools/backlog.py copies, the `requires:` gate among them).
+"""The partition, the rank order and the offer.
 
 Every record lands in exactly one bucket, and the banner refuses to print a partition that does
 not add up. The offer is a greedy fill down the rank order: scopes of live pulls are occupied

@@ -360,7 +360,7 @@ class MarkRoots(Base):
         self.jailed(self.write(os.path.join(self.w.home, 'projects', 'other.md'), env=PM, sub=False))
 
     def test_no_root_on_over_or_in_the_machine_config_folder(self):
-        cfg = kconfig.user.config_dir(self.w.home)
+        cfg = os.path.join(self.w.home, kconfig.user.DIR_NAME)
         name = kconfig.user.DIR_NAME
         for path in ('~/', '~/' + name, '~/%s/sub' % name, self.w.home, self.w.base):
             with self.subTest(path):

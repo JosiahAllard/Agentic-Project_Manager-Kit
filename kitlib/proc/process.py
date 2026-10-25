@@ -34,6 +34,69 @@ def snapshot():
         K32.CloseHandle(h)
 
 
+SYSTEM_PROCESS_INFORMATION_CLASS = 5        # NtQuerySystemInformation: SystemProcessInformation
+STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
+
+
+class SYSTEM_PROCESS_INFORMATION(ctypes.Structure):
+    """The head of one SystemProcessInformation entry. winternl.h names the 48 bytes after
+    NumberOfThreads Reserved1; they hold these fields at these offsets on every Windows since NT
+    (CreateTime at 0x20, ImageName at 0x38, UniqueProcessId at 0x50 on x64)."""
+    _fields_ = [("NextEntryOffset", wintypes.ULONG), ("NumberOfThreads", wintypes.ULONG),
+                ("WorkingSetPrivateSize", ctypes.c_longlong), ("HardFaultCount", wintypes.ULONG),
+                ("NumberOfThreadsHighWatermark", wintypes.ULONG),
+                ("CycleTime", ctypes.c_ulonglong), ("CreateTime", ctypes.c_longlong),
+                ("UserTime", ctypes.c_longlong), ("KernelTime", ctypes.c_longlong),
+                ("ImageName", win32.UNICODE_STRING), ("BasePriority", ctypes.c_long),
+                ("UniqueProcessId", ctypes.c_void_p)]
+
+
+def system_processes():
+    """[(pid, creation FILETIME, image name)] of every process, from one
+    NtQuerySystemInformation(SystemProcessInformation) listing. It needs no process handle, so it
+    gives the creation time of a process this user may not open (another user's, a SYSTEM service,
+    a protected one). One system call of some 10-15 ms (600 processes): the 2 MiB first buffer
+    holds such a listing, so a second call is rare. Raises OSError when no listing can be had."""
+    size, n = wintypes.ULONG(0), 1 << 21
+    for _ in range(8):
+        buf = ctypes.create_string_buffer(n)
+        st = win32.NTDLL.NtQuerySystemInformation(
+            ctypes.c_int(SYSTEM_PROCESS_INFORMATION_CLASS), buf, wintypes.ULONG(n),
+            ctypes.byref(size)) & 0xFFFFFFFF
+        if st == 0:
+            break
+        if st != STATUS_INFO_LENGTH_MISMATCH:
+            raise OSError("NtQuerySystemInformation(SystemProcessInformation): status 0x%08X" % st)
+        n = max(n * 2, size.value + (1 << 16))  # processes may start between the two calls
+    else:
+        raise OSError("NtQuerySystemInformation(SystemProcessInformation): it kept growing")
+    out, off, head = [], 0, ctypes.sizeof(SYSTEM_PROCESS_INFORMATION)
+    while off + head <= n:
+        e = SYSTEM_PROCESS_INFORMATION.from_buffer(buf, off)
+        name = e.ImageName
+        out.append((int(e.UniqueProcessId or 0), int(e.CreateTime),
+                    ctypes.wstring_at(name.Buffer, name.Length // 2)
+                    if name.Buffer and name.Length else ""))
+        if not e.NextEntryOffset:
+            break
+        off += e.NextEntryOffset
+    return out
+
+
+def listed_ctimes():
+    """{pid: creation FILETIME} from one system_processes listing, or None when none can be had."""
+    try:
+        return {p: ct for p, ct, _n in system_processes()}
+    except OSError:
+        return None
+
+
+def listed_ctime(pid):
+    """The creation FILETIME the system's process listing (system_processes) gives pid, or None
+    when the listing cannot be had or does not name pid."""
+    return (listed_ctimes() or {}).get(int(pid))
+
+
 def process_parents():
     """{pid: parent pid} from one snapshot."""
     return {pid: ppid for pid, ppid, _name in snapshot()}
@@ -84,11 +147,21 @@ def proc_ctime(pid):
 
 
 def alive(pid, ctime):
-    """False only when the process (pid and creation time) is surely gone; True when alive or
-    when it cannot be opened for another reason (another user's, say)."""
+    """False only when the process (pid and creation time) is surely gone; True when alive.
+    A process that cannot be opened for another reason (another user's, a SYSTEM service, a
+    protected one: a reused pid can name one) is judged by the creation time the system's process
+    listing gives it (listed_ctime): another one than ctime is False. It is True when that cannot
+    be told: ctime None or not a number, or the listing unavailable or not naming pid."""
     h = K32.OpenProcess(win32.QUERY_LIMITED | SYNCHRONIZE, False, int(pid))
     if not h:
-        return ctypes.get_last_error() != win32.ERROR_INVALID_PARAMETER
+        if ctypes.get_last_error() == win32.ERROR_INVALID_PARAMETER:
+            return False
+        try:
+            want = None if ctime is None else int(ctime)
+        except (TypeError, ValueError):
+            return True
+        listed = None if want is None else listed_ctime(pid)
+        return listed is None or listed == want
     try:
         if ctime is not None and handle_ctime(h) not in (None, int(ctime)):
             return False
@@ -120,9 +193,12 @@ def ancestry(pid, ctime, parents=None, limit=64, through_exited=False):
     The same bounds hold: `limit` hops, and a parent created after its child (a reused pid) or
     one that cannot be opened ends it. exited is then True only when the walk could go no
     further past an exited ancestor: its parent is gone (not opened, not listed) or newer than
-    it. A parent the listing names but that cannot be opened (winlogon above the desktop's exited
-    userinit) is taken as running. Known limit: its creation time cannot be checked, so a reused
-    pid there, or a listing that still names a process that has just exited, reads as running."""
+    it. A parent above an exited ancestor that this user cannot open (winlogon above the desktop's
+    exited userinit) is judged by the system's process listing (listed_ctimes, read then, so at
+    most once a walk): running when it names that pid created no later than the exited ancestor;
+    a pid it does not name, or names created after it (reused), is gone. With no listing to be
+    had, a parent `parents` names is taken as running. Known limit: a parent that exits just
+    after that listing is read reads as running."""
     parents = process_parents() if parents is None else parents
     out, cur, cur_ct, exited = [], int(pid), ctime, False
     pp = parents.get(cur)
@@ -130,11 +206,15 @@ def ancestry(pid, ctime, parents=None, limit=64, through_exited=False):
         if not pp or pp == cur:
             break
         pct, gone, recorded = _ancestor(pp)
+        if pct is None and exited:
+            # A process this user cannot open (winlogon, above the desktop's exited userinit):
+            # the walk ends below a running one, as it does above a running hop, or past an exited
+            # one whose parent is gone. cur_ct is that exited hop's creation time, never None.
+            listed = listed_ctimes()
+            exited = pp not in parents if listed is None else (
+                pp not in listed or listed[pp] > cur_ct)
+            break
         if pct is None or (cur_ct is not None and pct > cur_ct):
-            if exited and pct is None and pp in parents:
-                # A listed process this user cannot open (winlogon, above the desktop's exited
-                # userinit): the walk ends below a running one, as it does above a running hop.
-                exited = False
             break
         out.append((pp, pct))
         exited = gone
