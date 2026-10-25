@@ -731,12 +731,25 @@ class Store:
         out.sort(key=lambda d: d["ended"])
         return out
 
-    def history_expect(self, repo, kind):
-        """Expected seconds of a run of repo and kind: the median held time of its finished
-        (how: done) runs, at least history_min_s; None with fewer than history_min_runs."""
+    @staticmethod
+    def run_mode(priority=None, branch=None, gate=False):
+        """The mode a run's expected time is kept by: "land" (a landing's gate, priority land),
+        "branch" (a branch gate, which names its branch) or "other" (the rest, and every line
+        written before a gate named its branch). A history line's own priority, branch and gate
+        give the same answer as the booking's."""
+        if priority == "land":
+            return "land"
+        return "branch" if gate and branch else "other"
+
+    def history_expect(self, repo, kind, mode="other"):
+        """Expected seconds of a run of repo, kind and mode (run_mode): the median held time of
+        its finished (how: done) runs of that mode, at least history_min_s; None with fewer than
+        history_min_runs of them, so a thin mode falls back to the kind's guide, not to the
+        other modes' median."""
         s = self.settings
         ds = sorted(float(d["held_s"]) for d in self.history_records()
                     if d.get("repo") == repo and d.get("kind") == kind and d.get("how") == "done"
+                    and self.run_mode(d.get("priority"), d.get("branch"), d.get("gate")) == mode
                     and isinstance(d.get("held_s"), (int, float)) and d["held_s"] >= 0)
         if len(ds) < s.history_min_runs:
             return None

@@ -1415,7 +1415,8 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     rid, mutex = claim_id(store, rid)
     try:
         run = Run(store, L, repo, slug, kind, note, cmd, "waiting", rid, detached, env, log)
-        hist = None if expect_s is not None else store.history_expect(repo, kind)
+        hist = None if expect_s is not None else store.history_expect(
+            repo, kind, store.run_mode(priority, branch, gate))
         run.rec.update(expect_s=expect_s if expect_s is not None else hist if hist is not None
                        else k["warn_min"] * 60,
                        expect_from="--expect" if expect_s is not None else "history"
