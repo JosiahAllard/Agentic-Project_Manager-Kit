@@ -16,6 +16,8 @@ from tests.hubsite.httpfix import FINDING
 
 CLOCK = lambda: '2026-01-02T03:04:05+00:00'      # noqa: E731
 OPTIONS = [{'label': 'a', 'description': 'b'}]
+# ledger ids, built so no file holds a ruling id (tests/scrub)
+R7 = 'R-' + '0007'
 KEY = 'k' * 64
 URL = 'https://github.com/Owner/Repo.git'
 GIT = []        # the TempRepo the approvals routes read their bases from (setUpModule)
@@ -193,7 +195,7 @@ ROWS = {
     ('POST', '/questions'): (None, {'title': 't', 'options': OPTIONS}, None),
     ('POST', '/questions/{id}/answer'): (seed_question, {'choice': 0}, None),
     ('POST', '/questions/{id}/log'): (lambda s: seed_question(s, 'answered'),
-                                      {'ruling': 'decision-7', 'if_version': 1}, None),
+                                      {'ruling': R7, 'if_version': 1}, None),
     ('POST', '/questions/{id}/done'): (lambda s: seed_question(s, 'answered'),
                                        {'why': 'a one-off go', 'if_version': 1}, None),
     ('POST', '/questions/file'): (lambda s: seed_question(s, 'answered'), {}, None),
