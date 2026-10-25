@@ -15,7 +15,7 @@ description: Use when a load-sensitive or timing-dependent test fails intermitte
 
 ## Never
 
-- Rerun to turn a red green: only a flake on the repo's known-flake list gets one rerun; any other failing run is real.
+- Rerun to turn a red green: a red `gate.py --full` gets one targeted rerun (`python <kit>/tools/gate.py -C <worktree> --rerun`; skill builder, step 7) and nothing more. FLAKE: report the `backlog.py add` line it prints; the coordinator decides on filing it. REAL, or a test that failed twice: the failure is real and never lands.
 - Loosen an assertion or a timeout without the evidence above.
 
 Details: the repo profile, "Known flakes".
