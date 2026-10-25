@@ -31,8 +31,7 @@ Every message says "returned", never "failed": a caller that runs the child unsh
 prints it, and it must not read as a failing line to a gate's fail patterns. (runner.PidHoldRun's
 lines do say FAILED: its flag is refused in any gate step, so no gate reads them.)
 
-Ported from the PM kit's pid_shield.py (the PidHold version). The bindings
-are kitlib.proc.win32's; resume is win32.resume (Job.start calls it).
+The Win32 bindings are kitlib.proc.win32's; resume is win32.resume (Job.start calls it).
 """
 import atexit
 import collections
@@ -150,9 +149,9 @@ class PidHold(object):
     not hand its pid to a new process until the object is gone (measured: taskkill of
     a held, exited pid answers "not found", exit 128, and kills nothing). Held from before a
     shell exits until `linger` (3 s) after, the pid Claude Code's second taskkill names - ~1.6 s
-    after the shell ended, pid_shield's GOTCHA - belongs to no live process, so it kills nothing.
+    after the shell ended - belongs to no live process, so it kills nothing.
     Unlike `shield`, it denies no access to anyone: a .NET child may open its parent with
-    PROCESS_ALL_ACCESS (TreeShield's deny entry made that fail).
+    PROCESS_ALL_ACCESS.
 
     HOW: a daemon thread, every `interval` seconds: K32EnumProcesses, then OpenProcess(SYNCHRONIZE |
     QUERY_LIMITED_INFORMATION) on each pid not yet held. A held pid no longer listed has exited

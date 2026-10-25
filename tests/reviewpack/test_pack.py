@@ -136,6 +136,27 @@ class NoOwnerConfigured(PackCase):
         self.assertIn('NOT VERIFIABLE', out)
 
 
+class HubOwnerApproval(PackCase):
+    """`Owner-Approval: hub:A-<n>` (commit.py --owner-approval) is not MISSING; the hub checks it
+    at land time (kitlib.guard.ownercommits)."""
+
+    def agent_edit(self, trailer):
+        self.git('checkout', '-q', '-b', 'feature')
+        self.write('CLAUDE.md', 'v1')
+        self.commit_all('agent edit\n\n%s' % trailer, author=AGENT)
+        return self.owner_only()[1]
+
+    def test_a_hub_approval_trailer_reads_ok_not_missing(self):
+        [row] = self.agent_edit('Owner-Approval: hub:A-001')
+        self.assertEqual((row[1], row[2]), ('ok', 'CLAUDE.md'), row)
+        self.assertIn('hub:A-001', row[3])
+
+    def test_a_malformed_hub_id_still_blocks(self):
+        [row] = self.agent_edit('Owner-Approval: hub:A-1')
+        self.assertEqual(row[1], 'MISSING', row)
+        self.assertIn('not one hub:A-<n>', row[3])
+
+
 class RangeCommits(PackCase):
     def test_range_commits_splits_author_message_and_names(self):
         self.git('checkout', '-q', '-b', 'feature')
