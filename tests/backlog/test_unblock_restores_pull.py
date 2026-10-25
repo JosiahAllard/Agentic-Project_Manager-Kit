@@ -219,6 +219,31 @@ class Unblock(RestoreCase):
         self.assert_open('FOO', 'scope folds into %s' % NEWCOMER)
         self.assertIn('a lead may re-pull it', self.get('FOO').body)
 
+    def newcomer_pull(self, start='main'):
+        self.advance(NEWCOMER, start=start)
+        self.seed(priced('BAR', state='pulled', pulled_at=TODAY, pulled_by=NEWCOMER,
+                         scope='area/bar/**'))
+
+    def test_a_code_main_that_does_not_resolve_is_not_restored(self):
+        # The fold check cannot diff the other pull's branch: "cannot tell" is never "no overlap".
+        self.pulled(scope='area/foo/**')
+        self.block()
+        self.newcomer_pull()
+        with mock.patch.object(pmod, '_code_main', return_value=('origin/nosuch', '')):
+            self.unblock()
+        self.assert_open('FOO', 'cannot tell whether its scope folds into another pull\'s work '
+                                '(code main origin/nosuch does not resolve here')
+        self.assertIn('a lead may re-pull it', self.get('FOO').body)
+
+    def test_a_branch_with_no_shared_history_is_not_restored(self):
+        self.pulled(scope='area/foo/**')
+        self.block()
+        tree = self.repo.git('rev-parse', 'main^{tree}')
+        orphan = self.repo.git('commit-tree', tree, '-m', 'unrelated history')
+        self.newcomer_pull(start=orphan)
+        self.unblock()
+        self.assert_open('FOO', 'shares no history with %s' % NEWCOMER)
+
     def test_a_later_block_of_the_opened_record_does_not_revive_the_old_pull(self):
         self.pulled()
         self.block()
@@ -314,6 +339,23 @@ class Answer(RestoreCase):
         self.block()
         self.answer()
         self.assert_open('FOO')
+
+    def end_blocker(self, verb, gone):
+        self.seed(priced('XYZ'))
+        self.pulled()
+        self.verb('block', 'FOO', ['item:XYZ'], reason='waits for XYZ to land first')
+        self.verb(verb, 'XYZ', 'not wanted after all', role_checked=True)
+        self.assert_open('FOO', 'Unblocked (%s): opened by item:XYZ %s; pull by %s not restored.'
+                         % (TODAY, gone, OTHER))
+        self.block()
+        self.answer()
+        self.assert_open('FOO')
+
+    def test_a_record_opened_by_a_retired_item_keeps_no_stale_pull(self):
+        self.end_blocker('retire', 'retiring')
+
+    def test_a_record_opened_by_a_deleted_item_keeps_no_stale_pull(self):
+        self.end_blocker('delete', 'being deleted')
 
 
 class BlockedPull(unittest.TestCase):

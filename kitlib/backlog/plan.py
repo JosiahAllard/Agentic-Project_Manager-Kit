@@ -1539,9 +1539,16 @@ def _restore_why_not(snap, ctx, rec, branch, tip):
     hits = live_hits(rec.all('scope'), holding, skip=rec.id, branch=branch)
     if hits:
         return hits[0] + lead
-    folds, _notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
+    folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
     if folds:
         return 'scope folds into %s (%s)%s' % (_fold_where(folds), folds[0], lead)
+    # A branch the fold check could not compare is "cannot tell", never "no overlap" (as
+    # _branch_changes refuses to measure it): the record opens for a lead to look at.
+    unmeasured = [n for n in notes if 'not compared' in n]
+    if unmeasured:
+        return ('cannot tell whether its scope folds into another pull\'s work (%s)%s'
+                % (unmeasured[0][len('NOTE: '):] if unmeasured[0].startswith('NOTE: ')
+                   else unmeasured[0], lead))
     return None
 
 
