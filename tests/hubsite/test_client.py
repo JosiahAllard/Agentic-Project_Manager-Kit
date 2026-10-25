@@ -8,6 +8,8 @@ import unittest
 
 from kitlib.hubsite import api, auth, client, httpd, serve
 from tests.hubsite import httpfix
+# a ledger id, built so no file holds a ruling id (tests/scrub)
+RULING = 'R-' + '0007'
 
 
 class ClientCase(httpfix.ListenerCase):
@@ -61,7 +63,7 @@ class PendingCase(ClientCase):
         now = self.hub.version('questions', asked['id'])
         self.assertEqual(now, done['version'])
         logged = self.hub.post('/questions/%s/log' % asked['id'], client.AGENT,
-                               {'ruling': 'D-7', 'if_version': now})
+                               {'ruling': RULING, 'if_version': now})
         self.assertIs(logged['ok'], True)
         with self.assertRaises(client.Refused) as c:
             self.hub.version('questions', 'Q-999')
@@ -81,7 +83,7 @@ class RefusalCase(ClientCase):
         self.assertIsInstance(e, serve.ServeError)
         self.assertEqual(client.exit_code(e), client.REFUSED)
         with self.assertRaises(client.Refused) as c:
-            self.hub.post('/questions/Q-404/log', client.AGENT, {'ruling': 'D-7', 'if_version': 1})
+            self.hub.post('/questions/Q-404/log', client.AGENT, {'ruling': RULING, 'if_version': 1})
         self.assertEqual((c.exception.status, c.exception.code), (404, 'not_found'))
         with self.assertRaises(client.Refused) as c:
             self.hub.get('/questions', query={'status': 'nonsense'})

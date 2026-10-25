@@ -200,8 +200,8 @@ for the PM. A filed question carries `filed_as`, what the answer did to its reco
 freed, held: _filed_as, from the `record` view read before and after), which the push reads to
 choose who hears it. `standing` {at, via} marks an answer the owner made a standing rule (the
 answer's `standing` true, or later `standing` alone: _promote): the PM logs it.
-POST questions/{id}/log takes `ruling`, a ledger id that exists (questions_log: R-nnnn or
-H-<repo>-nnnn, checked by the ruling_exists view when there is one), and `replace` true to swap the
+POST questions/{id}/log takes `ruling`, a ledger ruling id that exists (questions_log:
+kitlib.ledger.fmt.is_id, then the ruling_exists view when there is one), and `replace` true to swap the
 ruling of an already logged question for another.
 
 Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
@@ -1240,15 +1240,16 @@ HANDLED_FROM = ('answered', 'filed')
 
 
 def _ruling(api, ruling):
-    """`ruling` when it is a ledger id (R-nnnn or H-<repo>-nnnn: kitlib.ledger.fmt.is_id) that
+    """`ruling` when it is a ledger ruling id (kitlib.ledger.fmt.is_id) that
     exists. Refused `invalid` (field ruling) for any other text, so a stray line cannot be stored
     as a ruling, and for an id no ledger file holds. The existence check is the optional
     `ruling_exists` view (module docstring, "Views"); a server with no ledger configured has none
     and checks the shape alone."""
     if not ledger_fmt.is_id(ruling):
-        raise _invalid('ruling must be a ledger id (R-nnnn or H-<repo>-nnnn), not %s'
+        raise _invalid('ruling must be a ledger ruling id (the id ledger.py add prints), not %s'
                        % ascii(ruling if len(ruling) <= 60 else ruling[:60] + '...'), 'ruling')
-    if callable(getattr(api.views, 'ruling_exists', None))             and not api.shown('ruling_exists', rid=ruling):
+    if callable(getattr(api.views, 'ruling_exists', None)) and (
+            not api.shown('ruling_exists', rid=ruling)):
         raise _invalid('%s is in no ledger file: log the ruling first (ledger.py add)' % ruling,
                        'ruling')
     return ruling

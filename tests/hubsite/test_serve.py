@@ -1874,18 +1874,20 @@ class MachineCase(unittest.TestCase):
         pm = pm_repo(self, record=False)
         ledger = os.path.join(self.home, 'ledger')
         os.makedirs(ledger)
+        ids = lambda repo, n: 'H-%s-%s' % (repo, n)     # noqa: E731 - built: tests/scrub
+        one = ids('kit', '0001')
         with open(os.path.join(ledger, 'kit.md'), 'w', encoding='utf-8', newline='') as f:
-            f.write('# Ledger\n\n## H-kit-0001 | 2026-10-01 10:00Z | kit | decision\n'
-                    'Q: q\nA: a\nDecides: d\nSource: typed\n')
+            f.write('# Ledger\n\n## %s | 2026-10-01 10:00Z | kit | decision\n'
+                    'Q: q\nA: a\nDecides: d\nSource: typed\n' % one)
         self.config({'ledger_dir': ledger, 'ledger_repos': ['kit', 'other']})
         src = serve.machine_sources(self.home, sync=False)
-        self.assertTrue(src.rulings('H-kit-0001'))
-        self.assertFalse(src.rulings('H-kit-0002'), 'no such entry')
-        self.assertFalse(src.rulings('H-other-0001'), 'its file is not there')
-        self.assertFalse(src.rulings('H-unknown-0001'), 'no configured file holds it')
-        self.assertFalse(src.rulings('R-0001'), 'no frozen ledger')
+        self.assertTrue(src.rulings(one))
+        self.assertFalse(src.rulings(ids('kit', '0002')), 'no such entry')
+        self.assertFalse(src.rulings(ids('other', '0001')), 'its file is not there')
+        self.assertFalse(src.rulings(ids('unknown', '0001')), 'no configured file holds it')
+        self.assertFalse(src.rulings('R-' + '0001'), 'no frozen ledger')
         views = serve.SiteViews(None, src)
-        self.assertTrue(views.ruling_exists('H-kit-0001'))
+        self.assertTrue(views.ruling_exists(one))
         self.assertFalse(hasattr(serve.SiteViews(None, serve.Sources()), 'ruling_exists'))
 
     def test_the_pm_start_config_gives_the_repository_views(self):

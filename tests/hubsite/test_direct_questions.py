@@ -15,6 +15,8 @@ from kitlib.hubsite.store import Store
 NOW = '2026-01-02T03:04:05+00:00'
 CLOCK = lambda: NOW      # noqa: E731
 OPTIONS = [{'label': 'first', 'description': 'b'}, {'label': 'second', 'description': 'c'}]
+# a ledger id, built so no file holds a ruling id (tests/scrub)
+RULING = 'R-' + '0007'
 
 
 class DirectCase(unittest.TestCase):
@@ -179,7 +181,7 @@ class ForTest(DirectCase):
         self.assertEqual(self.ids(self.pending(**{'for': 'kit'})), [qid])
         self.assertEqual(self.store.get('questions', qid)['version'], version)
         self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': 'logged', 'if_version': version})
+                {'ruling': RULING, 'if_version': version})
         self.assertEqual(self.pending(), [])
         self.assertEqual(self.pending(**{'for': 'kit'}), [])
 

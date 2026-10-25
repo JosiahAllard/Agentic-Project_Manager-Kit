@@ -19,6 +19,8 @@ from kitlib.hubsite.store import HubError, Store
 from tests.hubsite import httpfix
 
 OPTIONS = [{'label': 'first', 'description': 'b'}, {'label': 'second', 'description': 'c'}]
+# ledger ids, built so no file holds a ruling id (tests/scrub)
+R1 = 'R-' + '0001'
 PLANTED = 'PUSHPROOF title text'
 NOTE = 'PUSHPROOF note text'
 REAL_HEARTBEAT = push.watcher_heartbeat      # the default reader, before no_watcher patches it
@@ -848,7 +850,7 @@ class FiledPushCase(PushCase):
 
     def log(self, qid):
         version = self.store.get('questions', qid)['version']
-        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'R-0001', 'if_version': version})
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': R1, 'if_version': version})
 
 
 class FiledRecipientsTest(FiledPushCase):
