@@ -175,7 +175,7 @@ is null and `unavailable` maps its name to that same reason:
   health()                                  a dict merged into GET health (git, backlog, ...)
   record(repo, id)                          one record (GET records/{repo}/{id})
   ruling_exists(rid)                        whether a ledger file holds the ruling id (POST
-                                            questions/{id}/log); none: only the id's shape is checked
+                                            questions/{id}/log); none: only its shape is checked
   record_template(repo)                     a new record's fields (GET records/{repo}/new)
 The two record views differ: what they raise as a HubError is the answer (a 404 for a record or
 repository that is not there, a 400 for a name that cannot be one), so their messages are fixed
@@ -200,6 +200,9 @@ for the PM. A filed question carries `filed_as`, what the answer did to its reco
 freed, held: _filed_as, from the `record` view read before and after), which the push reads to
 choose who hears it. `standing` {at, via} marks an answer the owner made a standing rule (the
 answer's `standing` true, or later `standing` alone: _promote): the PM logs it.
+POST questions/{id}/log takes `ruling`, a ledger id that exists (questions_log: R-nnnn or
+H-<repo>-nnnn, checked by the ruling_exists view when there is one), and `replace` true to swap the
+ruling of an already logged question for another.
 
 Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
 through `lock`: a door object (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this
