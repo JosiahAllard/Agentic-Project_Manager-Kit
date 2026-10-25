@@ -2253,8 +2253,10 @@ def _schedule_repo(api, name):
     known_repos gives, a repos/ document's name (its id when it has none), or one of its aliases.
     `invalid`, field repo, for any other."""
     names, aliases = {}, {}
+    keys = getattr(api.store.known_repos, 'session_keys', None)     # {repo: [hub keys]}
+    keyed = {k.lower(): r for r, ks in (keys() if keys else {}).items() for k in ks}
     for n in api.store.known_repos() or ():
-        if isinstance(n, str) and n.strip():
+        if isinstance(n, str) and n.strip() and n.strip().lower() not in keyed:
             names.setdefault(n.strip().lower(), n.strip())
     for doc_id, d in sorted(api.store.docs('repos').items()):
         own = d.get('name') if isinstance(d.get('name'), str) and d['name'].strip() else doc_id
@@ -2262,6 +2264,9 @@ def _schedule_repo(api, name):
         for a in d.get('aliases') if isinstance(d.get('aliases'), list) else ():
             if isinstance(a, str) and a.strip():
                 aliases.setdefault(a.strip().lower(), own)
+    for k, r in keyed.items():              # a session key stands for its repository
+        if r.lower() in names:
+            aliases.setdefault(k, names[r.lower()])
     want = name.strip().lower()
     found = names.get(want) or aliases.get(want)
     if found is None:

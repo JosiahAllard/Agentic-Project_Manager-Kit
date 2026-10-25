@@ -3182,6 +3182,14 @@ class ScheduleTest(ApiCase):
                 self.assertEqual(got['id'], 'maint-lint-Kit')
                 self.assertEqual(self.store.get('schedules', got['id'])['repo'], 'Kit')
 
+    def test_a_session_key_is_stored_as_its_repository_name(self):
+        known = lambda: ('Alpha', 'alpha-key')
+        known.session_keys = lambda: {'Alpha': ['alpha-key']}
+        self.store.known_repos = known
+        got = self.ok('POST', '/schedules', OWNER, self.body(repo='alpha-key'))
+        self.assertEqual(got['id'], 'maint-lint-Alpha')
+        self.assertEqual(self.store.get('schedules', got['id'])['repo'], 'Alpha')
+
     def test_a_repo_the_store_knows_from_the_config_counts(self):
         self.store.known_repos = lambda: ('Alpha',)
         got = self.ok('POST', '/schedules', OWNER, self.body(repo='alpha'))
