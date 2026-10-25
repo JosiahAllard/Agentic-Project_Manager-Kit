@@ -11,14 +11,9 @@ plan_add / plan_set in Store.write), so every store check applies. When the repo
 is the implicit default one, the PM data branch's store is used instead
 (kitlib.backlog.at_landing.pm_data_store).
 
-The record is priced in the same call. The machine config's `daily_red_ruling`
-(kitlib.config.user), read at filing time, is only an on/off switch: its value is never written
-into the record or its commit.
-
-- set (non-empty): priority 1, priority_by pm, written as a role-checked set (the owner turned
-  it on in the machine config, the role check's stand-in for this run);
-- unset: priority 2, priority_by agent (an agent's own price never takes priority 1), and the
-  returned note says so for the run's result.json.
+The record is priced in the same call, always at priority 2, priority_by agent: an agent's own
+price never takes priority 1, and no machine config key changes it (the old `daily_red_ruling`
+is retired, kitlib.config.user RETIRED). The PM or the owner promotes it to 1.
 
 Filing is idempotent. An id the store already holds is not added again, and a record already
 priced is never repriced. Nothing is filed without a prefix. Nothing here prints or exits: file()
@@ -29,15 +24,12 @@ from kitlib.backlog import plan as pmod
 from kitlib.backlog import scope as bscope
 from kitlib.backlog import store as bstore
 from kitlib.backlog.errors import Refusal
-from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
 
 SLUG = 'daily-full'                  # the store commit's Session: line
 MAX_SCOPE = 20
 NOT_FOLDED = 'found by the daily full run bisect on the main branch, with no branch to fold it into'
-PRICE_PM, PRICE_AGENT = '1', '2'
-NO_RULING = ('no daily_red_ruling is set in the machine config: a new record is priced at '
-             'priority 2, priority_by agent')
+PRICE = [('priority', ['2']), ('priority_by', ['agent'])]
 
 
 def record_id(prefix, sha):
@@ -71,27 +63,17 @@ def open_filing_store(root, session=SLUG):
     return opener.open_store(pm_root, fetch=True, session=session), None
 
 
-def file(root, settings, found, red, git, home=None):
+def file(root, settings, found, red, git):
     """Files the bisect `found` (kitlib.dailyfull.bisect.bisect, with `bad`) of the red steps
     `red`, through the store of the repository at `root`. `settings`: the "daily_full".bisect
-    section; `home`: the machine config's home (None: the user's). Returns
-    `(rid or None, lines, note)`: `note` is NO_RULING when the switch is off (the record is
-    priced at priority 2 by an agent), else None. Every store refusal is a line, never raised."""
+    section. Returns `(rid or None, lines)`. Every store refusal is a line, never raised."""
     prefix = (settings or {}).get('prefix')
     if not prefix:
-        return None, [], None
+        return None, []
     sha = found.get('culprit') or found.get('bad')
     if not sha:
-        return None, [], None
+        return None, []
     rid = record_id(prefix, sha)
-    try:
-        # An on/off switch only: the value is never passed on or written.
-        pm_price = bool(kuser.daily_red_ruling(home))
-    except ConfigError as e:
-        return None, ['daily: not filed %s: the machine config: %s' % (rid, e)], None
-    note = None if pm_price else NO_RULING
-    price = [('priority', [PRICE_PM]), ('priority_by', ['pm'])] if pm_price else \
-        [('priority', [PRICE_AGENT]), ('priority_by', ['agent'])]
     if found.get('culprit'):
         summary = ('the daily full run turned red (%s) at commit %s, found by bisect in %d probe(s)'
                    % (', '.join(red), sha[:10], len(found.get('probes') or ())))
@@ -103,7 +85,7 @@ def file(root, settings, found, red, git, home=None):
     try:
         ctx, why = open_filing_store(root)
         if ctx is None:
-            return None, ['daily: not filed: %s' % why], None
+            return None, ['daily: not filed: %s' % why]
 
         def add(s):
             if s.get(rid) is not None:
@@ -116,11 +98,11 @@ def file(root, settings, found, red, git, home=None):
             rec = s.get(rid)
             if rec is None or rec.get('priority') != '-':
                 return bstore.Change({}, '', [])
-            return pmod.plan_set(s, ctx, rid, price, (), role_checked=pm_price)
+            return pmod.plan_set(s, ctx, rid, PRICE, ())
 
         for plan in (add, priced):
             change, _tip = ctx.store.write(plan)
             lines.extend('daily: %s' % line for line in change.lines)
     except (Refusal, ConfigError, OSError) as e:
-        return None, lines + ['daily: not filed %s: %s' % (rid, e)], None
-    return rid, lines + (['daily: %s' % note] if note else []), note
+        return None, lines + ['daily: not filed %s: %s' % (rid, e)]
+    return rid, lines

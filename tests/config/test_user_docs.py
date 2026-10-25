@@ -173,6 +173,14 @@ class RetiredKeyTest(unittest.TestCase):
         self.assertEqual(got['ledger_path'], self.ledger)
         self.assertNotIn('standing_delegation', got)
 
+    def test_the_retired_daily_red_ruling_still_loads_and_is_not_returned(self):
+        self.assertIn('daily_red_ruling', user.RETIRED)
+        self.assertNotIn('daily_red_ruling', user.SCHEMA)
+        self.write({'ledger_path': self.ledger, 'daily_red_ruling': 'R-' + '9168'})
+        got = self.read()
+        self.assertEqual(got['ledger_path'], self.ledger)
+        self.assertNotIn('daily_red_ruling', got)
+
     def test_a_retired_key_loads_whatever_it_holds(self):
         for value in ('not an object', 7, [], None, {'no_such_key': 1}):
             self.write({'ledger_path': self.ledger, 'ledger_refs': value})

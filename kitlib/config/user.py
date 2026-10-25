@@ -146,7 +146,7 @@ MARK_ROOT = Obj({
 
 # Keys the machine config no longer has. A file written before the removal still loads: the key
 # is dropped whatever it holds, never refused and never returned. An unknown key is still refused.
-RETIRED = ('ledger_refs', 'standing_delegation')
+RETIRED = ('ledger_refs', 'standing_delegation', 'daily_red_ruling')
 
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
@@ -155,7 +155,6 @@ SCHEMA = {
     'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repos `ledger.py add --repo` writes; `pm` is the machine-wide one; a repository\'s name is its folder name lower-cased with `_` as `-` (`My_Tools-Repo` is `my-tools-repo`); with `ledger_dir`, each name once, and never `all`, `standing` or the frozen file\'s name; without it, the one-file ledger\'s repo columns besides `all`, and unset: any lower-case name (docs/ledger.md)'),
     'ledger_path': Field(PmRepoPath(), None, 'the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split'),
     'pending_path': Field(PmRepoPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
-    'daily_red_ruling': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'an on/off switch for the daily full run\'s bisect: set, its red record is filed at priority 1, priority_by pm; the value is never written into the record, its commit or the run\'s output (docs/daily-full.md "Bisect"); unset: priority 2, priority_by agent, and the run\'s result.json says so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
     'guard_mcp_tools': Field(ListOf(Str()), None, 'more full tool names the guard treats as the lock MCP\'s owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")'),
@@ -182,14 +181,15 @@ SCHEMA = {
 # tests/config/test_read_pm_repo.py keeps these equal to move's POLICY, LOCAL, DROPPED and
 # RELATIVE_KEYS: this module does not import move, which imports kitlib.coordinatorstart).
 POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
-               'daily_red_ruling', 'guard_rules', 'guard_mark_roots', 'guard_agent_marks',
+               'guard_rules', 'guard_mark_roots', 'guard_agent_marks',
                'guard_mcp_tools', 'guard_mcp_prefix', 'pm_start', 'coordinator_start', 'pm_watch',
                'backlog_lint', 'machine_lock', 'temp_dir', 'agent_temp_sweep',
                'machine_path_folders', 'plugin')
 LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
 # Never in the PM repository's files: a ConfigError there, except a RETIRED key, which is ignored
 # (`pm_data` is derived: locate).
-DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data', 'standing_delegation')
+DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data', 'standing_delegation',
+                'daily_red_ruling')
 # POLICY_KEYS paths that may be written relative to the PM repository (resolved).
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
@@ -1048,12 +1048,6 @@ def files_of(cfg):
 def ledger_files(home=None):
     """files_of the machine config."""
     return files_of(user_config(home))
-
-
-def daily_red_ruling(home=None):
-    """The ruling a daily bisect files its red record under at priority 1, or None when the
-    machine config does not set one (kitlib.dailyfull.file)."""
-    return user_config(home)['daily_red_ruling']
 
 
 def machine_path_folders(home=None):

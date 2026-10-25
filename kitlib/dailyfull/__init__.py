@@ -299,12 +299,10 @@ def _bisect(main, cfg, s, result, earlier, log_dir, say, kw, git):
     if found.get('back'):
         lines.append('daily: bisect: %s' % found['back'])
     if any(p['verdict'] == B.RED for p in found['probes']):      # reproduced: worth a record
-        rid, said, note = filing.file(main, conf, found, red, git)
+        rid, said = filing.file(main, conf, found, red, git)
         lines += said
         if rid:
             found['filed'] = rid
-        if note:
-            found['note'] = note
     result['bisect'] = found
     _write(log_dir, result)
     return lines
