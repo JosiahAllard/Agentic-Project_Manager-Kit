@@ -2,8 +2,7 @@
 
 The commit/push options take `--host NAME`: the agent host for the Co-Authored-By trailer, a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude); `--provider` is its old name, accepted for one release. The trailer comes from `kitlib.attribution` (docs/commit.md); a Codex trailer needs the actual explicit --model id. The host and model are checked before anything is written; the provenance, branch, path and owner checks keep their rules.
 
-Append-only files hold the owner's rulings for every repository on the machine: one file per repository in the folder the machine config's `ledger_dir` names, or the one file `ledger_path` names ("Files"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `files` which file holds what, `write` the writes, `vcs` the git, `standing` the standing digest, `rulebook` the rulebooks, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
-
+Append-only files hold the owner's rulings for every repository on the machine: one file per repository in the folder the machine config's `ledger_dir` names, or the one file `ledger_path` names ("Files"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `files` which file holds what, `write` the writes, `vcs` the git, `standing` the standing digest, `rulebook` the rulebooks, `precommit` the opt-in hook); tests `tests/ledger`.
 ## Format
 
 Logic: `kitlib/ledger/fmt.py`.

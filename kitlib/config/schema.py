@@ -231,6 +231,7 @@ SECTIONS = {
         'log_dir': Field(RelPath(), None, 'where gate logs live'),
         'wait_s': Field(Int(0, 86400), 21600, 'seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise'),
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
+        'self_review_max_lines': Field(Int(1, 100000), None, 'most changed lines (added plus removed, git diff --numstat: the larger of <base>...<tip> and <main as fetched>...<tip>) a verdict the queueing coordinator reviewed itself may cover: tools/verdict.py add refuses a larger self-read, or one whose size cannot be told (docs/gate.md "Strict paths"); unset: no size check'),
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
         'reuse_never': Field(Strs, [], 'globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache'),
         'in_flight': Field(IN_FLIGHT, None, 'how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")'),

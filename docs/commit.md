@@ -1,6 +1,6 @@
 # commit.py and machine_paths.py
 
-Two tools, both ported from the PM kit (PM 9813c73). `tools/commit.py` is the entry over `kitlib/commit`. `tools/machine_paths.py` is the entry over `kitlib/machinepaths`. Each library's module docstring holds the full rules, and this page holds the contract.
+Two tools. `tools/commit.py` is the entry over `kitlib/commit`. `tools/machine_paths.py` is the entry over `kitlib/machinepaths`. Each library's module docstring holds the full rules, and this page holds the contract.
 
 ## commit.py
 

@@ -102,6 +102,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `landing.log_dir` (repo path): where gate logs live
 - `landing.wait_s` (int from 0 to 86400, default 21600): seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise
 - `landing.batch_max` (int from 1 to 20, default 3): most branches one tools/land.py landing merges and gates together
+- `landing.self_review_max_lines` (int from 1 to 100000): most changed lines (added plus removed, git diff --numstat: the larger of <base>...<tip> and <main as fetched>...<tip>) a verdict the queueing coordinator reviewed itself may cover: tools/verdict.py add refuses a larger self-read, or one whose size cannot be told (docs/gate.md "Strict paths"); unset: no size check
 - `landing.reuse_max_age_h` (int from 0 to 168, default 24): hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result
 - `landing.reuse_never` (list of string, default []): globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache
 - `landing.in_flight` ({wait_s, command}): how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")
