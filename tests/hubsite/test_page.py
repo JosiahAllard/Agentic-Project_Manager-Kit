@@ -2067,7 +2067,6 @@ class RecordPageTest(unittest.TestCase):
     at the version read, delete takes the typed id, and New story opens a blank record."""
 
     # Built, so this file holds no ruling id or flag for tests/scrub to flag.
-    RULING = "R-" + "9001"
     ASKS = "the priority is the owner's: give " + "--" + "ruling" + " with the ruling id"
 
     def page(self, body, **values):
@@ -2087,36 +2086,36 @@ class RecordPageTest(unittest.TestCase):
                                                 ["effort", "m"], ["priority", "2"]])
         got = self.page("""
             server.route = c => c.method === "GET" && c.path === "/records/alpha/B-1" ? { status: 200, body: REC }
-              : c.path === "/records/alpha/B-1/edit" ? (c.body.ruling ? { status: 200, body: { ok: true, lines: ["SET B-1"], record: AFTER } } : REFUSED)
+              : c.path === "/records/alpha/B-1/edit" ? (edits++ ? { status: 200, body: { ok: true, lines: ["SET B-1"], record: AFTER } } : REFUSED)
               : undefined;
+            let edits = 0;
             await click(button($("#pane-detail"), "Edit fields"));
             const out = { reads: calls.filter(c => c.path.startsWith("/records")).map(c => c.method + " " + c.path),
                           heads: $$("#list .rec .pk h2").map(text), shown: text($("#list")) };
             const fields = $$("#list .rec .pk")[0];
             out.open = !fields.querySelector(".pmf").hidden;                    // the detail's button opened the section's editor
-            const ta = fields.querySelector("textarea"), ruling = fields.querySelector("input");
-            out.text = ta.value; out.rulingFirst = ruling.hidden;
+            const ta = fields.querySelector("textarea");
+            out.text = ta.value;
             await type(ta, ta.value.replace("effort: s", "effort: m") + "\\npriority: 2");
             await click(button(fields, "Save"));
-            out.refused = text(fields.querySelector(".status")); out.rulingAsked = !ruling.hidden;
-            ruling.value = RULING;
+            out.refused = text(fields.querySelector(".status"));
+            out.boxes = fields.querySelectorAll("input").length;              // a refusal naming a ruling opens no box
             await click(button(fields, "Save"));
             out.sent = calls.filter(c => c.path.endsWith("/edit")).map(c => c.body);
             out.after = text($("#list"));
             await click(button($("#list"), "Back to the backlog"));
             out.back = !$("#list .rec") && !!document.getElementById("row-alpha:B-1") && !!button($("#pane-detail"), "Edit fields");
             return out;
-        """, AFTER=after, REFUSED=self.refusal("invalid", self.ASKS), RULING=self.RULING)
+        """, AFTER=after, REFUSED=self.refusal("invalid", self.ASKS))
         self.assertEqual(got["reads"], ["GET /records/alpha/B-1"] * 2)                  # the detail reads it for Effort, Scope and Body, then the record page
         self.assertEqual(got["heads"], ["Fields", "Blocker or hold", "Body", "Branch", "Delete"])
         self.assertTrue(got["open"])
         self.assertIn("summary: one", got["shown"])
         self.assertEqual(got["text"], "id: B-1\nsummary: one\nscope: tools/x.py\neffort: s")
-        self.assertTrue(got["rulingFirst"])                                       # asked for only when the store asks
         self.assertEqual(got["refused"], "Not saved: " + self.ASKS)
-        self.assertTrue(got["rulingAsked"])
+        self.assertEqual(got["boxes"], 0)                                         # no ruling id box, ever
         change = {"version": "c1:s1", "changes": {"effort": ["m"], "priority": ["2"]}, "unset": []}
-        self.assertEqual(got["sent"], [change, dict(change, ruling=self.RULING)])
+        self.assertEqual(got["sent"], [change, change])                            # the retry sends no ruling
         self.assertIn("priority: 2", got["after"])
         self.assertTrue(got["back"])
 
@@ -4565,21 +4564,22 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(got["posts"], [["/records/alpha/R-3/delete", {"why": "a copy of R-2", "confirm": "R-3"}]])
         self.assertEqual(got["said"], "Retire done on R-3.")
 
-    def test_a_refused_inline_action_shows_the_stores_words_and_asks_for_a_ruling_only_when_named(self):
+    def test_a_refused_inline_action_shows_the_stores_words_and_never_asks_for_a_ruling(self):
         got = self.run_page("""
             await start();
             await click($("#row-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
             await type($("#fa-fp1-R-1-priority"), "P1");
-            const ruling = () => $("#fa-fp1-R-1-ruling").hidden;
+            const boxes = () => $$("#fa-fp1-R-1 input, #fa-fp1-R-1 textarea, #fa-fp1-R-1 select").length;
+            const before = boxes(), box = () => boxes() !== before;   // a refusal adds no box
             lintS.recWrite = REFUSAL_A; await click(button($("#fa-fp1-R-1"), "Save")); await settle();
-            const first = [text($("#fa-fp1-R-1 .status")), ruling()];
+            const first = [text($("#fa-fp1-R-1 .status")), box()];
             lintS.recWrite = REFUSAL_B; await click(button($("#fa-fp1-R-1"), "Save")); await settle();
-            const second = [text($("#fa-fp1-R-1 .status")), ruling()];
+            const second = [text($("#fa-fp1-R-1 .status")), box()];
             return { first, second, enabled: !button($("#fa-fp1-R-1"), "Save").disabled };
         """.replace("REFUSAL_A", json.dumps(refusal("conflict", "R-1 is at version 5, not 4", 409)))
            .replace("REFUSAL_B", json.dumps(refusal("ruling", "this edit needs a ruling id"))))
-        self.assertEqual(got["first"], ["Not done: R-1 is at version 5, not 4", True])
-        self.assertEqual(got["second"], ["Not done: this edit needs a ruling id", False])
+        self.assertEqual(got["first"], ["Not done: R-1 is at version 5, not 4", False])
+        self.assertEqual(got["second"], ["Not done: this edit needs a ruling id", False])   # a refusal naming a ruling opens no box
         self.assertTrue(got["enabled"])
 
     def test_a_record_that_is_not_open_has_nothing_to_change(self):

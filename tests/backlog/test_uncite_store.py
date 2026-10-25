@@ -322,7 +322,15 @@ class ClearPath(StoreCase):
     def setUp(self):
         super().setUp()
         self.seed(rec('FOO', hold_ruling='R-9002', resume='R-9003', priority='3',
-                      priority_by='agent', priority_ruling='R-9001'))
+                      priority_by='agent', priority_ruling='R-9001', priority_per='R-9004'))
+
+    def test_priority_per_is_no_longer_written_and_unset_clears_it(self):
+        with self.assertRaises(Refusal) as cm:
+            self.verb('set', 'FOO', [('priority_per', ['R-9009'])], role_checked=True)
+        self.assertIn('`priority_per` is no longer written', str(cm.exception))
+        self.assertEqual(self.get('FOO').get('priority_per'), 'R-9004')
+        self.verb('set', 'FOO', [], ('priority_per',))
+        self.assertIsNone(self.get('FOO').get('priority_per'))
 
     def test_each_is_cleared_once_the_role_check_ran(self):
         for key in pmod.UNWRITTEN:
@@ -331,7 +339,7 @@ class ClearPath(StoreCase):
             self.assertIn('-> (absent)', '\n'.join(change.lines), key)
 
     def test_the_ruling_keys_clear_without_the_role_check(self):
-        for key in ('hold_ruling', 'priority_ruling'):
+        for key in ('hold_ruling', 'priority_ruling', 'priority_per'):
             self.verb('set', 'FOO', [], (key,))
             self.assertIsNone(self.get('FOO').get(key), key)
 

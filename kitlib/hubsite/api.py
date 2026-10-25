@@ -184,9 +184,9 @@ repository that is not there, a 400 for a name that cannot be one), so their mes
 phrases with no path, no id and nothing the caller sent; only anything else is `unavailable`.
 Both are read now, never cached, and neither is part of GET snapshot.
   record_add(repo, id, summary, scopes, effort, ref)               the owner's four writes to
-  record_edit(repo, id, version, changes, unset, body, ruling)     a repository's backlog store
-  record_delete(repo, id, why, ruling)                             (OWNER routes; kitlib.hubsite.
-  record_unblock(repo, id, on, reason, ruling)                     recordwrite)
+  record_edit(repo, id, version, changes, unset, body)             a repository's backlog store
+  record_delete(repo, id, why)                                     (OWNER routes; kitlib.hubsite.
+  record_unblock(repo, id, on, reason)                             recordwrite)
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
   record_answer(repo, id, qid, at, title, label, note, via, other, waiting)
@@ -2015,28 +2015,27 @@ def record_add(api, req):
 
 def record_edit(api, req):
     repo, rid = _segment(req, 'repo'), _segment(req, 'id')
-    b = _fields(req, ('version', 'changes', 'unset', 'body', 'ruling'), ('version',))
+    b = _fields(req, ('version', 'changes', 'unset', 'body'), ('version',))
     changes = _typed(b, 'changes', (dict,), 'an object of field names and values') or {}
     out = _record_view(api, 'record_edit', repo, rid, _text(b, 'version'),
                        [(k, _strings(changes, k)) for k in changes], _strings(b, 'unset'),
-                       _text(b, 'body'), _text(b, 'ruling'))
+                       _text(b, 'body'))
     return dict(out, ok=True)
 
 
 def record_delete(api, req):
     repo, rid = _segment(req, 'repo'), _segment(req, 'id')
-    b = _fields(req, ('why', 'confirm', 'ruling'), ('why', 'confirm'))
+    b = _fields(req, ('why', 'confirm'), ('why', 'confirm'))
     if _text(b, 'confirm') != rid:
         raise _invalid('confirm must repeat the record id to delete it', 'confirm')
-    out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'), _text(b, 'ruling'))
+    out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'))
     return dict(out, ok=True)
 
 
 def record_unblock(api, req):
     repo, rid = _segment(req, 'repo'), _segment(req, 'id')
-    b = _fields(req, ('on', 'reason', 'ruling'))
-    out = _record_view(api, 'record_unblock', repo, rid, _text(b, 'on'), _text(b, 'reason'),
-                       _text(b, 'ruling'))
+    b = _fields(req, ('on', 'reason'))
+    out = _record_view(api, 'record_unblock', repo, rid, _text(b, 'on'), _text(b, 'reason'))
     return dict(out, ok=True)
 # ---- end of the owner's record writes
 

@@ -122,10 +122,10 @@ class LocationTest(_Case):
 class TolerantReadTest(_Case):
     def test_each_key_comes_from_its_own_file(self):
         write(self.policy, {'ledger_path': 'Q:\\ledger.md', 'owner_email': 'misplaced@example.invalid'})
-        write(self.local, {'owner_email': 'owner@example.invalid', 'daily_red_ruling': 'R-' + '9009'})
+        write(self.local, {'owner_email': 'owner@example.invalid', 'guard_mcp_prefix': 'mcp__x'})
         u = self.ctx().user()
         self.assertEqual((u['ledger_path'], u['owner_email']), ('Q:\\ledger.md', 'owner@example.invalid'))
-        self.assertIsNone(u['daily_red_ruling'])
+        self.assertIsNone(u['guard_mcp_prefix'])
         self.assertNotIn('broken', u)
         self.assertTrue(u['error'])                 # the strict reader refuses both misplaced keys
 

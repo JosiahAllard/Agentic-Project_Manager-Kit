@@ -39,8 +39,9 @@ WRITTEN_BY = {
 # Keys no verb writes any more: an owner gate is a role (kitlib/backlog/roles.py), not a cited
 # id. A record that carries one keeps it until `set ID --unset K` clears it (a price move drops
 # `priority_ruling`, which named the old price; `uncite` drops `priority_ruling` and
-# `hold_ruling`). In WRITTEN_BY too, so the Action Hub shows them as no edit's to make.
-UNWRITTEN = ('priority_ruling', 'hold_ruling', 'resume')
+# `hold_ruling`; `priority_per` is kept). In WRITTEN_BY too, so the Action Hub shows them as no
+# edit's to make.
+UNWRITTEN = ('priority_ruling', 'hold_ruling', 'resume', 'priority_per')
 WRITTEN_BY.update((k, 'no verb: an owner gate is a role now (kitlib/backlog/roles.py); '
                       '`set ID --unset %s` clears it' % k)
                   for k in UNWRITTEN)
@@ -690,7 +691,7 @@ def refuse_top(rid, verb, rows):
 WIDEN_ROW = policy.COLLISION_ROWS['set']
 
 
-def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, role_checked=False,
+def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False,
              may_collide=False):
     """Edit fields and/or the body. `changes` is `[(key, [values])]`.
 
@@ -702,12 +703,12 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, role_che
       release from `-1` to `-`.
     - A price field moved drops the record's `priority_ruling` (it named the old price); so does
       a result of `priority_by: agent`.
-    - `ruling`: kept for kitlib/dailyfull/file.py's pricing alone, until the uncite work's next
-      slice moves it to the role check: the write counts as role-checked, a price it moves records
-      `priority_ruling: <ruling>`, and the commit carries its `Ruling:` line.
+    - No ruling id is taken: an owner gate is a role. Past `unset` every argument is a keyword,
+      so a sixth positional (the old ruling slot) is a TypeError.
     - `state: pulled` is entered only by `pull` and left only by `release`; `state: parked` only
       by `set-status parked` and `unpark`.
-    - `priority_ruling`, `hold_ruling` and `resume` (UNWRITTEN) are never written; `unset` of
+    - `priority_ruling`, `hold_ruling`, `resume` and `priority_per` (UNWRITTEN) are never
+      written; `unset` of
       one clears it. Clearing `resume` is the owner's and the PM's (policy.OWNER_CLEARS, the
       `set-price-owner` row), so without the role check it refuses (refuse_top).
     - On a pulled record, `scope` members no old member covers (widened_members) that collide
@@ -760,8 +761,6 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, role_che
     if (rec.get('state') == 'parked') != (get('state') == ['parked']):
         raise Refusal('`state: parked` is entered only by `set-status parked [--q Q-nnn]` and left '
                       'only by `unpark`, which record the wait and its end')
-    if ruling is not None:
-        role_checked = True     # the daily full run's pricing (see the docstring)
     if not role_checked:
         refuse_top(rid, 'set', policy.sort('set', policy.given_of_set(changes, unset, body), rec))
 
@@ -795,17 +794,14 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, role_che
                           % (rid, '; '.join(widen_hits), override))
         raise Refusal(_fold_message(rid, folds, override, 'widen'))
     dropped = dropped_why = None
-    if ruling is not None and priced:
-        pairs = rmod.apply_changes(pairs, [('priority_ruling', [ruling])])
-    elif get('priority_ruling') and (priced or get('priority_by') == ['agent']):
+    if get('priority_ruling') and (priced or get('priority_by') == ['agent']):
         dropped = get('priority_ruling')[0]
         dropped_why = ('`priority_by: agent` carries no ruling' if get('priority_by') == ['agent']
                        else 'it named the old price')
         pairs = [(k, v) for k, v in pairs if k != 'priority_ruling']
 
     lines = notes + ['SET %s' % rid]
-    for key in sorted(set(keys) | set(unset) | ({'priority_ruling'} if dropped or priced and
-                                                ruling else set())):
+    for key in sorted(set(keys) | set(unset) | ({'priority_ruling'} if dropped else set())):
         lines.append('  %-11s %s -> %s' % (key + ':', ' / '.join(rec.all(key)) or '(absent)',
                                            ' / '.join(rmod.values(pairs, key)) or '(absent)'))
     if body is not None:
@@ -821,12 +817,11 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, role_che
                                                          else 'entries', ', '.join(gone)))
     if dropped is not None:
         lines.append('  priority_ruling %s dropped: %s' % (dropped, dropped_why))
-    subject = ('backlog: priority %s' % rid if ruling is not None and priced
-               else 'backlog: set %s' % rid)
+    subject = 'backlog: set %s' % rid
     text = _text(pairs, body if body is not None else rec.body)
     if text == rec.text:
         return Change({}, subject, lines + ['  (no change)'])
-    change = Change({rid: text}, subject, lines, ruling=ruling)
+    change = Change({rid: text}, subject, lines)
     if widen_hits or folds:
         _collision_change(change, 'set')
     return change

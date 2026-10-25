@@ -179,6 +179,12 @@ class Move(unittest.TestCase):
         self.assertEqual(code, move.OK, out)
         self.assertIn('drop    standing_delegation (retired)', out)
 
+    def test_daily_red_ruling_is_dropped(self):
+        self.config({'daily_red_ruling': 'R-' + '9168'})
+        code, out = self.run_move()
+        self.assertEqual(code, move.OK, out)
+        self.assertIn('drop    daily_red_ruling (retired)', out)
+
     def pm_data(self, **change):
         value = {'path': self.pm, 'branch': 'main', 'remote': 'origin'}
         value.update(change)

@@ -1029,15 +1029,15 @@ class RecordViewsCase(ServeCase):
                              {'lines': ['add'], 'record': {'repo': 'Alpha', 'id': 'A-2',
                                                            'where': 'open'}})
             self.assertEqual(views.record_edit('ALPHA', 'A-2', 'c:v', [('effort', ['s'])], [],
-                                               None, 'R-1')['record']['id'], 'A-2')
-            self.assertEqual(views.record_delete('Alpha', 'A-2', 'w', None), {'lines': ['delete']})
+                                               None)['record']['id'], 'A-2')
+            self.assertEqual(views.record_delete('Alpha', 'A-2', 'w'), {'lines': ['delete']})
         # each write is followed by a read of that repository, so the snapshot shows it
         reread = ('reread', 'Alpha', 'C:\\alpha')
         self.assertEqual(seen, [('add', 'C:\\alpha', 'A-2', 's', ['x'], None, None), reread,
                                 ('record', 'Alpha', 'A-2'),
                                 ('edit', 'C:\\alpha', 'A-2', 'c:v', [('effort', ['s'])], [],
-                                 None, 'R-1'), reread, ('record', 'Alpha', 'A-2'),
-                                ('delete', 'C:\\alpha', 'A-2', 'w', None), reread])
+                                 None), reread, ('record', 'Alpha', 'A-2'),
+                                ('delete', 'C:\\alpha', 'A-2', 'w'), reread])
 
     def test_a_bad_id_or_a_repository_not_configured_is_refused_before_any_write(self):
         views, _ = self.site()

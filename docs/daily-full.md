@@ -26,11 +26,11 @@ With `"daily_full".bisect` set (docs/kit-json.md), a red run looks for the commi
 - The search runs over `git rev-list --first-parent G..S`: S is the red run's commit, G the commit of the latest earlier green run that is an ancestor of S. No such green run: `not run: no earlier green run is an ancestor of <sha>`.
 - The first probe is S itself. Green there, the verdict is `did not reproduce: possible flake` and nothing is filed. Red, a binary search finds the first red commit, at most `max_probes` probes in all; a cap reached first names the range the culprit lies in.
 - A probe switches the daily worktree to the commit, plans that commit's own gate and runs only the red steps (and `setup`) through `runner.gated`, in a machine-lock slot of its own, logging to `<log dir>/bisect-<n>-<sha10>`. A commit whose gate lacks a red step counts as green for it. A switch, config or plan failure, a lock refusal, a failed setup or a red step that did not run stops the bisect as `inconclusive: <why>`. The worktree is put back at S afterwards.
-- The run's `result.json` gains `bisect`: `{good, bad, culprit, probes, verdict}` (each probe `{sha, verdict, red}`), plus `filed` (the record id) and `note` when they apply. The run prints `daily: bisect: <verdict> (<n> probe(s))`.
+- The run's `result.json` gains `bisect`: `{good, bad, culprit, probes, verdict}` (each probe `{sha, verdict, red}`), plus `filed` (the record id) when one was filed. The run prints `daily: bisect: <verdict> (<n> probe(s))`.
 
 When a probe reproduced the red and `prefix` is set, the red is filed through the backlog library, every store check included, as `<prefix>-DAILY-RED-<SHA10>` (`kitlib/dailyfull/file.py`). SHA10 is the culprit's, or S's when only a range was found. The scope is the paths the culprit changed against its first parent, or `none`. A repository on the implicit default store files in the PM data branch's store. Filing is idempotent: an id already held is not added again, and a priced record is never priced again.
 
-The price comes from the machine config's `daily_red_ruling` (docs/kit-json.md "Machine config keys"), read when the record is filed, so no ruling id sits in a tracked file. Set: priority 1, `priority_by` pm, under that ruling. Unset: priority 2, `priority_by` agent, and the result's `note` says so. Tests: `tests/dailyfull/test_bisect.py`.
+The record is always priced at priority 2, `priority_by` agent, in the same call: an agent's own price never takes priority 1, and the PM or the owner promotes it. No machine config key changes the price; the old `daily_red_ruling` is retired, still accepted and never read (docs/kit-json.md "Machine config keys"). Tests: `tests/dailyfull/test_bisect.py`.
 
 ## The schedule
 
