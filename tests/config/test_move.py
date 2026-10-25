@@ -173,6 +173,12 @@ class Move(unittest.TestCase):
         self.assertEqual(code, move.OK, out)
         self.assertIn('drop    ledger_refs (retired)', out)
 
+    def test_standing_delegation_is_dropped(self):
+        self.config({'standing_delegation': 'R-' + '9168'})
+        code, out = self.run_move()
+        self.assertEqual(code, move.OK, out)
+        self.assertIn('drop    standing_delegation (retired)', out)
+
     def pm_data(self, **change):
         value = {'path': self.pm, 'branch': 'main', 'remote': 'origin'}
         value.update(change)
