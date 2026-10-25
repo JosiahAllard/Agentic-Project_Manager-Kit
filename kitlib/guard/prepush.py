@@ -21,7 +21,7 @@ lander):
   forced (--force, a + refspec, --force-with-lease);
 - then, when the repository sets repo.push_block, the pushed commit needs a gate-OK record, read by
   kitlib.gate.runner.verify_record: it must name a config_rev in the pushed commit's history and
-  hash the gate config that commit holds. Until KIT-GATE-OK-LEGACY-READ-RETIRE the record's .git
+  hash the gate config that commit holds. Until the legacy read is retired the record's .git
   copy counts too (kitlib.records.gate_ok.ANY), so a landing by an older kit, which writes only
   that, is not refused here;
 - then, under push_block too, a commit the push adds that changes an owner-only path the push

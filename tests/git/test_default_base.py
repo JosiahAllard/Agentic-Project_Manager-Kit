@@ -11,7 +11,7 @@ from kitlib.preflight import settings as pfsettings
 from kitlib.reviewpack import _pack
 from kitlib.worktree import new as newwt
 from tests import gitfixture
-from tests.home import no_machine_owner
+from tests.home import no_machine_owner, result_drive
 
 TRACKING = 'refs/remotes/origin/main'
 
@@ -89,6 +89,7 @@ class Callers(unittest.TestCase):
     def test_review_pack_default_and_explicit(self):
         # no owner email in .kit.json: the owner rules read the machine config's, here none
         no_machine_owner(self)
+        result_drive(self)        # the pack's gate line reads the gate-OK record folder
         lines = []
         _pack(lines, self.repo.root, 'kit/x', None, None)
         text = '\n'.join(lines)

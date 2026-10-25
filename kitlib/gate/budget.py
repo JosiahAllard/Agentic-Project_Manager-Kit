@@ -21,7 +21,7 @@ An allowance is `<dev_drive>/pm-kit/kit-gate-budget/<repo key>/<result.file_stem
 caller's role and session)}. The folder is outside every checkout, where agents' own file writes
 do not reach. One written before the branch was last made is not read. `gate.py allow` also
 writes a .git copy, `<git common dir>/kit-gate-budget/<stem>.json` (legacy_path), for an older
-kit's gate until KIT-GATE-OK-GIT-COPIES-RETIRE; this check never reads one (any session that can
+kit's gate until the .git copies are retired; this check never reads one (any session that can
 write .git could write it), so an allowance given before the folder moved is given again. The
 owner is never refused. Anything the check cannot read is one WARNING and the gate runs (fail
 open): a wrong refusal would stop every agent's gate.

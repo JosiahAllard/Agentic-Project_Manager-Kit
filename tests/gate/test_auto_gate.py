@@ -12,6 +12,7 @@ from kitlib.gate import land, result, runner
 from kitlib.records import gate_ok
 from tests import gitfixture
 from tests.gate import fixtures
+from tests.home import result_drive
 
 PASSING = 'import unittest\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n'
 FAILING = ('import unittest\n\nclass T(unittest.TestCase):\n    def test_a(self):\n'
@@ -108,6 +109,7 @@ class NoLock(unittest.TestCase):
         self.repo = gitfixture.TempRepo(prepare=prepare,
                                         prepare_key=('gate.test_auto_gate.NoLock',))
         self.addCleanup(self.repo.cleanup)
+        result_drive(self)  # the gate-OK records (kitlib.records.gate_ok) go under it
         self.main = self.repo.prepared
         self.ran = []
 

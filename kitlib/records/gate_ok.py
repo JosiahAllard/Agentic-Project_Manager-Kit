@@ -10,7 +10,7 @@ common dir, where records were before, is writable by any session that can write
 record per commit; a later pass of the same commit replaces it (atomically: a temp file in the
 same folder, then os.replace).
 
-The grace window (until KIT-GATE-OK-LEGACY-READ-RETIRE and KIT-GATE-OK-GIT-COPIES-RETIRE): every
+The grace window (until the legacy read and the .git copies are retired, later work): every
 write also writes the record's .git copy, `<git common dir>/kit-gate-ok/<commit>.json`
 (legacy_dir), for an older kit's readers. A reader with no record in the new folder reads the
 .git copy: read(legacy=ANY), the pre-push hook's, takes any; every other reader (TRUSTED, the
@@ -143,7 +143,7 @@ def record_dir(root):
 
 def legacy_dir(root):
     """The old record folder, `<git common dir>/kit-gate-ok`: written beside the new one until
-    KIT-GATE-OK-GIT-COPIES-RETIRE, read as the module docstring says."""
+    the .git copies are retired, read as the module docstring says."""
     return os.path.join(_common(root), DIR_NAME)
 
 

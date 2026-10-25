@@ -159,7 +159,7 @@ findings and nothing else.
 steps of the repository's gate-OK records (`kitlib/records/gate_ok.py`,
 `<dev_drive>\pm-kit\kit-gate-ok\<repo key>\<commit>.json`, and the .git copies in
 `<git common dir>/kit-gate-ok/` of commits that folder has no record of, until
-KIT-GATE-OK-LEGACY-READ-RETIRE) of full gates only (`mode_of` "full": `gate.py
+the legacy read is retired) of full gates only (`mode_of` "full": `gate.py
 --full` and full landings); a selected or docs-only gate times only part of a step. A sample is
 a step whose result is pass or warn with seconds above 0. Per step, the newest 10 samples
 (`WINDOW`) that ended in the last 14 days (`DAYS`) are taken; with 5 or more (`MIN_SAMPLES`),

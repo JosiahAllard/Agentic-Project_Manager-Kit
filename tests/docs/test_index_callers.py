@@ -19,7 +19,7 @@ from kitlib.docs import callers as doc_callers, index
 from kitlib.preflight import report
 from tests.docs.test_cli import call, doc_index_cli, repo_with_docs
 from tests.gitfixture import fixture_env
-from tests.home import no_machine_owner, temp_home
+from tests.home import no_machine_owner, result_drive, temp_home
 from tests.preflight.test_preflight import free_reader
 from tools import preflight
 
@@ -141,6 +141,7 @@ class ReviewPack(Case):
         super().setUp()
         # no owner email in .kit.json: the owner rules read the machine config's, here none
         no_machine_owner(self)
+        result_drive(self)        # the pack's gate line reads the gate-OK record folder
 
     def pack(self):
         self.repo.git('checkout', '-q', '-b', 'phase/x')

@@ -95,7 +95,7 @@ class HookTest(pc.PrePushCase):
         self.assertEqual((rec['commit'], rec['config_rev'], why), (self.with_kit, self.with_kit, None))
 
     def test_a_record_only_in_git_is_pushed(self):
-        # Until KIT-GATE-OK-LEGACY-READ-RETIRE: a landing by an older kit writes only the .git copy,
+        # Until the legacy read is retired: a landing by an older kit writes only the .git copy,
         # and the hook takes it though no trusted reader would (gate_ok.ANY).
         self.assertEqual(self.push('origin', 'main')[0], 0)
         gate_ok.freeze(self.repo.root)
