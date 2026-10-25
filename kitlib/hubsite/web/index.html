@@ -131,7 +131,8 @@ textarea{width:100%;box-sizing:border-box;min-height:64px;font:inherit;padding:8
 @media (max-width:760px){.keys{display:none}}
 button.primary{font:600 .875rem var(--f-body);background:var(--accent);color:var(--surface);border:0;border-radius:var(--r-s);padding:8px 16px;min-height:36px;cursor:pointer}
 button.link{font:500 .85rem var(--f-body);background:none;border:0;color:var(--accent);cursor:pointer;padding:4px 0;text-decoration:underline}
-button:disabled{opacity:.5;cursor:default}
+button:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}
+button.link:disabled{background:none;text-decoration:none}
 .status{font-size:.82rem;color:var(--muted)}
 .status.err{color:var(--warn)}
 .ans{background:var(--bg);border-radius:var(--r-s);padding:10px 12px;display:grid;gap:4px}
@@ -1972,7 +1973,7 @@ ul.hist .sch-line{display:block}
   // The note the server writes for a finding passed on with none (api.py _act_note), from the finding as shown here.
   const actText = d => { const s = v => typeof v === "string" ? v : "-"; return "Act on maintenance finding " + s(d.check) + " " + s(d.target) + ": " + s(d.text) + " (fix: " + s(d.fix) + ")"; };
   function findingChips(d){
-    return [el("span", {class:"chip need", text: String(d.check || "?")}), d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
+    return [el("span", {class:"chip rec", text: String(d.check || "?")}), d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
       d.new === true ? el("span", {class:"chip urgent", text:"New"}) : null,
       d.status != null ? el("span", {class: "chip" + (d.status === "dismissed" ? "" : " ok"), text: MARKED[d.status] || String(d.status)}) : null];
   }
