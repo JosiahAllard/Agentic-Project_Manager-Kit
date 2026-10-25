@@ -7,7 +7,11 @@
       Medium | High. Prints `QUEUED <branch> <tip>`. A High-risk verdict whose reviewer is the
       calling coordinator (--reviewer-id is --session, or --reviewer names the coordinator role)
       prints `REFUSED: ...` and an `Instead:` line naming a dispatched analyst (exit 2, nothing
-      written; verdicts.self_review_why).
+      written; verdicts.self_review_why). With "landing".self_review_max_lines set in the -C
+      checkout's .kit.json, a verdict of any risk the calling coordinator reviewed itself is
+      refused the same way when it changes more lines than that (the larger of --range and the
+      tip's diff from main as last fetched), or its size cannot be told
+      (verdicts.self_review_size_why); a .kit.json that cannot be read is NOT DONE (exit 1).
   verdict.py carry --branch B [-C DIR]
       after a main sync of a queued branch: move B's verdict to B's head when every commit after
       the review is a conflict-free merge of main and B's own diff against main is the one
@@ -29,8 +33,9 @@
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate.verdicts, prints and
 exits. Exit codes: 0 done; 1 not done (git gave no answer, a queue file cannot be read or written,
+the kit configuration cannot be read by add or carry,
 nothing queued to drop or carry, a carry refused, or list found a file that is not an entry); 2 usage (the arguments, or an
-entry add finds malformed or a High-risk self-review; nothing written); 3 tip mismatch (add: SHA is not the branch's head, or
+entry add finds malformed or a self-review it refuses; nothing written); 3 tip mismatch (add: SHA is not the branch's head, or
 there is no such branch; nothing written).
 """
 import argparse
@@ -148,7 +153,14 @@ def run(a, common_dir):
                  'reviewer': a.reviewer, 'reviewer_model': a.reviewer_model,
                  'reviewer_id': a.reviewer_id, 'author': a.author, 'range': a.range,
                  'session': a.session, 'records': a.record}
-        _, stored = verdicts.add(common_dir, entry)
+        try:
+            cap = kconfig.load(os.path.abspath(a.root)).section('landing')['self_review_max_lines']
+        except kconfig.ConfigError as e:
+            return fail('NOT DONE', 'the kit configuration cannot be read: %s; nothing was queued'
+                        % e, NOT_DONE)
+        main, main_why = main_as_fetched(a.root) if cap is not None else (None, None)
+        _, stored = verdicts.add(common_dir, entry, self_review_max_lines=cap, main=main,
+                                 main_why=main_why)
         print('QUEUED %s %s' % (stored['branch'], stored['tip']), flush=True)
         return DONE
     if a.cmd == 'list':
