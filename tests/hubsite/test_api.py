@@ -819,6 +819,17 @@ class PagesTest(ApiCase):
                 self.refused('invalid', 'html', 'POST', '/pages', AGENT,
                              {'id': 'bad', 'title': 't', 'html': html})
 
+    def test_a_per_repo_ledger_id_in_a_page_id_is_refused(self):
+        h = 'H' + '-kit-' + '0007'
+        for doc_id in (h, 'plan-' + h, h + '-plan', 'x_' + h):
+            with self.subTest(id=doc_id):
+                obj = self.refused('invalid', 'id', 'POST', '/pages', AGENT,
+                                   {'id': doc_id, 'title': 't', 'html': PAGE})
+                self.assertIn('holds', obj['error']['message'])
+        for doc_id in ('H-kit', 'Hx-kit-0007', 'planH-kit-0007'):
+            with self.subTest(id=doc_id):
+                self.ok('POST', '/pages', AGENT, {'id': doc_id, 'title': 't', 'html': PAGE})
+
     def test_ids_shaped_like_items_or_rulings_are_refused(self):
         for doc_id in ('Q-1', 'q-001', 'M-2', 'T-3', 'P-4', 'S-5', 'A-6', 'R-21',
                        'plan-Q-1', 'Q-1.v2', 'R-21-plan', 'x_T-3', 'notes.M-12.draft'):
