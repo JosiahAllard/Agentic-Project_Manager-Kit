@@ -91,7 +91,7 @@ the reviewer is pinned to the light tier (since the reviewer split) and the "Rev
 read-only (`kitlib/guard/rolepolicy.py` `RULES`); identical to today.
 
 What replaces the researcher's `write` capability (decided): the report is returned as text, plus a
-file in the agent's scratch folder for long notes (the rule already in `coordinator-dispatch` "Dispatch traps").
+file in the agent's scratch folder for long notes (the report itself as text, never a report file: `coordinator-dispatch` "Dispatch traps").
 Scratch is outside the checkout, so `rolepolicy.check` role-edit never fires. No `writes`, no repo
 write path; `write` is dropped from the capabilities. This is the researcher's behaviour today (its
 body says scratch only).
