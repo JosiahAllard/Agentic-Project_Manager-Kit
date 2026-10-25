@@ -6996,6 +6996,19 @@ def _no_verify_word(word):
     return t.startswith('--') and 'no-verify' in _canon_long('push', t[2:].partition('=')[0])
 
 
+def _push_names_branches(pos):
+    """True when a `git push`'s positional words (remote, then refspecs) name at least one refspec
+    and none takes its source from HEAD or @: a push the same from any checkout of the repository."""
+    specs = [w.text for w in pos[1:]]
+    if not specs:
+        return False
+    for t in specs:
+        src = t.lstrip('+').partition(':')[0]
+        if src.startswith('@') or src.startswith('HEAD'):
+            return False
+    return True
+
+
 def git_push_pmdata(event, ctx, gc, role):
     """`git push --no-verify` (any abbreviation git accepts), and a `git push` with a word computed
     at run time or arguments xargs appends, or git with a computed subcommand or one xargs
@@ -7037,9 +7050,12 @@ def git_push_pmdata(event, ctx, gc, role):
         if cut or not _no_verify_word(w):
             words.append(w.text)
     # an agent session's push from the main checkout it may not write: the same push from its own
-    # worktree of that checkout, which shares its branches and remotes (the write jail lets that one through)
+    # worktree of that checkout, which shares its branches and remotes (the write jail lets that one
+    # through), only when it names each branch: with none, or HEAD (@), it pushes the branch checked
+    # out where it runs, the worktree's there, so it stays in the main checkout
     run_in = gc.dir
-    if gc.dir and agent_session(event, ctx) and gc.inv is not None and ctx.place(gc.dir).kind == repo.MAIN:
+    if gc.dir and agent_session(event, ctx) and gc.inv is not None and ctx.place(gc.dir).kind == repo.MAIN \
+            and _push_names_branches(_pos):
         run_in = own_worktree(ctx, gc.inv.cmd.cwd, ctx.main_top(gc.dir)) or gc.dir
     return refuse('git-push-pmdata', role, '`git push %s` skips the pre-push hook, which keeps PM data off public '
                   'remotes in this repository (it has %s). Push with the hook:'

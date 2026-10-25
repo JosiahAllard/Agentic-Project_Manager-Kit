@@ -34,6 +34,13 @@ KNOWN_FAILS = {
     'Start-Process cp -WorkingDirectory into main':
         'a Start-Process program\'s -ArgumentList is a word the guard does not read, so any such cp is '
         'unplaced; no rewrite of it passes',
+    'git push --no-verify of the main checkout\'s branch, no branch named':
+        'the push names no branch, so it pushes the branch the main checkout has out; from the worktree '
+        'it would push the worktree\'s, so the Instead stays in the main checkout, which the write jail '
+        'refuses a subagent',
+    'git push --no-verify of HEAD from the main checkout':
+        'HEAD is the main checkout\'s branch only there: the Instead stays in the main checkout, which '
+        'the write jail refuses a subagent',
 }
 
 FILL = {'<subject>': 'x', '<what>': 'x', '<each path you changed>': 'a.txt'}
@@ -141,6 +148,11 @@ CASES = [
     ('git push of the PM data branch', pmdata_world,
      lambda w: bash('git -C "%s" push --no-verify private pmdata' % f(w.main), w.wt, True), None,
      'git-push-pmdata'),
+    ('git push --no-verify of the main checkout\'s branch, no branch named', pmdata_world,
+     lambda w: bash('git -C "%s" push --no-verify private' % f(w.main), w.wt, True), None, 'git-push-pmdata'),
+    ('git push --no-verify of HEAD from the main checkout', pmdata_world,
+     lambda w: bash('git -C "%s" push --no-verify private HEAD' % f(w.main), w.wt, True), None,
+     'git-push-pmdata'),
     # an inline alias that makes a commit: the kit commit tool, which git-plain-commit names
     ('git -C main inline alias that commits', jail_world,
      lambda w: bash("git -C \"%s\" -c alias.x='commit -m y' x" % f(w.main), w.wt, True), None, 'git-alias'),
@@ -164,6 +176,12 @@ def filled(text, w):
     for k, v in FILL.items():
         text = text.replace(k, v)
     return text.replace('<worktree>', f(w.wt))
+
+
+def unfed(known, table, fed):
+    """The names on `known` that are rows of `table` but were not fed back (`fed`), sorted."""
+    names = {r[0] for r in table}
+    return sorted(n for n in known if n in names and n not in fed)
 
 
 setUpModule = W.deny_softened           # as test_rules: the rows pin the softened rules as refusals
@@ -195,15 +213,23 @@ class RowsPass(unittest.TestCase):
                 w.cleanup()
         self.assertGreater(checked, 200)        # the rows were read, not skipped
         # strict: a known fail named for a row is one this test fed back (not skipped, not gone)
-        rows = {r[0] for r in ROWS}
-        self.assertEqual(sorted(n for n in KNOWN_FAILS if n in rows and n not in fed), [])
+        self.assertEqual(unfed(KNOWN_FAILS, ROWS, fed), [])
+
+    def test_row_names_are_unique(self):
+        self.assertEqual(len(ROWS), len({r[0] for r in ROWS}))       # one name, one row
+
+    def test_a_known_fail_for_a_skipped_row_is_reported(self):
+        # a row skipped for a placeholder (or no refusal) is never fed: its known fail is stale
+        table = [('fed row',), ('skipped row',)]
+        known = {'fed row': 'why', 'skipped row': 'why', 'a case': 'why'}
+        self.assertEqual(unfed(known, table, {'fed row'}), ['skipped row'])
+        self.assertEqual(unfed(known, table, {'fed row', 'skipped row'}), [])
 
 
 class CasesPass(unittest.TestCase):
     """The table's Instead, its placeholders filled, fed back."""
 
     def test_every_cases_instead_passes(self):
-        fed = set()
         for name, world, make, environ, rule in CASES:
             w = world()
             try:
@@ -216,15 +242,12 @@ class CasesPass(unittest.TestCase):
                     text = filled(d.instead, w)
                     self.assertIsNone(PLACEHOLDER.search(text), text)
                     why = again(ev, text, ctx)
-                    fed.add(name)
                     if name in KNOWN_FAILS:
                         self.assertIsNotNone(why, 'a known fail now passes: take it off KNOWN_FAILS: %s' % name)
                     else:
                         self.assertIsNone(why, '%s: %s' % (text, why))
             finally:
                 w.cleanup()
-        cases = {c[0] for c in CASES}
-        self.assertEqual(sorted(n for n in KNOWN_FAILS if n in cases and n not in fed), [])
 
     def test_every_known_fail_is_a_row_or_a_case(self):
         names = {r[0] for r in ROWS} | {c[0] for c in CASES}
@@ -284,6 +307,21 @@ class Forms(unittest.TestCase):
         d = self.instead(bash('git -C "%s" merge-tree --write-tree a b' % f(self.w.ro), self.w.plain, True))
         self.assertEqual((d.rule, d.instead), ('write-jail', 'pwd'))
         self.assertIn('To see where this session runs:', d.reason)
+
+
+class PushForms(unittest.TestCase):
+    """git-push-pmdata from the main checkout: the worktree only for a push that names its branch."""
+
+    def test_only_a_named_branch_moves_to_the_worktree(self):
+        w = pmdata_world()
+        self.addCleanup(w.cleanup)
+        main, wt = f(w.main), f(w.wt)
+        for words, where in (('private pmdata', wt), ('private +pmdata:pmdata', wt), ('private', main),
+                             ('private HEAD', main), ('private HEAD:main', main), ('private @', main),
+                             ('private pmdata HEAD', main), ('--all private', main)):
+            with self.subTest(words):
+                d = decide(bash('git -C "%s" push --no-verify %s' % (main, words), w.wt, True), w.ctx())
+                self.assertEqual((d.rule, d.instead), ('git-push-pmdata', 'git -C "%s" push %s' % (where, words)))
 
 
 class ExecForms(unittest.TestCase):
