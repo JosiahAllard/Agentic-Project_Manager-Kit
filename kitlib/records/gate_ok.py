@@ -12,7 +12,7 @@ temp file in the same folder, then os.replace).
 
 The grace window (until the legacy read and the .git copies are retired, later work): every
 write also writes the record's .git copy, `<git common dir>/kit-gate-ok/<commit>.json`
-(legacy_dir), first, for an older kit's readers. Every reader (a landing, the guard, the pre-push
+(legacy_dir), after the folder's record, for an older kit's readers (write). Every reader (a landing, the guard, the pre-push
 hook, the worktree and review tools) reads the record folder first and, when it has no record
 for the commit or there is no record folder (no dev_drive), the .git copy, so a branch gated by
 an older kit or before the record folder moved needs no fresh gate.
@@ -274,13 +274,29 @@ def _retry(fn, *args):
 
 
 def write(root, record):
-    """Write `record` (from build()) to its .git copy (legacy_dir), then to the record folder,
-    each atomically; returns the record folder's path. The .git copy first, so the record is
-    there only when its copy is. NoRecordFolder, with only the .git copy written, when there is
-    no record folder (no dev_drive)."""
+    """Write `record` (from build()) to the record folder, then to its .git copy (legacy_dir),
+    each atomically; returns the record folder's path. The folder first, so a failed write leaves
+    no copy that read() would take; when the copy then fails the folder's record is removed, so
+    the record is there only when its copy is. RecordError when either write fails.
+    NoRecordFolder, with only the .git copy written, when there is no record folder (no
+    dev_drive)."""
     commit = record.get('commit')
-    _write_file(legacy_path(root, commit), record)
-    return _write_file(record_path(root, commit), record)
+    old = legacy_path(root, commit)
+    try:
+        path = record_path(root, commit)
+    except NoRecordFolder:
+        _write_file(old, record)
+        raise
+    _write_file(path, record)
+    try:
+        _write_file(old, record)
+    except RecordError as e:
+        try:
+            os.remove(path)
+        except OSError as gone:
+            raise RecordError('%s; and %s could not be removed: %s' % (e, path, gone))
+        raise
+    return path
 
 
 def _write_file(path, record):

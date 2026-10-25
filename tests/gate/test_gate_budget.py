@@ -233,6 +233,47 @@ class Refused(BudgetCase):
         os.remove(path)
         self.assertEqual(budget.allowance(self.wt, BRANCH)['runs'], budget.RUNS + 9)
 
+    def check(self):
+        said = []
+        got = budget.refusal(self.wt, self.store, self.name, BRANCH, said.append)
+        return got, said
+
+    def test_with_no_dev_drive_the_allowance_is_the_git_copy_alone_and_it_counts(self):
+        with mock.patch('kitlib.config.user.dev_drive', return_value=None):
+            path, _ = budget.allow(self.wt, BRANCH, budget.RUNS + 1, 'one more', self.store,
+                                   who=AGENT)
+            self.assertEqual(path, budget.legacy_path(self.wt, BRANCH))
+            self.assertEqual(budget.allowance(self.wt, BRANCH)['runs'], budget.RUNS + 1)
+            self.lines(budget.RUNS)
+            got, said = self.check()
+            self.assertIsNone(got)
+            self.assertEqual(said, ['gate budget: run %d of %d on %s' % (
+                budget.RUNS + 1, budget.RUNS + 1, BRANCH)])
+            self.line()
+            got, said = self.check()                # the budget applies: it does not fail open
+            self.assertIn('REFUSED: the branch gate budget', got[0])
+            self.assertEqual(said, [])
+        self.assertFalse(os.path.exists(os.path.join(self.result_drive, 'pm-kit',
+                                                     'kit-gate-budget')))
+
+    def blocked(self, folder):
+        """A file where `folder` should be, so nothing can be written in it."""
+        os.makedirs(os.path.dirname(folder), exist_ok=True)
+        with open(folder, 'w', encoding='utf-8') as f:
+            f.write('not a folder\n')
+
+    def test_a_failed_folder_write_leaves_no_git_copy_to_read(self):
+        self.blocked(os.path.dirname(budget.allow_path(self.wt, BRANCH)))
+        with self.assertRaises(budget.BudgetError):
+            budget.allow(self.wt, BRANCH, budget.RUNS + 1, 'one more', self.store, who=AGENT)
+        self.assertFalse(os.path.exists(budget.legacy_path(self.wt, BRANCH)))
+
+    def test_a_failed_git_copy_write_removes_the_folder_allowance(self):
+        self.blocked(os.path.dirname(budget.legacy_path(self.wt, BRANCH)))
+        with self.assertRaises(budget.BudgetError):
+            budget.allow(self.wt, BRANCH, budget.RUNS + 1, 'one more', self.store, who=AGENT)
+        self.assertFalse(os.path.exists(budget.allow_path(self.wt, BRANCH)))
+
     def test_a_git_copy_from_before_the_branch_was_made_is_not_read(self):
         copy = budget.legacy_path(self.wt, BRANCH)
         os.makedirs(os.path.dirname(copy), exist_ok=True)

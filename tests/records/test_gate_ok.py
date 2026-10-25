@@ -265,6 +265,27 @@ class LegacyTest(GateOkCase):
             self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
         self.assertFalse(os.path.exists(os.path.join(self.drive, 'pm-kit')))
 
+    def blocked(self, folder):
+        """A file where `folder` should be, so nothing can be written in it."""
+        os.makedirs(os.path.dirname(folder), exist_ok=True)
+        with open(folder, 'w', encoding='utf-8') as f:
+            f.write('not a folder\n')
+
+    def test_a_failed_folder_write_leaves_no_git_copy_to_read(self):
+        self.blocked(gate_ok.record_dir(self.repo.root))
+        with self.assertRaises(gate_ok.RecordError) as cm:
+            self.passed()
+        self.assertNotIsInstance(cm.exception, gate_ok.NoRecordFolder)
+        self.assertFalse(os.path.exists(gate_ok.legacy_path(self.repo.root, self.head)))
+        self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
+
+    def test_a_failed_git_copy_write_removes_the_folder_record(self):
+        self.blocked(gate_ok.legacy_dir(self.repo.root))
+        with self.assertRaises(gate_ok.RecordError):
+            self.passed()
+        self.assertFalse(os.path.exists(gate_ok.record_path(self.repo.root, self.head)))
+        self.assertEqual(gate_ok.read(self.repo.root, self.head)[0], None)
+
     def test_with_no_record_anywhere_the_answer_is_none(self):
         self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
         with mock.patch('kitlib.config.user.dev_drive', return_value=None):
