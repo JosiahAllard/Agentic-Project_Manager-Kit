@@ -1,7 +1,6 @@
 """Tests for kitlib.proc.shield: a child's own process refuses PROCESS_TERMINATE by its pid while
 shielded, and `unshield` gives it back; the pid hold keeps an exited process's pid
-unused for its linger, and denies nothing. Windows only. Ported from the PM kit's
-test_pid_shield.py.
+unused for its linger, and denies nothing. Windows only.
 
 Every child here is the test's own, created suspended or not, and ended through its own Popen
 handle, its job, or by running to its end; a grandchild is its parent's, which waits for it.
@@ -23,8 +22,7 @@ if os.name == 'nt':
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # A note the shield writes is printed by a caller that runs the child unshielded anyway; it must
-# read as no failing line to a gate's fail patterns, so it never says "fail" (the PM kit checked
-# its gate.FAIL here; the kit gate's patterns are each repo's own).
+# read as no failing line to a gate's fail patterns, so it never says "fail".
 NO_RED = re.compile(r'(?i)fail')
 
 
@@ -211,8 +209,8 @@ class TheHold(unittest.TestCase):
         # .NET's Process opens a process with PROCESS_ALL_ACCESS to watch it exit (testhost opening
         # vstest.console: a repository's unit tier, 2026-10-06). Under a warmed hold, a job's
         # grandchild opens its parent - the job's young child - so: the hold may put no deny
-        # entry on it (TreeShield's was). (The PM kit ran this through gate.run_step;
-        # the kit gate starts no hold, docs/gate.md, so it runs through kitlib.proc.job here.)
+        # entry on it. (The kit gate starts no hold, docs/gate.md, so this runs through
+        # kitlib.proc.job.)
         if testutil.ancestor_reach():
             self.skipTest("an older kit's gate shields every new process of this one")
         self.hold(0.5)
@@ -222,7 +220,7 @@ class TheHold(unittest.TestCase):
             out, err = p.communicate(timeout=60)
         self.assertEqual(p.returncode, 0, err)
         self.assertEqual(out.strip(), '0', 'OpenProcess(PROCESS_ALL_ACCESS) of the parent '
-                                           'returned error %s' % out.strip())   # TreeShield: 5
+                                           'returned error %s' % out.strip())
 
 
 @unittest.skipUnless(os.name == 'nt', 'the shield is Windows-only')
