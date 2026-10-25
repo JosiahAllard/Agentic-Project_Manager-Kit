@@ -8,7 +8,9 @@
                      that branch's linked worktree (own_pull_refusal).
   backlog-raw-write  a write of the backlog that skips the tool and its role check: a subagent's
                      python code importing kitlib.backlog (-c, standard input, -m, runpy) or naming
-                     tools/backlog.py; any session's but the owner's git write of the store's ref
+                     tools/backlog.py; any session's but the owner's python code naming the hub's
+                     record writer (kitlib.hubsite.recordwrite, plan_answer: hub_writer_code);
+                     any session's but the owner's git write of the store's ref
                      (refs/backlog/*; the backlog branch when the store is `branch`); any
                      session's but the owner's edit of a folder store's records.
   pm-data-audit      any session's but the owner's write in <pm_data>/audit/, the backlog's audit
@@ -42,7 +44,13 @@ ASK = ('Ask a session whose role may take it (your coordinator; a coordinator as
 # in any spelling, a name of tools/backlog.py, or the kit command naming it (['kit', 'backlog', ...])
 CODE_RE = re.compile(r'kitlib\s*[./\\]\s*backlog\b|from\s+kitlib\s+import\s+[^\n;]*\bbacklog\b|'
                      r'\btools\s*[./\\]\s*backlog\b|\bbacklog\.py\b|\bkit(?:\.py|\.cmd|\.exe)?\W{1,4}backlog\b')
-REF_DIR = 'refs/backlog/'                       # kitlib.backlog.store.STORE_REF's folder
+# python code that names the hub's record writer or the store's answer filing: kitlib.hubsite.
+# recordwrite in any spelling, or plan_answer (kitlib.backlog.plan). Only the hub runs them.
+HUB_WRITER_RE = re.compile(r'\bhubsite\s*[./\\]\s*recordwrite\b|'
+                           r'from\s+kitlib\s*\.\s*hubsite\s+import\s+[^\n;]*\brecordwrite\b|\bplan_answer\b')
+HUB_WRITER_MODULE = 'kitlib.hubsite.recordwrite'
+HUB_FILE = 'questions file [<question id>]'     # tools/hub.py's agent verb that files bound answers
+REF_DIR = 'refs/backlog/'                     # kitlib.backlog.store.STORE_REF's folder
 BRANCH = 'backlog'                              # kitlib.backlog.store.BRANCH
 REMOTE_BRANCH_RE = re.compile(r'^refs/remotes/[^/]+/%s$' % BRANCH)
 
@@ -376,8 +384,39 @@ def _backlog_module(mod):
 
 def raw_code(event, ctx, cmd, inv, role):
     """A subagent's python that imports kitlib.backlog or runs tools/backlog.py as code: -m or
-    runpy of a kitlib.backlog module, -c or standard-input code (rules.inline_code). A script file
-    is not read."""
+    runpy of a kitlib.backlog module, -c or standard-input code (rules.inline_code). Then, in any
+    session's but the owner's, code that names the hub's record writer (hub_writer_code). A script
+    file is not read."""
+    return backlog_code(event, ctx, cmd, inv, role) or hub_writer_code(event, ctx, cmd, inv, role)
+
+
+def hub_writer_code(event, ctx, cmd, inv, role):
+    """Any session's but the owner's python that names kitlib.hubsite.recordwrite or plan_answer
+    (HUB_WRITER_RE; -m or runpy of that module): the hub's own writes of a record, an answer the
+    owner gave filed into it, which no agent session makes, main sessions included."""
+    if rules.is_owner_session(event, ctx):
+        return None
+    if py_module(inv) == HUB_WRITER_MODULE:
+        how = 'runs %s' % HUB_WRITER_MODULE
+    else:
+        how = None
+        for text in rules.inline_code(cmd, inv):
+            m = HUB_WRITER_RE.search(text)
+            if m:
+                how = 'runs code that names %s' % m.group(0)
+                break
+    if not how:
+        return None
+    return rules.refuse(RAW_RULE, role, '`%s` %s: the hub\'s record writer (kitlib/hubsite/recordwrite.py, the '
+                        'store\'s plan_answer) files the owner\'s answers and record-page writes, and only the hub '
+                        'runs it; no agent session does. Let the hub file a bound question\'s answer (any other '
+                        'record write is tools/backlog.py\'s verb):'
+                        % (rules.hub_line(rules.bare(cmd)), how),
+                        'python %s %s' % (rules.kit_tool(ctx, 'hub'), HUB_FILE))
+
+
+def backlog_code(event, ctx, cmd, inv, role):
+    """A subagent's python that reaches the backlog's library (raw_code's first rule)."""
     if not _judged_subagent(event):
         return None
     mod = py_module(inv)
