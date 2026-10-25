@@ -1024,12 +1024,13 @@ class ComputedCheckoutReads(Base):
 
     def test_a_write_stays_refused(self):
         self.each([('bash', 'git -C "$p" tag "v$n"'),
-                   ('bash', 'git -C "$p" branch -m main old'), ('powershell', 'git -C $p branch -m main "$b"'),
+                   ('bash', 'git -C "$p" branch -c main old'), ('powershell', 'git -C $p branch -c main "$b"'),
                    ('bash', 'git -C "$p" config user.name "$n"')],
                   lambda a, **kw: self.denied(a, 'unplaced', **kw))
-        # a symbolic-ref write moves a ref every worktree shares: git-shared-ref holds every
-        # session but the PM's (which the jail still refuses as unplaced)
-        self.each([('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x')],
+        # a symbolic-ref write or a branch rename moves a ref every worktree shares: git-shared-ref
+        # holds every session but the PM's (which the jail still refuses as unplaced)
+        self.each([('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x'),
+                   ('bash', 'git -C "$p" branch -m main old'), ('powershell', 'git -C $p branch -m main "$b"')],
                   lambda a, **kw: self.denied(a, 'unplaced' if kw['environ'].get(context.ROLE_ENV) == 'pm'
                                               else 'git-shared-ref', **kw))
 

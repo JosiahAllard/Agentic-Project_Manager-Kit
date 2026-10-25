@@ -1,7 +1,10 @@
 """git-shared-ref beyond update-ref (docs/guard.md "Rules"): a push into the repository itself,
-a fetch or pull refspec's destination, symbolic-ref, replace and a notes write move refs every
-worktree shares as update-ref does, so each is judged by the same allowance: refs/tmp/<name>, the
-per-worktree refs, and in a linked worktree its HEAD and the branch checked out there."""
+a fetch or pull refspec's destination, symbolic-ref, replace, a notes write, a forced or moved
+branch or tag, checkout -B, a checkout past another worktree's lock, worktree add -B or -f, a forced
+tag fetch, rebase --update-refs, a remote's removal, rename or head, fast-import and filter-branch
+move refs every worktree shares as update-ref does, so each is judged by the same allowance:
+refs/tmp/<name>, the per-worktree refs, and in a linked worktree its HEAD and the branch checked
+out there."""
 import os
 import re
 import time
@@ -172,7 +175,11 @@ class Notes(SharedRefBase):
 
 class Sessions(SharedRefBase):
     WRITES = ('git push . HEAD:refs/heads/kit/sib', 'git fetch origin main:main', 'git symbolic-ref HEAD refs/heads/main',
-              'git replace 0123abc 4567def', 'git notes add -m x')
+              'git replace 0123abc 4567def', 'git notes add -m x', 'git branch -f kit/sib HEAD',
+              'git branch -m kit/wt kit/x', 'git tag -d v1', 'git checkout -B kit/sib',
+              'git switch --ignore-other-worktrees kit/sib', 'git worktree add -B kit/sib .claude/worktrees/y',
+              'git fetch -f origin tag v1', 'git rebase --update-refs main', 'git remote remove origin',
+              'git fast-import')
 
     def test_coordinator_and_other_jailed_marks_are_held(self):
         for env in (tj.COORDINATOR, tj.DEEP, tj.CONSULTANT):
@@ -224,11 +231,50 @@ class Fallback(SharedRefBase):
     def test_a_notes_write(self):
         self.each_unclean_refused(['git notes add -m x', 'git notes --ref=x remove HEAD', 'git notes prune'])
 
+    def test_a_fetch_option_git_reads_abbreviated(self):
+        # git takes any unambiguous start of a long option: --ta is --tags, --for --force, --std --stdin
+        self.each_unclean_refused(['git fetch --ta --for origin', 'git fetch --tags --fo origin',
+                                   'git fetch --std origin', 'git fetch --prune-t origin',
+                                   'git -c remote.origin.pruneTags=true fetch origin',
+                                   'git -c fetch.pruneTags=true fetch origin',
+                                   'git fetch -f origin tag v1', 'git fetch --force origin tag v1'])
+
+    def test_a_push_to_a_computed_or_home_repository(self):
+        self.each_unclean_refused(['git push "$R" HEAD:refs/heads/kit/sib', 'git push $R HEAD:refs/heads/kit/sib',
+                                   'git push ~/../repo HEAD:refs/heads/kit/sib',
+                                   'git push -f ~/../repo HEAD:refs/heads/kit/sib'])
+
+    def test_a_branch_tag_or_checkout_that_moves_a_shared_ref(self):
+        self.each_unclean_refused(['git branch -f kit/sib HEAD', 'git branch --force kit/sib',
+                                   'git branch -m kit/wt kit/x', 'git branch -M x main', 'git branch -C x kit/sib',
+                                   'git branch --move kit/sib x',
+                                   'git tag -f v1', 'git tag --force v1', 'git tag -d v1', 'git tag --delete v1',
+                                   'git checkout -B kit/sib', 'git checkout --ignore-other-worktrees kit/sib',
+                                   'git switch -C kit/sib', 'git switch --force-create kit/sib',
+                                   'git switch --ignore-other-worktrees main',
+                                   'git worktree add -B kit/sib .claude/worktrees/y',
+                                   'git worktree add -f .claude/worktrees/y kit/sib',
+                                   'git worktree add --force .claude/worktrees/y main'])
+
+    def test_a_rebase_remote_or_history_tool_that_moves_shared_refs(self):
+        self.each_unclean_refused(['git rebase --update-refs main', 'git rebase --upd main',
+                                   'git -c rebase.updateRefs=true rebase main',
+                                   'git remote remove origin', 'git remote rm origin', 'git remote rename origin x',
+                                   'git remote set-head origin -a', 'git remote -v remove origin',
+                                   'git remote add --mirror=fetch backup https://example.invalid/x.git',
+                                   'git fast-import', 'git filter-branch -- --all'])
+
     def test_reads_and_allowed_writes_meet_no_shared_ref_refusal(self):
         for text in ('git fetch origin', 'git fetch https://example.invalid/x.git', 'git fetch origin main',
                      'git push origin HEAD:refs/heads/kit/x', 'git symbolic-ref HEAD', 'git symbolic-ref --short HEAD',
                      'git notes show', 'git replace -l', 'git push . HEAD:refs/tmp/x',
-                     'git fetch origin main:refs/remotes/origin/main', 'git symbolic-ref HEAD refs/heads/kit/wt'):
+                     'git fetch origin main:refs/remotes/origin/main', 'git symbolic-ref HEAD refs/heads/kit/wt',
+                     'git fetch --tags origin', 'git fetch --prune origin', 'git fetch origin tag v1',
+                     'git branch kit/new', 'git branch -c kit/wt kit/copy', 'git branch -d kit/x', 'git tag v9',
+                     'git checkout -b kit/new', 'git switch -c kit/new', 'git checkout -B kit/wt',
+                     'git worktree add .claude/worktrees/y -b kit/new', 'git rebase main',
+                     'git rebase --no-update-refs main', 'git remote -v', 'git remote prune origin',
+                     'git push origin HEAD:refs/heads/kit/wt'):
             with self.subTest(text):
                 d = self.worker(self.UNCLEAN + text)
                 self.assertTrue(d is None or d.rule != RULE, d and d.reason)
@@ -246,6 +292,232 @@ class Fallback(SharedRefBase):
                 d = self.session(self.UNCLEAN + text, {})
                 self.assertTrue(d is None or d.rule != RULE, d and d.reason)
 
+
+class FormsBase(SharedRefBase):
+    """Each refusal names what to run instead (rules._judge_refs): `instead` pins the command."""
+
+    def each_refused(self, texts, **kw):
+        for text in texts:
+            with self.subTest(text):
+                d = self.refused(self.worker(text, **kw))
+                self.assertIn(' Instead: ', d.reason)
+
+    def instead(self, text, command, **kw):
+        with self.subTest(text):
+            d = self.refused(self.worker(text, **kw))
+            got = d.reason.split(' Instead: ', 1)[1]
+            self.assertEqual(got[:got.index(' [kit guard: ')], command, d.reason)
+
+    def at(self, rest):
+        return 'git -C "%s" %s' % (self.wt, rest)
+
+    def not_this_rule(self, texts, **kw):
+        """Another rule may judge these (the jail, git-plain-commit); git-shared-ref does not."""
+        for text in texts:
+            with self.subTest(text):
+                d = self.worker(text, **kw)
+                self.assertTrue(d is None or d.rule != RULE, d and d.reason)
+
+
+class BranchForce(FormsBase):
+    def test_a_forced_branch_moves_a_shared_branch(self):
+        self.each_refused(['git branch -f main HEAD', 'git branch -f kit/sib HEAD', 'git branch --force kit/sib',
+                           'git branch --forc kit/sib main', 'git branch -fq kit/sib HEAD',
+                           'git branch -f kit/x HEAD',                  # any branch but its own is shared
+                           'git branch -C x kit/sib', 'git branch -c -f x kit/sib', 'git branch --copy --force x main'])
+        self.each_refused(['git branch -f kit/sib HEAD'], cwd=self.w.main)
+
+    def test_a_forced_branch_the_guard_cannot_read(self):
+        self.each_refused(['git branch -f "$B" HEAD', 'git branch -C x "$B"', 'git branch -f --bogus kit/x'])
+
+    def test_it_names_a_new_branch_instead(self):
+        self.instead('git branch -f kit/sib HEAD', self.at('branch <new-name> HEAD'))
+        self.instead('git branch --force kit/sib', self.at('branch <new-name>'))
+        self.instead('git branch -C x kit/sib', self.at('branch -c x <new-name>'))
+
+    def test_its_own_branch_and_a_new_one(self):
+        self.each_allowed(['git branch kit/new', 'git branch kit/new main', 'git branch -c kit/wt kit/copy',
+                           'git branch -f kit/wt HEAD~1', 'git branch -d kit/x',
+                           'git branch --list', 'git branch -v', 'git branch -a', 'git branch --contains HEAD',
+                           'git branch -u origin/main', 'git branch --show-current'])
+
+
+class BranchMove(FormsBase):
+    """A rename deletes the old name and writes the new one: refused even for the session's own
+    branch, which the coordinator lands by its name (docs/guard.md "Rules")."""
+
+    def test_a_move_deletes_a_shared_name(self):
+        self.each_refused(['git branch -m main x', 'git branch -M x main', 'git branch -m kit/sib x',
+                           'git branch --move kit/sib x', 'git branch --mo kit/sib x',
+                           'git branch -m kit/wt kit/renamed', 'git branch -M kit/wt kit/renamed',
+                           'git branch -m x',                    # renames the branch checked out where git runs
+                           'git branch -m "$A" x'])
+        self.each_refused(['git branch -m main old'], cwd=self.w.main)
+
+    def test_it_names_a_copy_instead(self):
+        self.instead('git branch -m kit/sib x', self.at('branch x kit/sib'))
+        self.instead('git branch -m kit/wt kit/renamed', self.at('branch kit/renamed kit/wt'))
+        self.instead('git branch -m x', self.at('branch x'))
+
+
+class TagForms(FormsBase):
+    def test_a_forced_or_deleted_tag_is_shared(self):
+        self.each_refused(['git tag -f v1 HEAD', 'git tag --force v1', 'git tag -fa v1 -m x', 'git tag -af v1 -m x',
+                           'git tag -d v1', 'git tag -d v1 v2', 'git tag --delete v1', 'git tag --d v1',
+                           'git tag -d "$T"', 'git tag -f "$T"'])
+
+    def test_it_names_a_new_tag_or_a_read_instead(self):
+        self.instead('git tag -f v1 HEAD', self.at('tag <new-name> HEAD'))
+        self.instead('git tag -d v1', self.at('show-ref refs/tags/v1'))
+
+    def test_a_new_tag_and_a_listing(self):
+        self.each_allowed(['git tag v9', 'git tag -a v9 -m x', 'git tag', 'git tag -l', 'git tag --list "v*"',
+                           'git tag -n', 'git tag --contains HEAD', 'git tag -v v1'])
+
+
+class CheckoutReset(FormsBase):
+    def test_a_reset_branch_is_shared(self):
+        self.each_refused(['git checkout -B main', 'git checkout -B kit/sib HEAD', 'git checkout -qB kit/sib',
+                           'git switch -C kit/sib', 'git switch --force-create kit/sib', 'git switch --force-c kit/sib',
+                           'git checkout -B "$B"', 'git switch -C "$B"'])
+
+    def test_it_names_a_new_branch_instead(self):
+        self.instead('git checkout -B kit/sib HEAD', self.at('switch -c <new-name> HEAD'))
+        self.instead('git switch -C kit/sib', self.at('switch -c <new-name>'))
+
+    def test_its_own_branch_and_a_new_one(self):
+        self.each_allowed(['git checkout -b kit/new', 'git switch -c kit/new', 'git checkout -B kit/wt',
+                           'git switch -C kit/wt HEAD~1'])
+
+
+class IgnoreOtherWorktrees(FormsBase):
+    """--ignore-other-worktrees checks out a branch another worktree holds: a commit there then
+    moves it under that worktree."""
+
+    def test_another_worktrees_branch(self):
+        self.each_refused(['git switch --ignore-other-worktrees main', 'git checkout --ignore-other-worktrees main',
+                           'git checkout --ignore-other-worktrees kit/sib', 'git switch --ignore-o kit/sib',
+                           'git switch --ignore-other-worktrees -', 'git switch --ignore-other-worktrees @{-1}',
+                           'git switch --ignore-other-worktrees "$B"'])
+
+    def test_it_names_a_detached_checkout_instead(self):
+        self.instead('git switch --ignore-other-worktrees main', self.at('switch --detach main'))
+
+    def test_a_new_branch_a_detached_head_or_its_own(self):
+        self.each_allowed(['git checkout --ignore-other-worktrees -b kit/new',
+                           'git switch --ignore-other-worktrees -c kit/new',
+                           'git switch --ignore-other-worktrees --detach main',
+                           'git checkout --ignore-other-worktrees HEAD',
+                           'git switch --ignore-other-worktrees kit/wt',
+                           'git switch --ignore-other-worktrees --no-ignore-other-worktrees kit/sib'])
+
+
+class WorktreeAdd(FormsBase):
+    def test_a_reset_or_forced_branch(self):
+        self.each_refused(['git worktree add -B main .claude/worktrees/y',
+                           'git worktree add -B kit/sib .claude/worktrees/y HEAD',
+                           'git worktree add -f .claude/worktrees/y main',
+                           'git worktree add -f .claude/worktrees/y kit/sib',
+                           'git worktree add --force .claude/worktrees/y kit/sib',
+                           'git worktree add -f .claude/worktrees/main',        # git takes the folder's name
+                           'git worktree add -f .claude/worktrees/y "$B"'])
+
+    def test_it_names_a_new_branch_or_a_detached_one_instead(self):
+        self.instead('git worktree add -B kit/sib .claude/worktrees/y HEAD',
+                     self.at('worktree add -b <new-name> .claude/worktrees/y HEAD'))
+        self.instead('git worktree add -f .claude/worktrees/y kit/sib',
+                     self.at('worktree add --detach .claude/worktrees/y kit/sib'))
+        self.instead('git worktree add -f .claude/worktrees/main',
+                     self.at('worktree add --detach .claude/worktrees/main <commit-ish>'))
+
+    def test_a_new_branch_stays_open(self):
+        self.each_allowed(['git worktree add .claude/worktrees/y -b kit/new',
+                           'git worktree add .claude/worktrees/y kit/new-branch',
+                           'git worktree add -b kit/new .claude/worktrees/y main',
+                           'git worktree add --detach .claude/worktrees/y HEAD',
+                           'git worktree add -f --detach .claude/worktrees/y main',
+                           'git worktree add -f -b kit/new .claude/worktrees/y'])
+        self.not_this_rule(['git worktree add ../y -b kit/new', 'git worktree list'])
+
+
+class FetchTag(FormsBase):
+    def test_a_forced_tag_fetch_moves_the_tag(self):
+        self.each_refused(['git fetch -f origin tag v1', 'git fetch --force origin tag v1 tag v2',
+                           'git fetch --forc origin tag v1', 'git fetch -qf origin tag v1',
+                           'git pull -f origin tag v1', 'git fetch -f origin tag "$T"'])
+
+    def test_it_names_a_scratch_ref_instead(self):
+        self.instead('git fetch -f origin tag v1', self.at('fetch origin refs/tags/v1:refs/tmp/v1'))
+
+    def test_an_unforced_tag_fetch_adds_only_a_new_tag(self):
+        self.each_allowed(['git fetch origin tag v1', 'git fetch origin tag v1 tag v2', 'git fetch -f origin main'])
+
+
+class RebaseUpdateRefs(FormsBase):
+    """--update-refs moves every branch whose tip the rebased commits hold, wherever it is checked out."""
+
+    def test_update_refs_moves_other_branches(self):
+        self.each_refused(['git rebase --update-refs main', 'git rebase --upd main', 'git rebase -i --update-refs main',
+                           'git -c rebase.updateRefs=true rebase main', 'git -c rebase.updateRefs rebase main',
+                           'git -c rebase.updateRefs=yes rebase -i main',
+                           'git rebase --no-update-refs --update-refs main',          # the last one counts
+                           'git -c rebase.updateRefs=false rebase --update-refs main',
+                           'git -c "rebase.updateRefs=$X" rebase main'])
+
+    def test_it_names_no_update_refs_instead(self):
+        self.instead('git rebase --update-refs main', self.at('rebase --no-update-refs main'))
+        self.instead('git -c rebase.updateRefs=true rebase -i main', self.at('rebase --no-update-refs -i main'))
+
+    def test_a_plain_rebase(self):
+        self.each_allowed(['git rebase main', 'git rebase -i main', 'git rebase --no-update-refs main',
+                           'git rebase --update-refs --no-update-refs main',
+                           'git -c rebase.updateRefs=false rebase main',
+                           'git -c rebase.updateRefs=true rebase --no-update-refs main'])
+
+
+class RemoteRefs(FormsBase):
+    def test_a_remote_removal_rename_or_head(self):
+        self.each_refused(['git remote remove origin', 'git remote rm origin', 'git remote rename origin x',
+                           'git remote -v rename origin x', 'git remote set-head origin -a',
+                           'git remote set-head origin main', 'git remote set-head origin -d',
+                           'git remote add --mirror=fetch backup https://example.invalid/x.git',
+                           'git remote add --mirror backup https://example.invalid/x.git',
+                           'git remote "$V" origin', 'git remote --bogus remove origin'])
+
+    def test_it_names_a_read_or_a_new_remote_instead(self):
+        self.instead('git remote remove origin', self.at('remote -v'))
+        self.instead('git remote rename origin x', self.at('remote add x <url>'))
+        self.instead('git remote set-head origin -a', self.at('remote show origin'))
+
+    def test_reads_prune_and_a_new_remote(self):
+        self.each_allowed(['git remote', 'git remote -v', 'git remote show origin', 'git remote get-url origin',
+                           'git remote prune origin', 'git remote update',
+                           'git remote add backup https://example.invalid/x.git',
+                           'git remote add --mirror=push backup https://example.invalid/x.git',
+                           'git remote set-url origin https://example.invalid/y.git'])
+
+
+class HistoryRewrite(FormsBase):
+    def test_fast_import_and_filter_branch_write_any_ref(self):
+        self.each_refused(['git fast-import', 'git fast-import --force', 'git filter-branch -- --all',
+                           'git filter-branch --msg-filter cat HEAD', 'git filter-branch -f --index-filter x HEAD'])
+
+    def test_it_names_a_clone_under_the_temp_folder_instead(self):
+        self.instead('git fast-import', 'git clone "%s" "%s/<name>"' % (self.wt, self.w.temp.replace(os.sep, '/')))
+
+    def test_help(self):
+        self.each_allowed(['git fast-import -h', 'git filter-branch --help'])
+
+
+class PushHome(FormsBase):
+    """~ in a push's repository is the home folder, as the shell expands it."""
+
+    def test_a_push_through_home_into_this_repository(self):
+        self.each_refused(['git push ~/../repo HEAD:refs/heads/kit/sib',
+                           'git push ~user/x HEAD:refs/heads/kit/sib'])     # another user's home: not read
+
+    def test_a_push_to_another_repository_under_home(self):
+        self.not_this_rule(['git push ~/x HEAD:refs/heads/kit/sib', 'git push ~/../repo HEAD:refs/tmp/x'])
 
 if __name__ == '__main__':
     unittest.main()

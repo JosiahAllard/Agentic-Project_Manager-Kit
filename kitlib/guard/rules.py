@@ -5001,7 +5001,8 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     sub, args = gc.sub, gc.rest
     text = bare(cmd)
     if sub == 'worktree':
-        return git_worktree_remove(ctx, gc, role, text)     # from any place: it removes another tree
+        # from any place: remove removes another tree, add -B or -f writes a shared branch
+        return git_worktree_remove(ctx, gc, role, text) or git_shared_ref_forms(event, ctx, cmd, gc, cwd, role)
     if sub == 'push':
         # git_push's refusal first, so git-shared-ref in warn mode never hides it
         return git_push(event, ctx, gc, role) or git_shared_push(event, ctx, cmd, gc, cwd, role)
@@ -5010,7 +5011,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         if d:
             return d
     if sub == 'branch':
-        d = git_branch_delete(ctx, gc, role)
+        d = git_branch_delete(ctx, gc, role) or git_shared_ref_forms(event, ctx, cmd, gc, cwd, role)
         if d:
             return d
     if sub == 'update-ref':
@@ -6534,11 +6535,17 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
 
 # ---------------------------------------------------------------- other git forms that write refs
 # git-shared-ref judges these as it judges update-ref (_judge_refs): a push into the repository
-# itself (git_shared_push), a fetch or pull refspec's destination, symbolic-ref with two names or
-# -d, replace and a notes write (git_shared_ref_forms). Known limits (docs/guard.md "Known
-# limits"): refspecs and remotes git takes from its config files, a named remote whose URL is this
-# repository, a fetch or pull refspec the shell computes whole, a push into another local repository.
-SHARED_REF_FORMS = ('fetch', 'pull', 'symbolic-ref', 'replace', 'notes')
+# itself (git_shared_push), a fetch or pull refspec's destination (a forced `tag <name>` too),
+# symbolic-ref with two names or -d, replace, a notes write, a forced or moving branch, a forced
+# or deleted tag, checkout -B and switch -C, --ignore-other-worktrees, worktree add -B or -f,
+# rebase --update-refs, a remote's remove, rename, set-head or mirror add, fast-import and
+# filter-branch (git_shared_ref_forms; branch after git_branch_delete, worktree after
+# git_worktree_remove). Known limits (docs/guard.md "What git-shared-ref does not read"): refspecs, remotes and
+# rebase.updateRefs git takes from its config files, a named remote whose URL is this repository,
+# a fetch or pull refspec the shell computes whole, a push into another local repository, rebase
+# <upstream> <branch> (it moves that branch), git replay and filter-repo.
+SHARED_REF_FORMS = ('fetch', 'pull', 'symbolic-ref', 'replace', 'notes', 'tag', 'checkout', 'switch', 'rebase',
+                    'remote', 'fast-import', 'filter-branch')
 # per form: (long flags, long options that take a value, short flags, short options that take a
 # value, short options whose value may only be attached)
 FETCH_FLAGS = ('all', 'append', 'atomic', 'dry-run', 'write-fetch-head', 'force', 'keep', 'multiple',
@@ -6552,9 +6559,39 @@ PULL_FLAGS = FETCH_FLAGS + ('commit', 'edit', 'ff', 'ff-only', 'squash', 'stat',
                             'verify', 'verify-signatures', 'autostash', 'allow-unrelated-histories', 'rebase',
                             'signoff', 'log', 'gpg-sign')
 PULL_VALUES = FETCH_VALUES + ('strategy', 'strategy-option', 'cleanup')
+BRANCH_FLAGS = ('delete', 'move', 'copy', 'force', 'list', 'all', 'remotes', 'verbose', 'quiet', 'track',
+                'unset-upstream', 'color', 'abbrev', 'column', 'omit-empty', 'show-current', 'create-reflog',
+                'edit-description', 'ignore-case', 'recurse-submodules')
+BRANCH_VALUES = ('set-upstream-to', 'contains', 'no-contains', 'merged', 'no-merged', 'sort', 'points-at', 'format')
+TAG_FLAGS = ('list', 'delete', 'verify', 'annotate', 'sign', 'edit', 'force', 'create-reflog', 'color', 'column',
+             'omit-empty', 'ignore-case')
+TAG_VALUES = ('message', 'file', 'trailer', 'cleanup', 'local-user', 'contains', 'no-contains', 'merged',
+              'no-merged', 'sort', 'points-at', 'format')
+CHECKOUT_FLAGS = ('quiet', 'progress', 'merge', 'detach', 'force', 'ours', 'theirs', 'patch', 'guess', 'overlay',
+                  'overwrite-ignore', 'ignore-other-worktrees', 'ignore-skip-worktree-bits', 'pathspec-file-nul',
+                  'recurse-submodules', 'track', 'auto-advance')
+CHECKOUT_VALUES = ('conflict', 'orphan', 'unified', 'inter-hunk-context', 'pathspec-from-file')
+SWITCH_FLAGS = ('guess', 'discard-changes', 'quiet', 'recurse-submodules', 'progress', 'merge', 'detach', 'force',
+                'overwrite-ignore', 'ignore-other-worktrees', 'track', 'auto-advance')
+SWITCH_VALUES = ('create', 'force-create', 'conflict', 'orphan')
+REBASE_FLAGS = ('keep-base', 'verify', 'quiet', 'verbose', 'stat', 'signoff', 'committer-date-is-author-date',
+                'reset-author-date', 'ignore-whitespace', 'force-rebase', 'ff', 'continue', 'skip', 'abort', 'quit',
+                'edit-todo', 'show-current-patch', 'apply', 'merge', 'interactive', 'rerere-autoupdate',
+                'autosquash', 'update-refs', 'gpg-sign', 'autostash', 'rebase-merges', 'fork-point', 'root',
+                'reschedule-failed-exec', 'reapply-cherry-picks', 'keep-empty')
+REBASE_VALUES = ('onto', 'trailer', 'whitespace', 'empty', 'exec', 'strategy', 'strategy-option')
+WORKTREE_ADD_FLAGS = ('force', 'detach', 'checkout', 'lock', 'orphan', 'quiet', 'track', 'guess-remote',
+                      'relative-paths')
 REF_FORM_OPTS = {'fetch': (FETCH_FLAGS, FETCH_VALUES, 'afkmnPpqtuv46', 'jo', ''),
                  'pull': (PULL_FLAGS, PULL_VALUES, 'aefknpqrtuv46', 'joXs', 'S'),
-                 'symbolic-ref': (('quiet', 'delete', 'short', 'recurse', 'no-recurse'), (), 'qd', 'm', '')}
+                 'symbolic-ref': (('quiet', 'delete', 'short', 'recurse', 'no-recurse'), (), 'qd', 'm', ''),
+                 'branch': (BRANCH_FLAGS, BRANCH_VALUES, 'vqrladDmMcCfi', 'u', 't'),
+                 'tag': (TAG_FLAGS, TAG_VALUES, 'ldvasefi', 'mFu', 'n'),
+                 'checkout': (CHECKOUT_FLAGS, CHECKOUT_VALUES, 'qmdf23plt', 'bBU', ''),
+                 'switch': (SWITCH_FLAGS, SWITCH_VALUES, 'qmdft', 'cC', ''),
+                 'rebase': (REBASE_FLAGS, REBASE_VALUES, 'qvnfmik', 'xsXC', 'Sr'),
+                 'worktree add': (WORKTREE_ADD_FLAGS, ('reason',), 'fdq', 'bB', ''),
+                 'remote add': (('fetch', 'tags', 'mirror'), ('track', 'master'), 'f', 'tm', '')}
 # git replace that only lists: these options (and --format=<f>), with a pattern only after -l
 REPLACE_LIST_OPTS = ('-l', '--list')
 NOTES_READ_VERBS = (None, 'list', 'show', 'get-ref')
@@ -6568,30 +6605,47 @@ def _computed(w):
     return bool(w.dyn or w.alt is not None or w.synth)
 
 
+def _long_hit(known, body):
+    """(name, negated) of the long option `body` (the text after `--`, before any `=`) among the
+    names `known`: its exact name, a `no-` one, or the one name it abbreviates; None when it names
+    none or more than one."""
+    neg = body.startswith('no-') and body not in known
+    stem = body[3:] if neg else body
+    hits = [stem] if stem in known else [n for n in known if n.startswith(stem)] if stem else []
+    return (hits[0], neg) if len(hits) == 1 else None
+
+
 def _form_words(sub, args):
     """(short flags, {long name: [(value text, computed)]}, positional Words, unread option texts)
     of git `sub`'s arguments by REF_FORM_OPTS: a long option is its exact name, a `no-` one, or the
     one name it abbreviates; one the table does not name, or an ambiguous prefix, is unread."""
+    return _form_scan(sub, args)[:4]
+
+
+def _form_scan(sub, args):
+    """_form_words, and the long option names in the order given (a negated one as no-<name>) and
+    how many positional words come before a `--`."""
     flags, values, s_flags, s_values, s_attached = REF_FORM_OPTS[sub]
     known = set(flags) | set(values)
-    shorts, longs, pos, unread = set(), {}, [], []
+    shorts, longs, pos, unread, seq = set(), {}, [], [], []
     k = 0
+    npre = None
     while k < len(args):
         w = args[k]
         t = w.text
         k += 1
         if t == '--':
+            npre = len(pos)
             pos.extend(args[k:])
             break
         if t.startswith('--'):
             body, eq, v = t[2:].partition('=')
-            neg = body.startswith('no-') and body not in known
-            stem = body[3:] if neg else body
-            hits = [stem] if stem in known else [n for n in known if n.startswith(stem)] if stem else []
-            if len(hits) != 1:
+            hit = _long_hit(known, body)
+            if hit is None:
                 unread.append(t)
                 continue
-            name = hits[0]
+            name, neg = hit
+            seq.append('no-' + name if neg else name)
             if name in values and not neg:
                 if not eq and k < len(args):
                     v, computed = args[k].text, _computed(args[k])
@@ -6620,7 +6674,7 @@ def _form_words(sub, args):
                     unread.append('-' + c)
             continue
         pos.append(w)
-    return shorts, longs, pos, unread
+    return shorts, longs, pos, unread, seq, len(pos) if npre is None else npre
 
 
 def fetch_dst_ref(dst):
@@ -6653,14 +6707,25 @@ def fetch_refs(gc):
     beyond FETCH_HEAD and the remote-tracking map (_tracking_ref): each refspec destination after
     the remote (fetch_dst_ref; a `^` exclusion and an empty destination write nothing), each
     --refmap and inline -c remote.<name>.fetch mapping, local tags under --prune-tags (or an inline
-    *.pruneTags) and a forced --tags. Unread: --stdin, a refspec the shell computes with a literal
-    `:` or `+`, an option the guard does not read on a line with a `:` word."""
+    *.pruneTags), a forced --tags and a forced `tag <name>`. Unread: --stdin, a refspec the shell
+    computes with a literal `:` or `+`, a forced `tag` whose name it computes, an option the guard
+    does not read on a line with a `:` word."""
     shorts, longs, pos, unknown = _form_words(gc.sub, gc.rest)
     remote = pos[0] if pos else None
     rname = remote.text if remote is not None and not _computed(remote) else None
     # with --multiple every word names a remote (and --all takes none)
     many = 'm' in shorts or 'multiple' in longs
-    specs = [] if many else [(w.text, _computed(w), rname) for w in pos[1:]]
+    specs, tagged = [], []          # tagged: (name text, computed) of each `tag <name>` (refs/tags/<name>)
+    words = [] if many else pos[1:]
+    j = 0
+    while j < len(words):
+        w = words[j]
+        if w.text == 'tag' and not _computed(w) and j + 1 < len(words):
+            tagged.append((words[j + 1].text, _computed(words[j + 1])))
+            j += 2
+            continue
+        specs.append((w.text, _computed(w), rname))
+        j += 1
     specs += [(v, c, rname) for v, c in longs.get('refmap', ())]
     if gc.inv is not None:
         for key, val, first, last in git_prefix_configs(gc):
@@ -6692,6 +6757,14 @@ def fetch_refs(gc):
             continue
         out.append((ref, False, None, (instead, 'git -C <at> fetch %s %s:refs/tmp/<name>' % (rem or '<remote>',
                                                                                              src or 'HEAD'))))
+    forced = 'f' in shorts or 'force' in longs
+    for name, computed in tagged if forced else ():
+        # unforced, git refuses to move a tag that is there; forced, it moves it
+        if computed:
+            return [], 'a tag name holds something only the shell knows (%s)' % name
+        out.append(('refs/tags/' + name, False, 'moves the tag %s to the remote\'s' % name,
+                    ('Fetch it into your scratch space:', 'git -C <at> fetch %s %s' % (
+                        rname or '<remote>', spelt('refs/tags/%s:refs/tmp/%s' % (name, name))))))
     tags = ('without --prune-tags or a forced --tags (a fetch never moves a tag you have):',
             'git -C <at> fetch %s' % (rname or '<remote>'))
     if 'P' in shorts or 'prune-tags' in longs:
@@ -6763,14 +6836,266 @@ def notes_refs(gc):
     return [(ref, verb.text == 'remove', None, ('To show the notes:', 'git -C <at> notes list'))], None
 
 
+def _first_computed(words):
+    """'a word holds something only the shell knows (<text>)' for the first computed Word of
+    `words`, or None."""
+    for w in words:
+        if _computed(w):
+            return 'a word holds something only the shell knows (%s)' % w.text
+    return None
+
+
+def _last_of(seq, names):
+    """The last of `names` in `seq` (_form_scan's long names in order), or None."""
+    for n in reversed(seq):
+        if n in names:
+            return n
+    return None
+
+
+HEAD_BRANCH = 'the branch checked out where git runs'
+
+
+def branch_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git branch `gc`: a move (-m, -M,
+    --move) deletes the old name (the branch checked out there when it names one name) and writes
+    the new; a forced copy (-C, or -c with -f) writes the new name; -f with a name writes it. A
+    plain create, an unforced copy, -d and -D (git_branch_delete judges -D), a listing and the
+    other modes write no ref here. A computed word, or an option the guard does not read, in a
+    form that writes is unread."""
+    shorts, longs, pos, unknown = _form_words('branch', gc.rest)
+    move = bool(shorts & set('mM')) or 'move' in longs
+    copy = bool(shorts & set('cC')) or 'copy' in longs
+    force = bool(shorts & set('fMC')) or 'force' in longs
+    if not pos or not (move or force):
+        return [], None
+    others = {'delete', 'list', 'edit-description', 'show-current', 'set-upstream-to', 'unset-upstream',
+              'contains', 'no-contains', 'merged', 'no-merged', 'points-at'}
+    if shorts & set('dDlu') or others & set(longs) or '-u' in longs:
+        return [], None
+    why = _first_computed(gc.rest)
+    if why or unknown:
+        return [], why or 'it gives an option the guard does not read (%s)' % unknown[0]
+    names = [w.text for w in pos]
+    if move or copy:
+        old, new = (names[0], names[1]) if len(names) > 1 else (None, names[0])
+        old_ref = 'refs/heads/' + old if old else HEAD_BRANCH
+        new_ref = 'refs/heads/' + new
+        if move:
+            make = ('To make a branch of the new name and leave %s as it is:' % (old or 'yours'),
+                    'git -C <at> branch %s%s' % (spelt(new), ' ' + spelt(old) if old else ''))
+            return [(old_ref, True, 'renames %s to %s, deleting the old name' % (old or HEAD_BRANCH, new), make),
+                    (new_ref, False, None, make)], None
+        copy_to = ('To copy it to a new name:', 'git -C <at> branch -c %s<new-name>' % (spelt(old) + ' ' if old else ''))
+        return [(new_ref, False, 'writes over %s with a copy' % new_ref, copy_to)], None
+    start = ' ' + spelt(names[1]) if len(names) > 1 else ''
+    return [('refs/heads/' + names[0], False, 'moves refs/heads/%s' % names[0],
+             ('To make a new branch there:', 'git -C <at> branch <new-name>%s' % start))], None
+
+
+def tag_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git tag `gc`: -d deletes each tag
+    named; -f with a name writes it. A plain create, a listing and -v write no ref here."""
+    shorts, longs, pos, unknown = _form_words('tag', gc.rest)
+    delete = 'd' in shorts or 'delete' in longs
+    force = 'f' in shorts or 'force' in longs
+    if not pos or not (delete or force) or 'l' in shorts or 'list' in longs or 'v' in shorts or 'verify' in longs:
+        return [], None
+    why = _first_computed(gc.rest)
+    if why or unknown:
+        return [], why or 'it gives an option the guard does not read (%s)' % unknown[0]
+    if delete:
+        return [('refs/tags/' + w.text, True, None, None) for w in pos], None
+    start = ' ' + spelt(pos[1].text) if len(pos) > 1 else ''
+    return [('refs/tags/' + pos[0].text, False, 'moves refs/tags/%s' % pos[0].text,
+             ('To make a new tag there:', 'git -C <at> tag <new-name>%s' % start))], None
+
+
+def _checked_out(word):
+    """([(ref, ...)], why) for the branch `word` that --ignore-other-worktrees (or worktree add
+    -f) checks out though another worktree has it: refs/heads/<name>; none for a word that names
+    no branch the guard reads (a commit expression) or HEAD; `-` and @{...} name a branch the text
+    does not show."""
+    t = word.text
+    if _computed(word):
+        return None, 'a word holds something only the shell knows (%s)' % t
+    detach = ('To check it out detached, so no branch moves with your commits:', 'git -C <at> switch --detach %s'
+              % spelt(t))
+    if t == '-' or t.startswith('@{'):
+        return ('the branch %s names' % t, detach), None
+    if t == 'HEAD' or not ref_name_ok(t):
+        return None, None
+    return ('refs/heads/' + t, detach), None
+
+
+def checkout_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git checkout or switch `gc`: -B
+    (checkout) or -C/--force-create (switch) writes the branch it names; the last of
+    --ignore-other-worktrees and its no- form, with no branch option or --detach, checks out the
+    branch named (_checked_out) though another worktree has it, so commits here move it."""
+    shorts, longs, pos, unknown, seq, npre = _form_scan(gc.sub, gc.rest)
+    if gc.sub == 'checkout':
+        forced = longs.get('-B') or []
+    else:
+        forced = (longs.get('-C') or []) + (longs.get('force-create') or [])
+    start = ' ' + spelt(pos[0].text) if pos and not _computed(pos[0]) else ''
+    if forced:
+        v, computed = forced[-1]
+        if computed:
+            return [], 'a branch name holds something only the shell knows (%s)' % v
+        return [('refs/heads/' + v, False, 'resets refs/heads/%s' % v,
+                 ('To make a new branch and switch to it:', 'git -C <at> switch -c <new-name>%s' % start))], None
+    if _last_of(seq, ('ignore-other-worktrees', 'no-ignore-other-worktrees')) != 'ignore-other-worktrees':
+        return [], None
+    if set(longs) & {'-b', '-c', 'create', 'orphan', 'detach'} or 'd' in shorts or not npre:
+        return [], None
+    hit, why = _checked_out(pos[0])
+    if why or not hit:
+        return [], why
+    return [(hit[0], False, 'checks out %s though another worktree may have it, so commits here move it' % hit[0],
+             hit[1])], None
+
+
+def worktree_add_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git worktree add `gc`: -B writes
+    the branch it names; -f with no -b, -B, --detach or --orphan checks out the branch named (the
+    commit-ish, else the path's last part) though another worktree may have it. Any other worktree
+    verb, and a plain add (-b <new>, or an existing branch git refuses when it is out elsewhere),
+    write no ref here."""
+    args = gc.rest
+    if not args or args[0].text != 'add' or _computed(args[0]):
+        return [], None
+    shorts, longs, pos, unknown, seq, npre = _form_scan('worktree add', args[1:])
+    force = 'f' in shorts or 'force' in longs
+    path = spelt(pos[0].text) if pos and not _computed(pos[0]) else '<path>'
+    if '-B' in longs:
+        v, computed = longs['-B'][-1]
+        if computed:
+            return [], 'a branch name holds something only the shell knows (%s)' % v
+        start = ' ' + spelt(pos[1].text) if len(pos) > 1 and not _computed(pos[1]) else ''
+        return [('refs/heads/' + v, False, 'resets refs/heads/%s' % v,
+                 ('To make a new branch for it:', 'git -C <at> worktree add -b <new-name> %s%s' % (path, start)))], None
+    if not force or not pos or '-b' in longs or 'd' in shorts or set(longs) & {'detach', 'orphan'}:
+        return [], None
+    if unknown:
+        return [], 'it gives an option the guard does not read (%s)' % unknown[0]
+    if len(pos) > 1:
+        hit, why = _checked_out(pos[1])
+    elif _computed(pos[0]):
+        hit, why = None, 'a word holds something only the shell knows (%s)' % pos[0].text
+    else:
+        base = re.split(r'[\\/]', pos[0].text.rstrip('\\/'))[-1]
+        hit, why = (('refs/heads/' + base, None), None) if ref_name_ok(base) and base != 'HEAD' else (None, None)
+    if why or not hit:
+        return [], why
+    commit = spelt(pos[1].text) if len(pos) > 1 else '<commit-ish>'
+    return [(hit[0], False, 'checks out %s though another worktree may have it, so commits there move it' % hit[0],
+             ('To check the commit out detached in the new worktree:',
+              'git -C <at> worktree add --detach %s %s' % (path, commit)))], None
+
+
+def rebase_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git rebase `gc`: with
+    --update-refs (the last of it and its no- form, else an inline -c rebase.updateRefs not
+    false) it moves every branch that points into the commits it rebases."""
+    shorts, longs, pos, unknown, seq, npre = _form_scan('rebase', gc.rest)
+    last = _last_of(seq, ('update-refs', 'no-update-refs'))
+    on = last == 'update-refs'
+    if last is None and gc.inv is not None:
+        for key, val, first, final in git_prefix_configs(gc):
+            if key == 'rebase.updaterefs':
+                if _computed(final) or first.text.startswith('--config-env'):
+                    return [], 'its -c rebase.updateRefs holds something only the shell knows'
+                on = val.strip().lower() not in FALSE_WORDS
+    if not on:
+        return [], None
+    keep = []
+    for w in gc.rest:
+        body = w.text[2:].partition('=')[0] if w.text.startswith('--') else None
+        hit = _long_hit(set(REBASE_FLAGS) | set(REBASE_VALUES), body) if body else None
+        if not (hit and hit[0] == 'update-refs'):
+            keep.append(spelt(w.text))
+    return [('refs/heads/*', False, 'moves every branch that points into the commits it rebases',
+             ('Rebase without moving other branches:', ('git -C <at> rebase --no-update-refs %s' % ' '.join(keep)).rstrip()))], None
+
+
+def remote_refs(gc):
+    """([(ref, delete, what, instead)], why unread or None) of git remote `gc`: remove (rm) and
+    rename delete the remote's remote-tracking refs, set-head writes or deletes <remote>/HEAD, and
+    add --mirror (=fetch) makes later fetches write every ref. Its other verbs (prune and update
+    as fetch --prune, show, get-url and the like) write no ref here."""
+    args, k = gc.rest, 0
+    while k < len(args) and args[k].text.startswith('-'):
+        t = args[k].text
+        if t == '-h':
+            return [], None
+        if _computed(args[k]) or not (t == '-v' or (len(t) > 2 and '--verbose'.startswith(t))):
+            return [], 'it gives an option the guard does not read (%s)' % t
+        k += 1
+    if k >= len(args):
+        return [], None
+    verb, rest = args[k], args[k + 1:]
+    if _computed(verb):
+        return [], 'its verb holds something only the shell knows (%s)' % verb.text
+    names = [w for w in rest if not w.text.startswith('-')]
+    listing = ('To list the remotes:', 'git -C <at> remote -v')
+    if verb.text in ('remove', 'rm', 'rename', 'set-head'):
+        why = _first_computed(rest)
+        if why:
+            return [], why
+        if not names:
+            return [], None
+        n = names[0].text
+        if verb.text == 'set-head':
+            delete = any(w.text in ('-d', '--delete') for w in rest)
+            return [('refs/remotes/%s/HEAD' % n, delete, None,
+                     ('To see which branch the remote\'s HEAD names:', 'git -C <at> remote show %s' % spelt(n)))], None
+        if verb.text == 'rename':
+            new = names[1].text if len(names) > 1 else '<new-name>'
+            return [('refs/remotes/%s/*' % n, True, 'renames every remote-tracking ref of %s to %s' % (n, new),
+                     ('To add the same URL under the new name and leave %s as it is:' % n,
+                      'git -C <at> remote add %s <url>' % spelt(new)))], None
+        return [('refs/remotes/%s/*' % n, True, 'deletes every remote-tracking ref of %s' % n, listing)], None
+    if verb.text != 'add':
+        return [], None
+    shorts, longs, pos, unknown, seq, npre = _form_scan('remote add', rest)
+    if _last_of(seq, ('mirror', 'no-mirror')) != 'mirror':
+        return [], None
+    v, computed = longs['mirror'][-1]
+    if computed:
+        return [], 'its --mirror holds something only the shell knows'
+    if v not in ('', 'fetch'):
+        return [], None
+    plain = ' '.join(spelt(w.text) for w in pos[:2]) or '<name> <url>'
+    return [('refs/*', False, 'sets the remote up as a mirror, so a fetch from it writes over every ref',
+             ('To add it with its own remote-tracking refs (refs/remotes/<name>/):', 'git -C <at> remote add %s' % plain))], None
+
+
+HISTORY_TOOLS = {'fast-import': 'writes the refs its input names',
+                 'filter-branch': 'rewrites the branches it names and keeps their old tips under refs/original/'}
+
+
+def history_tool_refs(gc):
+    """([(ref, delete, what, instead)], None) of git fast-import or filter-branch `gc`: every ref
+    (refs/*), unless it only asks for help (-h)."""
+    if [w.text for w in gc.rest] in (['-h'], ['--help']):
+        return [], None
+    return [('refs/*', False, HISTORY_TOOLS[gc.sub],
+             ('Run it in a clone under the temp folder, where the guard does not judge refs:',
+              'git clone <at> "<temp>/<name>"'))], None
+
+
 REF_FORM_READERS = {'fetch': fetch_refs, 'pull': fetch_refs, 'symbolic-ref': symbolic_ref_refs,
-                    'replace': replace_refs, 'notes': notes_refs}
+                    'replace': replace_refs, 'notes': notes_refs, 'branch': branch_refs, 'tag': tag_refs,
+                    'checkout': checkout_refs, 'switch': checkout_refs, 'rebase': rebase_refs,
+                    'remote': remote_refs, 'worktree': worktree_add_refs, 'fast-import': history_tool_refs,
+                    'filter-branch': history_tool_refs}
 
 
 def _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread):
     """git-shared-ref for a git form other than update-ref: `refs` [(ref, delete, what, instead)]
     the refs it writes or deletes (`what` a phrase for the refusal, None for "writes/deletes
-    <ref>"; `instead` (sentence, command with <at>), None for show-ref), `unread` why the guard
+    <ref>"; `instead` (sentence, command with <at> and maybe <temp>, the temp folder), None for show-ref), `unread` why the guard
     cannot tell them (None when it can). As git_shared_ref: only a held session
     (shared_ref_held), not in a scratch repository (_scratch_repo), each ref by _ref_ok; no form
     here writes through HEAD."""
@@ -6793,14 +7118,15 @@ def _judge_refs(event, ctx, cmd, gc, cwd, role, refs, unread):
             continue
         what = what or '%s %s' % ('deletes' if delete else 'writes', name)
         how, command = instead or ('To show it:', 'git -C <at> show-ref %s' % name)
+        temp = jail.temp_roots(ctx)
         return refuse('git-shared-ref', role, '`%s` %s: %s is not one it may %s; %s. %s %s' % (
             text, what, name, 'delete' if delete else 'write', SHARED_REFS, SHARED_REF_ALLOWED, how),
-            command.replace('<at>', quote(at)))
+            command.replace('<at>', quote(at)).replace('<temp>', fwd(temp[0]) if temp else '<temp folder>'))
     return None
 
 
 def git_shared_ref_forms(event, ctx, cmd, gc, cwd, role):
-    """git-shared-ref for fetch, pull, symbolic-ref, replace and notes (SHARED_REF_FORMS)."""
+    """git-shared-ref for the forms REF_FORM_READERS reads (SHARED_REF_FORMS, branch and worktree)."""
     if not shared_ref_held(event, ctx):
         return None
     refs, unread = REF_FORM_READERS[gc.sub](gc)
@@ -6820,16 +7146,23 @@ def _repo_common(path):
     return None
 
 
-def _push_self(gc, place, t, computed):
+def _push_self(gc, place, t, computed, home=None):
     """True when git push's repository `word` is the repository git runs in: `.`, or a local path
     or file:// URL (resolved against where git runs and its work tree's top) that opens this
     repository's common dir; False for a URL, scp-like host:path, or a name that opens no such
     repository; None when the guard cannot tell (a computed word, or a path with no place to
-    compare). A named remote is taken as a remote, whatever its URL (a known limit)."""
+    compare). A leading ~ is the home folder `home`, as git reads it. A named remote is taken as
+    a remote, whatever its URL (a known limit)."""
     if computed:
         return None
     if t == '.':
         return True
+    if t == '~' or t.startswith(('~/', '~\\')):
+        if not home:
+            return None
+        t = os.path.join(home, t[2:]) if len(t) > 2 else home
+    elif t.startswith('~'):
+        return None                             # ~user: another user's home
     if t.lower().startswith('file://'):
         t = t[len('file://'):]
         t = t[1:] if re.match(r'^/[A-Za-z]:', t) else t
@@ -6884,7 +7217,7 @@ def git_shared_push(event, ctx, cmd, gc, cwd, role):
     delete = 'd' in short or 'delete' in longs
     every = sorted({'all', 'mirror', 'branches', 'tags', 'prune'} & longs)
     place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
-    self_ = _push_self(gc, place, *remote)
+    self_ = _push_self(gc, place, *remote, home=getattr(ctx, 'home', None))
     if self_ is False:
         return None
     writes = delete or every or any(':' in w.text or _computed(w) for w in specs)
