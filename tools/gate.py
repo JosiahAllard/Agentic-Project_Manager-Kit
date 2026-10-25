@@ -21,6 +21,11 @@
       from or stored in the gate cache (docs/gate.md "Gate reuse"). --submit: started detached;
       prints a REVIEW line for each branch whose queued verdict is at the tip submitted, then the
       one SUBMITTED line with its wait-result command, and exits 0
+  gate.py [-C DIR] --rerun [--slug S] [--log-dir D]
+      after a red --full run of a clean tree: rerun only its failing test classes, each paired
+      with a control at the merge base, and the steps it never reached, under the machine lock;
+      0 FLAKE (the tip lands on that record), 1 REAL (or VOID), 4 nothing to rerun (kitlib.gate.
+      rerun; docs/gate.md "Targeted rerun")
   gate.py --measure --out PATH [--days N]
       write a proposed kinds table from the lock's run history (never the live table)
   gate.py wait-result BRANCH --tip SHA [--kind gate|land] [--timeout S] [-C DIR]
@@ -71,7 +76,7 @@ from kitlib import gate as G                                       # noqa: E402
 from kitlib import pluginsource                                    # noqa: E402
 from kitlib.config import policy                                  # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
-from kitlib.gate import budget, caller, measure, outfile, runner   # noqa: E402
+from kitlib.gate import budget, caller, measure, outfile, rerun, runner  # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
 from kitlib.gate import submit as submitmod                        # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
@@ -104,6 +109,10 @@ def gate_parser():
     sel.add_argument('--full', action='store_true', help='every step that is not manual; nothing '
                      'read from or stored in the gate cache')
     sel.add_argument('--only', nargs='+', metavar='STEP', help='exactly these steps (no record)')
+    sel.add_argument('--rerun', action='store_true',
+                     help='rerun only the failing test classes of the red --full run, each '
+                     'paired with a control at the merge base, under the machine lock (one per '
+                     'red run; counts toward the gate budget; docs/gate.md "Targeted rerun")')
     p.add_argument('--plan', action='store_true', help='print what would run; run nothing')
     p.add_argument('--slug', help='the machine-lock slug (default: the branch)')
     p.add_argument('--log-dir', help='where this run\'s logs go')
@@ -331,12 +340,15 @@ def main(argv):
             return do_allow(argv[1:])
         a = gate_parser().parse_args(argv)
         if a.measure:
-            if a.only or a.full or a.plan or a.base:
+            if a.only or a.full or a.rerun or a.plan or a.base:
                 print('USAGE: --measure takes only --out and --days', file=sys.stderr)
                 return G.USAGE
             return do_measure(a)
         if a.out:
             print('USAGE: --out goes with --measure', file=sys.stderr)
+            return G.USAGE
+        if a.rerun and (a.plan or a.base):
+            print('USAGE: --rerun takes only -C, --slug and --log-dir', file=sys.stderr)
             return G.USAGE
         if why:
             print('REFUSED: %s; nothing ran' % why)
@@ -365,6 +377,9 @@ def main(argv):
             say(warning)
         try:
             book_kw = {'store': Store(say=say)}
+            if a.rerun:
+                return emit(guarded(rerun.rerun_gate, root, slug=a.slug, log_dir=a.log_dir,
+                                    say=say, book_kw=book_kw))
             return emit(guarded(runner.branch_gate, root, base=a.base, full=a.full,
                                 only=a.only, plan=a.plan, slug=a.slug, log_dir=a.log_dir,
                                 say=say, book_kw=book_kw))

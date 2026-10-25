@@ -29,7 +29,9 @@ was gated, and its config_rev is that commit. A REUSED step did not run in this 
 its key is in the gate cache
 (kitlib.gate.reuse), stored by an earlier gate of the same inputs. A rerun with every step
 reused therefore writes a gate-OK record for a commit on which no step ran; its record says
-`reused` for each step.
+`reused` for each step. A `--full` gate that FAILED on those same terms (no --only, the default
+base, a clean tree at start and end, HEAD unmoved, the stash empty) writes a red run instead
+(kitlib.gate.rerun.record_red), which `gate.py --rerun` reruns (docs/gate.md "Targeted rerun").
 """
 import datetime
 import os
@@ -811,6 +813,9 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
                  log_dir=logs, changed=changed, windows=watched.get('windows'))
     if not ok:
         facts['no_record'] = 'the gate failed'
+        if full and not only and not partial and not empty:
+            facts['rerun_record'] = _red_record(top, cfg, head, mb, started, results, chosen,
+                                                logs, entries, say)
         return G.Outcome(G.FAILED, lines, **facts)
     refused = None if empty else nothing_ran(results)
     if refused:
@@ -855,6 +860,34 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     facts['record'] = path
     lines.append('gate-OK record: %s' % path)
     return G.Outcome(G.OK, lines, **facts)
+
+
+def _red_record(top, cfg, head, mb, started, results, chosen, logs, entries, say):
+    """The red run of a failed `--full` gate (kitlib.gate.rerun.record_red), written on the gate-OK
+    record's own terms: the tree clean when the gate started and when it ended, HEAD unmoved and
+    the stash empty. Its path, or None (said). Nothing here changes the gate's verdict."""
+    from kitlib.gate import rerun   # rerun imports this module
+    after, _ = gitstatus.status(top)
+    head_now, _ = refs.head(top)
+    if entries:
+        no = 'the work tree had uncommitted changes when the gate started'
+    elif after != []:
+        no = 'the work tree changed while the gate ran'
+    elif head_now != head:
+        no = 'HEAD moved while the gate ran'
+    else:
+        no = stash.appeared(top)
+    if no:
+        say('no red-run record for a targeted rerun: %s' % no)
+        return None
+    try:
+        path = rerun.record_red(top, cfg, head, mb, started, results, chosen, logs)
+    except rerun.RerunError as e:
+        say('WARNING: no red-run record for a targeted rerun: %s' % e)
+        return None
+    say('red-run record: %s; a targeted rerun of the failing tests: gate.py --rerun '
+        '(docs/gate.md "Targeted rerun")' % path)
+    return path
 
 
 # ---------------------------------------------------------------- the merged-tree gate

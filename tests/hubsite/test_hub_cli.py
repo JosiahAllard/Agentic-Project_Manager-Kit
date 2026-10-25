@@ -1594,12 +1594,12 @@ class WriteCase(VerbCase):
                          ['QUEUED P-002'])
         self.assertEqual(self.ok('to-pm'), ['P-001 queued [kit] first', 'P-002 queued [-] second line'])
         self.assertEqual(self.ok('to-pm', 'send'), ['SENT P-001 P-002'])
-        self.assertEqual(self.ok('to-pm', 'reply', 'P-001', 'done as asked', 'D-7'),
+        self.assertEqual(self.ok('to-pm', 'reply', 'P-001', 'done as asked', RULING),
                          ['REPLIED P-001'])
         self.assertEqual(self.ok('to-pm', 'reply', 'P-002', 'seen'), ['REPLIED P-002'])
         docs = self.direct('/to_pm?status=all')['items']
         self.assertEqual([(d['reply'], d.get('ruling')) for d in docs],
-                         [('done as asked', 'D-7'), ('seen', None)])
+                         [('done as asked', RULING), ('seen', None)])
 
     def test_the_inbox_is_posted_to_listed_and_read(self):
         self.assertEqual(self.ok('inbox'), [])

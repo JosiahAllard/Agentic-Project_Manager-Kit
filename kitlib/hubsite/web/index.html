@@ -780,7 +780,7 @@ ul.hist .sch-line{display:block}
   const pmBadge = items => { const w = items.filter(x => x.status === "queued" || x.status === "sent"); return { n: w.length, hot: w.some(x => x.urgent) }; };
   const pmSendAll = (items, iso) => items.filter(x => x.status === "queued").map(x => ({ id: x.id, patch: { status: "sent", sent_at: iso } }));
   // Refs may be question ids (Q-nnn); entries shaped like a ledger id are never shown.
-  const keptRefs = a => Array.isArray(a) ? a.filter(r => !/^R-\d+$/.test(String(r))) : [];
+  const keptRefs = a => Array.isArray(a) ? a.filter(r => !/^(?:R-\d+|H-[a-z0-9][a-z0-9-]*-\d+)$/.test(String(r))) : [];
   // A note's kind as the page names it: an act note (a lint finding passed on, docs/action-hub.md) is its own kind.
   const pmKindText = k => k === "fyi" ? "FYI" : k === "act" ? "Act" : "Question";
   // The sent items, one line each with its id.
