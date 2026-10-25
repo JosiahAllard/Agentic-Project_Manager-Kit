@@ -2385,6 +2385,106 @@ class QuestionRecordTest(ApiCase):
                                                     'record': None}), [])
 
 
+class SweepViews(BindViews):
+    """The backlog and record views for `questions bind`: repo kit holds a parked record citing
+    Q-1, an owner-blocked one citing Q-1001 in its owner_ask, a parked one citing Q-1002 (answered),
+    one citing Q-1000 and Q-1001, a parked one citing nothing, a parked one citing Q-9999 (no such
+    question), and a blocked one that waits on a tool (not the owner's)."""
+
+    ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1000 (the owner)'},
+             {'id': 'EX-2', 's': 'blocked'},
+             {'id': 'EX-3', 's': 'parked', 'q': 'Q-1002'},
+             {'id': 'EX-4', 's': 'parked', 'q': 'Q-1000 and Q-1001'},
+             {'id': 'EX-5', 's': 'parked', 'q': 'later'},
+             {'id': 'EX-6', 's': 'parked', 'q': 'Q-9999'},
+             {'id': 'EX-7', 's': 'blocked'},
+             {'id': 'EX-8', 's': 'open'}]
+
+    def backlog(self, repo='', state='', fresh=False):
+        return [{'repo': 'kit', 'items': list(self.ITEMS), 'error': None},
+                {'repo': 'down', 'items': [], 'error': 'git timed out'}]
+
+    def record(self, repo, id):
+        got = {'repo': 'kit', 'id': id, 'where': 'open'} if id in ('EX-2', 'EX-7')             else BindViews.record(self, repo, id)
+        if id == 'EX-2':
+            got.update(blockers=[{'value': 'owner', 'kind': 'owner'}],
+                       hold={'owner_ask': 'Q-1001: which one', 'q': None}, body='')
+        elif id == 'EX-7':
+            got.update(blockers=[{'value': 'tool:x', 'kind': 'tool'}], hold={}, body='')
+        return got
+
+
+class QuestionBindTest(ApiCase):
+    """questions bind: the PM pairs each parked or owner-blocked record with the open question it
+    cites (docs/action-hub.md "Binding the open questions")."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = SweepViews()
+        self.views.ITEMS = [dict(i, id=i['id']) for i in SweepViews.ITEMS]
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+        self.q = [self.question(), self.question(), self.question()]
+        self.assertEqual(self.q, ['Q-1000', 'Q-1001', 'Q-1002'])
+        self.ok('POST', '/questions/Q-1002/answer', OWNER, {'choice': 0})
+
+    def bind(self, **body):
+        return self.ok('POST', '/questions/bind', AGENT, dict({'from': 'pm'}, **body))
+
+    def test_a_dry_run_lists_pairs_misses_and_records_citing_several_questions(self):
+        before = self.store.snapshot()
+        got = self.bind(apply=False)
+        self.assertEqual(self.store.snapshot(), before)
+        self.assertEqual(got['pairs'], [
+            {'question': 'Q-1000', 'record': {'repo': 'kit', 'id': 'EX-1'}, 'bound': False},
+            {'question': 'Q-1001', 'record': {'repo': 'kit', 'id': 'EX-2'}, 'bound': False}])
+        self.assertEqual(got['multi'], [{'record': {'repo': 'kit', 'id': 'EX-4'},
+                                         'questions': ['Q-1000', 'Q-1001']}])
+        self.assertEqual(sorted((m['record']['repo'], m['record']['id'] or '', m['why'])
+                                for m in got['misses']),
+                         [('down', '', 'the repository could not be read'),
+                          ('kit', 'EX-3', 'Q-1002 is answered, not open'),
+                          ('kit', 'EX-5', 'cites no question'),
+                          ('kit', 'EX-6', 'Q-9999 is not a hub question')])
+        self.assertEqual((got['applied'], got['skipped'], got['failed']), (False, [], []))
+
+    def test_apply_binds_open_questions_only(self):
+        got = self.bind(apply=True)
+        self.assertEqual([(p['question'], p['bound']) for p in got['pairs']],
+                         [('Q-1000', True), ('Q-1001', True)])
+        docs = self.store.docs('questions')
+        self.assertEqual(docs['Q-1000']['record'], {'repo': 'kit', 'id': 'EX-1'})
+        self.assertEqual(docs['Q-1001']['record'], {'repo': 'kit', 'id': 'EX-2'})
+        self.assertNotIn('record', docs['Q-1002'])
+        again = self.bind(apply=True)       # nothing left to do: both are bound already
+        self.assertEqual((again['pairs'], [s['question'] for s in again['skipped']]),
+                         ([], ['Q-1000', 'Q-1001']))
+
+    def test_a_question_bound_elsewhere_or_cited_twice_is_skipped(self):
+        self.ok('POST', '/questions/Q-1000/edit', AGENT, {'from': 'pm', 'if_version': 1,
+                                                       'record': {'repo': 'kit', 'id': 'EX-2'}})
+        self.views.ITEMS.append({'id': 'EX-8', 's': 'parked', 'q': 'Q-1001'})
+        got = self.bind(apply=True)
+        self.assertEqual(got['pairs'], [])
+        self.assertEqual({(s['question'], s['why']) for s in got['skipped']},
+                         {('Q-1000', 'bound to another record'),
+                          ('Q-1001', 'cited by more than one record')})
+        self.assertNotIn('record', self.store.docs('questions')['Q-1001'])
+
+    def test_a_record_that_fails_its_check_is_reported_and_the_rest_are_bound(self):
+        self.views.ITEMS[0]['id'] = 'EX-404'
+        got = self.bind(apply=True)
+        self.assertEqual([p['question'] for p in got['pairs'] if p['bound']], ['Q-1001'])
+        self.assertEqual([(f['question'], f['code']) for f in got['failed']],
+                         [('Q-1000', 'not_found')])
+
+    def test_only_the_pm_binds(self):
+        for who in ('some-coordinator', ' x '):
+            self.refused('forbidden', 'from', 'POST', '/questions/bind', AGENT,
+                         {'from': who, 'apply': True})
+        self.refused('forbidden', 'role', 'POST', '/questions/bind', OWNER, {'from': 'pm'})
+        self.assertNotIn('record', self.store.docs('questions')['Q-1000'])
+
+
 class WriteViews(object):
     """The three record writes as SiteViews gives them: each call is kept, and `fail` is raised
     when set."""

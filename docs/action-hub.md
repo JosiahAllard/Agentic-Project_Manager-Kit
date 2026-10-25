@@ -306,6 +306,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions log Q-1 <ruling id> [--replace] --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
 | `questions file [Q-1]` | `FILED Q-1` and `NOT FILED Q-2: <why> (<code>)` lines, or `nothing to file` ("Filing the answer") |
+| `questions bind --dry-run \| --apply` (PM) | `BIND`/`BOUND Q-1 repo:ID` lines, then `MISS`, `MULTI`, `SKIP`, `NOT BOUND` ("Binding the open questions") |
 | `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent] [--record REPO:ID \| --no-record]` | `EDITED Q-1` |
 | `questions withdraw Q-1 --from KEY --if-version V` | `WITHDRAWN Q-1` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
@@ -587,6 +588,20 @@ these is refused, field `record`, and nothing is written (`kitlib.hubsite.api` `
 An edit checks its asker and its status first, so a refused edit reads no backlog. Tests:
 tests/hubsite/test_api.py `QuestionRecordTest`, tests/hubsite/test_hub_cli.py
 `RecordArgumentCase`.
+
+#### Binding the open questions
+`hub.py questions bind --dry-run | --apply` (`POST /api/v1/questions/bind`, agent, body `{from:
+"pm", apply}`; refused `forbidden`, field `from`, for any other `from`, as `questions done`) pairs
+the questions that exist before the binding with their records. It reads every configured
+repository's backlog now: a parked record's `q:` line, and an owner-blocked record's `owner_ask`,
+`q`, `blocked_on` and `Blocked on` lines, each give the Q-nnn they cite (Q-012 is Q-12). A record
+citing one open hub question is a pair. It answers `{pairs, misses, multi, skipped, failed}`: a
+`miss` is a record whose question is not in the hub or is not open (an answered or closed question
+is never bound), a parked record citing none, or a repository or record that could not be read;
+`multi` are records citing several questions, left alone; `skipped` is a question already bound or
+cited by two records. `--dry-run` writes nothing; `--apply` sets `record` on each pair's open,
+unbound question, checked as `_bound` checks it (a failure is in `failed`). Tests:
+tests/hubsite/test_api.py `QuestionBindTest`.
 
 #### Filing the answer
 The hub files the owner's answer to a bound question into the record itself, in this order
