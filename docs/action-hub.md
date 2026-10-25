@@ -306,7 +306,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions log Q-1 <ruling id> [--replace] --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
 | `questions file [Q-1]` | `FILED Q-1` and `NOT FILED Q-2: <why> (<code>)` lines, or `nothing to file` ("Filing the answer") |
-| `questions bind --dry-run \| --apply` (PM) | `BIND`/`BOUND Q-1 repo:ID` lines, then `MISS`, `MULTI`, `SKIP`, `NOT BOUND` ("Binding the open questions") |
+| `questions bind --dry-run \| --apply` (PM) | `BIND Q-1 repo:ID` (dry run) or `BOUND Q-1 repo:ID` lines, `NOT BOUND Q-1: <why> (<code>)` for a pair that failed, then `MISS repo:ID: <why>`, `MULTI repo:ID cites Q-1 Q-2`, `SKIP Q-1: <why>`, or `nothing to bind` ("Binding the open questions") |
 | `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent] [--record REPO:ID \| --no-record]` | `EDITED Q-1` |
 | `questions withdraw Q-1 --from KEY --if-version V` | `WITHDRAWN Q-1` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |

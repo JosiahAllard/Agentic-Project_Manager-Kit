@@ -1294,7 +1294,8 @@ def questions_bind(api, req):
     for qid in docs:
         if _asked(qid) is not None:
             numbered[_asked(qid)] = qid
-    found = []                      # (record, via, [question numbers])
+    found = []                      # (record, the one question number it cites)
+    cites = collections.Counter()   # records citing each question number
     misses, multi = [], []
     for entry in api.shown('backlog', repo='', state='', fresh=False):
         repo = entry.get('repo')
@@ -1305,6 +1306,7 @@ def questions_bind(api, req):
         for item in entry.get('items') or []:
             rec = {'repo': repo, 'id': item.get('id')}
             nums, why = _cited(api, repo, item)
+            cites.update(nums or ())
             if why:
                 misses.append({'record': rec, 'why': why})
             elif nums is None:
@@ -1317,7 +1319,6 @@ def questions_bind(api, req):
                                                            for n in nums]})
             else:
                 found.append((rec, nums[0]))
-    wanted = collections.Counter(n for _rec, n in found)
     pairs, skipped = [], []
     for rec, n in found:
         qid = numbered.get(n)
@@ -1326,7 +1327,7 @@ def questions_bind(api, req):
             misses.append({'record': rec, 'why': 'Q-%d is not a hub question' % n})
         elif d.get('status') != 'open':
             misses.append({'record': rec, 'why': '%s is %s, not open' % (qid, d.get('status'))})
-        elif wanted[n] > 1:
+        elif cites[n] > 1:
             skipped.append({'question': qid, 'why': 'cited by more than one record'})
         elif d.get('record') == rec:
             skipped.append({'question': qid, 'why': 'already bound to this record'})
