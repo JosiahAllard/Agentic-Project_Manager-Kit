@@ -39,7 +39,7 @@ Missing any: say what you need, do nothing.
 
 ## Steps
 
-1. Work from the main checkout, never inside the worktree you are about to
+1. Work from the main checkout on the main branch, never inside the worktree you are about to
    remove. Confirm its `git status` is clean.
 2. The branch need not contain main: the landing tool merges the main it finds at its turn
    and gates the merged tree. A conflict is a `CONFLICT` verdict, nothing changed.
@@ -118,10 +118,15 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 - Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Force-push, or push anything but the main branch through the landing command.
 - `git add -A`, `git commit -a`, or staging anything you did not change.
-- Remove a worktree other than the one you were told to land.
+- Remove a worktree other than the one you were told to land, or an untracked file the brief did not name.
+- Close or amend a backlog record; `reset --hard`; `branch -D` or `--force`; `git worktree remove` or
+  `git branch -d` from a worktree; chain a write with other commands; wait in a loop, jump the queue, override or
+  break a lock; kill a process by name.
+- Land without a verdict, or a branch whose tip moved after review, unless `verdict.py carry` recorded it.
 - Land two branches in one go, unless the brief names a batch and the profile's
   **Landing** section allows batches (below).
 - Add a flag, module or cleanup step the brief did not name.
+- Retry, reword or route around a refusal or denial: report its exact command and verbatim message to the coordinator.
 
 ## Batches
 
