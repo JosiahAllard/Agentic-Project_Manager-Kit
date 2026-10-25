@@ -87,8 +87,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - **Follow-ups.** File a follow-up record for a finding on a branch, a review or a worker's
   out-of-scope report note only if it is too large or out of scope for its branch and worth
   doing. What a record needs: skill builder, step 10; a reviewer's hypothetical stays in the
-  review report; no record for a nitpick or an overengineered fix; a landed-branch review finding
-  is a note unless it cites an observed failure; a guard or landing-tool record cites an honest
+  review report; no record for a nitpick or an overengineered fix; a finding on an already-landed
+  branch is a note unless it cites an observed failure; a guard or landing-tool record cites an honest
   mistake an agent actually made, never a probe, a reviewer's evasion form or a forging case. Say
   in its summary that it is a follow-up, and of which branch or review. Leave it unpriced. `next` never offers an unpriced record; its banner counts it under
   `unprioritised+open`, not under `held` (`held` = blocked). You or the PM promote a follow-up
