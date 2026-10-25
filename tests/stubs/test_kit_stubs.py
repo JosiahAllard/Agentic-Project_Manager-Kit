@@ -167,6 +167,18 @@ class RetiredTools(StubCase):
         self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
 
 
+class RemovedToolHint(StubCase):
+    """A kit older than a removal still refuses the removed name (live_kit runs its code against
+    the live kit's tools): the refusal names the remedy."""
+
+    def test_the_refusal_names_the_rewrite_and_the_config_edit(self):
+        code, out = self.run_stubs('check', tools=['no_such_tool'])
+        self.assertEqual(code, stubs.CONFIG, out)
+        self.assertIn('no_such_tool', out)
+        self.assertIn('kit_stubs.py write -C', out)
+        self.assertIn('"stubs".tools', out)
+
+
 class RetiredToolsUnchanged(StubCase):
     """What the retirement leaves as it was."""
 

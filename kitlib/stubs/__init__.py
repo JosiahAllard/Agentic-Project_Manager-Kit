@@ -168,7 +168,10 @@ def wanted(cfg, kit=None, tools=None):
         return [n for n in SHARED if n in have]
     bad = sorted(set(names) - set(have))
     if bad:
-        raise ConfigError('not kit tool commands (no %s/tools/<name>.py with a __main__ block): %s'
+        raise ConfigError('not kit tool commands (no %s/tools/<name>.py with a __main__ block): %s; '
+                          'if the kit removed the tool, run `python <kit>/tools/kit_stubs.py write '
+                          '-C <repo>` from the current kit (an older kit does not know the '
+                          'removal) and drop the name from "stubs".tools'
                           % (kit, ', '.join(bad)))
     return list(dict.fromkeys(names))
 
