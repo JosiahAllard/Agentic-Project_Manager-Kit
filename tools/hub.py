@@ -114,6 +114,11 @@ the server alone decides what a role may do.
                                                      or `nothing to file`: each answer to a
                                                      question bound to a record not filed yet,
                                                      filed into its record again
+  hub.py questions bind --dry-run | --apply          (PM) `BIND Q-1 repo:ID` per open question a
+                                                     parked record's q or an owner-blocked
+                                                     record cites, then `MISS`, `MULTI`, `SKIP`
+                                                     lines; --apply binds them (open questions
+                                                     only), `BOUND` / `NOT BOUND` for each
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
         [--urgent | --no-urgent] [--record REPO:ID | --no-record]
@@ -313,6 +318,25 @@ def _record(text):
     return {'repo': repo.strip(), 'id': rid.strip()}
 
 
+def _bind_lines(got):
+    """The lines `questions bind` prints for the hub's answer."""
+    def named(r):
+        r = r if isinstance(r, dict) else {}
+        return '%s:%s' % (r.get('repo'), r.get('id')) if r.get('id') else str(r.get('repo'))
+    lines = []
+    for p in got.get('pairs') or []:
+        word = 'BOUND' if p.get('bound') else 'BIND'
+        lines.append('%s %s %s' % (word, p.get('question'), named(p.get('record'))))
+    lines += ['NOT BOUND %s: %s (%s)' % (f.get('question'), f.get('message'), f.get('code'))
+              for f in got.get('failed') or []]
+    lines += ['MISS %s: %s' % (named(m.get('record')), m.get('why'))
+              for m in got.get('misses') or []]
+    lines += ['MULTI %s cites %s' % (named(m.get('record')), ' '.join(m.get('questions') or []))
+              for m in got.get('multi') or []]
+    lines += ['SKIP %s: %s' % (s.get('question'), s.get('why')) for s in got.get('skipped') or []]
+    return lines or ['nothing to bind']
+
+
 def _asks(p):
     """The two arguments of every parser whose verb asks the server. No default is set: a
     sub-verb's parser would put its own over what the verb before it was given."""
@@ -398,7 +422,12 @@ def _client_verbs(sub):
     x = _leaf(q, 'file', 'file each answer to a question bound to a record that is not filed '
               'yet into its record (the hub does at once and at start)')
     x.add_argument('id', nargs='?', help='only this question')
-    x = _leaf(q, 'edit', 'change an open question you asked')
+    x = _leaf(q, 'bind', 'bind open questions to the records that cite them (the PM)')
+    mode = x.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--dry-run', dest='dry_run', action='store_true',
+                      help='list what would be bound, and what cannot be')
+    mode.add_argument('--apply', action='store_true', help='bind them')
+    x = _leaf(q, 'edit','change an open question you asked')
     _creator(x, 'KEY')
     x.add_argument('--title')
     x.add_argument('--context-file', dest='context_file', metavar='F',
@@ -1035,6 +1064,9 @@ def _questions(a, stop):
         lines += ['NOT FILED %s: %s (%s)' % (f.get('id'), f.get('message'), f.get('code'))
                   for f in got.get('failed') or [] if isinstance(f, dict)]
         return _show(a, got, lines or ['nothing to file'])
+    if a.sub == 'bind':
+        got = hub.post('/questions/bind', client.AGENT, {'from': 'pm', 'apply': bool(a.apply)})
+        return _show(a, got, _bind_lines(got))
     if a.sub == 'edit':
         context = _text_of(a.context_file, 'context') if a.context_file else None
         body = _body(title=a.title, context=context, options=a.options,

@@ -371,7 +371,7 @@ class InlineAliasJudged(unittest.TestCase):
                 d = self.decide(text)
                 self.assertEqual(d.verdict, 'deny', d.reason)
                 self.assertNotIn('alias.', d.instead)
-                self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" <each path you changed>'
+                self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" --model "<your model>" <each path you changed>'
                                  % (rules.kit_tool(self.w.ctx(), 'commit'), W.fwd(self.w.wt)))
         # a git the text cannot place (--git-dir): drop it, the same command in the worktree; a
         # commit there is the kit's commit tool
@@ -380,7 +380,7 @@ class InlineAliasJudged(unittest.TestCase):
         self.assertEqual(d.instead, 'git -C "%s" rm -q y' % W.fwd(self.w.wt))
         d = self.decide("git --git-dir=../x -c alias.x='commit -m y' x")
         self.assertEqual(d.verdict, 'deny', d.reason)
-        self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" <each path you changed>'
+        self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" --model "<your model>" <each path you changed>'
                          % (rules.kit_tool(self.w.ctx(), 'commit'), W.fwd(self.w.wt)))
 
     def test_a_hooks_path_setting_an_alias_gives_is_denied(self):

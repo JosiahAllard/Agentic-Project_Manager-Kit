@@ -48,7 +48,7 @@ KNOWN_FAILS = {
         'wrapped in a try around the whole git call both get the machine_lock line',
 }
 
-FILL = {'<subject>': 'x', '<what>': 'x', '<each path you changed>': 'a.txt'}
+FILL = {'<subject>': 'x', '<what>': 'x', '<your model>': 'x', '<each path you changed>': 'a.txt'}
 
 
 def instead_of(d):
@@ -297,10 +297,10 @@ class Forms(unittest.TestCase):
     def test_a_commit_retargeted_to_the_worktree_is_the_kit_commit_tool(self):
         tool = rules.kit_tool(self.w.ctx(), 'commit')
         d = self.instead(bash('git -C "%s" commit -m x' % f(self.w.ro), self.w.wt, True))
-        self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" <each path you changed>' % (tool, self.wt))
+        self.assertEqual(d.instead, 'python %s -C "%s" -m "<subject>" --model "<your model>" <each path you changed>' % (tool, self.wt))
         self.assertIn('plain git writes no Co-Authored-By trailer', d.reason)
         d = self.instead(bash('git -C "%s" stash' % f(self.w.ro), self.w.wt, True))
-        self.assertEqual(d.instead, 'python %s -C "%s" -m "WIP: <what>" <each path you changed>' % (tool, self.wt))
+        self.assertEqual(d.instead, 'python %s -C "%s" -m "WIP: <what>" --model "<your model>" <each path you changed>' % (tool, self.wt))
         self.assertIn('the stash stack is shared', d.reason)
 
     def test_a_subagents_reset_hard_of_a_main_checkout_is_reset_keep_in_its_worktree(self):
