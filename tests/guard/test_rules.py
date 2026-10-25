@@ -1021,8 +1021,10 @@ class PmDataNoVerify(unittest.TestCase):
         self.assert_denied(self.decide('git push --no-verify origin kit/wt', sub=False, environ=MARKED), plain)
         self.assert_denied(self.decide('git push --no-verify origin kit/wt', sub=False,
                                        environ={context.ROLE_ENV: 'pm'}), plain)
+        # from the main checkout, a subagent's push with the hook runs in its worktree (write-jail
+        # refuses the main checkout itself)
         self.assert_denied(self.decide('git -C %s push --no-verify private pmdata' % W.fwd(self.w.main)),
-                           'git -C "%s" push private pmdata' % W.fwd(self.w.main))
+                           'git -C "%s" push private pmdata' % W.fwd(self.w.wt))
 
     def test_an_abbreviation_git_accepts_is_denied(self):
         for flag in ('--no-verif', '--no-ver', '--no-v'):
