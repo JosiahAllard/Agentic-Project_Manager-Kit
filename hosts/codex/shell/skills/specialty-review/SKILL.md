@@ -24,6 +24,6 @@ You have no stake: you did not write the branch, you never review a change you w
 
 ## Report
 
-Findings, most severe first, each as: BLOCKING, FIX-HERE or NOTE (a NOTE is report only, never a record; a nitpick, an overengineered fix, or any finding on an already landed branch without an observed failure is a NOTE at most); file and symbol; one sentence stating the defect; the concrete input or state that triggers it and what goes wrong; and CONFIRMED (you read the code path) or PLAUSIBLE. Then: files out of scope; changes with no test that reaches them; and one line - "no blocking findings" or "blocking: N". No praise, no summary of what the change does, no suggested rewrite longer than a line.
+Findings, most severe first, each as: BLOCKING, FIX-HERE or NOTE (a NOTE is report only, never a record; a nitpick or an overengineered fix is FIX-HERE if fixed on the branch, else a NOTE; never a record); file and symbol; one sentence stating the defect; the concrete input or state that triggers it and what goes wrong; and CONFIRMED (you read the code path) or PLAUSIBLE. Then: files out of scope; changes with no test that reaches them; and one line - "no blocking findings" or "blocking: N". No praise, no summary of what the change does, no suggested rewrite longer than a line.
 
 Details: skill `mutation-testing` for guard tests that stay green while decorative.
