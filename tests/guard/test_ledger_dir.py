@@ -1,7 +1,7 @@
-"""The guard's ledger keys (kitlib.guard.context Ctx.user): a ledger_dir or ledger_path the guard
-cannot place (blank, or not absolute once read against the PM repository) or a ledger_dir that
-names something other than a folder makes the machine config broken, so every subagent write is
-refused, never a silently unguarded ledger; a folder that does not exist yet and one outside the
+"""The guard's ledger keys (kitlib.guard.context Ctx.user): a blank ledger_dir or ledger_path
+(unset: nothing to hold), one not absolute once read against the PM repository, or a ledger_dir
+that names something other than a folder (both still held as given) makes the machine config
+broken, so every subagent write is refused, never a silently unguarded ledger; a folder that does not exist yet and one outside the
 PM repository are accepted. Under a BAD machine config location the ledger keys, and only those,
 are read from the folder the PM-repo pointer names when it is absolute, so a main session's edit
 of the ledger is refused there too. Every home and PM repository is a temp folder under the fence
@@ -54,10 +54,10 @@ class _Case(unittest.TestCase):
         return d
 
 
-class UnplacedTest(_Case):
-    """A ledger key the guard cannot place: broken, the key unset, every subagent write refused."""
+class BlankTest(_Case):
+    """A blank ledger key: nothing to hold, so it is unset; broken, every subagent write refused."""
 
-    def check(self, key, value, said):
+    def check(self, key, value):
         body = {key: value}
         if key == 'ledger_dir':
             body['ledger_repos'] = ['kit']
@@ -65,21 +65,49 @@ class UnplacedTest(_Case):
         u = self.ctx().user()
         self.assertIsNone(u[key])
         self.assertIn(key, u.get('broken') or '')
-        self.assertIn(said, u.get('broken'))
+        self.assertIn('non-empty', u.get('broken'))
         d = self.assert_subagent_refused()
         self.assertIn(key, d.reason)
 
-    def test_a_drive_relative_ledger_dir(self):
-        self.check('ledger_dir', 'C:books', 'absolute')
-
-    def test_a_drive_relative_ledger_path(self):
-        self.check('ledger_path', 'C:LEDGER.md', 'absolute')
-
     def test_a_blank_ledger_dir(self):
-        self.check('ledger_dir', '  ', 'non-empty')
+        self.check('ledger_dir', '  ')
 
     def test_an_empty_ledger_path(self):
-        self.check('ledger_path', '', 'non-empty')
+        self.check('ledger_path', '')
+
+
+class DriveRelativeTest(_Case):
+    """A ledger key relative to a drive's current folder (`Q:books`): broken, and still held as
+    given, as before the check, so a main session's write of it is refused by `ledger` too. The
+    drive is one the PM repository is not on: `resolved` would read a same-drive one against it."""
+
+    def drive(self):
+        here = os.path.splitdrive(self.pm)[0][:1].upper()
+        return 'R:' if here == 'Q' else 'Q:'
+
+    def check(self, key, value, written):
+        body = {key: value}
+        if key == 'ledger_dir':
+            body['ledger_repos'] = ['kit']
+        self.config(body)
+        c = self.ctx()
+        u = c.user()
+        self.assertEqual(u[key], value)
+        self.assertIn(key, u.get('broken') or '')
+        self.assertIn('absolute', u.get('broken'))
+        d = self.assert_subagent_refused(ctx=c)
+        self.assertIn(key, d.reason)
+        d = self.edit(written, ctx=c)
+        self.assertIsNotNone(d, written)
+        self.assertEqual(d.rule, 'ledger', d.reason)
+
+    def test_a_drive_relative_ledger_dir(self):
+        books = self.drive() + 'books'
+        self.check('ledger_dir', books, books + '\\STANDING.md')
+
+    def test_a_drive_relative_ledger_path(self):
+        ledger = self.drive() + 'LEDGER.md'
+        self.check('ledger_path', ledger, ledger)
 
 
 class NotAFolderTest(_Case):
@@ -92,6 +120,16 @@ class NotAFolderTest(_Case):
         self.assertEqual(u['ledger_dir'], books)
         self.assertIn('not a folder', u.get('broken') or '')
         self.assert_subagent_refused()
+
+    def test_a_trailing_separator_does_not_hide_the_file(self):
+        books = os.path.join(self.pm, 'books')
+        with open(books, 'w') as f:
+            f.write('')
+        for value in (books + '\\', books + '/'):
+            self.config({'ledger_dir': value, 'ledger_repos': ['kit']})
+            u = self.ctx().user()
+            self.assertEqual(u['ledger_dir'], value)
+            self.assertIn('not a folder', u.get('broken') or '', value)
 
 
 class AcceptedTest(_Case):
@@ -150,6 +188,23 @@ class BadStateTest(_Case):
 
     def test_every_subagent_write_is_still_refused(self):
         self.assert_subagent_refused()
+
+    def test_a_pointer_config_that_gives_no_ledger_key_adds_nothing(self):
+        bodies = {
+            'not JSON': '{"ledger_dir": ',
+            'not UTF-8': b'\xff\xfe\x00{',
+            'not an object': json.dumps(['ledger_dir', 'books']),
+            'keys not strings': json.dumps({'ledger_path': 5, 'ledger_dir': ['books'], 'ledger_repos': ['kit']}),
+        }
+        for what, body in bodies.items():
+            with open(self.policy, 'wb') as f:
+                f.write(body if isinstance(body, bytes) else body.encode('utf-8'))
+            c = self.ctx()
+            self.assertEqual(c.config_location().state, kuser.BAD, what)
+            u = c.user()
+            self.assertEqual((u['ledger_path'], u['ledger_dir']), (None, None), what)
+            self.assertEqual(u.get('broken'), c.config_location().error, what)
+            self.assert_subagent_refused(ctx=c)
 
     def test_a_pointer_that_is_not_absolute_is_not_read(self):
         # the PM repository itself, written relative to this process's folder: read as it stands,

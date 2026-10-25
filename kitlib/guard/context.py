@@ -44,8 +44,9 @@ a constructor argument, and the defaults read this machine.
                      POLICY_KEYS from config.json, LOCAL_KEYS from local.json) and a relative
                      ledger_path or ledger_dir read against the PM repository. A file that cannot
                      be read or is not a JSON object, or a ledger_path or ledger_dir that is not a
-                     path string, is blank or is not absolute once read (`C:books`; the key is
-                     then unset), or a ledger_dir that exists and is not a folder (still held),
+                     path string or is blank (the key is then unset), or that is not absolute
+                     once read (`C:books`), or a ledger_dir that exists and is not a folder (both
+                     still held as given),
                      sets 'broken' (why), and the ledger rule then denies every subagent write
                      (_ledger_checked, on the strict answer too). A ledger_dir not made yet, or
                      outside the PM repository, is accepted. Missing files are an empty config, not
@@ -161,6 +162,15 @@ def _placed(path):
     return os.path.isabs(path) and bool(os.path.splitdrive(path)[0])
 
 
+def _not_a_folder(path):
+    """`path` exists and is not a folder, read without its trailing separators (with one, Windows
+    answers a file as absent); a drive root keeps its own."""
+    bare = path.rstrip('\\/')
+    if not bare or bare.endswith(':'):
+        bare = path
+    return os.path.exists(bare) and not os.path.isdir(bare)
+
+
 def _ledger_keys(data, pm, out):
     """LEDGER_KEYS of the JSON object `data` into `out`: a relative path read against the PM
     repository `pm`; a value that is not a path string, is blank, or is relative with no `pm`
@@ -182,10 +192,12 @@ def _ledger_keys(data, pm, out):
 
 
 def _ledger_checked(u):
-    """`u` (a user() answer) with each ledger key the guard can hold: one that is not absolute
-    once read (`C:books`), or blank, is unset and sets 'broken'; a ledger_dir that exists and is
-    not a folder sets 'broken' and is still held. A folder not made yet (ledger.py makes it) or
-    outside the PM repository is accepted. An earlier 'broken' is kept: it is the first cause."""
+    """`u` (a user() answer) with each ledger key checked: a blank one is unset (nothing to hold)
+    and sets 'broken'; one that is not absolute once read (`C:books`) and a ledger_dir that exists
+    and is not a folder (a trailing separator dropped first: `Z:\\books\\` names the file
+    `Z:\\books`) set 'broken' and are still held as given, so no session writes what the guard
+    held before. A folder not made yet (ledger.py makes it) or outside the PM repository is
+    accepted. An earlier 'broken' is kept: it is the first cause."""
     for k in LEDGER_KEYS:
         v = u.get(k)
         why = None
@@ -194,8 +206,8 @@ def _ledger_checked(u):
         if not isinstance(v, str) or not v.strip():
             why, u[k] = '%s must be a non-empty path, not %r' % (k, v), None
         elif not _placed(v):
-            why, u[k] = '%s must be an absolute path, not %r' % (k, v), None
-        elif k == 'ledger_dir' and os.path.exists(v) and not os.path.isdir(v):
+            why = '%s must be an absolute path, not %r' % (k, v)
+        elif k == 'ledger_dir' and _not_a_folder(v):
             why = 'ledger_dir %s is not a folder' % v
         if why and not u.get('broken'):
             u['broken'] = why
