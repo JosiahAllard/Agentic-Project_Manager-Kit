@@ -122,7 +122,9 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 - Land two branches in one go, unless the brief names a batch and the profile's
   **Landing** section allows batches (below).
 - Add a flag, module or cleanup step the brief did not name.
-- Retry, reword or route around a refusal or denial: report its exact command and verbatim message to the coordinator.
+- Retry, reword or route around a classifier refusal, a permission denial or a `REFUSED:` on substance: each is final;
+  report its exact command, directory and verbatim message to the coordinator. A kit-guard (hook) refusal: fix the
+  form its `Instead:` line gives, then retry. A form-only `REFUSED:`: report it; only the PM may allow one retry.
 
 ## Batches
 
