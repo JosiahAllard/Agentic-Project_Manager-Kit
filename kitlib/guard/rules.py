@@ -1789,7 +1789,9 @@ def ledger_what(what):
 
 
 def lock_state_dir(ctx):
-    """The machine lock's state folder: <home>/.claude/machine-lock (kitlib.lock.store)."""
+    """The machine lock's state folder: <home>/.claude/machine-lock (kitlib.lock.store.real_root).
+    It may be a junction to the store on another volume; lock_state judges its target, by either
+    spelling, through jail.real (tests/guard/test_lock_state_junction.py)."""
     return os.path.join(ctx.home, '.claude', 'machine-lock')
 
 
