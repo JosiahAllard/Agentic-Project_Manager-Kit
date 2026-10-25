@@ -10,7 +10,7 @@ SKILLS = ROOT / "content" / "skills"      # every host ships these (docs/content
 GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
 EXPECTED = {"backlog-ops", "backlog-pricing", "branch-review", "branch-sync", "builder", "coordinator-dispatch", "doc-claims-discipline",
             "flaky-test-triage", "hub-ops", "ledger-ops", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
-            "shell-and-worktree-traps", "subagent-dispatch",
+            "shell-and-worktree-traps",
             "specialty-3d-assets", "specialty-rigging", "specialty-tech-art", "specialty-sound",
             "specialty-review", "specialty-research", "specialty-records", "specialty-spec"}
 # a task specialty a generic agent loads because its brief names it (docs/specialty-skills.md

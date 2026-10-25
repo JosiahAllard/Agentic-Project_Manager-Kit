@@ -53,7 +53,7 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   docs/content.md): backlog-ops, backlog-pricing, branch-review, branch-sync, builder,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, hub-ops, ledger-ops, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
-  shell-and-worktree-traps, subagent-dispatch, specialty-3d-assets, specialty-rigging,
+  shell-and-worktree-traps, specialty-3d-assets, specialty-rigging,
   specialty-tech-art, specialty-sound, specialty-review, specialty-research, specialty-records, specialty-spec.
   branch-review and coordinator-dispatch hold the
   coordinator's procedure, loaded only when needed. Skills name kit tools by path
