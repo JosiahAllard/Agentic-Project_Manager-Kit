@@ -96,6 +96,9 @@ the lines named here. A verb marked (owner) carries the owner's token, the other
 the server alone decides what a role may do.
 
   hub.py questions [--status S] [--repo R]          `Q-1 v2 open [repo] title` for each
+  hub.py questions show Q-1                         one question: title, status, version, options
+                                                     (the recommended marked), context, answer
+                                                     and note; any status
   hub.py questions add --title T [--repo R] [--context-file F] [--option "label::description"
         ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID]
         [--from KEY]                                 `ASKED Q-2`, then a line for each warning;
@@ -364,6 +367,8 @@ def _client_verbs(sub):
     q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
                 'done: handled with no ruling; edit, withdraw: change or remove one you asked; '
                 'file: file answers into their records again', S['questions'], since=True)
+    x = _leaf(q, 'show', 'one question with its options, context and answer')
+    x.add_argument('id')
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
     _repo(x)
@@ -1037,7 +1042,34 @@ def _questions(a, stop):
     if a.sub == 'withdraw':
         got = hub.post(_one('questions', a) + '/delete', client.AGENT, _edits(a, {}))
         return _wrote(a, got, 'WITHDRAWN %s' % got.get('id'))
+    if a.sub == 'show':
+        return _question(a)
     return _list(a, 'questions', version=True)
+
+
+def _question(a):
+    """questions show: the one document of `a.id` out of the list of every status."""
+    got = _hub(a).get('/questions', query={'status': 'all'})
+    for d in got.get('items') or []:
+        if d.get('id') == a.id:
+            break
+    else:
+        raise serve.ServeError('%s is not a question the hub holds' % a.id)
+    if getattr(a, 'json', False):
+        return _show(a, d, [])
+    lines = [_item(d, version=True)]
+    for n, o in enumerate(d.get('options') or []):
+        if isinstance(o, dict):
+            mark = ' (recommended)' if d.get('recommended') == n else ''
+            lines.append('option %d: %s%s - %s' % (n, o.get('label'), mark, o.get('description') or ''))
+    if d.get('context'):
+        lines.append('context: %s' % d['context'].strip())
+    answer = d.get('answer') if isinstance(d.get('answer'), dict) else None
+    if answer:
+        lines.append('answer: %s' % answer.get('label'))
+        if answer.get('note'):
+            lines.append('note: %s' % answer['note'])
+    return _show(a, d, lines)
 
 
 def _edits(a, body):
