@@ -207,6 +207,30 @@ class RemovedKitOnlyTools(StubCase):
         self.assertFalse(os.path.exists(os.path.join(KIT, 'tools', self.GONE + '.py')))
 
 
+class MergedBoardTool(StubCase):
+    """tools/board.py was merged into preflight.py --board: a repository's old board stub is named
+    for deletion and a "stubs".tools list naming it still loads."""
+
+    GONE = 'board'
+
+    def test_a_config_naming_it_is_dropped_not_refused(self):
+        self.assertIn(self.GONE, stubs.RETIRED)
+        self.assertNotIn(self.GONE, stubs.commands())
+        self.config(stubs={'tools': ['landed', self.GONE]})
+        code, out = self.run_stubs('write')
+        self.assertEqual(code, stubs.OK, out)
+        self.assertEqual(os.listdir(os.path.join(self.root, 'tools')), ['landed.py'])
+
+    def test_a_board_stub_left_behind_is_a_note(self):
+        self.config(stubs={'tools': ['landed', self.GONE]})
+        left = self.stub(self.GONE)
+        self.put(left, stubs.stub_text(self.GONE))
+        for verb in ('write', 'check'):
+            code, out = self.run_stubs(verb)
+            self.assertEqual(code, stubs.OK, (verb, out))
+            self.assertIn('retired  %s (delete it)' % left, out.splitlines())
+
+
 class Partition(StubCase):
     """Every tools/*.py command is stubbed (SHARED) or kit-only (KIT_ONLY), exactly one."""
 
