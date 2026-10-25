@@ -554,7 +554,9 @@ class SameTree(ReuseCase):
         self.assertIs(gate_ok.read(self.repo.root, tip)[0]['kit']['clean'], record)
         self.ident['clean'] = landing
         lander, out = self.land(BRANCH, tip)
-        self.assert_unused(out, lander, tip, 'the record was made by another kit (aaaaaaaaaa)')
+        self.assert_unused(out, lander, tip, "the record's kit and the landing's kit are the same "
+                           'commit but differ in uncommitted state (record clean=%s, landing '
+                           'clean=%s)' % (record, landing))
         self.assert_ran(lander.gate_logs, 'unit')
 
     def test_a_kit_with_uncommitted_files_serves_nothing(self):

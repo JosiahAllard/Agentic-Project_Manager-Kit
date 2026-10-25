@@ -45,8 +45,9 @@ base commit, or that declares no input, is not barred: the tree is the same tree
 the same commit, so {base} and every tracked file are the ones the tip's run had (the history
 differs only by the merge commit, and the opt-in already promises the step does not read git
 state). Tracked content only: the landing tree lacks the author worktree's ignored and generated
-files, and a step that declares no input is not checked for them, so a step whose result depends
-on such a file must not set reuse. The result taken is the one of the step's --full command
+files, and no step is checked for them (plan_steps takes the record on a miss as well as for a
+step that declares no input, and the key is built from the landing tree), so a step whose result
+depends on such a file must not set reuse. The result taken is the one of the step's --full command
 (full_cmd where it has one), not of the landing's cmd. Such a step gets no key and is never
 stored, so the relaxation never reaches the cache. Anything that raises means every step runs.
 
@@ -222,6 +223,11 @@ def _record_why(rec, cfg, base, tip, merge, root, now):
     kit = runner.kit_identity()
     if not isinstance(rec.get('kit'), dict) or kit.get('clean') is not True \
             or any(rec['kit'].get(k) != kit.get(k) for k in ('commit', 'python', 'clean')):
+        if isinstance(rec.get('kit'), dict) and all(
+                rec['kit'].get(k) == kit.get(k) for k in ('commit', 'python')):
+            return ("the record's kit and the landing's kit are the same commit but differ in "
+                    'uncommitted state (record clean=%s, landing clean=%s)' % (
+                        rec['kit'].get('clean'), kit.get('clean')))
         return 'the record was made by another kit (%s)' % str((rec.get('kit') or {}).get('commit'))[:10]
     max_h = cfg.section('landing')['reuse_max_age_h']
     ended = datetime.datetime.strptime(rec['ended_utc'], '%Y-%m-%dT%H:%M:%SZ').replace(
