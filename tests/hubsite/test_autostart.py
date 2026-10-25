@@ -2,12 +2,15 @@
 starts the hub server at sign-in. No test registers a task: the PowerShell runner is injected, and
 the CLI tests replace install."""
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from kitlib import pluginsource
 from kitlib.hubsite import autostart, serve
 from kitlib.proc import spawn
 from tests.hubsite.test_hub_cli import HUB, CliCase
@@ -80,6 +83,25 @@ class Install(unittest.TestCase):
         self.assertIn('not a worktree', said[0])
         self.assertIn('no pythonw.exe beside %s' % PY, said[1])
         self.assertEqual(run.calls, [])
+
+    def test_a_hub_py_in_a_plugin_export_folder_is_refused_and_a_main_checkout_one_is_not(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        export = os.path.join(tmp, '0123456789ab')
+        os.makedirs(os.path.join(export, 'tools'))
+        with open(os.path.join(export, pluginsource.MARKER), 'w') as f:
+            f.write('{}')
+        export_hub = os.path.join(export, 'tools', 'hub.py')
+        isfile = present
+
+        why = autostart.refusals(export_hub, PY, isfile)
+        self.assertEqual(len(why), 1, why)
+        self.assertIn('plugin export', why[0])
+        self.assertIn('main checkout', why[0])
+        self.assertIn('hub.py setup --autostart', why[0])
+        self.assertEqual(autostart.refusals(HUB_PY, PY, isfile), [])
+        with self.assertRaises(autostart.AutostartError):
+            autostart.install(export_hub, python=PY, run=Recorder(), isfile=isfile)
 
     def test_install_runs_the_script_in_powershell_once(self):
         run = Recorder()
