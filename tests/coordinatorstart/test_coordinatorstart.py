@@ -533,13 +533,13 @@ class LedgerLineTest(unittest.TestCase):
         self.assertNotIn("ledger", coordinatorstart.context(dict(self.CAP, standing=["s"]), live=False,
                                                             machine_cfg=self.SPLIT))
 
-    def test_a_config_that_cannot_be_read_adds_no_line(self):
+    def test_a_config_that_cannot_be_read_gives_the_unknown_rulebook_line_only(self):
         with mock.patch.object(coordinatorstart.kuser, "user_config",
                                side_effect=ConfigError("bad key")):
             broken = ContextTest().build(self.CAP, machine_cfg=None)
-        self.assertEqual(broken, ContextTest().build(self.CAP, machine_cfg={}))
         self.assertNotIn("- ledger", broken)
-        self.assertIn("- rulebooks (standing rules): none", broken)
+        self.assertIn("- rulebooks (standing rules): unknown - the machine config cannot be read (see the machine config line)", broken)
+        self.assertNotIn("no ledger_dir or ledger_path is set", broken)
         self.assertIn("- agent cap 4", broken)
 
     def test_a_bug_reading_the_config_is_reported_not_dropped(self):
@@ -553,6 +553,20 @@ class LedgerLineTest(unittest.TestCase):
         text = ContextTest().build({}, pm_cfg={}, machine_cfg={})
         self.assertNotIn("could not check ledger", text)
         self.assertIn("- rulebooks (standing rules): none", text)
+
+    def test_without_ledger_dir_a_missing_sessions_file_is_no_ledger_error(self):
+        def read(path):
+            raise FileNotFoundError(path)
+        text = ContextTest().build(self.CAP, machine_cfg={}, read=read)
+        self.assertNotIn("could not check ledger", text)
+        self.assertIn("- rulebooks (standing rules): none", text)
+
+    def test_a_ledger_path_only_config_reads_the_rules_beside_the_frozen_file(self):
+        d = self._rules({"all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n" % ID})
+        machine = {"ledger_path": os.path.join(d, "LEDGER.md")}
+        line, = coordinatorstart.ledger_lines(machine, "alpha")
+        self.assertIn("in %s: shared 1 rules" % os.path.join(d, "rules"), line)
+        self.assertTrue(line.endswith("rules --repo alpha"), line)
 
 
 class StubsLineTest(unittest.TestCase):

@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import pmstart
 from kitlib.pmstart import fglock
@@ -65,7 +66,13 @@ class StandingTest(unittest.TestCase):
 class RulebooksCheckTest(unittest.TestCase):
     def test_the_checklist_carries_the_rulebooks_line(self):
         txt = pmstart.checklist(dict(CFG, standing=["x"]), NOW, procs=[], machine={}, **StandingTest.FAKES)
-        self.assertEqual(txt.split(chr(10))[2], "- rulebooks (standing rules): none - no ledger_dir or ledger_path is set")
+        self.assertIn("- rulebooks (standing rules): none - no ledger_dir or ledger_path is set", txt.splitlines())
+
+    def test_an_unreadable_machine_config_is_unknown_not_none(self):
+        with mock.patch.object(pmstart, "_user_config", lambda: None):
+            txt = pmstart.checklist(dict(CFG, standing=["x"]), NOW, procs=[], **StandingTest.FAKES)
+        rows = [l for l in txt.splitlines() if l.startswith("- rulebooks")]
+        self.assertEqual(rows, ["- rulebooks (standing rules): unknown - the machine config cannot be read (see the machine config line)"])
 
 
 def wproc(pid, name="python.exe", cmd="python -u pm_watch.py"):

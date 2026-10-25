@@ -47,7 +47,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    (or pm-session, when the launcher resumed it; a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
    account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
    kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
-4. Read the start context's `rulebooks` line command (`ledger.py rules --repo <this repo>`): the standing rules bind your work.
+4. The start context's `rulebooks` line names the standing rules and the command that reads them.
    Read your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`, below); treat as stale. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test

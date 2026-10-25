@@ -33,14 +33,14 @@ def _config(loader, label, rows):
 
 
 def _quiet(loader):
-    """`loader()`, or {} when it gives None or raises ConfigError (kitlib.config.user.user_config's
-    one error for a config that cannot be read): for a config read only to add an optional line
-    (the ledger line needs `ledger_dir`), so a broken config adds no row. Any other error is a bug
-    and propagates."""
+    """`loader()` (an empty config when it gives None), or None when it raises ConfigError
+    (kitlib.config.user.user_config's one error for a config that cannot be read): the ledger
+    check turns None into the rulebook line's "unknown" (the ledger-file line needs `ledger_dir`).
+    Any other error is a bug and propagates."""
     try:
         return loader() or {}
     except kuser.ConfigError:
-        return {}
+        return None
 
 
 def machine_lines(snapshot):

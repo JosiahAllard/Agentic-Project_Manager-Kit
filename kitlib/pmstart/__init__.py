@@ -1052,21 +1052,24 @@ def _failure_text(e):
 
 
 def _user_config():
-    """The machine config, `{}` when it cannot be read (configcheck reports that)."""
+    """The machine config, None when it cannot be read (configcheck reports that)."""
     try:
         return kuser.user_config()
     except kuser.ConfigError:
-        return {}
+        return None
 
 
 def rulebook_lines(machine, repo=None):
-    """[the rulebook line] from the machine config `machine`: the rules folder, each rulebook
+    """[the rulebook line] from the machine config `machine` (None: it cannot be read, which the
+    line says apart from "nothing configured"): the rules folder, each rulebook
     present with its rule count, and the `tools/ledger.py rules` command to read them
     (`--repo REPO`, or `--all` without `repo`). Always one line: no ledger configured, or no
     rulebook in the folder, says so (docs/ledger.md "Rulebooks"). The rulebooks are loaded for
     their counts only; a parse error is `ledger.py check`'s to report."""
     cmd = kitroot.command("ledger") + (" rules --repo %s" % repo if repo else " rules --all")
-    found = ledger_files.of_config(machine or {})
+    if machine is None:
+        return ["rulebooks (standing rules): unknown - the machine config cannot be read (see the machine config line)"]
+    found = ledger_files.of_config(machine)
     if found is None:
         return ["rulebooks (standing rules): none - no ledger_dir or ledger_path is set"]
     books, _ = rulebook.load(found.rules)

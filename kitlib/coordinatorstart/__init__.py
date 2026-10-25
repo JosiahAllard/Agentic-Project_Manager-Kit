@@ -248,8 +248,8 @@ def ledger_lines(machine, repo):
     instead. The ledger file is never opened. The rulebook line (pmstart.rulebook_lines, with
     `rules --repo` for `repo`) is always there: it names the rules folder, each rulebook with
     its count, or says there is none."""
-    book = pmstart.rulebook_lines(machine, repo)
-    if not machine.get("ledger_dir"):
+    book = pmstart.rulebook_lines(machine, repo)     # machine None: the config cannot be read
+    if not machine or not machine.get("ledger_dir"):
         return book
     files = kuser.files_of(machine)
     repo = str(repo or "")
@@ -347,19 +347,15 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
 
         def ledger():
             # A config that cannot be read (user_config raises ConfigError for every such case):
-            # read as an empty one, so only the rulebook line (it says none is
-            # configured). Any other error is a bug and is reported below.
+            # only the rulebook line, saying it is unknown. Without ledger_dir that line needs no
+            # sessions entry. Any other error is a bug and is reported below.
             try:
                 m = machine_cfg if machine_cfg is not None else kuser.user_config()
             except kuser.ConfigError:
-                m = {}
-            try:
-                repo = entry_once()["repo"]
-            except (LookupError, ValueError):
-                if m.get("ledger_dir"):
-                    raise
-                repo = "<this repo's folder>"      # no ledger file to name; the rulebook line still prints
-            return ledger_lines(m, repo)
+                return pmstart.rulebook_lines(None)
+            if not m.get("ledger_dir"):
+                return pmstart.rulebook_lines(m, "<this repo's folder>")
+            return ledger_lines(m, entry_once()["repo"])
 
         checks = [
             ("machine_config", config_lines or configcheck.lines),

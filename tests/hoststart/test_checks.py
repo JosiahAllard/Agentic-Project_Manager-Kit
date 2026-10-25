@@ -76,12 +76,11 @@ class Checks(unittest.TestCase):
         split = {'ledger_dir': 'D:/pm/rulings', 'ledger_repos': ['demo']}
         self.assertFalse([r for r in self.coordinator(machine_config=split) if 'ledger' in r])
 
-    def test_a_machine_config_that_cannot_be_read_adds_no_row(self):
+    def test_a_machine_config_that_cannot_be_read_gives_the_unknown_rulebook_row(self):
         with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=ConfigError('broken')):
             rows = self.coordinator(repo_name='demo', machine_config=None)
-        self.assertEqual(rows, self.coordinator(repo_name='demo', machine_config={}))
-        self.assertFalse([r for r in rows if 'machine config' in r or r.startswith('ledger')], rows)
-        self.assertTrue([r for r in rows if r.startswith('rulebooks (standing rules): none')], rows)
+        self.assertFalse([r for r in rows if r.startswith('ledger')], rows)
+        self.assertTrue([r for r in rows if r.startswith('rulebooks (standing rules): unknown - the machine config cannot be read')], rows)
 
     def test_a_bug_reading_the_machine_config_is_reported_not_dropped(self):
         with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=TypeError('bug')):
