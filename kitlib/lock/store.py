@@ -111,7 +111,10 @@ def profile_dir():
 
 def real_root():
     """The machine's store: machine-lock in the kit's per-user state folder (registry.state_path;
-    ~/.claude/machine-lock, where it has always been)."""
+    ~/.claude/machine-lock, where it has always been). Every kit version spells it so; the owner
+    may move the folder to another local volume and leave a junction here (the store reads and
+    writes through it: its temp files sit beside their targets and its mutexes are named, not
+    pathed). There is no setting for it."""
     return registry.state_path(profile_dir(), "machine-lock")
 
 
