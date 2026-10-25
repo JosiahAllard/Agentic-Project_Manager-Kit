@@ -1006,8 +1006,10 @@ class LanderMainCheckout(MainGit):
         self.each_denied(['git -C "$M" commit -m x'], tool='PowerShell')
         # a computed -C is a checkout the guard cannot place (unplaced); GIT_DIR re-points git on purpose;
         # a symbolic-ref write moves a ref every worktree shares (git-shared-ref), from any place
+        # a copy is a write only the jail refuses there; a rename deletes main's name (git-shared-ref)
         for text, rule in (('git -C "$M" symbolic-ref HEAD refs/heads/x', 'git-shared-ref'),
-                           ('git -C "$M" branch -m main old', 'unplaced'),
+                           ('git -C "$M" branch -m main old', 'git-shared-ref'),
+                           ('git -C "$M" branch -c main old', 'unplaced'),
                            ('GIT_DIR="%s/.git" git tag v9' % self.main, 'write-jail')):
             with self.subTest(text):
                 self.jailed(self.git(text), rule)
@@ -1077,14 +1079,16 @@ class UnplacedGit(MainGit):
 
     def test_a_worker_may_not_repoint_main_through_git_dir(self):
         m = self.main
-        # a symbolic-ref write is git-shared-ref's: it moves a ref every worktree shares
+        # a symbolic-ref write and a rename are git-shared-ref's: they move a ref every worktree shares
         for text, rule in (('git --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % m, 'git-shared-ref'),
-                           ('git --git-dir="%s/.git" branch -m main old' % m, 'write-jail'),
+                           ('git --git-dir="%s/.git" branch -m main old' % m, 'git-shared-ref'),
+                           ('GIT_DIR="%s/.git" git branch -m main old' % m, 'git-shared-ref'),
+                           ('git --git-dir="%s/.git" branch -c main old' % m, 'write-jail'),
                            ('GIT_DIR="%s/.git" git symbolic-ref HEAD refs/heads/x' % m, 'git-shared-ref'),
-                           ('GIT_DIR="%s/.git" git branch -m main old' % m, 'write-jail')):
+                           ('GIT_DIR="%s/.git" git branch -c main old' % m, 'write-jail')):
             with self.subTest(text):
                 self.jailed(self.git(text, 'worker'), rule)
-        self.jailed(self.git('$env:GIT_DIR = "%s/.git"; git branch -m main old' % m, 'worker', tool='PowerShell'))
+        self.jailed(self.git('$env:GIT_DIR = "%s/.git"; git branch -c main old' % m, 'worker', tool='PowerShell'))
 
     def test_a_worker_writes_no_checkout_it_cannot_place(self):
         m = self.main
@@ -1110,7 +1114,7 @@ class UnplacedGit(MainGit):
                      'git -C "%s" --git-dir="%s/.git" symbolic-ref HEAD refs/heads/x' % (wt, m)):
             with self.subTest(text):
                 self.jailed(self.git(text, 'worker'), 'git-shared-ref')     # it moves a shared ref
-        for text in ('GIT_DIR="%s/.git" git -C "%s" branch -m main old' % (m, wt),
+        for text in ('GIT_DIR="%s/.git" git -C "%s" branch -c main old' % (m, wt),
                      'git -c core.worktree="%s" -C "%s" add a.py' % (m, wt),
                      'git --work-tree="%s" -C "%s" add a.py' % (m, wt)):
             with self.subTest(text):
@@ -1118,7 +1122,7 @@ class UnplacedGit(MainGit):
         self.worker_denied(['git --git-dir="%s/.git" -C "%s" commit -m x' % (m, wt),
                             'git --git-dir="%s/.git" -C "%s" merge kit/x' % (m, wt),
                             'git --git-dir="%s/.git" -C "%s" rebase main' % (m, wt)], 'git-main-history')
-        self.worker_denied(['$env:GIT_DIR = "%s/.git"; git -C "%s" branch -m main old' % (m, wt)], tool='PowerShell')
+        self.worker_denied(['$env:GIT_DIR = "%s/.git"; git -C "%s" branch -c main old' % (m, wt)], tool='PowerShell')
         for text in ('git --git-dir="%s/.git" -C "%s" log --oneline -3' % (m, wt),
                      'GIT_DIR="%s/.git" git -C "%s" status' % (m, wt)):
             with self.subTest(text):
@@ -1139,11 +1143,13 @@ class UnplacedGit(MainGit):
     def test_an_unplaceable_git_reads_only_what_is_plainly_a_read(self):
         m = self.main
         for text in ('git --git-dir="%s/.git" branch --unset-up' % m, 'git --git-dir="%s/.git" branch --set-up=o/x' % m,
-                     'git --git-dir="%s/.git" tag --del v1' % m, 'git --git-dir="%s/.git" config --unset x.y' % m,
+                     'git --git-dir="%s/.git" tag v9' % m, 'git --git-dir="%s/.git" config --unset x.y' % m,
                      'git --git-dir="%s/.git" log --output=x.txt' % m, 'git --git-dir="%s/.git" show --output x.txt' % m,
                      'git --git-dir="%s/.git" diff --outp=x.txt' % m, 'git --git-dir="%s/.git" log "$R"' % m):
             with self.subTest(text):
                 self.jailed(self.git(text, 'worker'))
+        # a tag delete moves a ref every worktree shares: git-shared-ref refuses it before the jail
+        self.jailed(self.git('git --git-dir="%s/.git" tag --del v1' % m, 'worker'), 'git-shared-ref')
         for text in ('git --git-dir="%s/.git" branch --list' % m, 'git --git-dir="%s/.git" branch -a' % m,
                      'git --git-dir="%s/.git" tag -l' % m, 'git --git-dir="%s/.git" config --get user.name' % m,
                      'git --git-dir="%s/.git" log --oneline -3' % m):
@@ -1152,7 +1158,7 @@ class UnplacedGit(MainGit):
 
     def test_every_spelling_of_a_git_environment_assignment_is_unplaceable(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.worker_denied(['$env:GIT_DIR="%s/.git"; %s' % (m, g), '$Env:Git_Dir="%s/.git"; %s' % (m, g),
                             '${env:GIT_DIR} = "%s/.git"; %s' % (m, g), '${env:GIT_DIR}="%s/.git"; %s' % (m, g),
                             '${env:GIT_DIR} += "x"; %s' % g,
@@ -1173,7 +1179,7 @@ class UnplacedGit(MainGit):
 
     def test_git_environment_set_anywhere_in_the_line_leaves_all_its_git_unplaceable(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.worker_denied(['eval "export GIT_DIR=%s/.git"; %s' % (m, g),
                             '. /dev/stdin <<< "export GIT_DIR=%s/.git"; %s' % (m, g),
                             'source /dev/stdin <<EOF\nexport GIT_DIR=%s/.git\nEOF\n%s' % (m, g),
@@ -1188,7 +1194,7 @@ class UnplacedGit(MainGit):
         # bash's set takes options and positional parameters, never a variable: set -- GIT_DIR and
         # set GIT_DIR=x set $1 (commands.exporter_names); cmd's set NAME=value is the setter
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written(['set -- GIT_DIR; %s' % g, 'set -- GIT_DIR "%s/.git"; %s' % (m, g),
                                 'set GIT_DIR="%s/.git"; %s' % (m, g), 'set -e -- GIT_WORK_TREE; %s' % g])
         self.worker_denied(['cmd /c "set GIT_DIR=%s/.git && %s"' % (m, g)], tool='PowerShell')
@@ -1197,7 +1203,7 @@ class UnplacedGit(MainGit):
         # declare, typeset and local -p list the variables named (any other attribute is then
         # ignored): no value is set
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written(['declare -p GIT_DIR; %s' % g, 'typeset -p GIT_DIR GIT_WORK_TREE; %s' % g,
                                 'declare -xp GIT_DIR; %s' % g, 'export -p; %s' % g, 'readonly -p; %s' % g])
         # without -p the name is set or exported: the line's git stays unplaceable
@@ -1220,7 +1226,7 @@ class UnplacedGit(MainGit):
         self.assertNotIn('`git -C "%s" add a.py`' % wt, d.reason)
         for text in ('git -C "%s" add a.py && GIT_INDEX_FILE=/tmp/idx git -C "%s" log -3' % (wt, wt),
                      'env GIT_INDEX_FILE=/tmp/idx git -C "%s" log -3; git -C "%s" add a.py' % (wt, wt),
-                     'GIT_INDEX_FILE=/tmp/idx git -C "%s" log -3; git -C "%s" branch -m main old' % (wt, wt)):
+                     'GIT_INDEX_FILE=/tmp/idx git -C "%s" log -3; git -C "%s" branch -c main old' % (wt, wt)):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker'))
                 self.allowed(self.marked(text, COORDINATOR))
@@ -1239,13 +1245,13 @@ class UnplacedGit(MainGit):
                 with self.subTest(text, cwd=cwd):
                     self.allowed(decide(event('PowerShell', {'command': text, 'description': 'test'}, cwd, True,
                                               'worker'), self.w.ctx(environ={})))
-        self.judged_as_written(['Remove-Item Env:GIT_DIR; git -C "%s" branch -m main old' % wt], tool='PowerShell')
+        self.judged_as_written(['Remove-Item Env:GIT_DIR; git -C "%s" branch -c main old' % wt], tool='PowerShell')
 
     def test_ps_double_quoted_text_not_scanned(self):
         # a string is text: SetEnvironmentVariable(...) written inside one (a commit message, a
         # Write-Host line) sets nothing, so the line's git is placed as written
         wt = W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written([
             'git -C "%s" commit --dry-run -m "SetEnvironmentVariable(\'GIT_DIR\', 1)"' % wt,
             "git -C \"%s\" commit --dry-run -m 'SetEnvironmentVariable(\"GIT_DIR\", 1)'" % wt,
@@ -1266,14 +1272,14 @@ class UnplacedGit(MainGit):
 
     def test_a_plus_equals_assignment_is_not_the_program(self):
         m = self.main
-        self.worker_denied(['X+=1 git -C "%s" branch -m main old' % m, 'env X+=1 git -C "%s" branch -m main old' % m])
+        self.worker_denied(['X+=1 git -C "%s" branch -c main old' % m, 'env X+=1 git -C "%s" branch -c main old' % m])
         self.worker_denied(['X+=1 git -C "%s" commit -m x' % m], 'git-main-history')
         self.worker_denied(['X+=1 taskkill /IM node.exe', 'A=1 X+=1 pkill node'], 'kill-by-name')
 
     def test_a_backslash_in_the_variable_name_hides_nothing(self):
         # bash drops the backslash: export and env are handed GIT_DIR=...
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.worker_denied(['export GIT_D\\IR="%s/.git"; %s' % (m, g), 'declare -x GIT_D\\IR="%s/.git"; %s' % (m, g),
                             'export GIT_DIR\\="%s/.git"; %s' % (m, g), 'export GIT\\_DIR="%s/.git"; %s' % (m, g),
                             'export GIT_D\\IR; %s' % g,
@@ -1283,7 +1289,7 @@ class UnplacedGit(MainGit):
         # set -a with read, printf -v or for sets GIT_DIR by no NAME=value the text shows: the
         # guard does not read it (honest mistakes only), and the git is judged where -C places it
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written(['set -a; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
                                 'set -a; printf -v GIT_DIR "%%s" "%s/.git"; %s' % (m, g),
                                 'set -a; for GIT_DIR in "%s/.git"; do %s; done' % (m, g),
@@ -1295,7 +1301,7 @@ class UnplacedGit(MainGit):
         # the name may be GIT_DIR, but the guard reads only a name the text spells (honest mistakes only): the
         # git is judged where -C places it, for a worker and the coordinator's mark alike
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written(['V=GIT_DIR; export $V="%s/.git"; %s' % (m, g),
                                 'V=GIT_DIR; declare -x "$V=%s/.git"; %s' % (m, g),
                                 'V=GIT_DIR; export "$V"; %s' % g,
@@ -1345,7 +1351,7 @@ class UnplacedGit(MainGit):
 
     def test_bash_env_changers_the_guard_does_not_read_pass(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written([
             'export \\GIT_DIR="%s/.git"; %s' % (m, g),
             'env \\GIT_DIR="%s/.git" %s' % (m, g),
@@ -1368,7 +1374,7 @@ class UnplacedGit(MainGit):
 
     def test_powershell_env_changers_the_guard_does_not_read_pass(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written([
             "$p='env:GIT_DIR'; Set-Item -Path $p '%s/.git'; %s" % (m, g),
             "Set-Item \"${e}:GIT_DIR\" '%s/.git'; %s" % (m, g),
@@ -1382,12 +1388,12 @@ class UnplacedGit(MainGit):
     def test_a_git_variable_assigned_by_name_in_powershell_is_read(self):
         # one target among several, and a chained assignment, are still a git variable set by name
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.held_everywhere(["$env:A, $env:GIT_DIR = 1, '%s/.git'; %s" % (m, g),
                               "$a = $env:GIT_DIR = '%s/.git'; %s" % (m, g)], tool='PowerShell')
 
     def test_an_env_read_in_a_path_is_not_an_env_write(self):
-        g = 'git -C "%s" branch -m main old' % W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -c main old' % W.fwd(self.w.wt)
         # (a $env:TEMP write target is refused as not literal: test_ps_drive_paths DynamicTargets)
         for text in ('Get-Content "$env:TEMP\\x.txt"', 'Test-Path "$env:TEMP\\x"',
                      'Get-ChildItem $env:TEMP', 'Set-Item env:PATH "$env:PATH;C:\\tools"',
@@ -1401,16 +1407,16 @@ class UnplacedGit(MainGit):
         wt = W.fwd(self.w.wt)
         for text in ('set -a; . ./.env; set +a', 'export $(cat .env | xargs)', 'for v in A B; do export $v=1; done',
                      'export $(cat .env | xargs); git -C "%s" status' % wt,
-                     'GIT_AUTHOR_DATE=x git -C "%s" branch -m main old' % wt,
-                     'export FOO=1 PATH="$PATH:/x"; git -C "%s" branch -m main old' % wt):
+                     'GIT_AUTHOR_DATE=x git -C "%s" branch -c main old' % wt,
+                     'export FOO=1 PATH="$PATH:/x"; git -C "%s" branch -c main old' % wt):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker'))
-        self.allowed(self.git('cmd /c "set FOO=1 & git -C "%s" branch -m main old"' % wt, 'worker', tool='PowerShell'))
+        self.allowed(self.git('cmd /c "set FOO=1 & git -C "%s" branch -c main old"' % wt, 'worker', tool='PowerShell'))
 
     def test_the_hint_names_what_leaves_git_unplaceable(self):
         m, wt = self.main, W.fwd(self.w.wt)
         for text, cause, instead in (
-                ('GIT_DIR="%s/.git" git branch -m main old' % m, 'GIT_DIR', 'git -C "%s" branch -m main old' % wt),
+                ('GIT_DIR="%s/.git" git branch -c main old' % m, 'GIT_DIR', 'git -C "%s" branch -c main old' % wt),
                 ('git --git-dir="%s/.git" tag v9' % m, '--git-dir', 'git -C "%s" tag v9' % wt),
                 ('git --work-tree="%s" add a.py' % m, '--work-tree', 'git -C "%s" add a.py' % wt),
                 ('git -c core.worktree="%s" add a.py' % m, 'core.worktree', 'git -C "%s" add a.py' % wt),
@@ -1442,9 +1448,9 @@ class UnplacedGit(MainGit):
 
     def test_a_later_dash_c_never_places_a_config_from_the_environment_or_a_computed_one(self):
         wt = W.fwd(self.w.wt)
-        self.worker_denied(['git --config-env=core.worktree=V -C "%s" branch -m main old' % wt,
+        self.worker_denied(['git --config-env=core.worktree=V -C "%s" branch -c main old' % wt,
                             'git --config-env core.worktree=V -C "%s" add a.py' % wt,
-                            'git -c "$x" -C "%s" branch -m main old' % wt, 'git -c"$x" -C "%s" add a.py' % wt])
+                            'git -c "$x" -C "%s" branch -c main old' % wt, 'git -c"$x" -C "%s" add a.py' % wt])
 
     def test_the_strict_listing_forms_still_read(self):
         m = self.main
@@ -1471,7 +1477,7 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
         # and a write through it is still refused
-        for text in ('git --git-dir="$D" tag v9', 'git --git-dir="$D" branch -m main old'):
+        for text in ('git --git-dir="$D" tag v9', 'git --git-dir="$D" branch -c main old'):
             with self.subTest(text):
                 self.jailed(self.git(text, 'worker'))
 
@@ -1491,7 +1497,7 @@ class UnplacedGit(MainGit):
 
     def test_a_jailed_mark_gets_no_git_on_a_line_the_guard_cannot_read(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         cases = [('Bash', 'eval "$c"; %s' % g),
                  ('Bash', "V='GIT_DIR=%s/.git'; env $V %s" % (m, g)),
                  ('Bash', 'bash -c "$x"; %s' % g),
@@ -1518,7 +1524,7 @@ class UnplacedGit(MainGit):
 
     def test_a_trap_or_mapfile_callback_that_sets_a_git_variable_leaves_git_unplaceable(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.held_everywhere(["trap 'export GIT_DIR=%s/.git' DEBUG; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' ERR; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' RETURN; %s" % (m, g),
@@ -1535,9 +1541,9 @@ class UnplacedGit(MainGit):
 
     def test_xargs_that_fills_in_git_words_leaves_git_unplaceable(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         # with no subcommand, the input may hold --git-dir before it
-        self.held_everywhere(['echo branch -m main old | xargs git -C "%s"' % wt])
+        self.held_everywhere(['echo branch -c main old | xargs git -C "%s"' % wt])
         # an environment xargs fills in for env is not read (honest mistakes only)
         self.judged_as_written(['echo GIT_DIR=%s/.git | xargs -I{} env {} %s' % (m, g),
                                 'echo GIT_DIR=x | xargs -I {} env {} %s' % g,
@@ -1546,7 +1552,7 @@ class UnplacedGit(MainGit):
                                 'echo x | xargs --replace=Q env Q %s' % g,
                                 'echo x | xargs --rep env {} %s' % g])
         # the input in a branch option reads as a computed word, so the line is unclean: refused
-        text = 'echo old | xargs -I{} git -C "%s" branch -m main {}' % wt
+        text = 'echo old | xargs -I{} git -C "%s" branch -c main {}' % wt
         self.assertFalse(cm.read(text, sh.BASH, wt).clean, text)
         self.denied(self.git(text, 'worker'))
         self.denied(self.marked(text, COORDINATOR))
@@ -1558,7 +1564,7 @@ class UnplacedGit(MainGit):
 
     def test_powershell_splats_script_text_and_renamed_env_items(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         # a git place variable set by name, = at the start of the value's word, is read
         self.held_everywhere(['$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
         # a splat, script text and a variable outside the git place names are not read (honest mistakes only)
@@ -1592,7 +1598,7 @@ class UnplacedGit(MainGit):
         # line that appends one to a plain variable leaves its git placed (observed with
         # PowerShell 5.1: "$t::GetEnvironmentVariable('OS')" prints the call as text)
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         loop = ('foreach ($b in $branches) { foreach ($f in $files) { if (git merge-base --is-ancestor $b '
                 'origin/master) { $hits += "$b :: $f" } } }')
         texts = [loop, '$hits += "$b :: $f"; %s' % g, '$hits += "$t::SetItem($b)"; %s' % g,
@@ -1663,7 +1669,7 @@ class UnplacedGit(MainGit):
 
     def test_text_piped_into_set_content_or_add_content_is_its_value(self):
         wt = W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         for text in ("'text' | Set-Content notes.md; %s" % g, "'text' | Add-Content -Path notes.md; %s" % g,
                      "'text' | Set-Content notes.md; git -C \"%s\" add notes.md" % wt):
             with self.subTest(text):
@@ -1678,7 +1684,7 @@ class UnplacedGit(MainGit):
         a computed name, a module, an output variable, a process environment or a batch file is not
         read (honest mistakes only); a literal setx of a git place name still is."""
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written(['alias git="git --git-dir=%s/.git"; %s' % (m, g),
                                 'export BASH_ENV=./x.sh; bash -c \'%s\'' % g,
                                 'BASH_ENV=./x.sh %s' % g,
@@ -1692,7 +1698,7 @@ class UnplacedGit(MainGit):
                                 'Get-Item x -OutVariable env:GIT_DIR; %s' % g,
                                 'Get-Item x -ov:env:GIT_DIR; %s' % g,
                                 "Start-Process git -Environment @{GIT_DIR='%s/.git'} "
-                                "-ArgumentList '-C','%s','branch','-m','main','old'" % (m, wt),
+                                "-ArgumentList '-C','%s','branch','-c','main','old'" % (m, wt),
                                 'cmd /c "call x.bat & %s"' % g,
                                 'cmd /c "x.bat & %s"' % g], tool='PowerShell')
         self.held_everywhere(['cmd /c "setx GIT_DIR x & %s"' % g], tool='PowerShell')
@@ -1713,7 +1719,7 @@ class UnplacedGit(MainGit):
         self.denied_for_every_jailed_role([
             "printf '%%s\\n' --git-dir=%s/.git | xargs -I{} sh -c 'git {} symbolic-ref HEAD refs/heads/x'" % m,
             "printf '%%s\\n' --git-dir=%s/.git | xargs -I{} env -S 'git {} symbolic-ref HEAD refs/heads/x'" % m,
-            "printf '%%s\\n' --git-dir=%s/.git | xargs -I{} bash -c 'git {} branch -m main old'" % m,
+            "printf '%%s\\n' --git-dir=%s/.git | xargs -I{} bash -c 'git {} branch -c main old'" % m,
             'echo git | xargs -I{} {} -C %s symbolic-ref HEAD refs/heads/x' % m,
             'echo git | xargs -IQ Q -C %s symbolic-ref HEAD refs/heads/x' % m])
         for text in ('ls | xargs -I{} wc -l {}', 'echo x | xargs -I{} git -C "%s" status' % wt):
@@ -1724,7 +1730,7 @@ class UnplacedGit(MainGit):
     def test_a_trap_on_any_signal_but_exit_leaves_git_unplaceable(self):
         # a handler on a signal the line may raise (kill, a child ending) runs before the git
         m, wt = self.main, W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.held_everywhere(["trap 'export GIT_DIR=%s/.git' USR1; kill -USR1 $$; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' CHLD; sleep 0 & %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' SIGINT; %s" % (m, g),
@@ -1745,17 +1751,17 @@ class UnplacedGit(MainGit):
             "trap 'git symbolic-ref HEAD refs/heads/x' EXIT; cd %s" % m,
             "mapfile -C 'git -C %s symbolic-ref HEAD refs/heads/x #' -c 1 a < f" % m])
         # a handler the text does not spell is text the guard cannot read, as eval "$c" is
-        for text in ('trap "$h" EXIT; git status', 'trap -- "$h" DEBUG; git -C "%s" branch -m main old' % wt):
+        for text in ('trap "$h" EXIT; git status', 'trap -- "$h" DEBUG; git -C "%s" branch -c main old' % wt):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.BASH, wt).clean, text)
         self.denied_for_every_jailed_role(['trap "$h" EXIT; git status',
-                                           'trap -- "$h" DEBUG; git -C "%s" branch -m main old' % wt])
+                                           'trap -- "$h" DEBUG; git -C "%s" branch -c main old' % wt])
 
     def test_powershell_script_text_in_every_spelling_is_not_read(self):
         # script text the line builds may set anything; the guard reads only what the text
         # spells (honest mistakes only), so the git is judged where -C places it
         wt = W.fwd(self.w.wt)
-        g = 'git -C "%s" branch -m main old' % wt
+        g = 'git -C "%s" branch -c main old' % wt
         self.judged_as_written([
             "[Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
             "[ScriptBlock]::Create($s).Invoke(); %s" % g,
@@ -1775,7 +1781,7 @@ class UnplacedGit(MainGit):
                 self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
         # a string that runs a subexpression is code, but script text it builds is not read either
         # (honest mistakes only): the git after it is judged where -C places it
-        text = 'git -C "%s" commit --dry-run -m "$([scriptblock]::Create($s).Invoke())"; git -C "%s" branch -m main old' % (wt, wt)
+        text = 'git -C "%s" commit --dry-run -m "$([scriptblock]::Create($s).Invoke())"; git -C "%s" branch -c main old' % (wt, wt)
         self.judged_as_written([text], tool='PowerShell')
 
     def test_find_execdir_and_a_filled_in_exec_word_leave_git_unplaceable(self):
@@ -1783,9 +1789,9 @@ class UnplacedGit(MainGit):
         m, wt = self.main, W.fwd(self.w.wt)
         self.denied_for_every_jailed_role([
             "find %s -maxdepth 1 -name README.md -execdir git symbolic-ref HEAD refs/heads/x ';'" % m,
-            "find %s -maxdepth 1 -name README.md -okdir git branch -m main old ';'" % m,
+            "find %s -maxdepth 1 -name README.md -okdir git branch -c main old ';'" % m,
             "find %s -maxdepth 0 -exec git -C {} symbolic-ref HEAD refs/heads/x ';'" % m,
-            "find %s -maxdepth 0 -exec git --git-dir={}/.git branch -m main old ';'" % m,
+            "find %s -maxdepth 0 -exec git --git-dir={}/.git branch -c main old ';'" % m,
             "find %s -maxdepth 1 -name git -exec {} -C %s symbolic-ref HEAD refs/heads/x ';'" % (m, m)])
         for text in ("find . -name '*.py' -exec wc -l {} +", "find . -name '*.py' -execdir wc -l {} +",
                      'find "%s" -maxdepth 0 -exec git -C "%s" status \';\'' % (wt, wt)):

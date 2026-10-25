@@ -21,9 +21,12 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     The location-dependent git patterns are checked when the call's directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
     the owner's own. The git-shared-ref patterns (SHARED_REF_PATTERNS: update-ref, a push into a
-    repository named by a path, a fetch or pull that may write a ref, symbolic-ref with two names
-    or -d, replace other than a listing, a notes write) are checked wherever the call runs, in a
-    session rules.shared_ref_held holds. The push-to-main pattern in a repository that does not set
+    repository named by a path or one the shell computes, a fetch or pull that may write a ref
+    (its option abbreviations included), symbolic-ref with two names or -d, replace other than a
+    listing, a notes write, branch -f/-m/-M/-C, tag -f/-d, checkout -B, switch -C,
+    --ignore-other-worktrees, worktree add -B/-f, rebase --update-refs or rebase.updateRefs, remote
+    remove/rm/rename/set-head and add --mirror, fast-import and filter-branch) are checked
+    wherever the call runs, in a session rules.shared_ref_held holds. The push-to-main pattern in a repository that does not set
     repo.push_block (one with no .kit.json among them) gives only the re-read's own deny (a delete
     or a forced push of main); no deny lets the line run.
   - a heavy program's name: the same, and a program named by a variable is denied as heavy with
@@ -89,10 +92,33 @@ SHARED_REF_PATTERNS = (
     G + r'update-ref\b',
     # a push whose repository may be this one: `.`, a file: URL, a path, --repo
     G + r'push\b' + REST + r'?\s(?:--repo\b|["\']?(?:\.(?=["\']?(?:\s|$|[|;&\n]))|\.\.?[\\/]|file:|[A-Za-z]:[\\/]|/))',
+    # ... or one the shell computes, or under the home folder: the first word after the options
+    G + r'push\s+(?:-\S+\s+)*["\']?[$`~]',
     # a fetch or pull with a refspec (a `:` not of a URL), or an option that writes refs of its own
-    G + r'(?:fetch|pull)\b' + REST + r'(?::(?!//)|\s--(?:prune-t|tags\b|update-head|stdin\b)|\s-[a-zA-Z0-9]*[Ptu])',
-    # git -c remote.<name>.fetch=... or fetch.pruneTags (config keys ignore case)
-    r'\bgit(?:\.exe)?\s' + REST + r'(?i:\bremote\.\S+\.fetch|\bfetch\.prunetags)\s*=',
+    # (--tags, --stdin, --prune-tags, --update-head-ok, or an abbreviation of one git takes)
+    G + r'(?:fetch|pull)\b' + REST + r'(?::(?!//)|\s--(?:prune-t|t(?:a(?:gs?)?)?\b|update-h|st(?:d(?:in?)?)?\b)'
+        r'|\s-[a-zA-Z0-9]*[Ptu])',
+    # a forced fetch or pull of `tag <name>`: -f in a cluster, or --force down to --fo (--f is
+    # ambiguous to git: --filter, and pull's --ff)
+    G + r'(?:fetch|pull)\b(?=' + REST + r'\stag\s)' + REST + r'\s(?:-[a-zA-Z0-9]*f|--fo(?:r(?:ce?)?)?(?![^\s|;&]))',
+    # git -c remote.<name>.fetch=... or a pruneTags (config keys ignore case), rebase.updateRefs.
+    # The key starts a word (or follows -c): a start inside one, as at each `remote.` of
+    # remote.remote.remote..., would scan the rest of the word again from each
+    r'\bgit(?:\.exe)?\s' + REST + r'(?i:(?:(?<![\w.-])|(?<=-c))remote\.[^\s=]*\.(?:fetch|prunetags)|\bfetch\.prunetags)\s*=',
+    r'\bgit(?:\.exe)?\s' + REST + r'(?i:\brebase\.updaterefs)\b',
+    # branch -f, -m, -M, -C (in a cluster too), --force, --move; tag -f, -d, --force, --delete
+    G + r'branch\b' + REST + r'\s(?:-[a-zA-Z]*[fmMC]|--forc|--mo)',
+    G + r'tag\b' + REST + r'\s(?:-[a-zA-Z]*[fd]|--forc|--d)',
+    # checkout -B, switch -C or --force-create, --ignore-other-worktrees; worktree add -B or -f
+    G + r'checkout\b' + REST + r'\s(?:-[a-zA-Z0-9]*B|--ignore-o)',
+    G + r'switch\b' + REST + r'\s(?:-[a-zA-Z]*C|--force-|--i)',
+    G + r'worktree\s+add\b' + REST + r'\s(?:-[a-zA-Z]*[Bf]|--f)',
+    # rebase --update-refs (any abbreviation: no other rebase option starts with u)
+    G + r'rebase\b' + REST + r'\s--u',
+    # remote remove, rm, rename, set-head, add --mirror
+    G + r'remote\s+(?:-\S+\s+)*(?:remove|rm|rename|set-head)\b',
+    G + r'remote\s+(?:-\S+\s+)*add\b' + REST + r'\s--mi',
+    G + r'(?:fast-import|filter-branch)\b',
     # symbolic-ref -d (in a cluster too, -dq), or with two names (a write); one name alone reads. An
     # option word is -m and its value or another option, never both (`-mx` either way would
     # backtrack exponentially on a line of them)
