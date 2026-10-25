@@ -693,21 +693,21 @@ class SiteViews(object):
         self._backlog.reread(name, root)
         return dict(out, record=self._record(name, id))
 
-    def _record_edit(self, repo, id, version, changes, unset, body, ruling):
+    def _record_edit(self, repo, id, version, changes, unset, body):
         name, root = self._record_root(repo, id)
-        out = recordwrite.edit(root, id, version, changes, unset, body, ruling)
+        out = recordwrite.edit(root, id, version, changes, unset, body)
         self._backlog.reread(name, root)
         return dict(out, record=self._record(name, id))
 
-    def _record_delete(self, repo, id, why, ruling):
+    def _record_delete(self, repo, id, why):
         name, root = self._record_root(repo, id)
-        out = recordwrite.delete(root, id, why, ruling)
+        out = recordwrite.delete(root, id, why)
         self._backlog.reread(name, root)
         return out
 
-    def _record_unblock(self, repo, id, on, reason, ruling):
+    def _record_unblock(self, repo, id, on, reason):
         name, root = self._record_root(repo, id)
-        out = recordwrite.unblock(root, id, on, reason, ruling)
+        out = recordwrite.unblock(root, id, on, reason)
         self._backlog.reread(name, root)
         return dict(out, record=self._record(name, id))
 

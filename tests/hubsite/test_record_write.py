@@ -121,11 +121,19 @@ class Edit(Case):
                                                   [('pulled_by', ['kit/x'])]), 'invalid')
         self.assertIn('`pulled_by` is written only by', e.message)
 
-    def test_the_owner_prices_and_reprices_and_a_ruling_given_is_never_written(self):
+    def test_the_owner_prices_and_reprices_with_no_ruling_and_the_writes_take_none(self):
         # an OWNER route: the store's set-price-owner row is the owner's and the role check ran
-        # (role_checked), so no ruling is asked for; `ruling` is accepted and ignored
-        recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
-                         [('priority', ['2']), ('priority_by', ['owner'])], ruling=FIRST)
+        # (role_checked), so no ruling is asked for, and none of the writes takes one
+        version = self.read('FOO')['version']
+        for write in (lambda: recordwrite.edit(self.repo.root, 'FOO', version,
+                                               [('priority', ['2'])], ruling=FIRST),
+                      lambda: recordwrite.delete(self.repo.root, 'FOO', 'why', ruling=FIRST),
+                      lambda: recordwrite.unblock(self.repo.root, 'FOO', ruling=FIRST)):
+            with self.assertRaises(TypeError):
+                write()
+        self.assertEqual(self.field('FOO', 'priority'), ['-'])
+        recordwrite.edit(self.repo.root, 'FOO', version,
+                         [('priority', ['2']), ('priority_by', ['owner'])])
         self.assertEqual(self.field('FOO', 'priority_by'), ['owner'])
         self.assertEqual(self.field('FOO', 'priority_ruling'), [])
         recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],

@@ -1425,21 +1425,14 @@ ul.hist .sch-line{display:block}
   const REC_ACT = {fields: "Fields", body: "Body", retire: "Delete"};
   let recOpeners = {};
   function showRecord(d){ recView = recPage(recordView(d)); render(); }
-  // The ruling id, asked for only when the store's refusal names one (the PM's default; the one place to switch it).
-  function rulingField(){
-    const n = el("input", {type:"text", placeholder:"Ruling id", "aria-label":"Ruling id", hidden:true});
-    n.ask = e => { if (/ruling/.test(why(e))) n.hidden = false; };
-    n.put = b => { if (!n.hidden && n.value.trim()) b.ruling = n.value.trim(); return b; };
-    return n;
-  }
   // One section: what it shows, and an Edit that opens its text; post turns the text into the edit's body
   // (null: nothing changed). Every save is pinned to the version the page read.
   function recSection(d, title, shown, text, post){
     const box = el("div", {class:"pk"}, el("h2", {text: title}), el("div", {}, ...shown));
     if (!post || d.where !== "open") return box;
-    const ta = el("textarea", {"aria-label": title}), ruling = rulingField(), status = el("span", {class:"status", role:"status"});
+    const ta = el("textarea", {"aria-label": title}), status = el("span", {class:"status", role:"status"});
     const save = el("button", {class:"primary", type:"button", text:"Save"}), cancel = el("button", {class:"link", type:"button", text:"Cancel"});
-    const pane = el("div", {class:"pmf", hidden:true}, ta, ruling, el("div", {class:"act"}, save, cancel, status));
+    const pane = el("div", {class:"pmf", hidden:true}, ta, el("div", {class:"act"}, save, cancel, status));
     const open = el("button", {class:"link", type:"button", text:"Edit " + title.toLowerCase()});
     const show = () => { ta.value = text; pane.hidden = false; open.hidden = true; recSay(status, "status", ""); };
     open.addEventListener("click", show); recOpeners[title] = show;
@@ -1449,8 +1442,8 @@ ul.hist .sch-line{display:block}
       try { body = post(ta.value); } catch (e) { recSay(status, "status err", why(e)); return; }
       if (!body) { recSay(status, "status", "Nothing changed."); return; }
       save.disabled = true; recSay(status, "status", "Saving…");
-      try { const out = await write("/records/" + seg(d.repo) + "/" + seg(d.id) + "/edit", ruling.put(Object.assign({version: d.version}, body))); showRecord(out.record); }
-      catch (e) { recSay(status, "status err", "Not saved: " + why(e)); ruling.ask(e); save.disabled = false; }
+      try { const out = await write("/records/" + seg(d.repo) + "/" + seg(d.id) + "/edit", Object.assign({version: d.version}, body)); showRecord(out.record); }
+      catch (e) { recSay(status, "status err", "Not saved: " + why(e)); save.disabled = false; }
     });
     box.append(open, pane);
     return box;
@@ -1493,18 +1486,18 @@ ul.hist .sch-line{display:block}
   function deletePanel(d){
     const reason = el("input", {type:"text", placeholder:"Why delete it", "aria-label":"Why delete it"});
     const typed = el("input", {type:"text", placeholder:"Type " + d.id + " to confirm", "aria-label":"Type the id to confirm"});
-    const ruling = rulingField(), status = el("span", {class:"status", role:"status"});
+    const status = el("span", {class:"status", role:"status"});
     const go = el("button", {class:"danger", type:"button", text:"Delete " + d.id, disabled:true});
     const check = () => { go.disabled = !(reason.value.trim() && typed.value.trim() === d.id); };
     reason.addEventListener("input", check); typed.addEventListener("input", check);
-    const pane = el("div", {class:"pmf", hidden:true}, reason, typed, ruling, el("div", {class:"act"}, go, status));
+    const pane = el("div", {class:"pmf", hidden:true}, reason, typed, el("div", {class:"act"}, go, status));
     const show = () => { pane.hidden = false; open.hidden = true; };
     const open = el("button", {class:"link", type:"button", text:"Delete…", onclick: show});
     recOpeners.Delete = show;
     go.addEventListener("click", async () => {
       go.disabled = true; recSay(status, "status", "Deleting…");
-      try { await write("/records/" + seg(d.repo) + "/" + seg(d.id) + "/delete", ruling.put({why: reason.value.trim(), confirm: typed.value.trim()})); loadRecord(); }
-      catch (e) { recSay(status, "status err", "Not deleted: " + why(e)); ruling.ask(e); check(); }
+      try { await write("/records/" + seg(d.repo) + "/" + seg(d.id) + "/delete", {why: reason.value.trim(), confirm: typed.value.trim()}); loadRecord(); }
+      catch (e) { recSay(status, "status err", "Not deleted: " + why(e)); check(); }
     });
     return el("div", {class:"pk"}, el("h2", {text:"Delete"}), open, pane);
   }
@@ -2016,7 +2009,7 @@ ul.hist .sch-line{display:block}
   function goRecord(repo, id){ state.section = "backlog"; state.sfilter = "current"; state.repo = ""; $("#repo").value = ""; openRecord(canonRepo(repo) || String(repo || ""), id); }
   // One record check's action, run in the finding's detail pane against the owner routes the record page uses: the record is
   // read for its fields and version; an edit is pinned to that version, and Unblock and Retire (whose routes take none)
-  // read the record again first and refuse when its version moved. The ruling id appears only when the store asks for one.
+  // read the record again first and refuse when its version moved.
   function findingAct(d, id, f){
     const act = FINDING_ACTS[d.check], repo = canonRepo(d.repo) || String(d.repo || "");
     const path = "/records/" + seg(repo) + "/" + seg(id);
@@ -2028,7 +2021,6 @@ ul.hist .sch-line{display:block}
       let rec;
       try { rec = await hub.call("GET", path); } catch (e) { say("status err", "Cannot read " + id + ": " + why(e)); return; }
       if (rec.where !== "open") { say("status", id + " is " + rec.where + (rec.removed ? " (" + rec.removed.how + ")" : "") + ": there is nothing to change here."); return; }
-      const ruling = rulingField(); ruling.id = box.id + "-ruling";
       const go = el("button", {class: act === "Retire" ? "danger" : "primary", type:"button", text: act === "Retire" ? "Retire " + id : "Save"});
       const touched = () => { f.edits++; };
       const same = async () => { const now = await hub.call("GET", path); if (now.version !== rec.version) throw new Error(id + " changed since it was read here (version " + rec.version + " to " + now.version + "). Close and open this again."); };
@@ -2038,13 +2030,13 @@ ul.hist .sch-line{display:block}
         const pr = el("input", {type:"text", "aria-label":"Priority", id: box.id + "-priority", oninput: touched}); pr.value = field("priority")[0] || "";
         inputs = [pr];
         send = async () => { const v = pr.value.trim(); if (!v) throw new Error("Give a priority."); if (v === (field("priority")[0] || "")) return null;
-          return write(path + "/edit", ruling.put({ version: rec.version, changes: { priority: [v] } })); };
+          return write(path + "/edit", { version: rec.version, changes: { priority: [v] } }); };
       } else if (act === "Edit scope") {
         const sc = el("textarea", {"aria-label":"Scope: one path per line", id: box.id + "-scope", oninput: touched}); sc.value = field("scope").join("\n");
         inputs = [sc];
         send = async () => { const v = sc.value.split("\n").map(s => s.trim()).filter(Boolean); if (!v.length) throw new Error("Give at least one path.");
           if (JSON.stringify(v) === JSON.stringify(field("scope"))) return null;
-          return write(path + "/edit", ruling.put({ version: rec.version, changes: { scope: v } })); };
+          return write(path + "/edit", { version: rec.version, changes: { scope: v } }); };
       } else if (act === "Unblock") {
         const members = rec.blockers.map(b => b.value);
         if (!members.length) { say("status", id + " is not blocked."); return; }
@@ -2053,19 +2045,19 @@ ul.hist .sch-line{display:block}
         if (members.includes(named)) on.value = named;
         const reason = el("input", {type:"text", placeholder:"Why it is clear", "aria-label":"Why it is clear", id: box.id + "-reason", oninput: touched});
         inputs = [members.length > 1 ? on : null, reason];
-        send = async () => { await same(); return write(path + "/unblock", ruling.put({ ...(members.length > 1 ? { on: on.value } : {}), ...(reason.value.trim() ? { reason: reason.value.trim() } : {}) })); };
+        send = async () => { await same(); return write(path + "/unblock", { ...(members.length > 1 ? { on: on.value } : {}), ...(reason.value.trim() ? { reason: reason.value.trim() } : {}) }); };
       } else {
         const why_ = el("input", {type:"text", placeholder:"Why retire it", "aria-label":"Why retire it", id: box.id + "-why", oninput: () => { touched(); check(); }});
         const typed = el("input", {type:"text", placeholder:"Type " + id + " to confirm", "aria-label":"Type the id to confirm", id: box.id + "-confirm", oninput: () => { touched(); check(); }});
         const check = () => { go.disabled = !(why_.value.trim() && typed.value.trim() === id); };
         go.disabled = true; inputs = [why_, typed];
-        send = async () => { await same(); return write(path + "/delete", ruling.put({ why: why_.value.trim(), confirm: typed.value.trim() })); };
+        send = async () => { await same(); return write(path + "/delete", { why: why_.value.trim(), confirm: typed.value.trim() }); };
       }
       go.addEventListener("click", async () => {
         if (go.disabled) return;
         go.disabled = true; say("status", "Saving…");
         let out;
-        try { out = await send(); } catch (e) { say("status err", "Not done: " + why(e)); ruling.ask(e); go.disabled = false; return; }
+        try { out = await send(); } catch (e) { say("status err", "Not done: " + why(e)); go.disabled = false; return; }
         if (out === null) { say("status", "Nothing changed."); go.disabled = false; return; }
         say("status", act + " done on " + id + ".");
         lint.said.set(d.id, { text: act + " done on " + id + ".", kept: null });
@@ -2073,7 +2065,7 @@ ul.hist .sch-line{display:block}
         lintRedraw();
       });
       st.textContent = "";
-      box.append(...inputs.filter(Boolean), ruling, el("div", {class:"act"}, go, st));
+      box.append(...inputs.filter(Boolean), el("div", {class:"act"}, go, st));
     })();
     return box;
   }

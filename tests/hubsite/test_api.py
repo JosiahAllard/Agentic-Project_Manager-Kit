@@ -2558,14 +2558,14 @@ class WriteViews(object):
     def record_add(self, repo, id, summary, scopes, effort, ref):
         return self._do('add', repo, id, summary, scopes, effort, ref)
 
-    def record_edit(self, repo, id, version, changes, unset, body, ruling):
-        return self._do('edit', repo, id, version, changes, unset, body, ruling)
+    def record_edit(self, repo, id, version, changes, unset, body):
+        return self._do('edit', repo, id, version, changes, unset, body)
 
-    def record_delete(self, repo, id, why, ruling):
-        return self._do('delete', repo, id, why, ruling)
+    def record_delete(self, repo, id, why):
+        return self._do('delete', repo, id, why)
 
-    def record_unblock(self, repo, id, on, reason, ruling):
-        return self._do('unblock', repo, id, on, reason, ruling)
+    def record_unblock(self, repo, id, on, reason):
+        return self._do('unblock', repo, id, on, reason)
 
 
 class RecordWriteRouteTest(ApiCase):
@@ -2580,18 +2580,29 @@ class RecordWriteRouteTest(ApiCase):
                          {'lines': ['DONE'], 'ok': True, 'revision': self.store.revision})
         self.ok('POST', '/records/kit/EX-1/edit', OWNER,
                 {'version': 'c:v', 'changes': {'effort': 's', 'scope': ['a', 'b']},
-                 'unset': ['ref'], 'body': 'B\n', 'ruling': 'R-1'})
+                 'unset': ['ref'], 'body': 'B\n'})
         self.ok('POST', '/records/kit/EX-1/delete', OWNER, {'why': 'w', 'confirm': 'EX-1'})
         self.ok('POST', '/records/kit/EX-1/unblock', OWNER, {})
         self.ok('POST', '/records/kit/EX-1/unblock', OWNER,
-                {'on': 'item:EX-2', 'reason': 'landed', 'ruling': 'R-2'})
+                {'on': 'item:EX-2', 'reason': 'landed'})
         self.assertEqual(self.views.calls, [
             ('add', 'kit', 'EX-2', 's', ['tools/x.py'], None, None),
             ('edit', 'kit', 'EX-1', 'c:v', [('effort', ['s']), ('scope', ['a', 'b'])], ['ref'],
-             'B\n', 'R-1'),
-            ('delete', 'kit', 'EX-1', 'w', None),
-            ('unblock', 'kit', 'EX-1', None, None, None),
-            ('unblock', 'kit', 'EX-1', 'item:EX-2', 'landed', 'R-2')])
+             'B\n'),
+            ('delete', 'kit', 'EX-1', 'w'),
+            ('unblock', 'kit', 'EX-1', None, None),
+            ('unblock', 'kit', 'EX-1', 'item:EX-2', 'landed')])
+
+    def test_a_ruling_in_the_body_is_an_unknown_field_and_never_reaches_the_view(self):
+        ruling = 'R-' + '9001'          # made up, built so no file holds a ruling id
+        for path, body in (('/records/kit/EX-1/edit', {'version': 'c:v', 'ruling': ruling}),
+                           ('/records/kit/EX-1/delete', {'why': 'w', 'confirm': 'EX-1',
+                                                         'ruling': ruling}),
+                           ('/records/kit/EX-1/unblock', {'ruling': ruling})):
+            with self.subTest(path=path):
+                obj = self.refused('invalid', 'ruling', 'POST', path, OWNER, body)
+                self.assertIn("this route takes no 'ruling' field", obj['error']['message'])
+        self.assertEqual(self.views.calls, [])
 
     def test_the_writes_are_the_owners(self):
         for method, path, body in (('POST', '/records/kit', {'id': 'A', 'summary': 's',
@@ -3970,7 +3981,7 @@ class UnblockStoreTest(trw.Case):
                 return {'repo': repo, 'id': rid}
 
         views = serve.SiteViews(None, serve.Sources(), backlog_views=Backlog())
-        out = views.record_unblock('r', 'FOO', None, None, None)
+        out = views.record_unblock('r', 'FOO', None, None)
         self.assertEqual(out['record'], {'repo': 'r', 'id': 'FOO'})
         self.assertEqual(reread, [('r', root)])
         self.assertEqual(self.field('FOO', 'state'), ['open'])

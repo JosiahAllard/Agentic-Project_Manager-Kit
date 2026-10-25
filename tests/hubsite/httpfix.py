@@ -52,13 +52,13 @@ class Views(object):
     def record_add(self, repo, id, summary, scopes, effort, ref):
         return {}
 
-    def record_edit(self, repo, id, version, changes, unset, body, ruling):
+    def record_edit(self, repo, id, version, changes, unset, body):
         return {}
 
-    def record_delete(self, repo, id, why, ruling):
+    def record_delete(self, repo, id, why):
         return {}
 
-    def record_unblock(self, repo, id, on, reason, ruling):
+    def record_unblock(self, repo, id, on, reason):
         return {}
 
     def findings(self):

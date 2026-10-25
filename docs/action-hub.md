@@ -158,9 +158,8 @@ and "last run skipped: <reason>, <time>" only when the server names a skip later
   (`changes` = `priority`, or `scope` one path per line); Unblock `POST .../unblock` with the
   reason (and `on`, when the record has several blockers); Retire `POST .../delete` with the reason
   and the record's id typed again (the button waits for both). Unblock and Retire take no version, so
-  the panel reads the record again first and refuses when its version moved. The ruling id is asked
-  for only when the store's refusal names one, and a refusal or conflict shows in the panel in the
-  store's words. A done action leaves the finding listed until the next lint run; an "Open <id>"
+  the panel reads the record again first and refuses when its version moved. No ruling id is asked
+  for or sent, and a refusal or conflict shows in the panel in the store's words. A done action leaves the finding listed until the next lint run; an "Open <id>"
   button beside it opens the record page;
 - Pass on: an act note to the PM with the note field's text (prefilled as the server would write
   it; unchanged, the server writes it), queued in To PM like any note, then the mark `passed_on`. A
@@ -1211,18 +1210,18 @@ comes from the caller.
   `review: owner-hub <date>` mark, so `pull` refuses it and `next` never offers it until a
   coordinator runs `clear-review` (docs/backlog.md "Records").
 - `POST /api/v1/records/{repo}/{id}/edit` (owner only), body `version` (the one the read
-  answered), `changes` (`{key: [values]}`), `unset`, `body`, `ruling`: the backlog library's set.
+  answered), `changes` (`{key: [values]}`), `unset`, `body`: the backlog library's set.
   A record that changed since that read is `conflict` on field `version`; read it again.
-- `POST /api/v1/records/{repo}/{id}/delete` (owner only), body `why`, `confirm`, `ruling`:
+- `POST /api/v1/records/{repo}/{id}/delete` (owner only), body `why`, `confirm`:
   `confirm` must repeat the id, or the call is `invalid` on field `confirm` and nothing is
   written. The store's delete rules apply unchanged: a live pull is refused until it is released.
-- `POST /api/v1/records/{repo}/{id}/unblock` (owner only), body `on`, `reason`, `ruling`: the
+- `POST /api/v1/records/{repo}/{id}/unblock` (owner only), body `on`, `reason`: the
   backlog library's unblock (`recordwrite.unblock`). One blocker opens the record; with several,
   `on` names the one to clear and `reason` is required, and a call with no `on` is `invalid` on
   field `on`. Clearing an owner blocker takes nothing more.
 - These routes are the owner's, so they meet the store's owner gates (docs/backlog.md "Owner
-  gates"; recordwrite passes `role_checked`). `ruling` is still accepted and ignored: no ruling
-  is checked or written into a record.
+  gates"; recordwrite passes `role_checked`). None takes a ruling id: a body with `ruling` is
+  `invalid` on that field, as any field a route does not take.
 - Each write answers `lines`, what the store printed (its notes included), and an add or edit
   also answers the record as it reads now. A store refusal is `invalid` in the store's words; a
   record not there is `not_found`. A repository whose `.kit.json` names no backlog store, or whose
@@ -1244,8 +1243,7 @@ On an open record, Fields, Blocker or hold and Body each have an Edit button tha
 section as text. In the two field sections a key left out is unset, a changed key is sent with all
 its values, and a line that is not `key: value` is refused on the page. Save sends only what
 changed, at the version the page read, and draws the record the answer carries; a refusal shows
-as "Not saved: " and the store's text. A Ruling id box appears only after a refusal that names a
-ruling, and a ruling typed there is sent with the next save.
+as "Not saved: " and the store's text. The page has no ruling id box and sends no ruling.
 
 Delete… (open records only) opens a panel with a reason and a box to type the id again; the
 Delete button stays disabled until both are filled and the typed id matches. After the delete the

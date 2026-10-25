@@ -690,7 +690,7 @@ def refuse_top(rid, verb, rows):
 WIDEN_ROW = policy.COLLISION_ROWS['set']
 
 
-def plan_set(snap, ctx, rid, changes, unset=(), _slot=None, body=None, role_checked=False,
+def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False,
              may_collide=False):
     """Edit fields and/or the body. `changes` is `[(key, [values])]`.
 
@@ -702,8 +702,8 @@ def plan_set(snap, ctx, rid, changes, unset=(), _slot=None, body=None, role_chec
       release from `-1` to `-`.
     - A price field moved drops the record's `priority_ruling` (it named the old price); so does
       a result of `priority_by: agent`.
-    - No ruling id is taken: `_slot`, the sixth positional, is kept only because
-      kitlib/hubsite/recordwrite.py passes None there; any other value is USAGE.
+    - No ruling id is taken: an owner gate is a role. Past `unset` every argument is a keyword,
+      so a sixth positional (the old ruling slot) is a TypeError.
     - `state: pulled` is entered only by `pull` and left only by `release`; `state: parked` only
       by `set-status parked` and `unpark`.
     - `priority_ruling`, `hold_ruling` and `resume` (UNWRITTEN) are never written; `unset` of
@@ -718,9 +718,6 @@ def plan_set(snap, ctx, rid, changes, unset=(), _slot=None, body=None, role_chec
       not a collision.
     - `scope` replaces the whole list; the output names each member it removed.
     """
-    if _slot is not None:
-        # The old ruling slot, held for recordwrite.py's positional None: a gate is a role now.
-        raise Usage('`set` takes no ruling id: an owner gate is a role (kitlib/backlog/roles.py)')
     for key, vals in changes:
         refuse_machine_paths('--' + key, *vals)
     refuse_machine_paths('--body-file', body)

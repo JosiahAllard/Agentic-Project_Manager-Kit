@@ -2,9 +2,9 @@
 add, edit, delete and unblock from the record page (docs/action-hub.md "The record page").
 
   add(root, rid, summary, scopes, effort=None, ref=None)        -> {"lines"}
-  edit(root, rid, version, changes, unset=(), body=None, ruling=None) -> {"lines"}
-  delete(root, rid, why, ruling=None)                           -> {"lines"}
-  unblock(root, rid, on=None, reason=None, ruling=None)         -> {"lines"}
+  edit(root, rid, version, changes, unset=(), body=None)        -> {"lines"}
+  delete(root, rid, why)                                        -> {"lines"}
+  unblock(root, rid, on=None, reason=None)                      -> {"lines"}
   answer(root, rid, qid, at, title, label, note=None, via=None, other=False, waiting=())
                                                                 -> {"lines"}
 
@@ -23,9 +23,8 @@ answer the owner gave, whoever's call starts the filing.
 add writes the review mark `owner-hub <date>`, found on no branch: pull and next refuse the record
 until a coordinator clears it. edit is pinned to the record text the page read: `version` is
 Views.record's `<commit>:<sha1 of the text>`, and a record whose text no longer has that sha1 is a
-`conflict`, checked again on every re-plan. `ruling` is accepted and ignored: these are owner
-routes, so the plans run with the role check already made (role_checked) and the store asks for
-no ruling; the page's ruling field goes with the next slice of that removal. unblock clears
+`conflict`, checked again on every re-plan. These are owner routes, so the plans run with the
+role check already made (role_checked); no ruling id is taken or written. unblock clears
 one blocker as the backlog tool's unblock does: a record blocked on several needs `on` (the one
 to clear) and a `reason`, and with no `on` it is refused here as `invalid` on `on`, since the
 store's own refusal names the backlog tool's path.
@@ -86,7 +85,7 @@ def add(root, rid, summary, scopes, effort=None, ref=None):
     return _write(root, plan)
 
 
-def edit(root, rid, version, changes, unset=(), body=None, ruling=None):
+def edit(root, rid, version, changes, unset=(), body=None):
     want = str(version).rsplit(':', 1)[-1]
 
     def plan(s, ctx):
@@ -97,18 +96,18 @@ def edit(root, rid, version, changes, unset=(), body=None, ruling=None):
                 now = rec.text.encode('utf-8')
             if hashlib.sha1(now).hexdigest() != want:
                 raise HubError('conflict', STALE, 'version')
-        # an OWNER route (kitlib/hubsite/api.py): `ruling` is ignored, see the module docstring
-        return pmod.plan_set(s, ctx, rid, list(changes), list(unset), None, body,
+        # an OWNER route (kitlib/hubsite/api.py), so the role check is made
+        return pmod.plan_set(s, ctx, rid, list(changes), list(unset), body=body,
                              role_checked=True, may_collide=True)
     return _write(root, plan)
 
 
-def delete(root, rid, why, ruling=None):
+def delete(root, rid, why):
     return _write(root, lambda s, ctx: pmod.plan_delete(s, ctx, rid, why,
                                                         role_checked=True))   # an OWNER route
 
 
-def unblock(root, rid, on=None, reason=None, ruling=None):
+def unblock(root, rid, on=None, reason=None):
     def plan(s, ctx):
         rec = s.get(rid)
         if rec is not None and on is None and rec.get('state') == 'blocked':
