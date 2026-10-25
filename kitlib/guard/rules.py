@@ -2111,7 +2111,19 @@ def write_jail(event, ctx, target, cwd, role, what, rewrite=None, run=None):
     verdict, root = jail.judge(target, rs)
     if verdict is None or (verdict == jail.OUTSIDE and jail.sibling(ctx, target, cwd)):
         return None
-    return jail_refusal(role, rs, verdict, root, what, target, rewrite, run)
+    dest, aim = jail.destination(rs), None
+    if dest is not None and rewrite is not None:
+        place = ctx.place(dest.path)
+        try:
+            barred = place.kind == repo.MAIN and not kconfig.permissions(
+                event, kconfig.roles(ctx.config(place.top or dest.path))).get('edit_main_checkout')
+        except Exception:  # noqa: BLE001 - the advice only: a config that does not read leaves it as it was
+            barred = False
+        if barred:
+            # the checkout it may write is a main checkout this role may not edit (main-checkout
+            # refuses the same write there): its own worktree of it, <worktree> when the call shows none
+            aim = own_worktree(ctx, cwd, place.top) or '<worktree>'
+    return jail_refusal(role, rs, verdict, root, what, target, rewrite, run, aim)
 
 
 def jail_why(rs, verdict, root, what, target):
@@ -2126,7 +2138,9 @@ def jail_why(rs, verdict, root, what, target):
             % (what, fwd(target), jail.describe(rs), JAIL_ASK))
 
 
-def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None):
+def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None, aim=None):
+    """The write-jail refusal; `aim`, when given, is the folder the rewrite names in place of the
+    jail's destination (write_jail: a main checkout the role may not edit)."""
     dest = jail.destination(rs)
     why = jail_why(rs, verdict, root, what, target)
     if verdict == jail.ADD_ONLY:
@@ -2139,8 +2153,9 @@ def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None):
         return refuse('write-jail', role, why + ' To see where this session runs:', 'pwd')
     if rewrite is not None:
         name = os.path.basename(target.rstrip('\\/')) or 'out'
-        return refuse('write-jail', role, why + ' The same write in %s:' % fwd(dest.path),
-                      rewrite(fwd(os.path.join(dest.path, name))))
+        there = aim or dest.path
+        return refuse('write-jail', role, why + ' The same write in %s:' % fwd(there),
+                      rewrite(fwd(there) + '/' + name if there.startswith('<') else fwd(os.path.join(there, name))))
     return refuse('write-jail', role, why + ' Run it with %s as the working directory:' % quote(dest.path),
                   run or 'cd %s' % quote(dest.path))
 
@@ -3133,11 +3148,22 @@ def _curl(args, cmd_word):
     return out
 
 
+class Under(sh.Word):
+    """A file a folder option places (_under): its text is the folder's joined with the name's;
+    `folder` and `name` are the two words, which only the refusal's rewrite reads (word_rewrite)."""
+    __slots__ = ('folder', 'name')
+
+    def __init__(self, folder, name):
+        sh.Word.__init__(self, folder.text.rstrip('/\\') + '/' + name.text, folder.dyn or name.dyn,
+                         name.start, name.end)
+        self.folder, self.name = folder, name
+
+
 def _under(folder, w):
     """`w` placed in `folder` (curl --output-dir), unless it is absolute."""
     if folder is None or re.match(r'^(?:[A-Za-z]:)?[\\/]', w.text):
         return w
-    return sh.Word(folder.text.rstrip('/\\') + '/' + w.text, folder.dyn or w.dyn, w.start, w.end)
+    return Under(folder, w)
 
 
 def _wget(args, cmd_word):
@@ -4067,10 +4093,11 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         'the checkout `%s` acts on, %s (counted as written: %s)' % (cmd.text, checked[0].text, unread)
     # here() or ps_unread(): no word to aim
     stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
-    part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
-    rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
+    # a value its option's word also spells (of=, --output=, -tDIR) keeps that option before it
+    rewrite = None if stand_in else word_rewrite(cmd, w)
+    attached = attached_lead(cmd, w) if rewrite is not None and not isinstance(w, Under) else None
     if (w.start, w.end) in net and not w.dyn:
-        rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
+        rewrite, attached = (lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)), None
     if checked is not None:
         x = checked[0]
         # -C'dir' spelt other than its text: the value's span is the whole word, so the rewrite spells -C again
@@ -4085,9 +4112,13 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
                  (r.target.start, r.target.end) == (w.start, w.end) for r in cmd.redirects) or (getattr(inv, 'name', None) or '').lower() in OUTPUT_WRITERS
     item = target is None and ps_provider_word(cmd, inv, w)
     for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
+        aim = rewrite
+        if attached is not None and checked is None and t != target and rewrite is not None:
+            # -tDIR names the folder: the same copy into the folder that holds the file it would write
+            aim = lambda path, r=rewrite: r(fwd(path).rsplit('/', 1)[0] if '/' in fwd(path) else path)
         # a provider item's refusal runs the whole line from the worktree: a statement before the
         # call may set what it reads (PROVIDER_ITEM_WHY)
-        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite,
+        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=aim,
                         run=whole_line(ctx, cmd) if item else bare(cmd), redirect=output,
                         shell=outer_shell(cmd), item=item,
                         stand_in=piped or w.start == w.end or unread_write(cmd, inv, w))
@@ -4162,7 +4193,11 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
                 bare(f), bare(cmd), w.text if w.text != '.' else 'the directory it runs in')
             stand_in = (w.text == '.' and f.source[w.start:w.end] != '.') or w.start == w.end
             part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in f.words)
-            rewrite = None if stand_in or part else (lambda path, w=w, f=f: retarget(f, w, path))
+            swaps = execdir_swaps(f, cmd)
+            if swaps:
+                what += ' (with -exec in place of -execdir, find hands it the same files by their full paths)'
+            rewrite = None if stand_in or part else \
+                (lambda path, w=w, f=f, s=swaps: retarget(f, w, path, swaps=s))
             d = edit_target(event, ctx, target, cwd, role, what, why, rewrite=rewrite, run=bare(f),
                             shell=outer_shell(f))
             if target is None:
@@ -4170,6 +4205,26 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
             if d:
                 return d
     return None
+
+
+def execdir_swaps(f, cmd):
+    """[(word, '-exec' or '-ok')] for the one -execdir or -okdir of the find command `f` when it runs
+    `cmd` and `cmd` takes only options and {}: -exec runs it on the same files, named by full path,
+    which the guard can place; [] otherwise (a relative name the command writes would land
+    elsewhere)."""
+    dirs = [i for i, x in enumerate(f.words) if not x.dyn and x.text in ('-execdir', '-okdir')]
+    words = [x.text for x in cmd.words]
+    # find's {} is the one word computed at run time (the path it fills in)
+    if len(dirs) != 1 or len(words) < 2 or any(x.dyn and x.text != '{}' for x in cmd.words):
+        return []
+    if not all(t == '{}' or t.startswith('-') for t in words[1:]) or '{}' not in words[1:]:
+        return []
+    i = dirs[0]
+    x = f.words[i]
+    # the words after it are the command find runs, as `cmd` spells them (a nested command has its own source)
+    if x.start is None or [y.text for y in f.words[i + 1:i + 1 + len(words)]] != words:
+        return []
+    return [(x, x.text.replace('dir', ''))]
 
 
 def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
@@ -4191,15 +4246,63 @@ def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
 DUPS_RE = re.compile(r'(?:[ \t]*[0-9]*[<>]&[0-9-]+)+')
 
 
-def retarget(cmd, w, path, lead=''):
+def retarget(cmd, w, path, lead='', swaps=()):
     """The command `cmd` (from its program word, redirections kept) with the word `w` replaced
-    by `path`, quoted, after `lead` (an option the word's span also covers, as -C'dir' does)."""
+    by `path`, quoted so both shells read it literally (literal_word: a `::$DATA` stream name is
+    not expanded), after `lead` (an option the word's span also covers, as -C'dir' does); each
+    (word, text) of `swaps` replaces another word of the line as well."""
     start = cmd.words[0].start if cmd.words else w.start
     start = min(start, w.start)
     end = max(cmd.end, w.end)
     m = DUPS_RE.match(cmd.source, end)          # a dup (2>&1) has no word, so no span
     end = m.end() if m else end
-    return (cmd.source[start:w.start] + lead + quote(path) + cmd.source[w.end:end]).strip()
+    out, at = [], start
+    for x0, x1, text in sorted([(w.start, w.end, lead + literal_word(path))] +
+                               [(x.start, x.end, t) for x, t in swaps]):
+        out.append(cmd.source[at:x0] + text)
+        at = x1
+    return (''.join(out) + cmd.source[at:end]).strip()
+
+
+def attached_lead(cmd, w):
+    """The option text the word holding the value Word `w` also spells before it (`of=`,
+    `--output=`, `-d`, `-t`), or None when `w` is a word of its own or not such a value."""
+    for x in cmd.words:
+        if (x.start, x.end) != (w.start, w.end) or x.text == w.text:
+            continue
+        if w.dyn or x.dyn or len(x.text) <= len(w.text) or not x.text.endswith(w.text):
+            return None
+        lead = x.text[:-len(w.text)]
+        return lead if ATTACHED_LEAD_RE.match(lead) else None
+    return None
+
+
+# an option an attached value follows: -d, -sSLo, --output=, of=
+ATTACHED_LEAD_RE = re.compile(r'^(?:--?[A-Za-z][\w-]*=?|[A-Za-z]+=)$')
+
+
+def word_rewrite(cmd, w):
+    """rewrite(path) for the write target Word `w` of `cmd`: the word aimed at `path`, an attached
+    value after its option (attached_lead), a file curl or ruby places under a folder (Under) by
+    aiming that folder; None when no word of the line can be aimed."""
+    if isinstance(w, Under):
+        aim = word_rewrite(cmd, w.folder) if w.folder.start is not None and not w.folder.dyn else None
+        if aim is None:
+            return None
+        name = fwd(w.name.text)
+
+        def under(path):
+            p = fwd(path)
+            # the folder that keeps the name as written; a destination named by its last part only: its folder
+            p = p[:-len(name) - 1] if p.endswith('/' + name) else p.rsplit('/', 1)[0]
+            return aim(p)
+        return under
+    if not any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words):
+        return lambda path: retarget(cmd, w, path)
+    lead = attached_lead(cmd, w)
+    if lead is None:
+        return None
+    return lambda path: retarget(cmd, w, path, lead)
 
 
 # ---------------------------------------------------------------- wrapped gates (P16)
@@ -4728,7 +4831,7 @@ def _pos(args):
     return [w for w in args if not w.text.startswith('-')]
 
 
-def git_alias(ctx, cmd, gc, cwd, role):
+def git_alias(ctx, cmd, gc, cwd, role, event=None):
     name, val = gc.alias
     rest = ' '.join(w.text for w in gc.rest)
     if val.startswith('!'):
@@ -4736,6 +4839,14 @@ def git_alias(ctx, cmd, gc, cwd, role):
         instead = alias_heavy_run(ctx, cmd, cwd, instead) or instead
     else:
         how, instead = 'Run the git command itself:', ('git %s %s' % (val if gc.sub == name else gc.sub, rest)).strip()
+        # the command git runs makes a commit, in an agent session's worktree: plain git there is
+        # refused for its missing trailer (git_plain_commit), so the advice is that rule's kit tool
+        place = ctx.place(cmd.cwd or cwd) if (cmd.cwd or cwd) and event is not None and \
+            agent_session(event, ctx) else None
+        alt = commit_alternative(ctx, inline_alias(gc), place.top) \
+            if place is not None and place.kind == repo.LINKED and place.top else None
+        if alt is not None:
+            how, instead = 'Run the git command itself, which makes a commit: %s' % alt[0][0].lower() + alt[0][1:], alt[1]
     return refuse('git-alias', role, '`%s` defines a git alias on the command line (alias.%s=%s), which hides '
                   'the command git runs. %s' % (bare(cmd), name, val, how), instead)
 
@@ -4802,7 +4913,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if gc is None:
         return None
     if gc.alias:
-        d = git_alias(ctx, cmd, gc, cwd, role)
+        d = git_alias(ctx, cmd, gc, cwd, role, event)
         if d:
             return d                            # a warning by default: the command git runs is judged below
         gc = inline_alias(gc)
@@ -5277,9 +5388,11 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
                 event, kconfig.roles(ctx.config(place.top or gc.dir))).get('edit_main_checkout'):
             # reset --keep changes the main checkout too, which git-main-history refuses this role
             mine = own_worktree(ctx, cwd, place.top)
+            # <worktree> for a session the call shows no worktree of: a new one only in a clause (only_new)
             return refuse('git-reset-hard', role, '`%s` discards work in %s; this role may not change a main '
-                          'checkout. In your worktree, reset --keep refuses to drop uncommitted changes:'
-                          % (text, where), 'git -C %s reset --keep %s' % (quote(mine or '<worktree>'), rev))
+                          'checkout. In your worktree%s, reset --keep refuses to drop uncommitted changes:'
+                          % (text, where, '' if mine or no_wt or not wt else only_new(wt)),
+                          'git -C %s reset --keep %s' % (quote(mine or '<worktree>'), rev))
         return refuse('git-reset-hard', role, '`%s` discards work in %s. Reset --keep refuses to drop uncommitted '
                       'changes:' % (text, where), 'git -C %s reset --keep %s' % (quote(top), rev))
     if sub == 'clean':
@@ -5949,6 +6062,11 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     dest = jail.destination(rs)
     if dest is None:
         return jail_refusal(role, rs, verdict, root, what, gc.dir)
+    if ctx.place(dest.path).kind not in (repo.MAIN, repo.LINKED):
+        # the folder it may write is no checkout (the temp folder, a plain folder): git there has no
+        # repository to act on, so no same command is offered
+        return refuse('write-jail', role, jail_why(rs, verdict, root, what, gc.dir) +
+                      ' To see where this session runs:', 'pwd')
     if verdict == jail.OUTSIDE:
         why = '%s: it is outside the folders an agent session may write: %s. %s' % (what, jail.describe(rs), JAIL_ASK)
     else:
@@ -6765,6 +6883,16 @@ def git_branch_delete(ctx, gc, role):
     if not force:
         return None
     names = ' '.join(w.text for w in pos) or '<branch>'
+    from . import backlogrole
+    store = backlogrole.store_kind(ctx, gc.dir) if gc.dir and not gc.unknown else None
+    held = [w.text for w in pos if not w.dyn and '*' not in w.text and
+            backlogrole.is_store_ref(w.text, store, short=True)]
+    if held:
+        # -d of it is a raw write of the store's ref (backlog-raw-write): no delete form passes
+        return refuse('git-branch-force-delete', role, '`git branch %s` deletes a branch whether or not it is '
+                      'merged, and %s is the backlog store\'s branch, which only tools/backlog.py writes; no '
+                      'session deletes it. To see it:' % (' '.join(w.text for w in gc.rest), held[0]),
+                      'git log --oneline -1 %s' % held[0])
     return refuse('git-branch-force-delete', role, '`git branch %s` deletes a branch whether or not it is merged. '
                   'Delete it with -d, which refuses an unmerged branch; unmerged work goes to the PM, never '
                   'deleted:' % ' '.join(w.text for w in gc.rest), 'git branch -d %s' % names)
@@ -6908,10 +7036,15 @@ def git_push_pmdata(event, ctx, gc, role):
             cut = True
         if cut or not _no_verify_word(w):
             words.append(w.text)
+    # an agent session's push from the main checkout it may not write: the same push from its own
+    # worktree of that checkout, which shares its branches and remotes (the write jail lets that one through)
+    run_in = gc.dir
+    if gc.dir and agent_session(event, ctx) and gc.inv is not None and ctx.place(gc.dir).kind == repo.MAIN:
+        run_in = own_worktree(ctx, gc.inv.cmd.cwd, ctx.main_top(gc.dir)) or gc.dir
     return refuse('git-push-pmdata', role, '`git push %s` skips the pre-push hook, which keeps PM data off public '
                   'remotes in this repository (it has %s). Push with the hook:'
                   % (' '.join(w.text for w in gc.rest), pmdata.FILE_NAME),
-                  ('git -C %s push %s' % (quote(gc.dir), ' '.join(words))).rstrip())
+                  ('git -C %s push %s' % (quote(run_in), ' '.join(words))).rstrip())
 
 
 def home_config(event, ctx, gc, role):
