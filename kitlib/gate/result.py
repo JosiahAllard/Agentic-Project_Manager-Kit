@@ -1,10 +1,21 @@
 """The result record: how a branch gate or a landing is going or ended, for a session waiting on it
 (docs/gate.md "Result record").
 
-`<git common dir>/kit-gate-result/<stem>.<kind>.json`, stem = file_stem(branch). The common dir is
-where the gate-OK records (kit-gate-ok/) and the landing lock already live: one folder per
-repository, shared by every worktree of it and never tracked, so the session that gates in its
-worktree and the session that waits in another (or in the main checkout) read the same file.
+`<dev_drive>/pm-kit/kit-gate-result/<repo key>/<stem>.<kind>.json`, stem = file_stem(branch):
+`dev_drive` is the machine config's Dev Drive root (kitlib.config.user.dev_drive), and the repo
+key (repo_key) names the repository's git common dir, so every worktree of a repository shares
+one folder and no two repositories do. The session that gates in its worktree and the session
+that waits in another (or in the main checkout) read the same file. The folder is outside every
+checkout and every agent's temp folder, where agents' own file writes do not reach. With no
+`dev_drive` set, or a machine config that cannot be read, there is no result folder: a write is
+a ResultError (a branch gate says it as a WARNING; a direct landing and a submission refuse) and
+nothing is written anywhere else.
+
+The old folder, `<git common dir>/kit-gate-result/` (legacy_dir), is read, and written only when
+finish_dead finishes a dead old-folder record in place (under that file's lock, which it makes
+there): read() and wait() take a record there when the new folder has none of that branch and
+kind, or when it started strictly later than the new folder's (an older kit's run; pick). The readers a landing trusts
+(kitlib.gate.submit's claim and restore) read the new folder only.
 
 A Run writes the file twice: a `running` record when the work starts (it replaces any earlier
 record of that branch and kind, at that tip or another), then the final record with the same
@@ -20,7 +31,7 @@ finish_dead re-read under it; an unconditional write (a run writing its own outc
 its turn. The lock file stays (TreeLock never removes one), and its leading dot keeps it out of
 every scan of the folder. A lock not had within LOCK_WAIT_S is a ResultError, like any write that
 fails. kitlib.fs.writelock is not used: it places its lock files by asking git which checkout the
-file is in, and the common dir is in none.
+file is in, and the result folder is in none.
 
 The record (SCHEMA 1), every key always present:
 
@@ -68,12 +79,18 @@ import secrets
 import time
 
 from kitlib import gate as G
+from kitlib.config import user as kuser
 from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError
 from kitlib.records import gate_ok
 from kitlib.git import refs, repo
 from kitlib.proc import process
 
 DIR_NAME = 'kit-gate-result'
+KIT_DIR = 'pm-kit'      # <dev_drive>/pm-kit/kit-gate-result: the machine's kit folder
+KEY_NAME_MAX = 40       # the readable part of a repo key; its hash keeps keys apart
+NO_DEV = ('the machine config sets no dev_drive (the Dev Drive\'s root folder), so there is no '
+          'result folder (<dev_drive>\\pm-kit\\kit-gate-result); the owner sets it '
+          '(docs/kit-json.md "Machine config keys")')
 SCHEMA = 1
 KINDS = ('gate', 'land')
 RUNNING = 'running'
@@ -119,17 +136,72 @@ def file_stem(branch):
     return stem
 
 
-def result_dir(root):
+def machine_root():
+    """`<dev_drive>/pm-kit/kit-gate-result`: the folder every repository's result folder is in.
+    ResultError when the machine config cannot be read or sets no dev_drive."""
+    try:
+        cfg = kuser.user_config()
+    except Exception as e:      # noqa: BLE001 - ConfigError, OSError: no folder, and why
+        raise ResultError('the machine config cannot be read, so there is no result folder: %s'
+                          % e)
+    dev = kuser.dev_drive(cfg)
+    if not dev:
+        raise ResultError(NO_DEV)
+    return os.path.join(os.path.abspath(dev), KIT_DIR, DIR_NAME)
+
+
+def repo_key(common):
+    """The result folder name of the repository whose git common dir is `common`: its folder's
+    name (the common dir's parent, for a `.git`), lower case, [a-z0-9_-] only and at most
+    KEY_NAME_MAX long, then `-` and 12 hex of the sha256 of the common dir's real path
+    (normcase): one name for every worktree of a repository, another for every other one."""
+    real = os.path.normcase(os.path.realpath(common)).rstrip('\\/')
+    head, base = os.path.split(real)
+    name = os.path.basename(head) if base == '.git' else base
+    slug = ''.join(c for c in name.lower() if c in SAFE and c != '.')[:KEY_NAME_MAX] or 'repo'
+    return '%s-%s' % (slug, hashlib.sha256(real.encode('utf-8')).hexdigest()[:12])
+
+
+def _common(root):
     common, why = repo.common_dir(root)
     if not common:
         raise ResultError('no git common dir for %s: %s' % (root, why))
-    return os.path.join(common, DIR_NAME)
+    return common
+
+
+def result_dir(root):
+    """The result folder of the repository `root` is in (the module docstring): ResultError
+    when it cannot be worked out."""
+    return os.path.join(machine_root(), repo_key(_common(root)))
+
+
+def legacy_dir(root):
+    """The old result folder, `<git common dir>/kit-gate-result`: read, and written only when
+    finish_dead finishes a dead old-folder record in place."""
+    return os.path.join(_common(root), DIR_NAME)
+
+
+def record_dirs(root):
+    """[result_dir, legacy_dir] of `root`: the folders a reader of every record lists, the new
+    one first. ResultError when the new one cannot be worked out."""
+    common = _common(root)
+    return [os.path.join(machine_root(), repo_key(common)), os.path.join(common, DIR_NAME)]
+
+
+def _file_name(branch, kind):
+    if kind not in KINDS:
+        raise ResultError('a result kind is one of %s, not %r' % (', '.join(KINDS), kind))
+    return '%s.%s.json' % (file_stem(branch), kind)
 
 
 def result_path(root, branch, kind='gate'):
-    if kind not in KINDS:
-        raise ResultError('a result kind is one of %s, not %r' % (', '.join(KINDS), kind))
-    return os.path.join(result_dir(root), '%s.%s.json' % (file_stem(branch), kind))
+    return os.path.join(result_dir(root), _file_name(branch, kind))
+
+
+def legacy_path(root, branch, kind='gate'):
+    """The record's path in the old folder (legacy_dir): read, and written only when finish_dead
+    finishes a dead old-folder record in place."""
+    return os.path.join(legacy_dir(root), _file_name(branch, kind))
 
 
 def source_of(rec):
@@ -311,12 +383,49 @@ def read_path(path):
     return rec, None
 
 
-def read(root, branch, kind='gate'):
+def _stamp(rec):
+    try:
+        return calendar.timegm(time.strptime(rec.get('started_at'), '%Y-%m-%dT%H:%M:%SZ'))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def newer_old(new, old):
+    """True when the old folder's record `old` is the one to take over the new folder's `new`:
+    there is no `new`, or `old` started strictly later (an older kit's run since). A started_at
+    that cannot be read never wins over the new folder's record."""
+    if not isinstance(old, dict):
+        return False
+    if not isinstance(new, dict):
+        return True
+    a, b = _stamp(new), _stamp(old)
+    return a is not None and b is not None and b > a
+
+
+def pick(new_got, old_got):
+    """`((record, why), index)`: what read() answers from read_path's `(record, why)` of the new
+    path and of the old one, and which it is (0 new, 1 old). A new path that cannot be read is
+    the answer, whatever the old one holds; else the old one when newer_old, or when neither
+    path has a record and only the old one's why is more than 'none'; else the new one."""
+    (new, new_why), (old, old_why) = new_got, old_got
+    if new is None and new_why != 'none':
+        return new_got, 0
+    if newer_old(new, old) or (new is None and old is None and old_why != 'none'):
+        return old_got, 1
+    return new_got, 0
+
+
+def read(root, branch, kind='gate', legacy=True):
+    """`(record, None)`, `(None, 'none')` or `(None, why)`: the record of `branch` and `kind`
+    in the new folder, or in the old one (pick); `legacy` False: the new folder only."""
     try:
         path = result_path(root, branch, kind)
+        old = legacy_path(root, branch, kind) if legacy else None
     except ResultError as e:
         return None, str(e)
-    return read_path(path)
+    if old is None:
+        return read_path(path)
+    return pick(read_path(path), read_path(old))[0]
 
 
 def answers(rec, branch, kind, tip):
@@ -350,17 +459,20 @@ def running_state(rec, now=None, alive=None):
     return 'live' if age is not None and age < CLAIM_S else 'unknown'
 
 
-def finish_dead(root, rec, why=None, unclaimed=False):
+def finish_dead(root, rec, why=None, unclaimed=False, path=None):
     """Finish the running record `rec`, whose process died, as `error`: the record as it is
     now, or None when it cannot be read. Only when the record on disk is still `rec`'s run and
     running (`unclaimed`: and has no pid yet); anything else (finished, or a newer run's) is
     returned untouched. The final record keeps the run's run_id, started_at, tip, base, log, pid
     and ctime. The record is read, judged and replaced under its lock, so a record another writer
-    put there meanwhile is judged, never overwritten unread."""
-    try:
-        path = result_path(root, rec['branch'], rec['kind'])
-    except (KeyError, ResultError):
-        return None
+    put there meanwhile is judged, never overwritten unread. `path`: the file `rec` was read
+    from (wait finishes an old-folder record where it is, under that file's lock); default the
+    record's path in the new folder."""
+    if path is None:
+        try:
+            path = result_path(root, rec['branch'], rec['kind'])
+        except (KeyError, ResultError):
+            return None
     try:
         with _held(path):
             now, _ = read_path(path)
@@ -412,19 +524,20 @@ def wait(root, branch, tip, kind='gate', timeout_s=None, poll_s=POLL_S, clock=ti
          sleep=time.sleep):
     """Poll until the final `kind` record of `branch` names a tip starting with `tip`:
     `(record, None)`, or `(None, 'timeout')` once `timeout_s` passed (None: never). A running
-    record at that tip whose process died is finished `error` (finish_dead) and returned; any
-    other running record, one at another tip or of another branch, a missing one, or one that
-    cannot be read is waited past. ResultError when the record path cannot be worked out (not a
-    repository)."""
+    record at that tip whose process died is finished `error` (finish_dead, in the folder it was
+    read from) and returned; any other running record, one at another tip or of another branch,
+    a missing one, or one that cannot be read is waited past. Each poll reads the record's file
+    in the new folder and in the old one and takes the one read() would (pick). ResultError when
+    the record path cannot be worked out (not a repository, or no result folder: result_dir)."""
     if not valid_timeout(timeout_s):
         raise ValueError('timeout_s must be None or a finite number >= 0, not %r' % (timeout_s,))
-    path = result_path(root, branch, kind)
+    paths = (result_path(root, branch, kind), legacy_path(root, branch, kind))
     end = None if timeout_s is None else clock() + timeout_s
     while True:
-        rec, _ = read_path(path)
+        (rec, _), at = pick(read_path(paths[0]), read_path(paths[1]))
         if (rec is not None and rec.get('verdict') == RUNNING and at_tip(rec, branch, kind, tip)
                 and running_state(rec) == 'dead'):
-            rec = finish_dead(root, rec)
+            rec = finish_dead(root, rec, path=paths[at])
         if rec is not None and answers(rec, branch, kind, tip):
             return rec, None
         if end is not None and clock() >= end:

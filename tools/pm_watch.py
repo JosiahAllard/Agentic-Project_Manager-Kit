@@ -1,8 +1,9 @@
 """pm_watch.py: the PM watcher (docs/pm-watch.md). Silent until something needs the PM, then
-prints one line per event and exits. The PM runs it as a background command and relaunches it
-after handling the event, so no model turn is spent while nothing happens. With --stream it
-never exits on an event: it prints each one and keeps polling, for a run under Monitor (one
-notification per line). Every pass but a --once one writes a heartbeat, <state>.beat
+prints one line per event and exits. The PM runs it as a background command without --stream and
+relaunches it at once when it exits, then handles the events, so no model turn is spent while
+nothing happens and the heartbeat never goes stale. With --stream it never exits on an event: it
+prints each one and keeps polling, for a caller that reads its output line by line; the PM's
+background run does not use it (the PM start check warns on it). Every pass but a --once one writes a heartbeat, <state>.beat
 ({pid, beat, stream, started}), that the PM session-start check reads (docs/pm-start.md).
 
 Events:
@@ -72,7 +73,8 @@ def parse(argv, cfg, launcher_set=None):
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="poll once, print events, exit 0")
     mode.add_argument("--stream", action="store_true",
-                      help="never exit on an event: print each and keep polling (run under Monitor)")
+                      help="never exit on an event: print each and keep polling (not the PM's "
+                           "background run, which exits with its events)")
     a = ap.parse_args(argv)
     if a.usage_script is not None or "usage_script" in cfg:
         ap.error(RETIRED_USAGE_SCRIPT)

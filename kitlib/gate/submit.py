@@ -44,8 +44,8 @@ the records were written `running` before the start, and Lander.run finishes the
 landing does (an exception: `error`). A start that fails finishes them `refused` here; a payload
 the detached tool cannot read, `refused` there (abandon); a detached tool that dies before it
 records itself, `error` here (claim); one that dies later, `error` by the first result.wait that
-sees it gone. Files, in the result folder (<git common dir>/kit-gate-result): <stem>.land.json
-per branch (the record), and, named by the batch's first branch and the run_id,
+sees it gone. Files, in the result folder (kitlib.gate.result.result_dir:
+<dev_drive>/pm-kit/kit-gate-result/<repo key>): <stem>.land.json per branch (the record), and, named by the batch's first branch and the run_id,
 <stem>.<run_id>.land.submit (the payload) and <stem>.<run_id>.land.log (the detached tool's
 output, the records' `log` until a merged gate names its own); each submission deletes the old
 ones (prune). Nothing here prints or exits.
@@ -250,8 +250,9 @@ def wait_line(branches, tips, root, kit=None):
     own land record, but a batch has one outcome, which Lander.run writes into the records in the
     batch's order, so the last branch's record is final only once every branch's is. The command
     names the repository with -C: the main checkout of `root` (where the landing runs, and a
-    checkout no cleanup removes), or `root` itself when git cannot place it. The record is in the
-    git common dir, so any checkout of the repository reads the same one."""
+    checkout no cleanup removes), or `root` itself when git cannot place it. Every checkout of the
+    repository has the one result folder (kitlib.gate.result.result_dir), so any of them reads
+    the same record."""
     kit = kit or pluginsource.live_root()
     main = repo.main_checkout_toplevel(root) or root
     return 'SUBMITTED %s tip %s wait: python %s wait-result %s --tip %s --kind land -C %s' % (
@@ -278,6 +279,7 @@ def blocked(root, branches, tips):
     """Why the land records of `branches` stop a submission, or None: a branch's landing is
     running and its process lives (result.running_state 'live'; a dead or unknown one does not
     count), or a branch already landed at its tip (verdict pass, or an old record's landed-ungated).
+    A record in the old folder counts too (result.read): an older kit's landing writes there.
     Read only."""
     for b, t in zip(branches, tips):
         rec, _ = result.read(root, b, 'land')
@@ -326,7 +328,7 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
         return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
     replaced = []
     for b in branches:
-        rec, _ = result.read(root, b, 'land')
+        rec, _ = result.read(root, b, 'land', legacy=False)    # the records the new ones replace
         if isinstance(rec, dict):
             replaced.append(rec)
     runs = []
@@ -466,8 +468,9 @@ def _open(rec, rr):
 
 
 def _unclaimed(root, rr):
-    """The land record of `rr` when it is still `rr`'s run, running and with no pid; else None."""
-    rec, _ = result.read(root, rr.branch, 'land')
+    """The land record of `rr` when it is still `rr`'s run, running and with no pid; else None.
+    The new folder only: the submission wrote its records there."""
+    rec, _ = result.read(root, rr.branch, 'land', legacy=False)
     return rec if _open(rec, rr) else None
 
 
@@ -534,7 +537,9 @@ def restore(root, payload, branches, tips, expect_main=None, environ=None):
 def untrusted_why(root, runs, output, digest, token, branches, tips, expect_main, rid,
                   want_output):
     """Why restore does not run a payload it read at the path submit names (Trust, in the module
-    docstring), or None. Read only."""
+    docstring), or None. The land records are read from the new folder only (result.read
+    legacy=False): the submission wrote them there, and the old folder is in agents' reach.
+    Read only."""
     if not token:
         return 'no submission token (%s): only the landing a submission started runs its ' \
                'payload' % TOKEN_ENV
@@ -550,7 +555,7 @@ def untrusted_why(root, runs, output, digest, token, branches, tips, expect_main
         return 'the payload\'s output %r is not the submission\'s %s' % (output, want_output)
     mine = (None, os.getpid(), os.getppid())
     for rr in runs:
-        rec, why = result.read(root, rr.branch, 'land')
+        rec, why = result.read(root, rr.branch, 'land', legacy=False)
         if not isinstance(rec, dict):
             return 'the land record of %s cannot be read: %s' % (rr.branch, why)
         if rec.get('verdict') != result.RUNNING or rec.get('run_id') != rid:

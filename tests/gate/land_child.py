@@ -2,13 +2,16 @@
 `python -m tests.gate.land_child <json>` from the kit root. The json names the scratch repo, the
 branch and hashes, `wait` (seconds), the scratch lock store (root, kinds path, fake hardware) and
 `hold`: with it the merged gate prints INSIDE and waits for a line on stdin before it gates, holding
-the landing lock meanwhile. It prints the outcome's lines and exits with its code. It never
-touches the machine's lock store, a real repository or a real remote."""
+the landing lock meanwhile, and `results`, the folder of the result folders
+(kitlib.gate.result.machine_root) as the parent test has it: importing `tests` fences this
+process's own temp home (tests/__init__.py), so the child cannot look the machine config up
+itself. It prints the outcome's lines and exits with its code. It never touches the machine's lock
+store, a real repository or a real remote."""
 import json
 import os
 import sys
 
-from kitlib.gate import land, runner
+from kitlib.gate import land, result, runner
 from kitlib.lock import layout as lay
 from kitlib.lock import run as lockrun
 from kitlib.lock.store import Settings, Store
@@ -29,6 +32,7 @@ def scratch_store(spec):
 
 def main(argv):
     a = json.loads(argv[1])
+    result.machine_root = lambda: a['results']
     book_kw = {'cores': 1, 'store': scratch_store(a['store']), 'env': dict(os.environ)}
     lockrun.book = compat_book([])
     held = None

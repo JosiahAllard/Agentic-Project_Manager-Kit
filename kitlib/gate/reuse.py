@@ -84,21 +84,23 @@ class NotCacheable(Exception):
 
 def prior_records(root, tips):
     """The result records that name any of `tips`, read before a landing writes its own: a list
-    of dicts, or None when the folder cannot be read (then nothing is reused)."""
+    of dicts, from the result folder and the old one (result.record_dirs: an older kit's red
+    record still counts), or None when a folder cannot be read or there is no result folder
+    (then nothing is reused)."""
+    out = []
     try:
-        folder = result.result_dir(root)
-        names = os.listdir(folder) if os.path.isdir(folder) else []
+        for folder in result.record_dirs(root):
+            names = os.listdir(folder) if os.path.isdir(folder) else []
+            for n in sorted(names):
+                if not n.endswith('.json') or n.startswith('.'):
+                    continue
+                rec, why = result.read_path(os.path.join(folder, n))
+                if rec is None:
+                    return None     # a record nobody can read might be the red one
+                if rec.get('tip') in tips:
+                    out.append(rec)
     except Exception:       # noqa: BLE001 - cannot tell: reuse nothing
         return None
-    out = []
-    for n in sorted(names):
-        if not n.endswith('.json') or n.startswith('.'):
-            continue
-        rec, why = result.read_path(os.path.join(folder, n))
-        if rec is None:
-            return None     # a record nobody can read might be the red one
-        if rec.get('tip') in tips:
-            out.append(rec)
     return out
 
 
