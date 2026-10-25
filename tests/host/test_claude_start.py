@@ -1,7 +1,8 @@
 """ADAPTER.start_text and ADAPTER.start_parts on Claude Code: the text each start hook adds, by its
 part (what boot/hook.py writes and tools/agent_view.py "At start" shows), and the parts a role runs:
 the plugin's hooks.json (the header, the coordinator rules) for every session, and the PM checklist
-from the PM's own settings."""
+from the PM's own settings. With no pm_start config the PM part is the skip line and the machine
+config lines (kitlib.pmstart.configcheck)."""
 import os
 import unittest
 from unittest import mock
@@ -9,6 +10,9 @@ from unittest import mock
 from kitlib import agentstart, coordinatorstart, pmstart
 from kitlib.config import user
 from kitlib.host import header
+from kitlib.pmstart import configcheck
+from tests import home as khome
+from tests import pmstart as tpm
 
 from hosts.claude.adapter import content
 from hosts.claude.adapter.host import ADAPTER
@@ -76,6 +80,31 @@ class Start(unittest.TestCase):
         with mock.patch.object(pmstart, 'load_config', side_effect=OSError('gone')):
             self.assertEqual(ADAPTER.start_text('SessionStart', KIT, {}, {}, 'pm'),
                              'PM session start: checklist failed: OSError: gone')
+
+    def test_with_no_pm_start_config_the_machine_config_line_still_shows(self):
+        # the real check on a temp home with no PM repo pointer (tests/pmstart stubs it process-wide)
+        khome.temp_home(self)
+        with mock.patch.object(configcheck, 'lines', tpm.REAL_CONFIG_LINES):
+            lines = ADAPTER.start_text('SessionStart', KIT, {}, {}, 'pm').split('\n')
+        self.assertIn('checklist skipped', lines[0])
+        self.assertEqual(lines[1:], ['- ' + configcheck.NO_POINTER])
+
+    def test_with_no_pm_start_config_a_failing_check_is_one_line(self):
+        def boom():
+            raise OSError('disk gone')
+        with mock.patch.object(pmstart, 'load_config', return_value=None), \
+                mock.patch.object(user, 'display', return_value='CONFIG'), \
+                mock.patch.object(configcheck, 'lines', boom):
+            got = ADAPTER.start_text('SessionStart', KIT, {}, {}, 'pm')
+        self.assertEqual(got.split('\n'), ['PM session start: no pm_start config in CONFIG; checklist skipped.',
+                                           '- could not check machine_config: OSError: disk gone'])
+
+    def test_with_no_pm_start_config_and_all_well_the_skip_line_stands_alone(self):
+        with mock.patch.object(pmstart, 'load_config', return_value=None), \
+                mock.patch.object(user, 'display', return_value='CONFIG'), \
+                mock.patch.object(configcheck, 'lines', lambda: []):
+            self.assertEqual(ADAPTER.start_text('SessionStart', KIT, {}, {}, 'pm'),
+                             'PM session start: no pm_start config in CONFIG; checklist skipped.')
 
     def test_the_parts_a_role_runs(self):
         plugin = tuple(part for event, _, part in content.HOOKS if event == 'SessionStart')

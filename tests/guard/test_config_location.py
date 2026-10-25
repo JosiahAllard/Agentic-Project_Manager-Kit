@@ -158,6 +158,52 @@ class TolerantReadTest(_Case):
         self.assertEqual(u['broken'], c.config_location().error)
 
 
+class LeftoverTest(_Case):
+    """A home config.json beside the PM repository's files (LEFTOVER): still broken, so every
+    subagent write is denied, and the PM repository's ledger keys are read, so a main session's
+    edit of the ledger is refused too; nothing else of the file is read."""
+
+    def setUp(self):
+        super().setUp()
+        self.books = tempfile.mkdtemp(prefix='kit-ledger-')
+        self.addCleanup(gitfixture.rmtree, self.books)
+        self.ledger = os.path.join(self.books, 'LEDGER.md')
+        self.split = os.path.join(self.books, 'split')
+        write(self.policy, {'ledger_path': self.ledger, 'ledger_dir': self.split, 'ledger_repos': ['kit'],
+                            'guard_mcp_tools': ['mcp__x__write'], 'guard_mcp_prefix': 'mcp__x__'})
+        write(self.local, {})
+        write(os.path.join(self.home, kuser.DIR_NAME, kuser.FILE_NAME), {})
+
+    def edit(self, path, sub=False):
+        from tests.guard.claudehost import decide
+        from tests.guard.world import event
+        return decide(event('Write', {'file_path': path, 'content': ''}, self.books, sub=sub), self.ctx())
+
+    def test_the_location_is_leftover(self):
+        self.assertEqual(self.ctx().config_location().state, kuser.LEFTOVER)
+
+    def test_the_ledger_keys_are_read_and_the_config_stays_broken(self):
+        c = self.ctx()
+        u = c.user()
+        self.assertEqual((u['ledger_path'], u['ledger_dir']), (self.ledger, self.split))
+        self.assertEqual(u['broken'], c.config_location().error)
+        # only the ledger keys: no other key (string or string list, which the tolerant reader
+        # keeps) is taken from the refused config
+        self.assertEqual((u['guard_mcp_tools'], u['guard_mcp_prefix'], u['ledger_repos']), (None, None, None))
+
+    def test_a_main_session_edit_of_the_ledger_is_refused(self):
+        for path in (self.ledger, os.path.join(self.split, 'rules', 'kit.md'), os.path.join(self.split, 'STANDING.md')):
+            d = self.edit(path)
+            self.assertIsNotNone(d, path)
+            self.assertEqual(d.rule, 'ledger', d.reason)
+
+    def test_every_subagent_write_is_still_refused(self):
+        d = self.edit(os.path.join(self.books, 'a.py'), sub=True)
+        self.assertIsNotNone(d)
+        self.assertEqual(d.rule, 'ledger', d.reason)
+        self.assertIn('broken', d.reason)
+
+
 class HubFoldersTest(_Case):
     def test_the_home_the_located_and_the_pointer_folders_are_held(self):
         got = [os.path.normcase(p) for p, _real in rules.hub_secret_folders(self.ctx())]

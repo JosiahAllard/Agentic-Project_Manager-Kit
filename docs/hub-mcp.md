@@ -59,6 +59,7 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 |---|---|---|
 | `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story`, `record` | `POST /questions` |
 | `hub_question_log` | `id`, `ruling`, `if_version` | `POST /questions/<id>/log` |
+| `hub_question_done` | `id`, `why`, `if_version` | `POST /questions/<id>/done` |
 | `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent`, `record` | `POST /questions/<id>/edit` |
 | `hub_question_withdraw` | `id`, `from`, `if_version` | `POST /questions/<id>/delete` |
 | `hub_todo_add` | `title`; `detail`, `commands`, `steps` ("To-do steps"), `repo`, `refs`, `urgent`, `from` | `POST /todos` |
