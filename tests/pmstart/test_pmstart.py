@@ -62,6 +62,12 @@ class StandingTest(unittest.TestCase):
         self.assertIn(HUB_KEPT_OFF, txt)
 
 
+class RulebooksCheckTest(unittest.TestCase):
+    def test_the_checklist_carries_the_rulebooks_line(self):
+        txt = pmstart.checklist(dict(CFG, standing=["x"]), NOW, procs=[], machine={}, **StandingTest.FAKES)
+        self.assertEqual(txt.split(chr(10))[2], "- rulebooks (standing rules): none - no ledger_dir or ledger_path is set")
+
+
 def wproc(pid, name="python.exe", cmd="python -u pm_watch.py"):
     return {"Name": name, "CommandLine": cmd, "ProcessId": pid}
 

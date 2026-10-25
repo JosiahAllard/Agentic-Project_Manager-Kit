@@ -383,7 +383,7 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
   is then the key's for `ACK_WINDOW_S` (30 minutes) from the first hand-over, and the PM's after
   that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
   an answered question stays pending until the PM logs it (`questions log`) or, when it needs no
-  ruling (a one-off go such as a landing or archive go, which the ledger keeps out), marks it
+  ruling (a one-off go such as a landing or archive go, which the ledger and the rulebooks keep out), marks it
   done (`questions done <id> --why <text> --if-version V`; status `done`, with `done_why` and
   `done_at`). A done question is no longer pending and
   its push ends (`kitlib/hubsite/api.py` `questions_done`). A question bound to a record whose

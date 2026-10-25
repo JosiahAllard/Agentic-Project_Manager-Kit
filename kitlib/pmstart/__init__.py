@@ -11,7 +11,9 @@ import re
 import subprocess
 import time
 
+from kitlib import kitroot
 from kitlib.config import user as kuser
+from kitlib.ledger import files as ledger_files, rulebook
 from kitlib.host import registry
 from kitlib.pmstart import configcheck, consoletasks, fglock
 from kitlib.proc import spawn
@@ -1049,6 +1051,33 @@ def _failure_text(e):
     return text
 
 
+def _user_config():
+    """The machine config, `{}` when it cannot be read (configcheck reports that)."""
+    try:
+        return kuser.user_config()
+    except kuser.ConfigError:
+        return {}
+
+
+def rulebook_lines(machine, repo=None):
+    """[the rulebook line] from the machine config `machine`: the rules folder, each rulebook
+    present with its rule count, and the `tools/ledger.py rules` command to read them
+    (`--repo REPO`, or `--all` without `repo`). Always one line: no ledger configured, or no
+    rulebook in the folder, says so (docs/ledger.md "Rulebooks"). The rulebooks are loaded for
+    their counts only; a parse error is `ledger.py check`'s to report."""
+    cmd = kitroot.command("ledger") + (" rules --repo %s" % repo if repo else " rules --all")
+    found = ledger_files.of_config(machine or {})
+    if found is None:
+        return ["rulebooks (standing rules): none - no ledger_dir or ledger_path is set"]
+    books, _ = rulebook.load(found.rules)
+    if not books:
+        return ["rulebooks (standing rules): none in %s" % found.rules]
+    counts = ", ".join("%s %d" % ("shared" if n == rulebook.SHARED else n, len(b.rules))
+                       for n, b in books.items())
+    return ["rulebooks (standing rules, read before deciding) in %s: %s rules; read with: %s"
+            % (found.rules, counts, cmd)]
+
+
 def checklist(cfg, now=None, procs=None, **fakes):
     """The full session-start text. A failed check is one "could not check X: reason" line."""
     today = (now or datetime.datetime.now()).date()
@@ -1064,6 +1093,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("standing", lambda: standing(cfg)),
         ("machine_config", lambda: configcheck.lines(**fakes.get("machine_config", {}))),
         ("eng_review", lambda: eng_review(cfg)),
+        ("rulebooks", lambda: rulebook_lines(fakes["machine"] if "machine" in fakes else _user_config())),
         ("hub", lambda: hub_site(**dict({"stamp": filed_stamp_file},
                                                      **fakes.get("hub_site", {})))),
         ("watcher", lambda: watcher(cfg, procs_once(), **fakes.get("watcher", {}))),

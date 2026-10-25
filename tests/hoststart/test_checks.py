@@ -80,7 +80,8 @@ class Checks(unittest.TestCase):
         with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=ConfigError('broken')):
             rows = self.coordinator(repo_name='demo', machine_config=None)
         self.assertEqual(rows, self.coordinator(repo_name='demo', machine_config={}))
-        self.assertFalse([r for r in rows if 'machine config' in r or 'ledger' in r], rows)
+        self.assertFalse([r for r in rows if 'machine config' in r or r.startswith('ledger')], rows)
+        self.assertTrue([r for r in rows if r.startswith('rulebooks (standing rules): none')], rows)
 
     def test_a_bug_reading_the_machine_config_is_reported_not_dropped(self):
         with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=TypeError('bug')):
