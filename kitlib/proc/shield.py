@@ -31,8 +31,7 @@ Every message says "returned", never "failed": a caller that runs the child unsh
 prints it, and it must not read as a failing line to a gate's fail patterns. (runner.PidHoldRun's
 lines do say FAILED: its flag is refused in any gate step, so no gate reads them.)
 
-Ported from the PM kit's pid_shield.py (the PidHold version). The bindings
-are kitlib.proc.win32's; resume is win32.resume (Job.start calls it).
+The bindings are kitlib.proc.win32's; resume is win32.resume (Job.start calls it).
 """
 import atexit
 import collections
