@@ -11,10 +11,10 @@ checkout and every agent's temp folder, where agents' own file writes do not rea
 a ResultError (a branch gate says it as a WARNING; a direct landing and a submission refuse) and
 nothing is written anywhere else.
 
-The old folder, `<git common dir>/kit-gate-result/` (legacy_dir), is read and never written:
-read() and wait() take a record there when the new folder has none of that branch and kind, or
-when it started strictly later than the new folder's (an older kit's run; pick), and
-finish_dead finishes a dead run's record where it is. The readers a landing trusts
+The old folder, `<git common dir>/kit-gate-result/` (legacy_dir), is read, and written only when
+finish_dead finishes a dead old-folder record in place (under that file's lock, which it makes
+there): read() and wait() take a record there when the new folder has none of that branch and
+kind, or when it started strictly later than the new folder's (an older kit's run; pick). The readers a landing trusts
 (kitlib.gate.submit's claim and restore) read the new folder only.
 
 A Run writes the file twice: a `running` record when the work starts (it replaces any earlier
@@ -176,7 +176,8 @@ def result_dir(root):
 
 
 def legacy_dir(root):
-    """The old result folder, `<git common dir>/kit-gate-result`: read, never written."""
+    """The old result folder, `<git common dir>/kit-gate-result`: read, and written only when
+    finish_dead finishes a dead old-folder record in place."""
     return os.path.join(_common(root), DIR_NAME)
 
 
@@ -198,7 +199,8 @@ def result_path(root, branch, kind='gate'):
 
 
 def legacy_path(root, branch, kind='gate'):
-    """The record's path in the old folder (legacy_dir): read, never written."""
+    """The record's path in the old folder (legacy_dir): read, and written only when finish_dead
+    finishes a dead old-folder record in place."""
     return os.path.join(legacy_dir(root), _file_name(branch, kind))
 
 

@@ -217,8 +217,10 @@ class TheLine(SubmitCase):
 class OldFolder(SubmitCase):
     """The result folder is out of the git common dir (docs/gate.md "Result record"): an older
     kit's land record in the old folder (<git common dir>/kit-gate-result) still stops a
-    submission, and is never written; with no result folder (no dev_drive) a submission refuses
-    and writes nothing anywhere."""
+    submission, and the submission never writes it (only result.finish_dead writes there, to
+    finish a dead old-folder record in place); what a landing trusts (the records a submission
+    replaces, the claim) reads the new folder only; with no result folder (no dev_drive) a
+    submission refuses and writes nothing anywhere."""
 
     def plant(self, rec):
         path = result.legacy_path(self.repo.root, rec['branch'], rec['kind'])
@@ -249,6 +251,48 @@ class OldFolder(SubmitCase):
         self.assertEqual(out.lines, ['REFUSED: kit/feature at %s already landed (run %s, LANDED '
                                      'kit/feature); nothing was changed' % (tip[:10], old['run_id'])])
         self.assertEqual(detach.calls, [])
+        self.assertEqual(result.read_path(path), (old, None))
+
+    def test_an_old_folder_record_is_not_one_the_submission_replaces(self):
+        """The records a submission replaces (submit.py `replaced`, which restore puts back) are
+        the new folder's only: an old-folder land record of the branch, which read() would take
+        when the new folder has none, is not carried into the payload."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        old = result.build(BRANCH, tip, self.main, 'land', G.FAILED, summary='NOT LANDED: red')
+        path = self.plant(old)
+        self.assertEqual(result.read(self.repo.root, BRANCH, 'land'), (old, None))
+        out, _ = self.submit([BRANCH], [tip])
+        self.assertEqual(out.code, G.OK, out.lines)
+        with open(out.facts['payload'], encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['replaced'], [])
+        self.assertEqual(result.read_path(path), (old, None))
+
+    def test_the_claim_never_takes_an_old_folder_record_as_unclaimed(self):
+        """claim() watches the new folder only (submit.py `_unclaimed`): a landing that claimed
+        its new-folder record is claimed, even with an unclaimed `running` record of the same
+        run in the old folder that started later (one read() would take). With the landing's
+        process gone, the old record would otherwise make the claim report it died."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = os.path.join(tmp.name, 'out.txt')     # a claim that thinks the landing died notes it
+        rr = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+        rr.pid, rr.ctime = None, None       # as submit writes it: not claimed yet
+        rr.start(log=out)
+        done = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+        done.run_id, done.started_at = rr.run_id, rr.started_at
+        done.start(log=out)                 # the landing claimed it: its pid is in the record
+        old = result.build(BRANCH, tip, self.main, 'land', None, verdict=result.RUNNING,
+                           run_id=rr.run_id, started_at='2999-01-01T00:00:00Z')
+        path = self.plant(old)
+        self.assertEqual(result.read(self.repo.root, BRANCH, 'land'), (old, None))
+        self.assertIsNone(submit.claim(self.repo.root, [rr], 4242, out, wait_s=0,
+                                       clock=lambda: 0.0, sleep=lambda s: None,
+                                       alive=lambda pid, ctime: False))
+        self.assertFalse(os.path.exists(out))
+        rec, _ = result.read(self.repo.root, BRANCH, 'land', legacy=False)
+        self.assertEqual((rec['verdict'], rec['run_id'], rec['pid']),
+                         ('running', rr.run_id, os.getpid()))
         self.assertEqual(result.read_path(path), (old, None))
 
     def test_with_no_result_folder_a_submit_refuses_and_writes_nothing(self):
