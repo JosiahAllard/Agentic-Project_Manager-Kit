@@ -1,4 +1,4 @@
-"""Ported from the PM repo's launcher/test_pm_watch.py at 95f7262, plus Watcher and CLI tests."""
+"""Ported from the PM repo's launcher/test_pm_watch.py, plus Watcher and CLI tests."""
 import io
 import json
 import os
@@ -259,10 +259,10 @@ class IdleEvents(unittest.TestCase):
         self.assertEqual(ev, [])
 
     def test_project_roots_are_claude_config_folders(self):
-        for d in (".claude", ".claude-account2", ".codex", "other"):
+        for d in (".claude", ".claude-ex2", ".codex", "other"):
             os.makedirs(os.path.join(self.root, d))
         self.assertEqual(H.project_roots(self.root),
-                         [os.path.join(self.root, d, "projects") for d in (".claude", ".claude-account2")])
+                         [os.path.join(self.root, d, "projects") for d in (".claude", ".claude-ex2")])
 
 
 class WatcherRun(unittest.TestCase):

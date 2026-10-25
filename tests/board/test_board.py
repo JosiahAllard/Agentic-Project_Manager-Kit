@@ -28,11 +28,11 @@ TASKLIST = ('Image Name                     PID Session Name        Session#    
             'Engine.exe                    3456 Console                    1     10,000 K\n'
             'notepad.exe                   4567 Console                    1      5,000 K\n')
 NETSTAT = ('\nActive Connections\n\n  Proto  Local Address          Foreign Address        State           PID\n'
-           '  UDP    0.0.0.0:7800           *:*                                    1234\n'
-           '  UDP    0.0.0.0:7999           *:*                                    1234\n'
+           '  UDP    0.0.0.0:41000          *:*                                    1234\n'
+           '  UDP    0.0.0.0:41199          *:*                                    1234\n'
            '  UDP    0.0.0.0:8000           *:*                                    1234\n'
-           '  UDP    [::]:7850              *:*                                    2345\n'
-           '  UDP    127.0.0.1:7800         *:*                                    3456\n')
+           '  UDP    [::]:41050             *:*                                    2345\n'
+           '  UDP    127.0.0.1:41000        *:*                                    3456\n')
 
 
 def free_reader(_kit):
@@ -346,11 +346,11 @@ class TheMachineLine(Fixture):
         self.assertIsNone(self.line())
 
     def test_configured_engines_and_ports_are_counted_on_one_line(self):
-        self.config(preflight={'engines': ['Godot', 'engine.exe'], 'udp_ports': [7800, 7999]})
+        self.config(preflight={'engines': ['Godot', 'engine.exe'], 'udp_ports': [41000, 41199]})
         with self.fake_run():
             code, out = self.run_board()
         self.assertEqual(code, 0, out)
-        self.assertIn('machine: engines running 3 | ports 7800-7999 in use [7800, 7850, 7999]',
+        self.assertIn('machine: engines running 3 | ports 41000-41199 in use [41000, 41050, 41199]',
                       out.splitlines())
 
     def test_engines_alone(self):
@@ -369,8 +369,8 @@ class TheMachineLine(Fixture):
 
     def test_a_failed_netstat_is_unknown_not_none(self):
         with self.fake_run(netstat=(1, '', '')):
-            self.assertEqual(self.line(udp_ports=[7800, 7999]),
-                             'machine: ports 7800-7999 UNKNOWN (netstat failed)')
+            self.assertEqual(self.line(udp_ports=[41000, 41199]),
+                             'machine: ports 41000-41199 UNKNOWN (netstat failed)')
 
 
 class TheStateFile(Fixture):

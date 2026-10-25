@@ -63,7 +63,7 @@ PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, foll
                 "into this set; never a sweep. `next` never offers an unpriced record; its banner counts it "
                 "under `unprioritised+open`, not under `held` (`held` = blocked). "
                 "A record that needs the owner (priority 1, a pre-emption, an owner-held area, a question only "
-                "he can answer) goes to the PM as one question; never ask him directly.")
+                "the owner can answer) goes to the PM as one question; never ask the owner directly.")
 
 
 def is_coordinator(env=None):

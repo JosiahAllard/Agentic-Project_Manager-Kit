@@ -34,7 +34,8 @@ class InstallJunctionsSection(unittest.TestCase):
 
     def test_agents_sentence_is_one_standalone_line(self):
         self.assertIn('\n' + AGENTS + '\n', self.text)
-        self.assertIn('KIT-AGENTS-IN-PLUGIN', self.text)
+        self.assertIn("Gated on the plugin shipping the kit's agents under the pm-kit: names",
+                      self.text)
 
 
 if __name__ == '__main__':

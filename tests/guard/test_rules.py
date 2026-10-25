@@ -675,7 +675,7 @@ UNHELD = {context.ROLE_ENV: 'plain'}             # a marked session the write ja
 
 
 class OwnerLockTools(unittest.TestCase):
-    """reserve_ui.pyw and the lock CLI's owner-only writes are the owner's to run himself; an agent's
+    """reserve_ui.pyw and the lock CLI's owner-only writes are the owner's to run themselves; an agent's
     Bash or PowerShell call that runs one is denied, whatever the session."""
 
     BLOCKED = [
