@@ -128,10 +128,12 @@ def widened(change):
 
 
 def step(g):
-    return g['steps'][0]
+    return next(s for s in g['steps'] if s['name'] == 'kit-suite')
 
 
-EXTRA = {'name': 'extra', 'cmd': ['{python}', '-c', 'pass']}
+# A `check` step, not a `cmd` one: steps.build gives it cmd None, which argv_problems skips, so only
+# the selection check can catch an EXTRA step that gets selected.
+EXTRA = {'name': 'extra', 'check': 'extra'}
 
 WIDENINGS = {
     'cmd loses --select': lambda g: step(g)['cmd'].remove('--select'),
