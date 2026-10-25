@@ -9,7 +9,8 @@
   backlog-raw-write  a write of the backlog that skips the tool and its role check: a subagent's
                      python code importing kitlib.backlog (-c, standard input, -m, runpy) or naming
                      tools/backlog.py; any session's but the owner's python code naming the hub's
-                     record writer (kitlib.hubsite.recordwrite, plan_answer: hub_writer_code);
+                     record writer by its module name, not its file's path
+                     (kitlib.hubsite.recordwrite, plan_answer: hub_writer_code);
                      any session's but the owner's git write of the store's ref
                      (refs/backlog/*; the backlog branch when the store is `branch`); any
                      session's but the owner's edit of a folder store's records.
@@ -45,11 +46,13 @@ ASK = ('Ask a session whose role may take it (your coordinator; a coordinator as
 CODE_RE = re.compile(r'kitlib\s*[./\\]\s*backlog\b|from\s+kitlib\s+import\s+[^\n;]*\bbacklog\b|'
                      r'\btools\s*[./\\]\s*backlog\b|\bbacklog\.py\b|\bkit(?:\.py|\.cmd|\.exe)?\W{1,4}backlog\b')
 # python code that names the hub's record writer or the store's answer filing: hubsite then
-# recordwrite across a dot or slash; any attribute .recordwrite (an alias: serve.recordwrite,
+# recordwrite across a dot; any attribute .recordwrite (an alias: serve.recordwrite,
 # h.recordwrite; a backslash line break allowed after the dot); `from kitlib.hubsite import`
 # naming it, on one line, across backslash line breaks or inside its parentheses; or plan_answer
-# (kitlib.backlog.plan). Only the hub runs them.
-HUB_WRITER_RE = re.compile(r'\bhubsite\s*[./\\]\s*recordwrite\b|\.(?:\s|\\\n)*recordwrite\b|'
+# (kitlib.backlog.plan). Only the hub runs them. The file's path (kitlib/hubsite/recordwrite.py,
+# with either slash) is not read: code that reads the file writes nothing, and the file run as a
+# script stops at its relative import (`from .store import`) before it writes.
+HUB_WRITER_RE = re.compile(r'\bhubsite\s*\.\s*recordwrite\b|\.(?:\s|\\\n)*recordwrite\b|'
                            r'from\s+kitlib\s*\.\s*hubsite\s+import\s+'
                            r'(?:\([^)]*|[^\n;]*(?:\\\n[^\n;]*)*)\brecordwrite\b|\bplan_answer\b')
 HUB_WRITER_MODULE = 'kitlib.hubsite.recordwrite'
