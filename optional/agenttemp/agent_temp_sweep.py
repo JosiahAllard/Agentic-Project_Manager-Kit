@@ -311,6 +311,8 @@ def second_root_unsafe(root, home=None):
     home = os.path.abspath(home or os.path.expanduser("~"))
     for name, other in (("the kit checkout", KIT_ROOT),
                         ("the machine config folder", kuser.config_dir(home))):
+        if not other:                                                # no such folder to keep clear of
+            continue
         if overlaps(root, other):
             return "%s is %s %s, in it or holds it" % (root, name, other)
     top = kagenttemp.in_checkout(root)

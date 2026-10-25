@@ -720,6 +720,12 @@ class UserTemp(Case):
         os.makedirs(cfg)
         self.assertIsNotNone(S.second_root_unsafe(cfg, self.home))
 
+    def test_a_second_root_with_no_config_folder_to_keep_clear_of_does_not_crash(self):
+        root = os.path.join(self.local, 'claude')
+        os.makedirs(root)
+        with mock.patch.object(kuser, 'config_dir', lambda home=None: None):
+            self.assertIsNone(S.second_root_unsafe(root, self.home))
+
     @unittest.skipUnless(hasattr(__import__('_winapi'), 'CreateJunction'), 'a junction needs Windows')
     def test_a_second_root_that_is_a_link_or_under_one_is_refused(self):
         import _winapi
