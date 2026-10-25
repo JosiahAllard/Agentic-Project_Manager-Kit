@@ -51,6 +51,21 @@ class MachineConfigCheck(unittest.TestCase):
         self.assertTrue(any('machine_config' in r and 'disk gone' in r for r in rows), rows)
         self.assertIn('standing rule: s', rows)
 
+    def test_codex_start_text_shows_the_line_for_a_pm_with_no_machine_config(self):
+        # the Codex host's start text runs these shared checks (hosts.codex.adapter.start)
+        from hosts.codex.adapter import start
+
+        def checks(role, cwd, **kw):
+            return hoststart.shared_checks(role, cwd, now=NOW, pm_config={'standing': ['s']},
+                                           machine_config={}, lock_reader=lambda: {}, **{
+                                               k: v for k, v in kw.items()
+                                               if k in ('repo_name', 'state_note')})
+        with mock.patch('kitlib.config.load') as load:
+            load.return_value.repo = {'name': 'demo'}
+            got = start.text('SessionStart', 'C:/kit', {'cwd': os.getcwd()}, {'PM_KIT_ROLE': 'pm'},
+                             checks=checks)
+        self.assertIn('- standing rule: s\n- ' + configcheck.NO_POINTER, got)
+
     def test_a_worker_gets_no_check(self):
         self.assertEqual(self.rows('worker'), ())
 

@@ -375,11 +375,8 @@ def render(env=None, path=None, **kw):
         cfg = load_config(path)
         if cfg is None:
             text = "Coordinator session start: no coordinator_start config in %s; skipped." % (path or kuser.display())
-            try:     # the machine config lines still show (kitlib.pmstart.configcheck)
-                extra = (kw.get("config_lines") or configcheck.lines)()
-            except Exception as e:
-                extra = ["could not check machine_config: %s: %s" % (type(e).__name__, e)]
-            return text + "".join("\n- " + l for l in extra)
+            # the machine config lines still show (kitlib.pmstart.configcheck, as at the PM part)
+            return configcheck.appended(text, kw.get("config_lines"))
         return context(cfg, env=env, **kw)
     except Exception as e:
         return "Coordinator session start: could not check config: %s: %s" % (type(e).__name__, e)
