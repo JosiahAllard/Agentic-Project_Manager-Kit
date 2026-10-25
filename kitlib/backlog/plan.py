@@ -941,19 +941,22 @@ def plan_unblock(snap, ctx, rid, on=None, reason=None, role_checked=False):
         refuse_top(rid, 'unblock', ['unblock-owner'])
     drop = unheld and rec.get('priority') != rmod.OWNER_PRIORITY
     pairs = [(k, v) for k, v in rec.pairs() if not (drop and k == 'owner_ask')]
+    restored, restore_lines, note = ([], [], '') if left else restore_pull(snap, ctx, rec)
     changes = [('blocked_on', left)] if left else [('state', ['open']), ('blocked_on', ['-'])]
-    pairs = rmod.apply_changes(pairs, changes)
+    pairs = rmod.apply_changes(pairs, changes + restored)
     if left:
         lines = ['UNBLOCKED %s - `%s` removed -> %s' % (rid, on, ', '.join(left))]
     else:
-        lines = ['UNBLOCKED %s - state: open, blocked_on: -' % rid]
+        lines = ['UNBLOCKED %s - state: %s, blocked_on: -' % (rid, 'pulled' if restored else 'open')]
+    lines += restore_lines
     if drop and rec.has('owner_ask'):
         lines.append('  owner_ask dropped: nothing waits on the owner now. It was: %s' % rec.get('owner_ask'))
     subject = 'backlog: unblock %s' % rid
     if reason is not None:
         named = next((m for m in ([on] if on else members) if m != '-'), None)
         subject += '%s: %s' % (' from %s' % named if named else '', ' '.join(reason.split()))
-    return Change({rid: _text(pairs, rec.body)}, subject, lines)
+    body = _append_line(rec.body, note) if note else rec.body
+    return Change({rid: _text(pairs, body)}, subject, lines)
 
 
 # --- park / unpark -----------------------------------------------------------------------
@@ -1104,6 +1107,7 @@ def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, othe
     asked = _waits_on(rec)
     state = rec.get('state')
     pending = [q for q in asked if q not in done] + [w for w in waiting if w not in done]
+    stop_note = ''
     if not asked:
         lines.append('  state: %s, unchanged: its wait names no question' % state)
     elif pending:
@@ -1121,11 +1125,15 @@ def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, othe
         left = [m for m in rec.all('blocked_on') if m != 'owner']
         if rec.get('priority') != rmod.OWNER_PRIORITY:
             pairs = [(k, v) for k, v in pairs if k != 'owner_ask']
+        restored, restore_lines, stop_note = (([], [], '') if left
+                                              else restore_pull(snap, ctx, rec))
         changes = [('blocked_on', left)] if left else [('state', ['open']),
                                                          ('blocked_on', ['-'])]
-        pairs = rmod.apply_changes(pairs, changes)
+        pairs = rmod.apply_changes(pairs, changes + restored)
         lines.append('  owner blocker cleared - %s' % ('still blocked on %s' % ', '.join(left)
-                                                       if left else 'state: open'))
+                                                       if left else 'state: %s' % (
+                                                           'pulled' if restored else 'open')))
+        lines += restore_lines
     marked = other and not rec.has('review')
     if marked:
         mark = '%s %s' % (ANSWER_REVIEW, ctx.date())
@@ -1143,6 +1151,8 @@ def plan_answer(snap, ctx, rid, qid, at, title, label, note=None, via=None, othe
                        'anyone pulls the record.')
     body = (rec.body or '').rstrip('\n')
     body = (body + '\n\n' if body.strip() else '') + '\n'.join(section) + '\n'
+    if stop_note:
+        body = _append_line(body, stop_note)
     lines.append('  body: section `## Owner answer (Action Hub, %s)` appended' % at)
     return Change({rid: _text(pairs, body)}, subject, lines)
 
@@ -1473,6 +1483,114 @@ def resume_line(body):
     return '  resume on %s? Work stopped there at %s, branch kept' % (branch, tip)
 
 
+# plan_block's `Blocked on M (date): T` line, and the lines that end a stopped pull's wait.
+BLOCKED_NOTE_RE = re.compile(r'Blocked on .+? \((\d{4}-\d{2}-\d{2})\): ')
+_STOP_ENDED = ('Unblocked (', 'Released (')
+
+
+def blocked_pull(body):
+    """`(branch, tip)` of the pull a `block` stopped and nothing has ended since: the latest
+    STOPPED_NOTE is followed straight by plan_block's `Blocked on` line, and no
+    `Unblocked (` or `Released (` line comes after it. None otherwise."""
+    found = list(STOPPED_RE.finditer(body or ''))
+    if not found:
+        return None
+    rest = body[found[-1].end():].split('\n')[1:]
+    blocked = BLOCKED_NOTE_RE.match(rest[0]) if rest else None
+    if not blocked or any(line.startswith(_STOP_ENDED) for line in rest[1:]):
+        return None
+    return found[-1].group(1), found[-1].group(2)
+
+
+def _git_answer(got, what):
+    """`got`'s value, `(value, why)` from a kitlib.git.refs probe; Failure when git cannot tell."""
+    value, why = got
+    if value is None:
+        raise Failure('cannot tell %s: %s' % (what, why))
+    return value
+
+
+def _restore_why_not(snap, ctx, rec, branch, tip):
+    """Why the pull `block` stopped on `branch` at `tip` does not come back, None when it does.
+    Failure when git cannot tell any of it."""
+    if rec.get('priority') == rmod.OWNER_PRIORITY:
+        return 'the record is held (`priority: -1`)'
+    what = 'whether the pull of `%s` by %s comes back' % (rec.id, branch)
+    names = _git_answer(omod.live_branches(ctx.root, ctx.remote), what)
+    if branch not in names:
+        return 'no branch or worktree by that name'
+    full = _git_answer(refs.resolve(tip, ctx.root, known=True), what)
+    if not full:
+        return 'its stopped tip %s is gone' % tip
+    head = ''
+    for ref in ('refs/heads/%s' % branch, 'refs/remotes/%s/%s' % (ctx.remote, branch)):
+        head = _git_answer(refs.ref_commit(ref, ctx.root), what)
+        if head:
+            break
+    if not head or not _git_answer(refs.is_ancestor(full, head, ctx.root), what):
+        return '%s no longer holds its stopped tip %s' % (branch, tip)
+    for ref in ('refs/heads/%s' % ctx.main_branch,
+                'refs/remotes/%s/%s' % (ctx.remote, ctx.main_branch)):
+        main = _git_answer(refs.ref_commit(ref, ctx.root), what)
+        if main and _git_answer(refs.is_ancestor(full, main, ctx.root), what):
+            return 'its stopped tip %s has landed on %s' % (tip, ref.split('/', 2)[2])
+    holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+    lead = '; a lead may re-pull it (the pull-collision row)'
+    hits = live_hits(rec.all('scope'), holding, skip=rec.id, branch=branch)
+    if hits:
+        return hits[0] + lead
+    folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
+    if folds:
+        return 'scope folds into %s (%s)%s' % (_fold_where(folds), folds[0], lead)
+    # A branch the fold check could not compare is "cannot tell", never "no overlap" (as
+    # _branch_changes refuses to measure it): the record opens for a lead to look at.
+    unmeasured = [n for n in notes if 'not compared' in n]
+    if unmeasured:
+        return ('cannot tell whether its scope folds into another pull\'s work (%s)%s'
+                % (unmeasured[0][len('NOTE: '):] if unmeasured[0].startswith('NOTE: ')
+                   else unmeasured[0], lead))
+    return None
+
+
+def restore_pull(snap, ctx, rec):
+    """What opening the blocked `rec` does with the pull its `block` stopped (blocked_pull):
+    `(changes, lines, note)`, all empty when there is none. The pull comes back (`state:
+    pulled`, `pulled_by` the branch, `pulled_at` today) only while the branch is live by `next`'s
+    test (offer.live_branches: a local, remote-tracking or worktree branch by that name), still
+    holds the stopped tip, which is on neither the local nor the remote main branch, the record
+    is not held (`priority: -1`), and its scope neither collides with another live pull nor folds
+    into one's work (those are a lead's call, the pull-collision row). Otherwise the record opens
+    as before. `note` is the body line that says which, and ends the stopped pull's wait. A git
+    that cannot say fails (_restore_why_not)."""
+    found = blocked_pull(rec.body)
+    if found is None:
+        return [], [], ''
+    branch, tip = found
+    why = _restore_why_not(snap, ctx, rec, branch, tip)
+    if why:
+        return [], ['  pull by %s not restored: %s' % (branch, why)], \
+            'Unblocked (%s): pull by %s not restored: %s.' % (ctx.date(), branch, why)
+    changes = [('state', ['pulled']), ('pulled_at', [ctx.date()]), ('pulled_by', [branch])]
+    lines = ['  pull restored - state: pulled, pulled_by: %s, pulled_at: %s'
+             % (branch, ctx.date())]
+    return changes, lines, 'Unblocked (%s): pull by %s restored.' % (ctx.date(), branch)
+
+
+def stale_stop_note(rec, day, why):
+    """The body line that ends `rec`'s stopped pull (blocked_pull) when something other than an
+    unblock opens it, None when it has none: `why` says what opened it. It never restores."""
+    found = blocked_pull(rec.body)
+    if found is None:
+        return None
+    return 'Unblocked (%s): %s; pull by %s not restored.' % (day, why, found[0])
+
+
+def _append_line(body, line):
+    """`body` with `line` appended as its own paragraph."""
+    body = (body or '').rstrip('\n')
+    return (body + '\n\n' if body.strip() else '') + line + '\n'
+
+
 def plan_release(snap, ctx, rid, reason, kept=True):
     """Return a pull to `state: open`: the caller's own pull, or one anybody may stop (stop_pull:
     no branch or worktree by its `pulled_by`, or a worktree `ctx.liveness` finds dead). Pre-emption
@@ -1514,9 +1632,12 @@ def plan_release(snap, ctx, rid, reason, kept=True):
 
 # --- close / retire -------------------------------------------------------------------------------
 
-def dependent_rewrites(snap, rid):
+def dependent_rewrites(snap, rid, day, gone='closing'):
     """`({stem: text}, lines)`: every record blocked on `item:<rid>`, without that member; one
-    left with none takes `blocked_on: -` and, if blocked, `state: open`."""
+    left with none takes `blocked_on: -` and, if blocked, `state: open`. One that opens with a
+    stopped pull (blocked_pull) gets the body line that ends it (stale_stop_note, dated `day`,
+    `gone` saying what became of `rid`), so a later unblock cannot restore it; this never
+    restores a pull."""
     target = 'item:%s' % rid
     writes, lines = {}, []
     for other in snap.readable:
@@ -1526,7 +1647,9 @@ def dependent_rewrites(snap, rid):
         left = [m for m in members if m != target] or ['-']
         opened = left == ['-'] and other.get('state') == 'blocked'
         changes = [('blocked_on', left)] + ([('state', ['open'])] if opened else [])
-        writes[other.stem] = _text(rmod.apply_changes(other.pairs(), changes), other.body)
+        note = stale_stop_note(other, day, 'opened by %s %s' % (target, gone)) if opened else None
+        body = _append_line(other.body, note) if note else other.body
+        writes[other.stem] = _text(rmod.apply_changes(other.pairs(), changes), body)
         lines.append('UNBLOCKED %s - `%s` removed -> %s%s' % (other.id, target, ', '.join(left),
                                                               '; state: open' if opened else ''))
     return writes, lines
@@ -1556,7 +1679,7 @@ def plan_close(snap, ctx, rid, reason, role_checked=False):
     rec = require(snap, rid)
     subject = _claim_subject('closes', rid, reason, '--reason')
     refuse_unchecked_end(rec, 'close', role_checked)
-    writes, lines = dependent_rewrites(snap, rid)
+    writes, lines = dependent_rewrites(snap, rid, ctx.date())
     writes[rid] = None
     lines.insert(0, 'CLOSED %s' % rid)
     if rec.get('state') != 'pulled':
@@ -1573,7 +1696,7 @@ def plan_retire(snap, ctx, rid, why, role_checked=False):
     subject = _claim_subject('retires', rid, why, '--why')
     notes = _refuse_live_pulls(snap, ctx, [rec])
     refuse_unchecked_end(rec, 'retire', role_checked)
-    writes, lines = dependent_rewrites(snap, rid)
+    writes, lines = dependent_rewrites(snap, rid, ctx.date(), 'retiring')
     writes[rid] = None
     lines.insert(0, 'RETIRED %s' % rid)
     lines[1:1] = notes
@@ -1634,7 +1757,7 @@ def plan_delete(snap, ctx, rid, why, role_checked=False):
         notes.append('  parked on %s; a branch kept for it is not touched: remove it by hand'
                      % (rec.get('q') or 'no recorded question'))
     refuse_unchecked_end(rec, 'delete', role_checked)
-    writes, lines = dependent_rewrites(snap, rid)
+    writes, lines = dependent_rewrites(snap, rid, ctx.date(), 'being deleted')
     writes[rid] = None
     return Change(writes, subject, ['DELETED %s' % rid] + notes + lines)
 
