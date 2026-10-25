@@ -1350,7 +1350,7 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
         return None
     sub, args = gc.sub, gc.rest
     held = ledger_guarded(ctx)
-    if not held:
+    if not held and not ctx.user().get('ledger_unread'):
         return None
     from . import delegfile
     xargs = gc.inv is not None and gc.inv.via == 'xargs'
@@ -1358,6 +1358,9 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
               else 'the subcommand xargs appends' if xargs and not sub else None)
     short, longs, pos = _opts(sub, args, wide=True)
     tree_form = unread or ledger_git_tree_form(sub, args, short, longs, xargs)
+    d = ledger_git_unread(event, ctx, cmd, sub, args, short, longs, xargs, tree_form, role)
+    if d or not held:
+        return d
     if not gc.dir or gc.blind or (gc.unknown and not gc.sub_dyn):
         if not ledger_wide_binds(event, ctx):
             return None
@@ -1410,6 +1413,21 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
         return refuse('ledger', role, STANDING_WHY[kind] % ('`%s` (%s)' % (bare(cmd), text)),
                       ledger_instead(ctx, kind))
     return None
+
+
+def ledger_git_unread(event, ctx, cmd, sub, args, short, longs, xargs, tree_form, role):
+    """ledger_unread for a git call while a ledger key could not be read, wherever it runs (the
+    ledger may be in any tree): a path form (rm, mv, restore but the index alone, checkout-index,
+    checkout of paths) in any session, and a form that rewrites or moves the tree
+    (ledger_git_tree_form, ledger_git_moves) in the sessions ledger_wide_binds names; else None."""
+    if not ctx.user().get('ledger_unread'):
+        return None
+    moves = None if tree_form else ledger_git_moves(sub, args, short, longs)
+    path_form = sub in ('rm', 'mv', 'checkout-index') or (
+        sub == 'restore' and (xargs or not restore_index_only(short, longs))) or (sub == 'checkout' and not moves)
+    if not path_form and not ((tree_form or moves) and ledger_wide_binds(event, ctx)):
+        return None
+    return ledger_unread(ctx, role, '`%s` (%s)' % (bare(cmd), tree_form or moves or 'a path form'))
 
 
 def held_spec(ctx, words, cwd, top, held):
@@ -1696,7 +1714,8 @@ def ledger_rule(event, ctx, target, role, what, stand_in=False):
     the sessions ledger_wide_binds names, a folder above a held path or a wildcard that can name
     one (`above`), unless the target is a stand-in for what the guard cannot read (edit_target's
     `stand_in`: the folder python runs in), as delegfile.reaches reads folders. A broken machine
-    config refuses every subagent write."""
+    config refuses every subagent write; one with a ledger key the guard could not read asks the
+    owner about every main-session write a held path does not refuse (ledger_unread)."""
     user = ctx.user()
     broken = user.get('broken')
     if broken and role == 'subagent':
@@ -1704,12 +1723,29 @@ def ledger_rule(event, ctx, target, role, what, stand_in=False):
                       'guard cannot tell where the rulings ledger is and refuses every subagent write. The owner '
                       'or the PM session fixes it.' % (what, ctx.config_location().display(), broken),
                       'python -m json.tool %s' % quote(ctx.config_location().path))
-    if not target:
-        return None
-    kind = ledger_kind(ctx, target, above=not stand_in and ledger_wide_binds(event, ctx))
+    kind = ledger_kind(ctx, target, above=not stand_in and ledger_wide_binds(event, ctx)) if target else None
     if kind is None:
-        return None
+        return ledger_unread(ctx, role, what)
     return refuse('ledger', role, STANDING_WHY[kind] % ledger_what(what), ledger_instead(ctx, kind))
+
+
+def ledger_unread(ctx, role, what):
+    """While the machine config holds a ledger key the guard could not read (Ctx.user's
+    'ledger_unread': the ledger may be at any path), the write `what`: asked of the owner in a
+    main session, denied in a subagent's; else None. No kit tool's ledger write is asked: ledger.py
+    reads the strict config and refuses while it is broken."""
+    why = ctx.user().get('ledger_unread')
+    if not why:
+        return None
+    loc = ctx.config_location()
+    if role == 'subagent':
+        return refuse('ledger', role, '%s: the machine config %s is broken (%s), so the guard cannot tell where '
+                      'the rulings ledger is and refuses every subagent write. The owner or the PM session fixes '
+                      'it.' % (what, loc.display(), why), 'python -m json.tool %s' % quote(loc.path))
+    return refuse('ledger', role, '%s: the machine config %s is broken (%s), so the guard cannot tell where the '
+                  'rulings ledger is and asks the owner about every write of this session until it is fixed (only '
+                  'ledger.py writes the ledger, and it refuses while the config is broken). To read the machine '
+                  'config:' % (what, loc.display(), why), 'python -m json.tool %s' % quote(loc.path), kind=ASK)
 
 
 def ledger_what(what):

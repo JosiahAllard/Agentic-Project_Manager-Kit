@@ -55,7 +55,12 @@ a constructor argument, and the defaults read this machine.
                      home leftover is still read, and a LEFTOVER one's PM repository config.json
                      for its ledger_path and ledger_dir only, so the ledger stays protected; a
                      BAD one's are read the same way from <pointer>/.pm-kit/config.json when
-                     the PM-repo pointer's value is absolute (_bad_ledger_keys).
+                     the PM-repo pointer's value is absolute (_bad_ledger_keys). A ledger key the
+                     guard could not read, so that the ledger may be at any path (a file that does
+                     not read, a BAD location whose pointer config gives nothing, a blank,
+                     non-string or unplaceable relative key), also sets 'ledger_unread' (why): the
+                     ledger rule then asks the owner about every main-session write
+                     (rules.ledger_unread).
   ledger_files()     kitlib.ledger.files.of_config over user(): where the ledger's log files,
                      standing digest and rulebooks' folder are (the ledger rule), or None
   config_location()  kitlib.config.user.locate(home) with the PM-repo pointer read once from the
@@ -171,29 +176,42 @@ def _not_a_folder(path):
     return os.path.exists(bare) and not os.path.isdir(bare)
 
 
+def _unread(out, why):
+    """Mark `out` (a user() answer) as holding a ledger key the guard could not read: 'broken' and
+    'ledger_unread' each set to `why` unless already set (the first cause is kept)."""
+    if not out.get('broken'):
+        out['broken'] = why
+    if not out.get('ledger_unread'):
+        out['ledger_unread'] = why
+
+
 def _ledger_keys(data, pm, out):
     """LEDGER_KEYS of the JSON object `data` into `out`: a relative path read against the PM
     repository `pm`; a value that is not a path string, is blank, or is relative with no `pm`
-    leaves the key unset and sets 'broken' (why)."""
+    leaves the key unset and sets 'broken' and 'ledger_unread' (why)."""
     for k in LEDGER_KEYS:
         v = data.get(k)
         if v is None:
             continue
+        why = None
         if not isinstance(v, str):
-            out['broken'], out[k] = '%s must be a string, not %r' % (k, v), None
+            why = '%s must be a string, not %r' % (k, v)
         elif not v.strip():
-            out['broken'], out[k] = '%s must be a non-empty path, not %r' % (k, v), None
+            why = '%s must be a non-empty path, not %r' % (k, v)
         elif os.path.isabs(v):
             out[k] = v
         elif pm:
             out[k] = kuser.resolved({k: v}, pm)[k]
         else:
-            out['broken'], out[k] = '%s must be an absolute path, not %r' % (k, v), None
+            why = '%s must be an absolute path, not %r' % (k, v)
+        if why:
+            out['broken'], out[k] = why, None
+            _unread(out, why)
 
 
 def _ledger_checked(u):
     """`u` (a user() answer) with each ledger key checked: a blank one is unset (nothing to hold)
-    and sets 'broken'; one that is not absolute once read (`C:books`) and a ledger_dir that exists
+    and sets 'broken' and 'ledger_unread'; one that is not absolute once read (`C:books`) and a ledger_dir that exists
     and is not a folder (a trailing separator dropped first: `<ledger_dir>\\` names the
     file `<ledger_dir>`) set 'broken' and are still held as given, so no session writes what the guard
     held before. A folder not made yet (ledger.py makes it) or outside the PM repository is
@@ -205,6 +223,7 @@ def _ledger_checked(u):
             continue
         if not isinstance(v, str) or not v.strip():
             why, u[k] = '%s must be a non-empty path, not %r' % (k, v), None
+            _unread(u, why)
         elif not _placed(v):
             why = '%s must be an absolute path, not %r' % (k, v)
         elif k == 'ledger_dir' and _not_a_folder(v):
@@ -481,8 +500,8 @@ class Ctx(object):
         out['error'] = why
         loc = self.config_location()
         if loc.error and loc.state not in (kuser.UNMOVED, kuser.LEFTOVER):
-            if loc.state == kuser.BAD:
-                self._bad_ledger_keys(out)
+            if loc.state != kuser.BAD or not self._bad_ledger_keys(out):
+                _unread(out, loc.error)
             out['broken'] = loc.error
             return out
         if loc.state == kuser.OK:
@@ -498,6 +517,8 @@ class Ctx(object):
             if broken:
                 # the rules name loc.path's file; the local file names itself
                 out['broken'] = broken if path == loc.path else '%s: %s' % (loc.display(path), broken)
+                if set(LEDGER_KEYS) & set(keys):
+                    _unread(out, out['broken'])
                 return out
             for k in keys:
                 v = data.get(k)
@@ -519,13 +540,19 @@ class Ctx(object):
         """Under a BAD location, LEDGER_KEYS (no other key) of `<pointer>/.pm-kit`'s policy file
         into `out`, relative ones read against the pointer, when the pointer's value is absolute:
         the guard then holds the ledger that folder names, for main sessions too. It only adds
-        held paths; the config stays broken, so every subagent write is still refused."""
+        held paths; the config stays broken, so every subagent write is still refused. True when
+        that file was read (a key in it that does not read sets 'ledger_unread' itself); False when
+        the pointer is not absolute or the file is absent or does not read: the ledger is then
+        unread."""
         pm = self.pm_repo_pointer()
         if not isinstance(pm, str) or not _placed(pm):
-            return
-        data, why = _tolerant_read(os.path.join(pm, kuser.DIR_NAME, kuser.FILE_NAME))
-        if not why:
-            _ledger_keys(data, pm, out)
+            return False
+        path = os.path.join(pm, kuser.DIR_NAME, kuser.FILE_NAME)
+        data, why = _tolerant_read(path)
+        if why or not os.path.isfile(path):
+            return False
+        _ledger_keys(data, pm, out)
+        return True
 
     def session_role(self, event):
         return self._role(event, self.environ)
