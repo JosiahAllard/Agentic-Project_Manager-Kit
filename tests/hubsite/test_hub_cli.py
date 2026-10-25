@@ -1944,7 +1944,12 @@ class ArgumentCase(CliCase):
         # with it, the one call is the write, with the version that was given: nothing is read first
         (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--if-version', '4')
         self.assertEqual((code, err), (0, ''), out)
-        self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'ruling': 'D-7', 'if_version': 4, 'replace': False})])
+        self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'ruling': 'D-7', 'if_version': 4})])
+        (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--replace',
+                                           '--if-version', '4')
+        self.assertEqual((code, err), (0, ''), out)
+        self.assertEqual(seen, [('POST', '/questions/Q-001/log',
+                                 {'ruling': 'D-7', 'if_version': 4, 'replace': True})])
         (code, out, err), seen = self.sent('stories', 'set', 'S-001', '--status', 'review',
                                            '--if-version', '0')
         self.assertEqual((code, err), (0, ''), out)

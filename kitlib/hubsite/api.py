@@ -1243,8 +1243,9 @@ def _ruling(api, ruling):
     """`ruling` when it is a ledger ruling id (kitlib.ledger.fmt.is_id) that
     exists. Refused `invalid` (field ruling) for any other text, so a stray line cannot be stored
     as a ruling, and for an id no ledger file holds. The existence check is the optional
-    `ruling_exists` view (module docstring, "Views"); a server with no ledger configured has none
-    and checks the shape alone."""
+    `ruling_exists` view (module docstring, "Views"); only a server built with no `rulings` source
+    checks the shape alone. The machine server always has one, so with no ledger configured it
+    refuses every id."""
     if not ledger_fmt.is_id(ruling):
         raise _invalid('ruling must be a ledger ruling id (the id ledger.py add prints), not %s'
                        % ascii(ruling if len(ruling) <= 60 else ruling[:60] + '...'), 'ruling')

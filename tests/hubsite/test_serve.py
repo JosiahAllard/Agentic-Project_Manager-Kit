@@ -1890,6 +1890,18 @@ class MachineCase(unittest.TestCase):
         self.assertTrue(views.ruling_exists(one))
         self.assertFalse(hasattr(serve.SiteViews(None, serve.Sources()), 'ruling_exists'))
 
+    def test_the_rulings_source_fails_closed_on_a_ledger_file_it_cannot_read(self):
+        pm_repo(self, record=False)
+        ledger = os.path.join(self.home, 'ledger')
+        os.makedirs(ledger)
+        one = 'H-%s-%s' % ('kit', '0001')       # built: tests/scrub
+        with open(os.path.join(ledger, 'kit.md'), 'wb') as f:
+            f.write(b'\xff\xfe\x00 not utf-8 \x80\x81')
+        self.config({'ledger_dir': ledger, 'ledger_repos': ['kit']})
+        src = serve.machine_sources(self.home, sync=False)
+        with self.assertRaises(OSError):
+            src.rulings(one)
+
     def test_the_pm_start_config_gives_the_repository_views(self):
         notices = os.path.join(self.home, 'notices')
         self.config({'pm_start': {'sessions_file': os.path.join(self.home, 'pm', 's.json'),

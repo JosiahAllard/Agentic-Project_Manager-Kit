@@ -1020,8 +1020,10 @@ def _questions(a, stop):
             record=a.record, **{'from': a.who}))
         return _wrote(a, got, 'ASKED %s' % got.get('id'))
     if a.sub == 'log':
-        got = hub.post(_one('questions', a) + '/log', client.AGENT,
-                       {'ruling': a.ruling, 'if_version': a.if_version, 'replace': a.replace})
+        body = {'ruling': a.ruling, 'if_version': a.if_version}
+        if a.replace:
+            body['replace'] = True      # sent only when asked: a hub not yet restarted refuses unknown fields
+        got = hub.post(_one('questions', a) + '/log', client.AGENT, body)
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
     if a.sub == 'done':
         got = hub.post(_one('questions', a) + '/done', client.AGENT,
