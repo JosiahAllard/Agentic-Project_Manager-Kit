@@ -1,6 +1,6 @@
 ---
 name: builder
-description: Use when you build or fix on a branch - as worker, senior-worker, strong-worker or deep-worker. Covers how to work, the smallest fix, commits, the gate, follow-ups and records, the report, the kit tools, and what you never do.
+description: Use when you build or fix on a branch - as worker, senior-worker, strong-worker or deep-worker. Covers how to work, the smallest fix, commits, the gate, follow-ups and records, the report, bulk work to the helper, dispatching a subagent, the kit tools, and what you never do.
 ---
 
 # Builder
@@ -16,6 +16,15 @@ description: Use when you build or fix on a branch - as worker, senior-worker, s
 9. Use shared resources exactly as your brief says (locks, ports, scratch folder); if two uses could collide and the brief does not say, stop and ask. Heavy work beyond your gate takes the machine lock (skill machine-lock-run).
 10. Follow-ups: a minor follow-up of your story, or a small defect you find (tool bug, wrong doc line, flake fix), is fixed on this branch when it fits about one small commit; never a new record. Too large, needs another pulled item's files, or needs the owner: report it; the coordinator decides on a record (`backlog.py add --found-on <branch> --why-not-folded "<reason>"`), left unpriced. A record needs an observed failure cited (refusal row, failed run, incident, live finding), a concrete file:line or doc or dead-code cleanup, or an owner request; a hypothetical gets a Known-limits line or nothing, a flake only the add line its targeted rerun printed, in your report (step 7). No record for a nitpick (wording, a rename, one doc line, a test name or strength, a tidy-up) or an overengineered fix (hypothetical or unobserved edge cases, hardening against misuse or evasion, extra machinery): fix it on the branch or leave it in the report. A finding on an already-landed branch is a note in the review report, not a record, unless it cites an observed failure. A guard or landing-tool record cites an honest mistake an agent actually made, never a probe, a reviewer's evasion form or a forging case. Own-pull backlog writes on a store in another repo are refused by the guard: ask your coordinator.
 11. Report (about 40 lines, as text, never a report file): the answer first, what is true now that was not before; then what you confirmed and how, what remains inferred, branch and commits, the gate line proving each result, anything outside your scope. No process narrative.
+12. Dispatching a subagent yourself, where your role allows: the brief names role, scope, worktree, branch, shared resources and validation; a writer goes into the worktree you prepared, never a second checkout the host makes; ask for a text report in its result (about 40 lines), never a report file, and a host's task-output file is no rescue for a lost one; a built-in planner may have no write tool, so it returns its answer in its report body.
+
+## Bulk work to the helper
+
+A builder may hand bulk menial work to the helper role (light tier; read and edit tools, no shell), only where `<kit>/docs/ROSTER.md` maps the light tier to a cheaper model than yours: elsewhere, do it yourself. Its start-up plus your check costs about 15-25k tokens (initial figure), so:
+- Bulk read: a log or file over about 1,000 lines you need summarised, a search expected to touch 20+ files, a whole-tree listing. One section, a known path or a single grep stays with you.
+- Bulk write: one exact mechanical change (a rename, table or fixture rows, a reformat) across 10+ files or 100+ lines. A mechanical rename across 10 or more files fits here (the helper edits each listed file; any script stays with you), not a weak-worker (which never does moves or renames). Anything smaller, or anything needing judgement, stays with you.
+- The brief names the worktree, every file and the exact change or question. One writer per file: leave the listed files alone while it runs.
+- You own the result: re-read every cited file:line a read claim you act on rests on, read the whole diff of a write, then gate and commit yourself. A test run is never handed to the helper; run it as step 7 says.
 
 ## Never
 

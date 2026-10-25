@@ -209,7 +209,7 @@ class AgentFilesTest(unittest.TestCase):
 
     def test_builder_roles_point_to_the_bulk_helper_rule(self):
         """Each role that may hand bulk work to the helper names the rule, and the rule exists."""
-        skill = AGENTS.parents[3] / "content" / "skills" / "subagent-dispatch" / "SKILL.md"
+        skill = AGENTS.parents[3] / "content" / "skills" / "builder" / "SKILL.md"
         self.assertIn("## " + BULK_RULE, skill.read_text(encoding="utf-8").splitlines())
         for name in BULK_PARENTS:
             with self.subTest(agent=name):
