@@ -44,6 +44,7 @@ EXIT_FAIL, EXIT_USAGE, EXIT_BUSY, EXIT_TIMEOUT = 1, 2, 6, 8
 EXIT_REQUIRE, EXIT_RESERVED, EXIT_HOLD = 10, 11, 12
 
 WAIT_OBJECT_0, WAIT_ABANDONED_0 = 0, 0x80
+ERROR_FILE_NOT_FOUND = 2            # OpenMutexW: no mutex of that name exists
 # An elevated creator's default DACL shuts non-elevated callers out of the mutex. This one lets
 # SYSTEM, administrators and every signed-in user open it, at medium integrity.
 MUTEX_SDDL = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)S:(ML;;NW;;;ME)"
@@ -416,8 +417,11 @@ def wrapper_state(pid, ctime):
     if not h:
         return False if ctypes.get_last_error() == win32.ERROR_INVALID_PARAMETER else None
     try:
-        if K32.WaitForSingleObject(h, 0) != win32.WAIT_TIMEOUT:
+        waited = K32.WaitForSingleObject(h, 0)
+        if waited in (WAIT_OBJECT_0, WAIT_ABANDONED_0):
             return False
+        if waited != win32.WAIT_TIMEOUT:
+            return None                 # the wait failed: whether it has exited is not known
         made = process.handle_ctime(h)
         if ctime is None or made is None:
             return None
@@ -537,13 +541,15 @@ class Store:
         return self.run_mutex_held(str(e["id"])) is False
 
     def run_mutex_held(self, rid):
-        """Is run rid's mutex owned by a live wrapper? True when it is; False when it is gone,
-        abandoned or unowned (an unowned one is taken and let go at once); None when this process
-        may not open it."""
+        """Is run rid's mutex owned by a live wrapper? True when it is; False when it is gone
+        (no such mutex, ERROR_FILE_NOT_FOUND), abandoned or unowned (an unowned one is taken and
+        let go at once); None when it cannot be told: any other failure to open it (access
+        denied, say). This assumes the checker and the wrappers share the Global namespace
+        (mutex_name): a wrapper's mutex is then seen from any session on the machine."""
         h = K32.OpenMutexW(win32.SYNCHRONIZE | win32.MUTEX_MODIFY_STATE, False,
                            self.mutex_name("run." + rid))
         if not h:
-            return None if ctypes.get_last_error() == win32.ERROR_ACCESS_DENIED else False
+            return False if ctypes.get_last_error() == ERROR_FILE_NOT_FOUND else None
         try:
             if K32.WaitForSingleObject(h, 0) in (WAIT_OBJECT_0, WAIT_ABANDONED_0):
                 K32.ReleaseMutex(h)

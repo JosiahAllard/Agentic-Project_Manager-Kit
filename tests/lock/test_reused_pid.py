@@ -23,6 +23,7 @@ if os.name == "nt":
     from kitlib.lock import api
     from kitlib.lock import holds as hl
     from kitlib.lock import release
+    from kitlib.lock import run as rm
     from kitlib.lock import store as st
     from kitlib.proc import process, win32
     from kitlib.proc.win32 import K32
@@ -42,6 +43,14 @@ def denied(pid):
             return 0
         return real(access, inherit, p)
     return mock.patch.object(K32, "OpenProcess", fake)
+
+
+def mutex_fails(code):
+    """K32.OpenMutexW refused with the Windows error code, for every name."""
+    def fake(access, inherit, name):
+        ctypes.set_last_error(code)
+        return 0
+    return mock.patch.object(K32, "OpenMutexW", fake)
 
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
@@ -131,6 +140,51 @@ class ReusedPid(StoreCase):
         # elevated, the open is refused and the missing run mutex decides.
         self.live_record(RID, pid=procs[0], ctime=1, cores=[0, 1])
         self.assert_not_live()
+
+    def test_a_run_mutex_that_cannot_be_opened_for_another_reason_counts_as_live(self):
+        # Only "no such mutex" (ERROR_FILE_NOT_FOUND) means gone. Access denied, or any other
+        # failure (6, invalid handle, here), cannot tell, and a run that cannot be told is live.
+        pid, ct = self.other_process()
+        self.live_record(RID, pid=pid, ctime=ct, cores=[0, 1])
+        for code in (win32.ERROR_ACCESS_DENIED, 6):
+            with self.subTest(code=code), denied(pid), mutex_fails(code):
+                self.assertIsNone(self.store.run_mutex_held(RID))
+                self.assertTrue(self.store.run_live(self.store.read("active/%s.json" % RID)))
+                self.assertEqual([r["id"] for r in self.store.live_runs()], [RID])
+                live, gone, _own = release.live_runs(self.store)
+                self.assertEqual((live, gone), (["active/%s.json" % RID], []))
+        with denied(pid):                       # no mutex at all: gone
+            self.assertIs(self.store.run_mutex_held(RID), False)
+            self.assertEqual(self.store.live_runs(), [])
+
+    def test_a_failed_wait_on_the_wrapper_cannot_tell(self):
+        pid, ct = self.other_process()
+        with mock.patch.object(K32, "WaitForSingleObject", lambda h, ms: 0xFFFFFFFF):
+            self.assertIsNone(st.wrapper_state(pid, ct))
+
+    def test_an_unknown_wrapper_without_a_valid_run_id_counts_as_live(self):
+        pid, ct = self.other_process()
+        with denied(pid):
+            self.assertIs(self.store.run_live({"id": RID, "pid": pid, "ctime": ct}), False)
+            for d in ({"pid": pid, "ctime": ct}, {"id": "../x", "pid": pid, "ctime": ct},
+                      {"id": 5, "pid": pid, "ctime": ct}, {"id": "", "pid": pid, "ctime": ct}):
+                self.assertIs(self.store.run_live(d), True, d)
+
+    def test_settle_lets_the_run_mutex_go_only_after_the_record_left_active(self):
+        # The mutex fallback rests on this order: while the mutex is held, the record may be in
+        # active/; once it is let go, the record is no longer there.
+        run = rm.Run(self.store, self.layout(), "kit", "t", "engine-test", None, [], "held",
+                     rid=RID)
+        run.save()
+        active = self.store.path("active", RID + ".json")
+        seen = []
+
+        class Mutex:
+            def release(self):
+                seen.append((os.path.exists(active),
+                             os.path.exists(run.store.path("ended", RID + ".json"))))
+        rm.settle(self.store, run, 0, "done", Mutex())
+        self.assertEqual(seen, [(False, True)])
 
     def test_a_hold_claimed_by_an_unopenable_run_is_claimed_only_while_its_mutex_is_held(self):
         pid, ct = self.other_process()
