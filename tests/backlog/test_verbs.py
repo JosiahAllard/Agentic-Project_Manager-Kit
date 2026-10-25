@@ -1,8 +1,7 @@
 """The write verbs end to end through Store.write on a no-remote ref store (the plans do not
-depend on the backend; tests/backlog/test_store.py covers the remote path). Ported from
-earlier per-repository backlog tests: Add, Set, Block, Pull, Close, Retire and release
-cases. Cases for cut features (stale, hold_spent, --owner-said, value shims, small_fix,
-the main-checkout refusal) are not ported."""
+depend on the backend; tests/backlog/test_store.py covers the remote path). Covers Add, Set,
+Block, Pull, Close, Retire and release. Cases for cut features (stale, hold_spent, --owner-said,
+value shims, small_fix, the main-checkout refusal) are not ported."""
 import unittest
 
 from kitlib.backlog.errors import NotFound, Refusal, Usage

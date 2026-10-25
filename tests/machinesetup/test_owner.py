@@ -179,6 +179,18 @@ class SharedWrites(OwnerCase):
             'dir': folder, 'max_age_days': agenttemp.MAX_AGE_DAYS}})
         self.assertEqual(kuser.owner_email(self.home), OWNER)
 
+    def test_a_new_folder_gets_the_gitignore_that_ignores_local_json(self):
+        ignore = os.path.join(self.folder, '.gitignore')
+        self.assertFalse(os.path.exists(ignore))
+        self.apply(self.plan(self.ctx(given=OWNER)))
+        with open(ignore, encoding='utf-8') as f:
+            self.assertIn('local.json', f.read().split())
+        with open(ignore, 'ab') as f:
+            f.write(b'mine\n')
+        self.apply(self.plan(self.ctx(given='other@example.invalid')))      # a second write keeps it
+        with open(ignore, 'rb') as f:
+            self.assertTrue(f.read().endswith(b'mine\n'))
+
     def test_with_no_pointer_no_key_has_a_snapshot_naming_the_pointer_step(self):
         no_pointer(self)
         ctx = self.ctx()
