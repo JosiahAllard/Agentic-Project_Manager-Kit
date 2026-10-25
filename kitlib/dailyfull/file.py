@@ -11,10 +11,12 @@ plan_add / plan_set in Store.write), so every store check applies. When the repo
 is the implicit default one, the PM data branch's store is used instead
 (kitlib.backlog.at_landing.pm_data_store).
 
-The record is priced in the same call, from the machine config's `daily_red_ruling`
-(kitlib.config.user), read at filing time so no ruling id sits in a tracked file:
+The record is priced in the same call. The machine config's `daily_red_ruling`
+(kitlib.config.user), read at filing time, is only an on/off switch: its value is never written
+into the record or its commit.
 
-- set: priority 1, priority_by pm, that ruling as priority_ruling;
+- set (non-empty): priority 1, priority_by pm, written as a role-checked set (the owner turned
+  it on in the machine config, the role check's stand-in for this run);
 - unset: priority 2, priority_by agent (an agent's own price never takes priority 1), and the
   returned note says so for the run's result.json.
 
@@ -73,8 +75,8 @@ def file(root, settings, found, red, git, home=None):
     """Files the bisect `found` (kitlib.dailyfull.bisect.bisect, with `bad`) of the red steps
     `red`, through the store of the repository at `root`. `settings`: the "daily_full".bisect
     section; `home`: the machine config's home (None: the user's). Returns
-    `(rid or None, lines, note)`: `note` is NO_RULING when the record was priced without a
-    ruling, else None. Every store refusal is a line, never raised."""
+    `(rid or None, lines, note)`: `note` is NO_RULING when the switch is off (the record is
+    priced at priority 2 by an agent), else None. Every store refusal is a line, never raised."""
     prefix = (settings or {}).get('prefix')
     if not prefix:
         return None, [], None
@@ -83,11 +85,12 @@ def file(root, settings, found, red, git, home=None):
         return None, [], None
     rid = record_id(prefix, sha)
     try:
-        ruling = kuser.daily_red_ruling(home)
+        # An on/off switch only: the value is never passed on or written.
+        pm_price = bool(kuser.daily_red_ruling(home))
     except ConfigError as e:
         return None, ['daily: not filed %s: the machine config: %s' % (rid, e)], None
-    note = None if ruling else NO_RULING
-    price = [('priority', [PRICE_PM]), ('priority_by', ['pm'])] if ruling else \
+    note = None if pm_price else NO_RULING
+    price = [('priority', [PRICE_PM]), ('priority_by', ['pm'])] if pm_price else \
         [('priority', [PRICE_AGENT]), ('priority_by', ['agent'])]
     if found.get('culprit'):
         summary = ('the daily full run turned red (%s) at commit %s, found by bisect in %d probe(s)'
@@ -113,7 +116,7 @@ def file(root, settings, found, red, git, home=None):
             rec = s.get(rid)
             if rec is None or rec.get('priority') != '-':
                 return bstore.Change({}, '', [])
-            return pmod.plan_set(s, ctx, rid, price, (), ruling)
+            return pmod.plan_set(s, ctx, rid, price, (), role_checked=pm_price)
 
         for plan in (add, priced):
             change, _tip = ctx.store.write(plan)

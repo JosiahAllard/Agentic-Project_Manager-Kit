@@ -86,7 +86,7 @@ def planner(args, ctx):
         changes = set_changes(args)
         # A widening into a live pull is the plan's to find; the role decides whether it may.
         may_collide = policy.may(pmod.WIDEN_ROW)
-        return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, None, body,
+        return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, body=body,
                                        role_checked=True, may_collide=may_collide)
     if v == 'block':
         return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask,
