@@ -94,7 +94,7 @@ def main(argv=None, lock_reader=None, home=None):
         if where is None:
             print_safe('preflight: refused: %s' % why)
             return USAGE
-        size = state.write(where, time.strftime('%Y-%m-%d %H:%M'), '\n'.join(board_lines))
+        size = state.write(where, time.strftime('%Y-%m-%d %H:%M'), '\n'.join(board.state_lines(lines, board_lines)))
         print_safe('state written: %s (%d bytes)' % (where, size))
     return 0
 

@@ -63,15 +63,15 @@ A folder in no git work tree, or no absolute folder in the hook payload, is one 
 
 `python tools/preflight.py --board [-C DIR] [--base REV] [--write-state]` prints the whole report above, then the coordinator's board. `kitlib.preflight.board.lines` produces, in order (the base, lock and engines/ports lines are the report's own and are not repeated):
 
-1. The header `branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched`.
-2. One row per worktree that is on a branch other than the base. When the local base differs from `<remote>/<base>` and no `--base` was given, the rows are measured against `<remote>/<base>` (the report's `vs base` line says so). The `dirty` column counts tracked files only, and the owner-only paths come from `.kit.json` `owner`.
+1. When the local base differs from `<remote>/<base>` and no `--base` was given, the rows are measured against `<remote>/<base>` and the board says so: `board     rows measured against <remote>/<base> (local <base> differs)`. (The report's `vs base` line says it too, but only off the base branch.) No such line when they match.
+2. The header `branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched`, then one row per worktree that is on a branch other than the base. The `dirty` column counts tracked files only, and the owner-only paths come from `.kit.json` `owner`.
 3. `docs:` with the last line of `<kit>/tools/doc_index.py --stale -C <checkout>`.
 
 In a row, `?` means git could not answer. `-` means "no owner-only paths", and `has base tip` is `yes` or `NO` only when git answered.
 
 A worktree that git cannot read as its own work tree is a row of `?`, ending `? (not its own work tree: git cannot read it)`. The check is `kitlib.preflight.board._own_tree`. The case it guards against is a half-deleted worktree under `.claude/worktrees/`: git, asked inside it, walks up and answers for the main checkout.
 
-`--write-state` (only with `--board`; alone it is a usage error, exit 2) writes the board lines into the state file and changes nothing else. kitlib/preflight/state.py chooses the file, in the main checkout's git common dir, so that no untracked file is left in the work tree (a dirty main checkout refuses `gate.py land`):
+`--write-state` (only with `--board`; alone it is a usage error, exit 2) writes the report's `base` line, the board lines, then the report's `lock`, `engines` and `ports` lines (`kitlib.preflight.board.state_lines`) into the state file, so the lock snapshot is kept, and changes nothing else. kitlib/preflight/state.py chooses the file, in the main checkout's git common dir, so that no untracked file is left in the work tree (a dirty main checkout refuses `gate.py land`):
 
 1. `<git common dir>/kit/board-state.md` by default.
 2. `.kit.json` `board.state_file`, when set and when it lies under the git dir (for example `.git/kit/board-state.md`). Any other value is in the work tree: `preflight: refused: "board".state_file <path> is inside the work tree...`, exit 2, nothing written.

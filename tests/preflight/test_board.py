@@ -108,6 +108,8 @@ class TheRows(BoardFixture):
         self.git('update-ref', 'refs/remotes/origin/master', 'HEAD')
         self.git('update-ref', 'refs/heads/master', self.head)          # local master stale
         out = self.run_board()[1]
+        self.assertIn('board     rows measured against origin/master (local master differs)',
+                      out.splitlines())
         self.assertEqual(self.column(out, 'ahead/behind'), '+0 -1', out)
         self.assertEqual(self.column(out, 'has base tip'), 'NO', out)
 
@@ -116,8 +118,13 @@ class TheRows(BoardFixture):
         self.repo.write('m.txt', 'm\n')
         self.repo.commit('m', 'm.txt')
         out = self.run_board()[1]
+        self.assertIn('board     rows measured against origin/master (local master differs)',
+                      out.splitlines())
         self.assertEqual(self.column(out, 'ahead/behind'), '+0 -0', out)
         self.assertEqual(self.column(out, 'has base tip'), 'yes', out)
+
+    def test_an_equal_base_prints_no_measure_note(self):
+        self.assertNotIn('rows measured against', self.run_board()[1])
 
     def test_an_explicit_base_is_the_one_rows_are_counted_against(self):
         self.git('branch', 'main', 'master')
@@ -260,6 +267,15 @@ class TheStateFile(BoardFixture):
         for folder in ('ops', 'docs'):
             self.assertFalse(os.path.exists(os.path.join(self.root, folder)))
         self.assertNotIn('state', self.git('status', '--porcelain'))
+
+    def test_the_state_keeps_the_base_and_the_lock_lines(self):
+        self.run_board('--write-state')
+        body = self.read_state().splitlines()
+        self.assertIn('base      master @ %s | origin/master @ %s (equal)' % (self.head, self.head),
+                      body)
+        self.assertTrue(any(l.startswith('lock      ') for l in body), body)
+        self.assertLess(body.index(board.HEADER), max(
+            i for i, l in enumerate(body) if l.startswith('lock ')))
 
     def test_without_the_flag_nothing_is_written(self):
         self.run_board()
