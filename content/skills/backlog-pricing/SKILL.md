@@ -11,7 +11,7 @@ Price with `python <kit>/tools/backlog.py -C <worktree> set <ID> --priority <n> 
 
 Check the record against the code and the docs. Close or narrow it when it is:
 
-- already done or no longer applies (`close`, naming what did it);
+- already done (`close`, naming what did it) or no longer applies (`retire`, citing the check);
 - a duplicate;
 - a nitpick (wording, a rename, one doc line, a test name or strength, a tidy-up);
 - overengineering (a hypothetical or unobserved case, hardening against deliberate misuse or evasion, or machinery beyond the observed problem);
