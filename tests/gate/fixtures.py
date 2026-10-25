@@ -10,7 +10,7 @@ from unittest import mock
 
 from kitlib.lock import run as lockrun
 from tests import gitfixture
-from tests.home import child_home
+from tests.home import child_home, result_drive
 from tests.lock.helpers import StoreCase
 
 # A step that prints ok and exits 1 when the file RED is in the tree it runs in.
@@ -142,7 +142,9 @@ def patch_book(case):
 class GateRepoCase(StoreCase):
     """self.repo: main with `.kit.json` (self.GATE; None: no "gate" section, so the gate is
     auto-detected) committed and pushed to a bare remote; self.book_kw books one fake cpu slot
-    on the scratch store; self.book_calls: every kitlib.lock.run.book call (compat_book). A test
+    on the scratch store; self.book_calls: every kitlib.lock.run.book call (compat_book);
+    self.result_drive: the temp dev_drive the result records go under (tests.home.result_drive),
+    in the machine config of the PM repository the test's environment names. A test
     still running DUMP_S after its setUp ends dumps every thread's stack (arm_dump, the last step
     of setUp)."""
     GATE = GATE
@@ -167,6 +169,7 @@ class GateRepoCase(StoreCase):
                                         prepare_key=('gate.fixtures.GateRepoCase', text))
         self.addCleanup(self.repo.cleanup)
         self.main = self.repo.prepared
+        self.result_drive = result_drive(self)     # before test_env: its tools write there too
         self.env = test_env()
         self.book_kw = {'cores': 1, 'store': self.store, 'env': self.env}
         self.logs = os.path.join(self.tmp, 'logs')

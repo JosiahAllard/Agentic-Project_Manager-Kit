@@ -220,6 +220,22 @@ class AgentWrittenPayloads(TrustCase):
                           expect_main=self.main)
         self.assert_refused(r, payload, before, logged=out.facts['output'])
 
+    def test_a_land_record_in_the_old_folder_is_never_trusted(self):
+        """8: the run's own running record, claimed by this landing's parent, moved to the old
+        folder (<git common dir>/kit-gate-result, in agents' reach): restore reads the result
+        folder only, finds no record there, and runs nothing."""
+        wt, [tip], out, token = self.genuine()
+        payload, new = out.facts['payload'], self.record_path()
+        old = result.legacy_path(self.repo.root, BRANCH, 'land')
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        os.replace(new, old)
+        self.assertEqual(result.read(self.repo.root, BRANCH, 'land')[0]['verdict'], result.RUNNING)
+        before = self.snapshot(new, old, out.facts['output'], payload)
+        r = self.run_tool([LAND_PY], wt, [BRANCH], [tip], payload, token=token,
+                          expect_main=self.main)
+        self.assert_refused(r, payload, before, logged=out.facts['output'])
+        self.assertIn('the land record of kit/feature cannot be read: none', r.stderr)
+
     def test_no_token_never_reads_the_payload_so_nothing_is_abandoned(self):
         """Without a token a payload at the submission's own path that is missing, not json or
         an older kit's schema is untrusted, not a SubmitError: abandon would finish the run's

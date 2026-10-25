@@ -5,8 +5,10 @@ history afterwards holds the worker's change and nothing else.
 
 The cycle, in the order a PM and a worker run it:
   1. machine setup's owner step (kitlib.machinesetup.owner.survey, as the default mode plans and
-     applies it) stores the owner's email in the machine config, the only machine state the cycle
-     reads, and writes nothing into the clone;
+     applies it) stores the owner's email in the machine config, and writes nothing into the
+     clone; the machine config's other key the cycle reads is dev_drive, which the owner sets by
+     hand (docs/kit-json.md "Machine config keys"): the gate's and the landing's result records go
+     under it (docs/gate.md "Result record"), never into the clone;
   2. the PM makes the worker's worktree (kitlib.worktree.new.create, tools/new_worktree.py),
      which runs the first-use repo prep (kitlib.git.prep: info/exclude, core.hooksPath);
   3. the worker commits in the worktree (kitlib.commit.commit, tools/commit.py);
@@ -54,7 +56,7 @@ from kitlib.machinesetup.common import Plan
 from kitlib.worktree import new as wtnew
 from tests import gitfixture
 from tests.gate.fixtures import queue_review, test_env
-from tests.home import pm_repo, temp_home
+from tests.home import pm_repo, result_drive, temp_home
 from tests.lock.helpers import StoreCase
 from tests.realgit import real_git
 
@@ -102,6 +104,7 @@ class Cycle(object):
         self.addCleanup(patch.stop)
         self.home = temp_home(self)
         self.pm = pm_repo(self)
+        self.drive = result_drive(self)         # dev_drive: the result records' folder
         self.base = os.path.realpath(tempfile.mkdtemp(prefix='kit-zero-'))
         self.addCleanup(gitfixture.rmtree, self.base)
         # The user's own git identity, as a machine has it: global, never in the repository.
@@ -216,6 +219,12 @@ class Cycle(object):
                         landed.lines)
         self.assertEqual(self.remote_git('rev-parse', 'main'), self.git('rev-parse', 'HEAD'))
         self.pre_push_passed(landed.merge, start)
+        # The result records are under dev_drive; the clone's git dir holds none.
+        for rec in (gated.result_record, landed.result_record):
+            self.assertTrue(os.path.isfile(rec), rec)
+            self.assertTrue(os.path.normcase(rec).startswith(os.path.normcase(self.drive) + os.sep),
+                            rec)
+        self.assertFalse(os.path.exists(os.path.join(self.clone, '.git', 'kit-gate-result')))
         # The remote's history past the upstream commit changes the worker's files and no other.
         changed = set(self.remote_git('log', '--format=', '--name-only', '%s..main' % start).split())
         self.assertEqual(changed, set(FIX))

@@ -24,6 +24,7 @@ from kitlib.lock.store import LockError
 from kitlib.proc import process
 from tests import gitfixture, testutil
 from tests.gate.test_land import BRANCH, HANG_S, KIT_ROOT, LandCase
+from tests.home import machine_config
 from tests.lock.test_detach_cli import console_windows_of
 
 LAND_PY = os.path.join(KIT_ROOT, 'tools', 'land.py')
@@ -211,6 +212,58 @@ class TheLine(SubmitCase):
                     f.write(text)
             with self.assertRaises(submit.SubmitError):
                 self.restored(out, detach, [BRANCH], [tip])
+
+
+class OldFolder(SubmitCase):
+    """The result folder is out of the git common dir (docs/gate.md "Result record"): an older
+    kit's land record in the old folder (<git common dir>/kit-gate-result) still stops a
+    submission, and is never written; with no result folder (no dev_drive) a submission refuses
+    and writes nothing anywhere."""
+
+    def plant(self, rec):
+        path = result.legacy_path(self.repo.root, rec['branch'], rec['kind'])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(rec, f)
+        return path
+
+    def test_an_old_folder_landing_that_lives_refuses_a_submit(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        old = result.build(BRANCH, tip, self.main, 'land', None, verdict=result.RUNNING,
+                           pid=os.getpid(), ctime=process.own_ctime())
+        path = self.plant(old)
+        out, detach = self.submit([BRANCH], [tip])
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertTrue(out.lines[0].startswith(
+            'REFUSED: a landing of kit/feature is already running (run %s, pid %d'
+            % (old['run_id'], os.getpid())), out.lines)
+        self.assertEqual(detach.calls, [])
+        self.assertEqual(result.read_path(path), (old, None))
+        self.assertEqual(result.read(self.repo.root, BRANCH, 'land', legacy=False), (None, 'none'))
+
+    def test_an_old_folder_landed_tip_refuses_a_resubmit(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        old = result.build(BRANCH, tip, self.main, 'land', G.OK, summary='LANDED kit/feature')
+        path = self.plant(old)
+        out, detach = self.submit([BRANCH], [tip])
+        self.assertEqual(out.lines, ['REFUSED: kit/feature at %s already landed (run %s, LANDED '
+                                     'kit/feature); nothing was changed' % (tip[:10], old['run_id'])])
+        self.assertEqual(detach.calls, [])
+        self.assertEqual(result.read_path(path), (old, None))
+
+    def test_with_no_result_folder_a_submit_refuses_and_writes_nothing(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self._kit_dev_drive = None
+        machine_config(None, {}, case=self)             # the machine config sets no dev_drive
+        out, detach = self.submit([BRANCH], [tip])
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertEqual(len(out.lines), 1, out.lines)
+        self.assertTrue(out.lines[0].startswith('REFUSED: the machine config sets no dev_drive'),
+                        out.lines)
+        self.assertTrue(out.lines[0].endswith('; nothing was changed'), out.lines)
+        self.assertEqual(detach.calls, [])
+        self.assertFalse(os.path.exists(result.legacy_dir(self.repo.root)))
+        self.assertEqual(os.listdir(self.result_drive), [])
 
 
 class ReviewLines(SubmitCase):

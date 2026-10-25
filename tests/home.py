@@ -25,7 +25,13 @@
                      (kitlib.config.user POLICY_KEYS and LOCAL_KEYS), or config.json's text as it
                      is. `pm_data` is derived from the pointer now: a body's pm_data.path becomes
                      the PM repository itself (pm_repo of that folder). `case` defaults to the
-                     test temp_home made `home` for.
+                     test temp_home made `home` for. After result_drive, a dict body without
+                     `dev_drive` gets the test's.
+  result_drive(case)  a new temp folder, the machine config's dev_drive for the rest of the test
+                     (machine_config, into this test's PM repository or a new one): the gate's
+                     result records (kitlib.gate.result) go under it, never under the real Dev
+                     Drive. tests.gate.fixtures.GateRepoCase calls it before its test_env(), so
+                     the gate and land tools a test starts write there too.
   child_home()       a temp folder to be the home of the processes tests start, for a helper that
                      builds a child's environment and has no test case to clean up with: one per
                      process, removed at exit.
@@ -134,6 +140,9 @@ def machine_config(home, body, case=None):
         case = _CASES.get(os.path.normcase(os.path.normpath(home)))
         if case is None:
             raise ValueError('machine_config(%r): pass case=, this home is not from temp_home' % home)
+    drive = getattr(case, '_kit_dev_drive', None)
+    if isinstance(body, dict) and drive and 'dev_drive' not in body:
+        body = dict(body, dev_drive=drive)
     if isinstance(body, dict) and isinstance(body.get('pm_data'), dict) and body['pm_data'].get('path'):
         body = dict(body)
         pm = pm_repo(case, body.pop('pm_data')['path'])
@@ -156,6 +165,21 @@ def machine_config(home, body, case=None):
         with open(local, 'w', encoding='utf-8') as fh:
             fh.write(json.dumps(private))
     return folder
+
+
+def result_drive(case):
+    """A new temp folder (removed after the test `case`), the machine config's dev_drive for the
+    rest of the test: written now (machine_config, an empty config otherwise) and kept by every
+    dict body machine_config writes for the test later. A test with no temp_home yet gets one
+    first: reading the machine config in the test's own process looks up the home, which the
+    fence refuses when it is the real one. Returns the folder."""
+    if os.path.normcase(os.path.normpath(os.environ.get('USERPROFILE', ''))) not in _CASES:
+        temp_home(case)
+    drive = tempfile.mkdtemp(prefix='kit-dev-drive-')
+    case.addCleanup(gitfixture.rmtree, drive)
+    case._kit_dev_drive = drive
+    machine_config(None, {}, case=case)
+    return drive
 
 
 def fence_decoy(case):
