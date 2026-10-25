@@ -1226,7 +1226,8 @@ class ReasonCase(ServeCase):
                 code = get(hub.port, path, self.owner).json()['code']
                 self.assertIs(code['stale'], True, path)
                 self.assertIn('hub.py" restart', code['restart'])
-                self.assertIn('serve', code['restart'])         # the fallback for a hub with no autostart task
+                self.assertIn('hub.py" stop, then python', code['restart'])   # the fallback for a hub with no autostart task
+                self.assertIn('hub.py" serve', code['restart'])
         hub.close()
 
     def test_a_code_status_that_raises_or_is_none_gives_no_code_and_health_still_answers(self):

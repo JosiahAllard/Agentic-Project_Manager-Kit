@@ -201,8 +201,9 @@ shows as Act, its edit offers no kind, and the server's refusal shows in its own
   title (`#codeerr`), a `hub: WARN` line in the PM session-start checklist (docs/pm-start.md), and a
   `HUB` event of pm_watch (docs/pm-watch.md), said once per stale episode. Nothing restarts the hub
   by itself. Known limit: only the hub package's own files are compared, so a landing that changes
-  only another package the hub imports (`kitlib/pmdata`, `kitlib/config`) does not warn. Known
-  limit: a hub started before this field existed gives no `code`, so none of the three warn about
+  only other packages the hub imports (for example `kitlib/pmdata`, `kitlib/config`) does not warn.
+  `web/index.html` is not compared either: the server reads it from disk per request
+  (`httpd.static_file`), so a page-only change needs no restart. Known limit: a hub started before this field existed gives no `code`, so none of the three warn about
   it; it needs one restart.
 - Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`,
   the application's audience tag `aud` and the allowed `emails`; all three), the server also

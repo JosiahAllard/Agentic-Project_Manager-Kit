@@ -48,6 +48,19 @@ class HubEventTest(unittest.TestCase):
         self.assertIs(w.s["hub_stale"], True)
         self.assertEqual(self.watcher(c, state=dict(w.s)).poll(3.0), [])
 
+    def test_the_hub_is_asked_at_most_once_per_branch_poll(self):
+        c = Client(STALE)
+        check = W.hub_check(load=lambda: Settings(), make_client=lambda port: c)
+        w = W.Watcher({}, [], lambda: {}, os.path.join("nowhere", "alerts"),
+                      os.path.join("nowhere", "sessions.json"), lambda n: None, branch_poll=300, hub=check)
+        w.start(0.0)
+        w.poll(1.0)
+        w.poll(2.0)
+        w.poll(300.0)
+        self.assertEqual(len(c.asked), 1)
+        w.poll(301.0)
+        self.assertEqual(len(c.asked), 2)
+
     def test_a_restart_clears_the_memory_and_a_later_stale_is_said_again(self):
         c = Client(STALE)
         w = self.watcher(c)
