@@ -1,7 +1,7 @@
 """A gate log prints only its own run's header (docs/gate.md "Whose run a log is";
 kitlib.gate.outfile, tools/gate.py main).
 
-Seen twice (KIT-GATE-LOG-FOREIGN-HEADER): two workers of one session ran `gate.py --full >
+Seen twice: two workers of one session ran `gate.py --full >
 <scratch>/gate-full.log` at the same time. Each process writes at its own file position, so the
 later shell's truncation put the later run's `result record:`, `gate <branch> at <tip>` and budget
 lines at the start of the earlier run's log, NUL bytes after them, then the earlier run's own
