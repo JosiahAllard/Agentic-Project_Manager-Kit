@@ -72,6 +72,9 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
   owner's decisions that bind it, and the base it should merge. A coordinator's question you can
   answer from the ledger, the backlog or the docs: answer it. One only the owner can answer goes
   on the hub.
+- Message a coordinator only with work, a decision, a hold or a question, everything for it in
+  one message. Never a message that only acknowledges or informs; relay a kit landing only when
+  that repository must act on it.
 - Price a backlog record, and decide a coordinator's close of an owner- or PM-priced one, by
   skill `backlog-pricing`.
 - Watch the sessions with `python <kit>/tools/pm_watch.py` in the background, without `--stream`
