@@ -61,7 +61,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    applies -> close it. Price the rest 2-5
    (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
    pre-emption, an owner-held area, a question only the owner can answer) goes on the Action Hub
-   as a question from your session key (The owner, below), posted with the work set's other
+   as a question from your session key bound to the record, which you park on it (The owner,
+   below), posted with the work set's other
    owner questions at its start (Look ahead); never ask the owner directly.
 7. Take a work set (below) and dispatch. A tree `--classify` puts in L is live or kept: never
    land, reuse or remove it.
@@ -147,7 +148,10 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - The owner does not watch your window. A question for the owner, and a command for the owner
   to run for your own work, you post on the Action Hub yourself and act on its answer yourself
   (skill `hub-ops`: questions, to-dos, pages; you run no background hub wait, the hub pushes the
-  answers to you). Anything else that needs the owner (a typed go, a
+  answers to you). A question about one of your records is asked with `--record <repo>:<ID>`
+  and the record parked on it (`set-status <ID> parked --q <Q-id>`, skill backlog-ops); then move
+  on, with no relay to the PM. The hub files the answer into the record and ends the park; take
+  the item up from the record and mark the question done (skill hub-ops). Anything else that needs the owner (a typed go, a
   step for another repo) goes to the PM by send_message (not available to a Codex agent: ask the PM) with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
   in your window where one is required. Pass answers on as a paraphrase, no ruling id.

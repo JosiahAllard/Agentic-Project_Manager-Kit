@@ -30,7 +30,11 @@ or equivalent) load on top of this file and win any disagreement.
    notifications"). The checklist's push line says whether push and the watcher are up; while
    push is down or off, read `pending --for pm` again by hand. An answer to a coordinator's question or a coordinator's to-do goes to that coordinator while it can be
    reached; it falls to you when the coordinator is gone or has not acked within 30 minutes
-   (<kit>/docs/action-hub.md "Who handles a pending item"). You log the ruling of every answer. A paired browser stays
+   (<kit>/docs/action-hub.md "Who handles a pending item"). You log the ruling of every unbound answer, every standing rule
+   (a bound answer the owner made one), and every bound answer whose filing failed (it stays
+   `answered` with `filing` set: handle it as an unbound one). A bound answer the hub filed into
+   its record is its asker's: read the checklist's filed digest for your information, and log
+   or mark done only the ones you asked. A paired browser stays
    paired after a hub restart; `hub.py unpair` ends every browser's session.
 4. Read the hand-off file (HANDOFF.md in the PM repo), then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
