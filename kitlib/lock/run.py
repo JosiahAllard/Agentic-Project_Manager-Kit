@@ -1410,14 +1410,14 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     if own["gpu"] and bg_ancestor(env):
         raise LockError(EXIT_USAGE, "usage: a gpu lock inside a background run would pause that "
                                     "run; refused")
-    # Records in active/ whose wrapper is surely gone (Store.run_live) move to ended/, how
-    # "reaped": nothing else takes them out, and every read of the store walks them.
-    with contextlib.suppress(OSError):
-        store.live_runs(prune=True)
     # The id first, its run mutex held: an id another run has, live or ended, is never written
     # over, and a refusal here writes nothing (claim_id).
     rid, mutex = claim_id(store, rid)
     try:
+        # Records in active/ whose wrapper is surely gone (Store.run_live) move to ended/, how
+        # "reaped": nothing else takes them out, and every read of the store walks them.
+        with contextlib.suppress(OSError):
+            store.live_runs(prune=True)
         run = Run(store, L, repo, slug, kind, note, cmd, "waiting", rid, detached, env, log)
         hist = None if expect_s is not None else store.history_expect(
             repo, kind, store.run_mode(priority, branch, gate))
