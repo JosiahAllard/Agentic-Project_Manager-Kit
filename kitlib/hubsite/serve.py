@@ -480,6 +480,7 @@ def _configured_repos(cfg, toplevel=None):
                 {k for ks in _session_aliases(cfg).values() for k in ks}, key=str.lower)
         except (KeyError, ValueError, OSError, AttributeError, TypeError):
             return ()
+    names.session_keys = lambda: _session_aliases(cfg)     # api._schedule_repo maps keys to repos
     return names
 
 
@@ -492,7 +493,8 @@ def _session_aliases(cfg):
         sessions = json.loads(pmstart._read(cfg['sessions_file']))
         out = {}
         for key, e in sessions.items():
-            if isinstance(e, dict) and isinstance(e.get('repo'), str) and e['repo']                     and isinstance(key, str) and key and key.lower() != e['repo'].lower():
+            if (isinstance(e, dict) and isinstance(e.get('repo'), str) and e['repo']
+                    and isinstance(key, str) and key and key.lower() != e['repo'].lower()):
                 out.setdefault(e['repo'], []).append(key)
         return out
     except (KeyError, ValueError, OSError, AttributeError, TypeError):
