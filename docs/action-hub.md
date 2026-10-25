@@ -385,9 +385,11 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
   an answered question stays pending until the PM logs it (`questions log`) or, when it needs no
   ruling (a one-off go such as a landing or archive go, which the ledger keeps out), marks it
   done (`questions done <id> --why <text> --if-version V`; status `done`, with `done_why` and
-  `done_at`). A done question is no longer pending and
-  its push ends (`kitlib/hubsite/api.py` `questions_done`). A question bound to a record whose
-  answer the hub filed (status `filed`, "Filing the answer") stays pending, with `filed` true on
+  `done_at`). Only the asker (the question's `from`) or the PM (`pm`) marks it done: the body's
+  optional `from` (default `pm`) must be one of the two, else `forbidden` (field `from`) and the
+  question is unchanged; like the edit check it is a claim, since agents share one token. A done
+  question is no longer pending and its push ends (`kitlib/hubsite/api.py` `questions_done`). A
+  question bound to a record whose answer the hub filed (status `filed`, "Filing the answer") stays pending, with `filed` true on
   the item, until its asker logs it or marks it done: both take a filed question as they take an
   answered one.
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
