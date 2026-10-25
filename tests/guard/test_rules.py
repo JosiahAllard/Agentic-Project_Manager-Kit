@@ -977,8 +977,8 @@ class OwnerSetup(unittest.TestCase):
 
 class NamedInHeredocText(TH.Hub):
     """A python edit script whose heredoc only names a protected file runs nothing of it and
-    writes nothing there: it passes in every held session (KIT-GUARD-OWNER-SETUP-NAME-MATCH, seen
-    refused as owner-setup and hub-secrets). A real run or write of each target is still refused."""
+    writes nothing there: it passes in every held session (seen refused as owner-setup and
+    hub-secrets). A real run or write of each target is still refused."""
 
     @staticmethod
     def edit_script(path, old, new):

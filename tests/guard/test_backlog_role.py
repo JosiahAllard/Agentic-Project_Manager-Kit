@@ -718,13 +718,12 @@ class HubWriterCode(Base):
             with self.subTest(text):
                 self.allowed(self.cmd(text, sub=False, env=PM))
 
-    # code that only reads the writer's file, by its path (seen refused live as backlog-raw-write,
-    # KIT-GUARD-RECORDWRITE-NAME-FALSE-POSITIVE)
+    # code that only reads the writer's file, by its path (seen refused live as backlog-raw-write)
     READS = ("python - <<'EOF'\nimport pathlib\n"
              "t = pathlib.Path('kitlib/hubsite/recordwrite.py').read_text(encoding='utf-8')\n"
              "print(t[:400])\nEOF",
              "python - <<'EOF'\n"
-             "t = open(r'Z:\\GitHub\\Agentic-Project_Manager-Kit\\kitlib\\hubsite\\recordwrite.py').read()\n"
+             "t = open(r'Z:\\src\\kit\\kitlib\\hubsite\\recordwrite.py').read()\n"
              "print(t.count('def '))\nEOF",
              'python -c "print(open(\'kitlib/hubsite/recordwrite.py\').read()[:200])"')
 
