@@ -243,6 +243,7 @@ ROWS = {
                                          None),
     ('POST', '/approvals/{id}/consume'): (lambda s: seed_approval(s, ap.APPROVE),
                                           {'commit': 'c' * 40, 'if_version': 1}, None),
+    ('POST', '/approvals/{id}/delete'): (seed_approval, {'from': 'pm', 'if_version': 1}, None),
     ('GET', '/approvals/{id}/verify'): (lambda s: seed_approval(s, ap.APPROVE), None,
                                         {'repo': URL, 'head': 'a' * 40, 'files': '{}'}),
     ('GET', '/backlog'): (None, None, None),
@@ -371,6 +372,7 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/finding_marks'): OWNER, ('POST', '/finding_marks/{id}/delete'): OWNER,
                 ('POST', '/approvals'): AGENT, ('POST', '/approvals/{id}/decide'): APPROVER,
                 ('POST', '/approvals/{id}/consume'): AGENT,
+                ('POST', '/approvals/{id}/delete'): AGENT,
                 ('GET', '/approvals/{id}/verify'): AGENT,
                 # the machine lock's reads are the owner's: an agent reads the lock through its
                 # own MCP server, never through the hub (the owner's decision)

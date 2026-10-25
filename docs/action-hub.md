@@ -319,6 +319,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `stories [--status S] [--repo R]` | `S-1 v2 submitted [repo] title` |
 | `stories add --repo R --title T --story-file F [--urgent]` (owner) | `SUBMITTED S-2` |
 | `stories set S-1 --status review\|questions\|added\|declined [--reviewer NAME] [--review-note TEXT] [--backlog-id ID] [--closed-note TEXT] --if-version V` | `SET S-1 <status>` |
+| `approvals withdraw A-1 --from KEY --if-version V` | `WITHDRAWN A-1` |
 | `stories withdraw S-1` (owner) | `WITHDRAWN S-1` |
 | `to-pm [--status S] [--repo R]` | `P-1 queued [repo] text` |
 | `to-pm add --text T [--kind K] [--repo R] [--urgent]` (owner) | `QUEUED P-2` |
@@ -1020,6 +1021,13 @@ Routes, below `/api/v1`:
   request is decided.
 - POST `/approvals/{id}/consume` (agent): body `commit` and `if_version`; only an approval that is
   `approved` is consumed.
+- POST `/approvals/{id}/delete` (agent): the requester withdraws a request (`hub.py approvals
+  withdraw A-n --from KEY --if-version V`, `WITHDRAWN A-n`), as `questions withdraw` does: the body
+  gives `from` and `if_version`, both required, and the document is deleted, so the page stops
+  listing it. Only a pending request that has not expired is withdrawn (`conflict`, field `status`
+  otherwise: a decided one is the owner's record). The `from` is a claim, as for the other
+  withdrawals: an approval stores none, so it is `pm` (`forbidden`, field `from`, for another) and
+  the check stops a mistake, not an agent that gives another's name.
 - GET `/approvals/{id}/verify` (agent): query `repo`, `head`, `files` (JSON `{path: blob}`) and an
   optional `commit`; answers `{ok, valid, why}`, never the key or the sig. With `commit`, only an
   approval consumed by that commit is valid.
