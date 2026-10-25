@@ -509,3 +509,22 @@ class Branch(RerunCase):
         out = self.rerun(wt)
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIn('the branch commit %s cannot be read' % first[:10], out.lines[0])
+
+    def test_an_unreadable_branch_record_refuses_a_tip_with_no_failure_of_its_own(self):
+        wt, first = self.work('done')
+        tip = self.next_commit(wt, 'done')
+        rerun._write(self.repo.root, {'kind': rerun.RED, 'commit': tip, 'steps': [
+            {'name': 'unit', 'status': 'FAIL', 'failures': []}]})
+        reds, reruns = self.loaded(tip)
+        self.assertEqual(rerun.failure_counts(reds, reruns), {})
+        self.assertEqual(rerun.branch_twice(self.repo.root, tip, self.main, reds, reruns),
+                         ([], None))
+        os.makedirs(rerun.commit_dir(self.repo.root, first), exist_ok=True)
+        with open(os.path.join(rerun.commit_dir(self.repo.root, first), 'red-1-0000000g.json'),
+                  'w', encoding='utf-8') as f:
+            f.write('{}')
+        ids, why = rerun.branch_twice(self.repo.root, tip, self.main, reds, reruns)
+        self.assertIsNone(ids)
+        self.assertIn('the branch commit %s cannot be read' % first[:10], why)
+        self.assertIn('the branch commit %s cannot be read' % first[:10],
+                      rerun.twice_refusal(self.repo.root, tip, self.main))

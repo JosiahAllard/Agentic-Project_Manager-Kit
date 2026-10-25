@@ -215,22 +215,21 @@ def branch_commits(root, tip, main):
 def branch_twice(root, tip, main, reds, reruns):
     """`(ids, None)`: the ids that failed on `tip` (its own `reds` and `reruns`) and failed
     at least twice over the branch (branch_commits; failure_counts summed over every commit's
-    records), sorted; or `(None, why)` when the branch or a commit's records cannot be read
-    (fail closed)."""
-    mine = failure_counts(reds, reruns)
-    if not mine:
-        return [], None
+    records), sorted; or `(None, why)` when the branch or any commit's records cannot be read,
+    whatever the tip's own count (fail closed: every record is read before any answer)."""
     commits, why = branch_commits(root, tip, main)
     if commits is None:
         return None, why
-    total = dict(mine)
+    others = []
     for c in commits[1:]:
         try:
-            r, rr = load(root, c)
+            others.append(failure_counts(*load(root, c)))
         except RerunError as e:
             return None, 'the rerun records of the branch commit %s cannot be read: %s' % (
                 c[:10], e)
-        for tid, n in failure_counts(r, rr).items():
+    total = failure_counts(reds, reruns)
+    for counts in others:
+        for tid, n in counts.items():
             if tid in total:
                 total[tid] += n
     return sorted(t for t, n in total.items() if n >= 2), None
