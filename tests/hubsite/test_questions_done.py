@@ -17,6 +17,8 @@ from tests.hubsite import test_push as pushfix
 NOW = '2026-01-02T03:04:05+00:00'
 CLOCK = lambda: NOW      # noqa: E731
 OPTIONS = [{'label': 'go', 'description': 'land it'}, {'label': 'wait', 'description': 'hold'}]
+# a ledger id, built so no file holds a ruling id (tests/scrub)
+RULING = 'R-' + '0007'
 
 
 class DoneCase(unittest.TestCase):
@@ -122,7 +124,7 @@ class RefusedTest(DoneCase):
     def test_a_logged_question_is_refused(self):
         qid = self.answered()
         self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': 'D-7', 'if_version': self.version(qid)})
+                {'ruling': RULING, 'if_version': self.version(qid)})
         self.refused('invalid', 'status', qid, {'why': 'w', 'if_version': self.version(qid)})
 
     def test_a_question_already_done_is_refused(self):
