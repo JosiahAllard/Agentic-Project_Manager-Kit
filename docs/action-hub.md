@@ -191,9 +191,19 @@ shows as Act, its edit offers no kind, and the server's refusal shows in its own
   Access keys were fetched), `tunnel: bound, keys not fetched` (shown until the first request
   with a token; a failed fetch adds ` (reason)`, such as `keys-fetch`) or `tunnel: off: <why>`.
   `on` does not say that a tunnel program reaches the listener.
-- A running `hub serve` logs one error line, `this hub server is running older code than the hub
-  code now on disk: restart the hub ...`, when a file of `kitlib/hubsite` changed after it started.
-  It restarts nothing by itself.
+- Stale code. A running `hub serve` compares the `.py` files of `kitlib/hubsite` (name, modified
+  time, size; `serve.code_stamp`) with what they were at its start, at most every 30 seconds. When
+  they differ it logs one error line to its console and says so in a `code` object, `{"stale",
+  "restart"}`, in GET health (the local listener; the tunnel's fixed health carries none) and in
+  GET snapshot (`kitlib.hubsite.codestale`, one text for all of them). `restart` is the owner's
+  to-do: `python <kit>/tools/hub.py restart`, or, with no autostart task, `hub.py stop` then
+  `hub.py serve`. Three places show it, each reading that object: the page's banner under the
+  title (`#codeerr`), a `hub: WARN` line in the PM session-start checklist (docs/pm-start.md), and a
+  `HUB` event of pm_watch (docs/pm-watch.md), said once per stale episode. Nothing restarts the hub
+  by itself. Known limit: only the hub package's own files are compared, so a landing that changes
+  only another package the hub imports (`kitlib/pmdata`, `kitlib/config`) does not warn. Known
+  limit: a hub started before this field existed gives no `code`, so none of the three warn about
+  it; it needs one restart.
 - Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`,
   the application's audience tag `aud` and the allowed `emails`; all three), the server also
   listens on `hub.tunnel_port` (default 8791, loopback too) for a Cloudflare tunnel, and every

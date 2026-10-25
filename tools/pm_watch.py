@@ -85,8 +85,9 @@ def parse(argv, cfg, launcher_set=None):
     return a
 
 
-def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None):
-    """`plugin`: the PLUGIN check (None: W.plugin_check() over the machine config; False: none)."""
+def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None):
+    """`plugin`: the PLUGIN check (None: W.plugin_check() over the machine config; False: none).
+    `hub`: the HUB check (None: W.hub_check() over the hub server on this machine; False: none)."""
     try:
         cfg = W.load_config()
     except kuser.ConfigError as e:
@@ -99,6 +100,7 @@ def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None):
                   branch_poll=a.branch_poll, usage_poll=a.usage_poll, idle_poll=a.idle_poll,
                   notice_dir=a.notice_dir,
                   plugin=W.plugin_check() if plugin is None else (plugin or None),
+                  hub=W.hub_check() if hub is None else (hub or None),
                   preload_modules=claude_host.PRELOAD)
     beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),

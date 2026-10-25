@@ -298,6 +298,7 @@ ul.hist .sch-line{display:block}
     <h1>Action Hub</h1>
     <p class="pill" id="pmpill" role="status"></p>
     <div class="status err" id="loaderr" role="alert" hidden></div>
+    <div class="status err" id="codeerr" role="status" hidden></div>
   </header>
 
   <div class="bar" id="qbar">
@@ -892,7 +893,7 @@ ul.hist .sch-line{display:block}
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
     const pages = pageRows(col);
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
-      push: s.push && typeof s.push === "object" ? s.push : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
+      push: s.push && typeof s.push === "object" ? s.push : null, code: s.code && typeof s.code === "object" ? s.code : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, notices: noticeRows(views.notices),
@@ -3052,10 +3053,13 @@ ul.hist .sch-line{display:block}
   // server is given the wait it asked for, and anything else is tried again after hubRetryMs.
   let rev = 0, lastKey = "", lastCheap = "", fails = 0;
   function loadSay(text){ const b = $("#loaderr"); b.textContent = text; b.hidden = !text; }
+  // The server's own word that hub code newer than it has landed: its restart text (the owner's step), shown until it restarts.
+  function codeSay(code){ const b = $("#codeerr"), t = code && code.stale === true && typeof code.restart === "string" ? code.restart : ""; b.textContent = t; b.hidden = !t; }
   const typing = () => { const a = document.activeElement; return !!a && a !== document.body && a.matches("input:not([type=checkbox]):not([type=radio]), textarea"); };
   async function refresh(){
     const next = hubState(await hub.snapshot());
     if (ready && next.revision < rev) return;         // an older answer that arrived late
+    codeSay(next.code);
     // The same revision and the same of everything a revision does not cover (the git-backed views: backlogs, usage,
     // agents, repos, notices, what is stale, partial or unavailable) is the page already drawn: only what moves on every
     // read is brought up to date, without the whole-snapshot comparison and the redraw. The lists of the store's own
