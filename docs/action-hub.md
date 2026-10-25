@@ -319,6 +319,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `stories [--status S] [--repo R]` | `S-1 v2 submitted [repo] title` |
 | `stories add --repo R --title T --story-file F [--urgent]` (owner) | `SUBMITTED S-2` |
 | `stories set S-1 --status review\|questions\|added\|declined [--reviewer NAME] [--review-note TEXT] [--backlog-id ID] [--closed-note TEXT] --if-version V` | `SET S-1 <status>` |
+| `approvals withdraw A-1 --from KEY --if-version V` | `WITHDRAWN A-1` |
 | `stories withdraw S-1` (owner) | `WITHDRAWN S-1` |
 | `to-pm [--status S] [--repo R]` | `P-1 queued [repo] text` |
 | `to-pm add --text T [--kind K] [--repo R] [--urgent]` (owner) | `QUEUED P-2` |
@@ -883,8 +884,8 @@ or `done` (`kitlib.hubvalidate.STATUSES`); repo, check, target and text are copi
 finding when it is marked. `GET /api/v1/findings` (anyone) lists the lint's last findings, every
 repo (`kitlib.hubsite.derived.findings` over `<pm_data>/maint-lint/<repo>/result.json`),
 filtered by `repo`, less every marked one, with `runs`: each repo's last run as {repo, started,
-ledger, skipped}, ledger its whole-number counts `stale_cites`, `superseded` and
-`superseded_live` or null, skipped the skip marker's {reason, at} only when `at` is later than
+ledger, skipped}, ledger its whole-number counts `stale_cites`, `conflict_pairs` and
+`overrides` or null, skipped the skip marker's {reason, at} only when `at` is later than
 `started` and both parse, else null (`_lint_runs`; from the server's `lint_runs` view,
 `kitlib.hubsite.derived.lint_runs`, always there: an empty list when there is no lint folder).
 `POST /api/v1/finding_marks` (owner) takes
@@ -1020,6 +1021,13 @@ Routes, below `/api/v1`:
   request is decided.
 - POST `/approvals/{id}/consume` (agent): body `commit` and `if_version`; only an approval that is
   `approved` is consumed.
+- POST `/approvals/{id}/delete` (agent): the requester withdraws a request (`hub.py approvals
+  withdraw A-n --from KEY --if-version V`, `WITHDRAWN A-n`), as `questions withdraw` does: the body
+  gives `from` and `if_version`, both required, and the document is deleted, so the page stops
+  listing it. Only a pending request that has not expired is withdrawn (`conflict`, field `status`
+  otherwise: a decided one is the owner's record). The `from` is a claim, as for the other
+  withdrawals: an approval stores none, so it is `pm` (`forbidden`, field `from`, for another) and
+  the check stops a mistake, not an agent that gives another's name.
 - GET `/approvals/{id}/verify` (agent): query `repo`, `head`, `files` (JSON `{path: blob}`) and an
   optional `commit`; answers `{ok, valid, why}`, never the key or the sig. With `commit`, only an
   approval consumed by that commit is valid.

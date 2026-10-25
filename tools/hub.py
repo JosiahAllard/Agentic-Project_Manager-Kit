@@ -181,6 +181,10 @@ the server alone decides what a role may do.
                                                      the checkout DIR, default .), none for a new
                                                      file; --repo defaults to DIR's origin. It only
                                                      asks: no delete, no --from (kitlib.hubapprove)
+  hub.py approvals withdraw A-1 --from KEY --if-version V    `WITHDRAWN A-1`
+                                                     the requester takes back a request still
+                                                     pending (KEY is pm: approvals store no from);
+                                                     a decided or expired one is refused
   hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
                                                      each item of owner input not yet handled: R
                                                      is the session key to handle it now (pm
@@ -208,7 +212,7 @@ the server alone decides what a role may do.
 
 `--choice N` and `--recommended N` are the option's place in the question's list, counted from
 0 as the api counts it. `questions log`, `questions done`, `stories set` and each `edit` and
-`withdraw` need --if-version V: the version of the document the caller read and decided on, which the `questions`
+`withdraw` (`approvals withdraw` too) need --if-version V: the version of the document the caller read and decided on, which the `questions`
 and `stories` lines show as `v2` and --json (`todos --json` too) as `version`. Without it the verb is a usage error and asks nothing; with a version
 the document no longer has, the server refuses the write (`REFUSED conflict`).
 
@@ -546,7 +550,7 @@ def _client_verbs(sub):
     x.add_argument('--out', metavar='F', help='write the HTML to this file instead')
 
     x = _listed(sub, 'approvals', "list the requests for the owner's approval; show; add: ask "
-                "for one", S['approvals'])
+                "for one; withdraw: take back a pending one", S['approvals'])
     _leaf(x, 'show', 'one request and its files').add_argument('id')
     y = _leaf(x, 'add', "ask the owner to approve writing these files")
     y.add_argument('--checkout', default='.', metavar='DIR',
@@ -559,6 +563,7 @@ def _client_verbs(sub):
     _repo(y)
     y.add_argument('--head', metavar='SHA', help="the base commit (default: the checkout's HEAD)")
     y.add_argument('--reason')
+    _creator(_leaf(x, 'withdraw', 'take back a request still pending'), 'KEY')
 
     x = _asks(sub.add_parser('pending', help='the owner input the PM has not handled'))
     x.add_argument('--for', dest='for_key', metavar='KEY',
@@ -1243,6 +1248,9 @@ def _approvals(a, stop):
     """The requests from GET /snapshot (the api has no route that lists approvals), each with
     its status read now: approvals.status_at applies the expiry, `malformed` for a bad document.
     add posts one request (kitlib.hubapprove): it never decides or consumes one."""
+    if a.sub == 'withdraw':
+        got = _hub(a).post(_one('approvals', a) + '/delete', client.AGENT, _edits(a, {}))
+        return _wrote(a, got, 'WITHDRAWN %s' % got.get('id'))
     if a.sub == 'add':
         try:
             body = hubapprove.build(a.checkout, a.title, [tuple(f) for f in a.files],
