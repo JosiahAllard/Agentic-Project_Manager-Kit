@@ -1210,10 +1210,15 @@ def _routed(p):
     return 'to=%s from=%s' % (p.get('route') or '-', p.get('from') or '-')
 
 
+def _title(p):
+    """The title of pending item p, marked `(filed)` when its answer is filed into its record."""
+    return (p.get('title') or '') + (' (filed)' if p.get('filed') is True else '')
+
+
 def _pending(a, stop):
     got = _hub(a).get('/pending', client.ANY, {'for': a.for_key})
     return _show(a, got, ['%s %s [%s] %s %s' % (p.get('kind'), p.get('id'), p.get('repo') or '-',
-                                                 _routed(p), p.get('title') or '')
+                                                 _routed(p), _title(p))
                           for p in got.get('items') or []])
 
 
@@ -1225,7 +1230,7 @@ def _wait(a, stop):
         return client.TIMED_OUT
     rev = got.get('revision')
     lines = ['HUB %s %s %s %s %s' % (rev, p.get('kind'), p.get('id'), _routed(p),
-                                     p.get('title') or '')
+                                     _title(p))
              for p in got.get('pending') or []]
     lines += ['HUB %s %s %s %s %s' % (rev, c.get('collection'), c.get('id'), c.get('op'),
                                       c.get('status') or '-')

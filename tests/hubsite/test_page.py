@@ -1405,7 +1405,7 @@ class DomTest(unittest.TestCase):
                          "answer": {"choice": 0, "label": "one", "note": "", "at": NOW}, "filed_at": NOW}, **kw)
         got = dom("""
             await start();
-            await click($("#tabs [data-f=other]"));
+            await click($("#tabs [data-f=filed]"));
             const asker = text($("#q-Q-1"));
             await click(button($("#q-Q-1"), "Change answer"));
             return { asker, save: !!button($("#q-Q-1"), "Save new answer"), cancel: !!button($("#q-Q-1"), "Cancel"),
@@ -1413,7 +1413,7 @@ class DomTest(unittest.TestCase):
         """, snapshot(collections={"questions": {"Q-1": filed(**{"from": "kit-1"})}}))
         got["pm"] = dom("""
             await start();
-            await click($("#tabs [data-f=other]"));
+            await click($("#tabs [data-f=filed]"));
             return text($("#q-Q-2"));
         """, snapshot(collections={"questions": {"Q-2": filed(**{"from": "pm"})}}))
         self.assertIn("filed in EX-1 · waiting for kit-1 to read it", got["asker"])
@@ -1436,6 +1436,25 @@ class DomTest(unittest.TestCase):
                                    {"choice": 0, "note": ""}, {"choice": 0, "note": ""},
                                    {"choice": 0, "note": ""}, {"choice": 0, "note": ""}])
         self.assertEqual(got[5], [True, False, False, False])
+
+    def test_a_filed_question_has_its_own_bucket_and_no_unknown_status_chip(self):
+        statuses = ["open", "answered", "filed", "logged", "done", "weird", None]
+        self.assertEqual(js("items.map(pmQBucket)", [{"status": s} for s in statuses]),
+                         ["open", "answered", "filed", "logged", "logged", "other", "other"])
+        q = dict(LISTS["questions"]["Q-1"], status="filed", version=3, record=self.REC,
+                 answer={"choice": 0, "label": "one", "note": "", "at": NOW}, filed_at=NOW)
+        got = dom("""
+            await start();
+            const tab = $("#tabs [data-f=filed]");
+            const out = { count: tab && text($("#n-filed")), hidden: tab && tab.hidden, other: $("#tab-other").hidden };
+            await click(tab);
+            out.card = text($("#q-Q-1"));
+            out.chips = $$("#q-Q-1 .chip.need").map(text);
+            return out;
+        """, snapshot(collections={"questions": {"Q-1": q}}))
+        self.assertEqual((got["count"], got["hidden"], got["other"]), ("1", False, True))
+        self.assertIn("filed in EX-1", got["card"])
+        self.assertEqual(got["chips"], [])
 
     def test_only_a_filed_bound_answer_not_standing_yet_can_be_promoted(self):
         rec = self.REC
@@ -1481,7 +1500,7 @@ class DomTest(unittest.TestCase):
                                "Q-2": filed("Q-2", standing={"at": NOW, "via": "web"})}}
         got = dom("""
             await start();
-            await click($("#tabs [data-f=other]"));
+            await click($("#tabs [data-f=filed]"));
             const card = id => $("#q-" + id);
             await click($("#row-Q-2"));             // the list is rows; the card is in the detail pane
             const seen = { rule: text(card("Q-2")), ruleButton: !!button(card("Q-2"), "Make it a standing rule") };
