@@ -2,7 +2,7 @@
 
 Each check turns the previous state and a fresh reading into event lines. tools/pm_watch.py loops,
 prints the lines and exits. Event lines and state keys are those of the PM repo's
-launcher/pm_watch.py at 95f7262. Transcript reading is host-specific and lives in hosts/claude/adapter/claude_host.py.
+launcher/pm_watch.py. Transcript reading is host-specific and lives in hosts/claude/adapter/claude_host.py.
 """
 import json
 import os

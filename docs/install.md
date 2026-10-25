@@ -387,7 +387,7 @@ Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkT
 
 The last command must print nothing. Then `ListSkills` shows each of the 23 names once.
 
-**Stage 1b.** Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
+**Stage 1b.** Gated on the plugin shipping the kit's agents under the pm-kit: names; do not do this before.
 
 Remove ~/.claude/agents only after the plugin providing pm-kit agents is installed and the launcher uses pm-kit:coordinator.
 

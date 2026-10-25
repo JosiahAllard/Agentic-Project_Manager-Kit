@@ -127,7 +127,7 @@ def run(argv, runner, root, tool, pythonw=None):
                                ' [--register --owner-confirmed]'])
     named, register, confirmed = got
     if register and not confirmed:
-        return Outcome(REFUSED, ['refused   --register is the owner\'s act: he runs it'
+        return Outcome(REFUSED, ['refused   --register is the owner\'s act: they run it'
                                  ' with --owner-confirmed; nothing was registered'])
     found = resolve(named or root, tool)
     if isinstance(found, str):

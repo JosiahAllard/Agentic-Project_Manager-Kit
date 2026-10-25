@@ -1,6 +1,6 @@
 # sync_base
 
-`tools/sync_base.py [-C DIR] <hash> --model "<model name>" [--host NAME] [--base BRANCH] [--no-wait]` merges exactly the base commit the coordinator named into the branch checked out at `-C` (default `.`). Logic: `kitlib/syncbase`; the module docstring holds the full rules. Ported from the PM repo's `kit/tools/sync_base.py` at 2d390a8.
+`tools/sync_base.py [-C DIR] <hash> --model "<model name>" [--host NAME] [--base BRANCH] [--no-wait]` merges exactly the base commit the coordinator named into the branch checked out at `-C` (default `.`). Logic: `kitlib/syncbase`; the module docstring holds the full rules. Ported from the PM repo's `kit/tools/sync_base.py`.
 
 `--host NAME` names the agent host for the Co-Authored-By trailer: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). `--provider` is its old name, accepted for one release. A name `hosts.json` lacks is a usage error (exit 2) before any work. The trailer comes from `kitlib.attribution` (docs/commit.md): a Codex one needs the actual explicit model id, is `Codex <model-id> <noreply@openai.com>` on the clean and the prepared conflict message, and never reads CLAUDE_AGENT_MODEL. The host and model are checked before anything changes; the pushed-base, dirty-tree, conflict and regrowth checks keep their rules.
 

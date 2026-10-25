@@ -313,7 +313,7 @@ def owner_identity_error(rules, email):
                 'record (git var GIT_AUTHOR_IDENT failed). Nothing was committed.')
     if email in rules.agent_emails:
         return ('refused: --owner-authored, but the author identity %s is an agent\'s '
-                '("owner".agent_emails). The owner commits from his own terminal. Nothing was '
+                '("owner".agent_emails). The owner commits from their own terminal. Nothing was '
                 'committed.' % email)
     if email != rules.owner_email:
         return ('refused: --owner-authored, but the author identity %s is not the owner\'s (%s). '
@@ -1264,7 +1264,7 @@ def _commit(req, lines):
         # The hint only for a path the merge would carry unnamed, as it is staged now.
         carried = sorted(merge_owned(root, rules, set(locked) & set(status_before), heads,
                                      landed)[0])
-        raise _Stop(REFUSED, 'refused: %s is owner-only, and only a commit the owner authors (his '
+        raise _Stop(REFUSED, 'refused: %s is owner-only, and only a commit the owner authors (their '
                     'own git identity, --owner-authored) can carry its approval. Propose the '
                     'change to the owner.%s Or ask the owner on the hub and commit with '
                     '--owner-approval hub:A-<n>.' % (', '.join(locked), (

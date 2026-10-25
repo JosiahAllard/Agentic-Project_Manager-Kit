@@ -349,7 +349,7 @@ def run_unit(unit, audit, timeout, path=None, root=None, cmd=None, env=None):
                          'no output is what a kill from outside (TerminateProcess, taskkill /F) '
                          'leaves; see kitlib.pytests.runner, The shield'))
     elif status == 'OK' and not ran:
-        # A ported rule (py_select): a unit that ran nothing proves nothing.
+        # A unit that ran nothing proves nothing.
         status = 'FAILED'
         notes.append('pytests: %s ran no test; an empty unit is a FAIL' % unit_name(unit))
     if notes:

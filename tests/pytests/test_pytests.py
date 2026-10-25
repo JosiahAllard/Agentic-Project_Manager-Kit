@@ -1,5 +1,5 @@
 """kitlib.pytests and tools/pytests.py: the parallel tools-test runner. Ported
-from the PM kit's test_pytests.py (kit/pid-hold d151596): the checkout root is passed explicitly
+from the PM kit's test_pytests.py: the checkout root is passed explicitly
 (the PM kit patched pytests.ROOT and set KIT_REPO_ROOT / KIT_CONFIG), the job is kitlib.proc.job's,
 and a fail pattern stands in for the PM kit's gate.FAIL (the kit's fail patterns are per-repo
 gate config).
@@ -169,7 +169,7 @@ class Verdicts(Fakes):
                               r'at all: no test ran')
 
     def test_a_unit_that_runs_no_test_fails_named(self):
-        # a repository's py_select rule: an empty unit proves nothing.
+        # an empty unit proves nothing.
         self.write('test_p1', PASSING)
         self.write('test_empty', 'import unittest\n')
         code, out = self.run_modules(['test_p1', 'test_empty'])
@@ -1116,8 +1116,8 @@ class ChangedPaths(Repo):
         return str(cm.exception)
 
     def test_a_git_failure_refuses_naming_the_command(self):
-        # A repository's gate-git-fail-refuse: py_select used to return None and run every module, a
-        # silent degrade (py-select-git-fail).
+        # A git failure refuses: returning None and running every module instead would be a silent
+        # degrade.
         msg = self.refusal(git_run({'merge-base': (0, 'abc123\n', ''),
                                     'diff': (128, '', 'hint: x\nfatal: bad revision\n')}))
         self.assertIn('pytests: REFUSED - `git diff --name-only --no-renames -z abc123` failed '
@@ -1318,7 +1318,7 @@ class Usage(unittest.TestCase):
                          [2, 2, 2, 3, 6, 6])
 
     def test_jobs_max_and_divisor_set_the_default(self):
-        # a repository's py_select: min(8, max(2, cpus // 2)).
+        # an example setting: min(8, max(2, cpus // 2)).
         c = cfg(jobs_max=8, jobs_divisor=2)
         self.assertEqual([runner.default_jobs(n, c, environ={}) for n in (1, 4, 8, 12, 24, 64)],
                          [2, 2, 4, 6, 8, 8])

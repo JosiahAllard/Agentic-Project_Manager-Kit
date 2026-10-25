@@ -1007,8 +1007,8 @@ TASKLIST = ('\nImage Name                     PID Session Name\n'
             'engine.exe                    4343 Console\n'
             'notepad.exe                   4444 Console\n')
 NETSTAT = ('\nActive Connections\n\n  Proto  Local Address          Foreign Address\n'
-           '  UDP    0.0.0.0:7801           *:*\n'
-           '  UDP    [::]:7999              *:*\n'
+           '  UDP    0.0.0.0:41001          *:*\n'
+           '  UDP    [::]:41199             *:*\n'
            '  UDP    0.0.0.0:8000           *:*\n'
            '  UDP    0.0.0.0:53             *:*\n')
 
@@ -1036,15 +1036,15 @@ class TheEngineAndPortLines(unittest.TestCase):
         self.assertEqual(line, 'engines   UNKNOWN - tasklist failed: not found')
 
     def test_ports_in_the_range_are_listed(self):
-        [line] = self.readings({'udp_ports': [7800, 7999]}, {'netstat': (0, NETSTAT, '')})
-        self.assertEqual(line, 'ports     7800-7999 in use: [7801, 7999]')
+        [line] = self.readings({'udp_ports': [41000, 41199]}, {'netstat': (0, NETSTAT, '')})
+        self.assertEqual(line, 'ports     41000-41199 in use: [41001, 41199]')
 
     def test_no_port_in_use_says_none(self):
         [line] = self.readings({'udp_ports': [9000, 9001]}, {'netstat': (0, NETSTAT, '')})
         self.assertEqual(line, 'ports     9000-9001 in use: none')
 
     def test_a_failed_netstat_is_unknown(self):
-        [line] = self.readings({'udp_ports': [7800, 7999]}, {'netstat': (1, '', '')})
+        [line] = self.readings({'udp_ports': [41000, 41199]}, {'netstat': (1, '', '')})
         self.assertEqual(line, 'ports     UNKNOWN - netstat failed: exit 1')
 
     def test_a_command_that_cannot_start_is_a_failed_reading(self):
@@ -1069,10 +1069,10 @@ class TheConfig(unittest.TestCase):
 
     def test_every_key_set(self):
         got = self.settings({'traps': ' t ', 'report_hooks': ['daily_full:summary_lines'],
-                             'engines': ['Godot', 'engine.exe'], 'udp_ports': [7800, 7999],
+                             'engines': ['Godot', 'engine.exe'], 'udp_ports': [41000, 41199],
                              '_note': 'notes are allowed'})
         self.assertEqual(got, {'traps': 't', 'report_hooks': ['daily_full:summary_lines'],
-                               'engines': ['godot', 'engine.exe'], 'udp_ports': [7800, 7999]})
+                               'engines': ['godot', 'engine.exe'], 'udp_ports': [41000, 41199]})
 
     def test_what_it_cannot_use_refuses(self):
         for bad, words in (({'traps': ''}, 'traps'),
@@ -1084,8 +1084,8 @@ class TheConfig(unittest.TestCase):
                            ({'report_hooks': ['a.b:c']}, 'report_hooks'),
                            ({'engines': 'godot'}, 'engines'),
                            ({'engines': ['']}, 'engines'),
-                           ({'udp_ports': [7999, 7800]}, 'udp_ports'),
-                           ({'udp_ports': [7800]}, 'udp_ports'),
+                           ({'udp_ports': [41199, 41000]}, 'udp_ports'),
+                           ({'udp_ports': [41000]}, 'udp_ports'),
                            ({'udp_ports': [0, 70000]}, 'udp_ports'),
                            ({'udp_ports': [True, 9]}, 'udp_ports'),
                            ({'udp_port': [1, 2]}, 'udp_port')):

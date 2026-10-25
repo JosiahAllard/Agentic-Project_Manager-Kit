@@ -549,7 +549,7 @@ def is_owner_held(rec):
 
 
 def is_owner_prioritised(rec):
-    """The owner's price: `priority_by: owner`, or `pm` (priced on his ruling)."""
+    """The owner's price: `priority_by: owner`, or `pm` (priced on the owner's ruling)."""
     return rec.get('priority_by') in ('owner', 'pm')
 
 
