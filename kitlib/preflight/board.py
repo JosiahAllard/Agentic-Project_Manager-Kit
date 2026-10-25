@@ -1,4 +1,4 @@
-"""The board's lines for one checkout (docs/preflight.md "board.py").
+"""The board's lines for one checkout, printed by `preflight.py --board` (docs/preflight.md "--board").
 
 A dashboard cannot refuse, so every cell is a READING: a git command that failed prints `?` (or
 `? (git diff failed)`), never a value. `-` means "no owner-only paths" and nothing else, `0` means
@@ -10,7 +10,7 @@ import sys
 
 from kitlib.git import cmd, repo
 from kitlib.git import refs as gitrefs
-from kitlib.preflight import lockline, machine, settings as st
+from kitlib.preflight import machine, settings as st
 
 HEADER = 'branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched'
 
@@ -62,20 +62,16 @@ def docs_line(top, kit_root):
                            stale[-1].strip() if stale else 'no stale report')
 
 
-def lines(top, cfg, kit_root, base=None, lock_reader=lockline.read_snapshot):
+def lines(top, cfg, kit_root, base=None):
     """The board's lines for the repository whose work tree `top` is (`cfg` its loaded Config;
-    kitlib.config.ConfigError for a "preflight" value it cannot use)."""
-    s = st.settings(cfg)
+    kitlib.config.ConfigError for a "preflight" value it cannot use): the header, a row per
+    worktree and the stale-doc line. The base, the lock and the machine lines are preflight's
+    own, printed before these."""
     rules = cfg.owner_rules()
-    remote = cfg.remote
     explicit = base
     base, b, ob = st.base_pair(top, cfg, base)
     measure = st.measure_rev(cfg, base, b, ob, explicit)
-    out = ['%s @ %s | %s/%s @ %s %s' % (
-        base, b or '?', remote, base, ob or '?',
-        '(equal)' if b and b == ob else '(DIFFERENT%s)' % (
-            '' if measure == base else '; rows measured against %s/%s' % (remote, base))),
-           HEADER]
+    out = [HEADER]
     wts, why = repo.worktrees(top)
     if wts is None:
         out.append('(worktrees UNKNOWN - %s)' % why)
@@ -83,11 +79,7 @@ def lines(top, cfg, kit_root, base=None, lock_reader=lockline.read_snapshot):
         rows = [row(w, measure, rules) for w in wts
                 if w.branch and w.branch != base and os.path.isdir(w.path)]
         out += rows or ['(no worktrees besides the main checkout)']
-    out.append('machine: lock %s' % lockline.line_for(kit_root, lock_reader))
     out.append(docs_line(top, kit_root))
-    line = machine.board_line(s)
-    if line:
-        out.append(line)
     return out
 
 

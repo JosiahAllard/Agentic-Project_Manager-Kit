@@ -1,4 +1,4 @@
-"""--write-state: the board's facts into ONE marked block of the coordinator's state file; the
+"""`preflight.py --board --write-state`: the board's facts into ONE marked block of the coordinator's state file; the
 judgement fields around it (landing queue, waiting on owner, next) are the coordinator's and are
 never touched.
 

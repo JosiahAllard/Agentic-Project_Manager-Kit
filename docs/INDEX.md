@@ -60,7 +60,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/plugin-source.md` | the plugin's source: export of pushed kit main, refresh, migrate | installing or refreshing the plugin | kw: plugin-source, plugin, plugin_refresh, export
 - `docs/pm-start.md` | PM session-start checklist | starting a PM session | kw: pm-start, checklist
 - `docs/pm-watch.md` | PM watcher | watching sessions | kw: pm-watch, watcher
-- `docs/preflight.md` | preflight, board and checkout guard | starting any task | kw: preflight, board, checkout
+- `docs/preflight.md` | preflight (with its --board) and checkout guard | starting any task | kw: preflight, board, checkout
 - `docs/stray-restore.md` | discard a main-checkout stray a branch already holds byte for byte | the gate reports main-checkout-stray | kw: stray-restore, stray, main-checkout-stray, restore
 - `docs/redfirst.md` | redfirst | proving a test fails first | kw: redfirst, red
 - `docs/repo-checks.md` | forbidden, trailers, pieces | repo checks | kw: forbidden, trailers, pieces
@@ -94,7 +94,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 
 ## Tools
 
-- `tools/preflight.py` | board and checkout guard (`docs/preflight.md`) | kw: preflight, board
+- `tools/preflight.py` | a session's first look; `--board` adds the coordinator's worktree board (`docs/preflight.md`) | kw: preflight, board
 - `tools/new_worktree.py` | start a task worktree (`docs/new-worktree.md`) | kw: new_worktree, worktree
 - `tools/commit.py` | commit by explicit path (`docs/commit.md`) | kw: commit
 - `tools/gate.py` | run the gate (`docs/gate.md`) | kw: gate, test
@@ -128,7 +128,6 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/agent_roster.py` | checks or writes docs/ROSTER.md's tables alone, rendered from content/roles and the hosts' tier maps (`docs/ROSTER.md`) | kw: agent_roster, roster
 - `tools/render_content.py` | render content/ into each host's agents and skills; --check for drift (`docs/content.md`) | kw: render_content, content, render
 - `tools/agent_view.py` | everything one role is given and held to on one host (`docs/content.md` "Agent view") | kw: agent_view, role, view, instructions, mode, capabilities
-- `tools/board.py` | the coordinator's whole board in one call (`docs/preflight.md`) | kw: board
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
 - `tools/stray_restore.py` | discard main-checkout strays a branch tip holds (`docs/stray-restore.md`) | kw: stray_restore, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs

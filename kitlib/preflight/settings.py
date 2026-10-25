@@ -1,4 +1,4 @@
-"""`.kit.json` "preflight" as preflight and board use it, and the base branch pick.
+"""`.kit.json` "preflight" as preflight uses it, and the base branch pick.
 
 kitlib.config's schema checks each key's type; settings() adds what a type cannot say: a hook is
 `module:function` with both halves Python identifiers (the module is a file in the repo's tools
@@ -75,7 +75,7 @@ def base_refs(top, names, remote):
 
 def base_pair(top, cfg, explicit=None):
     """(base name, local short hash or '', <remote>/<base> short hash or '') - the one base pick
-    preflight and the board share. An explicit base with no local branch may be any revision."""
+    preflight's report and its board share. An explicit base with no local branch may be any revision."""
     names = base_names(cfg, explicit)
     refs = base_refs(top, names, cfg.remote)
     base = pick_base(names, refs)
