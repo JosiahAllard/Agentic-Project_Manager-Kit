@@ -1,6 +1,6 @@
 # Repo checks: forbidden, trailers, pieces
 
-Three repository checks ported from the PM kit. Held for the joint review: no repository's gate runs them until its `.kit.json` adds the step. Each is a thin entry point in `tools/` over a `kitlib` package; `-C DIR` (default `.`) names the checkout, resolved with `kitlib.git.repo.toplevel`. Exit 2 is also every `USAGE:` error.
+Three repository checks. Held for the joint review: no repository's gate runs them until its `.kit.json` adds the step. Each is a thin entry point in `tools/` over a `kitlib` package; `-C DIR` (default `.`) names the checkout, resolved with `kitlib.git.repo.toplevel`. Exit 2 is also every `USAGE:` error.
 
 ## forbidden
 

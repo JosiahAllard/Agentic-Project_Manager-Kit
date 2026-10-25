@@ -480,7 +480,7 @@ note: no exit code changes and nothing deletes the file.
 A committed stub carries the kit's absolute path, so a repository whose gate checks for machine
 paths must allow it (`machine_paths.allow`, docs/kit-json.md).
 
-## Not ported from the older PM kit
+## Not carried over
 
 - kit_stubs: the `_kit_stub.py` runtime (`KIT_REPO_ROOT`/`KIT_CONFIG` env, runpy in-process);
   the `PM_KIT`/`DEV_ROOT` kit lookup; library stubs and the import-as-library mode (the shared
