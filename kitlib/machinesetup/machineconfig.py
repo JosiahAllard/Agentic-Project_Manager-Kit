@@ -15,7 +15,6 @@ unignored. Nothing here prints or exits.
 import os
 
 from kitlib.config import ConfigError
-from kitlib.config import move as kmove
 from kitlib.config import user as kuser
 
 from . import settings
@@ -77,6 +76,7 @@ def set_key(home, snap, key, value, replace=False):
         raise RuntimeError('%s already has %s; not overwritten' % (path, key))
     data[key] = value
     new = settings.write(layout, data)
+    from kitlib.config import move as kmove      # at the call: move imports kitlib.coordinatorstart, which imports this package
     folder = os.path.dirname(path)
     os.makedirs(folder, exist_ok=True)
     if not os.path.lexists(os.path.join(folder, kmove.IGNORE_FILE)):
