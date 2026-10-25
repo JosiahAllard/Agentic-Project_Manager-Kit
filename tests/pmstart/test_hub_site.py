@@ -66,6 +66,21 @@ class HubSiteTest(unittest.TestCase):
                                    % type(err).__name__])
         self.assertEqual(c.calls, [])
 
+    def test_a_hub_that_says_its_code_is_old_gets_a_warn_line_with_the_owners_restart_step(self):
+        from kitlib.hubsite import codestale
+        out = site(FakeClient(health={"ok": True, "code": {"stale": True, "restart": "x"}}))
+        self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM")
+        self.assertEqual(out[1], "hub: WARN " + codestale.text(pmstart.HUB_TOOL))
+        self.assertIn('python "%s" restart' % pmstart.HUB_TOOL, out[1])
+        self.assertEqual(len(out), 3)
+
+    def test_a_current_hub_or_one_with_no_or_a_malformed_code_field_gets_no_warn_line(self):
+        for code in ({"stale": False, "restart": None}, None, "stale", {"stale": "yes"}, []):
+            out = site(FakeClient(health={"ok": True, "code": code}))
+            self.assertEqual(len(out), 2, code)
+            self.assertFalse(any("older code" in line for line in out), code)
+        self.assertEqual(len(site(FakeClient())), 2)
+
     def test_up_with_nothing_pending_says_port_and_count_and_the_wait_line(self):
         out = site(FakeClient())
         self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM")

@@ -247,6 +247,10 @@ def hub_site(procs=(), load=None, make_client=_hub_client, stamp=None, now=None)
     except Exception as e:
         return ["hub: server up on port %d, pending not asked (%s)" % (port, type(e).__name__)]
     lines = ["hub: server up on port %d, %d pending for the PM" % (port, len(items))]
+    from kitlib.hubsite import codestale
+    old = codestale.notice(health.get("code"), HUB_TOOL)      # never raises; None: current or no field
+    if old:
+        lines.append("hub: WARN " + old)
     if items:
         lines.append("hub: process the %d pending item(s): python \"%s\" pending --for pm, then "
                      "handle, ack or log each" % (len(items), HUB_TOOL))
