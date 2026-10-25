@@ -84,6 +84,100 @@ class QueueCase(GateRepoCase):
             return []
 
 
+def lines(n, tag='x'):
+    return ''.join('%s %d\n' % (tag, i) for i in range(n))
+
+
+class SelfReviewSize(QueueCase):
+    """With "landing".self_review_max_lines given, add() refuses a verdict of any risk the queueing
+    coordinator reviewed itself when its range changes more lines than that, or git cannot say
+    (verdicts.self_review_size_why); a dispatched reviewer, or no cap, queues as before."""
+    CAP = 4
+
+    def add(self, tip, cap=CAP, base=None, **over):
+        return V.add(self.common, given('kit/a', tip, base=base or self.main[:10], **over),
+                     self_review_max_lines=cap)
+
+    def refused(self, tip, cap=CAP, **over):
+        with self.assertRaises(V.SelfReview) as cm:
+            self.add(tip, cap=cap, **over)
+        self.assertEqual(self.folder_names(), [])
+        why = str(cm.exception)
+        self.assertEqual(why.splitlines()[-1], V.SELF_REVIEW_INSTEAD)
+        self.assertIn('("landing".self_review_max_lines)', why)
+        self.assertIn('nothing was queued', why)
+        return why
+
+    def test_a_self_read_over_the_cap_is_refused_with_the_counts(self):
+        _, tip = self.branch('a', {'a.txt': lines(3), 'b.txt': lines(2)})
+        for risk in ('Low', 'Medium'):
+            with self.subTest(risk=risk):
+                why = self.refused(tip, risk=risk, reviewer_id='coord-1')
+                self.assertIn('covers at most 4 changed lines', why)
+                self.assertIn('changes 5 (+5 -0 in 2 files)', why)
+                self.assertIn('its reviewer id coord-1 is the session queueing it', why)
+
+    def test_the_coordinator_role_as_reviewer_counts_as_a_self_read(self):
+        _, tip = self.branch('a', {'a.txt': lines(5)})
+        why = self.refused(tip, reviewer='pm-kit:coordinator', reviewer_id='agent-z')
+        self.assertIn('its reviewer pm-kit:coordinator is the coordinator role', why)
+        self.assertIn('changes 5 (+5 -0 in 1 file)', why)
+
+    def test_a_self_read_at_the_cap_is_queued(self):
+        wt, _ = self.branch('a', {'a.txt': lines(3)})
+        tip = self.more(wt, 'a', {'a.txt': lines(4)})        # +4 -0 from main in all
+        _, stored = self.add(tip, reviewer_id='coord-1')
+        self.assertEqual(stored['tip'], tip)
+
+    def test_removed_lines_count_too(self):
+        self.repo.write('m.txt', lines(3))
+        main2 = self.repo.commit('main work', 'm.txt')
+        wt = self.repo.worktree('b')
+        self.repo.write('m.txt', lines(1), root=wt)                  # -2 against main2
+        self.repo.write('n.txt', lines(3), root=wt)                  # +3
+        tip = self.repo.commit('work on b', 'm.txt', 'n.txt', cwd=wt)
+        self.assertEqual(V.diff_lines(self.common, '%s..%s' % (main2, tip)), (3, 2, 2))
+        with self.assertRaises(V.SelfReview) as cm:
+            V.add(self.common, given('kit/b', tip, base=main2[:10], reviewer_id='coord-1'),
+                  self_review_max_lines=4)
+        self.assertIn('changes 5 (+3 -2 in 2 files)', str(cm.exception))
+
+    def test_commits_the_base_gained_after_the_branch_left_it_are_not_counted(self):
+        _, tip = self.branch('a', {'a.txt': lines(2)})
+        self.repo.write('m.txt', lines(50))
+        main2 = self.repo.commit('main moved on', 'm.txt')
+        _, stored = self.add(tip, base=main2[:10], reviewer_id='coord-1')
+        self.assertEqual(stored['tip'], tip)
+
+    def test_a_binary_file_counts_no_lines(self):
+        _, tip = self.branch('a', {'a.txt': lines(4), 'img.bin': 'PNG\x00\x01\x02' * 40})
+        _, stored = self.add(tip, reviewer_id='coord-1')
+        self.assertEqual(stored['tip'], tip)
+        self.assertEqual(V.diff_lines(self.common, '%s..%s' % (self.main, tip)), (4, 0, 2))
+
+    def test_a_dispatched_reviewer_or_no_cap_queues_any_size(self):
+        _, tip = self.branch('a', {'a.txt': lines(40)})
+        _, stored = self.add(tip, reviewer='pm-kit:analyst', reviewer_id='agent-a7')
+        self.assertEqual(stored['tip'], tip)
+        _, stored = self.add(tip, cap=None, reviewer_id='coord-1')
+        self.assertEqual(stored['reviewer_id'], 'coord-1')
+
+    def test_a_size_git_cannot_tell_is_refused_only_with_a_cap(self):
+        _, tip = self.branch('a', {'a.txt': lines(1)})
+        why = self.refused(tip, base='nosuchbase', reviewer_id='coord-1')
+        self.assertIn('git cannot tell how many nosuchbase..%s changes' % tip[:10], why)
+        _, stored = self.add(tip, cap=None, base='nosuchbase', reviewer_id='coord-1')
+        self.assertEqual(stored['tip'], tip)
+        _, stored = self.add(tip, base='nosuchbase', reviewer='pm-kit:analyst', reviewer_id='a7')
+        self.assertEqual(stored['tip'], tip)
+
+    def test_a_high_risk_self_review_is_still_refused_whatever_its_size(self):
+        _, tip = self.branch('a', {'a.txt': lines(1)})
+        with self.assertRaises(V.SelfReview) as cm:
+            self.add(tip, risk='High', reviewer_id='coord-1')
+        self.assertIn('a High-risk verdict needs a reviewer other than', str(cm.exception))
+
+
 class Queue(QueueCase):
     def test_add_list_drop_round_trip(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
