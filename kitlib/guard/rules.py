@@ -188,17 +188,24 @@ def literal_word(path):
 def advice_kit(ctx):
     """The kit folder an alternative names (docs/guard.md "Kit paths in advice"): the installed
     export the sessions' kit tools run from, when the guard can know it, else the kit the guard
-    runs from (ctx.kit). A guard run from an export names that export. A guard run from a kit
-    checkout names the export the machine's plugin marketplace names now
+    runs from (ctx.kit). The guard names the export the machine's plugin marketplace names now
     (kitlib.pluginsource.current_folder under the plugin export root), when that folder is an
-    export (a 12-hex-digit name, the marker and kit.json in it) whose marker names this checkout
-    (export_checkout). The hook is not told which folder a session's header named, so a session
-    that started on an older export is still pointed at the current one."""
+    export (a 12-hex-digit name, the marker and kit.json in it) whose marker names the kit checkout
+    the guard is from (export_checkout): the guard's own checkout, or, for a guard run from an
+    export, the checkout that export's marker names. So a guard still running from an export a
+    refresh replaced names the current one, which prune keeps, and which kitlib.host.headerfollow
+    then tells the session its header names. The hook is not told which folder a session's header
+    named, so a session that started on an older export is still pointed at the current one."""
     kit = getattr(ctx, 'kit', None)
-    if not kit or os.path.isfile(os.path.join(kit, '.pm-kit-export')):
+    if not kit:
         return kit
     from kitlib import pluginsource
     from . import rolepolicy
+    source = kit
+    if os.path.isfile(os.path.join(kit, pluginsource.MARKER)):
+        source = pluginsource.export_checkout(kit)
+        if not source:
+            return kit
     user = ctx.user()
     if not isinstance(user, dict) or user.get('error'):
         return kit
@@ -213,7 +220,7 @@ def advice_kit(ctx):
     if not all(os.path.isfile(os.path.join(folder, f)) for f in rolepolicy.EXPORT_FILES):
         return kit
     checkout = pluginsource.export_checkout(folder)
-    if not checkout or paths.norm(checkout) != paths.norm(kit):
+    if not checkout or paths.norm(checkout) != paths.norm(source):
         return kit
     return folder
 
