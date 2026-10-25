@@ -109,6 +109,14 @@ class StaleMarkWord(test_marks.MarkCase):
         self.assertIn('its stale mark is void: ', reason)
         self.assertIn('old-0.txt changed at ', reason)
 
+    def test_a_lock_after_the_mark_voids_it_while_held(self):
+        self.marked()
+        self.git('worktree', 'lock', self.wt, cwd=self.repo)
+        self.addCleanup(self.git, 'worktree', 'unlock', self.wt, cwd=self.repo)
+        reason = self.refused(self.remove_from_main())
+        self.assertIn('its stale mark is void: ', reason)
+        self.assertIn('locked changed at ', reason)
+
     def test_a_mark_naming_another_path_is_void(self):
         self.marked()
         got = self.stored()
