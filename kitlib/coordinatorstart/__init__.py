@@ -347,7 +347,8 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
 
         def ledger():
             # A config that cannot be read (user_config raises ConfigError for every such case):
-            # read as an empty one, so only the rulebook line (it says none is configured). Any other error is a bug and is reported below.
+            # read as an empty one, so only the rulebook line (it says none is
+            # configured). Any other error is a bug and is reported below.
             try:
                 m = machine_cfg if machine_cfg is not None else kuser.user_config()
             except kuser.ConfigError:
