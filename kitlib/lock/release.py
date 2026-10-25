@@ -30,7 +30,7 @@ import os
 import time
 
 from kitlib.git import cmd, refs
-from kitlib.lock.store import Store, read_json
+from kitlib.lock.store import ID_RE, Store, read_json, wrapper_state
 from kitlib.proc import process
 
 OK, REFUSED, USAGE, ERROR = 0, 1, 2, 3
@@ -79,16 +79,28 @@ def error_outcome(err):
                            "release." % (type(err).__name__, err)], None)
 
 
-def _owner_live(d, alive):
-    """Is the run d (a record or a queue entry) live? False only when its process is surely gone."""
+def _owner_live(d, alive, mutex_gone=None):
+    """Is the run d (a record or a queue entry) live? False only when its process is surely
+    gone: alive(pid, ctime) says False; or alive cannot tell (None, or True for a record with no
+    creation time: a pid alone is not proof of life) and mutex_gone(id) says its run mutex is
+    surely gone (store.run_mutex_held False)."""
     if not isinstance(d, dict):
         return True
     pid, ctime = d.get("pid"), d.get("ctime")
     if type(pid) is not int or pid <= 0 or (ctime is not None and type(ctime) is not int):
         return True
     try:
-        return bool(alive(pid, ctime))
+        state = alive(pid, ctime)
     except (OSError, ValueError, TypeError, OverflowError):
+        return True
+    if state is not None and (ctime is not None or not state):
+        return bool(state)
+    rid = d.get("id")
+    if mutex_gone is None or not isinstance(rid, str) or not ID_RE.match(rid):
+        return True
+    try:
+        return not mutex_gone(rid)
+    except (OSError, ValueError, TypeError):
         return True
 
 
@@ -124,15 +136,17 @@ def live_runs(store, alive=None, mine=None):
     """(live, gone, own): the store's runs as 'active/<file>' and 'queue.json:<id>' ('?' for an
     entry with no id). Gone means the run's process is surely gone; anything unreadable is live,
     and a missing store folder is the one live entry MISSING. own: the live runs whose process is
-    in mine ({(pid, ctime)}). Writes nothing."""
-    alive = alive or process.alive
+    in mine ({(pid, ctime)}). Writes nothing. alive(pid, ctime): True, False, or None when it
+    cannot tell (store.wrapper_state, the default); then the run's mutex decides
+    (store.run_mutex_held), as store.run_live does."""
+    alive = alive or wrapper_state
     mine = mine or set()
     if not os.path.isdir(store.path()):
         return [MISSING], [], []
     live, gone, own = [], [], []
 
     def sort(name, d):
-        if not _owner_live(d, alive):
+        if not _owner_live(d, alive, lambda rid: store.run_mutex_held(rid) is False):
             gone.append(name)
             return
         live.append(name)

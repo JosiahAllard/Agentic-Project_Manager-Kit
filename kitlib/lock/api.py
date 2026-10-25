@@ -610,7 +610,7 @@ def end_run(actor, rid, store=None):
         me = who(actor, store)
         _id(rid, "r")
         d = _active_record(store, rid)
-        if not d or not process.alive(d.get("pid", 0), d.get("ctime")):
+        if not d or not store.run_live(d):
             raise ApiError("not_found", "no live run %s" % rid, "id")
         _check(me, "end_run", d)
         by = "owner" if is_owner(me) else me.get("name") or me.get("session")
@@ -671,7 +671,7 @@ def run_record(rid, store=None):
         d = _active_record(store, rid)
     except ApiError as e:
         return _fail(store, e.code, e.message, e.field)
-    if d and process.alive(d.get("pid", 0), d.get("ctime")):
+    if d and store.run_live(d):
         return dict(d, live=True)
     return read_json(store.path("ended", rid + ".json"))
 

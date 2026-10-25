@@ -55,7 +55,11 @@
 - **`slots`**: {cpu: [...], gpu: [...]}, one per slot.
   - {slot, holder (run id), background, hold (the hold id covering it now), hold_owner}.
   - cpu slots add `threads` and `pinned`; gpu slots add `card`.
-- **`runs`**: every live run (waiting, held or background).
+- **`runs`**: every live run (waiting, held or background): a record in `active/` whose wrapper is live (`Store.run_live`, the same test `run_record` and `end_run` use).
+  - Its pid and creation time decide when they can be checked (`store.wrapper_state`): a running process created then is live; no such pid, an exited one or another creation time is gone.
+  - When they cannot (a process this user may not open, which a reused pid can name, or a record with no creation time), the run mutex decides: the wrapper holds it from before its record is written until after the record leaves `active/` (`run.claim_id`, `run.settle`), so one that does not exist (`ERROR_FILE_NOT_FOUND`), is abandoned or is unowned means gone. One that cannot be opened for any other reason (access denied, say), a failed wait on the wrapper, or a record with no valid run id counts as live. A pid alone is never proof of life (`tests/lock/test_reused_pid.py`). Hold claims are checked the same way (`holds.claim_alive`).
+  - The mutex is let go even when removing the record from `active/` fails (`store.remove` ignores the OSError). The ended record is written first, so such a record left in `active/` is a run that has ended: while its wrapper process is still alive with that creation time it is still listed; once the process exits it reads as gone. Nothing removes it from `active/`.
+  - This assumes the checker and every wrapper share the `Global\` mutex namespace (`Store.mutex_name`), so a wrapper's mutex is seen from any session on the machine.
   - The record's id, state, repo, slug, kind, note, pid, ctime, since, held_since, expect_s, expect_from, hold, parent, pinned, pin and pin_note.
   - `resource` and `priority`: the run's exclusive resource and its priority (`"land"`), or null; see Run resources and landing priority.
   - `within`: the thread list the run is confined to (`8-15`), or null; see Runs confined to a thread set.
