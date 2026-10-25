@@ -1,5 +1,4 @@
-"""The Windows scheduled task that runs the nightly worktree sweep, ported from the PM
-kit's tools/worktree_sweep_task.py (docs/worktree-remove.md). tools/worktree_sweep_task.py is the
+"""The Windows scheduled task that runs the nightly worktree sweep (docs/worktree-remove.md). tools/worktree_sweep_task.py is the
 entry point; `run` here does the work and returns Outcome(code, lines). Nothing here prints.
 
 The task, `<repo name>-worktree-sweep`, runs `python "<kit>\\tools\\worktree_remove.py" -C "<main

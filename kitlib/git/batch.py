@@ -1,4 +1,4 @@
-"""One git process for many reads (ported from the PM kit's tools/_git.py).
+"""One git process for many reads.
 
 A tool that asks git one question per item pays one process start per item, and on Windows under
 load that start is the run time. Each helper here answers a whole list in one git process:
