@@ -610,14 +610,14 @@ class Store:
             pass
 
     def live_runs(self, prune=False):
-        """Run records whose wrapper is live (run_live). prune: move the others to ended/ (book
+        """Run records whose wrapper is live (run_live). prune: move the others to ended/ (acquire
         does, kitlib.lock.run) and delete orphaned .stop and .giveback files (kitlib.lock.giveback)
         and dead writers' .tmp files. A run that settled keeps the ended record it wrote; one
         whose wrapper died without settling gets one with how "reaped", code None, ended now and
         `reaped` saying what showed it gone (wrapper_state, else the run mutex), and no history
         line (it has no measured use, and the gate budget would count it now). A record leaves
         active/ only once its ended record is there."""
-        out, folder = [], self.path("active")
+        out, folder, moved = [], self.path("active"), False
         try:
             names = sorted(os.listdir(folder))
         except FileNotFoundError:
@@ -652,7 +652,9 @@ class Store:
                 remove(p)
                 remove(p[:-5] + ".stop")
                 remove(p[:-5] + ".giveback")
-                self.bump()
+                moved = True
+        if moved:
+            self.bump()
         return out
 
     def prune_files(self, live_ids):

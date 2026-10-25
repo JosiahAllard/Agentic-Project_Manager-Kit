@@ -386,13 +386,14 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None, within=None):
     covers within its expected time; one they leave too few of keeps its place, parked. With
     no_wait it waits only for background runs to yield. prefer: its hold's slots. within: {pool:
     the only slots it may take} (book's within): its entry carries it (kitlib.lock.queue.plan)
-    and only holds over those slots park it."""
+    and only holds over those slots park it. After its first look at the queue it moves dead
+    runs' records to ended/ (Store.live_runs prune), whether or not it then gets its slots."""
     s, say = store.settings, store.say
     deadline = time.monotonic() + (0 if no_wait else math.inf if wait_s is None else wait_s)
     span, hid = run.rec["expect_s"], run.rec.get("hold")
     whole = run.rec.get("hold_scope") == "whole"
     told = said = seen = yielding = ypool = qbad = hbad = None
-    joined = back = False
+    joined = back = reaped = False
     while True:
         now = utc_now()
         game.sync(store, L)
@@ -566,6 +567,14 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None, within=None):
                                               "written (%s); the command was not run" % err)
             time.sleep(s.queue_poll_s)
             continue
+        if not reaped:
+            # Once, after the first prune of the queue said which dead runs it dropped: records
+            # in active/ whose wrapper is surely gone (Store.run_live) move to ended/, how
+            # "reaped". Nothing else takes them out, and every read of the store walks them. An
+            # ended record makes a later prune drop the run's entry quietly (queue.prune).
+            reaped = True
+            with contextlib.suppress(OSError):
+                store.live_runs(prune=True)
         if qbad is not None:
             say("run %s: the queue reads again%s" % (
                 run.id, "; its entry was gone, so it joined again at the back" if back else ""))
@@ -1414,10 +1423,6 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     # over, and a refusal here writes nothing (claim_id).
     rid, mutex = claim_id(store, rid)
     try:
-        # Records in active/ whose wrapper is surely gone (Store.run_live) move to ended/, how
-        # "reaped": nothing else takes them out, and every read of the store walks them.
-        with contextlib.suppress(OSError):
-            store.live_runs(prune=True)
         run = Run(store, L, repo, slug, kind, note, cmd, "waiting", rid, detached, env, log)
         hist = None if expect_s is not None else store.history_expect(
             repo, kind, store.run_mode(priority, branch, gate))

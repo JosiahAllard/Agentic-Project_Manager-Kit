@@ -8,7 +8,7 @@ path(), mutex_name(), real_root(), profile_dir() and machine_home(). None reads,
 it; the release check's look at it (kitlib.lock.release.live_runs) is given a stand-in for `os`.
 
 On a scratch store, a booking moves the records of runs whose wrapper is surely gone out of
-active/ (DeadRecordsReaped)."""
+active/, after the queue's prune has said which dead runs it dropped (DeadRecordsReaped)."""
 import hashlib
 import json
 import os
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 
@@ -24,7 +25,7 @@ from kitlib.config import user
 from kitlib.lock import release
 from kitlib.lock import run as rm
 from kitlib.lock import store as lockstore
-from kitlib.lock.store import Settings, Store, iso, real_root
+from kitlib.lock.store import EXIT_BUSY, LockError, Settings, Store, iso, real_root
 from kitlib.proc import process
 from tests.home import unmarked_env
 from tests.lock.helpers import StoreCase, clean_env
@@ -216,8 +217,9 @@ class RealRun(Case):
 
 @unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
 class DeadRecordsReaped(StoreCase):
-    """book moves a record whose run is surely gone (Store.run_live) from active/ to ended/;
-    every record whose run may be live stays."""
+    """A booking moves a record whose run is surely gone (Store.run_live) from active/ to ended/,
+    after its first look at the queue (so the queue's prune still says which dead runs it
+    dropped) and whether or not it gets its slots; every record whose run may be live stays."""
     DEAD_PID = 'r-20261010T000000Z-dead01'      # its pid and creation time name no process
     DEAD_MUTEX = 'r-20261010T000000Z-dead02'    # no creation time, and no run mutex
     SETTLED = 'r-20261010T000000Z-dead03'       # dead, and its ended record was written
@@ -278,6 +280,51 @@ class DeadRecordsReaped(StoreCase):
                          {'id': self.SETTLED, 'how': 'done', 'code': 0})
         # no history line for a reaped run: only the booking's own
         self.assertEqual([d['slug'] for d in self.store.history_records()], ['reaper'])
+
+    def queue_entry(self, rid, cores):
+        """A queue entry for rid holding cores, its wrapper this process: live while rid's run
+        mutex is held (Store.run_dead)."""
+        return {'id': rid, 'ticket': 1, 'state': 'held', 'pid': os.getpid(),
+                'ctime': process.own_ctime(), 'repo': 'kit', 'slug': 'gone',
+                'kind': 'engine-test', 'need': {'cpu': len(cores), 'gpu': 0}, 'expect_s': 600,
+                'cores': cores, 'gpus': [], 'held_at': time.time()}
+
+    def test_a_dead_run_in_active_and_the_queue_is_still_said_to_have_died(self):
+        # The reap writes its ended record, which would make the queue's prune drop its entry
+        # quietly as settled (queue.prune); the prune looks first.
+        core = self.confine(1)[0]
+        self.live_record(self.DEAD_MUTEX, ctime=None, cores=[core])
+        self.store.write('queue.json', {'ticket': 1, 'entries': [
+            self.queue_entry(self.DEAD_MUTEX, [core])]})
+        said = []
+        self.store.say = said.append
+
+        s = rm.book('engine-test', 'kit', 'next', cores=1, store=self.store, no_wait=True,
+                    env=clean_env())
+        s.release()
+
+        [line] = [t for t in said if self.DEAD_MUTEX in t]
+        self.assertIn('died holding it; it is free', line)
+        self.assertFalse(self.active(self.DEAD_MUTEX))
+        self.assertEqual(self.store.read('ended/%s.json' % self.DEAD_MUTEX)['how'], 'reaped')
+
+    def test_a_refused_booking_still_moves_dead_records(self):
+        cores = self.confine(1)                 # the live run holds every slot it may use
+        self.live_record(self.DEAD_MUTEX, ctime=None)
+        self.live_record(self.LIVE_MUTEX, ctime=None, cores=cores)
+        held = self.store.run_mutex(self.LIVE_MUTEX)
+        self.addCleanup(held.release)
+        self.store.write('queue.json', {'ticket': 1, 'entries': [
+            self.queue_entry(self.LIVE_MUTEX, cores)]})
+
+        with self.assertRaises(LockError) as cm:
+            rm.book('engine-test', 'kit', 'busy', cores=1, store=self.store, no_wait=True,
+                    env=clean_env())
+
+        self.assertEqual(cm.exception.code, EXIT_BUSY)
+        self.assertFalse(self.active(self.DEAD_MUTEX))
+        self.assertEqual(self.store.read('ended/%s.json' % self.DEAD_MUTEX)['how'], 'reaped')
+        self.assertTrue(self.active(self.LIVE_MUTEX))
 
 
 if __name__ == '__main__':
