@@ -1859,7 +1859,9 @@ class RecordArgumentCase(CliCase):
         answer = {'ok': True, 'pairs': [{'question': 'Q-1000', 'bound': True,
                                          'record': {'repo': 'kit', 'id': 'EX-1'}}],
                   'failed': [{'question': 'Q-1001', 'code': 'not_found', 'message': 'gone'}],
-                  'misses': [{'record': {'repo': 'kit', 'id': 'EX-3'}, 'why': 'cites no question'}],
+                  'misses': [{'record': {'repo': 'kit', 'id': 'EX-3'}, 'why': 'cites no question'},
+                             {'record': {'repo': 'down', 'id': None},
+                              'why': 'the repository could not be read'}],
                   'multi': [{'record': {'repo': 'kit', 'id': 'EX-4'},
                              'questions': ['Q-1002', 'Q-1003']}],
                   'skipped': [{'question': 'Q-1004', 'why': 'bound to another record'}]}
@@ -1869,7 +1871,8 @@ class RecordArgumentCase(CliCase):
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(out.splitlines(), [
             'BOUND Q-1000 kit:EX-1', 'NOT BOUND Q-1001: gone (not_found)',
-            'MISS kit:EX-3: cites no question', 'MULTI kit:EX-4 cites Q-1002 Q-1003',
+            'MISS kit:EX-3: cites no question', 'MISS down: the repository could not be read',
+            'MULTI kit:EX-4 cites Q-1002 Q-1003',
             'SKIP Q-1004: bound to another record'])
         self.assertTrue(self.sent[-1][0].endswith('/questions/bind'))
         self.assertEqual(self.sent[-1][1], {'from': 'pm', 'apply': True})

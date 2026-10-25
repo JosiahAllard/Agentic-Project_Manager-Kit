@@ -1277,7 +1277,8 @@ def questions_bind(api, req):
     """POST questions/bind, the PM's alone (`from` pm, as questions_done checks a claim): pair
     each parked record's `q` and each owner-blocked record's cited question with an open hub
     question of the same number, and with `apply` true bind them (set `record`). The backlog is
-    read now, every configured repository. Nothing but an open, unbound question is written; an
+    read fresh with `apply` (a fetch round) and from the held snapshot without, every configured
+    repository. A pair whose record fails its check is in `failed` only. Nothing but an open, unbound question is written; an
     answered or closed one is a miss. Answers {ok, applied, pairs: [{question, record, bound}],
     misses: [{record, why}], multi: [{record, questions}], skipped: [{question, why}],
     failed: [{question, code, message}]}: `multi` are records citing several questions, left
@@ -1297,7 +1298,7 @@ def questions_bind(api, req):
     found = []                      # (record, the one question number it cites)
     cites = collections.Counter()   # records citing each question number
     misses, multi = [], []
-    for entry in api.shown('backlog', repo='', state='', fresh=False):
+    for entry in api.shown('backlog', repo='', state='', fresh=apply):
         repo = entry.get('repo')
         if entry.get('error'):
             misses.append({'record': {'repo': repo, 'id': None},
@@ -1349,6 +1350,8 @@ def questions_bind(api, req):
                 failed.append({'question': p['question'], 'code': e.code,
                                'message': e.message if req.full else AGENT_SAYS.get(
                                    e.code, e.message)})
+        lost = set(f['question'] for f in failed)
+        pairs = [p for p in pairs if p['question'] not in lost]
     return {'ok': True, 'applied': apply, 'pairs': pairs, 'misses': misses, 'multi': multi,
             'skipped': skipped, 'failed': failed}
 

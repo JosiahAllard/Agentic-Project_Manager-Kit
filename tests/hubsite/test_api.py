@@ -2389,7 +2389,7 @@ class SweepViews(BindViews):
     """The backlog and record views for `questions bind`: repo kit holds a parked record citing
     Q-1000, an owner-blocked one citing Q-1001 in its owner_ask, a parked one citing Q-1002
     (answered), one citing Q-1002 and Q-1003, a parked one citing nothing, a parked one citing
-    Q-9999 (no such question), and a blocked one that waits on a tool (not the owner's). RECS are
+    Q-9999 (no such question), and a blocked one that waits on a tool (not the owner's) yet cites Q-1003 and Q-1004. RECS are
     the record views of the blocked ones; any other id answers as BindViews does."""
 
     ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1000 (the owner)'},
@@ -2403,13 +2403,16 @@ class SweepViews(BindViews):
     OWNER = {'value': 'owner', 'kind': 'owner'}
     RECS = {'EX-2': {'blockers': [OWNER], 'hold': {'owner_ask': 'Q-1001: which one', 'q': None},
                      'body': ''},
-            'EX-7': {'blockers': [{'value': 'tool:x', 'kind': 'tool'}], 'hold': {}, 'body': ''},
+            'EX-7': {'blockers': [{'value': 'tool:x', 'kind': 'tool'}],
+                     'hold': {'owner_ask': 'Q-1004: not for the owner', 'q': 'Q-1003'},
+                     'body': 'Blocked on Q-1004'},
             'EX-12': {'blockers': [{'value': 'owner Q-1003', 'kind': 'owner'}], 'hold': {},
                       'body': ''},
             'EX-13': {'blockers': [OWNER], 'hold': {},
                       'body': 'Blocked on Q-1004 until it is answered\nsee Q-1001'}}
 
     def backlog(self, repo='', state='', fresh=False):
+        self.fresh = getattr(self, 'fresh', []) + [fresh]
         return [{'repo': 'kit', 'items': list(self.ITEMS), 'error': None},
                 {'repo': 'down', 'items': [], 'error': 'git timed out'}]
 
@@ -2451,6 +2454,11 @@ class QuestionBindTest(ApiCase):
                           ('kit', 'EX-5', 'cites no question'),
                           ('kit', 'EX-6', 'Q-9999 is not a hub question')])
         self.assertEqual((got['applied'], got['skipped'], got['failed']), (False, [], []))
+        self.assertEqual(self.views.fresh, [False])     # EX-7 cites two, on no owner block: unread
+
+    def test_apply_reads_the_backlog_fresh(self):
+        self.bind(apply=True)
+        self.assertEqual(self.views.fresh, [True])
 
     def test_apply_binds_open_questions_only(self):
         got = self.bind(apply=True)
@@ -2503,9 +2511,10 @@ class QuestionBindTest(ApiCase):
     def test_a_record_that_fails_its_check_is_reported_and_the_rest_are_bound(self):
         self.views.ITEMS[0]['id'] = 'EX-404'
         got = self.bind(apply=True)
-        self.assertEqual([p['question'] for p in got['pairs'] if p['bound']], ['Q-1001'])
+        self.assertEqual([(p['question'], p['bound']) for p in got['pairs']], [('Q-1001', True)])
         self.assertEqual([(f['question'], f['code']) for f in got['failed']],
                          [('Q-1000', 'not_found')])
+        self.assertNotIn('record', self.store.docs('questions')['Q-1000'])
 
     def test_only_the_pm_binds(self):
         for who in ('some-coordinator', ' x '):

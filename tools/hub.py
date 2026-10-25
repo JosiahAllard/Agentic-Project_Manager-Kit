@@ -322,7 +322,7 @@ def _bind_lines(got):
     """The lines `questions bind` prints for the hub's answer."""
     def named(r):
         r = r if isinstance(r, dict) else {}
-        return '%s:%s' % (r.get('repo'), r.get('id'))
+        return '%s:%s' % (r.get('repo'), r.get('id')) if r.get('id') else str(r.get('repo'))
     lines = []
     for p in got.get('pairs') or []:
         word = 'BOUND' if p.get('bound') else 'BIND'
