@@ -476,10 +476,37 @@ def _configured_repos(cfg, toplevel=None):
 
     def names():
         try:
-            return pmstart.known_repos(cfg, toplevel=toplevel)
+            return list(pmstart.known_repos(cfg, toplevel=toplevel)) + sorted(
+                {k for ks in _session_aliases(cfg).values() for k in ks}, key=str.lower)
         except (KeyError, ValueError, OSError, AttributeError, TypeError):
             return ()
     return names
+
+
+def _session_aliases(cfg):
+    """{repo: [hub keys]} from the sessions file of `cfg`: each session's key (what the hub's
+    repo tags use, such as `kit` for the kit's repository) is an alias of that session's "repo".
+    {} when the file cannot be read, is not an object or names no repo, so the hub falls back to
+    the repo names alone."""
+    try:
+        sessions = json.loads(pmstart._read(cfg['sessions_file']))
+        out = {}
+        for key, e in sessions.items():
+            if isinstance(e, dict) and isinstance(e.get('repo'), str) and e['repo']                     and isinstance(key, str) and key and key.lower() != e['repo'].lower():
+                out.setdefault(e['repo'], []).append(key)
+        return out
+    except (KeyError, ValueError, OSError, AttributeError, TypeError):
+        return {}
+
+
+def _repos_with_session_keys(cfg, stored, toplevel):
+    """derived.repos of `cfg` with each repository's session keys added to its aliases."""
+    found = derived.repos(cfg, stored, toplevel=toplevel)
+    keys = {r.lower(): ks for r, ks in _session_aliases(cfg).items()}
+    for r in found:
+        r['aliases'] = r['aliases'] + [k for k in keys.get(r['name'].lower(), ())
+                                       if k not in r['aliases']]
+    return found
 
 
 def _ruling_exists(home):
@@ -530,7 +557,7 @@ def machine_sources(home=None, sync=True):
         src.usage = report
     if cfg and cfg.get('sessions_file'):
         tops = _toplevels()         # one memo: the repo menu, the alias check, the backlog
-        src.repos = lambda stored: derived.repos(cfg, stored, toplevel=tops)
+        src.repos = lambda stored: _repos_with_session_keys(cfg, stored, tops)
         src.known_repos = _configured_repos(cfg, tops)
         src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg, tops), refresh_s)
     return src
