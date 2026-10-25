@@ -472,6 +472,15 @@ def decide_fields(key, doc_id, doc, decision, now):
     return fields
 
 
+def withdraw_check(doc, now):
+    """Only a pending request that has not expired is withdrawn by its requester: ApprovalError
+    (code conflict, field status) for any other status, the owner's record by then."""
+    status = status_at(doc, now)
+    if status != PENDING:
+        raise ApprovalError('only a pending approval can be withdrawn, not one that is %s'
+                            % (status or 'malformed'), 'status', 'conflict')
+
+
 def _line_holds(doc):
     """True when the op document `doc` holds a line that hashes to its args_sha256: the line the
     owner reads is the one the signature binds."""

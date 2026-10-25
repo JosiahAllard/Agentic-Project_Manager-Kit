@@ -38,7 +38,9 @@ that is not the file at head is `invalid`, field files), and the unified diff li
 shows are stored in the document as `diff`. POST approvals/{id}/decide (APPROVER) writes the
 owner's decision, signed with Api's approval_key; POST approvals/{id}/consume (AGENT) marks an
 approval consumed by a commit. Both take the `if_version` the caller read and are pinned to it,
-and an ApprovalError is answered as a HubError of its code and field. GET approvals/{id}/verify
+and an ApprovalError is answered as a HubError of its code and field. POST approvals/{id}/delete (AGENT) withdraws a request still pending (not decided, not
+expired: else `conflict`, field status): the body gives `from` (the requester's claim, `pm` as
+approvals store none) and `if_version`, as a question's withdrawal does. GET approvals/{id}/verify
 (AGENT, query repo, head, files as JSON {path: blob} and an optional commit) answers
 {ok, valid, why} and never the key or the sig; an unknown id is valid false, approvals.WHY_UNKNOWN.
 An approval of kind `op` (one run of a delegated operation, docs/delegations.md "Hub approvals")
@@ -1909,6 +1911,20 @@ def approvals_consume(api, req):
     return api.change(ap.COLLECTION, doc_id, d, changes, req, {'status': changes['status']})
 
 
+def approvals_delete(api, req):
+    """The requester takes back a pending request: the `from` is a claim checked as for a
+    question's withdrawal (an approval has none stored, so it is `pm`)."""
+    from . import approvals as ap
+    b = _fields(req, ('from', 'if_version'), required=('from',))
+    _pin(b, required=True)
+    _text(b, 'from')
+    doc_id = req.params['id']
+    d = api.doc(ap.COLLECTION, doc_id, b)
+    _creator(b, doc_id, d, 'withdraw')
+    _approval(ap.withdraw_check, d, _when(api.clock(), ''))
+    return _withdrawn(api, ap.COLLECTION, doc_id, d)
+
+
 def approvals_verify(api, req):
     from . import approvals as ap
     doc_id = req.params['id']
@@ -2494,7 +2510,7 @@ def findings_list(api, req):
             'runs': [r for r in _lint_runs(api) if not repo or r['repo'].lower() == repo]}
 
 
-LEDGER_COUNTS = ('stale_cites', 'superseded', 'superseded_live')   # kitlib/maintlint/ledger.py
+LEDGER_COUNTS = ('stale_cites', 'conflict_pairs', 'overrides')   # kitlib/maintlint/ledger.py
 
 
 def _utc(text):
@@ -2819,6 +2835,7 @@ ROUTES = (
     _r('POST', '/approvals', AGENT, approvals_add),
     _r('POST', '/approvals/{id}/decide', APPROVER, approvals_decide),
     _r('POST', '/approvals/{id}/consume', AGENT, approvals_consume),
+    _r('POST', '/approvals/{id}/delete', AGENT, approvals_delete),
     _r('GET', '/approvals/{id}/verify', AGENT, approvals_verify),
     _r('GET', '/backlog', ANY, backlog),
     _r('GET', '/completed', ANY, completed),

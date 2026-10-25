@@ -4685,18 +4685,18 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(got["err"], ["Could not read the findings (store busy)."])
 
     def test_the_ledger_is_counts_and_a_skip_shows_only_when_later_than_the_run(self):
-        runs = [{"repo": "alpha", "started": "2026-10-20T03:00:00Z", "ledger": {"stale_cites": 2, "superseded": 1, "superseded_live": 0},
+        runs = [{"repo": "alpha", "started": "2026-10-20T03:00:00Z", "ledger": {"stale_cites": 2, "conflict_pairs": 1, "overrides": 0, "superseded": 7},
                  "skipped": {"reason": "the lock was busy", "at": "2026-10-21T03:00:00Z"}},
                 {"repo": "beta", "started": "2026-10-21T03:00:00Z", "ledger": None,
                  "skipped": {"reason": "older", "at": "2026-10-20T03:00:00Z"}},
-                {"repo": "gamma", "started": "2026-10-21T03:00:00Z", "ledger": {"stale_cites": "3", "superseded": 1.5},
+                {"repo": "gamma", "started": "2026-10-21T03:00:00Z", "ledger": {"stale_cites": "3", "conflict_pairs": 1.5},
                  "skipped": {"reason": "garbled", "at": "not a time"}},
                 {"repo": "delta", "started": "yesterday", "ledger": None, "skipped": {"reason": "no run time", "at": "2026-10-21T03:00:00Z"}}]
         got = self.run_page("""
             await start();
             return $$("#list p").filter(p => p.className === "status" || p.className === "gone").map(p => [p.className, text(p)]);
         """, runs=runs)
-        self.assertEqual(got[0], ["status", "alpha ledger: 2 stale cites, 1 superseded, 0 superseded and still live."])
+        self.assertEqual(got[0], ["status", "alpha ledger: 2 stale cites, 1 conflict pairs, 0 overrides."])
         self.assertEqual(got[1][0], "gone")
         self.assertTrue(got[1][1].startswith("alpha: last run skipped: the lock was busy, "), got[1][1])
         self.assertEqual(len(got), 2, got)
