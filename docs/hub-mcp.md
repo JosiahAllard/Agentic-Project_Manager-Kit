@@ -59,7 +59,7 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | tool | arguments (required first) | endpoint |
 |---|---|---|
 | `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story`, `record` | `POST /questions` |
-| `hub_question_log` | `id`, `ruling`, `if_version` | `POST /questions/<id>/log` |
+| `hub_question_log` | `id`, `ruling`, `if_version`; `replace` (corrects a logged question's ruling) | `POST /questions/<id>/log` |
 | `hub_question_done` | `id`, `why`, `if_version` | `POST /questions/<id>/done` |
 | `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent`, `record` | `POST /questions/<id>/edit` |
 | `hub_question_withdraw` | `id`, `from`, `if_version` | `POST /questions/<id>/delete` |
@@ -105,6 +105,9 @@ the default when it is absent or blank. The hub refuses any other value, a free-
 included (`invalid`, field `from`, status 400: `kitlib/hubsite/api.py` `questions_add`;
 `LiveKeys.test_a_question_comes_from_a_session_key_or_pm_only`). The `from` of `hub_todo_add`
 and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
+
+`hub_question_log` refuses (`invalid`, field `ruling`) a ruling that is not a ledger id and one that
+no ledger file holds; `replace: true` corrects the ruling of a question already logged.
 
 The `record` of `hub_ask` and `hub_question_edit` is `{repo, id}`, both required: the backlog
 record the question is about (the kit's own records are repo `pm`); `null` on `hub_question_edit`

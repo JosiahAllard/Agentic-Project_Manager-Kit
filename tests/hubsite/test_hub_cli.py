@@ -1351,6 +1351,22 @@ class WriteCase(VerbCase):
         self.assertEqual(json.loads(self.ok('questions', '--status', 'all', '--json')[0]),
                          self.direct('/questions?status=all'))
 
+    def test_questions_log_replace_corrects_a_logged_ruling(self):
+        other = 'R-' + '0008'
+        self.ask()
+        self.ok('answer', 'Q-1000', '--choice', '0')
+        self.ok('questions', 'log', 'Q-1000', RULING, '--if-version', '2')
+        self.assertIn('REFUSED', self.refused('questions', 'log', 'Q-1000', other, '--if-version', '3'))
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', other, '--replace', '--if-version', '3'),
+                         ['LOGGED Q-1000 ' + other])
+        self.assertEqual(self.direct('/questions?status=all')['items'][0]['ruling'], other)
+
+    def test_questions_log_refuses_a_ruling_that_is_not_a_ledger_id(self):
+        self.ask()
+        self.ok('answer', 'Q-1000', '--choice', '0')
+        self.assertIn('ledger ruling id', self.refused('questions', 'log', 'Q-1000',
+                                                       'warning: too long', '--if-version', '2'))
+
     def test_questions_show_prints_one_question_with_its_answer_and_note(self):
         self.ask()
         self.ask('another')
@@ -1928,7 +1944,7 @@ class ArgumentCase(CliCase):
         # with it, the one call is the write, with the version that was given: nothing is read first
         (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--if-version', '4')
         self.assertEqual((code, err), (0, ''), out)
-        self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'ruling': 'D-7', 'if_version': 4})])
+        self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'ruling': 'D-7', 'if_version': 4, 'replace': False})])
         (code, out, err), seen = self.sent('stories', 'set', 'S-001', '--status', 'review',
                                            '--if-version', '0')
         self.assertEqual((code, err), (0, ''), out)

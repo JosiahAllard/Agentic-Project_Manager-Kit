@@ -185,6 +185,13 @@ class Routes(Case):
         self.assertEqual(call["via"], serve.VIA_MCP)
         self.assertEqual(call["port"], 8790)
 
+    def test_the_question_log_tool_passes_replace_in_the_body(self):
+        payload, is_error = self.rpc(self.server(), "hub_question_log",
+                                     {"id": "Q-1", "ruling": "R-9", "if_version": 3, "replace": True})
+        self.assertFalse(is_error, payload)
+        self.assertEqual(self.ask.calls[-1]["body"],
+                         {"ruling": "R-9", "if_version": 3, "replace": True})
+
     def test_a_read_puts_its_arguments_in_the_query(self):
         self.rpc(self.server(), "hub_list", {"collection": "todos", "status": "all", "repo": "r"})
         self.rpc(self.server(), "hub_backlog", {"fresh": True})
