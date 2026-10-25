@@ -1364,6 +1364,17 @@ class WriteCase(VerbCase):
         self.assertEqual(doc['answer']['note'], 'as planned')
         self.assertIn('REFUSED: Q-9 is not a question', self.refused('questions', 'show', 'Q-9'))
 
+    def test_questions_show_marks_the_recommended_option_and_prints_context_and_other(self):
+        self.ok('questions', 'add', '--title', 'which road', '--context-file',
+                self.file('context.md', 'why it matters'), '--option', 'up::go up',
+                '--option', 'down::go down', '--recommended', '1')
+        out = self.ok('questions', 'show', 'Q-1000')
+        self.assertIn('option 1: down (recommended) - go down', out)
+        self.assertIn('option 0: up - go up', out)
+        self.assertIn('context: why it matters', out)
+        self.ok('answer', 'Q-1000', '--choice', 'other', '--note', 'neither')
+        self.assertEqual(self.ok('questions', 'show', 'Q-1000')[-2:], ['answer: Other', 'note: neither'])
+
     def test_other_needs_a_note_and_a_stale_version_is_refused(self):
         self.ask()
         self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-1000', '--choice', 'other'))
