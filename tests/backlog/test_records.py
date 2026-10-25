@@ -1,6 +1,5 @@
-"""Records and scopes: the scope language and collision (ported from an earlier
-tools/test_backlog.py ScopeGrammar, ScopeIntersection, UncertaintyCollides), the header schema, and
-Per-repository-format records round-tripping through parse and render."""
+"""Records and scopes: the scope language and collision (ScopeGrammar, ScopeIntersection,
+UncertaintyCollides), the header schema, and Per-repository-format records round-tripping through parse and render."""
 import unittest
 
 from kitlib.backlog import record as rmod

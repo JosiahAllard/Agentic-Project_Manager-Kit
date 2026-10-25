@@ -1,7 +1,6 @@
 """kitlib.worktree.new (tools/new_worktree.py): its two modes and its refusal to guess between them,
--C, the landing lock and the `.kit.json` keys it reads. Ported from the PM kit's
-test_new_worktree.py; the cases that tested retired mechanisms are listed in docs/new-worktree.md
-"Not ported".
+-C, the landing lock and the `.kit.json` keys it reads. The cases that tested retired mechanisms are
+listed in docs/new-worktree.md "Not ported".
 
 Every case runs against a throwaway repository (tests/gitfixture.py) with its own bare origin. The
 git children run with the fixture's environment (no global or system git config).

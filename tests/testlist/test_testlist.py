@@ -1,7 +1,6 @@
 """kitlib.testlist and tools/testlist.py: the moves gate's identical-test-names check.
-Ported from the PM kit's test_testlist.py: every case reads result files it wrote into its own
-temporary git checkout (tests/gitfixture.py), passed as `-C`, where the PM kit patched
-testlist.ROOT."""
+Every case reads result files it wrote into its own temporary git checkout
+(tests/gitfixture.py), passed as `-C`."""
 import importlib.util
 import io
 import json

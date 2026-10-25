@@ -1,6 +1,6 @@
 """kitlib.reviewpack's pure parts, no git: the owner-approval rows, trailer parsing, the risk map,
-the trailers rule and its owner check, and the CLI's argument rules (ported from the PM kit's
-test_review_pack.py; the owner-only path rules themselves are tests/config/test_owner.py's)."""
+the trailers rule and its owner check, and the CLI's argument rules; the owner-only path rules
+themselves are tests/config/test_owner.py's."""
 import contextlib
 import io
 import unittest
