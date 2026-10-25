@@ -102,8 +102,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   re-wakes you later.
 - Nothing startable left in the set and 1 or 2 items being built -> wind down (skill
   session-handoff): review what you have, then write into the state note every LAND verdict
-  you hold (branch, tip, reviewer, range), every landing not yet reported (branch | tip |
-  result) and every branch whose agent is still running, and
+  you hold (branch, tip, reviewer, range), every landing not yet reported (named in no message
+  to the PM yet; branch | tip | result) and every branch whose agent is still running, and
   SendMessage the PM `ready to restart: <state note path>`;
   it starts your successor on a fresh set. Start nothing new, leave `next` to it. Each item goes
   to an end, as the owner ruled: landed, blocked on its record with the reason and its branch kept
@@ -133,7 +133,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   overwritten whole with Write - never appended, no dated copies. Fields: main hash; open
   items and holds (work set item | state; in flight branch | agent | state; landings submitted (branch | tip);
   landings not yet reported (branch | tip | result); waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
-  repo's records (landing notes), never the note. No narrative. A successor reads it as stale.
+  repo's records (landing notes), never the note, except landings not yet reported. No narrative. A successor reads it as stale.
 - Write it, and anything under your host's config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`),
   with Edit/Write, never a shell command: a shell write there blocks on an approval prompt and
   leaves you idle.
@@ -176,7 +176,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   the owner must do or know (main or CI broken, a lock or resource stuck, a usage limit); plus the
   start check-in (step 3) and the ready-to-restart, ready-to-stop and hand-off replies, whose state
   note lists every landing not yet reported. Each landing message names every pass not yet
-  reported (reported: named in a message to the PM). Never a message that only acknowledges or informs,
+  reported. Never a message that only acknowledges or informs,
   and never forward an agent's notice. Small facts ride in the state note and your next real message. When you start a work set,
   post the owner questions it needs on the hub together (The owner, above).
 - **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
