@@ -3,8 +3,8 @@ rerun"). A red --full run of a clean tree writes a red run; `gate.py --rerun` re
 test classes at the tip (each paired with a control at the base, which is information only) and
 the steps it never reached, under one gate slot of the branch, and says FLAKE or REAL. A landing
 takes a tip with no full gate-OK record on a FLAKE rerun of its latest red run, and never lands
-a tip on which a test failed twice, whatever record it has. Every missing, unreadable or altered
-record refuses."""
+a tip a test failed on when that test failed twice over the branch's commits, whatever record it
+has. Every missing, unreadable or altered record refuses."""
 import json
 import os
 import unittest
@@ -299,7 +299,7 @@ class Flake(RerunCase):
         self.assertEqual([s['name'] for s in reruns[0]['steps'] if s['name'] != 'windows'],
                          ['after'])
         self.assertIsNone(rerun.verify_flake(self.repo.root, tip))
-        self.assertIsNone(rerun.twice_refusal(self.repo.root, tip))
+        self.assertIsNone(rerun.twice_refusal(self.repo.root, tip, self.main))
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
 
@@ -339,7 +339,7 @@ class Flake(RerunCase):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(rec, f)
         self.assertIn('does not match its hash', rerun.verify_flake(self.repo.root, tip))
-        self.assertIn('cannot be read', rerun.twice_refusal(self.repo.root, tip))
+        self.assertIn('cannot be read', rerun.twice_refusal(self.repo.root, tip, self.main))
         fixtures.gate_full(self.repo.root, tip)         # even a full gate-OK record
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.REFUSED, out.lines)
@@ -354,14 +354,14 @@ class Flake(RerunCase):
                   'w', encoding='utf-8') as f:
             f.write('{}')
         self.assertIsNotNone(rerun.verify_flake(self.repo.root, tip))
-        self.assertIsNotNone(rerun.twice_refusal(self.repo.root, tip))
+        self.assertIsNotNone(rerun.twice_refusal(self.repo.root, tip, self.main))
 
 
 class Real(RerunCase):
     def assert_never_lands(self, tip):
         self.assertIsNotNone(rerun.verify_flake(self.repo.root, tip))
-        why = rerun.twice_refusal(self.repo.root, tip)
-        self.assertIn('%s failed twice' % ID, why)
+        why = rerun.twice_refusal(self.repo.root, tip, self.main)
+        self.assertIn('%s failed on this tip and failed twice on its branch' % ID, why)
         fixtures.gate_full(self.repo.root, tip)         # a full gate-OK record does not help
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.REFUSED, out.lines)
@@ -385,8 +385,9 @@ class Real(RerunCase):
         self.red(wt)
         self.red(wt)
         out = self.rerun(wt)
-        self.assertEqual(out.code, G.REFUSED, out.lines)
-        self.assertTrue(out.lines[0].startswith('REAL: %s failed twice' % ID), out.lines)
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertTrue(out.lines[0].startswith('RERUN REAL: %s failed on this tip' % ID),
+                        out.lines)
         self.assert_never_lands(tip)
 
     def test_a_step_the_red_run_never_reached_failing_is_real(self):
@@ -422,3 +423,89 @@ class Real(RerunCase):
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIn('not clean', out.lines[0])
         self.assertEqual(self.loaded(tip)[1], [])
+
+
+class Branch(RerunCase):
+    """The twice rule counts a test's failures over every commit of the branch since its merge
+    base, for a tip that has a red run of its own; a tip without one (a green --full) lands."""
+
+    def next_commit(self, wt, state):
+        self.set_state(state)
+        self.repo.write('more.txt', 'more\n', root=wt)
+        return self.repo.commit('more work', 'more.txt', cwd=wt)
+
+    def assert_real_on_the_tip(self, wt, tip):
+        n = len(self.book_calls)
+        out = self.rerun(wt)
+        self.assertEqual(out.code, G.FAILED, out.lines + out.said)
+        self.assertTrue(out.lines[0].startswith(
+            'RERUN REAL: %s failed on this tip and failed twice on its branch' % ID), out.lines)
+        self.assertEqual(self.book_calls[n:], [])       # nothing was rerun or booked
+        fixtures.gate_full(self.repo.root, tip)         # a full gate-OK record does not help
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn('%s tip %s does not land' % (BRANCH, tip[:10]), out.lines[0])
+        self.assertIn('failed twice on its branch', out.lines[0])
+        self.assertEqual(self.main_now(), self.main)
+        self.assertEqual(self.remote_main(), self.main)
+
+    def test_a_test_real_on_an_earlier_commit_that_fails_once_on_the_tip_never_lands(self):
+        wt, _ = self.work('red')
+        self.red(wt)
+        self.assertEqual(self.rerun(wt).code, G.FAILED)  # REAL on the first commit
+        tip = self.next_commit(wt, 'once')              # on the tip it fails once, then passes
+        self.red(wt)
+        self.assert_real_on_the_tip(wt, tip)
+
+    def test_a_flake_on_an_earlier_commit_that_fails_again_on_the_tip_never_lands(self):
+        wt, _ = self.work('once')
+        self.red(wt)
+        self.assertEqual(self.rerun(wt).code, G.OK)      # FLAKE on the first commit
+        tip = self.next_commit(wt, 'once')
+        self.red(wt)
+        self.assert_real_on_the_tip(wt, tip)
+
+    def test_a_green_full_run_of_a_fix_after_a_real_failure_lands(self):
+        wt, _ = self.work('red')
+        self.red(wt)
+        self.assertEqual(self.rerun(wt).code, G.FAILED)
+        tip = self.next_commit(wt, 'done')
+        out = runner.branch_gate(wt, full=True, book_kw=self.book_kw,
+                                 log_dir=os.path.join(self.tmp, 'own'))
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.loaded(tip), ([], []))
+        self.assertIsNone(rerun.twice_refusal(self.repo.root, tip, self.main))
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+
+    def test_only_a_test_that_failed_on_the_tip_counts(self):
+        wt, _ = self.work('red')
+        self.red(wt)
+        self.assertEqual(self.rerun(wt).code, G.FAILED)  # ID failed twice on the first commit
+        tip = self.next_commit(wt, 'done')
+        other = {'id': 'other_mod.Case.test_x', 'cls': 'other_mod.Case', 'env': {}}
+        rerun._write(self.repo.root, {'kind': rerun.RED, 'commit': tip, 'steps': [
+            {'name': 'unit', 'status': 'FAIL', 'failures': [other]}]})
+        reds, reruns = self.loaded(tip)
+        self.assertEqual(rerun.branch_twice(self.repo.root, tip, self.main, reds, reruns),
+                         ([], None))
+        self.assertIsNone(rerun.twice_refusal(self.repo.root, tip, self.main))
+        rerun._write(self.repo.root, {'kind': rerun.RED, 'commit': tip, 'steps': [
+            {'name': 'unit', 'status': 'FAIL', 'failures': [dict(other, id=ID)]}]})
+        reds, reruns = self.loaded(tip)
+        self.assertEqual(rerun.branch_twice(self.repo.root, tip, self.main, reds, reruns),
+                         ([ID], None))
+
+    def test_an_unreadable_record_of_an_earlier_commit_refuses(self):
+        wt, first = self.work('once')
+        self.red(wt)
+        tip = self.next_commit(wt, 'red')
+        self.red(wt)
+        with open(os.path.join(rerun.commit_dir(self.repo.root, first), 'red-1-0000000g.json'),
+                  'w', encoding='utf-8') as f:
+            f.write('{}')
+        why = rerun.twice_refusal(self.repo.root, tip, self.main)
+        self.assertIn('the branch commit %s cannot be read' % first[:10], why)
+        out = self.rerun(wt)
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertIn('the branch commit %s cannot be read' % first[:10], out.lines[0])

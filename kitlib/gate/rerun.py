@@ -11,15 +11,18 @@ control), and every step the red run did not reach (NOT RUN) whole. It writes a 
 and says FLAKE or REAL.
 
 FLAKE: every failing id passed at the tip, every NOT RUN step passed, warned or skipped, no step
-was uncovered, and no id has failed twice in the commit's history. Anything else is REAL. The
+was uncovered, and no id that failed on the tip has failed twice on the branch (branch_twice).
+Anything else is REAL. The
 control is information only: a red control never turns a REAL into a FLAKE; it is said and
 recorded as `also red at base`. A FLAKE prints the `backlog.py add` line the builder reports;
 the coordinator decides on filing it.
 
 A landing (kitlib.gate.land) takes a tip with no full gate-OK record when verify_flake finds
-its latest red run and a FLAKE rerun of exactly that run, and refuses any tip on which some id
-failed twice (twice_refusal), whatever other record it has. Every missing, unreadable or
-mismatched record refuses (fail closed).
+its latest red run and a FLAKE rerun of exactly that run, and refuses any tip that has a red
+run of its own and an id that failed on it and failed twice on the branch (twice_refusal),
+whatever other record it has. A tip with no red run of its own is not counted: a green
+`gate.py --full` of a fix lands. Every missing, unreadable or mismatched record refuses (fail
+closed).
 
 Uncovered (the rerun refuses; only a passing `gate.py --full` lands the tip): a FAIL step whose
 reasons are more than its exit code and a missing pass pattern; one whose log is neither
@@ -30,7 +33,8 @@ kit_tests run; a step whose directory is outside the tree.
 
 Records: `<dev_drive>/pm-kit/kit-gate-rerun/<repo key>/<commit>/`, one file per run, written
 once (red-<ns>-<token>.json, rerun-<ns>-<token>.json), each carrying the sha256 of its own
-canonical JSON. A commit's history is every file there; it is never rewritten.
+canonical JSON. A commit's history is every file there; it is never rewritten. A branch's
+history is the history of the tip and of every commit `git rev-list <tip> ^<merge base>` names.
 """
 import hashlib
 import json
@@ -54,7 +58,7 @@ from kitlib.gate import result
 from kitlib.gate import runner
 from kitlib.gate import stash
 from kitlib.gate import steps as S
-from kitlib.git import refs, repo
+from kitlib.git import cmd, refs, repo
 from kitlib.lock import run as lockrun
 from kitlib.lock.store import LockError, Store
 from kitlib.proc.job import JobError
@@ -188,8 +192,48 @@ def twice(reds, reruns):
 
 
 def _twice_text(ids):
-    return ('%s failed twice on this commit: a real failure, which never lands; fix it (skill '
-            'flaky-test-triage) and gate the new tip' % ', '.join(ids[:5]))
+    return ('%s failed on this tip and failed twice on its branch: a real failure, which never '
+            'lands; fix it (skill flaky-test-triage) and gate the new tip' % ', '.join(ids[:5]))
+
+
+def branch_commits(root, tip, main):
+    """`(commits, None)`: `tip` and every other commit of its branch, `git rev-list <tip>
+    ^<merge base of tip and main>`; or `(None, why)`."""
+    mb, why = refs.merge_base(tip, main, root)
+    if not mb:
+        return None, 'git cannot find the merge base of %s and %s: %s' % (
+            tip[:10], (main or '')[:10], why or 'none')
+    out, why = cmd.run_text(['rev-list', tip, '^' + mb, '--'], root)
+    if out is None:
+        return None, 'git cannot list the commits of the branch: %s' % why
+    commits = out.split()
+    if not all(refs.is_sha(c) for c in commits):
+        return None, 'git rev-list printed %r, not commits' % out[:120]
+    return [tip] + [c for c in commits if c != tip], None
+
+
+def branch_twice(root, tip, main, reds, reruns):
+    """`(ids, None)`: the ids that failed on `tip` (its own `reds` and `reruns`) and failed
+    at least twice over the branch (branch_commits; failure_counts summed over every commit's
+    records), sorted; or `(None, why)` when the branch or a commit's records cannot be read
+    (fail closed)."""
+    mine = failure_counts(reds, reruns)
+    if not mine:
+        return [], None
+    commits, why = branch_commits(root, tip, main)
+    if commits is None:
+        return None, why
+    total = dict(mine)
+    for c in commits[1:]:
+        try:
+            r, rr = load(root, c)
+        except RerunError as e:
+            return None, 'the rerun records of the branch commit %s cannot be read: %s' % (
+                c[:10], e)
+        for tid, n in failure_counts(r, rr).items():
+            if tid in total:
+                total[tid] += n
+    return sorted(t for t, n in total.items() if n >= 2), None
 
 
 # ---------------------------------------------------------------- parsing a step's log
@@ -392,17 +436,23 @@ def _folder(root, tip):
         return None
 
 
-def twice_refusal(root, tip):
-    """Why `tip` never lands because some test failed twice on it, or because its rerun records
-    cannot be read; None when neither (and when the machine has no rerun folder: nothing can
-    have been recorded)."""
+def twice_refusal(root, tip, main):
+    """Why `tip` never lands: a test failed on it and failed twice on its branch (branch_twice,
+    the branch being its commits since its merge base with `main`), or its rerun records, or
+    the branch's, cannot be read. None when neither, when the tip has no rerun record of its own
+    (a green `gate.py --full` of a fix lands), and when the machine has no rerun folder.
+    """
     if _folder(root, tip) is None:
         return None
     try:
         reds, reruns = load(root, tip)
     except RerunError as e:
         return 'its rerun records cannot be read: %s' % e
-    ids = twice(reds, reruns)
+    if not reds and not reruns:
+        return None
+    ids, why = branch_twice(root, tip, main, reds, reruns)
+    if ids is None:
+        return why
     return _twice_text(ids) if ids else None
 
 
@@ -610,9 +660,12 @@ def rerun_gate(root, slug=None, log_dir=None, say=None, book_kw=None):
         return G.Outcome(G.REFUSED, ['REFUSED: the latest red run of %s was rerun already; one '
                                      'rerun per red run: the next step is a fix, or a new '
                                      'gate.py --full' % head[:10]])
-    ids = twice(reds, reruns)
+    ids, why = branch_twice(top, head, red['base'], reds, reruns)
+    if ids is None:
+        return G.Outcome(G.REFUSED, ['REFUSED: %s' % why])
     if ids:
-        return G.Outcome(G.REFUSED, ['REAL: %s' % _twice_text(ids)])
+        return G.Outcome(G.FAILED, ['RERUN REAL: %s; nothing was rerun' % _twice_text(ids)],
+                         verdict=REAL)
     if red.get('gate_config') != gate_ok.config_hash(runner.gate_config(cfg)):
         return G.Outcome(G.REFUSED, ['REFUSED: the gate config is not the one the red run used'])
     unc = uncovered_of(red)

@@ -99,7 +99,7 @@ nothing until it fails twice); `test_selfrun.py:326` (`< 4.5` s) is the likelies
   rerun (docs/gate.md "Targeted rerun"): a red `gate.py --full` gets one `gate.py --rerun` of
   its failing test classes, each paired with a control at the base that never decides the
   verdict. A FLAKE lands the tip and prints a `backlog.py add` line the builder reports and
-  the coordinator decides on; a test that fails twice on one commit is real and never lands.
+  the coordinator decides on; a test that fails twice on one branch is real and never lands.
   The fence still keeps the list empty: a load flake is a test defect, fixed by a seam or a
   marked tier, never by listing it. The list stays for a cause outside the kit (none today).
   The profile's sentence "A failure is real until the same tip passes a rerun" still reads

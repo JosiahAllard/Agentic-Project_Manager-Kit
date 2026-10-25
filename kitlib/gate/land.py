@@ -44,7 +44,8 @@
                  "landing".shared_paths and the change touches none of them, no strict path and
                  no gate config file; docs/gate.md "Shared paths"), or by none when the tip's
                  latest red --full run has a FLAKE targeted rerun (kitlib.gate.rerun.verify_flake);
-                 a tip on which a test failed twice never lands (rerun.twice_refusal);
+                 a tip a test failed on, that failed twice on its branch, never lands
+                 (rerun.twice_refusal);
                  a miss names the `gate.py -C <worktree>
                  --full` command that gates it, and, when the kit lands itself and the tip does
                  not contain the base, says to merge <remote>/<main> into the branch first (its
@@ -733,8 +734,9 @@ class Lander(object):
         pass's that the base config takes (select_refusal). A record from before records said
         whether the gate was --full, one whose mode is unknown, and a record of any other commit
         do not count; an --only run writes none. A tip with neither lands on a FLAKE targeted
-        rerun of its latest red --full run (kitlib.gate.rerun.verify_flake). A tip on which a test
-        failed twice, or whose rerun records cannot be read, never lands, whatever record it has
+        rerun of its latest red --full run (kitlib.gate.rerun.verify_flake). A tip a test failed
+        on, when that test failed twice over the branch's commits since its merge base with the
+        base, or whose rerun records cannot be read, never lands, whatever record it has
         (rerun.twice_refusal). None, or the first miss: why, and what gates that tip whole
         (full_gate_advice; REFUSED, nothing merged). It only adds to the merged gate. A base
         gate that --full selects no step from refuses first (no_full_step).
@@ -750,7 +752,7 @@ class Lander(object):
         if why:
             return why
         for b, t in self.pairs:
-            why = rerun.twice_refusal(self.root, t)
+            why = rerun.twice_refusal(self.root, t, self.expect_main)
             if why:
                 return '%s tip %s does not land: %s' % (b, t[:10], why)
             why = self.tip_refusal(t)
