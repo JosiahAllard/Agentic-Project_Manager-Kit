@@ -1,8 +1,7 @@
 r"""What holds a worktree, and the walks that read one without leaving it (docs/worktree-remove.md).
 
-Why this exists: on Windows `git worktree remove` is DESTRUCTIVE ON FAILURE. Measured in the PM kit
-2026-09-22 (git 2.38.1.windows.1): git deletes the worktree's `.git` file and its
-`.git/worktrees/<id>` entry, then fails partway through the tree, so the path leaves `git worktree
+Why this exists: on Windows `git worktree remove` is DESTRUCTIVE ON FAILURE. Measured 2026-09-22 (git 2.38.1.windows.1): git deletes the
+worktree's `.git` file and its `.git/worktrees/<id>` entry, then fails partway through the tree, so the path leaves `git worktree
 list` while a stump stays on disk, and a retry answers `not a working tree`. Two holder kinds were
 measured to do it: a process whose current directory is in the tree, and a file held open without
 FILE_SHARE_DELETE (an ordinary CPython `open(path, 'r')` is one). So everything is checked BEFORE
