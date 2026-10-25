@@ -28,7 +28,8 @@ AUDIT_DAYS = 7                  # the audit log window read; the findings are st
                                 # log line covers, never an age
 AUDIT_KINDS = {'UNAUDITED': 'store change(s) in %d days with no audit line',
                'UNKNOWN': 'store change(s) in %d days whose subject names no backlog verb',
-               'UNMAPPED': 'audit line(s) in %d days whose role the role map does not list'}
+               'UNMAPPED': 'audit line(s) in %d days whose role the role map does not list',
+               'UNVERIFIED': 'answer line(s) in %d days the hub did not file or does not hold'}
 # a hub question's status once the owner has answered it; `done`: the PM marked it handled with
 # no ruling (hub.py questions done); `filed`: the hub wrote the answer into the bound record
 # itself, so the PM has no log step left before the unpark
