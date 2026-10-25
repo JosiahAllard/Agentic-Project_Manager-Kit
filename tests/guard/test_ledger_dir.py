@@ -220,5 +220,169 @@ class BadStateTest(_Case):
         self.assertEqual(u.get('broken'), bad.error)
 
 
+class UnreadTest(_Case):
+    """A ledger key the guard could not read (Ctx.user 'ledger_unread'): the ledger may be any path,
+    so a main session's every write is asked of the owner (rule ledger, verdict ask), never let
+    through; a subagent's is denied; a path still held is denied as before. ledger.py refuses a
+    broken config, so no ledger write of the kit's is asked."""
+
+    ROLES = ('owner', 'pm')
+
+    def ctx(self, role='owner', **kw):
+        return super().ctx(role_resolver=lambda action, environ: role, **kw)
+
+    def run_(self, payload, role='owner', ctx=None):
+        from tests.guard.claudehost import decide
+        return decide(payload, ctx or self.ctx(role))
+
+    def bad_unread(self):
+        """A BAD location whose pointer config is not JSON: nothing of the ledger can be read."""
+        self.config({'ledger_path': 'LEDGER.md'})
+        with open(self.policy, 'w', encoding='utf-8') as f:
+            f.write('{"ledger_path": ')
+        with open(os.path.join(self.pm, '.git', 'HEAD'), 'w') as f:
+            f.write('ref: refs/heads/other\n')
+
+    def assert_asked(self, payload, what):
+        for role in self.ROLES:
+            d = self.run_(payload, role)
+            self.assertIsNotNone(d, '%s (%s)' % (what, role))
+            self.assertEqual((d.verdict, d.rule), ('ask', 'ledger'), '%s (%s): %s' % (what, role, d.reason))
+            self.assertIn('broken', d.reason)
+
+    def write(self, path, sub=False):
+        from tests.guard.world import event
+        return event('Write', {'file_path': path, 'content': ''}, self.pm, sub=sub)
+
+    def test_the_marker(self):
+        self.bad_unread()
+        self.assertTrue(self.ctx().user().get('ledger_unread'))
+        self.config({'ledger_path': ''})
+        self.assertTrue(self.ctx().user().get('ledger_unread'))
+        self.config({'ledger_path': os.path.join(self.pm, 'LEDGER.md')})
+        self.assertFalse(self.ctx().user().get('ledger_unread'))
+
+    def test_bad_location_with_no_readable_ledger_key_asks_a_main_session(self):
+        self.bad_unread()
+        for path in (os.path.join(self.pm, 'LEDGER.md'), os.path.join(self.pm, 'a.py')):
+            self.assert_asked(self.write(path), path)
+        # outside the PM session's jail: the owner is asked, the PM session's write-jail refusal wins
+        work = os.path.join(self.work, 'notes.md')
+        d = self.run_(self.write(work), 'owner')
+        self.assertEqual((d.verdict, d.rule), ('ask', 'ledger'), d.reason)
+        self.assert_denied_as(self.write(work), 'pm', 'write-jail', work)
+
+    def test_bad_location_with_a_relative_pointer_asks_a_main_session(self):
+        self.config({'ledger_path': 'LEDGER.md'})
+        with open(os.path.join(self.pm, '.git', 'HEAD'), 'w') as f:
+            f.write('ref: refs/heads/other\n')
+        try:
+            relative = os.path.relpath(self.pm)
+        except ValueError:
+            self.skipTest('the PM repository is on another drive than the current folder')
+        bad = super().ctx().config_location()
+        self.assertEqual(bad.state, kuser.BAD)
+        for role in self.ROLES:
+            c = self.ctx(role, location=lambda: bad, pointer=lambda: relative)
+            d = self.run_(self.write(os.path.join(self.pm, 'LEDGER.md')), role, ctx=c)
+            self.assertIsNotNone(d, role)
+            self.assertEqual((d.verdict, d.rule), ('ask', 'ledger'), d.reason)
+
+    def test_a_blank_only_key_asks_a_main_session(self):
+        self.config({'ledger_path': ''})
+        self.assert_asked(self.write(os.path.join(self.pm, 'a.py')), 'a.py')
+
+    def test_a_blank_key_beside_a_held_key_asks_and_the_held_path_stays_denied(self):
+        books = os.path.join(self.pm, 'books')
+        self.config({'ledger_path': '  ', 'ledger_dir': books, 'ledger_repos': ['kit']})
+        self.assertTrue(self.ctx().user().get('ledger_unread'))
+        self.assert_asked(self.write(os.path.join(self.pm, 'FROZEN.md')), 'FROZEN.md')
+        d = self.run_(self.write(os.path.join(books, 'STANDING.md')))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'ledger'), d.reason)
+
+    def test_a_shell_write_asks_a_main_session(self):
+        from tests.guard.world import bash
+        self.bad_unread()
+        self.assert_asked(bash('rm "%s"' % os.path.join(self.pm, 'LEDGER.md').replace('\\', '/'), self.pm), 'rm')
+
+    def test_git_writes_ask_a_main_session(self):
+        from tests.guard.world import bash
+        self.bad_unread()
+        # a folder outside the PM repository: the ledger may be in any tree, so no place is needed
+        work = self.work.replace('\\', '/')
+        for cmd in ('git -C "%s" rm LEDGER.md' % work, 'git -C "%s" checkout -- .' % work,
+                    'git -C "%s" restore LEDGER.md' % work, 'git rm LEDGER.md'):
+            self.assert_asked(bash(cmd, self.work), cmd)
+
+    def test_a_git_read_passes_a_main_session(self):
+        from tests.guard.world import bash
+        self.bad_unread()
+        self.assertIsNone(self.run_(bash('git -C "%s" status' % self.pm.replace('\\', '/'), self.work)))
+
+    def test_a_subagent_is_denied(self):
+        from tests.guard.world import bash
+        self.bad_unread()
+        d = self.run_(self.write(os.path.join(self.pm, 'a.py'), sub=True))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'ledger'), d.reason)
+        d = self.run_(bash('git -C "%s" rm LEDGER.md' % self.pm.replace('\\', '/'), self.work, sub=True))
+        self.assertIsNotNone(d)
+        self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_a_held_ledger_under_a_broken_config_is_still_denied(self):
+        self.config({'ledger_path': 'LEDGER.md'})
+        with open(os.path.join(self.pm, '.git', 'HEAD'), 'w') as f:
+            f.write('ref: refs/heads/other\n')
+        self.assertFalse(self.ctx().user().get('ledger_unread'))
+        d = self.run_(self.write(os.path.join(self.pm, 'LEDGER.md')))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'ledger'), d.reason)
+        self.assertIsNone(self.run_(self.write(os.path.join(self.work, 'notes.md'))))
+
+    def test_a_sound_config_with_no_ledger_lets_a_main_session_write(self):
+        self.config({})
+        self.assertIsNone(self.run_(self.write(os.path.join(self.work, 'notes.md'))))
+
+    # Any refusal wins over the unread ask: the ask holds back until every other rule has judged
+    # the call (edit_target, ledger_git, shell_command, shell_writes; rules.Asked).
+
+    def assert_denied_as(self, payload, role, rule, what):
+        d = self.run_(payload, role)
+        self.assertIsNotNone(d, what)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), '%s: %s' % (what, d.reason))
+
+    def test_a_protected_file_stays_denied_with_the_marker(self):
+        self.bad_unread()
+        self.assertTrue(self.ctx('coordinator').user().get('ledger_unread'))
+        self.assert_denied_as(self.write(self.policy), 'coordinator', 'machine-config', 'the machine config')
+
+    def test_a_main_checkout_write_stays_denied_with_the_marker(self):
+        self.bad_unread()
+        with open(os.path.join(self.pm, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump({'repo': {'name': 'pm'}, 'roles': {'main': {'edit_main_checkout': False, 'why': 'test'}}}, f)
+        self.assert_denied_as(self.write(os.path.join(self.pm, 'a.py')), 'owner', 'main-checkout', 'a.py')
+
+    def test_git_rm_of_a_held_path_stays_denied_with_the_marker(self):
+        from tests.guard.world import bash
+        books = os.path.join(self.pm, 'books')
+        self.config({'ledger_path': '', 'ledger_dir': books, 'ledger_repos': ['kit']})
+        self.assertTrue(self.ctx().user().get('ledger_unread'))
+        cmd = 'git -C "%s" rm books/STANDING.md' % self.pm.replace('\\', '/')
+        for role in self.ROLES:
+            self.assert_denied_as(bash(cmd, self.pm), role, 'ledger', cmd)
+
+    def test_a_git_write_outside_the_jail_stays_denied_with_the_marker(self):
+        from tests.guard.world import bash
+        self.bad_unread()
+        cmd = 'git -C "%s" rm notes.md' % self.work.replace('\\', '/')
+        d = self.run_(bash(cmd, self.pm), 'pm')         # the PM session's jail: its checkout, the PM repository
+        self.assertIsNotNone(d, cmd)
+        self.assertEqual(d.verdict, 'deny', d.reason)
+        self.assertNotEqual(d.rule, 'ledger', d.reason)
+
+    def test_a_computed_bash_target_from_a_worktree_asks(self):
+        from tests.guard.world import bash
+        self.bad_unread()
+        self.assert_asked(bash('rm "$x"', self.work), 'rm "$x"')
+
+
 if __name__ == '__main__':
     unittest.main()
