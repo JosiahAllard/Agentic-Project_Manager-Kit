@@ -386,8 +386,8 @@ _ID_SPLIT = re.compile(r'([0-9]+)')
 _NAME = re.compile(r'[\x21-\x7e]+(?: [\x21-\x7e]+)*')
 _SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
 # A hub item's id or a ruling's anywhere in a page id ("Pages"): hubvalidate._REF's pattern, plus
-# A and R, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
-_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])[QMTPSAR]-\d+(?![A-Za-z0-9])', re.I)
+# A and R and the per-repo ledger id H-<repo>-nnnn, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
+_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])(?:[QMTPSAR]-\d+|H-[a-z0-9][a-z0-9-]*-\d+)(?![A-Za-z0-9])', re.I)
 PAGE_HTML_MAX = pagecheck.MAX_BYTES
 
 
@@ -1818,6 +1818,7 @@ def to_pm_reply(api, req):
         changes['ruling'] = b['ruling'].strip()
         if not changes['ruling']:
             raise _invalid('ruling, when given, names the decision: it cannot be blank', 'ruling')
+        _ruling(api, changes['ruling'])         # a ledger ruling id that exists, as questions log
     doc_id = req.params['id']
     d = api.doc('to_pm', doc_id, b)
     if d.get('status') != 'sent':
