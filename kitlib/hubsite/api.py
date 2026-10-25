@@ -1097,9 +1097,6 @@ FILING_SAYS = {
     'no_store': 'this repository names no backlog store the hub may write (.kit.json '
                 '"backlog".store): the PM handles this answer',
 }
-# the filing codes the questions/file sweep (and so the hub start) does not try again: only a
-# call naming the question does, once what made it fail is mended
-FILING_TERMINAL = ('no_store',)
 
 
 def _waiting(api, doc_id, record):
@@ -1210,18 +1207,14 @@ def questions_file(api, req):
     """File every answered question bound to a record (or only `id`) that is not filed yet:
     {ok, filed: [ids], failed: [{id, code, message}]}; a question that moved meanwhile is in
     neither. An unknown `id` is `not_found`; one that is not answered or has no record files
-    nothing. With no `id` a question whose filing failed with a FILING_TERMINAL code is not
-    tried again (in neither list); naming it tries it."""
+    nothing."""
     b = _fields(req, ('id',))
     one = _text(b, 'id')
     if one is not None:
         api.doc('questions', one)
         ids = [one]
     else:
-        docs = api.store.docs('questions')
-        ids = sorted((i for i, q in docs.items()
-                      if not (isinstance(q.get('filing'), dict)
-                              and q['filing'].get('code') in FILING_TERMINAL)), key=_natural)
+        ids = sorted(api.store.docs('questions'), key=_natural)
     filed, failed = [], []
     for doc_id in ids:
         got = file_answer(api, doc_id, _via(req), full=req.full)

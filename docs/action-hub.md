@@ -617,21 +617,22 @@ When step 2 fails the question stays `answered`, so it stays pending for the PM,
 store refused the answer) leave the answer to the PM, who handles it as an unbound one, and so
 does `no_store` (the repository's `.kit.json` names no `"backlog".store`, so the hub may write
 none: `kitlib.hubsite.recordwrite` `answer` refuses the implicit store with that code); `store`
-and `unavailable` are tried again. `message` is a fixed phrase (`FILING_SAYS`), never the store's
-text, which can name a path; the local owner's answer route alone carries that text, in its
-`filing`. A retry that fails the same way (the code and phrase `filing` already has) writes
-nothing and keeps the first `at`, so it moves no version an asker's `--if-version` holds. A mark
+and `unavailable` say the hub tries again. Every code is tried again by the next filing call
+below, which files the answer once what made it fail is mended (a record reopened, a store
+named). `message` is a fixed phrase (`FILING_SAYS`), never the store's text, which can name a
+path; the local owner's answer route alone carries that text, in its `filing`. A retry that fails
+the same way (the code and phrase `filing` already has) writes nothing and keeps the first `at`,
+so it moves no version an asker's `--if-version` holds. A mark
 (step 3, or `filing`) whose pin no longer holds writes nothing: the question was answered again,
 logged or marked done meanwhile, and the call that moved it does its own filing.
 
 Every answered, bound question not filed yet is filed again by `hub.py questions file [Q-1]`
 (`POST /api/v1/questions/file`, agent, optional `{id}`; it answers `{filed: [ids], failed: [{id,
 code, message}]}`) and once at each hub start, on a thread after the listeners start (`kitlib.
-hubsite.serve` `Hub._refile`, which logs each failure as a note). The sweep with no id, and so
-the hub start, skips a question whose filing failed `no_store` (`FILING_TERMINAL`); `questions
-file <id>` still tries it, which files it once the repository names a store. A crash after step 1
-or after step 2 is mended there. The answer route's own answer carries `filing` (`{id, filed, version,
-revision}`, `{id, filed: false, code, message}`, or `{id, filed: false, moved: true}`), and its
+hubsite.serve` `Hub._refile`, which logs each failure as a note), whatever code its last
+filing failed with. A crash after step 1 or after step 2 is mended there. The answer route's
+own answer carries `filing` (`{id, filed, version, revision}`, `{id, filed: false, code,
+message}`, or `{id, filed: false, moved: true}`), and its
 `status`, `version` and `revision` are those of the last write. An unbound question is never
 filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
 `AnswerStoreTest`, `AnswerNoStoreTest`, `FiledAsTest`; tests/hubsite/test_record_write.py

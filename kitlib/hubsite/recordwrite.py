@@ -35,8 +35,8 @@ store's own text; a Failure (git, a publish, a folder store outside a linked wor
 whose text the Api gives the local owner only (kitlib.hubsite.api "What an agent is told"). The
 implicit `ref` store (no "backlog".store in `.kit.json`) is refused as `store` before any write,
 since its refusal names the PM data worktree's path; answer refuses it as `no_store` instead, a
-code the hub's filing alone reads (kitlib.hubsite.api file_answer: a repository with no store
-the hub may write is no failure a retry mends). Anything else is raised as it is.
+code the hub's filing alone reads (kitlib.hubsite.api file_answer, which leaves that answer to
+the PM). Anything else is raised as it is.
 """
 import hashlib
 
