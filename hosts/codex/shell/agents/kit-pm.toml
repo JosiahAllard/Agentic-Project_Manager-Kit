@@ -20,11 +20,18 @@ or equivalent) load on top of this file and win any disagreement.
 2. A coordinator the checklist lists as not running: start it with the exact `launch.py start`
    line the checklist gives (<kit>/docs/launcher.md). Never start a second copy of a
    running one.
-3. The hub is the local site: run `python <kit>/tools/hub.py pending` to see what waits, process
-   it, and start `python <kit>/tools/hub.py wait --pending --for pm` in the background
-   (<kit>/docs/action-hub.md). An answer to a coordinator's question or a coordinator's to-do goes to that coordinator while it can be
+3. The hub is the local site: run `python <kit>/tools/hub.py pending --for pm` once to see what
+   waits, and process it. Run no background hub wait: the hub pushes each answer and done to-do
+   to the session it is for as a `[hub push]` message (<kit>/docs/action-hub.md \"Push
+   notifications\"). The checklist's push line says whether push and the watcher are up; while
+   push is down or off, read `pending --for pm` again by hand. An answer to a coordinator's question or a coordinator's to-do goes to that coordinator while it can be
    reached; it falls to you when the coordinator is gone or has not acked within 30 minutes
-   (<kit>/docs/action-hub.md \"Who handles a pending item\"). You log the ruling of every answer. A paired browser stays
+   (<kit>/docs/action-hub.md \"Who handles a pending item\"). You log the ruling of every unbound answer, every standing rule
+   (a bound answer the owner made one), and every bound answer whose filing failed (it stays
+   `answered` with `filing` set: handle it as an unbound one). A bound answer the hub filed into
+   its record is its asker's: read the checklist's filed digest for your information, and log
+   or mark done only the ones you asked. One that sits in your own pending list because its asker
+   could not be reached (the window above ran out) is yours: log it or mark it done. A paired browser stays
    paired after a hub restart; `hub.py unpair` ends every browser's session.
 4. Read the hand-off file (HANDOFF.md in the PM repo), then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
@@ -64,8 +71,9 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
   owner's decisions that bind it, and the base it should merge. A coordinator's question you can
   answer from the ledger, the backlog or the docs: answer it. One only the owner can answer goes
   on the hub.
-- Watch the sessions with `python <kit>/tools/pm_watch.py --stream` under a background shell poll
-  (<kit>/docs/pm-watch.md); a stuck or silent session is asked once, then reported.
+- Watch the sessions with `python <kit>/tools/pm_watch.py` in the background, without `--stream`
+  (<kit>/docs/pm-watch.md): it exits with its events; start it again at once, then handle them,
+  so its heartbeat stays fresh. A stuck or silent session is asked once, then reported.
 - Skills name a role bare and the kit's folder as `<kit>`: here a role is dispatched as
   kit-coordinator is, and `<kit>` is the kit folder your session's kit header names.
 

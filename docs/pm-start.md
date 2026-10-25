@@ -26,16 +26,17 @@ wait. The lines:
 `hub: server up on port <n>, <k> pending for the PM` (`<k>` is 0 when the answer's `items` is not a
 list); a `hub: WARN this hub server is running older code than the hub code now on disk. Owner step:
 restart the Action Hub: python "<hub.py>" restart ...` line when the server's health `code` says
-so (docs/action-hub.md "Stale code"; none from a hub that gives no `code`); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then either
-`hub: wait --pending is running` or a warning, `hub: WARN no PM wait --pending --for pm is
-running, so items routed to the PM go unseen; ...`, telling the PM to start
-`hub.py wait --pending --for pm` in the background and start it again after it ends (docs/action-hub.md
-"Who handles a pending item"). "Running" is matched by
-command text only: any `python` process on the machine whose command line holds `hub.py`, `wait`
-and `--pending`, and no `--for` other than `--for pm`, counts (`_wait_running` in
-`kitlib/pmstart/__init__.py`): a session's `wait --pending --for <key>` waits on its own answers
-and is not the PM's, but another PM session's plain `wait --pending` makes this line say running. Failures,
-each one line:
+so (docs/action-hub.md "Stale code"; none from a hub that gives no `code`); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then the push line
+(`kitlib.pmstart` `push_line`), from the health answer's `push` and `watcher` (docs/action-hub.md
+"Push notifications"). No session runs a background `hub.py wait`: each reads `hub.py pending`
+once at start, and the hub pushes every answer and done to-do to the session that owns it. The
+push line is `hub: push up (last delivery to the PM: <last>, <n> undelivered); watcher <state>
+(beat <s>s ago)` while push is up; `hub: WARN push down (...); ...` when it is down, and `hub:
+WARN push notifications are off on this server, ...` when the hub runs no push worker (`push`
+null), each naming `hub.py pending --for pm` to read by hand. `<last>` is `none yet` before the
+first delivery; the beat part is left out when the hub has read no heartbeat (`watcher none`).
+Every value is checked against the states the hub gives (`?` otherwise), so no server text
+reaches the line. The `wait` verb stays for a caller that wants it. Failures, each one line:
 - Nothing listens: `hub: hub server down (nothing listens on port <n>): start it with python
   "<kit>/tools/hub.py" serve`.
 - No token file (neither the agent's nor the owner's can be read): `hub: no hub token file is there
@@ -59,14 +60,16 @@ heartbeat (docs/pm-watch.md "Stream mode and heartbeat") is at most 5 minutes ol
 holds `pm_watch.py` and that started at the time the heartbeat records (within 2 seconds,
 `START_SLACK`; skipped when either start time is unknown), so a reused pid does not count.
 Otherwise the line says whether it stopped polling, is an older copy with no heartbeat, or is not
-running, and gives the command to start it under Monitor. A running watcher whose heartbeat says it
-does not stream gets a line to restart it with `--stream`, and a `pm_watch_cmd` without `--stream`
-gets a line too: either watcher exits after one batch of events. Tests:
+running, and gives the command to start it in the background (docs/pm-watch.md: it exits with its
+events, and the PM starts it again at once, then handles them). A running watcher whose heartbeat
+says it streams gets a line to restart it without `--stream`, and a `pm_watch_cmd` with `--stream`
+gets a line too: a streaming watcher never exits, so a background run of it reports no event. The
+configured command is printed as written, never changed. Tests:
 `tests/pmstart/test_pmstart.py` `WatcherTest`. The last check, always on and with no config key (after `console_tasks`, below), is the live foreground lock timeout (docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their own PowerShell window. Code: `kitlib/pmstart/fglock.py`; tests: `tests/pmstart/test_fglock.py`.
 
 ## Filed answers
 
-When the hub is up and its pending ask answered, the hub lines end, before the wait line, with at
+When the hub is up and its pending ask answered, the hub lines end, before the push line, with at
 most one line counting the owner's answers the hub filed into their records since the last PM
 start that are still `filed`, waiting for their askers (`kitlib.pmstart` `filed_digest`;
 docs/action-hub.md "Filing the answer"). An answer its asker has logged or marked done since is
@@ -255,7 +258,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 ```json
 {"pm_start": {
-  "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py --stream",
+  "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py",
   "memory_dir": "<repo drive>/Agent-memory/<pm-repo>",
   "handoff_file": "HANDOFF.md",
   "reminders_file": "<config-dir>/reminders.json",
@@ -270,9 +273,9 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.
-- `pm_watch_cmd`: the command the watcher line prints, as written (docs/pm-watch.md); without
-  `--stream` the checklist adds a line saying so. Unset, it is
-  the kit's own `python -u "<kit>/tools/pm_watch.py" --stream` (`kitlib.pmstart`
+- `pm_watch_cmd`: the command the watcher line prints, as written (docs/pm-watch.md), run in the
+  background; with `--stream` the checklist adds a line saying so (a streaming watcher never
+  exits). Unset, it is the kit's own `python -u "<kit>/tools/pm_watch.py"` (`kitlib.pmstart`
   `PM_WATCH_DEFAULT_CMD`).
 - `eng_review` (optional, list of strings): the owner's design-review flags
   (docs/engineering-rulings.md), printed each start so the PM sends matching ENG questions (from

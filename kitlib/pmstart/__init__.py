@@ -77,8 +77,9 @@ def eng_review(cfg):
 
 # This kit's checkout: the PM session's directory is not the kit, so kit paths are made absolute.
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# With no pm_watch_cmd, the watcher line names the kit's own pm_watch.py in stream mode.
-PM_WATCH_DEFAULT_CMD = 'python -u "%s" --stream' % os.path.join(KIT_ROOT, "tools", "pm_watch.py")
+# With no pm_watch_cmd, the watcher line names the kit's own pm_watch.py, run in the background
+# without --stream: it exits on an event and the PM starts it again (docs/pm-watch.md).
+PM_WATCH_DEFAULT_CMD = 'python -u "%s"' % os.path.join(KIT_ROOT, "tools", "pm_watch.py")
 BEAT_STALE = 300      # seconds: a heartbeat older than this is a watcher that stopped polling
 
 
@@ -182,28 +183,49 @@ def _hub_client(port):
     return client.Client(port, tokens=folder, timeout=HUB_SITE_TIMEOUT_S)
 
 
-# a wait's `--for KEY` or `--for=KEY`, the key quoted or not
-_WAIT_FOR = re.compile(r'--for(?:=|\s+)"?([^\s"]*)')
+_PUSH_STATES = ("up", "down")
+_PUSH_LAST = ("written", "not-written", "uncertain", "no-live-session")
+_WATCHER_STATES = ("up", "down", "none")
 
 
-def _wait_running(procs):
-    """Whether the PM's `hub.py wait --pending` process is in `procs` (a list, or a function
-    giving one: asked only when the server is up; a list that cannot be had counts as none). A
-    wait `--for` a key other than `pm` is another session's, waiting on its own answers."""
-    try:
-        procs = procs() if callable(procs) else procs
-    except Exception:
-        return False
-    for p in procs or []:
-        cmd = p.get("CommandLine") or ""
-        if (p.get("Name") or "").lower().startswith("python") and "hub.py" in cmd \
-                and " wait" in cmd and "--pending" in cmd \
-                and all(k == "pm" for k in _WAIT_FOR.findall(cmd)):
-            return True
-    return False
+def _known(value, allowed):
+    """`value` when it is one of `allowed`, else "?": no server text reaches a line."""
+    return value if isinstance(value, str) and value in allowed else "?"
 
 
-def hub_site(procs=(), load=None, make_client=_hub_client, stamp=None, now=None):
+def _count(value):
+    """A non-negative whole number as text, else "?"."""
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else "?"
+
+
+def push_line(health):
+    """[the push and watcher line] of the hub site, from GET health's `push` ({"state", "last",
+    "undelivered"}, null with no push worker) and `watcher` ({"state", "age"}, null with no worker;
+    docs/action-hub.md "Push notifications"). Sessions run no background hub wait: the hub pushes
+    each answer and done to-do, so push down or off is a WARN that nothing reaches the PM by
+    itself. Every value is allow-listed (`?` otherwise)."""
+    push, w = health.get("push"), health.get("watcher")
+    if isinstance(w, dict):
+        state = _known(w.get("state"), _WATCHER_STATES)
+        age = _count(w.get("age")) if w.get("age") is not None else None
+        watch = "watcher %s" % state + (" (beat %ss ago)" % age if age is not None else "")
+    else:
+        watch = "watcher not read (no push worker)"
+    read = 'read python "%s" pending --for pm now and at each start' % HUB_TOOL
+    if not isinstance(push, dict):
+        return "hub: WARN push notifications are off on this server, so no answer or done to-do " \
+               "reaches a session by itself; %s; %s" % (watch, read)
+    state = _known(push.get("state"), _PUSH_STATES)
+    last = push.get("last")
+    last = "none yet" if last is None else _known(last, _PUSH_LAST)
+    said = "push %s (last delivery to the PM: %s, %s undelivered); %s" % (
+        state, last, _count(push.get("undelivered")), watch)
+    if state == "up":
+        return "hub: " + said
+    return "hub: WARN %s; %s" % (said, read)
+
+
+def hub_site(load=None, make_client=_hub_client, stamp=None, now=None):
     """The hub site's lines, on the `hub` key's settings or, with no key, on the defaults (port
     8790): the site is the hub whether or not the key is written. Asks only the loopback server,
     with HUB_SITE_TIMEOUT_S per ask; starts nothing. A machine config that cannot be read is one
@@ -256,13 +278,7 @@ def hub_site(procs=(), load=None, make_client=_hub_client, stamp=None, now=None)
                      "handle, ack or log each" % (len(items), HUB_TOOL))
     if stamp is not None:
         lines.extend(filed_digest(hub, stamp, now))
-    if _wait_running(procs):
-        lines.append("hub: wait --pending is running")
-    else:
-        lines.append("hub: WARN no PM wait --pending --for pm is running, so items routed to the PM "
-                     "go unseen; start in the background: python \"%s\" wait --pending --for pm (it "
-                     "exits with one HUB line per item; handle the items, then start it again)"
-                     % HUB_TOOL)
+    lines.append(push_line(health))
     return lines
 
 
@@ -346,7 +362,7 @@ def read_heartbeat():
 
 
 def _pm_watch_cmd(cfg):
-    """cfg["pm_watch_cmd"] as configured, else the kit's own stream-mode command."""
+    """cfg["pm_watch_cmd"] as configured, else the kit's own command (no --stream)."""
     return cfg.get("pm_watch_cmd") or PM_WATCH_DEFAULT_CMD
 
 
@@ -363,16 +379,18 @@ def _created(p):
 
 
 def watcher(cfg, procs, beat=None, now=None):
-    """Steps: empty while pm_watch is alive and streaming, else the step that (re)starts it.
+    """Steps: empty while pm_watch is alive and not streaming, else the step that (re)starts it.
 
     Alive means all of: the heartbeat pm_watch writes every pass (beat(), default read_heartbeat)
     is younger than BEAT_STALE, its pid is a running python process whose command line has
     pm_watch.py, and that process started when the heartbeat says (within START_SLACK; skipped
     when either start time is unknown), so a reused pid does not pass. A pid alone accepts a
     hung watcher or a --once check; a heartbeat alone stays fresh for a while after a watcher has
-    exited on an event. A live watcher whose heartbeat says it is not streaming, and a
-    pm_watch_cmd without --stream, each add a line: such a watcher exits after one batch. The
-    configured command is printed as written, never changed."""
+    exited on an event. The PM runs pm_watch in the background without --stream: it exits with
+    its events, and the PM starts it again at once, then handles them (docs/pm-watch.md). A live
+    watcher whose heartbeat says it streams, and a pm_watch_cmd with --stream, each add a line:
+    a streaming watcher never exits, so its events reach no one. The configured command is
+    printed as written, never changed."""
     running = {}
     for p in procs:
         name = (p.get("Name") or "").lower()
@@ -382,9 +400,9 @@ def watcher(cfg, procs, beat=None, now=None):
     now = time.time() if now is None else now
     cmd = _pm_watch_cmd(cfg)
     lines = _watcher_state(hb, running, now, cmd)
-    if not _STREAM_FLAG.search(cmd):
-        lines.append("pm_start.pm_watch_cmd has no --stream: a watcher started with it exits after "
-                     "one batch of events; add --stream to run it under Monitor")
+    if _STREAM_FLAG.search(cmd):
+        lines.append("pm_start.pm_watch_cmd has --stream: a watcher started with it never exits, so "
+                     "a background run reports no event; remove --stream from pm_watch_cmd")
     return lines
 
 
@@ -396,19 +414,22 @@ def _watcher_state(hb, running, now, cmd):
     if hb is not None and hb["pid"] in running:
         age = now - hb["beat"]
         if age > BEAT_STALE:
-            return ["pm_watch.py (pid %d) has not polled for %dm: stop that pid and start it under "
-                    "Monitor: %s" % (hb["pid"], age // 60, cmd)]
-        if hb.get("stream") is False:
-            return ["pm_watch.py (pid %d) runs without --stream: it exits after one batch of events; "
-                    "stop that pid and start it under Monitor with --stream: %s" % (hb["pid"], cmd)]
+            return ["pm_watch.py (pid %d) has not polled for %dm: stop that pid and start it in the "
+                    "background: %s" % (hb["pid"], age // 60, cmd)]
+        if hb.get("stream") is True:
+            return ["pm_watch.py (pid %d) runs with --stream: it never exits, so a background run "
+                    "reports no event; stop that pid and start it in the background without "
+                    "--stream: %s" % (hb["pid"], cmd)]
         return []
     if running:
         return ["pm_watch.py is running without a heartbeat (an older copy, or another --state): "
-                "restart it under Monitor: %s" % cmd]
+                "restart it in the background: %s" % cmd]
     if hb is not None:
-        return ["pm_watch.py is not running (it last polled %ds ago): start it under Monitor: %s"
+        return ["pm_watch.py is not running (it last polled %ds ago): start it in the background "
+                "(it exits with its events; start it again at once, then handle them): %s"
                 % (max(0, now - hb["beat"]), cmd)]
-    return ["pm_watch.py is not running: start it under Monitor: %s" % cmd]
+    return ["pm_watch.py is not running: start it in the background (it exits with its events; "
+            "start it again at once, then handle them): %s" % cmd]
 
 
 HANDOFF_DEFAULT = "HANDOFF.md"
@@ -1043,7 +1064,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("standing", lambda: standing(cfg)),
         ("machine_config", lambda: configcheck.lines(**fakes.get("machine_config", {}))),
         ("eng_review", lambda: eng_review(cfg)),
-        ("hub", lambda: hub_site(procs_once, **dict({"stamp": filed_stamp_file},
+        ("hub", lambda: hub_site(**dict({"stamp": filed_stamp_file},
                                                      **fakes.get("hub_site", {})))),
         ("watcher", lambda: watcher(cfg, procs_once(), **fakes.get("watcher", {}))),
         ("handoff", lambda: handoff(cfg, **fakes.get("handoff", {}))),
