@@ -49,7 +49,7 @@ SELF = 'kit'                         # this command's own tool name, never run t
 # The kit tools a repository could run through stubs (the PM kit's SHARED commands; kitlib.stubs
 # re-exports this until it is removed). A name the kit has no command for yet is left out.
 SHARED = (
-    'backlog', 'board', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
+    'backlog', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
     'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree',
     'pieces', 'preflight', 'pytests', 'redfirst', 'review_pack', 'stack_skill',
     'sync_base', 'testlist', 'tool_deps', 'trailers', 'verdict', 'worktree_paths',
