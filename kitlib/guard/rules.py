@@ -7424,14 +7424,54 @@ def git_worktree_remove(ctx, gc, role, text):
     head, why = ctx.git.resolve('HEAD', target)
     merged, why2 = ctx.git.is_ancestor(head, main, gc.dir) if head else (None, why)
     if merged is not True:
+        word, mark_why = stale_mark_word(ctx, target, head) if merged is False and head else (False, None)
+        if word:
+            return None                         # a stale mark that holds: the PM's word
         how = ('Merge it first; unmerged work goes to the PM, who decides (python %s -C %s %s --abandon "<why>" '
                'only on the PM\'s word).' % (kit_tool(ctx, 'worktree_remove'),
                                              quote(main_top) if main_top else '"<main checkout>"',
                                              os.path.basename(target)))
+        if mark_why:
+            how += ' A stale mark does not count: %s.' % mark_why
         return refuse('git-worktree-remove', role, '`%s` removes a worktree whose commit is not merged into %s (%s). '
                       '%s Its unmerged commits:' % (text, main, why2 or 'not an ancestor', how),
                       'git -C %s log --oneline %s..HEAD' % (quote(target), main))
     return None
+
+
+def stale_mark_word(ctx, target, head):
+    """`(True, None)` when the clean worktree at `target`, HEAD `head`, carries a stale mark that
+    holds (kitlib.worktree.marks: a coordinator's record that the PM gave the tree up, read from
+    `<git common dir>/kit-stale-marks.json`): the PM's word to remove it unmerged. It holds as the
+    nightly sweep has it hold (sweep.sweep_skip): the mark names this path and this tip, and
+    nothing in the tree, its git dir or its branch's reflog is newer than the mark. Else `(False,
+    why)`: why is None when the tree's branch has no mark (detached included), else why no mark
+    counts. Fails closed: a marks file, branch or last activity that cannot be read is no word.
+    The tree walk (sweep.last_activity) runs only here, on an unmerged remove that found a mark."""
+    from kitlib.worktree import marks, sweep  # the walk and its git reads: only on this path
+    place = ctx.place(target)
+    if not place.common:
+        return False, 'git cannot place its repository (%s)' % (place.why or 'no git common dir')
+    branch, why = ctx.git.current_branch(target)
+    if branch is None:
+        return False, 'its branch cannot be read (%s)' % why
+    if not branch:
+        return False, None                    # a detached HEAD: a mark names a branch
+    got, why = marks.load(os.path.join(place.common, marks.FILE_NAME))
+    if got is None:
+        return False, 'the stale marks cannot be read (%s)' % why
+    mark = marks.find(got, branch)
+    if mark is None:
+        return False, None
+    void = marks.void_reason(mark, target, head)
+    if void is None:
+        seen, why = sweep.last_activity(ctx.main_top(target) or target, target, branch)
+        if seen is None:
+            return False, 'its stale mark cannot be checked: its last activity cannot be read (%s)' % why
+        void = marks.void_reason(mark, target, head, seen)
+    if void:
+        return False, 'its stale mark is void: %s' % void
+    return True, None
 
 
 def _branch_of(ref):
