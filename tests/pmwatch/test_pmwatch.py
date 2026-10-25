@@ -1,4 +1,4 @@
-"""Ported from the PM repo's launcher/test_pm_watch.py, plus Watcher and CLI tests."""
+"""Tests for pmwatch: the usage, alert and idle events, the Watcher and the CLI."""
 import io
 import json
 import os

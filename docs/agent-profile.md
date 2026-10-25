@@ -30,21 +30,26 @@ Pass line `kit_tests: OK`; anything else is a failure. Report the summary line a
 module lines only.
 
 ## Landing
-Landing is standing owner-approved work: the lander lands a reviewed branch on the coordinator's or
-project manager's go, with the reviewer's verdict in its brief. From the main checkout, on main:
-`python tools/land.py <branch> --expect-tip <sha> --submit`, then the `gate.py wait-result ... --kind land`
-command it prints, run in the background. No agent merges or pushes: a detached process books its turn
-in the machine lock (the landing queue), merges onto the main it finds, gates the merge in its own
-landing tree and pushes only when green (docs/gate.md "Landing"). Success: a `RESULT pass land` line
-with `LANDED `. `CONFLICT <branch> with main <sha>: the author merges main` goes back to the branch's
-author; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`, `NOT RUN:`) is reported as
-is, with the doc's recovery steps, and not retried. Batches allowed: up to
+Landing is standing owner-approved work and needs no further go: the coordinator queues a verdict for
+every landing, then submits it. Before a landing, per branch, from the main checkout:
+`python tools/verdict.py add -C <repo> --branch <branch> --tip <sha> --verdict LAND ...`
+(docs/gate.md "Strict paths"), then `python tools/land.py <branch> --expect-tip <sha> --submit`, then
+the `gate.py wait-result ... --kind land` command it prints, kept running in the background. A lander
+role may do the submit, wait and report for the coordinator. No agent merges or pushes, and no
+expected-main hash is given: a detached process books its turn in the machine lock (the landing
+queue), so submitted landings merge in ticket order, each onto the main it finds; it gates the merge
+in its own landing tree and pushes only when green (docs/gate.md "Landing"). Success: a `RESULT pass
+land` line with `LANDED `. `CONFLICT <branch> with main <sha>: the author merges main` goes back to
+the branch's author; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`, `NOT
+RUN:`) is reported as is, with the doc's recovery steps, and not retried. Batches allowed: up to
 `"landing".batch_max` branches (3), each with its own reviewer, range and LAND verdict; never a
 high-risk branch (docs/gate.md "Batch").
 
 ## Review
-A coordinator reviews a branch itself when it is small (about 150 lines) and low or medium risk: read
-every hunk; skim docs and additive content. Larger or High: a fresh reviewer.
+A coordinator reviews a branch itself when it is small and low or medium risk: read every hunk; skim
+docs and additive content. "Small" is the `.kit.json` key `landing.self_review_max_lines`
+(docs/kit-json.md): `tools/verdict.py add` refuses a coordinator's own review of a larger diff, so a
+larger diff needs an analyst review. Larger or High: a fresh reviewer.
 Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. Reseed a
 strong- or deep-tier coder whose context is above about 150k tokens.
 
