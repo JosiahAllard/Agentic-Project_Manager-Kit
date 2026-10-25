@@ -1,5 +1,4 @@
-"""Which tools test modules a change can break. Ported from the PM kit's
-tools/tool_deps.py; tools/tool_deps.py is the entry point, docs/test-tools.md the doc. Every
+"""Which tools test modules a change can break. tools/tool_deps.py is the entry point, docs/test-tools.md the doc. Every
 function takes the checkout root (or a checked configuration) explicitly: there is no module ROOT.
 
 The map is DERIVED, not hand-written: `scan` reads every top-level `*.py` of the repository's

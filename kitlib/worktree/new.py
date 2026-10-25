@@ -1,5 +1,4 @@
-"""Create a workstream's worktree in one call (ported from the PM kit's tools/new_worktree.py;
-docs/new-worktree.md). tools/new_worktree.py is the entry point.
+"""Create a workstream's worktree in one call (docs/new-worktree.md). tools/new_worktree.py is the entry point.
 
 `create(root, branch, existing, base)` acts on the MAIN checkout of the repository `root` is in
 (the main checkout or any linked worktree): `git fetch <remote>`; refuses unless local `<base>`

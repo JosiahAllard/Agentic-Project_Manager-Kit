@@ -1,5 +1,4 @@
-"""Has a branch landed? One read-only look, never a wait (ported from the PM kit's
-tools/landed.py; docs/landed.md). tools/landed.py is the entry point.
+"""Has a branch landed? One read-only look, never a wait (docs/landed.md). tools/landed.py is the entry point.
 
 `look(root, ref)` -> Outcome(code, lines). It never loops, sleeps, fetches or writes.
 
