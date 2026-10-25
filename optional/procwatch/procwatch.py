@@ -49,7 +49,7 @@ sys.path.insert(0, HERE)
 
 MIN = 60
 HOUR = 3600
-PAGED_POOL_WARN = 4 * 2**30      # kernel paged pool; ~1-2 GB is normal here, the find-/ leak reached ~15 GB
+PAGED_POOL_WARN = 4 * 2**30      # kernel paged pool: a healthy machine stays well under this; a leak grows past it
 
 # Never killed and never a suspect: production and the owner's generators.
 PROTECT_PATTERNS = [
@@ -227,8 +227,8 @@ def _gate_ok(p):
 
 
 # Groups --kill may end even while the parent (the agent's tool shell) is alive, past this age: a search from a
-# drive root is never legitimate, and a drive-root search with a live shell can leak GB of paged pool
-# (observed 2026-09-24).
+# drive root is never legitimate, and a drive-root search with a live shell can leak GB of paged
+# pool.
 LIVE_PARENT_KILL = {"root-search": 10 * MIN}
 
 

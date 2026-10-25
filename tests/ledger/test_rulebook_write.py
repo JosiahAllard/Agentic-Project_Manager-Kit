@@ -298,11 +298,30 @@ class WriteTest(WriteBase):
         self.assertEqual(len(errs), 1, errs)
         self.assertIn('%s drops kit.md landing.fast, which is still there' % rid(6), errs[0])
 
+    def test_a_book_override_writes_the_named_book_not_the_repos(self):
+        kit, shared = self.read(self.kit_path()), os.path.join(self.rules, 'all.md')
+        text = 'Every repo lands small branches fast.'
+        checked = self.checked('landing.fast', 'Landing', text, repo='all')
+        change = write.RuleChange(self.rules, 'set', 'landing.fast', 'Landing', text, checked, book='all')
+        got = write.add(self.log, 'kit', 'selected', 'q', 'a', text, 's', when=WHEN, rule=change)
+        self.assertEqual(self.read(self.kit_path()), kit)
+        self.assertIn('- landing.fast: %s (from %s)' % (text, got.id), self.read(shared))
+        self.assertIn('[rule all.md landing.fast set]', write.show(self.read(self.log), got.id))
+        self.assertEqual(rulebook.applied(write.load_books(self.rules), [self.read(self.log)]), [])
+
+    def test_an_unknown_book_override_is_refused_and_nothing_written(self):
+        log, kit = self.read(self.log), self.read(self.kit_path())
+        change = write.RuleChange(self.rules, 'set', 'landing.fast', 'Landing', 'T.', '0' * 16, book='nope')
+        with self.assertRaises(Usage) as e:
+            write.add(self.log, 'kit', 'selected', 'q', 'a', 'T.', 's', when=WHEN, rule=change)
+        self.assertIn("--book: no rulebook 'nope'", str(e.exception))
+        self.assertEqual((self.read(self.log), self.read(self.kit_path())), (log, kit))
+
     def test_a_book_rerouted_while_waiting_for_its_lock_is_refused(self):
         real = write.rule_target
 
-        def reroute(folder, repo):
-            got = real(folder, repo)        # kit.md, the book whose lock add takes
+        def reroute(folder, repo, book=None):
+            got = real(folder, repo, book)       # kit.md, the book whose lock add takes
             self.book('kit', KIT.replace('Alpha_Checkout', 'elsewhere'))
             self.book('beta', '# Beta rules\nRepos: kit\n')
             return got
@@ -377,6 +396,40 @@ class CliTest(WriteBase):
         self.assertIn('over its budget', add.stderr)
         self.assertIn('- landing.fast: Small branches land fast. (from %s)' % rid(4), self.read(self.kit_path()))
         self.assertEqual(self.run_tool('check').returncode, 0)
+
+    def test_add_rule_book_writes_the_shared_book(self):
+        text = 'Every repo lands small branches fast.'
+        r = self.run_tool('conflicts', '--repo', 'all', '--topic', 'Landing', '--key', 'landing.fast',
+                          '--text', text)
+        checked = r.stdout.splitlines()[-1].split('checked: ', 1)[1]
+        base = ['add', '--repo', 'kit', '--prov', 'selected', '--q', 'q', '--a', 'a', '--decides', text,
+                '--source', 's']
+        kit = self.read(self.kit_path())
+        r = self.run_tool(*(base + ['--rule', 'landing.fast', '--topic', 'Landing', '--checked', checked,
+                                    '--book', 'nope']))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("--book: no rulebook 'nope'", r.stderr)
+        r = self.run_tool(*(base + ['--book', 'all']))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('--book needs --rule KEY', r.stderr)
+        self.assertEqual(self.read(self.log), log_text())
+        r = self.run_tool(*(base + ['--rule', 'landing.fast', '--topic', 'Landing', '--checked', checked,
+                                    '--book', 'all']))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('- landing.fast: %s (from %s)' % (text, rid(4)),
+                      self.read(os.path.join(self.rules, 'all.md')))
+        self.assertEqual(self.read(self.kit_path()), kit)
+        self.assertEqual(self.run_tool('check').returncode, 0)
+
+    def test_add_rule_book_checked_hint_names_the_book(self):
+        base = ['add', '--repo', 'kit', '--prov', 'selected', '--q', 'q', '--a', 'a', '--decides', 'd',
+                '--source', 's', '--rule', 'landing.fast', '--topic', 'Landing', '--book', 'all']
+        r = self.run_tool(*base)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('conflicts --repo all ', r.stderr)
+        r = self.run_tool(*(base + ['--checked', '0' * 16]))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn('conflicts --repo all ', r.stderr)
 
     def test_add_rule_arguments(self):
         base = ['add', '--repo', 'kit', '--prov', 'selected', '--q', 'q', '--a', 'a', '--decides', 'd',

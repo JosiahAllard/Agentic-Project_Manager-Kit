@@ -149,6 +149,15 @@ TOOLS = {
         _obj({"id": _ID, "ruling": {"type": "string", "description": "The ruling's id."},
               "if_version": _PIN}, ["id", "ruling", "if_version"]),
         "POST", "/questions/{id}/log", AGENT),
+    "hub_question_done": (
+        "Marks an answered or filed question handled when it became no ruling "
+        "(POST /questions/<id>/done); the question is then done. why says why the answer needs "
+        "no ruling. Refused (invalid) for a question that is neither answered nor filed and for "
+        "a blank why.",
+        _obj({"id": _ID, "why": {"type": "string", "description": "Why the answer needs no "
+                                                                   "ruling."},
+              "if_version": _PIN}, ["id", "why", "if_version"]),
+        "POST", "/questions/{id}/done", AGENT),
     "hub_todo_add": (
         "Adds a to-do for the owner (POST /todos). An agent's open to-do needs commands or "
         "steps: what the owner runs. Refused: plain Notepad, 'open and apply' prose, and "

@@ -157,7 +157,7 @@ class OwnerApproval(OwnerLandCase):
 class NoOwnerEmail(test_land.LandCase):
     """The base names no owner, and neither does the machine config (no_machine_owner: the lander
     runs in this process and would otherwise read the real home's, which the home fence refuses):
-    no commit is provable as his, so every owner-only change is refused (fail closed)."""
+    no commit is provable as the owner's, so every owner-only change is refused (fail closed)."""
 
     def setUp(self):
         super().setUp()

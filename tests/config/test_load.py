@@ -429,7 +429,7 @@ class RealRepoShapeTest(TreeCase):
     def test_the_beta_shape_loads(self):
         cfg = self.load(BETA_SHAPE, BETA_FILES)
         self.assertEqual(cfg.main_branch, 'main')
-        self.assertEqual(cfg.section('preflight')['udp_ports'], [7800, 7999])
+        self.assertEqual(cfg.section('preflight')['udp_ports'], [41000, 41199])
         self.assertEqual(cfg.section('worktree_remove')['branch_template'], 'phase/{slug}')
         self.assertEqual(cfg.owner()['email'], OWNER)
         self.assertEqual(config.load_hook_module(cfg)[0].HOOKED, 'beta')

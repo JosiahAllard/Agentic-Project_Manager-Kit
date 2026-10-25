@@ -19,7 +19,7 @@ lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every 
 when there is no `hub` key. The check only asks the loopback server on `hub.port`, through
 `kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
 `kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /api/v1/health`,
-then `GET /api/v1/pending?for=pm`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The pending
+then `GET /api/v1/pending?for=pm`, then the filed answers' one, "Filed answers") waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The pending
 ask is the PM's items only, the list `hub.py pending --for pm` prints: an item routed to a creator
 that can still be reached is that session's to ack, and a PM ack would hide it from the creator's
 wait. The lines:
@@ -61,6 +61,40 @@ running, and gives the command to start it under Monitor. A running watcher whos
 does not stream gets a line to restart it with `--stream`, and a `pm_watch_cmd` without `--stream`
 gets a line too: either watcher exits after one batch of events. Tests:
 `tests/pmstart/test_pmstart.py` `WatcherTest`. The last check, always on and with no config key (after `console_tasks`, below), is the live foreground lock timeout (docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their own PowerShell window. Code: `kitlib/pmstart/fglock.py`; tests: `tests/pmstart/test_fglock.py`.
+
+## Filed answers
+
+When the hub is up and its pending ask answered, the hub lines end, before the wait line, with at
+most one line counting the owner's answers the hub filed into their records since the last PM
+start that are still `filed`, waiting for their askers (`kitlib.pmstart` `filed_digest`;
+docs/action-hub.md "Filing the answer"). An answer its asker has logged or marked done since is
+not counted, and one answered again counts only once it is filed again, by that filing's time.
+A filed answer that changed nothing for the PM to do (`filed_as` `held`, or `pulled` with a
+worker on the record) is pushed to nobody or to its asker alone (docs/action-hub.md "Push
+notifications"), so this line is where the PM sees the ones still unread. It is information,
+not a step.
+- The stamp: `pm-start-last.json`, `{"at": <ISO time with its offset>}`, in the folder of the
+  pm_watch state file (the `pm_watch` config's `state_file`, else
+  `kitlib.pmwatch.default_state_file`; `filed_stamp_file`). The path is worked out only when the
+  hub is up. A stamp that is missing, unreadable or holds a time with no offset counts as
+  24 hours before now (`FILED_FALLBACK`).
+- The ask: one `GET /api/v1/questions?status=filed&since=<T>`, at most `HUB_SITE_TIMEOUT_S`
+  (1.5 seconds), the third ask of the check. The route keeps the questions written (`updated_at`)
+  at or after T; the line counts those whose `filed_at` is at or after T.
+- The line: `hub: <k> answer(s) filed into records since <T>, for your information: python
+  "<kit>/tools/hub.py" questions --status filed --since <T>`; no line when `<k>` is 0. That
+  command lists them: `hub.py questions --since ISO` passes the route's `since` (it lists the
+  questions written at or after it, with or without `--status`).
+- The stamp is rewritten with now (whole file, through a `.tmp` and a replace) once the hub has
+  answered, line or no line, so the next start counts from this one; a stamp that cannot be
+  written is not reported, and the next start counts again from the old time.
+- Failures, each one line, and the stamp left as it was: the stamp's path cannot be worked out
+  (`hub: answers filed since the last start not counted (<exception class>)`, and no ask), or the
+  ask fails (`hub: answers filed since <T> not asked (<exception class>)`). A hub that is down, or
+  whose pending ask failed, gets no digest and its stamp is neither read nor written.
+
+Tests: `tests/pmstart/test_hub_site.py` `FiledDigestTest`; `tests/hubsite/test_hub_cli.py`
+`WriteCase.test_questions_since_lists_the_ones_written_at_or_after_it`.
 
 ## Kit currency (`kit_sync`)
 

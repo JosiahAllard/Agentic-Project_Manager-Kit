@@ -179,9 +179,10 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     rows = policy.sort(argv.verb, argv.given)
     text = policy.refusal(who, rows)
     form, instead = '', None
+    here = cm.run_dir(inv)
     if text and argv.rid and not argv.given.get(policy.UNKNOWN) and \
             policy.refusal(who, rows, (roles.OWN_PULL,)) is None:
-        text, form, instead = own_pull_refusal(ctx, cmd, cwd, argv, who, cm.run_dir(inv), pairs)
+        text, form, instead = own_pull_refusal(ctx, cmd, argv, who, here, pairs)
     if not text:
         return None
     # the rows were sorted as if the record were held (not read: the strictest); when the role
@@ -189,23 +190,25 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     text = policy.refusal(who, policy.sort(argv.verb, argv.given, _Unheld())) or text
     return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py).%s%s%s'
                         % (rules.bare(cmd), text, _unread(pairs, argv, who), form, '' if instead else ' ' + ASK),
-                        instead or read_alternative(ctx, cmd, cwd, argv))
+                        instead or read_alternative(ctx, cmd, here, argv))
 
 
-def _root(cmd, cwd, argv):
-    """The folder the run names (its -C, else the command's directory); None when -C is a word
-    the guard cannot read (policy.UNREAD) or no folder is known."""
+def _root(cmd, here, argv):
+    """The folder the run names: its -C, read from `here`, the directory the tool runs in
+    (commands.run_dir: the command's, or a Start-Process -WorkingDirectory), else `here` itself.
+    None, fail closed, when -C is a word the guard cannot read (policy.UNREAD) or when the folder
+    rests on a `here` the text cannot tell (run_dir's None: a cd it cannot read, a computed or
+    unplaceable -WorkingDirectory); never the hook's directory in its place."""
     from kitlib.backlog import policy
-    base = cmd.cwd or cwd
     if argv.root is policy.UNREAD:
         return None
-    return rules.sh.resolve_path(argv.root, base, cmd.shell) if argv.root is not None else base
+    return rules.sh.resolve_path(argv.root, here, cmd.shell) if argv.root is not None else here
 
 
-def read_alternative(ctx, cmd, cwd, argv):
+def read_alternative(ctx, cmd, here, argv):
     """The tool's read of the record the run names (`show <ID>`; `list` when it names none), at
-    the folder it runs on (its -C, else the command's directory)."""
-    root = _root(cmd, cwd, argv)
+    the folder it runs on (_root: its -C, else the directory it runs in; <worktree> when unknown)."""
+    root = _root(cmd, here, argv)
     where = rules.quote(root) if root else '<worktree>'
     what = 'show %s' % argv.rid if argv.rid and re.match(r'^[\w.-]+$', argv.rid) else 'list'
     return 'python %s -C %s %s' % (rules.kit_tool(ctx, TOOL), where, what)
@@ -242,10 +245,10 @@ def _worktree_on(ctx, where, branch):
     return _branch_at(ctx, place.top) == branch
 
 
-def own_pull_refusal(ctx, cmd, cwd, argv, who, here=None, pairs=None):
+def own_pull_refusal(ctx, cmd, argv, who, here=None, pairs=None):
     """(policy.refusal, the form sentence, the form or None) for a run only a builder's own pull
     would allow: the
-    record read where the tool runs (its -C folder, else the command's directory), its pull
+    record read where the tool runs (_root: its -C folder, else `here`; none when unknown), its pull
     compared with the branch the run acts as. That is the branch checked out at that folder, or
     an --as branch when `here`, the directory the tool runs in (commands.run_dir: as the line
     leaves it, or a Start-Process -WorkingDirectory; None, never evidence, when the text cannot
@@ -256,7 +259,7 @@ def own_pull_refusal(ctx, cmd, cwd, argv, who, here=None, pairs=None):
     out (own_form) when the guard finds the store holding the record pulled by the branch the run
     acts as, and that branch's worktree, else None. Nothing own_form reads changes the decision."""
     from kitlib.backlog import policy, roles
-    root = _root(cmd, cwd, argv)
+    root = _root(cmd, here, argv)                # None: no record read, so never its own pull
     rec, branch = None, None
     if root:
         branch = _branch_at(ctx, root)

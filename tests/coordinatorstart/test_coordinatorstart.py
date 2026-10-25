@@ -69,7 +69,7 @@ class RenderTest(unittest.TestCase):
                      "price only those going into this set; never a sweep",
                      "`next` never offers an unpriced record",
                      "under `unprioritised+open`, not under `held` (`held` = blocked)",
-                     "goes to the PM", "never ask him directly"):
+                     "goes to the PM", "never ask the owner directly"):
             self.assertIn(want, line)
         # Withdrawn wording: no pass at all, unpriced called held, the capped-offer and duplicate triggers.
         for gone in ("No start-up pricing pass", "is held", "stay held", "held is not waiting",
@@ -294,7 +294,7 @@ class ContextTest(unittest.TestCase):
 
         def run(args, timeout=10):
             return json.dumps(status) if "machine_lock.py" in args[1] else "G"
-        base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-account2"}, cwd=ROOT + "/alpha", now=NOW,
+        base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-ex2"}, cwd=ROOT + "/alpha", now=NOW,
                     procs=[], run=run, read=reader(files), kit="H", pid=1, pm_cfg=self.PM, machine_cfg={})
         base.update(kw)
         return coordinatorstart.context(dict(dict(repos_root=ROOT), **cfg), **base)

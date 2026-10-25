@@ -14,6 +14,7 @@ from unittest import mock
 from kitlib import hubvalidate
 from kitlib.backlog import store as smod
 from kitlib.hubsite import api, approvals, derived, push, recordwrite, schema, serve, todosteps
+from kitlib.hubsite import backlog as hbacklog
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
 from kitlib.maintlint import result as lint_result
@@ -4021,6 +4022,209 @@ class FilingTest(ApiCase):
         self.assertEqual(len(said), 1)
 
 
+class StateViews(FileViews):
+    """FileViews whose record view carries the record's `state:` line as read_record gives it
+    (fields, [key, value] pairs): `states` {id: state} (none: no state line), and `moves`
+    {id: state}, the state a filing leaves (what plan_answer does to the record). `blind`: the
+    record view raises after the first read; `bare`: it gives no fields."""
+
+    def __init__(self):
+        FileViews.__init__(self)
+        self.states, self.moves = {}, {}
+        self.blind = self.bare = False
+
+    def record(self, repo, id):
+        got = BindViews.record(self, repo, id)
+        if self.blind and len(self.calls) > 1:
+            raise HubError('unavailable', 'git timed out', 'views')
+        if not self.bare:
+            state = self.states.get(id)
+            got['fields'] = [['id', id]] + ([['state', state]] if state else [])
+        return got
+
+    def record_answer(self, repo, id, *rest):
+        out = FileViews.record_answer(self, repo, id, *rest)
+        if id in self.moves:
+            self.states[id] = self.moves.pop(id)
+        return out
+
+
+class FiledAsTest(ApiCase):
+    """A filed question's `filed_as`: what the answer did to its record, from the record's
+    state read before and after the filing (docs/action-hub.md "Push notifications")."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = StateViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def filed_as(self, rid, state, moved=None, choice=0, **kw):
+        self.views.states[rid] = state
+        if moved is not None:
+            self.views.moves[rid] = moved
+        qid = self.qid = self.question(record={'repo': 'kit', 'id': rid})
+        self.views.calls[:] = []
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, dict({'choice': choice}, **kw))
+        d = self.store.get('questions', qid)
+        self.assertEqual(d['status'], 'filed')
+        return d['filed_as']
+
+    def test_an_answer_into_a_pulled_record_is_filed_as_pulled(self):
+        self.assertEqual(self.filed_as('EX-1', 'pulled'), 'pulled')
+        self.assertEqual(self.views.calls, [('kit', 'EX-1'), ('kit', 'EX-1')], 'before and after')
+
+    def test_the_answer_that_unparks_or_unblocks_its_record_is_filed_as_freed(self):
+        self.assertEqual(self.filed_as('EX-1', 'parked', 'open'), 'freed')
+        self.assertEqual(self.filed_as('EX-2', 'blocked', 'open'), 'freed')
+
+    def test_a_free_text_answer_that_unparks_its_record_is_filed_as_freed(self):
+        self.assertEqual(self.filed_as('EX-1', 'parked', 'open', choice='other', note='neither'),
+                         'freed')
+
+    def test_an_answer_that_leaves_its_record_waiting_is_filed_as_held(self):
+        self.assertEqual(self.filed_as('EX-1', 'parked'), 'held', 'another question waits')
+        self.assertEqual(self.filed_as('EX-2', 'blocked'), 'held', 'another blocker is left')
+
+    def test_an_answer_into_an_open_record_is_filed_as_held(self):
+        # no state line reads as open: nothing waited on the answer, nobody is woken
+        self.assertEqual(self.filed_as('EX-1', None), 'held')
+
+    def test_a_record_that_cannot_be_read_leaves_filed_as_unknown(self):
+        self.views.blind = True
+        self.assertIsNone(self.filed_as('EX-1', 'parked', 'open'), 'read after: refused')
+        self.views.blind = False
+        self.views.bare = True
+        self.assertIsNone(self.filed_as('EX-2', 'parked', 'open'), 'a view with no fields')
+
+    def test_a_re_answer_drops_what_the_first_filing_did(self):
+        self.assertEqual(self.filed_as('EX-1', 'parked', 'open'), 'freed')
+        qid = self.qid
+        self.views.fail = HubError('store', 'busy', '')
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 1})
+        d = self.store.get('questions', qid)
+        self.assertEqual((d['status'], d['filed_as']), ('answered', None))
+
+
+class StandingRuleTest(ApiCase):
+    """The owner's standing-rule box: `standing` true with an answer to a question bound to a
+    record, or alone on one answered already (the promote): `standing` {at, via}, so the PM
+    logs it (docs/action-hub.md "A standing rule")."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = FileViews()
+        self.times = iter('2026-01-02T03:04:%02d+00:00' % s for s in range(5, 60))
+        self.now = next(self.times)
+        self.mono = [1000.0]
+        self.api = api.Api(self.store, views=self.views, clock=lambda: self.now,
+                           session_keys=lambda: {'kit-1'}, now=lambda: self.mono[0])
+        # the asker is heard (a wait), so a plain filed answer is its alone
+        self.ok('GET', '/wait', AGENT, query={'pending': '1', 'for': 'kit-1', 'timeout': '0'})
+
+    def tick(self):
+        self.now = next(self.times)
+
+    def doc(self, qid):
+        return self.store.get('questions', qid)
+
+    def bound(self, rid='EX-1'):
+        return self.question(**{'from': 'kit-1', 'record': {'repo': 'kit', 'id': rid}})
+
+    def answer(self, qid, body):
+        return self.ok('POST', '/questions/%s/answer' % qid, OWNER, body)
+
+    def for_pm(self):
+        return [p['id'] for p in self.ok('GET', '/pending', AGENT, query={'for': 'pm'})['items']]
+
+    def for_asker(self):
+        return [p['id'] for p in self.ok('GET', '/pending', AGENT,
+                                         query={'for': 'kit-1'})['items']]
+
+    def test_the_box_makes_a_filed_answer_a_standing_rule_the_pm_reads(self):
+        plain, rule = self.bound(), self.bound('EX-2')
+        self.answer(plain, {'choice': 0})
+        self.tick()
+        got = self.answer(rule, {'choice': 1, 'note': 'always', 'standing': True})
+        d = self.doc(rule)
+        self.assertEqual((got['status'], d['status']), ('filed', 'filed'))
+        self.assertEqual(d['standing'], {'at': self.now, 'via': 'api'})
+        self.assertNotIn('standing', self.doc(plain))
+        self.assertEqual(len(self.views.filed), 2, 'a standing answer is filed like any other')
+        # the asker still reads both; the PM reads the standing one while the asker is reachable
+        self.assertEqual(self.for_asker(), [plain, rule])
+        self.assertEqual(self.for_pm(), [rule])
+        flags = {p['id']: p.get('standing') for p in self.ok('GET', '/pending', AGENT)['items']}
+        self.assertEqual(flags, {plain: None, rule: True})
+
+    def test_a_re_answer_without_the_box_drops_the_standing_rule(self):
+        qid = self.bound()
+        self.answer(qid, {'choice': 0, 'standing': True})
+        self.tick()
+        self.answer(qid, {'choice': 1, 'standing': False})
+        self.assertIsNone(self.doc(qid)['standing'])
+        self.assertEqual(self.for_pm(), [])
+        self.tick()
+        self.answer(qid, {'choice': 0, 'standing': True})
+        self.tick()
+        self.answer(qid, {'choice': 0})
+        self.assertIsNone(self.doc(qid)['standing'])
+
+    def test_the_box_is_refused_for_a_question_bound_to_no_record(self):
+        qid = self.question()
+        self.refused('invalid', 'standing', 'POST', '/questions/%s/answer' % qid, OWNER,
+                     {'choice': 0, 'standing': True})
+        self.refused('invalid', 'standing', 'POST', '/questions/%s/answer' % self.bound(), OWNER,
+                     {'choice': 0, 'standing': 'yes'})
+
+    def test_a_promote_keeps_the_answer_given_and_files_nothing_again(self):
+        qid = self.bound()
+        self.answer(qid, {'choice': 1, 'note': 'why'})
+        before = self.doc(qid)
+        self.assertEqual(self.for_pm(), [], 'a plain filed answer is its asker\'s')
+        self.tick()
+        got = self.answer(qid, {'standing': True, 'if_version': before['version']})
+        d = self.doc(qid)
+        self.assertEqual(d['standing'], {'at': self.now, 'via': 'api'})
+        self.assertEqual((d['status'], d['answer'], d['filed_at']),
+                         ('filed', before['answer'], before['filed_at']))
+        self.assertEqual((got['version'], d['version']), (before['version'] + 1,) * 2)
+        self.assertEqual(len(self.views.filed), 1, 'not filed again')
+        self.assertEqual(self.for_pm(), [qid])
+
+    def test_an_answer_whose_filing_failed_can_be_promoted(self):
+        qid = self.bound()
+        self.views.fail = HubError('store', 'busy', '')
+        self.answer(qid, {'choice': 0})
+        self.assertEqual(self.doc(qid)['status'], 'answered')
+        self.answer(qid, {'standing': True})
+        self.assertEqual(self.doc(qid)['standing']['via'], 'api')
+
+    def test_a_promote_is_refused_unless_an_answer_bound_to_a_record_is_there(self):
+        path = '/questions/%s/answer'
+        opened = self.bound()
+        self.refused('invalid', 'status', 'POST', path % opened, OWNER, {'standing': True})
+        unbound = self.question()
+        self.answer(unbound, {'choice': 0})
+        self.refused('invalid', 'record', 'POST', path % unbound, OWNER, {'standing': True})
+        rule = self.bound('EX-2')
+        self.answer(rule, {'choice': 0, 'standing': True})
+        self.refused('invalid', 'standing', 'POST', path % rule, OWNER, {'standing': True})
+        self.refused('invalid', 'note', 'POST', path % rule, OWNER,
+                     {'standing': True, 'note': 'x'})
+        self.refused('invalid', 'choice', 'POST', path % rule, OWNER, {'standing': False})
+        self.refused('invalid', 'choice', 'POST', path % rule, OWNER, {})
+
+    def test_a_standing_rule_is_logged_by_the_pm_never_marked_done(self):
+        qid = self.bound()
+        self.answer(qid, {'choice': 0, 'standing': True})
+        v = self.doc(qid)['version']
+        self.refused('invalid', 'standing', 'POST', '/questions/%s/done' % qid, AGENT,
+                     {'why': 'filed in EX-1', 'if_version': v})
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'R-9', 'if_version': v})
+        self.assertEqual(self.doc(qid)['status'], 'logged')
+        self.assertEqual((self.for_pm(), self.for_asker()), ([], []))
+
+
 class AnswerStoreTest(trw.Case):
     """The owner's answer filed through SiteViews' record_answer into a real ref store."""
 
@@ -4041,7 +4245,8 @@ class AnswerStoreTest(trw.Case):
             def record(self, repo, rid):
                 return {'repo': repo, 'id': rid, 'where': 'open'}
 
-        self.views = serve.SiteViews(None, serve.Sources(), backlog_views=Backlog())
+        self.backlog = Backlog()
+        self.views = serve.SiteViews(None, serve.Sources(), backlog_views=self.backlog)
         hub = tempfile.mkdtemp(prefix='kit-hubapi-')
         self.addCleanup(shutil.rmtree, hub, True)
         self.store = Store.open(hub, clock=CLOCK)
@@ -4072,6 +4277,19 @@ class AnswerStoreTest(trw.Case):
         # the retry finds nothing left, and filing the record again would change nothing
         self.assertEqual(self.api.call('POST', BASE + '/questions/file', AGENT, {})[1]['filed'],
                          [])
+
+    def test_a_free_text_answer_frees_the_record_it_unparks(self):
+        # the record read through the real read_record, before and after the real filing
+        root = self.repo.root
+        self.backlog.record = lambda repo, rid: hbacklog.read_record('r', root, rid)
+        self.api.call('POST', BASE + '/questions', AGENT,
+                      {'title': 'Which one?', 'options': OPTIONS,
+                       'record': {'repo': 'r', 'id': 'FOO'}})
+        status, got = self.api.call('POST', BASE + '/questions/Q-1000/answer', OWNER,
+                                    {'choice': 'other', 'note': 'neither'}, via='web')
+        self.assertEqual((status, got['status']), (200, 'filed'), got)
+        self.assertEqual(self.field('FOO', 'state'), ['open'])
+        self.assertEqual(self.store.get('questions', 'Q-1000')['filed_as'], 'freed')
 
 
 if __name__ == '__main__':

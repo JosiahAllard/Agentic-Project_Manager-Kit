@@ -107,7 +107,7 @@ BETA_SHAPE = {
         'python_tests_drops': 'tools/py_test_drops.txt', 'python_tests_selected_floor': True,
         'python_tests_docs': ['test_backlog_migrate'], 'python_tests_docs_floor': 105}},
     'doc_index': {'roles': {'worker': ['preflight', 'gate'], 'lander': ['landing']}},
-    'preflight': {'engines': ['godot', 'engine.exe'], 'udp_ports': [7800, 7999]},
+    'preflight': {'engines': ['godot', 'engine.exe'], 'udp_ports': [41000, 41199]},
     'machine_paths': {
         'allow': [{'glob': 'docs/TESTING.md', 'line': 'settings file: ', 'hit': '[C]:/Users/\\.\\.\\.',
                    'why': 'sample output'}],

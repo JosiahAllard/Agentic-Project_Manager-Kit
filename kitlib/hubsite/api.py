@@ -192,7 +192,11 @@ stored, and again by POST questions/file (AGENT, optional {id}) and at hub start
 answered one not filed yet: file_answer. A filed question has status `filed` and stays pending,
 with `filed` true, until its asker logs it or marks it done (POST questions/{id}/log or done), so
 an asker between waits still reads the answer; the PM's list carries it only when it is the PM's
-or routed to `pm` (Routes). One that failed stays `answered` with `filing`, for the PM.
+or routed to `pm` (Routes), or a standing rule. One that failed stays `answered` with `filing`,
+for the PM. A filed question carries `filed_as`, what the answer did to its record (pulled,
+freed, held: _filed_as, from the `record` view read before and after), which the push reads to
+choose who hears it. `standing` {at, via} marks an answer the owner made a standing rule (the
+answer's `standing` true, or later `standing` alone: _promote): the PM logs it.
 
 Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
 through `lock`: a door object (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this
@@ -541,13 +545,15 @@ def launcher_keys():
 def _for(d, for_key):
     """Whether pending item d (with `from`, `route` and `note`) is listed for for_key: every
     item with none; for AGENT_FROM, the ones routed to it, every question not filed (the PM logs
-    each ruling; a filed answer is its asker's while the asker can be reached) and every approval
-    (the owner's decision); for another key, its own."""
+    each ruling; a filed answer is its asker's while the asker can be reached), every filed one
+    the owner made a standing rule (`standing`: the PM logs it) and every approval (the owner's
+    decision); for another key, its own."""
     if not for_key:
         return True
     if for_key == AGENT_FROM:
         return (d['route'] == AGENT_FROM or d['kind'] == 'approval'
-                or (d['kind'] == 'question' and d.get('note') != 'filed'))
+                or (d['kind'] == 'question'
+                    and (d.get('note') != 'filed' or d.get('standing') is True)))
     return d['from'] == for_key
 
 
@@ -809,6 +815,10 @@ class Api(object):
             if mine and keys is None:
                 keys = self.session_keys()          # read once, and only when it can matter
             d['from'] = sender if mine and sender in keys else AGENT_FROM
+            if d['kind'] == 'question' and d.get('note') == 'filed':
+                q = self.store.get('questions', d['id']) or {}
+                if isinstance(q.get('standing'), dict):
+                    d['standing'] = True        # the PM logs it too (_for)
             out.append(d)
         now, flips = self.now(), []
         live = {(d['kind'], d['id']) for d in out}
@@ -1000,14 +1010,30 @@ def questions_add(api, req):
 
 
 def questions_answer(api, req):
-    b = _fields(req, ('choice', 'note', 'if_version'), required=('choice',))
+    """The owner's answer: `choice`, an optional `note`, and `standing` true when the answer is
+    to be a standing rule (a question bound to a record only: the PM logs it, docs/action-hub.md
+    "A standing rule"); a re-answer with no `standing` drops the mark. `standing` true with no
+    `choice` is the promote of an answer already given (_promote)."""
+    allowed = ('choice', 'note', 'standing', 'if_version')
+    b = _fields(req, allowed, flags=('standing',))
+    standing = _flag(b, 'standing', False)
+    doc_id = req.params['id']
+    if standing and 'choice' not in b:
+        _pin(b)
+        if 'note' in b:
+            raise _invalid('a note comes with a choice: standing alone keeps the answer given',
+                           'note')
+        return _promote(api, req, doc_id, b)
+    _fields(req, allowed, required=('choice',))
     _pin(b)
     note = (_text(b, 'note') or '').strip()
-    doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
     if d.get('status') not in ('open', 'answered', 'filed'):
         raise _invalid('%s is %s: only an open, an answered or a filed question takes an answer'
                        % (doc_id, d.get('status')), 'status')
+    if standing and not isinstance(d.get('record'), dict):
+        raise _invalid('%s is bound to no record: an answer the PM handles is logged by the PM '
+                       'already, so it takes no standing flag' % doc_id, 'standing')
     choice = b['choice']
     options = d.get('options') if isinstance(d.get('options'), list) else []
     if choice == 'other':
@@ -1023,8 +1049,13 @@ def questions_answer(api, req):
     answer = {'choice': choice, 'label': label, 'note': note, 'at': api.clock(),
               'via': _via(req)}
     changes = {'status': 'answered', 'answer': answer}
-    if d.get('filing') is not None or d.get('filed_at') is not None:
-        changes.update(filing=None, filed_at=None)      # a re-answer is filed afresh
+    if (d.get('filing') is not None or d.get('filed_at') is not None
+            or d.get('filed_as') is not None):
+        changes.update(filing=None, filed_at=None, filed_as=None)   # a re-answer is filed afresh
+    if standing:
+        changes['standing'] = {'at': answer['at'], 'via': answer['via']}
+    elif d.get('standing') is not None:
+        changes['standing'] = None      # a re-answer without the box is no standing rule
     out = api.change('questions', doc_id, d, changes, req,
                      {'status': 'answered', 'answer': answer})
     if isinstance(d.get('record'), dict):
@@ -1055,6 +1086,40 @@ def _waiting(api, doc_id, record):
                   key=_natural)
 
 
+def _record_state(api, record):
+    """The `state:` of the open record `record` ({repo, id}) read now through the `record`
+    view ('open' when it has no state line), or None when it cannot be told: no view, a view
+    that raised, no fields, or a completed record."""
+    try:
+        got = api._view('record')(record.get('repo'), record.get('id'))
+    except Exception:               # noqa: BLE001 - a view is another module's code
+        return None
+    if not isinstance(got, dict) or got.get('where') != 'open':
+        return None
+    fields = got.get('fields')
+    if not isinstance(fields, list):
+        return None
+    for pair in fields:
+        if isinstance(pair, (list, tuple)) and len(pair) == 2 and pair[0] == 'state':
+            return pair[1] if isinstance(pair[1], str) and pair[1] else 'open'
+    return 'open'
+
+
+def _filed_as(before, after):
+    """What a filed answer did to its record, from the record's state before and after the
+    filing (_record_state): `pulled` (someone is working on it), `freed` (it was parked or
+    blocked and now is open: work can start), `held` (it waits on more), or None when a state
+    could not be read (the push then treats it as before this field: docs/action-hub.md "Push
+    notifications")."""
+    if before == 'pulled':
+        return 'pulled'
+    if before is None or after is None:
+        return None
+    if before in ('parked', 'blocked') and after == 'open':
+        return 'freed'
+    return 'held'
+
+
 def file_answer(api, doc_id, via='api', full=False):
     """File the stored answer of question doc_id into the record it is bound to, through the
     `record_answer` view, then mark the question (docs/action-hub.md "A question bound to a
@@ -1076,6 +1141,7 @@ def file_answer(api, doc_id, via='api', full=False):
     if not isinstance(record, dict) or not isinstance(ans, dict):
         return None
     version = _version(d)
+    before = _record_state(api, record)
     try:
         api._view('record_answer')(
             record.get('repo'), record.get('id'), doc_id, ans.get('at'), d.get('title'),
@@ -1088,7 +1154,8 @@ def file_answer(api, doc_id, via='api', full=False):
     else:
         code = said = None
     if code is None:
-        changes = {'status': 'filed', 'filed_at': api.clock(), 'filing': None}
+        changes = {'status': 'filed', 'filed_at': api.clock(), 'filing': None,
+                   'filed_as': _filed_as(before, _record_state(api, record))}
     else:
         message = FILING_SAYS.get(code, 'the answer could not be filed (%s)' % code)
         changes = {'filing': {'at': api.clock(), 'code': code, 'message': message}}
@@ -1152,7 +1219,7 @@ def questions_done(api, req):
     """The PM, or the asker of a filed question, marks an answered or filed question handled
     with no ruling (a one-off go the ledger keeps out; an answer the record already holds):
     status `done`, terminal, so it is no longer pending and its push ends. Refused (`invalid`)
-    for a question that is neither and for a blank why."""
+    for a question that is neither, for a blank why and for a standing rule (the PM logs it)."""
     b = _fields(req, ('why', 'if_version'), required=('why',))
     _pin(b, required=True)
     why = _text(b, 'why').strip()
@@ -1163,9 +1230,35 @@ def questions_done(api, req):
     if d.get('status') not in HANDLED_FROM:
         raise _invalid('%s is %s: only an answered or filed question is marked done'
                        % (doc_id, d.get('status')), 'status')
+    if isinstance(d.get('standing'), dict):
+        # the asker's routine done of a filed answer would end the PM's push unlogged
+        raise _invalid('%s is a standing rule the owner made: the PM logs it in the ledger '
+                       '(hub questions log), it is not marked done' % doc_id, 'standing')
     return api.change('questions', doc_id, d,
                       {'status': 'done', 'done_why': why, 'done_at': api.clock()}, req,
                       {'status': 'done'})
+
+
+def _promote(api, req, doc_id, b):
+    """POST questions/{id}/answer with `standing` true and no `choice`: the owner makes the
+    answer already given to a question bound to a record a standing rule (the filed card's
+    promote button), the answer kept as it is and not filed again: `standing` {at, via}, so the
+    question is pending for the PM, who logs it into the ledger, as well as for its asker
+    (docs/action-hub.md "A standing rule"). Refused (`invalid`) for a question that is not
+    answered or filed, one bound to no record (the PM logs every such answer already) and one
+    already standing."""
+    d = api.doc('questions', doc_id, b)
+    if d.get('status') not in HANDLED_FROM:
+        raise _invalid('%s is %s: only an answered or filed question is made a standing rule'
+                       % (doc_id, d.get('status')), 'status')
+    if not isinstance(d.get('record'), dict):
+        raise _invalid('%s is bound to no record: the PM logs its answer already' % doc_id,
+                       'record')
+    if isinstance(d.get('standing'), dict):
+        raise _invalid('%s is a standing rule already' % doc_id, 'standing')
+    standing = {'at': api.clock(), 'via': _via(req)}
+    return api.change('questions', doc_id, d, {'standing': standing}, req,
+                      {'standing': standing})
 
 
 def todos_list(api, req):

@@ -400,13 +400,16 @@ It is not the store's git push (the `push` setting).
   (`serve --store`), a host with no delivery or an unset `launcher.state_dir` serves without it,
   with one note line: `push notifications off: <why>`. A worker that fails to start leaves the
   server serving (`push notifications did not start: ...`).
-- What fires: a question answered (or answered again), a to-do done (or done again), a done to-do
+- What fires: a question answered (or answered again; `answered`: not bound to a record, its
+  filing failed, or filed with no `filed_as`), a bound question's answer filed into its record
+  (`filed`, nothing while the filing is under way: "Filed answers" below), an answer already
+  given made a standing rule (`standing`, to the PM: "A standing rule"), a to-do done (or done again), a done to-do
   reopened, a to-do the owner added (to the PM only), a story the owner submitted (`submitted`,
   to the PM only), a note to the PM the owner sent (`sent`, to the PM only), an approval the owner approved or denied
   (`decided`), and an approval still approved and not consumed 20 hours after the decision
   (`expiring`, `push.EXPIRING_S`), the one reminder before it expires at 24 hours, so a missed
-  first push cannot lose the owner's approval. Each item has a fingerprint (a question's status,
-  `answer.at` and a digest of the answer; a to-do's status and `done_at`; a story's status and
+  first push cannot lose the owner's approval. Each item has a fingerprint (a question's phase,
+  `answer.at`, a digest of the answer and, once it is a standing rule, `standing.at`; a to-do's status and `done_at`; a story's status and
   `submitted_at`; a note's status and `sent_at`; an approval's status,
   `decided_at` and phase, `decided` then `expiring`, read at the worker's clock each round), and
   only a changed fingerprint fires, so `pm_ack` alone never does. An approval's phase ending
@@ -415,23 +418,49 @@ It is not the store's git push (the `push` setting).
   PM, once; for an approval, the coordinator key its `repo` names ("Who handles a pending item")
   and the PM. A launcher key is resolved through sessions.json; `pm` through coordinators.json's
   `pm_session_id`, then the names `Project Manager` and `pm-session`.
+- Filed answers (`filed`): who hears depends on what the filing did to the record, the question's
+  `filed_as` ("Filing the answer"):
+  - `pulled` (someone is working on the record): its asker alone, until it picks it up; when
+    the PM asked, the PM, sent once, for its information (the worker on the record reads it).
+  - `freed` (the record was parked or blocked and is now open): the PM alone, sent once, and
+    only when no live session can take the record up: the delivery's `resolve` finds no live
+    session for the asker, the record's repository or the question's repo. A delivery with no
+    `resolve` counts as none live, and a key whose `resolve` raises as not live (logged), so the
+    PM is told.
+  - `held` (the record still waits on more): nobody. The asker reads it in its pending list, and
+    the PM start's digest counts the answers filed since the last start that are still `filed`,
+    waiting for their askers (docs/pm-start.md "Filed answers"); a logged or done one drops out.
+  The phase a question goes through while it is being filed is skipped: a filed answer is
+  judged against the question as it was before the answer (a first answer or a re-answer).
+  An answer that is a standing rule also goes to the PM, whatever its `filed_as`, and a
+  standing rule made of an answer already pushed adds the PM to the push still owed for it
+  (`push.py` `_fire_filed`).
 - What it says: a fixed header, `[hub push] <kind> <id> <status> repo:<repo> from:<from>
   route:<recipient> attempt:<k>`, and one line of what to do; never a title, a note or an
   answer, since the session takes the message as a prompt. A to-do's line is `A done mark is not
   proof: verify each step on disk, then: hub todo ack <id>`: the owner marks a to-do done even
-  when a step inside it failed, so the id is there to check against the disk.
+  when a step inside it failed, so the id is there to check against the disk. A filed answer's
+  line names the record (`<repo>:<id>`) and what to do: pick it up (`pulled`, the asker), read
+  it with no ack needed (`pulled` to the PM that asked, and `freed`, which also says to start a
+  coordinator of the record's repository), and, for a standing rule, log it in the ledger
+  (`hub questions log <id> <ruling-id>`), which acknowledges it.
 - Until when: each recipient is sent each item until it is acknowledged. The asking session
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
   `questions log` or `questions done` (no ruling) for a question; for a question the hub filed
   into its record (status `filed`, "Filing the answer") asked by another session, by the filing
-  itself, since its asker reads it; for a story, any change of its status (`stories set`), and for a
+  itself, since its asker reads it; for a filed answer's `pulled` note to the PM that asked it
+  and its `freed` ping, by the first written try; for a standing rule, only by logging it
+  (`questions log`: a standing rule is never marked done, "A standing rule"); for a story, any change of its status (`stories set`), and for a
   note to the PM, its reply (`to-pm reply`). An approval's push is sent once to each: the first written
   try acknowledges it. An item withdrawn, reopened or answered again replaces or
   ends its push. A session that picked up a first answer or done mark before the worker saw it
-  is not sent it. The filing does not change a question's fingerprint (`filed` counts as
-  `answered`), so an answer filed before the worker saw it still fires one `answered` push, with
-  `filed` in its header, and its asker is sent it until it picks it up, logs it or marks it done. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
+  is not sent it. A question's phase is `push.question_phase`: an answer to a bound question that
+  is neither filed nor failed is `filing` and fires nothing, a filed one with a `filed_as` is
+  `filed` (the rules above), and one filed with no `filed_as` (filed before the field existed, or
+  its record could not be read) counts as `answered`: it fires one `answered` push, with `filed`
+  in its header, and its asker is sent it until it picks it up, logs it or marks it done. An
+  answer whose filing failed (`filing` set) is `answered` too, pushed as any answer. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
   the rest wait for the next slot. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
   day after the first try with one `gave-up` line (`push.SCHEDULE_S`, `push.GIVE_UP_S`). A write
   whose end is unknown waits for the next slot like any other outcome.
@@ -491,8 +520,13 @@ It is not the store's git push (the `push` setting).
 - Known limit: an approval's 20-hour reminder (`expiring`) is not sent when the server is down
   across the 20-hour mark after its `decided` push was delivered. The approval stays pending
   for its coordinator and the PM ("Who handles a pending item") until it is consumed or expires.
+- Known limit: a `freed` answer's live check takes the asker, the record's repository and the
+  question's repo as session keys as they are, not through the repository-to-key map an
+  approval's push uses (`Api.repo_key`). A coordinator whose key is none of them is not found,
+  so the PM is told when it need not be: an extra ping, never a lost one.
 
-Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py,
+Tests: tests/hubsite/test_push.py (filed answers: `FiledRecipientsTest`, `StandingPushTest`),
+tests/host/test_claude_peer.py, tests/launcher/test_pipes.py,
 tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.py.
 
 ## questions/Q-NNN
@@ -512,6 +546,8 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 | record | PM, coordinator | `{repo, id}`: the backlog record the question is about; absent or null on an unbound question (every question asked before the field existed reads so) |
 | filing | hub | `{at, code, message}`: why the last filing of the answer failed; null once filed or answered again |
 | filed_at | hub | when the answer was filed into the record (ISO time); null after a re-answer |
+| filed_as | hub | what the filing did to the record: `pulled`, `freed`, `held`, or null when the record's state could not be read; null after a re-answer ("Filing the answer") |
+| standing | owner | `{at, via}`: the owner made the answer a standing rule, for the PM to log ("A standing rule"); null after a re-answer without the box |
 
 ### A question bound to a record
 `record` is given when the question is asked (`questions add --record REPO:ID`, MCP `hub_ask`
@@ -536,7 +572,8 @@ tests/hubsite/test_api.py `QuestionRecordTest`, tests/hubsite/test_hub_cli.py
 The hub files the owner's answer to a bound question into the record itself, in this order
 (`kitlib.hubsite.api` `questions_answer`, `file_answer`):
 1. The answer is stored as for any question: status `answered`, `answer`. A re-answer also clears
-   `filing` and `filed_at`, and a `filed` question takes a new answer like an answered one.
+   `filing`, `filed_at` and `filed_as`, and a `filed` question takes a new answer like an answered
+   one.
 2. The record is written through the backlog library (`kitlib.hubsite.recordwrite` `answer`, the
    store's `plan_answer`, with the role check made: the hub files only the answer the owner gave,
    whoever's call starts it): an `answer: <qid> <at>` line, a `## Owner answer (Action Hub, <at>)`
@@ -544,7 +581,13 @@ The hub files the owner's answer to a bound question into the record itself, in 
    park or owner blocker ends. The store's compare-and-swap plans the write again after a lost
    race. The same question and `at` again changes nothing, and an older `at` never overwrites a
    newer answer, so this step can be repeated after a crash.
-3. The question is marked `filed`, with `filed_at`, pinned to the version of step 1. A filed
+3. The question is marked `filed`, with `filed_at` and `filed_as`, pinned to the version of
+   step 1. `filed_as` is what the answer did to the record, from its `state` read through the
+   record view just before step 2 and again after it (`kitlib.hubsite.api` `_record_state`,
+   `_filed_as`): `pulled` when it was pulled before (someone is working on it), `freed` when it
+   was parked or blocked and is now open (a free-text Other answer that ends the wait frees it
+   too), `held` otherwise (it still waits on more, or it was open), and null when a read that
+   decides it cannot tell (no record view, a view that raised, no fields, a completed record). The push reads it to choose who hears ("Push notifications"). A filed
    question stays pending for its asker, with `filed` true, until the asker logs it (`questions
    log`, where a ruling is bound) or marks it done (`questions done`), so an asker between waits
    when the owner answers still finds the answer on its next `wait --pending --for KEY`. It is the
@@ -570,14 +613,51 @@ step 2 is mended there. The answer route's own answer carries `filing` (`{id, fi
 revision}`, `{id, filed: false, code, message}`, or `{id, filed: false, moved: true}`), and its
 `status`, `version` and `revision` are those of the last write. An unbound question is never
 filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
-`AnswerStoreTest`; tests/hubsite/test_record_write.py `Answer`; tests/hubsite/test_push.py
-`AckTest`; tests/delegations/test_run.py `HubTrigger`.
+`AnswerStoreTest`, `FiledAsTest`; tests/hubsite/test_record_write.py `Answer`;
+tests/hubsite/test_push.py `AckTest`; tests/delegations/test_run.py `HubTrigger`.
 
 Known limits:
 - The page has no tab for `filed`: a filed question shows under Other.
 - After the store reports an Uncommitted error the line is already in the record, so the retry
   changes nothing and marks the question `filed` before the store's catch-up applies it (the
   answer audit of a later slice allows for this).
+
+#### A standing rule
+An answer to a bound question goes to its asker, so the PM would not log it as a ruling. When the
+owner wants the answer to hold beyond this record, so the same question is not asked again, the
+owner makes it a standing rule, which the PM logs in the ledger (`questions log`, docs/ledger.md).
+- On the answer: `POST /api/v1/questions/{id}/answer` with `standing` true beside `choice` sets
+  `standing` `{at, via}` (the answer's own). A re-answer without it clears `standing`. It is
+  refused `invalid`, field `standing`, on a question bound to no record: the PM logs every such
+  answer already.
+- Afterwards (promote): the same route with `standing` true and no `choice` keeps the answer as it
+  is and files nothing again; it sets `standing` `{at, via}` at the time of the promote
+  (`kitlib.hubsite.api` `_promote`). It takes an optional `if_version`; a `note` is refused `invalid`, field
+  `note` (a note comes with a choice). It is refused `invalid`, field `status`, unless the
+  question is `answered` or `filed` (an answer whose filing failed can be promoted), field
+  `record` for a question bound to no record, and field `standing` for one already standing.
+  There is no separate route.
+- Who reads it: a filed standing rule stays pending for its asker and is also pending for the PM
+  (`pending --for pm`, with `standing` true), and the push tells the PM to log it until it is
+  logged ("Push notifications"). `questions done` is refused `invalid`, field `standing`: the
+  asker's routine done would end the PM's push with nothing logged.
+- The page: a bound question's card has a "Make this a standing rule" box beside the options,
+  ticked again on a re-answer of a standing one; it sends `standing` true only when ticked. A
+  filed card that is not standing has a "Make it a standing rule" button (the promote, with the
+  version it shows), and a standing card says `a standing rule, for the PM to log`.
+
+Tests: tests/hubsite/test_api.py `StandingRuleTest`; tests/hubsite/test_push.py
+`StandingPushTest`; tests/hubsite/test_page.py `DomTest`
+`test_the_answer_sends_standing_only_when_a_bound_questions_box_is_ticked`,
+`test_only_a_filed_bound_answer_not_standing_yet_can_be_promoted`,
+`test_a_bound_question_offers_the_standing_box_and_sends_it_ticked`,
+`test_a_filed_answer_is_promoted_by_its_button_and_a_standing_one_says_so`.
+
+Known limits:
+- Until the PM logs it, a filed standing rule stays in its asker's pending list too: the asker
+  cannot mark it done.
+- The page offers the promote only on a filed card: an answer whose filing failed is promoted
+  through the route, or by answering again with the box ticked.
 
 While a question is open its asker may change it (`POST /api/v1/questions/{id}/edit`, agent only:
 `hub.py questions edit`, the MCP tool `hub_question_edit`) or withdraw it (`POST

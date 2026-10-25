@@ -73,7 +73,7 @@ class Rules(object):
         return (self._email or '').strip().lower()
 
     def identity_problem(self):
-        """None when the owner's identity is usable, else why no commit can be proven his."""
+        """None when the owner's identity is usable, else why no commit can be proven the owner's."""
         if not self.owner_email:
             return ('the owner\'s identity is not configured ("owner".email in .kit.json, or '
                     'owner_email in the machine config), so no commit can be proven to be the owner\'s')

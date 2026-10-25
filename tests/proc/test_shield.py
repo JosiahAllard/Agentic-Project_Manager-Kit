@@ -1,7 +1,7 @@
 """Tests for kitlib.proc.shield: a child's own process refuses PROCESS_TERMINATE by its pid while
 shielded, and `unshield` gives it back; the pid hold keeps an exited process's pid
 unused for its linger, and denies nothing. Windows only. Ported from the PM kit's
-test_pid_shield.py (kit/pid-hold d151596).
+test_pid_shield.py.
 
 Every child here is the test's own, created suspended or not, and ended through its own Popen
 handle, its job, or by running to its end; a grandchild is its parent's, which waits for it.

@@ -29,9 +29,8 @@ class Derive(unittest.TestCase):
         self.assertEqual(L["gpus"], 1)
         self.assertTrue(lay.valid_layout(L))
 
-    # The older kit's installed machine_lock.py key for this machine (24 threads, 12 SMT-2 cores,
-    # one card), copied from its refusal on 2026-10-10. It refuses
-    # every run while a live record carries another string.
+    # The older kit's machine_lock.py key for the fake hardware in the test below, copied from
+    # that tool's refusal. It refuses every run while a live record carries another string.
     LIVE_TOOL_KEY = "t24 g1 cpu 12 x 2 gpu 2 m9b5a6751"
 
     def test_slot_key_is_the_installed_tools_key(self):
@@ -115,7 +114,7 @@ class Derive(unittest.TestCase):
                 lay.derive(hw, d)
 
     def test_past_64_logical_processors(self):
-        # 80 threads in two processor groups of 40: thread ids 0-39 and 64-103.
+        # Two processor groups of 40 logical processors each: thread ids 0-39 and 64-103.
         hw = lay.fake_hardware(threads=80, smt=2, group_size=40)
         self.assertEqual([g["group"] for g in hw["groups"]], [0, 1])
         self.assertEqual(hw["threads"][40], 64)

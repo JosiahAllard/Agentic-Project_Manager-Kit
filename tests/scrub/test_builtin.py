@@ -40,6 +40,8 @@ ALLOWED = tuple(('%s' % glob, 'record-id', '', why) for glob, why in ID_SHAPE_FO
     ('tests/scrub/test_no_cites.py', 'record-id', "'docs/near.md': 'PR-",
      'longer tokens that end like a cite, to prove the cite pattern anchors on a word boundary; '
      'an EX- prefix would change what the anchor sees'),
+    ('.kit.json', 'record-id', '"gate_time": {"prefix": "KIT' '-GATE-SLOW"',
+     'the maint_lint record prefix set in the repo config (owner-approved exception)'),
 )
 
 # Today's hits, by the work that removes them.
@@ -51,13 +53,6 @@ PENDING_FIXTURES = {
 # replaced kit and pinned commit hashes go.
 PENDING_HISTORY = {
     ('pinned-hash', 'docs/commit.md'): 1,
-    ('pinned-hash', 'docs/pm-watch.md'): 1,
-    ('pinned-hash', 'docs/review-pack.md'): 1,
-    ('pinned-hash', 'docs/sync-base.md'): 1,
-    ('pinned-hash', 'docs/test-tools.md'): 2,
-    ('pinned-hash', 'kitlib/pmwatch/__init__.py'): 1,
-    ('pinned-hash', 'kitlib/proc/shield.py'): 1,
-    ('pinned-hash', 'kitlib/pytests/__init__.py'): 1,
     ('provenance', 'docs/commit.md'): 2,
     ('provenance', 'docs/doc-tools.md'): 2,
     ('provenance', 'docs/gate.md'): 14,
@@ -154,33 +149,18 @@ PENDING_HISTORY = {
     ('provenance', 'tests/worktree/test_worktree_remove.py'): 1,
     ('provenance', 'tools/machine_setup.py'): 1,
     ('record-id', 'docs/guard.md'): 1,
-    ('record-id', 'docs/install.md'): 1,
     ('record-id', 'tests/delegations/test_cli.py'): 1,
     ('record-id', 'tests/delegations/test_run.py'): 13,
-    ('record-id', 'tests/docs/test_install_junctions.py'): 1,
     ('record-id', 'tests/guard/test_backlog_role.py'): 1,
     ('record-id', 'tests/guard/test_cheap.py'): 5,
     ('record-id', 'tests/host/test_claude_peer.py'): 2,
 }
 # Owner-specific prose becomes generic: "the owner" for the pronouns, no one machine's parts.
 PENDING_OWNER_TEXT = {
-    ('gender', 'kitlib/backlog/plan.py'): 1,
-    ('gender', 'kitlib/backlog/record.py'): 1,
-    ('gender', 'kitlib/commit/__init__.py'): 2,
-    ('gender', 'kitlib/config/owner.py'): 1,
-    ('gender', 'kitlib/coordinatorstart/__init__.py'): 2,
-    ('gender', 'kitlib/worktree/remove.py'): 3,
-    ('gender', 'kitlib/worktree/task.py'): 1,
-    ('gender', 'tests/coordinatorstart/test_coordinatorstart.py'): 1,
-    ('gender', 'tests/gate/test_land_owner.py'): 1,
-    ('gender', 'tests/guard/test_rules.py'): 1,
     ('hardware', 'kitlib/lock/layout.py'): 2,
     ('hardware', 'kitlib/lockui/window.py'): 1,
     ('hardware', 'kitlib/proc/cpu.py'): 2,
     ('hardware', 'kitlib/proc/process.py'): 1,
-    ('hardware', 'kitlib/proc/shield.py'): 1,
-    ('hardware', 'tests/lock/test_layout.py'): 2,
-    ('hardware', 'tests/lockmcp/scratch_server.py'): 1,
 }
 PENDING = (PENDING_FIXTURES, PENDING_HISTORY, PENDING_OWNER_TEXT)
 
