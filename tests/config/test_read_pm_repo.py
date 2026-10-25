@@ -204,6 +204,16 @@ class KeepClearTest(_PmRepo):
         self.assertEqual(user.config_dir(self.home), None)
         self.assertEqual(user.keep_clear_dirs(self.home), [self.folder, self.home_cfg()])
 
+    def test_bad_with_a_bad_pointer_keeps_clear_of_nothing(self):
+        plain = os.path.join(self.home, 'not-a-pm-repo')       # a folder that is no PM repository
+        os.makedirs(plain)
+        with mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: plain}):
+            user.forget()
+            self.assertEqual(user.locate(self.home).state, user.BAD)
+            self.assertIsNone(user.config_dir(self.home))
+            self.assertEqual(user.keep_clear_dirs(self.home), [])
+        user.forget()
+
     def test_bad_with_a_good_pointer_keeps_clear_of_the_pm_folder(self):
         os.makedirs(self.policy)                  # config.json is a folder: the config cannot be read
         user.forget()
