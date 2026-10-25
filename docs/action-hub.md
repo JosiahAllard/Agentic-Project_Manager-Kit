@@ -1042,18 +1042,20 @@ gets CONTENT_FILE's exact bytes as its content, read as UTF-8 with its line endi
 blob is the one `commit.py --owner-approval` writes; the work tree is never read for it, since the
 consumer needs the file still at its base. The base is PATH's blob at `--head` (default: the
 checkout's HEAD), none for a file absent there; `--repo` defaults to the checkout's origin.
-Refused before anything is posted, in the builder's or `approvals.new_doc`'s words: a head that is
-not 40 hex digits or not a commit of the checkout, a path an owner approval may not carry (a render
-source in a kit checkout, or a path the repository's owner rules do not lock, as `commit.py` reads
-them: `hubapprove.owner_paths_error`, whose refusal says where each named file is committed
-instead), a path at head that is not a file, a new file
-the work tree already has, a file at head whose work tree copy git does not hash to its base (the
-consumer's prewrite check refuses both), a content file that cannot be read, is not UTF-8 or is
-over `approvals.MAX_CONTENT_BYTES`, content that is the file at head, content git would store as
-another blob (`git hash-object --path=PATH --stdin` differs from its blob: core.autocrlf or a
+Refused before anything is posted, in the builder's or `approvals.new_doc`'s words: a checkout that
+is not a git work tree, a repository the checkout's origin cannot name (no `--repo`), a checkout with
+no HEAD commit (no `--head`), a head that is not 40 hex digits or not a commit of the checkout, no
+file, a path that is not a plain path of the repository, a path an owner approval may not carry (a
+render source in a kit checkout, or a path the repository's owner rules do not lock, as `commit.py`
+reads them: `hubapprove.owner_paths_error`, whose refusal says where each named file is committed
+instead), a kit configuration of the checkout that is refused, a path at head that is not a file, a
+new file the work tree already has, a file at head whose work tree copy git does not hash to its
+base (the consumer's prewrite check refuses both), a content file that cannot be read, is not UTF-8
+or is over `approvals.MAX_CONTENT_BYTES`, content that is the file at head, content git would store
+as another blob (`git hash-object --path=PATH --stdin` differs from its blob: core.autocrlf or a
 text, eol or filter attribute changes it on staging, which the consumer's staged check refuses),
-and what `new_doc` refuses (its
-`MAX_FILES`, `MAX_PATH`, `MAX_TITLE` and `MAX_REASON` included). What the hub refuses comes back
+and what `new_doc` refuses (its `MAX_FILES`, `MAX_PATH`, `MAX_TITLE` and `MAX_REASON` included).
+What the hub refuses comes back
 as the hub said it (`REFUSED <code>: <message>`).
 
 Known limits:

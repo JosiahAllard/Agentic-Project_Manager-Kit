@@ -153,7 +153,7 @@ def ancestry(rev, cwd, timeout=None, env=None):
 
 
 # Every commit in a throwaway repository otherwise starts a `git maintenance run --auto` child.
-# Measured 2026-10-01 in the PM kit's tests: 3,075 git processes, 555 of
+# Measured 2026-10-01 in the tests: 3,075 git processes, 555 of
 # them started by git itself; 209 with this.
 FIXTURE_CONFIG = (('maintenance.auto', 'false'), ('gc.auto', '0'))
 

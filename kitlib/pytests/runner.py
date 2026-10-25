@@ -63,8 +63,8 @@ kitlib/config/schema.py, checks their types; `settings` adds the checks below):
   jobs_max       6                    default jobs = min(jobs_max, max(2, cpus // jobs_divisor))
   jobs_divisor   4
   jobs_env       null                 an environment variable that, when set to an integer,
-                                      overrides the default jobs (--jobs overrides both). Kept as
-                                      the PM kit had it; it sets a job count, never the root or
+                                      overrides the default jobs (--jobs overrides both). It sets
+                                      a job count, never the root or
                                       the configuration (a tool never takes those from env).
   unit_timeout   3600                 seconds before a unit is killed (TIMEOUT)
 """
