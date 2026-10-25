@@ -376,6 +376,34 @@ def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None):
     return check
 
 
+def hub_check(load=None, make_client=None):
+    """The HUB check for Watcher: check(last) -> (lines, last). Asks the loopback hub server's
+    GET health and gives one line, once per stale episode, when its `code` says hub code newer than
+    the running server has landed (kitlib.hubsite.codestale.notice: the owner's restart step).
+    `last` is True once reported (kept in the state file, so a relaunch does not say it again) and
+    None otherwise: a restarted hub, or one that is down, re-arms it. A hub that is down, has no
+    token file, or has no pointer to read is no event and no failure; any other error is a failed
+    check (ERROR on the third), never a dead watcher. `load` gives the hub Settings and
+    `make_client(port)` the client, as kitlib.pmstart.hub_site takes them."""
+    def check(last):
+        from kitlib import pmstart
+        from kitlib.hubsite import codestale, serve
+        down = (pmstart.NoHubToken, serve.NotRunning,
+                getattr(pmstart, "NoHubPointer", pmstart.NoHubToken))
+        try:
+            port = (load or pmstart.hub_settings)().port
+            health = (make_client or pmstart._hub_client)(port).get(
+                "/health", timeout=pmstart.HUB_SITE_TIMEOUT_S)
+        except down:
+            return [], None
+        text = codestale.notice(health.get("code") if isinstance(health, dict) else None,
+                                pmstart.HUB_TOOL)
+        if text is None:
+            return [], None
+        return ([] if last else [text]), True
+    return check
+
+
 def preload(modules=()):
     """Load, at start, every kit module a check imports on its first pass, so a landing that writes
     this checkout later cannot give the running watcher a mix of old and new modules
@@ -387,6 +415,8 @@ def preload(modules=()):
     import kitlib.launcher.settings
     import kitlib.launcher.usage
     import kitlib.machinesetup.extras
+    import kitlib.hubsite.codestale
+    import kitlib.hubsite.serve
     import kitlib.pluginsource
     import kitlib.pmstart.consoletasks      # kitlib.pluginsource's in-use reads (_processes, _tasks)
     for name in modules:
@@ -402,13 +432,14 @@ class Watcher:
     sessions: path of sessions.json; newest(name) -> mtime or None; tip(repo, ref) -> short sha;
     plugin: check(last) -> (lines, last) (plugin_check), or None for no PLUGIN check. Unlike the
     others it has no baseline: a plugin export already behind at the first run is reported then.
+    hub: check(last) -> (lines, last) (hub_check), or None for no HUB check.
     preload_modules: the host's own modules its checks import late (preload).
     stopped: stopped(name, mtime) -> time or None (stop_log_reader over stop.log beside `sessions`).
     """
 
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
-                 notice_dir=None, plugin=None, preload_modules=(), stopped=None):
+                 notice_dir=None, plugin=None, preload_modules=(), stopped=None, hub=None):
         preload(preload_modules)
         self.stopped = stop_log_reader(sessions) if stopped is None else stopped
         self.s = state
@@ -422,8 +453,10 @@ class Watcher:
         self.tip = tip
         self.notice_dir = notice_dir
         self.plugin = plugin
-        self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0, "plugin": 0}
-        self.next_b = self.next_u = self.next_i = self.next_p = 0.0
+        self.hub = hub
+        self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0, "plugin": 0,
+                      "hub": 0}
+        self.next_b = self.next_u = self.next_i = self.next_p = self.next_h = 0.0
 
     def start(self, now):
         s = self.s
@@ -502,4 +535,12 @@ class Watcher:
                 self.fails["plugin"] = 0
             except Exception as e:
                 self._failed("plugin", e, events)
+        if self.hub and now >= self.next_h:         # on the branch cadence: one loopback ask
+            self.next_h = now + self.branch_poll
+            try:
+                ev, s["hub_stale"] = self.hub(s.get("hub_stale"))
+                events += ["HUB %s" % line for line in ev]
+                self.fails["hub"] = 0
+            except Exception as e:
+                self._failed("hub", e, events)
         return events

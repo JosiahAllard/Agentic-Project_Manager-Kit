@@ -1,6 +1,6 @@
 """tools/review_pack.py end to end over a throwaway repository (tests/reviewpack/repo.py): the
 owner-only section, the owner's identity, the header, failed git reads, the base default, the
-merge layer and the doc-budget sub-run (ported from the PM kit's test_review_pack.py)."""
+merge layer and the doc-budget sub-run."""
 import contextlib
 import io
 import json

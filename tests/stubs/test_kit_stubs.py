@@ -1,5 +1,5 @@
 """kitlib.stubs (tools/kit_stubs.py): writing and checking a repository's stubs, and what a written
-stub runs. The PM kit's kit_stubs.py had no tests; these are new.
+stub runs.
 
 Every case runs against a throwaway repository (tests/gitfixture.py). A stub runs this kit's own
 tools (landed.py, read-only) on that repository; the fake kits are folders in the fixture's temp.
@@ -194,6 +194,12 @@ class RemovedKitOnlyTools(StubCase):
     """A kit-only tool the kit no longer has: it was never a default stub, so it is in no list."""
 
     GONE = 'ledger_refs'
+
+    def test_a_config_naming_it_loads_because_it_is_retired(self):
+        self.assertIn(self.GONE, stubs.RETIRED)
+        self.config(stubs={'tools': ['landed', self.GONE]})
+        code, out = self.run_stubs('write')
+        self.assertEqual(code, stubs.OK, out)
 
     def test_the_kit_has_no_command_of_that_name_and_no_list_names_it(self):
         self.assertNotIn(self.GONE, stubs.commands())

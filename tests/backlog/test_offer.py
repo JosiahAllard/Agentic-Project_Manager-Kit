@@ -1,5 +1,5 @@
-"""The partition, the rank order and the offer (ported from earlier per-repository backlog tests:
-Partition, Rank and NextOffer cases, `requires:` among them), on snapshots built in memory."""
+"""The partition, the rank order and the offer (Partition, Rank and NextOffer cases,
+`requires:` among them), on snapshots built in memory."""
 import unittest
 
 from kitlib.backlog import offer as omod

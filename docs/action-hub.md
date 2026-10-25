@@ -43,7 +43,8 @@ the title.
 
 - **Questions.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
-  Submitted (answered, not yet logged by the PM), Logged, and Other, which shows only when a
+  Submitted (answered, not yet logged by the PM), Logged, Filed (shows only when a filed question
+  exists; a filed answer sits there until its asker logs it), and Other, which shows only when a
   question has another status. Answers: the PM's replies to what you asked in a note, in Unread
   and Read tabs.
 - **Message the PM** (the `#topm` section). Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
@@ -190,9 +191,20 @@ shows as Act, its edit offers no kind, and the server's refusal shows in its own
   Access keys were fetched), `tunnel: bound, keys not fetched` (shown until the first request
   with a token; a failed fetch adds ` (reason)`, such as `keys-fetch`) or `tunnel: off: <why>`.
   `on` does not say that a tunnel program reaches the listener.
-- A running `hub serve` logs one error line, `this hub server is running older code than the hub
-  code now on disk: restart the hub ...`, when a file of `kitlib/hubsite` changed after it started.
-  It restarts nothing by itself.
+- Stale code. A running `hub serve` compares the `.py` files of `kitlib/hubsite` (name, modified
+  time, size; `serve.code_stamp`) with what they were at its start, at most every 30 seconds. When
+  they differ it logs one error line to its console and says so in a `code` object, `{"stale",
+  "restart"}`, in GET health (the local listener; the tunnel's fixed health carries none) and in
+  GET snapshot (`kitlib.hubsite.codestale`, one text for all of them). `restart` is the owner's
+  to-do: `python <kit>/tools/hub.py restart`, or, with no autostart task, `hub.py stop` then
+  `hub.py serve`. Three places show it, each reading that object: the page's banner under the
+  title (`#codeerr`), a `hub: WARN` line in the PM session-start checklist (docs/pm-start.md), and a
+  `HUB` event of pm_watch (docs/pm-watch.md), said once per stale episode. Nothing restarts the hub
+  by itself. Known limit: only the hub package's own files are compared, so a landing that changes
+  only other packages the hub imports (for example `kitlib/pmdata`, `kitlib/config`) does not warn.
+  `web/index.html` is not compared either: the server reads it from disk per request
+  (`httpd.static_file`), so a page-only change needs no restart. Known limit: a hub started before this field existed gives no `code`, so none of the three warn about
+  it; it needs one restart.
 - Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`,
   the application's audience tag `aud` and the allowed `emails`; all three), the server also
   listens on `hub.tunnel_port` (default 8791, loopback too) for a Cloudflare tunnel, and every
@@ -617,7 +629,8 @@ filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
 tests/hubsite/test_push.py `AckTest`; tests/delegations/test_run.py `HubTrigger`.
 
 Known limits:
-- The page has no tab for `filed`: a filed question shows under Other.
+- A filed question has its own Filed tab on the page (no attention chip), and `hub.py pending` and
+  `wait --pending` mark it ` (filed)` after the title.
 - After the store reports an Uncommitted error the line is already in the record, so the retry
   changes nothing and marks the question `filed` before the store's catch-up applies it (the
   answer audit of a later slice allows for this).

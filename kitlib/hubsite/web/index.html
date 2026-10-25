@@ -298,6 +298,7 @@ ul.hist .sch-line{display:block}
     <h1>Action Hub</h1>
     <p class="pill" id="pmpill" role="status"></p>
     <div class="status err" id="loaderr" role="alert" hidden></div>
+    <div class="status err" id="codeerr" role="status" hidden></div>
   </header>
 
   <div class="bar" id="qbar">
@@ -309,6 +310,7 @@ ul.hist .sch-line{display:block}
       <button class="tab" role="tab" data-f="open" aria-selected="true" id="tab-open">Open <span class="n" id="n-open">0</span></button>
       <button class="tab" role="tab" data-f="answered" aria-selected="false" id="tab-answered">Submitted <span class="n" id="n-answered">0</span></button>
       <button class="tab" role="tab" data-f="logged" aria-selected="false" id="tab-logged">Logged <span class="n" id="n-logged">0</span></button>
+      <button class="tab" role="tab" data-f="filed" aria-selected="false" id="tab-filed" hidden>Filed <span class="n" id="n-filed">0</span></button>
       <button class="tab" role="tab" data-f="other" aria-selected="false" id="tab-other" hidden>Other <span class="n" id="n-other">0</span></button>
     </div>
     <div class="tabs sw" role="tablist" id="itabs" data-for="inbox" aria-label="Which answers" hidden>
@@ -792,7 +794,7 @@ ul.hist .sch-line{display:block}
   const pmCommands = t => Array.isArray(t.commands) ? t.commands.filter(c => typeof c === "string" && c.trim()) : typeof t.commands === "string" && t.commands.trim() ? [t.commands] : typeof t.command === "string" && t.command.trim() ? [t.command] : [];
   // The question tab a doc belongs to: a done one (no ruling needed) sits with logged, and an
   // unknown or missing status lands in "other".
-  const pmQBucket = d => d.status === "open" || d.status === "answered" || d.status === "logged" ? d.status : d.status === "done" ? "logged" : "other";
+  const pmQBucket = d => d.status === "open" || d.status === "answered" || d.status === "filed" || d.status === "logged" ? d.status : d.status === "done" ? "logged" : "other";
   // How current a view the server reads is, from its rows' posted_at (stale after 3 days).
   function pmFresh(items, now){
     const t = items.map(x => x.posted_at).filter(Boolean).sort().pop();
@@ -891,7 +893,7 @@ ul.hist .sch-line{display:block}
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
     const pages = pageRows(col);
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
-      push: s.push && typeof s.push === "object" ? s.push : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
+      push: s.push && typeof s.push === "object" ? s.push : null, code: s.code && typeof s.code === "object" ? s.code : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, notices: noticeRows(views.notices),
@@ -1538,11 +1540,12 @@ ul.hist .sch-line{display:block}
   }
 
   function renderQuestions(){
-    const counts = {open:0, answered:0, logged:0, other:0};
+    const counts = {open:0, answered:0, filed:0, logged:0, other:0};
     for (const d of state.docs) counts[pmQBucket(d)]++;
     for (const k of Object.keys(counts)) $("#n-"+k).textContent = counts[k];
     $("#tab-other").hidden = !counts.other;
-    if (state.filter === "other" && !counts.other) state.filter = "open";
+    $("#tab-filed").hidden = !counts.filed;
+    if (state.filter === "other" && !counts.other || state.filter === "filed" && !counts.filed) state.filter = "open";
     document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
     fillRepos(state.docs);
 
@@ -1555,6 +1558,7 @@ ul.hist .sch-line{display:block}
       const msg = {
         open: ["No open questions", "New questions from the PM appear here, oldest first."],
         answered: ["Nothing waiting to be logged", "Answers you submit move here until the PM files them."],
+        filed: ["No filed answers", "An answer filed into its record shows here until its asker logs it."],
         logged: ["No logged answers yet", "Once the PM files an answer, or marks it done, it shows here."],
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
@@ -3049,10 +3053,13 @@ ul.hist .sch-line{display:block}
   // server is given the wait it asked for, and anything else is tried again after hubRetryMs.
   let rev = 0, lastKey = "", lastCheap = "", fails = 0;
   function loadSay(text){ const b = $("#loaderr"); b.textContent = text; b.hidden = !text; }
+  // The server's own word that hub code newer than it has landed: its restart text (the owner's step), shown until it restarts.
+  function codeSay(code){ const b = $("#codeerr"), t = code && code.stale === true && typeof code.restart === "string" ? code.restart : ""; b.textContent = t; b.hidden = !t; }
   const typing = () => { const a = document.activeElement; return !!a && a !== document.body && a.matches("input:not([type=checkbox]):not([type=radio]), textarea"); };
   async function refresh(){
     const next = hubState(await hub.snapshot());
     if (ready && next.revision < rev) return;         // an older answer that arrived late
+    codeSay(next.code);
     // The same revision and the same of everything a revision does not cover (the git-backed views: backlogs, usage,
     // agents, repos, notices, what is stale, partial or unavailable) is the page already drawn: only what moves on every
     // read is brought up to date, without the whole-snapshot comparison and the redraw. The lists of the store's own

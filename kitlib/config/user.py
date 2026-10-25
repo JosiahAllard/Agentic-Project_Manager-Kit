@@ -4,7 +4,7 @@ pointer names (kitlib.config.pointer; docs/kit-json.md "Machine config").
 With a good pointer (locate OK) the config is two files in `<PM repo>/.pm-kit`: FILE_NAME, tracked,
 holds the policy keys (POLICY_KEYS), and LOCAL_FILE_NAME, git-ignored, the machine-local and
 personal keys (LOCAL_KEYS); a key in the other file, or one the move drops (DROPPED_KEYS), is a
-ConfigError. `pm_data` is never read from a file: it is derived from the pointer and its
+ConfigError (except a RETIRED key, which is ignored). `pm_data` is never read from a file: it is derived from the pointer and its
 repository's kit-pm-data.json record. RELATIVE_KEYS paths written relative are read against the PM
 repository. Either file absent is empty.
 
@@ -146,7 +146,7 @@ MARK_ROOT = Obj({
 
 # Keys the machine config no longer has. A file written before the removal still loads: the key
 # is dropped whatever it holds, never refused and never returned. An unknown key is still refused.
-RETIRED = ('ledger_refs',)
+RETIRED = ('ledger_refs', 'standing_delegation')
 
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
@@ -155,7 +155,6 @@ SCHEMA = {
     'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repos `ledger.py add --repo` writes; `pm` is the machine-wide one; a repository\'s name is its folder name lower-cased with `_` as `-` (`My_Tools-Repo` is `my-tools-repo`); with `ledger_dir`, each name once, and never `all`, `standing` or the frozen file\'s name; without it, the one-file ledger\'s repo columns besides `all`, and unset: any lower-case name (docs/ledger.md)'),
     'ledger_path': Field(PmRepoPath(), None, 'the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split'),
     'pending_path': Field(PmRepoPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
-    'standing_delegation': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that'),
     'daily_red_ruling': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'the ruling the daily full run\'s bisect files its red record under: priority 1, priority_by pm (docs/daily-full.md "Bisect"); unset: priority 2, priority_by agent, and the run\'s result.json says so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
@@ -182,14 +181,15 @@ SCHEMA = {
 # Which of the PM repository's two files holds each key (kitlib.config.move writes them so;
 # tests/config/test_read_pm_repo.py keeps these equal to move's POLICY, LOCAL, DROPPED and
 # RELATIVE_KEYS: this module does not import move, which imports kitlib.coordinatorstart).
-POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path', 'standing_delegation',
+POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
                'daily_red_ruling', 'guard_rules', 'guard_mark_roots', 'guard_agent_marks',
                'guard_mcp_tools', 'guard_mcp_prefix', 'pm_start', 'coordinator_start', 'pm_watch',
                'backlog_lint', 'machine_lock', 'temp_dir', 'agent_temp_sweep',
                'machine_path_folders', 'plugin')
 LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
-# Never in the PM repository's files: a ConfigError there (`pm_data` is derived: locate).
-DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data')
+# Never in the PM repository's files: a ConfigError there, except a RETIRED key, which is ignored
+# (`pm_data` is derived: locate).
+DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data', 'standing_delegation')
 # POLICY_KEYS paths that may be written relative to the PM repository (resolved).
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
@@ -596,7 +596,7 @@ class Location(collections.namedtuple('Location', 'state path local folder pm pm
     name; UNMOVED, LEFTOVER), else None. `error` why the config cannot be read (UNMOVED,
     LEFTOVER, BAD), else None. `home` the home folder.
 
-    `new` exists only for kitlib.hubsite.auth.folder (its line 121, the hub's credential folder
+    `new` exists only for kitlib.hubsite.auth.folder (the hub's credential folder
     beside it) and the guard's matching hold on that folder (kitlib.guard.rules.hub_secret_folders);
     the hub session removes it: `path` for OK, else the home file."""
 
@@ -895,7 +895,7 @@ def _read_pm(loc):
             continue
         kept = {}
         for k, v in data.items():
-            if is_note(k):
+            if is_note(k) or k in RETIRED:
                 continue
             if k in DROPPED_KEYS:
                 errs.append(_dropped(k, path))
@@ -1028,11 +1028,6 @@ def files_of(cfg):
 def ledger_files(home=None):
     """files_of the machine config."""
     return files_of(user_config(home))
-
-
-def standing_delegation(home=None):
-    """The standing delegation's ruling id, or None when the machine config does not set one."""
-    return user_config(home)['standing_delegation']
 
 
 def daily_red_ruling(home=None):

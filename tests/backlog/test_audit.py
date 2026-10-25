@@ -363,6 +363,188 @@ class Check(unittest.TestCase):
             'denied: %r' % self.log])
 
 
+AT = '2026-10-24T10:00:00+00:00'
+
+
+def question(qid='Q-1001', rid='FOO', at=AT, status='filed'):
+    """A hub question document bound to record `rid`, answered at `at`."""
+    return {'id': qid, 'status': status, 'title': 'which way', 'record': {'repo': 'pm', 'id': rid},
+            'answer': {'choice': 0, 'label': 'this way', 'note': '', 'at': at, 'via': 'page'}}
+
+
+class AnswerCheck(unittest.TestCase):
+    """UNVERIFIED: an `answer:` line not written by owner-hub, or matching no answered or
+    filed question in the hub store (read through a stand-in for the hub's client)."""
+
+    run_tool, ok, tip, add = Tool.run_tool, Tool.ok, Tool.tip, Tool.add
+
+    def setUp(self):
+        Tool.setUp(self)
+        # the library writes below read the machine config of the temp home, as the tool does
+        patch = mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def answer(self, session, qid='Q-1001', at=AT):
+        """An answer line written straight through the store as `session` (plan_answer, the
+        hub's own plan, so only the commit's Session: line tells the writer)."""
+        ctx = opener.open_store(self.repo.root, fetch=False, session=session)
+        ctx.store.write(lambda s: pmod.plan_answer(s, ctx, 'FOO', qid, at, 'which way',
+                                                   'this way', role_checked=True))
+
+    def report(self, docs=(), calls=None):
+        _top, cfg, rules = opener.open_repo(self.repo.root)
+        backend = smod.open_backend(self.repo.root, cfg, fetch=False)
+
+        def questions():
+            if calls is not None:
+                calls.append(1)
+            if isinstance(docs, Exception):
+                raise docs
+            return list(docs)
+        return audit_check.check(backend, rules, [], 0, questions)
+
+    def answers(self, r):
+        return [f for f in r.findings if f.kind == audit_check.ANSWER]
+
+    def test_a_genuine_filing_is_verified(self):
+        from kitlib.hubsite import recordwrite
+        self.add()
+        recordwrite.answer(self.repo.root, 'FOO', 'Q-1001', AT, 'which way', 'this way')
+        for status in audit_check.ANSWERED:
+            with self.subTest(status):
+                r = self.report([question(status=status)])
+                self.assertEqual(self.answers(r), [])
+                self.assertEqual(r.by_design['owner-hub'], 1)
+
+    def test_a_forged_field_is_unverified(self):
+        # the hub holds the question, but the line was committed by another session
+        self.add()
+        self.answer('kit')
+        r = self.report([question()])
+        found = self.answers(r)
+        self.assertEqual(len(found), 1, r.findings)
+        self.assertIn('answer: Q-1001 %s' % AT, found[0].text)
+        self.assertIn('not written by owner-hub', found[0].text)
+
+    def test_a_forged_session_is_unverified(self):
+        # Session: owner-hub, so the change counts by design, but no hub question matches it
+        self.add()
+        self.answer('owner-hub', qid='Q-1002')
+        for docs in ([], [question()], [question(qid='Q-1002', at='2026-10-24T09:00:00+00:00')],
+                     [question(qid='Q-1002', rid='BAR')], [question(qid='Q-1002', status='open')]):
+            with self.subTest(docs):
+                r = self.report(docs)
+                found = self.answers(r)
+                self.assertEqual(len(found), 1, r.findings)
+                self.assertIn('no answered or filed hub question Q-1002 on FOO', found[0].text)
+                self.assertEqual(r.by_design['owner-hub'], 1)
+
+    def test_a_re_answer_is_verified(self):
+        # "Change answer": the hub files the new answer, which replaces the line; the hub then
+        # holds only the newer `at`, and the first filing, still in the window, must pass
+        from kitlib.hubsite import recordwrite
+        later = '2026-10-24T11:00:00+00:00'
+        self.add()
+        recordwrite.answer(self.repo.root, 'FOO', 'Q-1001', AT, 'which way', 'this way')
+        recordwrite.answer(self.repo.root, 'FOO', 'Q-1001', later, 'which way', 'that way')
+        r = self.report([question(at=later)])
+        self.assertEqual(self.answers(r), [])
+        self.assertEqual(r.by_design['owner-hub'], 2)
+        # a hub answer older than the line is no cover for it
+        found = self.answers(self.report([question()]))
+        self.assertEqual(len(found), 1, found)
+        self.assertIn('answer: Q-1001 %s' % later, found[0].text)
+
+    def test_covered_and_by_design_changes_read_no_record(self):
+        # the window's records are read in one git process, shared by the answer check and
+        # rows_of: a covered or by-design change starts none of its own
+        self.add()
+        self.ok('set', 'FOO', *PRICE)                                # covered by its line
+        self.ok('--session', 'daily-full', 'set', 'FOO', '--priority', '3')    # by design
+        reads = []
+        real = audit_check.batch.cat_file
+
+        def counted(specs, root):
+            if any('^:' in spec for spec in specs):          # a change's records, not the tip's
+                reads.append(specs)
+            return real(specs, root)
+        _top, cfg, rules = opener.open_repo(self.repo.root)
+        backend = smod.open_backend(self.repo.root, cfg, fetch=False)
+        entries, _notes = audit_check.read_log(self.log)
+        with mock.patch.object(audit_check.batch, 'cat_file', counted):
+            r = audit_check.check(backend, rules, entries, 0, lambda: [])
+        self.assertEqual((r.covered, dict(r.by_design), r.findings), (1, {'daily-full': 1}, []))
+        self.assertEqual(len(reads), 1, reads)
+        reads[:] = []
+        from kitlib.hubsite import recordwrite
+        recordwrite.answer(self.repo.root, 'FOO', 'Q-1001', AT, 'which way', 'this way')
+        with mock.patch.object(audit_check.batch, 'cat_file', counted):
+            r = audit_check.check(backend, rules, entries, 0, lambda: [question()])
+        self.assertEqual((self.answers(r), len(reads)), ([], 1), reads)
+
+    def test_a_hub_that_cannot_be_read_is_not_checked(self):
+        from kitlib.hubsite import serve
+        self.add()
+        self.answer('owner-hub')
+        self.answer('kit', qid='Q-1002')               # no hub needed: never the hub's
+        r = self.report(serve.NotRunning(1))
+        found = self.answers(r)
+        self.assertEqual(len(found), 1, r.findings)
+        self.assertIn('answer: Q-1002 ', found[0].text)
+        self.assertIn('not written by owner-hub', found[0].text)
+        self.assertTrue(any(n.startswith('answers NOT CHECKED: the hub store could not be read')
+                            for n in r.notes), r.notes)
+
+    def test_run_gives_an_unreadable_hub_as_a_note_and_exit_ok(self):
+        from kitlib.hubsite import serve
+        self.add()
+        self.answer('owner-hub')
+
+        def questions():
+            raise serve.NotRunning(1)
+        code, lines = audit_check.run(self.repo.root, fetch=False, home=self.home,
+                                      questions=questions)
+        self.assertEqual(code, audit_check.OK, lines)
+        self.assertEqual(lines[-1], 'OK')
+        notes = [x for x in lines if x.startswith('NOTE: answers NOT CHECKED: the hub store could '
+                                                  'not be read (NotRunning')]
+        self.assertEqual(len(notes), 1, lines)
+        self.assertFalse([x for x in lines if x.startswith(audit_check.ANSWER)], lines)
+
+    def test_no_answer_change_asks_no_hub(self):
+        self.add()
+        self.ok('set', 'FOO', '--summary', 'another thing to do')
+        calls = []
+        r = self.report(ValueError('must not be asked'), calls)
+        self.assertEqual((self.answers(r), calls), ([], []))
+
+    def test_a_catch_up_commit_needs_the_hub_match(self):
+        self.add()
+        ctx = opener.open_store(self.repo.root, fetch=False, session='kit')
+        ctx.store.write(lambda s: smod.Change(
+            pmod.plan_answer(s, ctx, 'FOO', 'Q-1001', AT, 'which way', 'this way',
+                             role_checked=True).writes,
+            'backlog: catch up 1 record path'))
+        self.assertEqual(self.answers(self.report([question()])), [])
+        self.assertEqual(len(self.answers(self.report([]))), 1)
+
+    def test_a_marked_session_may_not_use_a_by_design_name(self):
+        self.add()
+        before = self.tip()
+        marked = {sessionmark.ENV: 'coordinator'}
+        for name in audit_check.BY_DESIGN + ('Owner-Hub',):
+            with self.subTest(name):
+                rc, out, _err = self.run_tool('--session', name, 'set', 'FOO', '--effort', 'm',
+                                              env=marked)
+                self.assertEqual(rc, 2, out)
+                self.assertIn('REFUSED', out)
+                self.assertIn('a marked session may not use it', out)
+        self.assertEqual(self.tip(), before)                      # nothing was written
+        self.ok('--session', 'kit-x', 'set', 'FOO', '--effort', 'm', env=marked)
+        self.ok('--session', 'owner-hub', 'set', 'FOO', '--effort', 'l')    # unmarked: the owner
+
+
 class CheckFolder(unittest.TestCase):
     """A folder store: read in the PM data worktree, NOT CHECKED anywhere else."""
 

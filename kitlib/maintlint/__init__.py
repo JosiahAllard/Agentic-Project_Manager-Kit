@@ -36,7 +36,8 @@ VERSION = 1
 CHECKS = ('keyword-hold', 'unpriced', 'dead-pull', 'dead-blocker', 'duplicate', 'audit',
           'body-path-gone', 'file-moved', 'scope-path-gone', 'worktree-A', 'worktree-B',
           'worktree-C', 'worktree-E', 'worktree-O', 'landed-still-pulled', 'closed-unlanded',
-          'answered-question', 'ledger-stale-cites', 'ledger-superseded-live', 'gate-time')
+          'answered-question', 'ledger-stale-cites', 'ledger-over-budget', 'ledger-rule-conflicts',
+          'gate-time')
 # The store history closed-unlanded reads: the audit's window.
 CLOSE_DAYS = backlog.AUDIT_DAYS
 

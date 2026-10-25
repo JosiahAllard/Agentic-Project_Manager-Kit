@@ -2,8 +2,7 @@
 
 The commit/push options take `--host NAME`: the agent host for the Co-Authored-By trailer, a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude); `--provider` is its old name, accepted for one release. The trailer comes from `kitlib.attribution` (docs/commit.md); a Codex trailer needs the actual explicit --model id. The host and model are checked before anything is written; the provenance, branch, path and owner checks keep their rules.
 
-The owner's list of hand steps the PM session keeps: one file, a flat numbered list. It is the file the machine config's `pending_path` names (docs/kit-json.md). Entry point `tools/pending.py`; logic `kitlib/pending`; tests `tests/pending`. Ported from the PM repository's `tools/pending.py`.
-
+The owner's list of hand steps the PM session keeps: one file, a flat numbered list. It is the file the machine config's `pending_path` names (docs/kit-json.md). Entry point `tools/pending.py`; logic `kitlib/pending`; tests `tests/pending`.
 ## Format
 
 - Items are `N. text`, continuation lines indented. No sections; any other line is kept as it is.

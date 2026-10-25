@@ -9,7 +9,9 @@
       outside the gated checkout is USAGE (2) (kitlib.gate.caller). From another directory:
       python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout").
       Refused (4), with --plan and as `land` too, while the repository's stash stack holds an
-      entry, whichever checkout made it (kitlib.gate.stash; docs/gate.md "The stash guard")
+      entry, whichever checkout made it (kitlib.gate.stash; docs/gate.md "The stash guard").
+      Refused (4) before its header when its stdout is a file another gate run is writing
+      (kitlib.gate.outfile; docs/gate.md "Whose run a log is")
   gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--summary TEXT]
                       [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch] [--submit]
       land BRANCH from the main checkout, as tools/land.py does: merge onto <remote>/<main> as it
@@ -69,7 +71,7 @@ from kitlib import gate as G                                       # noqa: E402
 from kitlib import pluginsource                                    # noqa: E402
 from kitlib.config import policy                                  # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
-from kitlib.gate import budget, caller, measure, runner            # noqa: E402
+from kitlib.gate import budget, caller, measure, outfile, runner   # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
 from kitlib.gate import submit as submitmod                        # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
@@ -355,10 +357,20 @@ def main(argv):
         refused = caller.log_dir_refusal(a.log_dir, root, os.getcwd())
         if refused is not None:
             return emit(refused)
-        book_kw = {'store': Store(say=say)}
-        return emit(guarded(runner.branch_gate, root, base=a.base, full=a.full,
-                            only=a.only, plan=a.plan, slug=a.slug, log_dir=a.log_dir,
-                            say=say, book_kw=book_kw))
+        # Before the gate says anything: no second gate's header in another run's log.
+        held, refused, warning = outfile.claim(sys.stdout)
+        if refused:
+            return emit(G.Outcome(G.REFUSED, refused))
+        if warning:
+            say(warning)
+        try:
+            book_kw = {'store': Store(say=say)}
+            return emit(guarded(runner.branch_gate, root, base=a.base, full=a.full,
+                                only=a.only, plan=a.plan, slug=a.slug, log_dir=a.log_dir,
+                                say=say, book_kw=book_kw))
+        finally:
+            if held is not None:
+                held.release()
     except LockError as e:
         return emit(runner.lock_refusal(e))
     except KeyboardInterrupt:

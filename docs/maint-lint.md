@@ -78,7 +78,7 @@ class.
   it is not logged yet; for a question the PM marked done (`hub.py questions done`), `unpark
   <ID>` alone, with no ruling to cite. No ruling id is shown. A hub that cannot be asked gives a NOT CHECKED note.
 - `audit`: `kitlib.backlog.audit_check.run` over 7 days, with no fetch. It gives one count finding
-  per kind (UNAUDITED, UNKNOWN, UNMAPPED), for example "12 store change(s) in 7 days with no audit
+  per kind (UNAUDITED, UNKNOWN, UNMAPPED, UNVERIFIED), for example "12 store change(s) in 7 days with no audit
   line", whose fix is the `backlog_audit.py` command that lists them. The lines themselves are not
   shown: they carry commit subjects. audit_check's NOTE lines become notes.
 
@@ -129,17 +129,28 @@ repository's, or not fetched), counted.
 
 ## Ledger counts
 
-`kitlib/maintlint/ledger.py` gives three numbers:
+`kitlib/maintlint/ledger.py` gives these counts:
 - `stale_cites`: STANDING digest citations of a retired or absent entry;
-- `superseded`: entries that another entry's Supersedes names;
-- `superseded_live`: how many of those are not retired.
+- `rules`: the rules of each rulebook file (`rules/<name>.md` beside the log,
+  `kitlib/ledger/rulebook.py`; docs/ledger.md "Rulebooks"), by file name;
+- `over_budget`: the files with more rules than their `Budget:` (default 40);
+- `conflict_pairs`: pairs of rules, each counted once, that `rulebook.conflicts` finds sharing
+  content words (a rule is read against its own book and the shared one; rules under the same
+  heading are not counted);
+- `overrides`: repo rules whose key is also a shared rule's.
 
-Each count above 0 is also a finding for the PM, whose ledger it is: `ledger-stale-cites` (fix:
-`ledger.py check`, which names each citation, then re-point or drop the digest line) and
-`ledger-superseded-live` (fix: `ledger.py retire` for each superseded entry not yet a tombstone).
-Their text carries the numbers only.
+The counts are read through `rulebook.load` and `rulebook.conflicts`, not parsed again; a rulebook
+that does not parse is a note, and no rulebook folder gives zeros. The superseded-live count is
+gone: a rule is changed in its rulebook, not left live beside a newer entry.
 
-No entry id and no entry text leave the module. Dropping the module drops the counts, their
+Each of `stale_cites`, `over_budget` and `conflict_pairs` above 0 is also a finding for the PM,
+whose ledger it is: `ledger-stale-cites` (fix: `ledger.py check`, which names each citation, then
+re-point or drop the digest line), `ledger-over-budget` (fix: `ledger.py rules --all`, then
+`rule-drop` or `rule-set --budget`) and `ledger-rule-conflicts` (fix: `ledger.py conflicts`, which
+shows what a rule is set against). Overrides are information only. The text carries numbers and
+file names only.
+
+No entry id, rule key or rule text leaves the module. Dropping the module drops the counts, their
 findings and nothing else.
 
 ## Gate time

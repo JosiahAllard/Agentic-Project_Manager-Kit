@@ -236,6 +236,33 @@ class OwnPull(Base):
         self.allowed(self.cmd('python "%s" -C "%s" set X-1 --scope s' % (self.tool, W.fwd(self.w.main))))
         self.allowed(self.cmd('python "%s" set X-1 --scope s' % self.tool, cwd=self.w.main))
 
+    def test_a_cd_the_guard_cannot_read_is_no_folder(self):
+        """The hook's directory is the worktree holding the pull, but the line moves where the
+        text cannot tell (commands.run_dir: None): the store is unknown, so the run is refused
+        (backlogrole._root fails closed), never judged at the hook's directory."""
+        self.rec = pulled_by('kit/wt')
+        for prefix in ('cd "$X" && ', 'cd $X; '):
+            for args in ('set X-1 --scope s', '-C . set X-1 --scope s'):
+                with self.subTest(prefix=prefix, args=args):
+                    d = self.refused(self.cmd('%spython "%s" %s' % (prefix, self.tool, args)))
+                    self.assertIn('-C <worktree> show X-1', d.reason)
+        self.assertEqual(self.reads, [])
+
+    def test_a_start_process_reads_the_store_where_its_working_directory_says(self):
+        """Start-Process -WorkingDirectory moves where the tool runs (commands.run_dir): with no
+        -C, or a relative one, the store is read there, not at the command's directory."""
+        self.rec = pulled_by('kit/wt')                               # main's branch is main: not its own
+
+        def sp(c, workdir, cwd):
+            return self.cmd("Start-Process python -ArgumentList '%s %sset X-1 --scope s' -WorkingDirectory \"%s\""
+                            % (self.tool, c, workdir), tool='PowerShell', cwd=cwd)
+        for c in ('', '-C . '):
+            with self.subTest(c=c):
+                self.refused(sp(c, self.w.main, self.w.wt))
+                self.allowed(sp(c, self.w.wt, self.w.main))
+        self.refused(self.cmd("Start-Process python -ArgumentList '%s set X-1 --scope s' -WorkingDirectory $X"
+                              % self.tool, tool='PowerShell'))
+
     def test_own_pull_never_widens_to_a_lead_row(self):
         self.rec = pulled_by('kit/wt')
         for args in ('set X-1 --scope s --priority 3', 'block X-1 --owner-ask q', 'close X-1',
@@ -620,6 +647,80 @@ class RawCode(Base):
 
     def test_a_main_session_is_not_judged_here(self):
         self.allowed(self.cmd('python -c "from kitlib.backlog import store"', sub=False, env=COORDINATOR))
+
+
+class HubWriterCode(Base):
+    """Code that names the hub's record writer (kitlib.hubsite.recordwrite) or the store's
+    plan_answer is a raw write in every session but the owner's, main sessions included
+    (backlogrole.HUB_WRITER_RE): only the hub files a bound question's answer."""
+    TEXTS = ('python -c "from kitlib.hubsite import recordwrite; recordwrite.answer(1)"',
+             'python -c "import kitlib.hubsite.recordwrite as w"',
+             "python -c 'from kitlib import hubsite; hubsite.recordwrite.add(1)'",
+             "python -c \"import importlib; importlib.import_module('kitlib.hubsite.recordwrite')\"",
+             'python -m kitlib.hubsite.recordwrite',
+             'python -m runpy kitlib.hubsite.recordwrite',
+             "python - <<'EOF'\nfrom kitlib.backlog.plan import plan_answer\nEOF",
+             'echo "p.plan_answer(s, c)" | python -')
+
+    def test_every_agent_session_is_refused(self):
+        for text in self.TEXTS:
+            for who, kw in (('pm', dict(sub=False, env=PM)), ('coordinator', dict(sub=False, env=COORDINATOR)),
+                            ('subagent', dict())):
+                with self.subTest(text=text, who=who):
+                    d = self.refused(self.cmd(text, **kw), 'backlog-raw-write')
+                    self.assertIn('Instead:', d.reason)
+
+    def test_a_main_session_refusal_names_the_hub_filing(self):
+        d = self.refused(self.cmd(self.TEXTS[0], sub=False, env=PM), 'backlog-raw-write')
+        self.assertIn('questions file', d.instead)
+        self.assertIn('hub.py', d.instead)
+        self.assertIn('recordwrite', d.reason.split('Instead:')[0])
+
+    def test_the_owner_runs_it(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                self.allowed(self.cmd(text, sub=False, env={}))
+
+    def test_other_main_session_code_is_unchanged(self):
+        for env in (PM, COORDINATOR):
+            for text in ('python -c "from kitlib.backlog import store"', 'python -m kitlib.backlog.migrate',
+                         "python -c 'from kitlib.hubsite import serve'", 'python -c "print(1)"',
+                         'python tools/hub.py questions file EX-1'):
+                with self.subTest(env=env, text=text):
+                    self.allowed(self.cmd(text, sub=False, env=env))
+
+    # the attribute or alias form and a multi-line import
+    ALIAS_TEXTS = ("python -c 'from kitlib.hubsite import serve; serve.recordwrite.add(1)'",
+                   'python -c "import kitlib.hubsite as h; h.recordwrite.answer(1)"',
+                   'python -c "import kitlib.hubsite as h; h . recordwrite.edit(1)"',
+                   "python - <<'EOF'\nfrom kitlib import hubsite as h\nh.\\\n  recordwrite.delete(1)\nEOF",
+                   "python - <<'EOF'\nfrom kitlib.hubsite import (\n    serve,\n    recordwrite)\nEOF",
+                   "python - <<'EOF'\nfrom kitlib.hubsite import (recordwrite as w,\n    serve)\nEOF",
+                   "python - <<'EOF'\nfrom kitlib.hubsite import serve, \\\n    recordwrite\nEOF")
+
+    def test_the_alias_and_multi_line_forms_are_refused(self):
+        for text in self.ALIAS_TEXTS:
+            for who, kw in (('pm', dict(sub=False, env=PM)), ('subagent', dict())):
+                with self.subTest(text=text, who=who):
+                    self.refused(self.cmd(text, **kw), 'backlog-raw-write')
+
+    def test_the_owner_runs_the_alias_forms(self):
+        for text in self.ALIAS_TEXTS:
+            with self.subTest(text):
+                self.allowed(self.cmd(text, sub=False, env={}))
+
+    def test_near_names_are_not_the_writer(self):
+        for text in ('python -c "import x; x.recordwriter(1)"', 'python -c "x.recordwrite_log(1)"',
+                     'python -c "print(\'recordwrite\')"', 'python -c "recordwrite = 1"',
+                     "python - <<'EOF'\nfrom kitlib.hubsite import (serve)\nrecordwrite = 1\nEOF",
+                     "python - <<'EOF'\nfrom kitlib.hubsite import serve\nrecordwrite = 1\nEOF",
+                     "python -c 'from kitlib.hubsite import recordwriter'"):
+            with self.subTest(text):
+                self.allowed(self.cmd(text, sub=False, env=PM))
+
+    def test_a_subagent_keeps_the_backlog_code_refusal(self):
+        d = self.refused(self.cmd('python -c "from kitlib.backlog.plan import plan_answer"'), 'backlog-raw-write')
+        self.assertIn('backlog.py', d.instead)
 
 
 class Refs(Base):

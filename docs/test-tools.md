@@ -1,6 +1,6 @@
 # Test tools
 
-Three tools for a checkout's own test runs: `tools/testlist.py`, `tools/tool_deps.py` and `tools/pytests.py`. All three are ported from the PM kit and are not live. Each one takes `-C DIR`, the checkout, default here. Each exits 2 on USAGE or on a refused configuration or checkout. Their keys are `.kit.json` "testlist" and "tool_tests"; the defaults are in `kitlib/config/schema.py`, and docs/kit-json.md lists them.
+Three tools for a checkout's own test runs: `tools/testlist.py`, `tools/tool_deps.py` and `tools/pytests.py`. All three are not live. Each one takes `-C DIR`, the checkout, default here. Each exits 2 on USAGE or on a refused configuration or checkout. Their keys are `.kit.json` "testlist" and "tool_tests"; the defaults are in `kitlib/config/schema.py`, and docs/kit-json.md lists them.
 
 ## testlist
 
