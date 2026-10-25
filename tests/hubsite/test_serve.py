@@ -1870,6 +1870,38 @@ class MachineCase(unittest.TestCase):
         self.assertIsInstance(src.lock, lockdoor.LockDoor)
         self.assertEqual(os.listdir(self.home), [], 'reading the sources wrote something')
 
+    def test_the_rulings_source_finds_an_id_in_the_ledger_file_that_can_hold_it(self):
+        pm = pm_repo(self, record=False)
+        ledger = os.path.join(self.home, 'ledger')
+        os.makedirs(ledger)
+        ids = lambda repo, n: 'H-%s-%s' % (repo, n)     # noqa: E731 - built: tests/scrub
+        one = ids('kit', '0001')
+        with open(os.path.join(ledger, 'kit.md'), 'w', encoding='utf-8', newline='') as f:
+            f.write('# Ledger\n\n## %s | 2026-10-01 10:00Z | kit | decision\n'
+                    'Q: q\nA: a\nDecides: d\nSource: typed\n' % one)
+        self.config({'ledger_dir': ledger, 'ledger_repos': ['kit', 'other']})
+        src = serve.machine_sources(self.home, sync=False)
+        self.assertTrue(src.rulings(one))
+        self.assertFalse(src.rulings(ids('kit', '0002')), 'no such entry')
+        self.assertFalse(src.rulings(ids('other', '0001')), 'its file is not there')
+        self.assertFalse(src.rulings(ids('unknown', '0001')), 'no configured file holds it')
+        self.assertFalse(src.rulings('R-' + '0001'), 'no frozen ledger')
+        views = serve.SiteViews(None, src)
+        self.assertTrue(views.ruling_exists(one))
+        self.assertFalse(hasattr(serve.SiteViews(None, serve.Sources()), 'ruling_exists'))
+
+    def test_the_rulings_source_fails_closed_on_a_ledger_file_it_cannot_read(self):
+        pm_repo(self, record=False)
+        ledger = os.path.join(self.home, 'ledger')
+        os.makedirs(ledger)
+        one = 'H-%s-%s' % ('kit', '0001')       # built: tests/scrub
+        with open(os.path.join(ledger, 'kit.md'), 'wb') as f:
+            f.write(b'\xff\xfe\x00 not utf-8 \x80\x81')
+        self.config({'ledger_dir': ledger, 'ledger_repos': ['kit']})
+        src = serve.machine_sources(self.home, sync=False)
+        with self.assertRaises(OSError):
+            src.rulings(one)
+
     def test_the_pm_start_config_gives_the_repository_views(self):
         notices = os.path.join(self.home, 'notices')
         self.config({'pm_start': {'sessions_file': os.path.join(self.home, 'pm', 's.json'),

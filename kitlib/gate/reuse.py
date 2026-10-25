@@ -1,6 +1,5 @@
 """Gate reuse: a per-step cache of gate results, read by a branch-gate rerun and by a landing's
-merged-tree gate, a batch landing included (docs/gate.md "Gate reuse"; the opt-in and the
-never-list are ported from one repository's tools/gate_reuse.py).
+merged-tree gate, a batch landing included (docs/gate.md "Gate reuse").
 
 A step opts in with `"reuse": true`, or a group name: the steps of one group are reused together
 or not at all. A step is not run again when a pass is stored for its key, and no fail or warn is,

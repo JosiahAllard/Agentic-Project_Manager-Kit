@@ -145,8 +145,10 @@ TOOLS = {
              ["title"]), "POST", "/questions", AGENT),
     "hub_question_log": (
         "Records the ruling an answered question became (POST /questions/<id>/log); the question "
-        "is then logged.",
+        "is then logged. The ruling must be an id a ledger file holds; replace corrects the "
+        "ruling of a question already logged.",
         _obj({"id": _ID, "ruling": {"type": "string", "description": "The ruling's id."},
+              "replace": {"type": "boolean"},
               "if_version": _PIN}, ["id", "ruling", "if_version"]),
         "POST", "/questions/{id}/log", AGENT),
     "hub_question_done": (

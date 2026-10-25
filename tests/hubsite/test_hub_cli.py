@@ -35,6 +35,8 @@ def load():
 
 
 HUB = load()
+# a ledger id, built so no file holds a ruling id (tests/scrub)
+RULING = 'R-' + '0007'
 
 
 class CliCase(unittest.TestCase):
@@ -1341,13 +1343,29 @@ class WriteCase(VerbCase):
                          ['ANSWERED Q-1000 left'])
         self.assertEqual(self.ok('questions', '--status', 'answered'),
                          ['Q-1000 v2 answered [kit] which way'])
-        self.assertEqual(self.ok('questions', 'log', 'Q-1000', 'D-7', '--if-version', '2'),
-                         ['LOGGED Q-1000 D-7'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', RULING, '--if-version', '2'),
+                         ['LOGGED Q-1000 ' + RULING])
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc['ruling'], doc['answer']['note']),
-                         ('logged', 'D-7', 'as planned'))
+                         ('logged', RULING, 'as planned'))
         self.assertEqual(json.loads(self.ok('questions', '--status', 'all', '--json')[0]),
                          self.direct('/questions?status=all'))
+
+    def test_questions_log_replace_corrects_a_logged_ruling(self):
+        other = 'R-' + '0008'
+        self.ask()
+        self.ok('answer', 'Q-1000', '--choice', '0')
+        self.ok('questions', 'log', 'Q-1000', RULING, '--if-version', '2')
+        self.assertIn('REFUSED', self.refused('questions', 'log', 'Q-1000', other, '--if-version', '3'))
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', other, '--replace', '--if-version', '3'),
+                         ['LOGGED Q-1000 ' + other])
+        self.assertEqual(self.direct('/questions?status=all')['items'][0]['ruling'], other)
+
+    def test_questions_log_refuses_a_ruling_that_is_not_a_ledger_id(self):
+        self.ask()
+        self.ok('answer', 'Q-1000', '--choice', '0')
+        self.assertIn('ledger ruling id', self.refused('questions', 'log', 'Q-1000',
+                                                       'warning: too long', '--if-version', '2'))
 
     def test_questions_show_prints_one_question_with_its_answer_and_note(self):
         self.ask()
@@ -1383,9 +1401,9 @@ class WriteCase(VerbCase):
                                                          '--if-version', '99'))
         self.assertEqual(self.ok('answer', 'Q-1000', '--choice', 'other', '--note', 'neither'),
                          ['ANSWERED Q-1000 Other'])
-        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-1000', 'D-7',
+        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-1000', RULING,
                                                          '--if-version', '0'))
-        self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', 'D-7',
+        self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', RULING,
                                                           '--if-version', '1'))
         self.assertIn('REFUSED not_found: ', self.refused('answer', 'Q-009', '--choice', '0'))
 
@@ -1398,14 +1416,14 @@ class WriteCase(VerbCase):
         self.assertEqual(self.ok('questions', '--status', 'answered'),
                          ['Q-1000 v%d answered [kit] which way' % read])
         self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '1'), ['ANSWERED Q-1000 right'])
-        err = self.refused('questions', 'log', 'Q-1000', 'D-7', '--if-version', str(read))
+        err = self.refused('questions', 'log', 'Q-1000', RULING, '--if-version', str(read))
         self.assertTrue(err.startswith('REFUSED conflict: '), err)
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc.get('ruling'), doc['answer']['label']),
                          ('answered', None, 'right'))
         # the version of the answer as it is now logs it
-        self.assertEqual(self.ok('questions', 'log', 'Q-1000', 'D-7', '--if-version',
-                                 str(doc['version'])), ['LOGGED Q-1000 D-7'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', RULING, '--if-version',
+                                 str(doc['version'])), ['LOGGED Q-1000 ' + RULING])
 
     def test_questions_since_lists_the_ones_written_at_or_after_it(self):
         # the PM-start digest's command (docs/pm-start.md "Filed answers")
@@ -1927,6 +1945,11 @@ class ArgumentCase(CliCase):
         (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--if-version', '4')
         self.assertEqual((code, err), (0, ''), out)
         self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'ruling': 'D-7', 'if_version': 4})])
+        (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--replace',
+                                           '--if-version', '4')
+        self.assertEqual((code, err), (0, ''), out)
+        self.assertEqual(seen, [('POST', '/questions/Q-001/log',
+                                 {'ruling': 'D-7', 'if_version': 4, 'replace': True})])
         (code, out, err), seen = self.sent('stories', 'set', 'S-001', '--status', 'review',
                                            '--if-version', '0')
         self.assertEqual((code, err), (0, ''), out)

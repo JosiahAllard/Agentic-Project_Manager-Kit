@@ -107,7 +107,7 @@ the server alone decides what a role may do.
                                                      not know it; --record: the open backlog
                                                      record it is about, refused unless the
                                                      hub reads it now in that configured repo
-  hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
+  hub.py questions log Q-1 <ruling id> [--replace] --if-version V   `LOGGED Q-1 <ruling id>`
   hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
                                                      that needs no ruling
   hub.py questions file [Q-1]                       `FILED Q-1`, `NOT FILED Q-1: <why> (<code>)`
@@ -388,6 +388,8 @@ def _client_verbs(sub):
     x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
     x.add_argument('id')
     x.add_argument('ruling', metavar='ruling-id')
+    x.add_argument('--replace', action='store_true',
+                   help='correct the ruling of a question already logged')
     _pins(x, required=True)
     x = _leaf(q, 'done', 'mark an answered question handled with no ruling (a one-off go)')
     x.add_argument('id')
@@ -1018,8 +1020,10 @@ def _questions(a, stop):
             record=a.record, **{'from': a.who}))
         return _wrote(a, got, 'ASKED %s' % got.get('id'))
     if a.sub == 'log':
-        got = hub.post(_one('questions', a) + '/log', client.AGENT,
-                       {'ruling': a.ruling, 'if_version': a.if_version})
+        body = {'ruling': a.ruling, 'if_version': a.if_version}
+        if a.replace:
+            body['replace'] = True      # sent only when asked: a hub not yet restarted refuses unknown fields
+        got = hub.post(_one('questions', a) + '/log', client.AGENT, body)
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
     if a.sub == 'done':
         got = hub.post(_one('questions', a) + '/done', client.AGENT,

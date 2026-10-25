@@ -303,7 +303,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
 | `questions show Q-1 [--json]` | the `Q-1 v2 answered [repo] title` line, then its options (the recommended one marked), context, answer and note |
 | `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID] [--from KEY]` | `ASKED Q-2`, then any warning lines |
-| `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
+| `questions log Q-1 <ruling id> [--replace] --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
 | `questions file [Q-1]` | `FILED Q-1` and `NOT FILED Q-2: <why> (<code>)` lines, or `nothing to file` ("Filing the answer") |
 | `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent] [--record REPO:ID \| --no-record]` | `EDITED Q-1` |
@@ -335,6 +335,8 @@ Notes on the table:
 - `todos` lines carry no version; `todos --json` gives each to-do's `version`.
 - `questions add --story` is the story a follow-up belongs to; `stories set`, `questions log`,
   `questions done` and every `edit` and `withdraw` require `--if-version`.
+- `questions log` refuses (`invalid`, field `ruling`) a ruling that is not a ledger id and one that
+  no ledger file holds; `--replace` corrects the ruling of a question already logged.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged or done,
   stories submitted, To PM items sent, to-dos done or added by the owner without `pm_ack`, and
   approvals the owner decided that are not consumed (`kitlib.hubsite.store.pending_items`; an

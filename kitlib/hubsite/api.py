@@ -174,6 +174,8 @@ is null and `unavailable` maps its name to that same reason:
                                             (kitlib.maintlint.slot.read_skip) or null
   health()                                  a dict merged into GET health (git, backlog, ...)
   record(repo, id)                          one record (GET records/{repo}/{id})
+  ruling_exists(rid)                        whether a ledger file holds the ruling id (POST
+                                            questions/{id}/log); none: only its shape is checked
   record_template(repo)                     a new record's fields (GET records/{repo}/new)
 The two record views differ: what they raise as a HubError is the answer (a 404 for a record or
 repository that is not there, a 400 for a name that cannot be one), so their messages are fixed
@@ -198,6 +200,9 @@ for the PM. A filed question carries `filed_as`, what the answer did to its reco
 freed, held: _filed_as, from the `record` view read before and after), which the push reads to
 choose who hears it. `standing` {at, via} marks an answer the owner made a standing rule (the
 answer's `standing` true, or later `standing` alone: _promote): the PM logs it.
+POST questions/{id}/log takes `ruling`, a ledger ruling id that exists (questions_log:
+kitlib.ledger.fmt.is_id, then the ruling_exists view when there is one), and `replace` true to swap the
+ruling of an already logged question for another.
 
 Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
 through `lock`: a door object (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this
@@ -323,6 +328,7 @@ import re
 import time
 
 from kitlib import hubvalidate
+from kitlib.ledger import fmt as ledger_fmt
 # at load, not on each read: a kit refresh can remove the folder this process imported from
 from kitlib.launcher import settings as lsettings, state as lstate
 
@@ -1233,15 +1239,45 @@ def questions_file(api, req):
 HANDLED_FROM = ('answered', 'filed')
 
 
+def _ruling(api, ruling):
+    """`ruling` when it is a ledger ruling id (kitlib.ledger.fmt.is_id) that
+    exists. Refused `invalid` (field ruling) for any other text, so a stray line cannot be stored
+    as a ruling, and for an id no ledger file holds. The existence check is the optional
+    `ruling_exists` view (module docstring, "Views"); only a server built with no `rulings` source
+    checks the shape alone. The machine server always has one, so with no ledger configured it
+    refuses every id."""
+    if not ledger_fmt.is_id(ruling):
+        raise _invalid('ruling must be a ledger ruling id (the id ledger.py add prints), not %s'
+                       % ascii(ruling if len(ruling) <= 60 else ruling[:60] + '...'), 'ruling')
+    if callable(getattr(api.views, 'ruling_exists', None)) and (
+            not api.shown('ruling_exists', rid=ruling)):
+        raise _invalid('%s is in no ledger file: log the ruling first (ledger.py add)' % ruling,
+                       'ruling')
+    return ruling
+
+
 def questions_log(api, req):
-    b = _fields(req, ('ruling', 'if_version'), required=('ruling',))
+    """POST questions/{id}/log: record the ledger id `ruling` an answered or filed question was
+    logged as (status `logged`). `ruling` is checked (_ruling). A logged question is refused
+    (`invalid`, field status) unless `replace` is true, which swaps its ruling for another checked
+    one and changes nothing else: the way to correct a wrong id. `replace` on a question that is
+    not logged is refused the same way."""
+    b = _fields(req, ('ruling', 'if_version', 'replace'), required=('ruling',),
+                flags=('replace',))
     _pin(b, required=True)
     ruling = _text(b, 'ruling').strip()
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
-    if d.get('status') not in HANDLED_FROM:
-        raise _invalid('%s is %s: only an answered or filed question is logged'
-                       % (doc_id, d.get('status')), 'status')
+    if b.get('replace'):
+        if d.get('status') != 'logged':
+            raise _invalid('%s is %s: only a logged question has a ruling to replace'
+                           % (doc_id, d.get('status')), 'replace')
+    elif d.get('status') not in HANDLED_FROM:
+        raise _invalid('%s is %s: only an answered or filed question is logged%s'
+                       % (doc_id, d.get('status'),
+                          ' (replace: true corrects its ruling)' if d.get('status') == 'logged'
+                          else ''), 'status')
+    _ruling(api, ruling)
     return api.change('questions', doc_id, d, {'status': 'logged', 'ruling': ruling}, req,
                       {'status': 'logged'})
 

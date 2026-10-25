@@ -1,5 +1,5 @@
 """The gate's steps: built from `.kit.json` "gate", picked by what changed, judged by their logs
-(ported from the PM kit tools/gate.py: build_steps, selects, substitute, judge; docs/gate.md).
+(build, selects, substitute, judge; docs/gate.md).
 
 Pure logic: no process is started here (kitlib.gate.runner runs the steps) and nothing prints.
 
