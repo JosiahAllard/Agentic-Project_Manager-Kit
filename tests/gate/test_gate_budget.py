@@ -197,6 +197,22 @@ class Refused(BudgetCase):
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIn('--runs %d' % (budget.RUNS + 3), '\n'.join(out.lines))
 
+    def test_the_allowance_is_in_the_drive_folder_and_its_git_copy_is_never_read(self):
+        path, _ = budget.allow(self.wt, BRANCH, budget.RUNS + 1, 'one more', self.store, who=AGENT)
+        self.assertEqual(path, budget.allow_path(self.wt, BRANCH))
+        self.assertTrue(os.path.normcase(path).startswith(os.path.normcase(
+            os.path.join(self.result_drive, 'pm-kit', 'kit-gate-budget') + os.sep)), path)
+        copy = budget.legacy_path(self.wt, BRANCH)
+        self.assertTrue(os.path.samefile(os.path.dirname(copy),
+                                         os.path.join(self.repo.common_dir(), 'kit-gate-budget')))
+        with open(path, encoding='utf-8') as a, open(copy, encoding='utf-8') as b:
+            self.assertEqual(json.load(a), json.load(b))    # written for an older kit's gate
+        os.remove(path)                                     # only the .git copy is left
+        self.assertIsNone(budget.allowance(self.wt, BRANCH))
+        self.lines(budget.RUNS)
+        out, _ = self.gate()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+
 
 class NeverRefused(BudgetCase):
     def test_the_owner_is_never_refused(self):
