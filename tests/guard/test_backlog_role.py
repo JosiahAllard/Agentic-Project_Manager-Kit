@@ -689,7 +689,7 @@ class HubWriterCode(Base):
                 with self.subTest(env=env, text=text):
                     self.allowed(self.cmd(text, sub=False, env=env))
 
-    # the attribute or alias form and a multi-line import (KIT-GUARD-HUB-WRITER-ALIAS)
+    # the attribute or alias form and a multi-line import
     ALIAS_TEXTS = ("python -c 'from kitlib.hubsite import serve; serve.recordwrite.add(1)'",
                    'python -c "import kitlib.hubsite as h; h.recordwrite.answer(1)"',
                    'python -c "import kitlib.hubsite as h; h . recordwrite.edit(1)"',
