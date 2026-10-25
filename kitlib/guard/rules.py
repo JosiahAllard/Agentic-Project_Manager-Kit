@@ -306,27 +306,42 @@ def shell_command(event, ctx, text, shell, cwd, role):
     parsed = cm.read(text, shell, cwd, home=ctx.home)
     hub_rules = HubShell(event, ctx, parsed)
     late = None             # cmd-reparse's, judged last: every other rule's refusal, the fallback's too, comes first
+    asked = Asked()         # an ask (the unread ledger's) waits: any refusal on the line wins over it
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, ledger_git,
                      wrapped_gate, root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path,
                      owner_identity, kill_by_name, shell_writes, git_plain_commit, interpreter_git):
-            d = rule(event, ctx, cmd, inv, cwd, role)
+            d = asked.firm(rule(event, ctx, cmd, inv, cwd, role))
             if d:
                 return d
-        late = late or cmd_reparse(event, ctx, cmd, inv, cwd, role)
-    d = brace_limit(parsed, role)
+        late = late or asked.firm(cmd_reparse(event, ctx, cmd, inv, cwd, role))
+    d = asked.firm(brace_limit(parsed, role))
     if d:
         return d
-    d = busy_wait(event, ctx, parsed, cwd, role)
+    d = asked.firm(busy_wait(event, ctx, parsed, cwd, role))
     if d:
         return d
     if not parsed.clean:
         from . import fallback
-        d = fallback.check(event, ctx, text, cwd, role, parsed)
+        d = asked.firm(fallback.check(event, ctx, text, cwd, role, parsed))
         if d:
             return d
-    return late
+    return late or asked.first
+
+
+class Asked(object):
+    """The first ask among a run of decisions, held back so that a refusal judged after it wins:
+    firm(d) gives `d` unless it is an ask (kept in `first`, the earliest), when it gives None."""
+
+    def __init__(self):
+        self.first = None
+
+    def firm(self, d):
+        if d is not None and d.verdict == ASK:
+            self.first = self.first or d
+            return None
+        return d
 
 
 def brace_limit(parsed, role):
@@ -1358,9 +1373,15 @@ def ledger_git(event, ctx, cmd, inv, cwd, role):
               else 'the subcommand xargs appends' if xargs and not sub else None)
     short, longs, pos = _opts(sub, args, wide=True)
     tree_form = unread or ledger_git_tree_form(sub, args, short, longs, xargs)
-    d = ledger_git_unread(event, ctx, cmd, sub, args, short, longs, xargs, tree_form, role)
-    if d or not held:
-        return d
+    asked = ledger_git_unread(event, ctx, cmd, sub, args, short, longs, xargs, tree_form, role)
+    d = ledger_git_held(event, ctx, cmd, gc, sub, args, short, longs, pos, xargs, unread, tree_form, held, role) \
+        if held else None
+    return d or asked                           # a held path's refusal before the unread ask
+
+
+def ledger_git_held(event, ctx, cmd, gc, sub, args, short, longs, pos, xargs, unread, tree_form, held, role):
+    """ledger_git's refusal of the git call `gc` over the held ledger paths `held`, or None."""
+    from . import delegfile
     if not gc.dir or gc.blind or (gc.unknown and not gc.sub_dyn):
         if not ledger_wide_binds(event, ctx):
             return None
@@ -1709,13 +1730,14 @@ STANDING_WHY = {
 }
 
 
-def ledger_rule(event, ctx, target, role, what, stand_in=False):
+def ledger_rule(event, ctx, target, role, what, stand_in=False, unread=True):
     """The ledger rule over an edit of `target`: what of the ledger it is (ledger_kind), and, for
     the sessions ledger_wide_binds names, a folder above a held path or a wildcard that can name
     one (`above`), unless the target is a stand-in for what the guard cannot read (edit_target's
     `stand_in`: the folder python runs in), as delegfile.reaches reads folders. A broken machine
     config refuses every subagent write; one with a ledger key the guard could not read asks the
-    owner about every main-session write a held path does not refuse (ledger_unread)."""
+    owner about every main-session write a held path does not refuse (ledger_unread; `unread`
+    False leaves that to the caller, which judges it after its other rules: edit_target)."""
     user = ctx.user()
     broken = user.get('broken')
     if broken and role == 'subagent':
@@ -1725,7 +1747,7 @@ def ledger_rule(event, ctx, target, role, what, stand_in=False):
                       'python -m json.tool %s' % quote(ctx.config_location().path))
     kind = ledger_kind(ctx, target, above=not stand_in and ledger_wide_binds(event, ctx)) if target else None
     if kind is None:
-        return ledger_unread(ctx, role, what)
+        return ledger_unread(ctx, role, what) if unread else None
     return refuse('ledger', role, STANDING_WHY[kind] % ledger_what(what), ledger_instead(ctx, kind))
 
 
@@ -1743,7 +1765,7 @@ def ledger_unread(ctx, role, what):
                       'the rulings ledger is and refuses every subagent write. The owner or the PM session fixes '
                       'it.' % (what, loc.display(), why), 'python -m json.tool %s' % quote(loc.path))
     return refuse('ledger', role, '%s: the machine config %s is broken (%s), so the guard cannot tell where the '
-                  'rulings ledger is and asks the owner about every write of this session until it is fixed (only '
+                  'rulings ledger is, so every write of this session needs the owner\'s yes until it is fixed (only '
                   'ledger.py writes the ledger, and it refuses while the config is broken). To read the machine '
                   'config:' % (what, loc.display(), why), 'python -m json.tool %s' % quote(loc.path), kind=ASK)
 
@@ -1894,7 +1916,7 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     `stand_in`, a target that stands for what the guard cannot read (the folder python runs in, the
     pipeline's paths), which counts as the owner's delegation list only when it is that file
     (delegfile.edit)."""
-    d = ledger_rule(event, ctx, target, role, what, stand_in) or pm_data_unknown(ctx, target, cwd, role, what) or \
+    d = ledger_rule(event, ctx, target, role, what, stand_in, unread=False) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         delegations_edit(event, ctx, target, role, what, stand_in) or \
         machine_config(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
@@ -1903,7 +1925,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     if d:
         return d
     return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run, redirect, shell, item) or \
-        write_jail(event, ctx, target, cwd, role, what, rewrite, run)
+        write_jail(event, ctx, target, cwd, role, what, rewrite, run) or \
+        ledger_unread(ctx, role, what)          # last: any refusal above wins over the unread ask
 
 
 # A write the guard cannot place: a computed or unread target, code given on the line (python -c,
@@ -4089,21 +4112,24 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     # git-* program) gives none: the git rules judge its writes, from the workdir (commands.git_call).
     moved = len(write_targets(cmd, None)) + len(inv.writes) \
         if inv is not None and inv.via == 'start-process' and inv.workdir is not None else None
+    asked = Asked()                             # every target's refusal wins over another's ask
     for k, w in enumerate(write_targets(cmd, inv)):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
         bases = (OUTER,) if moved is None or k < moved else (OUTER, cm.run_dir(inv))
         for base in bases:
             d, searched = _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched)
+            d = asked.firm(d)
             if d:
                 return d
-    return None
+    return asked.first
 
 
 def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     """(Decision or None, searched) for the write target `w` of shell_writes read from `base`
     (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
     runs_in = cmd.cwd if base is OUTER else base
+    asked = Asked()                             # find's ask waits for this target's own refusal
     piped = pipe_stand_in_word(cmd, w)
     target, why = (None, PIPE_UNPLACED) if piped else write_place(ctx, cmd, w, base)
     unread = py_unread(cmd, inv, w) or (NET_UNPLACED if net_stand_in(cmd, w) else None)
@@ -4113,7 +4139,7 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         target, why = checked[1], None
     if target is None and not searched:
         searched = True                         # find's start paths answer for every such target at once
-        d = find_exec_writes(event, ctx, cmd, cwd, role)
+        d = asked.firm(find_exec_writes(event, ctx, cmd, cwd, role))
         if d:
             return d, searched
     computed = target is None and cmd.shell == sh.PS and w.dyn
@@ -4121,7 +4147,9 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         pass                                    # PowerShell's, from any location: one $p or (...) can name the main checkout (B15)
     elif target is None and runs_in is not None and \
             ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
-        return None, searched                   # a target it cannot place, from a worktree or elsewhere
+        # a target it cannot place, from a worktree or elsewhere: passes, but while a ledger key is
+        # unread it can be the ledger
+        return asked.first or ledger_unread(ctx, role, '`%s` writes %s' % (cmd.text, w.text)), searched
     what = '`%s` writes the path the pipeline gives it' % cmd.text if piped else \
         '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
         if unread is None else \
@@ -4159,7 +4187,8 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
                         shell=outer_shell(cmd), item=item,
                         stand_in=piped or w.start == w.end or unread_write(cmd, inv, w))
         if not placed:
-            d = unplaced(d, role)
+            d = unplaced(d, role) or ledger_unread(ctx, role, what)   # a warned refusal leaves the ask
+        d = asked.firm(d)
         if d:
             return d, searched
     # A computed PowerShell target, or a path read from a directory the guard cannot tell (after a
@@ -4168,7 +4197,7 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
         if d:
             return d, searched
-    return None, searched
+    return asked.first, searched
 
 
 OUTER = object()                                # write_place: the command's own directory
@@ -4217,13 +4246,19 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
     found file's folder (-execdir). It is judged as each such find's start paths, or the directory
     find runs in when it names none, as -delete is (write_targets): every path find hands the
     command is under them. A start path the guard cannot place passes from a worktree, as any
-    target does (shell_writes)."""
+    target does (shell_writes), unless a ledger key is unread (ledger_unread). An ask waits for
+    every start path's refusal (Asked)."""
+    asked = Asked()
     for f, inv in find_runs(cmd):
         for w in _find_paths(inv.args)[0] or [here(inv.word)]:
             if not w.dyn and BASH_DEVICE_RE.match(w.text):
                 continue
             target, why = write_place(ctx, f, w)
             if target is None and f.cwd is not None and ctx.place(f.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
+                d = asked.firm(ledger_unread(ctx, role, '`%s` runs `%s` on what it finds in %s'
+                                             % (bare(f), bare(cmd), w.text)))
+                if d:
+                    return d                    # a subagent's refusal
                 continue
             what = '`%s` runs `%s` on what it finds in %s' % (
                 bare(f), bare(cmd), w.text if w.text != '.' else 'the directory it runs in')
@@ -4237,10 +4272,11 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
             d = edit_target(event, ctx, target, cwd, role, what, why, rewrite=rewrite, run=bare(f),
                             shell=outer_shell(f))
             if target is None:
-                d = unplaced(d, role)
+                d = unplaced(d, role) or ledger_unread(ctx, role, what)   # a warned refusal leaves the ask
+            d = asked.firm(d)
             if d:
                 return d
-    return None
+    return asked.first
 
 
 def execdir_swaps(f, cmd):
