@@ -7,28 +7,35 @@ import unittest
 
 from kitlib.maintlint import ledger, page
 from tests.gitfixture import rmtree
-from tests.ledger.test_standing import entry, rid
+from tests.ledger.test_standing import entry
+
+
+def _id(n):
+    return 'H-%s-%04d' % ('a', n)
+
+
+IDS = {'h1': _id(1), 'h2': _id(2), 'h3': _id(3)}
 
 SHARED = """# Shared rules
 Repos: shared
 Budget: 40
 
 ## Landing
-- landing.batch: Landers batch several branches together. (from H-a-0001)
-- landing.docs: Documentation accompanies behaviour changes. (from H-a-0001)
-"""
+- landing.batch: Landers batch several branches together. (from %(h1)s)
+- landing.docs: Documentation accompanies behaviour changes. (from %(h1)s)
+""" % IDS
 
 KIT = """# Kit rules
 Repos: kit
 Budget: 2
 
 ## Gate
-- gate.batch: Batch branches together through gate runs. (from H-a-0002)
-- gate.full: Strict paths need full coverage. (from H-a-0002)
+- gate.batch: Batch branches together through gate runs. (from %(h2)s)
+- gate.full: Strict paths need full coverage. (from %(h2)s)
 
 ## Landing
-- landing.docs: Prose lives beside code. (from H-a-0003)
-"""
+- landing.docs: Prose lives beside code. (from %(h3)s)
+""" % IDS
 
 
 def temp_dir(case):
@@ -78,7 +85,7 @@ class RulebookCounts(unittest.TestCase):
         res = {'repo': 'x', 'counts': {}, 'ledger': got, 'notes': [], 'findings': []}
         text = json.dumps(got) + page.render(res) + json.dumps([
             f._asdict() for f in ledger.findings(got)])
-        for leak in ('landing.', 'gate.', 'Landers', 'H-a-', 'R-'):
+        for leak in ('landing.', 'gate.', 'Landers', 'H-', 'R-'):
             self.assertNotIn(leak, text)
         self.assertIn('2 rules in all', page.render(res))
 
