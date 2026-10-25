@@ -9,7 +9,8 @@
   backlog-raw-write  a write of the backlog that skips the tool and its role check: a subagent's
                      python code importing kitlib.backlog (-c, standard input, -m, runpy) or naming
                      tools/backlog.py; any session's but the owner's python code naming the hub's
-                     record writer (kitlib.hubsite.recordwrite, plan_answer: hub_writer_code);
+                     record writer by its module name, not its file's path
+                     (kitlib.hubsite.recordwrite, plan_answer: hub_writer_code);
                      any session's but the owner's git write of the store's ref
                      (refs/backlog/*; the backlog branch when the store is `branch`); any
                      session's but the owner's edit of a folder store's records.
