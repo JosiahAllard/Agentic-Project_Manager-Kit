@@ -1,5 +1,4 @@
-"""`landable`: may a branch land without leaving a dead pull? (ported from an earlier
-tools/backlog.py `cmd_landable`).
+"""`landable`: may a branch land without leaving a dead pull?
 
 Landing deletes the branch, so a record still `state: pulled` with `pulled_by: <branch>` would
 name a branch that no longer exists, unless the landing itself ends that pull. It does in a store

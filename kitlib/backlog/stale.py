@@ -1,5 +1,5 @@
-"""`stale`: records that may no longer say what is true (ported from an earlier tools/backlog.py,
-the `anchor` test dropped with the key). Read-only; it reports, it never writes or fails a record.
+"""`stale`: records that may no longer say what is true.
+Read-only; it reports, it never writes or fails a record.
 
 Three tests, each a different way of going stale:
 

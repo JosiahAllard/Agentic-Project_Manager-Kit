@@ -1,5 +1,4 @@
-"""`check`: every named check with its own denominator (ported from an earlier per-repository
-tools/backlog.py; decision cites, anchors, ruling orphans and the UNBUILT lines cut).
+"""`check`: every named check with its own denominator.
 
 A check that looked at nothing over a store that was read is vacuous (an answer); one with no
 population at all is red (it never ran). No check reads the ledger: a ruling id on a record is
