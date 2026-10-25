@@ -39,5 +39,5 @@ Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dis
 ## Report
 
 `{{tool:message}}` it to the requester (`{{tool:list-agents}}` finds it; gone -> the session named Project
-Manager), when done or blocked on something only the requester can settle, in the form skill builder
+Manager, or pm-session when the launcher resumed it), when done or blocked on something only the requester can settle, in the form skill builder
 gives (worktree included); then stay idle - the requester or the PM closes your window.
