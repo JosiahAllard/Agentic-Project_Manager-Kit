@@ -139,6 +139,14 @@ class HubSiteTest(unittest.TestCase):
             out = site(FakeClient(error=err))
             self.assertEqual(out, ["hub: server did not answer as the hub does (%s)" % type(err).__name__])
 
+    def test_no_pm_repo_pointer_names_the_pointer_not_a_hub_that_did_not_answer(self):
+        with mock.patch.object(auth, "folder", side_effect=ConfigError(auth.NO_POINTER)):
+            out = pmstart.hub_site(load=lambda: SET)
+        self.assertEqual(len(out), 1)
+        self.assertIn("no PM repo pointer is set", out[0])
+        self.assertIn("--pm-repo", out[0])
+        self.assertNotIn("did not answer", out[0])
+
     def test_a_health_answer_that_is_not_ok_is_not_up(self):
         out = site(FakeClient(health={"ok": False}))
         self.assertEqual(out, ["hub: server did not answer as the hub does (health not ok)"])

@@ -58,7 +58,9 @@ and, only in an entry carry() moved (a re-add drops it):
 
 Errors (all VerdictError): BadEntry for a malformed entry or branch name given, nothing read or
 written; SelfReview (a BadEntry) when add() is given a High-risk verdict the coordinator queueing
-it reviewed itself (self_review_why), nothing read or written; TipMismatch when the tip is not the branch's head, or there is no such branch;
+it reviewed itself (self_review_why), nothing read or written, or, with "landing".
+self_review_max_lines given, a self-read of a branch over that many changed lines or one whose
+size cannot be told (self_review_size_why), nothing written; TipMismatch when the tip is not the branch's head, or there is no such branch;
 CarryRefused when carry() finds the head does not carry the verdict, nothing written;
 OtherBranch when the file for the branch named holds another branch's entry (names that differ
 only in case share one file on Windows); VerdictError itself for a queue file that cannot be read
@@ -80,6 +82,7 @@ import time
 import urllib.parse
 
 from kitlib.gate import carry as carrymod
+from kitlib.git import cmd as gitcmd
 from kitlib.git import refs
 
 DIR_NAME = 'kit-verdicts'
@@ -206,25 +209,98 @@ SELF_REVIEW_INSTEAD = ('Instead: dispatch a fresh analyst to review the branch (
 COORDINATOR_RE = re.compile(r'(?<![a-z0-9])coordinator(?![a-z0-9])')
 
 
-def self_review_why(entry):
-    """Why add() refuses `entry` as a self-review, or None. Refused: a High-risk verdict whose
-    reviewer is the coordinator queueing it, that is an id `reviewer_id` lists (split as
-    land.is_author splits it) is `session`, case and outer space aside, or an agent type the
-    reviewer names (reviewer_types) holds `coordinator` as a word (`pm-kit:coordinator`,
-    `kit-coordinator`). A Low or Medium one is not: a coordinator may read a small branch itself
-    (skill branch-review, step 3). `entry` is well formed (check). Pure."""
-    if entry['risk'] != 'High':
-        return None
+def self_reader(entry):
+    """How `entry`'s reviewer is the coordinator queueing it, or None: an id `reviewer_id` lists
+    (split as land.is_author splits it) is `session`, case and outer space aside, or an agent type
+    the reviewer names (reviewer_types) holds `coordinator` as a word (`pm-kit:coordinator`,
+    `kit-coordinator`). `entry` is well formed (check). Pure."""
     session = entry['session'].strip().casefold()
     ids = [i for i in re.split(r'[/,;\s]+', entry['reviewer_id'].casefold()) if i]
     if session in ids:
-        who = 'its reviewer id %s is the session queueing it' % entry['reviewer_id'].strip()
-    elif any(COORDINATOR_RE.search(t) for t in reviewer_types(entry['reviewer'])):
-        who = 'its reviewer %s is the coordinator role' % entry['reviewer'].strip()
-    else:
+        return 'its reviewer id %s is the session queueing it' % entry['reviewer_id'].strip()
+    if any(COORDINATOR_RE.search(t) for t in reviewer_types(entry['reviewer'])):
+        return 'its reviewer %s is the coordinator role' % entry['reviewer'].strip()
+    return None
+
+
+def self_review_why(entry):
+    """Why add() refuses `entry` as a self-review, or None. Refused: a High-risk verdict whose
+    reviewer is the coordinator queueing it (self_reader). A Low or Medium one is not: a
+    coordinator may read a small branch itself (skill branch-review, step 3), up to
+    "landing".self_review_max_lines when that is set (self_review_size_why). `entry` is well
+    formed (check). Pure."""
+    if entry['risk'] != 'High':
+        return None
+    who = self_reader(entry)
+    if not who:
         return None
     return ('a High-risk verdict needs a reviewer other than the coordinator queueing it, and %s '
             '(skill branch-review, step 3); nothing was queued\n%s' % (who, SELF_REVIEW_INSTEAD))
+
+
+def diff_lines(cwd, rng):
+    """`(added, removed, files)` the range `rng` (`<base>..<tip>`) changes, counted as
+    `git diff --numstat --find-renames <base>...<tip>` counts them: from the merge base of the two
+    to the tip, so commits the base gained after the branch left it are not counted. A binary file
+    is one file and no lines. Git runs in `cwd` (a git dir does). VerdictError when git gives no
+    answer or prints a line that is not a numstat row."""
+    base, _, tip = rng.partition('..')
+    for rev in (base, tip):
+        why = refs.bad_rev(rev)
+        if why:
+            raise VerdictError('the range %s: %s' % (rng, why))
+    out, why = gitcmd.run_text(['diff', '--numstat', '--find-renames', '%s...%s' % (base, tip),
+                                '--'], cwd)
+    if out is None:
+        raise VerdictError('git diff --numstat %s...%s: %s' % (base, tip, (why or '').strip()))
+    added = removed = files = 0
+    for row in out.splitlines():
+        a, sep, rest = row.partition('\t')
+        d, sep2, _ = rest.partition('\t')
+        if not (sep and sep2):
+            raise VerdictError('git diff --numstat printed %r, not a numstat row' % row[:80])
+        if (a, d) != ('-', '-'):
+            if not (a.isdigit() and d.isdigit()):
+                raise VerdictError('git diff --numstat printed %r, not a numstat row' % row[:80])
+            added, removed = added + int(a), removed + int(d)
+        files += 1
+    return added, removed, files
+
+
+def self_review_size_why(entry, max_lines, cwd, main, main_why=None):
+    """Why add() refuses `entry` as a self-read too large for the coordinator to give, or None.
+    None whenever `max_lines` ("landing".self_review_max_lines) is None or the reviewer is not the
+    coordinator queueing it (self_reader). Else the size is the larger of two counts (diff_lines,
+    git run in `cwd`): the range given, and `main...<tip>` with `main` main as fetched, so a base
+    stated past most of the branch (`<tip>~1..<tip>`) does not shrink it. Refused when that is
+    more than `max_lines`, or when it cannot be told (`main` None, `main_why` saying why, or git
+    gives no answer): with a cap set, a size that cannot be told is not a small branch. `entry` is
+    well formed (check)."""
+    if max_lines is None:
+        return None
+    who = self_reader(entry)
+    if not who:
+        return None
+    head = ('a verdict the coordinator queueing it reviewed itself covers at most %d changed lines '
+            '("landing".self_review_max_lines), and ' % max_lines)
+    tail = '; %s; nothing was queued\n%s' % (who, SELF_REVIEW_INSTEAD)
+    if not main:
+        return head + ('main as fetched cannot be read (%s), so the size of %s cannot be told'
+                       % (main_why or 'not given', entry['range'])) + tail
+    tip = entry['tip'][:10]
+    counts = []
+    for rng in (entry['range'], '%s..%s' % (main, entry['tip'])):
+        try:
+            counts.append(diff_lines(cwd, rng))
+        except VerdictError as e:
+            return head + 'git cannot tell how many lines %s changes (%s)' % (rng, e) + tail
+    added, removed, files = max(counts, key=lambda c: c[0] + c[1])
+    if added + removed <= max_lines:
+        return None
+    return head + ('%s changes %d (+%d -%d in %d file%s; the larger of the range given and %s...%s '
+                   'from main as fetched)' % (entry['range'], added + removed, added, removed,
+                                              files, '' if files == 1 else 's', main[:10],
+                                              tip)) + tail
 
 
 def check(entry, stored=True):
@@ -420,11 +496,14 @@ def head_of(common_dir, branch):
     return sha
 
 
-def add(common_dir, entry, now=None):
+def add(common_dir, entry, now=None, self_review_max_lines=None, main=None, main_why=None):
     """Queue `entry` (the GIVEN_KEYS; nothing else) for its branch, replacing an entry already
     queued for it: `(path, stored entry)`. The tip must be `refs/heads/<branch>` in the repository
     whose common dir is `common_dir`, else TipMismatch. A High-risk self-review is SelfReview
-    (self_review_why). `now`: a datetime for queued_utc."""
+    (self_review_why); so is a self-read of a branch over `self_review_max_lines` changed lines, or
+    one whose size cannot be told, when that cap ("landing".self_review_max_lines) is given
+    (self_review_size_why; `main`: main as fetched, a commit, or None with `main_why`). `now`: a
+    datetime for queued_utc."""
     why = check(entry, stored=False)
     if why:
         raise BadEntry(why)
@@ -438,6 +517,9 @@ def add(common_dir, entry, now=None):
         raise TipMismatch('there is no branch %s' % branch)
     if head != tip:
         raise TipMismatch('%s is at %s, not the tip given %s' % (branch, head, tip))
+    why = self_review_size_why(entry, self_review_max_lines, common_dir, main, main_why)
+    if why:
+        raise SelfReview(why)
     stored = dict(entry, records=list(entry['records']), queued_utc=utc(now), state=QUEUED,
                   last_result=None)
     with _locked(common_dir):

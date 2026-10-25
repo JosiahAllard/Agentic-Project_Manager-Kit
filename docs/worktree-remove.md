@@ -1,6 +1,6 @@
 # Worktree remove
 
-Remove a workstream's worktree only when its work has landed and nothing holds it, abandon unlanded work under a tag, and sweep landed idle worktrees nightly. Ported from the PM kit's `tools/worktree_remove.py` and `tools/worktree_sweep_task.py`. On Windows `git worktree remove` destroys the worktree's registration when it fails partway, so every check runs before git is called.
+Remove a workstream's worktree only when its work has landed and nothing holds it, abandon unlanded work under a tag, and sweep landed idle worktrees nightly. On Windows `git worktree remove` destroys the worktree's registration when it fails partway, so every check runs before git is called.
 
 ## Tools
 

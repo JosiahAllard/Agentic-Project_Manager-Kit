@@ -8,7 +8,9 @@ every change that writes a key checks the file still holds what the run last saw
 the snapshot on to the bytes it wrote, so two keys planned in one run both land, while a file
 another program changed since the survey refuses the write. The file's other keys and its layout
 (BOM, line ends, indent: kitlib.machinesetup.settings.read) are kept, and the file is put back when
-the machine config cannot be read after the write. Nothing here prints or exits.
+the machine config cannot be read after the write. A folder with no .gitignore gets the one the
+move writes (kitlib.config.move.GITIGNORE) before the first key lands, so local.json is never
+unignored. Nothing here prints or exits.
 """
 import os
 
@@ -74,7 +76,11 @@ def set_key(home, snap, key, value, replace=False):
         raise RuntimeError('%s already has %s; not overwritten' % (path, key))
     data[key] = value
     new = settings.write(layout, data)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    from kitlib.config import move as kmove      # at the call: move imports kitlib.coordinatorstart, which imports this package
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    if not os.path.lexists(os.path.join(folder, kmove.IGNORE_FILE)):
+        kmove._write_new(os.path.join(folder, kmove.IGNORE_FILE), kmove.GITIGNORE.encode('utf-8'))
     _replace(path, new)
     try:
         kuser.user_config(home)

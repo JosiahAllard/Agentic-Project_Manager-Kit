@@ -25,12 +25,25 @@ writes add no line by design (the landing's close, the Action Hub's writes, the 
 pricing; docs/backlog.md
 "Audit log", Known limit), is counted.
 
+UNVERIFIED (docs/backlog.md "Audit log"): each `answer:` line a change
+adds or changes, whatever its session, covered and by-design changes included, is checked. It
+passes only when the change was written by the Action Hub (its `Session:` is owner-hub,
+ANSWER_WRITER) or is a `catch-up` commit (an answer line a failed hub write left in a folder
+store), AND the hub store holds that question with that record id, an `answer.at` equal to or
+later than the line's (a re-answer replaced it: held) and a status in ANSWERED. Anything else is
+the finding. The window's records are read once, in one git process for every change (records_of),
+and shared with rows_of. The hub store is read only, through the hub's own client (`questions`,
+default hub_questions), and only when the window holds an answer change the hub wrote; a hub that
+cannot be read is a NOT CHECKED note for those lines, never a finding.
+
   read_log(path)                  ([(line number, fields)], notes); a missing file is no lines
   verb_of(subject)                the backlog.py verb a store commit's subject names, or None
   history(root, rev, rel, since)  [Change] newest first
+  records_of(root, changes)       {sha: {path: (before, after)}}, read in one git process
   store_place(backend, rules)     (root, rev or None, rel); NotChecked for a folder store elsewhere
-  check(backend, rules, entries, since_epoch)   a Report
-  run(root, days, fetch, home, now, show_all)   (exit code, lines) for the tool
+  check(backend, rules, entries, since_epoch, questions)   a Report
+  hub_questions()                 every hub question document, read with the agent token
+  run(root, days, fetch, home, now, show_all, questions)   (exit code, lines) for the tool
 """
 import collections
 import datetime
@@ -49,6 +62,15 @@ OK, FINDINGS, NOT_CHECKED = 0, 1, 2
 # kitlib.hubsite.recordwrite.SESSION and kitlib.dailyfull.file.SLUG (tests/backlog/test_audit.py
 # holds them equal).
 BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
+
+# The one writer of an `answer:` line (kitlib.hubsite.recordwrite.SESSION), the commit subject
+# that may carry one it left uncommitted (store.catch_up), and the hub question statuses that hold
+# the owner's answer (kitlib.hubvalidate STATUSES: answered, filed, then logged or done once its
+# asker reads it; a re-answer is told apart by its `at`).
+ANSWER = 'UNVERIFIED'
+ANSWER_WRITER = 'owner-hub'
+CATCH_UP = 'backlog: catch up '
+ANSWERED = ('answered', 'filed', 'logged', 'done')
 
 # (subject prefix, verb): kitlib.backlog.plan's (`uncite` among them), retarget's and
 # store.catch_up's subjects, and `migrate: `, the subject of a store's first commit in old store
@@ -191,15 +213,20 @@ def _given(verb, change, before, after):
     return {}
 
 
-def _records(root, change):
-    """{path: (before Record or None, after Record or None)} for `change`'s record paths, read in
-    one git process."""
+def records_of(root, changes):
+    """{sha: {path: (before Record or None, after Record or None)}} for every change's record
+    paths, all read in one git process (so a covered or by-design change, whose answer lines are
+    checked too, starts none of its own)."""
     specs = []
-    for _status, path in change.paths:
-        specs += ['%s^:%s' % (change.sha, path), '%s:%s' % (change.sha, path)]
+    for change in changes:
+        for _status, path in change.paths:
+            specs += ['%s^:%s' % (change.sha, path), '%s:%s' % (change.sha, path)]
+    if not specs:
+        return dict((change.sha, {}) for change in changes)
     got, why = batch.cat_file(specs, root)
     if got is None:
-        raise Failure('cannot read the store\'s records at %s: %s' % (change.sha[:10], why))
+        raise Failure('cannot read the store\'s records at %s: %s'
+                      % (','.join(c.sha[:10] for c in changes), why))
 
     def parsed(spec, path):
         hit = got.get(spec)
@@ -207,16 +234,24 @@ def _records(root, change):
             return None
         stem = path.rsplit('/', 1)[-1][:-3]
         return smod.parse_blob(stem, hit[1], path)
-    return dict((path, (parsed('%s^:%s' % (change.sha, path), path),
-                        parsed('%s:%s' % (change.sha, path), path)))
-                for _status, path in change.paths)
+    return dict((change.sha, dict((path, (parsed('%s^:%s' % (change.sha, path), path),
+                                          parsed('%s:%s' % (change.sha, path), path)))
+                                  for _status, path in change.paths))
+                for change in changes)
 
 
-def rows_of(root, verb, change):
+def _records(root, change):
+    """{path: (before Record or None, after Record or None)} for `change`'s record paths, read in
+    one git process."""
+    return records_of(root, [change])[change.sha]
+
+
+def rows_of(root, verb, change, records=None):
     """The ACTIONS rows (sorted names) `change` took, by policy.sort over each record it wrote,
-    and the collision row a plan found when the subject carries policy.COLLISION_MARK."""
+    and the collision row a plan found when the subject carries policy.COLLISION_MARK.
+    `records`: _records' answer for `change` when already read (None: read it)."""
     rows = set()
-    for before, after in _records(root, change).values():
+    for before, after in (records if records is not None else _records(root, change)).values():
         rows.update(policy.sort(verb, _given(verb, change, before, after), before))
     if verb in policy.COLLISION_ROWS and policy.COLLISION_MARK in change.subject:
         rows.add(policy.COLLISION_ROWS[verb])
@@ -227,10 +262,80 @@ def _ids(change):
     return ','.join(sorted(p.rsplit('/', 1)[-1][:-3] for _s, p in change.paths)) or '-'
 
 
-def check(backend, rules, entries, since):
-    """A Report of the store's changes since the epoch `since` against the log `entries`."""
+def answer_lines(root, change, records=None):
+    """[(record id, `<qid> <at>`)] for each `answer:` line `change` adds or changes; a removed line
+    is none (docs/backlog.md "Audit log", Known limits). `records`: as rows_of's."""
+    out = []
+    got = records if records is not None else _records(root, change)
+    for path, (before, after) in sorted(got.items()):
+        if after is None:
+            continue
+        was = set(before.all('answer')) if before is not None else set()
+        rid = path.rsplit('/', 1)[-1][:-3]
+        out += [(rid, v) for v in after.all('answer') if v not in was]
+    return out
+
+
+def hub_questions():
+    """Every question document on this machine's hub, read with the agent token through the hub's
+    client (as kitlib.maintlint.backlog hub_questions and tools/hub.py read them): read only.
+    Raises what the client raises, and ConfigError for a hub config that cannot be read."""
+    from kitlib.hubsite import client, settings
+    return client.Client(settings.load().port).listing('questions', status='all',
+                                                         role=client.AGENT)
+
+
+def hub_answers(docs):
+    """{(qid, record id, at)} of the hub's answered questions bound to a record (status in
+    ANSWERED). The record's repo is not matched (docs/backlog.md "Audit log", Known limits)."""
+    out = set()
+    for d in docs or ():
+        if not isinstance(d, dict) or d.get('status') not in ANSWERED:
+            continue
+        record, ans = d.get('record'), d.get('answer')
+        if isinstance(record, dict) and isinstance(ans, dict):
+            out.add((str(d.get('id')), str(record.get('id')), str(ans.get('at'))))
+    return out
+
+
+def _when(at):
+    """The aware datetime of an answer time, or None when it is not one."""
+    try:
+        when = datetime.datetime.fromisoformat(at)
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo is not None else None
+
+
+def held(answers, qid, rid, at):
+    """True when the hub's `answers` (hub_answers) hold question `qid` on record `rid` answered at
+    `at`, or at a later time: a re-answer replaced the line `at` (plan_answer), so the hub keeps
+    only the newer `at` (docs/backlog.md "Audit log", Known limits)."""
+    if (qid, rid, at) in answers:
+        return True
+    when = _when(at)
+    return when is not None and any(
+        q == qid and r == rid and _when(a) is not None and _when(a) > when
+        for q, r, a in answers)
+
+
+def _hub_read(questions):
+    """(the hub's answers, None) or (None, why the hub store could not be read)."""
+    from kitlib.config.types import ConfigError
+    from kitlib.hubsite import serve
+    try:
+        return hub_answers((questions or hub_questions)()), None
+    except (serve.ServeError, ConfigError, OSError, ValueError) as exc:
+        return None, '%s: %s' % (type(exc).__name__, ' '.join(str(exc).split()))
+
+
+def check(backend, rules, entries, since, questions=None):
+    """A Report of the store's changes since the epoch `since` against the log `entries`.
+    `questions`: a callable giving the hub's question documents (None: hub_questions), called
+    once, only when a change in the window that the hub wrote adds an answer line."""
     report = Report(backend.describe())
     root, rev, rel = store_place(backend, rules)
+    hub = []                                 # [answers or None, why], read on first need
     shas = set()
     report.lines_read = len(entries)
     for _n, fields in entries:
@@ -240,11 +345,30 @@ def check(backend, rules, entries, since):
         else:
             shas.add(str(sha))
     changes = history(root, rev, rel, since) if rev else []
+    every = records_of(root, changes) if changes else {}
     for change in changes:
         report.changes += 1
         session = smod.session_of(change.body) or audit.MISSING
         what = '%s %s %s session=%s' % (change.sha[:10], utc_of(change.epoch), _ids(change),
                                         session)
+        records = every[change.sha]
+        answers = answer_lines(root, change, records)
+        writer = session == ANSWER_WRITER or change.subject.startswith(CATCH_UP)
+        if answers and writer and not hub:
+            hub[:] = _hub_read(questions)
+            if hub[1]:
+                report.notes.append('answers NOT CHECKED: the hub store could not be read (%s), '
+                                    'so no answer line the hub wrote was checked' % hub[1])
+        for rid, line in answers:
+            qid, _, at = line.partition(' ')
+            if not writer:
+                why = 'not written by %s' % ANSWER_WRITER
+            elif hub[0] is None or held(hub[0], qid, rid, at):
+                continue
+            else:
+                why = 'no answered or filed hub question %s on %s at %s' % (qid, rid, at)
+            report.findings.append(Finding(ANSWER, '%s answer: %s (%s)  %s' % (
+                what, line, why, change.subject)))
         if change.sha in shas:
             report.covered += 1
             report.listed.append('COVERED %s  %s' % (what, change.subject))
@@ -257,7 +381,7 @@ def check(backend, rules, entries, since):
         if verb is None:
             report.findings.append(Finding('UNKNOWN', '%s  %s' % (what, change.subject)))
             continue
-        rows = rows_of(root, verb, change)
+        rows = rows_of(root, verb, change, records)
         if not rows:                         # a write subject no roles.py row names yet
             report.findings.append(Finding('UNKNOWN', '%s %s rows=none  %s' % (
                 what, verb, change.subject)))
@@ -296,8 +420,9 @@ def report_lines(report, days, show_all=False):
     return lines
 
 
-def run(root, days=1, fetch=True, home=None, now=None, show_all=False):
-    """`(exit code, lines)`: the whole check for the repository at `root` over the last `days`."""
+def run(root, days=1, fetch=True, home=None, now=None, show_all=False, questions=None):
+    """`(exit code, lines)`: the whole check for the repository at `root` over the last `days`
+    (`questions`: check's)."""
     from .opener import open_repo
     now = now or datetime.datetime.now(datetime.timezone.utc)
     since = now.timestamp() - days * 86400
@@ -311,7 +436,7 @@ def run(root, days=1, fetch=True, home=None, now=None, show_all=False):
         top, cfg, rules = open_repo(root)
         backend = smod.open_backend(top, cfg, fetch=fetch)
         entries, notes = read_log(audit.log_path(pm_data))
-        report = check(backend, rules, entries, since)
+        report = check(backend, rules, entries, since, questions)
     except NotChecked as exc:
         return NOT_CHECKED, ['NOT CHECKED: %s' % exc]
     except Refusal as exc:
@@ -319,5 +444,5 @@ def run(root, days=1, fetch=True, home=None, now=None, show_all=False):
     except (OSError, ValueError) as exc:          # an unreadable log or store: never FINDINGS
         return NOT_CHECKED, ['NOT CHECKED: cannot read the log or the store: %s: %s'
                              % (type(exc).__name__, ' '.join(str(exc).split()))]
-    report.notes = notes
+    report.notes = notes + report.notes
     return (FINDINGS if report.findings else OK), report_lines(report, days, show_all)
