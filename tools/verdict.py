@@ -9,7 +9,8 @@
       prints `REFUSED: ...` and an `Instead:` line naming a dispatched analyst (exit 2, nothing
       written; verdicts.self_review_why). With "landing".self_review_max_lines set in the -C
       checkout's .kit.json, a verdict of any risk the calling coordinator reviewed itself is
-      refused the same way when --range changes more lines than that, or git cannot measure it
+      refused the same way when it changes more lines than that (the larger of --range and the
+      tip's diff from main as last fetched), or its size cannot be told
       (verdicts.self_review_size_why); a .kit.json that cannot be read is NOT DONE (exit 1).
   verdict.py carry --branch B [-C DIR]
       after a main sync of a queued branch: move B's verdict to B's head when every commit after
@@ -157,7 +158,9 @@ def run(a, common_dir):
         except kconfig.ConfigError as e:
             return fail('NOT DONE', 'the kit configuration cannot be read: %s; nothing was queued'
                         % e, NOT_DONE)
-        _, stored = verdicts.add(common_dir, entry, self_review_max_lines=cap)
+        main, main_why = main_as_fetched(a.root) if cap is not None else (None, None)
+        _, stored = verdicts.add(common_dir, entry, self_review_max_lines=cap, main=main,
+                                 main_why=main_why)
         print('QUEUED %s %s' % (stored['branch'], stored['tip']), flush=True)
         return DONE
     if a.cmd == 'list':

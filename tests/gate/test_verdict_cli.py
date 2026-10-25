@@ -190,11 +190,25 @@ class VerdictCliSizeCap(GateRepoCase):
         self.assertTrue(lines[0].startswith(
             'REFUSED: a verdict the coordinator queueing it reviewed itself covers at most 3 '
             'changed lines ("landing".self_review_max_lines), and %s..%s changes 4 (+4 -0 in 2 '
-            'files)' % (self.main[:10], tip[:10])), out)
+            'files; the larger of the range given and %s...%s from main as fetched)'
+            % (self.main[:10], tip[:10], self.main[:10], tip[:10])), out)
         self.assertEqual(lines[-1], V.SELF_REVIEW_INSTEAD)
         code, out, err = self.run_tool(*self.add_args(
             tip=tip, **{'--reviewer': 'pm-kit:analyst', '--reviewer-id': 'agent-a7'}))
         self.assertEqual((code, out.strip()), (0, 'QUEUED kit/a %s' % tip), err)
+
+    def test_a_self_read_is_refused_when_main_as_fetched_cannot_be_read(self):
+        self.repo.git('update-ref', '-d', 'refs/remotes/origin/main')
+        code, out, err = self.run_tool(*self.add_args(**{'--reviewer-id': 'coord-1'}))
+        self.assertEqual(code, 2, (out, err))
+        self.assertTrue(out.startswith(
+            'REFUSED: a verdict the coordinator queueing it reviewed itself covers at most 3 '
+            'changed lines ("landing".self_review_max_lines), and main as fetched cannot be read '
+            '(origin/main: '), out)
+        self.assertIn('so the size of %s..%s cannot be told' % (self.main[:10], self.tip[:10]), out)
+        code, out, err = self.run_tool(*self.add_args(
+            **{'--reviewer': 'pm-kit:analyst', '--reviewer-id': 'agent-a7'}))
+        self.assertEqual((code, out.strip()), (0, 'QUEUED kit/a %s' % self.tip), err)
 
 
 if __name__ == '__main__':

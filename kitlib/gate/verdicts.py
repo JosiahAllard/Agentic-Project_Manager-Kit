@@ -59,8 +59,8 @@ and, only in an entry carry() moved (a re-add drops it):
 Errors (all VerdictError): BadEntry for a malformed entry or branch name given, nothing read or
 written; SelfReview (a BadEntry) when add() is given a High-risk verdict the coordinator queueing
 it reviewed itself (self_review_why), nothing read or written, or, with "landing".
-self_review_max_lines given, a self-read of a range over that many changed lines or one git
-cannot measure (self_review_size_why), nothing written; TipMismatch when the tip is not the branch's head, or there is no such branch;
+self_review_max_lines given, a self-read of a branch over that many changed lines or one whose
+size cannot be told (self_review_size_why), nothing written; TipMismatch when the tip is not the branch's head, or there is no such branch;
 CarryRefused when carry() finds the head does not carry the verdict, nothing written;
 OtherBranch when the file for the branch named holds another branch's entry (names that differ
 only in case share one file on Windows); VerdictError itself for a queue file that cannot be read
@@ -267,31 +267,40 @@ def diff_lines(cwd, rng):
     return added, removed, files
 
 
-def self_review_size_why(entry, max_lines, cwd):
+def self_review_size_why(entry, max_lines, cwd, main, main_why=None):
     """Why add() refuses `entry` as a self-read too large for the coordinator to give, or None.
     None whenever `max_lines` ("landing".self_review_max_lines) is None or the reviewer is not the
-    coordinator queueing it (self_reader); else refused when the range reviewed changes more than
-    `max_lines` lines (diff_lines, git run in `cwd`), or when git cannot say how many: with a cap
-    set, a size that cannot be told is not a small branch. `entry` is well formed (check)."""
+    coordinator queueing it (self_reader). Else the size is the larger of two counts (diff_lines,
+    git run in `cwd`): the range given, and `main...<tip>` with `main` main as fetched, so a base
+    stated past most of the branch (`<tip>~1..<tip>`) does not shrink it. Refused when that is
+    more than `max_lines`, or when it cannot be told (`main` None, `main_why` saying why, or git
+    gives no answer): with a cap set, a size that cannot be told is not a small branch. `entry` is
+    well formed (check)."""
     if max_lines is None:
         return None
     who = self_reader(entry)
     if not who:
         return None
-    try:
-        added, removed, files = diff_lines(cwd, entry['range'])
-    except VerdictError as e:
-        return ('a verdict the coordinator queueing it reviewed itself covers at most %d changed '
-                'lines ("landing".self_review_max_lines), and git cannot tell how many %s changes '
-                '(%s); %s; nothing was queued\n%s'
-                % (max_lines, entry['range'], e, who, SELF_REVIEW_INSTEAD))
+    head = ('a verdict the coordinator queueing it reviewed itself covers at most %d changed lines '
+            '("landing".self_review_max_lines), and ' % max_lines)
+    tail = '; %s; nothing was queued\n%s' % (who, SELF_REVIEW_INSTEAD)
+    if not main:
+        return head + ('main as fetched cannot be read (%s), so the size of %s cannot be told'
+                       % (main_why or 'not given', entry['range'])) + tail
+    tip = entry['tip'][:10]
+    counts = []
+    for rng in (entry['range'], '%s..%s' % (main, entry['tip'])):
+        try:
+            counts.append(diff_lines(cwd, rng))
+        except VerdictError as e:
+            return head + 'git cannot tell how many lines %s changes (%s)' % (rng, e) + tail
+    added, removed, files = max(counts, key=lambda c: c[0] + c[1])
     if added + removed <= max_lines:
         return None
-    return ('a verdict the coordinator queueing it reviewed itself covers at most %d changed lines '
-            '("landing".self_review_max_lines), and %s changes %d (+%d -%d in %d file%s); %s; '
-            'nothing was queued\n%s'
-            % (max_lines, entry['range'], added + removed, added, removed, files,
-               '' if files == 1 else 's', who, SELF_REVIEW_INSTEAD))
+    return head + ('%s changes %d (+%d -%d in %d file%s; the larger of the range given and %s...%s '
+                   'from main as fetched)' % (entry['range'], added + removed, added, removed,
+                                              files, '' if files == 1 else 's', main[:10],
+                                              tip)) + tail
 
 
 def check(entry, stored=True):
@@ -487,13 +496,14 @@ def head_of(common_dir, branch):
     return sha
 
 
-def add(common_dir, entry, now=None, self_review_max_lines=None):
+def add(common_dir, entry, now=None, self_review_max_lines=None, main=None, main_why=None):
     """Queue `entry` (the GIVEN_KEYS; nothing else) for its branch, replacing an entry already
     queued for it: `(path, stored entry)`. The tip must be `refs/heads/<branch>` in the repository
     whose common dir is `common_dir`, else TipMismatch. A High-risk self-review is SelfReview
-    (self_review_why); so is a self-read of a range over `self_review_max_lines` changed lines, or
-    of one git cannot measure, when that cap ("landing".self_review_max_lines) is given
-    (self_review_size_why). `now`: a datetime for queued_utc."""
+    (self_review_why); so is a self-read of a branch over `self_review_max_lines` changed lines, or
+    one whose size cannot be told, when that cap ("landing".self_review_max_lines) is given
+    (self_review_size_why; `main`: main as fetched, a commit, or None with `main_why`). `now`: a
+    datetime for queued_utc."""
     why = check(entry, stored=False)
     if why:
         raise BadEntry(why)
@@ -507,7 +517,7 @@ def add(common_dir, entry, now=None, self_review_max_lines=None):
         raise TipMismatch('there is no branch %s' % branch)
     if head != tip:
         raise TipMismatch('%s is at %s, not the tip given %s' % (branch, head, tip))
-    why = self_review_size_why(entry, self_review_max_lines, common_dir)
+    why = self_review_size_why(entry, self_review_max_lines, common_dir, main, main_why)
     if why:
         raise SelfReview(why)
     stored = dict(entry, records=list(entry['records']), queued_utc=utc(now), state=QUEUED,
