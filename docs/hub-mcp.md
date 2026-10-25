@@ -41,8 +41,9 @@ Endpoints are below `/api/v1` (`kitlib.hubsite.api.BASE`).
 
 `hub_pending` and `hub_wait` take an optional `for`, a session key, sent as the `for` query of the
 hub's api as given (blank sends none). With it they list or wait for that key's pending items only:
-a session waits for its own answers with `hub_wait` `pending: true, for: <its launcher key>`, and
-`for: pm` is the PM's items and every answered question (docs/action-hub.md "Who handles a
+a session reads its own items once at start with `hub_pending` `for: <its launcher key>` and runs no
+background wait, since the hub pushes its answers and done to-dos (docs/action-hub.md "Push
+notifications"); `hub_wait` stays for a caller that wants it. `for: pm` is the PM's items and every answered question (docs/action-hub.md "Who handles a
 pending item"). A session key's `for` that returns one of that key's items hands it over, as the
 CLI's does; `for: pm` hands nothing over (`api.Api.handed`). The
 hub refuses `for` on a wait without `pending` (`invalid`, field `for`). Without `for` they see

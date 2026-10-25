@@ -12,7 +12,7 @@ from tests.home import temp_home
 from tests.pmstart import HANDOFF_FAKE, HUB_KEPT_OFF, keep_off_hub_site, keep_off_launcher_repos
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
-CFG = {"pm_watch_cmd": "python launcher/pm_watch.py --stream", "memory_dir": "M",
+CFG = {"pm_watch_cmd": "python launcher/pm_watch.py", "memory_dir": "M",
        "reminders_file": "r.json", "sessions_file": "s.json"}
 
 
@@ -62,58 +62,68 @@ class StandingTest(unittest.TestCase):
         self.assertIn(HUB_KEPT_OFF, txt)
 
 
-def wproc(pid, name="python.exe", cmd="python -u pm_watch.py --stream"):
+def wproc(pid, name="python.exe", cmd="python -u pm_watch.py"):
     return {"Name": name, "CommandLine": cmd, "ProcessId": pid}
 
 
 class WatcherTest(unittest.TestCase):
-    """watcher: alive by heartbeat plus pid (pmstart.BEAT_STALE)."""
+    """watcher: alive by heartbeat plus pid (pmstart.BEAT_STALE); run in the background
+    without --stream, so a streaming one is a line (docs/pm-start.md)."""
     T = 1000000.0
 
     def run_it(self, procs, hb, cfg=CFG):
         return pmstart.watcher(cfg, procs, beat=lambda: hb, now=self.T)
 
     def test_fresh_heartbeat_and_live_pid_is_running(self):
-        hb = {"pid": 42, "beat": self.T - 30, "stream": True}
+        hb = {"pid": 42, "beat": self.T - 30, "stream": False}
         self.assertEqual(self.run_it([wproc(42)], hb), [])
 
     def test_stale_heartbeat_with_live_pid_says_it_stopped_polling(self):
-        hb = {"pid": 42, "beat": self.T - pmstart.BEAT_STALE - 120, "stream": True}
+        hb = {"pid": 42, "beat": self.T - pmstart.BEAT_STALE - 120, "stream": False}
         (s,) = self.run_it([wproc(42)], hb)
-        self.assertIn("pm_watch.py (pid 42) has not polled for 7m: stop that pid", s)
-        self.assertIn("python launcher/pm_watch.py --stream", s)
+        self.assertIn("pm_watch.py (pid 42) has not polled for 7m: stop that pid and start it in "
+                      "the background", s)
+        self.assertIn("python launcher/pm_watch.py", s)
 
     def test_fresh_heartbeat_with_pid_gone_is_not_running(self):
         hb = {"pid": 42, "beat": self.T - 10, "stream": False}
         (s,) = self.run_it([wproc(43, name="code.exe")], hb)
-        self.assertEqual(s, "pm_watch.py is not running (it last polled 10s ago): start it under "
-                            "Monitor: python launcher/pm_watch.py --stream")
+        self.assertEqual(s, "pm_watch.py is not running (it last polled 10s ago): start it in the "
+                            "background (it exits with its events; start it again at once, then "
+                            "handle them): python launcher/pm_watch.py")
 
-    def test_a_live_watcher_without_stream_says_it_exits_after_one_batch(self):
-        hb = {"pid": 42, "beat": self.T - 30, "stream": False}
-        (s,) = self.run_it([wproc(42, cmd="python pm_watch.py")], hb)
-        self.assertEqual(s, "pm_watch.py (pid 42) runs without --stream: it exits after one batch of "
-                            "events; stop that pid and start it under Monitor with --stream: "
-                            "python launcher/pm_watch.py --stream")
-
-    def test_a_pm_watch_cmd_without_stream_is_kept_and_warned_about(self):
-        cfg = dict(CFG, pm_watch_cmd="python launcher/pm_watch.py")
-        start, warn = self.run_it([], None, cfg)
-        self.assertEqual(start, "pm_watch.py is not running: start it under Monitor: "
-                                "python launcher/pm_watch.py")     # as configured, not rewritten
-        self.assertEqual(warn, "pm_start.pm_watch_cmd has no --stream: a watcher started with it exits "
-                               "after one batch of events; add --stream to run it under Monitor")
+    def test_a_live_watcher_with_stream_says_it_never_exits(self):
         hb = {"pid": 42, "beat": self.T - 30, "stream": True}
-        self.assertEqual(self.run_it([wproc(42)], hb, cfg), [warn])  # even while one streams
-        for ok in ("python w.py --stream", "python w.py --stream --branch a=b"):
+        (s,) = self.run_it([wproc(42, cmd="python pm_watch.py --stream")], hb)
+        self.assertEqual(s, "pm_watch.py (pid 42) runs with --stream: it never exits, so a "
+                            "background run reports no event; stop that pid and start it in the "
+                            "background without --stream: python launcher/pm_watch.py")
+
+    def test_a_heartbeat_without_a_stream_field_counts_as_not_streaming(self):
+        self.assertEqual(self.run_it([wproc(42)], {"pid": 42, "beat": self.T - 30}), [])
+
+    def test_a_pm_watch_cmd_with_stream_is_kept_and_warned_about(self):
+        cfg = dict(CFG, pm_watch_cmd="python launcher/pm_watch.py --stream")
+        start, warn = self.run_it([], None, cfg)
+        self.assertTrue(start.startswith("pm_watch.py is not running: start it in the background"),
+                        start)
+        self.assertTrue(start.endswith(": python launcher/pm_watch.py --stream"),
+                        start)     # as configured, not rewritten
+        self.assertEqual(warn, "pm_start.pm_watch_cmd has --stream: a watcher started with it never "
+                               "exits, so a background run reports no event; remove --stream from "
+                               "pm_watch_cmd")
+        hb = {"pid": 42, "beat": self.T - 30, "stream": False}
+        self.assertEqual(self.run_it([wproc(42)], hb, cfg), [warn])  # even while one runs without
+        for ok in ("python w.py", "python w.py --branch a=b", "w.py --streams"):
             self.assertEqual(self.run_it([wproc(42)], hb, dict(CFG, pm_watch_cmd=ok)), [])
-        self.assertEqual(len(self.run_it([wproc(42)], hb, dict(CFG, pm_watch_cmd="w.py --streams"))), 1)
+        self.assertEqual(len(self.run_it([wproc(42)], hb,
+                                         dict(CFG, pm_watch_cmd="w.py --stream --branch a=b"))), 1)
 
     def test_a_reused_pid_started_at_another_time_is_not_the_watcher(self):
         created = "2026-10-06T09:00:00.1234567+00:00"         # list_processes' CreationDate 'o' form
         at = datetime.datetime(2026, 10, 6, 9, 0, tzinfo=datetime.timezone.utc).timestamp()
         procs = [dict(wproc(42), Created=created)]
-        hb = {"pid": 42, "beat": self.T - 30, "stream": True, "started": at + 1}
+        hb = {"pid": 42, "beat": self.T - 30, "stream": False, "started": at + 1}
         self.assertEqual(self.run_it(procs, hb), [])                 # same start, within START_SLACK
         (s,) = self.run_it(procs, dict(hb, started=at - 600))        # pid 42 is now another process
         self.assertIn("running without a heartbeat", s)
@@ -129,7 +139,7 @@ class WatcherTest(unittest.TestCase):
         started = pmwatch.own_start_time()
         created = datetime.datetime.fromtimestamp(started).astimezone().isoformat()
         procs = [dict(wproc(os.getpid()), Created=created)]
-        hb = {"pid": os.getpid(), "beat": self.T - 30, "stream": True, "started": started}
+        hb = {"pid": os.getpid(), "beat": self.T - 30, "stream": False, "started": started}
         self.assertLessEqual(abs(pmstart._created(procs[0]) - started), pmstart.START_SLACK)
         self.assertEqual(self.run_it(procs, hb), [])
 
@@ -137,25 +147,34 @@ class WatcherTest(unittest.TestCase):
         for hb in (None, {"pid": 7, "beat": self.T}):     # none, or another process's
             (s,) = self.run_it([wproc(42, cmd="python launcher/pm_watch.py")], hb)
             self.assertIn("running without a heartbeat", s)
-            self.assertIn("restart it under Monitor", s)
+            self.assertIn("restart it in the background", s)
 
     def test_nothing_running_gives_start_step(self):
         # a non-python process mentioning pm_watch.py (e.g. an editor) does not count
         (s,) = self.run_it([wproc(42, name="code.exe", cmd="code pm_watch.py")], None)
-        self.assertEqual(s, "pm_watch.py is not running: start it under Monitor: "
-                            "python launcher/pm_watch.py --stream")
+        self.assertEqual(s, "pm_watch.py is not running: start it in the background (it exits with "
+                            "its events; start it again at once, then handle them): "
+                            "python launcher/pm_watch.py")
 
-    def test_no_pm_watch_cmd_names_the_kits_stream_command(self):
+    def test_no_line_names_monitor(self):
+        for hb, procs in ((None, []), ({"pid": 42, "beat": self.T - 10}, []),
+                          ({"pid": 42, "beat": self.T - 900}, [wproc(42)]), (None, [wproc(42)]),
+                          ({"pid": 42, "beat": self.T - 30, "stream": True}, [wproc(42)])):
+            for line in self.run_it(procs, hb, dict(CFG, pm_watch_cmd="w.py --stream")):
+                self.assertNotIn("Monitor", line)
+
+    def test_no_pm_watch_cmd_names_the_kits_command_without_stream(self):
         cfg = dict(CFG)
         del cfg["pm_watch_cmd"]
         (s,) = self.run_it([], None, cfg)
         tool = os.path.join(pmstart.KIT_ROOT, "tools", "pm_watch.py")
         self.assertTrue(os.path.isfile(tool))
-        self.assertTrue(s.endswith('python -u "%s" --stream' % tool), s)
+        self.assertTrue(s.endswith(': python -u "%s"' % tool), s)
+        self.assertNotIn("--stream", pmstart.PM_WATCH_DEFAULT_CMD)
 
     def test_the_configured_command_is_used_as_written(self):
-        (s,) = self.run_it([], None, dict(CFG, pm_watch_cmd="run the watcher --stream"))
-        self.assertTrue(s.endswith("Monitor: run the watcher --stream"), s)
+        (s,) = self.run_it([], None, dict(CFG, pm_watch_cmd="run the watcher"))
+        self.assertTrue(s.endswith("then handle them): run the watcher"), s)
 
     def test_checklist_passes_the_watcher_fake(self):
         hb = {"pid": 42, "beat": 0}

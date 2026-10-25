@@ -146,7 +146,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - The owner does not watch your window. A question for the owner, and a command for the owner
   to run for your own work, you post on the Action Hub yourself and act on its answer yourself
-  (skill `hub-ops`: questions, to-dos, the wait, pages). Anything else that needs the owner (a typed go, a
+  (skill `hub-ops`: questions, to-dos, pages; you run no background hub wait, the hub pushes the
+  answers to you). Anything else that needs the owner (a typed go, a
   step for another repo) goes to the PM by send_message (not available to a Codex agent: ask the PM) with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
   in your window where one is required. Pass answers on as a paraphrase, no ruling id.

@@ -5,7 +5,8 @@ comes from the "coordinator_start" key of the machine config and is emitted only
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
 machine state, other coordinators, the ledger line, the hub key: the session's sessions.json
-key, which it posts hub questions --from and waits --for, or "unknown" when no entry is found,
+key, which it posts hub questions --from and reads pending --for once at start (answers come by
+push), or "unknown" when no entry is found,
 and stubs: a line only when a repo that uses stubs has them not current), run as in kitlib.pmstart: each is a pure function over fakeable inputs
 (process list, file reads, a subprocess runner, now, the machine config), and a failed one is one
 "could not check X: reason" line. No check reads the rulings ledger: with the split ledger
@@ -159,11 +160,13 @@ def find_entry(sessions, cwd, name=None, root=None):
 
 def hub_key(sessions, entry):
     """[the `hub key: <key>` line]: the sessions.json key of `entry` (find_entry's pick, the same
-    object), the key this coordinator posts hub questions --from and waits --for
+    object), the key this coordinator posts hub questions --from and reads pending --for once at
+    start; it runs no background wait, as the hub pushes its answers and done to-dos
     (docs/action-hub.md "For the PM"). LookupError when no key holds it."""
     for k, v in sessions.items():
         if v is entry and not str(k).startswith("_"):
-            return ["hub key: %s (hub.py questions add --from %s; wait --pending --for %s)" % (k, k, k)]
+            return ["hub key: %s (hub.py questions add --from %s; read hub.py pending --for %s once "
+                    "at start; answers come by push)" % (k, k, k)]
     raise LookupError("no sessions.json key holds this session's entry")
 
 
