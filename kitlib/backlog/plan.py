@@ -39,8 +39,9 @@ WRITTEN_BY = {
 # Keys no verb writes any more: an owner gate is a role (kitlib/backlog/roles.py), not a cited
 # id. A record that carries one keeps it until `set ID --unset K` clears it (a price move drops
 # `priority_ruling`, which named the old price; `uncite` drops `priority_ruling` and
-# `hold_ruling`). In WRITTEN_BY too, so the Action Hub shows them as no edit's to make.
-UNWRITTEN = ('priority_ruling', 'hold_ruling', 'resume')
+# `hold_ruling`; `priority_per` is kept). In WRITTEN_BY too, so the Action Hub shows them as no
+# edit's to make.
+UNWRITTEN = ('priority_ruling', 'hold_ruling', 'resume', 'priority_per')
 WRITTEN_BY.update((k, 'no verb: an owner gate is a role now (kitlib/backlog/roles.py); '
                       '`set ID --unset %s` clears it' % k)
                   for k in UNWRITTEN)
@@ -706,7 +707,8 @@ def plan_set(snap, ctx, rid, changes, unset=(), *, body=None, role_checked=False
       so a sixth positional (the old ruling slot) is a TypeError.
     - `state: pulled` is entered only by `pull` and left only by `release`; `state: parked` only
       by `set-status parked` and `unpark`.
-    - `priority_ruling`, `hold_ruling` and `resume` (UNWRITTEN) are never written; `unset` of
+    - `priority_ruling`, `hold_ruling`, `resume` and `priority_per` (UNWRITTEN) are never
+      written; `unset` of
       one clears it. Clearing `resume` is the owner's and the PM's (policy.OWNER_CLEARS, the
       `set-price-owner` row), so without the role check it refuses (refuse_top).
     - On a pulled record, `scope` members no old member covers (widened_members) that collide

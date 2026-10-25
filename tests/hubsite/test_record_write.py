@@ -156,6 +156,14 @@ class Edit(Case):
         self.assertEqual(self.field('FOO', 'priority_ruling'), [])
         self.assertFalse(any(ASKS in line for line in out['lines']), out['lines'])
 
+    def test_a_priority_per_ruling_is_no_longer_written(self):
+        recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
+                         [('priority', ['2']), ('priority_by', ['owner'])])
+        e = self.refused(lambda: recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
+                                                  [('priority_per', [FIRST])]), 'invalid')
+        self.assertIn('`priority_per` is no longer written', e.message)
+        self.assertEqual(self.field('FOO', 'priority_per'), [])
+
     def test_a_record_not_there_is_not_found(self):
         self.refused(lambda: recordwrite.edit(self.repo.root, 'BAR', 'x:y', [('effort', ['m'])]),
                      'not_found')

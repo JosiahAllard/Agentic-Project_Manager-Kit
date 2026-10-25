@@ -4569,7 +4569,8 @@ class FindingsTest(unittest.TestCase):
             await start();
             await click($("#row-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
             await type($("#fa-fp1-R-1-priority"), "P1");
-            const box = () => !!$("#fa-fp1-R-1-ruling");
+            const boxes = () => $$("#fa-fp1-R-1 input, #fa-fp1-R-1 textarea, #fa-fp1-R-1 select").length;
+            const before = boxes(), box = () => boxes() !== before;   // a refusal adds no box
             lintS.recWrite = REFUSAL_A; await click(button($("#fa-fp1-R-1"), "Save")); await settle();
             const first = [text($("#fa-fp1-R-1 .status")), box()];
             lintS.recWrite = REFUSAL_B; await click(button($("#fa-fp1-R-1"), "Save")); await settle();
