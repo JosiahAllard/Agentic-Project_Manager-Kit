@@ -119,22 +119,51 @@ class Safety(unittest.TestCase):
             canary._persist(client, binding, provider, events)
         self.assertEqual(client.request.call_args.args[0], 'turn/start')
 
+    def _results(self, folder):
+        root = Path(folder) / 'results'
+        mine, other = root / 'fixture-abc', root / 'real-def'
+        for item in (mine, other):
+            item.mkdir(parents=True)
+            (item / 'gate.json').write_text('{}')
+        return root, mine, other
+
     def test_result_folder_cleanup_removes_only_the_fixture_key_folder(self):
         with tempfile.TemporaryDirectory() as folder:
-            from kitlib.gate import result
-            parent = Path(folder) / result.DIR_NAME
-            mine, other = parent / 'fixture-abc', parent / 'real-def'
-            for item in (mine, other):
-                item.mkdir(parents=True)
-                (item / 'gate.json').write_text('{}')
-            canary._remove_result_folder(str(mine))
-            self.assertFalse(mine.exists())
+            root, mine, other = self._results(folder)
+            with mock.patch('kitlib.gate.result.machine_root', return_value=str(root)):
+                canary._remove_result_folder(str(mine))
+                self.assertFalse(mine.exists())
+                self.assertTrue((other / 'gate.json').exists())
+                canary._remove_result_folder(str(mine))      # missing: ignored
+                canary._remove_result_folder(None)
+                canary._remove_result_folder(str(root))      # the root is never removed
+                canary._remove_result_folder(str(Path(folder)))
             self.assertTrue((other / 'gate.json').exists())
-            canary._remove_result_folder(str(mine))      # missing: ignored
-            canary._remove_result_folder(None)
-            canary._remove_result_folder(str(parent))    # the parent is never removed
-            canary._remove_result_folder(str(Path(folder)))
+
+    def test_result_folder_cleanup_refuses_dotdot_and_foreign_parents(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, mine, other = self._results(folder)
+            with mock.patch('kitlib.gate.result.machine_root', return_value=str(root)):
+                canary._remove_result_folder(str(root / '..'))
+                canary._remove_result_folder(str(mine / '..'))
             self.assertTrue((other / 'gate.json').exists())
+
+    def test_result_folder_cleanup_never_follows_a_junction(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as folder:
+            root, mine, other = self._results(folder)
+            link = root / 'linked'
+            made = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(other)],
+                                  capture_output=True, text=True)
+            if made.returncode:
+                self.skipTest('no junction: ' + made.stderr)
+            try:
+                with mock.patch('kitlib.gate.result.machine_root', return_value=str(root)):
+                    canary._remove_result_folder(str(link))
+                self.assertTrue((other / 'gate.json').exists())
+                self.assertTrue(link.exists())
+            finally:
+                os.rmdir(link)
 
     def test_cli_help_and_missing_fixture_root_are_bounded(self):
         import sys

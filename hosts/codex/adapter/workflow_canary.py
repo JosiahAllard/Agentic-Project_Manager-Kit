@@ -252,14 +252,21 @@ def _prepare_or_isolate(task, coordinator, env):
 
 def _remove_result_folder(folder):
     """Best effort: remove the fixture's own per-repository result folder (result.result_dir),
-    never the machine-wide folder above it. None, a missing folder or an error is ignored."""
+    only when it is a plain folder directly inside the machine result root (never the root, a
+    `.` or `..` name, a symlink or a junction). None, a missing folder or an error is ignored."""
     if not folder:
         return
-    from kitlib.gate import result
-    target = Path(folder)
-    if target.parent.name != result.DIR_NAME or not target.name:
-        return
-    shutil.rmtree(target, ignore_errors=True)
+    try:
+        from kitlib.gate import result
+        from kitlib.machinesetup.common import is_link
+        target = os.path.normpath(folder)
+        name = os.path.basename(target)
+        if name in ('', '.', '..') or os.path.normcase(os.path.dirname(target)) != \
+                os.path.normcase(os.path.normpath(result.machine_root())) or is_link(target):
+            return
+        shutil.rmtree(target, ignore_errors=True)
+    except Exception:       # noqa: BLE001 - cleanup only: nothing here may hide the probe's own outcome
+        pass
 
 
 def probe(codex_exe=None, profile=None, fixture_root=None):
@@ -290,6 +297,12 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
             _, _, coordinator = _start(stack, exe, directory, 'coordinator', task.coordinator,
                                         profile, env, (str(main / FIXTURE_FOLDER / 'worktrees'), str(origin), str(temporary)))
             prepared = _prepare_or_isolate(task, coordinator, env)
+            # Taken here, once the worktree exists, so a later failure still cleans it up (the
+            # folder is under the real machine dev_drive: the machine config the registry's
+            # PM-repo pointer names, which the gate child reads too; the fixture repo's key
+            # keeps it apart from every real repository's).
+            from kitlib.gate import result
+            result_folder = result.result_dir(task.worker)
             _, _, worker = _start(stack, exe, directory, 'worker', task.worker, profile, env,
                                   (str(temporary),))
             _, _, tester = _start(stack, exe, directory, 'test-runner', task.worker, profile, env,
@@ -331,11 +344,6 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
             record, why = gate_ok.verify(task.worker, tip, gate_config=gate_config(load(task.worker)))
             if not record or why or record.get('base') != task.base:
                 raise RuntimeError('real fixture gate proof does not cover the exact tip/base')
-            # The result folder is under the real machine dev_drive, which the canary shares with
-            # its gate child (the PM-repo pointer is the registry's, not the fixture home's); the
-            # fixture repo's key keeps it apart from every real repository's.
-            from kitlib.gate import result
-            result_folder = result.result_dir(task.worker)
             gate_result, error = result.read(task.worker, task.branch)
             if error or not gate_result or gate_result.get('verdict') != 'pass':
                 raise RuntimeError('real gate result record is missing')
