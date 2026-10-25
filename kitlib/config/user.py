@@ -785,19 +785,33 @@ def locate(home=None, ptr=None):
 
 
 def config_dir(home=None):
-    """The folder of the machine config file locate() names (the PM repository's `.pm-kit` for
-    OK; the home folder's for the other states, where it is only a place to keep clear of: a
-    caller that reads or writes a file there uses pm_config_dir). Never raises."""
-    return os.path.dirname(locate(home).path)
+    """The PM repository's machine config folder (`<PM repo>/.pm-kit`) when locate() is OK, else
+    None (pm_config_dir). The home folder's `.pm-kit` is never named in its place; a caller that
+    only keeps clear of the folders holding config uses keep_clear_dirs. Never raises."""
+    return pm_config_dir(home)
 
 
 def pm_config_dir(home=None):
     """The PM repository's machine config folder (`<PM repo>/.pm-kit`) when locate() is OK, else
     None: with no good pointer, or a config that cannot be read, there is no such folder, and the
-    home folder's `.pm-kit` is never named in its place (config_dir does, for the callers that only
-    keep clear of it). Never raises."""
+    home folder's `.pm-kit` is never named in its place (keep_clear_dirs does, for the callers that
+    only keep clear of it). Never raises."""
     loc = locate(home)
     return loc.folder if loc.state == OK else None
+
+
+def keep_clear_dirs(home=None):
+    """Every folder that still holds the machine config, for a caller that only keeps clear of
+    them (the agent-temp sweep and machine setup): the PM repository's `.pm-kit` for OK and
+    LEFTOVER, the folder of the config file still in the home folder for UNMOVED and LEFTOVER;
+    none for NONE and BAD (no config is known to be anywhere). Never raises."""
+    loc = locate(home)
+    dirs = []
+    if loc.state in (OK, LEFTOVER) and loc.folder:
+        dirs.append(loc.folder)
+    if loc.state in (UNMOVED, LEFTOVER) and loc.leftover:
+        dirs.append(os.path.dirname(loc.leftover))
+    return dirs
 
 
 def config_file(home=None):

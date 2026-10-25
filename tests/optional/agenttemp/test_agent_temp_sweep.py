@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'optional', 'agenttemp'))
 import agent_temp_sweep as S  # noqa: E402
 from kitlib.config import user as kuser  # noqa: E402
-from tests.home import machine_config  # noqa: E402
+from tests.home import PM_REPO_FENCE_ENV, machine_config  # noqa: E402
 
 LATER = time.time() + 10 * S.DAY        # every entry made now is 10 days old then
 
@@ -404,6 +404,7 @@ class SessionDirs(Case):
             self.assertTrue(os.path.isfile(os.path.join(d, 'old.txt')))
 
     def test_a_dir_under_the_machine_config_folder_is_refused(self):
+        self.config({})                                     # a good pointer: the config is in the PM repo
         d = os.path.join(kuser.config_dir(self.home), 'temp')
         put(os.path.join(d, 'old.txt'))
         self.assertIsNotNone(S.unsafe_dir(d, self.home))
@@ -445,6 +446,7 @@ class SessionDirs(Case):
     def test_a_junction_above_dir_into_home_or_the_config_folder_is_refused(self):
         self.junction(os.path.join(self.tmp, 'up'), self.tmp)
         self.assertIn('home folder', S.unsafe_dir(os.path.join(self.tmp, 'up', 'home'), self.home) or '')
+        self.config({})
         cfg = kuser.config_dir(self.home)
         put(os.path.join(cfg, 'temp', 'old.txt'))
         self.junction(os.path.join(self.tmp, 'cfgvia'), cfg)
@@ -716,15 +718,26 @@ class UserTemp(Case):
         os.makedirs(os.path.join(self.local, '.git'))
         os.makedirs(os.path.join(self.local, 'claude'), exist_ok=True)
         self.assertIn('git', S.second_root_unsafe(os.path.join(self.local, 'claude'), self.home) or '')
+        self.config({})
         cfg = os.path.join(kuser.config_dir(self.home), 'claude')
         os.makedirs(cfg)
         self.assertIsNotNone(S.second_root_unsafe(cfg, self.home))
 
-    def test_a_second_root_with_no_config_folder_to_keep_clear_of_does_not_crash(self):
-        root = os.path.join(self.local, 'claude')
-        os.makedirs(root)
-        with mock.patch.object(kuser, 'config_dir', lambda home=None: None):
-            self.assertIsNone(S.second_root_unsafe(root, self.home))
+    def test_a_second_root_in_a_home_folder_still_holding_the_config_is_refused(self):
+        # UNMOVED (config in the home folder, none in the PM repo): that folder is kept clear of;
+        # NONE (nothing anywhere) keeps clear of nothing for the config
+        home_cfg = os.path.join(self.home, kuser.DIR_NAME)
+        under = os.path.join(home_cfg, 'claude')
+        os.makedirs(under)
+        with mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''}),                 mock.patch.object(S, 'local_temp', lambda: home_cfg):    # lifts the home refusal only
+            kuser.forget()
+            self.addCleanup(kuser.forget)
+            self.assertEqual(kuser.locate(self.home).state, kuser.NONE)
+            self.assertIsNone(S.second_root_unsafe(under, self.home))
+            put(os.path.join(home_cfg, kuser.FILE_NAME), '{}')
+            kuser.forget()
+            self.assertEqual(kuser.locate(self.home).state, kuser.UNMOVED)
+            self.assertIn('machine config folder', S.second_root_unsafe(under, self.home) or '')
 
     @unittest.skipUnless(hasattr(__import__('_winapi'), 'CreateJunction'), 'a junction needs Windows')
     def test_a_second_root_that_is_a_link_or_under_one_is_refused(self):

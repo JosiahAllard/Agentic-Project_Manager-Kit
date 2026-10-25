@@ -169,6 +169,48 @@ class DerivedPmDataTest(_PmRepo):
         user.forget()
 
 
+class KeepClearTest(_PmRepo):
+    """config_dir is the PM repository's folder or None; keep_clear_dirs names every folder that
+    still holds the config, for the callers that only keep clear of it."""
+
+    def home_cfg(self):
+        return os.path.join(self.home, user.DIR_NAME)
+
+    def test_ok_names_the_pm_folder_only(self):
+        self.write(self.policy, {})
+        self.assertEqual(user.config_dir(self.home), self.folder)
+        self.assertEqual(user.keep_clear_dirs(self.home), [self.folder])
+
+    def test_no_pointer_and_no_file_keeps_clear_of_nothing(self):
+        with mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''}):
+            user.forget()
+            self.assertEqual((user.config_dir(self.home), user.keep_clear_dirs(self.home)), (None, []))
+        user.forget()
+
+    def test_unmoved_keeps_clear_of_the_home_folder_and_config_dir_is_none(self):
+        self.write(os.path.join(self.home_cfg(), user.FILE_NAME), {})
+        with mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''}):
+            user.forget()
+            self.assertEqual(user.locate(self.home).state, user.UNMOVED)
+            self.assertIsNone(user.config_dir(self.home))
+            self.assertEqual(user.keep_clear_dirs(self.home), [self.home_cfg()])
+        user.forget()
+
+    def test_leftover_keeps_clear_of_both_folders(self):
+        self.write(self.policy, {})
+        self.write(os.path.join(self.home_cfg(), user.FILE_NAME), {})
+        user.forget()
+        self.assertEqual(user.locate(self.home).state, user.LEFTOVER)
+        self.assertEqual(user.config_dir(self.home), None)
+        self.assertEqual(user.keep_clear_dirs(self.home), [self.folder, self.home_cfg()])
+
+    def test_bad_keeps_clear_of_nothing(self):
+        self.write(self.folder, 'a file where the folder goes')
+        user.forget()
+        self.assertEqual(user.locate(self.home).state, user.BAD)
+        self.assertEqual((user.config_dir(self.home), user.keep_clear_dirs(self.home)), (None, []))
+
+
 class FileByKeyTest(_PmRepo):
     def test_ok_names_each_keys_own_file(self):
         for key in user.LOCAL_KEYS:

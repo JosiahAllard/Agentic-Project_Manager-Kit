@@ -99,9 +99,10 @@ class LocateTest(Case):
         self.assertEqual((loc.state, loc.error, loc.leftover), (kuser.OK, None, None))
         self.assertEqual(kuser.ledger_repos(self.home), ['a'])
 
-    def test_config_dir_names_the_pm_folder_never_the_home_one(self):
-        self.leave()
-        self.assertEqual(kuser.config_dir(self.home), self.folder)
+    def test_config_dir_is_none_for_a_leftover_and_keep_clear_names_both_folders(self):
+        left = self.leave()
+        self.assertIsNone(kuser.config_dir(self.home))
+        self.assertEqual(kuser.keep_clear_dirs(self.home), [self.folder, os.path.dirname(left)])
 
 
 class ConfigLineTest(Case):

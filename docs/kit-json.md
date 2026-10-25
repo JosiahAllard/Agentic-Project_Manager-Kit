@@ -211,6 +211,7 @@ The machine config was read from the home folder, first from the retired folder 
   A coordinator with no `coordinator_start` config still gets them, after the skip line; so does a PM on the claude host with no `pm_start` config (`hosts/claude/adapter/host.py` `start_text`, through `configcheck.appended`; tests/host/test_claude_start.py).
 - **Kit copies:** a copy whose `kitlib/config/user.py` predates the pointer reader still reads the home folder's file, so `python tools/hub.py setup --check` lists it as `reads the home folder: restart its sessions or prune it`, never as knowing a key; one in use makes the check not ready (`kitlib.config.copies.pre_pointer`).
 - **The owner's step:** once the PM repository's files are committed and the preflight `config` line names them, remove each leftover `config.json` and move the auto-tasks state with the commands the session-start lines give.
+- `kitlib.config.user.config_dir` (= `pm_config_dir`) is the PM repository's `.pm-kit` when the state is OK, else None. The agent-temp sweep and machine setup, which only keep clear of the config, use `keep_clear_dirs`: the PM folder for OK and leftover, the home folder still holding the file for unmoved and leftover, nothing for no config or a bad one.
 - `machine_setup.py` skips both folder names (`kitlib.machinesetup.default_config_dirs`). The modules that use `OLD_DIR_NAME` are listed in tests/scrub/test_old_config_name.py, so retiring the name finds each.
 
 ## The PM repo pointer
