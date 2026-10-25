@@ -8,9 +8,9 @@ from .load import Config, config_path, load, load_at
 from .owner import Rules as OwnerRules, merge as merge_owner_rules
 from .policy import (HEAVY_DEFAULTS, ROLE_DEFAULTS, gate_checks, heavy_match, heavy_programs,
                      kinds_table, load_gate_checks, load_hook_module, permissions, role_name, roles)
-from .user import ledger_dir, ledger_files, ledger_path, standing_delegation, user_config
+from .user import ledger_dir, ledger_files, ledger_path, user_config
 
 __all__ = ['ConfigError', 'Config', 'config_path', 'load', 'load_at', 'OwnerRules',
            'merge_owner_rules', 'HEAVY_DEFAULTS', 'ROLE_DEFAULTS', 'heavy_match', 'heavy_programs',
            'kinds_table', 'gate_checks', 'load_gate_checks', 'load_hook_module', 'permissions', 'role_name', 'roles', 'ledger_path',
-           'ledger_dir', 'ledger_files', 'standing_delegation', 'user_config']
+           'ledger_dir', 'ledger_files', 'user_config']
