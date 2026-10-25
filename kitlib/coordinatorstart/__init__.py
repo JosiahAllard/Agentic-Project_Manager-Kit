@@ -347,14 +347,19 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
 
         def ledger():
             # A config that cannot be read (user_config raises ConfigError for every such case):
-            # only the rulebook line, saying it is unknown. Without ledger_dir that line needs no
-            # sessions entry. Any other error is a bug and is reported below.
+            # only the rulebook line, saying it is unknown. Without ledger_dir the sessions entry
+            # only names the repo in the rulebook command: unreadable, the line says `rules --all`
+            # rather than fail. Any other error is a bug and is reported below.
             try:
                 m = machine_cfg if machine_cfg is not None else kuser.user_config()
             except kuser.ConfigError:
                 return pmstart.rulebook_lines(None)
             if not m.get("ledger_dir"):
-                return pmstart.rulebook_lines(m, "<this repo's folder>")
+                try:
+                    repo = entry_once()["repo"]
+                except (LookupError, ValueError, OSError):
+                    repo = None
+                return ledger_lines(m, repo)
             return ledger_lines(m, entry_once()["repo"])
 
         checks = [

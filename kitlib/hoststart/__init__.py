@@ -65,7 +65,7 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
     """A tuple of check lines. Missing connections/configuration are reported, never guessed.
     `machine_config`: the machine config the coordinator's ledger line reads (default
     kitlib.config.user.user_config(), read only for a coordinator with a repo_name; one that
-    cannot be read adds no row, and any other error reading it is a 'could not check ledger' row).
+    cannot be read gives the rulebook line's "unknown" row, and any other error reading it is a 'could not check ledger' row).
     `config_lines`: the machine config check, right after the standing lines for both roles (default
     kitlib.pmstart.configcheck.lines)."""
     if role not in {'pm', 'coordinator'}:

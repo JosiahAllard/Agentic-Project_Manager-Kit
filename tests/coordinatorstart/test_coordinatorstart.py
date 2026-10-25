@@ -561,6 +561,17 @@ class LedgerLineTest(unittest.TestCase):
         self.assertNotIn("could not check ledger", text)
         self.assertIn("- rulebooks (standing rules): none", text)
 
+    def test_ledger_path_only_names_the_real_repo_in_the_command_through_context(self):
+        d = self._rules({})
+        text = ContextTest().build(self.CAP, machine_cfg={"ledger_path": os.path.join(d, "LEDGER.md")})
+        row, = [l for l in text.splitlines() if l.startswith("- rulebooks")]
+        self.assertIn("none in %s" % os.path.join(d, "rules"), row)
+        d = self._rules({"all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n" % ID})
+        text = ContextTest().build(self.CAP, machine_cfg={"ledger_path": os.path.join(d, "LEDGER.md")})
+        row, = [l for l in text.splitlines() if l.startswith("- rulebooks")]
+        self.assertTrue(row.endswith("rules --repo alpha"), row)
+        self.assertNotIn("<this repo", row)
+
     def test_a_ledger_path_only_config_reads_the_rules_beside_the_frozen_file(self):
         d = self._rules({"all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n" % ID})
         machine = {"ledger_path": os.path.join(d, "LEDGER.md")}
