@@ -131,7 +131,7 @@ ROWS = [
     ('subagent commit in main', lambda w: bash('git commit -m "two words"', w.main, sub=True), 'deny', 'git-main-history',
      'git -C "{main}" worktree add .claude/worktrees/<slug> -b <branch>'),
     ('subagent commit in main via -C from its worktree', lambda w: bash('git -C %s commit -m "two words"' % W.fwd(w.main), w.wt, sub=True),
-     'deny', 'git-main-history', 'python "{kit}/tools/commit.py" -C "{wt}" -m "<subject>" <each path you changed>'),
+     'deny', 'git-main-history', 'python "{kit}/tools/commit.py" -C "{wt}" -m "<subject>" --model "<your model>" <each path you changed>'),
     ('subagent merge in main', lambda w: ps('git merge kit/wt', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent rebase in main', lambda w: bash('git rebase origin/main', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent cherry-pick in main', lambda w: bash('git cherry-pick abc123', w.main, sub=True), 'deny', 'git-main-history', None),
@@ -1354,7 +1354,7 @@ class PlainCommit(unittest.TestCase):
                 d = self.decide('git commit -m x -- a.py', {context.ROLE_ENV: mark})
                 self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
                 self.assertIn('writes no Co-Authored-By trailer', d.reason)
-                self.assertIn('/tools/commit.py" -C "%s" -m "<subject>" <each path you changed>' % W.fwd(self.w.wt),
+                self.assertIn('/tools/commit.py" -C "%s" -m "<subject>" --model "<your model>" <each path you changed>' % W.fwd(self.w.wt),
                               d.reason)
 
     def test_an_unmarked_main_session_is_the_owners(self):
