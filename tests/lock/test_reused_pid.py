@@ -83,9 +83,18 @@ class ReusedPid(StoreCase):
     def test_a_reused_pid_this_user_may_not_open_is_not_live_without_the_run_mutex(self):
         pid = self.phantom()
         with denied(pid):
-            self.assertIsNone(st.wrapper_state(pid, 1))
-            self.assertFalse(self.store.run_live(self.store.read("active/%s.json" % RID)))
             self.assert_not_live()
+
+    def test_wrapper_state_cannot_tell_for_an_unopenable_pid_or_a_missing_creation_time(self):
+        pid, ct = self.other_process()
+        self.assertTrue(st.wrapper_state(pid, ct))
+        self.assertIsNone(st.wrapper_state(pid, None))
+        with denied(pid):
+            self.assertIsNone(st.wrapper_state(pid, ct))
+            self.assertIsNone(st.wrapper_state(pid, 1))
+        for bad in (None, "x", 1.5j):
+            self.assertIsNone(st.wrapper_state(bad, ct), bad)
+        self.assertFalse(st.wrapper_state(0, ct))
 
     def test_an_unopenable_wrapper_holding_its_run_mutex_stays_live(self):
         pid, ct = self.other_process()
@@ -100,7 +109,6 @@ class ReusedPid(StoreCase):
 
     def test_a_record_with_no_creation_time_is_not_live_on_its_pid_alone(self):
         self.live_record(RID, ctime=None)       # this live process's pid, no creation time
-        self.assertIsNone(st.wrapper_state(os.getpid(), None))
         self.assert_not_live()
         mutex = self.store.run_mutex(RID)
         self.addCleanup(mutex.release)
@@ -108,11 +116,9 @@ class ReusedPid(StoreCase):
 
     def test_a_checkable_pid_still_decides_without_the_mutex(self):
         self.live_record(RID)                   # this process, its creation time: live
-        self.assertTrue(st.wrapper_state(os.getpid(), process.own_ctime()))
         self.assert_live()
         self.store.drop("active/%s.json" % RID)
         self.live_record(RID, ctime=process.own_ctime() + 1)     # another creation time: gone
-        self.assertFalse(st.wrapper_state(os.getpid(), process.own_ctime() + 1))
         mutex = self.store.run_mutex(RID)
         self.addCleanup(mutex.release)
         self.assertEqual(self.store.live_runs(), [])
