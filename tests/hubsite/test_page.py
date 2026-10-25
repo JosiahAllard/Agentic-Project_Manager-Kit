@@ -215,7 +215,7 @@ class LogicTest(unittest.TestCase):
         self.assertEqual(js("pmAlertLines(items)", [item(1, "queued")]), [])
 
     def test_refs_hide_both_ledger_id_forms(self):
-        refs = ["Q-12", "R-" + "0007", "H-" + "kit-0007", "H-" + "agentic-project-manager-kit-0001", "H-x"]
+        refs = ["Q-12", "R-" + "0007", "H-" + "kit-0007", "H-" + "some-long-repo-0001", "H-x"]
         self.assertEqual(js("keptRefs(items)", refs), ["Q-12", "H-x"])
 
     def test_an_act_note_is_its_own_kind_in_the_alert(self):
