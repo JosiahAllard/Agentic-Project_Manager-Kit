@@ -411,7 +411,7 @@ A landing never trusts the stored facts: it runs the check again under its lock,
 
 ### Gate reuse
 
-kitlib/gate/reuse.py: a per-step cache of gate results, read and written by a branch gate (a rerun reuses) and by a landing's merged-tree gate, a batch landing included (`reuse.branch_plan`, `reuse.planner`). The opt-in and the never-list are ported from one repo's gate reuse. A step with `reuse` is not run when a pass of its key is stored within `"landing".reuse_max_age_h` hours and no fail or warn of that key is. It is fail-closed: any doubt or error runs the step, and its `gate: reuse:` line says why.
+kitlib/gate/reuse.py: a per-step cache of gate results, read and written by a branch gate (a rerun reuses) and by a landing's merged-tree gate, a batch landing included (`reuse.branch_plan`, `reuse.planner`). A step with `reuse` is not run when a pass of its key is stored within `"landing".reuse_max_age_h` hours and no fail or warn of that key is. It is fail-closed: any doubt or error runs the step, and its `gate: reuse:` line says why.
 
 **The key** (`reuse.step_key`) is the sha256 of the canonical JSON of:
 

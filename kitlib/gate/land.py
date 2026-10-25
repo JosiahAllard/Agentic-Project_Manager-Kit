@@ -1,5 +1,4 @@
-"""One branch landed on main (docs/gate.md "Landing"; ported from an earlier per-repository
-tools/land.py).
+"""One branch landed on main (docs/gate.md "Landing").
 
 `land()` runs in the repository's MAIN checkout, on its main branch:
 
