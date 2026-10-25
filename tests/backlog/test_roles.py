@@ -7,9 +7,13 @@ import unittest
 from unittest import mock
 
 from kitlib import content
+from kitlib.backlog import policy
 from kitlib.backlog import record
 from kitlib.backlog import roles as R
 from kitlib.config import schema
+from tests import inproc
+from tests.backlog.helpers import ADD_FLAGS, kit_json_ref, parse
+from tests.gitfixture import TempRepo, fixture_env, rmtree
 
 BUILDERS = ('weak-worker', 'worker', 'senior-worker', 'opus-worker', 'strong-worker', 'helper')
 READ_ONLY = ('analyst', 'test-runner', 'consultant')
@@ -203,6 +207,147 @@ class RolesTest(unittest.TestCase):
             self.assertTrue(record.is_band(band), band)
         for field in R.TEXT_FIELDS:
             self.assertTrue(field == 'body' or field in record.FIELDS, field)
+
+
+def _rec(**over):
+    return parse(**over)
+
+
+def _price(priority, by=None):
+    """policy.sort's `given` for `set ID --priority <priority> [--priority-by <by>]`."""
+    changes = [('priority', [priority])] + ([('priority_by', [by])] if by is not None else [])
+    return policy.given_of_set(changes)
+
+
+UNPRICED = dict(priority='-', priority_by='-')
+OWNER_BLOCKED = dict(state='blocked', blocked_on='owner', owner_ask='which one?')
+
+
+class CoordinatorPrice(unittest.TestCase):
+    """The owner's rule (KIT-COORD-FOLLOWUP-PRICE-MISMATCH): a coordinator, like the PM, sets a
+    first price of 2-5 with `priority_by: agent` on an unpriced record; a price of 1 or -1, a
+    reprice of an owner's or the PM's price, a `priority_by` of owner or pm, and a price on a
+    record blocked on the owner stay the owner's and the PM's. The rows are sorted as
+    tools/backlog.py's check sorts them (policy.sort over the record it reads) and judged by
+    roles.allows."""
+
+    def refusal(self, role, given, rec):
+        return policy.refusal(role, policy.sort('set', given, rec))
+
+    def test_a_coordinator_sets_a_first_agent_price_of_2_to_5_on_an_unpriced_record(self):
+        for band in R.PRICE_LOW:
+            with self.subTest(band=band):
+                rows = policy.sort('set', _price(band, 'agent'), _rec(**UNPRICED))
+                self.assertEqual(rows, ['set-price', 'set-other'])
+                self.assertIsNone(policy.refusal('coordinator', rows))
+
+    def test_a_coordinator_may_not_set_a_price_of_1(self):
+        text = self.refusal('coordinator', _price('1', 'agent'), _rec(**UNPRICED))
+        self.assertIn('`set-price-owner` (risk medium) is for owner, pm', text)
+
+    def test_a_coordinator_may_not_set_or_release_a_hold(self):
+        text = self.refusal('coordinator', _price('-1', 'agent'), _rec(**UNPRICED))
+        self.assertIn('`set-hold` (risk high) is for owner, pm', text)
+        held = _rec(priority='-1', priority_by='owner')
+        text = self.refusal('coordinator', _price('-'), held)
+        self.assertIn('`set-hold` (risk high) is for owner, pm', text)
+
+    def test_a_coordinator_may_not_reprice_an_owner_or_pm_price(self):
+        """The three logged refusals (docs/refusals.md in the PM repo, 2026-10-24 and -25) were
+        this case: `--priority N --priority-by agent` on a record the PM had already priced."""
+        for by in TOP:
+            for band in R.PRICE_LOW:
+                with self.subTest(by=by, band=band):
+                    rec = _rec(priority='3', priority_by=by)
+                    for given in (_price(band, 'agent'), _price(band), _price('-')):
+                        text = self.refusal('coordinator', given, rec)
+                        self.assertIn('`set-price-owner` (risk medium)', text)
+
+    def test_a_coordinator_may_not_price_as_the_owner_or_the_pm(self):
+        for by in TOP:
+            with self.subTest(by=by):
+                text = self.refusal('coordinator', _price('3', by), _rec(**UNPRICED))
+                self.assertIn('`set-price-owner` (risk medium)', text)
+
+    def test_a_coordinator_may_not_price_a_record_blocked_on_the_owner(self):
+        for rec in (_rec(**dict(UNPRICED, **OWNER_BLOCKED)),
+                    _rec(priority='3', priority_by='agent', **OWNER_BLOCKED)):
+            with self.subTest(priority=rec.get('priority')):
+                text = self.refusal('coordinator', _price('3', 'agent'), rec)
+                self.assertIn('`set-price-owner` (risk medium)', text)
+
+    def test_a_coordinator_reprices_an_agent_price(self):
+        """An agent price is set-price, the leads' row, whoever set it: `priority_by: agent`
+        does not say which session priced, so a coordinator may move it within 2-5 (with or
+        without `--priority-by agent`) or clear it, but never to 1 or -1."""
+        rec = _rec(priority='3', priority_by='agent')
+        for given in (_price('4', 'agent'), _price('5'), _price('-')):
+            self.assertIsNone(self.refusal('coordinator', given, rec), given)
+        self.assertIn('`set-price-owner`', self.refusal('coordinator', _price('1', 'agent'), rec))
+        self.assertIn('`set-hold`', self.refusal('coordinator', _price('-1', 'agent'), rec))
+
+    def test_the_pm_and_the_owner_keep_every_price_and_builders_take_none(self):
+        recs = (_rec(**UNPRICED), _rec(priority='3', priority_by='agent'),
+                _rec(priority='3', priority_by='pm'), _rec(priority='3', priority_by='owner'),
+                _rec(priority='-1', priority_by='owner'), _rec(**dict(UNPRICED, **OWNER_BLOCKED)))
+        for rec in recs:
+            # a bare `--priority 4` on an agent price is set-price alone, no set-other beside it
+            for given in (_price('1', 'pm'), _price('3', 'owner'), _price('3', 'agent'),
+                          _price('-1', 'owner'), _price('4'), _price('-')):
+                for role in R.TOP:
+                    self.assertIsNone(self.refusal(role, given, rec), (role, given))
+                for role in R.BUILDERS + R.DOCS + R.READ_ONLY + R.LANDERS:
+                    self.assertIsNotNone(self.refusal(role, given, rec), (role, given))
+                    self.assertIsNotNone(policy.refusal(role, policy.sort('set', given, rec),
+                                                        R.FACTS), (role, given))
+
+
+class CoordinatorPriceCli(unittest.TestCase):
+    """The same rule through tools/backlog.py, run with a coordinator's session mark."""
+
+    def setUp(self):
+        self.repo = TempRepo(bare_remote=True, prepare=kit_json_ref,
+                             prepare_key='test_cli.Cli.kit_json_ref')
+        self.addCleanup(self.repo.cleanup)
+        home = tempfile.mkdtemp(prefix='kit-home-')
+        self.addCleanup(rmtree, home)
+        self.env = fixture_env({'USERPROFILE': home, 'HOME': home})
+        self.env.pop('PM_KIT_ROLE', None)
+
+    def run_tool(self, mark, *args):
+        env = dict(self.env)
+        if mark is not None:
+            env['PM_KIT_ROLE'] = mark
+        return inproc.run_main(_backlog().main, ['-C', self.repo.root] + list(args), env,
+                               self.repo.root)
+
+    def ok(self, mark, *args):
+        rc, out, err = self.run_tool(mark, *args)
+        self.assertEqual(rc, 0, out + err)
+        return out + err
+
+    def add(self, rid):
+        self.ok(None, 'add', rid, '--summary', 'a thing to do', '--scope', 'tools/%s.py' % rid.lower(),
+                *ADD_FLAGS)
+
+    def test_a_coordinator_prices_an_unpriced_record_once_and_never_over_the_pm(self):
+        self.add('FOO')
+        self.add('BAR')
+        self.ok('coordinator', 'set', 'FOO', '--priority', '3', '--priority-by', 'agent')
+        out = self.ok(None, 'show', 'FOO')
+        self.assertIn('priority: 3\n', out)
+        self.assertIn('priority_by: agent\n', out)
+        self.ok(None, 'set', 'BAR', '--priority', '2', '--priority-by', 'pm')
+        rc, out, err = self.run_tool('coordinator', 'set', 'BAR', '--priority', '4',
+                                     '--priority-by', 'agent')
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn('REFUSED: the backlog action `set-price-owner` (risk medium) is for owner, pm; '
+                      "this session's role is coordinator", out + err)
+        self.assertIn('priority: 2\n', self.ok(None, 'show', 'BAR'))
+
+
+def _backlog():
+    return inproc.load_tool('backlog')
 
 
 if __name__ == '__main__':
