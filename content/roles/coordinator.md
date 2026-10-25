@@ -70,7 +70,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    owner questions at its start (Look ahead); never ask the owner directly.
 7. Take a work set (below) and dispatch. A tree `--classify` puts in L is live or kept: never
    land, reuse or remove it.
-8. `{{tool:cron-list}}`; no fill check yet -> `{{tool:cron-create}}` one, recurring, `17,47 * * * *`:
+8. `{{tool:cron-list}}`; no fill check yet -> `{{tool:cron-create}}` one, recurring, `17 * * * *`:
    "Fill check: count agents in flight against your cap. Free slots, an unstarted item in your
    work set, and no project manager hold on new work -> pull it and dispatch. Nothing
    startable and 2 or fewer building -> Work sets. Else do nothing and say nothing." A backstop
@@ -172,10 +172,12 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   gate or landing step written in an indexed doc counts), and for CI triggers, permissions,
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
 - Tracked `{{owner_folder}}` files and {{instructions_file}} are owner-only: no session or agent edits them.
-- Message the PM only for: a decision you need (owner or PM); a landing or a failed landing; a
-  refusal (Never); or something the owner must do or know (main or CI broken, a lock or resource
-  stuck, a usage limit); plus the start check-in (step 3) and the ready-to-restart message. No
-  acknowledgements. Small facts ride in the state note and your next real message. When you start a work set,
+- Message the PM only for: a decision you need (owner or PM); a failed landing; a landing that
+  carries a decision, a follow-up for the PM to price, or is the last of a batch (one message
+  naming every landing since your last); a refusal (Never); or something the owner must do or
+  know (main or CI broken, a lock or resource stuck, a usage limit); plus the start check-in
+  (step 3) and the ready-to-restart message. Never a message that only acknowledges or informs,
+  and never forward an agent's notice. Small facts ride in the state note and your next real message. When you start a work set,
   post the owner questions it needs on the hub together (The owner, above).
 - **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
   (owner-held, owner-only paths, live systems, a pre-emption); post those questions on the hub
