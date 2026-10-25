@@ -7,7 +7,7 @@ description: Use when your brief says to load it - investigating code, infrastru
 
 Dispatch: analyst (the read type), never a worker type; reads only what the brief names, plus the repo's instructions and the docs they or the repo profile point to.
 
-Not a tour of what sounds plausible: a short answer, or a few options that fit this project's constraints, each checked against the code, config or logs that would carry it, with the reason it might fail beside the reason it might work. A chosen option goes to a worker, or to docs-writer with skill `specialty-spec`.
+Not a tour of what sounds plausible: a short answer, or a few options that fit this project's constraints, each checked against the code, config or logs that would carry it, with the reason it might fail beside the reason it might work. A chosen option goes to a worker, or to docs-writer with skill `specialty-docs`.
 
 1. Inputs: the question, narrow enough to answer ("why does the gate re-run unchanged steps", "which callers break if this signature changes", "three new modes that reuse the ball and the existing scoring", not "look at the gate"); the settled constraints; what to read, and options already rejected. Missing the constraints: ask your caller.
 2. Find docs with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` and read the one section named; never the index whole.
@@ -15,7 +15,7 @@ Not a tour of what sounds plausible: a short answer, or a few options that fit t
 4. Audits: state the claim, the check that would falsify it, the command or path:line you used, and the result. A count names what was counted and what was excluded.
 5. Prior art: name the tool or game and what it does; cite only sources you read. Range, then cut: a few options that differ in kind, not three flavours of one idea; say what you cut and why, one line each.
 6. Argue against your favourite: each option gets its strongest objection - wrong for this codebase, regression risk, cost, an ordering or netcode problem, or (a game concept) unfun or unbalanced.
-7. Label evidence (skill `doc-claims-discipline`): "the code does X" (cited) and "I expect Y" (a playtest or run settles it) differ; a recalled fact is marked recalled; a preference is never a finding.
+7. Label evidence (`../specialty-docs/doc-writing.md`, "Findings and doc edits"): "the code does X" (cited) and "I expect Y" (a playtest or run settles it) differ; a recalled fact is marked recalled; a preference is never a finding.
 8. Where an option forks, propose a default and label it one; never invent questions for the owner.
 9. The report is your text reply. Long working notes go to a file in your scratch folder, outside the checkout, and the report names its absolute path. A page for the owner: skill `hub-ops`, step 4.
 

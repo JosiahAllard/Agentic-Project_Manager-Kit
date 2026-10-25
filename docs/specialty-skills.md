@@ -52,7 +52,7 @@ know-how. Every inference is marked "inference"; the rest is read from the code.
 |---|---|---|---|
 | weak-worker, worker, strong-worker, senior-worker | per the tier and weak-worker changes | write, builder | the brief picks one per task; specialty skills ride on these |
 | read type (reviewer + researcher) | light / high | read, read-only | skills `specialty-review`, `specialty-research` |
-| docs type (records + spec-writer) | standard / medium, raised for specs | write, docs | skills `specialty-records`, `specialty-spec` |
+| docs type (records + spec-writer) | standard / medium, raised for specs | write, docs | skill `specialty-docs` |
 | lander, test-runner, coordinator, pm, consultant, deep-worker | unchanged | unchanged | |
 
 Retired: asset-smith, tech-artist, sound-smith, researcher, reviewer, records, spec-writer (7 files);
@@ -75,8 +75,7 @@ and names start with a letter (`_NAME` in `kitlib/host/content.py`).
 | specialty-sound | sound-smith | worker; senior-worker for design | measure clips, ends in a question for the owner |
 | specialty-review | reviewer | read type | brief + diff range + logs, report format |
 | specialty-research | researcher | read type | concepts with evidence, spec-writer hand-off |
-| specialty-records | records | docs type | transcribe, never decide |
-| specialty-spec | spec-writer | docs type | findings first, defaults labelled, inferences marked |
+| specialty-docs | records, spec-writer | docs type | records: transcribe, never decide; spec: findings first, defaults labelled, inferences marked |
 
 Each SKILL.md opens with a "Dispatch" line: the minimum worker tier (never weak-worker for creative
 work) and the profile sections it reads (the creative roles read **Art**, **Shared resources**). The

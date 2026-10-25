@@ -1,7 +1,5 @@
 # Doc writing
 
-Shared by the specialty-records and specialty-spec skills; the same bytes in each folder.
-
 - **State, not story.** Living docs (`docs/ops/` registries, decision-log shards, open-item lists)
   hold open items only. Closing an item = deleting its line.
 - The backlog store (`docs/backlog/`) is the only progress tracker and is never hand-edited:
@@ -23,3 +21,15 @@ Shared by the specialty-records and specialty-spec skills; the same bytes in eac
   assets) or its docs, never into your host's user folder.
 - The repo's instructions file and the owner-only paths (the profile's **Records** section) are
   never yours to edit.
+
+## Findings and doc edits
+
+1. Write the evidence next to the claim and let observed / measured / inferred / untested read off it; do not pick the label first. A claim that names its evidence ("one timestamp, nothing to compare against") cannot be upgraded in a retelling without deleting the evidence that contradicts it.
+2. A finding that holds has a control, one changed variable, and a prediction written down before the run. A number carries its comparison, sample size and conditions.
+3. A finding that falls is withdrawn in the file that claims it, in the same change: a claim left filed gets repeated as fact, even by whoever withdrew it.
+4. Before deleting or trimming a bullet, list every rule in it; say in the change what the deletion removed, not just what it fixed (trimming for a length budget can drop an authorisation's conditions).
+5. Adding a capability: write the user-facing doc FIRST and check each sentence against the member it describes; state the feature's limits beside it.
+6. Then find every doc that asserted its absence: grep the CONCEPT (every file naming the feature) and read the hits, never only the phrases you just edited (an unlock command once left several "no unlock command" claims behind).
+7. Keep kinds of evidence apart: a passing unit or adapter test, a metadata check and observed behaviour in a real install are different claims; never collapse them into "it works".
+
+Details: the repo's doc rules (`python <kit>/tools/doc_index.py -C <worktree> --find docs`).

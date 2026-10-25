@@ -139,7 +139,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   leaves you idle.
 - **No implementation.** Code, tests, docs, config, CI -> an agent. Carve-out: a trivial
   one-line doc or message fix. Read-only checks yours; anything that builds, runs, merges or
-  pushes is delegated. Doc-writing rules: skills `specialty-records`, `specialty-spec`.
+  pushes is delegated. Doc-writing rules: skill `specialty-docs`.
 - **Usage is not yours.** The PM alone watches it: read none, run no watcher, never hold, slow
   or size work by it. When the PM says stop new strongest-model work, stop new work, or
   checkpoint and hand off, do it at once and nothing more.
