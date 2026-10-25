@@ -492,6 +492,11 @@ class SameTree(ReuseCase):
                          {'unit': 'reused', 'basey': 'reused', 'whole': 'reused',
                           'merged': 'pass', 'plain': 'pass'})
         self.assertIs(rec['full'], False)
+        # the same tree as the merge of the tip onto another base is not the same landing
+        cfg = runner.kconfig.load(self.repo.root)
+        self.assertEqual(reuse.same_tree(self.repo.root, cfg, BRANCH, tip, 'd' * 40, out.merge),
+                         (None, NOT_USED % (tree, tip[:10], 'the merge %s is not the merge of %s '
+                                            'onto dddddddddd' % (out.merge[:10], tip[:10]))))
 
     def test_main_moved_runs_every_step_and_relaxes_nothing(self):
         _, tip = self.full_tip()
