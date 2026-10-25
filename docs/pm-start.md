@@ -4,7 +4,7 @@
 `additionalContext`; logic `kitlib/pmstart`). A hook cannot call tools, so it lists steps for the
 PM. It always exits 0; a failed check becomes one "could not check X: reason" line.
 
-Checks: standing rules, eng_review flags, the hub, `pm_watch.py` running, the hand-off file ("Hand-off file"), reminders due, and coordinators not running (no `claude.exe`
+Checks: standing rules, eng_review flags, the hub, `pm_watch.py` running, the hand-off file ("Hand-off file"), reminders due, the rulebooks (one `rulebooks` line: the rules folder, each book with its rule count, and `ledger.py rules --all`, or `none` when no ledger or no book is there, or `unknown` when the machine config cannot be read; `kitlib.pmstart` `rulebook_lines`, docs/ledger.md "Rulebooks"), and coordinators not running (no `claude.exe`
 with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/lookup.py`); each such line names the
 `launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). A repository in sessions.json with no live `consultant-<repo>` session (and no consultant entry of its own) gets one `consultant-<repo> is not running: launch.py consultant --repo <repo> --repo-path <folder>` line, the folder from the machine config's `launcher.repos` or `<its checkout>` when it is not there (`kitlib.pmstart` `_consultants_missing`; no config switch). `<n>` is the account
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM

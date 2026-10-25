@@ -33,14 +33,14 @@ def _config(loader, label, rows):
 
 
 def _quiet(loader):
-    """`loader()`, or {} when it gives None or raises ConfigError (kitlib.config.user.user_config's
-    one error for a config that cannot be read): for a config read only to add an optional line
-    (the ledger line needs `ledger_dir`), so a broken config adds no row. Any other error is a bug
-    and propagates."""
+    """`loader()` (an empty config when it gives None), or None when it raises ConfigError
+    (kitlib.config.user.user_config's one error for a config that cannot be read): the ledger
+    check turns None into the rulebook line's "unknown" (the ledger-file line needs `ledger_dir`).
+    Any other error is a bug and propagates."""
     try:
         return loader() or {}
     except kuser.ConfigError:
-        return {}
+        return None
 
 
 def machine_lines(snapshot):
@@ -65,7 +65,7 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
     """A tuple of check lines. Missing connections/configuration are reported, never guessed.
     `machine_config`: the machine config the coordinator's ledger line reads (default
     kitlib.config.user.user_config(), read only for a coordinator with a repo_name; one that
-    cannot be read adds no row, and any other error reading it is a 'could not check ledger' row).
+    cannot be read gives the rulebook line's "unknown" row, and any other error reading it is a 'could not check ledger' row).
     `config_lines`: the machine config check, right after the standing lines for both roles (default
     kitlib.pmstart.configcheck.lines)."""
     if role not in {'pm', 'coordinator'}:
