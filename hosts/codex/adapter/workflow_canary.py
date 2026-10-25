@@ -251,12 +251,13 @@ def _prepare_or_isolate(task, coordinator, env):
 
 
 def _remove_result_folder(folder):
-    """Best effort: remove the fixture's own result folder (<dev_drive>/pm-kit/kit-gate-result/<key>),
-    never the kit-gate-result folder above it. None, a missing folder or an error is ignored."""
+    """Best effort: remove the fixture's own per-repository result folder (result.result_dir),
+    never the machine-wide folder above it. None, a missing folder or an error is ignored."""
     if not folder:
         return
+    from kitlib.gate import result
     target = Path(folder)
-    if target.parent.name != 'kit-gate-result' or not target.name:
+    if target.parent.name != result.DIR_NAME or not target.name:
         return
     shutil.rmtree(target, ignore_errors=True)
 

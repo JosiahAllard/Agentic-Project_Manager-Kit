@@ -121,7 +121,8 @@ class Safety(unittest.TestCase):
 
     def test_result_folder_cleanup_removes_only_the_fixture_key_folder(self):
         with tempfile.TemporaryDirectory() as folder:
-            parent = Path(folder) / 'kit-gate-result'
+            from kitlib.gate import result
+            parent = Path(folder) / result.DIR_NAME
             mine, other = parent / 'fixture-abc', parent / 'real-def'
             for item in (mine, other):
                 item.mkdir(parents=True)
