@@ -15,6 +15,7 @@ from kitlib.git import repo
 from kitlib.guard import commands as cm, context, rules, shell as sh
 from kitlib.lockmcp import server as lockmcp
 
+from . import test_rules_hub as TH
 from . import world as W
 from .claudehost import MCP_PREFIX, decide
 from .extra_rows import ROWS as EXTRA_ROWS
@@ -972,6 +973,36 @@ class OwnerSetup(unittest.TestCase):
                 d = decide(ev, self.w.ctx(environ=environ))
                 self.assertIsNotNone(d, 'allowed')
                 self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'), d.reason)
+
+
+class NamedInHeredocText(TH.Hub):
+    """A python edit script whose heredoc only names a protected file runs nothing of it and
+    writes nothing there: it passes in every held session (seen refused as owner-setup and
+    hub-secrets). A real run or write of each target is still refused."""
+
+    @staticmethod
+    def edit_script(path, old, new):
+        return ("python - <<'EOF'\nimport pathlib\np = pathlib.Path(%r)\n"
+                "t = p.read_text(encoding='utf-8')\nt = t.replace(%r, %r)\n"
+                "p.write_text(t, encoding='utf-8')\nEOF" % (path, old, new))
+
+    def test_an_edit_script_naming_machinesetup_passes(self):
+        text = self.edit_script('kitlib/machinesetup/managed.py', 'kitlib.machinesetup.extras',
+                                'kitlib.machinesetup.extras  # read by machine_setup.py --apply')
+        self.allowed(lambda sub: bash(text, self.w.wt, sub))
+
+    def test_an_edit_script_of_the_guard_s_hub_module_passes(self):
+        text = self.edit_script('kitlib/guard/hub.py', "HUB_SERVER = 'hub'", "HUB_SERVER = 'hub'  # hub.py")
+        self.allowed(lambda sub: bash(text, self.w.wt, sub))
+
+    def test_machine_setup_run_to_act_is_still_refused(self):
+        self.denied(lambda sub: bash('python tools/machine_setup.py --apply', self.w.wt, sub), 'owner-tool')
+
+    def test_a_write_into_the_token_folder_is_still_refused(self):
+        sec = W.fwd(self.secrets)
+        self.denied(lambda sub: bash("python - <<'EOF'\nopen(%r, 'w').write('x')\nEOF" % (sec + '/owner.token'),
+                                     self.w.wt, sub), 'hub-secrets')
+        self.denied(lambda sub: bash('echo x > "%s/agent.token"' % sec, self.w.wt, sub), 'hub-secrets')
 
 
 class PushBlockOff(unittest.TestCase):

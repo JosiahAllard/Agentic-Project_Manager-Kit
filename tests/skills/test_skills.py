@@ -27,7 +27,7 @@ CREATIVE_HOME = "specialty-tech-art"
 SHARED_COMPANIONS = {"doc-writing.md": ("specialty-records", "specialty-spec")}
 # reference files a skill carries beside its SKILL.md
 EXTRA_FILES = {"coordinator-dispatch": ["roster.md", "creative.md", "upkeep.md"], "specialty-tech-art": ["creative.md"],
-               "specialty-sound": ["measuring.md"],
+               "specialty-sound": ["measuring.md"], "machine-lock-run": ["training.md"],
                "specialty-records": ["doc-writing.md"], "specialty-spec": ["doc-writing.md"]}
 # one repo's own: never shipped in the plugin (docs/shipping.md, "Stays repo-local")
 REPO_LOCAL = {"worktree-start"}

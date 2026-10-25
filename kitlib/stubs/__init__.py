@@ -88,7 +88,7 @@ from kitlib.kitcmd import KIT_ONLY, SHARED                          # noqa: E402
 # Tools the kit no longer has. A "stubs".tools list written before the removal still loads: the
 # name is dropped, never refused, and a stub of it left in the repository is named for deletion
 # (a note line, not a problem). An unknown name is still a ConfigError.
-RETIRED = ('ruling_cites', 'ledger_refs')
+RETIRED = ('ruling_cites', 'ledger_refs', 'board')
 
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
