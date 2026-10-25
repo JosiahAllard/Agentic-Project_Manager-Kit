@@ -48,7 +48,7 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 - Briefs to the docs-writer role give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
   logs split into more per-area files as they fill.
-- A brief for an owner-approved change tells the author to commit with `commit.py --owner-approval hub:A-n` and leave the work tree at the approval's base; never to copy the approved content in first.
+- A brief for an owner-approved change tells the author to commit with `commit.py --owner-approval hub:A-n --model "<model name>"` and leave the work tree at the approval's base; never to copy the approved content in first.
 
 ## Which role, which tier
 

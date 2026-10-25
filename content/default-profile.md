@@ -20,7 +20,7 @@ Anything below that you could not confirm in the repository is an inference: say
 One task is one branch `<area>/<slug>` in its own worktree, never the main checkout. Make it with
 `python <kit>/tools/new_worktree.py -C <repo> <area>/<slug>`, which puts it in your host's worktrees
 folder (the kit keeps that folder out of git locally). Commit by explicit path with
-`python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`, never `git add -A` or
+`python <kit>/tools/commit.py -C <worktree> -m "<subject>" --model "<model name>" <path> ...`, never `git add -A` or
 `commit -a`. Remove only your own worktree, once its work has landed:
 `python <kit>/tools/worktree_remove.py -C <repo> <worktree>`. For a sync (skill branch-sync): no
 untracked generated file may be deleted first; a merge git refuses is reported. Started in a home
