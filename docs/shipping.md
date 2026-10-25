@@ -50,7 +50,7 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 - **Agents** (`hosts/claude/shell/agents/`): the agent definitions; docs/ROSTER.md says which model and
   effort each runs at and what it is for.
 - **Skills** (`content/skills/<name>/SKILL.md`, the plugin's skills folder itself, never copied:
-  docs/content.md): backlog-ops, branch-review, branch-sync, builder,
+  docs/content.md): backlog-ops, backlog-pricing, branch-review, branch-sync, builder,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, hub-ops, ledger-ops, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
   shell-and-worktree-traps, subagent-dispatch, specialty-3d-assets, specialty-rigging,

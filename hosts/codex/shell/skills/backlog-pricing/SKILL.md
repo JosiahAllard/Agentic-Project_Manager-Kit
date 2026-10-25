@@ -11,16 +11,18 @@ Price with `python <kit>/tools/backlog.py -C <worktree> set <ID> --priority <n> 
 
 Check the record against the code and the docs. Close or narrow it when it is:
 
-- already done, or no longer applies;
+- already done or no longer applies (`close`, naming what did it);
 - a duplicate;
-- a nitpick (wording, a rename, a tidy-up);
-- overengineering (a hypothetical edge case, hardening against misuse);
+- a nitpick (wording, a rename, one doc line, a test name or strength, a tidy-up);
+- overengineering (a hypothetical or unobserved case, hardening against deliberate misuse or evasion, or machinery beyond the observed problem);
 - dropped by the owner;
 - citing no observed failure, concrete defect, cleanup (file:line) or owner request.
 
+Narrow it rather than close it when only part of it fails.
+
 ## B. What each priority means
 
-- p1: the owner only.
+- p1: the owner or the PM.
 - p2: blocks a p1, a red gate, or a live failure in the focus area.
 - p3: a real defect or an owner feature that blocks nothing.
 - p4: cleanup, docs, dead code, tooling comfort.
@@ -30,5 +32,5 @@ Ties: the focus area first, then the smaller item. Never raise a record because 
 
 ## C. Who closes what
 
-- A coordinator retires an unpriced record that fails A, citing the check (`retire <ID> --why "<check>"`).
+- A coordinator retires an unpriced record that fails A, citing the check (`retire <ID> --why "<check>"`; one already done is closed with `close`, not retired).
 - An owner- or PM-priced record that fails A goes to the PM, who decides; a coordinator never retires it.
