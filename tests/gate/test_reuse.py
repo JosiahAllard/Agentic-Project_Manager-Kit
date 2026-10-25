@@ -546,6 +546,29 @@ class SameTree(ReuseCase):
         self.assert_unused(out, lander, tip, 'the record was made by another kit (aaaaaaaaaa)')
         self.assert_ran(lander.gate_logs, 'unit')
 
+    def unclean(self, record, landing):
+        """The tip gated --full by a kit whose clean is `record`, landed by one whose clean is
+        `landing`: the record serves nothing and every step runs."""
+        self.ident['clean'] = record
+        _, tip = self.full_tip()
+        self.assertIs(gate_ok.read(self.repo.root, tip)[0]['kit']['clean'], record)
+        self.ident['clean'] = landing
+        lander, out = self.land(BRANCH, tip)
+        self.assert_unused(out, lander, tip, 'the record was made by another kit (aaaaaaaaaa)')
+        self.assert_ran(lander.gate_logs, 'unit')
+
+    def test_a_kit_with_uncommitted_files_serves_nothing(self):
+        self.unclean(False, False)
+
+    def test_a_kit_git_cannot_read_serves_nothing(self):
+        self.unclean(None, None)
+
+    def test_a_record_of_an_unclean_kit_serves_a_clean_one_nothing(self):
+        self.unclean(False, True)
+
+    def test_a_record_of_a_clean_kit_serves_an_unclean_one_nothing(self):
+        self.unclean(True, None)
+
     def test_an_old_record_serves_nothing(self):
         _, tip = self.full_tip()
         old = gate_ok.utc(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25))

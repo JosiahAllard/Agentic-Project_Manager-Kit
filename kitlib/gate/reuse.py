@@ -42,10 +42,13 @@ kit gating the landing, and it ended within "landing".reuse_max_age_h hours. A s
 it when it asks for reuse, is no check step, has no merged_args (its landing argv never ran at the
 tip) and the record says it passed. Only in that mode, a step whose command names {base} or the
 base commit, or that declares no input, is not barred: the tree is the same tree, and the base is
-the same commit, so {base} and every file a step could read from the tree are the ones the tip's
-run had (the history differs only by the merge commit, and the opt-in already promises the step
-does not read git state). Such a step gets no key and is never stored, so the relaxation never
-reaches the cache. Anything that raises means every step runs.
+the same commit, so {base} and every tracked file are the ones the tip's run had (the history
+differs only by the merge commit, and the opt-in already promises the step does not read git
+state). Tracked content only: the landing tree lacks the author worktree's ignored and generated
+files, and a step that declares no input is not checked for them, so a step whose result depends
+on such a file must not set reuse. The result taken is the one of the step's --full command
+(full_cmd where it has one), not of the landing's cmd. Such a step gets no key and is never
+stored, so the relaxation never reaches the cache. Anything that raises means every step runs.
 
 Entries live in `<git common dir>/kit-gate-cache/<key>/<YYYYmmddTHHMMSSZ>-<pid>-<hex8>.<pass|fail>.json`,
 written to a temp file (TMP_RE) and renamed. Entries older than PRUNE_H hours are pruned, and so
