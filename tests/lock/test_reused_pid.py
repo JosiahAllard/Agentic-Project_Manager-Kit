@@ -136,10 +136,16 @@ class ReusedPid(StoreCase):
         procs = [pid for pid, _pp, name in process.snapshot() if name.lower() in PROTECTED]
         if not procs:
             self.skipTest("no protected system process is listed")
-        # A creation time no process has: elevated, the open works and the time differs; not
-        # elevated, the open is refused and the missing run mutex decides.
-        self.live_record(RID, pid=procs[0], ctime=1, cores=[0, 1])
+        # The real denial, unpatched: only where this user may not open the process (not
+        # elevated), so the run mutex decides and not a creation time compared.
+        pid = procs[0]
+        if st.wrapper_state(pid, 1) is not None:
+            self.skipTest("this runner may open a protected process (elevated)")
+        self.live_record(RID, pid=pid, ctime=1, cores=[0, 1])
         self.assert_not_live()
+        mutex = self.store.run_mutex(RID)
+        self.addCleanup(mutex.release)
+        self.assert_live()
 
     def test_a_run_mutex_that_cannot_be_opened_for_another_reason_counts_as_live(self):
         # Only "no such mutex" (ERROR_FILE_NOT_FOUND) means gone. Access denied, or any other
@@ -185,6 +191,34 @@ class ReusedPid(StoreCase):
                              os.path.exists(run.store.path("ended", RID + ".json"))))
         rm.settle(self.store, run, 0, "done", Mutex())
         self.assertEqual(seen, [(False, True)])
+
+    def test_settle_lets_the_run_mutex_go_when_the_record_cannot_leave_active(self):
+        # store.remove ignores the OSError: the mutex is still let go, after the ended record
+        # was written, and the record left in active/ is listed only while its wrapper lives.
+        run = rm.Run(self.store, self.layout(), "kit", "t", "engine-test", None, [], "held",
+                     rid=RID)
+        run.save()
+        active = self.store.path("active", RID + ".json")
+        ended = self.store.path("ended", RID + ".json")
+        real, seen = os.remove, []
+
+        def refuse(path):
+            if os.path.normcase(os.path.abspath(path)) == os.path.normcase(active):
+                raise PermissionError(13, "in use", path)
+            real(path)
+
+        class Mutex:
+            def release(self):
+                seen.append((os.path.exists(active), os.path.exists(ended)))
+        with mock.patch.object(st.os, "remove", refuse):
+            rm.settle(self.store, run, 0, "done", Mutex())
+        self.assertEqual(seen, [(True, True)])
+        self.assertEqual(self.store.read("ended/%s.json" % RID)["state"], "ended")
+        self.assertEqual([r["id"] for r in self.store.live_runs()], [RID])   # this process
+        with mock.patch.object(st, "wrapper_state", lambda pid, ctime: False):
+            self.assertEqual(self.store.live_runs(), [])
+            live, gone, _own = release.live_runs(self.store, alive=lambda p, c: False)
+            self.assertEqual((live, gone), ([], ["active/%s.json" % RID]))
 
     def test_a_hold_claimed_by_an_unopenable_run_is_claimed_only_while_its_mutex_is_held(self):
         pid, ct = self.other_process()
