@@ -24,7 +24,9 @@ ask is the PM's items only, the list `hub.py pending --for pm` prints: an item r
 that can still be reached is that session's to ack, and a PM ack would hide it from the creator's
 wait. The lines:
 `hub: server up on port <n>, <k> pending for the PM` (`<k>` is 0 when the answer's `items` is not a
-list); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then either
+list); a `hub: WARN this hub server is running older code than the hub code now on disk. Owner step:
+restart the Action Hub: python "<hub.py>" restart ...` line when the server's health `code` says
+so (docs/action-hub.md "Stale code"; none from a hub that gives no `code`); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then either
 `hub: wait --pending is running` or a warning, `hub: WARN no PM wait --pending --for pm is
 running, so items routed to the PM go unseen; ...`, telling the PM to start
 `hub.py wait --pending --for pm` in the background and start it again after it ends (docs/action-hub.md
