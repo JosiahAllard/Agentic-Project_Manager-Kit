@@ -42,7 +42,10 @@
                  config file changes, or the change is docs-only under the base's
                  "gate".docs_only and its steps all passed, or the base sets
                  "landing".shared_paths and the change touches none of them, no strict path and
-                 no gate config file; docs/gate.md "Shared paths"); a miss names the `gate.py -C <worktree>
+                 no gate config file; docs/gate.md "Shared paths"), or by none when the tip's
+                 latest red --full run has a FLAKE targeted rerun (kitlib.gate.rerun.verify_flake);
+                 a tip on which a test failed twice never lands (rerun.twice_refusal);
+                 a miss names the `gate.py -C <worktree>
                  --full` command that gates it, and, when the kit lands itself and the tip does
                  not contain the base, says to merge <remote>/<main> into the branch first (its
                  own gate.py may predate the record's `full` key). Then the
@@ -170,7 +173,7 @@ import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
 from kitlib.content import oncommit
 from kitlib.gate import cleanup, detect, gitstatus, result, reuse, runner, stash, strict_defaults
-from kitlib.gate import carry, verdicts
+from kitlib.gate import carry, rerun, verdicts
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
@@ -729,9 +732,12 @@ class Lander(object):
         (tip_refusal): a `gate.py --full` pass's (gate_ok.full_of), or a default-mode or docs-only
         pass's that the base config takes (select_refusal). A record from before records said
         whether the gate was --full, one whose mode is unknown, and a record of any other commit
-        do not count; an --only run writes none. None, or the first miss: why, and what gates
-        that tip whole (full_gate_advice; REFUSED, nothing merged). It only adds to the merged
-        gate. A base gate that --full selects no step from refuses first (no_full_step).
+        do not count; an --only run writes none. A tip with neither lands on a FLAKE targeted
+        rerun of its latest red --full run (kitlib.gate.rerun.verify_flake). A tip on which a test
+        failed twice, or whose rerun records cannot be read, never lands, whatever record it has
+        (rerun.twice_refusal). None, or the first miss: why, and what gates that tip whole
+        (full_gate_advice; REFUSED, nothing merged). It only adds to the merged gate. A base
+        gate that --full selects no step from refuses first (no_full_step).
 
         The record's `gate_config` is not compared with any config: the branch gate writes a
         record only for a clean tree, with `config_rev` the tip, so the hash is of the tip's own
@@ -744,6 +750,9 @@ class Lander(object):
         if why:
             return why
         for b, t in self.pairs:
+            why = rerun.twice_refusal(self.root, t)
+            if why:
+                return '%s tip %s does not land: %s' % (b, t[:10], why)
             why = self.tip_refusal(t)
             if why:
                 return '%s tip %s has no full-gate OK record: %s; %s' % (
@@ -752,16 +761,25 @@ class Lander(object):
 
     def tip_refusal(self, tip):
         """Why `tip`'s gate-OK record does not land it, or None: verify_full's reason, unless the
-        record is a default-mode ("select") or docs-only ("docs") pass that select_refusal takes."""
+        record is a default-mode ("select") or docs-only ("docs") pass that select_refusal takes,
+        or the tip's latest red --full run has a FLAKE targeted rerun (rerun.verify_flake; its
+        reason is added only when the tip has rerun records)."""
         _, why = gate_ok.verify_full(self.root, tip)
         if why is None:
             return None
         rec, _ = gate_ok.verify(self.root, tip)
         mode = gate_ok.mode_of(rec) if rec is not None else None
-        if mode not in ('select', 'docs'):
-            return why          # no record, one git disagrees with, or one of no known mode
-        more = self.select_refusal(rec, tip, mode)
-        return None if more is None else '%s, and %s' % (why, more)
+        if mode in ('select', 'docs'):
+            more = self.select_refusal(rec, tip, mode)
+            if more is None:
+                return None
+            why = '%s, and %s' % (why, more)
+        flake = rerun.verify_flake(self.root, tip)
+        if flake is None:
+            return None
+        if rerun.has_records(self.root, tip):
+            why = '%s; its targeted rerun does not land it: %s' % (why, flake)
+        return why
 
     def select_refusal(self, rec, tip, mode):
         """Why a verified record of `tip` that is not --full (`mode` "select" or "docs") does not
