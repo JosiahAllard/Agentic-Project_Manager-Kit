@@ -283,7 +283,8 @@ class LedgerCounts(unittest.TestCase):
             fh.write('# Standing rulings\n\n- %s: an old rule.\n- %s: a live rule.\n'
                      % (rid(2), rid(3)))
         got, notes = ledger.counts(user_config=lambda home: {'ledger_path': path})
-        self.assertEqual(got, {'stale_cites': 1, 'superseded_live': 1, 'superseded': 2})
+        self.assertEqual(got, {'stale_cites': 1, 'rules': {}, 'over_budget': [],
+                               'conflict_pairs': 0, 'overrides': 0})
         self.assertEqual(notes, [])
         res = {'repo': 'x', 'counts': {}, 'ledger': got, 'notes': notes, 'findings': []}
         for text in (json.dumps(got), page.render(res)):
@@ -294,22 +295,19 @@ class LedgerCounts(unittest.TestCase):
         self.assertEqual(ledger.counts(user_config=lambda home: {}),
                          (None, ['ledger NOT CHECKED: the machine config names no ledger']))
 
-    def test_each_count_above_0_is_a_finding_for_the_pm_with_numbers_only(self):
-        got = ledger.findings({'stale_cites': 2, 'superseded_live': 1, 'superseded': 3})
-        self.assertEqual([(f.check, f.key) for f in got],
-                         [('ledger-stale-cites', 'stale_cites'),
-                          ('ledger-superseded-live', 'superseded_live')])
+    def test_stale_cites_above_0_is_a_finding_for_the_pm_with_numbers_only(self):
+        got = ledger.findings({'stale_cites': 2, 'rules': {}, 'over_budget': [],
+                               'conflict_pairs': 0, 'overrides': 0})
+        self.assertEqual([(f.check, f.key) for f in got], [('ledger-stale-cites', 'stale_cites')])
         self.assertIn('2 citation(s)', got[0].text)
         self.assertIn('ledger.py" check', got[0].fix)
-        self.assertEqual(got[1].text, '1 of 3 superseded entry not retired')
-        self.assertIn('ledger.py" retire <id>', got[1].fix)
-        for f in got:
-            self.assertIn('the PM', f.fix)
-            self.assertNotIn('R-', f.text + f.fix)
+        self.assertIn('the PM', got[0].fix)
+        self.assertNotIn('R-', got[0].text + got[0].fix)
 
     def test_no_count_above_0_and_an_unchecked_ledger_are_no_finding(self):
-        self.assertEqual(ledger.findings({'stale_cites': 0, 'superseded_live': 0,
-                                          'superseded': 4}), [])
+        self.assertEqual(ledger.findings({'stale_cites': 0, 'rules': {'kit': 4},
+                                          'over_budget': [], 'conflict_pairs': 0,
+                                          'overrides': 1}), [])
         self.assertEqual(ledger.findings(None), [])
 
 
