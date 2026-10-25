@@ -7444,16 +7444,18 @@ def git_worktree_remove(ctx, gc, role, text):
 def stale_mark_word(ctx, target, head):
     """`(True, None)` when the clean worktree at `target`, HEAD `head`, carries a stale mark that
     holds (kitlib.worktree.marks: a coordinator's record that the PM gave the tree up, read from
-    `<git common dir>/kit-stale-marks.json`): the PM's word to remove it unmerged. It holds as the
-    nightly sweep has it hold (sweep.sweep_skip): the mark names this path and this tip, and
-    nothing in the tree, its git dir or its branch's reflog is newer than the mark. Else `(False,
+    `<git common dir>/kit-stale-marks.json`): the PM's word to remove it unmerged. It holds on the
+    nightly sweep's void checks (sweep.sweep_skip): the mark names this path and this tip, and
+    nothing in the tree, its git dir or its branch's reflog is newer than the mark. The sweep's
+    other checks (idle bar, git locks, holders, open claims, machine lock, landing hold) are not
+    made here (docs/guard.md, the git-worktree-remove row). Else `(False,
     why)`: why is None when the tree's branch has no mark (detached included), else why no mark
     counts. Fails closed: a marks file, branch or last activity that cannot be read is no word.
     The tree walk (sweep.last_activity) runs only here, on an unmerged remove that found a mark."""
     from kitlib.worktree import marks, sweep  # the walk and its git reads: only on this path
     place = ctx.place(target)
     if not place.common:
-        return False, 'git cannot place its repository (%s)' % (place.why or 'no git common dir')
+        return False, 'git cannot place its repository (%s)' % (place.detail or 'no git common dir')
     branch, why = ctx.git.current_branch(target)
     if branch is None:
         return False, 'its branch cannot be read (%s)' % why
