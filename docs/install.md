@@ -378,7 +378,7 @@ Only the 23 kit skill names are touched (the directories under `content/skills`)
 `cmd /c rmdir` removes the link only, never the target:
 
 ```powershell
-$kit = 'backlog-ops','branch-review','branch-sync','builder','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','hub-ops','ledger-ops','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','specialty-3d-assets','specialty-rigging','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-records','specialty-spec'
+$kit = 'backlog-ops','backlog-pricing','branch-review','branch-sync','builder','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','hub-ops','ledger-ops','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','specialty-3d-assets','specialty-rigging','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-records','specialty-spec'
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
   Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
   ForEach-Object { cmd /c rmdir "$($_.FullName)" }
