@@ -649,6 +649,51 @@ class RawCode(Base):
         self.allowed(self.cmd('python -c "from kitlib.backlog import store"', sub=False, env=COORDINATOR))
 
 
+class HubWriterCode(Base):
+    """Code that names the hub's record writer (kitlib.hubsite.recordwrite) or the store's
+    plan_answer is a raw write in every session but the owner's, main sessions included
+    (backlogrole.HUB_WRITER_RE): only the hub files a bound question's answer."""
+    TEXTS = ('python -c "from kitlib.hubsite import recordwrite; recordwrite.answer(1)"',
+             'python -c "import kitlib.hubsite.recordwrite as w"',
+             "python -c 'from kitlib import hubsite; hubsite.recordwrite.add(1)'",
+             "python -c \"import importlib; importlib.import_module('kitlib.hubsite.recordwrite')\"",
+             'python -m kitlib.hubsite.recordwrite',
+             'python -m runpy kitlib.hubsite.recordwrite',
+             "python - <<'EOF'\nfrom kitlib.backlog.plan import plan_answer\nEOF",
+             'echo "p.plan_answer(s, c)" | python -')
+
+    def test_every_agent_session_is_refused(self):
+        for text in self.TEXTS:
+            for who, kw in (('pm', dict(sub=False, env=PM)), ('coordinator', dict(sub=False, env=COORDINATOR)),
+                            ('subagent', dict())):
+                with self.subTest(text=text, who=who):
+                    d = self.refused(self.cmd(text, **kw), 'backlog-raw-write')
+                    self.assertIn('Instead:', d.reason)
+
+    def test_a_main_session_refusal_names_the_hub_filing(self):
+        d = self.refused(self.cmd(self.TEXTS[0], sub=False, env=PM), 'backlog-raw-write')
+        self.assertIn('questions file', d.instead)
+        self.assertIn('hub.py', d.instead)
+        self.assertIn('recordwrite', d.reason.split('Instead:')[0])
+
+    def test_the_owner_runs_it(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                self.allowed(self.cmd(text, sub=False, env={}))
+
+    def test_other_main_session_code_is_unchanged(self):
+        for env in (PM, COORDINATOR):
+            for text in ('python -c "from kitlib.backlog import store"', 'python -m kitlib.backlog.migrate',
+                         "python -c 'from kitlib.hubsite import serve'", 'python -c "print(1)"',
+                         'python tools/hub.py questions file Q-1'):
+                with self.subTest(env=env, text=text):
+                    self.allowed(self.cmd(text, sub=False, env=env))
+
+    def test_a_subagent_keeps_the_backlog_code_refusal(self):
+        d = self.refused(self.cmd('python -c "from kitlib.backlog.plan import plan_answer"'), 'backlog-raw-write')
+        self.assertIn('backlog.py', d.instead)
+
+
 class Refs(Base):
     def git(self, args, env=PM, sub=False, cwd=None):
         return self.cmd('git -C "%s" %s' % (W.fwd(cwd or self.w.wt), args), sub=sub, env=env)
