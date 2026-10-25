@@ -13,7 +13,7 @@ import unittest
 from kitlib.guard import fallback, rules
 
 from . import test_jail as tj
-from .test_shared_ref import RULE, SharedRefBase
+from .test_shared_ref import RULE, SharedRefBase, put
 
 
 class PushIntoItself(SharedRefBase):
@@ -237,7 +237,15 @@ class Fallback(SharedRefBase):
                                    'git fetch --std origin', 'git fetch --prune-t origin',
                                    'git -c remote.origin.pruneTags=true fetch origin',
                                    'git -c fetch.pruneTags=true fetch origin',
-                                   'git fetch -f origin tag v1', 'git fetch --force origin tag v1'])
+                                   'git fetch -f origin tag v1', 'git fetch --force origin tag v1',
+                                   'git fetch --fo origin tag v1', 'git pull --forc origin tag v1'])
+
+    def test_an_option_that_only_starts_like_force_is_no_forced_tag(self):
+        # --f is ambiguous to git (--filter, pull's --ff); --filter and --foo are no --force
+        for text in ('git fetch --filter blob origin tag v1', 'git fetch --foo origin tag v1',
+                     'git pull --ff origin tag v1', 'git fetch --forced origin tag v1'):
+            with self.subTest(text):
+                self.assertEqual([p for p in fallback.SHARED_REF_PATTERNS if re.search(p, text)], [])
 
     def test_a_push_to_a_computed_or_home_repository(self):
         self.each_unclean_refused(['git push "$R" HEAD:refs/heads/kit/sib', 'git push $R HEAD:refs/heads/kit/sib',
@@ -259,6 +267,7 @@ class Fallback(SharedRefBase):
     def test_a_rebase_remote_or_history_tool_that_moves_shared_refs(self):
         self.each_unclean_refused(['git rebase --update-refs main', 'git rebase --upd main',
                                    'git -c rebase.updateRefs=true rebase main',
+                                   'git -c rebase.updateRefs=true pull --rebase origin main',
                                    'git remote remove origin', 'git remote rm origin', 'git remote rename origin x',
                                    'git remote set-head origin -a', 'git remote -v remove origin',
                                    'git remote add --mirror=fetch backup https://example.invalid/x.git',
@@ -280,11 +289,23 @@ class Fallback(SharedRefBase):
                 self.assertTrue(d is None or d.rule != RULE, d and d.reason)
 
     def test_a_line_of_options_does_not_hang_the_pattern(self):
-        text = 'git symbolic-ref' + ' -mx' * 24 + ' |'   # 24: about 5 s with the old pattern, doubling per word
-        for pat in fallback.SHARED_REF_PATTERNS:
-            start = time.perf_counter()
-            re.search(pat, text)
-            self.assertLess(time.perf_counter() - start, 0.25, pat)
+        texts = ('git symbolic-ref' + ' -mx' * 24 + ' |',   # 24: about 5 s with the old pattern, doubling per word
+                 'git -c ' + 'remote.' * 400 + ' fetch |',
+                 'git -c ' + 'remote.x.fetch.' * 4000 + ' fetch |')   # about 1.5 s when each `remote.` starts a scan
+        for text in texts:
+            for pat in fallback.SHARED_REF_PATTERNS:
+                with self.subTest(text[:24], pat=pat):
+                    start = time.perf_counter()
+                    re.search(pat, text)
+                    self.assertLess(time.perf_counter() - start, 0.25, pat)
+
+    def test_a_remote_key_after_c_or_a_quote(self):
+        for text in ('git -cremote.origin.fetch=+refs/heads/*:refs/heads/* fetch origin',
+                     'git -c "remote.origin.fetch=+refs/heads/*:refs/heads/*" fetch origin',
+                     'git --config-env=remote.origin.pruneTags=P fetch origin',
+                     'git -c Remote.Origin.PruneTags=true fetch origin'):
+            with self.subTest(text):
+                self.assertTrue(any('prunetags' in p and re.search(p, text) for p in fallback.SHARED_REF_PATTERNS))
 
     def test_the_owner_is_not_held(self):
         for text in ('git push . HEAD:refs/heads/kit/sib', 'git fetch origin main:main', 'git notes add -m x'):
@@ -357,7 +378,23 @@ class BranchMove(FormsBase):
     def test_it_names_a_copy_instead(self):
         self.instead('git branch -m kit/sib x', self.at('branch x kit/sib'))
         self.instead('git branch -m kit/wt kit/renamed', self.at('branch kit/renamed kit/wt'))
-        self.instead('git branch -m x', self.at('branch x'))
+        self.instead('git branch -m x', self.at('branch x kit/wt'))
+
+    def test_one_name_renames_the_branch_head_names(self):
+        d = self.refused(self.worker('git branch -m x'))
+        self.assertTrue(d.reason.startswith('`git branch -m x` renames refs/heads/kit/wt to refs/heads/x, deleting the '
+                                            'old name: refs/heads/kit/wt is not one it may delete; '), d.reason)
+        d = self.refused(self.worker('git branch -M kit/sib x'))
+        self.assertTrue(d.reason.startswith('`git branch -M kit/sib x` renames refs/heads/kit/sib to refs/heads/x, '
+                                            'deleting the old name: refs/heads/kit/sib is not one it may delete; '),
+                        d.reason)
+
+    def test_one_name_with_head_detached_or_unread(self):
+        put(os.path.join(self.wt_git, 'HEAD'), '0123abc4567def0123abc4567def0123abc4567\n')
+        self.not_this_rule(['git branch -m x'])          # git renames nothing: no branch is checked out
+        os.remove(os.path.join(self.wt_git, 'HEAD'))
+        d = self.refused(self.worker('git branch -m x'))
+        self.assertIn('the guard cannot tell which refs it writes', d.reason)
 
 
 class TagForms(FormsBase):
@@ -410,6 +447,26 @@ class IgnoreOtherWorktrees(FormsBase):
                            'git checkout --ignore-other-worktrees HEAD',
                            'git switch --ignore-other-worktrees kit/wt',
                            'git switch --ignore-other-worktrees --no-ignore-other-worktrees kit/sib'])
+
+    def test_a_branch_checked_out_nowhere_or_packed(self):
+        put(os.path.join(self.common, 'refs', 'heads', 'kit', 'loose'), '0123abc4567def0123abc4567def0123abc4567\n')
+        put(os.path.join(self.common, 'packed-refs'),
+            '# pack-refs with: peeled fully-peeled sorted\n'
+            '0123abc4567def0123abc4567def0123abc4567 refs/heads/kit/packed\n')
+        self.each_refused(['git switch --ignore-other-worktrees kit/loose',
+                           'git checkout --ignore-other-worktrees kit/packed',
+                           'git worktree add -f .claude/worktrees/y kit/packed'])
+
+    def test_a_tag_or_a_commit_checks_out_detached(self):
+        # git checks out a name that is no branch detached (or makes a new branch from a remote's):
+        # no branch another worktree has moves
+        put(os.path.join(self.common, 'refs', 'tags', 'v1'), '0123abc4567def0123abc4567def0123abc4567\n')
+        self.each_allowed(['git checkout --ignore-other-worktrees v1',
+                           'git switch --ignore-other-worktrees 0123abc4567def',
+                           'git checkout --ignore-other-worktrees 0123abc4567def0123abc4567def0123abc4567',
+                           'git checkout --ignore-other-worktrees kit/new-from-origin',
+                           'git worktree add -f .claude/worktrees/y v1',
+                           'git worktree add -f .claude/worktrees/v1'])
 
 
 class WorktreeAdd(FormsBase):
@@ -473,6 +530,36 @@ class RebaseUpdateRefs(FormsBase):
                            'git rebase --update-refs --no-update-refs main',
                            'git -c rebase.updateRefs=false rebase main',
                            'git -c rebase.updateRefs=true rebase --no-update-refs main'])
+
+
+    def test_a_rebasing_pull_with_update_refs_on(self):
+        # git pull takes no --update-refs, but the rebase it runs reads rebase.updateRefs
+        self.each_refused(['git -c rebase.updateRefs=true pull --rebase origin main',
+                           'git -c rebase.updateRefs pull -r origin main',
+                           'git -c rebase.updateRefs=true pull -qr origin main',
+                           'git -c rebase.updateRefs=true pull --reb=merges origin main',
+                           'git -c rebase.updateRefs=true -c pull.rebase=true pull origin main',
+                           'git -c pull.rebase -c rebase.updateRefs=yes pull origin main',
+                           'git -c rebase.updateRefs=true pull origin main',     # the repository's pull.rebase may rebase
+                           'git -c rebase.updateRefs=true pull --no-rebase --rebase origin main',
+                           'git -c rebase.updateRefs=true -c pull.rebase=false pull -r origin main',
+                           'git -c rebase.updateRefs=true pull "--rebase=$R" origin main',
+                           'git -c "rebase.updateRefs=$X" pull --rebase origin main',
+                           'git -c rebase.updateRefs=true -c "pull.rebase=$P" pull origin main'])
+
+    def test_it_names_a_pull_with_update_refs_off_instead(self):
+        self.instead('git -c rebase.updateRefs=true pull --rebase origin main',
+                     self.at('-c rebase.updateRefs=false pull --rebase origin main'))
+
+    def test_a_pull_that_merges_or_leaves_update_refs_off(self):
+        self.not_this_rule(['git pull --rebase origin main', 'git pull -r origin main', 'git pull origin main',
+                           'git -c rebase.updateRefs=false pull --rebase origin main',
+                           'git -c rebase.updateRefs=true -c rebase.updateRefs=false pull -r origin main',
+                           'git -c pull.rebase=true pull origin main',
+                           'git -c rebase.updateRefs=true pull --no-rebase origin main',
+                           'git -c rebase.updateRefs=true pull --rebase=false origin main',
+                           'git -c rebase.updateRefs=true pull -r --no-rebase origin main',
+                           'git -c rebase.updateRefs=true -c pull.rebase=false pull origin main'])
 
 
 class RemoteRefs(FormsBase):

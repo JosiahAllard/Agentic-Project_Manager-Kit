@@ -98,10 +98,13 @@ SHARED_REF_PATTERNS = (
     # (--tags, --stdin, --prune-tags, --update-head-ok, or an abbreviation of one git takes)
     G + r'(?:fetch|pull)\b' + REST + r'(?::(?!//)|\s--(?:prune-t|t(?:a(?:gs?)?)?\b|update-h|st(?:d(?:in?)?)?\b)'
         r'|\s-[a-zA-Z0-9]*[Ptu])',
-    # a forced fetch or pull of `tag <name>`
-    G + r'(?:fetch|pull)\b(?=' + REST + r'\stag\s)' + REST + r'\s(?:-[a-zA-Z0-9]*f|--fo?)',
-    # git -c remote.<name>.fetch=... or a pruneTags (config keys ignore case), rebase.updateRefs
-    r'\bgit(?:\.exe)?\s' + REST + r'(?i:\bremote\.\S+\.(?:fetch|prunetags)|\bfetch\.prunetags)\s*=',
+    # a forced fetch or pull of `tag <name>`: -f in a cluster, or --force down to --fo (--f is
+    # ambiguous to git: --filter, and pull's --ff)
+    G + r'(?:fetch|pull)\b(?=' + REST + r'\stag\s)' + REST + r'\s(?:-[a-zA-Z0-9]*f|--fo(?:r(?:ce?)?)?(?![^\s|;&]))',
+    # git -c remote.<name>.fetch=... or a pruneTags (config keys ignore case), rebase.updateRefs.
+    # The key starts a word (or follows -c): a start inside one, as at each `remote.` of
+    # remote.remote.remote..., would scan the rest of the word again from each
+    r'\bgit(?:\.exe)?\s' + REST + r'(?i:(?:(?<![\w.-])|(?<=-c))remote\.[^\s=]*\.(?:fetch|prunetags)|\bfetch\.prunetags)\s*=',
     r'\bgit(?:\.exe)?\s' + REST + r'(?i:\brebase\.updaterefs)\b',
     # branch -f, -m, -M, -C (in a cluster too), --force, --move; tag -f, -d, --force, --delete
     G + r'branch\b' + REST + r'\s(?:-[a-zA-Z]*[fmMC]|--forc|--mo)',
