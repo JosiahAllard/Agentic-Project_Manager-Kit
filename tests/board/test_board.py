@@ -1,8 +1,6 @@
 """tools/board.py and kitlib.board: the coordinator's board. Every case builds its own repository
 (tests.gitfixture) and its own kit folder (a stub doc_index.py); nothing reads the real repos,
 fetches, or reads the machine lock (the lock reader is a stub).
-
-Ported from the PM kit's test_board.py and test_exit_status.py (class Board).
 """
 import contextlib
 import io
@@ -257,7 +255,7 @@ class TheRows(Fixture):
                          'tree: git cannot read it)' % self.head, out)
 
     def test_a_worktree_outside_the_checkout_whose_git_fails_reads_unknown(self):
-        """The PM kit's own case: a worktree beside the repository, every git command failing."""
+        """A worktree beside the repository, every git command failing."""
         outside = os.path.join(self.repo.base, 'outside-wt')
         self.git('worktree', 'add', '-q', outside, '-b', 'beside')
         os.remove(os.path.join(outside, '.git'))

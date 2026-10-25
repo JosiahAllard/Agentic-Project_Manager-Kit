@@ -1,6 +1,6 @@
 """kitlib.worktree.remove (tools/worktree_remove.py): the plain verb, --abandon and --check, against
-throwaway repositories (tests/gitfixture.py) with their own bare origin. Ported from the PM kit's
-worktree_remove cases; docs/worktree-remove.md lists what is not ported.
+throwaway repositories (tests/gitfixture.py) with their own bare origin.
+docs/worktree-remove.md lists what is not ported.
 
 Every removal here is of a worktree or branch the test itself made in a temp folder.
 """

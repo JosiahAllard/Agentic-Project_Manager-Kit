@@ -230,13 +230,12 @@ from kitlib.proc import process
 
 from . import api as _api
 from . import push as _push
-from . import access, auth, backlog, derived, gitsync, httpd, recordwrite, tunnel
+from . import access, auth, backlog, codestale, derived, gitsync, httpd, recordwrite, tunnel
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 CLOSE_TIMEOUT_S = 10            # each step of the clean close
-STALE_CODE = ('this hub server is running older code than the hub code now on disk: restart the '
-              'hub (hub.py stop, then start it again) to use the landed change')
+STALE_CODE = codestale.text()   # the console line; GET health's `code` and the page say it too
 CODE_LOOK_S = 30                # at most one look at the hub code's files in this many seconds
 POLL_S = 0.5                    # run()'s wait between two looks at `stop` (and at Ctrl+C)
 ASK_TIMEOUT_S = 10
@@ -1101,8 +1100,10 @@ def build(settings, sources, log=None):
                                      log=functools.partial(_push_line, log))
             notes.append('push notifications on: the asking session and the PM hear of an answer '
                          'or a done to-do')
-        return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
-                   tunnel=said, stopping=stopping, push=pusher)
+        hub = Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
+                  tunnel=said, stopping=stopping, push=pusher)
+        api.code_status = hub.code_state     # GET health and GET snapshot `code` (Api.code_seen)
+        return hub
     except BaseException:
         for lis in listeners:
             lis.close_door()
@@ -1174,6 +1175,11 @@ class Hub(object):
             return self._tunnel         # no tunnel listener: why, and the same after the close
         # read with no lock: one flag that close() sets once, before it stops the gate
         return TUNNEL_CLOSED if self._closed else self._tunnel()
+
+    def code_state(self):
+        """codestale.state of this server: stale once watch() saw hub code newer than this
+        process. Read with no lock: one flag that _watch_code sets once."""
+        return codestale.state(self._stale)
 
     def _say(self, text, level='error'):
         """One line of the hub's own to the log, with scrub() applied."""

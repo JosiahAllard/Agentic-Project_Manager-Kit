@@ -1,8 +1,7 @@
 """kitlib.tooldeps and tools/tool_deps.py: the scan, both selection modes ("path", one repository's;
 "tokens", an invented repository's), every `.kit.json` "tool_tests" key, and the audit a repository
-runs on its own tools. Ported from the PM kit's test_tool_deps.py: the
-configuration and the checkout root are passed explicitly (the PM kit cleared KIT_CONFIG and
-patched tool_deps.ROOT), and the pieces tables are tests/tooldeps/piecetable.py's stand-ins.
+runs on its own tools. The configuration and the checkout root are passed explicitly, and the
+pieces tables are tests/tooldeps/piecetable.py's stand-ins.
 
 Every test runs on a throwaway tools folder and an explicit configuration: the repositories' own
 audits of their real tools (`tool_deps.py --check`) stay in each repository.

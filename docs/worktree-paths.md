@@ -1,6 +1,6 @@
 # Worktree paths
 
-Where a write from a worktree may go. Ported from the PM kit's `tools/worktree_paths.py`: an agent's patch script opened docs by a relative path with the main checkout as its cwd, and edited the main checkout instead of its worktree.
+Where a write from a worktree may go. An agent's patch script opened docs by a relative path with the main checkout as its cwd, and edited the main checkout instead of its worktree.
 
 ## The rule
 

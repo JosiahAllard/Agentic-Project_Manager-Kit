@@ -1212,6 +1212,37 @@ class ReasonCase(ServeCase):
             self.assertEqual(len(self.lines), 1, 'said again for the same stale server')
         hub.close()
 
+    def test_health_and_snapshot_say_when_the_hub_code_on_disk_is_newer(self):
+        stamp = [(('serve.py', 1, 10),)]
+        with mock.patch.object(serve, 'code_stamp', lambda: stamp[0]),                 mock.patch.object(serve, 'CODE_LOOK_S', 0):
+            hub = self.build()
+            hub.start()
+            for path in (HEALTH, BASE + '/snapshot'):
+                self.assertEqual(get(hub.port, path, self.owner).json()['code'],
+                                 {'stale': False, 'restart': None}, path)
+            stamp[0] = (('serve.py', 2, 12),)
+            hub.watch()
+            for path in (HEALTH, BASE + '/snapshot'):
+                code = get(hub.port, path, self.owner).json()['code']
+                self.assertIs(code['stale'], True, path)
+                self.assertIn('hub.py" restart', code['restart'])
+                self.assertIn('hub.py" stop, then python', code['restart'])   # the fallback for a hub with no autostart task
+                self.assertIn('hub.py" serve', code['restart'])
+        hub.close()
+
+    def test_a_code_status_that_raises_or_is_none_gives_no_code_and_health_still_answers(self):
+        hub = self.build()
+        hub.start()
+        self.assertEqual(hub.api.code_seen(), {'stale': False, 'restart': None})
+        hub.api.code_status = lambda: {}['gone']
+        self.assertIsNone(hub.api.code_seen())
+        self.assertIsNone(get(hub.port, HEALTH, self.owner).json()['code'])
+        hub.api.code_status = None
+        self.assertIsNone(hub.api.code_seen())
+        hub.api.code_status = lambda: 'old'
+        self.assertIsNone(hub.api.code_seen())
+        hub.close()
+
     def test_watch_takes_the_code_stamp_at_most_once_in_the_look_window(self):
         looks = []
 

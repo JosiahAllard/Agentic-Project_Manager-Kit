@@ -689,6 +689,35 @@ class HubWriterCode(Base):
                 with self.subTest(env=env, text=text):
                     self.allowed(self.cmd(text, sub=False, env=env))
 
+    # the attribute or alias form and a multi-line import
+    ALIAS_TEXTS = ("python -c 'from kitlib.hubsite import serve; serve.recordwrite.add(1)'",
+                   'python -c "import kitlib.hubsite as h; h.recordwrite.answer(1)"',
+                   'python -c "import kitlib.hubsite as h; h . recordwrite.edit(1)"',
+                   "python - <<'EOF'\nfrom kitlib import hubsite as h\nh.\\\n  recordwrite.delete(1)\nEOF",
+                   "python - <<'EOF'\nfrom kitlib.hubsite import (\n    serve,\n    recordwrite)\nEOF",
+                   "python - <<'EOF'\nfrom kitlib.hubsite import (recordwrite as w,\n    serve)\nEOF",
+                   "python - <<'EOF'\nfrom kitlib.hubsite import serve, \\\n    recordwrite\nEOF")
+
+    def test_the_alias_and_multi_line_forms_are_refused(self):
+        for text in self.ALIAS_TEXTS:
+            for who, kw in (('pm', dict(sub=False, env=PM)), ('subagent', dict())):
+                with self.subTest(text=text, who=who):
+                    self.refused(self.cmd(text, **kw), 'backlog-raw-write')
+
+    def test_the_owner_runs_the_alias_forms(self):
+        for text in self.ALIAS_TEXTS:
+            with self.subTest(text):
+                self.allowed(self.cmd(text, sub=False, env={}))
+
+    def test_near_names_are_not_the_writer(self):
+        for text in ('python -c "import x; x.recordwriter(1)"', 'python -c "x.recordwrite_log(1)"',
+                     'python -c "print(\'recordwrite\')"', 'python -c "recordwrite = 1"',
+                     "python - <<'EOF'\nfrom kitlib.hubsite import (serve)\nrecordwrite = 1\nEOF",
+                     "python - <<'EOF'\nfrom kitlib.hubsite import serve\nrecordwrite = 1\nEOF",
+                     "python -c 'from kitlib.hubsite import recordwriter'"):
+            with self.subTest(text):
+                self.allowed(self.cmd(text, sub=False, env=PM))
+
     def test_a_subagent_keeps_the_backlog_code_refusal(self):
         d = self.refused(self.cmd('python -c "from kitlib.backlog.plan import plan_answer"'), 'backlog-raw-write')
         self.assertIn('backlog.py', d.instead)

@@ -2,8 +2,6 @@
 repository (tests.gitfixture) and its own kit folder; nothing reads the real repos, fetches from a
 real remote, or touches the live machine lock (the lock reader is a stub, or the kit tool on a
 scratch store).
-
-Ported from the PM kit's test_preflight.py and test_exit_status.py (class Preflight).
 """
 import contextlib
 import datetime

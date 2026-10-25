@@ -295,10 +295,12 @@ class WorktreeAdvice(unittest.TestCase):
         self.assertEqual(d.instead, 'git -C "%s" worktree list' % self.main)
         self.assertIn(self.ONLY % self.main, d.reason)
 
-    def test_a_main_target_with_no_word_to_aim_shows_the_worktrees(self):
-        # cp -t<dir> has no word the guard rewrites: it offered a new worktree as the Instead before
+    def test_a_main_target_in_an_attached_option_is_aimed_at_the_worktree(self):
+        # cp -t<dir>: the value after its option is aimed (it offered a new worktree as the Instead
+        # before, then the worktree list); an input with no word to aim at all shows the worktrees
+        # (test_an_unplaced_target_with_no_word_to_aim_shows_the_worktrees)
         d = self.refused(bash('cp -t%s/d a' % self.main, self.w.main, sub=True), 'main-checkout')
-        self.assertEqual(d.instead, 'git -C "%s" worktree list' % self.main)
+        self.assertEqual(d.instead, 'cp -t"<worktree>/d" a')
         self.assertIn(self.ONLY % self.main, d.reason)
         self.assertIn('(d there)', d.reason)
 
@@ -306,8 +308,9 @@ class WorktreeAdvice(unittest.TestCase):
         # a place git cannot tell offered a new worktree as the Instead before, from a worktree too
         unknown = W.fwd(self.w.unknown)
         for payload, instead, only in (
-                (bash('cp -t%s/d a' % unknown, self.w.wt, sub=True), 'git -C "%s" worktree list' % self.main, False),
-                (bash('cp -t%s/d a' % unknown, self.w.main, sub=True), 'git -C "%s" worktree list' % self.main, True),
+                (bash('cp -t%s/d a' % unknown, self.w.wt, sub=True), 'cp -t"%s/d" a' % self.wt, False),
+                (bash('cp -t%s/d a' % unknown, self.w.main, sub=True), 'cp -t"<worktree>/d" a', True),
+                (bash('tar -xf a.tar -C"$X"', self.w.main, sub=True), 'git -C "%s" worktree list' % self.main, True),
                 (bash('cp a %s/b' % unknown, self.w.main, sub=True), 'cp a "<worktree>/b"', True),
                 (bash('cp a %s/b' % unknown, self.w.wt, sub=True), 'cp a "%s/b"' % self.wt, False)):
             with self.subTest(payload['tool_input']['command'], cwd=payload['cwd']):

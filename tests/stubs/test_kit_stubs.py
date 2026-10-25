@@ -1,5 +1,5 @@
 """kitlib.stubs (tools/kit_stubs.py): writing and checking a repository's stubs, and what a written
-stub runs. The PM kit's kit_stubs.py had no tests; these are new.
+stub runs.
 
 Every case runs against a throwaway repository (tests/gitfixture.py). A stub runs this kit's own
 tools (landed.py, read-only) on that repository; the fake kits are folders in the fixture's temp.

@@ -1,5 +1,5 @@
 """kitlib.machinepaths and tools/machine_paths.py, the guard against hard-coded machine
-paths (ported from the PM kit's tools/test_machine_paths.py).
+paths.
 
 Every planted path is assembled at run time from pieces, so this file never carries one itself
 and no machine-path sweep of the kit finds one here. Each refusal has a passing twin, because a

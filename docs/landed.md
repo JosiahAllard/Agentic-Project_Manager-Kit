@@ -2,8 +2,7 @@
 
 Held for the joint review: no repository runs it yet.
 
-`tools/landed.py` answers whether a branch has landed. It takes one read-only look and never waits, fetches or writes. Logic: `kitlib/landed/__init__.py`; tests: `tests/landed/test_landed.py`. Ported from the PM kit's `tools/landed.py`.
-
+`tools/landed.py` answers whether a branch has landed. It takes one read-only look and never waits, fetches or writes. Logic: `kitlib/landed/__init__.py`; tests: `tests/landed/test_landed.py`.
 ```
 python tools/landed.py [-C DIR] <branch or commit>
 ```

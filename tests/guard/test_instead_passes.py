@@ -6,6 +6,8 @@ the ones it names. A bare `cd <folder>` does nothing, so it counts as a failure.
 
 KNOWN_FAILS names each form that is refused again today, with why; it is checked both ways, so a
 new failing form fails the test and so does a known one that now passes (take it off the list).
+It is strict: every name on it must be a row or case that was fed back, so a stale entry (a row
+renamed, removed or skipped for a placeholder) fails too.
 DecisionPins pins the refusal itself for every input whose Instead this branch changed: the same
 (verdict, rule) before and after (the own-pull rows are pinned in
 test_backlog_role.OwnPullDecision)."""
@@ -27,25 +29,23 @@ PM = {context.ROLE_ENV: 'pm'}
 PLACEHOLDER = re.compile(r'<[^<>\s][^<>]*>')
 BARE_CD = re.compile(r'^cd\s+("[^"]*"|\S+)\s*$')
 
-# A main-checkout or write-jail rewrite that leaves the target in place: an attached writer
-# option's value (dd of=, curl --output=, curl --output-dir, gawk -d"..", ruby -C, cp -t"..") is not
-# retargeted, so the same write is refused again.
-ATTACHED = 'the rewrite does not retarget an attached writer option; the same write is refused again'
 KNOWN_FAILS = {
-    # test_rules.ROWS (shell_rows, review_rows)
-    'dd of= into main': ATTACHED,
-    'curl --output= into main': ATTACHED,
-    'curl -o --output-dir into main': ATTACHED,
-    'find -execdir rm of main from a worktree, subagent':
-        'the -execdir rm keeps its {} target, which the guard cannot place (unplaced)',
     # CASES below
-    'gawk -d into another folder': ATTACHED,
-    'ruby -C into another folder': ATTACHED,
-    'cp -t into another folder': ATTACHED,
-    'git branch -D backlog on a branch store':
-        'git branch -d of the store branch is a raw write of the backlog store (backlog-raw-write)',
-    'git push of the PM data branch':
-        'git -C <main checkout> push is outside a subagent\'s write jail (write-jail)',
+    'Start-Process cp -WorkingDirectory into main':
+        'a Start-Process program\'s -ArgumentList is a word the guard does not read, so any such cp is '
+        'unplaced; no rewrite of it passes',
+    'git push --no-verify of the main checkout\'s branch, no branch named':
+        'the push names no branch, so it pushes the branch the main checkout has out; from the worktree '
+        'it would push the worktree\'s, so the Instead stays in the main checkout, which the write jail '
+        'refuses a subagent',
+    'git push --no-verify of HEAD from the main checkout':
+        'HEAD is the main checkout\'s branch only there: the Instead stays in the main checkout, which '
+        'the write jail refuses a subagent',
+    'git alias whose shell value is a try block running a heavy program':
+        'GAP (kitlib/guard/rules.py alias_heavy_run, ~line 4863): the value `try { godot --headless } catch '
+        '{ }` is not one clean command, so the lock-wrapped run is not offered and the plain try block is '
+        'printed, which the heavy rule refuses again; the bare `godot --headless` value and the same alias '
+        'wrapped in a try around the whole git call both get the machine_lock line',
 }
 
 FILL = {'<subject>': 'x', '<what>': 'x', '<each path you changed>': 'a.txt'}
@@ -93,6 +93,12 @@ def pmdata_world():
     return w
 
 
+def main_world():
+    w = W.World()
+    w.git.ancestors.add((W.SHA_WT, 'main'))
+    return w
+
+
 def f(path):
     return W.fwd(path)
 
@@ -132,18 +138,54 @@ CASES = [
      lambda w: ps('git -C "%s" reset --hard HEAD~1' % f(w.main), w.wt, True), None, 'git-reset-hard'),
     ('git reset --hard in the main checkout', jail_world,
      lambda w: bash('git reset --hard', w.main, True), None, 'git-reset-hard'),
-    # KNOWN_FAILS
+    # an attached writer option's value (gawk -d"..", cp -t"..") and a folder option (ruby -C) aimed
+    # at the worktree
     ('gawk -d into another folder', jail_world,
      lambda w: bash('gawk -d"%s/x.txt" \'{print}\' a.txt' % f(w.plain), w.wt, True), None, 'write-jail'),
     ('ruby -C into another folder', jail_world,
      lambda w: bash('ruby -C "%s" -i -pe 1 x.txt' % f(w.plain), w.wt, True), None, 'write-jail'),
     ('cp -t into another folder', jail_world,
      lambda w: bash('cp -t"%s" a.txt' % f(w.plain), w.wt, True), None, 'write-jail'),
+    # the backlog store's branch: no delete form passes, so the Instead reads it
     ('git branch -D backlog on a branch store', branch_store_world,
      lambda w: bash('git branch -D backlog', w.wt, False), PM, 'git-branch-force-delete'),
+    # a subagent's push from the main checkout: the same push from its worktree
     ('git push of the PM data branch', pmdata_world,
      lambda w: bash('git -C "%s" push --no-verify private pmdata' % f(w.main), w.wt, True), None,
      'git-push-pmdata'),
+    ('git push --no-verify of the main checkout\'s branch, no branch named', pmdata_world,
+     lambda w: bash('git -C "%s" push --no-verify private' % f(w.main), w.wt, True), None, 'git-push-pmdata'),
+    ('git push --no-verify of HEAD from the main checkout', pmdata_world,
+     lambda w: bash('git -C "%s" push --no-verify private HEAD' % f(w.main), w.wt, True), None,
+     'git-push-pmdata'),
+    # an inline alias that makes a commit: the kit commit tool, which git-plain-commit names
+    ('git -C main inline alias that commits', jail_world,
+     lambda w: bash("git -C \"%s\" -c alias.x='commit -m y' x" % f(w.main), w.wt, True), None, 'git-alias'),
+    ('git inline alias that commits', jail_world,
+     lambda w: bash("git -c alias.x='commit -m y' x", w.wt, True), None, 'git-alias'),
+    # a ::$DATA stream name single-quoted, so neither shell expands $DATA
+    ('Set-Content of a ::$DATA stream in main', jail_world,
+     lambda w: ps("Set-Content '%s/x.txt::$DATA' y" % f(w.main), w.wt, True), None, 'main-checkout'),
+    ('Set-Content of a ::$DATA stream in another folder', jail_world,
+     lambda w: ps("Set-Content '%s/x.txt::$DATA' y" % f(w.plain), w.wt, True), None, 'write-jail'),
+    # from the main checkout: the jail's own checkout is a main one this role may not edit
+    ('tar -C into another folder from the main checkout', main_world,
+     lambda w: bash('tar -xf a.tar -C "%s" -C sub' % f(w.plain), w.main, True), None, 'write-jail'),
+    ('Start-Process cp -WorkingDirectory into main', jail_world,
+     lambda w: ps("Start-Process cp -ArgumentList 'a.txt','b.txt' -WorkingDirectory '%s'" % f(w.main), w.wt, True),
+     None, 'main-checkout'),
+    # git archive's output file is a write target: --prefix's value is not it, -o is
+    ('git archive --prefix <p> -o out of the jail', jail_world,
+     lambda w: bash('git archive --prefix p -o "%s/out.tar" HEAD' % f(w.plain), w.wt, True), None, 'write-jail'),
+    ('git archive --prefix <p>/ -o into a read-only data root', jail_world,
+     lambda w: bash('git archive --prefix p/ -o "%s/out.tar" HEAD' % f(w.ro), w.wt, True), None, 'write-jail'),
+    # an alias that runs a heavy program: the machine lock's run line, wherever the git call sits
+    ('git alias running a heavy program, PowerShell', jail_world,
+     lambda w: ps("git -c 'alias.x=!godot --headless' x", w.wt, True), None, 'git-alias'),
+    ('git alias running a heavy program inside a try block', jail_world,
+     lambda w: ps("try { git -c 'alias.x=!godot --headless' x } catch { }", w.wt, True), None, 'git-alias'),
+    ('git alias whose shell value is a try block running a heavy program', jail_world,
+     lambda w: ps("git -c 'alias.x=!try { godot --headless } catch { }' x", w.wt, True), None, 'git-alias'),
 ]
 
 
@@ -151,6 +193,12 @@ def filled(text, w):
     for k, v in FILL.items():
         text = text.replace(k, v)
     return text.replace('<worktree>', f(w.wt))
+
+
+def unfed(known, table, fed):
+    """The names on `known` that are rows of `table` but were not fed back (`fed`), sorted."""
+    names = {r[0] for r in table}
+    return sorted(n for n in known if n in names and n not in fed)
 
 
 setUpModule = W.deny_softened           # as test_rules: the rows pin the softened rules as refusals
@@ -161,7 +209,7 @@ class RowsPass(unittest.TestCase):
     """Each test_rules row's Instead, fed back."""
 
     def test_every_rows_instead_passes(self):
-        checked = 0
+        checked, fed = 0, set()
         for name, make, kind, rule, instead in ROWS:
             w = W.World()
             try:
@@ -173,6 +221,7 @@ class RowsPass(unittest.TestCase):
                 with self.subTest(name):
                     why = again(ev, d.instead, w.ctx())
                     checked += 1
+                    fed.add(name)
                     if name in KNOWN_FAILS:
                         self.assertIsNotNone(why, 'a known fail now passes: take it off KNOWN_FAILS: %s' % name)
                     else:
@@ -180,6 +229,18 @@ class RowsPass(unittest.TestCase):
             finally:
                 w.cleanup()
         self.assertGreater(checked, 200)        # the rows were read, not skipped
+        # strict: a known fail named for a row is one this test fed back (not skipped, not gone)
+        self.assertEqual(unfed(KNOWN_FAILS, ROWS, fed), [])
+
+    def test_row_names_are_unique(self):
+        self.assertEqual(len(ROWS), len({r[0] for r in ROWS}))       # one name, one row
+
+    def test_a_known_fail_for_a_skipped_row_is_reported(self):
+        # a row skipped for a placeholder (or no refusal) is never fed: its known fail is stale
+        table = [('fed row',), ('skipped row',)]
+        known = {'fed row': 'why', 'skipped row': 'why', 'a case': 'why'}
+        self.assertEqual(unfed(known, table, {'fed row'}), ['skipped row'])
+        self.assertEqual(unfed(known, table, {'fed row', 'skipped row'}), [])
 
 
 class CasesPass(unittest.TestCase):
@@ -208,6 +269,7 @@ class CasesPass(unittest.TestCase):
     def test_every_known_fail_is_a_row_or_a_case(self):
         names = {r[0] for r in ROWS} | {c[0] for c in CASES}
         self.assertEqual(sorted(set(KNOWN_FAILS) - names), [])
+        self.assertEqual(len(CASES), len({c[0] for c in CASES}))      # one name, one case
 
 
 class Forms(unittest.TestCase):
@@ -249,6 +311,102 @@ class Forms(unittest.TestCase):
         # a main session that may edit the main checkout keeps reset --keep there
         d = self.instead(bash('git reset --hard', self.w.main, False))
         self.assertEqual(d.instead, 'git -C "%s" reset --keep HEAD' % f(self.w.main))
+
+    def test_a_reset_hard_with_no_worktree_shown_says_who_makes_one(self):
+        d = self.instead(bash('git reset --hard', self.w.main, True))
+        self.assertIn('only a session with no worktree makes one, first (git -C "%s" worktree add'
+                      % f(self.w.main), d.reason)
+        d = self.instead(bash('git -C "%s" reset --hard HEAD~1' % f(self.w.main), self.w.wt, True))
+        self.assertNotIn('only a session with no worktree', d.reason)
+
+    def test_git_from_a_folder_that_is_no_checkout_offers_no_git_there(self):
+        # the folder the session may write is a plain one: git -C there has no repository
+        d = self.instead(bash('git -C "%s" merge-tree --write-tree a b' % f(self.w.ro), self.w.plain, True))
+        self.assertEqual((d.rule, d.instead), ('write-jail', 'pwd'))
+        self.assertIn('To see where this session runs:', d.reason)
+
+
+class JailForms(unittest.TestCase):
+    """What the write jail answers for the forms the follow-up review named."""
+
+    def setUp(self):
+        self.w = jail_world()
+        self.addCleanup(self.w.cleanup)
+        self.wt = f(self.w.wt)
+
+    def test_an_indexed_variable_target_is_unplaced_with_a_form_to_fill(self):
+        # the parenthesised index is no literal path, as a plain $x[1] is none: the guard cannot tell
+        # where Set-Content writes, and the Instead is the same cmdlet on a literal path in the worktree
+        for target in ('$x[(1)]', '$x[1]'):
+            with self.subTest(target):
+                d = decide(ps('Set-Content %s y' % target, self.w.wt, True), self.w.ctx())
+                self.assertEqual((d.verdict, d.rule), ('deny', 'unplaced'))
+                self.assertIn('a target that is not literal: %s' % target, d.reason)
+                self.assertEqual(d.instead, 'Set-Content "%s/<file>" y' % self.wt)
+
+    def test_git_archive_names_its_output_file_as_the_write_target(self):
+        # --prefix takes the next word (p), so the -o after it is read; out of the jail the answer is the
+        # same archive written into the worktree, and that Instead passes
+        for prefix in ('p', 'p/'):
+            with self.subTest(prefix):
+                ev = bash('git archive --prefix %s -o "%s/out.tar" HEAD' % (prefix, f(self.w.plain)), self.w.wt, True)
+                d = decide(ev, self.w.ctx())
+                self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'))
+                self.assertIn('makes %s/out.tar' % f(self.w.plain), d.reason)
+                self.assertEqual(d.instead, 'git -C "%s" archive --prefix %s -o "%s/out.tar" HEAD'
+                                 % (self.wt, prefix, self.wt))
+        # the same archive into the worktree writes inside the jail
+        self.assertIsNone(decide(bash('git archive --prefix p -o out.tar HEAD', self.w.wt, True), self.w.ctx()))
+
+    def test_read_only_retargets_the_same_verb_and_add_only_asks_for_a_new_name(self):
+        # READ_ONLY: the same command on the same file name in the worktree (jail_refusal's rewrite);
+        # ADD_ONLY, a file that exists: the same verb on <new file name> in the folder (a form to fill);
+        # ADD_ONLY, a new file: allowed
+        add_old = os.path.join(self.w.add, 'old.txt')
+        os.makedirs(self.w.add, exist_ok=True)
+        with open(add_old, 'w', encoding='utf-8') as fh:
+            fh.write('x')
+        for cmd, ro, add in (('cp a.txt "%s"', 'cp a.txt "%s/x.txt"', 'cp a.txt "%s/<new file name>"'),
+                             ('mv a.txt "%s"', 'mv a.txt "%s/x.txt"', 'mv a.txt "%s/<new file name>"'),
+                             ('Set-Content "%s" y', 'Set-Content "%s/x.txt" y', 'Set-Content "%s/<new file name>" y')):
+            shell = ps if cmd.startswith('Set-Content') else bash
+            with self.subTest(cmd):
+                d = decide(shell(cmd % (f(self.w.ro) + '/x.txt'), self.w.wt, True), self.w.ctx())
+                self.assertEqual((d.rule, d.instead), ('write-jail', ro % self.wt))
+                self.assertIn('read-only for agent sessions', d.reason)
+                d = decide(shell(cmd % f(add_old), self.w.wt, True), self.w.ctx())
+                self.assertEqual((d.rule, d.instead), ('write-jail', add % f(self.w.add)))
+                self.assertIn('an add-only data folder', d.reason)
+        self.assertIsNone(decide(bash('cp a.txt "%s/new.txt"' % f(self.w.add), self.w.wt, True), self.w.ctx()))
+
+
+class PushForms(unittest.TestCase):
+    """git-push-pmdata from the main checkout: the worktree only for a push that names its branch."""
+
+    def test_only_a_named_branch_moves_to_the_worktree(self):
+        w = pmdata_world()
+        self.addCleanup(w.cleanup)
+        main, wt = f(w.main), f(w.wt)
+        for words, where in (('private pmdata', wt), ('private +pmdata:pmdata', wt), ('private', main),
+                             ('private HEAD', main), ('private HEAD:main', main), ('private @', main),
+                             ('private pmdata HEAD', main), ('--all private', main)):
+            with self.subTest(words):
+                d = decide(bash('git -C "%s" push --no-verify %s' % (main, words), w.wt, True), w.ctx())
+                self.assertEqual((d.rule, d.instead), ('git-push-pmdata', 'git -C "%s" push %s' % (where, words)))
+
+
+class ExecForms(unittest.TestCase):
+    """find -execdir aimed at the worktree runs as -exec, its reason saying why."""
+
+    def test_execdir_with_only_options_and_braces_becomes_exec(self):
+        w = main_world()
+        self.addCleanup(w.cleanup)
+        d = decide(bash('find %s -name "*.tmp" -execdir rm -f {} +' % f(w.main), w.wt, True), w.ctx())
+        self.assertEqual(d.instead, 'find "%s/." -name "*.tmp" -exec rm -f {} +' % f(w.wt))
+        self.assertIn('with -exec in place of -execdir, find hands it the same files by their full paths', d.reason)
+        # a relative name of its own: -execdir writes it beside each file, so it is kept
+        d = decide(bash('find %s -name "*.tmp" -execdir cp {} out.txt \\;' % f(w.main), w.wt, True), w.ctx())
+        self.assertNotIn('-exec ', d.instead or '')
 
 
 class DecisionPins(unittest.TestCase):

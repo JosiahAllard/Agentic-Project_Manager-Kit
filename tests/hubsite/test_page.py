@@ -608,6 +608,20 @@ class DomTest(unittest.TestCase):
         self.assertIn("drawn at last", got["list"])
         self.assertEqual((got["err"], got["hidden"], got["add"]), ("", True, False))
 
+    def test_a_banner_gives_the_owners_restart_step_while_the_server_says_its_code_is_old(self):
+        read = """
+            await start();
+            return { text: text($("#codeerr")), hidden: $("#codeerr").hidden };
+        """
+        step = 'Owner step: restart the Action Hub: python "hub.py" restart'
+        stale = dom(read, snapshot(code={"stale": True, "restart": step}))
+        self.assertEqual((stale["text"], stale["hidden"]), (step, False))
+        for code in ({"stale": False, "restart": None}, None, {"stale": True}, {"stale": "yes", "restart": step}):
+            got = dom(read, snapshot(code=code))
+            self.assertEqual((got["text"], got["hidden"]), ("", True), code)
+        gone = dom(read, snapshot())                 # a hub that predates the field
+        self.assertEqual((gone["text"], gone["hidden"]), ("", True))
+
     def test_a_later_list_that_cannot_be_drawn_is_drawn_again_even_while_the_owner_types(self):
         # The page is ready; a later read's draw throws. The next read brings the same lists while the owner is
         # in a field: a read whose lists did not change is normally not redrawn under a typing owner, but this
