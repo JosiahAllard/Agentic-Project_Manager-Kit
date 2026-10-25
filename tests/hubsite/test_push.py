@@ -848,7 +848,7 @@ class FiledPushCase(PushCase):
 
     def log(self, qid):
         version = self.store.get('questions', qid)['version']
-        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'R-1', 'if_version': version})
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'R-0001', 'if_version': version})
 
 
 class FiledRecipientsTest(FiledPushCase):

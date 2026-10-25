@@ -1870,6 +1870,24 @@ class MachineCase(unittest.TestCase):
         self.assertIsInstance(src.lock, lockdoor.LockDoor)
         self.assertEqual(os.listdir(self.home), [], 'reading the sources wrote something')
 
+    def test_the_rulings_source_finds_an_id_in_the_ledger_file_that_can_hold_it(self):
+        pm = pm_repo(self, record=False)
+        ledger = os.path.join(self.home, 'ledger')
+        os.makedirs(ledger)
+        with open(os.path.join(ledger, 'kit.md'), 'w', encoding='utf-8', newline='') as f:
+            f.write('# Ledger\n\n## H-kit-0001 | 2026-10-01 10:00Z | kit | decision\n'
+                    'Q: q\nA: a\nDecides: d\nSource: typed\n')
+        self.config({'ledger_dir': ledger, 'ledger_repos': ['kit', 'other']})
+        src = serve.machine_sources(self.home, sync=False)
+        self.assertTrue(src.rulings('H-kit-0001'))
+        self.assertFalse(src.rulings('H-kit-0002'), 'no such entry')
+        self.assertFalse(src.rulings('H-other-0001'), 'its file is not there')
+        self.assertFalse(src.rulings('H-unknown-0001'), 'no configured file holds it')
+        self.assertFalse(src.rulings('R-0001'), 'no frozen ledger')
+        views = serve.SiteViews(None, src)
+        self.assertTrue(views.ruling_exists('H-kit-0001'))
+        self.assertFalse(hasattr(serve.SiteViews(None, serve.Sources()), 'ruling_exists'))
+
     def test_the_pm_start_config_gives_the_repository_views(self):
         notices = os.path.join(self.home, 'notices')
         self.config({'pm_start': {'sessions_file': os.path.join(self.home, 'pm', 's.json'),

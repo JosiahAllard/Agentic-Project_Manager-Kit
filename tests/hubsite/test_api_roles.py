@@ -193,7 +193,7 @@ ROWS = {
     ('POST', '/questions'): (None, {'title': 't', 'options': OPTIONS}, None),
     ('POST', '/questions/{id}/answer'): (seed_question, {'choice': 0}, None),
     ('POST', '/questions/{id}/log'): (lambda s: seed_question(s, 'answered'),
-                                      {'ruling': 'decision-7', 'if_version': 1}, None),
+                                      {'ruling': 'R-0007', 'if_version': 1}, None),
     ('POST', '/questions/{id}/done'): (lambda s: seed_question(s, 'answered'),
                                        {'why': 'a one-off go', 'if_version': 1}, None),
     ('POST', '/questions/file'): (lambda s: seed_question(s, 'answered'), {}, None),
