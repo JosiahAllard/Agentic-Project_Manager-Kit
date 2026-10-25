@@ -421,5 +421,148 @@ class ChecklistTest(unittest.TestCase):
         self.assertNotIn("no config", txt)
 
 
+UTC = datetime.timezone.utc
+AT = datetime.datetime(2026, 10, 6, 9, 0, tzinfo=UTC)
+
+
+class FiledClient(FakeClient):
+    """FakeClient whose GET /questions answers `filed` (the questions the hub holds filed) and
+    keeps each query it was asked."""
+
+    def __init__(self, filed=(), **kw):
+        FakeClient.__init__(self, **kw)
+        self.filed, self.queries = list(filed), []
+
+    def get(self, path, role=hubclient.ANY, query=None, timeout=None):
+        if path != "/questions":
+            return FakeClient.get(self, path, role, query, timeout)
+        self.calls.append((path, timeout))
+        self.queries.append(query)
+        if self.error:
+            raise self.error
+        return {"ok": True, "items": self.filed}
+
+
+def filed(*ats):
+    return [{"id": "Q-%d" % (1000 + n), "status": "filed",
+             "filed_at": at.isoformat() if isinstance(at, datetime.datetime) else at}
+            for n, at in enumerate(ats)]
+
+
+class FiledDigestTest(unittest.TestCase):
+    """pmstart.filed_digest: the start checklist's one line of the owner's answers filed into
+    records since the last PM start (docs/pm-start.md "Filed answers")."""
+
+    def setUp(self):
+        d = tempfile.mkdtemp(prefix="kit-filed-")
+        self.addCleanup(shutil.rmtree, d, True)
+        self.stamp = os.path.join(d, "pm_watch", pmstart.FILED_STAMP_NAME)
+
+    def write(self, text):
+        os.makedirs(os.path.dirname(self.stamp), exist_ok=True)
+        with open(self.stamp, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def held(self):
+        with open(self.stamp, encoding="utf-8") as f:
+            return json.load(f)
+
+    def line(self, count, since):
+        text = since.isoformat(timespec="seconds")
+        return ('hub: %d answer(s) filed into records since %s, for your information: python '
+                '"%s" questions --status filed --since %s' % (count, text, pmstart.HUB_TOOL, text))
+
+    def test_a_first_start_counts_the_last_24_hours_and_writes_the_stamp(self):
+        hour = datetime.timedelta(hours=1)
+        c = FiledClient(filed(AT - hour, AT - 25 * hour))
+        since = AT - pmstart.FILED_FALLBACK
+        self.assertEqual(pmstart.filed_digest(c, self.stamp, AT), [self.line(1, since)])
+        self.assertEqual(c.queries,
+                         [{"status": "filed", "since": since.isoformat(timespec="seconds")}])
+        self.assertEqual(c.calls, [("/questions", pmstart.HUB_SITE_TIMEOUT_S)])
+        self.assertEqual(self.held(), {"at": AT.isoformat(timespec="seconds")})
+
+    def test_the_next_start_counts_from_the_stamp_the_last_one_wrote(self):
+        last = AT - datetime.timedelta(hours=3)
+        self.write(json.dumps({"at": last.isoformat()}))
+        later = (last + datetime.timedelta(hours=1)).astimezone(
+            datetime.timezone(datetime.timedelta(hours=10)))
+        c = FiledClient(filed(last - datetime.timedelta(seconds=1), last, later))
+        self.assertEqual(pmstart.filed_digest(c, self.stamp, AT), [self.line(2, last)])
+        self.assertEqual(c.queries[0]["since"], last.isoformat(timespec="seconds"))
+        self.assertEqual(self.held()["at"], AT.isoformat(timespec="seconds"))
+
+    def test_no_answer_filed_since_is_no_line_and_moves_the_stamp(self):
+        last = AT - datetime.timedelta(hours=3)
+        self.write(json.dumps({"at": last.isoformat()}))
+        c = FiledClient(filed(last - datetime.timedelta(hours=1), None, "not a time",
+                              "2026-10-06T08:00:00"))
+        self.assertEqual(pmstart.filed_digest(c, self.stamp, AT), [])
+        self.assertEqual(self.held()["at"], AT.isoformat(timespec="seconds"))
+
+    def test_an_ask_that_fails_is_one_line_and_leaves_the_stamp_for_the_next_start(self):
+        last = AT - datetime.timedelta(hours=3)
+        self.write(json.dumps({"at": last.isoformat()}))
+        c = FiledClient(filed(AT), error=OSError("C:\\secret"))
+        self.assertEqual(pmstart.filed_digest(c, self.stamp, AT),
+                         ["hub: answers filed since %s not asked (OSError)"
+                          % last.isoformat(timespec="seconds")])
+        self.assertEqual(self.held()["at"], last.isoformat())
+
+    def test_a_stamp_that_cannot_be_read_falls_back_to_24_hours(self):
+        since = AT - pmstart.FILED_FALLBACK
+        for text in ("{", "[]", '{"at": 7}', '{"at": "2026-10-06T06:00:00"}', '{"no": 1}'):
+            with self.subTest(text=text):
+                self.write(text)
+                c = FiledClient(filed(AT))
+                self.assertEqual(pmstart.filed_digest(c, self.stamp, AT), [self.line(1, since)])
+                self.assertEqual(self.held()["at"], AT.isoformat(timespec="seconds"))
+
+    def test_a_stamp_path_that_cannot_be_told_is_one_line_and_asks_nothing(self):
+        def where():
+            raise ConfigError("C:\\secret")
+        c = FiledClient(filed(AT))
+        self.assertEqual(pmstart.filed_digest(c, where, AT),
+                         ["hub: answers filed since the last start not counted (ConfigError)"])
+        self.assertEqual(c.calls, [])
+
+    def test_the_site_lines_carry_the_digest_only_when_given_a_stamp(self):
+        c = FiledClient(filed(AT - datetime.timedelta(hours=1)))
+        out = pmstart.hub_site(procs=[], load=lambda: SET, make_client=lambda port: c,
+                               stamp=lambda: self.stamp, now=AT)
+        self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM")
+        self.assertEqual(out[1], self.line(1, AT - pmstart.FILED_FALLBACK))
+        self.assertIn("wait --pending", out[2])
+        self.assertEqual([t for _, t in c.calls], [pmstart.HUB_SITE_TIMEOUT_S] * 3)
+        bare = FiledClient(filed(AT))
+        self.assertEqual(len(site(bare)), 2)
+        self.assertNotIn("/questions", [p for p, _ in bare.calls])
+
+    def test_a_hub_that_is_down_reads_and_writes_no_stamp(self):
+        def where():
+            raise AssertionError("the stamp was looked up")
+        out = pmstart.hub_site(procs=[], load=lambda: SET,
+                               make_client=lambda port: FiledClient(error=serve.NotRunning(port)),
+                               stamp=where, now=AT)
+        self.assertEqual(len(out), 1)
+        self.assertFalse(os.path.exists(self.stamp))
+
+    def test_the_stamp_sits_beside_the_pm_watch_state_file(self):
+        from kitlib import pmwatch
+        state = os.path.join(os.path.dirname(self.stamp), "state.json")
+        with mock.patch.object(pmwatch, "load_config", lambda: {"state_file": state}):
+            self.assertEqual(pmstart.filed_stamp_file(), self.stamp)
+        with mock.patch.object(pmwatch, "load_config", lambda: {}):
+            with mock.patch.object(pmwatch, "default_state_file", lambda: state):
+                self.assertEqual(pmstart.filed_stamp_file(), self.stamp)
+
+    def test_the_checklist_gives_the_hub_check_the_stamp_file(self):
+        c = FiledClient(filed(datetime.datetime.now(UTC)))
+        with mock.patch.object(pmstart, "filed_stamp_file", lambda: self.stamp):
+            txt = pmstart.checklist({}, NOW, procs=[], hub_site={
+                "load": lambda: SET, "make_client": lambda port: c}, **FAKES)
+        self.assertIn("- hub: 1 answer(s) filed into records since ", txt)
+        self.assertIn("at", self.held())
+
 if __name__ == "__main__":
     unittest.main()

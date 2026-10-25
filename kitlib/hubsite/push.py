@@ -12,12 +12,16 @@ item itself is read through the hub. Nothing here imports a host: the delivery o
                        within STOP_S, so Hub.close's join outlasts one in flight.
   is_pm(recipient)     the recipient is the PM's own session
 
-What fires (a fingerprint per item: a question's status, with `filed` read as `answered` so
-filing it into its record changes nothing, answer.at and a digest of its answer,
-a to-do's status and done_at, an approval's status, decided_at and phase, a story's status and
-submitted_at, a note to the PM's status and sent_at; only a changed fingerprint fires, so a
-pm_ack, which leaves them alone, never does):
-  answered    a question answered or answered again (filed or not)
+What fires (a fingerprint per item: a question's phase (question_phase), answer.at, a digest of
+its answer and, once it is a standing rule, standing.at, a to-do's status and done_at, an
+approval's status, decided_at and phase, a story's status and submitted_at, a note to the PM's
+status and sent_at; only a changed fingerprint fires, so a pm_ack, which leaves them alone, never
+does):
+  answered    a question answered or answered again: not bound to a record, its filing failed,
+              or filed with no `filed_as` (read as before that field)
+  filed       a question's answer filed into its record, with `filed_as` (Filed answers below);
+              while it is being filed (`filing` phase) nothing fires
+  standing    an answer already given made a standing rule (the owner's promote): to the PM
   done        a to-do marked done or done again
   reopened    a done to-do back to open: informational, acknowledged by the first written
   added       a to-do the owner added (from: you): to the PM only
@@ -30,6 +34,18 @@ pm_ack, which leaves them alone, never does):
 Recipients: the item's `from` (a launcher key, or a to-do's free name; for an approval, which has
 no `from`, Api.repo_key of its repo) unless it is the PM's (AGENT_FROM, OWNER_FROM, empty, or
 is_pm), and the PM (PM_KEY) always, once.
+
+Filed answers (`filed`, by the question's `filed_as`, kitlib.hubsite.api _filed_as):
+  pulled      its asker alone: someone is working on the record (the PM when the PM asked,
+              sent once: the worker on the record reads the answer)
+  freed       the PM alone, sent once, and only when no live session can take the record up:
+              the delivery object's resolve(key) (None: none live) finds none of the asker, the
+              record's repository and the question's repo; with no resolve the PM is told
+  held        nobody: the record waits on more, and the asker reads it in its pending list
+              (the PM start's digest counts the answers filed since the last start that are
+              still `filed`, waiting for their askers: a logged or done one drops out)
+An answer that is a standing rule (`standing`) also goes to the PM, who logs it, whatever its
+filed_as; a `standing` change of an answer already pushed adds the PM to the push still owed.
 
 An approval's phase is read at the worker's clock: 'decided' while it is decided and pending,
 'expiring' from EXPIRING_S after decided_at while it is still approved, None once it is not
@@ -44,7 +60,10 @@ Each recipient is sent each item until it is acknowledged:
   from-session, to-do      the same, or pm_ack, or the to-do is no longer done
   PM, question             the question is no longer answered or filed (logged, or done: no
                            ruling), or it is filed and another session asked it (that asker
-                           reads it; it is the PM's again in `pending --for pm` once routed so)
+                           reads it; it is the PM's again in `pending --for pm` once routed so),
+                           but never for a standing rule (only logging ends it: it is not
+                           marked done, kitlib.hubsite.api questions_done); the
+                           `freed` ping: its first written try
   PM, to-do                pm_ack, or no longer done (an owner-added one: pm_ack)
   PM, story or note        its status changed (hub stories set, hub to-pm reply)
   either                   the item is withdrawn, or a newer fingerprint replaces the push
@@ -73,7 +92,9 @@ seconds, None with no beat) is the snapshot's and GET health's `watcher` (Api.wa
 
 Files, in `folder` (the launcher's state_dir):
   push-outbox.json         {"<kind>:<id>": {kind, id, event, fingerprint, status, repo, from,
-                           first_at, recipients: {key: {attempt, next_at, last, once}}}}, times in
+                           first_at, recipients: {key: {attempt, next_at, last, once}}}} (a
+                           question's also filed_as, record, record_repo, freed, asker_pm and
+                           standing when they apply: its guidance), times in
                            epoch seconds, replaced whole after each round that changed it. At
                            start an entry whose item changed since is fired afresh; one whose
                            item is gone is dropped; nothing else already pending is sent again.
@@ -132,7 +153,9 @@ UNDELIVERED = 'push-undelivered.jsonl'
 COLLECTIONS = {'questions': 'question', 'todos': 'todo', 'approvals': 'approval',
                'stories': 'story', 'to_pm': 'to_pm'}
 ANSWERED = ('answered', 'filed')          # a question's statuses that hold an unread answer
-EVENTS = ('answered', 'done', 'reopened', 'added', 'decided', 'expiring', 'submitted', 'sent')
+FILED_AS = ('pulled', 'freed', 'held')    # what a filed answer did to its record (api._filed_as)
+EVENTS = ('answered', 'filed', 'standing', 'done', 'reopened', 'added', 'decided', 'expiring',
+          'submitted', 'sent')
 EXPIRING_S = 20 * 3600                      # after decided_at: an approved one's reminder
 WATCHER_STALE_S = 300                       # a heartbeat older than this: the watcher is down
                                             # (kitlib.pmstart BEAT_STALE, the same rule)
@@ -175,19 +198,37 @@ def _utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def question_phase(doc):
+    """A question's status as the push reads it: `filing` for an answer to a question bound to
+    a record that is not filed yet and did not fail (nothing fires: the filing decides who
+    hears it), `filed` for one filed with a known `filed_as`, `answered` for one filed with
+    none (filed before that field, or its record unreadable: pushed as any answer), else its
+    status."""
+    status = doc.get('status')
+    if status == 'filed':
+        return 'filed' if doc.get('filed_as') in FILED_AS else 'answered'
+    if status == 'answered' and isinstance(doc.get('record'), dict) and doc.get('filing') is None:
+        return 'filing'
+    return status
+
+
 def fingerprint(kind, doc, now=None):
-    """What a push is about: a question's status and answer, a to-do's status and done_at, an
-    approval's status, decided_at and phase at `now` (an aware datetime; the current time when
-    None). The answer goes in as a digest (its time has whole seconds, so two answers in one
-    second differ only in what they say; the outbox never holds that text)."""
+    """What a push is about: a question's phase (question_phase) and answer, and the time it
+    was made a standing rule when it is one, a to-do's status and done_at, an approval's status,
+    decided_at and phase at `now` (an aware datetime; the current time when None). The answer
+    goes in as a digest (its time has whole seconds, so two answers in one second differ only in
+    what they say; the outbox never holds that text)."""
     if kind == 'approval':
         return [doc.get('status'), doc.get('decided_at'),
                 approval_phase(doc, now if now is not None else _utc_now())]
     if kind == 'question':
         ans = doc.get('answer') if isinstance(doc.get('answer'), dict) else {}
         said = json.dumps(ans, sort_keys=True, default=str).encode('utf-8')
-        status = 'answered' if doc.get('status') == 'filed' else doc.get('status')
-        return [status, ans.get('at'), hashlib.sha256(said).hexdigest()[:16]]
+        out = [question_phase(doc), ans.get('at'), hashlib.sha256(said).hexdigest()[:16]]
+        standing = doc.get('standing')
+        if isinstance(standing, dict):
+            out.append(standing.get('at'))
+        return out
     if kind == 'story':
         return [doc.get('status'), doc.get('submitted_at')]
     if kind == 'to_pm':
@@ -202,7 +243,13 @@ def trigger(kind, doc, old, now=None):
         return approval_phase(doc, now if now is not None else _utc_now())
     status = doc.get('status')
     if kind == 'question':
-        return 'answered' if status in ANSWERED else None
+        phase = question_phase(doc)
+        if phase not in ('answered', 'filed'):
+            return None
+        if (isinstance(doc.get('standing'), dict) and old is not None
+                and list(old[:3]) == fingerprint(kind, doc)[:3]):
+            return 'standing'           # the same answer, made a standing rule since
+        return phase
     if kind == 'story':
         return 'submitted' if status == 'submitted' else None
     if kind == 'to_pm':
@@ -221,7 +268,38 @@ def schedule(attempt):
     return SCHEDULE_S[attempt - 1] if 0 < attempt <= len(SCHEDULE_S) else HOURLY_S
 
 
-def guidance(kind, doc_id, event, recipient):
+def _question_guidance(doc_id, event, recipient, entry):
+    """What to do about a question push: by its event and, for a filed answer, the record it
+    went into (`record`, `filed_as`), whether it owes the PM the `freed` ping and whether the
+    answer is a standing rule (entry flags, _fire)."""
+    record = field(entry.get('record'))
+    said = []
+    if event == 'filed' and entry.get('filed_as') == 'pulled' and recipient != PM_KEY:
+        said.append('The owner\'s answer is filed into record %s, which is being worked on: '
+                    'hub pending --for %s (or hub view %s). Picking it up acknowledges this push.'
+                    % (record, recipient, doc_id))
+    elif event == 'filed' and entry.get('filed_as') == 'pulled' and entry.get('asker_pm'):
+        said.append('The owner\'s answer to your question is filed into record %s, which is '
+                    'being worked on, so its worker reads it: hub view %s. For your information, '
+                    'no ack needed.' % (record, doc_id))
+    elif event == 'answered':
+        said.append('Read it: hub pending --for %s (or hub view %s). Picking it up acknowledges '
+                    'this push.' % (recipient, doc_id))
+    if recipient == PM_KEY and entry.get('freed'):
+        said.append('The owner\'s answer is filed into record %s and frees it, and no '
+                    'coordinator of repo %s is running: start one to take it up (hub view %s). '
+                    'For your information, no ack needed.'
+                    % (record, field(entry.get('record_repo')), doc_id))
+    if recipient == PM_KEY and entry.get('standing'):
+        said.append('The owner made this answer a standing rule: hub view %s, then log it in the '
+                    'ledger (hub questions log %s <ruling-id> --if-version N); logging it '
+                    'acknowledges this push.' % (doc_id, doc_id))
+    return ' '.join(said) or ('Read it: hub view %s.' % doc_id)
+
+
+def guidance(kind, doc_id, event, recipient, entry=None):
+    if kind == 'question' and entry is not None:
+        return _question_guidance(doc_id, event, recipient, entry)
     if event == 'decided':
         return ('Decided by the owner: hub pending --for %s (or hub approvals show %s).'
                 % (recipient, doc_id))
@@ -255,6 +333,7 @@ class PushWorker(object):
         self._rev = 0
         self._fps = {}
         self._outbox = {}
+        self._before = {}               # {key: fingerprint before a question's filing}, _fire
         self._dirty = False
         self._last = None               # the latest deliver's state to the PM
         self._started = False           # start() finished: until then status() is 'down'
@@ -424,6 +503,7 @@ class PushWorker(object):
                     kind, doc_id = key.split(':', 1)
                     self._fire(kind, doc_id, docs[_coll(kind)][doc_id], self._fps.get(key))
             for key in set(self._fps) - set(fresh):
+                self._before.pop(key, None)
                 self._drop(key)
             self._fps, self._rev = fresh, rev
         else:
@@ -469,6 +549,7 @@ class PushWorker(object):
         doc = self.store.get(_coll(kind), doc_id)
         if doc is None:
             self._fps.pop(key, None)
+            self._before.pop(key, None)
             self._drop(key)
             return
         old, fp = self._fps.get(key), self._print(kind, doc)
@@ -483,8 +564,20 @@ class PushWorker(object):
             event = trigger(kind, doc, old, now_at)
         else:
             event = trigger(kind, doc, old)
+        base = old
+        if kind == 'question':
+            # an answer seen while it was being filed: the filed one is judged against what was
+            # before it (a first answer or a re-answer), never against the filing phase
+            if question_phase(doc) == 'filing':
+                if key not in self._before:
+                    self._before[key] = old
+            else:
+                base = self._before.pop(key, old)
         if event is None:
             self._drop(key)             # a change that fires nothing replaces what was owed
+            return
+        if kind == 'question' and event in ('filed', 'standing'):
+            self._fire_filed(key, doc_id, doc, base, event)
             return
         if kind == 'approval':
             sender = self._repo_key(doc.get('repo'))    # no `from`: its repository's coordinator
@@ -497,7 +590,7 @@ class PushWorker(object):
             keys.insert(0, sender)
         now = self.clock()
         fp = self._print(kind, doc, now_at)
-        first = old is None or old[0] != fp[0]      # not a re-answer or a re-done
+        first = self._first(kind, base, fp)         # not a re-answer or a re-done
         recipients = {}
         for r in keys:
             held = r != PM_KEY and self._handed(kind, doc_id) == r
@@ -510,7 +603,108 @@ class PushWorker(object):
                              'status': doc.get('status'),
                              'repo': doc.get('repo') if isinstance(doc.get('repo'), str) else '',
                              'from': sender, 'first_at': None, 'recipients': recipients}
+        if kind == 'question' and isinstance(doc.get('standing'), dict):
+            self._outbox[key]['standing'] = True    # the PM is told to log it (guidance)
         self._dirty = True
+
+    @staticmethod
+    def _first(kind, base, fp):
+        """True when fingerprint fp is a first answer or done mark after `base` (the item's
+        fingerprint before it; for a question, before its filing), not a re-answer or a re-done
+        one."""
+        if base is None:
+            return True
+        if kind == 'question':
+            return base[0] not in ANSWERED
+        return base[0] != fp[0]
+
+    def _sender(self, doc):
+        sender = doc.get('from') if isinstance(doc.get('from'), str) else ''
+        mine = sender and sender not in (PM_KEY, OWNER_FROM) and not self._is_pm(sender)
+        return sender, bool(mine)
+
+    def _fire_filed(self, key, doc_id, doc, base, event):
+        """A question's answer filed into its record (event `filed`), or made a standing rule
+        (`standing`): who hears it depends on what the filing did (`filed_as`; module docstring
+        "Filed answers"). A `standing` change merges into the push still owed for the same
+        answer, if any, adding the PM; else it goes to the PM alone."""
+        sender, mine = self._sender(doc)
+        fp, now = self._print('question', doc), self.clock()
+        standing = isinstance(doc.get('standing'), dict)
+        held = self._handed('question', doc_id)
+        if event == 'standing':
+            entry = self._outbox.get(key)
+            if entry is not None and list(entry['fingerprint'][:3]) == fp[:3]:
+                entry['fingerprint'] = fp
+                entry['standing'] = True
+                entry['status'] = doc.get('status')
+                st = entry['recipients'].get(PM_KEY)
+                if st is None:
+                    entry['recipients'][PM_KEY] = {'attempt': 0, 'next_at': now, 'last': None,
+                                                   'once': False}
+                else:
+                    st.update(once=False, next_at=now)
+                self._dirty = True
+                return
+            recipients = {PM_KEY: {'attempt': 0, 'next_at': now, 'last': None, 'once': False}}
+            flags = {}
+        else:
+            first = self._first('question', base, fp)
+            filed_as = doc.get('filed_as')
+            record = doc.get('record') if isinstance(doc.get('record'), dict) else {}
+            recipients, flags = {}, {'filed_as': filed_as}
+            if filed_as == 'pulled':
+                r = sender if mine else PM_KEY
+                if not (r != PM_KEY and held == r and first):     # picked it up already
+                    # the PM that asked is told once: the worker on the record reads the answer
+                    recipients[r] = {'attempt': 0, 'next_at': now, 'last': None,
+                                     'once': r == PM_KEY or held == r}
+                if r == PM_KEY:
+                    flags['asker_pm'] = True
+            elif filed_as == 'freed' and not self._coordinator_live(doc, sender if mine else ''):
+                recipients[PM_KEY] = {'attempt': 0, 'next_at': now, 'last': None, 'once': True}
+                flags['freed'] = True
+            if standing:
+                st = recipients.setdefault(PM_KEY, {'attempt': 0, 'next_at': now, 'last': None,
+                                                    'once': False})
+                st['once'] = False
+            flags['record'] = '%s:%s' % (record.get('repo') or '', record.get('id') or '')
+            flags['record_repo'] = record.get('repo') or ''
+        if not recipients:
+            self._drop(key)             # held, or freed with its coordinator running: no push
+            return
+        entry = {'kind': 'question', 'id': doc_id, 'event': event, 'fingerprint': fp,
+                 'status': doc.get('status'),
+                 'repo': doc.get('repo') if isinstance(doc.get('repo'), str) else '',
+                 'from': sender, 'first_at': None, 'recipients': recipients}
+        entry.update(flags)
+        if standing:
+            entry['standing'] = True
+        self._outbox[key] = entry
+        self._dirty = True
+
+    def _coordinator_live(self, doc, asker):
+        """True when a live session can take up the record doc's answer freed: its asker, or
+        the coordinator keyed by the record's repository or the question's repo, resolves to a
+        live session (the delivery object's `resolve`, None for none). False when the delivery
+        object cannot tell (no `resolve`, or it raised): the PM is told."""
+        resolve = getattr(self.push, 'resolve', None)
+        if not callable(resolve):
+            return False
+        record = doc.get('record') if isinstance(doc.get('record'), dict) else {}
+        keys = []
+        for k in (asker, record.get('repo'), doc.get('repo')):
+            if isinstance(k, str) and k and k not in keys and k not in (PM_KEY, OWNER_FROM):
+                keys.append(k)
+        for k in keys:
+            if self._is_pm(k):
+                continue
+            try:
+                if resolve(k) is not None:
+                    return True
+            except Exception as e:      # noqa: BLE001 - a host fault: the PM hears it
+                self.log('push: resolve(%s) failed: %s' % (field(k), type(e).__name__))
+        return False
 
     def _asked_by(self, entry):
         """True when the entry's item is from a session other than the PM's (a recipient)."""
@@ -569,6 +763,9 @@ class PushWorker(object):
         if kind == 'question':
             if doc.get('status') not in ANSWERED:
                 return True
+            if recipient == PM_KEY and (entry.get('standing')
+                                        or entry['event'] in ('filed', 'standing')):
+                return False            # the PM logs it, or the freed ping's written try ends it
             if doc.get('status') == 'filed' and recipient == PM_KEY and self._asked_by(entry):
                 return True             # filed into its record: its asker reads it, not the PM
             return picked
@@ -615,7 +812,8 @@ class PushWorker(object):
             lines.append('[hub push] %s %s %s repo:%s from:%s route:%s attempt:%d' % (
                 entry['kind'], field(entry['id']), field(entry['status']), field(entry['repo']),
                 field(entry['from']), field(recipient), st['attempt'] + 1))
-            lines.append(guidance(entry['kind'], field(entry['id']), entry['event'], field(recipient)))
+            lines.append(guidance(entry['kind'], field(entry['id']), entry['event'], field(recipient),
+                                  entry))
         if rest:
             lines.append('+%d more: hub pending --for %s' % (len(rest), field(recipient)))
         sent = self._deliver(recipient, '\n'.join(lines))
