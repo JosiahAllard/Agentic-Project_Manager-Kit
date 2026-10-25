@@ -83,13 +83,18 @@ def system_processes():
     return out
 
 
+def listed_ctimes():
+    """{pid: creation FILETIME} from one system_processes listing, or None when none can be had."""
+    try:
+        return {p: ct for p, ct, _n in system_processes()}
+    except OSError:
+        return None
+
+
 def listed_ctime(pid):
     """The creation FILETIME the system's process listing (system_processes) gives pid, or None
     when the listing cannot be had or does not name pid."""
-    try:
-        return next((ct for p, ct, _n in system_processes() if p == int(pid)), None)
-    except OSError:
-        return None
+    return (listed_ctimes() or {}).get(int(pid))
 
 
 def process_parents():
@@ -188,9 +193,12 @@ def ancestry(pid, ctime, parents=None, limit=64, through_exited=False):
     The same bounds hold: `limit` hops, and a parent created after its child (a reused pid) or
     one that cannot be opened ends it. exited is then True only when the walk could go no
     further past an exited ancestor: its parent is gone (not opened, not listed) or newer than
-    it. A parent the listing names but that cannot be opened (winlogon above the desktop's exited
-    userinit) is taken as running. Known limit: its creation time cannot be checked, so a reused
-    pid there, or a listing that still names a process that has just exited, reads as running."""
+    it. A parent above an exited ancestor that this user cannot open (winlogon above the desktop's
+    exited userinit) is judged by the system's process listing (listed_ctimes, read then, so at
+    most once a walk): running when it names that pid created no later than the exited ancestor;
+    a pid it does not name, or names created after it (reused), is gone. With no listing to be
+    had, a parent `parents` names is taken as running. Known limit: a parent that exits just
+    after that listing is read reads as running."""
     parents = process_parents() if parents is None else parents
     out, cur, cur_ct, exited = [], int(pid), ctime, False
     pp = parents.get(cur)
@@ -198,11 +206,15 @@ def ancestry(pid, ctime, parents=None, limit=64, through_exited=False):
         if not pp or pp == cur:
             break
         pct, gone, recorded = _ancestor(pp)
+        if pct is None and exited:
+            # A process this user cannot open (winlogon, above the desktop's exited userinit):
+            # the walk ends below a running one, as it does above a running hop, or past an exited
+            # one whose parent is gone. cur_ct is that exited hop's creation time, never None.
+            listed = listed_ctimes()
+            exited = pp not in parents if listed is None else (
+                pp not in listed or listed[pp] > cur_ct)
+            break
         if pct is None or (cur_ct is not None and pct > cur_ct):
-            if exited and pct is None and pp in parents:
-                # A listed process this user cannot open (winlogon, above the desktop's exited
-                # userinit): the walk ends below a running one, as it does above a running hop.
-                exited = False
             break
         out.append((pp, pct))
         exited = gone

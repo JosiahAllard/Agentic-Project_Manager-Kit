@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -30,6 +31,16 @@ def denied(pid):
             return 0
         return real(access, inherit, p)
     return mock.patch.object(win32.K32, "OpenProcess", fake)
+
+
+def ntdll(query):
+    """win32.NTDLL with NtQuerySystemInformation replaced by query(cls, buf, length, size)."""
+    return mock.patch.object(win32, "NTDLL", types.SimpleNamespace(NtQuerySystemInformation=query))
+
+
+def signed(status):
+    """An NTSTATUS as the real call returns it: a signed C int."""
+    return ctypes.c_int(status).value
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
@@ -147,6 +158,57 @@ class Process(unittest.TestCase):
         self.assertEqual(listed[os.getpid()],
                          (process.own_ctime(), snap[os.getpid()]))
         self.assertEqual(process.listed_ctime(os.getpid()), process.own_ctime())
+
+    def test_a_listing_too_big_for_the_buffer_is_asked_again_in_a_bigger_one(self):
+        # NtQuerySystemInformation is replaced: STATUS_INFO_LENGTH_MISMATCH twice (the second
+        # naming a size past double the buffer), then the real call into the last buffer.
+        real, asked = win32.NTDLL.NtQuerySystemInformation, []
+
+        def fake(cls, buf, length, size):
+            asked.append(length.value)
+            if len(asked) == 1:
+                return signed(process.STATUS_INFO_LENGTH_MISMATCH)      # no size: doubled
+            if len(asked) == 2:
+                size._obj.value = 9 << 20
+                return signed(process.STATUS_INFO_LENGTH_MISMATCH)
+            return real(cls, buf, length, size)
+        with ntdll(fake):
+            listed = {pid: ct for pid, ct, _n in process.system_processes()}
+        self.assertEqual(asked, [2 << 20, 4 << 20, (9 << 20) + (1 << 16)])
+        self.assertEqual(listed[os.getpid()], process.own_ctime())
+
+    def test_a_listing_that_never_fits_ends_after_eight_tries(self):
+        # Every call says the buffer is too small. The buffers are recorded, not made: the
+        # eighth would be 256 MiB.
+        asked, made = [], []
+        make = ctypes.create_string_buffer
+
+        def small(n):
+            made.append(n)
+            return make(16)
+
+        def fake(_cls, _buf, length, _size):
+            asked.append(length.value)
+            return signed(process.STATUS_INFO_LENGTH_MISMATCH)
+        with ntdll(fake), mock.patch.object(process.ctypes, "create_string_buffer", small):
+            with self.assertRaisesRegex(OSError, "it kept growing"):
+                process.system_processes()
+        self.assertEqual(asked, [(2 << 20) << k for k in range(8)])
+        self.assertEqual(made, asked)
+        with ntdll(fake), mock.patch.object(process.ctypes, "create_string_buffer", small):
+            self.assertIsNone(process.listed_ctime(os.getpid()))         # no listing: None
+
+    def test_another_status_ends_the_listing_at_once_and_names_it(self):
+        asked = []
+
+        def fake(_cls, _buf, length, _size):
+            asked.append(length.value)
+            return signed(0xC0000022)                                   # STATUS_ACCESS_DENIED
+        with ntdll(fake):
+            with self.assertRaisesRegex(OSError, "status 0xC0000022"):
+                process.system_processes()
+            self.assertIsNone(process.listed_ctimes())
+        self.assertEqual(asked, [2 << 20, 2 << 20])
 
     def test_a_pid_this_user_may_not_open_is_judged_by_its_listed_creation_time(self):
         # The denial is made by replacing K32.OpenProcess for one child (ERROR_ACCESS_DENIED, as

@@ -46,6 +46,13 @@ class ExitedShell(unittest.TestCase):
                   HOST: FakeProc(350, GONE, False, 'pwsh.exe')})
         self.assertEqual(me['role'], 'agent')
 
+    def test_an_exited_shell_whose_parent_pid_a_process_it_cannot_open_reused_is_not_the_owner(self):
+        # HOST's pid now names a SYSTEM svchost made after SHELL: listed, not openable; the
+        # system's process listing gives its creation time.
+        me = who({ME: FakeProc(400, SHELL, False, 'python.exe'),
+                  SHELL: FakeProc(300, HOST, True, None),
+                  HOST: FakeProc(350, GONE, False, 'svchost.exe', opens=False)})
+        self.assertEqual(me['role'], 'agent')
 
     def test_an_agent_host_below_an_exited_shell_makes_the_agent_whatever_is_above(self):
         # The walk ends not-exited at a listed parent it cannot open; the host below decides.
@@ -60,7 +67,7 @@ class ExitedShell(unittest.TestCase):
 class OwnersChain(unittest.TestCase):
     def test_an_exited_hop_under_a_listed_parent_that_cannot_be_opened_is_the_owner(self):
         # No agent host anywhere in the chain: the walk ends not-exited (kitlib.proc.process
-        # ancestry's known limit: that parent's creation time cannot be checked).
+        # ancestry: the system's process listing dates that parent before the exited hop).
         me = who({ME: FakeProc(400, SHELL, False, 'python.exe'),
                   SHELL: FakeProc(300, WINLOGON, True, None),
                   WINLOGON: FakeProc(100, GONE, False, 'winlogon.exe', opens=False)})
