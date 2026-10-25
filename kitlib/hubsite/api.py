@@ -1818,6 +1818,7 @@ def to_pm_reply(api, req):
         changes['ruling'] = b['ruling'].strip()
         if not changes['ruling']:
             raise _invalid('ruling, when given, names the decision: it cannot be blank', 'ruling')
+        _ruling(api, changes['ruling'])         # a ledger ruling id that exists, as questions log
     doc_id = req.params['id']
     d = api.doc('to_pm', doc_id, b)
     if d.get('status') != 'sent':
