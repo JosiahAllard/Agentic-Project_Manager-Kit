@@ -1094,6 +1094,8 @@ FILING_SAYS = {
     'invalid': 'the backlog store refused this answer: the PM handles it',
     'store': 'the backlog store could not be written now: the hub tries again',
     'unavailable': 'this hub cannot write a backlog store: the hub tries again',
+    'no_store': 'this repository names no backlog store the hub may write (.kit.json '
+                '"backlog".store): the PM handles this answer',
 }
 
 
@@ -1149,7 +1151,8 @@ def file_answer(api, doc_id, via='api', full=False):
     else {id, filed, version, revision} or {id, filed: false, code, message} (message the
     view's own text when `full`) and the version and revision of each mark written, or {id,
     filed: false, moved: true}. A mark the hub store refuses otherwise is given as a failure with
-    that code, nothing marked. The record write is
+    that code, nothing marked. A failure with the code and phrase the question's `filing` has
+    already writes nothing: its version and revision are those it has. The record write is
     idempotent (kitlib.hubsite.recordwrite answer), so a crash anywhere in between is mended by
     filing again."""
     d = api.store.get('questions', doc_id)
@@ -1176,6 +1179,15 @@ def file_answer(api, doc_id, via='api', full=False):
                    'filed_as': _filed_as(before, _record_state(api, record))}
     else:
         message = FILING_SAYS.get(code, 'the answer could not be filed (%s)' % code)
+        was = d.get('filing')
+        if isinstance(was, dict) and (was.get('code'), was.get('message')) == (code, message):
+            # failed as it failed before: the mark it has stays, its first `at` kept, so a retry
+            # moves no version an asker's --if-version holds
+            now = api.store.get('questions', doc_id)
+            if now is None or _version(now) != version:
+                return {'id': doc_id, 'filed': False, 'moved': True}
+            return {'id': doc_id, 'filed': False, 'code': code, 'version': version,
+                    'revision': api.store.revision, 'message': said if full else message}
         changes = {'filing': {'at': api.clock(), 'code': code, 'message': message}}
     try:
         r = api.store.update('questions', doc_id, dict(changes, via=via), if_version=version)

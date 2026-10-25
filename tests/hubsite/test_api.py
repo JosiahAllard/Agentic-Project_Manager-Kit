@@ -3922,6 +3922,92 @@ class FilingTest(ApiCase):
         d = self.doc(qid)
         self.assertEqual((d['status'], d['filing'], d['filed_at']), ('filed', None, self.now))
 
+    def test_a_retry_that_fails_the_same_way_moves_no_version(self):
+        qid = self.bound()
+        self.views.fail = HubError('store', 'C:\\work\\repo is busy', '')
+        self.answer(qid)
+        first = self.doc(qid)
+        revision = self.store.revision
+        for _ in range(3):              # questions/file, as the hub start runs it, and by id
+            self.tick()
+            self.assertEqual(self.refile()['failed'], [{'id': qid, 'code': 'store',
+                                                        'message': api.FILING_SAYS['store']}])
+            self.refile({'id': qid})
+        self.assertEqual(len(self.views.filed), 7, 'each retry did try the record')
+        self.assertEqual(self.doc(qid), first, 'nothing written: the first `at` is kept')
+        self.assertEqual(self.store.revision, revision)
+        # the version the asker read still holds for its log
+        self.ok('POST', '/questions/%s/log' % qid, AGENT,
+                {'ruling': 'decision-7', 'if_version': first['version']})
+        self.assertEqual(self.doc(qid)['status'], 'logged')
+
+    def test_a_retry_that_fails_another_way_marks_the_new_failure(self):
+        qid = self.bound()
+        self.views.fail = HubError('store', 'busy', '')
+        self.answer(qid)
+        first = self.doc(qid)
+        self.tick()
+        self.views.fail = HubError('unavailable', 'no view', 'views')
+        self.assertEqual(self.refile()['failed'][0]['code'], 'unavailable')
+        d = self.doc(qid)
+        self.assertEqual(d['filing'], {'at': self.now, 'code': 'unavailable',
+                                       'message': api.FILING_SAYS['unavailable']})
+        self.assertGreater(d['version'], first['version'])
+
+    def test_a_repo_with_no_store_is_left_to_the_pm_and_swept_with_no_write(self):
+        qid = self.bound()
+        self.views.fail = HubError('no_store', 'C:\\pm\\data names no store', 'repo')
+        got = self.answer(qid)
+        d = self.doc(qid)
+        self.assertEqual((got['status'], d['status']), ('answered', 'answered'))
+        self.assertEqual(d['filing'], {'at': self.now, 'code': 'no_store',
+                                       'message': api.FILING_SAYS['no_store']})
+        self.assertIn('the PM handles this answer', d['filing']['message'])
+        self.assertNotIn('tries again', d['filing']['message'])
+        self.assertEqual(self.pending(), [qid])
+        tried = len(self.views.filed)
+        self.tick()
+        self.assertEqual(self.refile()['failed'], [{'id': qid, 'code': 'no_store',
+                                                    'message': api.FILING_SAYS['no_store']}])
+        self.assertEqual(len(self.views.filed), tried + 1, 'the sweep tries it again')
+        self.assertEqual(self.doc(qid), d, 'a repeat writes nothing')
+        # once the repository names a store the next sweep (or the hub start) files it
+        self.views.fail = None
+        self.tick()
+        self.assertEqual(self.refile()['filed'], [qid])
+        self.assertEqual(self.doc(qid)['status'], 'filed')
+
+    def test_a_success_after_a_failure_marks_it_filed_with_a_new_version(self):
+        qid = self.bound()
+        self.views.fail = HubError('store', 'busy', '')
+        self.answer(qid)
+        failed = self.doc(qid)
+        self.views.fail = None
+        self.tick()
+        self.assertEqual(self.refile()['filed'], [qid])
+        d = self.doc(qid)
+        self.assertEqual((d['status'], d['filing'], d['filed_at']), ('filed', None, self.now))
+        self.assertGreater(d['version'], failed['version'])
+
+    def test_a_repeat_failure_on_a_question_that_moved_meanwhile_is_moved(self):
+        qid = self.bound()
+        self.views.fail = HubError('store', 'busy', '')
+        self.answer(qid)
+        first = self.doc(qid)
+        record_answer = self.views.record_answer
+
+        def racing(*args):
+            # another call writes the question between this retry's read and its mark
+            self.views.record_answer = record_answer
+            self.store.update('questions', qid, {'via': 'race'})
+            return record_answer(*args)
+        self.views.record_answer = racing
+        self.assertEqual(api.file_answer(self.api, qid),
+                         {'id': qid, 'filed': False, 'moved': True})
+        d = self.doc(qid)
+        self.assertEqual((d['filing'], d['via']), (first['filing'], 'race'))
+        self.assertGreater(d['version'], first['version'])
+
     def test_a_record_closed_meanwhile_falls_back_to_the_pm(self):
         qid = self.bound()
         self.views.fail = HubError('not_found', 'no such record', 'id')
@@ -4290,6 +4376,52 @@ class AnswerStoreTest(trw.Case):
         self.assertEqual((status, got['status']), (200, 'filed'), got)
         self.assertEqual(self.field('FOO', 'state'), ['open'])
         self.assertEqual(self.store.get('questions', 'Q-1000')['filed_as'], 'freed')
+
+
+class AnswerNoStoreTest(trw.Case):
+    """An answer bound to a record of a repository whose .kit.json names no backlog store: the
+    implicit store is refused as `no_store`, which the filing leaves to the PM."""
+
+    def setUp(self):
+        trw.Case.setUp(self)        # not named(): the implicit default store
+        root = self.repo.root
+
+        class Backlog(object):
+            def _named(self, repo):
+                return 'r', root
+
+            def reread(self, name, at):
+                pass
+
+            def record(self, repo, rid):
+                return {'repo': repo, 'id': rid, 'where': 'open'}
+
+        self.views = serve.SiteViews(None, serve.Sources(), backlog_views=Backlog())
+        hub = tempfile.mkdtemp(prefix='kit-hubapi-')
+        self.addCleanup(shutil.rmtree, hub, True)
+        self.store = Store.open(hub, clock=CLOCK)
+        self.addCleanup(self.store.close)
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def test_the_owner_answer_is_left_to_the_pm_with_the_no_store_phrase(self):
+        before = self.repo.git('for-each-ref', smod.STORE_REF)
+        self.api.call('POST', BASE + '/questions', AGENT,
+                      {'title': 'Which one?', 'options': OPTIONS,
+                       'record': {'repo': 'r', 'id': 'FOO'}})
+        status, got = self.api.call('POST', BASE + '/questions/Q-1000/answer', OWNER,
+                                    {'choice': 1}, via='web')
+        self.assertEqual((status, got['status'], got['filing']['code']),
+                         (200, 'answered', 'no_store'), got)
+        d = self.store.get('questions', 'Q-1000')
+        self.assertEqual((d['filing']['code'], d['filing']['message']),
+                         ('no_store', api.FILING_SAYS['no_store']))
+        self.assertEqual(self.repo.git('for-each-ref', smod.STORE_REF), before)
+        version = d['version']
+        # the sweep tries it again and says so, and the repeat moves no version
+        self.assertEqual(self.api.call('POST', BASE + '/questions/file', AGENT, {})[1]['failed'],
+                         [{'id': 'Q-1000', 'code': 'no_store',
+                           'message': api.FILING_SAYS['no_store']}])
+        self.assertEqual(self.store.get('questions', 'Q-1000')['version'], version)
 
 
 if __name__ == '__main__':
