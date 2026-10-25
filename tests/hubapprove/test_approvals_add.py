@@ -122,11 +122,19 @@ class Case(unittest.TestCase):
         return got.exception.message
 
 
-STAGED = 'build hashes the content with hash-object --path --stdin: the fake takes no --path'
-
-
-@real_git(STAGED)
 class TheRequest(Case):
+    def test_the_staged_hash_goes_through_the_run_stand_in_on_the_fake_tier(self):
+        seen = []
+
+        def run(args, cwd, stdin=None):
+            seen.append((args[0], stdin))
+            return hubapprove._run_text(args, cwd, stdin=stdin)
+        body = hubapprove.build(self.repo.root, 't', [('README.md', self.content('x y\n'))],
+                                run=run)
+        self.assertEqual(body['files'][0]['content'], 'x y\n')
+        self.assertIn(('hash-object', b'x y\n'), seen)
+
+
     def test_an_edit_is_posted_decided_and_accepted_by_the_consumer(self):
         body = hubapprove.build(self.repo.root, 'Edit the readme',
                                 [('README.md', self.content('hello world\n'))], reason='asked')
@@ -201,7 +209,6 @@ class TheRequest(Case):
         self.assertEqual(calls, [('/approvals', AGENT, body)])
 
 
-@real_git(STAGED)
 class WhatIsRefusedBeforeAnyCall(Case):
     def test_a_checkout_that_is_not_a_work_tree(self):
         self.refused('checkout', 'is not a git work tree',
@@ -321,7 +328,6 @@ class ContentGitWouldStageAsAnotherBlob(Case):
         self.accepted(got['id'], ['README.md'])
 
 
-@real_git(STAGED)
 class OnlyOwnerOnlyPathsAreRequested(Case):
     """An owner approval carries owner-only files only: a render source (in a kit checkout,
     which commit.py --owner-approval refuses) or a path the owner rules do not lock is refused
@@ -435,7 +441,6 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
         self.refused('checkout', 'the kit configuration of', [('README.md', self.content('x\n'))])
 
 
-@real_git(STAGED)
 class TheCommandLine(Case):
     def run_hub(self, *argv):
         out, err = io.StringIO(), io.StringIO()

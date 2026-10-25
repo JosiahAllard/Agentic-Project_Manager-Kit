@@ -107,14 +107,22 @@ def owner_paths_error(top, paths):
             % (' and '.join(named), lead, '; '.join(advice)))
 
 
+def _run_text(args, cwd, stdin=None):
+    """cmd.run_text's `(stdout_text, None)` or `(None, why)`, with git's stdin."""
+    out, why = cmd.run(args, cwd, stdin=stdin)
+    if out is None:
+        return None, why
+    return cmd.text(out).strip(), None
+
+
 def build(checkout, title, files, repo=None, head=None, reason=None, now=None, run=None,
           cat=None):
     """The body of POST /approvals for the change `files`, a list of (path, content_file): path
     relative to the repository top with `/`, content_file the file holding its proposed text.
     `repo` defaults to the checkout's origin (ap.remote_id), `head` to its HEAD. `run` is
-    kitlib.git.cmd.run_text and `cat` kitlib.git.batch.cat_file, or stand-ins. RequestError for
-    anything refused (module docstring); nothing is posted."""
-    run, cat = run or cmd.run_text, cat or batch.cat_file
+    _run_text (kitlib.git.cmd.run_text, which also takes stdin) and `cat` kitlib.git.batch.cat_file,
+    or stand-ins. RequestError for anything refused (module docstring); nothing is posted."""
+    run, cat = run or _run_text, cat or batch.cat_file
     top, why = run(['rev-parse', '--show-toplevel'], checkout)
     if not top:
         raise RequestError('%s is not a git work tree: %s' % (checkout, why or 'no top'),
@@ -172,9 +180,8 @@ def build(checkout, title, files, repo=None, head=None, reason=None, now=None, r
         if blob == base:
             raise RequestError('%s: the content is the file at head; the request would change '
                                'nothing' % path, 'files')
-        r = cmd.call(['hash-object', '--path=' + path, '--stdin'], top,
-                     stdin=content.encode('utf-8'))
-        staged = cmd.text(r.out).strip() if r.rc == 0 else None
+        staged, why = run(['hash-object', '--path=' + path, '--stdin'], top,
+                          stdin=content.encode('utf-8'))
         if staged != blob:
             # the consumer's staged check compares the blob git stages (its clean filter,
             # core.autocrlf, .gitattributes text or eol) with the approved one
@@ -182,7 +189,7 @@ def build(checkout, title, files, repo=None, head=None, reason=None, now=None, r
                                'ending or filter attribute changes it on staging, so the '
                                'commit would be refused. Give the content as git stores it.'
                                % (path, 'it would store %s' % staged[:12] if staged
-                                  else r.err or 'hash-object failed'), 'files')
+                                  else why or 'hash-object failed'), 'files')
         out.append({'path': path, 'base_blob': base, 'content': content})
     body = {'repo': repo, 'title': title, 'head': head, 'files': out}
     if reason is not None:

@@ -687,8 +687,10 @@ def hash_object(ctx, args):
     opts, pos, dd = _u.parse(_HASHOBJ, args)
     if dd:
         pos += dd
-    if opts.get('literally') or opts.get('stdin-paths') or opts.get('path'):
+    if opts.get('literally') or opts.get('stdin-paths'):
         raise Unsupported('hash-object options')
+    if opts.get('path') is not None and opts.get('no-filters'):
+        raise GitExit(129, 'error: Can\'t specify both --path and --no-filters\n')
     kind = opts.get('t', 'blob')
     if kind not in ('blob', 'commit', 'tree', 'tag'):
         raise die('invalid object type "%s"' % kind)
@@ -697,7 +699,14 @@ def hash_object(ctx, args):
         repo = ctx.need_repo()
     datas = []
     if opts.get('stdin'):
-        datas.append(ctx.stdin_bytes())
+        data = ctx.stdin_bytes()
+        if opts.get('path') is not None and kind == 'blob' and repo is not None and repo.worktree:
+            # --path names the file the bytes stand for: git applies that path's filters
+            from . import wt as _wt
+            conv = _wt.Convert(repo)
+            conv.guard()
+            data = conv.to_git(opts['path'], data)
+        datas.append(data)
     for p in pos:
         with open(os.path.join(ctx.cwd, p), 'rb') as f:
             data = f.read()
