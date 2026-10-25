@@ -21,7 +21,9 @@ lander):
   forced (--force, a + refspec, --force-with-lease);
 - then, when the repository sets repo.push_block, the pushed commit needs a gate-OK record, read by
   kitlib.gate.runner.verify_record: it must name a config_rev in the pushed commit's history and
-  hash the gate config that commit holds;
+  hash the gate config that commit holds. Until KIT-GATE-OK-LEGACY-READ-RETIRE the record's .git
+  copy counts too (kitlib.records.gate_ok.ANY), so a landing by an older kit, which writes only
+  that, is not refused here;
 - then, under push_block too, a commit the push adds that changes an owner-only path the push
   changes on main (its net change) and whose author email is not the owner's is refused, record
   or not (kitlib.guard.ownercommits; the base's
@@ -449,10 +451,12 @@ def _cfg(root, remote_sha, remote):
 
 def verify_record(root, sha):
     """kitlib.gate.runner.verify_record, imported only when a push to main needs it (its imports
-    load the Windows process modules); any failure is `(None, why)`, so the push is refused."""
+    load the Windows process modules), taking a record's .git copy too (gate_ok.ANY: a landing by
+    an older kit writes only that); any failure is `(None, why)`, so the push is refused."""
     try:
         from kitlib.gate import runner
-        return runner.verify_record(root, sha)
+        from kitlib.records import gate_ok
+        return runner.verify_record(root, sha, legacy=gate_ok.ANY)
     except Exception as e:
         return None, 'cannot read gate-OK records: %s: %s' % (type(e).__name__, e)
 

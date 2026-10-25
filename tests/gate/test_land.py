@@ -399,7 +399,8 @@ class TakeTurns(LandCase):
         self.gate_tips(tip)
         spec = dict(repo=self.repo.root, branch=branch, expect_main=self.main, expect_tip=tip,
                     logs=self.logs, store={'root': self.root, 'kinds_path': self.kinds_path,
-                                           'hw': self.HW}, results=result.machine_root(), **extra)
+                                           'hw': self.HW},
+                    kit=os.path.dirname(result.machine_root()), **extra)
         return [sys.executable, '-m', 'tests.gate.land_child', json.dumps(spec)]
 
     def test_two_landing_processes_into_one_repo_take_turns(self):

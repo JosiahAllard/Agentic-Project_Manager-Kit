@@ -18,7 +18,7 @@ from kitlib.git import cmd
 from kitlib.git import defaults as gitdefaults
 from kitlib.records import gate_ok, landing
 from tests import gitfixture
-from tests.home import machine_config
+from tests.home import machine_config, result_drive
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'landed.py')
@@ -494,6 +494,7 @@ class TheGateOkRecord(Fixture):
     """Information only: whether the tip has a gate-OK record (kitlib.records.gate_ok)."""
 
     def test_none_and_a_record(self):
+        result_drive(self)          # the gate-OK records (kitlib.records.gate_ok) go under it
         tip = self.git('rev-parse', 'HEAD')
         code, out = self.look()
         self.assertIn('gate-ok    none for %s' % tip[:12], out)

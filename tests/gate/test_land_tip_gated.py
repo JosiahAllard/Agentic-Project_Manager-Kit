@@ -105,6 +105,41 @@ class Refused(TipCase):
         self.assert_refused(out, 'kit/other', tip2, wt2)
 
 
+class GitCopy(TipCase):
+    """A tip whose record is only in the git common dir (gate_ok.legacy_dir), as an older kit
+    or a forger writes it: it lands only when the frozen list took that copy (kitlib.records.gate_ok
+    "The grace window")."""
+
+    def git_copy_only(self, wt):
+        """A real --full pass of the branch at `wt`, then its record left only in .git."""
+        self.gate(wt, full=True)
+        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        os.remove(gate_ok.record_path(self.repo.root, tip))
+        self.assertTrue(os.path.isfile(gate_ok.legacy_path(self.repo.root, tip)))
+        return tip
+
+    def test_a_git_copy_written_after_the_freeze_does_not_land(self):
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.assertEqual(self.git_copy_only(wt), tip)     # its write froze the list first
+        self.assertEqual(gate_ok.freeze(self.repo.root), {})
+        self.assertEqual(gate_ok.verify_full(self.repo.root, tip, legacy=gate_ok.ANY)[0]['commit'],
+                         tip)                             # pre-push would take it
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assert_refused(out, BRANCH, tip, wt, 'is not one the frozen list',
+                            gate_ok.legacy_dir(self.repo.root))
+
+    def test_a_git_copy_from_before_the_switch_lands(self):
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        self.git_copy_only(wt)
+        # Before the switch: no frozen list and an empty record folder, as an older kit left it.
+        os.remove(gate_ok.frozen_path(self.repo.root))
+        os.rmdir(gate_ok.record_dir(self.repo.root))
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertIn(tip, gate_ok.freeze(self.repo.root))
+        self.assertEqual(self.remote_main(), self.main_now())
+
+
 def same_path(a, b):
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 

@@ -113,15 +113,16 @@ def gate_config_at(root, rev):
     return gate_config(kconfig.load_at(root, rev))
 
 
-def verify_record(root, commit):
+def verify_record(root, commit, legacy=gate_ok.TRUSTED):
     """gate_ok.verify() with the gate config read from the record's own `config_rev` (the commit
-    whose `.kit.json` the gate ran with): `(record, None)` or `(None, why)`."""
+    whose `.kit.json` the gate ran with): `(record, None)` or `(None, why)`. `legacy`: which .git
+    copies count (gate_ok.read; the pre-push hook's is ANY)."""
     def config_at(rev):
         try:
             return gate_config_at(root, rev)
         except ConfigError as e:
             raise gate_ok.RecordError('the gate config at %s: %s' % (rev[:10], e))
-    return gate_ok.verify(root, commit, config_at=config_at)
+    return gate_ok.verify(root, commit, config_at=config_at, legacy=legacy)
 
 
 def kit_identity():

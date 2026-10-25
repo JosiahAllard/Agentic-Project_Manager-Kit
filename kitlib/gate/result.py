@@ -88,9 +88,10 @@ from kitlib.proc import process
 DIR_NAME = 'kit-gate-result'
 KIT_DIR = 'pm-kit'      # <dev_drive>/pm-kit/kit-gate-result: the machine's kit folder
 KEY_NAME_MAX = 40       # the readable part of a repo key; its hash keeps keys apart
-NO_DEV = ('the machine config sets no dev_drive (the Dev Drive\'s root folder), so there is no '
-          'result folder (<dev_drive>\\pm-kit\\kit-gate-result); the owner sets it '
-          '(docs/kit-json.md "Machine config keys")')
+NO_DEV_FOR = ('the machine config sets no dev_drive (the Dev Drive\'s root folder), so there is no '
+              '%s (<dev_drive>\\pm-kit\\%s); the owner sets it (docs/kit-json.md "Machine config '
+              'keys")')
+NO_DEV = NO_DEV_FOR % ('result folder', DIR_NAME)
 SCHEMA = 1
 KINDS = ('gate', 'land')
 RUNNING = 'running'
@@ -136,18 +137,25 @@ def file_stem(branch):
     return stem
 
 
-def machine_root():
-    """`<dev_drive>/pm-kit/kit-gate-result`: the folder every repository's result folder is in.
-    ResultError when the machine config cannot be read or sets no dev_drive."""
+def kit_folder(name, what):
+    """`<dev_drive>/pm-kit/<name>`: one of the machine's kit folders, each holding one folder per
+    repository (repo_key): kit-gate-result, kitlib.records.gate_ok's kit-gate-ok and
+    kitlib.gate.budget's kit-gate-budget. ResultError when the machine config cannot be read or
+    sets no dev_drive; `what` names the folder in it ("result folder")."""
     try:
         cfg = kuser.user_config()
     except Exception as e:      # noqa: BLE001 - ConfigError, OSError: no folder, and why
-        raise ResultError('the machine config cannot be read, so there is no result folder: %s'
-                          % e)
+        raise ResultError('the machine config cannot be read, so there is no %s: %s' % (what, e))
     dev = kuser.dev_drive(cfg)
     if not dev:
-        raise ResultError(NO_DEV)
-    return os.path.join(os.path.abspath(dev), KIT_DIR, DIR_NAME)
+        raise ResultError(NO_DEV_FOR % (what, name))
+    return os.path.join(os.path.abspath(dev), KIT_DIR, name)
+
+
+def machine_root():
+    """`<dev_drive>/pm-kit/kit-gate-result`: the folder every repository's result folder is in.
+    ResultError when the machine config cannot be read or sets no dev_drive."""
+    return kit_folder(DIR_NAME, 'result folder')
 
 
 def repo_key(common):
