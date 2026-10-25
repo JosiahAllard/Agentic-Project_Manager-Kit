@@ -7450,13 +7450,15 @@ def stale_mark_word(ctx, target, head):
     branch's reflog or the tip's commit date is newer than the mark. The sweep's other checks are
     not made here: the idle bar, `git worktree lock`, exemption, worktree-folder placement, a branch
     checked out elsewhere, holders, open claims, machine lock and landing hold. marks.mark makes
-    them all when it marks (with classify.live_reason) but the holder probe (holders.blockers),
-    reading only processes' current folders, so what is open is that probe and a change after
-    the mark: the mark is the decision that the tree is idle and later activity voids it; a later
-    `git worktree lock` writes `locked` into the walked git dir and voids it while it is held (no
-    `--force` is read); a mark naming another path is void. Known limits: a file held open in the
-    tree other than as a current folder, and a later exemption, second checkout, holder, claim,
-    machine-lock run or landing that writes nothing there, are not seen (docs/guard.md, the
+    them all when it marks (with classify.live_reason) but the DELETE-access holder probe
+    (holders.blockers): of holders it checks only processes' current folders, through the L
+    rule. So what is open is that probe and a change after the mark: the mark is the decision that
+    the tree is idle and later activity voids it; a later `git worktree lock` writes `locked` into
+    the walked git dir and voids it while it is held (no `--force` is read); a mark naming another
+    path is void. Known limits: a file held open in the
+    tree other than as a current folder (neither the mark nor this runs holders.blockers), and a
+    later exemption, second checkout, holder (no process probe runs here), claim, machine-lock
+    run or landing that writes nothing there, are not seen (docs/guard.md, the
     git-worktree-remove row). Else `(False, why)`: why is None when the tree's branch has no
     mark (detached included), else why no mark counts. Fails closed: a marks file, branch, git
     common dir or last activity that cannot be read is no word.
