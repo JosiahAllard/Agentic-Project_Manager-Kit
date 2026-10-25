@@ -144,6 +144,10 @@ class NoHubToken(Exception):
     """Neither token file of the hub (agent or owner) is there to read."""
 
 
+class NoHubPointer(Exception):
+    """No PM-repo pointer is set, so the hub has no token folder to look in."""
+
+
 def hub_settings():
     """The hub Settings (kitlib.hubsite.settings.load): the `hub` key's, or every default (port
     8790) when the machine config has no `hub` key. HubSettingsError when they cannot be had and
@@ -165,8 +169,14 @@ def hub_settings():
 
 def _hub_client(port):
     """The real client, after a look that a token file is there: NoHubToken when neither is."""
+    from kitlib.config.types import ConfigError
     from kitlib.hubsite import auth, client
-    folder = auth.folder()
+    try:
+        folder = auth.folder()
+    except ConfigError as e:
+        if str(e) == auth.NO_POINTER:
+            raise NoHubPointer()
+        raise
     if not any(auth.read_token(folder, role) for role in auth.ROLES):
         raise NoHubToken()
     return client.Client(port, tokens=folder, timeout=HUB_SITE_TIMEOUT_S)
@@ -217,6 +227,9 @@ def hub_site(procs=(), load=None, make_client=_hub_client, stamp=None, now=None)
     try:
         hub = make_client(port)
         health = hub.get("/health", timeout=HUB_SITE_TIMEOUT_S)
+    except NoHubPointer:
+        return ["hub: no PM repo pointer is set, so the hub has no token folder: set it with "
+                "tools/machine_setup.py --pm-repo <PM repository> (an elevated owner step)"]
     except NoHubToken:
         return ["hub: no hub token file is there to read: run python \"%s\" setup" % HUB_TOOL]
     except serve.NotRunning:
