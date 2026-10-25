@@ -610,8 +610,13 @@ class Store:
             pass
 
     def live_runs(self, prune=False):
-        """Run records whose wrapper is live (run_live). prune: delete the others,
-        orphaned .stop and .giveback files (kitlib.lock.giveback) and dead writers' .tmp files."""
+        """Run records whose wrapper is live (run_live). prune: move the others to ended/ (book
+        does, kitlib.lock.run) and delete orphaned .stop and .giveback files (kitlib.lock.giveback)
+        and dead writers' .tmp files. A run that settled keeps the ended record it wrote; one
+        whose wrapper died without settling gets one with how "reaped", code None, ended now and
+        `reaped` saying what showed it gone (wrapper_state, else the run mutex), and no history
+        line (it has no measured use, and the gate budget would count it now). A record leaves
+        active/ only once its ended record is there."""
         out, folder = [], self.path("active")
         try:
             names = sorted(os.listdir(folder))
@@ -635,6 +640,15 @@ class Store:
             if self.run_live(d):
                 out.append(d)
             elif prune:
+                ended = self.path("ended", n)
+                if not os.path.exists(ended):
+                    gone = wrapper_state(d.get("pid", 0), d.get("ctime")) is False
+                    try:
+                        write_json(ended, dict(public(d), state="ended", code=None, how="reaped",
+                                               ended=iso(), reaped="its wrapper process is gone"
+                                               if gone else "its run mutex is not held"))
+                    except OSError:
+                        continue
                 remove(p)
                 remove(p[:-5] + ".stop")
                 remove(p[:-5] + ".giveback")

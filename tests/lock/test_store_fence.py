@@ -5,7 +5,10 @@ store it always got.
 
 On the machine's store these tests compute paths and names only: Store(), .root, .testing,
 path(), mutex_name(), real_root(), profile_dir() and machine_home(). None reads, writes or locks
-it; the release check's look at it (kitlib.lock.release.live_runs) is given a stand-in for `os`."""
+it; the release check's look at it (kitlib.lock.release.live_runs) is given a stand-in for `os`.
+
+On a scratch store, a booking moves the records of runs whose wrapper is surely gone out of
+active/ (DeadRecordsReaped)."""
 import hashlib
 import json
 import os
@@ -19,10 +22,12 @@ from unittest import mock
 
 from kitlib.config import user
 from kitlib.lock import release
+from kitlib.lock import run as rm
 from kitlib.lock import store as lockstore
 from kitlib.lock.store import Settings, Store, iso, real_root
 from kitlib.proc import process
 from tests.home import unmarked_env
+from tests.lock.helpers import StoreCase, clean_env
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The marker, spelled here so that a renamed constant fails a test instead of following it.
@@ -207,6 +212,72 @@ class RealRun(Case):
 
     def test_the_stores_profile_is_the_fences(self):
         self.assertEqual(user.real_profile(), lockstore.profile_dir())
+
+
+@unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+class DeadRecordsReaped(StoreCase):
+    """book moves a record whose run is surely gone (Store.run_live) from active/ to ended/;
+    every record whose run may be live stays."""
+    DEAD_PID = 'r-20261010T000000Z-dead01'      # its pid and creation time name no process
+    DEAD_MUTEX = 'r-20261010T000000Z-dead02'    # no creation time, and no run mutex
+    SETTLED = 'r-20261010T000000Z-dead03'       # dead, and its ended record was written
+    LIVE = 'r-20261010T000000Z-a11ve1'          # this process, with its creation time
+    LIVE_MUTEX = 'r-20261010T000000Z-a11ve2'    # no creation time, its run mutex held
+
+    def exited(self):
+        """(pid, creation time) of a process that has exited."""
+        p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        ct = process.proc_ctime(p.pid)
+        p.kill()
+        p.wait()
+        return p.pid, ct
+
+    def active(self, rid):
+        return os.path.exists(self.store.path('active', rid + '.json'))
+
+    def test_a_booking_moves_dead_records_to_ended_and_keeps_live_ones(self):
+        self.confine(1)
+        pid, ct = self.exited()
+        self.live_record(self.DEAD_PID, pid=pid, ctime=ct, cores=[0])
+        self.live_record(self.DEAD_MUTEX, ctime=None)
+        self.live_record(self.SETTLED, pid=pid, ctime=ct)
+        self.store.write('ended/%s.json' % self.SETTLED, {'id': self.SETTLED, 'how': 'done',
+                                                          'code': 0})
+        self.live_record(self.LIVE)
+        self.live_record(self.LIVE_MUTEX, ctime=None)
+        held = self.store.run_mutex(self.LIVE_MUTEX)
+        self.addCleanup(held.release)
+        stop = self.store.path('active', self.DEAD_PID + '.stop')
+        with open(stop, 'w', encoding='utf-8') as f:
+            json.dump({'by': 'owner'}, f)
+        dead = (self.DEAD_PID, self.DEAD_MUTEX, self.SETTLED)
+        self.assertEqual(sorted(d['id'] for d in self.store.live_runs()),
+                         [self.LIVE, self.LIVE_MUTEX])
+        for rid in dead:                    # a read moves nothing
+            self.assertTrue(self.active(rid), rid)
+
+        s = rm.book('engine-test', 'kit', 'reaper', cores=1, store=self.store, no_wait=True,
+                    env=clean_env())
+        s.release()
+
+        for rid in dead:
+            self.assertFalse(self.active(rid), rid)
+        self.assertFalse(os.path.exists(stop))
+        for rid in (self.LIVE, self.LIVE_MUTEX):
+            self.assertTrue(self.active(rid), rid)
+            self.assertIsNone(self.store.read('ended/%s.json' % rid), rid)
+        by_pid = self.store.read('ended/%s.json' % self.DEAD_PID)
+        self.assertEqual({k: by_pid[k] for k in ('id', 'state', 'how', 'code', 'reaped', 'cores')},
+                         {'id': self.DEAD_PID, 'state': 'ended', 'how': 'reaped', 'code': None,
+                          'reaped': 'its wrapper process is gone', 'cores': [0]})
+        self.assertIsNotNone(lockstore.epoch(by_pid['ended']))
+        by_mutex = self.store.read('ended/%s.json' % self.DEAD_MUTEX)
+        self.assertEqual((by_mutex['how'], by_mutex['reaped']),
+                         ('reaped', 'its run mutex is not held'))
+        self.assertEqual(self.store.read('ended/%s.json' % self.SETTLED),
+                         {'id': self.SETTLED, 'how': 'done', 'code': 0})
+        # no history line for a reaped run: only the booking's own
+        self.assertEqual([d['slug'] for d in self.store.history_records()], ['reaper'])
 
 
 if __name__ == '__main__':
