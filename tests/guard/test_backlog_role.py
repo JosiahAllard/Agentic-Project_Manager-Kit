@@ -685,7 +685,7 @@ class HubWriterCode(Base):
         for env in (PM, COORDINATOR):
             for text in ('python -c "from kitlib.backlog import store"', 'python -m kitlib.backlog.migrate',
                          "python -c 'from kitlib.hubsite import serve'", 'python -c "print(1)"',
-                         'python tools/hub.py questions file Q-1'):
+                         'python tools/hub.py questions file EX-1'):
                 with self.subTest(env=env, text=text):
                     self.allowed(self.cmd(text, sub=False, env=env))
 
