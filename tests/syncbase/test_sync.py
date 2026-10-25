@@ -1,6 +1,6 @@
 """kitlib.syncbase and tools/sync_base.py on real throwaway repositories (tests/gitfixture.py).
 
-Ported from the PM kit's test_sync_base.py. The fixture is a MAIN checkout parked on its own
+The fixture is a MAIN checkout parked on its own
 branch, a LINKED worktree every case works in, and a real bare remote the base is pushed to:
 sync_base fetches <remote> <base> itself and merges only a hash on the fetched branch (P27).
 """

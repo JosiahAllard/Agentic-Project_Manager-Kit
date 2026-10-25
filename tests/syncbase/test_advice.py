@@ -1,4 +1,4 @@
-"""kitlib.syncbase's texts and argument rules, no git (ported from the PM kit's test_sync_base.py).
+"""kitlib.syncbase's texts and argument rules, no git.
 
 The conflict advice is printed at the moment someone is standing in a half-finished merge and will
 do what it says. It used to say "Docs: keyword form, keep both sides' lines", which is wrong for a
