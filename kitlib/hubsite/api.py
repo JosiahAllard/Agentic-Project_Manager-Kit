@@ -2494,7 +2494,7 @@ def findings_list(api, req):
             'runs': [r for r in _lint_runs(api) if not repo or r['repo'].lower() == repo]}
 
 
-LEDGER_COUNTS = ('stale_cites', 'superseded', 'superseded_live')   # kitlib/maintlint/ledger.py
+LEDGER_COUNTS = ('stale_cites', 'conflict_pairs', 'overrides')   # kitlib/maintlint/ledger.py
 
 
 def _utc(text):

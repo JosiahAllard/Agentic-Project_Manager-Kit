@@ -3769,10 +3769,10 @@ class FindingsTest(ApiCase):
         self.assertEqual((obj['runs'], len(obj['items'])), ([], 2))
 
     def test_findings_give_the_ledger_as_whole_counts_only(self):
-        led = {'stale_cites': 2, 'superseded': 0, 'superseded_live': True, 'extra': 5,
-               'notes': ['Q:\\home\\x']}
+        led = {'stale_cites': 2, 'conflict_pairs': 0, 'overrides': True, 'superseded': 4,
+               'extra': 5, 'notes': ['Q:\\home\\x']}
         got = self.runs([{'repo': 'kit', 'started': None, 'ledger': led, 'skip': None}])
-        self.assertEqual(got[0]['ledger'], {'stale_cites': 2, 'superseded': 0})
+        self.assertEqual(got[0]['ledger'], {'stale_cites': 2, 'conflict_pairs': 0})
         self.assertIsNone(self.runs([{'repo': 'kit', 'ledger': [1]}])[0]['ledger'])
 
     def test_the_local_owner_sees_every_path_whole(self):

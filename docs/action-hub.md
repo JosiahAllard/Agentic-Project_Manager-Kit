@@ -883,8 +883,8 @@ or `done` (`kitlib.hubvalidate.STATUSES`); repo, check, target and text are copi
 finding when it is marked. `GET /api/v1/findings` (anyone) lists the lint's last findings, every
 repo (`kitlib.hubsite.derived.findings` over `<pm_data>/maint-lint/<repo>/result.json`),
 filtered by `repo`, less every marked one, with `runs`: each repo's last run as {repo, started,
-ledger, skipped}, ledger its whole-number counts `stale_cites`, `superseded` and
-`superseded_live` or null, skipped the skip marker's {reason, at} only when `at` is later than
+ledger, skipped}, ledger its whole-number counts `stale_cites`, `conflict_pairs` and
+`overrides` or null, skipped the skip marker's {reason, at} only when `at` is later than
 `started` and both parse, else null (`_lint_runs`; from the server's `lint_runs` view,
 `kitlib.hubsite.derived.lint_runs`, always there: an empty list when there is no lint folder).
 `POST /api/v1/finding_marks` (owner) takes

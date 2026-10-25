@@ -1990,7 +1990,7 @@ ul.hist .sch-line{display:block}
     const out = [];
     for (const r of lint.runs) {
       const led = r.ledger && typeof r.ledger === "object" ? r.ledger : null;
-      const n = led ? [["stale_cites", "stale cites"], ["superseded", "superseded"], ["superseded_live", "superseded and still live"]].filter(([k]) => Number.isInteger(led[k])).map(([k, t]) => led[k] + " " + t) : [];
+      const n = led ? [["stale_cites", "stale cites"], ["conflict_pairs", "conflict pairs"], ["overrides", "overrides"]].filter(([k]) => Number.isInteger(led[k])).map(([k, t]) => led[k] + " " + t) : [];
       if (n.length) out.push(el("p", {class:"status", text: r.repo + " ledger: " + n.join(", ") + "."}));
       const sk = r.skipped && typeof r.skipped === "object" ? r.skipped : null;
       const at = sk && typeof sk.at === "string" ? Date.parse(sk.at) : NaN, ran = typeof r.started === "string" ? Date.parse(r.started) : NaN;
