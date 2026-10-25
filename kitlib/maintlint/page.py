@@ -67,12 +67,19 @@ def _document(result, limit):
     if ledger is None:
         body.append('<p>Not checked.</p>')
     else:
-        body.append('<p>%d stale citation%s in the STANDING digest; %d of %d superseded entr%s '
-                    'not retired.</p>' % (
+        files = ledger.get('rules') or {}
+        over = ledger.get('over_budget') or []
+        body.append('<p>%d stale citation%s in the STANDING digest. Rulebooks: %s. Over budget: %s. '
+                    '%d possible conflicting pair%s; %d override%s.</p>' % (
                         ledger.get('stale_cites', 0),
                         '' if ledger.get('stale_cites') == 1 else 's',
-                        ledger.get('superseded_live', 0), ledger.get('superseded', 0),
-                        'y' if ledger.get('superseded') == 1 else 'ies'))
+                        esc(', '.join('%d rules in %s' % (n, f) for f, n in files.items())
+                            or 'none'),
+                        esc(', '.join(over) or 'none'),
+                        ledger.get('conflict_pairs', 0),
+                        '' if ledger.get('conflict_pairs') == 1 else 's',
+                        ledger.get('overrides', 0),
+                        '' if ledger.get('overrides') == 1 else 's'))
     by_check = {}
     for r in rows:
         by_check.setdefault(r.get('check'), []).append(r)

@@ -236,6 +236,33 @@ class OwnPull(Base):
         self.allowed(self.cmd('python "%s" -C "%s" set X-1 --scope s' % (self.tool, W.fwd(self.w.main))))
         self.allowed(self.cmd('python "%s" set X-1 --scope s' % self.tool, cwd=self.w.main))
 
+    def test_a_cd_the_guard_cannot_read_is_no_folder(self):
+        """The hook's directory is the worktree holding the pull, but the line moves where the
+        text cannot tell (commands.run_dir: None): the store is unknown, so the run is refused
+        (backlogrole._root fails closed), never judged at the hook's directory."""
+        self.rec = pulled_by('kit/wt')
+        for prefix in ('cd "$X" && ', 'cd $X; '):
+            for args in ('set X-1 --scope s', '-C . set X-1 --scope s'):
+                with self.subTest(prefix=prefix, args=args):
+                    d = self.refused(self.cmd('%spython "%s" %s' % (prefix, self.tool, args)))
+                    self.assertIn('-C <worktree> show X-1', d.reason)
+        self.assertEqual(self.reads, [])
+
+    def test_a_start_process_reads_the_store_where_its_working_directory_says(self):
+        """Start-Process -WorkingDirectory moves where the tool runs (commands.run_dir): with no
+        -C, or a relative one, the store is read there, not at the command's directory."""
+        self.rec = pulled_by('kit/wt')                               # main's branch is main: not its own
+
+        def sp(c, workdir, cwd):
+            return self.cmd("Start-Process python -ArgumentList '%s %sset X-1 --scope s' -WorkingDirectory \"%s\""
+                            % (self.tool, c, workdir), tool='PowerShell', cwd=cwd)
+        for c in ('', '-C . '):
+            with self.subTest(c=c):
+                self.refused(sp(c, self.w.main, self.w.wt))
+                self.allowed(sp(c, self.w.wt, self.w.main))
+        self.refused(self.cmd("Start-Process python -ArgumentList '%s set X-1 --scope s' -WorkingDirectory $X"
+                              % self.tool, tool='PowerShell'))
+
     def test_own_pull_never_widens_to_a_lead_row(self):
         self.rec = pulled_by('kit/wt')
         for args in ('set X-1 --scope s --priority 3', 'block X-1 --owner-ask q', 'close X-1',
