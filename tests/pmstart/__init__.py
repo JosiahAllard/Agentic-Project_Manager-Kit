@@ -46,6 +46,16 @@ def keep_off_console_tasks():
     p = mock.patch.object(consoletasks, "read_tasks", lambda: [])
     p.start()
     unittest.addModuleCleanup(p.stop)
+    keep_off_machine_config()
+
+
+def keep_off_machine_config():
+    """For a module's setUpModule: the checklist's rulebooks check reads an empty machine config,
+    not this machine's (it then gives the "none" line; tests/pmstart/test_rulebooks.py tests it)."""
+    from kitlib import pmstart
+    p = mock.patch.object(pmstart, "_user_config", lambda: {})
+    p.start()
+    unittest.addModuleCleanup(p.stop)
 
 
 # The one line the checklist's hub check gives under keep_off_hub_site.

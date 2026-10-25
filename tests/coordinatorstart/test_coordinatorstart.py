@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -445,6 +446,9 @@ class NoRulingsCheckTest(unittest.TestCase):
             self.assertFalse(hasattr(coordinatorstart, name), name)
 
 
+ID = {"i": "R-%04d" % 1}     # built, so no ruling id sits in the file (tests/scrub)
+
+
 class LedgerLineTest(unittest.TestCase):
     """With the split ledger (ledger_dir), one line names this repo's ledger file, the reference for
     HOW the repo works; it comes from the machine config and the file is never opened."""
@@ -458,31 +462,60 @@ class LedgerLineTest(unittest.TestCase):
         self.assertEqual([l for l in text.splitlines() if l.startswith("- ledger")], [want])
 
     def test_the_repo_name_is_matched_without_case(self):
-        self.assertEqual(coordinatorstart.ledger_lines(self.SPLIT, "Alpha"),
-                         ["ledger (reference, HOW this repo works): %s" % os.path.join(self.DIR, "alpha.md")])
+        self.assertEqual(coordinatorstart.ledger_lines(self.SPLIT, "Alpha")[0],
+                         "ledger (reference, HOW this repo works): %s" % os.path.join(self.DIR, "alpha.md"))
 
     def test_the_sessions_repo_name_is_lower_cased_with_underscores_as_hyphens(self):
         machine = dict(self.SPLIT, ledger_repos=["my-tools-repo", "side-repo", "pm"])
         for repo, name in (("My-Tools_Repo", "my-tools-repo"), ("my_tools_repo", "my-tools-repo"),
                            ("side-repo", "side-repo"), ("Side_Repo", "side-repo")):
             with self.subTest(repo=repo):
-                self.assertEqual(coordinatorstart.ledger_lines(machine, repo),
-                                 ["ledger (reference, HOW this repo works): %s"
-                                  % os.path.join(self.DIR, name + ".md")])
+                self.assertEqual(coordinatorstart.ledger_lines(machine, repo)[0],
+                                 "ledger (reference, HOW this repo works): %s"
+                                 % os.path.join(self.DIR, name + ".md"))
 
     def test_a_repo_not_in_ledger_repos_gets_the_folder_and_the_names(self):
-        line, = coordinatorstart.ledger_lines(self.SPLIT, "Some_Folder")
+        line = coordinatorstart.ledger_lines(self.SPLIT, "Some_Folder")[0]
         self.assertEqual(line, "ledger (reference, HOW each repo works): one file per ledger_repos name in %s "
                                "(kit, alpha, pm); none is named some-folder (from Some_Folder)" % self.DIR)
-        line, = coordinatorstart.ledger_lines(self.SPLIT, "beta")
+        line = coordinatorstart.ledger_lines(self.SPLIT, "beta")[0]
         self.assertTrue(line.endswith("(kit, alpha, pm); none is named beta"), line)
 
-    def test_no_line_without_ledger_dir(self):
+    def test_no_ledger_file_line_without_ledger_dir(self):
         for machine in ({}, {"ledger_path": "D:/pm/LEDGER.md", "ledger_repos": ["alpha"]},
                         {"ledger_dir": None, "ledger_repos": ["alpha"]}):
             with self.subTest(machine_cfg=machine):
-                self.assertEqual(coordinatorstart.ledger_lines(machine, "alpha"), [])
+                line, = coordinatorstart.ledger_lines(machine, "alpha")
+                self.assertTrue(line.startswith("rulebooks (standing rules)"), line)
                 self.assertNotIn("- ledger", ContextTest().build(self.CAP, machine_cfg=machine))
+
+    def _rules(self, books):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, "rules"))
+        for name, text in books.items():
+            with open(os.path.join(d, "rules", name + ".md"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+        return d
+
+    def test_the_rulebook_line_prints_without_ledger_dir_and_says_none(self):
+        text = ContextTest().build(self.CAP, machine_cfg={})
+        self.assertIn("- rulebooks (standing rules): none", text)
+
+    def test_the_rulebook_line_shows_counts_and_the_repo_command(self):
+        d = self._rules({
+            "all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n- a.two: y\n  (from %(i)s)\n" % ID,
+            "alpha": "# Alpha\n\nRepos: alpha\n\n## T\n- k.one: x\n  (from %(i)s)\n" % ID})
+        machine = {"ledger_dir": d, "ledger_repos": ["alpha"]}
+        line = coordinatorstart.ledger_lines(machine, "Alpha")[1]
+        self.assertIn("alpha 1, shared 2 rules", line)
+        self.assertIn(os.path.join(d, "rules"), line)
+        self.assertTrue(line.endswith('tools/ledger.py" rules --repo Alpha'), line)
+
+    def test_a_missing_rulebook_says_so(self):
+        d = self._rules({})
+        line = coordinatorstart.ledger_lines({"ledger_dir": d, "ledger_repos": ["alpha"]}, "alpha")[1]
+        self.assertEqual(line, "rulebooks (standing rules): none in %s" % os.path.join(d, "rules"))
 
     def test_the_ledger_file_is_never_opened(self):
         seen = []
@@ -500,12 +533,13 @@ class LedgerLineTest(unittest.TestCase):
         self.assertNotIn("ledger", coordinatorstart.context(dict(self.CAP, standing=["s"]), live=False,
                                                             machine_cfg=self.SPLIT))
 
-    def test_a_config_that_cannot_be_read_adds_no_line(self):
+    def test_a_config_that_cannot_be_read_gives_the_unknown_rulebook_line_only(self):
         with mock.patch.object(coordinatorstart.kuser, "user_config",
                                side_effect=ConfigError("bad key")):
             broken = ContextTest().build(self.CAP, machine_cfg=None)
-        self.assertEqual(broken, ContextTest().build(self.CAP, machine_cfg={}))
-        self.assertNotIn("ledger", broken)
+        self.assertNotIn("- ledger", broken)
+        self.assertIn("- rulebooks (standing rules): unknown - the machine config cannot be read (see the machine config line)", broken)
+        self.assertNotIn("no ledger_dir or ledger_path is set", broken)
         self.assertIn("- agent cap 4", broken)
 
     def test_a_bug_reading_the_config_is_reported_not_dropped(self):
@@ -515,9 +549,35 @@ class LedgerLineTest(unittest.TestCase):
         self.assertIn("- agent cap 4", text)
 
     def test_without_ledger_dir_the_sessions_entry_is_not_needed(self):
-        # No sessions file: cap and the others cannot run, and the ledger check adds no line.
+        # No sessions file: cap and the others cannot run, and the ledger check adds only the rulebook line.
         text = ContextTest().build({}, pm_cfg={}, machine_cfg={})
-        self.assertNotIn("ledger", text)
+        self.assertNotIn("could not check ledger", text)
+        self.assertIn("- rulebooks (standing rules): none", text)
+
+    def test_without_ledger_dir_a_missing_sessions_file_is_no_ledger_error(self):
+        def read(path):
+            raise FileNotFoundError(path)
+        text = ContextTest().build(self.CAP, machine_cfg={}, read=read)
+        self.assertNotIn("could not check ledger", text)
+        self.assertIn("- rulebooks (standing rules): none", text)
+
+    def test_ledger_path_only_names_the_real_repo_in_the_command_through_context(self):
+        d = self._rules({})
+        text = ContextTest().build(self.CAP, machine_cfg={"ledger_path": os.path.join(d, "LEDGER.md")})
+        row, = [l for l in text.splitlines() if l.startswith("- rulebooks")]
+        self.assertIn("none in %s" % os.path.join(d, "rules"), row)
+        d = self._rules({"all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n" % ID})
+        text = ContextTest().build(self.CAP, machine_cfg={"ledger_path": os.path.join(d, "LEDGER.md")})
+        row, = [l for l in text.splitlines() if l.startswith("- rulebooks")]
+        self.assertTrue(row.endswith("rules --repo alpha"), row)
+        self.assertNotIn("<this repo", row)
+
+    def test_a_ledger_path_only_config_reads_the_rules_beside_the_frozen_file(self):
+        d = self._rules({"all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n" % ID})
+        machine = {"ledger_path": os.path.join(d, "LEDGER.md")}
+        line, = coordinatorstart.ledger_lines(machine, "alpha")
+        self.assertIn("in %s: shared 1 rules" % os.path.join(d, "rules"), line)
+        self.assertTrue(line.endswith("rules --repo alpha"), line)
 
 
 class StubsLineTest(unittest.TestCase):
