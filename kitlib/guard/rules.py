@@ -7443,14 +7443,18 @@ def git_worktree_remove(ctx, gc, role, text):
 
 def stale_mark_word(ctx, target, head):
     """`(True, None)` when the clean worktree at `target`, HEAD `head`, carries a stale mark that
-    holds (kitlib.worktree.marks: a coordinator's record that the PM gave the tree up, read from
+    holds (kitlib.worktree.marks: a mark recorded by `worktree_remove.py --mark-stale`, read from
     `<git common dir>/kit-stale-marks.json`): the PM's word to remove it unmerged. It holds on the
     nightly sweep's void checks (sweep.sweep_skip): the mark names this path and this tip, and
-    nothing in the tree, its git dir or its branch's reflog is newer than the mark. The sweep's
-    other checks (idle bar, git locks, holders, open claims, machine lock, landing hold) are not
-    made here (docs/guard.md, the git-worktree-remove row). Else `(False,
-    why)`: why is None when the tree's branch has no mark (detached included), else why no mark
-    counts. Fails closed: a marks file, branch or last activity that cannot be read is no word.
+    nothing in the tree, its git dir (but index, index.lock and the folder's own time), its
+    branch's reflog or the tip's commit date is newer than the mark. The sweep's other checks are
+    not made here: the idle bar, `git worktree lock` (git refuses a locked tree unless forced
+    twice), holders, open claims, machine lock, landing hold, exemption (remove.exemption),
+    worktree-folder placement (remove.is_workstream) and a branch checked out elsewhere; marks.mark
+    refuses the last three when it marks, and a mark naming another path is void (docs/guard.md,
+    the git-worktree-remove row). Else `(False, why)`: why is None when the tree's branch has no
+    mark (detached included), else why no mark counts. Fails closed: a marks file, branch, git
+    common dir or last activity that cannot be read is no word.
     The tree walk (sweep.last_activity) runs only here, on an unmerged remove that found a mark."""
     from kitlib.worktree import marks, sweep  # the walk and its git reads: only on this path
     place = ctx.place(target)
