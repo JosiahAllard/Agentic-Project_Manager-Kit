@@ -15,6 +15,7 @@ from kitlib.records import gate_ok
 
 from tests.backlog.helpers import StoreCase, kit_json_ref
 from tests.gitfixture import rmtree
+from tests.home import result_drive
 from tools import maint_lint
 
 NOW = datetime.datetime(2026, 10, 24, 12, 0, tzinfo=datetime.timezone.utc)
@@ -25,20 +26,26 @@ class GateTimeCase(StoreCase):
 
     def setUp(self):
         StoreCase.setUp(self)
+        result_drive(self)
         self.root = self.repo.root
         self.folder = gate_ok.record_dir(self.root)
         self.n = 0
 
-    def gates(self, count, seconds, step='kit-suite', full=True, mode='full', start=NOW):
-        """`count` gate-OK records, an hour apart before `start`, each timing `step`."""
-        os.makedirs(self.folder, exist_ok=True)
+    def gates(self, count, seconds, step='kit-suite', full=True, mode='full', start=NOW,
+              folder=None, first=None):
+        """`count` gate-OK records, an hour apart before `start`, each timing `step`, in `folder`
+        (default the record folder), numbered from `first` (default the next unused)."""
+        folder = folder or self.folder
+        os.makedirs(folder, exist_ok=True)
+        if first is not None:
+            self.n = first - 1
         for i in range(count):
             self.n += 1
             ended = start - datetime.timedelta(hours=i + 1)
             rec = {'commit': '%040x' % self.n, 'full': full, 'mode': mode,
                    'ended_utc': ended.strftime('%Y-%m-%dT%H:%M:%SZ'),
                    'steps': [{'name': step, 'result': 'pass', 'seconds': seconds}]}
-            with open(os.path.join(self.folder, '%040x.json' % self.n), 'w',
+            with open(os.path.join(folder, '%040x.json' % self.n), 'w',
                       encoding='utf-8') as fh:
                 json.dump(rec, fh)
 
@@ -169,6 +176,15 @@ class Filing(GateTimeCase):
         self.assertEqual(self.checks(res), [])
         self.assertIn('gate time NOT CHECKED: no full gate record in the last 14 days',
                       res['notes'])
+
+    def test_git_copies_are_samples_and_a_commit_in_both_folders_counts_once_as_the_new_one(self):
+        kit_json_ref(self.repo, FILING)
+        old = gate_ok.legacy_dir(self.root)
+        self.gates(6, 1000, folder=old)                 # only in .git: an older kit's records
+        res = self.lint()
+        self.assertEqual(self.checks(res), [('gate-time', 'kit-suite')], res['notes'])
+        self.gates(6, 100, first=1)                     # the same six commits, in the new folder
+        self.assertEqual(gatetime.samples(self.root, NOW), ({'kit-suite': [100.0] * 6}, None))
 
     def test_no_gate_records_is_a_note_and_no_finding(self):
         kit_json_ref(self.repo, FILING)

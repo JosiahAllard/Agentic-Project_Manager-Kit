@@ -2,6 +2,7 @@
 import json
 
 from tests import gitfixture
+from tests.home import result_drive
 from tests.realgit import real_git
 from tests.guard import prepush_case as pc
 from tests.guard.prepush_case import AGENT, _with_kit_pushed
@@ -19,6 +20,7 @@ class OwnerTest(pc.PrePushCase):
         self.repo = gitfixture.TempRepo(bare_remote=True, prepare=_with_kit_pushed,
                                         prepare_key='test_prepush.OwnerTest')
         self.addCleanup(self.repo.cleanup)
+        result_drive(self)  # the gate-OK records (kitlib.records.gate_ok) go under it
         self.with_kit = self.repo.prepared
         self.assertEqual(self.remote_main(), self.with_kit)
 

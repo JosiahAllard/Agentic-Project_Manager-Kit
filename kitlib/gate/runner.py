@@ -115,7 +115,8 @@ def gate_config_at(root, rev):
 
 def verify_record(root, commit):
     """gate_ok.verify() with the gate config read from the record's own `config_rev` (the commit
-    whose `.kit.json` the gate ran with): `(record, None)` or `(None, why)`."""
+    whose `.kit.json` the gate ran with): `(record, None)` or `(None, why)`. Until the legacy read
+    is retired a record's .git copy counts when the record folder has none (gate_ok.read)."""
     def config_at(rev):
         try:
             return gate_config_at(root, rev)
@@ -839,6 +840,14 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
                                          record_steps(results), base=mb, config_rev=head,
                                          source=eff.source, full=bool(full),
                                          mode='docs' if docs else None)
+    except gate_ok.NoRecordFolder as e:
+        # Until the .git copies are retired: the .git copy is written, as before the record folder.
+        path = gate_ok.legacy_path(top, head)
+        facts['record'] = path
+        lines.append('warning: the gate-OK record could not be written to the record folder: %s'
+                     % e)
+        lines.append('gate-OK record (.git copy only): %s' % path)
+        return G.Outcome(G.OK, lines, **facts)
     except gate_ok.RecordError as e:
         facts['no_record'] = str(e)
         lines.append('FAILED: the gate passed, and its gate-OK record could not be written: %s' % e)

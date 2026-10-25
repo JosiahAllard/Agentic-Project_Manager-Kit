@@ -15,7 +15,7 @@ from unittest import mock
 
 from kitlib import reviewpack
 from tests.gitfixture import EMAIL, TempRepo, fixture_env
-from tests.home import no_machine_owner
+from tests.home import no_machine_owner, result_drive
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(KIT, 'tools'))
@@ -44,6 +44,7 @@ class PackCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, fixture_env(), clear=True)
         env.start()
         self.addCleanup(env.stop)
+        result_drive(self)          # the gate-OK records (kitlib.records.gate_ok) go under it
         # no owner email in .kit.json: the owner rules read the machine config's, here none
         no_machine_owner(self)
         self.r = TempRepo('main', prepare=self._prepare_base,

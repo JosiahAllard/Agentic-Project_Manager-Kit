@@ -2,7 +2,9 @@
 (docs/maint-lint.md "Gate time").
 
 The timings are the steps of the repository's gate-OK records (kitlib.records.gate_ok,
-`<git common dir>/kit-gate-ok/<commit>.json`), of full gates only (mode_of "full": `gate.py
+`<dev_drive>/pm-kit/kit-gate-ok/<repo key>/<commit>.json`, and until the
+legacy read is retired the .git copies in `<git common dir>/kit-gate-ok/` of commits the
+new folder has no record of), of full gates only (mode_of "full": `gate.py
 --full` and full landings; a selected or docs-only gate times a subset of a step). A sample is a
 step whose result is pass or warn with seconds above 0; reused and skipped steps did not run.
 
@@ -70,16 +72,21 @@ def _ended(record):
 def samples(root, now):
     """Each step's sample seconds, newest first, at most WINDOW, from the full gate-OK records
     that ended in the last DAYS days before `now`. A record that cannot be read is skipped."""
-    try:
-        folder = gate_ok.record_dir(root)
-        names = [n for n in os.listdir(folder) if n.endswith('.json')]
-    except (gate_ok.RecordError, OSError) as exc:
-        return None, 'no gate-OK records: %s' % ' '.join(str(exc).split())
+    paths, errors = {}, []
+    for where in (gate_ok.legacy_dir, gate_ok.record_dir):     # the record folder's file wins
+        try:
+            folder = where(root)
+            paths.update((n, os.path.join(folder, n)) for n in os.listdir(folder)
+                         if gate_ok.is_record_name(n))
+        except (gate_ok.RecordError, OSError) as exc:
+            errors.append(' '.join(str(exc).split()))
+    if len(errors) == 2:
+        return None, 'no gate-OK records: %s' % '; '.join(errors)
     since = now - datetime.timedelta(days=DAYS)
     timed = {}
-    for name in names:
+    for name in sorted(paths):
         try:
-            with open(os.path.join(folder, name), encoding='utf-8') as fh:
+            with open(paths[name], encoding='utf-8') as fh:
                 record = json.load(fh)
         except (OSError, ValueError):
             continue

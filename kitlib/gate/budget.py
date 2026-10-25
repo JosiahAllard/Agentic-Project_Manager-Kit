@@ -16,10 +16,16 @@ books nothing and is never counted or refused (kitlib.gate.runner `gated` asks, 
 gate only, just before it waits for the gate cap and books); a landing, the daily full run and
 redfirst never ask.
 
-An allowance is `<git common dir>/kit-gate-budget/<result.file_stem(branch)>.json`: {branch,
-runs (the new total), why, at, by (the caller's role and session)}. One written before the branch
-was last made is not read. The owner is never refused. Anything the check cannot read is one
-WARNING and the gate runs (fail open): a wrong refusal would stop every agent's gate.
+An allowance is `<dev_drive>/pm-kit/kit-gate-budget/<repo key>/<result.file_stem(branch)>.json`
+(kitlib.gate.result.kit_folder and repo_key): {branch, runs (the new total), why, at, by (the
+caller's role and session)}. The folder is outside every checkout, where agents' own file writes
+do not reach. One written before the branch was last made is not read. `gate.py allow` also
+writes a .git copy, `<git common dir>/kit-gate-budget/<stem>.json` (legacy_path), after the
+folder's file, for an older kit's gate until the .git copies are retired; with no dev_drive it
+writes only that copy. While the folder has no allowance for the branch, or there is no folder,
+this check reads that .git copy, until the legacy read is retired, so a branch given an
+allowance before the folder moved needs no fresh one. The owner is never refused. Anything the check cannot read is one WARNING and the gate runs (fail
+open): a wrong refusal would stop every agent's gate.
 """
 import datetime
 import json
@@ -83,23 +89,60 @@ def of_branch(d, branch):
     return isinstance(got, str) and got.lower() == branch.lower()
 
 
-def allow_path(root, branch):
+def _common(root):
     common, why = repo.common_dir(root)
     if not common:
         raise BudgetError('no git common dir for %s: %s' % (root, why))
-    return os.path.join(common, DIR_NAME, '%s.json' % result.file_stem(branch))
+    return common
+
+
+class NoBudgetFolder(BudgetError):
+    """There is no allowance folder: the machine config sets no dev_drive, or cannot be read."""
+
+
+def allow_path(root, branch):
+    """The allowance's file (the module docstring). BudgetError when there is no git common dir;
+    NoBudgetFolder when there is no dev_drive."""
+    common = _common(root)
+    try:
+        folder = result.kit_folder(DIR_NAME, 'gate budget folder')
+    except result.ResultError as e:
+        raise NoBudgetFolder(str(e))
+    return os.path.join(folder, result.repo_key(common), '%s.json' % result.file_stem(branch))
+
+
+def legacy_path(root, branch):
+    """The allowance's .git copy: written for an older kit, and read when the folder has none
+    (allowance)."""
+    return os.path.join(_common(root), DIR_NAME, '%s.json' % result.file_stem(branch))
+
+
+def _folder_path(root, branch):
+    """allow_path, or None when there is no allowance folder (no dev_drive)."""
+    try:
+        return allow_path(root, branch)
+    except NoBudgetFolder:
+        return None
 
 
 def allowance(root, branch, after=None):
-    """The allowance record of `branch` (a dict), or None: none, or written before `after`."""
-    path = allow_path(root, branch)
-    try:
-        with open(path, encoding='utf-8') as f:
-            rec = json.load(f)
-    except FileNotFoundError:
+    """The allowance record of `branch` (a dict), or None: none, or written before `after`. The
+    folder's file; when it has none, or there is no folder (no dev_drive), the .git copy
+    (legacy_path) until the legacy read is retired."""
+    folder = _folder_path(root, branch)
+    for path in (folder, legacy_path(root, branch)):
+        if path is None:
+            continue
+        try:
+            with open(path, encoding='utf-8') as f:
+                rec = json.load(f)
+            break
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError) as e:
+            raise BudgetError('the allowance %s cannot be read: %s' % (path, e))
+    else:
         return None
-    except (OSError, ValueError) as e:
-        raise BudgetError('the allowance %s cannot be read: %s' % (path, e))
     n = rec.get('runs') if isinstance(rec, dict) else None
     if isinstance(n, bool) or not isinstance(n, int) or rec.get('branch') != branch:
         raise BudgetError('the allowance %s is not one this check wrote' % path)
@@ -150,9 +193,12 @@ def refusal(root, store, repo_name, branch, say, who=None):
 
 
 def allow(root, branch, total, why, store, who=None):
-    """Writes the allowance of `branch`: `total` gate runs in all, replacing any earlier one.
-    (path, runs used so far). ValueError when total is not a whole number above RUNS or why is
-    empty; BudgetError when the branch, its repository or the file cannot be read or written."""
+    """Writes the allowance of `branch`: `total` gate runs in all, replacing any earlier one, to
+    the folder, then its .git copy (legacy_path); when the copy cannot be written the folder's
+    file is removed. With no folder (no dev_drive) only the .git copy, which allowance() then
+    reads. (path written, the folder's or else the copy's; runs used so far). ValueError when
+    total is not a whole number above RUNS or why is empty; BudgetError when the branch, its
+    repository or a file cannot be read or written."""
     if isinstance(total, bool) or not isinstance(total, int) or total <= RUNS:
         raise ValueError('--runs is the new total, a whole number above %d, not %r' % (RUNS, total))
     if not (why or '').strip():
@@ -165,14 +211,29 @@ def allow(root, branch, total, why, store, who=None):
         raise BudgetError('%s is not a branch of %s' % (branch, root))
     after = since(root, branch)
     used = len(runs(store, repo_name_of(root), branch, after))
-    path = allow_path(root, branch)
+    path, copy = _folder_path(root, branch), legacy_path(root, branch)
     rec = {'branch': branch, 'runs': total, 'why': why.strip(), 'at': lockstore.iso(),
            'by': {'role': who.get('role'), 'session': who.get('session')}}
+    if path is None:                    # no dev_drive: the .git copy alone, as before the folder
+        _write(copy, rec)
+        return copy, used
+    _write(path, rec)                   # the folder first: a failed write leaves no copy to read
+    try:
+        _write(copy, rec)
+    except BudgetError as e:
+        try:
+            os.remove(path)
+        except OSError as gone:
+            raise BudgetError('%s; and %s could not be removed: %s' % (e, path, gone))
+        raise
+    return path, used
+
+
+def _write(path, rec):
     try:
         lockstore.write_json(path, rec)
     except OSError as e:
         raise BudgetError('the allowance %s cannot be written: %s' % (path, e))
-    return path, used
 
 
 def repo_name_of(root):

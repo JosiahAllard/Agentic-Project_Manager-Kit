@@ -16,6 +16,7 @@ from kitlib import kitroot, pmdata
 from kitlib.records import gate_ok
 from kitlib.worktree import classify, holders, marks, remove, sweep
 from tests import gitfixture
+from tests.home import result_drive
 from tests.realgit import real_git
 from tests.worktree.test_worktree_remove import TOOL, WINDOWS, RemoveCase
 
@@ -34,6 +35,10 @@ def no_procs():
 
 
 class ClassifyCase(RemoveCase):
+
+    def setUp(self):
+        super().setUp()
+        result_drive(self)          # the gate-OK records (kitlib.records.gate_ok) go under it
 
     def run_classify(self, now=None, machine=free, procs=no_procs):
         got = classify.classify(self.repo, now=time.time() + LATER if now is None else now,

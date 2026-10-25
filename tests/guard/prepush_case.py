@@ -9,7 +9,7 @@ from kitlib import pmdata
 from kitlib.gate import runner
 from kitlib.records import gate_ok
 from tests import gitfixture
-from tests.home import child_home
+from tests.home import child_home, result_drive
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOKS = os.path.join(KIT_ROOT, 'githooks')
@@ -40,15 +40,24 @@ class PrePushCase(unittest.TestCase):
                                         prepare_key='test_prepush.PrePushCase')
         self.addCleanup(self.repo.cleanup)
         self.with_kit = self.repo.prepared
+        result_drive(self)          # the gate-OK record folder; the hook's child reads it too
 
-    def passed(self, rev, gate_config=None, config_rev='same'):
+    def passed(self, rev, gate_config=None, config_rev='same', git_copy_only=False):
         """A gate-OK record for `rev` as gate.py writes it: the gate config `rev` holds and
-        config_rev `rev`. `gate_config` / `config_rev` given: a record made otherwise."""
+        config_rev `rev`. `gate_config` / `config_rev` given: a record made otherwise.
+        `git_copy_only`: only its .git copy (gate_ok.legacy_path), as an older kit writes it."""
         if gate_config is None:
             gate_config = runner.gate_config_at(self.repo.root, rev)
-        gate_ok.record_pass(self.repo.root, rev, gate_config, KIT, 'kit-test', '2026-10-06T10:00:00Z',
-                            [{'name': 'unit', 'result': 'pass', 'seconds': 1.0}],
+        rec = gate_ok.build(self.repo.root, rev, gate_config, KIT, 'kit-test',
+                            '2026-10-06T10:00:00Z', [{'name': 'unit', 'result': 'pass', 'seconds': 1.0}],
                             config_rev=rev if config_rev == 'same' else config_rev)
+        if not git_copy_only:
+            return gate_ok.write(self.repo.root, rec)
+        path = gate_ok.legacy_path(self.repo.root, rec['commit'])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(json.dumps(rec, sort_keys=True, indent=1) + '\n')
+        return path
 
     def push(self, *args):
         home = child_home()         # the hook is a kit process: it gets a temp home, never the real one
@@ -92,6 +101,7 @@ class PmDataCase(PrePushCase):
                                         prepare_key='test_prepush.PmDataTest')
         self.addCleanup(self.repo.cleanup)
         self.with_kit, self.root, self.data = self.repo.prepared
+        result_drive(self)
         # The private remote and the data worktree are paths outside the copy: made per test.
         self.private = os.path.join(self.repo.base, 'private.git')
         gitfixture.built_copy(('test_prepush.PmDataTest.private', os.environ.get('KIT_FAKE_GIT')),

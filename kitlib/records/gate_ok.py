@@ -1,10 +1,21 @@
 """The gate-OK record: the gate's word that it passed exactly one commit (ARCHITECTURE.md
 "Gate-OK record").
 
-gate.py writes `<git common dir>/kit-gate-ok/<commit>.json` for the commit it passed; the kit guard and
-the pre-push hook read it. The common dir is shared by every checkout of the repository and is
-never tracked. One record per commit; a later pass of the same commit replaces it (atomically:
-a temp file in the same folder, then os.replace).
+gate.py writes `<dev_drive>/pm-kit/kit-gate-ok/<repo key>/<commit>.json` (record_dir; the repo
+key is kitlib.gate.result.repo_key's, one for every worktree of a repository) for the commit it
+passed; landings, the kit guard and the pre-push hook read it. The folder is outside every
+checkout and every agent's temp folder, where agents' own file writes do not reach; the git
+common dir, where records were before, is writable by any session that can write `.git`. With no
+`dev_drive` there is no record folder: a write writes only the .git copy, then raises
+NoRecordFolder. One record per commit; a later pass of the same commit replaces it (atomically: a
+temp file in the same folder, then os.replace).
+
+The grace window (until the legacy read and the .git copies are retired, later work): every
+write also writes the record's .git copy, `<git common dir>/kit-gate-ok/<commit>.json`
+(legacy_dir), after the folder's record, for an older kit's readers (write). Every reader (a landing, the guard, the pre-push
+hook, the worktree and review tools) reads the record folder first and, when it has no record
+for the commit or there is no record folder (no dev_drive), the .git copy, so a branch gated by
+an older kit or before the record folder moved needs no fresh gate.
 
 The record (SCHEMA 1), every key always present:
 
@@ -47,7 +58,7 @@ verify() re-derives everything git can answer: the record's file name, `commit`,
 `author` must match the repository now, and `gate_config` must match the caller's config when it
 passes one. With `config_at` (rev -> that commit's gate config) it instead requires `config_rev`,
 a commit in `commit`'s history (or `commit` itself), and the hash of config_at(config_rev). A
-record is evidence for a reader that trusts the git dir; it is not a signature.
+record is evidence for a reader that trusts the record folder; it is not a signature.
 """
 import datetime
 import hashlib
@@ -73,6 +84,10 @@ class RecordError(Exception):
     """A record could not be written, or git could not answer what writing it needs."""
 
 
+class NoRecordFolder(RecordError):
+    """There is no record folder: the machine config sets no dev_drive, or cannot be read."""
+
+
 def utc(when=None):
     return (when or datetime.datetime.now(datetime.timezone.utc)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
@@ -86,17 +101,60 @@ def config_hash(gate_config):
     return hashlib.sha256(canonical_json(gate_config).encode('utf-8')).hexdigest()
 
 
-def record_dir(root):
+def _result():
+    from kitlib.gate import result      # result imports this module
+    return result
+
+
+def _common(root):
     common, why = repo.common_dir(root)
     if not common:
         raise RecordError('no git common dir for %s: %s' % (root, why))
-    return os.path.join(common, DIR_NAME)
+    return common
+
+
+def machine_dir():
+    """`<dev_drive>/pm-kit/kit-gate-ok`: the folder every repository's record folder is in
+    (kitlib.gate.result.kit_folder). NoRecordFolder when there is no dev_drive."""
+    r = _result()
+    try:
+        return r.kit_folder(DIR_NAME, 'gate-OK folder')
+    except r.ResultError as e:
+        raise NoRecordFolder(str(e))
+
+
+def record_dir(root):
+    """The record folder of the repository `root` is in: `<dev_drive>/pm-kit/kit-gate-ok/<repo
+    key>` (kitlib.gate.result.repo_key: one for every worktree of a repository). RecordError when
+    it cannot be worked out (no git common dir; NoRecordFolder: no dev_drive)."""
+    common = _common(root)
+    return os.path.join(machine_dir(), _result().repo_key(common))
+
+
+def legacy_dir(root):
+    """The old record folder, `<git common dir>/kit-gate-ok`: written beside the new one until
+    the .git copies are retired, and read when the new one has no record until the legacy read
+    is retired (read)."""
+    return os.path.join(_common(root), DIR_NAME)
+
+
+def _name(commit):
+    if not refs.is_sha(commit):
+        raise RecordError('a gate-OK record is named by a full commit hash, not %r' % (commit,))
+    return commit + '.json'
 
 
 def record_path(root, commit):
-    if not refs.is_sha(commit):
-        raise RecordError('a gate-OK record is named by a full commit hash, not %r' % (commit,))
-    return os.path.join(record_dir(root), commit + '.json')
+    return os.path.join(record_dir(root), _name(commit))
+
+
+def legacy_path(root, commit):
+    return os.path.join(legacy_dir(root), _name(commit))
+
+
+def is_record_name(name):
+    """Whether a file name in a record folder is a record's (`<full hash>.json`), not a temp file."""
+    return name.endswith('.json') and refs.is_sha(name[:-len('.json')])
 
 
 def author_of(root, commit):
@@ -216,8 +274,32 @@ def _retry(fn, *args):
 
 
 def write(root, record):
-    """Write `record` (from build()) atomically; returns its path."""
-    path = record_path(root, record.get('commit'))
+    """Write `record` (from build()) to the record folder, then to its .git copy (legacy_dir),
+    each atomically; returns the record folder's path. The folder first, so a failed write leaves
+    no copy that read() would take; when the copy then fails the folder's record is removed, so
+    the record is there only when its copy is. RecordError when either write fails.
+    NoRecordFolder, with only the .git copy written, when there is no record folder (no
+    dev_drive)."""
+    commit = record.get('commit')
+    old = legacy_path(root, commit)
+    try:
+        path = record_path(root, commit)
+    except NoRecordFolder:
+        _write_file(old, record)
+        raise
+    _write_file(path, record)
+    try:
+        _write_file(old, record)
+    except RecordError as e:
+        try:
+            os.remove(path)
+        except OSError as gone:
+            raise RecordError('%s; and %s could not be removed: %s' % (e, path, gone))
+        raise
+    return path
+
+
+def _write_file(path, record):
     folder = os.path.dirname(path)
     try:
         os.makedirs(folder, exist_ok=True)
@@ -242,27 +324,40 @@ def record_pass(root, rev, gate_config, kit, repo_name, started_utc, steps, base
     return write(root, rec), rec
 
 
-def read(root, commit):
-    """`(record, None)`, `(None, 'none')` when there is no record, or `(None, why)` when the file
-    is there and cannot be read as one."""
-    try:
-        path = record_path(root, commit)
-    except RecordError as e:
-        return None, str(e)
+def _load(path):
+    """`(record, None)`, `(None, 'none')` when there is no file, or `(None, why)`."""
     try:
         with open(path, encoding='utf-8') as f:
-            text = f.read()
+            rec = json.load(f)
     except FileNotFoundError:
         return None, 'none'
     except OSError as e:
         return None, 'cannot read %s: %s' % (path, e)
-    try:
-        rec = json.loads(text)
     except ValueError as e:
         return None, '%s is not a gate-OK record: %s' % (path, e)
     if not isinstance(rec, dict):
         return None, '%s is not a gate-OK record' % path
     return rec, None
+
+
+def read(root, commit):
+    """`(record, None)`, `(None, 'none')` when there is no record, or `(None, why)` when the file
+    is there and cannot be read as one. The record folder's file first; when it has none, or
+    there is no record folder (no dev_drive), the .git copy (legacy_path), until the legacy read
+    is retired (the module docstring)."""
+    try:
+        old = legacy_path(root, commit)
+    except RecordError as e:
+        return None, str(e)
+    try:
+        path = record_path(root, commit)
+    except RecordError:
+        path = None
+    if path is not None:
+        rec, why = _load(path)
+        if why != 'none':
+            return rec, why
+    return _load(old)
 
 
 def verify(root, commit, gate_config=None, config_at=None):
