@@ -1,4 +1,4 @@
-"""A run record whose pid was reused (KIT-LOCK-STALE-RUN-PID-REUSE).
+"""A run record whose pid was reused.
 
 Run r-20261011T064159Z-0ae903 showed as live, holding 2 cpu slots, for about 325 h after its
 wrapper died without settling: its pid had become a SYSTEM svchost.exe, which this user may not
