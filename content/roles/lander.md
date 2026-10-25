@@ -92,9 +92,8 @@ Missing any: say what you need, do nothing.
    At minimum: main and its remote match, and the branch tip is an ancestor of the remote main; not verified: report.
    Keep verification read-only and on its own: `git ls-remote origin <main>` plus
    one `git merge-base --is-ancestor`, never chained with anything that changes a
-   branch or worktree. Cleanup comes after, as its own command: the repo's
-   cleanup command (`--find cleanup`), skipped when the landing command already
-   did it. Chained verify-and-delete commands draw auto-mode classifier refusals.
+   branch or worktree. Cleanup is not yours (step 7).
+   Chained verify-and-delete commands draw auto-mode classifier refusals.
 7. Records: the branch names its own in its last commit's message, on its own line (`Closes: <ID>`), and
    `land.py` closes it at landing; one the brief names still open at the pushed main is reported, never closed
    by you. `land.py` removes the landed branch, worktree and remote branch itself; report any part its `kept`
@@ -141,7 +140,7 @@ marks high-risk.
 
 One short block: branch; old and new main hash; fast-forward or merge commit; test
 counts; extra gate result; pushed yes/no with the two hashes; worktree removed
-yes/no; any record still open; any line you had to judge. No narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
+yes/no; any record still open; where a LAND WITH FOLLOW-UP follow-up is recorded; any line you had to judge. No narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 

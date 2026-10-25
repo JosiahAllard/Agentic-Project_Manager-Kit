@@ -796,7 +796,7 @@ class LanderMainCheckout(MainGit):
                 self.allowed(self.git(text, tool='PowerShell'))
 
     def test_a_lander_may_fetch_the_whole_remote(self):
-        # the lander role (verifying a landing): `git fetch <remote>` writes only remote-tracking refs and FETCH_HEAD
+        # docs/guard.md "Write jail", git bullet: `git fetch <remote>` writes only remote-tracking refs and FETCH_HEAD
         m = self.main
         for text in ('git -C "%s" fetch origin' % m, 'cd "%s" && git fetch origin' % m,
                      'cd "%s"; git fetch origin' % m):
