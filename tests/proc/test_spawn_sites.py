@@ -202,6 +202,7 @@ HAZARD_EXEMPT = {
     ('tests/guard/test_start_process_workdir.py', 'LockedMain.test_a_computed_folder_is_no_place',
      'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_unknown_dir_jail.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
+    ('tests/guard/test_instead_passes.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
     ('tests/guard/test_advice_workdir.py', 'RunDir.test_the_workdir_is_where_the_program_runs',
      'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_advice_workdir.py', 'RunDir.test_no_workdir_is_the_command_s_directory',

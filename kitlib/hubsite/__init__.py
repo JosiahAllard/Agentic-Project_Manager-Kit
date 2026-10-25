@@ -22,4 +22,5 @@
   storecheck the store folder's findings as on disk, read only, no lock (hub.py validate)
   autostart the opt-in scheduled task that starts the server at sign-in (hub.py setup --autostart)
   control  hub.py stop and restart: ask the server to close, wait for it, start the task again
+  codestale the one restart text for a server whose hub code on disk is newer (health, page, checklist)
 """

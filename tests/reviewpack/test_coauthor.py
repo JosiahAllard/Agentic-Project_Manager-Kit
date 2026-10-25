@@ -1,6 +1,6 @@
 """The pack's co-author section end to end: `.kit.json` "review_pack".coauthor as the base holds
 it, judged by kitlib.reviewpack.trailers, including the owner check on Owner-Authored and
-Owner-Approved claims (ported from the PM kit's CoAuthorSection and CoAuthorConfig)."""
+Owner-Approved claims."""
 import json
 from unittest import mock
 

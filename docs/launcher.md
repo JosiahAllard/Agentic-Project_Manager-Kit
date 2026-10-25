@@ -1,6 +1,6 @@
 # Launcher
 
-`tools/launch.py` starts, hands off and stops the PM's long-running Claude sessions, each in its own minimized window. Logic: `kitlib/launcher` (no argparse, print or exit); the machine-facing calls (process list, registry with `REG_EXPAND_SZ` values expanded as .NET did, window, stopping a process) sit in `kitlib/launcher/host.py` so tests fake them (`tests/launcher/fakes.py`). Ported from the PM repo's `launcher/*.ps1`; the old-to-new map is in "History: ported from" below.
+`tools/launch.py` starts, hands off and stops the PM's long-running Claude sessions, each in its own minimized window. Logic: `kitlib/launcher` (no argparse, print or exit); the machine-facing calls (process list, registry with `REG_EXPAND_SZ` values expanded as .NET did, window, stopping a process) sit in `kitlib/launcher/host.py` so tests fake them (`tests/launcher/fakes.py`). The old-to-new map is in "History: ported from" below.
 
 ```
 launch.py start (--repo NAME | --repo-path DIR | --session KEY) (--account N | --org N) [--agent A | --no-agent] [--brief F] [--prompt P] [--name N] [--predecessor N] [--model M] [--effort E] [--autocompact T] [--what-if] [--home-worktree]

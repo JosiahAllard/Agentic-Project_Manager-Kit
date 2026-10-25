@@ -1,6 +1,6 @@
 # Doc tools: doc_budget, doc_index, codemap
 
-Ported from the PM kit's `tools/doc_budget.py`, `tools/doc_index.py` and `tools/codemap.py`. Held for the joint review: no hook, gate or settings entry runs them yet; preflight, commit and review_pack run the tools as below.
+Held for the joint review: no hook, gate or settings entry runs them yet; preflight, commit and review_pack run the tools as below.
 
 | Entry point | Logic | Tests |
 |---|---|---|

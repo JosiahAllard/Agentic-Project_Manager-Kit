@@ -4,7 +4,7 @@ pointer names (kitlib.config.pointer; docs/kit-json.md "Machine config").
 With a good pointer (locate OK) the config is two files in `<PM repo>/.pm-kit`: FILE_NAME, tracked,
 holds the policy keys (POLICY_KEYS), and LOCAL_FILE_NAME, git-ignored, the machine-local and
 personal keys (LOCAL_KEYS); a key in the other file, or one the move drops (DROPPED_KEYS), is a
-ConfigError. `pm_data` is never read from a file: it is derived from the pointer and its
+ConfigError (except a RETIRED key, which is ignored). `pm_data` is never read from a file: it is derived from the pointer and its
 repository's kit-pm-data.json record. RELATIVE_KEYS paths written relative are read against the PM
 repository. Either file absent is empty.
 
@@ -187,7 +187,8 @@ POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
                'backlog_lint', 'machine_lock', 'temp_dir', 'agent_temp_sweep',
                'machine_path_folders', 'plugin')
 LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
-# Never in the PM repository's files: a ConfigError there (`pm_data` is derived: locate).
+# Never in the PM repository's files: a ConfigError there, except a RETIRED key, which is ignored
+# (`pm_data` is derived: locate).
 DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data', 'standing_delegation')
 # POLICY_KEYS paths that may be written relative to the PM repository (resolved).
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
@@ -595,7 +596,7 @@ class Location(collections.namedtuple('Location', 'state path local folder pm pm
     name; UNMOVED, LEFTOVER), else None. `error` why the config cannot be read (UNMOVED,
     LEFTOVER, BAD), else None. `home` the home folder.
 
-    `new` exists only for kitlib.hubsite.auth.folder (its line 121, the hub's credential folder
+    `new` exists only for kitlib.hubsite.auth.folder (the hub's credential folder
     beside it) and the guard's matching hold on that folder (kitlib.guard.rules.hub_secret_folders);
     the hub session removes it: `path` for OK, else the home file."""
 

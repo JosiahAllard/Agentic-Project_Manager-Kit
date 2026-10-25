@@ -44,10 +44,14 @@ ASK = ('Ask a session whose role may take it (your coordinator; a coordinator as
 # in any spelling, a name of tools/backlog.py, or the kit command naming it (['kit', 'backlog', ...])
 CODE_RE = re.compile(r'kitlib\s*[./\\]\s*backlog\b|from\s+kitlib\s+import\s+[^\n;]*\bbacklog\b|'
                      r'\btools\s*[./\\]\s*backlog\b|\bbacklog\.py\b|\bkit(?:\.py|\.cmd|\.exe)?\W{1,4}backlog\b')
-# python code that names the hub's record writer or the store's answer filing: kitlib.hubsite.
-# recordwrite in any spelling, or plan_answer (kitlib.backlog.plan). Only the hub runs them.
-HUB_WRITER_RE = re.compile(r'\bhubsite\s*[./\\]\s*recordwrite\b|'
-                           r'from\s+kitlib\s*\.\s*hubsite\s+import\s+[^\n;]*\brecordwrite\b|\bplan_answer\b')
+# python code that names the hub's record writer or the store's answer filing: hubsite then
+# recordwrite across a dot or slash; any attribute .recordwrite (an alias: serve.recordwrite,
+# h.recordwrite; a backslash line break allowed after the dot); `from kitlib.hubsite import`
+# naming it, on one line, across backslash line breaks or inside its parentheses; or plan_answer
+# (kitlib.backlog.plan). Only the hub runs them.
+HUB_WRITER_RE = re.compile(r'\bhubsite\s*[./\\]\s*recordwrite\b|\.(?:\s|\\\n)*recordwrite\b|'
+                           r'from\s+kitlib\s*\.\s*hubsite\s+import\s+'
+                           r'(?:\([^)]*|[^\n;]*(?:\\\n[^\n;]*)*)\brecordwrite\b|\bplan_answer\b')
 HUB_WRITER_MODULE = 'kitlib.hubsite.recordwrite'
 HUB_FILE = 'questions file [<question id>]'     # tools/hub.py's agent verb that files bound answers
 REF_DIR = 'refs/backlog/'                     # kitlib.backlog.store.STORE_REF's folder
