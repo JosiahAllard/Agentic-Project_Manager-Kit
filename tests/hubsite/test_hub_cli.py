@@ -1300,6 +1300,26 @@ class PendingCase(VerbCase):
             for i in want['items']])
         self.assertIn('Q-1000 [kit] to=pm from=pm which way', self.ok('pending')[0])
 
+    def filed_pair(self):
+        """Q-1000 answered and filed into its record (as the store holds it), Q-1001 only answered."""
+        self.ask()
+        self.ask('other way')
+        self.ok('answer', 'Q-1000', '--choice', '1')
+        self.ok('answer', 'Q-1001', '--choice', '1')
+        self.hub.store.update('questions', 'Q-1000', {'status': 'filed', 'filed_at': '2026-10-24T00:00:00Z'})
+
+    def test_pending_marks_a_filed_question(self):
+        self.filed_pair()
+        lines = {l.split()[1]: l for l in self.ok('pending')}
+        self.assertTrue(lines['Q-1000'].endswith(' which way (filed)'), lines)
+        self.assertTrue(lines['Q-1001'].endswith(' other way'), lines)
+
+    def test_wait_pending_marks_a_filed_question(self):
+        self.filed_pair()
+        lines = {l.split()[3]: l for l in self.ok('wait', '--pending', '--timeout', '5')}
+        self.assertTrue(lines['Q-1000'].endswith(' which way (filed)'), lines)
+        self.assertTrue(lines['Q-1001'].endswith(' other way'), lines)
+
 
 class WriteCase(VerbCase):
     def test_a_question_is_asked_answered_and_logged(self):

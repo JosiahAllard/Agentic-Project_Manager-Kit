@@ -309,6 +309,7 @@ ul.hist .sch-line{display:block}
       <button class="tab" role="tab" data-f="open" aria-selected="true" id="tab-open">Open <span class="n" id="n-open">0</span></button>
       <button class="tab" role="tab" data-f="answered" aria-selected="false" id="tab-answered">Submitted <span class="n" id="n-answered">0</span></button>
       <button class="tab" role="tab" data-f="logged" aria-selected="false" id="tab-logged">Logged <span class="n" id="n-logged">0</span></button>
+      <button class="tab" role="tab" data-f="filed" aria-selected="false" id="tab-filed" hidden>Filed <span class="n" id="n-filed">0</span></button>
       <button class="tab" role="tab" data-f="other" aria-selected="false" id="tab-other" hidden>Other <span class="n" id="n-other">0</span></button>
     </div>
     <div class="tabs sw" role="tablist" id="itabs" data-for="inbox" aria-label="Which answers" hidden>
@@ -792,7 +793,7 @@ ul.hist .sch-line{display:block}
   const pmCommands = t => Array.isArray(t.commands) ? t.commands.filter(c => typeof c === "string" && c.trim()) : typeof t.commands === "string" && t.commands.trim() ? [t.commands] : typeof t.command === "string" && t.command.trim() ? [t.command] : [];
   // The question tab a doc belongs to: a done one (no ruling needed) sits with logged, and an
   // unknown or missing status lands in "other".
-  const pmQBucket = d => d.status === "open" || d.status === "answered" || d.status === "logged" ? d.status : d.status === "done" ? "logged" : "other";
+  const pmQBucket = d => d.status === "open" || d.status === "answered" || d.status === "filed" || d.status === "logged" ? d.status : d.status === "done" ? "logged" : "other";
   // How current a view the server reads is, from its rows' posted_at (stale after 3 days).
   function pmFresh(items, now){
     const t = items.map(x => x.posted_at).filter(Boolean).sort().pop();
@@ -1538,11 +1539,12 @@ ul.hist .sch-line{display:block}
   }
 
   function renderQuestions(){
-    const counts = {open:0, answered:0, logged:0, other:0};
+    const counts = {open:0, answered:0, filed:0, logged:0, other:0};
     for (const d of state.docs) counts[pmQBucket(d)]++;
     for (const k of Object.keys(counts)) $("#n-"+k).textContent = counts[k];
     $("#tab-other").hidden = !counts.other;
-    if (state.filter === "other" && !counts.other) state.filter = "open";
+    $("#tab-filed").hidden = !counts.filed;
+    if (state.filter === "other" && !counts.other || state.filter === "filed" && !counts.filed) state.filter = "open";
     document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
     fillRepos(state.docs);
 
@@ -1555,6 +1557,7 @@ ul.hist .sch-line{display:block}
       const msg = {
         open: ["No open questions", "New questions from the PM appear here, oldest first."],
         answered: ["Nothing waiting to be logged", "Answers you submit move here until the PM files them."],
+        filed: ["No filed answers", "An answer filed into its record shows here until its asker logs it."],
         logged: ["No logged answers yet", "Once the PM files an answer, or marks it done, it shows here."],
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];

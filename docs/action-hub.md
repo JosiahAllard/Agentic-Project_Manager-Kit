@@ -43,7 +43,8 @@ the title.
 
 - **Questions.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
-  Submitted (answered, not yet logged by the PM), Logged, and Other, which shows only when a
+  Submitted (answered, not yet logged by the PM), Logged, Filed (shows only when a filed question
+  exists; a filed answer sits there until its asker logs it), and Other, which shows only when a
   question has another status. Answers: the PM's replies to what you asked in a note, in Unread
   and Read tabs.
 - **Message the PM** (the `#topm` section). Write the PM a question or an FYI. Add keeps it queued; Send all sends every queued
@@ -617,7 +618,8 @@ filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
 tests/hubsite/test_push.py `AckTest`; tests/delegations/test_run.py `HubTrigger`.
 
 Known limits:
-- The page has no tab for `filed`: a filed question shows under Other.
+- A filed question has its own Filed tab on the page (no attention chip), and `hub.py pending` and
+  `wait --pending` mark it ` (filed)` after the title.
 - After the store reports an Uncommitted error the line is already in the record, so the retry
   changes nothing and marks the question `filed` before the store's catch-up applies it (the
   answer audit of a later slice allows for this).
