@@ -23,7 +23,7 @@ A section names a topic: `python <kit>/tools/doc_index.py -C <main checkout> --f
 names. Nothing else.
 No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 {{instructions_file}} (or equivalent) where they exist. Never work out a landing procedure
-yourself.
+yourself. A repo whose profile names another landing command uses it; the rules here still hold.
 
 ## Required inputs, every landing
 
@@ -31,7 +31,7 @@ yourself.
 - **The reviewed tip**, full sha (`--expect-tip`): the review is of that tip. No expected main
   hash: the landing merges onto whatever main is at its turn.
 - **Review verdict**: any wording clearly saying to land (LAND, LAND WITH FOLLOW-UP, GO)
-  is a go; follow-ups are the coordinator's. Missing, no-land or unclear -> do nothing.
+  is a go (for LAND WITH FOLLOW-UP, note where the follow-up is recorded); follow-ups are the coordinator's. Missing, no-land or unclear -> do nothing.
 - **Gate beyond the landing command's own tests**, if any, and the resources it
   uses (ports, lock).
 
@@ -59,7 +59,7 @@ Missing any: say what you need, do nothing.
    does to that record; a `closes` line that ends `a slice branch needs a Part-of: <ID> line` closes the whole
    record, so for a slice branch report it and do not submit; 2 NOT LANDABLE, the branch holds a pull its
    landing leaves dead; 1 CANNOT TELL, a bad branch name or unreadable ref, records or Closes and Part-of lines:
-   report either, never widen scope at landing; scope is widened at fold-in, and widening a pulled record into a
+   report either, never widen scope at landing; scope is widened at fold-in, `python <kit>/tools/backlog.py -C <worktree> set <ID> --scope <path>`, and widening a pulled record into a
    live pull needs the PM's ruling, `<kit>/docs/backlog.md` "Owner gates"). Then submit the landing from the
    main checkout, as one bare call:
    `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`
@@ -68,7 +68,7 @@ Missing any: say what you need, do nothing.
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
    pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints a `REVIEW` line for
    each branch whose queued verdict is at the tip submitted, then the one
-   `SUBMITTED ... wait: ...` line, and exits 0. Start the
+   `SUBMITTED ... wait: ...` line, and exits 0 (no `SUBMITTED` line: report the output). Start the
    `gate.py wait-result ... --kind land -C <main checkout>` command it prints, as it prints it, with `run_in_background`, and wait for the task
    notification, never a polling loop (the classifier denies it); no Monitor either
    (<kit>/docs/gate.md "Waiting on a gate: who arms what"). `python <kit>/tools/land.py -C <main checkout> --queue`
@@ -89,7 +89,7 @@ Missing any: say what you need, do nothing.
    - `error`: the landing stopped on an exception, or its process died (`the landing process died: ...`);
      report it with `land.py --queue`.
    Verify, whatever the verdict.
-   At minimum: main and its remote match, and the branch tip is an ancestor of the remote main.
+   At minimum: main and its remote match, and the branch tip is an ancestor of the remote main; not verified: report.
    Keep verification read-only and on its own: `git ls-remote origin <main>` plus
    one `git merge-base --is-ancestor`, never chained with anything that changes a
    branch or worktree. Cleanup comes after, as its own command: the repo's
@@ -97,10 +97,8 @@ Missing any: say what you need, do nothing.
    did it. Chained verify-and-delete commands draw auto-mode classifier refusals.
 7. Records: the branch names its own in its last commit's message, on its own line (`Closes: <ID>`), and
    `land.py` closes it at landing; one the brief names still open at the pushed main is reported, never closed
-   by you. `land.py` removes the landed branch, worktree and remote branch itself; for any part its `kept`
-   lines name, use the repo's cleanup command, else `python <kit>/tools/land.py -C <main checkout>
-   --sweep-landed` (a dry run; read it) then `--sweep-landed --apply`, or
-   `python <kit>/tools/worktree_remove.py -C <main checkout> <worktree>`. "Filename too long" or "Permission
+   by you. `land.py` removes the landed branch, worktree and remote branch itself; report any part its `kept`
+   lines name and leave it to the coordinator (never a sweep of your own). "Filename too long" or "Permission
    denied": leave it, report. Absolute paths only.
 
 ## Flakes
@@ -143,7 +141,7 @@ marks high-risk.
 
 One short block: branch; old and new main hash; fast-forward or merge commit; test
 counts; extra gate result; pushed yes/no with the two hashes; worktree removed
-yes/no; any line you had to judge. No narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
+yes/no; any record still open; any line you had to judge. No narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 

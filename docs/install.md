@@ -374,7 +374,7 @@ An account set up by `machine_setup.py` has per-item junctions under `~/.claude`
 skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
 
 **Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
-Only the 23 current kit skill names (the directories under `content/skills`) and the retired `subagent-dispatch` are touched; any other link stays.
+Only the 21 current kit skill names (the directories under `content/skills`) and the retired `subagent-dispatch` are touched; any other link stays.
 `cmd /c rmdir` removes the link only, never the target:
 
 ```powershell

@@ -47,7 +47,8 @@ Roles are named bare here; your host's instructions say how a role name becomes 
   higher); unlisted is not a reason - list routine paths at their real level.
 - Briefs to the docs-writer role give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
-  logs split into more per-area files as they fill.
+  logs split into more per-area files as they fill. The evidence and deletion rules for a brief or
+  report that records findings: `specialty-docs` `doc-writing.md`, "Findings and doc edits".
 - A brief for an owner-approved change tells the author to commit with `commit.py --owner-approval hub:A-n --model "<model name>"` and leave the work tree at the approval's base; never to copy the approved content in first.
 
 ## Dispatch traps
