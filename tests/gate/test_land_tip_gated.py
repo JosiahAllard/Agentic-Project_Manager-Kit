@@ -8,6 +8,7 @@ gate_config is not compared."""
 import json
 import os
 import re
+from unittest import mock
 
 from kitlib import gate as G
 from kitlib.gate import runner
@@ -107,8 +108,8 @@ class Refused(TipCase):
 
 class GitCopy(TipCase):
     """A tip whose record is only in the git common dir (gate_ok.legacy_dir), as an older kit
-    or a forger writes it: it lands only when the frozen list took that copy (kitlib.records.gate_ok
-    "The grace window")."""
+    writes it: it lands until the legacy read is retired (kitlib.records.gate_ok "The grace
+    window")."""
 
     def git_copy_only(self, wt):
         """A real --full pass of the branch at `wt`, then its record left only in .git."""
@@ -118,26 +119,34 @@ class GitCopy(TipCase):
         self.assertTrue(os.path.isfile(gate_ok.legacy_path(self.repo.root, tip)))
         return tip
 
-    def test_a_git_copy_written_after_the_freeze_does_not_land(self):
+    def test_a_git_copy_written_now_lands(self):
         wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        self.assertEqual(self.git_copy_only(wt), tip)     # its write froze the list first
-        self.assertEqual(gate_ok.freeze(self.repo.root), {})
-        self.assertEqual(gate_ok.verify_full(self.repo.root, tip, legacy=gate_ok.ANY)[0]['commit'],
-                         tip)                             # pre-push would take it
+        self.assertEqual(self.git_copy_only(wt), tip)
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assert_refused(out, BRANCH, tip, wt, 'is not one the frozen list',
-                            gate_ok.legacy_dir(self.repo.root))
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), self.main_now())
 
     def test_a_git_copy_from_before_the_switch_lands(self):
         wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         self.git_copy_only(wt)
-        # Before the switch: no frozen list and an empty record folder, as an older kit left it.
-        os.remove(gate_ok.frozen_path(self.repo.root))
-        os.rmdir(gate_ok.record_dir(self.repo.root))
+        os.rmdir(gate_ok.record_dir(self.repo.root))    # no record folder, as an older kit left it
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
-        self.assertIn(tip, gate_ok.freeze(self.repo.root))
         self.assertEqual(self.remote_main(), self.main_now())
+
+    def test_with_no_dev_drive_the_branch_gate_passes_with_only_the_git_copy(self):
+        # Until the .git copies are retired: as before the record folder, a warning, not a fail.
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        with mock.patch('kitlib.config.user.dev_drive', return_value=None):
+            out = self.gate(wt, full=True)
+        self.assertTrue(out.lines[0].startswith('GATE OK'), out.lines)
+        warned = [l for l in out.lines if l.startswith(
+            'warning: the gate-OK record could not be written to the record folder: ')]
+        self.assertEqual(len(warned), 1, out.lines)
+        self.assertIn('dev_drive', warned[0])
+        self.assertTrue(os.path.samefile(out.record, gate_ok.legacy_path(self.repo.root, tip)))
+        self.assertFalse(os.path.exists(gate_ok.record_path(self.repo.root, tip)))
+        self.assertEqual(gate_ok.verify_full(self.repo.root, tip)[0]['commit'], tip)
 
 
 def same_path(a, b):

@@ -96,13 +96,12 @@ class HookTest(pc.PrePushCase):
 
     def test_a_record_only_in_git_is_pushed(self):
         # Until the legacy read is retired: a landing by an older kit writes only the .git copy,
-        # and the hook takes it though no trusted reader would (gate_ok.ANY).
+        # and every reader takes it.
         self.assertEqual(self.push('origin', 'main')[0], 0)
-        gate_ok.freeze(self.repo.root)
         self.repo.write('a.txt', 'a\n')
         head = self.repo.commit('a', 'a.txt')
         self.passed(head, git_copy_only=True)
-        self.assertIn('not one the frozen list', runner.verify_record(self.repo.root, head)[1])
+        self.assertEqual(runner.verify_record(self.repo.root, head)[0]['commit'], head)
         code, err = self.push('origin', 'main')
         self.assertEqual(code, 0, err)
         self.assertEqual(self.remote_main(), head)
@@ -330,24 +329,21 @@ class CheckTest(pc.PrePushCase):
         self.base({'repo': {'push_block': False}}, push=False)
         self.assertEqual(self.check(), (True, None))
 
-    def test_pre_push_takes_a_git_copy_and_the_guard_rules_reader_only_a_frozen_one(self):
+    def test_pre_push_and_the_guard_rules_reader_both_take_a_git_copy(self):
         # ctx.gate_ok is what the guard's git-push-main rule reads (kitlib.guard.rules).
         self.repo.git('push', '-q', 'origin', 'main')
         old = self.with_kit
-        self.passed(old, git_copy_only=True)            # before the switch: an older kit's record
+        self.passed(old, git_copy_only=True)            # an older kit's record
         ctx = context.Ctx(environ={}, home=self.repo.root)
-        rec, why = ctx.gate_ok(self.repo.root, old)     # the first trusted read freezes the list
+        rec, why = ctx.gate_ok(self.repo.root, old)
         self.assertEqual((rec and rec['commit'], why), (old, None))
-        self.repo.write('a.txt', 'a\n')
+        self.repo.write('a.txt', 'a' + chr(10))
         new = self.repo.commit('a', 'a.txt')
-        self.passed(new, git_copy_only=True)            # after it: forged, or an older kit's landing
+        self.passed(new, git_copy_only=True)            # written now, by an older kit's landing
         rec, why = ctx.gate_ok(self.repo.root, new)
-        self.assertIsNone(rec)
-        self.assertIn('not one the frozen list', why)
+        self.assertEqual((rec and rec['commit'], why), (new, None))
         line = 'refs/heads/main %s refs/heads/main %s' % (new, old)
         self.assertEqual(prepush.check(self.repo.root, [line]), (True, None))
-        self.passed(new)                                # a new kit's gate: both readers take it
-        self.assertEqual(ctx.gate_ok(self.repo.root, new)[0]['commit'], new)
 
     def test_a_record_reader_that_fails_refuses_a_push_to_main_only(self):
         self.base({'repo': {'push_block': True}})

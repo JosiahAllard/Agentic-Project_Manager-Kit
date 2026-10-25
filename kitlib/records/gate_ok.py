@@ -6,20 +6,16 @@ key is kitlib.gate.result.repo_key's, one for every worktree of a repository) fo
 passed; landings, the kit guard and the pre-push hook read it. The folder is outside every
 checkout and every agent's temp folder, where agents' own file writes do not reach; the git
 common dir, where records were before, is writable by any session that can write `.git`. With no
-`dev_drive` there is no record folder: a write is a RecordError and nothing is written. One
-record per commit; a later pass of the same commit replaces it (atomically: a temp file in the
-same folder, then os.replace).
+`dev_drive` there is no record folder: a write writes only the .git copy, then raises
+NoRecordFolder. One record per commit; a later pass of the same commit replaces it (atomically: a
+temp file in the same folder, then os.replace).
 
 The grace window (until the legacy read and the .git copies are retired, later work): every
 write also writes the record's .git copy, `<git common dir>/kit-gate-ok/<commit>.json`
-(legacy_dir), for an older kit's readers. A reader with no record in the new folder reads the
-.git copy: read(legacy=ANY), the pre-push hook's, takes any; every other reader (TRUSTED, the
-default: a landing, the guard's push-to-main rule, the worktree and review tools) takes one only
-for a tip on the frozen list, with the bytes it had then. The frozen list (frozen_path,
-`<repo key>.frozen.json` beside the record folder) is the sha256 of every .git record file
-there was when this kit first wrote or read that repository's records (freeze): made once, by a
-rename that never replaces it, and never extended, so a .git record written after the switch,
-forged or by an older kit, never counts for a trusted reader.
+(legacy_dir), first, for an older kit's readers. Every reader (a landing, the guard, the pre-push
+hook, the worktree and review tools) reads the record folder first and, when it has no record
+for the commit or there is no record folder (no dev_drive), the .git copy, so a branch gated by
+an older kit or before the record folder moved needs no fresh gate.
 
 The record (SCHEMA 1), every key always present:
 
@@ -84,18 +80,12 @@ RETRIES = 5
 RETRY_SLEEP = 0.2
 
 
-FROZEN_SUFFIX = '.frozen.json'
-TRUSTED = 'trusted'     # the new folder; a .git copy only for a tip on the frozen list
-ANY = 'any'             # the new folder, else any .git copy: the pre-push hook's grace read
-LEGACY = (TRUSTED, ANY)
-
-
 class RecordError(Exception):
     """A record could not be written, or git could not answer what writing it needs."""
 
 
-class FrozenMissing(RecordError):
-    """The frozen list is not there though the record folder holds records (freeze)."""
+class NoRecordFolder(RecordError):
+    """There is no record folder: the machine config sets no dev_drive, or cannot be read."""
 
 
 def utc(when=None):
@@ -125,33 +115,27 @@ def _common(root):
 
 def machine_dir():
     """`<dev_drive>/pm-kit/kit-gate-ok`: the folder every repository's record folder is in
-    (kitlib.gate.result.kit_folder). RecordError when there is no dev_drive."""
+    (kitlib.gate.result.kit_folder). NoRecordFolder when there is no dev_drive."""
     r = _result()
     try:
         return r.kit_folder(DIR_NAME, 'gate-OK folder')
     except r.ResultError as e:
-        raise RecordError(str(e))
+        raise NoRecordFolder(str(e))
 
 
 def record_dir(root):
     """The record folder of the repository `root` is in: `<dev_drive>/pm-kit/kit-gate-ok/<repo
     key>` (kitlib.gate.result.repo_key: one for every worktree of a repository). RecordError when
-    it cannot be worked out (no git common dir, no dev_drive)."""
+    it cannot be worked out (no git common dir; NoRecordFolder: no dev_drive)."""
     common = _common(root)
     return os.path.join(machine_dir(), _result().repo_key(common))
 
 
 def legacy_dir(root):
     """The old record folder, `<git common dir>/kit-gate-ok`: written beside the new one until
-    the .git copies are retired, read as the module docstring says."""
+    the .git copies are retired, and read when the new one has no record until the legacy read
+    is retired (read)."""
     return os.path.join(_common(root), DIR_NAME)
-
-
-def frozen_path(root):
-    """The frozen list's file: `<dev_drive>/pm-kit/kit-gate-ok/<repo key>.frozen.json`, beside
-    the record folder (never in it, so no listing of records meets it)."""
-    common = _common(root)
-    return os.path.join(machine_dir(), _result().repo_key(common) + FROZEN_SUFFIX)
 
 
 def _name(commit):
@@ -171,95 +155,6 @@ def legacy_path(root, commit):
 def is_record_name(name):
     """Whether a file name in a record folder is a record's (`<full hash>.json`), not a temp file."""
     return name.endswith('.json') and refs.is_sha(name[:-len('.json')])
-
-
-def _digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def _snapshot(folder):
-    """{commit: sha256 of its file's bytes} of every record file in `folder` ({} when there is
-    none). RecordError when the folder or a file cannot be read."""
-    try:
-        names = sorted(n for n in os.listdir(folder) if is_record_name(n))
-    except FileNotFoundError:
-        return {}
-    except OSError as e:
-        raise RecordError('cannot list %s: %s' % (folder, e))
-    out = {}
-    for n in names:
-        try:
-            with open(os.path.join(folder, n), 'rb') as f:
-                out[n[:-len('.json')]] = _digest(f.read())
-        except FileNotFoundError:
-            continue
-        except OSError as e:
-            raise RecordError('cannot read %s: %s' % (os.path.join(folder, n), e))
-    return out
-
-
-def _read_frozen(path):
-    """The frozen list's records ({commit: digest}), or None when the file is not there.
-    RecordError when it is there and is not one freeze() wrote."""
-    try:
-        with open(path, encoding='utf-8') as f:
-            body = json.load(f)
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as e:
-        raise RecordError('the frozen list %s cannot be read: %s' % (path, e))
-    got = body.get('records') if isinstance(body, dict) and body.get('schema') == SCHEMA else None
-    if not isinstance(got, dict) or not all(
-            refs.is_sha(k) and isinstance(v, str) for k, v in got.items()):
-        raise RecordError('the frozen list %s is not one this kit wrote' % path)
-    return got
-
-
-def freeze(root):
-    """The frozen list of `root`'s repository, {commit: sha256 of its .git copy's bytes}: the
-    tips whose .git copy (legacy_dir) land, the guard and every other trusted read still take
-    (the module docstring). Made once, by the first write or trusted read of a kit that has the
-    new folder: a snapshot of every record file in legacy_dir then, written to a temp file and
-    renamed onto frozen_path (Windows' rename never replaces a file, so one process's snapshot
-    wins and every other reads it). It is never extended. RecordError, and no .git copy counts,
-    when it cannot be read or made, and when it is missing while the record folder already
-    holds records (it was removed after it was made: made again it would take whatever .git
-    holds now)."""
-    path = frozen_path(root)
-    got = _read_frozen(path)
-    if got is not None:
-        return got
-    folder = record_dir(root)
-    try:
-        held = any(is_record_name(n) for n in os.listdir(folder))
-    except FileNotFoundError:
-        held = False
-    except OSError as e:
-        raise RecordError('cannot list %s: %s' % (folder, e))
-    if held:
-        raise FrozenMissing('the frozen list %s is missing while %s holds records, so no .git copy '
-                          'counts' % (path, folder))
-    old = legacy_dir(root)
-    body = {'schema': SCHEMA, 'frozen_utc': utc(), 'legacy_dir': old, 'records': _snapshot(old)}
-    parent = os.path.dirname(path)
-    tmp = os.path.join(parent, '.%s.%s.tmp' % (os.path.basename(path), secrets.token_hex(4)))
-    try:
-        os.makedirs(parent, exist_ok=True)
-        try:
-            with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(json.dumps(body, sort_keys=True, indent=1) + '\n')
-            os.rename(tmp, path)
-        except FileExistsError:
-            pass                # another process froze first: its list is the one
-        finally:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-    except OSError as e:
-        raise RecordError('cannot write the frozen list %s: %s' % (path, e))
-    got = _read_frozen(path)
-    if got is None:
-        raise RecordError('the frozen list %s was not there after it was written' % path)
-    return got
 
 
 def author_of(root, commit):
@@ -319,10 +214,10 @@ def mode_of(record):
     return mode
 
 
-def verify_full(root, commit, legacy=TRUSTED):
+def verify_full(root, commit):
     """`(record, None)` when verify() takes `commit`'s record and it is from a --full gate
     (full_of), else `(None, why)`: verify's reason first, then that the gate was not --full."""
-    rec, why = verify(root, commit, legacy=legacy)
+    rec, why = verify(root, commit)
     if rec is None:
         return None, why
     if full_of(rec):
@@ -379,31 +274,13 @@ def _retry(fn, *args):
 
 
 def write(root, record):
-    """Write `record` (from build()) to the record folder, and its .git copy to legacy_dir, each
-    atomically; returns the record folder's path. The frozen list is made first when it is not
-    there yet (freeze; a FrozenMissing one is left so: no .git copy counts), then the .git copy,
-    then the record itself, so the record a trusted reader takes is there only when every write
-    before it was. RecordError, and nothing written, when there is no record folder (no
-    dev_drive)."""
+    """Write `record` (from build()) to its .git copy (legacy_dir), then to the record folder,
+    each atomically; returns the record folder's path. The .git copy first, so the record is
+    there only when its copy is. NoRecordFolder, with only the .git copy written, when there is
+    no record folder (no dev_drive)."""
     commit = record.get('commit')
-    path = record_path(root, commit)
-    try:
-        freeze(root)
-    except FrozenMissing:
-        pass
     _write_file(legacy_path(root, commit), record)
-    return _write_file(path, record)
-
-
-def _freeze_early(root):
-    """freeze() when the frozen list is not there yet, its errors dropped: a trusted read that
-    finds no record at all still makes the list as early as it can, so a .git copy written later
-    is never on it. The read's answer does not depend on it."""
-    try:
-        if not os.path.exists(frozen_path(root)):
-            freeze(root)
-    except RecordError:
-        pass
+    return _write_file(record_path(root, commit), record)
 
 
 def _write_file(path, record):
@@ -432,80 +309,53 @@ def record_pass(root, rev, gate_config, kit, repo_name, started_utc, steps, base
 
 
 def _load(path):
-    """`(record, None, digest)`, `(None, 'none', None)` when there is no file, or
-    `(None, why, digest)`: digest is the sha256 of the file's bytes."""
+    """`(record, None)`, `(None, 'none')` when there is no file, or `(None, why)`."""
     try:
-        with open(path, 'rb') as f:
-            data = f.read()
+        with open(path, encoding='utf-8') as f:
+            rec = json.load(f)
     except FileNotFoundError:
-        return None, 'none', None
+        return None, 'none'
     except OSError as e:
-        return None, 'cannot read %s: %s' % (path, e), None
-    digest = _digest(data)
-    try:
-        rec = json.loads(data.decode('utf-8'))
+        return None, 'cannot read %s: %s' % (path, e)
     except ValueError as e:
-        return None, '%s is not a gate-OK record: %s' % (path, e), digest
+        return None, '%s is not a gate-OK record: %s' % (path, e)
     if not isinstance(rec, dict):
-        return None, '%s is not a gate-OK record' % path, digest
-    return rec, None, digest
+        return None, '%s is not a gate-OK record' % path
+    return rec, None
 
 
-def read(root, commit, legacy=TRUSTED):
+def read(root, commit):
     """`(record, None)`, `(None, 'none')` when there is no record, or `(None, why)` when the file
-    is there and cannot be read as one, or cannot be taken. The record folder's file first; when
-    it has none, the .git copy (legacy_path): with `legacy` TRUSTED (the default) only for a tip
-    on the frozen list whose copy has the bytes it had when frozen (freeze), with ANY whatever is
-    there. No record folder (no dev_drive): TRUSTED says why; ANY reads the .git copy."""
-    if legacy not in LEGACY:
-        raise ValueError('legacy is one of %s, not %r' % (', '.join(LEGACY), legacy))
+    is there and cannot be read as one. The record folder's file first; when it has none, or
+    there is no record folder (no dev_drive), the .git copy (legacy_path), until the legacy read
+    is retired (the module docstring)."""
     try:
         old = legacy_path(root, commit)
     except RecordError as e:
         return None, str(e)
     try:
         path = record_path(root, commit)
-    except RecordError as e:
-        if legacy != ANY:
-            return None, str(e)
+    except RecordError:
         path = None
     if path is not None:
-        rec, why, _ = _load(path)
+        rec, why = _load(path)
         if why != 'none':
             return rec, why
-    rec, why, digest = _load(old)
-    if legacy == ANY:
-        return rec, why
-    if why == 'none':
-        _freeze_early(root)
-        return rec, why
-    try:
-        frozen = freeze(root)
-    except RecordError as e:
-        return None, ('the record for %s is only in %s, and no .git copy counts: %s'
-                      % (commit, legacy_dir(root), e))
-    if commit not in frozen:
-        return None, ('the record for %s is only in %s, and it is not one the frozen list (%s) '
-                      'took when the record folder moved to %s, so it does not count'
-                      % (commit, legacy_dir(root), frozen_path(root), record_dir(root)))
-    if frozen[commit] != digest:
-        return None, ('the .git copy of the record for %s has changed since the frozen list '
-                      '(%s) took it, so it does not count' % (commit, frozen_path(root)))
-    return rec, why
+    return _load(old)
 
 
-def verify(root, commit, gate_config=None, config_at=None, legacy=TRUSTED):
+def verify(root, commit, gate_config=None, config_at=None):
     """`(record, None)` when `commit` has a gate-OK record git still agrees with, else
     `(None, why)`. `gate_config` given: the record's hash must be that config's. `config_at` given
     (a callable: full hash -> the gate config that commit holds; it may raise RecordError): the
     record's `config_rev` must be a full hash in `commit`'s history and the record's hash must be
-    config_at(config_rev)'s. `legacy`: which .git copies count (read)."""
+    config_at(config_rev)'s."""
     if not refs.is_sha(commit):
         resolved, why = refs.resolve(commit, root) if isinstance(commit, str) else (None, None)
         if not resolved:
             return None, 'cannot resolve %r: %s' % (commit, why)
         commit = resolved
-    rec, why = read(root, commit, legacy=legacy)
+    rec, why = read(root, commit)
     if rec is None:
         return None, ('no gate-OK record for %s' % commit) if why == 'none' else why
     missing = [k for k in KEYS if k not in rec]

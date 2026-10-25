@@ -197,7 +197,7 @@ class Refused(BudgetCase):
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIn('--runs %d' % (budget.RUNS + 3), '\n'.join(out.lines))
 
-    def test_the_allowance_is_in_the_drive_folder_and_its_git_copy_is_never_read(self):
+    def test_the_allowance_is_in_the_drive_folder_with_a_git_copy(self):
         path, _ = budget.allow(self.wt, BRANCH, budget.RUNS + 1, 'one more', self.store, who=AGENT)
         self.assertEqual(path, budget.allow_path(self.wt, BRANCH))
         self.assertTrue(os.path.normcase(path).startswith(os.path.normcase(
@@ -207,8 +207,39 @@ class Refused(BudgetCase):
                                          os.path.join(self.repo.common_dir(), 'kit-gate-budget')))
         with open(path, encoding='utf-8') as a, open(copy, encoding='utf-8') as b:
             self.assertEqual(json.load(a), json.load(b))    # written for an older kit's gate
-        os.remove(path)                                     # only the .git copy is left
-        self.assertIsNone(budget.allowance(self.wt, BRANCH))
+
+    def test_with_no_allowance_in_the_folder_its_git_copy_counts(self):
+        # Until the legacy read is retired: an allowance an older kit gave, only in .git.
+        path, _ = budget.allow(self.wt, BRANCH, budget.RUNS + 1, 'one more', self.store, who=AGENT)
+        with open(path, encoding='utf-8') as f:
+            rec = json.load(f)
+        os.remove(path)
+        self.assertEqual(budget.allowance(self.wt, BRANCH), rec)
+        self.lines(budget.RUNS)
+        out, _ = self.gate()
+        self.assertEqual(out.code, G.OK, out.lines)
+        out, _ = self.gate()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+
+    def test_the_folder_allowance_wins_over_its_git_copy(self):
+        path, _ = budget.allow(self.wt, BRANCH, budget.RUNS + 1, 'one more', self.store, who=AGENT)
+        copy = budget.legacy_path(self.wt, BRANCH)
+        with open(copy, encoding='utf-8') as f:
+            rec = json.load(f)
+        rec['runs'] = budget.RUNS + 9
+        with open(copy, 'w', encoding='utf-8') as f:
+            json.dump(rec, f)
+        self.assertEqual(budget.allowance(self.wt, BRANCH)['runs'], budget.RUNS + 1)
+        os.remove(path)
+        self.assertEqual(budget.allowance(self.wt, BRANCH)['runs'], budget.RUNS + 9)
+
+    def test_a_git_copy_from_before_the_branch_was_made_is_not_read(self):
+        copy = budget.legacy_path(self.wt, BRANCH)
+        os.makedirs(os.path.dirname(copy), exist_ok=True)
+        old = lockstore.iso(lockstore.utc_now() - datetime.timedelta(hours=1))
+        with open(copy, 'w', encoding='utf-8') as f:
+            json.dump({'branch': BRANCH, 'runs': 50, 'why': 'x', 'at': old}, f)
+        self.assertIsNone(budget.allowance(self.wt, BRANCH, budget.since(self.wt, BRANCH)))
         self.lines(budget.RUNS)
         out, _ = self.gate()
         self.assertEqual(out.code, G.REFUSED, out.lines)

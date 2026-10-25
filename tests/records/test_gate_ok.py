@@ -216,11 +216,11 @@ class VerifyTest(GateOkCase):
 
 
 class LegacyTest(GateOkCase):
-    """The grace window: the .git copy is written beside every record; pre-push (ANY) takes any
-    .git copy, every other reader (TRUSTED) only one the frozen list took, unchanged."""
+    """The grace window: the .git copy is written beside every record, and every reader takes it
+    when the record folder has no record for the commit or there is no record folder."""
 
     def git_copy(self, rev=None, **kw):
-        """A record written only to the .git folder, as an older kit (or a forger) writes it."""
+        """A record written only to the .git folder, as an older kit writes it."""
         rec = gate_ok.build(self.repo.root, rev or self.head, kw.pop('gate', GATE), KIT, 'kit-test',
                             '2026-10-06T10:00:00Z', STEPS, **kw)
         path = gate_ok.legacy_path(self.repo.root, rec['commit'])
@@ -229,113 +229,46 @@ class LegacyTest(GateOkCase):
             f.write(json.dumps(rec, sort_keys=True, indent=1) + '\n')
         return path, rec
 
-    def frozen(self):
-        with open(gate_ok.frozen_path(self.repo.root), encoding='utf-8') as f:
-            return json.load(f)
+    def test_a_git_record_from_before_the_switch_counts(self):
+        _, rec = self.git_copy(full=True)
+        self.assertFalse(os.path.exists(gate_ok.record_path(self.repo.root, self.head)))
+        self.assertEqual(gate_ok.read(self.repo.root, self.head), (rec, None))
+        self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
+        self.assertEqual(gate_ok.verify_full(self.repo.root, self.head), (rec, None))
 
-    def test_a_git_copy_written_after_the_freeze_counts_only_for_pre_push(self):
-        gate_ok.freeze(self.repo.root)
-        _, rec = self.git_copy()
+    def test_a_git_copy_written_now_counts_too(self):
+        self.passed()                           # the folder holds records: the switch is behind
+        self.repo.write('x.txt', 'x\n')
+        other = self.repo.commit('more', 'x.txt')
+        _, rec = self.git_copy(other)
+        self.assertEqual(gate_ok.verify(self.repo.root, other), (rec, None))
+
+    def test_the_record_folder_wins_over_the_git_copy(self):
+        path, rec = self.passed()
+        self.rewrite(gate_ok.legacy_path(self.repo.root, self.head), full=True, mode='full')
+        self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
+        self.assertIn('without --full', gate_ok.verify_full(self.repo.root, self.head)[1])
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('{')
         got, why = gate_ok.verify(self.repo.root, self.head)
         self.assertIsNone(got)
-        self.assertIn('not one the frozen list', why)
-        self.assertIn(gate_ok.legacy_dir(self.repo.root), why)
-        self.assertIsNone(gate_ok.verify_full(self.repo.root, self.head)[0])
-        self.assertEqual(gate_ok.verify(self.repo.root, self.head, legacy=gate_ok.ANY), (rec, None))
+        self.assertIn('is not a gate-OK record', why)       # a bad record is not passed over
 
-    def test_a_first_read_that_finds_nothing_freezes_so_a_later_git_copy_never_counts(self):
-        self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
-        self.assertEqual(self.frozen()['records'], {})
-        self.git_copy()
-        self.assertIn('not one the frozen list', gate_ok.verify(self.repo.root, self.head)[1])
-
-    def test_a_git_record_from_before_the_switch_counts_and_the_frozen_list_names_it(self):
-        path, rec = self.git_copy()
-        self.assertFalse(os.path.exists(gate_ok.frozen_path(self.repo.root)))
-        self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
-        with open(path, 'rb') as f:
-            digest = hashlib.sha256(f.read()).hexdigest()
-        body = self.frozen()
-        self.assertEqual(body['records'], {self.head: digest})
-        self.assertEqual(body['legacy_dir'], gate_ok.legacy_dir(self.repo.root))
-
-    def test_a_frozen_copy_changed_afterwards_does_not_count(self):
-        path, _ = self.git_copy()
-        gate_ok.freeze(self.repo.root)
-        self.rewrite(path, full=True, mode='full')
-        got, why = gate_ok.verify_full(self.repo.root, self.head)
-        self.assertIsNone(got)
-        self.assertIn('has changed since the frozen list', why)
-        self.assertIsNotNone(gate_ok.verify_full(self.repo.root, self.head, legacy=gate_ok.ANY)[0])
-
-    def test_the_list_is_never_extended_and_a_new_record_wins_over_its_copy(self):
-        self.git_copy()
-        first = gate_ok.freeze(self.repo.root)
-        self.repo.write('x.txt', 'x\n')
-        other = self.repo.commit('more', 'x.txt')
-        self.git_copy(other)
-        self.assertEqual(gate_ok.freeze(self.repo.root), first)
-        self.passed(other)                                  # a new kit's gate: the new folder too
-        self.assertEqual(gate_ok.freeze(self.repo.root), first)
-        self.assertNotIn(other, self.frozen()['records'])
-        self.assertIsNotNone(gate_ok.verify(self.repo.root, other)[0])
-
-    def test_a_removed_frozen_list_is_not_made_again_while_records_are_there(self):
-        self.git_copy()
-        self.passed()
-        os.remove(gate_ok.frozen_path(self.repo.root))
-        with self.assertRaises(gate_ok.FrozenMissing):
-            gate_ok.freeze(self.repo.root)
-        self.repo.write('x.txt', 'x\n')
-        other = self.repo.commit('more', 'x.txt')
-        self.git_copy(other)
-        self.assertIn('no .git copy counts', gate_ok.verify(self.repo.root, other)[1])
-        self.passed(other)                                  # writes still go on
-        self.assertIsNotNone(gate_ok.verify(self.repo.root, other)[0])
-        self.assertFalse(os.path.exists(gate_ok.frozen_path(self.repo.root)))
-
-    def test_when_another_process_froze_first_its_list_is_kept(self):
-        path = gate_ok.frozen_path(self.repo.root)
-        theirs = {'schema': 1, 'frozen_utc': 'x', 'legacy_dir': 'x', 'records': {}}
-        real = os.rename
-
-        def raced(a, b):
-            with open(b, 'w', encoding='utf-8') as f:     # the other process's rename lands first
-                json.dump(theirs, f)
-            real(a, b)
-
-        self.git_copy()
-        with mock.patch.object(gate_ok.os, 'rename', raced):
-            self.assertEqual(gate_ok.freeze(self.repo.root), {})
-        self.assertEqual(self.frozen(), theirs)
-        self.assertEqual(os.listdir(os.path.dirname(path)), [os.path.basename(path)])
-        self.assertIn('not one the frozen list', gate_ok.verify(self.repo.root, self.head)[1])
-
-    def test_a_frozen_list_that_is_not_one_freeze_wrote_trusts_no_git_copy(self):
-        self.git_copy()
-        path = gate_ok.frozen_path(self.repo.root)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        for body in ('{', '[]', '{"schema": 1, "records": {"HEAD": "x"}}'):
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(body)
-            self.assertIn('no .git copy counts', gate_ok.verify(self.repo.root, self.head)[1])
-
-    def test_with_no_dev_drive_nothing_is_written_and_only_pre_push_reads_the_git_copy(self):
-        _, rec = self.git_copy()
+    def test_with_no_dev_drive_only_the_git_copy_is_written_and_it_is_read(self):
         with mock.patch('kitlib.config.user.dev_drive', return_value=None):
-            with self.assertRaises(gate_ok.RecordError) as cm:
+            with self.assertRaises(gate_ok.NoRecordFolder) as cm:
                 self.passed()
             self.assertIn('dev_drive', str(cm.exception))
-            got, why = gate_ok.verify(self.repo.root, self.head)
-            self.assertIsNone(got)
-            self.assertIn('dev_drive', why)
-            self.assertEqual(gate_ok.verify(self.repo.root, self.head, legacy=gate_ok.ANY),
-                             (rec, None))
+            with open(gate_ok.legacy_path(self.repo.root, self.head), encoding='utf-8') as f:
+                rec = json.load(f)
+            self.assertEqual(rec['commit'], self.head)
+            self.assertEqual(gate_ok.verify(self.repo.root, self.head), (rec, None))
         self.assertFalse(os.path.exists(os.path.join(self.drive, 'pm-kit')))
 
-    def test_an_unknown_legacy_mode_is_a_caller_error(self):
-        with self.assertRaises(ValueError):
-            gate_ok.read(self.repo.root, self.head, legacy='yes')
+    def test_with_no_record_anywhere_the_answer_is_none(self):
+        self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
+        with mock.patch('kitlib.config.user.dev_drive', return_value=None):
+            self.assertEqual(gate_ok.read(self.repo.root, self.head), (None, 'none'))
 
 
 class FullTest(GateOkCase):
