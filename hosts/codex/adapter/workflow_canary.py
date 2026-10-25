@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import threading
 import time
@@ -249,6 +250,17 @@ def _prepare_or_isolate(task, coordinator, env):
     return dict(prepared, native_prepare=True, native_claim=True)
 
 
+def _remove_result_folder(folder):
+    """Best effort: remove the fixture's own result folder (<dev_drive>/pm-kit/kit-gate-result/<key>),
+    never the kit-gate-result folder above it. None, a missing folder or an error is ignored."""
+    if not folder:
+        return
+    target = Path(folder)
+    if target.parent.name != 'kit-gate-result' or not target.name:
+        return
+    shutil.rmtree(target, ignore_errors=True)
+
+
 def probe(codex_exe=None, profile=None, fixture_root=None):
     """Use real kit CLIs/native bindings; this gate checks only the tiny fixture."""
     profile = profile or discover()
@@ -261,6 +273,7 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
         raise RuntimeError('native executable version could not be verified')
     directory = destination / ('pmkit-native-fixtures-' + uuid.uuid4().hex)
     directory.mkdir()
+    result_folder = None
     try:
         temporary = directory / 'temp'
         temporary.mkdir()
@@ -317,7 +330,11 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
             record, why = gate_ok.verify(task.worker, tip, gate_config=gate_config(load(task.worker)))
             if not record or why or record.get('base') != task.base:
                 raise RuntimeError('real fixture gate proof does not cover the exact tip/base')
+            # The result folder is under the real machine dev_drive, which the canary shares with
+            # its gate child (the PM-repo pointer is the registry's, not the fixture home's); the
+            # fixture repo's key keeps it apart from every real repository's.
             from kitlib.gate import result
+            result_folder = result.result_dir(task.worker)
             gate_result, error = result.read(task.worker, task.branch)
             if error or not gate_result or gate_result.get('verdict') != 'pass':
                 raise RuntimeError('real gate result record is missing')
@@ -341,4 +358,7 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
                     'native_remaining_operations': ['assigned edit', 'commit', 'gate', 'review_pack'],
                     'remaining_operations_verified': True}
     finally:
-        _remove_fixtures(directory, destination)
+        try:
+            _remove_result_folder(result_folder)
+        finally:
+            _remove_fixtures(directory, destination)
