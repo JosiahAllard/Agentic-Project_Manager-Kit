@@ -77,7 +77,6 @@ PENDING_HISTORY = {
     ('provenance', 'kitlib/backlog/scope.py'): 1,
     ('provenance', 'kitlib/commit/__init__.py'): 1,
     ('provenance', 'kitlib/config/load.py'): 2,
-    ('provenance', 'kitlib/config/owner.py'): 2,
     ('provenance', 'kitlib/docs/budget.py'): 1,
     ('provenance', 'kitlib/docs/codemap.py'): 1,
     ('provenance', 'kitlib/docs/index.py'): 1,
