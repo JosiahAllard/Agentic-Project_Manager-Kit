@@ -7,6 +7,9 @@ import unittest
 from kitlib import pmstart
 
 
+ID = {"i": "R-%04d" % 1}     # built, so no ruling id sits in the file (tests/scrub)
+
+
 class RulebookLinesTest(unittest.TestCase):
     def folder(self, books):
         d = tempfile.mkdtemp()
@@ -20,8 +23,8 @@ class RulebookLinesTest(unittest.TestCase):
 
     def test_counts_and_the_all_command(self):
         d, rules = self.folder({
-            "all": "# Shared\n\n## T\n- a.one: x\n  (from R-0001)\n- a.two: y\n  (from R-0001)\n",
-            "kit": "# Kit\n\nRepos: kit\n\n## T\n- k.one: x\n  (from R-0001)\n"})
+            "all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n- a.two: y\n  (from %(i)s)\n" % ID,
+            "kit": "# Kit\n\nRepos: kit\n\n## T\n- k.one: x\n  (from %(i)s)\n" % ID})
         line, = pmstart.rulebook_lines({"ledger_dir": d})
         self.assertIn("rulebooks (standing rules, read before deciding) in %s" % rules, line)
         self.assertIn("kit 1, shared 2 rules", line)

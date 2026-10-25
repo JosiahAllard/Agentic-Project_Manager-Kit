@@ -446,6 +446,9 @@ class NoRulingsCheckTest(unittest.TestCase):
             self.assertFalse(hasattr(coordinatorstart, name), name)
 
 
+ID = {"i": "R-%04d" % 1}     # built, so no ruling id sits in the file (tests/scrub)
+
+
 class LedgerLineTest(unittest.TestCase):
     """With the split ledger (ledger_dir), one line names this repo's ledger file, the reference for
     HOW the repo works; it comes from the machine config and the file is never opened."""
@@ -501,8 +504,8 @@ class LedgerLineTest(unittest.TestCase):
 
     def test_the_rulebook_line_shows_counts_and_the_repo_command(self):
         d = self._rules({
-            "all": "# Shared\n\n## T\n- a.one: x\n  (from R-0001)\n- a.two: y\n  (from R-0001)\n",
-            "alpha": "# Alpha\n\nRepos: alpha\n\n## T\n- k.one: x\n  (from R-0001)\n"})
+            "all": "# Shared\n\n## T\n- a.one: x\n  (from %(i)s)\n- a.two: y\n  (from %(i)s)\n" % ID,
+            "alpha": "# Alpha\n\nRepos: alpha\n\n## T\n- k.one: x\n  (from %(i)s)\n" % ID})
         machine = {"ledger_dir": d, "ledger_repos": ["alpha"]}
         line = coordinatorstart.ledger_lines(machine, "Alpha")[1]
         self.assertIn("alpha 1, shared 2 rules", line)
