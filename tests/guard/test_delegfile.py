@@ -481,8 +481,54 @@ class FolderWildcards(unittest.TestCase):
         with mock.patch.object(delegfile, 'WALK_LIMIT', 3):
             self.assert_config(lambda sub: bash('rm */x/*.log', self.w.wt, sub), 'past the limit')
             d = self.decide(bash('rm */x/*.log', self.w.wt, True), {})
-            self.assertIn('stopped resolving after 3 names', d.reason)
+            self.assertIn('read more than 3 names', d.reason)
         self.assert_not_config(lambda sub: bash('rm */x/*.log', self.w.wt, sub), 'under the limit')
+
+
+class WalkLimitText(unittest.TestCase):
+    """A wildcard write whose match reads past delegfile.WALK_LIMIT names is refused (fail
+    closed) with its own text: the word was too wide to check, so narrow it or name the files;
+    not the machine config folder's wording or its advice to ask the owner. Checked in a repo
+    with no .pm-kit folder anywhere, where the folder's wording is plainly wrong."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        self.big = os.path.join(self.w.wt, 'big')
+        os.makedirs(self.big)
+        for i in range(5):
+            with open(os.path.join(self.big, '%d.tmp' % i), 'w', encoding='utf-8') as fh:
+                fh.write('x\n')
+
+    def decide(self, payload, environ):
+        return decide(payload, self.w.ctx(environ=environ, pointer=lambda: None))
+
+    def test_a_walk_past_the_limit_says_the_word_was_too_wide(self):
+        folder = W.fwd(self.big)
+        for name, payload_of in (('rm', lambda sub: bash('rm big/*.tmp', self.w.wt, sub)),
+                                 ('rm back', lambda sub: bash("rm 'big\\*.tmp'", self.w.wt, sub)),
+                                 ('Remove-Item', lambda sub: ps('Remove-Item big\\*.tmp', self.w.wt, sub)),
+                                 ('Remove-Item fwd', lambda sub: ps('Remove-Item big/*.tmp', self.w.wt, sub))):
+            for environ, sub in SESSIONS:
+                with self.subTest(name, environ=environ, sub=sub), \
+                        mock.patch.object(delegfile, 'WALK_LIMIT', 3):
+                    d = self.decide(payload_of(sub), environ)
+                    self.assertIsNotNone(d, 'allowed')
+                    self.assertEqual((d.verdict, d.rule), ('deny', rules.MACHINE_CONFIG), d.reason)
+                    self.assertIn('too wide for the guard to check', d.reason)
+                    self.assertIn('Narrow it, or name the files', d.reason)
+                    self.assertNotIn('Ask the owner', d.reason)
+                    self.assertNotIn(rules.MACHINE_CONFIG_WHY, d.reason)
+                    self.assertEqual(d.instead, 'Get-ChildItem -Force -Name "%s"' % folder)
+        with mock.patch.object(delegfile, 'WALK_LIMIT', 3):
+            d = self.decide(bash('rm big/*.tmp', self.w.wt, False), OWNER[0])
+        self.assertTrue(d is None or d.rule != rules.MACHINE_CONFIG, d and d.reason)
+
+    def test_under_the_limit_it_stays_open(self):
+        for environ, sub in SESSIONS:
+            with self.subTest(environ=environ, sub=sub):
+                d = self.decide(bash('rm big/*.tmp', self.w.wt, sub), environ)
+                self.assertTrue(d is None or d.rule != rules.MACHINE_CONFIG, d and d.reason)
 
 
 class FolderWildcardShortNames(unittest.TestCase):
