@@ -1,6 +1,4 @@
-"""kitlib.landed (tools/landed.py): one read-only look at whether a branch has landed. Ported from
-the PM kit's test_landed.py; the cases that tested retired mechanisms or unported keys are listed
-in docs/landed.md "Not ported".
+"""kitlib.landed (tools/landed.py): one read-only look at whether a branch has landed.
 
 Every case builds its own repository and bare origin (tests/gitfixture.py), its own gate log
 folder and its own landing lock; nothing reaches the network, the real gate logs or a real lock.

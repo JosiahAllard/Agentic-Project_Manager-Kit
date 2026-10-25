@@ -1,8 +1,5 @@
 """Process helpers for kit tests that check the pid shield (kitlib.proc.shield): a child's own
 probe of its shield, and how long an OUTER shield keeps a new process of this one shielded.
-Ported from the PM kit's _testutil.py: only these two; its rmtree_force is
-tests/gitfixture.py's rmtree here, and its fixture runner, git spawns and template repos are not
-needed by any kit test.
 """
 import os
 import subprocess
