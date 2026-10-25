@@ -153,7 +153,7 @@ Tests: tests/gate/test_windows.py, tests/lock/test_run_windows.py, tests/proc/te
 
 ## Gate-OK record
 
-The branch gate writes `<git common dir>/kit-gate-ok/<sha>.json` (kitlib/records/gate_ok.py) only when all of these hold:
+The branch gate writes `<dev_drive>\pm-kit\kit-gate-ok\<repo key>\<sha>.json` (kitlib/records/gate_ok.py, `gate_ok.record_dir`; the repo key is the result folder's, Result record) only when all of these hold:
 
 - at least one step was selected, every selected step passed, warned or was skipped, and at least one passed or warned; or the gate is an auto-detected one that found no stack (Auto-detected gate), which selects and runs nothing, passes with `GATE OK (auto-detected: no stack found, so NO checks ran; ...)` (`runner.NO_CHECKS`) and writes the record with `source` `auto` and `steps` empty;
 - no `--only` was given;
@@ -161,6 +161,13 @@ The branch gate writes `<git common dir>/kit-gate-ok/<sha>.json` (kitlib/records
 - the work tree was clean (no tracked change, no untracked file) at the start and at the end;
 - HEAD did not move;
 - the repository's stash stack was empty when the gate started (else the gate is REFUSED) and when it ended (The stash guard).
+
+**Where the records are.** The record folder is outside every checkout and every agent's temp folder, like the result folder, so no agent's own file writes reach it; the git common dir, where records were before, is writable by any session that can write `.git`. With no `dev_drive` there is no record folder: the write fails and a passing branch gate says `FAILED: the gate passed, and its gate-OK record could not be written: ...`. Until KIT-GATE-OK-GIT-COPIES-RETIRE every write also writes the record's .git copy, `<git common dir>/kit-gate-ok/<sha>.json` (`gate_ok.legacy_dir`), for an older kit's readers. A reader with no record in the record folder reads the .git copy (`gate_ok.read`), until KIT-GATE-OK-LEGACY-READ-RETIRE:
+
+- the pre-push hook takes any .git copy (`gate_ok.ANY`), so a landing by an older kit, which writes only that copy, is not refused at the push (Pre-push hook, docs/guard.md);
+- every other reader (`gate_ok.TRUSTED`, the default: a landing's tip check, the guard's `git-push-main` rule, the worktree, review-pack and landed tools) takes one only for a commit on the frozen list, with the bytes it had then.
+
+The frozen list is `<dev_drive>\pm-kit\kit-gate-ok\<repo key>.frozen.json` (`gate_ok.frozen_path`, beside the record folder): the SHA-256 of every .git record file there was when this kit first wrote or read that repository's records (`gate_ok.freeze`). It is made once, by a rename that never replaces a file (another process's list, made first, is kept), and never extended, so a .git record written after the switch, forged or by an older kit's gate, never lands a tip. When it is missing while the record folder holds records, it is not made again and no .git copy counts; when it is there and cannot be read, no .git copy counts either. A branch gated only by an older kit (a kit branch not yet merged with this change) is gated again after it syncs.
 
 With no step selected, or every selected step skipped, it is REFUSED (exit 4), except in that auto-detected gate with no stack. Otherwise a missed condition prints `no gate-OK record: <why>` and still exits 0 when the gate passed. `gate_config` is `.kit.json` "gate" over its defaults (`kitlib.gate.runner.gate_config`); guard.py and pre-push verify with the same value. A landing writes the record for its merge commit after the merged gate passes, after the checkout is checked unchanged, and before the push.
 
@@ -226,7 +233,7 @@ Your own gate: run it in the foreground with `timeout` 600000 when it fits; othe
 - A run counted: a history line of the machine lock with `gate` true, a priority other than `land`, the gated repository (case aside) and the branch, that ended at or after the branch was made (the first entry of its reflog, so a branch made again under an old name starts at 0). A fully reused gate books nothing and counts nothing. A landing, the daily full run and redfirst never ask. History lines written before they kept `gate` never count.
 - The branch is the line's `branch` (case aside), which the branch gate books with, never its slug: two branches of one slug (`kit/a`, `kit-a`) each get 5, and a gate under `gate.py --slug` still counts. A null `branch` never counts. A line written before history lines kept `branch` counts by the branch's default slug (`runner.slug_of`).
 - At the limit (`budget.RUNS`, 5) a branch gate prints `REFUSED: the branch gate budget: ...` naming the counted run ids, with an `Instead:` line, and runs nothing. Below it the gate says `gate budget: run <k> of <n> on <branch>`.
-- `gate.py allow BRANCH --runs N --why TEXT` is the coordinator's: it writes `<git common dir>/kit-gate-budget/<branch stem>.json` (`branch`, `runs` the new total, `why`, `at`, `by`), replacing any earlier one. The limit is the larger of 5 and `runs`. An allowance written before the branch was last made is not read.
+- `gate.py allow BRANCH --runs N --why TEXT` is the coordinator's: it writes `<dev_drive>\pm-kit\kit-gate-budget\<repo key>\<branch stem>.json` (`budget.allow_path`; `branch`, `runs` the new total, `why`, `at`, `by`), replacing any earlier one, outside every checkout like the gate-OK record folder. The limit is the larger of 5 and `runs`. An allowance written before the branch was last made is not read. Until KIT-GATE-OK-GIT-COPIES-RETIRE it also writes a copy to `<git common dir>/kit-gate-budget/<branch stem>.json` (`budget.legacy_path`) for an older kit's gate; the budget never reads that copy, so an allowance given before the folder moved is given again.
 - The owner is never refused. Anything the check cannot read (reflog, history, allowance) is one `WARNING: the branch gate budget is not applied: ...` and the gate runs (fail open).
 - Known limit: a new branch made at the same tip is another branch, with a budget of its own.
 
@@ -292,7 +299,7 @@ STUCK is only a push that may have landed and cannot be told (step 8). Nothing i
 - **Not landed** (the remote's main is the base, or another commit that does not hold the merge): the merge did not land, and nothing is to be undone; only the lock break follows.
 - Last, a `python -c` line that runs `LandingLock.break_lock` (it refuses while the holder is alive or main differs from the remote's tracking ref).
 
-A gate-OK record is written for the merge before the push. When the push is refused (NOT LANDED) or did not land (cleared from STUCK), the record for that merge commit stays in `<git common dir>/kit-gate-ok/`. It is stale but harmless: records are keyed by commit (`gate_ok.record_path`), that commit is not on main, and a reader verifying any other commit never reads it. Only a later push of that same merge commit would find it; it can be deleted by hand.
+A gate-OK record is written for the merge before the push. When the push is refused (NOT LANDED) or did not land (cleared from STUCK), the record for that merge commit stays in the record folder, with its .git copy (Gate-OK record, "Where the records are"). It is stale but harmless: records are keyed by commit (`gate_ok.record_path`), that commit is not on main, and a reader verifying any other commit never reads it. Only a later push of that same merge commit would find it; it can be deleted by hand (the owner's: no agent's file writes reach the record folder).
 
 **First switch.** A repo's first switch from the old PM kit is landed by the owner, by hand. Its base `.kit.json` fails to load with the kit loader (old key spellings such as `gate.hook`, `doc_budget.owner_email`/`agent_emails`/`owner_only`/`owner_only_except`, and dropped keys such as `dependency_pin_check`, `python_tests_audit*`, `python_tests`, `python_tests_floor` and `trailers`). Five sites then refuse: the pre-push hook (kitlib/guard/prepush.py), the guard's git-push-main rule (kitlib/guard/rules.py `git_push`), the land.py preconditions (kitlib/gate/land.py), the trailers check (kitlib/trailerscheck) and review_pack's base read.
 
