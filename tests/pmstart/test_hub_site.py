@@ -50,8 +50,8 @@ class FakeClient(object):
         return {"ok": True, "items": self.items}
 
 
-def site(client, load=lambda: SET, procs=()):
-    return pmstart.hub_site(procs=list(procs), load=load, make_client=lambda port: client)
+def site(client, load=lambda: SET):
+    return pmstart.hub_site(load=load, make_client=lambda port: client)
 
 
 class HubSiteTest(unittest.TestCase):
@@ -81,18 +81,17 @@ class HubSiteTest(unittest.TestCase):
             self.assertFalse(any("older code" in line for line in out), code)
         self.assertEqual(len(site(FakeClient())), 2)
 
-    def test_up_with_nothing_pending_says_port_and_count_and_the_wait_line(self):
+    def test_up_with_nothing_pending_says_port_and_count_and_the_push_line(self):
         out = site(FakeClient())
         self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM")
         self.assertEqual(len(out), 2)
-        self.assertIn("wait --pending", out[1])
-        self.assertIn("in the background", out[1])
+        self.assertTrue(out[1].startswith("hub: WARN push notifications are off"), out[1])
 
     def test_pending_items_are_counted_and_to_be_processed(self):
         out = site(FakeClient(pending=[{"id": "a"}, {"id": "b"}]))
         self.assertEqual(out[0], "hub: server up on port 4321, 2 pending for the PM")
         self.assertIn('hub.py" pending', out[1])
-        self.assertIn("wait --pending", out[2])
+        self.assertIn("push", out[2])
 
     def test_only_the_pms_items_are_counted_not_one_routed_to_a_reachable_creator(self):
         class Routed(FakeClient):
@@ -111,36 +110,54 @@ class HubSiteTest(unittest.TestCase):
         self.assertIn('process the 1 pending item(s): python "%s" pending --for pm, then handle'
                       % pmstart.HUB_TOOL, out[1])
 
-    def test_a_running_wait_replaces_the_start_line(self):
-        procs = [{"Name": "python.exe", "CommandLine": 'python "x/tools/hub.py" wait --pending'}]
-        out = site(FakeClient(), procs=procs)
-        self.assertEqual(out[1], "hub: wait --pending is running")
+    def test_push_up_with_a_live_watcher_is_one_plain_line_and_names_no_wait(self):
+        health = {"ok": True, "push": {"state": "up", "last": "written", "undelivered": 0},
+                  "watcher": {"state": "up", "age": 42}}
+        out = site(FakeClient(health=health))
+        self.assertEqual(out[1], "hub: push up (last delivery to the PM: written, 0 undelivered); "
+                                 "watcher up (beat 42s ago)")
+        self.assertFalse(any("wait" in line for line in out), out)
 
-    def test_only_the_pms_wait_counts_not_another_sessions_for_its_key(self):
-        def line(cmd):
-            return site(FakeClient(), procs=[{"Name": "python.exe", "CommandLine": cmd}])[1]
-        hub = 'python "x/tools/hub.py" wait --pending'
-        for cmd in (hub + ' --for kit', hub + ' --for=kit', hub + ' --for "kit"',
-                    'python "x/tools/hub.py" wait --for kit --pending'):
-            with self.subTest(cmd=cmd):
-                self.assertIn("in the background", line(cmd))
-        for cmd in (hub + ' --for pm', hub + ' --for=pm', hub + ' --for "pm"',
-                    hub + ' --timeout 30'):
-            with self.subTest(cmd=cmd):
-                self.assertEqual(line(cmd), "hub: wait --pending is running")
+    def test_push_up_before_any_delivery_and_with_no_heartbeat_yet(self):
+        health = {"ok": True, "push": {"state": "up", "last": None, "undelivered": 3},
+                  "watcher": {"state": "none", "age": None}}
+        self.assertEqual(site(FakeClient(health=health))[1],
+                         "hub: push up (last delivery to the PM: none yet, 3 undelivered); "
+                         "watcher none")
 
-    def test_with_no_pm_wait_the_line_is_a_warning_naming_the_pms_wait_for_pm(self):
-        cmd = 'python "x/tools/hub.py" wait --pending --for coordinator-x'
-        for procs in ([], [{"Name": "python.exe", "CommandLine": cmd}]):
-            with self.subTest(procs=procs):
-                line = site(FakeClient(), procs=procs)[1]
-                self.assertTrue(line.startswith("hub: WARN no PM wait --pending --for pm is running"),
-                                line)
-                self.assertIn('hub.py" wait --pending --for pm (', line)
+    def test_push_down_is_a_warn_naming_the_pending_read(self):
+        health = {"ok": True, "push": {"state": "down", "last": "not-written", "undelivered": 2},
+                  "watcher": {"state": "down", "age": 900}}
+        line = site(FakeClient(health=health))[1]
+        self.assertTrue(line.startswith("hub: WARN push down (last delivery to the PM: not-written, "
+                                        "2 undelivered); watcher down (beat 900s ago)"), line)
+        self.assertIn('read python "%s" pending --for pm' % pmstart.HUB_TOOL, line)
+        self.assertNotIn("wait", line)
 
-    def test_a_wait_without_pending_does_not_count(self):
-        procs = [{"Name": "python.exe", "CommandLine": 'python "x/tools/hub.py" wait --timeout 5'}]
-        self.assertIn("in the background", site(FakeClient(), procs=procs)[1])
+    def test_no_push_worker_is_a_warn_that_nothing_arrives_by_itself(self):
+        for health in ({"ok": True}, {"ok": True, "push": None, "watcher": None},
+                       {"ok": True, "push": "up", "watcher": "up"}):
+            with self.subTest(health=health):
+                line = site(FakeClient(health=health))[1]
+                self.assertTrue(line.startswith("hub: WARN push notifications are off"), line)
+                self.assertIn("watcher not read (no push worker)", line)
+                self.assertIn('pending --for pm', line)
+
+    def test_server_values_outside_the_allow_list_never_reach_the_line(self):
+        odd = "x@mail.invalid secret"
+        health = {"ok": True, "push": {"state": odd, "last": odd, "undelivered": odd},
+                  "watcher": {"state": odd, "age": odd}}
+        line = site(FakeClient(health=health))[1]
+        self.assertNotIn(odd, line)
+        self.assertTrue(line.startswith("hub: WARN push ? (last delivery to the PM: ?, ? undelivered); "
+                                        "watcher ? (beat ?s ago)"), line)
+        for bad in (True, -1, 1.5):
+            health = {"ok": True, "push": {"state": "up", "last": "written", "undelivered": bad},
+                      "watcher": {"state": "up", "age": bad}}
+            with self.subTest(bad=bad):
+                self.assertEqual(site(FakeClient(health=health))[1],
+                                 "hub: push up (last delivery to the PM: written, ? undelivered); "
+                                 "watcher up (beat ?s ago)")
 
     def test_nothing_listening_is_hub_server_down(self):
         out = site(FakeClient(error=serve.NotRunning(4321)))
@@ -250,7 +267,7 @@ class HubSiteTest(unittest.TestCase):
     def test_no_token_file_is_its_own_line_naming_setup(self):
         def no_token(port):
             raise pmstart.NoHubToken()
-        out = pmstart.hub_site(procs=[], load=lambda: SET, make_client=no_token)
+        out = pmstart.hub_site(load=lambda: SET, make_client=no_token)
         self.assertEqual(out, ['hub: no hub token file is there to read: run python "%s" setup'
                                % pmstart.HUB_TOOL])
 
@@ -258,7 +275,7 @@ class HubSiteTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(auth, "folder", lambda: d):
             with self.assertRaises(pmstart.NoHubToken):
                 pmstart._hub_client(4321)
-            out = pmstart.hub_site(procs=[], load=lambda: SET, make_client=pmstart._hub_client)
+            out = pmstart.hub_site(load=lambda: SET, make_client=pmstart._hub_client)
             self.assertEqual(out, ['hub: no hub token file is there to read: run python "%s" setup'
                                    % pmstart.HUB_TOOL])
             with open(os.path.join(d, auth.AGENT_FILE), "w") as f:
@@ -292,7 +309,7 @@ class HubSiteTest(unittest.TestCase):
             with open(os.path.join(d, auth.AGENT_FILE), "w") as f:
                 f.write(TOKEN)
             made = pmstart.hub_site(
-                procs=[], load=lambda: SET,
+                load=lambda: SET,
                 make_client=lambda port: hubclient.Client(
                     port, tokens=d, timeout=pmstart.HUB_SITE_TIMEOUT_S, ask=ask))
         self.assertTrue(asked)
@@ -323,7 +340,7 @@ class RealSettingsTest(unittest.TestCase):
         self.write({})
         self.assertEqual(pmstart.hub_settings().port, settings.PORT)
         self.assertEqual(settings.PORT, 8790)
-        out = pmstart.hub_site(procs=[], make_client=lambda port: FakeClient(error=serve.NotRunning(port)))
+        out = pmstart.hub_site(make_client=lambda port: FakeClient(error=serve.NotRunning(port)))
         self.assertEqual(len(out), 1)
         self.assertTrue(out[0].startswith("hub: hub server down (nothing listens on port 8790)"), out)
 
@@ -355,7 +372,7 @@ class RealSettingsTest(unittest.TestCase):
         with self.assertRaises(pmstart.HubSettingsError) as cm:
             pmstart.hub_settings()
         self.assertIn("hub must be an object", str(cm.exception))
-        out = pmstart.hub_site(procs=[])
+        out = pmstart.hub_site()
         self.assertEqual(len(out), 1)
         self.assertTrue(out[0].startswith("hub: the hub key of the machine config cannot be used: "), out)
         self.assertIn("hub must be an object", out[0])
@@ -412,7 +429,7 @@ class RealSettingsTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as cm:
             pmstart.hub_settings()
         self.assertNotIsInstance(cm.exception, pmstart.HubSettingsError)
-        self.assertEqual(pmstart.hub_site(procs=[]),
+        self.assertEqual(pmstart.hub_site(),
                          ["hub: the machine config could not be read (ConfigError)"])
 
     def test_without_a_hub_key_the_checklist_shows_the_site_lines_on_port_8790(self):
@@ -551,11 +568,11 @@ class FiledDigestTest(unittest.TestCase):
 
     def test_the_site_lines_carry_the_digest_only_when_given_a_stamp(self):
         c = FiledClient(filed(AT - datetime.timedelta(hours=1)))
-        out = pmstart.hub_site(procs=[], load=lambda: SET, make_client=lambda port: c,
+        out = pmstart.hub_site(load=lambda: SET, make_client=lambda port: c,
                                stamp=lambda: self.stamp, now=AT)
         self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM")
         self.assertEqual(out[1], self.line(1, AT - pmstart.FILED_FALLBACK))
-        self.assertIn("wait --pending", out[2])
+        self.assertIn("push", out[2])
         self.assertEqual([t for _, t in c.calls], [pmstart.HUB_SITE_TIMEOUT_S] * 3)
         bare = FiledClient(filed(AT))
         self.assertEqual(len(site(bare)), 2)
@@ -564,7 +581,7 @@ class FiledDigestTest(unittest.TestCase):
     def test_a_hub_that_is_down_reads_and_writes_no_stamp(self):
         def where():
             raise AssertionError("the stamp was looked up")
-        out = pmstart.hub_site(procs=[], load=lambda: SET,
+        out = pmstart.hub_site(load=lambda: SET,
                                make_client=lambda port: FiledClient(error=serve.NotRunning(port)),
                                stamp=where, now=AT)
         self.assertEqual(len(out), 1)
