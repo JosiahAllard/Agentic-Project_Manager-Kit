@@ -755,22 +755,43 @@ class Key(ReuseCase):
 
 class PriorRecords(unittest.TestCase):
     def test_an_unreadable_folder_is_none(self):
-        with mock.patch.object(result, 'result_dir', side_effect=result.ResultError('x')):
+        with mock.patch.object(result, 'record_dirs', side_effect=result.ResultError('x')):
             self.assertIsNone(reuse.prior_records('.', ['a' * 40]))
 
-    def test_one_unreadable_record_is_none(self):
+    def folder(self, *recs):
         folder = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, folder, True)
-        mine = {'kind': 'gate', 'branch': BRANCH, 'tip': 'a' * 40, 'verdict': 'pass'}
-        other = dict(mine, branch='kit/other', tip='b' * 40)
-        for name, rec in (('mine.gate.json', mine), ('other.gate.json', other)):
+        for name, rec in recs:
             with open(os.path.join(folder, name), 'w', encoding='utf-8') as f:
                 json.dump(rec, f)
-        with mock.patch.object(result, 'result_dir', return_value=folder):
+        return folder
+
+    def test_one_unreadable_record_is_none(self):
+        mine = {'kind': 'gate', 'branch': BRANCH, 'tip': 'a' * 40, 'verdict': 'pass'}
+        other = dict(mine, branch='kit/other', tip='b' * 40)
+        folder = self.folder(('mine.gate.json', mine), ('other.gate.json', other))
+        with mock.patch.object(result, 'record_dirs', return_value=[folder]):
             self.assertEqual(reuse.prior_records('.', ['a' * 40]), [mine])
             with open(os.path.join(folder, 'red.gate.json'), 'w', encoding='utf-8') as f:
                 f.write('{"kind": "gate", "verdict": "fa')          # cut short: unreadable
             self.assertIsNone(reuse.prior_records('.', ['a' * 40]))
+
+    def test_the_old_folders_records_count_too(self):
+        """An older kit's red land record of the tip, in the old folder (<git common
+        dir>/kit-gate-result), is a prior record as one in the result folder is; one that cannot
+        be read there is reuse of nothing too; a missing old folder is no records."""
+        mine = {'kind': 'gate', 'branch': BRANCH, 'tip': 'a' * 40, 'verdict': 'pass'}
+        red = dict(mine, kind='land', verdict='fail')
+        new = self.folder(('mine.gate.json', mine))
+        old = self.folder(('mine.land.json', red))
+        with mock.patch.object(result, 'record_dirs', return_value=[new, old]):
+            self.assertEqual(reuse.prior_records('.', ['a' * 40]), [mine, red])
+            with open(os.path.join(old, 'cut.gate.json'), 'w', encoding='utf-8') as f:
+                f.write('{"kind": "gate", "verdict": "fa')
+            self.assertIsNone(reuse.prior_records('.', ['a' * 40]))
+        with mock.patch.object(result, 'record_dirs',
+                               return_value=[new, os.path.join(old, 'missing')]):
+            self.assertEqual(reuse.prior_records('.', ['a' * 40]), [mine])
 
 
 def load_tool(path, name):

@@ -15,6 +15,7 @@ from kitlib import gate as G
 from kitlib.gate import result, runner, steps
 from tests import gitfixture, inproc
 from tests.gate import fixtures
+from tests.home import result_drive
 
 GATE_PY = os.path.join(steps.KIT_TOOLS, 'gate.py')
 STAR = '✳'     # the character those runs could not print: cp1252 has no byte for it
@@ -67,6 +68,7 @@ class Cp1252Console(unittest.TestCase):
         self.addCleanup(repo.cleanup)
         repo.write('a.txt', 'a\n')
         tip = repo.commit('a', 'a.txt')
+        result_drive(self)      # the machine config's dev_drive: the result folder's drive
         env = dict(fixtures.test_env(), PYTHONIOENCODING='cp1252')
         env.pop('PYTHONUTF8', None)
         r = subprocess.run([sys.executable, GATE_PY, 'wait-result', 'kit/' + STAR, '--tip', tip,

@@ -527,11 +527,18 @@ class Lander(object):
         return None
 
     def preconditions(self):
+        """The refusals before the landing joins the queue, or None. A landing with no result
+        folder (kitlib.gate.result.result_dir: no dev_drive in the machine config) is refused:
+        its land records, which the session waiting on it reads, could not be written."""
         place = repo.classify(self.root)
         if place.kind != repo.MAIN:
             return ('%s is not a main checkout (%s): a landing runs in the main checkout, on its '
                     'main branch' % (self.root, place.kind))
         self.root = place.top
+        try:
+            result.result_dir(self.root)
+        except result.ResultError as e:
+            return 'no result folder for the land records: %s' % e
         head = self.ref('HEAD')
         if not head:
             return 'the main checkout %s has no HEAD commit' % self.root

@@ -17,6 +17,7 @@ from kitlib.proc import process
 from kitlib.records import landing
 from tests import gitfixture, testutil
 from tests.gate import fixtures
+from tests.home import machine_config, result_drive, temp_home
 
 GATE_PY = os.path.join(steps.KIT_TOOLS, 'gate.py')
 FIELDS = ('schema', 'kind', 'branch', 'tip', 'base', 'run_id', 'started_at', 'finished_at',
@@ -27,7 +28,9 @@ UTC = r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
 
 def block_dir(root):
     """A file where the result folder goes: every record write then fails."""
-    with open(result.result_dir(root), 'w') as f:
+    folder = result.result_dir(root)
+    os.makedirs(os.path.dirname(folder), exist_ok=True)
+    with open(folder, 'w') as f:
         f.write('not a folder\n')
 
 
@@ -74,6 +77,7 @@ class Records(unittest.TestCase):
         self.addCleanup(self.repo.cleanup)
         self.repo.write('a.txt', 'a\n')
         self.tip = self.repo.commit('a', 'a.txt')
+        self.drive = result_drive(self)
 
     def rec(self, tip=None, verdict='pass', kind='gate', branch='kit/x'):
         return result.build(branch, tip or self.tip, None, kind,
@@ -349,6 +353,157 @@ class Records(unittest.TestCase):
         self.assertEqual((got['verdict'], got['run_id']), ('fail', run.run_id))
 
 
+class Folder(unittest.TestCase):
+    """The result folder is <dev_drive>/pm-kit/kit-gate-result/<repo key>, outside every checkout
+    and one per repository; the old <git common dir>/kit-gate-result is read, never written; with
+    no dev_drive there is no result folder (docs/gate.md "Result record")."""
+
+    def setUp(self):
+        self.repo = gitfixture.TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        self.repo.write('a.txt', 'a\n')
+        self.tip = self.repo.commit('a', 'a.txt')
+        self.old_dir = os.path.join(self.repo.common_dir(), 'kit-gate-result')
+
+    def rec(self, branch='kit/x', kind='gate', **kw):
+        return result.build(branch, self.tip, None, kind, kw.pop('code', G.OK), summary='S', **kw)
+
+    def legacy(self, rec):
+        """`rec` written where an older kit wrote it: the old folder."""
+        path = os.path.join(self.old_dir, '%s.%s.json' % (result.file_stem(rec['branch']),
+                                                         rec['kind']))
+        os.makedirs(self.old_dir, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(rec, f)
+        return path
+
+    def same(self, a, b):
+        self.assertEqual(os.path.normcase(os.path.normpath(a)), os.path.normcase(os.path.normpath(b)))
+
+    def test_records_go_under_the_dev_drive_one_folder_per_repository(self):
+        drive = result_drive(self)
+        path = result.write(self.repo.root, self.rec())
+        folder = os.path.dirname(path)
+        self.same(os.path.dirname(folder), os.path.join(drive, 'pm-kit', 'kit-gate-result'))
+        self.assertRegex(os.path.basename(folder), r'^[a-z0-9_-]{1,40}-[0-9a-f]{12}$')
+        wt = self.repo.worktree('other')
+        self.same(result.result_dir(wt), folder)                # every worktree: the one folder
+        self.assertEqual(result.read(wt, 'kit/x')[0]['run_id'],
+                         result.read(self.repo.root, 'kit/x')[0]['run_id'])
+        other = gitfixture.TempRepo()
+        self.addCleanup(other.cleanup)
+        self.same(os.path.dirname(result.result_dir(other.root)), os.path.dirname(folder))
+        self.assertNotEqual(os.path.normcase(result.result_dir(other.root)),
+                            os.path.normcase(folder))           # another repository: its own
+        self.assertFalse(os.path.exists(self.old_dir))           # nothing in the old folder
+
+    def test_a_repo_key_is_the_folder_name_and_a_hash_of_the_common_dir(self):
+        a = result.repo_key(r'C:\work\My.Repo\.git')
+        self.assertRegex(a, r'^myrepo-[0-9a-f]{12}$')
+        self.assertEqual(result.repo_key(r'c:\WORK\my.repo\.GIT'), a)   # Windows ignores case
+        self.assertNotEqual(result.repo_key(r'C:\other\My.Repo\.git'), a)
+        self.assertRegex(result.repo_key(r'C:\remotes\proj.git'), r'^projgit-[0-9a-f]{12}$')
+        self.assertRegex(result.repo_key(r'C:\x\%%%\.git'), r'^repo-[0-9a-f]{12}$')
+        self.assertLessEqual(len(result.repo_key('C:\\x\\%s\\.git' % ('n' * 200))), 40 + 13)
+
+    def test_with_no_dev_drive_there_is_no_result_folder_and_nothing_is_written(self):
+        temp_home(self)
+        machine_config(None, {}, case=self)                      # a machine config, no dev_drive
+        with self.assertRaises(result.ResultError) as cm:
+            result.result_dir(self.repo.root)
+        self.assertIn('dev_drive', str(cm.exception))
+        run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
+        path, line = run.start()
+        self.assertIsNone(path)
+        self.assertTrue(line.startswith('WARNING: the result record could not be written: '),
+                        line)
+        self.assertIn('dev_drive', line)
+        self.assertFalse(os.path.exists(self.old_dir))
+        rec, why = result.read(self.repo.root, 'kit/x')
+        self.assertIsNone(rec)
+        self.assertIn('dev_drive', why)
+        with self.assertRaises(result.ResultError):
+            result.wait(self.repo.root, 'kit/x', self.tip, timeout_s=0)
+        self.assertEqual(result.running_records(self.repo.root, 'gate', run.run_id), [])
+
+    def test_a_machine_config_that_cannot_be_read_is_no_result_folder(self):
+        temp_home(self)
+        machine_config(None, '{"not": json', case=self)
+        with self.assertRaises(result.ResultError) as cm:
+            result.result_dir(self.repo.root)
+        self.assertIn('machine config cannot be read', str(cm.exception))
+
+    def test_an_old_folder_record_is_read_when_the_new_folder_has_none(self):
+        result_drive(self)
+        old = self.rec()
+        self.legacy(old)
+        self.assertEqual(result.read(self.repo.root, 'kit/x'), (old, None))
+        self.assertEqual(result.read(self.repo.root, 'kit/x', legacy=False), (None, 'none'))
+        self.assertEqual(result.wait(self.repo.root, 'kit/x', self.tip, timeout_s=0), (old, None))
+        self.assertEqual(result.read(self.repo.root, 'kit/x', 'land'), (None, 'none'))
+
+    def test_the_new_record_wins_unless_the_old_one_started_strictly_later(self):
+        result_drive(self)
+        new = self.rec(started_at='2026-10-01T10:00:00Z')
+        result.write(self.repo.root, new)
+        for stamp, later in (('2026-10-01T09:59:59Z', False), ('2026-10-01T10:00:00Z', False),
+                             ('not a time', False), (None, False),
+                             ('2026-10-01T10:00:01Z', True)):
+            with self.subTest(stamp=stamp):
+                old = self.rec(code=G.FAILED)
+                old['started_at'] = stamp
+                self.legacy(old)
+                want = old if later else new
+                self.assertEqual(result.read(self.repo.root, 'kit/x'), (want, None))
+                self.assertEqual(result.wait(self.repo.root, 'kit/x', self.tip, timeout_s=0),
+                                 (want, None))
+                self.assertEqual(result.read(self.repo.root, 'kit/x', legacy=False), (new, None))
+        unstamped = dict(new, started_at='not a time')          # the new one's own stamp unread
+        result.write(self.repo.root, unstamped)
+        self.assertEqual(result.read(self.repo.root, 'kit/x'), (unstamped, None))
+
+    def test_a_new_record_that_cannot_be_read_is_never_covered_by_an_old_one(self):
+        result_drive(self)
+        self.legacy(self.rec())
+        path = result.result_path(self.repo.root, 'kit/x')
+        os.makedirs(os.path.dirname(path))
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('{"verdict": "pa')                           # cut short
+        rec, why = result.read(self.repo.root, 'kit/x')
+        self.assertIsNone(rec)
+        self.assertTrue(why.startswith('cannot read %s' % path), why)
+        self.assertEqual(result.wait(self.repo.root, 'kit/x', self.tip, timeout_s=0),
+                         (None, 'timeout'))
+
+    def test_wait_finishes_a_dead_old_folder_record_where_it_is(self):
+        result_drive(self)
+        p = testutil.dead_process()
+        self.addCleanup(p.wait)
+        old = self.rec(kind='land', code=None, verdict='running', pid=p.pid, log='L')
+        path = self.legacy(old)
+        got, why = result.wait(self.repo.root, 'kit/x', self.tip, kind='land', timeout_s=0)
+        self.assertIsNone(why)
+        self.assertEqual((got['verdict'], got['run_id'], got['log']), ('error', old['run_id'], 'L'))
+        self.assertEqual(result.read_path(path), (got, None))    # finished in the old folder
+        self.assertTrue(os.path.exists(result.lock_path(path)))  # under that file's own lock
+        self.assertFalse(os.path.exists(result.result_dir(self.repo.root)))
+
+    def test_the_readers_of_every_record_list_the_new_folder_then_the_old(self):
+        result_drive(self)
+        dirs = result.record_dirs(self.repo.root)
+        self.assertEqual(len(dirs), 2)
+        self.same(dirs[0], result.result_dir(self.repo.root))
+        self.same(dirs[1], self.old_dir)
+
+    def test_running_records_are_the_new_folders_only(self):
+        result_drive(self)
+        rid = 'ab' * 8
+        self.legacy(self.rec(kind='land', code=None, verdict='running', run_id=rid))
+        mine = self.rec(branch='kit/y', kind='land', code=None, verdict='running', run_id=rid)
+        result.write(self.repo.root, mine)
+        self.assertEqual(result.running_records(self.repo.root, 'land', rid), [mine])
+
+
 class BranchGateWrites(fixtures.GateRepoCase):
     def gate(self, wt, **kw):
         kw.setdefault('log_dir', self.logs)
@@ -527,6 +682,25 @@ class LandingWrites(fixtures.GateRepoCase):
         self.assertIsNone(out.result_record)
         self.assertTrue(any(l.startswith('WARNING: the result record') for l in said), said)
 
+    def test_a_landing_with_no_result_folder_is_refused_and_lands_nothing(self):
+        """No dev_drive in the machine config: no folder for the land records the waiting
+        session reads, so the landing refuses before it joins the queue, writing nothing."""
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        lander = self.lander('kit/feature', self.main, tip)
+        self._kit_dev_drive = None
+        machine_config(None, {}, case=self)
+        out = lander.run()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertEqual(len(out.lines), 1, out.lines)
+        self.assertTrue(out.lines[0].startswith(
+            'REFUSED: no result folder for the land records: the machine config sets no '
+            'dev_drive'), out.lines)
+        self.assertTrue(out.lines[0].endswith('; nothing was changed'), out.lines)
+        self.assertIsNone(out.result_record)
+        self.assertEqual(self.repo.git('rev-parse', 'refs/remotes/origin/main'), self.main)
+        self.assertFalse(os.path.exists(result.legacy_dir(self.repo.root)))
+        self.assertEqual(self.book_calls, [])
+
     def test_an_exception_after_the_checks_writes_error(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
 
@@ -551,6 +725,7 @@ class WaitResultEntry(unittest.TestCase):
         self.addCleanup(self.repo.cleanup)
         self.repo.write('a.txt', 'a\n')
         self.tip = self.repo.commit('a', 'a.txt')
+        result_drive(self)              # before gate_py's test_env: the tool reads it there
 
     def put(self, code, kind='gate', tip=None, verdict=None):
         result.write(self.repo.root, result.build('kit/x', tip or self.tip, None, kind, code,
