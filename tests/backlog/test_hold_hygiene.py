@@ -119,6 +119,7 @@ class BlockCitationError(unittest.TestCase):
                             ('R-9647: until no live session uses a *-conductor stem', None),
                             ('until Q-1027 is answered', None),
                             ('until T-104 is done', None),
+                            ('A-025: until the owner decides the approval', None),
                             ('until item:EX-OTHER closes', None),
                             (None, 'Q-1027: which of the two?')):
             with self.subTest(reason=reason, ask=ask):
@@ -130,7 +131,8 @@ class BlockCitationError(unittest.TestCase):
                 self.assertIsNone(rmod.block_citation_error([m]))
 
     def test_a_malformed_id_is_not_a_citation(self):
-        for reason in ('per R-12 for now', 'per aR-9092 for now', 'per Q-12 for now'):
+        for reason in ('per R-12 for now', 'per aR-9092 for now', 'per Q-12 for now', 'per A-12 for now',
+                       'per aA-025 for now'):
             with self.subTest(reason=reason):
                 self.assertIsNotNone(rmod.block_citation_error(['deliberate'], reason))
 
