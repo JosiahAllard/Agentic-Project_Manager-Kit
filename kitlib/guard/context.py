@@ -194,8 +194,8 @@ def _ledger_keys(data, pm, out):
 def _ledger_checked(u):
     """`u` (a user() answer) with each ledger key checked: a blank one is unset (nothing to hold)
     and sets 'broken'; one that is not absolute once read (`C:books`) and a ledger_dir that exists
-    and is not a folder (a trailing separator dropped first: `Z:\\books\\` names the file
-    `Z:\\books`) set 'broken' and are still held as given, so no session writes what the guard
+    and is not a folder (a trailing separator dropped first: `<ledger_dir>\\` names the
+    file `<ledger_dir>`) set 'broken' and are still held as given, so no session writes what the guard
     held before. A folder not made yet (ledger.py makes it) or outside the PM repository is
     accepted. An earlier 'broken' is kept: it is the first cause."""
     for k in LEDGER_KEYS:
