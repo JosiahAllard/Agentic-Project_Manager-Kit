@@ -40,6 +40,20 @@ class TrailerNamesADifferentPath(unittest.TestCase):
         self.assertIn('Owner-Approved .claude/', missing[3])
 
 
+class HubApprovalRows(unittest.TestCase):
+    def test_a_merge_with_a_hub_trailer_is_missing_and_lists_it(self):
+        [row] = reviewpack.owner_approval_rows(
+            [('a', ['CLAUDE.md'], [], None, ['hub:A-001'], True)], Rules())
+        self.assertEqual(row[1], 'MISSING')
+        self.assertIn('Owner-Approval hub:A-001', row[3])
+        self.assertNotIn('none', row[3])
+
+    def test_the_same_trailer_on_a_plain_commit_is_ok(self):
+        [row] = reviewpack.owner_approval_rows(
+            [('a', ['CLAUDE.md'], [], None, ['hub:A-001'], False)], Rules())
+        self.assertEqual(row[1], 'ok')
+
+
 class ApprovalIsPerCommit(unittest.TestCase):
     def test_a_sibling_commits_trailer_does_not_approve_this_one(self):
         got = rows(('a1b2c3d', ['CLAUDE.md'], ['CLAUDE.md']), ('e4f5a6b', ['CLAUDE.md'], []))
