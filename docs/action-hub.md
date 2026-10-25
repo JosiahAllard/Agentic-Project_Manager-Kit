@@ -287,7 +287,7 @@ item: "Who handles a pending item" below. For a question, the server takes `--fr
 key of the launcher's sessions.json, read again on each add; any other value is refused, and a
 question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
 until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), or
-marks it done when it needs no ruling (`questions done`), as for any other answer, so a plain wait would print the same answer again at once: a caller
+marks it done when it needs no ruling (`questions done`), as for any other answer, so each `pending` read lists it again and a plain wait would print it again at once: a caller
 that does wait passes `--except` and every id it has acted on (`wait --pending --for
 <its key> --except Q-7 T-3`), which leaves those ids out and ends only on another item. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
@@ -358,8 +358,8 @@ Notes on the table:
   `HUB <rev> <collection> <id> <op> <status>`; `--for` or `--except` without `--pending` is a
   usage error. `--timeout S` exits 4 with no line when nothing came. No session keeps a wait
   running: the PM and each coordinator read `pending --for <key>` once at start and the hub
-  pushes the rest ("Push notifications"); the verb stays for a caller that wants it, and a PM
-  waiting there is what the page shows as listening. A plain `wait --pending` would
+  pushes the rest ("Push notifications"); the verb stays for a caller that wants it. The page
+  still shows a PM wait as listening, so with push alone it shows no PM listening. A plain `wait --pending` would
   end at once on an item a creator holds and not yet acknowledged, again and again.
 
 `--if-version V` is the version of the document the PM read and decided on (the `v2` of the
@@ -374,10 +374,10 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
 `kitlib/hubsite/api.py` docstring):
 - An item for `pm` is the PM's.
 - An item for a session key, before it is handed over, is that key's while the key can be reached:
-  a `wait --pending --for <key>` is open now, one started or ended within `REACH_GRACE_S` (the
-  55-second wait limit plus 30 seconds), or a push was written to it within `ACK_WINDOW_S`
-  (`Api.pushed`, which the push worker calls for each written try to a key other than `pm`,
-  "Push notifications"), so a session told by push with no wait open keeps its items. Otherwise
+  a push was written to it within `ACK_WINDOW_S` (`Api.pushed`, which the push worker calls for
+  each written try to a key other than `pm`, "Push notifications"), the usual case since no
+  session keeps a wait open; or a `wait --pending --for <key>` is open now, or one started or
+  ended within `REACH_GRACE_S` (the 55-second wait limit plus 30 seconds). Otherwise
   it is the PM's.
 - A `pending` or `wait` `--for <key>` that returns one of the key's items hands it over. The item
   is then the key's for `ACK_WINDOW_S` (30 minutes) from the first hand-over, and the PM's after
@@ -604,8 +604,8 @@ The hub files the owner's answer to a bound question into the record itself, in 
    too), `held` otherwise (it still waits on more, or it was open), and null when a read that
    decides it cannot tell (no record view, a view that raised, no fields, a completed record). The push reads it to choose who hears ("Push notifications"). A filed
    question stays pending for its asker, with `filed` true, until the asker logs it (`questions
-   log`, where a ruling is bound) or marks it done (`questions done`), so an asker between waits
-   when the owner answers still finds the answer on its next `wait --pending --for KEY`. It is the
+   log`, where a ruling is bound) or marks it done (`questions done`), so an asker busy
+   when the owner answers still finds the answer in the push and on its next `pending --for KEY`. It is the
    PM's only when the PM asked it or its asker cannot be reached ("Who handles a pending item").
    The page shows a filed card as `filed in <record id> · waiting for <asker> to read it` (the PM
    for its own question) and keeps its Change answer button: a re-answer files again.

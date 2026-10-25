@@ -30,7 +30,8 @@ or equivalent) load on top of this file and win any disagreement.
    (a bound answer the owner made one), and every bound answer whose filing failed (it stays
    `answered` with `filing` set: handle it as an unbound one). A bound answer the hub filed into
    its record is its asker's: read the checklist's filed digest for your information, and log
-   or mark done only the ones you asked. A paired browser stays
+   or mark done only the ones you asked. One that sits in your own pending list because its asker
+   could not be reached (the window above ran out) is yours: log it or mark it done. A paired browser stays
    paired after a hub restart; `hub.py unpair` ends every browser's session.
 4. Read the hand-off file (HANDOFF.md in the PM repo), then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
