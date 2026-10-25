@@ -41,6 +41,11 @@ KNOWN_FAILS = {
     'git push --no-verify of HEAD from the main checkout':
         'HEAD is the main checkout\'s branch only there: the Instead stays in the main checkout, which '
         'the write jail refuses a subagent',
+    'git alias whose shell value is a try block running a heavy program':
+        'GAP (kitlib/guard/rules.py alias_heavy_run, ~line 4863): the value `try { godot --headless } catch '
+        '{ }` is not one clean command, so the lock-wrapped run is not offered and the plain try block is '
+        'printed, which the heavy rule refuses again; the bare `godot --headless` value and the same alias '
+        'wrapped in a try around the whole git call both get the machine_lock line',
 }
 
 FILL = {'<subject>': 'x', '<what>': 'x', '<each path you changed>': 'a.txt'}
@@ -169,6 +174,18 @@ CASES = [
     ('Start-Process cp -WorkingDirectory into main', jail_world,
      lambda w: ps("Start-Process cp -ArgumentList 'a.txt','b.txt' -WorkingDirectory '%s'" % f(w.main), w.wt, True),
      None, 'main-checkout'),
+    # git archive's output file is a write target: --prefix's value is not it, -o is
+    ('git archive --prefix <p> -o out of the jail', jail_world,
+     lambda w: bash('git archive --prefix p -o "%s/out.tar" HEAD' % f(w.plain), w.wt, True), None, 'write-jail'),
+    ('git archive --prefix <p>/ -o into a read-only data root', jail_world,
+     lambda w: bash('git archive --prefix p/ -o "%s/out.tar" HEAD' % f(w.ro), w.wt, True), None, 'write-jail'),
+    # an alias that runs a heavy program: the machine lock's run line, wherever the git call sits
+    ('git alias running a heavy program, PowerShell', jail_world,
+     lambda w: ps("git -c 'alias.x=!godot --headless' x", w.wt, True), None, 'git-alias'),
+    ('git alias running a heavy program inside a try block', jail_world,
+     lambda w: ps("try { git -c 'alias.x=!godot --headless' x } catch { }", w.wt, True), None, 'git-alias'),
+    ('git alias whose shell value is a try block running a heavy program', jail_world,
+     lambda w: ps("git -c 'alias.x=!try { godot --headless } catch { }' x", w.wt, True), None, 'git-alias'),
 ]
 
 
@@ -307,6 +324,60 @@ class Forms(unittest.TestCase):
         d = self.instead(bash('git -C "%s" merge-tree --write-tree a b' % f(self.w.ro), self.w.plain, True))
         self.assertEqual((d.rule, d.instead), ('write-jail', 'pwd'))
         self.assertIn('To see where this session runs:', d.reason)
+
+
+class JailForms(unittest.TestCase):
+    """What the write jail answers for the forms the follow-up review named."""
+
+    def setUp(self):
+        self.w = jail_world()
+        self.addCleanup(self.w.cleanup)
+        self.wt = f(self.w.wt)
+
+    def test_an_indexed_variable_target_is_unplaced_with_a_form_to_fill(self):
+        # the parenthesised index is no literal path, as a plain $x[1] is none: the guard cannot tell
+        # where Set-Content writes, and the Instead is the same cmdlet on a literal path in the worktree
+        for target in ('$x[(1)]', '$x[1]'):
+            with self.subTest(target):
+                d = decide(ps('Set-Content %s y' % target, self.w.wt, True), self.w.ctx())
+                self.assertEqual((d.verdict, d.rule), ('deny', 'unplaced'))
+                self.assertIn('a target that is not literal: %s' % target, d.reason)
+                self.assertEqual(d.instead, 'Set-Content "%s/<file>" y' % self.wt)
+
+    def test_git_archive_names_its_output_file_as_the_write_target(self):
+        # --prefix takes the next word (p), so the -o after it is read; out of the jail the answer is the
+        # same archive written into the worktree, and that Instead passes
+        for prefix in ('p', 'p/'):
+            with self.subTest(prefix):
+                ev = bash('git archive --prefix %s -o "%s/out.tar" HEAD' % (prefix, f(self.w.plain)), self.w.wt, True)
+                d = decide(ev, self.w.ctx())
+                self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'))
+                self.assertIn('makes %s/out.tar' % f(self.w.plain), d.reason)
+                self.assertEqual(d.instead, 'git -C "%s" archive --prefix %s -o "%s/out.tar" HEAD'
+                                 % (self.wt, prefix, self.wt))
+        # the same archive into the worktree writes inside the jail
+        self.assertIsNone(decide(bash('git archive --prefix p -o out.tar HEAD', self.w.wt, True), self.w.ctx()))
+
+    def test_read_only_retargets_the_same_verb_and_add_only_asks_for_a_new_name(self):
+        # READ_ONLY: the same command on the same file name in the worktree (jail_refusal's rewrite);
+        # ADD_ONLY, a file that exists: the same verb on <new file name> in the folder (a form to fill);
+        # ADD_ONLY, a new file: allowed
+        add_old = os.path.join(self.w.add, 'old.txt')
+        os.makedirs(self.w.add, exist_ok=True)
+        with open(add_old, 'w', encoding='utf-8') as fh:
+            fh.write('x')
+        for cmd, ro, add in (('cp a.txt "%s"', 'cp a.txt "%s/x.txt"', 'cp a.txt "%s/<new file name>"'),
+                             ('mv a.txt "%s"', 'mv a.txt "%s/x.txt"', 'mv a.txt "%s/<new file name>"'),
+                             ('Set-Content "%s" y', 'Set-Content "%s/x.txt" y', 'Set-Content "%s/<new file name>" y')):
+            shell = ps if cmd.startswith('Set-Content') else bash
+            with self.subTest(cmd):
+                d = decide(shell(cmd % (f(self.w.ro) + '/x.txt'), self.w.wt, True), self.w.ctx())
+                self.assertEqual((d.rule, d.instead), ('write-jail', ro % self.wt))
+                self.assertIn('read-only for agent sessions', d.reason)
+                d = decide(shell(cmd % f(add_old), self.w.wt, True), self.w.ctx())
+                self.assertEqual((d.rule, d.instead), ('write-jail', add % f(self.w.add)))
+                self.assertIn('an add-only data folder', d.reason)
+        self.assertIsNone(decide(bash('cp a.txt "%s/new.txt"' % f(self.w.add), self.w.wt, True), self.w.ctx()))
 
 
 class PushForms(unittest.TestCase):

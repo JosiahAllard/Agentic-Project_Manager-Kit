@@ -1,9 +1,7 @@
 """kitlib.git.stray and tools/checkout_guard.py: the main checkout's stray changes and the guard's
 exit codes, against real throwaway repositories.
 
-Ported from the PM kit's test_checkout_guard.py (Classify's CLI and hung-git cases,
-MainCheckoutUntracked, PrintSafe); its stray-writer attribution tests went with the attribution
-(PM ruling, see kitlib/git/stray.py). The fixture is a
+The fixture is a
 main work tree with linked worktrees w and v INSIDE it at .claude/worktrees/, the real shape.
 """
 import contextlib

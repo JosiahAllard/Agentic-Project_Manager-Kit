@@ -272,6 +272,12 @@ the PM's pm_watch heartbeat at the worker's latest read, state 'up', 'down' (old
 WATCHER_STALE_S) or 'none' (no heartbeat readable), age its seconds (null with none). A status
 that raises is 'down' with a null age.
 
+Code. GET snapshot and GET health carry `code`: null when this hub gives none, else {"stale",
+"restart"} from Hub.code_state (kitlib.hubsite.codestale): stale is true once the hub code on disk
+is newer than this process, restart the owner's to-do text then (null otherwise). The server sets
+Api.code_status when it is built; a status that raises or is not an object gives null. The
+tunnel's health holds fixed words only and carries none.
+
 Pending for one session. Every pending item carries `from`, the session key it is for
 (Api.pending). GET pending and GET wait (with pending=1) take `for=<key>`: only that key's
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
@@ -617,6 +623,7 @@ class Api(object):
         self._handed = {}           # (kind, id) -> (session key, `now` of the first hand-over)
         self._pushed = {}           # session key -> `now` of the latest push written to it
         self.watcher_status = None  # PushWorker.watcher_status, set by the worker ("Watcher")
+        self.code_status = None     # Hub.code_state, set by serve.build ("Code")
 
     def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False,
              agent_words=False, strong=False):
@@ -936,6 +943,17 @@ class Api(object):
             got = fn()
         except Exception:           # noqa: BLE001 - the snapshot answers whatever the worker does
             return {'state': 'down', 'age': None}
+        return got if isinstance(got, dict) else None
+
+    def code_seen(self):
+        """The server's `code` object (module docstring "Code"), or None. Never raises."""
+        fn = self.code_status
+        if fn is None:
+            return None
+        try:
+            got = fn()
+        except Exception:           # noqa: BLE001 - the snapshot and health answer whatever it does
+            return None
         return got if isinstance(got, dict) else None
 
 
@@ -2403,7 +2421,7 @@ def snapshot(api, req):
     return {'revision': revision, 'collections': docs,
             'pending': _unpath_pending(api, api.pending(), req),
             'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
-            'push': api.push_seen(), 'watcher': api.watcher_seen(),
+            'push': api.push_seen(), 'watcher': api.watcher_seen(), 'code': api.code_seen(),
             'strong': req.strong is True}
 
 
@@ -2417,7 +2435,7 @@ def health(api, req):
         out.update(extra)
     out.pop('store', None)
     out.update(ok=True, version=API_VERSION, revision=api.store.revision, unavailable=missing,
-               watcher=api.watcher_seen(), push=api.push_seen())
+               watcher=api.watcher_seen(), push=api.push_seen(), code=api.code_seen())
     if req.role == OWNER:           # where the store is on this machine is the owner's to know
         out['store'] = api.store.root
     return out
