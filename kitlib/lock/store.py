@@ -398,6 +398,34 @@ def public(d):
 
 
 # ------------------------------------------------------------------ the run mutex
+def wrapper_state(pid, ctime):
+    """Is the wrapper (pid, ctime) of a run record live? True when pid names a running process
+    created at ctime. False when it surely names none: no such pid, one that has exited, or one
+    created at another time. None when that cannot be told: the process cannot be opened (another
+    user's or a protected one; a reused pid can name one, such as a SYSTEM svchost, and
+    process.alive then says alive without its creation time), or ctime is missing. A pid without
+    a matching creation time is never proof of life (run_live then asks the run mutex)."""
+    try:
+        pid = int(pid)
+        ctime = None if ctime is None else int(ctime)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return False
+    h = K32.OpenProcess(win32.QUERY_LIMITED | win32.SYNCHRONIZE, False, pid)
+    if not h:
+        return False if ctypes.get_last_error() == win32.ERROR_INVALID_PARAMETER else None
+    try:
+        if K32.WaitForSingleObject(h, 0) != win32.WAIT_TIMEOUT:
+            return False
+        made = process.handle_ctime(h)
+        if ctime is None or made is None:
+            return None
+        return made == ctime
+    finally:
+        K32.CloseHandle(h)
+
+
 class RunMutex:
     """A run's liveness signal: mutex run.<id>, created owned by a thread of its own, which keeps
     it until release(). Windows abandons it when the wrapper dies, so the next look at the queue
@@ -506,17 +534,38 @@ class Store:
                 return True
         except (TypeError, ValueError):
             return True
+        return self.run_mutex_held(str(e["id"])) is False
+
+    def run_mutex_held(self, rid):
+        """Is run rid's mutex owned by a live wrapper? True when it is; False when it is gone,
+        abandoned or unowned (an unowned one is taken and let go at once); None when this process
+        may not open it."""
         h = K32.OpenMutexW(win32.SYNCHRONIZE | win32.MUTEX_MODIFY_STATE, False,
-                           self.mutex_name("run." + str(e["id"])))
+                           self.mutex_name("run." + rid))
         if not h:
-            return ctypes.get_last_error() != win32.ERROR_ACCESS_DENIED
+            return None if ctypes.get_last_error() == win32.ERROR_ACCESS_DENIED else False
         try:
             if K32.WaitForSingleObject(h, 0) in (WAIT_OBJECT_0, WAIT_ABANDONED_0):
                 K32.ReleaseMutex(h)
-                return True
-            return False
+                return False
+            return True
         finally:
             K32.CloseHandle(h)
+
+    def run_live(self, d):
+        """Is record or entry d's wrapper live? Its pid and creation time decide when they can be
+        checked (wrapper_state). When they cannot (a process this user may not open, which a
+        reused pid can name, or a record with no creation time), its run mutex decides: a wrapper
+        holds it from before its record is written until after the record leaves active/
+        (run.claim_id, run.settle), so one gone, abandoned or unowned means the wrapper is gone.
+        A mutex this process may not open, or a d with no run id, counts as live."""
+        state = wrapper_state(d.get("pid", 0), d.get("ctime"))
+        if state is not None:
+            return state
+        rid = d.get("id")
+        if not isinstance(rid, str) or not ID_RE.match(rid):
+            return True
+        return self.run_mutex_held(rid) is not False
 
     # -------------------------------------------------------------- records
     def write(self, rel, data, replace_s=2.0):
@@ -555,7 +604,7 @@ class Store:
             pass
 
     def live_runs(self, prune=False):
-        """Run records whose wrapper (pid and creation time) is alive. prune: delete the others,
+        """Run records whose wrapper is live (run_live). prune: delete the others,
         orphaned .stop and .giveback files (kitlib.lock.giveback) and dead writers' .tmp files."""
         out, folder = [], self.path("active")
         try:
@@ -577,7 +626,7 @@ class Store:
             d = read_json(p)
             if d is None:
                 continue
-            if process.alive(d.get("pid", 0), d.get("ctime")):
+            if self.run_live(d):
                 out.append(d)
             elif prune:
                 remove(p)

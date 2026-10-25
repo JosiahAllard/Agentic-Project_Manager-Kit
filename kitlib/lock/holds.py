@@ -175,11 +175,12 @@ def recorded_slots(L, h):
     return out
 
 
-def claim_alive(h):
+def claim_alive(store, h):
+    """Is the run that claimed agent hold h live (store.run_live: its pid and creation time, or
+    its run mutex when they cannot be checked)? False when there is no claim or it is malformed."""
     c = h.get("claim")
     try:
-        from kitlib.proc import process
-        return bool(c) and process.alive(int(c["pid"]), c.get("ctime"))
+        return bool(c) and int(c["pid"]) > 0 and store.run_live(c)
     except (TypeError, KeyError, ValueError, AttributeError):
         return False
 
@@ -284,7 +285,7 @@ def records(store, L, prune=False):
                 continue
             d["slots"] = sl
             d["_lapse"] = d["_start"] + grace
-            d["_claimed"] = claim_alive(d)
+            d["_claimed"] = claim_alive(store, d)
             if d["_end"] > now and (d["_claimed"] or now < d["_lapse"]):
                 agents.append(d)
             elif prune:
