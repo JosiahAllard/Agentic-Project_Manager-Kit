@@ -204,11 +204,18 @@ class KeepClearTest(_PmRepo):
         self.assertEqual(user.config_dir(self.home), None)
         self.assertEqual(user.keep_clear_dirs(self.home), [self.folder, self.home_cfg()])
 
-    def test_bad_keeps_clear_of_nothing(self):
+    def test_bad_with_a_good_pointer_keeps_clear_of_the_pm_folder(self):
+        os.makedirs(self.policy)                  # config.json is a folder: the config cannot be read
+        user.forget()
+        self.assertEqual(user.locate(self.home).state, user.BAD)
+        self.assertIsNone(user.config_dir(self.home))
+        self.assertEqual(user.keep_clear_dirs(self.home), [self.folder])
+
+    def test_bad_with_a_file_where_the_folder_goes_still_keeps_clear_of_it(self):
         self.write(self.folder, 'a file where the folder goes')
         user.forget()
         self.assertEqual(user.locate(self.home).state, user.BAD)
-        self.assertEqual((user.config_dir(self.home), user.keep_clear_dirs(self.home)), (None, []))
+        self.assertEqual(user.keep_clear_dirs(self.home), [self.folder])
 
 
 class FileByKeyTest(_PmRepo):

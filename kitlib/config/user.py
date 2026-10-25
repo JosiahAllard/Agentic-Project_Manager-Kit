@@ -30,8 +30,8 @@ from .migration import OLD_DIR_NAME
 from .types import ConfigError, Email, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
 
 # The machine config's folder in the home folder. The one place the kit names it: code derives
-# the folder from config_dir() and messages from display(), so a new name changes this
-# line only.
+# the folder from config_dir() (None unless the PM repository holds the config), keep_clear_dirs()
+# and messages from display(), so a new name changes this line only.
 DIR_NAME = '.pm-kit'
 FILE_NAME = 'config.json'
 
@@ -804,11 +804,17 @@ def keep_clear_dirs(home=None):
     """Every folder that still holds the machine config, for a caller that only keeps clear of
     them (the agent-temp sweep and machine setup): the PM repository's `.pm-kit` for OK and
     LEFTOVER, the folder of the config file still in the home folder for UNMOVED and LEFTOVER;
-    none for NONE and BAD (no config is known to be anywhere). Never raises."""
+    for BAD the PM repository's `.pm-kit` when the pointer is good (the config cannot be read, but
+    the folder may exist), else nothing; none for NONE (no config is known to be anywhere).
+    Never raises."""
     loc = locate(home)
     dirs = []
     if loc.state in (OK, LEFTOVER) and loc.folder:
         dirs.append(loc.folder)
+    elif loc.state == BAD:
+        p = _pointer()
+        if p.state == OK_POINTER:
+            dirs.append(os.path.join(os.path.normpath(p.path), DIR_NAME))
     if loc.state in (UNMOVED, LEFTOVER) and loc.leftover:
         dirs.append(os.path.dirname(loc.leftover))
     return dirs

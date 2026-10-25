@@ -257,7 +257,7 @@ class RulingCitesUnchecked(unittest.TestCase):
         kit_json_ref(self.repo, {'backlog': {'ledger_repo': 'kit'}})  # the ledger's repo column
 
     def configure(self, **extra):
-        os.makedirs(os.path.join(self.home, kuser.DIR_NAME), exist_ok=True)
+        os.makedirs(os.path.dirname(kuser.config_file(self.home)), exist_ok=True)
         with open(kuser.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump(dict(ledger_path=self.ledger, **extra), f)
 
