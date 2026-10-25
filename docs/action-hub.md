@@ -301,6 +301,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | Verb | Prints |
 |---|---|
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
+| `questions show Q-1 [--json]` | the `Q-1 v2 answered [repo] title` line, then its options (the recommended one marked), context, answer and note |
 | `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID] [--from KEY]` | `ASKED Q-2`, then any warning lines |
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
