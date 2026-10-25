@@ -282,7 +282,8 @@ class Flake(RerunCase):
         self.assertEqual(out.code, G.OK, out.lines + out.said)
         self.assertTrue(out.lines[0].startswith('RERUN FLAKE'), out.lines)
         add = out.lines[-1].strip()
-        self.assertIn('add FLAKE-CASE', add)
+        # the id it proposes is FLAKE- and the failing test's class name
+        self.assertIn(' add FLAKE-%s ' % ID.split('.')[-2].upper(), add)
         self.assertIn('--scope flaky_mod.py', add)
         self.assertIn('--found-on %s' % BRANCH, add)
         self.assertIn('report this line to your coordinator', out.lines[-2])
