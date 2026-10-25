@@ -215,14 +215,19 @@ class PullResume(StoppedCase):
                          ['  resume on %s? Work stopped there at abcdef1234, branch kept' % OTHER])
 
     def test_the_note_block_writes_is_the_note_pull_reads(self):
-        # stop_pull's own text, not a copy of it: block, unblock, then pull.
-        self.seed(priced('FOO', pulled_by=BRANCH, **PULLED))
-        tip = self.tip(BRANCH)
+        # stop_pull's own text, not a copy of it: block, unblock, then pull. The branch is gone
+        # by the unblock, so the record opens (a live one gets its pull back:
+        # tests/backlog/test_unblock_restores_pull.py).
+        self.repo.git('branch', OTHER)
+        self.seed(priced('FOO', pulled_by=OTHER, **PULLED))
+        tip = self.tip(OTHER)
+        self.ctx.liveness = lambda b: (None, tip)
         self.verb('block', 'FOO', ['live-client'], reason=WHY)
+        self.repo.git('branch', '-D', OTHER)
         self.verb('unblock', 'FOO')
         self.assertEqual(self.resume(self.verb('pull', 'FOO')),
                          ['  resume on %s? Work stopped there at %s, branch kept'
-                          % (BRANCH, tip[:10])])
+                          % (OTHER, tip[:10])])
 
 
 class Opener(unittest.TestCase):
