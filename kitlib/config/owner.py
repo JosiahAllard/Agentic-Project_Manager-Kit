@@ -1,5 +1,4 @@
-"""Owner-only paths and the owner's identity: the one rule every tool applies (ported from the PM
-kit's tools/_owner_only.py; config moved from "doc_budget" to the `owner` section).
+"""Owner-only paths and the owner's identity: the one rule every tool applies.
 
   paths          only the owner changes these. An entry ending `/` locks every path under it, and
                  `<trailer>: <that entry>` is a blanket approval for them; any other entry is one

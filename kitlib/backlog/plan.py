@@ -1,5 +1,4 @@
-"""The write verbs as plans: `plan_<verb>(snap, ctx, ...) -> Change` (ported from earlier
-per-repository tools/backlog.py copies, with the keys and verbs the kit dropped cut).
+"""The write verbs as plans: `plan_<verb>(snap, ctx, ...) -> Change`.
 
 A plan only decides. It reads the snapshot it is given, refuses (Usage, Refusal, NotFound,
 Failure) or returns the records to write, and never touches a file, a ref or the screen. The
