@@ -1,4 +1,4 @@
-"""The kit tools that run the doc tools, called the way they call them: board (kitlib.board.report
+"""The kit tools that run the doc tools, called the way they call them: board (kitlib.preflight.board
 docs_line: doc_index.py --stale -C), commit (kitlib.commit doc_budget_check: doc_budget.py -C) and
 review_pack (kitlib.reviewpack docs_line: doc_budget.py -C --base --head). Each must reach a real
 verdict from this kit's tools/, never NOT CHECKED, a USAGE error or a refusal."""
@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from kitlib import commit, reviewpack
-from kitlib.board import report as board
+from kitlib.preflight import board
 from tests.docs.test_cli import repo_with_docs
 from tests.gitfixture import fixture_env
 

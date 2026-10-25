@@ -1014,10 +1014,10 @@ NETSTAT = ('\nActive Connections\n\n  Proto  Local Address          Foreign Addr
 class TheEngineAndPortLines(unittest.TestCase):
     """A Godot repository's (and a mixed one's Godot-only) engines and ports lines, driven by config."""
 
-    def readings(self, cfg, answers, board=False):
+    def readings(self, cfg, answers):
         s = dict({'engines': [], 'udp_ports': None}, **cfg)
         with mock.patch.object(machine, 'run', lambda argv, **kw: answers[argv[0]]):
-            return machine.board_line(s) if board else machine.preflight_lines(s)
+            return machine.preflight_lines(s)
 
     def test_engines_are_counted_by_prefix_case_blind(self):
         [line] = self.readings({'engines': ['godot', 'engine.exe']}, {'tasklist': (0, TASKLIST, '')})

@@ -24,13 +24,13 @@ import sys
 from .kit import HOST, catalog, child_environment, current_role, discover, load_kit, trailer
 
 
-TOOLS = frozenset(("preflight", "board", "backlog", "gate", "land", "landed", "review_pack",
+TOOLS = frozenset(("preflight", "backlog", "gate", "land", "landed", "review_pack",
                    "machine_lock", "worktree_paths", "new_worktree", "worktree_remove",
                    "worktree_sweep_task", "lock_release_check", "commit", "sync_base", "ledger",
                    "pending", "doc_budget", "doc_index", "codemap", "pieces",
                    "forbidden", "trailers", "machine_paths", "checkout_guard",
                    "agent_roster", "pytests", "testlist", "tool_deps", "redfirst", "daily_full"))
-READ_TOOLS = {"preflight", "board", "landed", "review_pack", "worktree_paths", "lock_release_check",
+READ_TOOLS = {"preflight", "landed", "review_pack", "worktree_paths", "lock_release_check",
               "doc_index", "codemap", "trailers", "machine_paths",
               "checkout_guard", "agent_roster", "testlist", "tool_deps"}
 READ_BACKLOG = {"next", "show", "list", "check", "landable", "stale"}
