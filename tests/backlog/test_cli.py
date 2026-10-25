@@ -242,7 +242,7 @@ class Cli(unittest.TestCase):
 class RulingCitesUnchecked(unittest.TestCase):
     """A ledger the machine config names is never read by tools/backlog.py: `check` does not test
     a record's cited ruling against it, and no write takes a ruling: the role check decides an
-    owner's price, whatever the machine config calls the standing delegation."""
+    owner's price."""
     run_tool, run_process, ok = Cli.run_tool, Cli.run_process, Cli.ok  # Cli's sandbox only
     LEDGER = ('# Rulings ledger (test fixture)\n\n'
               '## R-9168 | 2026-09-25 08:08Z | kit | typed\n\nstand-in text\nItems: FOO\n\n'

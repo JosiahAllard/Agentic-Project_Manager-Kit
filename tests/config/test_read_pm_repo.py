@@ -77,10 +77,21 @@ class TwoFilesTest(_PmRepo):
 
     def test_a_dropped_key_in_either_file_is_refused(self):
         for path in (self.policy, self.local):
-            for key in ('ledger_refs', 'conductor_start'):
+            for key in ('conductor_start',):
                 self.write(path, {key: {}})
                 self.refused('%s: %s is a key the move drops' % (path, key))
             os.remove(path)
+
+    def test_a_retired_key_in_either_file_loads_and_is_not_returned(self):
+        for path in (self.policy, self.local):
+            for key in user.RETIRED:
+                self.write(path, {key: {}})
+                self.assertNotIn(key, user.user_config(self.home))
+            os.remove(path)
+        self.write(self.policy, {'standing_delegation': RID, 'daily_red_ruling': RID})
+        cfg = user.user_config(self.home)
+        self.assertEqual(cfg['daily_red_ruling'], RID)
+        self.assertNotIn('standing_delegation', cfg)
 
     def test_pm_data_in_either_file_is_derived_never_read(self):
         for path in (self.policy, self.local):

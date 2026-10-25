@@ -178,11 +178,9 @@ class RetiredKeyTest(unittest.TestCase):
             self.write({'ledger_path': self.ledger, 'ledger_refs': value})
             self.assertEqual(self.read()['ledger_path'], self.ledger, repr(value))
 
-    def test_the_pm_repositorys_config_refuses_a_retired_key(self):
+    def test_the_pm_repositorys_config_loads_a_retired_key_and_does_not_return_it(self):
         machine_config(self.home, {'ledger_path': self.ledger, 'ledger_refs': {}}, case=self)
-        with self.assertRaises(config.ConfigError) as cm:
-            user.user_config(self.home)
-        self.assertIn('ledger_refs is a key the move drops', str(cm.exception))
+        self.assertNotIn('ledger_refs', user.user_config(self.home))
 
     def test_no_schema_key_is_retired_and_no_doc_line_names_one(self):
         for key in user.RETIRED:

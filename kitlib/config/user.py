@@ -894,7 +894,7 @@ def _read_pm(loc):
             continue
         kept = {}
         for k, v in data.items():
-            if is_note(k):
+            if is_note(k) or k in RETIRED:
                 continue
             if k in DROPPED_KEYS:
                 errs.append(_dropped(k, path))
