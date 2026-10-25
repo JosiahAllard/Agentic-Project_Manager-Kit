@@ -61,6 +61,7 @@ from kitlib.config import owner as ownermod
 from kitlib.git import cmd as gitcmd
 from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
+from kitlib.guard import ownercommits
 from kitlib.records import gate_ok
 from kitlib import verdict
 from kitlib.docs import callers as doc_callers
@@ -286,20 +287,31 @@ def trailers_of(message, key=TRAILER):
 
 
 def owner_approval_rows(commits, rules):
-    """[(sha, changed paths, Owner-Approved values, not_owner)] -> [(sha, status, subject, detail)].
+    """[(sha, changed paths, Owner-Approved values, not_owner[, hub values])] ->
+    [(sha, status, subject, detail)].
 
     MISSING: a locked path this commit changes that no trailer OF ITS OWN covers (approval is per
     commit), or that a trailer covers on a commit `not_owner` says is not provably the owner's.
     UNMATCHED: a trailer naming a path this commit does not change. Each locked path needs its own
-    cover."""
+    cover. The hub form (`Owner-Approval: hub:A-<n>`, the 5th field, read as ownercommits reads it)
+    covers every locked path of a commit when it is the one valid value; the hub verifies it at land
+    time (kitlib.guard.ownercommits), which this read-only pack cannot, so the row says so."""
     rows = []
     key = rules.trailer
-    for sha, paths, values, not_owner in commits:
+    for sha, paths, values, not_owner, *rest in commits:
+        hub = rest[0] if rest else []
+        hub_ok = len(hub) == 1 and bool(ownercommits.APPROVAL_RE.match(hub[0]))
         for path in paths:
             if not rules.is_locked(path):
                 continue
             got = rules.approved_by(path, values)
-            if got and not_owner:
+            if not got and hub_ok:
+                rows.append((sha, 'ok', path, '%s %s (the hub verifies it at land time, not this pack)'
+                             % (ownercommits.TRAILER, hub[0])))
+            elif not got and hub:
+                rows.append((sha, 'MISSING', path, 'do not land - its %s %s is not one hub:A-<n> (as %s)'
+                             % (ownercommits.TRAILER, ', '.join(hub), ownercommits.EXAMPLE)))
+            elif got and not_owner:
                 rows.append((sha, 'MISSING', path, 'do not land - %s %s is on a commit %s'
                              % (key, got, not_owner)))
             elif got:
@@ -369,13 +381,14 @@ def owner_only_section(root, base, branch, mb, rules):
     simple, merges = [], []
     for sha, merge, author, body, names in range_commits(root, rng):
         values = trailers_of(body, rules.trailer)
+        hub = [] if merge else trailers_of(body, ownercommits.TRAILER)
         paths = commit_paths(root, sha) if merge else names
         if not values and not any(rules.is_locked(p) for p in paths):
             continue
         not_owner = None if rules.is_owner(author) else (
             'whose author cannot be verified: %s' % identity if identity
             else 'authored by %s, not the owner' % (author or '?'))
-        (merges if merge else simple).append((sha[:7], paths, values, not_owner))
+        (merges if merge else simple).append((sha[:7], paths, values, not_owner, hub))
     changed = [p for p in git(root, 'diff', '--name-only', '--no-renames', mb, branch,
                               '--').splitlines() if rules.is_locked(p)]
     net = {norm(p) for p in changed}
