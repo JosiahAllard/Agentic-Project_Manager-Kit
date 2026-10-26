@@ -2,7 +2,7 @@
 
 Hardware (detect, or fake_hardware in tests) is what Windows reports, on any machine: logical
 processors in every processor group (past 64), physical cores with SMT and efficiency class, L3
-domains (a Ryzen CCD), CPU sets (scheduling class), memory, and display adapters of any vendor
+domains (a CPU may have several), CPU sets (scheduling class), memory, and display adapters of any vendor
 through DXGI (CIM as the fallback). nvidia-smi is never needed to size the pools; it only adds
 live use (kitlib.lock.api).
 

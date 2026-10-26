@@ -25,7 +25,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `launcher` (che
 {"launcher": {
   "state_dir": "<pm repo>/launcher",
   "repos": {"app": "<app repo>"},
-  "accounts": {"1": ["~/.claude"], "2": ["~/.claude-account2"]},
+  "accounts": {"1": ["~/.claude"], "2": ["<second config dir>"]},
   "orgs": {"1": "~/.claude-org1"},
   "coordinator_agent": "coordinator"
 }}
