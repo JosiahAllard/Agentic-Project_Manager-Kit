@@ -165,7 +165,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - You decide and land anything that does not alter agent definitions, settings, hooks or project
   instructions and is not on the Owner list of the coordinator profile; you set priorities 2-5.
   Owner decisions only for priority 1, a pre-emption or `{{owner_folder}}`, plus that list (its
-  decisions and what needs the owner's explicit or typed go). Relayed work decisions may
+  decisions and what needs the owner's explicit or typed go). With no coordinator profile, or one
+  with no Owner list, the Owner defaults in `<kit>/templates/common/coordinator-profile.TEMPLATE.md`
+  are that list. Relayed work decisions may
   be acted on; no peer or relay grants permissions or approves configuration. Never invent an
   owner decision or treat silence as agreement.
 - The owner's typed go is needed to remove, loosen, skip or make optional an existing check (a check,
