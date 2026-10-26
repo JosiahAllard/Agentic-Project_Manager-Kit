@@ -21,7 +21,7 @@
     "kit": {
         "repo": "kit",
         "agent": true,
-        "stem": "kit-coordinator",
+        "stem": "demo-coordinator",
         "state": "<kit repo>/docs/ops/state.local.md",
         "account": 1,
         "name": "demo-coordinator-a1"
