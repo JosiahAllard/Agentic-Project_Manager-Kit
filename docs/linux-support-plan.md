@@ -214,11 +214,12 @@ Rules:
 | NtQueryInformationProcess command line | /proc/<pid>/cmdline | NUL-separated, no CRT re-quoting |
 | Job object (kill on close, CPU mask, memory, peak) | cgroup v2 leaf under a delegated subtree, or a lower tier of the ladder | see 2.3 |
 | SetProcessAffinityMask / cpu sets | os.sched_setaffinity | for the pool and W2 (the weak tier of the ladder) only; the slot's mask lives in cpuset.cpus |
-| WMI Win32_Process Create (detach) | `systemd-run --user --scope` with user systemd, else double fork + setsid | systemd-run also places the run in its own cgroup |
+| WMI Win32_Process Create (detach) | `systemd-run --user --scope` with user systemd, else `setsid` (double fork) where there is no systemd | systemd-run also places the run in its own cgroup |
 | Named mutex, WAIT_ABANDONED | fcntl.flock on a lock file in the store, opened O_CLOEXEC | the kernel drops it when the holder dies: the same "abandoned counts as free" meaning |
 | RunMutex (liveness) | the run holds flock on `runs/<id>.alive`; readers probe with LOCK_NB | run_dead and run_live keep their meaning |
 | msvcrt.locking (treelock) | fcntl.lockf on the same lock file | byte range kept |
-| Register-ScheduledTask | systemd user `.timer` + `.service` units; loginctl enable-linger | cron (`crontab -l`/`crontab -`, `@reboot` where there is no linger) is first-class where there is no user systemd (question 5) |
+| Register-ScheduledTask | systemd user `.timer` + `.service` units; loginctl enable-linger only where user systemd exists | cron (`crontab -l`/`crontab -`, `@reboot`) is first-class where there is no user systemd (question 5) |
+| Task at logon (the hub server start) | an XDG autostart `.desktop` entry in `~/.config/autostart`; a shell-profile line as the fallback where there is no desktop session | settled at plan review; cron has no logon form |
 | schtasks /Query /XML | `systemctl --user list-timers --output=json`, unit files | consoletasks reads the kit's own unit names |
 | Named pipes | AF_UNIX stream sockets, mode 0600, SO_PEERCRED | in the XDG runtime folder |
 | GetExtendedTcpTable | /proc/net/tcp and tcp6 | the parsers after the table are portable |
@@ -270,7 +271,11 @@ The owner's answer (question 4): heavy runs must work on Linux, with full cgroup
 on native Linux, and where nothing stronger exists (Docker included) they go ahead on weak
 containment, shown as such; the owner accepts that risk. The research below is that answer's
 precondition, and it finds that full containment on native Linux needs one root step at machine
-setup (section 6).
+setup (section 6). Settled at plan review: the root step is offered at setup and declining it is
+allowed; a box that declines is S2 (or W2 off systemd), shown as such, and still counts as "out
+of the box". Heavy runs on weak containment are supported, as the owner answered; that direction
+is not reopened. A default Docker container probes to its lower tier and is shown so; the plan
+never claims strong containment in a container (the proof is slice 14).
 
 Research, 2026-10-26 (read from documentation, nothing probed on a Linux box). Without root and
 without cpuset delegation nothing gives full containment: no CPU pinning a child cannot undo, and
@@ -381,10 +386,15 @@ layout adopted only while nothing is live or queued, under the queue lock. Two g
 own. A container sees the host's CPUs in /sys while its cgroup allows fewer, so the allowed set
 comes from sched_getaffinity and the cgroup's cpuset.cpus.effective, never from /sys alone; the
 backend closes that one. Two kit users on one box would each get a store and book the same CPUs
-twice. The owner's answer (question 10): one kit user per box, and machine setup refuses a
-second, so there is no shared store. The refusal needs a machine-wide marker, which exists only
-where the root step of section 6 runs; a container cannot see a host's kit at all. The same
-double-booking is why WSL is refused until native parity (question 11).
+twice. The owner's answer (question 10): one kit user per box, so there is no shared store.
+Settled at plan review, how it is enforced: without the root step, setup checks per user and
+warns on a second user; with the root step, a machine-wide marker makes setup refuse a second
+user (section 6, step 9).
+
+The rule for CPU sets, settled at plan review: one kit per CPU set. A kit in a container is
+supported only as the only kit on that host (a container cannot see a host's kit at all), and
+machine setup run inside a container warns and does not refuse. WSL double-books the same way,
+so it stays refused until the later phase after native parity (question 11).
 
 The proving test feeds four synthetic /sys and /proc trees, written by hand into the test data
 (fake_hardware, extended) from the kernel's documented layout: a plain desktop, a hybrid part
@@ -500,17 +510,22 @@ tools/machine_setup.py. machine_setup's steps on Linux:
 7. fresh mode surveys: run in the contain backend.
 8. owner email: unchanged.
 9. extras: environment.d, `.desktop`, chmod; the delegation step: probe the ladder (section
-   2.3) and, with the owner's sudo, the root step that gives full containment: a drop-in
-   `user@.service.d` with `Delegate=cpuset cpu io memory pids` and a re-login, or, without
-   systemd, a root boot hook that hands `/sys/fs/cgroup/pm-kit` to the kit user; loginctl
-   enable-linger so timers run while logged out; the machine-wide marker that makes a second kit
-   user refused (question 10); WSL refused (question 11).
-10. timers: worktree sweep, agent-temp sweep, automatic tasks, hub at login, coordinators after
-    reboot, as systemd user units named `pm-kit-*.timer`, or cron entries (`@reboot` where there
-    is no linger) where there is no user systemd.
+   2.3) and offer the root step that gives full containment: a drop-in `user@.service.d` with
+   `Delegate=cpuset cpu io memory pids` and a re-login, or, without systemd, a root boot hook
+   that hands `/sys/fs/cgroup/pm-kit` to the kit user. The owner may decline it; the box is then
+   S2 (or W2 off systemd), shown as such, and still counts as "out of the box". loginctl
+   enable-linger so timers run while logged out, only where user systemd exists. The second-user
+   rule (question 10): with the root step, a machine-wide marker makes a second kit user
+   refused; without it, a per-user check warns. A kit run inside a container warns and does not
+   refuse (section 2.4); WSL is refused (question 11).
+10. timers: worktree sweep, agent-temp sweep, automatic tasks, coordinators after reboot, as
+    systemd user units named `pm-kit-*.timer`, or cron entries (`@reboot`) where there is no user
+    systemd. The hub's start at logon is an XDG autostart entry, with a shell-profile line as the
+    fallback; detach uses `setsid` where there is no systemd.
 11. kit command: `~/.local/bin/kit`.
 
-Each step reports what it could not do (no linger, no delegation, no sudo) as a named problem,
+Each step reports what it could not do (no linger, no delegation, no sudo, no user systemd, no
+desktop session) as a named problem, so setup names each missing piece,
 and heavy runs go ahead on the tier the box allows, shown as weak or partial where it is
 (question 4). Plugin refresh: pluginsource's detached refresh uses the detach backend.
 
@@ -540,12 +555,13 @@ Linux uses the machine's store until slice 9.
 CI is a later phase (question 8), so no proof below runs "in CI": each Linux proof is a manual
 run on a Linux machine (the safety net below).
 
-Safety net while CI waits (Proposed, for review): (1) `gate.py --full` on Windows for each
+Safety net while CI waits (approved at plan review): (1) `gate.py --full` on Windows for each
 slice; (2) before each backend slice lands, a manual Linux run of `tools/ci_ratchet.py` at the
 branch tip on a reference VM (Ubuntu 24.04, systemd, the delegation drop-in) and on one
-weak-mode box or container, inside the machine lock (a VM on the owner's machine is outside
-the lock's view), with the log attached to the branch report. Default: a Hyper-V VM on the
-owner's machine; slices 1 to 4 need only the ratchet there.
+weak-mode box or container, with the log attached to the branch report. A VM on the owner's
+machine is outside the lock's view, so the VM run books the machine lock from the host as
+heavy. Default: a Hyper-V VM on the owner's machine; slices 1 to 4 need only the ratchet there.
+Creating the VM is an owner hand step, drafted only when slice 1 is ready for its Linux run.
 
 1. **Test markers and the ratchet.** kitlib/ci/ratchet.py with its thin entry point
    tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, the mechanical
@@ -615,10 +631,11 @@ owner's machine; slices 1 to 4 need only the ratchet there.
    finds a process whose cwd is in a worktree; Store() opens the real root; a landing runs end to
    end on a throwaway repository on the VM.
 10. **Scheduled jobs.** linux/schedule.py with systemd user timers and cron (first-class);
-    autostart, hubsite autostart, worktree and temp sweeps, automatic tasks, consoletasks
-    read-back. Risk Medium. Proof: units and cron entries render and round-trip through
-    read-back; on the VM with user systemd a timer fires once, and on a box without it a cron
-    entry does.
+    autostart (coordinators after reboot), hubsite autostart (the hub's start at logon: XDG
+    autostart, shell-profile fallback), worktree and temp sweeps, automatic tasks, consoletasks
+    read-back; linger only where user systemd exists. Risk Medium. Proof: units, cron entries
+    and autostart entries render and round-trip through read-back; on the VM with user systemd
+    a timer fires once, and on a box without it a cron entry does.
 11. **Sessions.** launcher window (tmux by default, a configured terminal command if set), stop,
     pmstart process listing, autotasks launch flags.
     Risk Medium. Proof: a launched session is found by name and stopped; no breakaway flag off
@@ -634,12 +651,16 @@ owner's machine; slices 1 to 4 need only the ratchet there.
     in the named lines; a step with one `{run:}` form renders byte-identical to the base's; Codex's
     rendered Windows output, and its dialect default on Windows ('powershell'), are unchanged.
 14. **Machine setup on Linux.** installer/machine-setup.sh, machinesetup steps on the seam
-    (the delegation step, root drop-in or boot hook; cron `@reboot`; the tmux check; the
-    second-user and WSL refusals),
-    tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL until native parity,
-    question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu container ends
-    with no problems and the lock status shows strong containment (but see open point 1,
-    section 9).
+    (the offered delegation step, root drop-in or boot hook, which may be declined; cron
+    `@reboot`; `setsid` detach and linger where there is no systemd or only where user systemd
+    exists; each missing piece named; the tmux check; the second-user rule, a per-user warning
+    without the root step and a machine-wide refusal with it; the container warning; the WSL
+    refusal), tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL until native
+    parity, question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu 24.04 VM
+    with the delegation drop-in ends with no problems and the lock status shows S1; separately,
+    machine setup in a default Docker container probes to its lower tier and the lock status
+    shows it as such (setup warns that it is in a container). No proof claims strong containment
+    in a container.
 15. **Peer messaging and the bridge.** peer.py on Claude Code's Linux socket (after a probe), the
     bridge's leader lock and transport on Unix sockets, procwatch. Risk High (networking). After
     Windows parity, not in the first build (question 7).
@@ -674,26 +695,10 @@ does not overlap another lock slice); the others are in order.
   argument, and the guard tests run both placers on every platform (they are pure).
 - Risk: the seam move changes Windows behaviour by accident. Mitigation: re-exports first, the
   full Windows suite on every slice, and the Windows CI leg once the CI phase brings it.
-- Risk: multi-user and container boxes break the one-store rule. Mitigation: section 2.4.
+- Risk: multi-user and container boxes break the one-store rule. Mitigation: one kit per CPU set
+  and the second-user rule (section 2.4).
 - Risk: the scope is large (17 branches, most High). It is paced by the coordinator's caps;
   nothing here asks for parallel heavy runs.
-
-Open for review (not resolved here):
-
-1. Slice 14's proof (machine setup on a fresh Ubuntu container showing strong containment)
-   contradicts the owner's answer that Docker is weak (question 4).
-2. Full cgroup v2 on native Linux needs root once, but section 6 lets the owner decline sudo:
-   without root a native box is S2 (or W2 off systemd).
-3. WSL is refused for double-booking CPUs, yet Docker is accepted: a container on a box that
-   also runs the kit double-books the same way, and one kit user per box cannot see across the
-   container wall.
-4. Breadth against the systemd-only parts: linger, systemd-run detach and the "at logon" hub
-   start, which has no cron form (a proposal: XDG autostart or a shell profile).
-5. The containment answer reverses this plan's earlier recommendation (refuse heavy runs
-   without delegation); sections 2.3, 6 and 9 are rewritten to it, not left beside it.
-6. The second-user refusal (question 10) needs a machine-wide marker, which exists only with the
-   root step of section 6 (step 9, section 2.4). Without sudo, "a second user is refused"
-   cannot be enforced.
 
 ## 10. Questions for the owner
 
