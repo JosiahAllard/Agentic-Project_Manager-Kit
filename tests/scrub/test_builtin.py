@@ -55,7 +55,6 @@ PENDING_HISTORY = {
     ('pinned-hash', 'docs/commit.md'): 1,
     ('provenance', 'docs/commit.md'): 2,
     ('provenance', 'docs/doc-tools.md'): 2,
-    ('provenance', 'docs/gate.md'): 14,
     ('provenance', 'docs/go-live.md'): 4,
     ('provenance', 'docs/install.md'): 1,
     ('provenance', 'docs/landed.md'): 2,
@@ -70,7 +69,6 @@ PENDING_HISTORY = {
     ('provenance', 'docs/repo-checks.md'): 1,
     ('provenance', 'docs/review-pack.md'): 1,
     ('provenance', 'docs/sync-base.md'): 1,
-    ('provenance', 'docs/test-tools.md'): 1,
     ('provenance', 'docs/worktree-paths.md'): 2,
     ('provenance', 'docs/worktree-remove.md'): 2,
     ('provenance', 'installer/machine-setup.ps1'): 2,
@@ -81,9 +79,6 @@ PENDING_HISTORY = {
     ('provenance', 'kitlib/docs/codemap.py'): 1,
     ('provenance', 'kitlib/docs/index.py'): 1,
     ('provenance', 'kitlib/forbidden/__init__.py'): 2,
-    ('provenance', 'kitlib/gate/land.py'): 2,
-    ('provenance', 'kitlib/gate/reuse.py'): 1,
-    ('provenance', 'kitlib/gate/steps.py'): 2,
     ('provenance', 'kitlib/git/batch.py'): 2,
     ('provenance', 'kitlib/git/checkout.py'): 1,
     ('provenance', 'kitlib/git/repo.py'): 1,
@@ -93,11 +88,9 @@ PENDING_HISTORY = {
     ('provenance', 'kitlib/machinesetup/extras.py'): 1,
     ('provenance', 'kitlib/machinesetup/settings.py'): 8,
     ('provenance', 'kitlib/preflight/leftovers.py'): 1,
-    ('provenance', 'kitlib/proc/shield.py'): 2,
     ('provenance', 'kitlib/pytests/__init__.py'): 2,
     ('provenance', 'kitlib/pytests/child.py'): 2,
     ('provenance', 'kitlib/pytests/runner.py'): 2,
-    ('provenance', 'kitlib/records/landing.py'): 2,
     ('provenance', 'kitlib/reviewpack/__init__.py'): 1,
     ('provenance', 'kitlib/reviewpack/trailers.py'): 1,
     ('provenance', 'kitlib/stubs/__init__.py'): 2,
@@ -121,7 +114,6 @@ PENDING_HISTORY = {
     ('provenance', 'tests/machinesetup/test_machinesetup.py'): 7,
     ('provenance', 'tests/pmwatch/test_pmwatch.py'): 1,
     ('provenance', 'tests/preflight/test_preflight.py'): 2,
-    ('provenance', 'tests/proc/test_shield.py'): 2,
     ('provenance', 'tests/pytests/test_pytests.py'): 2,
     ('provenance', 'tests/stubs/test_kit_stubs.py'): 1,
     ('provenance', 'tests/syncbase/test_advice.py'): 2,
@@ -138,10 +130,6 @@ PENDING_HISTORY = {
 }
 # Owner-specific prose becomes generic: "the owner" for the pronouns, no one machine's parts.
 PENDING_OWNER_TEXT = {
-    ('hardware', 'kitlib/lock/layout.py'): 2,
-    ('hardware', 'kitlib/lockui/window.py'): 1,
-    ('hardware', 'kitlib/proc/cpu.py'): 2,
-    ('hardware', 'kitlib/proc/process.py'): 1,
 }
 PENDING = (PENDING_FIXTURES, PENDING_HISTORY, PENDING_OWNER_TEXT)
 
