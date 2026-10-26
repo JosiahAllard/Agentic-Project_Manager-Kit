@@ -131,8 +131,9 @@ def write(root, files):
             fh.write(text)
 
 
-@windows_only('workers run in Windows job objects')
 class Pool(unittest.TestCase):
+    # Workers run in kit jobs: Windows job objects, or on Linux containment's (kitlib.platform.
+    # linux.contain), where every test but the start count runs the same.
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='kit-pool-', dir=fixture_parent())
         self.addCleanup(rmtree, self.root)
@@ -180,6 +181,7 @@ class Pool(unittest.TestCase):
         self.assertEqual(self.pool.stats(), (1, {}))
         self.assertEqual(os.listdir(self.folder), [])         # output files are read and removed
 
+    @windows_only('a Windows job counts its process starts; a Linux job has no count')
     def test_each_unit_s_process_starts_are_counted_and_the_worker_s_own_are_not(self):
         # The worker has a console (its own or this process's), so each child shares it: no
         # conhost, one start each. A child given a console of its own adds its conhost.

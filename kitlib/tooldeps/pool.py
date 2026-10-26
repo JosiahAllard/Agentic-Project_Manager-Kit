@@ -37,11 +37,13 @@ terminating a job only starts each process's end, and the worker's can come firs
 import json
 import os
 import queue
+import select
 import subprocess
 import sys
 import threading
 import time
 
+import kitlib.platform
 from kitlib.proc import process
 from kitlib.proc.job import Job, JobError
 from kitlib.pytests import runner as unit_runner
@@ -193,19 +195,48 @@ class Worker:
                     pass
         finally:
             for h in held:
-                process.close(h)
+                _release(h)
             self.job.close()
 
     def _hold(self):
         """A SYNCHRONIZE handle to each process in the job now, taken before it is terminated:
         terminating a job empties its pid list at once, while each process's end is only started
         (one with 1.5 GB to tear down was signalled ~45 ms later, 2026-10-10). None when the job
-        cannot be asked; a process that ended meanwhile is skipped."""
+        cannot be asked; a process that ended meanwhile is skipped. On Linux each is a pidfd."""
         try:
             pids = self.job.pids()
         except OSError:
             return []
-        return [h for h in (process.open_process(pid, process.SYNCHRONIZE) for pid in pids) if h]
+        return [h for h in (_hold_one(pid) for pid in pids) if h is not None]
+
+
+def _hold_one(pid):
+    """A handle that is signalled when process pid ends (Linux: a pidfd), or None."""
+    if kitlib.platform.NAME == 'linux':
+        try:
+            return os.pidfd_open(pid)
+        except OSError:
+            return None
+    return process.open_process(pid, process.SYNCHRONIZE) or None
+
+
+def _release(h):
+    if kitlib.platform.NAME == 'linux':
+        try:
+            os.close(h)
+        except OSError:
+            pass
+        return
+    process.close(h)
+
+
+def _ended(h, seconds):
+    """True when the process behind handle h has ended, waiting `seconds` at most."""
+    if kitlib.platform.NAME == 'linux':
+        poller = select.poll()
+        poller.register(h, select.POLLIN)
+        return bool(poller.poll(int(seconds * 1000)))
+    return process.K32.WaitForSingleObject(h, int(seconds * 1000)) != process.WAIT_TIMEOUT
 
 
 def _wait_all(handles, seconds):
@@ -215,8 +246,7 @@ def _wait_all(handles, seconds):
     for h in handles:
         while True:
             left = end - time.monotonic()
-            if left <= 0 or process.K32.WaitForSingleObject(
-                    h, int(min(POLL, left) * 1000)) != process.WAIT_TIMEOUT:
+            if left <= 0 or _ended(h, min(POLL, left)):
                 break
 
 

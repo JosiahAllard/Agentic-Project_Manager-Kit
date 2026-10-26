@@ -229,6 +229,7 @@ kitlib/proc/shield.py (`shield`, `release`, `process_dacl`) adds one entry to a 
 - It is not wired into the gate.
 - Its users are kitlib.pytests and kit_tests' pool. `runner.shield_unit` shields each unit's own process and each pool worker (kitlib/tooldeps/pool.py), and never the processes a unit starts.
 - A unit that cannot be shielded runs unshielded, with a `pytests: could not shield ...` note.
+- On Linux there is no shield (a process has no DACL): `shield_unit` raises PlatformUnsupported, so every unit and worker runs unshielded with that note, and its job's cgroup ends it.
 - Never end a unit by its pid. End the runner: KILL_ON_JOB_CLOSE ends its units.
 
 The pid hold covers the processes a unit starts. A test's git can be given the pid of a shell that has just died, and the second stale taskkill then ends it with exit 1 and no output. That is the same shape as a real exit-1 answer, such as `merge-base --is-ancestor`'s NO.
