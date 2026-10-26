@@ -142,7 +142,7 @@ SECTIONS = {
         'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
                                    'per-host worktree folders, keyed by hosts.json host name '
                                    '(docs/new-worktree.md "Hosts")'),
-        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, the opt-in kit tool stubs and the hook module live'),
+        'tools_dir': Field(RelPath(), 'tools', 'where repo tools and the hook module live'),
         'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says'),
     },
     'owner': {
@@ -285,7 +285,7 @@ SECTIONS = {
         'coauthor': Field(Bool(), False, 'list the branch\'s commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks'),
     },
     'stubs': {
-        'tools': Field(Strs, None, 'kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in'),
+        'tools': Field(Strs, None, 'ignored: the kit writes no tool stubs; kept so an older .kit.json that sets it still loads'),
     },
     'testlist': {
         'junit': Field(Strs, ['**/build/test-results/**/*.xml'], 'JUnit result globs'),
