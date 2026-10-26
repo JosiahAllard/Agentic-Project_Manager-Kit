@@ -5,12 +5,12 @@
 #
 #   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner>
 #                                -AgentEmail <agents> [-MainBranch main] [-RepoName <name>]
-#                                [-Stack python] [-PmData <folder> [-PrivateRemote <url>]] [-Stubs] [-Apply]
+#                                [-Stack python] [-PmData <folder> [-PrivateRemote <url>]] [-Apply]
 #
 # What it writes into the checkout (each listed in kitlib\machinesetup\repo.py): .kit.json, the
 # .gitignore and .gitattributes lines (only the missing ones appended to an existing file), a starter
 # docs\INDEX.md (only if absent; it opts the repository into the doc index check), with -Stack the
-# stack's tools\gate.json, tools files and skills, with -Stubs the kit tool stubs, and the
+# stack's tools\gate.json, tools files and skills, and the
 # autoMemoryDirectory in .claude\settings.local.json when neither it nor settings.json has it
 # (<drive>/Agent-memory/<repo>; kitlib\stubs\memory.py; git-ignored, nothing to commit). -PmData runs
 # the kit's `tools\pm_data.py init` after (the KIT's PM-data branch, docs/pm-data-branch.md). Dry run
@@ -34,7 +34,6 @@ param(
     [string]$Stack = '',
     [string]$PmData = '',
     [string]$PrivateRemote = '',
-    [switch]$Stubs,
     [switch]$Apply
 )
 
@@ -69,7 +68,6 @@ if ($RepoName) { $argv += @('--repo-name', $RepoName) }
 if ($Stack) { $argv += @('--stack', $Stack) }
 if ($PmData) { $argv += @('--pm-data', (Trim-Slash (Full-Path $PmData))) }
 if ($PrivateRemote) { $argv += @('--private-remote', (Trim-Slash $PrivateRemote)) }
-if ($Stubs) { $argv += '--stubs' }
 if ($Apply) { $argv += '--apply' }
 
 # The tool prints in the console's encoding, so a name outside the code page reads back as written.

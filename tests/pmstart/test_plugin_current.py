@@ -14,7 +14,7 @@ from tests.pluginsource import FakeProc, Kit
 
 NOW = datetime.datetime(2026, 10, 11, 9, 0)
 FAKES = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
-             liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
+             liveness={"read": lambda p: "{}"}, repos={},
              watcher={"beat": lambda: None, "now": 0},
              foreground_lock={"read": lambda: 0},
              agent_temp={"env": lambda: "X:\\temp", "sweep_key": lambda: {"dir": "X:\\temp"},

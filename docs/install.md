@@ -2,13 +2,12 @@
 
 Three steps: point the machine at its PM repository, set the machine up once, then work in any repository, with nothing of the kit written into it (plan decision 27, docs/multi-host-plan.md section 7). Held for the joint review: no repository runs the kit yet, and machine setup has not run on a real machine. The zero repo setup cycle below is proven by a test (`tests/zerosetup/test_cycle.py`, "What first use writes").
 
-A repository never holds a copy of the kit, and by default nothing else either: no stubs, no
-`.kit.json`, no ignore lines. Skills, roles and the default profile run every kit tool from the
+A repository never holds a copy of the kit or stubs of its tools, and by default nothing else
+either: no `.kit.json`, no ignore lines. Skills, roles and the default profile run every kit tool from the
 kit's folder, as `python <kit>/tools/<name>.py -C <worktree>` (decision 21 in
 docs/multi-host-plan.md section 7; the kit header names `<kit>`, docs/content.md "Kit header").
 A repository that wants its kit settings committed uses the committed setup ("Committed setup
-(--repo)"); stubs, small files in the repository's tools folder that run the kit's tools, are
-opt-in there (`--stubs`) or by `kit_stubs.py write` ("Stubs: tools/kit_stubs.py").
+(--repo)").
 
 ## Steps
 
@@ -173,16 +172,14 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
 2. **Dry run**, from the kit checkout:
 
    ```
-   python <kit>/tools/machine_setup.py --repo <checkout> --owner-email <owner> --agent-email <agents> [--main-branch main] [--repo-name <name>] [--stack python] [--stubs]
-   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python] [-Stubs]
+   python <kit>/tools/machine_setup.py --repo <checkout> --owner-email <owner> --agent-email <agents> [--main-branch main] [--repo-name <name>] [--stack python]
+   powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python]
    ```
 
    It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`,
    `"backlog".store` `"ref"`, `"owner".email`, `"owner".agent_emails`), `.gitignore` and
    `.gitattributes`, a starter `docs/INDEX.md`, with
-   `--stack` the stack's `tools/gate.json`, and with `--stubs` only the stubs (by
-   `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`),
-   and under `memory:` the `autoMemoryDirectory` key
+   `--stack` the stack's `tools/gate.json`, and under `memory:` the `autoMemoryDirectory` key
    (`<the main checkout's drive>/Agent-memory/<repo folder name>`, `kitlib/stubs/memory.py`): added
    to `.claude/settings.local.json` only when neither that file nor `.claude/settings.json` has it,
    kept when either names any absolute folder, refused when the local file is not JSON it can edit or
@@ -222,9 +219,8 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
      yourself (docs/kit-json.md).
 3. **Apply:** run it again with `--apply` (`-Apply`), then commit what it wrote. `.kit.json` and
    `tools/gate.json` are owner-only paths: commit them under the owner's identity, the rest
-   (`.gitignore`, `.gitattributes`, `docs/INDEX.md`, and with `--stubs` the stubs) as usual. It
-   refuses before writing anything when `.kit.json` or `tools/gate.json` exists, or, with
-   `--stubs`, when a file that is not a stub sits where a stub goes. A write that fails (a read-only file, a full disk) stops it with
+   (`.gitignore`, `.gitattributes`, `docs/INDEX.md`) as usual. It
+   refuses before writing anything when `.kit.json` or `tools/gate.json` exists. A write that fails (a read-only file, a full disk) stops it with
    `new-repo: FAILED`, the files already written, and exit 1. Exit codes: 0 done or dry run;
    1 refused or a write failed; 2 usage. Tests: `tests/machinesetup/test_repo.py` (any platform)
    and `tests/stubs/test_new_repo.py` (the PowerShell front end), against throwaway repositories only.
@@ -251,11 +247,8 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
    `.kit.json` only when it wants more than the defaults (docs/kit-json.md), and one that
    writes backlog records names its store there (`"backlog": {"store": "ref"}` or a folder:
    the default store alone is read-only, docs/backlog.md "Stores"); its
-   own copies are then removed, since agents run the kit's tools from `<kit>`. A repository that
-   wants stubs in their place instead runs
-   `python <kit>/tools/kit_stubs.py write -C <repo> --replace`, then a commit.
-5. **Stubs only:** `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0.
-6. **Git hooks:** the first-use prep sets them ("What first use writes"); by hand,
+   own copies are then removed, since agents run the kit's tools from `<kit>`.
+5. **Git hooks:** the first-use prep sets them ("What first use writes"); by hand,
    `git -C <repo> config core.hooksPath <kit>/githooks`. This installs `pre-push` and
    `pre-commit`; `pre-commit` is inert unless the repository opts in (docs/ledger.md "Pre-commit check").
 
@@ -275,41 +268,6 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
 - `backlog/.gitkeep` is not needed (the setup's `.kit.json` names the ref store `refs/backlog/main`), and
   `.github/workflows/instructions.yml` is not shipped: the stack workflows do not mention it.
 - Anything outside the repository: the ledger, the lock and the user config are per machine.
-
-### Tools without a stub
-
-Every kit tool runs by the kit's path, `python <kit>/tools/<name>.py`; one that acts on a
-repository checkout takes `-C <checkout>` (tests/content/test_skill_commands.py holds the skills
-and roles to that). For a repository that opts into stubs, the stubs cover the tools that act on
-a checkout, named by `-C` or the current directory (`kitlib.stubs.SHARED`), including `land.py`,
-`ledger.py`, `redfirst.py`, `trailers.py` and `daily_full.py` (which exits "off" unless
-`.kit.json` opts in, docs/daily-full.md). Every `tools/*.py` command is in exactly one of
-`SHARED` and `KIT_ONLY` (`kitlib.stubs`). The test `Partition` in `tests/stubs/test_kit_stubs.py`
-fails when a new tool is in neither; the tool's author picks the list. The `KIT_ONLY` tools never
-get a stub, because they act on the machine, the owner's files or the kit itself:
-
-- `machine_lock.py`: one lock per machine, so it runs from the machine's lock install, never a
-  repository's. `run` needs `--repo <name> --slug <slug>` (and `--kind`); `status` needs nothing.
-  A repository's own commands use it only through a gate (booked by `gate.py`) or a wrapped heavy
-  run.
-- `kit_tests.py` (the kit's own suites), `lock_release_check.py` (its `-C` is the kit's release
-  checkout), `backlog_audit.py`, `agent_roster.py`, `agent_view.py` (its `-C`
-  names the repository it describes, but what it shows is the kit's roles): run by the kit's
-  maintainers or the PM (docs/test-tools.md, docs/lock-release.md, docs/backlog.md,
-  docs/ROSTER.md, docs/content.md).
-- `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub.py`, `hub_mirror.py`, `pending.py`,
-  `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and the machine.
-- `delegated.py`: the PM's, to run one operation of the owner's delegation list on the owner's
-  order (docs/delegations.md "Running").
-- `no_window.py`: the carrier a scheduled task runs under `pythonw` so that no console window
-  opens (docs/daily-full.md "The schedule").
-
-A stub bakes in the kit it was written from, so one written from a kit worktree runs that
-worktree and is stale on main (`check` says `runs the kit at ...`). At session start the
-coordinator's and the PM's checklists print one `stubs (<repo>): N missing/stale: ...` line, with
-the `kit_stubs.py write -C <repo>` command, for a repository that uses stubs (its `.kit.json`
-sets `"stubs".tools`, or it holds one) and whose stubs are not current; a repository with none
-gets no line (docs/pm-start.md).
 
 ### Plugin install (local marketplace)
 
@@ -412,80 +370,23 @@ leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
 
 A second dry run then reports no leftover link.
 
-## Stubs: tools/kit_stubs.py
+## Agent memory folder: tools/kit_stubs.py memory
 
 ```
-python <kit>/tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-run]
-python <kit>/tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
 python <kit>/tools/kit_stubs.py memory [-C DIR] [--apply]
 ```
 
-`memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.local.json`
-(git-ignored; the value is a machine path) would get (dry run), and with `--apply` adds it when
-neither that file nor `.claude/settings.json` has the key; exit 1 when either file
-cannot be read as a JSON object (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
-"Memory folder (`memory`)").
-
-Opt-in, for a repository that wants committed stubs (the old setup; decision 21 made the default
-none). Nothing in the kit needs them: the skills, roles and the default profile run
-`<kit>/tools/<name>.py -C <worktree>`, which works the same in a repository with stubs.
-
-Logic: `kitlib/stubs/__init__.py`; tests: `tests/stubs/test_kit_stubs.py`,
-`tests/stubs/test_live_root.py`.
-
-A stub is `<checkout>/<tools_dir>/<name>.py`. It runs `<kit>/tools/<name>.py` in a child Python
-with the stub's arguments.
-
-- The kit's location is written into the stub. No environment variable names the kit, the
-  repository or its config.
-- That location is the live kit checkout (`kitlib.stubs.kit_root`). When `kit_stubs.py` runs
-  from a pinned export of pushed main (a gate's `kit-stubs` step under a pinned gate.py or
-  land.py, docs/gate.md "Pinned tools"), it is `KIT_LIVE_ROOT` (`kitlib.pluginsource.live_root`), never the
-  export: `write` names the main checkout and `check` holds stubs that name it current. That holds
-  for a gate started from the plugin's export too (`<kit>/tools/gate.py -C <checkout>`): it pins
-  through the main checkout the export's marker names (`kitlib.pluginsource.export_checkout`,
-  docs/plugin-source.md "Layout"; `tests/gate/test_export_stubs.py`).
-- Run from an export with no `KIT_LIVE_ROOT` (`<kit>/tools/kit_stubs.py` itself, or the session
-  start's stubs check, which runs in the plugin's export), the location is the main checkout the
-  export's marker names, when that folder holds `kit.json` and `tools/` (`kitlib.stubs.live_kit`).
-  An export whose marker names none is refused: `write`, and `check` on a repository that uses
-  stubs, exit 2 with `kit_stubs: refused: <export> is an export of the kit ...` and write nothing,
-  so no stub ever names an export a prune may remove (`tests/stubs/test_live_root.py`). A
-  repository that uses no stubs is never refused (`check` below).
-- The child runs in the caller's directory when that is inside the stub's checkout, else in the
-  stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
-  worktree's stub acts on that worktree.
-- When it moves the caller, the stub passes `[stub checkout, caller directory]` to the child in
-  `KIT_STUB_CALLER` (kitlib.stubs.CALLER_VAR). It reads no variable itself. The gate uses it to
-  refuse a caller in another checkout (docs/gate.md "The caller's checkout").
-- The child's exit code is the stub's. A missing kit tool exits 2 with
-  `refused: no kit tool at ...`.
-
-Which tools get a stub: `--tools`, else `.kit.json` "stubs".tools, else every name in
-`kitlib.stubs.SHARED` that the kit has as a command (a `tools/<name>.py` with a `__main__` block,
-`kit_stubs` excepted). A name the kit has no command for is refused (exit 2), but for a tool the
-kit removed (`kitlib.stubs.RETIRED`) named in "stubs".tools: that name is dropped, and `write` and
-`check` print `retired  <path> (delete it)` for a stub of it still in the repository. The line is a
-note: no exit code changes and nothing deletes the file.
-
-- `write` creates or replaces each stub. It keeps a file that is not a stub, and reports it,
-  unless `--replace`. `--dry-run` writes nothing.
-- `check` exits 0 when every stub has exactly the text `write` would give it. A stub that runs
-  another kit location is `stale`. A repository that uses no stubs (no `--tools`, no
-  `"stubs".tools` in its `.kit.json` and no stub in its tools folder, such as a PM data folder)
-  exits 0 with `kit_stubs: uses no stubs (...); nothing to check`, the rule the session start's
-  check follows (`kitlib.stubs` `_opted`).
-- Exit codes: 0 done, current, or no stubs used; 1 a problem named; 2 usage, configuration, or an
-  export whose marker names no main checkout.
-
-A committed stub carries the kit's absolute path, so a repository whose gate checks for machine
-paths must allow it (`machine_paths.allow`, docs/kit-json.md).
+It prints the `autoMemoryDirectory` that `.claude/settings.local.json` (git-ignored; the value is
+a machine path) would get (dry run), and with `--apply` adds it when neither that file nor
+`.claude/settings.json` has the key. Exit 1 when either file cannot be read as a JSON object, 2 on
+usage or a host registry it cannot read. The command it prints names the kit's main checkout, also
+when it runs from the plugin's export (`kitlib.stubs.kit_root`: the checkout the export's marker
+names, docs/plugin-source.md "Layout"). Logic: `kitlib/stubs/memory.py`; tests:
+`tests/stubs/test_memory.py`, `tests/stubs/test_kit_stubs.py`; docs/pm-start.md "Memory folder
+(`memory`)".
 
 ## Not carried over
 
-- kit_stubs: the `_kit_stub.py` runtime (`KIT_REPO_ROOT`/`KIT_CONFIG` env, runpy in-process);
-  the `PM_KIT`/`DEV_ROOT` kit lookup; library stubs and the import-as-library mode (the shared
-  libraries are `kitlib` modules); the warnings those modes needed. The old tool had no tests.
 - new-repo.ps1: copying `kit\tools\**`, `templates\common` and `templates\stacks\<Stack>`
   wholesale, with placeholder substitution (a repository holds no copy of the kit; `-Stack` installs
   only the stack's `tools/` files (`gate.json` and the runners above), its skills and its ignore lines); writing the identities

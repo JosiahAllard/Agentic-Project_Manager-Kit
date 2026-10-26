@@ -510,7 +510,7 @@ class PmStartCheck(unittest.TestCase):
         temp_home(self)
         handoff = {"globber": lambda p: [], "exists": lambda p: True, "pm_repo": lambda c: "X:/pm"}  # one file, no strays
         fakes = dict(pm_data=lambda: None, handoff=handoff, reminders={"read": lambda p: "[]"},
-                     liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
+                     liveness={"read": lambda p: "{}"}, repos={},
                      watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0},
                      worktree_sweep={'repos': {'demo': self.repo.root}, 'read': lambda: [],
                                      'plugin': lambda: self.settings})

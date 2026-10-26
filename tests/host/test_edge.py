@@ -47,8 +47,8 @@ class AdapterImport(unittest.TestCase):
         imp.assert_not_called()
 
     def test_the_edge_is_not_a_command(self):
-        from kitlib import stubs
-        self.assertNotIn('_host', stubs.commands(ROOT))
+        from kitlib import kitcmd
+        self.assertNotIn('_host', kitcmd.commands(ROOT))
 
 
 class HostFlag(unittest.TestCase):

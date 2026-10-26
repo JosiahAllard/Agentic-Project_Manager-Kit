@@ -19,9 +19,6 @@ count: nothing shows the flag is in it), the same names handed on without a call
 subprocess.run` default, an alias), `from subprocess import <one of them>`, os.system, os.startfile,
 os.popen, os.spawn*, asyncio's create_subprocess_*, multiprocessing and ProcessPoolExecutor.
 
-One text that is not a file is read too: the stub kitlib.stubs.stub_text writes into a repository's
-tools folder, under the name STUB. Its start is inside a string, which the reader of files cannot see.
-
 What it cannot see: a start written inside any other string (the scripts a test writes to a
 temporary folder), a name reached with getattr, and code in another language (the PowerShell the
 kit runs). tests/ is not read: a test starts what it tests, on purpose. The reader itself
@@ -33,8 +30,8 @@ fails the test, and so does a row that counts more than there are: the table nev
 code it excuses, and never covers a start nobody gave a reason for.
 
 A second rule, window hazards (class Hazards), reads more widely: every Python file and every
-.ps1, .cmd and .bat file git lists, tests/ included, outside `.claude` (hazard_files), and the stub
-text. A hazard is a construct that can open a console window whatever the CreateProcess hook
+.ps1, .cmd and .bat file git lists, tests/ included, outside `.claude` (hazard_files). A hazard
+is a construct that can open a console window whatever the CreateProcess hook
 kitlib.proc.console installs does (tests/proc/windowscan.py says which, and how each is seen):
 os.system, os.spawn*, os.exec*, os.startfile, ShellExecute*, CreateProcess* reached through
 ctypes, CREATE_NEW_CONSOLE, DETACHED_PROCESS (unless the start's argv names pythonw), AllocConsole,
@@ -48,7 +45,7 @@ EXEMPT.
 import os
 import unittest
 
-from kitlib import machinepaths, stubs
+from kitlib import machinepaths
 from tests import gitfixture
 from tests.proc import windowscan
 from tests.proc.spawnscan import SPAWNERS, scan_source
@@ -61,11 +58,6 @@ OWN_GATE_TOOL = ('a template for another repository\'s own gate tool, copied the
                  'kitlib, and it runs under that repository\'s gate, whose console it inherits')
 STANDALONE = ('a standalone optional tool that imports nothing of the kit: it starts itself again '
               'under the machine lock tool and hands its own console and output on')
-
-STUB = 'kitlib/stubs/__init__.py TEMPLATE'      # the name the stub's text is read under
-STUB_TOOL = 'gate'                              # any name: the template's start is the same
-STUB_KIT = r'C:\kit'                            # a fixed kit path: the checkout's own folder name
-                                                # (a worktree slug like guard-start-process-args) is no start
 
 EXEMPT = {
     ('kitlib/proc/spawn.py', 'run', 'subprocess.run'): (1, HELPER),
@@ -94,10 +86,6 @@ EXEMPT = {
         1, OWN_GATE_TOOL),
     ('templates/stacks/python/tools/js_tests.py', 'run_js_tests', 'ref subprocess.run'): (
         1, OWN_GATE_TOOL),
-    (STUB, 'main', 'subprocess.call'): (
-        1, 'a stub is a console program, run as `python <tools>/<name>.py`: it has a console when '
-           'it runs, its caller\'s or the one Windows gave it, and the kit tool it starts shares '
-           'that one. It imports nothing of the kit, so a stub whose kit is gone can still say so'),
 }
 
 # The window-hazard rule (class Hazards).
@@ -312,11 +300,6 @@ def scan_tree(root):
     return found
 
 
-def scan_stub():
-    """The findings in the text of a stub, under the name STUB."""
-    return scan_source(stubs.stub_text(STUB_TOOL, kit=STUB_KIT), STUB)
-
-
 def check(found, exempt):
     """(the findings no row excuses, the rows that count more starts than were found). A row
     excuses as many findings as its count, the first ones in `found`; the rest are unexcused."""
@@ -344,9 +327,9 @@ def hazard_files(root):
     return sorted(out)
 
 
-def scan_hazards(root, stub=True):
-    """[(rel, function, what, line)] of every window hazard in hazard_files(root), and in the stub
-    text when `stub`, less those in their RULE_HOMES file."""
+def scan_hazards(root):
+    """[(rel, function, what, line)] of every window hazard in hazard_files(root), less those in
+    their RULE_HOMES file."""
     found = []
     for rel in hazard_files(root):
         with open(os.path.join(root, rel), encoding='utf-8-sig', errors='replace') as f:
@@ -355,8 +338,6 @@ def scan_hazards(root, stub=True):
             found.extend(windowscan.scan_script(text, rel))
         else:
             found.extend(windowscan.scan_python(text, rel))
-    if stub:
-        found.extend(windowscan.scan_python(stubs.stub_text(STUB_TOOL, kit=STUB_KIT), STUB))
     return [f for f in found if RULE_HOMES.get(f[2]) != f[0]]
 
 
@@ -444,11 +425,6 @@ class Scanner(unittest.TestCase):
         self.assertEqual(check(found, {row: (2, 'why')}), ([], []))
         self.assertEqual(check(found, {row: (3, 'why')}), ([], [row]))      # one of them is gone
 
-    def test_the_stub_text_is_read(self):
-        """The start a stub makes is in a string in kitlib/stubs: it is read from the stub's text."""
-        self.assertEqual([f[:3] for f in scan_stub()], [(STUB, 'main', 'subprocess.call')])
-        self.assertIn(stubs.MARK, stubs.stub_text(STUB_TOOL, kit=STUB_KIT))
-
     def test_the_hooks_with_no_extension_are_read(self):
         files = python_files(ROOT)
         self.assertIn('githooks/pre-push', files)
@@ -521,7 +497,7 @@ class Sites(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.found = scan_tree(ROOT) + scan_stub()
+        cls.found = scan_tree(ROOT)
         cls.unlisted, cls.stale = check(cls.found, EXEMPT)
 
     def test_every_start_names_its_creation_flags(self):
@@ -658,7 +634,7 @@ class HazardFixture(unittest.TestCase):
         r.write('tools/other.py', 'D = "Win32_Process -MethodName Create"\n')
         r.write('kit/startup.py', 'S = "Win32_ProcessStartup Create"\n')
         r.commit('fixture', 'kit/bad.py')
-        self.found = scan_hazards(r.root, stub=False)
+        self.found = scan_hazards(r.root)
 
     def labels(self, rel):
         return [f[2] for f in self.found if f[0] == rel]

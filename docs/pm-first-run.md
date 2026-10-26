@@ -91,8 +91,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    `hub: server up on port 8790, 0 pending for the PM`.
 
 9. **Install each repository** (docs/install.md).
-   Success: `git -C <repo> config core.hooksPath` prints `<kit>/githooks` (and, for a
-   repository installed with `-Stubs`, `python <kit>/tools/kit_stubs.py check -C <repo>` exits 0).
+   Success: `git -C <repo> config core.hooksPath` prints `<kit>/githooks`.
 
 10. **Start its backlog.** In each repository the first `python <kit>/tools/backlog.py -C <repo> add` creates the
     store (docs/backlog.md); a first record found on no branch takes

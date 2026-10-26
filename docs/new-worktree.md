@@ -99,6 +99,6 @@ These source tests were dropped with the mechanisms they tested:
 
 - `TheCallerStandsInTheRepository`, and `-C`'s "another repository is a usage error": `_repo_guard.check_same_repo` is retired.
 - `-C`'s "a named worktree's copy never runs" and "a worktree's copy hands off": the `-C` hand-off is retired (one kit copy).
-- `StubMode`: the PM kit's stub runtime is retired. Stubs are `kitlib.stubs` now ([install.md](install.md)).
+- `StubMode`: the PM kit's stub runtime is retired; the kit writes no tool stubs.
 - `NoLockConfigured`: the kit always has a landing lock. `TheDefaultLock` tests the default `kit-landing.lock` instead.
 - The special message for `landing_stale_minutes`: it is now the generic unknown-key refusal of `kitlib.config`.

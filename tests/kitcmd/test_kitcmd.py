@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import kitcmd, pluginsource, stubs
+from kitlib import kitcmd, pluginsource
 from kitlib.config import ConfigError
 from kitlib.config.user import HomeFenced
 from tests.platforms import windows_only
@@ -171,10 +171,18 @@ class Names(Exports):
         self.assertIn("no kit tool named 'nope'", kitcmd.check_name('nope', have))
         self.assertIn('no kit tool', kitcmd.check_name('..\\gate', have))
 
-    def test_stubs_reads_the_partition_from_kitcmd(self):
-        self.assertIs(stubs.SHARED, kitcmd.SHARED)
-        self.assertIs(stubs.KIT_ONLY, kitcmd.KIT_ONLY)
-        self.assertIn('kit', kitcmd.KIT_ONLY)
+    def test_every_kit_command_is_in_exactly_one_list(self):
+        """SHARED (acts on a repository checkout) or KIT_ONLY (machine, owner or kit): each of the
+        kit's commands, `kit` itself included and kit_stubs left out, is in exactly one."""
+        both = sorted(set(kitcmd.SHARED) & set(kitcmd.KIT_ONLY))
+        self.assertEqual(both, [], 'in both SHARED and KIT_ONLY')
+        have = (set(kitcmd.commands(ROOT)) - {'kit_stubs'}) | {kitcmd.SELF}
+        listed = set(kitcmd.SHARED) | set(kitcmd.KIT_ONLY)
+        self.assertEqual(sorted(have - listed), [],
+                         'add each new tool to kitlib.kitcmd.SHARED (it acts on a repository '
+                         'checkout named by -C or the current directory) or KIT_ONLY (machine, '
+                         'owner or kit)')
+        self.assertEqual(sorted(listed - have), [], 'a listed name is not a kit command')
 
 
 @windows_only('the kit runs on Windows only')

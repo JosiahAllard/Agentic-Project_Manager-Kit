@@ -67,7 +67,7 @@ It never rebases, resets or forces, and never touches the data worktree. The hoo
 
 ## Other users
 
-A clone of the public remote has `main` only. `installer/new-repo.ps1` gains `-PmData <path>` (and `-PrivateRemote <url>`): it runs `pm_data.py init`, which makes an empty `pmdata` (one root commit, no files), the worktree at `<path>`, and the private remote if a URL is given. Without the switch nothing changes for a user who keeps data outside git. `kit_stubs.py` needs no change.
+A clone of the public remote has `main` only. `installer/new-repo.ps1` gains `-PmData <path>` (and `-PrivateRemote <url>`): it runs `pm_data.py init`, which makes an empty `pmdata` (one root commit, no files), the worktree at `<path>`, and the private remote if a URL is given. Without the switch nothing changes for a user who keeps data outside git.
 
 ## Failure modes
 

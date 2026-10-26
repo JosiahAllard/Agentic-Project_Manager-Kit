@@ -10,7 +10,6 @@ The target is an existing git checkout, named by its top level. It writes these 
                               with a stack "gate": "tools/gate.json". The name is `repo_name`,
                               else the folder's name lower-cased; either must be a lower-case repo
                               name, or it refuses.
-  <target>/<tools_dir>/<n>.py with `stubs` only: the kit tool stubs (kitlib.stubs write)
   <target>/.gitignore, .gitattributes   templates/common's lines plus the stack's lists. An
                               existing file is never overwritten: only the lines it lacks are
                               appended, under INSTALLER_MARK, in the file's own line ending.
@@ -26,8 +25,7 @@ The target is an existing git checkout, named by its top level. It writes these 
                               in the ignored local file, never a tracked one. A key already in
                               either file is kept; a file it cannot edit refuses before any write.
                               The memory folder itself is not made.
-It never overwrites: a .kit.json or tools/gate.json already there, or with `stubs` a file where a
-stub goes that is not a stub, refuses before anything is written. Every template and every
+It never overwrites: a .kit.json or tools/gate.json already there refuses before anything is written. Every template and every
 existing line file is read at plan time, so one that cannot be read refuses before any write.
 A write that fails stops at once: the lines name what was already written (and the file that
 failed, which may be partly written), exit 1.
@@ -92,11 +90,11 @@ class _Stop(Exception):
 
 
 class RepoContext(object):
-    """What a repo setup reads. `kit` is the kit checkout whose templates, stubs and tools are
+    """What a repo setup reads. `kit` is the kit checkout whose templates and tools are
     used; `python` the interpreter pm_data.py runs under."""
 
     def __init__(self, target, owner_email, agent_email, kit, main_branch='main', repo_name='',
-                 stack='', pm_data='', private_remote='', stubs=False, python=None, memory_root=None):
+                 stack='', pm_data='', private_remote='', python=None, memory_root=None):
         self.target = target
         self.owner_email = (owner_email or '').strip()
         self.agent_email = (agent_email or '').strip()
@@ -106,7 +104,6 @@ class RepoContext(object):
         self.stack = (stack or '').strip()
         self.pm_data = (pm_data or '').strip()
         self.private_remote = (private_remote or '').strip()
-        self.stubs = bool(stubs)
         self.python = python or sys.executable
         self.memory_root = memory_root      # the memory root; None: kitlib.stubs.memory's default
 
@@ -230,7 +227,6 @@ class Setup(object):
         self.line_files = [self._plan_line_file('.gitignore', self.stack_lines['gitignore']),
                            self._plan_line_file('.gitattributes', self.stack_lines['gitattributes'])]
         self._plan_index()
-        self._plan_stubs()
         self._plan_skills()
         rc, url, _err = _git(self.target, 'remote', 'get-url', 'origin')
         self.remote_url = url.strip().splitlines()[0] if rc == 0 and url.strip() else ''
@@ -337,21 +333,6 @@ class Setup(object):
         if self.memory.state == memory.BAD:
             raise Refused('cannot add autoMemoryDirectory: %s; nothing was written' % self.memory.why)
 
-    def _plan_stubs(self):
-        """With `stubs`: the stubs kitlib.stubs would write, read as the target is now (no
-        .kit.json yet: the default tools_dir and tool list apply, as they will after the write)."""
-        self.stub_lines, self.stub_code, self.stub_names = [], 0, []
-        if not self.ctx.stubs:
-            return
-        from kitlib import stubs
-        from kitlib.config import ConfigError, load
-        got = stubs.run(self.target, 'write', dry_run=True, kit=self.ctx.kit)
-        self.stub_lines, self.stub_code = list(got.lines), got.code
-        try:
-            self.stub_names = [n + '.py' for n in stubs.wanted(load(self.target), self.ctx.kit)]
-        except ConfigError:
-            self.stub_names = []
-
     def _plan_skills(self):
         self.skill_lines = []
         if not self.ctx.stack:
@@ -373,12 +354,6 @@ class Setup(object):
         if c.stack:
             out.append('  stack:   %s' % c.stack)
         out += ['', '.kit.json:'] + ['  ' + l for l in self.text.rstrip('\n').split('\n')]
-        out += ['', 'stubs:']
-        if c.stubs:
-            out += ['  ' + l for l in self.stub_lines]
-        else:
-            out.append('  none (skills and roles run %s -C <checkout>; --stubs writes them)'
-                       % os.path.join(c.kit, 'tools', '<x>.py'))
         out += ['', 'other files:']
         for f in self.line_files:
             if f.new:
@@ -432,18 +407,6 @@ class Setup(object):
                     % (m.path, m.value, m.want)]
         return ['current       %s names %s' % (m.path, m.value)]
 
-    def late_refusal(self):
-        """The refusals that follow the printed plan (it shows what they are about), or None."""
-        c = self.ctx
-        if self.stub_code != 0:
-            return 'kitlib.stubs refused the stubs above (exit %d); nothing was written' % self.stub_code
-        names = set(n.lower() for n in self.stub_names)
-        for n, _src, _dst in self.tool_files:
-            if n.lower() in names:
-                return ("the %s stack's tools file %s has the name of a kit tool stub; nothing was "
-                        "written" % (c.stack, n))
-        return None
-
     # -- the writes -------------------------------------------------------------------------
 
     def write(self):
@@ -481,22 +444,6 @@ class Setup(object):
             emit('%s: REFUSED - cannot create %s - %s; %s' % (NAME, self.kit_json, _why(e), did))
             raise _Stop()
         self.written.append(self.kit_json)
-        if c.stubs:
-            from kitlib import stubs
-            got = stubs.run(self.target, 'write', kit=c.kit)
-            emit(*['  ' + l for l in got.lines])
-            if got.code != 0:
-                wrote = '.kit.json'
-                if c.stack:
-                    wrote = ', '.join(['.kit.json', self.gate_dst]
-                                      + [d for _n, _s, d in self.tool_files if d in self.written]
-                                      + skill_written)
-                emit('%s: STOPPED - kitlib.stubs write exited %d after %s were written, and any stubs '
-                     'listed above.' % (NAME, got.code, wrote),
-                     '  The .gitignore, .gitattributes and docs/INDEX.md were not touched. To undo: '
-                     'delete %s and the stubs listed, then run again.' % wrote)
-                raise _Stop()
-            self.written.append('(and the stubs listed above)')
         for f in self.line_files:
             if not f.body:
                 continue
@@ -612,19 +559,15 @@ class Setup(object):
                '  1. review .kit.json (docs/kit-json.md names every key). Commit .kit.json and '
                'tools/gate.json under the',
                "     owner's identity (owner-only paths: the kit's tools/commit.py refuses an agent's); "
-               'commit %s.gitignore,' % ('the stubs, ' if c.stubs else ''),
+               'commit .gitignore,',
                '     %s as usual' % usual]
         if self.memory_added:
             from kitlib.stubs import memory
             out.append('     %s (its %s, a machine path) is git-ignored: nothing to commit for it'
                        % (memory.local_rel(), memory.KEY))
         tools = os.path.join(c.kit, 'tools')
-        if c.stubs:
-            out.append('  2. python "%s" check -C "%s"   (exit 0: every stub current)'
-                       % (os.path.join(tools, 'kit_stubs.py'), self.target))
-        else:
-            out.append('  2. agents run the kit\'s tools as python "%s" -C <checkout>; nothing to commit '
-                       'for them' % os.path.join(tools, '<x>.py'))
+        out.append('  2. agents run the kit\'s tools as python "%s" -C <checkout>; nothing to commit '
+                   'for them' % os.path.join(tools, '<x>.py'))
         if c.stack:
             out += ['  3. tools/gate.json is the %s gate: edit its globs and test command to the project.' % c.stack,
                     '     %s' % PASS_NOTES.get(c.stack, 'its steps pass on their exit status and fail patterns '
@@ -662,18 +605,13 @@ def run(ctx, apply=False, out=None):
         emit('%s: REFUSED - %s' % (NAME, e))
         return e.code, lines
     emit(*s.report(apply))
-    late = s.late_refusal()
-    if late:
-        emit('%s: REFUSED - %s' % (NAME, late))
-        return EXIT_REFUSED, lines
     if not apply:
         return EXIT_OK, lines
     try:
         s.write()
     except _Stop as e:
         return e.code, lines
-    what = '.kit.json, the stubs and the starter files' if ctx.stubs else '.kit.json and the starter files'
-    emit('', '%s: wrote %s in %s' % (NAME, what, s.target))
+    emit('', '%s: wrote .kit.json and the starter files in %s' % (NAME, s.target))
     code = s.pm_data() if ctx.pm_data else EXIT_OK
     emit(*s.next_steps())
     return code, lines

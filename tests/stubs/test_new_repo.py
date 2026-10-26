@@ -12,11 +12,11 @@ import subprocess
 import unittest
 from unittest import mock
 
-from kitlib import config, stubs
+from kitlib import config, kitroot
 from kitlib.config import user
 from tests import gitfixture
 
-SCRIPT = os.path.join(stubs.KIT_ROOT, 'installer', 'new-repo.ps1')
+SCRIPT = os.path.join(kitroot.root(), 'installer', 'new-repo.ps1')
 OWNER = 'owner@example.invalid'
 AGENT = 'agent@example.invalid'
 
@@ -49,9 +49,9 @@ class NewRepo(unittest.TestCase):
         files without touching this kit. Returns the copy's new-repo.ps1."""
         kit = os.path.join(os.path.realpath(self.fx.base), 'kitcopy')
         for name in ('installer', 'tools', 'kitlib', 'templates'):
-            shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(kit, name),
+            shutil.copytree(os.path.join(kitroot.root(), name), os.path.join(kit, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
-        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), kit)    # the host registry kitlib reads
+        shutil.copy2(os.path.join(kitroot.root(), 'hosts.json'), kit)    # the host registry kitlib reads
         return kit, os.path.join(kit, 'installer', 'new-repo.ps1')
 
     def lock(self, path):
@@ -68,23 +68,21 @@ class NewRepo(unittest.TestCase):
 
     def test_the_dry_run_writes_nothing(self):
         before = sorted(os.listdir(self.root))
-        code, out = self.ps('-Stubs')
+        code, out = self.ps()
         self.assertEqual(code, 0, out)
         self.assertIn('DRY RUN', out)
         self.assertIn('"email": "%s"' % OWNER, out)
-        self.assertIn('would write  %s' % os.path.join(self.root, 'tools', 'landed.py'), out)
         self.assertEqual(sorted(os.listdir(self.root)), before)
 
-    def test_apply_writes_the_config_and_the_stubs(self):
-        code, out = self.ps('-Apply', '-Stubs', '-MainBranch', 'master')
+    def test_apply_writes_the_config_and_no_tools_folder(self):
+        code, out = self.ps('-Apply', '-MainBranch', 'master')
         self.assertEqual(code, 0, out)
         with open(os.path.join(self.root, '.kit.json'), encoding='utf-8') as fh:
             data = json.load(fh)
         self.assertEqual(data, {'repo': {'main_branch': 'master', 'name': 'repo'},
                                 'backlog': {'store': 'ref'},
                                 'owner': {'email': OWNER, 'agent_emails': [AGENT]}})
-        got = stubs.run(self.root, 'check')
-        self.assertEqual(got.code, stubs.OK, got.lines)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')), out)
         code, out = self.ps('-Apply')
         self.assertEqual(code, 1, out)
         self.assertIn('.kit.json exists already', out)
@@ -130,7 +128,7 @@ class NewRepo(unittest.TestCase):
         code, out = self.ps('-Apply', target=plain)
         self.assertEqual(code, 1, out)
         self.assertIn('is not a git checkout', out)
-        code, out = self.ps('-Apply', target=os.path.join(stubs.KIT_ROOT, 'docs'))
+        code, out = self.ps('-Apply', target=os.path.join(kitroot.root(), 'docs'))
         self.assertEqual(code, 1, out)
         self.assertIn('inside the kit itself', out)
         self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
@@ -144,7 +142,7 @@ class NewRepo(unittest.TestCase):
                    "exit $LASTEXITCODE" % (os.path.dirname(self.root), SCRIPT, OWNER, AGENT))
         done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', command],
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
-                              env=gitfixture.fixture_env(), timeout=300, cwd=stubs.KIT_ROOT)
+                              env=gitfixture.fixture_env(), timeout=300, cwd=kitroot.root())
         out = (done.stdout or '') + (done.stderr or '')
         self.assertEqual(done.returncode, 0, out)
         self.assertIn('  target:  %s' % self.root, out)
@@ -164,15 +162,13 @@ class NewRepo(unittest.TestCase):
         self.assertNotIn('WARNING', out)
 
     def test_stack_writes_the_gate_section_the_lists_and_loads(self):
-        code, out = self.ps('-Apply', '-Stubs', '-Stack', 'python')
+        code, out = self.ps('-Apply', '-Stack', 'python')
         self.assertEqual(code, 0, out)
         cfg = config.load(self.root)
         self.assertEqual(cfg.section_file('gate'), 'tools/gate.json')
         self.assertEqual([st['name'] for st in cfg.section('gate')['steps']], ['unit-tests'])
         self.assertIn('__pycache__/', self.read('.gitignore').splitlines())
         self.assertIn('*.pyc        binary', self.read('.gitattributes').splitlines())
-        got = stubs.run(self.root, 'check')
-        self.assertEqual(got.code, stubs.OK, got.lines)
 
     def test_a_locked_ignore_file_refuses_at_plan_time_before_anything_is_written(self):
         path = os.path.join(self.root, '.gitignore')
@@ -235,9 +231,9 @@ class PmData(unittest.TestCase):
         self.addCleanup(self.kit.cleanup)
         self.kit_root = os.path.realpath(self.kit.root)
         for name in ('installer', 'tools', 'kitlib', 'templates'):
-            shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(self.kit_root, name),
+            shutil.copytree(os.path.join(kitroot.root(), name), os.path.join(self.kit_root, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
-        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), self.kit_root)    # the host registry kitlib reads
+        shutil.copy2(os.path.join(kitroot.root(), 'hosts.json'), self.kit_root)    # the host registry kitlib reads
         self.target = gitfixture.TempRepo()
         self.addCleanup(self.target.cleanup)
         self.target_root = os.path.realpath(self.target.root)
