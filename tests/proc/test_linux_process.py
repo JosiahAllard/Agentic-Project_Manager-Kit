@@ -82,9 +82,12 @@ class Tree(unittest.TestCase):
         self.own = process.own_ctime()
 
     def _end(self):
-        for pid, ct in ((self.gpid, getattr(self, 'gct', None)), (self.child.pid, self.ct)):
-            if ct is not None:
+        for pid, ct in ((getattr(self, 'gpid', None), getattr(self, 'gct', None)),
+                        (self.child.pid, getattr(self, 'ct', None))):
+            if pid is not None and ct is not None:
                 process.terminate_verified(pid, ct)     # this test's own, verified
+        if self.child.poll() is None:
+            self.child.kill()       # its ctime never read: by its handle (the grandchild sleeps out)
         self.child.wait(30)
         self.child.stdout.close()
 
