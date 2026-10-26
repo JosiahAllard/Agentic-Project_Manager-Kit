@@ -2510,22 +2510,22 @@ class QuestionBindTest(ApiCase):
                                ('Q-1002', 'cited by more than one record')]))
 
     def test_apply_binds_an_answered_question_and_files_its_answer_at_once(self):
-        self.views.ITEMS = [{'id': 'EX-3', 's': 'parked', 'q': 'Q-1002'}]
+        self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
         filed = []
         self.views.record_answer = lambda *a: filed.append(a[:3]) or {'lines': []}
         dry = self.bind(apply=False)
         self.assertEqual(dry['pairs'], [{'question': 'Q-1002', 'bound': False,
-                                         'record': {'repo': 'kit', 'id': 'EX-3'}}])
+                                         'record': {'repo': 'kit', 'id': 'EX-1'}}])
         self.assertEqual(filed, [])
         got = self.bind(apply=True)
         self.assertEqual([(p['question'], p['bound'], p['filing']) for p in got['pairs']],
                          [('Q-1002', True, {'filed': True})])
         d = self.store.docs('questions')['Q-1002']
-        self.assertEqual((d['record'], d['status']), ({'repo': 'kit', 'id': 'EX-3'}, 'filed'))
-        self.assertEqual(filed, [('kit', 'EX-3', 'Q-1002')])
+        self.assertEqual((d['record'], d['status']), ({'repo': 'kit', 'id': 'EX-1'}, 'filed'))
+        self.assertEqual(filed, [('kit', 'EX-1', 'Q-1002')])
 
     def test_an_answered_question_whose_filing_fails_is_bound_and_left_for_the_pm(self):
-        self.views.ITEMS = [{'id': 'EX-3', 's': 'parked', 'q': 'Q-1002'}]
+        self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
 
         def busy(*a):
             raise HubError('store', 'C:\\work is busy', '')
@@ -2536,10 +2536,10 @@ class QuestionBindTest(ApiCase):
                                             'message': api.FILING_SAYS['store']})])
         d = self.store.docs('questions')['Q-1002']
         self.assertEqual((d['record'], d['status'], d['filing']['code']),
-                         ({'repo': 'kit', 'id': 'EX-3'}, 'answered', 'store'))
+                         ({'repo': 'kit', 'id': 'EX-1'}, 'answered', 'store'))
 
     def test_a_question_marked_done_or_logged_is_still_a_miss(self):
-        self.views.ITEMS = [{'id': 'EX-3', 's': 'parked', 'q': 'Q-1002'}]
+        self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
         self.ok('POST', '/questions/Q-1002/done', AGENT, {'why': 'a one-off go', 'if_version': 2})
         got = self.bind(apply=True)
         self.assertEqual(([m['why'] for m in got['misses'] if m['record']['repo'] == 'kit'],
@@ -2550,7 +2550,8 @@ class QuestionBindTest(ApiCase):
         got = self.bind(apply=True)
         self.assertEqual([p['question'] for p in got['pairs']], ['Q-1001'])
         self.assertEqual([(s['question'], s['why']) for s in got['skipped']],
-                         [('Q-1000', 'cited by more than one record')])
+                         [('Q-1000', 'cited by more than one record'),
+                          ('Q-1002', 'cited by more than one record')])
         self.assertNotIn('record', self.store.docs('questions')['Q-1000'])
 
     def test_cites_come_from_blocked_on_and_the_blocked_on_body_line(self):
@@ -2576,7 +2577,8 @@ class QuestionBindTest(ApiCase):
         self.assertEqual(got['pairs'], [])
         self.assertEqual({(s['question'], s['why']) for s in got['skipped']},
                          {('Q-1000', 'bound to another record'),
-                          ('Q-1001', 'cited by more than one record')})
+                          ('Q-1001', 'cited by more than one record'),
+                          ('Q-1002', 'cited by more than one record')})
         self.assertNotIn('record', self.store.docs('questions')['Q-1001'])
 
     def test_a_record_that_fails_its_check_is_reported_and_the_rest_are_bound(self):
@@ -4225,10 +4227,11 @@ class FilingTest(ApiCase):
         self.assertEqual(len(self.views.filed), 7, 'each retry did try the record')
         self.assertEqual(self.doc(qid), first, 'nothing written: the first `at` is kept')
         self.assertEqual(self.store.revision, revision)
-        # the version the asker read still holds for its log
-        self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': R7, 'if_version': first['version']})
-        self.assertEqual(self.doc(qid)['status'], 'logged')
+        # the version the asker read still holds, but an answer that may still file is not
+        # logged before it does (docs/action-hub.md "Filing the answer")
+        self.refused('invalid', 'filing', 'POST', '/questions/%s/log' % qid, AGENT,
+                     {'ruling': R7, 'if_version': first['version']})
+        self.assertEqual(self.doc(qid), first)
 
     def test_a_retry_that_fails_another_way_marks_the_new_failure(self):
         qid = self.bound()
@@ -4306,8 +4309,9 @@ class FilingTest(ApiCase):
         self.assertIn('the PM handles this answer', d['filing']['message'])
         self.assertEqual(self.pending(), [qid])
         self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': R7, 'if_version': d['version']})
-        self.assertEqual(self.doc(qid)['status'], 'logged')
+                {'ruling': R7, 'if_version': d['version'], 'unfiled': 'the record is closed'})
+        self.assertEqual((self.doc(qid)['status'], self.doc(qid)['unfiled_why']),
+                         ('logged', 'the record is closed'))
         self.assertEqual(self.refile(), {'ok': True, 'filed': [], 'failed': [],
                                          'revision': self.store.revision})
         self.assertEqual(len(self.views.filed), 1, 'a logged question is never filed')

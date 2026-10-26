@@ -107,9 +107,13 @@ the server alone decides what a role may do.
                                                      not know it; --record: the open backlog
                                                      record it is about, refused unless the
                                                      hub reads it now in that configured repo
-  hub.py questions log Q-1 <ruling id> [--replace] --if-version V   `LOGGED Q-1 <ruling id>`
-  hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
-                                                     that needs no ruling
+  hub.py questions log Q-1 <ruling id> [--replace] [--unfiled WHY] --if-version V
+                                                     `LOGGED Q-1 <ruling id>`
+  hub.py questions done Q-1 --why TEXT [--unfiled WHY] --if-version V
+                                                     `DONE Q-1`: an answered question that
+                                                     needs no ruling. A bound answer not filed
+                                                     is refused until it files; --unfiled says
+                                                     why one that never can is handled anyway
   hub.py questions file [Q-1]                       `FILED Q-1`, `NOT FILED Q-1: <why> (<code>)`
                                                      or `nothing to file`: each answer to a
                                                      question bound to a record not filed yet,
@@ -117,8 +121,10 @@ the server alone decides what a role may do.
   hub.py questions bind --dry-run | --apply          (PM) `BIND Q-1 repo:ID` per open question a
                                                      parked record's q or an owner-blocked
                                                      record cites, then `MISS`, `MULTI`, `SKIP`
-                                                     lines; --apply binds them (open questions
-                                                     only), `BOUND` / `NOT BOUND` for each
+                                                     lines; --apply binds them (open or
+                                                     answered questions), `BOUND` / `NOT BOUND`
+                                                     for each, and files an answered one at
+                                                     once: `FILED` / `NOT FILED Q-1: <why>`
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
         [--urgent | --no-urgent] [--record REPO:ID | --no-record]
@@ -331,6 +337,12 @@ def _bind_lines(got):
     for p in got.get('pairs') or []:
         word = 'BOUND' if p.get('bound') else 'BIND'
         lines.append('%s %s %s' % (word, p.get('question'), named(p.get('record'))))
+        f = p.get('filing')
+        if isinstance(f, dict) and f.get('filed'):
+            lines.append('FILED %s' % p.get('question'))
+        elif isinstance(f, dict) and not f.get('moved'):
+            lines.append('NOT FILED %s: %s (%s)' % (p.get('question'), f.get('message'),
+                                                    f.get('code')))
     lines += ['NOT BOUND %s: %s (%s)' % (f.get('question'), f.get('message'), f.get('code'))
               for f in got.get('failed') or []]
     lines += ['MISS %s: %s' % (named(m.get('record')), m.get('why'))
@@ -339,6 +351,13 @@ def _bind_lines(got):
               for m in got.get('multi') or []]
     lines += ['SKIP %s: %s' % (s.get('question'), s.get('why')) for s in got.get('skipped') or []]
     return lines or ['nothing to bind']
+
+
+def _unfiled(x):
+    """--unfiled on questions log and done (docs/action-hub.md "Filing the answer")."""
+    x.add_argument('--unfiled', metavar='WHY',
+                   help='why an answer whose filing into its record failed for good (not '
+                        'found, invalid, no store) is handled without it')
 
 
 def _asks(p):
@@ -418,15 +437,18 @@ def _client_verbs(sub):
     x.add_argument('ruling', metavar='ruling-id')
     x.add_argument('--replace', action='store_true',
                    help='correct the ruling of a question already logged')
+    _unfiled(x)
     _pins(x, required=True)
     x = _leaf(q, 'done', 'mark an answered question handled with no ruling (a one-off go)')
     x.add_argument('id')
     x.add_argument('--why', required=True, help='why the answer needs no ruling')
+    _unfiled(x)
     _pins(x, required=True)
     x = _leaf(q, 'file', 'file each answer to a question bound to a record that is not filed '
               'yet into its record (the hub does at once and at start)')
     x.add_argument('id', nargs='?', help='only this question')
-    x = _leaf(q, 'bind', 'bind open questions to the records that cite them (the PM)')
+    x = _leaf(q, 'bind', 'bind open or answered questions to the records that cite them, '
+              'filing an answered one at once (the PM)')
     mode = x.add_mutually_exclusive_group(required=True)
     mode.add_argument('--dry-run', dest='dry_run', action='store_true',
                       help='list what would be bound, and what cannot be')
@@ -1057,11 +1079,15 @@ def _questions(a, stop):
         body = {'ruling': a.ruling, 'if_version': a.if_version}
         if a.replace:
             body['replace'] = True      # sent only when asked: a hub not yet restarted refuses unknown fields
+        if a.unfiled is not None:
+            body['unfiled'] = a.unfiled
         got = hub.post(_one('questions', a) + '/log', client.AGENT, body)
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
     if a.sub == 'done':
-        got = hub.post(_one('questions', a) + '/done', client.AGENT,
-                       {'why': a.why, 'if_version': a.if_version})
+        body = {'why': a.why, 'if_version': a.if_version}
+        if a.unfiled is not None:
+            body['unfiled'] = a.unfiled     # sent only when asked, as --replace is
+        got = hub.post(_one('questions', a) + '/done', client.AGENT, body)
         return _wrote(a, got, 'DONE %s' % got.get('id'))
     if a.sub == 'file':
         got = hub.post('/questions/file', client.AGENT, _body(id=a.id))

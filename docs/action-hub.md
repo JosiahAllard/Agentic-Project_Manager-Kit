@@ -302,10 +302,10 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
 | `questions show Q-1 [--json]` | the `Q-1 v2 answered [repo] title` line, then its options (the recommended one marked), context, answer and note |
 | `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID] [--from KEY]` | `ASKED Q-2`, then any warning lines |
-| `questions log Q-1 <ruling id> [--replace] --if-version V` | `LOGGED Q-1 <ruling id>` |
-| `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
+| `questions log Q-1 <ruling id> [--replace] [--unfiled WHY] --if-version V` | `LOGGED Q-1 <ruling id>` |
+| `questions done Q-1 --why TEXT [--unfiled WHY] --if-version V` | `DONE Q-1` |
 | `questions file [Q-1]` | `FILED Q-1` and `NOT FILED Q-2: <why> (<code>)` lines, or `nothing to file` ("Filing the answer") |
-| `questions bind --dry-run \| --apply` (PM) | `BIND Q-1 repo:ID` (dry run) or `BOUND Q-1 repo:ID` lines, `NOT BOUND Q-1: <why> (<code>)` for a pair that failed, then `MISS repo:ID: <why>` (`MISS repo: <why>` when the whole repository could not be read), `MULTI repo:ID cites Q-1 Q-2`, `SKIP Q-1: <why>`, or `nothing to bind` ("Binding the open questions") |
+| `questions bind --dry-run \| --apply` (PM) | `BIND Q-1 repo:ID` (dry run) or `BOUND Q-1 repo:ID` lines (each answered one followed by `FILED Q-1` or `NOT FILED Q-1: <why> (<code>)`), `NOT BOUND Q-1: <why> (<code>)` for a pair that failed, then `MISS repo:ID: <why>` (`MISS repo: <why>` when the whole repository could not be read), `MULTI repo:ID cites Q-1 Q-2`, `SKIP Q-1: <why>`, or `nothing to bind` ("Binding the open questions") |
 | `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent] [--record REPO:ID \| --no-record]` | `EDITED Q-1` |
 | `questions withdraw Q-1 --from KEY --if-version V` | `WITHDRAWN Q-1` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
@@ -564,6 +564,7 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 | answer | owner | `{choice: index or "other", label, note, at}` |
 | ruling | PM | the ruling id it was logged as |
 | done_why, done_at | PM | why the answer needed no ruling, and when it was marked done (ISO time) |
+| unfiled_why | PM | why an answer whose filing failed for good was logged or marked done anyway ("Filing the answer") |
 | record | PM, coordinator | `{repo, id}`: the backlog record the question is about; absent or null on an unbound question (every question asked before the field existed reads so) |
 | filing | hub | `{at, code, message}`: why the last filing of the answer failed; null once filed or answered again |
 | filed_at | hub | when the answer was filed into the record (ISO time); null after a re-answer |
@@ -578,8 +579,10 @@ uses (`kitlib.hubsite.backlog` `Views.record`: the configured repositories only,
 fetch), and stores `repo` as the configured name. The kit's own records are repo `pm`. Each of
 these is refused, field `record`, and nothing is written (`kitlib.hubsite.api` `_bound`):
 - `invalid`: a `record` that is not exactly `{repo, id}` with two non-blank strings, a name that
-  can be no repository or record id, or a record that is completed (closed, retired or taken out
-  of the store);
+  can be no repository or record id, a record that is completed (closed, retired or taken out
+  of the store), or one in a repository whose `.kit.json` names no `"backlog".store` (the record
+  view's `writable` false, `kitlib.hubsite.backlog` `writable`): its answer could never be filed
+  ("Filing the answer", `no_store`), so it is asked unbound;
 - `not_found`: a repo the hub has not configured, or an id that repo's backlog does not have;
 - `unavailable`: a record the hub cannot check (a server with no backlog views, no checkout of the
   repo on this machine, a store that cannot be read). It fails closed: an answer is meant to be
@@ -597,11 +600,13 @@ repository's backlog (`--apply` reads it fresh, a fetch round; `--dry-run` the h
 not to fetch for a look): a parked record's `q:` line, and an owner-blocked record's `owner_ask`,
 `q`, `blocked_on` and `Blocked on` lines, each give the Q-nnn they cite (Q-012 is Q-12). A record
 citing one open hub question is a pair. It answers `{pairs, misses, multi, skipped, failed}`: a
-`miss` is a record whose question is not in the hub or is not open (an answered or closed question
-is never bound), a parked record citing none, or a repository or record that could not be read;
-`multi` are records citing several questions, left alone; `skipped` is a question already bound or
-cited by two records. `--dry-run` writes nothing; `--apply` sets `record` on each pair's open,
-unbound question, checked as `_bound` checks it (a failure is in `failed`). Tests:
+`miss` is a record whose question is not in the hub or is neither open nor answered (a filed,
+logged or done question is never bound), a parked record citing none, or a repository or record
+that could not be read; `multi` are records citing several questions, left alone; `skipped` is a
+question already bound or cited by two records. `--dry-run` writes nothing; `--apply` sets
+`record` on each pair's open or answered, unbound question, checked as `_bound` checks it (a
+failure is in `failed`), and files an answered one at once (`file_answer`), its pair carrying
+`filing` `{filed, code, message}` (`FILED Q-1` or `NOT FILED Q-1: <why> (<code>)`). Tests:
 tests/hubsite/test_api.py `QuestionBindTest`.
 
 #### Filing the answer
@@ -655,7 +660,15 @@ filing failed with. A crash after step 1 or after step 2 is mended there. The an
 own answer carries `filing` (`{id, filed, version, revision}`, `{id, filed: false, code,
 message}`, or `{id, filed: false, moved: true}`), and its
 `status`, `version` and `revision` are those of the last write. An unbound question is never
-filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
+filed: the PM logs it as before.
+
+An answered, bound question not filed is neither logged nor marked done (`questions log`,
+`questions done`, `kitlib.hubsite.api` `_unfiled`): while its last code may still file (`store`,
+`unavailable`, `internal`, or no filing yet) both are refused `invalid`, field `filing`: file it
+first. For a final code (`not_found`, `invalid`, `no_store`, `FINAL_FILING`) they need
+`--unfiled "<why>"` (body `unfiled`), refused `invalid`, field `unfiled`, when absent or blank; the
+why is kept as `unfiled_why`. `unfiled` on any other question is refused the same way. Tests:
+tests/hubsite/test_api.py `FilingTest`,
 `AnswerStoreTest`, `AnswerNoStoreTest`, `FiledAsTest`; tests/hubsite/test_record_write.py
 `Answer`; tests/hubsite/test_push.py `AckTest`; tests/delegations/test_run.py `HubTrigger`.
 

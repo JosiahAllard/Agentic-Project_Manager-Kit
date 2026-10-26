@@ -982,7 +982,9 @@ def _bound(api, value):
     `not_found` for a repository that is not configured and a record its backlog does not have;
     `unavailable` when the record cannot be checked (no record view on this server, or a store
     that cannot be read). It fails closed: an answer is filed into this record, so a binding
-    nobody checked is never stored."""
+    nobody checked is never stored. A record whose view says `writable` false (its repository
+    names no backlog store the hub may write, kitlib.hubsite.backlog writable) is `invalid` too:
+    its answer could never be filed (recordwrite answer, `no_store`)."""
     if not isinstance(value, dict) or sorted(value) != ['id', 'repo'] or not all(
             isinstance(value[k], str) and value[k].strip() for k in ('repo', 'id')):
         raise _invalid(RECORD_SHAPE, 'record')
@@ -1009,6 +1011,10 @@ def _bound(api, value):
     if got.get('where') != 'open':
         raise _invalid('record %s:%s is completed: bind a question to an open record'
                        % (name, rid), 'record')
+    if got.get('writable') is False:
+        raise _invalid('record %s:%s: repo %s names no backlog store the hub may write (.kit.json '
+                       '"backlog".store), so its answer could not be filed: ask without a record'
+                       % (name, rid, name), 'record')
     return {'repo': name, 'id': rid}
 
 
@@ -1275,13 +1281,19 @@ def _cited(api, repo, item):
     return nums, None
 
 
+# the statuses questions bind binds a question from: still open, or answered and not yet handled
+BINDS_FROM = ('open', 'answered')
+
+
 def questions_bind(api, req):
     """POST questions/bind, the PM's alone (`from` pm, as questions_done checks a claim): pair
     each parked record's `q` and each owner-blocked record's cited question with an open hub
     question of the same number, and with `apply` true bind them (set `record`). The backlog is
     read fresh with `apply` (a fetch round) and from the held snapshot without, every configured
-    repository. A pair whose record fails its check is in `failed` only. Nothing but an open, unbound question is written; an
-    answered or closed one is a miss. Answers {ok, applied, pairs: [{question, record, bound}],
+    repository. A pair whose record fails its check is in `failed` only. Nothing but an open or
+    answered, unbound question is written (BINDS_FROM); a filed, logged or done one is a miss. An
+    answered one is filed into its record at once (file_answer), its pair carrying `filing`
+    {filed, code, message}. Answers {ok, applied, pairs: [{question, record, bound}],
     misses: [{record, why}], multi: [{record, questions}], skipped: [{question, why}],
     failed: [{question, code, message}]}: `multi` are records citing several questions, left
     alone; `skipped` a question already bound elsewhere or wanted by two records."""
@@ -1328,8 +1340,9 @@ def questions_bind(api, req):
         d = docs.get(qid) if qid else None
         if d is None:
             misses.append({'record': rec, 'why': 'Q-%d is not a hub question' % n})
-        elif d.get('status') != 'open':
-            misses.append({'record': rec, 'why': '%s is %s, not open' % (qid, d.get('status'))})
+        elif d.get('status') not in BINDS_FROM:
+            misses.append({'record': rec, 'why': '%s is %s, not open or answered'
+                           % (qid, d.get('status'))})
         elif cites[n] > 1:
             skipped.append({'question': qid, 'why': 'cited by more than one record'})
         elif d.get('record') == rec:
@@ -1343,11 +1356,16 @@ def questions_bind(api, req):
         for p in pairs:
             d = api.store.docs('questions').get(p['question'])
             try:
-                if d is None or d.get('status') != 'open' or d.get('record'):
+                if d is None or d.get('status') not in BINDS_FROM or d.get('record'):
                     raise HubError('conflict', '%s moved meanwhile' % p['question'], 'id')
                 bound = _bound(api, p['record'])
                 api.change('questions', p['question'], d, {'record': bound}, req)
                 p['bound'] = True
+                if d.get('status') == 'answered':
+                    # an answer the PM has not handled yet: filed now, as a bound answer is
+                    got = file_answer(api, p['question'], _via(req), full=req.full) or {}
+                    p['filing'] = {k: got[k] for k in ('filed', 'code', 'message', 'moved')
+                                   if k in got}
             except HubError as e:
                 failed.append({'question': p['question'], 'code': e.code,
                                'message': e.message if req.full else AGENT_SAYS.get(
@@ -1361,6 +1379,38 @@ def questions_bind(api, req):
 # The statuses a question is logged or marked done from: an answer the PM handles, and one filed
 # into its record that its asker has not yet read and closed.
 HANDLED_FROM = ('answered', 'filed')
+# The filing codes no retry mends by itself (FILING_SAYS: the PM handles the answer); any other
+# code, or no filing mark yet, may still file on the next filing call (questions_file).
+FINAL_FILING = ('not_found', 'invalid', 'no_store')
+
+
+def _unfiled(d, doc_id, b, verb):
+    """The changes `unfiled` adds to log or done (`verb`) of question d, which an answer bound to
+    a record and not filed must carry (docs/action-hub.md "Filing the answer"): refused
+    `invalid`, field `filing`, while its filing may still succeed (a code not in FINAL_FILING, or
+    none yet: file it first); field `unfiled` for a final code with no or a blank `unfiled`, and
+    for `unfiled` on any question whose filing did not fail. Else {unfiled_why} or {}."""
+    given = b.get('unfiled')
+    record = d.get('record')
+    if d.get('status') != 'answered' or not isinstance(record, dict):
+        if given is not None:
+            raise _invalid('%s has no answer left unfiled: only an answer whose filing failed '
+                           'takes unfiled' % doc_id, 'unfiled')
+        return {}
+    named = '%s:%s' % (record.get('repo'), record.get('id'))
+    filing = d.get('filing') if isinstance(d.get('filing'), dict) else {}
+    code = filing.get('code')
+    if code not in FINAL_FILING:
+        raise _invalid('%s is bound to %s and its answer is not filed yet (%s): file it first '
+                       '(hub.py questions file %s), then %s it'
+                       % (doc_id, named, filing.get('message') or 'no filing has run', doc_id,
+                          verb), 'filing')
+    why = (given or '').strip()
+    if not why:
+        raise _invalid('%s\'s answer could not be filed into %s (%s): %s; unfiled says why it '
+                       'is handled without its record' % (doc_id, named, code,
+                                                          filing.get('message')), 'unfiled')
+    return {'unfiled_why': why}
 
 
 def _ruling(api, ruling):
@@ -1385,10 +1435,12 @@ def questions_log(api, req):
     logged as (status `logged`). `ruling` is checked (_ruling). A logged question is refused
     (`invalid`, field status) unless `replace` is true, which swaps its ruling for another checked
     one and changes nothing else: the way to correct a wrong id. `replace` on a question that is
-    not logged is refused the same way."""
-    b = _fields(req, ('ruling', 'if_version', 'replace'), required=('ruling',),
+    not logged is refused the same way. An answer bound to a record and not filed is refused or
+    needs `unfiled` (_unfiled), which is kept as `unfiled_why`."""
+    b = _fields(req, ('ruling', 'if_version', 'replace', 'unfiled'), required=('ruling',),
                 flags=('replace',))
     _pin(b, required=True)
+    _text(b, 'unfiled')
     ruling = _text(b, 'ruling').strip()
     doc_id = req.params['id']
     d = api.doc('questions', doc_id, b)
@@ -1401,9 +1453,10 @@ def questions_log(api, req):
                        % (doc_id, d.get('status'),
                           ' (replace: true corrects its ruling)' if d.get('status') == 'logged'
                           else ''), 'status')
+    changes = _unfiled(d, doc_id, b, 'log')
     _ruling(api, ruling)
-    return api.change('questions', doc_id, d, {'status': 'logged', 'ruling': ruling}, req,
-                      {'status': 'logged'})
+    changes.update(status='logged', ruling=ruling)
+    return api.change('questions', doc_id, d, changes, req, {'status': 'logged'})
 
 
 def questions_done(api, req):
@@ -1414,10 +1467,12 @@ def questions_done(api, req):
     unless it is the question's own `from` or the PM's, and before anything else about the
     question is said or written. Like _creator it is a claim checked against the item, not
     proof (all agents share one token). Refused (`invalid`) for a question that is neither
-    answered nor filed, for a blank why and for a standing rule (the PM logs it)."""
-    b = _fields(req, ('why', 'from', 'if_version'), required=('why',))
+    answered nor filed, for a blank why and for a standing rule (the PM logs it). An answer bound
+    to a record and not filed is refused or needs `unfiled` (_unfiled), kept as `unfiled_why`."""
+    b = _fields(req, ('why', 'from', 'if_version', 'unfiled'), required=('why',))
     _pin(b, required=True)
     _text(b, 'from')
+    _text(b, 'unfiled')
     why = _text(b, 'why').strip()
     if not why:
         raise _invalid('why says why the answer needs no ruling: it cannot be blank', 'why')
@@ -1435,9 +1490,9 @@ def questions_done(api, req):
         # the asker's routine done of a filed answer would end the PM's push unlogged
         raise _invalid('%s is a standing rule the owner made: the PM logs it in the ledger '
                        '(hub questions log), it is not marked done' % doc_id, 'standing')
-    return api.change('questions', doc_id, d,
-                      {'status': 'done', 'done_why': why, 'done_at': api.clock()}, req,
-                      {'status': 'done'})
+    changes = _unfiled(d, doc_id, b, 'mark done')
+    changes.update(status='done', done_why=why, done_at=api.clock())
+    return api.change('questions', doc_id, d, changes, req, {'status': 'done'})
 
 
 def _promote(api, req, doc_id, b):
