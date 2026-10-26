@@ -4,6 +4,8 @@ folder with its AGENT_TEMP variable, sweep config key and sweep task (kitlib.mac
 that folder's permissions, the automatic tasks' tick task (AUTO_TASK), and the comfy entry point's
 lock tool (not in fresh mode: the plugin's lock tool is used). Each is read first and planned only when it differs; Host is the Windows side (also the
 `claude` runner that kitlib.machinesetup.plugin migrates each account with), and tests pass a fake.
+On Linux the tasks are pm-kit jobs (kitlib.machinesetup.linuxjobs): Host reads them back and
+writes them, and survey adds linger's note.
 """
 import json
 import os
@@ -16,10 +18,12 @@ try:
 except ImportError:                                                  # not Windows
     winreg = None
 
+from kitlib import platform
 from kitlib.launcher import pythonw as pythonw_mod
+from kitlib.platform.linux import schedule
 from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
-from . import agenttemp, procwatch
+from . import agenttemp, linuxjobs, procwatch
 from .common import Report, kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
@@ -127,6 +131,27 @@ class Host(object):
         """Run the PowerShell line that registers a scheduled task (agenttemp.task_line)."""
         self._ps(line)
 
+    def job_backend(self, job):
+        """Linux: the backend the pm-kit job `job` goes to (schedule.choose: ScheduleError when
+        there is none)."""
+        return schedule.choose(job)
+
+    def job_describe(self, job, kind):
+        """Linux: the lines saying what job_install(job) writes (schedule.describe)."""
+        return schedule.describe(job, kind)
+
+    def job_install(self, job):
+        """Linux: write and enable the pm-kit job `job` (schedule.install); its lines."""
+        return Report(schedule.install(job))
+
+    def systemd(self):
+        """Linux: whether the user's systemd manager answers."""
+        return schedule.has_systemd()
+
+    def linger(self):
+        """Linux: whether linger is on for this user (True, False, None: unknown)."""
+        return schedule.linger()
+
     def sweep_dry_run(self, kit, home=None):
         """The sweep's report lines from one run without --apply (agenttemp.sweep_dry_run), under
         this interpreter, reading the machine config of `home`."""
@@ -134,7 +159,8 @@ class Host(object):
 
     def task_list(self):
         """Every scheduled task with its actions (kitlib.pmstart.consoletasks.read_tasks):
-        RuntimeError, OSError or ET.ParseError when schtasks cannot be read."""
+        RuntimeError, OSError or ET.ParseError when schtasks cannot be read. On Linux every
+        pm-kit job read back."""
         from kitlib.pmstart import consoletasks
         return consoletasks.read_tasks(timeout=agenttemp.TASK_TIMEOUT)
 
@@ -241,6 +267,8 @@ def survey(plan, ctx):
         acl_step(plan, ctx, folder, made)
     procwatch.task_step(plan, ctx, folder)
     auto_task_step(plan, ctx)
+    if platform.NAME == 'linux':
+        linuxjobs.linger_note(plan, ctx)
     if ctx.fresh:
         plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
     else:
@@ -291,6 +319,15 @@ def auto_task_same(task, pythonw, argument):
     return False
 
 
+def auto_job(root, python=None):
+    """The Linux job of AUTO_TASK: `python <root>/AUTO_TOOL tick` in `root`, every
+    AUTO_EVERY_MINUTES minutes, ended after 10."""
+    root = os.path.normpath(root)
+    return schedule.Job(AUTO_TASK, [python or schedule.python(), os.path.join(root, AUTO_TOOL), 'tick'],
+                        root, ('every', AUTO_EVERY_MINUTES),
+                        'kit automatic tasks: starts what the Action Hub schedules', 10)
+
+
 def auto_task_step(plan, ctx):
     """Plan AUTO_TASK, the tick of the hub's automatic tasks, for the kit's live main checkout
     (worktreesweep.tool_root, as the worktree sweep tasks take it): registered when missing,
@@ -311,14 +348,21 @@ def auto_task_step(plan, ctx):
         plan.note('extras', '%s task: the kit at %s is not a main checkout (%s), so the task would run an '
                             'unreviewed copy; not planned' % (AUTO_TASK, root, place.detail or place.kind))
         return
-    pythonw = pythonw_mod.base_pythonw()
-    argument = auto_argument(root)
+    linux = platform.NAME == 'linux'
+    if not linux:
+        pythonw = pythonw_mod.base_pythonw()
+        argument = auto_argument(root)
     try:
         tasks = ctx.host.task_list()
     except (OSError, RuntimeError, ValueError, SyntaxError) as e:   # ET.ParseError is a SyntaxError
         plan.note('extras', '%s task: could not read the scheduled tasks (%s); not planned' % (AUTO_TASK, e))
         return
     have = worktreesweep.find(tasks, AUTO_TASK)
+    if linux:
+        job = auto_job(root)
+        if not schedule.same(have, job):
+            linuxjobs.plan_job(plan, ctx, job, 'update' if have else 'write')
+        return
     if have and auto_task_same(have, pythonw, argument):
         return
     line = auto_task_line(root, pythonw)

@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 
 from kitlib.launcher import autostart, handoff, lookup, reboot, start, state, stop
@@ -175,6 +176,7 @@ class OldStateFileElsewhere(unittest.TestCase):
         self.assertEqual(host.killed, [])
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Autostart(unittest.TestCase):
     def test_install_registers_the_new_name_then_unregisters_the_old(self):
         d = tempfile.mkdtemp(prefix='kit-autostart-')           # a pythonw.exe that is there

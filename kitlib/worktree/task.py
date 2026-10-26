@@ -16,9 +16,15 @@ nothing, on a WindowsApps path (`NOT_THE_STORE_ALIAS`), so a hand-edited copy is
 
 Nothing is registered without `--register --owner-confirmed`; a bare `--register` is refused before
 anything else is read. Agents never type `--owner-confirmed`.
+
+On Linux the task is the pm-kit job of the same name (kitlib.platform.linux.schedule, `linux_job`):
+a systemd user timer daily at 03:00 (Persistent, so a missed run is made up), else a crontab line,
+running this python's base install and the tool in the main checkout. The same flags print it or
+write it.
 """
 import os
 
+from kitlib import platform
 from kitlib.config import ConfigError, load
 from kitlib.git import repo as gitrepo
 from kitlib.launcher.pythonw import base_pythonw, refusal
@@ -116,10 +122,40 @@ def resolve(root, tool):
     return main, name
 
 
-def run(argv, runner, root, tool, pythonw=None):
+def linux_job(main, name, tool, python):
+    """The Linux job: `python tool -C main --sweep-merged --apply` in `main`, daily at AT."""
+    from kitlib.platform.linux import schedule
+    main = os.path.normpath(main)
+    return schedule.Job(task_name(name), [python, os.path.normpath(tool), '-C', main] + SWEEP.split(),
+                        main, ('daily', AT), description(name))
+
+
+def _linux(main, name, tool, register, jobs):
+    """run's Linux half, once the repository is resolved. `jobs`: the schedule module (tests pass
+    a stand-in with choose, describe and install)."""
+    if jobs is None:
+        from kitlib.platform.linux import schedule as jobs
+    python = jobs.python()
+    if not os.path.isfile(python):
+        return Outcome(REFUSED, ['refused   no python at %s; nothing was registered' % python])
+    job = linux_job(main, name, tool, python)
+    try:
+        kind = jobs.choose(job)
+        said = jobs.describe(job, kind)
+        if not register:
+            return Outcome(OK, said + ['printed   nothing was registered; the owner registers it with'
+                                       ' --register --owner-confirmed'])
+        done = jobs.install(job, kind)
+    except jobs.ScheduleError as e:
+        return Outcome(REFUSED, ['refused   %s' % e])
+    return Outcome(OK, said + ['registered %s' % l for l in done])
+
+
+def run(argv, runner, root, tool, pythonw=None, jobs=None):
     """The verb. `runner(args) -> exit code` runs PowerShell (tests pass a fake); `root` is the
     default repository (the caller's directory); `tool` the worktree_remove.py the task runs;
-    `pythonw` the task's program (default: kitlib.launcher.pythonw.base_pythonw())."""
+    `pythonw` the task's program (default: kitlib.launcher.pythonw.base_pythonw()). On Linux the
+    job goes through `jobs` (default kitlib.platform.linux.schedule) and `runner` is not used."""
     got = parse(argv)
     if got is None:
         return Outcome(USAGE, ['usage:    worktree_sweep_task.py [-C <main checkout>]'
@@ -132,6 +168,8 @@ def run(argv, runner, root, tool, pythonw=None):
     if isinstance(found, str):
         return Outcome(REFUSED, ['refused   %s; nothing was registered' % found])
     main, name = found
+    if platform.NAME == 'linux':
+        return _linux(main, name, tool, register, jobs)
     pythonw = pythonw or base_pythonw()
     why = refusal(pythonw)
     if why:
