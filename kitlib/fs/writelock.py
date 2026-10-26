@@ -2,7 +2,8 @@
 
 A caller holds `locked(path, prefix)` from its read of the file to its write, so two writers never
 both read the same text and neither replace loses the other's change. The lock is
-kitlib.fs.treelock's OS byte-range lock on a lock file (lock_path):
+kitlib.fs.treelock's OS lock (a byte-range lock on Windows, a flock on Linux) on a lock file
+(lock_path):
 
 - in a git checkout (kitlib.git.repo.classify of the file's folder, MAIN or LINKED):
   `<prefix>-<name>-<hash>.lock` in the repository's git common dir, never in the work tree, so a
