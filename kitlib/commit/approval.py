@@ -9,24 +9,31 @@ each answers why it refuses, or None.
                                     approved), or None
   prewrite_error(root, doc_id, doc, paths, head)
                                     why the change cannot be written: the named paths are not
-                                    exactly the approval's, HEAD is not its base, a content is not
-                                    its signed blob, a file is unchanged, or a file in the work tree
-                                    is not the approved base (or a path not a plain file of the
-                                    work tree); or None
+                                    exactly the approval's, HEAD is not on the same content as
+                                    its base, a content is not its signed blob, a file is
+                                    unchanged, or a file in the work tree is not the approved base
+                                    (or a path not a plain file of the work tree); or None
   preverify_error(root, client, doc_id, doc, head)
                                     why the hub does not verify the approval before the write
   write(root, doc) / restore(state) the approved content into the work tree, and back
-  staged_error(doc, head, staged, snap)
-                                    why what was staged is not the approved blobs on its base
+  staged_error(doc, head, staged, snap, judged)
+                                    why what was staged is not the approved blobs on the HEAD
+                                    the steps before judged
   consume_commit(root, client, doc_id, value, sha)
                                     (line, why, consumed): consume the approval for the commit
                                     `sha`, then ask the hub to verify it for that commit
 
-The hub is asked through kitlib.hubsite (approvals.Verifier and approvals.consume, the agent's
-calls); every failure to ask it is a refusal, never a pass. The commit gate land and the pre-push
-hook judge is kitlib.guard.ownercommits.violations: the approved commit has one parent (the
-approval's base), changes exactly the approval's files to their approved blobs, and is consumed
-by the hub for that commit.
+The same content: HEAD is the approval's base, or a descendant of it that holds every approved
+path exactly as the base does (kitlib.hubsite.approvals.same_content_error, the owner's choice:
+the approved paths only, compared). The base may have moved on with other work since the owner
+approved; the change written on HEAD is still, path for path, the change the owner saw.
+
+The hub is asked through kitlib.hubsite (approvals.Verifier.verify_on, for the approval's base,
+and approvals.consume, the agent's calls); every failure to ask it is a refusal, never a pass.
+The commit gate land and the pre-push hook judge is kitlib.guard.ownercommits.violations: the
+approved commit has one parent (the approval's base, or a descendant of it with the same
+content), changes exactly the approval's files to their approved blobs, and is consumed by the
+hub for that commit.
 """
 import os
 
@@ -35,6 +42,7 @@ from kitlib.guard import ownercommits as oc
 
 TRAILER = oc.TRAILER
 VALUE = 'hub:A-<n>'
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def doc_id(value):
@@ -46,6 +54,16 @@ def doc_id(value):
 
 def trailer(value):
     return '%s: %s' % (TRAILER, value)
+
+
+def base_route(root, did):
+    """The sentence naming the way to commit the approval `did` when HEAD is not on its base's
+    content: a worktree made at that base (docs/new-worktree.md "A base commit"), or a new
+    approval."""
+    return ('Commit it from a worktree at that base: python %s -C %s <area>/<slug> --approval '
+            'hub:%s (docs/new-worktree.md "A base commit"), then merge that branch into this one; '
+            'or ask the owner again from this HEAD.'
+            % (os.path.join(KIT_ROOT, 'tools', 'new_worktree.py'), root, did))
 
 
 def retry_command(tool, value, sha):
@@ -178,9 +196,10 @@ def prewrite_error(root, did, doc, paths, head):
         if why:
             return why
     if head != doc['head']:
-        return ('the approval is for base %s, and HEAD is %s. An approval applies to its own '
-                'base commit only; ask the owner again from this HEAD.'
-                % (doc['head'][:12], (head or 'unborn')[:12]))
+        why = ap.same_content_error(root, doc['head'], head, want)
+        if why:
+            return ('the approval is for base %s, and HEAD is %s: %s. %s'
+                    % (doc['head'][:12], (head or 'unborn')[:12], why, base_route(root, did)))
     unchanged = []
     for f in doc['files']:
         content = f.get('content')
@@ -208,23 +227,26 @@ def prewrite_error(root, did, doc, paths, head):
 
 def preverify_error(root, client, did, doc, head):
     """Why the hub does not verify the approval as it stands, before anything is written (its
-    signature, status and repository, for `head` and the approval's own blobs), or None."""
+    signature, status and repository, for a change on `head` with the approval's own blobs:
+    approvals.Verifier.verify_on, with the approval's base), or None."""
     from kitlib.hubsite import approvals as ap
     repo, why = ap.remote_id(root)
     if repo is None:
         return 'the repository has no remote to name it: %s' % why
-    ok, why = ap.Verifier(client).verify(did, repo, head,
-                                         {f['path']: f.get('blob') for f in doc['files']})
+    ok, why = ap.Verifier(client).verify_on(root, did, repo, head,
+                                            {f['path']: f.get('blob') for f in doc['files']},
+                                            base=doc['head'])
     return None if ok else 'hub:%s refused: %s' % (did, why)
 
 
-def staged_error(doc, head, staged, snap):
+def staged_error(doc, head, staged, snap, judged):
     """Why what is staged is not the approved change, or None. `head`: HEAD as read for the
-    commit; `staged`: {path: status letter} this call commits; `snap`: their index entries
-    ({path: (mode, oid)}, None for a deletion; kitlib.commit.index_snapshot)."""
-    if head != doc['head']:
-        return 'HEAD is %s, not the approval\'s base %s' % ((head or 'unborn')[:12],
-                                                          doc['head'][:12])
+    commit; `judged`: the HEAD prewrite_error and preverify_error judged; `staged`: {path: status
+    letter} this call commits; `snap`: their index entries ({path: (mode, oid)}, None for a
+    deletion; kitlib.commit.index_snapshot)."""
+    if head != judged:
+        return 'HEAD is %s, not %s, the commit the approval was checked on' % (
+            (head or 'unborn')[:12], (judged or 'unborn')[:12])
     want = approved_paths(doc)
     if sorted(staged) != want:
         return 'the staged paths are %s, not the approval\'s %s' % (
@@ -309,8 +331,9 @@ def consume_commit(root, client, did, value, sha):
     hex) and verifies it for that commit; else (None, why, consumed): `consumed` True when the hub
     did consume it for `sha` (now or before) and only the verify for the commit failed, so a retry
     (--consume) asks that verify again. The commit must carry exactly `Owner-Approval: <value>`
-    and have one parent; the hub checks the rest (its base and files) before the consume
-    (Verifier, no commit) and after it (with the commit)."""
+    and have one parent, on the same content as the approval's base; the hub checks the rest (its
+    base and files) before the consume (Verifier.verify_on, no commit) and after it (with the
+    commit)."""
     from kitlib.hubsite import approvals as ap
     facts, why = commit_facts(root, sha)
     if facts is None:
@@ -340,7 +363,7 @@ def consume_commit(root, client, did, value, sha):
     if doc.get('commit') != sha:
         if doc.get('commit'):
             return None, state_error(did, doc), False
-        ok, why = verifier.verify(did, repo, parents[0], blobs)
+        ok, why = verifier.verify_on(root, did, repo, parents[0], blobs, base=doc['head'])
         if not ok:
             return None, 'hub:%s refused: %s' % (did, why), False
         version = doc.get('version', 0)
@@ -348,7 +371,7 @@ def consume_commit(root, client, did, value, sha):
             ap.consume(client, did, sha, version if isinstance(version, int) else 0)
         except Exception as e:      # noqa: BLE001 - the commit stands; the caller says so
             return None, 'the hub did not consume hub:%s (%s)' % (did, _err(e)), False
-    ok, why = verifier.verify(did, repo, parents[0], blobs, commit=sha)
+    ok, why = verifier.verify_on(root, did, repo, parents[0], blobs, commit=sha, base=doc['head'])
     if not ok:
         return None, 'hub:%s refused: %s' % (did, why), True
     return 'approval  hub:%s consumed by %s' % (did, sha[:12]), None, True

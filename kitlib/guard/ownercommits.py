@@ -34,13 +34,15 @@ owner's email on the command line; an identity in the session's starting environ
 An owner approval (docs/commit.md "Owner approval"): a commit not authored by the owner that would
 be a violation is not one when it carries exactly one `Owner-Approval: hub:A-<n>` trailer
 (TRAILER; the id as the hub issues it, hub:A-001, APPROVAL_RE) and the hub server verifies that
-approval for exactly this commit (kitlib.hubsite.approvals, Verifier with the commit): the
-commit has one parent, the approval's base; every path it changes, with its blob at the commit
-(None when it deletes it), is the approval's, all of them; and the approval was consumed by this
-commit. A merge, a root commit, a path the commit holds as anything but a regular file (a
-symbolic link, a gitlink: blobs_at), a value that is not one hub:A-<n>, and any doubt of the hub
-(not running, no answer) keep the violation, with why in its `why`. `approvals` is the seam: an
-object with check(root, doc_id, head, blobs, commit) -> (ok, why); default_approvals() is the hub's.
+approval for exactly this commit (kitlib.hubsite.approvals, Verifier.verify_on with the commit):
+the commit has one parent, the approval's base or a descendant of it that holds every path the
+commit changes exactly as the base does (approvals.same_content_error); every path it changes,
+with its blob at the commit (None when it deletes it), is the approval's, all of them; and the
+approval was consumed by this commit. A merge, a root commit, a path the commit holds as anything
+but a regular file (a symbolic link, a gitlink: blobs_at), a value that is not one hub:A-<n>, and
+any doubt of the hub (not running, no answer) keep the violation, with why in its `why`.
+`approvals` is the seam: an object with check(root, doc_id, head, blobs, commit) -> (ok, why);
+default_approvals() is the hub's.
 """
 import collections
 import re
@@ -62,9 +64,10 @@ NOT_A_FILE = 'is not a regular file'    # blobs_at's text for any other entry
 
 
 class HubApprovals(object):
-    """The approvals seam of violations() that asks the hub server (approvals.Verifier, with the
-    commit). `client` and `repo` default to the machine's hub (kitlib.hubsite.settings) and the
-    checkout's origin remote; any failure to make either is a refusal, never a pass."""
+    """The approvals seam of violations() that asks the hub server (approvals.Verifier.verify_on,
+    with the commit: `head`, the commit's parent, may descend from the approval's base with the
+    same content). `client` and `repo` default to the machine's hub (kitlib.hubsite.settings) and
+    the checkout's origin remote; any failure to make either is a refusal, never a pass."""
 
     def __init__(self, client=None, repo=None):
         self.client, self.repo = client, repo
@@ -83,7 +86,7 @@ class HubApprovals(object):
                 client = hubclient.Client(settings.load().port)
             except Exception as e:      # noqa: BLE001 - fail closed: no client is no approval
                 return False, ap.WHY_SERVER % type(e).__name__
-        return ap.Verifier(client).verify(doc_id, repo, head, blobs, commit=commit)
+        return ap.Verifier(client).verify_on(root, doc_id, repo, head, blobs, commit=commit)
 
 
 def default_approvals():
