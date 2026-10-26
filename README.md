@@ -1,7 +1,35 @@
-# Agentic-Project_Manager-Kit
+# Agentic Software Factory
 
 Run a whole team of Claude Code agents on one Windows machine, across every repository you own,
 without them trampling each other's work or the machine itself.
+
+## What works today
+
+Live since 2026-10-15, with landings in three repositories, and covered by tests:
+
+- **A managed engineering organisation.** One PM agent across repositories, one coordinator per
+  repository, worker agents in parallel, each in its own worktree. Roles are written once and
+  rendered for Claude Code and Codex (`content/roles/`, `tools/render_content.py`). Task list:
+  the backlog store (`tools/backlog.py`); questions and to-dos for the owner: the Action Hub
+  (`tools/hub.py`); sessions: the launcher (`tools/launch.py`).
+- **Quality lives in the pipeline.** A branch needs a passing gate record and an independent
+  reviewer's verdict. The landing then merges it onto current main in a separate tree and gates
+  the merged result; only a green merge is pushed. On red, the merge is dropped and main is
+  untouched. A daily full run covers the rest (`tools/land.py`, `tools/gate.py`, docs/gate.md
+  "Landing", `tools/daily_full.py`).
+- **Guardrails stop risky actions and say what to do instead.** The hook guard refuses a
+  destructive git command in a main checkout, a search from a drive root or a heavy run outside
+  the lock, and each refusal names the right form on an `Instead:` line
+  (`kitlib/guard/rules.py`, docs/guard.md). A pre-push hook refuses a non-fast-forward push to
+  main (`githooks/`).
+- **Shared machine resources are scheduled.** Heavy runs queue for CPU and GPU slots in the
+  machine lock, and landings queue behind each other in it (`tools/machine_lock.py`,
+  docs/lock-api.md, docs/gate.md "The landing queue").
+- Also in use: worktree cleanup (`tools/worktree_remove.py`).
+
+Not done: Linux support is in progress (plan slices 1, 2 and 6 are built; the kit still refuses
+Linux; docs/linux-support-plan.md), and the Codex bridge is not live yet. Codex is a supported
+host for the roles, hooks and commit tools; the bridge between agents is the part that is not.
 
 ## The problem
 
@@ -49,12 +77,6 @@ test and land code at the same time. The kit lays the rails they run on:
 
 One person running several Claude Code sessions across several git repositories on one Windows
 PC. It needs Windows, Python 3 (standard library only), git and Claude Code.
-
-## Status
-
-Early. Most of the kit is built and tested but held for review before it goes live, and machine
-setup has not yet been run on a real machine. docs/go-live.md lists what
-is still to switch on.
 
 ## What you get
 
@@ -134,3 +156,7 @@ it in place.
 | The backlog | docs/backlog.md |
 | The PM's private ledger | docs/ledger.md |
 | How the kit is built | ARCHITECTURE.md |
+
+## License
+
+MIT. See LICENSE.
