@@ -9,11 +9,14 @@ from unittest import mock
 from kitlib.lock import store
 
 from tests.proc.fakeproc import FakeProc, patched
+from tests.platforms import windows_only
 
 ME = os.getpid()
 SHELL, HOST, PWSH, CONHOST, EXPLORER, USERINIT, WINLOGON = range(900002, 900009)
 CARRIER, WMI, SVCHOST, TERMINAL = range(900010, 900014)
 GONE = 900099                   # a pid that cannot be opened
+WALK = ('the fakes answer the calls the Windows walk makes (handles, the listing); on Linux the '
+        'walk reads /proc (tests/proc/test_linux_process.py)')
 
 
 def who(table, env=None):
@@ -22,6 +25,7 @@ def who(table, env=None):
         return store.caller(env=env or {})
 
 
+@windows_only(WALK)
 class ExitedShell(unittest.TestCase):
     """An agent's command whose shell has exited: its agent host holds the shell's handle (it
     waits on it), so the shell is still openable, and the listing may still name it."""
@@ -64,6 +68,7 @@ class ExitedShell(unittest.TestCase):
         self.assertEqual(me['host'], [HOST, 400])
 
 
+@windows_only(WALK)
 class OwnersChain(unittest.TestCase):
     def test_an_exited_hop_under_a_listed_parent_that_cannot_be_opened_is_the_owner(self):
         # No agent host anywhere in the chain: the walk ends not-exited (kitlib.proc.process
@@ -122,6 +127,7 @@ class OwnersChain(unittest.TestCase):
         self.assertEqual(me['role'], 'owner')
 
 
+@windows_only(WALK)
 class StartedByWmi(unittest.TestCase):
     """A process Win32_Process.Create started (kitlib.lock.detach: a detached lock run, a
     submitted landing) is under WMI's provider host, whoever asked WMI: never the owner.
@@ -160,6 +166,7 @@ class StartedByWmi(unittest.TestCase):
         self.assertEqual(me['role'], 'agent')
 
 
+@windows_only(WALK)
 class WmisHostHasExited(unittest.TestCase):
     """WMI's provider host exits when idle, while the run it started goes on: its pid is then
     missing from the listing (or names a newer process), and the chain no longer shows WMI. The
