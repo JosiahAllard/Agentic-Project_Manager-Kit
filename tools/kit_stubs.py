@@ -45,8 +45,8 @@ def main(argv=None):
     if top is None:
         p.error('-C: %s' % why)
     from kitlib.host import registry
-    from kitlib.stubs import memory
     try:
+        from kitlib.stubs import memory      # its import reads hosts.json (kitlib.machinesetup)
         outcome = memory.run(top, apply=a.apply)
     except KeyboardInterrupt:
         return 130
