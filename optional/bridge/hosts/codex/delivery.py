@@ -83,13 +83,10 @@ class CodexDesktopAdapter:
             # Native self-target dispatch is unsafe in the observed companion.
             # An unrelated relay thread must never substitute for this source;
             # only an owner-leased writer may, and never for a Codex sender.
-            if lease.writer is None:
-                expected = message.sender
-            elif (type(lease.writer) is not ChatBinding or lease.writer == message.sender
+            if (type(lease.writer) is not ChatBinding or lease.writer == message.sender
                     or message.sender.identity.adapter_id.startswith('codex-')):
                 raise BeforeWriteError('codex-desktop-executor-not-selected')
-            else:
-                expected = lease.writer
+            expected = lease.writer
             if executor != expected or executor == message.recipient:
                 raise BeforeWriteError('codex-desktop-executor-not-selected')
             try:

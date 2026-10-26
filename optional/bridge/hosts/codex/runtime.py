@@ -331,8 +331,10 @@ class CodexSources:
             if type(message) is not OutboundMessage:
                 raise BeforeWriteError('codex-direct-route-unavailable')
             leased=self._leased_writer(message)
-            # Without a lease the writer is the sender itself, exactly as before.
-            writer=message.sender if leased is None else leased
+            # The bridge never carries Codex-to-Codex: no lease, no route.
+            if leased is None:
+                raise BeforeWriteError('codex-direct-route-unavailable')
+            writer=leased
             if (self.desktop_executable is None
                     or writer.identity.adapter_id!='codex-desktop'
                     or message.recipient.identity.adapter_id!='codex-desktop'

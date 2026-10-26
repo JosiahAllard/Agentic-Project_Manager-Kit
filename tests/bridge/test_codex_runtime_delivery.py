@@ -15,7 +15,7 @@ import uuid
 
 from optional.bridge.hosts.codex.runtime import CodexSources
 from optional.bridge.core.contracts import Capability
-from optional.bridge.core.messages import BeforeWriteError,DeliveryError,OutboundMessage,reply_operation_id
+from optional.bridge.core.messages import BeforeWriteError,OutboundMessage,reply_operation_id
 from kitlib.proc.pipe import (INVALID,SecurityAttributes,connect_pipe,create_file,create_pipe,
     disconnect_pipe,from_sddl,local_free,peek,process_sids,read,write,close)
 from optional.bridge.win.channel import NativeChannel
@@ -95,6 +95,7 @@ class OwnedNativeRPC:
 
 
 class DirectRuntimeDeliveryTests(unittest.TestCase):
+    """Fixtures for the leased-writer tests; the bridge carries no Codex-to-Codex delivery."""
     write=runtime_fixtures.CodexRuntimeTests.write
     write_login=runtime_fixtures.CodexRuntimeTests.write_login
     tearDown=runtime_fixtures.CodexRuntimeTests.tearDown
@@ -138,140 +139,16 @@ class DirectRuntimeDeliveryTests(unittest.TestCase):
         self.message=OutboundMessage('direct-fixture-op',self.thread,self.sender,self.recipient,'owned fixture body')
         return self.factory.delivery_adapter()
 
-    def test_concrete_provider_dispatches_native_frame_within_existing_core_selected_guard(self):
-        adapter=self.populate()
-        self.assertIn(Capability.SEND,adapter.describe().capabilities)
-        with self.controller.pairs.selected_guard(self.sender,self.recipient):
-            result=adapter.send(self.message)
-        self.assertEqual(result.state,'recipient-accepted')
-        self.assertEqual(len(self.rpc.requests),1)
-        request=self.rpc.requests[0]
-        self.assertEqual(request['params']['threadId'],self.sender.identity.native_session_id)
-        arguments=request['params']['arguments']
-        self.assertEqual(arguments['threadId'],self.recipient.identity.native_session_id)
-        header,body=arguments['prompt'].split('\n\n',1)
-        self.assertEqual(header.splitlines()[0],'Bridge operation: '+self.message.operation_id)
-        self.assertIn('bridge_reply',header)
-        self.assertEqual(body,self.message.text)
-        self.assertEqual(request['params']['tool'],'send_message_to_thread')
-        self.assertIsNone(adapter.reconcile(self.message,result.native_id))
-        self.assertEqual(len(self.rpc.requests),1)
-
     def test_configured_image_or_verified_facility_absence_has_no_send_capability(self):
         self.assertNotIn(Capability.SEND,self.factory.delivery_adapter().describe().capabilities)
         other=CodexSources(self.controller,self.profile,'fixture-host')
         self.addCleanup(other.close)
         self.assertNotIn(Capability.SEND,other.delivery_adapter().describe().capabilities)
 
-    def test_source_or_target_context_drift_prevents_any_native_message_bytes(self):
-        adapter=self.populate()
-        self.context['approval_policy']='on-request'
-        self.write()
-        with self.assertRaises(BeforeWriteError): adapter.send(self.message)
-        self.assertEqual(self.rpc.requests,[])
-        self.context['approval_policy']='never'
-        self.write()
-        self.target_path.write_bytes(self.target_path.read_bytes().replace(b'"approval_policy":"never"',
-            b'"approval_policy":"on-request"'))
-        with self.assertRaises(BeforeWriteError): adapter.send(self.message)
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_known_capture_epoch_change_after_lease_invalidates_before_write(self):
-        self.populate()
-        with self.factory._delivery_lease(self.message) as lease:
-            self.metadata['x-codex-turn-metadata']['auto_review_enabled']=False
-            self.direct_source.observe(self.metadata)
-            self.assertFalse(lease.recheck())
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_self_target_or_different_account_cannot_acquire_native_executor(self):
-        adapter=self.populate()
-        for message in (replace(self.message,recipient=self.sender),
-                replace(self.message,sender=replace(self.sender,account_ref='other-account'))):
-            with self.assertRaises(BeforeWriteError): adapter.send(message)
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_explicit_desktop_image_mismatch_and_channel_mismatch_have_no_native_write(self):
-        adapter=self.populate()
-        self.factory.desktop_executable=Path(__file__).resolve()
-        self.assertNotIn(Capability.SEND,adapter.describe().capabilities)
-        with self.assertRaises(BeforeWriteError): adapter.send(self.message)
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_current_native_login_change_prevents_direct_write(self):
-        adapter=self.populate()
-        self.write_login(user='different-current-user')
-        with self.assertRaises(BeforeWriteError): adapter.send(self.message)
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_distinct_app_channel_cannot_be_used_for_selected_target(self):
-        self.populate()
-        second=OwnedNativeRPC(self.recipient.identity.native_session_id)
-        self.addCleanup(second.close)
-        # A second app-owned endpoint is still the wrong scheduling channel.
-        runtime=self.direct_source.observe.__self__
-        previous=runtime.native
-        replacement=NativeChannel(PipeTarget(second.name,os.getpid(),own_ctime()),Path(sys.executable).resolve())
-        runtime.native=replace(previous,channel=replacement)
-        with self.factory._delivery_lease(self.message) as lease:
-            runtime.native=previous
-            self.assertFalse(lease.recheck())
-        self.assertEqual(self.rpc.requests,[])
-        self.assertEqual(second.requests,[])
-
-    def test_different_target_frontend_app_endpoint_denies_before_any_native_body(self):
-        adapter=self.populate()
-        other_source,native,listener=runtime_fixtures.CodexRuntimeTests.channel_source(self)
-        event={'timestamp':'2026-10-12T12:00:00Z','type':'event_msg','payload':{
-            'type':'task_started','turn_id':self.target_meta['x-codex-turn-metadata']['turn_id']}}
-        with self.target_path.open('ab') as stream: stream.write(json.dumps(event).encode()+b'\n')
-        other_target=other_source.observe(self.target_meta).sender
-        self.controller.pairs.require_selected(self.sender,other_target)
-        message=replace(self.message,recipient=other_target)
-        with self.assertRaises(BeforeWriteError): adapter.send(message)
-        self.assertEqual(self.rpc.requests,[])
-
     def complete_source(self,kind='task_completed'):
         event={'timestamp':'2026-10-12T12:00:00Z','type':'event_msg','payload':{
             'type':kind,'turn_id':self.turn}}
         with self.path.open('ab') as stream: stream.write(json.dumps(event).encode()+b'\n')
-
-    def test_completed_source_is_live_identity_but_cannot_be_native_executor(self):
-        adapter=self.populate()
-        self.complete_source()
-        self.assertTrue(self.controller._live(self.sender))
-        self.assertTrue(self.controller._live(self.recipient))
-        with self.assertRaises(BeforeWriteError): adapter.send(self.message)
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_source_finishing_after_lease_capture_invalidates_before_write(self):
-        self.populate()
-        with self.factory._delivery_lease(self.message) as lease:
-            self.assertTrue(lease.recheck())
-            self.complete_source()
-            self.assertFalse(lease.recheck())
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_source_finishes_after_helper_connect_and_no_body_is_dispatched(self):
-        from unittest.mock import patch
-        from optional.bridge.hosts.codex.delivery_transport import NativeToolsPipe
-        adapter=self.populate()
-        original=NativeToolsPipe.call
-        def call(pipe,endpoint,request, *, before_write):
-            def finish_source_then_check():
-                self.complete_source('task_aborted')
-                return before_write()
-            return original(pipe,endpoint,request,before_write=finish_source_then_check)
-        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call',call):
-            with self.assertRaises(BeforeWriteError): adapter.send(self.message)
-        self.assertEqual(self.rpc.requests,[])
-
-    def test_contradictory_native_result_remains_uncertain_after_single_message(self):
-        adapter=self.populate()
-        self.rpc.response='malformed'
-        with self.assertRaises(DeliveryError) as caught: adapter.send(self.message)
-        self.assertNotIsInstance(caught.exception,BeforeWriteError)
-        self.assertEqual(len(self.rpc.requests),1)
 
 
 class LeasedWriterDeliveryTests(unittest.TestCase):
@@ -362,19 +239,13 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
             self.controller.leases._leases[self.recipient.reference]=(writer,self.recipient,time.monotonic()+60)
             self.refused(adapter,self.claude_message,'codex-direct-route-unavailable')
 
-    def test_codex_sender_is_unchanged_byte_for_byte_with_a_lease_present(self):
+    def test_a_codex_sender_is_refused_with_or_without_a_lease(self):
         adapter=self.leased()
-        self.assertEqual(adapter.send(self.message).state,'recipient-accepted')
-        # A lease naming another host's chat as writer would refuse if a Codex sender used it.
+        self.refused(adapter,self.message,'codex-direct-route-unavailable')
         self.controller.owner.lease(self.other.reference,self.recipient.reference,enabled=True)
-        self.assertEqual(self.controller.leases.writer(self.recipient),self.other)
-        with self.factory._delivery_lease(self.message) as lease:
-            self.assertIsNone(lease.writer)
-            self.assertEqual(lease.executor.thread_id,self.sender.identity.native_session_id)
-        self.assertEqual(adapter.send(self.message).state,'recipient-accepted')
-        self.assertEqual(len(self.rpc.requests),2)
-        self.assertEqual(self.rpc.requests[0],self.rpc.requests[1])
-        self.assertEqual(self.rpc.requests[1]['params']['threadId'],self.sender.identity.native_session_id)
+        self.refused(adapter,self.message,'codex-direct-route-unavailable')
+        self.grant()
+        self.refused(adapter,self.message,'codex-direct-route-unavailable')
 
 
 class OwnedNativeRPCFixtureTests(unittest.TestCase):
