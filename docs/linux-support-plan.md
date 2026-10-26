@@ -213,7 +213,7 @@ Rules:
 | Toolhelp parent walk | /proc/<pid>/stat ppid, checked against each starttime | same ancestry rule |
 | NtQueryInformationProcess command line | /proc/<pid>/cmdline | NUL-separated, no CRT re-quoting |
 | Job object (kill on close, CPU mask, memory, peak) | cgroup v2 leaf under a delegated subtree, or a lower tier of the ladder | see 2.3 |
-| SetProcessAffinityMask / cpu sets | os.sched_setaffinity | for the pool and the fallback only; the slot's mask lives in cpuset.cpus |
+| SetProcessAffinityMask / cpu sets | os.sched_setaffinity | for the pool and W2 (the weak tier of the ladder) only; the slot's mask lives in cpuset.cpus |
 | WMI Win32_Process Create (detach) | `systemd-run --user --scope` with user systemd, else double fork + setsid | systemd-run also places the run in its own cgroup |
 | Named mutex, WAIT_ABANDONED | fcntl.flock on a lock file in the store, opened O_CLOEXEC | the kernel drops it when the holder dies: the same "abandoned counts as free" meaning |
 | RunMutex (liveness) | the run holds flock on `runs/<id>.alive`; readers probe with LOCK_NB | run_dead and run_live keep their meaning |
@@ -390,9 +390,8 @@ The proving test feeds four synthetic /sys and /proc trees, written by hand into
 (fake_hardware, extended) from the kernel's documented layout: a plain desktop, a hybrid part
 (cpu_core and cpu_atom), a box with gaps in its CPU ids and a container whose cpuset allows
 fewer CPUs than /sys lists. It checks that no two slots share an id. No real machine was recorded
-for them, and none is needed for the division logic; the hybrid and gap trees are the ones a CI
-runner cannot give (a hosted runner is a plain VM, inferred). The CI phase adds its runner's own
-live /sys as a fifth case.
+for them, and none is needed for the division logic; the hybrid and gap trees are ones a live box
+may not offer. The CI phase adds its runner's own live /sys as a fifth case.
 
 ## 3. Guard path semantics and the safety review
 
@@ -464,8 +463,7 @@ real-hardware and GPU answers (questions 2 and 3) apply when the phase comes.
   runs on (3.14 on the owner's machine today), git configured with a throwaway identity. The
   Linux leg starts as the ratchet, moves to `tools/kit_tests.py` when the pool runs on Linux
   (slice 5) and to `gate.py --full` with a CI lock profile once the lock has a real Linux store
-  root (slice 9). Whether the repository is public on GitHub, and a hosted runner's delegation of
-  cgroups, are checked then.
+  root (slice 9). The runner's cgroup delegation is checked then.
 - CI adds only strictness: nothing in the landing path reads it until the owner says so.
 
 ## 5. Per-platform shell text
@@ -589,7 +587,8 @@ owner's machine; slices 1 to 4 need only the ratchet there.
    end-of-run pass ages a process started before its stamp and spares one started after; on
    Windows the ctime, the token and the record are byte for byte the base's.
 5. **Containment and the pool.** linux/contain.py (the S1, S2, W1 and W2 tiers of section 2.3,
-   the run-time probes, the subreaper watchdog and the `leftovers` cgroup sparing), cpu
+   the run-time probes, the subreaper watchdog and the `leftovers` cgroup mechanism; the call
+   sites in lock/run.py are slice 7's), cpu
    affinity, tooldeps/pool.py and pytests/runner.py on the seam. Risk High. Proof, on the VM
    and on a weak-mode box: a child that calls setsid stays in the cgroup and dies with it (S1);
    memory.peak is read; kill_on_close kills the tree when the owner dies; each lower tier is
@@ -599,8 +598,9 @@ owner's machine; slices 1 to 4 need only the ratchet there.
    synthetic trees, and the VM's live /sys, divide with no shared id; the Windows layout
    tests are unchanged.
 7. **Lock runs and detach.** lock/run.py Slot, give-back, release, detach and gate/submit on the
-   seam, on a test store root. Risk High. Proof: a detached run survives its caller; give-back
-   narrows cpuset.cpus. On a Linux box with Claude Code (the owner's Linux box or VM, question
+   seam, on a test store root, and the call sites of slice 5's `leftovers` mechanism (Slot.release
+   and end_sparing). Risk High. Proof: a detached run survives its caller; give-back narrows
+   cpuset.cpus; a straggler of a released slot is moved to `leftovers`. On a Linux box with Claude Code (the owner's Linux box or VM, question
    3), a probe of
    whether ending a tool call kills its tree by pid; if it does, a shield is added here before
    the slice lands (sections 1.3 and 9).
@@ -623,9 +623,9 @@ owner's machine; slices 1 to 4 need only the ratchet there.
     pmstart process listing, autotasks launch flags.
     Risk Medium. Proof: a launched session is found by name and stopped; no breakaway flag off
     Windows.
-12. **Hook interpreter.** per-platform interpreters (hookmain INTERPRETERS), the manifest form
-    the per-platform rendered manifests of question 9 (open seam: how the plugin ships the
-    right manifest per platform). Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
+12. **Hook interpreter.** per-platform interpreters (hookmain INTERPRETERS) and the manifests.
+    The form is settled (question 9): per-platform manifests, rendered for each platform. Open
+    seam: how the plugin ships the right manifest on each platform. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
     runs the hook on both; a missing interpreter blocks rather than passes; the rendered Windows
     hooks.json of each host is byte-identical to the base's.
 13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
@@ -637,9 +637,9 @@ owner's machine; slices 1 to 4 need only the ratchet there.
     (the delegation step, root drop-in or boot hook; cron `@reboot`; the tmux check; the
     second-user and WSL refusals),
     tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL until native parity,
-    question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu VM ends
-    with no problems and the lock status shows strong containment (a container is expected to
-    show weak; open point 1 in section 9).
+    question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu container ends
+    with no problems and the lock status shows strong containment (but see open point 1,
+    section 9).
 15. **Peer messaging and the bridge.** peer.py on Claude Code's Linux socket (after a probe), the
     bridge's leader lock and transport on Unix sockets, procwatch. Risk High (networking). After
     Windows parity, not in the first build (question 7).
@@ -675,11 +675,13 @@ does not overlap another lock slice); the others are in order.
 - Risk: the seam move changes Windows behaviour by accident. Mitigation: re-exports first, the
   full Windows suite on every slice, and the Windows CI leg once the CI phase brings it.
 - Risk: multi-user and container boxes break the one-store rule. Mitigation: section 2.4.
+- Risk: the scope is large (17 branches, most High). It is paced by the coordinator's caps;
+  nothing here asks for parallel heavy runs.
 
 Open for review (not resolved here):
 
-1. Slice 14's proof says a fresh Ubuntu VM shows strong containment, while Docker is weak: prove
-   strong on the VM and expect weak in a container.
+1. Slice 14's proof (machine setup on a fresh Ubuntu container showing strong containment)
+   contradicts the owner's answer that Docker is weak (question 4).
 2. Full cgroup v2 on native Linux needs root once, but section 6 lets the owner decline sudo:
    without root a native box is S2 (or W2 off systemd).
 3. WSL is refused for double-booking CPUs, yet Docker is accepted: a container on a box that
@@ -689,8 +691,9 @@ Open for review (not resolved here):
    start, which has no cron form (a proposal: XDG autostart or a shell profile).
 5. The containment answer reverses this plan's earlier recommendation (refuse heavy runs
    without delegation); sections 2.3, 6 and 9 are rewritten to it, not left beside it.
-- Risk: the scope is large (17 branches, most High). It is paced by the coordinator's caps;
-  nothing here asks for parallel heavy runs.
+6. The second-user refusal (question 10) needs a machine-wide marker, which exists only with the
+   root step of section 6 (step 9, section 2.4). Without sudo, "a second user is refused"
+   cannot be enforced.
 
 ## 10. Questions for the owner
 
@@ -700,12 +703,9 @@ All eleven are answered (owner, 2026-10-26); the answers are folded into the sec
    The seam names darwin unsupported and refuses it by name (section 7).
 2. **Linux CI runner.** ANSWERED (owner, 2026-10-26): a self-hosted box; support any Linux
    build, VM included; the primary target is full Linux support out of the box. Not
-   GitHub-hosted. I read this as leaving open whether the box is separate hardware or a VM on
-   the owner's Windows machine, and so whether its heavy work sits outside the machine lock's
-   view. A Linux container for a quick local check is a tool, not a runner.
+   GitHub-hosted. A Linux container for a quick local check is a tool, not a runner.
 3. **Spending.** ANSWERED (owner, 2026-10-26): a Linux box or VM, with real hardware and GPU
-   tests. No hosted-runner spend is planned, so the repository's visibility no longer matters
-   to cost.
+   tests. No hosted-runner spend is planned.
 4. **No cgroup v2 delegation.** ANSWERED (owner, 2026-10-26): heavy runs must work on Linux,
    with full cgroup v2 containment on native Linux as planned. Before the plan settles on the
    weak fallback, research must confirm no stronger option exists without delegation.
@@ -743,9 +743,9 @@ carries its own scope.
 | linux-import-seam | Import-clean kitlib, kitlib/platform skeleton, no-os-checks test, hook block while unready, per-platform process names | kitlib/platform/, kitlib/proc/win32.py, kitlib/proc/pipe.py, kitlib/gate/outfile.py, kitlib/lock/layout.py, kitlib/lock/store.py, kitlib/proc/cpu.py, kitlib/proc/process.py, kitlib/proc/shield.py, kitlib/proc/winwatch.py, kitlib/host/hookmain.py, kitlib/host/registry.py, hosts.json, tests/platform/, tests/host/, tests/gate/ |
 | linux-locks | flock named locks, run liveness, treelock and writelock, on a test store root | kitlib/platform/linux/locks.py, kitlib/lock/store.py, kitlib/fs/treelock.py, kitlib/fs/writelock.py, tests/lock/, tests/fs/ |
 | linux-process-identity | /proc identity, ancestry, kill; the boot folded into the Linux ctime | kitlib/platform/linux/process.py, kitlib/proc/process.py, kitlib/lock/run.py, tests/proc/, tests/lock/ |
-| linux-containment | Containment ladder (S1, S2, W1, W2), run-time probes, the root delegation step's probe, pool and unit runner on Linux | kitlib/platform/linux/contain.py, kitlib/platform/linux/cpu.py, kitlib/proc/job.py, kitlib/tooldeps/pool.py, kitlib/pytests/runner.py, tests/proc/, tests/tooldeps/ |
+| linux-containment | Containment ladder (S1, S2, W1, W2), run-time probes, the `leftovers` cgroup mechanism (its call sites are linux-lock-runs), the root delegation step's probe, pool and unit runner on Linux | kitlib/platform/linux/contain.py, kitlib/platform/linux/cpu.py, kitlib/proc/job.py, kitlib/tooldeps/pool.py, kitlib/pytests/runner.py, tests/proc/, tests/tooldeps/ |
 | linux-lock-hardware | /sys and /proc hardware detection, synthetic /sys trees | kitlib/platform/linux/hardware.py, kitlib/lock/layout.py, tests/lock/ |
-| linux-lock-runs | slots, give-back, detach and gate submit on Linux, on a test store root | kitlib/lock/run.py, kitlib/lock/detach.py, kitlib/gate/submit.py, kitlib/platform/linux/detach.py, tests/lock/, tests/gate/ |
+| linux-lock-runs | slots, give-back, detach and gate submit on Linux, on a test store root; the `leftovers` sparing call sites in Slot.release and end_sparing | kitlib/lock/run.py, kitlib/lock/detach.py, kitlib/gate/submit.py, kitlib/platform/linux/detach.py, tests/lock/, tests/gate/ |
 | linux-guard-paths | Guard placer for POSIX paths and the safety findings | kitlib/guard/, tests/guard/ |
 | linux-config-paths | Pointer, profile, temp, environment, the lock store's real root; worktree holders from /proc | kitlib/platform/linux/paths.py, kitlib/config/, kitlib/lock/store.py, kitlib/worktree/holders.py, kitlib/worktree/classify.py, tests/config/, tests/lock/, tests/worktree/ |
 | linux-scheduled-jobs | systemd user timers and cron for every scheduled task, read-back | kitlib/platform/linux/schedule.py, kitlib/launcher/autostart.py, kitlib/hubsite/autostart.py, kitlib/worktree/task.py, kitlib/machinesetup/, kitlib/pmstart/consoletasks.py, tests/ |
