@@ -1,5 +1,5 @@
-"""The landing lock: one per repository, held from a landing's merge to its push or its end (ported
-from an earlier per-repository tools/landing_lock.py; made repo-neutral for the kit).
+"""The landing lock: one per repository, held from a landing's merge to its push or its end, the
+same for every repository.
 
 The lock is the file `<git common dir>/kit-landing.lock` (LOCK_NAME): inside the git dir, so the
 main checkout and every worktree see the same one, and it is never tracked. It is created with O_CREAT|O_EXCL -

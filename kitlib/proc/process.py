@@ -313,8 +313,8 @@ def memory_mb():
 
 
 def system_mask():
-    """The system affinity mask of this process's processor group (at most 64 threads); see
-    kitlib.proc.cpu for every group."""
+    """The system affinity mask of this process's processor group (at most 64 logical
+    processors); see kitlib.proc.cpu for every group."""
     pm, sm = ctypes.c_size_t(), ctypes.c_size_t()
     K32.GetProcessAffinityMask(K32.GetCurrentProcess(), ctypes.byref(pm), ctypes.byref(sm))
     return sm.value
