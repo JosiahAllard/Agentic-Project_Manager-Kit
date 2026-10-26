@@ -15,6 +15,7 @@ from tests import gitfixture
 from tests.machinesetup import test_machinesetup as MS
 from tests.machinesetup import test_worktree_sweep_task as WS
 from tests.pmstart import keep_off_launcher_repos
+from tests.platforms import windows_only
 
 ROOT = 'C:\\kit main'
 RAW = '%USERPROFILE%\\bin;C:\\tools;'
@@ -160,7 +161,7 @@ class Steps(unittest.TestCase):
         self.assertTrue(any('not plain ASCII' in n for n in plan.notes['extras']), plan.notes)
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'kit.cmd runs under cmd.exe')
+@windows_only('kit.cmd runs under cmd.exe')
 class Launcher(unittest.TestCase):
     def test_the_launcher_runs_kit_py_with_the_arguments_and_gives_its_exit_code(self):
         tmp = tempfile.mkdtemp(prefix='kitcmd-run-')
@@ -176,7 +177,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), "['gate', '-C', 'a b'] %s" % tmp)
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'HKCU is Windows')
+@windows_only('HKCU is Windows')
 class RealPathRead(unittest.TestCase):
     def test_the_real_user_path_reads_as_a_string_of_a_string_type_or_unset(self):
         """Reads HKCU\\Environment Path only; nothing is written."""

@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
@@ -158,7 +159,8 @@ class ConfigDir(unittest.TestCase):
             self.once()
 
 
-@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
+@windows_only("needs Windows PowerShell")
+@unittest.skipUnless(shutil.which("powershell"), "needs Windows PowerShell")
 class WriterRoundTrip(unittest.TestCase):
     def run_writer(self, *args):
         return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
@@ -187,7 +189,8 @@ class WriterRoundTrip(unittest.TestCase):
             self.assertIn("no such config folder", p.stderr + p.stdout)
 
 
-@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
+@windows_only("needs Windows PowerShell")
+@unittest.skipUnless(shutil.which("powershell"), "needs Windows PowerShell")
 class StatuslineRoundTrip(unittest.TestCase):
     """statusline-usage.ps1 (the settings' statusLine command) writes the file usage_watch reads."""
 

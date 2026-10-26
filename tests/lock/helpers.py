@@ -14,6 +14,7 @@ import unittest
 from ctypes import wintypes
 
 from kitlib.host import registry
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import holds as hl
@@ -101,7 +102,7 @@ def clean_env(**extra):
     return env
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class StoreCase(unittest.TestCase):
     """setUp makes self.store: a scratch Store on fake_hardware(**HW) with KINDS and FAST
     settings (plus SETTINGS), and game probes: no process runs (self.procs), no anti-cheat service,

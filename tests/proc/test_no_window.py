@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 from kitlib.proc import spawn
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import job, win32
@@ -54,7 +55,7 @@ def python_exe():
     return p if os.path.exists(p) else sys.executable
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class NoWindowFlagsTest(unittest.TestCase):
     def test_console_parent_keeps_flags(self):
         self.assertEqual(job.no_window_flags(0, console=True), 0)
@@ -92,7 +93,7 @@ class NoWindowFlagsTest(unittest.TestCase):
         self.assertEqual(seen["flags"], win32.CREATE_NO_WINDOW | win32.CREATE_SUSPENDED)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class ConsoleWindowTest(unittest.TestCase):
     """Real processes: what a console child of Job.start sees of its console."""
 
@@ -200,7 +201,7 @@ class _Folder(unittest.TestCase):
             return json.load(f)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class SpawnWindowTest(_Folder):
     """Real processes: what a console child of kitlib.proc.spawn, and of kitlib.git.cmd's
     subprocess_run, sees of its console. The child is started with no flags of the caller's."""
@@ -241,7 +242,7 @@ class SpawnWindowTest(_Folder):
                 self.assertIn(r["parent_pid"], r["child"]["console_pids"], r)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class CarrierTest(_Folder):
     """tools/no_window.py under pythonw, as a scheduled task runs it: the program it carries has
     no console window, runs under the console python, and its exit code comes back."""

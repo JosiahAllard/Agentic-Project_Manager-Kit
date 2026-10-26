@@ -19,6 +19,7 @@ import unittest
 from unittest import mock
 
 from .helpers import FAST, OWNER, REPO, StoreCase, clean_env, own_affinity
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import api
@@ -531,7 +532,7 @@ class CoreRequests(StoreCase):
 CPU_FLAGS = ["-e", "CUDA_VISIBLE_DEVICES=", "-e", "JAX_PLATFORMS=cpu"]
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class DockerCpuEnv(unittest.TestCase):
     """A `docker exec` run holding no gpu slot keeps the container's process off the
     gpus: both variables right after `exec`, before any other flag."""

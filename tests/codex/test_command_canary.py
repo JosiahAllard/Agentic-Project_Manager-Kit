@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from hosts.codex.adapter.command_canary import _remove_fixtures, _write_probe, probe
+from tests.platforms import windows_only
 
 
 class Canary(unittest.TestCase):
@@ -53,7 +54,7 @@ class Canary(unittest.TestCase):
                 _remove_fixtures(innocent, parent)
             self.assertTrue(innocent.is_dir())
 
-    @unittest.skipUnless(os.name == 'nt', 'Windows Git read-only file attribute')
+    @windows_only('Windows Git read-only file attribute')
     def test_cleanup_removes_git_read_only_objects_only_in_the_fixture(self):
         with tempfile.TemporaryDirectory() as folder:
             parent = Path(folder).resolve()

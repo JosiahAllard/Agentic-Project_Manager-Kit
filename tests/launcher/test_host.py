@@ -6,9 +6,10 @@ import unittest
 from unittest import mock
 
 from kitlib.launcher import host as hostmod
+from tests.platforms import windows_only
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class GitIgnoredTest(unittest.TestCase):
     def call(self, console, rc=0):
         from kitlib.proc import job

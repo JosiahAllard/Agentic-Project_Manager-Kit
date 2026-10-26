@@ -12,6 +12,7 @@ import threading
 import unittest
 
 from tests.lock.helpers import REPO, StoreCase, clean_env
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import api
@@ -228,7 +229,7 @@ class Tools(McpCase):
         self.alive()
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class ReadOnly(unittest.TestCase):
     """The server in process: the retired names are pinned in kitlib.lockmcp, never served."""
 
@@ -283,7 +284,7 @@ class ReadOnly(unittest.TestCase):
         self.assertNotIn("\nassert ", source)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class EntryPoint(unittest.TestCase):
     """mcp/lock_server.py itself: initialize and tools/list read no store."""
 
@@ -296,7 +297,7 @@ class EntryPoint(unittest.TestCase):
         self.assertEqual(names, READS)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class IdShape(unittest.TestCase):
     """srv._id takes the whole string as an id (ID_RE.fullmatch): `$` in a re.match also matches
     before a final newline, and an id names a store file."""

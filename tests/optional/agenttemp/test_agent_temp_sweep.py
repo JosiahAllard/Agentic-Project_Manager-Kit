@@ -11,8 +11,11 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Short-circuit: _winapi imports on Windows only, so it is never imported elsewhere.
+HAVE_CREATE_JUNCTION = os.name == 'nt' and hasattr(__import__('_winapi'), 'CreateJunction')
 sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'optional', 'agenttemp'))
 import agent_temp_sweep as S  # noqa: E402
 from kitlib.config import user as kuser  # noqa: E402
@@ -141,7 +144,7 @@ class Sweep(Case):
         self.assertEqual(self.names(), ['old'])
         self.assertEqual(sorted(os.listdir(os.path.join(self.dir, 'old'))), ['a.txt', 'late.txt'])
 
-    @unittest.skipUnless(os.name == 'nt', 'claiming fails on an open file on Windows')
+    @windows_only('claiming fails on an open file on Windows')
     def test_an_entry_with_an_open_file_is_kept(self):
         f = os.path.join(self.dir, 'open', 'deep', 'a.txt')
         put(f)
@@ -149,7 +152,7 @@ class Sweep(Case):
             self.assertEqual(self.sweep(apply=True), {'open': 'in-use'})
         self.assertTrue(os.path.exists(f))
 
-    @unittest.skipUnless(os.name == 'nt', 'claiming fails on a working folder on Windows')
+    @windows_only('claiming fails on a working folder on Windows')
     def test_an_entry_a_process_works_in_is_kept(self):
         cwd = os.path.join(self.dir, 'cwd', 'deep')
         os.makedirs(cwd)
@@ -165,8 +168,8 @@ class Sweep(Case):
         self.assertEqual(self.sweep(apply=True), {'cwd': 'in-use'})
         self.assertTrue(os.path.isdir(cwd))
 
-    @unittest.skipUnless(os.name == 'nt' and hasattr(__import__('_winapi'), 'CreateJunction'),
-                         'a junction needs Windows')
+    @windows_only('a junction needs Windows')
+    @unittest.skipUnless(HAVE_CREATE_JUNCTION, 'a junction needs Windows')
     def test_a_link_is_removed_never_its_target(self):
         import _winapi
         target = os.path.join(self.tmp, 'keep')
@@ -193,7 +196,7 @@ def unreadable():
     raise RuntimeError('powershell exit 1: access denied')
 
 
-@unittest.skipUnless(os.name == 'nt', 'the sweep and its tests are Windows only')
+@windows_only('the sweep and its tests are Windows only')
 class SessionDirs(Case):
     """Claude Code's scratch is <dir>/claude/<project>/<session>: each session folder is its own unit,
     the keep-list holds names back, and the folder to sweep may not lie in a repository or the kit."""
@@ -516,7 +519,7 @@ class Cli(Case):
         self.assertEqual(code, 2)
         self.assertIn('home folder', err)
 
-    @unittest.skipUnless(os.name == 'nt', 'the sweep and its tests are Windows only')
+    @windows_only('the sweep and its tests are Windows only')
     def test_cli_prints_kept_and_live_counts_as_kept_and_exit_0(self):
         self.config({S.KEY: {'dir': self.dir, 'keep': ['pinned']}})
         put(os.path.join(self.dir, 'pinned', 'a.txt'))
@@ -562,7 +565,7 @@ class Cli(Case):
         self.assertIn('removed', out)
         self.assertEqual(self.names(), [])
 
-    @unittest.skipUnless(os.name == 'nt', 'claiming fails on an open file on Windows')
+    @windows_only('claiming fails on an open file on Windows')
     def test_an_entry_kept_in_use_exits_1(self):
         self.config({S.KEY: {'dir': self.dir}})
         f = os.path.join(self.dir, 'open.log')
@@ -572,7 +575,7 @@ class Cli(Case):
         self.assertEqual(code, 1)
         self.assertIn('in-use', out)
 
-    @unittest.skipUnless(os.name == 'nt', 'the installed layout is a Windows junction')
+    @windows_only('the installed layout is a Windows junction')
     def test_it_runs_through_an_installed_junction(self):
         # machine setup installs <tools>/agenttemp as a junction into the kit; the script finds
         # kitlib through the junction's real path, not beside the junction.
@@ -620,7 +623,7 @@ def started(*pairs):
                     for i, (n, c) in enumerate(pairs)]
 
 
-@unittest.skipUnless(os.name == 'nt', 'the sweep and its tests are Windows only')
+@windows_only('the sweep and its tests are Windows only')
 class UserTemp(Case):
     """The second root: <user temp>/claude, its session units only (agent_temp_sweep.user_temp), and
     the one-time drain of the Windows default user temp's claude folder (--drain-old-user-temp)."""

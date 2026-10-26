@@ -13,6 +13,7 @@ from unittest import mock
 from kitlib.config import user
 from kitlib.gate import runner
 from tests.home import machine_config
+from tests.platforms import windows_only
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRIVE = os.path.splitdrive(HERE)[0]
@@ -47,7 +48,8 @@ class SharedTemp(unittest.TestCase):
             self.assertEqual(user.shared_temp({}, 'linux'), '/tmp/x')
 
 
-@unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+@windows_only('drive letters are Windows only')
+@unittest.skipUnless(DRIVE, 'drive letters are Windows only')
 class LogBase(unittest.TestCase):
     def setUp(self):
         home = tempfile.mkdtemp(prefix='kit-home-')        # no machine config: no temp_dir

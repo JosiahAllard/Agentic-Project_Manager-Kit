@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from .helpers import StoreCase
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import game
@@ -14,7 +15,7 @@ if os.name == "nt":
     from kitlib.proc import job
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Derive(unittest.TestCase):
     def test_defaults_on_a_12_core_smt_machine_with_one_card(self):
         L = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=1, vram_mb=12288))
@@ -194,7 +195,7 @@ class Derive(unittest.TestCase):
         self.assertEqual(lay.kind_cores(L, {"cpu": "heavy"}, whole=True), 12)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class DomainSlots(unittest.TestCase):
     def test_two_l3_domains_take_the_preferred_one(self):
         hw = lay.fake_hardware(threads=24, smt=2, l3=2, sched={t: 1 for t in range(12, 24)})
@@ -425,7 +426,7 @@ class FailedDetection(StoreCase):
         self.assertIsNone(got["pending"])
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class DetectFailed(unittest.TestCase):
     """detect() names what it could not read in `failed`, which in_force will not adopt."""
 
@@ -493,7 +494,7 @@ class DetectFailed(unittest.TestCase):
         self.assertEqual(hw["threads"], [t for g in hw["groups"] for t in g["threads"]])
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class GroupsStandIn(StoreCase):
     """A look whose processor groups Windows would not list never replaces a layout.json from a
     good look: on a machine past 64 logical processors group 0's stand-in drops every other

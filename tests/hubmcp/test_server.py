@@ -20,6 +20,7 @@ from tests.hubsite import httpfix
 from tests.lock.helpers import REPO, clean_env
 from tests.lockmcp.test_server import Client as Process
 from tests.realgit import real_git
+from tests.platforms import windows_only
 
 ENTRY = os.path.join(REPO, "mcp", "hub_server.py")
 PINNED = ("hub_answer", "hub_todo_done", "hub_story_submit", "hub_to_pm_send")
@@ -901,7 +902,7 @@ class LiveKeys(httpfix.ListenerCase):
         self.assertEqual(self.errors(), [])
 
 
-@unittest.skipUnless(os.name == "nt", "the kit is Windows only")
+@windows_only("the kit is Windows only")
 class EntryPoint(unittest.TestCase):
     """mcp/hub_server.py itself: initialize and tools/list need no hub; the mark is read at start."""
 

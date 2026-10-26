@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from .helpers import OWNER, StoreCase, agent
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import holds as hl
@@ -23,7 +24,7 @@ def whole(**kw):
     return dict({"id": "h-x", "owner": "owner", "scope": "whole"}, **kw)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Admits(unittest.TestCase):
     """A whole hold is the owner's (job OWNER); only the owner's own runs use it. The old
     rule let an agent's run of the named job, or any run of an open hold, in."""
@@ -44,7 +45,7 @@ class Admits(unittest.TestCase):
         self.assertFalse(hl.admits(whole(), None)[0])
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Window(unittest.TestCase):
     NOW = datetime.datetime(2026, 10, 6, 12, 0, tzinfo=datetime.timezone.utc)
 

@@ -63,7 +63,7 @@ KIT_ONLY = (
     'backlog_lint', 'maint_lint', 'branch_overlap', 'config_move', 'delegated', 'hub', 'kit',
     'kit_tests', 'launch', 'lock_release_check', 'machine_lock', 'machine_setup', 'no_window',
     'pending', 'pm_data', 'pm_watch', 'plugin_refresh', 'render_content', 'worktree_sweep_task',
-    'kit_release', 'stray_restore',
+    'kit_release', 'stray_restore', 'ci_ratchet',
 )
 
 REFRESH_FIX = 'refresh the plugin export (tools/plugin_refresh.py --apply; docs/plugin-source.md)'

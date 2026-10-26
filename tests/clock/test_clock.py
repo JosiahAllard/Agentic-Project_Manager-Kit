@@ -119,8 +119,10 @@ def naming(root):
 
 class Production(unittest.TestCase):
     """No code a real run executes sets the marker: outside tests/, only kitlib/clock.py (which
-    defines it), tools/kit_tests.py (the test runner) and the design doc name it."""
-    ALLOWED = {'kitlib/clock.py', 'tools/kit_tests.py', 'docs/flaky-tests.md'}
+    defines it), tools/kit_tests.py (the test runner), kitlib/tooldeps/childenv.py (its test
+    children's environment) and the design doc name it."""
+    ALLOWED = {'kitlib/clock.py', 'tools/kit_tests.py', 'kitlib/tooldeps/childenv.py',
+               'docs/flaky-tests.md'}
 
     def test_only_the_test_runner_names_the_marker(self):
         found, scanned = naming(KIT)

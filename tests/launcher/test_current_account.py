@@ -3,6 +3,7 @@ import os
 import unittest
 
 from kitlib.launcher import accounts
+from tests.platforms import windows_only
 
 HOME = os.path.join('C:' + os.sep, 'Users', 'someone')
 
@@ -27,7 +28,7 @@ class CurrentAccountTest(unittest.TestCase):
         self.assertEqual(self.label(cfg, {'CLAUDE_CONFIG_DIR': ''}), '2')
         self.assertEqual(self.label(cfg, {'CLAUDE_CONFIG_DIR': '  '}), '2')
 
-    @unittest.skipUnless(os.name == 'nt', 'case and slash folding is Windows path behaviour')
+    @windows_only('case and slash folding is Windows path behaviour')
     def test_tilde_case_and_slashes_fold_on_windows(self):
         cfg = machine({'3': ['~\\.Claude-Three\\'], '4': [HOME.upper() + '/.claude-four']})
         self.assertEqual(self.label(cfg, {'CLAUDE_CONFIG_DIR': HOME.lower() + '/.claude-three'}), '3')

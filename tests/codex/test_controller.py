@@ -14,6 +14,7 @@ from kitlib.git import repo
 from tests.guard.world import World
 from tests import gitfixture
 from tests.realgit import real_git
+from tests.platforms import windows_only
 
 
 class Controller(unittest.TestCase):
@@ -253,7 +254,7 @@ class Controller(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn('--permission-profile', result.stderr)
 
-    @unittest.skipUnless(os.name == 'nt', 'Windows path comparison')
+    @windows_only('Windows path comparison')
     def test_matching_native_checkout_case_preserves_the_controller_assignment(self):
         planned = self.build('analyst', model='gpt-6.1-sol')
         value = {'thread': {'id': 'root', 'sessionId': 'session', 'cwd': planned.cwd.upper()},

@@ -11,6 +11,7 @@ from kitlib import git
 from kitlib.git import batch, cmd, refs, repo
 from tests import gitfixture
 from tests.realgit import real_git
+from tests.platforms import windows_only
 
 ZERO = '0' * 40
 
@@ -465,7 +466,7 @@ class AKilledRealGitIsNoAncestryAnswer(RepoFixture):
             self.assertIsNone(refs.is_ancestor(rev, self.feature, self.r.root)[0], rev)
             self.assertIsNone(refs.is_ancestor(self.feature, rev, self.r.root)[0], rev)
 
-    @unittest.skipUnless(os.name == 'nt', 'taskkill is Windows-only')
+    @windows_only('taskkill is Windows-only')
     def test_a_git_ended_by_taskkill_is_no_answer(self):
         # The real killer on a real git: started suspended (it runs nothing), ended by taskkill /F
         # by its pid while this process holds its handle (so the pid cannot be anyone else's).

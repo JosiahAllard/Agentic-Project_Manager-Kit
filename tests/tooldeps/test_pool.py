@@ -19,6 +19,7 @@ from unittest import mock
 
 from kitlib.tooldeps import pool
 from tests.gitfixture import fixture_parent, rmtree
+from tests.platforms import windows_only
 
 DIRTY = r'''import atexit
 import os
@@ -130,7 +131,7 @@ def write(root, files):
             fh.write(text)
 
 
-@unittest.skipUnless(os.name == 'nt', 'workers run in Windows job objects')
+@windows_only('workers run in Windows job objects')
 class Pool(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='kit-pool-', dir=fixture_parent())

@@ -6,6 +6,7 @@ import struct
 import unittest
 
 from kitlib.proc import tcp
+from tests.platforms import windows_only
 
 
 def v4_row(state, la, lp, ra, rp, pid):
@@ -63,7 +64,7 @@ class Parse(unittest.TestCase):
         self.assertEqual(tcp.peers({10}, [(a, (4, far, 443), 10)]), [], "another host")
 
 
-@unittest.skipUnless(os.name == "nt", "the connection table is Windows only")
+@windows_only("the connection table is Windows only")
 class RealTable(unittest.TestCase):
     def test_a_connection_this_test_opens_is_found_with_its_owner(self):
         srv = socket.socket()

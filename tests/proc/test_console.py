@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == "nt":
     import _winapi
@@ -259,7 +260,7 @@ def file_types(std):
     return {name: v[1] for name, v in std.items()}
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class InstalledTest(unittest.TestCase):
     """The hook is in place wherever kitlib is, and the stdlib still starts through it: a Python
     whose subprocess or multiprocessing stops calling _winapi.CreateProcess fails here."""
@@ -303,7 +304,7 @@ class InstalledTest(unittest.TestCase):
         self.assertEqual(seen, [CREATE_NO_WINDOW])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class WrapperTest(unittest.TestCase):
     """_create_process with the real CreateProcess and ensure faked."""
 
@@ -362,7 +363,7 @@ class WrapperTest(unittest.TestCase):
         self.assertEqual(self.flags, [CREATE_NO_WINDOW])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class EnsureTest(unittest.TestCase):
     """ensure_windowless_console's choice of path, with the Windows calls faked."""
 
@@ -414,7 +415,7 @@ class EnsureTest(unittest.TestCase):
         self.assertIsInstance(console.has_console(), bool)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class LogTest(unittest.TestCase):
 
     def setUp(self):
@@ -482,7 +483,7 @@ class LogTest(unittest.TestCase):
             self.assertIn('"old"', f.read())
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class RedactTest(unittest.TestCase):
     """redact_command: what the incident log keeps of a command line."""
 
@@ -669,7 +670,7 @@ class SenderGuardTest(unittest.TestCase):
                 self.assertFalse(self.guard([1, 2, 10, pid], 10, [1, 2], parent_of))
         self.assertFalse(self.guard([], 10, [1, 2], parent_of))
 
-    @unittest.skipUnless(os.name == "nt", "Windows only")
+    @windows_only("Windows only")
     def test_the_real_sender_refuses_the_test_s_console(self):
         """The sender itself, run dry from this process, sees this process on its console (not
         a root, not its descendant) and refuses."""
@@ -685,7 +686,7 @@ class SenderGuardTest(unittest.TestCase):
         self.assertEqual((got["refused"], got["sent"]), (True, False), got)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class PythonwParentTest(unittest.TestCase):
     """Real processes: a pythonw parent with kitlib imported, its children started bare."""
 
@@ -853,7 +854,7 @@ class PythonwParentTest(unittest.TestCase):
         self.assertEqual(len(r["log"]), 1, r["log"])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class CarrierFailureLine(unittest.TestCase):
     """The carrier's line when it cannot start its program: with no stderr under pythonw, the
     incident log is all that is left of a detached run that never started. console.py is the one

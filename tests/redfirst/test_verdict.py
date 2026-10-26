@@ -6,6 +6,7 @@ import time
 import unittest
 
 from kitlib.redfirst import verdict as V
+from tests.platforms import windows_only
 
 PY = {'glob': 'tests/*test_*.py', 'kind': 'python'}
 TOOLS = {'glob': 'tools/test_*.py', 'kind': 'python', 'pythonpath': 'tools'}
@@ -93,7 +94,7 @@ class GradleCmdReparse(unittest.TestCase):
     """gradlew.bat runs in cmd.exe, which reads its command line again: a gradle word holding
     one of cmd.exe's characters is refused before anything runs."""
 
-    @unittest.skipUnless(os.name == 'nt', 'cmd.exe runs a .bat on Windows only')
+    @windows_only('cmd.exe runs a .bat on Windows only')
     def test_injected_filter_runs_no_second_command_through_gradlew_bat(self):
         # The real shape: a scratch gradlew.bat run with the argv command() builds. Without the
         # refusal cmd.exe splits the line at the & and runs the echo itself: a word with no blank

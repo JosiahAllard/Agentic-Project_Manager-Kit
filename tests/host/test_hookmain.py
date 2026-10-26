@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 from kitlib.host import Action, Decision, HostCapabilities, hookmain
+from tests.platforms import windows_only
 
 
 def caps(supports_ask):
@@ -363,7 +364,7 @@ class CommandLine(unittest.TestCase):
         # an interpreter with no pythonw beside it is used itself
         self.assertEqual(hookmain.windowless(sys.executable + '-none'), sys.executable + '-none')
 
-    @unittest.skipUnless(os.name == 'nt', 'pythonw.exe is a Windows interpreter')
+    @windows_only('pythonw.exe is a Windows interpreter')
     def test_an_existing_interpreter_of_any_python_name_gets_the_pythonw_beside_it(self):
         with tempfile.TemporaryDirectory() as d:
             for name in ('python3.exe', 'python3.14.exe', 'pythonw.exe'):

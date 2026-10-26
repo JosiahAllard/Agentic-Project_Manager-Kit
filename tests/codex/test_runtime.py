@@ -11,6 +11,7 @@ from unittest import mock
 
 from hosts.codex.adapter.runtime import KitToolBroker, RoleBindings, RuntimeAppServer, SandboxCommandHost, tool_definition
 from kitlib.git import repo
+from tests.platforms import windows_only
 
 
 ROOT = str(Path(__file__).resolve().parents[2])
@@ -81,7 +82,7 @@ class Bindings(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.registry(mock.Mock()).add_root(snapshot(), 'analyst')
 
-    @unittest.skipUnless(os.name == 'nt', 'Windows paths')
+    @windows_only('Windows paths')
     def test_native_workspace_path_case_is_normalized(self):
         value = snapshot()
         value['runtimeWorkspaceRoots'] = [ROOT.upper()]

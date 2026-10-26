@@ -2,6 +2,7 @@
 backfill, on a layout from fake hardware (no store)."""
 import os
 import unittest
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import layout as lay
@@ -22,7 +23,7 @@ def waiter(rid, cpu, expect_s, ticket, **kw):
     return e
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class HolderEnd(unittest.TestCase):
     def test_before_its_expected_end_it_is_that_end(self):
         self.assertEqual(qm.holder_end(NOW - 100, 1000, NOW), NOW + 900)
@@ -38,7 +39,7 @@ class HolderEnd(unittest.TestCase):
         self.assertEqual(qm.holder_end(None, 1000, NOW), NOW + 500)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Plan(unittest.TestCase):
     def setUp(self):
         # 8 threads, 2 to a core: 4 cpu slots; no gpu (one placeholder gpu slot).
@@ -91,7 +92,7 @@ class Plan(unittest.TestCase):
         self.assertEqual(got["r-a"]["cores"], [1, 2, 3])
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class MixedOrder(unittest.TestCase):
     """A waiting gpu run whose gpu slots are free goes ahead of cpu-only runs for the
     cores (queue order only); no run passes one ahead of it unless it ends before that
@@ -140,7 +141,7 @@ def moved(seq):
     return {"by": "owner", "name": "reserve_ui", "at": "2026-01-01T00:00:00Z", "seq": seq}
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class MovedToTop(unittest.TestCase):
     """The owner's move to the top: a moved waiting run plans ahead of every other waiting run
     but own_turn ones, the latest move first; nothing behind it backfills across its start, and
@@ -215,7 +216,7 @@ def land(rid, cpu, expect_s, ticket, **kw):
     return waiter(rid, cpu, expect_s, ticket, priority="land", resource=LAND, **kw)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class LandPriority(unittest.TestCase):
     """priority "land": behind own_turn and owner-moved entries, ahead of every other waiting
     entry (gpu-free ones too), ticket order among landings; backfill as for any run ahead."""
@@ -277,7 +278,7 @@ class LandPriority(unittest.TestCase):
         self.assertEqual(got["r-over"]["start"], NOW + 1000)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class ResourceExclusion(unittest.TestCase):
     """An entry naming a resource never starts while another live entry holds it, and two
     entries naming it are never planned to overlap, however many slots are free."""

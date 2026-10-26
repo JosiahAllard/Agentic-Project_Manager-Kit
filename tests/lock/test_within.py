@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from .helpers import OWNER, StoreCase, clean_env
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import api
@@ -36,7 +37,7 @@ def waiter(rid, cpu, expect_s, ticket, **kw):
     return e
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Threads(unittest.TestCase):
     def test_parse_threads_reads_a_linux_cpuset_list(self):
         self.assertEqual(lay.parse_threads("8-15"), list(range(8, 16)))
@@ -56,7 +57,7 @@ class Threads(unittest.TestCase):
         self.assertEqual(lay.within_slots(L, [9]), [])
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Plan(unittest.TestCase):
     def setUp(self):
         # 8 threads, 2 to a core: 4 cpu slots; no gpu (one placeholder gpu slot).
@@ -97,7 +98,7 @@ class Plan(unittest.TestCase):
         self.assertEqual(qm.short_pools(self.L, q, q["entries"][1]), [])
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class PlanBehind(unittest.TestCase):
     """A waiting --within run keeps later runs off its own slots only: one that fits outside them
     starts now, one that would need a slot inside them waits for it (the backfill rule)."""

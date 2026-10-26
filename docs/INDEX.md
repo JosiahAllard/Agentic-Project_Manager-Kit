@@ -133,6 +133,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/stray_restore.py` | discard main-checkout strays a branch tip holds (`docs/stray-restore.md`) | kw: stray_restore, stray
 - `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
+- `tools/ci_ratchet.py` | the suite's failing tests held to a platform baseline (`docs/test-tools.md`) | kw: ci_ratchet, ratchet, baseline
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths
 - `tools/machine_setup.py` | set up a machine (guard entry, plugin, owner email, agent temp), switch from an older kit clone, or the committed repo setup with --repo (`docs/machine-setup.md`) | kw: machine_setup, fresh, owner email, repo setup
 - `tools/agent_temp_init.py` | set up the agents' temp folder alone (`docs/machine-setup.md` "Agent temp init") | kw: agent_temp_init, agent temp

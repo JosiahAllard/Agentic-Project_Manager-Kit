@@ -25,6 +25,7 @@ from kitlib.pluginsource import claude as pclaude
 from tests import gitfixture
 from tests.home import machine_config, pm_repo, temp_home
 from tests.machinesetup import test_machinesetup as T
+from tests.platforms import windows_only
 
 PID = 'pm-kit@pm-kit'
 MANIFEST = b'{\n  "name": "pm-kit",\n  "version": "0.1.0"\n}\n'
@@ -100,7 +101,7 @@ class FreshHost(T.FakeHost):
         return pclaude.Runner(home, claude='claude.cmd' if self.cli else '', run_proc=self.fake)
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'the wrapper and the kit are Windows only')
+@windows_only('the wrapper and the kit are Windows only')
 class FreshBase(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='machinesetup-fresh-')
@@ -483,7 +484,7 @@ time.sleep(60)
 '''
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'the kit is Windows only')
+@windows_only('the kit is Windows only')
 class RealRunner(unittest.TestCase):
     """extras.Host.plugin_runner, the path --apply runs (claude.Runner over extras.run_tree), against
     fake claude .cmd files: the argv, the environment (no CLAUDE_CONFIG_DIR for ~/.claude, even
