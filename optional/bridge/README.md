@@ -154,7 +154,9 @@ nominates no channel, and the other halves keep working.
   only for the exact live chat that frontend attested last, and only while that frontend is
   attached; an unmarked frontend attesting the same chat clears it. A frame without `mark` is still
   served, so a frontend started before the mark existed keeps working until its host restarts. The
-  mark grants nothing yet.
+  reverse is refused: a service started before the mark refuses a new, marked frontend's frames as
+  `invalid-private-request`, so restart the service after updating the kit. Unmarked sessions are
+  unaffected. The mark grants nothing yet.
   - Claude passes its MCP servers the session's whole environment, so a kit-launched Claude
     session's frontend is marked. Codex passes only `env_vars`, and the installer forwards no
     `PM_KIT_ROLE`. No kit launch starts a Codex chat yet, so every Codex chat is unmarked and needs
