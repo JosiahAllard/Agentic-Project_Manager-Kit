@@ -1,6 +1,7 @@
-"""kitlib.pluginsource.codex: plugin_refresh --apply mirrors the export's hosts/codex/shell parts
-into the Codex marketplace copy and cache config.toml names (docs/plugin-source.md "Codex copy").
-A fake Codex home and marketplace under a temp folder only: no real ~/.codex is read."""
+"""hosts.codex.adapter.plugin_copy: plugin_refresh --apply mirrors the export's hosts/codex/shell
+parts into the Codex marketplace copy and cache config.toml names, as the step the Codex adapter
+hands kitlib.pluginsource.refresh through tools/_host.py (docs/plugin-source.md "Host plugin
+copies"). A fake Codex home and marketplace under a temp folder only: no real ~/.codex is read."""
 import datetime
 import json
 import os
@@ -11,10 +12,13 @@ import tempfile
 import unittest
 from unittest import mock
 
+from hosts.codex.adapter import ADAPTER
+from hosts.codex.adapter import plugin_copy as codex
 from kitlib import pluginsource as P
-from kitlib.pluginsource import claude, codex
+from kitlib.pluginsource import claude
 from tests import gitfixture
 from tests.pluginsource import FakeProc, Kit
+from tests.host.conformance import load_tool
 from tests.pluginsource import test_tool
 from tests.pluginsource.test_tool import TOOL, tree
 
@@ -237,9 +241,9 @@ class SwapTest(Case):
 
 
 class RefreshWiringTest(unittest.TestCase):
-    """pluginsource.refresh with codex_home: the export's own hosts/codex/shell is mirrored, also
-    when the Claude side is current; a marked session (pm_watch's auto_refresh spawn inherits the
-    mark) mirrors nothing."""
+    """pluginsource.refresh with the Codex step in `copies`: the export's own hosts/codex/shell is
+    mirrored, also when the Claude side is current; a marked session (pm_watch's auto_refresh spawn
+    inherits the mark) mirrors nothing; a step that raises is a line, never the exit code."""
 
     def setUp(self):
         self.k = Kit(self)
@@ -254,11 +258,12 @@ class RefreshWiringTest(unittest.TestCase):
         self.k.seed_migrated(self.f)
         self.lines = []
 
-    def refresh(self, environ=UNMARKED, apply=True):
+    def refresh(self, environ=UNMARKED, apply=True, copies=None):
         runner = claude.Runner(self.k.home, claude='claude.cmd', run_proc=FakeProc())
+        if copies is None:
+            copies = [codex.Step(environ=dict(environ, CODEX_HOME=self.h.home))]
         return P.refresh(self.k.kit, self.s, self.f, self.lines.append, apply=apply, runner=runner,
-                         now=NOW, own=(1234, 99), alive=lambda pid, ctime: False,
-                         codex_home=self.h.home, environ=environ)
+                         now=NOW, own=(1234, 99), alive=lambda pid, ctime: False, copies=copies)
 
     def shell(self):
         sha = self.k.repo.git('rev-parse', 'refs/remotes/origin/main')
@@ -295,6 +300,32 @@ class RefreshWiringTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.k.root, self.k.repo.git(
             'rev-parse', 'refs/remotes/origin/main')[:12])))
         self.assertIn('would be replaced', '\n'.join(self.lines))
+
+
+    def test_a_step_that_raises_is_a_line_and_the_next_step_still_runs(self):
+        seen = []
+
+        def broken(folder, out, apply):
+            raise ValueError('boom')
+        broken.label = 'other'
+        good = codex.Step(environ={'CODEX_HOME': self.h.home})
+        self.assertEqual(self.refresh(copies=[broken, lambda f, o, a: seen.append((f, a)), good]),
+                         0, self.lines)
+        self.assertIn('other: not refreshed: ValueError: boom', self.lines)
+        sha = self.k.repo.git('rev-parse', 'refs/remotes/origin/main')
+        self.assertEqual(seen, [(os.path.join(self.k.root, sha[:12]), True)])   # the export folder
+        self.assertEqual(parts(self.h.cache), parts(self.shell()))
+
+
+class HostEdgeTest(unittest.TestCase):
+    """tools/_host.py plugin_copies: the step of each registered host whose adapter has the hook."""
+
+    def test_the_codex_adapter_hands_its_step_and_no_other_host_has_one(self):
+        steps = load_tool('_host').plugin_copies('X:\\home', {'PM_KIT_ROLE': 'pm'})
+        self.assertEqual([type(s) for s in steps], [codex.Step])
+        self.assertEqual(steps[0].home, os.path.join('X:\\home', '.codex'))
+        self.assertEqual(steps[0].environ, {'PM_KIT_ROLE': 'pm'})
+        self.assertEqual(ADAPTER.plugin_copy(None, {'CODEX_HOME': 'X:\\c'}).home, 'X:\\c')
 
 
 class ToolMarkTest(unittest.TestCase):

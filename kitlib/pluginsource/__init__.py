@@ -14,8 +14,8 @@ installs from (docs/plugin-source.md).
   read_state / write_state         <root>/state.json: {sha, version, folder, exported_at, folders}
   RefreshLock                      <root>/refresh.pid, one refresh at a time
   pick_folders(folders, wanted)    the account folders --folder names, and the names that are not one
-  refresh(...)                     the whole run tools/plugin_refresh.py makes (with codex_home,
-                                   the Codex plugin copy too: kitlib.pluginsource.codex)
+  refresh(...)                     the whole run tools/plugin_refresh.py makes (with copies, each
+                                   host's own plugin copy too: tools/_host.py plugin_copies)
   installs(folders)                [(install path, account folder)] of each account's kit install
   marketplace_mismatches(export_dir, folders, managed)
                                    lines where a marketplace path is not the export (read only)
@@ -26,7 +26,8 @@ installs from (docs/plugin-source.md).
 The export holds tracked files only (git ls-tree of the commit, blobs from one cat-file batch),
 so no worktree, no .git and nothing untracked reaches a plugin cache. It reads git and writes
 only under the export root (and, for prune_caches with apply or a refresh that went through,
-under each account's plugins cache; with codex_home, in the Codex plugin copy config.toml names);
+under each account's plugins cache; a host's plugin-copy step, which refresh is handed, writes
+that host's own copy);
 it fetches nothing and takes no machine lock.
 """
 import collections
@@ -931,14 +932,14 @@ def migrate_cmd(folder):
 
 
 def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=None, own=None,
-            alive=None, in_use=None, codex_home=None, environ=None):
+            alive=None, in_use=None, copies=None):
     """One refresh (tools/plugin_refresh.py). `folders` are the account folders to run in (all of
     them, or those --folder named); `runner` is kitlib.pluginsource.claude.Runner (or a test's);
-    `in_use` is the prune's reader of what is in use (prune; None: the 7-day rule). With
-    `codex_home`, the Codex plugin copy is mirrored from the export too (kitlib.pluginsource.codex:
-    its lines, never the exit code; skipped in a session `environ` marks), also when the Claude
-    side has nothing to do; None: no Codex step. After an update that went through, the old
-    versions in each account folder's plugins cache are pruned (_prune_old_caches).
+    `in_use` is the prune's reader of what is in use (prune; None: the 7-day rule). `copies` are
+    the hosts' plugin-copy steps (tools/_host.py plugin_copies), each run as step(export folder,
+    out, apply) after the account folders, also when they had nothing to do: a step prints its own
+    lines and never sets the exit code; None or []: none. After an update that went through, the
+    old versions in each account folder's plugins cache are pruned (_prune_old_caches).
     Without `migrate`, a folder whose state record does not say `migrated: true` is refused with
     a line naming the migrate command for it, and the others still run. Dry run (apply False):
     prints the plan and writes nothing. Returns the exit code: 0 done or nothing to do, 1 refused
@@ -968,8 +969,8 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
         if not refused:
             out('pm-kit plugin is current: %s is exported and every account folder named refreshed; '
                 'nothing to do' % name)
-        if codex_home is not None:
-            _codex_locked(s, name, sha, codex_home, out, apply, environ, own, alive)
+        if copies:
+            _copies_locked(s, name, sha, copies, out, apply, own, alive)
         return 1 if refused else 0
     if not apply:
         out('DRY RUN (nothing written; --apply makes these):')
@@ -986,8 +987,8 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
             out('  no account folder to run claude in')
         if migrate:
             _old_cache_lines(kit, sha, folders, out)
-        if codex_home is not None:
-            _codex(s, name, sha, codex_home, out, False, environ)
+        if copies:
+            _copies(s, name, sha, copies, out, False)
         return 1 if refused else 0
     try:
         os.makedirs(root, exist_ok=True)
@@ -1003,42 +1004,45 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
     try:
         code = _apply(kit, s, sha, state, fresh, todo, steps, migrate, folders, runner, out, now,
                       in_use)
-        if codex_home is not None:
-            _codex(s, name, sha, codex_home, out, True, environ)
+        if copies:
+            _copies(s, name, sha, copies, out, True)
     finally:
         lock.release()
     return 1 if refused else code
 
 
-def _codex(s, name, sha, codex_home, out, apply, environ):
-    """The Codex step (kitlib.pluginsource.codex.refresh) from export <name>'s Codex shell folder.
-    With apply the caller holds the refresh lock, and an export that is not there whole (the
-    export step failed) is a line, not a write."""
-    from kitlib.pluginsource import codex
+def _copies(s, name, sha, copies, out, apply):
+    """Run each plugin-copy step with export <name>'s folder. With apply the caller holds the
+    refresh lock, and an export that is not there whole (the export step failed) is a line per
+    step, not a write. A step that raises is a line: it never fails the account folders' result."""
     folder = os.path.join(s.export_dir, name)
-    if apply and (read_marker(folder) or {}).get('sha') != sha:
-        out('codex: not refreshed: there is no export of %s at %s' % (sha[:12], folder))
-        return
-    try:
-        codex.refresh(os.path.join(folder, codex.SHELL), codex_home, out, apply=apply, environ=environ)
-    except Exception as e:                       # never fail the Claude side over the Codex copy
-        out('codex: not refreshed: %s: %s' % (type(e).__name__, e))
+    whole = not apply or (read_marker(folder) or {}).get('sha') == sha
+    for step in copies:
+        label = getattr(step, 'label', 'plugin copy')
+        if not whole:
+            out('%s: not refreshed: there is no export of %s at %s' % (label, sha[:12], folder))
+            continue
+        try:
+            step(folder, out, apply)
+        except Exception as e:                   # never fail the refresh over a host's copy
+            out('%s: not refreshed: %s: %s' % (label, type(e).__name__, e))
 
 
-def _codex_locked(s, name, sha, codex_home, out, apply, environ, own, alive):
-    """_codex when the Claude side had nothing to do: with apply, under the refresh lock (busy:
-    a line, and the copy is left for the refresh holding it)."""
+def _copies_locked(s, name, sha, copies, out, apply, own, alive):
+    """_copies when the account folders had nothing to do: with apply, under the refresh lock
+    (busy: a line per step, and the copies are left for the refresh holding it)."""
     if not apply:
-        _codex(s, name, sha, codex_home, out, False, environ)
+        _copies(s, name, sha, copies, out, False)
         return
     lock = RefreshLock(s.export_dir, own=own, alive=alive)
     try:
         lock.acquire()
     except Busy as e:
-        out('codex: not refreshed: %s' % e)
+        for step in copies:
+            out('%s: not refreshed: %s' % (getattr(step, 'label', 'plugin copy'), e))
         return
     try:
-        _codex(s, name, sha, codex_home, out, True, environ)
+        _copies(s, name, sha, copies, out, True)
     finally:
         lock.release()
 

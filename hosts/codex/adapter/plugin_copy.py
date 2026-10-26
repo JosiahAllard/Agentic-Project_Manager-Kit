@@ -1,6 +1,9 @@
-"""The Codex plugin copy (docs/plugin-source.md "Codex copy"): plugin_refresh --apply mirrors the
-export's hosts/codex/shell parts into the folders Codex loads the pm-kit plugin from.
+"""hosts.codex.adapter.plugin_copy: the Codex plugin copy (docs/plugin-source.md "Host plugin
+copies"). plugin_refresh --apply mirrors the export's hosts/codex/shell parts into the folders Codex
+loads the pm-kit plugin from. The adapter hands it out (host.py plugin_copy, tools/_host.py
+plugin_copies); kitlib.pluginsource runs it with the export folder and never names this host.
 
+  Step(home, environ)              the step kitlib.pluginsource.refresh runs: step(export, out, apply)
   codex_home(home, environ)        <home>\\.codex when --home names one, else CODEX_HOME, else the
                                    user's ~\\.codex
   targets(codex_home)              ([(label, folder)], notes): the marketplace copy and the cache
@@ -13,12 +16,12 @@ Codex installs a plugin by copying the marketplace's folder into
 <CODEX_HOME>\\plugins\\cache\\<marketplace>\\<plugin>\\<version>, and copies it again from the
 marketplace folder later, so both are written, or Codex brings an old one back. The targets are the
 ones config.toml names, and nothing else: the [plugins."pm-kit@pm-kit-local"] entry, the
-[marketplaces.pm-kit-local] source folder, that folder's marketplace.json entry for pm-kit (a path
-under it that starts with ./), and the cache folder of the version the marketplace copy's
-plugin.json gives. A link or junction anywhere below the Codex home or the marketplace source is
-refused, never followed. No version is changed. A marked session (kitlib.sessionmark) writes
-nothing: the copy is the owner's. Every problem is a line, never an exit code: the Claude side of
-the refresh decides that.
+[marketplaces.pm-kit-local] source folder, that folder's .agents\\plugins\\marketplace.json entry
+for pm-kit (a path under it that starts with ./), and the cache folder of the version the
+marketplace copy's plugin.json gives. A link or junction anywhere below the Codex home or the
+marketplace source is refused, never followed. No version is changed. A marked session
+(kitlib.sessionmark) writes nothing: the copy is the owner's. Every problem is a line, never an
+exit code: the rest of the refresh decides that.
 """
 import json
 import os
@@ -27,13 +30,15 @@ import shutil
 import tomllib
 
 from kitlib import sessionmark
+from kitlib.pluginsource import _is_link as _link, _rmtree
 
+LABEL = 'codex'                      # the step's name: its lines start 'codex: '
 MARKET = 'pm-kit-local'
 PLUGIN = 'pm-kit'
 KEY = PLUGIN + '@' + MARKET
 SHELL = os.path.join('hosts', 'codex', 'shell')
 PARTS = ('skills', 'agents', 'hooks', '.codex-plugin')
-MARKETPLACE_FILES = ('.agents/plugins/marketplace.json', '.claude-plugin/marketplace.json')
+MARKETPLACE_FILES = ('.agents/plugins/marketplace.json',)
 MANIFESTS = ('plugin.json', '.codex-plugin/plugin.json')
 NEW = '.pmkit-new-'                  # <part>.pmkit-new-<pid>: the copy being put in place
 OLD = '.pmkit-old-'                  # <part>.pmkit-old-<pid>: the part it replaces, until removed
@@ -61,9 +66,21 @@ def codex_home(home=None, environ=None):
     return os.path.join(user.home_dir(), '.codex')
 
 
+class Step(object):
+    """The Codex copy as one step of kitlib.pluginsource.refresh: step(export, out, apply) mirrors
+    <export>\\hosts\\codex\\shell into the targets of the Codex home (codex_home(home, environ),
+    fixed when the step is made); `environ` (None: os.environ) is read for the session mark."""
+    label = LABEL
+
+    def __init__(self, home=None, environ=None):
+        self.home, self.environ = codex_home(home, environ), environ
+
+    def __call__(self, export, out, apply=False):
+        refresh(os.path.join(export, SHELL), self.home, out, apply=apply, environ=self.environ)
+
+
 def _is_link(path):
-    from kitlib.pluginsource import _is_link as is_link
-    return os.path.lexists(path) and is_link(path)
+    return os.path.lexists(path) and _link(path)
 
 
 def _no_links(base, parts):
@@ -180,7 +197,6 @@ def same(a, b):
 
 
 def _remove(path):
-    from kitlib.pluginsource import _rmtree
     try:
         if os.path.lexists(path):
             _rmtree(path)
@@ -240,7 +256,6 @@ def swap(src, dst):
         return False, 'could not put the new copy in place at %s (%s): the old one is back' % (dst, e)
     if old is not None:
         try:
-            from kitlib.pluginsource import _rmtree
             _rmtree(old)
         except OSError as e:
             return True, 'replaced %s; the old copy %s was not wholly removed (%s)' % (dst, old, e)
