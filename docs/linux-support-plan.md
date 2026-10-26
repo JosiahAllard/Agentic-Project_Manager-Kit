@@ -1,13 +1,17 @@
 # Linux support plan
 
-Status: plan only (2026-10-25). Nothing here is built. It extends, and for Linux supersedes, the
+Status: plan only (2026-10-25), revised 2026-10-26 to the owner's eleven answers (section 10).
+Nothing here is built. It extends, and for Linux supersedes, the
 section "6. Platform seam (later refactor: Linux and macOS)" of docs/multi-host-plan.md: that
 section set the seam's shape and four questions; this plan verifies the Windows-only surface,
 designs each backend, orders the work into branches and asks what only the owner can decide.
 
-Goal (the owner's): the whole kit runs on Linux out of the box, at parity with Windows: the PM,
-coordinators, the launcher, the hub, the guard, the machine lock, the gate, landings, scheduled
-jobs, machine setup, plugin refresh, skills and docs. Windows behaviour does not change: every
+Goal (the owner's): the whole kit runs on Linux out of the box, on any Linux distribution, at
+parity with Windows: the PM, coordinators, the launcher, the hub, the guard, the machine lock,
+the gate, landings, scheduled jobs, machine setup, plugin refresh, skills and docs. Parity here
+means without peer messaging and the bridge (after parity, question 7) and without macOS (out,
+question 1). The first goal is the plugin working on Linux; CI for Linux and Windows is a later
+phase (question 8). Windows behaviour does not change: every
 slice below keeps the Windows code path byte-for-byte where it can and proves it with the
 existing Windows suite.
 
@@ -148,13 +152,12 @@ default is 'powershell' (hosts/codex events.py).
 
 ### 1.5 Tests and CI
 
-- No CI: no workflow, no .github folder. That the repository is public on GitHub is unverified:
-  this plan did not check its visibility; no longer needed for cost (question 3 answered).
+- No CI: no workflow, no .github folder; CI is a later phase (section 4).
 - `git grep -c -E "skip(Unless|If)\((os\.name|sys\.platform)" -- '*.py'` finds 142 platform
   skips in 68 test files, with free-text reasons; `skip(Unless|If)\(WINDOWS` finds 13 more in 6
   files that skip through a module constant (`WINDOWS = os.name == 'nt'`).
 - The kit's own runners need job objects: tools/kit_tests.py (the pool) and gate.py (the pool and
-  the machine lock, which fails closed). A first Linux leg cannot use either.
+  the machine lock, which fails closed). A first Linux run cannot use either.
 - tests/realgit.py `real_git(reason)` is the house pattern for a marker with a reasons table.
 
 ## 2. The platform layer
@@ -176,7 +179,7 @@ kitlib/platform/
     contain.py    the Job contract on cgroup v2
     locks.py      named locks, run liveness, file locks
     detach.py     start outside the caller's tree
-    schedule.py   systemd user timers (cron fallback)
+    schedule.py   systemd user timers, or cron where there is no user systemd
     ipc.py        Unix sockets
     paths.py      profile, config, state and temp folders, the machine pointer
     hardware.py   /sys and /proc readers for lock/layout.detect
@@ -209,13 +212,13 @@ Rules:
 | (pid, FILETIME ctime) identity | (pid, starttime from /proc/<pid>/stat field 22) plus boot_id | starttime is in clock ticks since boot, so it repeats across reboots; the seam folds the boot into the ctime value (below) |
 | Toolhelp parent walk | /proc/<pid>/stat ppid, checked against each starttime | same ancestry rule |
 | NtQueryInformationProcess command line | /proc/<pid>/cmdline | NUL-separated, no CRT re-quoting |
-| Job object (kill on close, CPU mask, memory, peak) | cgroup v2 leaf under the user's delegated slice | see 2.3 |
+| Job object (kill on close, CPU mask, memory, peak) | cgroup v2 leaf under a delegated subtree, or a lower tier of the ladder | see 2.3 |
 | SetProcessAffinityMask / cpu sets | os.sched_setaffinity | for the pool and the fallback only; the slot's mask lives in cpuset.cpus |
-| WMI Win32_Process Create (detach) | `systemd-run --user --scope` or double fork + setsid | systemd-run also places the run in its own cgroup |
+| WMI Win32_Process Create (detach) | `systemd-run --user --scope` with user systemd, else double fork + setsid | systemd-run also places the run in its own cgroup |
 | Named mutex, WAIT_ABANDONED | fcntl.flock on a lock file in the store, opened O_CLOEXEC | the kernel drops it when the holder dies: the same "abandoned counts as free" meaning |
 | RunMutex (liveness) | the run holds flock on `runs/<id>.alive`; readers probe with LOCK_NB | run_dead and run_live keep their meaning |
 | msvcrt.locking (treelock) | fcntl.lockf on the same lock file | byte range kept |
-| Register-ScheduledTask | systemd user `.timer` + `.service` units; loginctl enable-linger | cron (`crontab -l`/`crontab -`) when there is no user systemd |
+| Register-ScheduledTask | systemd user `.timer` + `.service` units; loginctl enable-linger | cron (`crontab -l`/`crontab -`, `@reboot` where there is no linger) is first-class where there is no user systemd (question 5) |
 | schtasks /Query /XML | `systemctl --user list-timers --output=json`, unit files | consoletasks reads the kit's own unit names |
 | Named pipes | AF_UNIX stream sockets, mode 0600, SO_PEERCRED | in the XDG runtime folder |
 | GetExtendedTcpTable | /proc/net/tcp and tcp6 | the parsers after the table are portable |
@@ -228,7 +231,7 @@ Rules:
 | pythonw, CREATE_NO_WINDOW, console hook, winwatch | nothing: Linux spawns no console windows | the no-window carrier is a no-op |
 | pid shield, PidHold | inferred: nothing needed; pidfd where a hold is wanted | rests on Claude Code on Linux not killing a tool call's tree by pid (unknown, section 9; slice 7 probes it) |
 | Git Bash lookup | /bin/bash | kitlib/proc/bash.py answers /bin/bash |
-| conhost + PowerShell session window | tmux session (or a configured terminal command) | both supported, tmux by default (question 6, answered) |
+| conhost + PowerShell session window | tmux session by default, a configured terminal command if set | question 6 |
 | Get-CimInstance Win32_Process | /proc scan | pmstart, launcher/stop |
 | `.exe` process names in hosts.json | per-platform names (`claude`, `node`, `codex`) | hosts.json gains a per-platform field in slice 2: lock/store.py agent_hosts (the lock's caller walk) matches these names |
 
@@ -263,6 +266,67 @@ tools use. On Linux the nearest mechanism is a cgroup v2 leaf the kit owns. The 
 must meet: a child that calls setsid, double forks or resets its own affinity, as build tools and
 daemons do; not a same-user process that sets out to leave its cgroup.
 
+The owner's answer (question 4): heavy runs must work on Linux, with full cgroup v2 containment
+on native Linux, and where nothing stronger exists (Docker included) they go ahead on weak
+containment, shown as such; the owner accepts that risk. The research below is that answer's
+precondition, and it finds that full containment on native Linux needs one root step at machine
+setup (section 6).
+
+Research, 2026-10-26 (read from documentation, nothing probed on a Linux box). Without root and
+without cpuset delegation nothing gives full containment: no CPU pinning a child cannot undo, and
+no guaranteed kill. systemd's default user manager delegates only pids, memory and cpu to the user
+(user@.service.in: `Delegate=pids memory cpu`).
+
+1. A `systemd-run --user --scope` or `--slice`: with no root, MemoryMax, CPUQuota and CPUWeight,
+   pids limits and kill-the-unit work; `AllowedCPUs` needs the cpuset controller and is expected
+   to have no effect (a probe settles it). With a root drop-in, `user@.service.d` setting
+   `Delegate=cpuset cpu io memory pids`, and a re-login, it is full. It fails without user systemd
+   (non-systemd distributions, containers, a bare ssh login with no PAM session) and on cgroup v1
+   (deprecated in systemd v256, removed in v258). Detect: `user@$UID.service/cgroup.controllers`
+   lists cpuset and memory, then start a probe scope and read back `cpuset.cpus.effective` and
+   `memory.max`; never trust the exit code.
+2. A user plus cgroup namespace (`unshare -U -C`): a cgroup namespace changes only the view and
+   grants nothing (cgroup_namespaces(7)); not a candidate. Its neighbour, a PID namespace, kills
+   every member with SIGKILL when its init dies, with no escape (pid_namespaces(7)): the strongest
+   kill without cgroups, and it needs no capabilities. It fails on Ubuntu 23.10 and later
+   (AppArmor's user-namespace restriction) and under Docker's default seccomp profile, and the
+   namespace's own pids reach the nest token. Detect: a trial `unshare(CLONE_NEWUSER |
+   CLONE_NEWPID)` in a forked child.
+3. The container's own cgroup: plain Docker mounts cgroups read-only; `--privileged` makes them
+   writable, and the kit must move the container's processes into a leaf first (the
+   no-internal-process rule). On plain Docker the kit can still read the container-wide
+   `cpuset.cpus.effective` and `memory.max` for the layout (section 2.4). Detect: a read-write
+   cgroup2 entry in mountinfo and W_OK on `cgroup.subtree_control`.
+4. A pidfd plus `PR_SET_CHILD_SUBREAPER` watchdog: it catches double forks and setsid. It misses
+   processes launched for the tree by servers outside it (systemd-run --user, D-Bus, an existing
+   tmux server, at and cron, daemons already running), the same gap a Windows job has; it misses
+   everything if the watchdog is itself SIGKILLed; and it gives no CPU pinning (affinity is
+   cooperative) and no tree memory cap (RLIMIT_AS breaks V8, the JVM and Go, so it is dropped).
+   The kill walks `/proc/<pid>/task/*/children`, SIGSTOPs, then `pidfd_send_signal` SIGKILL, in
+   bounded passes like end_sparing's END_PASSES.
+5. A stronger route that is found: hand delegation by root at boot, the kernel documentation's
+   model. A root boot hook (OpenRC `local.d`, or a root `@reboot` cron) makes
+   `/sys/fs/cgroup/pm-kit` owned by the kit user. It is the only strong route without systemd.
+   `bwrap --unshare-pid --die-with-parent` is the same as the PID namespace.
+
+The ladder, chosen by probing the machine at run time, not by distribution name:
+
+| Tier | What it is | Strength |
+|---|---|---|
+| S1 | a writable cgroup2 subtree with cpuset, memory and pids and `cgroup.kill` (kernel 5.14+), from a `Delegate=yes` user scope or a root-delegated pm-kit directory | strong: CPU pinned, memory capped, guaranteed kill |
+| S2 | the same without cpuset (systemd's default delegation) | memory and kill strong, CPU cooperative |
+| W1 | a PID namespace | strong kill, no caps |
+| W2 | subreaper + pidfd + process group + affinity, with a sampled RSS watchdog and no RLIMIT_AS | weak |
+
+`containment: weak` (proposed wording) means: heavy runs go ahead; the kit kills every descendant
+it can see (subreaper, process group) at slot end; it cannot reach processes launched for it by
+servers outside its tree; cleanup is lost if the holder is SIGKILLed; CPU pinning is advisory;
+the memory cap is a sampled watchdog. The lock's status, the heavy-run start line and the run
+record name the tier and what it lacks. Proposed: S2 shows `containment: partial (cpus not
+pinned)` and is not counted weak.
+
+The S1 contract:
+
 - create: `systemd-run --user --scope --unit=pmkit-<rid> -p AllowedCPUs=<list> -p
   MemoryMax=<n>` for a fresh command, or mkdir of a leaf under the kit's delegated subtree for an
   existing process; assign writes the pid to cgroup.procs.
@@ -273,6 +337,11 @@ daemons do; not a same-user process that sets out to leave its cgroup.
   fallback; tree_working_set: memory.current.
 - terminate, end, kill_on_close: cgroup.kill (kernel 5.14+); kill_on_close is a watchdog that holds
   the cgroup and kills it when the owner's pidfd closes.
+- Stragglers: on Windows, Slot.release leaves them running unpinned (job.end(kill=False),
+  kitlib/lock/run.py:1236) and only KILL_HOW kills. On Linux a populated leaf cannot be removed
+  and keeps its cpuset, so leftovers move into a kit `leftovers` sibling cgroup (this needs write
+  access on the common ancestor), and end_sparing (run.py:708) can move a spared daemon out the
+  same way.
 - Escape, against that threat model: setsid and double fork do not move a process between
   cgroups, where they do leave a process group, so the leaf holds the tree that ordinary tools
   make. It is not a security boundary: a same-user process can write its own pid into any
@@ -282,11 +351,10 @@ daemons do; not a same-user process that sets out to leave its cgroup.
   is the one exception, section 1.3). The plan accepts that difference and states it in the docs
   rather than defending against a deliberate move.
 
-Fallback when the user has no delegated cgroup v2 (old systemd, containers, WSL without
-systemd): process group + sched_setaffinity + PR_SET_PDEATHSIG + an RLIMIT_AS cap. It is
-cooperative: a child that calls setsid or resets its affinity escapes. The backend names it
-`Contain(weak=True)`, the lock's status shows `containment: weak`, and the owner allows heavy runs on it
-(question 4) once the research step in section 9 finds nothing stronger.
+Sources: systemd `user@.service.in`; systemd.io/CGROUP_DELEGATION; systemd.resource-control(5);
+docs.kernel.org/admin-guide/cgroup-v2.html; man7.org cgroup_namespaces(7), pid_namespaces(7) and
+PR_SET_CHILD_SUBREAPER(2const); the Docker `docker run` and seccomp documentation; Ubuntu
+Discourse on the AppArmor user-namespace restriction; Arch forum thread 262917 (AllowedCPUs).
 
 ### 2.4 Lock hardware detection on Linux
 
@@ -312,18 +380,19 @@ No double-booking: unchanged in rule. One store per user (`<profile>/.claude/mac
 layout adopted only while nothing is live or queued, under the queue lock. Two gaps are Linux's
 own. A container sees the host's CPUs in /sys while its cgroup allows fewer, so the allowed set
 comes from sched_getaffinity and the cgroup's cpuset.cpus.effective, never from /sys alone; the
-backend closes that one. Two kit users on one box each get a store and would book the same CPUs
-twice. Answered (question 10): one kit user per box, and machine setup refuses a second, so
-there is no shared store. The same double-booking is why WSL is refused until native parity
-(question 11).
+backend closes that one. Two kit users on one box would each get a store and book the same CPUs
+twice. The owner's answer (question 10): one kit user per box, and machine setup refuses a
+second, so there is no shared store. The refusal needs a machine-wide marker, which exists only
+where the root step of section 6 runs; a container cannot see a host's kit at all. The same
+double-booking is why WSL is refused until native parity (question 11).
 
 The proving test feeds four synthetic /sys and /proc trees, written by hand into the test data
 (fake_hardware, extended) from the kernel's documented layout: a plain desktop, a hybrid part
 (cpu_core and cpu_atom), a box with gaps in its CPU ids and a container whose cpuset allows
 fewer CPUs than /sys lists. It checks that no two slots share an id. No real machine was recorded
 for them, and none is needed for the division logic; the hybrid and gap trees are the ones a CI
-runner cannot give (a hosted runner is a plain VM, inferred). The CI leg adds the runner's own
-live /sys as a fifth, plain case.
+runner cannot give (a hosted runner is a plain VM, inferred). The CI phase adds its runner's own
+live /sys as a fifth case.
 
 ## 3. Guard path semantics and the safety review
 
@@ -354,7 +423,8 @@ On Linux a path is absolute when it starts with `/`; there are no drives, no MSY
 refuses more). ledger_glob compares both sides the same way.
 
 What keeps Linux safe meanwhile is the front door, not the guard. **Until slice 14, tools/kit.py
-refuses Linux** (`the kit runs on Windows only`, verified in tools/kit.py main), so there is no
+refuses Linux** (`the kit runs on Windows only`, verified in tools/kit.py main), and it keeps
+refusing WSL (its kernel release names Microsoft) until after native Linux parity, so there is no
 supported way to set up or launch the kit on a Linux box. The guard cannot be that stop: the
 Claude manifest's `pythonw` does not exist on Linux, and a hook command that cannot start is, for
 Claude Code, a non-blocking error (inferred from its hook contract), so the tool call goes ahead
@@ -372,27 +442,30 @@ refusing) comes after both.
 
 ## 4. CI and test marking
 
-- `.github/workflows/linux.yml`: runs on the owner's self-hosted Linux runner (answered: not
-  GitHub-hosted; any Linux build, a VM included), Python at the version the kit runs on (3.14 on
-  the owner's machine today), git configured with a throwaway identity. The box has real
-  hardware and GPUs, so the live /sys case below is that box's.
-- The first leg runs `python -m unittest discover -s tests -t .` in a ratchet mode, not
-  kit_tests.py or gate.py (both need job objects and the lock). The ratchet logic lives in
-  kitlib/ci/ratchet.py (run the suite, collect the failing and erroring test ids, compare them
-  with tests/linux-baseline.txt), with tests in tests/ci/; tools/ci_ratchet.py is the thin entry
-  point (arguments, printing, exit code), as AGENTS.md lays out. A new failure fails the leg, a
-  fixed one must be removed from the baseline in the same branch. Import failures count as
-  failures.
-- tests/platforms.py gives `windows_only(reason)` and `posix_only(reason)`, built like
+The owner's answer (question 8): CI for Linux and Windows comes in a later phase, together; the
+first goal is the plugin working on Linux. No CI leg precedes the first backend. What is built
+now is the ratchet and the markers, without a workflow; the self-hosted runner and the
+real-hardware and GPU answers (questions 2 and 3) apply when the phase comes.
+
+- Now: tests/platforms.py gives `windows_only(reason)` and `posix_only(reason)`, built like
   tests/realgit.py with a reasons table keyed by module.Class. The 142 platform skips in 68 files
   and the 13 `skipUnless(WINDOWS, ...)` in 6 files (section 1.5) move to it in one mechanical
   branch, so `kit_tests --list` can count Windows-only tests by reason and the count is reported
   per slice.
-- When the pool runs on Linux (slice 5), the leg switches to `tools/kit_tests.py`; once the lock
-  has a real Linux store root (slice 9), to `gate.py --full` with a CI lock profile.
-- Answered (question 8): this whole section is a later phase, for Linux and Windows alike; the
-  initial goal is the plugin working on Linux, so no CI leg precedes the first backend. The
-  Windows leg (windows-latest) follows once Linux is green.
+- Now: the ratchet runs `python -m unittest discover -s tests -t .`, not kit_tests.py or gate.py
+  (both need job objects and the lock). Its logic lives in kitlib/ci/ratchet.py (run the suite,
+  collect the failing and erroring test ids, compare them with tests/linux-baseline.txt), with
+  tests in tests/ci/; tools/ci_ratchet.py is the thin entry point (arguments, printing, exit
+  code), as AGENTS.md lays out. A new failure fails the run, a fixed one must be removed from the
+  baseline in the same branch. Import failures count as failures. Until the CI phase it is run by
+  hand (the safety net in section 8).
+- Later phase: `.github/workflows/` legs on the owner's self-hosted Linux runner (any Linux
+  build, a VM included; real hardware and GPUs) and a Windows leg, Python at the version the kit
+  runs on (3.14 on the owner's machine today), git configured with a throwaway identity. The
+  Linux leg starts as the ratchet, moves to `tools/kit_tests.py` when the pool runs on Linux
+  (slice 5) and to `gate.py --full` with a CI lock profile once the lock has a real Linux store
+  root (slice 9). Whether the repository is public on GitHub, and a hosted runner's delegation of
+  cgroups, are checked then.
 - CI adds only strictness: nothing in the landing path reads it until the owner says so.
 
 ## 5. Per-platform shell text
@@ -413,8 +486,9 @@ refusing) comes after both.
 
 ## 6. Install and machine setup on a fresh Linux box
 
-Target: a systemd distribution with user sessions, cgroup v2 and a kernel of 5.14 or later
-(Ubuntu 24.04 as the reference); git, python3 (the kit's version) and a terminal multiplexer.
+Target: any Linux distribution (question 5). Strong containment needs cgroup v2 and a kernel of
+5.14 or later; anything else installs with a lower tier of the ladder (section 2.3). Ubuntu
+24.04 is the reference. Needs git, python3 (the kit's version) and tmux (checked).
 
 `installer/machine-setup.sh` does what the .ps1 does: checks arguments and runs
 tools/machine_setup.py. machine_setup's steps on Linux:
@@ -427,16 +501,20 @@ tools/machine_setup.py. machine_setup's steps on Linux:
 6. settings: the guard hook entry (boot/hook.py --settings-entry), interpreter python3.
 7. fresh mode surveys: run in the contain backend.
 8. owner email: unchanged.
-9. extras: environment.d, `.desktop`, chmod; cgroup delegation check (`systemctl --user show
-   -p Delegate` on the user slice, and the controllers in cgroup.subtree_control); loginctl
-   enable-linger so timers run while logged out.
+9. extras: environment.d, `.desktop`, chmod; the delegation step: probe the ladder (section
+   2.3) and, with the owner's sudo, the root step that gives full containment: a drop-in
+   `user@.service.d` with `Delegate=cpuset cpu io memory pids` and a re-login, or, without
+   systemd, a root boot hook that hands `/sys/fs/cgroup/pm-kit` to the kit user; loginctl
+   enable-linger so timers run while logged out; the machine-wide marker that makes a second kit
+   user refused (question 10); WSL refused (question 11).
 10. timers: worktree sweep, agent-temp sweep, automatic tasks, hub at login, coordinators after
-    reboot, as systemd user units named `pm-kit-*.timer`.
+    reboot, as systemd user units named `pm-kit-*.timer`, or cron entries (`@reboot` where there
+    is no linger) where there is no user systemd.
 11. kit command: `~/.local/bin/kit`.
 
 Each step reports what it could not do (no linger, no delegation, no sudo) as a named problem,
-and heavy runs go ahead on weak containment, shown as weak, where the research step in
-section 9 finds nothing stronger (question 4). Plugin refresh: pluginsource's detached refresh uses the detach backend.
+and heavy runs go ahead on the tier the box allows, shown as weak or partial where it is
+(question 4). Plugin refresh: pluginsource's detached refresh uses the detach backend.
 
 ## 7. macOS
 
@@ -444,9 +522,9 @@ Out of scope for this plan. On darwin the seam picks no backend: kitlib.platform
 'unsupported', there is no darwin folder, and every primitive raises PlatformUnsupported, so
 kitlib imports there (as on Linux after slice 2) and any OS call refuses by name; tools/kit.py
 keeps refusing darwin after slice 14. A darwin backend would be a new folder beside linux/, built
-by its own plan; nothing here builds or tests it: macOS has no cgroups (the lock could only limit concurrency, the old
-question 2), no /proc, launchd instead of systemd, and case-insensitive paths by default. The
-owner confirmed this scope (question 1).
+by its own plan, later; nothing here builds or tests it: macOS has no cgroups (the lock could
+only limit concurrency), no /proc, launchd instead of systemd, and case-insensitive paths by
+default.
 
 ## 8. Slices
 
@@ -459,17 +537,24 @@ slices 3 to 7 build and prove the lock on Linux against a test store, `Store(roo
 folder>)`, the way the Windows lock tests already do. Store.__init__ calls real_root() even when
 given a root (verified, to set `testing`), so slice 3 makes the Linux stub's "not on this
 platform" error count as "testing" when a root is given and refuse when none is. Nothing on
-Linux uses the machine's store, and the CI leg does not run gate.py, until slice 9.
+Linux uses the machine's store until slice 9.
 
-Answered (question 8): CI is a later phase, so slice 1 waits for it and slices 2 to 16 prove
-their Linux cases locally on the owner's Linux box or VM; the CI mentions in their proofs
-apply when that phase comes. The earlier order, a CI leg before the first backend, is void.
+CI is a later phase (question 8), so no proof below runs "in CI": each Linux proof is a manual
+run on a Linux machine (the safety net below).
 
-1. **CI leg and test markers (later phase, question 8).** `.github/workflows/linux.yml`, kitlib/ci/ratchet.py with its thin
-   entry point tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, the
-   mechanical move of the 155 platform skips (section 4). Risk High (CI config). Proof: the leg
-   runs green on the baseline; a planted failure fails it; `kit_tests --list` shows the same skip
-   count on Windows before and after.
+Safety net while CI waits (Proposed, for review): (1) `gate.py --full` on Windows for each
+slice; (2) before each backend slice lands, a manual Linux run of `tools/ci_ratchet.py` at the
+branch tip on a reference VM (Ubuntu 24.04, systemd, the delegation drop-in) and on one
+weak-mode box or container, inside the machine lock (a VM on the owner's machine is outside
+the lock's view), with the log attached to the branch report. Default: a Hyper-V VM on the
+owner's machine; slices 1 to 4 need only the ratchet there.
+
+1. **Test markers and the ratchet.** kitlib/ci/ratchet.py with its thin entry point
+   tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, the mechanical
+   move of the 155 platform skips (section 4); no workflow and no .github. Risk High (the skip
+   move touches many tests). Proof: the ratchet, run by hand on a Linux machine, is green on
+   the baseline and a planted failure fails it; `kit_tests --list` shows the same skip count
+   on Windows before and after.
 2. **Import-clean kitlib and the seam skeleton.** kitlib/platform/ (api, windows re-exports,
    linux stubs that raise, PlatformUnsupported for any other platform), lazy DLL binding in
    proc/win32.py, proc/pipe.py and gate/outfile.py, a lazy or guarded `wintypes` import in
@@ -503,19 +588,20 @@ apply when that phase comes. The earlier order, a CI leg before the first backen
    process, are judged dead by process.alive and wrapper_state and refused by nest_check; the
    end-of-run pass ages a process started before its stamp and spares one started after; on
    Windows the ctime, the token and the record are byte for byte the base's.
-5. **Containment and the pool.** linux/contain.py (cgroup v2 and the weak fallback), cpu
-   affinity, tooldeps/pool.py and pytests/runner.py on the seam; the CI leg moves to
-   kit_tests.py. Risk High. Proof: a child that calls setsid stays in the cgroup and dies with
-   it; memory.peak is read; kill_on_close kills the tree when the owner dies; the weak mode is
-   reported as weak.
+5. **Containment and the pool.** linux/contain.py (the S1, S2, W1 and W2 tiers of section 2.3,
+   the run-time probes, the subreaper watchdog and the `leftovers` cgroup sparing), cpu
+   affinity, tooldeps/pool.py and pytests/runner.py on the seam. Risk High. Proof, on the VM
+   and on a weak-mode box: a child that calls setsid stays in the cgroup and dies with it (S1);
+   memory.peak is read; kill_on_close kills the tree when the owner dies; each lower tier is
+   reported with what it lacks; the probes never trust an exit code.
 6. **Lock hardware.** linux/hardware.py feeding lock/layout.detect; fake_hardware gains the four
    synthetic /sys and /proc trees of section 2.4. Risk High (lock logic). Proof: the four
-   synthetic trees, and the CI runner's live /sys, divide with no shared id; the Windows layout
+   synthetic trees, and the VM's live /sys, divide with no shared id; the Windows layout
    tests are unchanged.
 7. **Lock runs and detach.** lock/run.py Slot, give-back, release, detach and gate/submit on the
    seam, on a test store root. Risk High. Proof: a detached run survives its caller; give-back
-   narrows cpuset.cpus. On a Linux box with Claude Code (the Linux box or VM of owner question
-   3 (c), or any Linux machine the owner lends for the probe), a probe of
+   narrows cpuset.cpus. On a Linux box with Claude Code (the owner's Linux box or VM, question
+   3), a probe of
    whether ending a tool call kills its tree by pid; if it does, a shield is added here before
    the slice lands (sections 1.3 and 9).
 8. **Guard path semantics.** The placer, the ten findings in section 3 as tests first, then the
@@ -524,18 +610,22 @@ apply when that phase comes. The earlier order, a CI leg before the first backen
 9. **Paths and configuration.** linux/paths.py: pointer, profile, temp, environment; config/user.py
    and config/pointer.py on the seam; lock/store.py real_root on the Linux profile, so the
    machine's store exists on Linux; worktree/holders.py and classify.py from /proc (holders stops
-   failing open); the CI leg moves to gate.py --full with a CI lock profile. Risk Medium (High
+   failing open); Risk Medium (High
    for the store root). Proof: machine config resolves on Linux from the pointer file; holders
    finds a process whose cwd is in a worktree; Store() opens the real root; a landing runs end to
-   end in CI on a throwaway repository.
-10. **Scheduled jobs.** linux/schedule.py; autostart, hubsite autostart, worktree and temp
-    sweeps, automatic tasks, consoletasks read-back. Risk Medium. Proof: units render and
-    round-trip through read-back; with user systemd in CI, a timer fires once.
-11. **Sessions.** launcher window (tmux), stop, pmstart process listing, autotasks launch flags.
+   end on a throwaway repository on the VM.
+10. **Scheduled jobs.** linux/schedule.py with systemd user timers and cron (first-class);
+    autostart, hubsite autostart, worktree and temp sweeps, automatic tasks, consoletasks
+    read-back. Risk Medium. Proof: units and cron entries render and round-trip through
+    read-back; on the VM with user systemd a timer fires once, and on a box without it a cron
+    entry does.
+11. **Sessions.** launcher window (tmux by default, a configured terminal command if set), stop,
+    pmstart process listing, autotasks launch flags.
     Risk Medium. Proof: a launched session is found by name and stopped; no breakaway flag off
     Windows.
 12. **Hook interpreter.** per-platform interpreters (hookmain INTERPRETERS), the manifest form
-    the per-platform rendered manifests of question 9. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
+    the per-platform rendered manifests of question 9 (open seam: how the plugin ships the
+    right manifest per platform). Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
     runs the hook on both; a missing interpreter blocks rather than passes; the rendered Windows
     hooks.json of each host is byte-identical to the base's.
 13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
@@ -543,15 +633,22 @@ apply when that phase comes. The earlier order, a CI leg before the first backen
     form. Windows stays byte-identical: every rendered Windows file differs from the base's only
     in the named lines; a step with one `{run:}` form renders byte-identical to the base's; Codex's
     rendered Windows output, and its dialect default on Windows ('powershell'), are unchanged.
-14. **Machine setup on Linux.** installer/machine-setup.sh, machinesetup steps on the seam,
+14. **Machine setup on Linux.** installer/machine-setup.sh, machinesetup steps on the seam
+    (the delegation step, root drop-in or boot hook; cron `@reboot`; the tmux check; the
+    second-user and WSL refusals),
     tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL until native parity,
-    question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu container ends
-    with no problems and the lock status shows strong containment.
+    question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu VM ends
+    with no problems and the lock status shows strong containment (a container is expected to
+    show weak; open point 1 in section 9).
 15. **Peer messaging and the bridge.** peer.py on Claude Code's Linux socket (after a probe), the
     bridge's leader lock and transport on Unix sockets, procwatch. Risk High (networking). After
     Windows parity, not in the first build (question 7).
 16. **Docs.** owner setup docs, ARCHITECTURE.md's platform line, AGENTS.md's "Windows only",
     the multi-host plan's section 6 marked superseded. Risk Low. Proof: docs gate.
+17. **CI legs (later phase, question 8).** `.github/workflows/` for the self-hosted Linux runner
+    and Windows, the ratchet and then the pool and gate as in section 4, the Windows leg after
+    Linux is green. Risk High (CI config). Proof: the Linux leg is green on the baseline and a
+    planted failure fails it.
 
 Slices 9 to 11 and 13 can run in parallel after slice 7 (slice 9 touches lock/store.py, so it
 does not overlap another lock slice); the others are in order.
@@ -566,24 +663,38 @@ does not overlap another lock slice); the others are in order.
 - Unknown: whether Claude Code on Linux kills a tool call's process tree by pid when it ends the
   call, as it does on Windows (the reason for the pid shield). Sections 1.3 and 2.2 infer it does
   not; slice 7 probes it on a Linux box before it lands.
-- Unknown: how the owner's self-hosted runner delegates cgroups to the runner user; slice 5 may
-  need `sudo systemd-run` in CI only, which tests the backend but not the delegation step.
-- Open work, research (question 4): before the plan settles on the weak fallback, confirm that
-  no stronger option exists without cgroup v2 delegation. Candidates: a systemd-run --user
-  scope; a rootless or user-namespace cgroup; the container's own cgroup, where writable; a
-  pidfd or subreaper watchdog that kills strays when the slot ends. A plan revision with this
-  research follows; slice 5 waits for it.
-- Risk: the weak containment fallback looks like it works. Mitigation: named, shown in status,
-  allowed for heavy runs by the owner's answer (question 4).
+- Unknown (CI phase): how the owner's self-hosted runner delegates cgroups to the runner user.
+- Unknown: the containment research of section 2.3 is read from documentation; slice 5 probes
+  each tier on a real box (whether `AllowedCPUs` has an effect without cpuset delegation, whether
+  a PID namespace starts, whether a container's cgroup is writable).
+- Risk: the weak containment tiers look like they work. Mitigation: shown and recorded, not
+  refused: the tier and what it lacks are named in the lock's status, the heavy-run start line
+  and the run record (question 4).
 - Risk: guard semantics drift between Windows and Linux. Mitigation: one placer with a platform
   argument, and the guard tests run both placers on every platform (they are pure).
 - Risk: the seam move changes Windows behaviour by accident. Mitigation: re-exports first, the
-  full Windows suite on every slice, and the Windows CI leg once it exists.
+  full Windows suite on every slice, and the Windows CI leg once the CI phase brings it.
 - Risk: multi-user and container boxes break the one-store rule. Mitigation: section 2.4.
-- Risk: the scope is large (16 branches, most High). It is paced by the coordinator's caps;
+
+Open for review (not resolved here):
+
+1. Slice 14's proof says a fresh Ubuntu VM shows strong containment, while Docker is weak: prove
+   strong on the VM and expect weak in a container.
+2. Full cgroup v2 on native Linux needs root once, but section 6 lets the owner decline sudo:
+   without root a native box is S2 (or W2 off systemd).
+3. WSL is refused for double-booking CPUs, yet Docker is accepted: a container on a box that
+   also runs the kit double-books the same way, and one kit user per box cannot see across the
+   container wall.
+4. Breadth against the systemd-only parts: linger, systemd-run detach and the "at logon" hub
+   start, which has no cron form (a proposal: XDG autostart or a shell profile).
+5. The containment answer reverses this plan's earlier recommendation (refuse heavy runs
+   without delegation); sections 2.3, 6 and 9 are rewritten to it, not left beside it.
+- Risk: the scope is large (17 branches, most High). It is paced by the coordinator's caps;
   nothing here asks for parallel heavy runs.
 
 ## 10. Questions for the owner
+
+All eleven are answered (owner, 2026-10-26); the answers are folded into the sections above.
 
 1. **macOS.** ANSWERED (owner, 2026-10-26): out of this plan; macOS gets its own plan later.
    The seam names darwin unsupported and refuses it by name (section 7).
@@ -597,9 +708,10 @@ does not overlap another lock slice); the others are in order.
    to cost.
 4. **No cgroup v2 delegation.** ANSWERED (owner, 2026-10-26): heavy runs must work on Linux,
    with full cgroup v2 containment on native Linux as planned. Before the plan settles on the
-   weak fallback, research must confirm no stronger option exists without delegation
-   (candidates in section 9). Where nothing stronger exists (Docker included), heavy runs go
-   ahead with weak containment, shown as `containment: weak`; the owner accepts that risk.
+   weak fallback, research must confirm no stronger option exists without delegation.
+   Where nothing stronger exists (Docker included), heavy runs go
+   ahead with weak containment, shown as `containment: weak`; the owner accepts that risk. The
+   research is in section 2.3.
 5. **Supported Linux.** ANSWERED (owner, 2026-10-26): any Linux distribution, with cron
    fallbacks where systemd is absent; breadth over systemd-only, in line with full Linux support
    out of the box.
@@ -626,19 +738,20 @@ carries its own scope.
 
 | Slug | Summary | Scope |
 |---|---|---|
-| linux-ci-leg | Later phase: Linux CI leg, ratchet baseline, platform test markers | .github/workflows/linux.yml, kitlib/ci/, tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, tests/ (skip moves) |
+| linux-ci-ratchet | Ratchet, baseline and platform test markers (no workflow) | kitlib/ci/, tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, tests/ (skip moves) |
+| linux-ci-legs | Later phase: Linux and Windows CI legs on the self-hosted runner | .github/workflows/ |
 | linux-import-seam | Import-clean kitlib, kitlib/platform skeleton, no-os-checks test, hook block while unready, per-platform process names | kitlib/platform/, kitlib/proc/win32.py, kitlib/proc/pipe.py, kitlib/gate/outfile.py, kitlib/lock/layout.py, kitlib/lock/store.py, kitlib/proc/cpu.py, kitlib/proc/process.py, kitlib/proc/shield.py, kitlib/proc/winwatch.py, kitlib/host/hookmain.py, kitlib/host/registry.py, hosts.json, tests/platform/, tests/host/, tests/gate/ |
 | linux-locks | flock named locks, run liveness, treelock and writelock, on a test store root | kitlib/platform/linux/locks.py, kitlib/lock/store.py, kitlib/fs/treelock.py, kitlib/fs/writelock.py, tests/lock/, tests/fs/ |
 | linux-process-identity | /proc identity, ancestry, kill; the boot folded into the Linux ctime | kitlib/platform/linux/process.py, kitlib/proc/process.py, kitlib/lock/run.py, tests/proc/, tests/lock/ |
-| linux-containment | cgroup v2 Job contract, weak fallback, pool and unit runner on Linux | kitlib/platform/linux/contain.py, kitlib/platform/linux/cpu.py, kitlib/proc/job.py, kitlib/tooldeps/pool.py, kitlib/pytests/runner.py, tests/proc/, tests/tooldeps/ |
+| linux-containment | Containment ladder (S1, S2, W1, W2), run-time probes, the root delegation step's probe, pool and unit runner on Linux | kitlib/platform/linux/contain.py, kitlib/platform/linux/cpu.py, kitlib/proc/job.py, kitlib/tooldeps/pool.py, kitlib/pytests/runner.py, tests/proc/, tests/tooldeps/ |
 | linux-lock-hardware | /sys and /proc hardware detection, synthetic /sys trees | kitlib/platform/linux/hardware.py, kitlib/lock/layout.py, tests/lock/ |
 | linux-lock-runs | slots, give-back, detach and gate submit on Linux, on a test store root | kitlib/lock/run.py, kitlib/lock/detach.py, kitlib/gate/submit.py, kitlib/platform/linux/detach.py, tests/lock/, tests/gate/ |
 | linux-guard-paths | Guard placer for POSIX paths and the safety findings | kitlib/guard/, tests/guard/ |
-| linux-config-paths | Pointer, profile, temp, environment, the lock store's real root; worktree holders from /proc; CI leg on gate.py | kitlib/platform/linux/paths.py, kitlib/config/, kitlib/lock/store.py, kitlib/worktree/holders.py, kitlib/worktree/classify.py, .github/workflows/linux.yml, tests/config/, tests/lock/, tests/worktree/ |
-| linux-scheduled-jobs | systemd user timers for every scheduled task, read-back | kitlib/platform/linux/schedule.py, kitlib/launcher/autostart.py, kitlib/hubsite/autostart.py, kitlib/worktree/task.py, kitlib/machinesetup/, kitlib/pmstart/consoletasks.py, tests/ |
+| linux-config-paths | Pointer, profile, temp, environment, the lock store's real root; worktree holders from /proc | kitlib/platform/linux/paths.py, kitlib/config/, kitlib/lock/store.py, kitlib/worktree/holders.py, kitlib/worktree/classify.py, tests/config/, tests/lock/, tests/worktree/ |
+| linux-scheduled-jobs | systemd user timers and cron for every scheduled task, read-back | kitlib/platform/linux/schedule.py, kitlib/launcher/autostart.py, kitlib/hubsite/autostart.py, kitlib/worktree/task.py, kitlib/machinesetup/, kitlib/pmstart/consoletasks.py, tests/ |
 | linux-sessions | tmux sessions, stop, process listing, launch flags | kitlib/launcher/, kitlib/pmstart/, kitlib/autotasks/, tests/launcher/, tests/pmstart/ |
 | linux-hook-manifests | Per-platform hook interpreter and manifests | hosts.json, kitlib/host/hookmain.py, kitlib/host/content.py, hosts/*/shell/, tests/host/ |
 | linux-shell-text | Per-platform skill text, hub to-do step forms, Codex dialect | content/, kitlib/hubsite/todosteps.py, hosts/codex/adapter/, tests/hubsite/, tests/content/ |
-| linux-machine-setup | Fresh-box machine setup and installer, kit.py stops refusing Linux | installer/machine-setup.sh, kitlib/machinesetup/, tools/machine_setup.py, tools/kit.py, tests/machinesetup/ |
+| linux-machine-setup | Fresh-box machine setup and installer, the root delegation step, second-user and WSL refusals, kit.py stops refusing Linux | installer/machine-setup.sh, kitlib/machinesetup/, tools/machine_setup.py, tools/kit.py, tests/machinesetup/ |
 | linux-peer-bridge | Peer messaging and the bridge on Unix sockets, procwatch | hosts/claude/adapter/peer.py, hosts/claude/adapter/peer_worker.py, optional/bridge/, kitlib/machinesetup/procwatch.py, tests/ |
 | linux-docs | Owner setup docs and the platform lines in the contract docs | docs/, ARCHITECTURE.md, AGENTS.md |
