@@ -10,7 +10,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from kitlib import stubs
+from kitlib import kitroot
 from tests import gitfixture
 
 SKILL = os.path.join('.claude', 'skills', 'godot-render-check', 'SKILL.md')
@@ -27,9 +27,9 @@ class NewRepoSkill(unittest.TestCase):
         self.root = os.path.realpath(self.fx.root)
         self.kit = os.path.join(os.path.realpath(self.fx.base), 'kit copy')
         for name in ('installer', 'tools', 'kitlib', 'templates'):
-            shutil.copytree(os.path.join(stubs.KIT_ROOT, name), os.path.join(self.kit, name),
+            shutil.copytree(os.path.join(kitroot.root(), name), os.path.join(self.kit, name),
                             ignore=shutil.ignore_patterns('__pycache__'))
-        shutil.copy2(os.path.join(stubs.KIT_ROOT, 'hosts.json'), self.kit)    # the host registry kitlib reads
+        shutil.copy2(os.path.join(kitroot.root(), 'hosts.json'), self.kit)    # the host registry kitlib reads
 
     def ps(self, *args):
         argv = ['powershell', '-NoProfile', '-NonInteractive', '-File',

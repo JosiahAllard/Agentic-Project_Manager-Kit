@@ -40,7 +40,7 @@
     ["tests/optional/**", ["knowledge"]],
     ["tests/**", ["tooldeps"]],
     ["reserve_ui.pyw", ["lockui"]],
-    ["tools/*.py", ["skills", "stubs"]],
+    ["tools/*.py", ["skills", "kitcmd"]],
     ["kitlib/hubsite/**", ["hubsite"]],
     ["kitlib/hubsite/web/**", ["hubsite"]],
     ["tests/hubsite/**", ["hubsite"]],

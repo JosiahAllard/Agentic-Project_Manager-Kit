@@ -2,7 +2,7 @@
 
 `tools/branch_overlap.py` lists, for each unmerged branch, the files it changed that are in a set. A reviewer uses it to check a sweep's exclusions against the work in flight without shell loops or scratch files. It is read-only: it never fetches, writes a file or moves a ref. Logic: `kitlib/git/overlap.py`; tests: `tests/git/test_overlap.py`.
 
-It runs from the kit, not through a repository stub: it is in `KIT_ONLY` in `kitlib/stubs/__init__.py`. Name the repository with `-C`:
+Name the repository with `-C`:
 
 ```
 python <kit>/tools/branch_overlap.py -C <checkout> (--files PATH ... | --files-from FILE | --branch BRANCH) [--base REV]

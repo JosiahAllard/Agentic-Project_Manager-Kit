@@ -6,8 +6,7 @@ environment variable PM_KIT_ROLE is "coordinator". After the standing lines come
 filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
 machine state, other coordinators, the ledger line, the hub key: the session's sessions.json
 key, which it posts hub questions --from and reads pending --for once at start (answers come by
-push), or "unknown" when no entry is found,
-and stubs: a line only when a repo that uses stubs has them not current), run as in kitlib.pmstart: each is a pure function over fakeable inputs
+push), or "unknown" when no entry is found), run as in kitlib.pmstart: each is a pure function over fakeable inputs
 (process list, file reads, a subprocess runner, now, the machine config), and a failed one is one
 "could not check X: reason" line. No check reads the rulings ledger: with the split ledger
 (`ledger_dir`, docs/ledger.md "Files") the ledger line names the repo's file from the machine
@@ -23,7 +22,7 @@ import os
 import re
 import sys
 
-from kitlib import kitroot, pmstart, sessionmark, stubs
+from kitlib import kitroot, pmstart, sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 from kitlib.pmstart import configcheck
@@ -266,19 +265,6 @@ def ledger_name(repo):
     return str(repo or "").lower().replace("_", "-")
 
 
-def stubs_line(entry, root=None, check=stubs.problem_line):
-    """[the stubs line] for the coordinator's repo (repos_root/<repo>), [] when its stubs are current
-    or it uses none (stubs are opt-in: kitlib.stubs.problem_line).
-    KeyError without repos_root; a missing folder is a could-not-check line, not an error."""
-    if not root:
-        raise KeyError("repos_root not configured")
-    repo = os.path.join(root, str(entry.get("repo")))
-    if not os.path.isdir(repo):
-        return ["could not check stubs: no repository folder %s" % repo]
-    line = check(repo)
-    return [line] if line else []
-
-
 def others(entry, procs, env, pid):
     """Other live sessions whose Remote Control name starts with this coordinator's stem."""
     stem = _need(entry, "stem")
@@ -301,9 +287,9 @@ def others(entry, procs, env, pid):
 
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
-            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None,
+            pid=None, pm_cfg=None, live=True, machine_cfg=None,
             config_lines=None):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines)."""
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check). `config_lines`: the machine config check, first of the live checks (default kitlib.pmstart.configcheck.lines)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -369,7 +355,6 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),
             ("ledger", ledger),
             ("hub key", own_key),
-            ("stubs", lambda: stubs_line(entry_once(), cfg.get("repos_root"), stubs_check)),
         ]
         for name, fn in checks:
             try:

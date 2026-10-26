@@ -2,8 +2,8 @@
 
 kitlib never imports a host: kitlib.host.registry hands out the adapter's module name from
 hosts.json, and this helper is the one place a shared tool turns that name into the module.
-Not a command (no __main__ block, so kit_stubs gives it no stub). A tool run as a script has its
-own folder on sys.path, so `import _host` finds this file.
+Not a command (no __main__ block; `kit` runs no tool whose name starts with _). A tool run as a
+script has its own folder on sys.path, so `import _host` finds this file.
 
   adapter_module(name, environ, path)   the imported adapter module of `name`, else of PM_KIT_HOST
 """

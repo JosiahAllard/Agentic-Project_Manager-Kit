@@ -1,5 +1,5 @@
 """The `kit` command: `kit <tool> [arguments]` runs `<export>/tools/<tool>.py [arguments]` of the
-plugin export the machine uses now, in place of stubs (tools/kit.py is the entry point).
+plugin export the machine uses now (tools/kit.py is the entry point).
 
   resolve(here, settings)    (export folder, None) or (None, why): the folder the machine
                              config's plugin.export_dir holds and its marketplace names
@@ -29,9 +29,8 @@ Exit codes: the tool's own (all 32 bits, kitlib.proc.spawn.exit_code); REFUSED 2
 usage error or refusal; INTERRUPTED 130 after Ctrl+C. The tool shares the console, so it gets the
 same Ctrl+C: the first one waits for the tool to end (its own cleanup runs), a second ends it.
 
-SHARED and KIT_ONLY are the partition of the kit's tools that kitlib.stubs (retiring) reads: SHARED
-act on a repository checkout, KIT_ONLY on the machine, the owner's files or the kit itself. `kit`
-runs either kind.
+SHARED and KIT_ONLY partition the kit's tools: SHARED act on a repository checkout, KIT_ONLY on
+the machine, the owner's files or the kit itself. `kit` runs either kind.
 """
 import os
 import re
@@ -46,8 +45,8 @@ REFUSED = 2
 INTERRUPTED = 130
 SELF = 'kit'                         # this command's own tool name, never run through itself
 
-# The kit tools a repository could run through stubs (the PM kit's SHARED commands; kitlib.stubs
-# re-exports this until it is removed). A name the kit has no command for yet is left out.
+# The kit tools that act on a repository checkout named by -C or the current directory. A name
+# the kit has no command for yet is left out.
 SHARED = (
     'backlog', 'checkout_guard', 'codemap', 'commit', 'daily_full', 'doc_budget',
     'doc_index', 'forbidden', 'gate', 'land', 'landed', 'ledger', 'machine_paths', 'new_worktree',
@@ -57,7 +56,7 @@ SHARED = (
 )
 # The kit tools that act on the machine, the owner's files or the kit itself, not on a repository
 # checkout named by -C or the current directory. Every `tools/*.py` command but kit_stubs is in
-# exactly one of SHARED and KIT_ONLY (tests/stubs: a new tool fails until it is classified).
+# exactly one of SHARED and KIT_ONLY (tests/kitcmd: a new tool fails until it is classified).
 KIT_ONLY = (
     'agent_roster', 'agent_temp_init', 'agent_view', 'auto_tasks', 'allow_rules', 'backlog_audit',
     'maint_lint', 'branch_overlap', 'config_move', 'delegated', 'hub', 'kit',

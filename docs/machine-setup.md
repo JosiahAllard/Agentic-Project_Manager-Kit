@@ -15,7 +15,7 @@ Five modes:
 
 - **The default** ("Default mode" below): the guard's entry in each Claude account's `settings.json`, the kit plugin on each host machine setup installs, the owner's email in the machine config ("Owner email") and the agents' temp folder ("Extras"). `--fresh` (`-Fresh`) is its old name and is still accepted.
 - **`--old-kit DIR`** (`-OldKit`): switches a machine's Claude config folders from an older kit clone to this kit checkout: each account's `settings.json` (with every link the clone's setup left reported, "Links"), the owner's email and the machine extras (the schedule shortcut, the agents' temp folder with its sweep, and `KIT_MACHINE_LOCK`). It is the switch-over command for the joint review (docs/go-live.md "Switches").
-- **`--repo PATH`**: the committed repo setup, for a repository that wants its kit settings committed: `.kit.json`, the ignore lines, a starter `docs/INDEX.md`, and with `--stack` and `--stubs` their files ("Committed repo setup (--repo)" below; docs/install.md "Committed setup (--repo)"). `installer/new-repo.ps1` is its PowerShell front end.
+- **`--repo PATH`**: the committed repo setup, for a repository that wants its kit settings committed: `.kit.json`, the ignore lines, a starter `docs/INDEX.md`, and with `--stack` its files ("Committed repo setup (--repo)" below; docs/install.md "Committed setup (--repo)"). `installer/new-repo.ps1` is its PowerShell front end.
 - **`--managed-settings`** (`-ManagedSettings`): writes Claude Code's machine-wide managed settings file from the kit's template, and nothing else ("Managed settings" below). `--apply` needs an elevated terminal.
 - **`--pm-repo PATH`**: sets the PM-repo pointer in the registry to the PM repository's work tree PATH, and nothing else ("PM repo pointer" below). `--apply` needs an elevated terminal. The PowerShell wrapper's switch is `-PmRepo PATH` (`installer/machine-setup.ps1`): a mode of its own that takes only `-Python` and `-Apply` (docs/install.md step 1).
 
@@ -201,7 +201,7 @@ The write keeps the machine config's other keys and its layout (`kitlib/machines
 
 ## Committed repo setup (--repo)
 
-`kitlib/machinesetup/repo.py`; `tools/machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--main-branch NAME] [--repo-name NAME] [--stack NAME] [--stubs] [--pm-data DIR [--private-remote URL]] [--apply]`. What `installer/new-repo.ps1` did before this step, now in Python and tested on any platform; the script is its PowerShell front end and passes its parameters through (`-Target` is `--repo`). It writes into the repository and nothing on the machine; no machine option goes with it. What it writes, refuses and prints is docs/install.md "Committed setup (--repo)".
+`kitlib/machinesetup/repo.py`; `tools/machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--main-branch NAME] [--repo-name NAME] [--stack NAME] [--pm-data DIR [--private-remote URL]] [--apply]`. What `installer/new-repo.ps1` did before this step, now in Python and tested on any platform; the script is its PowerShell front end and passes its parameters through (`-Target` is `--repo`). It writes into the repository and nothing on the machine; no machine option goes with it. What it writes, refuses and prints is docs/install.md "Committed setup (--repo)".
 
 ## Not done here
 

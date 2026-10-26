@@ -20,8 +20,8 @@ It writes nothing into any repository: a repository works with the kit with noth
   machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--apply]
                                                        the committed repo setup instead: writes
                                                        .kit.json, the ignore lines, a starter
-                                                       docs/INDEX.md (and with --stubs, --stack
-                                                       their files) into the repository PATH
+                                                       docs/INDEX.md (and with --stack
+                                                       its files) into the repository PATH
                                                        (docs/install.md "Committed setup (--repo)")
   machine_setup.py --managed-settings [--home DIR] [--kit DIR] [--apply]
                                                        write Claude Code's machine-wide managed
@@ -63,7 +63,7 @@ It writes nothing into any repository: a repository works with the kit with noth
            --kit DIR (default: the checkout this file is in; in a plugin export, the main
                              checkout its marker records, refused when that is gone)
   repo options (--repo): --agent-email EMAIL (required) --main-branch NAME (default main)
-           --repo-name NAME --stack NAME --stubs --pm-data DIR [--private-remote URL]
+           --repo-name NAME --stack NAME --pm-data DIR [--private-remote URL]
   --fresh is the default mode's old name, still accepted. Every mode re-points settings hooks that
   run a retired kit hook script to boot/hook.py.
 
@@ -86,7 +86,7 @@ from kitlib.machinesetup import pointer as mpointer                 # noqa: E402
 from kitlib.machinesetup import repo as mrepo                       # noqa: E402
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'stubs', 'pm_data', 'private_remote')
+REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'pm_data', 'private_remote')
 MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'no_sweep_task',
                 'no_worktree_sweep', 'shortcut', 'procwatch', 'procwatch_kill',
                 'desktop', 'home')
@@ -128,7 +128,6 @@ def parser():
     p.add_argument('--main-branch', default=None, help='--repo: the main branch (default main)')
     p.add_argument('--repo-name', default=None, help="--repo: the repository's short name")
     p.add_argument('--stack', default=None, help='--repo: a stack template (templates/stacks/<name>)')
-    p.add_argument('--stubs', action='store_true', help='--repo: write the kit tool stubs')
     p.add_argument('--pm-data', default=None, help="--repo: make the kit's PM data branch here after")
     p.add_argument('--private-remote', default=None, help='--repo, with --pm-data: its private remote')
     p.add_argument('--apply', action='store_true')
@@ -175,7 +174,7 @@ def main(argv=None):
         ctx = mrepo.RepoContext(a.repo, a.owner_email, a.agent_email, a.kit,
                                 main_branch=a.main_branch or 'main', repo_name=a.repo_name or '',
                                 stack=a.stack or '', pm_data=a.pm_data or '',
-                                private_remote=a.private_remote or '', stubs=a.stubs)
+                                private_remote=a.private_remote or '')
         code, _ = machinesetup.run_repo(ctx, apply=a.apply, out=out)
         return code
     given = [n for n in REPO_ONLY if getattr(a, n) not in (None, False)]

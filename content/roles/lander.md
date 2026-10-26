@@ -62,8 +62,7 @@ Missing any: say what you need, do nothing.
    report either, never widen scope at landing; scope is widened at fold-in, `python <kit>/tools/backlog.py -C <worktree> set <ID> --scope <path>`, and widening a pulled record into a
    live pull needs the PM's ruling, `<kit>/docs/backlog.md` "Owner gates"). Then submit the landing from the
    main checkout, as one bare call:
-   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`
-   (the repo's stub; `<kit>/tools/land.py` where the repo has none).
+   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`.
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
    pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints a `REVIEW` line for
