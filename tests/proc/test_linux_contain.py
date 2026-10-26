@@ -2,15 +2,18 @@
 slice 5): kitlib.proc.job.Job on a cgroup scope (S1, S2) or on the weak tier (W2).
 
 On every platform: which cgroups a job may kill (only one it made, checked before any write), the
-tier's report line, the scope prefix, a nested owner's tier, and the W1 trial read from what it
-prints, never its exit code.
+tier's report line, the scope prefix, a nested owner's tier, the W1 trial read from what it
+prints, never its exit code, systemd-run's --expand-environment asked of its --help, and the weak
+tier's walk and kill on a faked /proc where a pid is reused between reads (never signalled).
 
 On Linux, on real processes: a setsid grandchild ends with its job; memory.peak is read; the pin
 is the cgroup's; an owner killed by SIGKILL takes its job's tree and its watchdog with it; a job
 that ended cleanly leaves no watchdog; a released job's daemon runs on and leftovers() takes it out
 of the job; a job made inside a job is nested in it; a systemd-run that runs the command outside
-any scope is caught; the forced weak tier kills a setsid tree. Every scope a test makes is named
-`pmkit-containment-...-<this pid>-...` and is checked gone after each test."""
+any scope is caught; an owner SIGKILLed before go, a start aborted before go and a forged ready
+line each run no command and leave no stub, watchdog or unit; the forced weak tier kills a setsid
+tree. Every scope a test makes is named `pmkit-containment-...-<this pid>-...` and is checked
+gone after each test."""
 import ast
 import importlib
 import os
@@ -22,6 +25,7 @@ import tempfile
 import textwrap
 import threading
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -150,12 +154,145 @@ class Tiers(unittest.TestCase):
                 self.assertEqual(c.w1_status(), want)
 
 
-def unit_names():
-    """The pmkit-containment units this process made that systemd still lists, any state."""
+class Expand(unittest.TestCase):
+    def test_the_no_expand_switch_is_passed_only_when_systemd_run_names_it(self):
+        c = contain()
+        for out, want in ((b'  --expand-environment=BOOL  Control expansion\n',
+                           ['--expand-environment=no']),         # systemd 254 on
+                          (b'  --scope  Run this as scope rather than service\n', []),
+                          (b'', [])):
+            with self.subTest(out=out), mock.patch.dict(c._no_expand, clear=True), \
+                    mock.patch.object(c.subprocess, 'run', return_value=subprocess.
+                                      CompletedProcess([], 0, out, b'')) as run:
+                self.assertEqual(c.no_expand('/usr/bin/systemd-run'), want)
+                self.assertEqual(c.no_expand('/usr/bin/systemd-run'), want)
+                run.assert_called_once()                         # asked once for each path
+        with mock.patch.dict(c._no_expand, clear=True), \
+                mock.patch.object(c.subprocess, 'run', side_effect=OSError('no such file')):
+            self.assertEqual(c.no_expand('/x/systemd-run'), [])
+
+
+class FakeProc:
+    """pstat's, tree's and marked's /proc: {pid: (ppid, starttime, state)}. then[(pid, n)] runs
+    right after pid's nth stat read (that read sees the old process): a pid that ends and is
+    reused between two reads."""
+    BOOT = 0x5eed
+
+    def __init__(self, procs):
+        self.procs, self.reads, self.then = dict(procs), {}, {}
+
+    def ct(self, start):
+        return contain().lproc._ctime(start, self.BOOT)
+
+    def stat(self, pid):
+        if pid not in self.procs:
+            raise FileNotFoundError(pid)
+        ppid, start, state = self.procs[pid]
+        data = ('%d (x y) %s %d %s %d %s' % (pid, state, ppid, ' '.join(['0'] * 17), start,
+                                             ' '.join(['0'] * 5))).encode()
+        n = self.reads[pid] = self.reads.get(pid, 0) + 1
+        hook = self.then.pop((pid, n), None)
+        if hook is not None:
+            hook()
+        return data
+
+    def patch(self, test, c):
+        nowhere = os.path.join(tempfile.gettempdir(), 'kit-no-proc-%d' % os.getpid())
+        for p in (mock.patch.object(c, '_stat_bytes', side_effect=self.stat),
+                  mock.patch.object(c, '_pids', side_effect=lambda: sorted(self.procs)),
+                  mock.patch.object(c, '_boot', return_value=self.BOOT),
+                  mock.patch.object(c, 'PROC', nowhere)):        # no environ: nothing marked
+            p.start()
+            test.addCleanup(p.stop)
+
+
+class Walk(unittest.TestCase):
+    """The weak tier's tree walk and kill on a faked /proc, where a pid is reused between reads."""
+    R, C, G = 100, 200, 300
+
+    def setUp(self):
+        self.c = contain()
+        self.f = FakeProc({self.R: (1, 50, 'S'), self.C: (self.R, 60, 'S'),
+                           self.G: (self.C, 70, 'S')})
+        self.f.patch(self, self.c)
+
+    def reuse(self, pid, ppid, start):
+        def go():
+            self.f.procs[pid] = (ppid, start, 'S')
+        return go
+
+    def test_the_tree_is_the_command_s_descendants_with_their_ctimes(self):
+        f = self.f
+        self.assertEqual(self.c.tree(self.R, f.ct(50), f.BOOT),
+                         {self.C: f.ct(60), self.G: f.ct(70)})
+        self.assertEqual(self.c.tree(self.R, f.ct(51), f.BOOT), {})   # not the command
+        self.assertEqual(self.c.pstat(self.C, f.BOOT), (f.ct(60), self.R, False))
+        self.assertIsNone(self.c.pstat(999, f.BOOT))
+
+    def test_a_child_s_pid_reused_between_the_reads_never_joins_the_tree(self):
+        f = self.f
+        # the scan saw the command's child; it ended and its pid went to another process (another
+        # parent) before the child's own read: the parent and the ctime are that one read's
+        f.then[(self.C, 1)] = self.reuse(self.C, 1, 90)
+        self.assertEqual(self.c.tree(self.R, f.ct(50), f.BOOT), {})
+
+    def test_a_parent_s_pid_reused_during_the_walk_takes_no_children(self):
+        f = self.f
+        for n in (2, 3):            # after its read as the root's child, or between its 2 reads
+            with self.subTest(after_read=n):
+                f.procs[self.C] = (self.R, 60, 'S')
+                f.reads.clear()
+                f.then.clear()
+                f.then[(self.C, n)] = self.reuse(self.C, 1, 95)   # G now reads as its child
+                self.assertEqual(self.c.tree(self.R, f.ct(50), f.BOOT), {self.C: f.ct(60)})
+
+    def job(self):
+        return bare(self.c.WeakJob, token='wfake', _child=types.SimpleNamespace(pid=self.R),
+                    _ctime=self.f.ct(50), spared=set())
+
+    def kill(self, job, on_open=None):
+        """The pids _kill_pass signals (each pid's fake pidfd is pid + 10000)."""
+        sent = []
+
+        def pidfd_open(pid):
+            if on_open is not None:
+                on_open(pid)
+            return pid + 10000
+        sig = types.SimpleNamespace(SIGSTOP=19, SIGKILL=9,
+                                    pidfd_send_signal=lambda fd, s: sent.append((fd, s)))
+        with mock.patch.object(self.c.os, 'pidfd_open', side_effect=pidfd_open, create=True), \
+                mock.patch.object(self.c, 'signal', sig), mock.patch.object(self.c, '_close'):
+            job._kill_pass()
+        return sorted({fd - 10000 for fd, _ in sent})
+
+    def test_the_kill_pass_signals_the_tree(self):
+        self.assertEqual(self.kill(self.job()), [self.R, self.C, self.G])
+
+    def test_a_pid_reused_during_the_walk_is_not_signalled(self):
+        self.f.then[(self.C, 1)] = self.reuse(self.C, 1, 90)
+        self.assertEqual(self.kill(self.job()), [self.R])
+
+    def test_a_pid_reused_before_its_pidfd_is_opened_is_not_signalled(self):
+        def on_open(pid):
+            if pid == self.C:
+                self.reuse(self.C, 1, 90)()
+        self.assertEqual(self.kill(self.job(), on_open), [self.R, self.G])
+
+    def test_an_ended_or_reused_command_is_no_member(self):
+        f = self.f
+        f.procs[self.R] = (1, 50, 'Z')
+        self.assertNotIn(self.R, self.job().members())
+        f.procs[self.R] = (1, 77, 'S')
+        self.assertEqual(self.job().members(), {})
+
+
+def unit_names(pid=None):
+    """The pmkit-containment units process pid (default: this one) made that systemd still
+    lists, any state."""
     r = subprocess.run(['systemctl', '--user', 'list-units', '--all', '--plain', '--no-legend',
                         PREFIX + '-*'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                        timeout=30, check=False)
-    mine = '-%d-' % os.getpid()
+    mine = '-%d-' % (os.getpid() if pid is None else pid)
     return [line.split()[0] for line in r.stdout.decode().splitlines()
             if line.split() and mine in line.split()[0]]
 
@@ -273,6 +410,73 @@ class Case(unittest.TestCase):
         self.addCleanup(lambda: p.poll() is None and p.kill())
         self.addCleanup(p.stdout.close)
         return p
+
+    def marker(self):
+        """A path the command touches: it ran when the file is there."""
+        folder = tempfile.mkdtemp(prefix='kit-contain-')
+        self.addCleanup(shutil.rmtree, folder, True)
+        return os.path.join(folder, 'ran')
+
+    def owner_dies_before_go(self, make, wd):
+        """An owner SIGKILLed in before_resume, its job made and before go: the command never
+        runs, its stub and watchdog end, and no unit of the owner's is left."""
+        for kill_on_close in (True, False):
+            with self.subTest(kill_on_close=kill_on_close):
+                ran = self.marker()
+                p = self.owner('''
+                    import signal
+                    from kitlib.platform.linux import contain
+                    def die(stub):
+                        print(stub.pid, %s, flush=True)
+                        os.kill(os.getpid(), signal.SIGKILL)
+                    job = %s
+                    job.start(['sh', '-c', 'touch %s'], before_resume=die)
+                    time.sleep(300)
+                ''' % (wd, make % kill_on_close, ran))
+                stub, dog = (int(x) for x in lines(p, 1)[0])
+                self.strays.append(stub)
+                self.assertEqual(p.wait(20), -signal.SIGKILL)
+                for pid, what in ((stub, 'the stub'), (dog, 'the watchdog')):
+                    wait_until(lambda: gone(pid), '%s ended with its owner' % what)
+                wait_until(lambda: not unit_names(p.pid), 'no unit of the owner %d left (%s)'
+                           % (p.pid, unit_names(p.pid)))
+                time.sleep(0.2)
+                self.assertFalse(os.path.exists(ran))          # the command never ran
+
+    def start_fails_before_go(self, job, wd):
+        """before_resume raises: the start is aborted, its stub and watchdog end, the command
+        never runs. Returns what before_resume saw (stub, wd, cg)."""
+        ran, seen = self.marker(), {}
+
+        def fail(stub):
+            seen.update(stub=stub.pid, wd=wd(job), cg=getattr(job, 'cg', None))
+            self.strays.append(stub.pid)
+            raise RuntimeError('refused by the test')
+        with self.assertRaisesRegex(RuntimeError, 'refused by the test'):
+            job.start(['sh', '-c', 'touch ' + ran], before_resume=fail)
+        wait_until(lambda: gone(seen['stub']), 'the stub ended')
+        wait_until(lambda: gone(seen['wd']), 'the watchdog ended')
+        job.close()
+        time.sleep(0.2)
+        self.assertFalse(os.path.exists(ran))
+        return seen
+
+    def forged(self, name, line, forge, want):
+        """The stub's ready line forged (another pid, another cgroup): JobError, nothing runs."""
+        stub = getattr(self.c, name)
+        self.assertIn(line, stub)
+        ran = self.marker()
+        job = self.make()
+        with mock.patch.object(self.c, name, stub.replace(line, forge)):
+            with self.assertRaisesRegex(jobmod().JobError, want):
+                job.start(['sh', '-c', 'touch ' + ran])
+        dog = job.wd.pid if hasattr(job.wd, 'pid') else job.wd
+        if dog is not None:
+            wait_until(lambda: gone(dog), 'the watchdog ended')
+        job.close()
+        time.sleep(0.2)
+        self.assertFalse(os.path.exists(ran))
+        self.assertIsNone(job.p)
 
 
 @posix_only('cgroup scopes of the user systemd are Linux')
@@ -487,7 +691,8 @@ class Scope(Case):
         fake = os.path.join(folder, 'systemd-run')
         out = os.path.join(folder, 'ran')
         with open(fake, 'w') as f:
-            f.write('#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done; shift; exec "$@"\n')
+            f.write('#!/bin/sh\n[ "$1" = --help ] && exit 0\n'
+                    'while [ "$1" != -- ]; do shift; done; shift; exec "$@"\n')
         os.chmod(fake, 0o755)
         with mock.patch.object(self.c, 'SYSTEMD_RUN', fake):
             name, lacks, why = self.c.trial()
@@ -499,6 +704,27 @@ class Scope(Case):
             job.close()
         self.assertFalse(os.path.exists(out))               # the command never ran
         self.assertIsNone(job.cg)
+
+    def make(self):
+        return self.c.Job()
+
+    def test_an_owner_killed_before_go_runs_no_command_and_leaves_no_scope(self):
+        self.owner_dies_before_go('Job(kill_on_close=%s)', 'job.wd')
+
+    def test_a_start_that_fails_before_go_kills_the_scope_it_made_and_runs_nothing(self):
+        job = self.c.Job()
+        with mock.patch.object(self.c, '_write', wraps=self.c._write) as write:
+            seen = self.start_fails_before_go(job, lambda j: j.wd)
+        self.assertIn(mock.call(self.c.CGROOT + seen['cg'] + '/cgroup.kill', '1'),
+                      write.call_args_list)
+        wait_until(lambda: not os.path.isdir(self.c.cg_dir(seen['cg'])), 'the scope went')
+
+    def test_a_forged_ready_line_is_refused(self):
+        for forge, want in (('echo "s 1 $j"', 'the ready line named pid'),
+                            ('echo "s $$ /user.slice/other.scope"',
+                             'not a cgroup this job made')):
+            with self.subTest(forge=forge):
+                self.forged('STUB', 'echo "s $$ $j"', forge, want)
 
     def test_the_probe_finds_a_scope_that_is_killed_and_goes(self):
         tier = self.c.probe(fresh=True)
@@ -559,6 +785,19 @@ class Weak(Case):
         for pid, what in ((child, 'the command'), (grand, 'its setsid child'),
                           (wd, 'the watchdog')):
             wait_until(lambda: gone(pid), '%s ended with its owner' % what)
+
+    def make(self):
+        return self.job()
+
+    def test_an_owner_killed_before_go_runs_no_weak_command(self):
+        self.owner_dies_before_go("Job(kill_on_close=%s, tier=contain.Tier('W2', "
+                                  "contain.W2_LACKS, why='forced'))", 'job.wd.pid')
+
+    def test_a_weak_start_that_fails_before_go_ends_its_stub_and_runs_nothing(self):
+        self.start_fails_before_go(self.job(), lambda j: j.wd.pid)
+
+    def test_a_forged_weak_ready_line_is_refused(self):
+        self.forged('WSTUB', 'echo "s $$"', 'echo "s 1"', 'the ready line named pid')
 
     def test_leftovers_are_spared_by_the_weak_job_s_kill(self):
         job = self.job()

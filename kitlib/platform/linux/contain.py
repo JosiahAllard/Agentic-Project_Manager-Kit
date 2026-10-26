@@ -84,6 +84,7 @@ READY_SECONDS = 30.0              # a stub has this long to say it is in its cgr
 GONE_SECONDS = 5.0                # a killed job has this long to empty
 TIDY_SECONDS = 0.5                # a released nested job has this long to empty before close
 CALL_SECONDS = 30                 # a systemctl or busctl call
+HELP_SECONDS = 5                  # systemd-run --help
 KILL_PASSES = 8
 CONTROLLERS = ('cpuset', 'cpu', 'memory', 'pids')
 LEAF, WATCH_LEAF = 'main', 'w'
@@ -342,6 +343,25 @@ def _call(argv):
     return r.returncode == 0, r.stderr.decode('utf-8', 'replace').strip()
 
 
+_no_expand = {}
+
+
+def no_expand(run):
+    """['--expand-environment=no'] when systemd-run `run` names that switch in its --help, else
+    []. systemd 254 added it (254 to 257: off by default with --scope; 258 turned it on), and an
+    older one refuses it, but its --scope expands nothing: the stub's $ reach the shell either
+    way. Asked once for each path."""
+    if run not in _no_expand:
+        try:
+            out = subprocess.run([run, '--help'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, timeout=HELP_SECONDS,
+                                 creationflags=0).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = b''
+        _no_expand[run] = ['--expand-environment=no'] if b'--expand-environment' in out else []
+    return list(_no_expand[run])
+
+
 def populated(cg):
     """True while cg or a cgroup under it holds a process; False when empty or gone."""
     try:
@@ -403,17 +423,88 @@ def cpu_ticks(pid):
         return 0
 
 
-def marked(token):
-    """{pid: ctime} of the processes whose environment's PMKIT_JOB names token."""
-    want = token.encode('ascii')
+def _pids():
+    """Every pid PROC lists, or [] when it cannot be read."""
+    try:
+        return [int(n) for n in os.listdir(PROC) if n.isdigit()]
+    except OSError:
+        return []
+
+
+def _stat_bytes(pid):
+    with open('%s/%d/stat' % (PROC, pid), 'rb') as f:
+        return f.read()
+
+
+def pstat(pid, boot=None):
+    """(ctime, ppid, exited) of pid from ONE read of its stat, so the parent and the identity are
+    the same process's; None when it is gone or cannot be read."""
+    try:
+        data = _stat_bytes(pid)
+        close = data.rindex(b')')
+        f = data[close + 2:].split()
+        return (lproc._ctime(int(f[19]), boot), int(f[1]),
+                f[0].decode('ascii', 'replace') in lproc.EXITED)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _boot():
+    try:
+        return lproc.boot()
+    except OSError:
+        return None
+
+
+def tree(root, ctime, boot=None):
+    """{pid: ctime} of root's descendants, or {} when root is not the process ctime names. Each
+    child's parent and ctime come from one stat read, taken between two reads of the parent that
+    find it unchanged, so a pid that ends and is reused while the walk runs never joins the tree
+    (it is under its new parent, or its parent is gone)."""
+    boot = _boot() if boot is None else boot
+    if boot is None or ctime is None:
+        return {}
+    kids = {}
+    for pid in _pids():
+        st = pstat(pid, boot)
+        if st is not None and pid != root:
+            kids.setdefault(st[1], []).append(pid)
     out = {}
-    for n in os.listdir(PROC):
-        if not n.isdigit():
+    queue = [(root, ctime)]
+    while queue:
+        q, qc = queue.pop(0)
+        if not kids.get(q) or not _same(q, qc, boot):
             continue
-        pid = int(n)
-        ct = lproc.proc_ctime(pid)
-        if ct is not None and _marks(pid, want):
-            out[pid] = ct
+        got = []
+        for c in kids[q]:
+            st = pstat(c, boot)
+            if st is not None and st[1] == q and c not in out:
+                got.append((c, st[0]))
+        if not _same(q, qc, boot):
+            continue
+        for c, ct in got:
+            out[c] = ct
+            queue.append((c, ct))
+    return out
+
+
+def _same(pid, ctime, boot):
+    st = pstat(pid, boot)
+    return st is not None and st[0] == ctime
+
+
+def marked(token):
+    """{pid: ctime} of the processes whose environment's PMKIT_JOB names token (the ctime read
+    before and after the environment, so the two are the same process's)."""
+    want = token.encode('ascii')
+    boot = _boot()
+    out = {}
+    if boot is None:
+        return out
+    for pid in _pids():
+        st = pstat(pid, boot)
+        if st is not None and _marks(pid, want) and _same(pid, st[0], boot):
+            out[pid] = st[0]
     return out
 
 
@@ -522,7 +613,9 @@ def trial():
             p = job.start(['sleep', '30'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL)
         except OSError as e:
-            return None, (), 'a trial scope could not be made (%s)' % e
+            lack = ('' if no_expand(_tool(SYSTEMD_RUN)) else
+                    '; its systemd-run --help names no --expand-environment')
+            return None, (), 'a trial scope could not be made (%s)%s' % (e, lack)
         d = cg_dir(job.cg)
         try:
             eff = set(hardware.parse_cpulist(_read(d + '/cpuset.cpus.effective')))
@@ -902,8 +995,8 @@ class ScopeJob(Job):
                 props = ['-p', 'Delegate=yes']
                 if self.mask is not None and self.cpuset:
                     props += ['-p', 'AllowedCPUs=' + _jobmod().cpu.mask_text(self.mask)]
-                argv = ([run, '--user', '--scope', '--quiet', '--collect',
-                         '--expand-environment=no', '--unit', self.unit] + props + ['--'])
+                argv = ([run, '--user', '--scope', '--quiet', '--collect'] + no_expand(run)
+                        + ['--unit', self.unit] + props + ['--'])
                 join, penv = '', benv
             else:
                 self.name = 'j-' + _tag()
@@ -1241,19 +1334,17 @@ class WeakJob(Job):
 
     def members(self):
         """{pid: ctime} of the job's processes now."""
+        boot = _boot()
         found = marked(self.token)
         p = self._proc()
-        # the command's tree, only while its pid is still the command: a reused pid's children
-        # are another process's (the ctime is read again after the walk)
-        if p is not None and self._ctime is not None and lproc.proc_ctime(p.pid) == self._ctime:
-            tree = lproc.descendants(p.pid, self._ctime)
-            if lproc.proc_ctime(p.pid) == self._ctime:
-                if not _exited(p.pid):
-                    found[p.pid] = self._ctime
-                for pid, ct in tree:
-                    found.setdefault(pid, ct)
-        for pid in list(found):
-            if pid in self.spared or (self.wd is not None and pid == self.wd.pid) or _exited(pid):
+        if p is not None and self._ctime is not None and boot is not None:
+            found[p.pid] = self._ctime
+            for pid, ct in tree(p.pid, self._ctime, boot).items():
+                found.setdefault(pid, ct)
+        for pid, ct in list(found.items()):
+            st = pstat(pid, boot) if boot is not None else None
+            if (pid in self.spared or (self.wd is not None and pid == self.wd.pid)
+                    or st is None or st[0] != ct or st[2]):
                 del found[pid]
         return found
 
@@ -1284,12 +1375,15 @@ class WeakJob(Job):
         """One pass: every member stopped, then killed, each through a pidfd opened before its
         identity is checked. Returns how many it reached."""
         fds = []
+        boot = _boot()
         for pid, ct in self.members().items():
             try:
                 fd = os.pidfd_open(pid)
             except OSError:
                 continue
-            if lproc.proc_ctime(pid) != ct:
+            # the pidfd pins one process: the one with ct, or a reuse of the pid, which is let go
+            st = pstat(pid, boot)
+            if st is None or st[0] != ct:
                 _close(fd)
                 continue
             fds.append(fd)
@@ -1337,8 +1431,3 @@ class WeakJob(Job):
         _close(self._g)
         self._g = None
         self._reap_watchdog()
-
-
-def _exited(pid):
-    seen = lproc.identity(pid)
-    return seen is None or seen[1]
