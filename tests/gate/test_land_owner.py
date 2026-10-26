@@ -120,13 +120,17 @@ class OwnerApproval(OwnerLandCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def approve_and_commit(self, content, consume=True):
+    def approve_and_commit(self, content, consume=True, moved=None):
+        """`moved` ({path: text}): main moves on by an owner commit of those files after the
+        approval is signed and before the branch is made (move_main)."""
         base = self.repo.git('rev-parse', '--verify', '-q', '%s:CLAUDE.md' % self.main,
                              check=False) or None
         doc = ap.new_doc(toc.REPO, 'owner-only edit', self.main, [
             {'path': 'CLAUDE.md', 'base_blob': base, 'content': 'approved\n'}], toc.NOW)
         doc.update(ap.decide_fields(toc.KEY, 'A-001', doc, ap.APPROVE, toc.NOW))
         self.hub.docs['A-001'] = doc
+        if moved:
+            self.move_main(moved)
         _, tip = self.branch_as(AGENT, {'CLAUDE.md': content}, message='owner-approved edit',
                                 trailer='Owner-Approval: hub:A-001')
         if consume:
@@ -151,6 +155,44 @@ class OwnerApproval(OwnerLandCase):
         tip = self.approve_and_commit('approved\n', consume=False)
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertIn('owner approval hub:A-001 refused: %s' % ap.WHY_COMMIT, out.lines[0])
+        self.assert_untouched(out, G.REFUSED)
+
+    def hub_seam(self):
+        """The hub's own seam (HubApprovals) on the stand-in verify route, in place of setUp's."""
+        hub = ownercommits.HubApprovals(client=toc.VerifyRoute(self.hub), repo=toc.REPO)
+        patcher = mock.patch.object(ownercommits, 'default_approvals', lambda: hub)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def move_main(self, files):
+        """An owner commit of `files` on main, pushed: the new main."""
+        for rel, text in files.items():
+            self.repo.write(rel, text)
+        self.repo.git('add', '--', *files)
+        self.repo.git('-c', 'user.email=%s' % OWNER, 'commit', '-q', '-m', 'main moves on')
+        self.main = self.repo.git('rev-parse', 'HEAD')
+        self.repo.git('push', '-q', 'origin', 'main')
+        return self.main
+
+    def test_an_approved_commit_on_a_main_moved_by_other_paths_lands(self):
+        approved_on = self.main
+        self.hub_seam()
+        tip = self.approve_and_commit('approved\n', moved={'a.py': 'a\n'})
+        self.assertNotEqual(self.main, approved_on)
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertEqual(self.hub.asked[-1][1], approved_on)
+
+    def test_an_approved_commit_on_a_main_where_the_owner_changed_its_path_is_refused(self):
+        approved_on = self.main
+        self.hub_seam()
+        tip = self.approve_and_commit('approved\n', moved={'CLAUDE.md': 'owner\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-001 refused: %s: CLAUDE.md'
+                      ' at %s is not as the approved base %s has it)'
+                      % (tip[:10], AGENT, ap.WHY_HEAD, self.main[:12], approved_on[:12]),
+                      out.lines[0])
         self.assert_untouched(out, G.REFUSED)
 
 

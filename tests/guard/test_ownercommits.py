@@ -377,12 +377,17 @@ class StandInHub(object):
 
 
 class VerifyRoute(object):
-    """A stand-in hub client whose verify route runs approvals.check, as kitlib.hubsite.api's."""
+    """A stand-in hub client whose verify route runs approvals.check, as kitlib.hubsite.api's,
+    and whose snapshot holds the hub's documents. `asked`: the path of each call."""
 
     def __init__(self, hub):
-        self.hub = hub
+        self.hub, self.asked = hub, []
 
-    def get(self, path, role, query):
+    def get(self, path, role=None, query=None):
+        self.asked.append(path)
+        if path == '/snapshot':
+            return {'ok': True, 'collections': {'approvals': json.loads(json.dumps(
+                self.hub.docs))}}
         doc_id = path.split('/')[2]
         valid, why = self.hub.check(None, doc_id, query['head'], json.loads(query['files']),
                                     query.get('commit'))
@@ -488,7 +493,9 @@ class OwnerApprovals(ApprovalsCase):
         self.assertIn(ap.WHY_FILES, found[0].why)
         self.assertEqual(sorted(self.hub.asked[0][2]), ['CLAUDE.md', 'a.py'])
 
-    def test_a_commit_on_another_base_is_refused(self):
+    def test_the_server_alone_refuses_a_commit_on_another_base(self):
+        # The stand-in seam is the server's check, which compares the base exactly; a parent
+        # with the base's content passes only through HubApprovals (SameContentApprovals).
         self.commit_as(AGENT, 'agent work first', {'a.py': 'a\n'})
         sha = self.approved_commit()
         self.assertIn(ap.WHY_HEAD, self.judge(sha)[0].why)
@@ -575,6 +582,46 @@ class OwnerApprovals(ApprovalsCase):
         self.assertEqual([v.sha for v in found], [sha])
         self.assertIn('a root commit has no approved base', found[0].why)
         self.assertEqual(self.hub.asked, [])
+
+
+class SameContentApprovals(ApprovalsCase):
+    """Through HubApprovals (the hub's seam): an approved commit whose parent descends from the
+    approval's base counts when every path it changes is at the parent as at the base
+    (approvals.same_content_error), and the hub verifies the signed base."""
+
+    def seam(self):
+        self.route = VerifyRoute(self.hub)
+        return oc.HubApprovals(client=self.route, repo=REPO)
+
+    def test_a_base_that_moved_on_with_other_work_is_not_a_violation(self):
+        self.commit_as(OWNER, 'main moves on', {'a.py': 'a\n'})
+        sha = self.approved_commit()
+        self.assertEqual(self.judge(sha, approvals=self.seam()), [])
+        self.assertEqual(self.route.asked, ['/approvals/A-001/verify', '/snapshot',
+                                            '/approvals/A-001/verify'])
+        self.assertEqual(self.hub.asked[-1][1], self.main)
+
+    def test_an_approved_path_the_owner_changed_after_the_base_is_a_violation(self):
+        moved = self.commit_as(OWNER, 'the owner again', {'CLAUDE.md': 'owner again\n'})
+        sha = self.approved_commit()
+        found = self.judge(sha, approvals=self.seam())
+        self.assertEqual([(v.sha, v.paths) for v in found], [(sha, ['CLAUDE.md'])])
+        self.assertIn('owner approval hub:A-001 refused: %s: CLAUDE.md at %s is not as the '
+                      'approved base %s has it' % (ap.WHY_HEAD, moved[:12], self.main[:12]),
+                      found[0].why)
+        self.assertEqual([a[1] for a in self.hub.asked], [moved])   # the base never verified
+
+    def test_a_base_the_parent_does_not_descend_from_is_a_violation(self):
+        self.repo.git('checkout', '-q', '-b', 'side')
+        side = self.commit_as(OWNER, 'another line', {'b.txt': 'b\n'})
+        self.repo.git('checkout', '-q', 'main')
+        doc_id = self.approve({'CLAUDE.md': 'approved\n'}, head=side)
+        sha = self.commit_as(AGENT, approval_message('owner-approved edit', 'hub:A-001'),
+                             {'CLAUDE.md': 'approved\n'})
+        self.consume(doc_id, sha)
+        found = self.judge(sha, approvals=self.seam())
+        self.assertIn('the approved base %s is not an ancestor of %s'
+                      % (side[:12], self.main[:12]), found[0].why)
 
 
 @real_git('update-index --cacheinfo with a symbolic link or gitlink mode: the fake has none')
