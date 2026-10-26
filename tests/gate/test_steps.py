@@ -58,9 +58,9 @@ class Build(unittest.TestCase):
         self.assertEqual(plain.cmd[1:], ['-c', 'pass'])
 
     def test_a_full_merged_landing_of_a_pytests_step_passes_its_usage_check(self):
-        # KIT-GATE-FULL-MERGED-ARGS: retribution's tools-tests step (cmd --select, full_cmd
-        # --all, merged_args --merged) in a full landing's merged-tree gate built
-        # `pytests.py --all --audit --merged`, which pytests refused as USAGE.
+        # A repository's tools-tests step (cmd --select, full_cmd --all, merged_args --merged)
+        # in a full landing's merged-tree gate builds `pytests.py --all --audit --merged`; pytests
+        # once refused that pair as USAGE and undid the landing.
         here = '{here}/pytests.py'
         g = gate_of(cmd('tools-tests', cmd=['{python}', here, '-C', '{root}', '--select',
                                             '--base', '{base}', '--audit'],
