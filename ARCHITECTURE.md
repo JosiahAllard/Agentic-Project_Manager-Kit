@@ -13,7 +13,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 | Content | `content/roles/`, `content/skills/`, `content/instructions/`: every role, skill and instruction written once, rendered into each host's shell by `python tools/render_content.py --write`; `content/default-profile.md`, the host-neutral agent profile a role reads when its repository has none (never rendered) | Every role exists on every host. Skill text is identical on every host: a host loads `content/skills/` itself where it can (Claude), else ships a copy (Codex). Rendered files are committed, each one a comment can go in opens with a generated-file line naming its source, `tools/commit.py` renders when a source is committed, the guard refuses a hand edit, and a test fails on drift. |
 | Optional | `optional/bridge/` (agent-to-agent messaging: core, service, MCP frontend, and each host's half under `optional/bridge/hosts/<name>/`) and the other `optional/` packages | Installed on demand. The core never imports them. |
 | Guards | each host's guard hook (`boot/hook.py <host> <tool event>`; every tool a rule can refuse, its `hosts.json` `hook.guarded_tools`), judged once by `kitlib.guard` over a neutral `Action`, and the kit git `pre-push` hook plus the opt-in `pre-commit` ledger check (inert unless `.kit.json` names pre_commit_check) | Read-only checks of real state. They deny with the exact command to use instead. |
-| Repo layer | `.kit.json` (data, optional: with none, the defaults of docs/kit-json.md "With no file") plus at most one repo hook module the kit calls | Repos hold no copies of the kit and, by default, no stubs: skills and roles run `<kit>/tools/<x>.py -C <checkout>` (docs/multi-host-plan.md decision 21); stubs are opt-in (docs/install.md). |
+| Repo layer | `.kit.json` (data, optional: with none, the defaults of docs/kit-json.md "With no file") plus at most one repo hook module the kit calls | Repos hold no copies of the kit and no stubs of its tools: skills and roles run `<kit>/tools/<x>.py -C <checkout>` (docs/multi-host-plan.md decision 21). |
 
 ## Contracts
 
@@ -32,7 +32,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 - Tests live in `tests/<pkg>/` as unittest tests and target the library directly; the entry-point tests cover only arguments and exit codes.
 - Tests run on an in-process fake git (kitlib/git/fake), except the classes marked `real_git` (docs/test-tools.md "Fake git").
 - Once a repo uses `gate.py land`, the repo's own gate, landing, lock-wrapper, heavy-run and git-guard scripts are deleted (ported first).
-- The installer is machine setup (`tools/machine_setup.py`, `installer/machine-setup.ps1`), once per machine; it writes nothing into any repository, and a repository needs nothing installed (plan decision 27; docs/install.md). The committed setup for a repository that wants one is `machine_setup.py --repo` (`installer/new-repo.ps1` is its PowerShell front end; `kit_stubs.py` for stubs with `--stubs`), in the kit release, with nothing extra.
+- The installer is machine setup (`tools/machine_setup.py`, `installer/machine-setup.ps1`), once per machine; it writes nothing into any repository, and a repository needs nothing installed (plan decision 27; docs/install.md). The committed setup for a repository that wants one is `machine_setup.py --repo` (`installer/new-repo.ps1` is its PowerShell front end), in the kit release, with nothing extra.
 
 ## Build order
 

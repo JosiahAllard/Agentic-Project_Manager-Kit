@@ -120,27 +120,9 @@ Right after `kit_sync`, the `plugin_current` check prints one line when the pm-k
 
 Right after `plugin_current`, the `plugin_enabled` check prints one line naming every account folder (`kitlib.pluginsource.claude.account_folders`) whose `settings.json` has no `enabledPlugins["pm-kit@pm-kit"]`: `pm-kit plugin: not enabled in <folders>: python "<kit>/tools/machine_setup.py" --apply (docs/machine-setup.md "Default mode")`. `false` is the owner's choice and prints nothing; a `settings.json` that is not a JSON object is its own `could not check the pm-kit plugin in <folder>` line; a machine config whose plugin settings cannot be read is the checklist's `could not check plugin_enabled` line. Code: `kitlib/pmstart` `plugin_enabled`; tests: `tests/pmstart/test_plugin_enabled_check.py`.
 
-## Stubs (`stubs`)
-
-For each repository in the machine config's `launcher.repos`, the `stubs` check runs
-`kitlib.stubs.problem_line` and prints one line for a repository that uses stubs (its `.kit.json`
-sets `"stubs".tools`, or it holds at least one) whose stubs are missing or stale; stubs are opt-in
-(docs/install.md), so a repository with none prints nothing:
-`stubs (<repo>): N missing/stale: <names>; run python <kit>/tools/kit_stubs.py write -C <folder>`,
-with `(stale ones run the kit at <path>)` added when a stub runs another kit. A repository whose
-stubs are current prints nothing; a folder that is not there, or a check that fails, is that
-repository's own `could not check stubs (<repo>): ...` line. The check runs in the plugin's
-export, so it compares each stub with the main checkout the export's marker names, the folder
-`kit_stubs.py write` would name (`kitlib.stubs.live_kit`); an export whose marker names none gives
-each repository that uses stubs `could not check stubs (<repo>): <export> is an export of the kit
-...` with no write command, and a repository with none still nothing (docs/plugin-source.md
-"Layout"). The coordinator's session start has the
-same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
-`stubs`; tests: `tests/pmstart/test_stubs_check.py`.
-
 ## Memory folder (`memory`)
 
-After `stubs`, the `memory` check reads `.claude/settings.local.json`, then `.claude/settings.json`, of each repository in
+After `plugin_enabled`, the `memory` check reads `.claude/settings.local.json`, then `.claude/settings.json`, of each repository in
 `launcher.repos`, and of the PM repository (the main checkout holding `sessions_file`), through
 `kitlib.stubs.memory.problem_line`. Files without `autoMemoryDirectory` give
 `memory (<repo>): <file> has no autoMemoryDirectory; its memory folder is <folder>. Ask the owner
