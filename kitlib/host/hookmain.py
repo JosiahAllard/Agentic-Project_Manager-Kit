@@ -35,6 +35,10 @@ lives here once:
         exit code; the host reads the answer when the hook exits, so the log adds its time (no
         process, at most refusal_log.BOUND seconds of lock wait plus file reads) to the hook's.
   failure(e, role, entry, args)       that guard-error Decision
+  ready(guard)
+        raises PlatformUnsupported when the running platform is not one kitlib.guard declares
+        ready (READY_PLATFORMS): run() checks it once the guard imports, before any Action is
+        judged, so every guarded call on such a platform is the guard-error deny.
   command_line(script, executable)
         {"command", "args"} that starts `script` with no console window: the one place a hook
         command line is rendered (plan section 6, rule 4). Today: pythonw.exe beside `executable`
@@ -92,6 +96,18 @@ def failure(e, role, entry, args=()):
     return Decision('deny', ERROR, 'The kit guard failed (%s: %s), so it cannot clear this call. Reproduce it '
                     'with the event JSON this call sent and report the error to the PM; do not reword the call. '
                     'Instead: %s %s' % (type(e).__name__, e, instead, TAG % (ERROR, role)), instead)
+
+
+def ready(guard):
+    """Raise PlatformUnsupported unless the running platform (kitlib.platform.NAME, read now) is
+    one `guard` declares ready (kitlib.guard.READY_PLATFORMS): run() turns it into the guard-error
+    deny, so no guarded call goes ahead on a platform whose path semantics the guard has not been
+    proven on (docs/linux-support-plan.md section 3)."""
+    from kitlib import platform
+    if platform.NAME not in guard.READY_PLATFORMS:
+        raise platform.PlatformUnsupported(
+            'the kit guard is not declared ready on this platform (%s; ready: %s)'
+            % (platform.NAME, ', '.join(guard.READY_PLATFORMS)))
 
 
 def _role(adapter, payload, action):
@@ -226,6 +242,7 @@ def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=N
         if not actions:
             raise ValueError('the payload parsed into no action')
         from kitlib import guard
+        ready(guard)
         decision = _judge(adapter, guard, actions, environ, deadline, started)
         if decision is None:                    # still deciding at the deadline
             role = _role(adapter, payload, action)

@@ -122,6 +122,42 @@ class Run(unittest.TestCase):
                 hookmain.run(FakeAdapter(), 'PreToolUse', io.StringIO('{}'), Closed(), environ={}, entry='h')
 
 
+class Unready(unittest.TestCase):
+    """On a platform kitlib.guard does not declare ready (READY_PLATFORMS), every guarded call is
+    the guard-error deny and decide never runs (docs/linux-support-plan.md section 3): Linux until
+    slice 8 proves the guard there."""
+
+    def on(self, name):
+        patch = mock.patch('kitlib.platform.NAME', name)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_on_linux_every_guarded_call_is_denied_before_decide(self):
+        from kitlib import guard
+        self.assertNotIn('linux', guard.READY_PLATFORMS)
+        self.on('linux')
+        called = []
+
+        def decide(*x, **k):
+            called.append(x)
+            return Decision('allow')
+        for payload, role in (({'kind': 'shell'}, 'main'), ({'kind': 'edit', 'who': 'a1'}, 'subagent')):
+            a = FakeAdapter()
+            self.assertEqual(run(a, payload, decide), (3, 'deny guard-error\n'))
+            self.assertIn('PlatformUnsupported', a.last.reason)
+            self.assertIn('not declared ready on this platform (linux; ready: windows)', a.last.reason)
+            self.assertTrue(a.last.reason.endswith('role=%s]' % role))
+        self.assertEqual(called, [])
+
+    def test_a_platform_the_kit_has_no_backend_for_is_denied_too(self):
+        self.on('unsupported')
+        self.assertEqual(run(FakeAdapter(), {}, lambda *x, **k: Decision('allow')), (3, 'deny guard-error\n'))
+
+    def test_on_windows_the_guard_decides_as_before(self):
+        self.on('windows')
+        self.assertEqual(run(FakeAdapter(), {}, lambda *x, **k: Decision('allow')), (0, ''))
+
+
 class Several(unittest.TestCase):
     """A call parsed into several Actions (one patch over several files): each is judged."""
 
