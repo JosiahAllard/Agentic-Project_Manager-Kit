@@ -110,7 +110,7 @@ and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
 no ledger file holds; `replace: true` corrects the ruling of a question already logged.
 
 The `record` of `hub_ask` and `hub_question_edit` is `{repo, id}`, both required: the backlog
-record the question is about (the kit's own records are repo `pm`); `null` on `hub_question_edit`
+record the question is about (the kit's own records are bound under the PM repository's folder name, `project-manager` on this machine); `null` on `hub_question_edit`
 unbinds it. A `record` that is no object is refused before any call (`invalid`, field `record`);
 the hub then reads the record and refuses what it cannot bind, failing closed when it cannot read
 it (docs/action-hub.md "A question bound to a record";
