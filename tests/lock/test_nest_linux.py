@@ -133,6 +133,21 @@ class WrapperState(Base):
         self.assertFalse(self.store.run_live(d))
         self.assertFalse(self.store.run_dead(me))       # its run lock is free, but it is alive
 
+    def test_a_pid_that_is_gone_with_a_run_lock_that_cannot_be_told_is_not_dead(self):
+        d = self.gone_record()
+        with mock.patch.object(self.store, 'run_mutex_held', lambda rid: None):
+            self.assertFalse(self.store.run_dead(d))
+            self.assertTrue(self.store.run_live(d))
+
+    def test_a_pid_that_cannot_be_told_is_dead_once_its_run_lock_is_free(self):
+        d = {'id': RID, 'pid': os.getpid(), 'ctime': None}     # wrapper_state None
+        m = self.store.run_mutex(RID)
+        self.assertFalse(self.store.run_dead(d))
+        self.assertTrue(self.store.run_live(d))
+        m.release()
+        self.assertTrue(self.store.run_dead(d))
+        self.assertFalse(self.store.run_live(d))
+
     def test_a_record_whose_pid_is_gone_is_not_reaped_while_its_run_lock_is_held(self):
         d = self.gone_record()
         self.store.write('active/%s.json' % RID, d)
