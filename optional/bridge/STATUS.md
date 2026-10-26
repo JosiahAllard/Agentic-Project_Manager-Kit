@@ -121,15 +121,15 @@ a relocated copy. Both need re-running against this layout before they count for
 8. A full gate of the combined tree on Windows. The source's last full gate was 6,366 tests in
    335 modules, nine skipped, before its final assembly commits.
 
-## Retest on main (KIT-CODEX-BRIDGE-RETEST)
+## Retest on main
 
 Live round trip: **pending owner lease.** Nothing below the suite line has been run.
 
-- **Suite, 2026-10-25, main at 5c4e36b7a:** `python -m unittest discover -s tests/bridge -t .` on
+- **Suite, 2026-10-25, main after the writer-lease merge:** `python -m unittest discover -s tests/bridge -t .` on
   Windows: 489 tests, OK (199 s). This includes the Claude-to-Codex writer lease code that
-  landed after the port (322f874c6, 582badb45, 39c2f1b6d). It runs on fixtures, so it proves
+  landed after the port. It runs on fixtures, so it proves
   nothing live.
-- **Open bridge records:** only KIT-CODEX-BRIDGE-RETEST itself (pulled).
+- **Open bridge records:** only the retest record itself (pulled).
 
 Live round-trip plan (the owner grants the lease; no agent can):
 1. Prepare and register the bridge for both hosts (README "Install", steps 1 and 2), start the
@@ -144,15 +144,14 @@ Live round-trip plan (the owner grants the lease; no agent can):
    doc in a throwaway worktree), same path, checked by diff. The lease lasts an hour; renew it.
 4. Record the result here. A pass lets coordinators delegate suitable work to Codex workers.
 
-Owner steps (PowerShell, working directory `Z:\GitHub\Agentic-Project_Manager-Kit`; use the
-kit folder `Z:\pm-kit\plugin\5c4e36b7a832` as `<kit>`; `input.json` follows the half profiles,
-see README "Configuration"):
-1. `$out = "Z:\AgentTemp\bridge-live"`
-2. `python -I -B Z:\pm-kit\plugin\5c4e36b7a832\optional\bridge\tools\bridge_prepare.py --config "$out-input.json" --output $out`
-3. Review `$out\manifest.json`, then add `$out\mcp.json` entries: the Claude entry to the plugin's
-   MCP config plus `$out\claude-hooks.json` to its hooks; the `agent-bridge` entry to Codex's MCP
-   configuration. Restart both hosts.
-4. `python -I -B Z:\pm-kit\plugin\5c4e36b7a832\optional\bridge\tools\bridge_service.py --config "$out\runtime.json" --connections`
+Owner steps (PowerShell; `<repo>` is the kit checkout, `<kit>` the kit folder, `<out>` a new
+private folder; `<out>-input.json` follows the half profiles, see README "Configuration"):
+1. `Set-Location <repo>`
+2. `python -I -B <kit>\optional\bridge\tools\bridge_prepare.py --config <out>-input.json --output <out>`
+3. Review `<out>\manifest.json`, then add `<out>\mcp.json` entries: the Claude entry to the
+   plugin's MCP config plus `<out>\claude-hooks.json` to its hooks; the `agent-bridge` entry to
+   Codex's MCP configuration. Restart both hosts.
+4. `python -I -B <kit>\optional\bridge\tools\bridge_service.py --config <out>\runtime.json --connections`
 5. In the window: select the sender and recipient routes, select the writer Codex chat (in an
    active turn) and the recipient, click the lease button. Tell the worker to run the round trip.
 6. Rollback: stop the service, remove the entries added in step 3.
