@@ -766,7 +766,7 @@ class Live(httpfix.ListenerCase):
                               load_settings=lambda: Settings(self.lis.port, store=store))
 
     def test_an_agent_asks_lists_and_logs_through_the_listener(self):
-        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?", "class": "go",
                                                       "options": httpfix.OPTIONS})
         self.assertFalse(is_error, payload)
         doc_id = payload["id"]
@@ -783,7 +783,7 @@ class Live(httpfix.ListenerCase):
         self.assertEqual(self.errors(), [])
 
     def test_an_answered_question_is_marked_done_with_a_why_and_no_ruling(self):
-        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?", "class": "go",
                                                       "options": httpfix.OPTIONS})
         qid = payload["id"]
         payload, is_error = self.mcp.call("hub_question_done",
@@ -818,7 +818,7 @@ class Live(httpfix.ListenerCase):
         self.assertEqual(self.errors(), [])
 
     def test_the_creator_edits_and_withdraws_through_the_listener(self):
-        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?", "class": "go",
                                                       "options": httpfix.OPTIONS})
         self.assertFalse(is_error, payload)
         qid = payload["id"]
@@ -902,9 +902,10 @@ class LiveKeys(httpfix.ListenerCase):
 
     def test_a_question_comes_from_a_session_key_or_pm_only(self):
         for who in ("k-one", api.AGENT_FROM):
-            payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": who})
+            payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": who, "class": "go"})
             self.assertFalse(is_error, payload)
-        payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": "some agent"})
+        payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": "some agent",
+                                                      "class": "go"})
         self.assertTrue(is_error)
         self.assertEqual((payload["status"], payload["error"]["code"], payload["error"]["field"]),
                          (400, "invalid", "from"))

@@ -36,7 +36,8 @@ FIELDS = {
         'status': _STR, 'title': _STR, 'repo': _STR, 'from': _STR, 'asked_at': _STR,
         'context': _STR, 'options': _LIST, 'recommended': _INT, 'refs': _LIST, 'urgent': _BOOL,
         'answer': _DICT, 'ruling': _STR, 'story': _STR, 'done_why': _STR, 'done_at': _STR,
-        'record': _DICT, 'filing': _DICT, 'filed_at': _STR, 'unfiled_why': _STR}),
+        'record': _DICT, 'class': _STR, 'filing': _DICT, 'filed_at': _STR,
+        'unfiled_why': _STR}),
     'inbox': (('text',), {
         'text': _STR, 'ref': _STR, 'asked': _STR, 'title': _STR, 'repo': _STR, 'from': _STR,
         'at': _STR, 'refs': _LIST, 'read': _BOOL, 'read_at': _STR}),

@@ -20,7 +20,7 @@ class ClientCase(httpfix.ListenerCase):
 
     def ask_question(self, title='which way'):
         return self.hub.post('/questions', client.AGENT, {
-            'title': title, 'repo': 'kit', 'options': httpfix.OPTIONS + [
+            'title': title, 'repo': 'kit', 'class': 'go', 'options': httpfix.OPTIONS + [
                 {'label': 'c', 'description': 'd'}]})
 
 

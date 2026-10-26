@@ -2750,6 +2750,7 @@ ul.hist .sch-line{display:block}
       d.urgent ? el("span", {class:"chip urgent st-urgent", text:"Urgent"}) : null,
       el("span", {class:"id", text: d.id}),
       d.repo ? el("span", {class:"chip", text: d.repo}) : null,
+      !qBound(d) && typeof d.class === "string" && d.class ? el("span", {class:"chip", text: "class: " + d.class}) : null,
       d.from ? el("span", {text: "from " + d.from}) : null,
       d.story ? el("button", {class:"link", type:"button", text: "story: " + (state.stories.find(x => x.id === d.story)?.title || d.story), onclick: () => goStory(d.story)}) : null,
       d.asked_at ? el("span", {text: "asked " + when(d.asked_at)}) : null,
@@ -2832,7 +2833,7 @@ ul.hist .sch-line{display:block}
       parts.push(el("div", {class:"ans"},
         el("div", {}, el("b", {text: "Your answer: "}), pick, a.choice === rec ? " (the recommendation)" : ""),
         a.note ? el("div", {text: a.note}) : null,
-        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : d.status === "filed" ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · waiting for " + filedFor(d) + " to read it" : " · waiting for the PM to log it") + (qBound(d) && d.standing ? " · a standing rule, for the PM to log" : "")})
+        el("div", {class:"status", text: (a.at ? "Submitted " + when(a.at) : "") + (d.status === "logged" ? " · logged" : d.status === "done" ? " · done, no ruling needed" : d.status === "filed" ? " · filed in " + (d.record && typeof d.record.id === "string" ? d.record.id : "its record") + " · waiting for " + filedFor(d) + " to read it" : qBound(d) ? " · waiting to be filed in " + (typeof d.record.id === "string" ? d.record.id : "its record") : " · waiting for the PM to log it") + (qBound(d) && d.standing ? " · a standing rule, for the PM to log" : "")})
       ));
       if (canPromote(d)) {
         // A filed answer made a standing rule afterwards: the answer route with standing and no choice.

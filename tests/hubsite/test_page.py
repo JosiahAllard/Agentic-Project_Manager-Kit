@@ -1447,8 +1447,13 @@ class DomTest(unittest.TestCase):
         got = dom("""
             await start();
             await click($("#tabs [data-f=answered]"));
-            return { bound: text($("#q-Q-1")), classed: text($("#q-Q-2")), old: text($("#q-Q-3")),
-                     chips: [...$("#q-Q-2").querySelectorAll(".meta .chip")].map(c => c.textContent) };
+            const got = {};
+            for (const id of ["Q-1", "Q-2", "Q-3"]) {      // the pane shows one card at a time
+              await click($("#row-" + id));
+              got[id] = text($("#q-" + id));
+              if (id === "Q-2") got.chips = [...$("#q-Q-2").querySelectorAll(".meta .chip")].map(c => c.textContent);
+            }
+            return { bound: got["Q-1"], classed: got["Q-2"], old: got["Q-3"], chips: got.chips };
         """, snapshot(collections={"questions": {
             "Q-1": answered(record={"repo": "kit", "id": "EX-1"}),
             "Q-2": answered(**{"class": "cross-repo"}),

@@ -831,10 +831,12 @@ class Api(object):
             if mine and keys is None:
                 keys = self.session_keys()          # read once, and only when it can matter
             d['from'] = sender if mine and sender in keys else AGENT_FROM
-            if d['kind'] == 'question' and d.get('note') == 'filed':
+            if d['kind'] == 'question':
                 q = self.store.get('questions', d['id']) or {}
-                if isinstance(q.get('standing'), dict):
+                if d.get('note') == 'filed' and isinstance(q.get('standing'), dict):
                     d['standing'] = True        # the PM logs it too (_for)
+                if not isinstance(q.get('record'), dict) and q.get('class') in QUESTION_CLASSES:
+                    d['class'] = q['class']     # the PM audits a classed answer (hub.py pending)
             out.append(d)
         now, flips = self.now(), []
         live = {(d['kind'], d['id']) for d in out}
@@ -1018,9 +1020,35 @@ def _bound(api, value):
     return {'repo': name, 'id': rid}
 
 
+# The class a question bound to no record declares (docs/action-hub.md "A question's class"):
+# a standing rule (a delegation run line too), the machine, work across repositories, or a
+# one-off go (a landing, an archive). A bound question's answer is filed into its record instead.
+QUESTION_CLASSES = ('rule', 'machine', 'cross-repo', 'go')
+
+
+def _class(b, bound):
+    """Check b's `class` for a question that is `bound` to a record or not, once the fields it
+    ends with are known: refused `invalid`, field `class`, for a class on a bound question, a
+    class not in QUESTION_CLASSES, and no class on an unbound one."""
+    given = b.get('class')
+    if bound:
+        if given is not None:
+            raise _invalid('a question bound to a record takes no class: its answer is filed '
+                           'into the record', 'class')
+        return
+    if given is None:
+        raise _invalid('a question needs --record REPO:ID or --class %s (one bound to no '
+                       'record says what kind it is)' % '|'.join(QUESTION_CLASSES), 'class')
+    if given not in QUESTION_CLASSES:
+        raise _invalid('class is one of %s, not %s' % (', '.join(QUESTION_CLASSES),
+                                                      ascii(given)), 'class')
+
+
 def questions_add(api, req):
+    """A new open question: `record` (the backlog record its answer is filed into) or `class`
+    (_class) is required."""
     b = _fields(req, ('repo', 'from', 'title', 'context', 'options', 'recommended', 'refs',
-                      'urgent', 'story', 'record'), required=('title',))
+                      'urgent', 'story', 'record', 'class'), required=('title',))
     for name in ('repo', 'from', 'title', 'context', 'story'):
         _text(b, name)
     # the session the answer goes back to: a launcher session key, read now, or the PM's
@@ -1035,6 +1063,7 @@ def questions_add(api, req):
                            % (ascii(who), ', '.join(sorted(keys)), unread), 'from')
     b['from'] = who
     _typed(b, 'options', (list,), 'a list of {label, description}')
+    _class(b, 'record' in b)
     if 'record' in b:               # checked last: the one part that reads a backlog
         b['record'] = _bound(api, b['record'])
     b.setdefault('options', [])
@@ -1363,9 +1392,12 @@ def questions_bind(api, req):
                 p['bound'] = True
                 if d.get('status') == 'answered':
                     # an answer the PM has not handled yet: filed now, as a bound answer is
-                    got = file_answer(api, p['question'], _via(req), full=req.full) or {}
-                    p['filing'] = {k: got[k] for k in ('filed', 'code', 'message', 'moved')
-                                   if k in got}
+                    got = file_answer(api, p['question'], _via(req), full=req.full)
+                    if got is None:         # no longer answered when the filing read it
+                        p['filing'] = {'filed': False, 'unanswered': True}
+                    else:
+                        p['filing'] = {k: got[k] for k in ('filed', 'code', 'message', 'moved')
+                                       if k in got}
             except HubError as e:
                 failed.append({'question': p['question'], 'code': e.code,
                                'message': e.message if req.full else AGENT_SAYS.get(
@@ -1622,7 +1654,7 @@ def _withdrawn(api, coll, doc_id, d):
 
 
 def questions_edit(api, req):
-    names = ('title', 'context', 'options', 'recommended', 'refs', 'urgent', 'record')
+    names = ('title', 'context', 'options', 'recommended', 'refs', 'urgent', 'record', 'class')
     # record null or "" clears the binding
     b = _fields(req, names + ('from', 'if_version'), required=('from',), flags=('urgent',),
                 blank=('record',))
@@ -1641,7 +1673,16 @@ def questions_edit(api, req):
     _still_open(doc_id, d, 'edited')
     if changes.get('record') == '':
         changes['record'] = None
-    elif 'record' in changes:       # only once the asker and the status passed: no git before
+    if 'record' in changes or 'class' in changes:
+        # what the question ends with: bound and classless, or unbound with a class (_class);
+        # an edit of neither leaves a question asked before classes as it is
+        record = changes['record'] if 'record' in changes else d.get('record')
+        if record:
+            _class(changes, True)
+            changes['class'] = None
+        else:
+            _class({'class': changes['class'] if 'class' in changes else d.get('class')}, False)
+    if changes.get('record'):       # only once the asker and the status passed: no git before
         changes['record'] = _bound(api, changes['record'])
     return api.change('questions', doc_id, d, changes, req, {'status': 'open'})
 

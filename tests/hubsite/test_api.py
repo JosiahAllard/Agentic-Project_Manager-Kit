@@ -85,6 +85,8 @@ class ApiCase(unittest.TestCase):
 
     def question(self, **kw):
         body = {'title': 't', 'repo': 'kit', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         return self.ok('POST', '/questions', AGENT, body)['id']
 
@@ -179,7 +181,8 @@ class QuestionTest(ApiCase):
     def test_add(self):
         obj = self.ok('POST', '/questions', AGENT, {
             'title': 'Which?', 'repo': 'kit', 'from': 'pm', 'context': 'c', 'options': OPTIONS,
-            'recommended': 1, 'refs': ['S-001'], 'urgent': True, 'story': 'S-001'})
+            'recommended': 1, 'refs': ['S-001'], 'urgent': True, 'story': 'S-001',
+            'class': 'go'})
         self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-1000', 1, True))
         self.assertEqual(obj['revision'], self.store.revision)
         self.assertIsInstance(obj['warnings'], list)
@@ -206,7 +209,7 @@ class QuestionTest(ApiCase):
         self.refused('invalid', None, 'POST', '/questions', AGENT,
                      {'title': 't', 'options': ['not an option']})
         self.refused('invalid', 'urgent', 'POST', '/questions', AGENT,
-                     {'title': 't', 'urgent': 'yes'})
+                     {'title': 't', 'urgent': 'yes', 'class': 'go'})
 
     def test_answer_with_an_option(self):
         qid = self.question()
@@ -735,7 +738,7 @@ class ReadTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         self.assertEqual(self.ok('GET', '/pending', AGENT)['items'],
                          [{'kind': 'question', 'id': qid, 'title': 't', 'repo': 'kit',
-                           'at': NOW, 'from': 'pm', 'route': 'pm'}])
+                           'at': NOW, 'from': 'pm', 'class': 'go', 'route': 'pm'}])
 
     def test_snapshot(self):
         qid = self.question()
@@ -1199,8 +1202,8 @@ class FixTest(ApiCase):
         self.assertEqual(self.store.get('stories', sid)['via'], 'web')
         self.ok('POST', '/stories/%s' % sid, AGENT, {'status': 'review', 'if_version': 1})
         self.assertEqual(self.store.get('stories', sid)['via'], 'api')     # none given
-        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS},
-                      via='cli')['id']
+        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS,
+                                                    'class': 'go'}, via='cli')['id']
         self.assertEqual(self.store.get('questions', qid)['via'], 'cli')
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}, via='web')
         d = self.store.get('questions', qid)
@@ -1436,7 +1439,8 @@ class SecondFixTest(ApiCase):
                 ('POST', '/todos/%s/edit' % made, AGENT,
                  {'from': 'pm', 'if_version': 1, 'title': 'u'}),
                 ('POST', '/todos/%s/delete' % made, AGENT, {'from': 'pm', 'if_version': 2}),
-                ('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS}),
+                ('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS,
+                                                'class': 'go'}),
                 ('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}),
                 ('POST', '/questions/%s/log' % qid, AGENT, {'ruling': R7,
                                                             'if_version': 2}),
@@ -2095,7 +2099,7 @@ class ThirdFixTest(ApiCase):
 
     def test_an_agents_from_on_a_question_is_a_session_key_or_the_pm(self):
         self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit-2'})
-        body = {'title': 't', 'options': OPTIONS}
+        body = {'title': 't', 'options': OPTIONS, 'class': 'go'}
         for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
                     'a  b', 'pm kit-2', 'Kit-2'):
             with self.subTest(bad=bad):
@@ -2386,7 +2390,8 @@ class QuestionRecordTest(ApiCase):
         for version, cleared in ((3, None), (4, '')):
             with self.subTest(cleared=cleared):
                 self.ok('POST', '/questions/%s/edit' % qid, AGENT,
-                        {'from': 'pm', 'if_version': version, 'record': cleared})
+                        {'from': 'pm', 'if_version': version, 'record': cleared,
+                         'class': 'go'})      # unbound, it needs a class again
                 self.assertIsNone(self.doc(qid)['record'])
         self.assertEqual(self.views.calls, [('kit', 'EX-1'), ('kit', 'EX-2')])
         self.refused('not_found', 'record', 'POST', '/questions/%s/edit' % qid, AGENT,
@@ -3127,6 +3132,8 @@ class PushStatusTest(ApiCase):
 
     def answered(self, **kw):
         body = {'title': 't', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         qid = self.ok('POST', '/questions', AGENT, body)['id']
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})

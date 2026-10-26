@@ -49,6 +49,8 @@ class DoneCase(unittest.TestCase):
 
     def answered(self, **kw):
         body = {'title': 'land kit/x?', 'repo': 'kit', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         qid = self.ok('POST', '/questions', AGENT, body)['id']
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
@@ -118,7 +120,8 @@ class DoneTest(DoneCase):
 
 class RefusedTest(DoneCase):
     def test_an_open_question_is_refused(self):
-        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS})['id']
+        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS,
+                                                    'class': 'go'})['id']
         self.refused('invalid', 'status', qid, {'why': 'w', 'if_version': self.version(qid)})
 
     def test_a_logged_question_is_refused(self):

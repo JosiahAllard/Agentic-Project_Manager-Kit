@@ -1231,7 +1231,7 @@ class VerbCase(CliCase):
         return path
 
     def ask(self, title='which way'):
-        return self.ok('questions', 'add', '--title', title, '--repo', 'kit',
+        return self.ok('questions', 'add', '--title', title, '--repo', 'kit', '--class', 'go',
                        '--option', 'left::go left', '--option', 'right :: go right')
 
 
@@ -1297,10 +1297,11 @@ class PendingCase(VerbCase):
         self.assertEqual(len(want['items']), 2, want)
         self.assertEqual(json.loads('\n'.join(self.ok('pending', '--json'))), want)
         self.assertEqual(self.ok('pending'), [
-            '%s %s [%s] to=%s from=%s %s' % (i['kind'], i['id'], i['repo'] or '-', i['route'],
-                                             i['from'], i['title'])
+            '%s %s [%s] to=%s from=%s %s%s' % (i['kind'], i['id'], i['repo'] or '-', i['route'],
+                                               i['from'], 'class=%s ' % i['class']
+                                               if 'class' in i else '', i['title'])
             for i in want['items']])
-        self.assertIn('Q-1000 [kit] to=pm from=pm which way', self.ok('pending')[0])
+        self.assertIn('Q-1000 [kit] to=pm from=pm class=go which way', self.ok('pending')[0])
 
     def filed_pair(self):
         """Q-1000 answered and filed into its record (as the store holds it), Q-1001 only answered."""
@@ -1342,7 +1343,8 @@ class WriteCase(VerbCase):
     def test_a_question_is_asked_answered_and_logged(self):
         context = self.file('context.md', 'the context\nof it\n')
         self.assertEqual(self.ok(
-            'questions', 'add', '--title', 'which way', '--repo', 'kit', '--context-file', context,
+            'questions', 'add', '--title', 'which way', '--repo', 'kit', '--class', 'go',
+            '--context-file', context,
             '--option', 'left::go left', '--option', 'right::go right', '--recommended', '0',
             '--refs', 'B-1', 'B-2', '--urgent', '--from', 'pm'), ['ASKED Q-1000'])
         doc = self.direct('/questions')['items'][0]
@@ -1398,7 +1400,7 @@ class WriteCase(VerbCase):
         self.assertIn('REFUSED: Q-9 is not a question', self.refused('questions', 'show', 'Q-9'))
 
     def test_questions_show_marks_the_recommended_option_and_prints_context_and_other(self):
-        self.ok('questions', 'add', '--title', 'which road', '--context-file',
+        self.ok('questions', 'add', '--title', 'which road', '--class', 'go', '--context-file',
                 self.file('context.md', 'why it matters'), '--option', 'up::go up',
                 '--option', 'down::go down', '--recommended', '1')
         out = self.ok('questions', 'show', 'Q-1000')
@@ -1521,7 +1523,7 @@ class WriteCase(VerbCase):
         self.assertEqual(len(self.direct('/todos')['items']), 1)
 
     def test_a_question_is_edited_and_withdrawn_by_its_asker(self):
-        self.ok('questions', 'add', '--title', 'which way', '--from', 'pm', '--urgent',
+        self.ok('questions', 'add', '--title', 'which way', '--from', 'pm', '--urgent', '--class', 'go',
                 '--option', 'left::go left')
         context = self.file('context.md', 'new context\n')
         self.assertEqual(self.ok('questions', 'edit', 'Q-1000', '--from', 'pm', '--if-version',
@@ -1739,6 +1741,7 @@ class DirectQuestionCase(VerbCase):
 
     def asks(self, sender, title):
         return self.ok('questions', 'add', '--title', title, '--repo', 'kit', '--from', sender,
+                       '--class', 'go',
                        '--option', 'a::b', '--option', 'c::d')[0].split()[1]
 
     def test_a_question_from_a_launcher_key_comes_back_to_it_alone(self):
@@ -1749,7 +1752,8 @@ class DirectQuestionCase(VerbCase):
         got = json.loads('\n'.join(self.ok('pending', '--json', '--for', 'kit')))
         self.assertEqual([(i['id'], i['from']) for i in got['items']], [(mine, 'kit')])
         # the PM's list holds every answered question, each to be logged, whoever asked it
-        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending', '--for', 'pm')),
+        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending', '--for', 'pm')
+                                if not line.startswith('AUDIT ')),      # the classed ones
                          sorted([mine, theirs, pms]))
         self.assertEqual(sorted(line.split()[1] for line in self.ok('pending')),
                          sorted([mine, theirs, pms]))
@@ -1764,8 +1768,8 @@ class DirectQuestionCase(VerbCase):
         kind = self.direct('/pending')['items'][0]['kind']
         # kit has never waited: the PM handles its answer too
         self.assertEqual(sorted(self.ok('pending')),
-                         sorted(['%s %s [kit] to=pm from=kit mine' % (kind, mine),
-                                 '%s %s [kit] to=pm from=pm pms' % (kind, pms)]))
+                         sorted(['%s %s [kit] to=pm from=kit class=go mine' % (kind, mine),
+                                 '%s %s [kit] to=pm from=pm class=go pms' % (kind, pms)]))
         rev = self.hub.store.revision
         self.assertEqual(self.ok('wait', '--pending', '--for', 'kit', '--timeout', '5'),
                          ['HUB %d %s %s to=kit from=kit mine' % (rev, kind, mine)])
@@ -1781,7 +1785,7 @@ class DirectQuestionCase(VerbCase):
         self.assertEqual((code, out, err), (4, '', ''))
 
     def test_a_question_from_an_unknown_key_is_refused(self):
-        err = self.refused('questions', 'add', '--title', 't', '--from', 'coordinator',
+        err = self.refused('questions', 'add', '--title', 't', '--from', 'coordinator', '--class', 'go',
                            '--option', 'a::b', '--option', 'c::d')
         self.assertTrue(err.startswith('REFUSED invalid: '), err)
         self.assertIn('known: kit, other, pm', err)
@@ -2177,7 +2181,7 @@ class ValidateCase(CliCase):
 
     def test_a_text_recommended_that_names_an_option_is_exit_0_with_its_warning(self):
         hub = self.server()
-        self.assertEqual(self.run_cli('questions', 'add', '--title', 'which way', '--option',
+        self.assertEqual(self.run_cli('questions', 'add', '--title', 'which way', '--class', 'go', '--option',
                                       'left::go left', '--option', 'right::go right',
                                       '--recommended', '0', '--port', str(hub.port))[0], 0)
         hub.close()

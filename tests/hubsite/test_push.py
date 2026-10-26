@@ -96,6 +96,8 @@ class PushCase(unittest.TestCase):
 
     def ask(self, **kw):
         body = {'title': PLANTED, 'repo': 'kit', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         return self.ok('POST', '/questions', AGENT, body)['id']
 
@@ -515,7 +517,8 @@ class ResetTest(unittest.TestCase):
             status, obj = a.call(method, BASE + path, role, body)
             self.assertEqual(status, 200, obj)
             return obj
-        qid = call('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS, 'from': 'kit'})['id']
+        qid = call('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS, 'from': 'kit',
+                                                 'class': 'go'})['id']
         call('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         w.poll()
         self.assertEqual(len(fake.calls), 2)
@@ -747,7 +750,7 @@ class ThreadTest(unittest.TestCase):
         self.assertTrue(any('push notifications on' in n for n in hub.notes))
         hub.start()
         status, obj = hub.api.call('POST', BASE + '/questions', AGENT,
-                                   {'title': 't', 'options': OPTIONS})
+                                   {'title': 't', 'options': OPTIONS, 'class': 'go'})
         self.assertEqual(status, 200, obj)
         status, obj = hub.api.call('POST', BASE + '/questions/%s/answer' % obj['id'], OWNER,
                                    {'choice': 0})

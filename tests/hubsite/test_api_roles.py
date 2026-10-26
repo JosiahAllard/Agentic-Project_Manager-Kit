@@ -192,7 +192,7 @@ ADD_BODY = {'repo': URL, 'title': 't', 'head': None,        # head: setUpModule
 # `{repo}` the name REPO (`path`).
 ROWS = {
     ('GET', '/questions'): (None, None, None),
-    ('POST', '/questions'): (None, {'title': 't', 'options': OPTIONS}, None),
+    ('POST', '/questions'): (None, {'title': 't', 'options': OPTIONS, 'class': 'go'}, None),
     ('POST', '/questions/{id}/answer'): (seed_question, {'choice': 0}, None),
     ('POST', '/questions/{id}/log'): (lambda s: seed_question(s, 'answered'),
                                       {'ruling': R7, 'if_version': 1}, None),
