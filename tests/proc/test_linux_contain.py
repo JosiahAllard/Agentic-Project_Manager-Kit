@@ -11,6 +11,7 @@ that ended cleanly leaves no watchdog; a released job's daemon runs on and lefto
 of the job; a job made inside a job is nested in it; a systemd-run that runs the command outside
 any scope is caught; the forced weak tier kills a setsid tree. Every scope a test makes is named
 `pmkit-containment-...-<this pid>-...` and is checked gone after each test."""
+import ast
 import importlib
 import os
 import shutil
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from unittest import mock
@@ -190,6 +192,37 @@ def kill_own(pid):
         os.close(fd)
 
 
+def busy_starts(test, make_job, n=4):
+    """Start n jobs at once from a process with descriptors past 9 open (a pool runner's, a
+    busy owner's), each command listing its own descriptors: every one starts, and holds only
+    stdin, stdout and stderr (the stub's pipes are not left to it)."""
+    spare = [fd for _ in range(8) for fd in os.pipe()]
+    test.addCleanup(lambda: [os.close(fd) for fd in spare])
+    out, errors = {}, []
+
+    def one(i):
+        job = make_job()
+        try:
+            p = job.start([sys.executable, '-c', 'import os; print(sorted(int(f) for f in '
+                           'os.listdir("/proc/self/fd")))'], stdout=subprocess.PIPE)
+            out[i] = p.communicate(timeout=30)[0].decode().strip()
+        except Exception as e:      # reported below, with the others
+            errors.append(repr(e))
+        finally:
+            job.close()
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    test.assertEqual(errors, [])
+    test.assertEqual(sorted(out), list(range(n)))
+    for text in out.values():
+        fds = ast.literal_eval(text)
+        test.assertEqual(fds[:3], [0, 1, 2])
+        test.assertLessEqual(len(fds), 4, text)     # 0-2 and listdir's own
+
+
 def lines(p, n, timeout=20.0):
     """The first n lines the child prints (stdout a pipe), as words."""
     out = []
@@ -291,6 +324,9 @@ class Scope(Case):
         self.assertEqual(p.communicate(b'through', timeout=20), (b'through', None))
         self.assertEqual(p.returncode, 7)
         job.close()
+
+    def test_jobs_started_at_once_by_a_busy_owner_each_start_and_hold_no_stub_pipe(self):
+        busy_starts(self, lambda: self.c.Job(kill_on_close=True))
 
     def test_a_command_that_is_not_there_raises_and_makes_no_scope(self):
         with self.assertRaises(FileNotFoundError):
@@ -492,6 +528,9 @@ class Weak(Case):
         wait_until(lambda: gone(orphan), 'the setsid orphan ended')
         self.assertEqual(job.pids(), [])
         self.assertIsNone(job.processes())
+
+    def test_weak_jobs_started_at_once_by_a_busy_owner_each_start_and_hold_no_stub_pipe(self):
+        busy_starts(self, self.job)
 
     def test_a_weak_job_that_ended_cleanly_leaves_no_watchdog(self):
         for kill_on_close in (True, False):

@@ -843,13 +843,33 @@ def _find(prog, env, cwd):
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), prog)
 
 
+# dash, the usual /bin/sh, takes a single-digit descriptor only in a redirection (`>&12` is a
+# syntax error), and a busy process's pipes are past 9: this moves the stub's pipes to 3, 4, 5...
+# (FDS), closes the originals and execs the stub, the pid unchanged. The copies above 9 are
+# close-on-exec, so the stub holds its pipes once each.
+REMAP = ('import fcntl,os,sys\n'
+         'a=sys.argv;n=int(a[1]);fds=[int(x) for x in a[2:2+n]]\n'
+         'hi=[fcntl.fcntl(f,fcntl.F_DUPFD_CLOEXEC,10) for f in fds]\n'
+         'for f in fds:os.close(f)\n'
+         'for i,f in enumerate(hi):os.dup2(f,3+i)\n'
+         'os.execv(a[2+n],a[2+n:])\n')
+FDS = ('3', '4', '5')
+
+
 def _popen(argv, kw, env, fds):
-    """subprocess.Popen of the stub with the caller's keywords, `fds` passed to it as well."""
+    """subprocess.Popen of the stub (argv, from its shell on) with the caller's keywords, its
+    pipes `fds` moved to FDS first (REMAP)."""
+    if kw.get('pass_fds'):
+        raise ValueError('Job.start on Linux takes no pass_fds=: the stub owns descriptors 3-5')
+    py = sys.executable
+    if not py or not os.path.isabs(py):
+        raise _error('no interpreter path to start the stub with (sys.executable is %r)' % py)
     kw = dict(kw)
     kw['env'] = env
-    kw['pass_fds'] = tuple(kw.get('pass_fds', ())) + tuple(fds)
+    kw['pass_fds'] = tuple(fds)
     kw['close_fds'] = True
-    return subprocess.Popen(argv, creationflags=0, **kw)
+    lead = [py, '-I', '-S', '-c', REMAP, str(len(fds))] + [str(f) for f in fds]
+    return subprocess.Popen(lead + list(argv), creationflags=0, **kw)
 
 
 class ScopeJob(Job):
@@ -890,8 +910,8 @@ class ScopeJob(Job):
                 made = self.parent + '/' + self.name
                 self._make_nested(made)
                 argv, join, penv = [], made, env
-            argv += [SH, '-c', STUB, 'pmkit-job', self.name, join, str(r_w), str(g_r), str(k_r),
-                     '1' if self.kill_on_close else '0', ' '.join(unset)] + cmd
+            argv += [SH, '-c', STUB, 'pmkit-job', self.name, join] + list(FDS) + [
+                '1' if self.kill_on_close else '0', ' '.join(unset)] + cmd
             p = _popen(argv, kw, penv, (r_w, g_r, k_r))
         except BaseException:
             for fd in (r_r, r_w, g_r, g_w, k_r, k_w):
@@ -1161,7 +1181,7 @@ class WeakJob(Job):
         g_r, g_w = os.pipe()
         self._g = g_w
         try:
-            p = _popen([SH, '-c', WSTUB, 'pmkit-job', str(r_w), str(g_r)] + cmd, kw, env,
+            p = _popen([SH, '-c', WSTUB, 'pmkit-job'] + list(FDS[:2]) + cmd, kw, env,
                        (r_w, g_r))
         except BaseException:
             for fd in (r_r, r_w, g_r, g_w):
