@@ -44,6 +44,7 @@ import kitlib.platform
 from kitlib.host import registry
 from kitlib.platform import PlatformUnsupported
 from kitlib.platform.linux import locks
+from kitlib.platform.linux import process as procfs
 from kitlib.proc import process
 from kitlib.proc import win32
 from kitlib.proc.win32 import K32, ADV
@@ -427,7 +428,9 @@ def wrapper_state(pid, ctime):
     created at another time. None when that cannot be told: the process cannot be opened (another
     user's or a protected one; a reused pid can name one, such as a SYSTEM svchost, and
     process.alive then says alive without its creation time), or ctime is missing. A pid without
-    a matching creation time is never proof of life (run_live then asks the run mutex)."""
+    a matching creation time is never proof of life (run_live then asks the run mutex).
+    On Linux the same three answers from /proc (kitlib.platform.linux.process identity): an ended
+    process is a zombie, and None is a stat or boot id that cannot be read."""
     try:
         pid = int(pid)
         ctime = None if ctime is None else int(ctime)
@@ -435,6 +438,14 @@ def wrapper_state(pid, ctime):
         return None
     if pid <= 0:
         return False
+    if kitlib.platform.NAME == "linux":
+        try:
+            seen = procfs.identity(pid)
+        except (OSError, ValueError):
+            return None
+        if seen is None or seen[1]:
+            return False
+        return None if ctime is None else seen[0] == ctime
     h = K32.OpenProcess(win32.QUERY_LIMITED | win32.SYNCHRONIZE, False, pid)
     if not h:
         return False if ctypes.get_last_error() == win32.ERROR_INVALID_PARAMETER else None
@@ -568,11 +579,14 @@ class Store:
     def run_dead(self, e):
         """True when entry or record e's wrapper is surely gone: its pid and creation time name
         no live process, or its run mutex is gone, abandoned or unowned. A mutex this process may
-        not open leaves it to the pid and creation time. On Linux the run lock alone decides
-        until the pid and creation time can be checked there (slice 4 of
-        docs/linux-support-plan.md section 8)."""
+        not open leaves it to the pid and creation time. On Linux the run lock (run_mutex_held)
+        must be free, and the pid and creation time must not show the wrapper live
+        (wrapper_state): a pid that names no process is never enough on its own, since a checker
+        in its own pid namespace sees no wrapper's pid, but any namespace sees its flock. Exactly
+        what run_live does not take as live."""
         if kitlib.platform.NAME == "linux":
-            return self.run_mutex_held(str(e["id"])) is False
+            return (wrapper_state(e.get("pid", 0), e.get("ctime")) is not True
+                    and self.run_mutex_held(str(e["id"])) is False)
         try:
             if not process.alive(int(e.get("pid") or 0), e.get("ctime")):
                 return True
@@ -608,11 +622,17 @@ class Store:
         reused pid can name, or a record with no creation time), its run mutex decides: a wrapper
         holds it from before its record is written until after the record leaves active/
         (run.claim_id, run.settle), so one gone, abandoned or unowned means the wrapper is gone.
-        A mutex this process may not open, or a d with no run id, counts as live."""
+        A mutex this process may not open, or a d with no run id, counts as live. On Linux a
+        pid and creation time that name no process are not enough either: the run lock decides
+        then too, and only a free one is gone (run_dead: a checker in its own pid namespace sees
+        no wrapper's pid); with no run id to ask it by, the pid's answer stands."""
         state = wrapper_state(d.get("pid", 0), d.get("ctime"))
+        rid = d.get("id")
+        if state is False and kitlib.platform.NAME == "linux":
+            return (isinstance(rid, str) and bool(ID_RE.match(rid))
+                    and self.run_mutex_held(rid) is not False)
         if state is not None:
             return state
-        rid = d.get("id")
         if not isinstance(rid, str) or not ID_RE.match(rid):
             return True
         return self.run_mutex_held(rid) is not False
