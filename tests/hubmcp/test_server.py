@@ -604,6 +604,29 @@ class Creator(Case):
         self.assertIn("null unbinds",
                       srv.TOOLS["hub_question_edit"][1]["properties"]["record"]["description"])
 
+    def test_a_class_and_unfiled_are_passed_to_the_hub_as_given(self):
+        said = srv.TOOLS["hub_ask"][1]["properties"]["class"]
+        self.assertEqual(said["enum"], list(api.QUESTION_CLASSES))
+        self.assertIn("record", said["description"])
+        for name, args in (("hub_ask", {"title": "t", "class": "go"}),
+                           ("hub_question_edit", {"id": "Q-1", "from": "pm", "if_version": 2,
+                                                  "class": "rule", "record": None}),
+                           ("hub_question_log", {"id": "Q-1", "ruling": "R-1", "if_version": 2,
+                                                 "unfiled": "the record is closed"}),
+                           ("hub_question_done", {"id": "Q-1", "why": "w", "if_version": 2,
+                                                  "unfiled": "the record is closed"})):
+            with self.subTest(name=name):
+                payload, is_error = self.rpc(self.server(), name, args)
+                self.assertFalse(is_error, payload)
+                self.assertEqual(self.ask.calls[-1]["body"],
+                                 {k: v for k, v in args.items() if k != "id"})
+        calls = len(self.ask.calls)
+        payload, is_error = self.rpc(self.server(), "hub_ask", {"title": "t", "class": "other"})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                         ("invalid", "class"))
+        self.assertEqual(len(self.ask.calls), calls)
+
     def test_a_record_that_is_no_object_never_reaches_the_hub(self):
         for name, args in (("hub_ask", {"title": "t", "record": "pm:KIT-X"}),
                            ("hub_ask", {"title": "t", "record": None}),

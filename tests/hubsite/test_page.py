@@ -1439,6 +1439,27 @@ class DomTest(unittest.TestCase):
         self.assertIn("filed in EX-1 · waiting for the PM to read it", got["pm"])
         self.assertEqual((got["save"], got["cancel"], got["withdraw"]), (True, True, False))
 
+    def test_a_card_shows_its_class_and_a_bound_answer_waits_to_be_filed(self):
+        def answered(**kw):
+            return dict({"status": "answered", "title": "which", "version": 3, "asked_at": NOW,
+                         "options": [{"label": "one"}, {"label": "two"}],
+                         "answer": {"choice": 0, "label": "one", "note": "", "at": NOW}}, **kw)
+        got = dom("""
+            await start();
+            await click($("#tabs [data-f=answered]"));
+            return { bound: text($("#q-Q-1")), classed: text($("#q-Q-2")), old: text($("#q-Q-3")),
+                     chips: [...$("#q-Q-2").querySelectorAll(".meta .chip")].map(c => c.textContent) };
+        """, snapshot(collections={"questions": {
+            "Q-1": answered(record={"repo": "kit", "id": "EX-1"}),
+            "Q-2": answered(**{"class": "cross-repo"}),
+            "Q-3": answered()}}))
+        self.assertIn("waiting to be filed in EX-1", got["bound"])
+        self.assertNotIn("waiting for the PM", got["bound"])
+        self.assertIn("waiting for the PM to log it", got["classed"])
+        self.assertIn("class: cross-repo", got["chips"])
+        self.assertIn("waiting for the PM to log it", got["old"])
+        self.assertNotIn("class:", got["old"])
+
     REC = {"repo": "kit", "id": "EX-1"}
 
     def test_the_answer_sends_standing_only_when_a_bound_questions_box_is_ticked(self):

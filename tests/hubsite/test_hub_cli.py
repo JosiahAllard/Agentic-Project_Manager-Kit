@@ -1316,6 +1316,21 @@ class PendingCase(VerbCase):
         self.assertTrue(lines['Q-1000'].endswith(' which way (filed)'), lines)
         self.assertTrue(lines['Q-1001'].endswith(' other way'), lines)
 
+    def test_pending_for_pm_lists_classed_answers_apart_for_its_audit(self):
+        self.ask()
+        self.ok('questions', 'add', '--title', 'which go', '--repo', 'kit', '--class', 'go',
+                '--option', 'a::b')
+        self.hub.store.update('questions', 'Q-1000', {'class': None})   # one asked before classes
+        for qid in ('Q-1000', 'Q-1001'):
+            self.ok('answer', qid, '--choice', '0')
+        self.assertEqual(self.ok('pending', '--for', 'pm'), [
+            'question Q-1000 [kit] to=pm from=pm which way',
+            'AUDIT classed answers, no record to file into:',
+            'question Q-1001 [kit] to=pm from=pm class=go which go'])
+        self.assertEqual(self.ok('pending'), [
+            'question Q-1000 [kit] to=pm from=pm which way',
+            'question Q-1001 [kit] to=pm from=pm class=go which go'])
+
     def test_wait_pending_marks_a_filed_question(self):
         self.filed_pair()
         lines = {l.split()[3]: l for l in self.ok('wait', '--pending', '--timeout', '5')}
@@ -1864,7 +1879,13 @@ class RecordArgumentCase(CliCase):
                                         {'question': 'Q-1006', 'bound': True,
                                          'record': {'repo': 'kit', 'id': 'EX-6'},
                                          'filing': {'filed': False, 'code': 'store',
-                                                    'message': 'busy'}}],
+                                                    'message': 'busy'}},
+                                        {'question': 'Q-1007', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-7'},
+                                         'filing': {'filed': False, 'moved': True}},
+                                        {'question': 'Q-1008', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-8'},
+                                         'filing': {'filed': False, 'unanswered': True}}],
                   'failed': [{'question': 'Q-1001', 'code': 'not_found', 'message': 'gone'}],
                   'misses': [{'record': {'repo': 'kit', 'id': 'EX-3'}, 'why': 'cites no question'},
                              {'record': {'repo': 'down', 'id': None},
@@ -1879,6 +1900,8 @@ class RecordArgumentCase(CliCase):
         self.assertEqual(out.splitlines(), [
             'BOUND Q-1000 kit:EX-1', 'BOUND Q-1005 kit:EX-5', 'FILED Q-1005',
             'BOUND Q-1006 kit:EX-6', 'NOT FILED Q-1006: busy (store)',
+            'BOUND Q-1007 kit:EX-7', 'NOT FILED Q-1007: moved (filed by the answer handler)',
+            'BOUND Q-1008 kit:EX-8', 'NOT FILED Q-1008: no longer answered',
             'NOT BOUND Q-1001: gone (not_found)',
             'MISS kit:EX-3: cites no question', 'MISS down: the repository could not be read',
             'MULTI kit:EX-4 cites Q-1002 Q-1003',
@@ -1986,6 +2009,18 @@ class ArgumentCase(CliCase):
         self.assertEqual((code, err), (0, ''), out)
         self.assertEqual(seen, [('POST', '/questions/Q-001/log',
                                  {'ruling': 'D-7', 'if_version': 4, 'replace': True})])
+        for argv, path, body in (
+                (('questions', 'add', '--title', 't', '--class', 'cross-repo'), '/questions',
+                 {'title': 't', 'class': 'cross-repo'}),
+                (('questions', 'edit', 'Q-001', '--from', 'pm', '--class', 'rule',
+                  '--no-record', '--if-version', '2'), '/questions/Q-001/edit',
+                 {'from': 'pm', 'class': 'rule', 'record': None, 'if_version': 2})):
+            with self.subTest(argv=argv):
+                (code, out, err), seen = self.sent(*argv)
+                self.assertEqual((code, err), (0, ''), out)
+                self.assertEqual(seen, [('POST', path, body)])
+        self.assertEqual(self.run_cli('questions', 'add', '--title', 't', '--class', 'other',
+                                      '--port', '8791')[0], 2)
         for verb, more, body in (('log', ('D-7',), {'ruling': 'D-7'}),
                                  ('done', ('--why', 'w'), {'why': 'w'})):
             with self.subTest(verb=verb):

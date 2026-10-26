@@ -2417,6 +2417,82 @@ class QuestionRecordTest(ApiCase):
                                                     'record': None}), [])
 
 
+class QuestionClassTest(ApiCase):
+    """A question bound to no record declares its class (docs/action-hub.md "A question's
+    class"): rule, machine, cross-repo or go."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = BindViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def ask(self, **kw):
+        return dict({'title': 't', 'repo': 'kit', 'options': OPTIONS}, **kw)
+
+    def doc(self, qid):
+        return self.store.docs('questions')[qid]
+
+    def edit(self, qid, **kw):
+        return dict({'from': 'pm', 'if_version': self.doc(qid)['version']}, **kw)
+
+    def test_each_class_is_kept_on_the_question(self):
+        self.assertEqual(api.QUESTION_CLASSES, ('rule', 'machine', 'cross-repo', 'go'))
+        for name in api.QUESTION_CLASSES:
+            with self.subTest(name=name):
+                qid = self.ok('POST', '/questions', AGENT, self.ask(**{'class': name}))['id']
+                self.assertEqual(self.doc(qid)['class'], name)
+                self.assertNotIn('record', self.doc(qid))
+
+    def test_a_question_with_neither_a_record_nor_a_class_is_refused(self):
+        obj = self.refused('invalid', 'class', 'POST', '/questions', AGENT, self.ask())
+        self.assertIn('--record REPO:ID or --class', obj['error']['message'])
+        for bad in ('Go', 'other', '', 3, None):
+            with self.subTest(bad=bad):
+                self.refused('invalid', 'class', 'POST', '/questions', AGENT,
+                             self.ask(**{'class': bad}))
+        self.assertEqual(self.views.calls, [])
+
+    def test_a_bound_question_takes_no_class(self):
+        obj = self.refused('invalid', 'class', 'POST', '/questions', AGENT,
+                           self.ask(record={'repo': 'kit', 'id': 'EX-1'}, **{'class': 'go'}))
+        self.assertIn('bound to a record', obj['error']['message'])
+        self.assertEqual(self.views.calls, [], 'refused before the backlog is read')
+
+    def test_unbinding_needs_a_class_and_binding_drops_it(self):
+        qid = self.ok('POST', '/questions', AGENT,
+                      self.ask(record={'repo': 'kit', 'id': 'EX-1'}))['id']
+        self.refused('invalid', 'class', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     self.edit(qid, record=None))
+        self.refused('invalid', 'class', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     self.edit(qid, **{'class': 'rule'}))
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                self.edit(qid, record=None, **{'class': 'rule'}))
+        self.assertEqual((self.doc(qid).get('record'), self.doc(qid)['class']), (None, 'rule'))
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT, self.edit(qid, **{'class': 'machine'}))
+        self.assertEqual(self.doc(qid)['class'], 'machine')
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                self.edit(qid, record={'repo': 'kit', 'id': 'EX-1'}))
+        self.assertEqual((self.doc(qid)['record'], self.doc(qid).get('class')),
+                         ({'repo': 'kit', 'id': 'EX-1'}, None))
+
+    def test_an_old_question_with_neither_still_takes_an_edit_of_its_text(self):
+        doc = self.store.add('questions', {'status': 'open', 'title': 'old', 'repo': 'kit',
+                                           'from': 'pm', 'options': OPTIONS})
+        qid = doc['id'] if isinstance(doc, dict) else doc.id
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT, self.edit(qid, title='older'))
+        self.assertEqual(self.doc(qid)['title'], 'older')
+
+    def test_a_pending_answer_carries_its_class(self):
+        classed = self.ok('POST', '/questions', AGENT, self.ask(**{'class': 'cross-repo'}))['id']
+        bound = self.ok('POST', '/questions', AGENT,
+                        self.ask(record={'repo': 'kit', 'id': 'EX-1'}))['id']
+        for qid in (classed, bound):
+            self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        got = {p['id']: p for p in self.ok('GET', '/pending', AGENT)['items']}
+        self.assertEqual(got[classed]['class'], 'cross-repo')
+        self.assertNotIn('class', got[bound])
+
+
 class SweepViews(BindViews):
     """The backlog and record views for `questions bind`: repo kit holds a parked record citing
     Q-1000, an owner-blocked one citing Q-1001 in its owner_ask, a parked one citing Q-1002
@@ -2537,6 +2613,18 @@ class QuestionBindTest(ApiCase):
         d = self.store.docs('questions')['Q-1002']
         self.assertEqual((d['record'], d['status'], d['filing']['code']),
                          ({'repo': 'kit', 'id': 'EX-1'}, 'answered', 'store'))
+
+    def test_a_filing_that_moved_or_found_no_answer_says_so(self):
+        for got, want in (({'id': 'Q-1002', 'filed': False, 'moved': True},
+                           {'filed': False, 'moved': True}),
+                          (None, {'filed': False, 'unanswered': True})):
+            with self.subTest(got=got):
+                self.setUp()
+                self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
+                with mock.patch.object(api, 'file_answer', lambda *a, **kw: got):
+                    pairs = self.bind(apply=True)['pairs']
+                self.assertEqual([(p['question'], p['filing']) for p in pairs],
+                                 [('Q-1002', want)])
 
     def test_a_question_marked_done_or_logged_is_still_a_miss(self):
         self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
