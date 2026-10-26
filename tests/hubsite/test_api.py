@@ -2584,6 +2584,9 @@ class QuestionBindTest(ApiCase):
         self.assertEqual(docs['Q-1001']['record'], {'repo': 'kit', 'id': 'EX-2'})
         self.assertNotIn('record', docs['Q-1002'])
         self.assertNotIn('record', docs['Q-1003'])      # only a multi-cite record names it
+        # asked with a class, a question bound to its record drops it; one left unbound keeps it
+        self.assertEqual([docs[q].get('class') for q in ('Q-1000', 'Q-1001', 'Q-1002')],
+                         [None, None, 'go'])
         again = self.bind(apply=True)       # nothing left to do: both are bound already
         self.assertEqual((again['pairs'], [(s['question'], s['why']) for s in again['skipped']]),
                          ([], [('Q-1000', 'already bound to this record'),
