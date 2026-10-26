@@ -23,7 +23,7 @@ machine lock itself. Selected tests: `python tools/kit_tests.py --select` (what 
 Red-first through `tools/redfirst.py` (docs/redfirst.md), never an in-place mutant.
 
 ### Known flakes
-None recorded. A failure is real until the same tip passes a rerun; report both runs.
+None recorded. A red `gate.py --full` gets one targeted rerun of its failing tests, `python tools/gate.py --rerun` (docs/gate.md "Targeted rerun"): FLAKE lands the tip, and you report the flake record line it prints; REAL, or a second failure of the same test, is real and never lands. Report both runs.
 
 ## Test runner
 Pass line `kit_tests: OK`; anything else is a failure. Report the summary line and the failing
