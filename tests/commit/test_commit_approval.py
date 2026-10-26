@@ -196,6 +196,10 @@ class TheApprovedChange(ApprovalCase):
         self.assertEqual(self.git('show', '--name-only', '--format=', 'HEAD'), 'CLAUDE.md')
         self.assertEqual(self.hub.docs['A-001']['commit'], head)
         self.assertIn('approval  hub:A-001 consumed by %s' % head[:12], out)
+        rules = ownermod.Rules(owner_email=OWNER, agent_emails=[AGENT])    # and it would land
+        seam = oc.HubApprovals(client=self.hub, repo=REPO)
+        self.assertEqual(oc.violations(self.wt, rules, 'HEAD', [moved], approvals=seam),
+                         ([], None))
 
     def test_an_ordinary_path_in_the_approval_is_committed_the_same_way(self):
         self.approve({'CLAUDE.md': 'new rules\n', 'notes.md': 'why\n'})
