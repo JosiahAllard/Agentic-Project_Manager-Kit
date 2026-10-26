@@ -35,7 +35,8 @@ This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 Layer rules:
 - The core kit never imports `optional/` (tests/host/test_layering.py).
 - The bridge imports from the kit only `kitlib.ident`, `kitlib.proc` (`pipe`, `errors`,
-  `process`, `job`), `kitlib.host.registry` (to read `hosts.json`) and, in the Claude half,
+  `process`, `job`), `kitlib.host.registry` (to read `hosts.json`), `kitlib.sessionmark` (the
+  frontend's launch mark) and, in the Claude half,
   `hosts.claude.adapter.peer` (the peer wire format and pipe write). Its Win32 code is in
   `win/`, the halves and `kitlib/proc`.
 - `core/` names no host and touches no Win32. Nothing outside `hosts/` names a host
@@ -143,6 +144,27 @@ nominates no channel, and the other halves keep working.
   JSON identity claims grant nothing. Helpers run in job objects and are killed as a tree. A
   restarted service is rejoined by replaying only the frontend's initialize handshake; a tool call
   is never replayed.
+- **Launch mark** (`mcp_frontend.py`, `win/frontend.py`, `Controller.launched`). A session the kit
+  launched carries its kind in `PM_KIT_ROLE` (`kitlib/sessionmark.py`). The frontend reads it once,
+  at start, so a later change to the session's environment reaches no frame. It sends the mark
+  beside `channel` on every frame, the replayed handshake included. A value that is not a plain
+  name (letters, digits, `-` and `_`, at most 64) is not sent. The service binds the mark into that
+  frontend's `NativeFrontend` and refuses a frame that changes or drops it. Every authority the
+  frontend attests carries it as `SenderAuthority.launched`. `Controller.launched(binding)` gives it
+  only for the exact live chat that frontend attested last, and only while that frontend is
+  attached; an unmarked frontend attesting the same chat clears it. A frame without `mark` is still
+  served, so a frontend started before the mark existed keeps working until its host restarts. The
+  mark grants nothing yet.
+  - Claude passes its MCP servers the session's whole environment, so a kit-launched Claude
+    session's frontend is marked. Codex passes only `env_vars`, and the installer forwards no
+    `PM_KIT_ROLE`. No kit launch starts a Codex chat yet, so every Codex chat is unmarked and needs
+    the owner's click.
+  - Claude Desktop chats are never marked: the kit launches none.
+  - A mark belongs to one frontend process, so to one launched window.
+  - The mark is only as strong as this bridge-only boundary (`core/owner.py`). Any process running
+    as the same user can start a frontend with any `PM_KIT_ROLE`, or set another process's
+    environment before it starts. The mark tells kit launches apart from the owner's own chats; it
+    is no defence against code running as the owner.
 - **MCP tools**:
   - `bridge_connections`
   - `bridge_send` (a queued receipt is not delivery)
