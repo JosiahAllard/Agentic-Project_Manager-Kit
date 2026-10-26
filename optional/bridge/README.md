@@ -114,8 +114,8 @@ nominates no channel, and the other halves keep working.
 
   At every write the writer must hold the lease, be live, be in an active turn, be on the
   recipient's account and not be the recipient, or the send refuses before any byte. A reply
-  return from another host to a Codex chat uses the same lease. A Codex sender never uses a lease:
-  its path is unchanged. The window's lease buttons have no test.
+  return from another host to a Codex chat uses the same lease. A Codex sender never uses a lease and is
+  refused (`codex-direct-route-unavailable`): the bridge does not carry Codex-to-Codex. The window's lease buttons have no test.
 - **Caller proofs** (`core/callers.py`). For each call, the frontend's attestor turns private
   metadata into a sender and task root, bound to that exact intent. A proof is used once and lasts
   5 seconds. The sender and task root are never tool arguments.
