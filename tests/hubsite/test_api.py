@@ -164,7 +164,7 @@ class ErrorTest(ApiCase):
     def test_a_missing_document(self):
         for method, path, role, body in (
                 ('POST', '/questions/Q-404/answer', OWNER, {'choice': 0}),
-                ('POST', '/questions/Q-404/log', AGENT, {'ruling': R7, 'if_version': 1}),
+                ('POST', '/questions/Q-404/log', AGENT, {'if_version': 1}),
                 ('POST', '/todos/T-404/done', OWNER, None),
                 ('POST', '/todos/T-404/ack', AGENT, None),
                 ('POST', '/stories/S-404', AGENT, {'status': 'review', 'if_version': 1}),
@@ -251,7 +251,7 @@ class QuestionTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         obj = self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 1})
         self.assertEqual((obj['answer']['label'], obj['version']), ('second', 3))
-        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': R7, 'if_version': 3})
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'if_version': 3})
         self.refused('invalid', 'status', 'POST', '/questions/%s/answer' % qid, OWNER,
                      {'choice': 0})
 
@@ -299,7 +299,7 @@ class QuestionTest(ApiCase):
                 self.addCleanup(store.close)
                 hub = api.Api(store, clock=CLOCK)
                 status, obj = hub.call('POST', BASE + '/questions/%s/log' % doc_id, AGENT,
-                                       {'ruling': R7, 'if_version': 0}, None)
+                                       {'if_version': 0}, None)
                 self.assertEqual((status, obj.get('error')), (200, None), obj)
                 self.assertEqual((obj['status'], obj['version']), ('logged', 1))
                 with open(path, encoding='utf-8') as f:
@@ -309,80 +309,45 @@ class QuestionTest(ApiCase):
         qid = self.question()
         path = '/questions/%s/log' % qid
         self.refused('invalid', 'status', 'POST', path, AGENT,
-                     {'ruling': R7, 'if_version': 1})
+                     {'if_version': 1})
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
-        self.refused('invalid', 'ruling', 'POST', path, AGENT, {'if_version': 2})
-        self.refused('invalid', 'ruling', 'POST', path, AGENT, {'ruling': ' ', 'if_version': 2})
-        self.refused('invalid', 'ruling', 'POST', path, AGENT, {'ruling': 7, 'if_version': 2})
-        self.refused('invalid', 'if_version', 'POST', path, AGENT, {'ruling': R7})
+        self.refused('invalid', 'if_version', 'POST', path, AGENT, {})
         self.refused('conflict', 'if_version', 'POST', path, AGENT,
-                     {'ruling': R7, 'if_version': 1})
+                     {'if_version': 1})
         self.refused('invalid', 'answer', 'POST', path, AGENT,
-                     {'ruling': R7, 'if_version': 2, 'answer': {'choice': 1}})
-        obj = self.ok('POST', path, AGENT, {'ruling': ' ' + R7 + ' ', 'if_version': 2})
+                     {'if_version': 2, 'answer': {'choice': 1}})
+        obj = self.ok('POST', path, AGENT, {'if_version': 2})
         self.assertEqual((obj['status'], obj['version']), ('logged', 3))
         d = self.store.get('questions', qid)
-        self.assertEqual((d['status'], d['ruling'], d['answer']['choice']),
-                         ('logged', R7, 0))
+        self.assertEqual((d['status'], d['answer']['choice']), ('logged', 0))
+        self.assertNotIn('ruling', d)
+        # a logged question is not logged again: there is no id to correct
         self.refused('invalid', 'status', 'POST', path, AGENT,
-                     {'ruling': R8, 'if_version': 3})
+                     {'if_version': 3})
 
     def answered(self):
         qid = self.question()
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         return qid, '/questions/%s/log' % qid
 
-    def test_log_refuses_a_ruling_that_is_not_a_ledger_id(self):
+    def test_log_takes_no_ruling_id_and_no_replace(self):
         qid, path = self.answered()
-        warning = 'warning: %s Decides is 436 characters (aim for one line)' % HK25
-        for text in (warning, 'decision-7', 'R-1', 'H-kit-12', R7 + ' ' + R8):
-            with self.subTest(ruling=text[:20]):
-                obj = self.refused('invalid', 'ruling', 'POST', path, AGENT,
-                                   {'ruling': text, 'if_version': 2})
-                self.assertIn('ruling must be a ledger ruling id (the id ledger.py add prints)',
-                              obj['error']['message'])
+        for name, body in (('ruling', {'ruling': R7, 'if_version': 2}),
+                           ('replace', {'replace': True, 'if_version': 2})):
+            with self.subTest(field=name):
+                obj = self.refused('invalid', name, 'POST', path, AGENT, body)
+                self.assertIn("this route takes no %r field" % name, obj['error']['message'])
         self.assertEqual(self.store.get('questions', qid)['status'], 'answered')
-        self.ok('POST', path, AGENT, {'ruling': HK25, 'if_version': 2})
+        self.ok('POST', path, AGENT, {'if_version': 2})
 
-    def test_log_refuses_a_ledger_id_no_ledger_file_holds(self):
-        class Views(object):
-            def ruling_exists(self, rid):
-                return rid == HK3
-        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+    def test_a_question_an_older_hub_logged_keeps_its_ruling(self):
         qid, path = self.answered()
-        obj = self.refused('invalid', 'ruling', 'POST', path, AGENT,
-                           {'ruling': HK4, 'if_version': 2})
-        self.assertIn(HK4 + ' is in no ledger file', obj['error']['message'])
-        self.ok('POST', path, AGENT, {'ruling': HK3, 'if_version': 2})
-
-    def test_log_with_a_ledger_that_cannot_be_read_is_unavailable(self):
-        class Views(object):
-            def ruling_exists(self, rid):
-                raise OSError('x')
-        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
-        qid, path = self.answered()
-        self.refused('unavailable', 'views', 'POST', path, AGENT,
-                     {'ruling': R7, 'if_version': 2})
-
-    def test_log_replace_corrects_a_logged_ruling(self):
-        qid, path = self.answered()
-        self.ok('POST', path, AGENT, {'ruling': R7, 'if_version': 2})
-        again = {'ruling': R8, 'if_version': 3}
-        obj = self.refused('invalid', 'status', 'POST', path, AGENT, again)
-        self.assertIn('replace: true', obj['error']['message'])
-        self.refused('invalid', 'replace', 'POST', path, AGENT, dict(again, replace='yes'))
-        self.refused('invalid', 'ruling', 'POST', path, AGENT,
-                     dict(again, replace=True, ruling='not an id'))
-        self.assertEqual(self.store.get('questions', qid)['ruling'], R7)
-        obj = self.ok('POST', path, AGENT, dict(again, replace=True))
-        self.assertEqual((obj['status'], obj['version']), ('logged', 4))
+        self.store.update('questions', qid, {'status': 'logged', 'ruling': R7})
         d = self.store.get('questions', qid)
-        self.assertEqual((d['status'], d['ruling'], d['answer']['choice']), ('logged', R8, 0))
-
-    def test_log_replace_is_refused_for_a_question_not_logged(self):
-        qid, path = self.answered()
-        self.refused('invalid', 'replace', 'POST', path, AGENT,
-                     {'ruling': R7, 'if_version': 2, 'replace': True})
+        self.assertEqual((d['status'], d['ruling']), ('logged', R7))
+        obj = self.refused('invalid', 'status', 'POST', path, AGENT,
+                           {'if_version': d['version']})
+        self.assertNotIn('replace', obj['error']['message'])
 
     def test_list(self):
         a = self.question(repo='Kit')
@@ -1165,27 +1130,22 @@ class FixTest(ApiCase):
         self.assertEqual(obj['collections']['questions'][qid]['title'], 't')
         self.assertNotIn('a-folder-on-this-machine', json.dumps(obj))
 
-    # ---- to_pm: the reply's ruling
-    def test_a_reply_carries_its_ruling(self):
+    # ---- to_pm: the reply takes no ruling id
+    def test_a_reply_takes_no_ruling(self):
         pid = self.note()
         self.ok('POST', '/to_pm/send', OWNER)
         path = '/to_pm/%s/reply' % pid
-        self.refused('invalid', 'ruling', 'POST', path, AGENT, {'reply': 'r', 'ruling': 7})
-        for text in ('decision-7', 'D-7', 'R-1', R7 + ' ' + R8):
-            with self.subTest(ruling=text):
+        for given in (HK25, 'decision-7', '', None):
+            with self.subTest(ruling=given):
                 obj = self.refused('invalid', 'ruling', 'POST', path, AGENT,
-                                   {'reply': 'r', 'ruling': text})
-                self.assertIn('ruling must be a ledger ruling id', obj['error']['message'])
+                                   {'reply': 'r', 'ruling': given})
+                self.assertIn("this route takes no 'ruling' field", obj['error']['message'])
         self.assertEqual(self.store.get('to_pm', pid)['status'], 'sent')
-        obj = self.ok('POST', path, AGENT, {'reply': 'r', 'ruling': ' ' + HK25 + ' '})
+        obj = self.ok('POST', path, AGENT, {'reply': 'r'})
         d = self.store.get('to_pm', pid)
-        self.assertEqual((obj['status'], d['status'], d['reply'], d['ruling']),
-                         ('done', 'done', 'r', HK25))
-        other = self.note()
-        self.ok('POST', '/to_pm/send', OWNER)
-        self.ok('POST', '/to_pm/%s/reply' % other, AGENT, {'reply': 'r'})
-        self.assertNotIn('ruling', self.store.get('to_pm', other))
-        # the owner's routes still take no ruling
+        self.assertEqual((obj['status'], d['status'], d['reply']), ('done', 'done', 'r'))
+        self.assertNotIn('ruling', d)
+        # the owner's routes take none either
         self.refused('invalid', 'ruling', 'POST', '/to_pm', OWNER,
                      {'text': 'x', 'ruling': 'decision-7'})
 
@@ -1208,8 +1168,7 @@ class FixTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}, via='web')
         d = self.store.get('questions', qid)
         self.assertEqual((d['via'], d['answer']['via']), ('web', 'web'))
-        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': R7,
-                                                           'if_version': 2}, via='cli')
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'if_version': 2}, via='cli')
         d = self.store.get('questions', qid)
         self.assertEqual((d['via'], d['answer']['via']), ('cli', 'web'))
         mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'}, via='cli')['id']
@@ -1442,8 +1401,7 @@ class SecondFixTest(ApiCase):
                 ('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS,
                                                 'class': 'go'}),
                 ('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}),
-                ('POST', '/questions/%s/log' % qid, AGENT, {'ruling': R7,
-                                                            'if_version': 2}),
+                ('POST', '/questions/%s/log' % qid, AGENT, {'if_version': 2}),
                 ('POST', '/todos', AGENT, {'title': 't', 'commands': ['dir']}),
                 ('POST', '/todos/%s/edit' % tid, OWNER, {'title': 'u'}),
                 ('POST', '/todos/%s/done' % tid, OWNER, None),
@@ -1637,19 +1595,6 @@ class SecondFixTest(ApiCase):
         self.assertIsNone(told['P-011'])
         self.assertEqual((told['P-002'], told['P-006']), ('text', 'kind'))
         self.assertGreaterEqual(len([v for v in told.values() if v]), 4, told)
-
-    # ---- a blank ruling
-    def test_a_blank_ruling_is_refused_not_stored_empty(self):
-        pid = self.note()
-        self.ok('POST', '/to_pm/send', OWNER)
-        path = '/to_pm/%s/reply' % pid
-        for blank in ('', '  ', '\t\n'):
-            with self.subTest(ruling=blank):
-                self.refused('invalid', 'ruling', 'POST', path, AGENT,
-                             {'reply': 'r', 'ruling': blank})
-        self.assertEqual(self.store.get('to_pm', pid)['status'], 'sent')
-        self.ok('POST', path, AGENT, {'reply': 'r', 'ruling': None})       # null: none given
-        self.assertNotIn('ruling', self.store.get('to_pm', pid))
 
     # ---- the store closes while a wait is open
     def test_a_store_closed_during_a_wait_is_the_stores_refusal(self):
@@ -1888,7 +1833,7 @@ class CreatorTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % answered, OWNER, {'choice': 0})
         logged = self.question()
         self.ok('POST', '/questions/%s/answer' % logged, OWNER, {'choice': 1})
-        self.ok('POST', '/questions/%s/log' % logged, AGENT, {'ruling': R1, 'if_version': 2})
+        self.ok('POST', '/questions/%s/log' % logged, AGENT, {'if_version': 2})
         for qid, version in ((answered, 2), (logged, 3)):
             before = self.store.get('questions', qid)
             with self.subTest(id=qid):
@@ -4270,7 +4215,7 @@ class FilingTest(ApiCase):
         mono[0] += api.ACK_WINDOW_S
         self.assertEqual(wait('pm'), [(logs, True), (dones, True), (mine, True)])
         self.ok('POST', '/questions/%s/log' % logs, AGENT,
-                {'ruling': R7, 'if_version': self.doc(logs)['version']})
+                {'if_version': self.doc(logs)['version']})
         self.ok('POST', '/questions/%s/done' % dones, AGENT,
                 {'why': 'filed in EX-2', 'if_version': self.doc(dones)['version']})
         self.assertEqual((self.doc(logs)['status'], self.doc(dones)['status']), ('logged', 'done'))
@@ -4328,7 +4273,7 @@ class FilingTest(ApiCase):
         # the version the asker read still holds, but an answer that may still file is not
         # logged before it does (docs/action-hub.md "Filing the answer")
         self.refused('invalid', 'filing', 'POST', '/questions/%s/log' % qid, AGENT,
-                     {'ruling': R7, 'if_version': first['version']})
+                     {'if_version': first['version']})
         self.assertEqual(self.doc(qid), first)
 
     def test_a_retry_that_fails_another_way_marks_the_new_failure(self):
@@ -4407,7 +4352,7 @@ class FilingTest(ApiCase):
         self.assertIn('the PM handles this answer', d['filing']['message'])
         self.assertEqual(self.pending(), [qid])
         self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': R7, 'if_version': d['version'], 'unfiled': 'the record is closed'})
+                {'if_version': d['version'], 'unfiled': 'the record is closed'})
         self.assertEqual((self.doc(qid)['status'], self.doc(qid)['unfiled_why']),
                          ('logged', 'the record is closed'))
         self.assertEqual(self.refile(), {'ok': True, 'filed': [], 'failed': [],
@@ -4501,7 +4446,7 @@ class FilingTest(ApiCase):
     def handle(self, qid, verb, **body):
         """(path, role, body) of POST questions/{qid}/log (verb 'log', ruling R7) or /done
         (why), at the question's version."""
-        body = dict({'ruling': R7} if verb == 'log' else {'why': 'handled'}, **body)
+        body = dict({} if verb == 'log' else {'why': 'handled'}, **body)
         body['if_version'] = self.doc(qid)['version']
         return '/questions/%s/%s' % (qid, verb), AGENT, body
 
@@ -4769,7 +4714,7 @@ class StandingRuleTest(ApiCase):
         v = self.doc(qid)['version']
         self.refused('invalid', 'standing', 'POST', '/questions/%s/done' % qid, AGENT,
                      {'why': 'filed in EX-1', 'if_version': v})
-        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'ruling': R9, 'if_version': v})
+        self.ok('POST', '/questions/%s/log' % qid, AGENT, {'if_version': v})
         self.assertEqual(self.doc(qid)['status'], 'logged')
         self.assertEqual((self.for_pm(), self.for_asker()), ([], []))
 

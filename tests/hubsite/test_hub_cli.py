@@ -1360,29 +1360,23 @@ class WriteCase(VerbCase):
                          ['ANSWERED Q-1000 left'])
         self.assertEqual(self.ok('questions', '--status', 'answered'),
                          ['Q-1000 v2 answered [kit] which way'])
-        self.assertEqual(self.ok('questions', 'log', 'Q-1000', RULING, '--if-version', '2'),
-                         ['LOGGED Q-1000 ' + RULING])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', '--if-version', '2'),
+                         ['LOGGED Q-1000'])
         doc = self.direct('/questions?status=all')['items'][0]
-        self.assertEqual((doc['status'], doc['ruling'], doc['answer']['note']),
-                         ('logged', RULING, 'as planned'))
+        self.assertEqual((doc['status'], doc.get('ruling'), doc['answer']['note']),
+                         ('logged', None, 'as planned'))
         self.assertEqual(json.loads(self.ok('questions', '--status', 'all', '--json')[0]),
                          self.direct('/questions?status=all'))
 
-    def test_questions_log_replace_corrects_a_logged_ruling(self):
-        other = 'R-' + '0008'
+    def test_questions_log_takes_no_ruling_id_and_a_logged_question_is_not_logged_again(self):
         self.ask()
         self.ok('answer', 'Q-1000', '--choice', '0')
-        self.ok('questions', 'log', 'Q-1000', RULING, '--if-version', '2')
-        self.assertIn('REFUSED', self.refused('questions', 'log', 'Q-1000', other, '--if-version', '3'))
-        self.assertEqual(self.ok('questions', 'log', 'Q-1000', other, '--replace', '--if-version', '3'),
-                         ['LOGGED Q-1000 ' + other])
-        self.assertEqual(self.direct('/questions?status=all')['items'][0]['ruling'], other)
-
-    def test_questions_log_refuses_a_ruling_that_is_not_a_ledger_id(self):
-        self.ask()
-        self.ok('answer', 'Q-1000', '--choice', '0')
-        self.assertIn('ledger ruling id', self.refused('questions', 'log', 'Q-1000',
-                                                       'warning: too long', '--if-version', '2'))
+        for extra in (RULING, '--replace'):
+            (code, out, err) = self.run_cli('questions', 'log', 'Q-1000', extra, '--if-version', '2')
+            self.assertEqual(code, 2, (extra, out, err))
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', '--if-version', '2'), ['LOGGED Q-1000'])
+        self.assertIn('REFUSED', self.refused('questions', 'log', 'Q-1000', '--if-version', '3'))
+        self.assertNotIn('ruling', self.direct('/questions?status=all')['items'][0])
 
     def test_questions_show_prints_one_question_with_its_answer_and_note(self):
         self.ask()
@@ -1418,29 +1412,29 @@ class WriteCase(VerbCase):
                                                          '--if-version', '99'))
         self.assertEqual(self.ok('answer', 'Q-1000', '--choice', 'other', '--note', 'neither'),
                          ['ANSWERED Q-1000 Other'])
-        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-1000', RULING,
+        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-1000',
                                                          '--if-version', '0'))
-        self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', RULING,
+        self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009',
                                                           '--if-version', '1'))
         self.assertIn('REFUSED not_found: ', self.refused('answer', 'Q-009', '--choice', '0'))
 
-    def test_a_ruling_for_an_answer_that_changed_since_is_refused_and_nothing_is_logged(self):
+    def test_a_log_for_an_answer_that_changed_since_is_refused_and_nothing_is_logged(self):
         """The version is the one the caller read: an answer changed after that read is never
-        logged under a ruling written for the earlier one."""
+        logged as if it were the earlier one."""
         self.ask()
         self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '0'), ['ANSWERED Q-1000 left'])
         read = self.direct('/questions?status=answered')['items'][0]['version']
         self.assertEqual(self.ok('questions', '--status', 'answered'),
                          ['Q-1000 v%d answered [kit] which way' % read])
         self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '1'), ['ANSWERED Q-1000 right'])
-        err = self.refused('questions', 'log', 'Q-1000', RULING, '--if-version', str(read))
+        err = self.refused('questions', 'log', 'Q-1000', '--if-version', str(read))
         self.assertTrue(err.startswith('REFUSED conflict: '), err)
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc.get('ruling'), doc['answer']['label']),
                          ('answered', None, 'right'))
         # the version of the answer as it is now logs it
-        self.assertEqual(self.ok('questions', 'log', 'Q-1000', RULING, '--if-version',
-                                 str(doc['version'])), ['LOGGED Q-1000 ' + RULING])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', '--if-version',
+                                 str(doc['version'])), ['LOGGED Q-1000'])
 
     def test_questions_since_lists_the_ones_written_at_or_after_it(self):
         # the PM-start digest's command (docs/pm-start.md "Filed answers")
@@ -1611,12 +1605,14 @@ class WriteCase(VerbCase):
                          ['QUEUED P-002'])
         self.assertEqual(self.ok('to-pm'), ['P-001 queued [kit] first', 'P-002 queued [-] second line'])
         self.assertEqual(self.ok('to-pm', 'send'), ['SENT P-001 P-002'])
-        self.assertEqual(self.ok('to-pm', 'reply', 'P-001', 'done as asked', RULING),
+        (code, out, err) = self.run_cli('to-pm', 'reply', 'P-001', 'done as asked', RULING)
+        self.assertEqual(code, 2, 'a ruling id is no argument of reply: %r' % ((out, err),))
+        self.assertEqual(self.ok('to-pm', 'reply', 'P-001', 'done as asked'),
                          ['REPLIED P-001'])
         self.assertEqual(self.ok('to-pm', 'reply', 'P-002', 'seen'), ['REPLIED P-002'])
         docs = self.direct('/to_pm?status=all')['items']
         self.assertEqual([(d['reply'], d.get('ruling')) for d in docs],
-                         [('done as asked', RULING), ('seen', None)])
+                         [('done as asked', None), ('seen', None)])
 
     def test_the_inbox_is_posted_to_listed_and_read(self):
         self.assertEqual(self.ok('inbox'), [])
@@ -1916,7 +1912,7 @@ class RecordArgumentCase(CliCase):
 
 class ArgumentCase(CliCase):
     VERBS =(('questions',), ('questions', 'add', '--title', 't'),
-             ('questions', 'show', 'Q-001'), ('questions', 'log', 'Q-001', 'D-7', '--if-version', '1'),
+             ('questions', 'show', 'Q-001'), ('questions', 'log', 'Q-001', '--if-version', '1'),
              ('answer', 'Q-001', '--choice', '0'),
              ('todos',), ('todos', 'add', '--title', 't'), ('todos', 'done', 'T-001'),
              ('todos', 'ack', 'T-001'), ('stories',),
@@ -1958,7 +1954,7 @@ class ArgumentCase(CliCase):
         with mock.patch.object(serve, 'ask', down):
             self.assertEqual(self.run_cli('pending')[0], 3)
             self.assertEqual(self.run_cli('questions', '--port', '8794')[0], 3)
-            self.assertEqual(self.run_cli('questions', '--port', '8794', 'log', 'Q-001', 'D-7',
+            self.assertEqual(self.run_cli('questions', '--port', '8794', 'log', 'Q-001',
                                           '--if-version', '1')[0], 3)
             self.assertEqual(self.run_cli('todos', 'ack', 'T-001', '--port', '8795')[0], 3)
         self.assertEqual(asked, [8793, 8794, 8794, 8795])
@@ -1995,9 +1991,9 @@ class ArgumentCase(CliCase):
 
     def test_questions_log_and_stories_set_need_the_version_and_ask_nothing_without_it(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
-        for argv in (('questions', 'log', 'Q-001', 'D-7'),
+        for argv in (('questions', 'log', 'Q-001'),
                      ('stories', 'set', 'S-001', '--status', 'review'),
-                     ('questions', 'log', 'Q-001', 'D-7', '--json')):
+                     ('questions', 'log', 'Q-001', '--json')):
             with self.subTest(argv=argv):
                 (code, out, err), seen = self.sent(*argv)
                 self.assertEqual((code, out), (2, ''), err)
@@ -2005,14 +2001,9 @@ class ArgumentCase(CliCase):
                 self.assertIn('--if-version', err.split('USAGE: ')[1])
                 self.assertEqual(seen, [], 'a verb with no version asked the server')
         # with it, the one call is the write, with the version that was given: nothing is read first
-        (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--if-version', '4')
+        (code, out, err), seen = self.sent('questions', 'log', 'Q-001', '--if-version', '4')
         self.assertEqual((code, err), (0, ''), out)
-        self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'ruling': 'D-7', 'if_version': 4})])
-        (code, out, err), seen = self.sent('questions', 'log', 'Q-001', 'D-7', '--replace',
-                                           '--if-version', '4')
-        self.assertEqual((code, err), (0, ''), out)
-        self.assertEqual(seen, [('POST', '/questions/Q-001/log',
-                                 {'ruling': 'D-7', 'if_version': 4, 'replace': True})])
+        self.assertEqual(seen, [('POST', '/questions/Q-001/log', {'if_version': 4})])
         for argv, path, body in (
                 (('questions', 'add', '--title', 't', '--class', 'cross-repo'), '/questions',
                  {'title': 't', 'class': 'cross-repo'}),
@@ -2025,7 +2016,7 @@ class ArgumentCase(CliCase):
                 self.assertEqual(seen, [('POST', path, body)])
         self.assertEqual(self.run_cli('questions', 'add', '--title', 't', '--class', 'other',
                                       '--port', '8791')[0], 2)
-        for verb, more, body in (('log', ('D-7',), {'ruling': 'D-7'}),
+        for verb, more, body in (('log', (), {}),
                                  ('done', ('--why', 'w'), {'why': 'w'})):
             with self.subTest(verb=verb):
                 (code, out, err), seen = self.sent('questions', verb, 'Q-001', *more,
@@ -2114,7 +2105,7 @@ class ArgumentCase(CliCase):
                     (('inbox', 'add', '--text', 't'), ('POST', '/inbox', 'agent')),
                     (('inbox', 'read', 'M-001'), ('POST', '/inbox/M-001/read', 'owner')),
                     (('questions', 'add', '--title', 't'), ('POST', '/questions', 'agent')),
-                    (('questions', 'log', 'Q-001', 'D-7', '--if-version', '3'),
+                    (('questions', 'log', 'Q-001', '--if-version', '3'),
                      ('POST', '/questions/Q-001/log', 'agent')),
                     (('questions',), ('GET', '/questions', 'agent')),
                     (('inbox',), ('GET', '/snapshot', 'agent')),

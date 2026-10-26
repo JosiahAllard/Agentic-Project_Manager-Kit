@@ -184,7 +184,7 @@ class ForTest(DirectCase):
         self.assertEqual(self.ids(self.pending(**{'for': 'kit'})), [qid])
         self.assertEqual(self.store.get('questions', qid)['version'], version)
         self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': RULING, 'if_version': version})
+                {'if_version': version})
         self.assertEqual(self.pending(), [])
         self.assertEqual(self.pending(**{'for': 'kit'}), [])
 

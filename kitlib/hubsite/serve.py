@@ -378,9 +378,6 @@ class Sources(object):
                    no push notifications
       push_dir     the folder push notifications keep their outbox and undelivered log in (the
                    launcher's state folder); push notifications run only when both are set
-      rulings      callable(rid) -> whether a ledger file holds the ruling id, or raises when
-                   the ledger cannot be read (the ruling_exists view); None: no such view, and a
-                   logged ruling is checked for its shape alone
       lock         the machine lock's door for the Api's lock routes (kitlib.hubsite.lockdoor
                    LockDoor, or its like: revision, view, stats); None: those routes answer
                    `unavailable`
@@ -389,8 +386,7 @@ class Sources(object):
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
                  access_now=None, known_repos=None, push=None, push_dir=None, lock=None,
-                 findings=None, rulings=None):
-        self.rulings = rulings
+                 findings=None):
         self.findings = findings
         self.lock = lock
         self.push = push
@@ -511,25 +507,6 @@ def _repos_with_session_keys(cfg, stored, toplevel):
     return found
 
 
-def _ruling_exists(home):
-    """The Sources.rulings callable: whether the ledger file that can hold the ruling id `rid`
-    (kitlib.ledger.files.path_of, from the machine config read now) has an entry of that id. False
-    for an id no configured file can hold or a file not there yet; OSError for one that cannot be
-    read (the view answers `unavailable`)."""
-    from kitlib.ledger import files as ledger_files, read     # here: only a log reads the ledger
-
-    def exists(rid):
-        files = ledger_files.of_config(user.user_config(home))
-        path = ledger_files.path_of(files, rid) if files else None
-        if not path or not os.path.exists(path):
-            return False
-        text, why = read.read_file(path)
-        if text is None:
-            raise OSError(why)
-        return any(e.id == rid for e in read.parse(text))
-    return exists
-
-
 def machine_sources(home=None, sync=True):
     """This machine's Sources, read from the machine config under `home` (default the user's).
     It writes nothing and starts no git. sync=False: no git sync (a scratch store). The lock
@@ -550,7 +527,6 @@ def machine_sources(home=None, sync=True):
         src.findings = os.path.join(pm['path'], lint_result.FOLDER)
     from . import lockdoor          # here: only the machine's server reads the machine lock
     src.lock = lockdoor.LockDoor()
-    src.rulings = _ruling_exists(home)
     if pmwatch.launcher_configured(home):
         def report():
             from kitlib.launcher import settings as launcher_settings   # here: only this needs it
@@ -616,8 +592,6 @@ class SiteViews(object):
         self.findings = self._findings
         self.lint_runs = self._lint_runs
         self.usage = self._usage
-        if sources.rulings is not None:
-            self.ruling_exists = self._ruling_exists
         if backlog_views is not None:
             self.backlog = self._open
             self.completed = self._completed
@@ -745,9 +719,6 @@ class SiteViews(object):
         out = recordwrite.answer(root, id, qid, at, title, label, note, via, other, waiting)
         self._backlog.reread(name, root)
         return out
-
-    def _ruling_exists(self, rid):
-        return bool(self._sources.rulings(rid))
 
     def _notices(self):
         return derived.notices(self._sources.notices)

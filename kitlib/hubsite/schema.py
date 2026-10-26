@@ -35,7 +35,7 @@ FIELDS = {
     'questions': (('status', 'title'), {
         'status': _STR, 'title': _STR, 'repo': _STR, 'from': _STR, 'asked_at': _STR,
         'context': _STR, 'options': _LIST, 'recommended': _INT, 'refs': _LIST, 'urgent': _BOOL,
-        'answer': _DICT, 'ruling': _STR, 'story': _STR, 'done_why': _STR, 'done_at': _STR,
+        'answer': _DICT, 'story': _STR, 'done_why': _STR, 'done_at': _STR,
         'record': _DICT, 'class': _STR, 'filing': _DICT, 'filed_at': _STR,
         'unfiled_why': _STR}),
     'inbox': (('text',), {
@@ -47,7 +47,7 @@ FIELDS = {
         'pm_ack': (bool, str)}),
     'to_pm': (('status', 'kind', 'text'), {
         'status': _STR, 'kind': _STR, 'text': _STR, 'repo': _STR, 'urgent': _BOOL,
-        'created_at': _STR, 'sent_at': _STR, 'reply': _STR, 'ruling': _STR, 'done_at': _STR,
+        'created_at': _STR, 'sent_at': _STR, 'reply': _STR, 'done_at': _STR,
         'refs': _LIST, 'finding': _STR}),
     'stories': (('status', 'repo', 'title', 'story'), {
         'status': _STR, 'repo': _STR, 'title': _STR, 'story': _STR, 'urgent': _BOOL,
