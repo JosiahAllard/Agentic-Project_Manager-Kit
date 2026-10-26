@@ -11,15 +11,15 @@ Go down only when the step above genuinely cannot, and say why.
 2. **Free-licence library** - real-world material synthesis cannot reach: impacts, crowd,
    footsteps. Prefer public domain over attribution-required. Record every import where the
    project records them, whatever the licence.
-3. **Text to speech** - announcer lines only.
-4. **Local music generation** - music only (menu, match and victory themes, stingers over a few
-   seconds), never sound effects. ACE-Step via `python <kit>/optional/comfy/comfy_gen.py music`
-   (MIT; `<kit>/knowledge/asset-generation/MODELS.md`). It re-runs itself under the machine lock
+3. **Text to speech** - only for the lines the profile's **Audio** section allows it.
+4. **Local music generation** - only for what the profile's **Audio** section allows it. ACE-Step
+   via `python <kit>/optional/comfy/comfy_gen.py music` (MIT;
+   `<kit>/knowledge/asset-generation/MODELS.md`). It re-runs itself under the machine lock
    (kind local-ai): a kit lock wrapper, run directly (skill machine-lock-run), with no lock of
-   your own around it. Short runs while exploring; ask for
-   `[Instrumental]`. `check` fails: start and install nothing, say so. Record every session,
-   failures included, in the repo's `docs/ops/assets.md`: tags, seconds, seed, what you measured,
-   the owner's verdict once you have it.
+   your own around it. Short runs while exploring; ask for `[Instrumental]`. `check` fails: start
+   and install nothing, say so. Record every session, failures included, where the profile's
+   **Audio** section says: tags, seconds, seed, what you measured, the owner's verdict once you
+   have it.
 
 ## Searching a library
 

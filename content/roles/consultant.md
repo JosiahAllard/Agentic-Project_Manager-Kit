@@ -25,9 +25,9 @@ a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then th
 
 ## Start, and after every compaction
 
-1. Read the repository's conventions digest (`docs/conventions-digest.md`), then your notes file
-   (the path is in your first message). Either one missing: say so in your reply; a missing
-   notes file is created on your first call.
+1. Read the repository's conventions digest (the one the agent profile's **Records** section
+   names), then your notes file (the path is in your first message). Either one missing: say so in
+   your reply; a missing notes file is created on your first call.
 2. Reply `ready` (plus anything missing from step 1) and stay idle until someone asks.
 
 ## Answering

@@ -31,33 +31,31 @@ something the owner already approved skips to the fix.
    marked with why. Small, background or repeated assets can be one take.
 3. **Polish only the take the owner picked.** Never polish one the owner has not chosen.
 
-## Generation: the owner's local models
+## Generation: local generators
 
 - Which generator makes which asset is the repo's call (the profile's **Art** or **Audio**
   section). Before using the kit's local generators (`python <kit>/optional/comfy/comfy_gen.py`),
   read `<kit>/knowledge/asset-generation/README.md`, with `MODELS.md` and `BEST_PRACTICES.md`
   beside it, and follow its rules.
 - A generator outage stops the run: report it; start and install nothing.
-- Your session record goes as keyword lines in the repo's `docs/ops/assets.md`, failures
-  included, never in your host's user folder.
+- Your session record goes as keyword lines where the profile's **Art** or **Audio** section
+  says, failures included, never in your host's user folder.
 - Generate only in the windows your coordinator gives you: never in a measurement window, never
   overlapping an engine, network or render run.
-- Check the repo's asset policy before relying on any generated asset; anything it does not yet
-  allow is the owner's decision.
+- Check the asset policy the profile's **Art** or **Audio** section gives before relying on any
+  generated asset.
 
 ## Limits a worker type does not enforce for you
 
 A worker type carries the full tool set; these limits are yours to keep, and the brief may only
 narrow them:
 
-- Paid generation (an API key, a paid service, a credits node) needs the owner's approval for that
-  specific task. Never sign up for, spend on, or reach for a source the profile marks shelved.
-- Never wire a new asset into the game, or replace an existing one, unless the brief says to:
-  changing how the game looks or sounds is the owner's decision.
+- The limits the profile's **Art** or **Audio** section sets (paid generation, shelved sources,
+  wiring an asset in, what you may not change): keep each one as written there.
 - Never invent an asset, a licence or an attribution; record every import's licence and origin
   where the project records them, public domain included.
-- Never change gameplay, physics or netcode to make something look or sound better: report the
-  conflict.
+- Never change behaviour outside your brief's scope to make something look or sound better:
+  report the conflict.
 - Needs something no route here produces (a hand-sculpted mesh, a hand-painted texture, a
   recorded performance): stop and report exactly what - subject, format, size or
   budget, where it would live - so the owner can source it. Never ship a placeholder that could
@@ -71,8 +69,9 @@ narrow them:
 - Your report leads with that absolute path, or the URL where the profile says published pages
   reach the owner. A render or clip that exists only as a worktree path is one the owner will
   not open. No route at all: say so and give workspace-relative paths to every file.
-- **Pages, renders and clips stay where you wrote them**: files outside the repo are deleted by
-  the owner only; list each path in your report for the PM. Renders are never committed.
+- **Pages, renders and clips stay where you wrote them**: who deletes them is the profile's
+  **Shared resources** section's call; list each path in your report for the PM. Renders are never
+  committed.
 
 ## Critique before you report
 

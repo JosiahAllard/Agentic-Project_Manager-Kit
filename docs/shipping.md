@@ -104,7 +104,8 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
 ## Knowledge (`knowledge/asset-generation`)
 
 README, BEST_PRACTICES and MODELS. No session log and no samples: each repository records its
-sessions in its own `docs/ops/assets.md`, and lessons that hold up go into BEST_PRACTICES.
+sessions where its profile's **Art** or **Audio** section says (the template's default:
+`docs/ops/assets.md`), and lessons that hold up go into BEST_PRACTICES.
 
 ## Stays repo-local
 
