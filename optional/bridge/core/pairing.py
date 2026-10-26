@@ -108,7 +108,9 @@ class PairingStore:
             raise PairingError('invalid-verifier-port')
         self.path = Path(path)
         self._live_check, self._owner_check = live_check, owner_check
-        self._lock, self._peers, self._db = threading.RLock(), {}, None
+        # Kept so a sibling state file (the writer-lease log) is created the same way.
+        self.prepare_new_file = prepare_new_file
+        self._lock, self._peers, self._db, self._observers = threading.RLock(), {}, None, []
         if not self.path.is_absolute() or not self.path.parent.is_dir():
             raise PairingError('protected-absolute-state-path-required')
         try:
@@ -208,6 +210,20 @@ class PairingStore:
             if self._route_count() > MAX_ROUTES:
                 raise PairingError('route-capacity')
 
+    def on_observe(self, callback):
+        """Private service port: callback(binding) runs after each verified observation.
+
+        A listener uses it to learn that a session now has this exact binding, so
+        any other binding it holds for that session is replaced. A failed live
+        check or a withdraw is not reported: a chat between turns or missed by one
+        discovery pass is not closed. Runs under the store lock; a failing
+        callback never blocks the observation.
+        """
+        if not callable(callback):
+            raise PairingError('invalid-verifier-port')
+        with self._lock:
+            self._observers.append(callback)
+
     def _live(self, binding):
         try:
             verified = self._live_check is not None and self._live_check(binding) is True
@@ -232,6 +248,11 @@ class PairingStore:
             self._peers[session] = binding
             self._promote_legacy()
             self._observed(binding)
+            for callback in tuple(self._observers):
+                try:
+                    callback(binding)
+                except Exception:
+                    pass
             return binding.reference
 
     def registered(self):
