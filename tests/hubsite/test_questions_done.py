@@ -153,6 +153,12 @@ class RefusedTest(DoneCase):
         self.assertIn('only its asker or pm', obj['error']['message'])
         self.assertEqual(self.store.get('questions', qid), before)
 
+    def test_unfiled_is_refused_on_a_question_bound_to_no_record(self):
+        qid = self.answered()
+        obj = self.refused('invalid', 'unfiled', qid,
+                           {'why': 'w', 'unfiled': 'no record', 'if_version': self.version(qid)})
+        self.assertIn('only an answer whose filing failed', obj['error']['message'])
+
     def test_the_owner_cannot_mark_one_done(self):
         qid = self.answered()
         status, obj = self.call('POST', '/questions/%s/done' % qid, OWNER,

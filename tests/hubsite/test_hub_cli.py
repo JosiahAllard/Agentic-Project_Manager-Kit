@@ -1857,7 +1857,14 @@ class RecordArgumentCase(CliCase):
         self.assertEqual(self.run_asking('questions', 'bind', '--dry-run', '--apply')[0], 2)
         self.assertEqual(self.sent, [])
         answer = {'ok': True, 'pairs': [{'question': 'Q-1000', 'bound': True,
-                                         'record': {'repo': 'kit', 'id': 'EX-1'}}],
+                                         'record': {'repo': 'kit', 'id': 'EX-1'}},
+                                        {'question': 'Q-1005', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-5'},
+                                         'filing': {'filed': True}},
+                                        {'question': 'Q-1006', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-6'},
+                                         'filing': {'filed': False, 'code': 'store',
+                                                    'message': 'busy'}}],
                   'failed': [{'question': 'Q-1001', 'code': 'not_found', 'message': 'gone'}],
                   'misses': [{'record': {'repo': 'kit', 'id': 'EX-3'}, 'why': 'cites no question'},
                              {'record': {'repo': 'down', 'id': None},
@@ -1870,7 +1877,9 @@ class RecordArgumentCase(CliCase):
         code, out, err = self.run_asking('questions', 'bind', '--apply')
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(out.splitlines(), [
-            'BOUND Q-1000 kit:EX-1', 'NOT BOUND Q-1001: gone (not_found)',
+            'BOUND Q-1000 kit:EX-1', 'BOUND Q-1005 kit:EX-5', 'FILED Q-1005',
+            'BOUND Q-1006 kit:EX-6', 'NOT FILED Q-1006: busy (store)',
+            'NOT BOUND Q-1001: gone (not_found)',
             'MISS kit:EX-3: cites no question', 'MISS down: the repository could not be read',
             'MULTI kit:EX-4 cites Q-1002 Q-1003',
             'SKIP Q-1004: bound to another record'])
@@ -1977,6 +1986,16 @@ class ArgumentCase(CliCase):
         self.assertEqual((code, err), (0, ''), out)
         self.assertEqual(seen, [('POST', '/questions/Q-001/log',
                                  {'ruling': 'D-7', 'if_version': 4, 'replace': True})])
+        for verb, more, body in (('log', ('D-7',), {'ruling': 'D-7'}),
+                                 ('done', ('--why', 'w'), {'why': 'w'})):
+            with self.subTest(verb=verb):
+                (code, out, err), seen = self.sent('questions', verb, 'Q-001', *more,
+                                                   '--unfiled', 'the record is gone',
+                                                   '--if-version', '4')
+                self.assertEqual((code, err), (0, ''), out)
+                self.assertEqual(seen, [('POST', '/questions/Q-001/' + verb,
+                                         dict(body, if_version=4,
+                                              unfiled='the record is gone'))])
         (code, out, err), seen = self.sent('stories', 'set', 'S-001', '--status', 'review',
                                            '--if-version', '0')
         self.assertEqual((code, err), (0, ''), out)
