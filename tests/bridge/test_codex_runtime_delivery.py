@@ -330,7 +330,8 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
         adapter=self.leased()
         self.grant()
         self.complete_source()
-        self.refused(adapter,self.claude_message)
+        self.refused(adapter,self.claude_message,'codex-direct-context-unverified')
+        self.assertEqual(self.controller.leases.writer(self.recipient),self.sender)  # the lease itself stays
 
     def test_revoked_lease_invalidates_an_open_scope_before_write_and_time_does_not(self):
         adapter=self.leased()

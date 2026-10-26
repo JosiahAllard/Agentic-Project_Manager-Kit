@@ -58,8 +58,11 @@ class WriterLeases:
     route and every native check still apply at each write, and the host decides
     which chats can be a writer. One writer per recipient; a new grant replaces
     the old one. A lease has no expiry (owner ruling 2026-10-26): it lasts until
-    it is revoked, either chat's exact binding leaves (drop_chat), or the service
-    stops. Each entry keeps its grant time (clock, wall seconds) for display only.
+    it is revoked, a different binding is observed for either chat's session
+    (drop_replaced), or the service stops. A failed live check or a withdraw is
+    not a close and keeps the lease; the write-time checks still need the writer
+    live and in an active turn. Each entry keeps its grant time (clock, wall
+    seconds) for display only.
     """
     def __init__(self, *, owner_check, clock=time.time):
         if not callable(owner_check): raise PairingError('invalid-owner-components')
@@ -98,16 +101,31 @@ class WriterLeases:
             if current is None or current[0].reference!=writer_ref: return None
             return current[0],current[1]
 
-    def withdraw(self,writer,recipient):
-        """Remove exactly this lease with no owner proof; removing never grants anything."""
+    def entry(self,recipient_ref):
+        """The current (writer, recipient, grant time) entry for this recipient, or None."""
+        with self._lock: return self._leases.get(recipient_ref)
+
+    def withdraw(self,writer,recipient, *, restore=None):
+        """Undo exactly this lease with no owner proof, putting back the entry it replaced.
+
+        restore must be the owner-granted entry this lease replaced, from entry().
+        """
         with self._lock:
             current=self._leases.get(recipient.reference)
-            if current is not None and current[:2]==(writer,recipient): del self._leases[recipient.reference]
+            if current is None or current[:2]!=(writer,recipient): return
+            if restore is not None and restore[1]==recipient: self._leases[recipient.reference]=restore
+            else: del self._leases[recipient.reference]
 
-    def drop_chat(self,binding):
-        """A chat left: drop every lease naming its exact binding. Returns the dropped pairs."""
+    def drop_replaced(self,binding):
+        """binding is now current for its session: drop leases naming another binding of it.
+
+        Returns the dropped (writer, recipient) reference pairs.
+        """
+        if type(binding) is not ChatBinding: return ()
+        session=binding.identity.session_id
         with self._lock:
-            gone=[key for key,(writer,recipient,_granted) in self._leases.items() if binding in (writer,recipient)]
+            gone=[key for key,(writer,recipient,_granted) in self._leases.items()
+                if any(chat.identity.session_id==session and chat!=binding for chat in (writer,recipient))]
             dropped=[]
             for key in gone:
                 writer,recipient,_granted=self._leases.pop(key)
@@ -157,7 +175,7 @@ class OwnerControls:
             raise PairingError('invalid-owner-components')
         self.pairings,self.decisions,self.describe,self.leases=pairings,decisions,describe,leases
         self._log_lock=threading.Lock()
-        if leases is not None: pairings.on_leave(self._chat_left)
+        if leases is not None: pairings.on_observe(self._chat_observed)
 
     def chats(self):
         result=[]
@@ -198,7 +216,7 @@ class OwnerControls:
     def lease(self,writer_ref,recipient_ref, *, enabled):
         """Owner button: let the writer chat carry delivery to the recipient chat, or stop it.
 
-        A grant returns its grant time and lasts until revoked or either chat leaves.
+        A grant returns its grant time and lasts until revoked or either chat's binding is replaced.
         """
         if self.leases is None: raise PairingError('writer-lease-unavailable')
         for reference in (writer_ref,recipient_ref): digest(reference)
@@ -212,15 +230,17 @@ class OwnerControls:
         if (checked.sender_ref,checked.recipient_ref)!=(writer_ref,recipient_ref):
             raise PairingError('visible-chat-changed')
         grant=WriterGrant(writer_ref,recipient_ref,True)
+        replaced=self.leases.entry(recipient_ref)
         granted=self.leases.grant(writer,recipient,grant,self.decisions.mint(grant))
         try:
-            # A chat that left between the check and the grant drops nothing (drop_chat
-            # ran first), so refuse it here; one that leaves later is dropped by drop_chat.
+            # A binding replaced between the check and the grant was dropped before
+            # this lease existed, so refuse it here.
             observed=self.pairings.registered()
             if writer not in observed or recipient not in observed: raise PairingError('visible-chat-changed')
             self._log('grant','owner',writer_ref,recipient_ref,granted)
         except Exception as error:
-            self.leases.withdraw(writer,recipient)
+            # Undo this grant only; the writer it replaced keeps its lease.
+            self.leases.withdraw(writer,recipient,restore=replaced)
             if type(error) is PairingError: raise
             raise PairingError('writer-lease-log-failed') from None
         return granted
@@ -243,9 +263,9 @@ class OwnerControls:
             except Exception: pass
         return removed
 
-    def _chat_left(self,binding):
-        for writer_ref,recipient_ref in self.leases.drop_chat(binding):
-            try: self._log('closed','bridge',writer_ref,recipient_ref,self.leases.clock())
+    def _chat_observed(self,binding):
+        for writer_ref,recipient_ref in self.leases.drop_replaced(binding):
+            try: self._log('replaced','bridge',writer_ref,recipient_ref,self.leases.clock())
             except Exception: pass
 
     def _log(self,event,by,writer_ref,recipient_ref,when):

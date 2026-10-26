@@ -110,7 +110,7 @@ class PairingStore:
         self._live_check, self._owner_check = live_check, owner_check
         # Kept so a sibling state file (the writer-lease log) is created the same way.
         self.prepare_new_file = prepare_new_file
-        self._lock, self._peers, self._db, self._leaving = threading.RLock(), {}, None, []
+        self._lock, self._peers, self._db, self._observers = threading.RLock(), {}, None, []
         if not self.path.is_absolute() or not self.path.parent.is_dir():
             raise PairingError('protected-absolute-state-path-required')
         try:
@@ -210,24 +210,19 @@ class PairingStore:
             if self._route_count() > MAX_ROUTES:
                 raise PairingError('route-capacity')
 
-    def on_leave(self, callback):
-        """Private service port: callback(binding) runs when an observed chat leaves.
+    def on_observe(self, callback):
+        """Private service port: callback(binding) runs after each verified observation.
 
-        A chat leaves when it fails its live check (it closed), is withdrawn, or
-        is replaced by a new binding for the same session. Runs under the store
-        lock; a failing callback never blocks the departure.
+        A listener uses it to learn that a session now has this exact binding, so
+        any other binding it holds for that session is replaced. A failed live
+        check or a withdraw is not reported: a chat between turns or missed by one
+        discovery pass is not closed. Runs under the store lock; a failing
+        callback never blocks the observation.
         """
         if not callable(callback):
             raise PairingError('invalid-verifier-port')
         with self._lock:
-            self._leaving.append(callback)
-
-    def _left(self, binding):
-        for callback in tuple(self._leaving):
-            try:
-                callback(binding)
-            except Exception:
-                pass
+            self._observers.append(callback)
 
     def _live(self, binding):
         try:
@@ -237,7 +232,6 @@ class PairingStore:
         if not verified:
             if self._peers.get(binding.identity.session_id) == binding:
                 del self._peers[binding.identity.session_id]
-                self._left(binding)
             raise PairingError('chat-live-binding-unverified')
 
     def observe(self, binding):
@@ -252,10 +246,13 @@ class PairingStore:
             if previous is None and len(self._peers) >= MAX_CHATS:
                 raise PairingError('chat-capacity')
             self._peers[session] = binding
-            if previous is not None and previous != binding:
-                self._left(previous)
             self._promote_legacy()
             self._observed(binding)
+            for callback in tuple(self._observers):
+                try:
+                    callback(binding)
+                except Exception:
+                    pass
             return binding.reference
 
     def registered(self):
@@ -386,7 +383,6 @@ class PairingStore:
             peer = self._peers.get(session_id)
             if peer is not None:
                 del self._peers[session_id]
-                self._left(peer)
 
     def close(self):
         with self._lock:

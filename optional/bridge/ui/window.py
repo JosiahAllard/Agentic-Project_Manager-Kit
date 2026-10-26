@@ -42,7 +42,8 @@ class Window:
         writers=ttk.Frame(frame)
         writers.pack(fill='x',pady=(0,12))
         # A writer lease: the first chat (a Codex app chat with an active turn) carries
-        # delivery to the second for a chat of another app. It lasts until Stop or either chat closes.
+        # delivery to the second for a chat of another app. It lasts until Stop, a PM revoke, a
+        # service restart, or either chat coming back as a different chat binding (a permission change).
         self.lend=ttk.Button(writers,text='Let first chat deliver to second for other apps',
             command=lambda:self._lease(True))
         self.lend.pack(side='left')
@@ -103,8 +104,8 @@ class Window:
         if self.preview or len(self._order)!=2: return
         try:
             granted=self.owner.lease(*self._order,enabled=enabled)
-            self.status.set('Since '+_when(granted)+' the first chat delivers to the second for other apps, '
-                'until you click Stop or either chat closes. It delivers only during an active turn.'
+            self.status.set('Since '+_when(granted)+' the first chat may deliver to the second for other apps, '
+                'until you click Stop. It delivers only while it is in an active turn.'
                 if enabled else 'The first chat no longer delivers to the second.')
         except Exception:
             self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')

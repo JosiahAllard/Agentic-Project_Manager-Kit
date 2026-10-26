@@ -96,12 +96,14 @@ nominates no channel, and the other halves keep working.
   of another host has none, so the owner may lend one: in the window, select a Codex desktop chat
   (the writer) and then the Codex recipient, and click the lease button. The lease:
   - names one writer for one recipient, and a new grant for that recipient replaces the old one
-  - has no expiry: it lasts until the owner clicks Stop, the PM revokes it (`OwnerControls.revoke`,
-    a private port), or either chat closes (fails its live check, is withdrawn or is replaced), which
-    drops it; the window shows when it was granted
-  - is logged: every grant, revoke and close appends one JSON line (`at`, `event`, `by`, `writer`,
-    `recipient`; chat references only) to `writer-leases.log` beside `pairings.sqlite`, and a grant
-    that cannot be logged is refused
+  - has no expiry: it ends when the owner clicks Stop, the PM revokes it (`OwnerControls.revoke`,
+    a private port), the service restarts, or either chat's session is observed with a different
+    binding (for example a permission change). A failed live check, a turn change or a chat missed
+    by one discovery pass ends nothing: the write-time checks below refuse while the chat is away.
+    The window shows when it was granted
+  - is logged: every grant, revoke and replacement appends one JSON line (`at`, `event`, `by`,
+    `writer`, `recipient`; chat references only) to `writer-leases.log` beside `pairings.sqlite`.
+    A grant that cannot be logged is refused, and a writer it would have replaced keeps its lease
   - is granted with a one-use owner proof; a route choice's proof never grants a lease, and a
     lease's proof never selects a route
   - lives in the service's memory only, so a restart drops it; only its log is written to disk

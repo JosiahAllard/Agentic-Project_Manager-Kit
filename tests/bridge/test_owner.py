@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from optional.bridge.core.owner import MAX_LEASES,OwnerControls,OwnerDecisions,WriterGrant,WriterLeases
 from optional.bridge.core.pairing import PairingError,PairingStore
@@ -123,52 +124,74 @@ class WriterLeaseTests(unittest.TestCase):
         self.assertIsNone(self.leases.writer(self.b))
         self.assertFalse(self.owner.revoke(self.a.reference,self.b.reference,by='pm'))
 
-    def test_a_closed_writer_or_recipient_chat_drops_the_lease(self):
+    def test_a_lease_survives_a_failed_live_check_and_the_same_binding_returning(self):
+        # A Codex chat fails observation while it starts a new turn; that is not a close.
         for gone in ('a','b'):
-            self.live['a'],self.live['b']=self.a,self.b
-            for peer in (self.a,self.b): self.pairs.observe(peer)
             self.owner.lease(self.a.reference,self.b.reference,enabled=True)
             del self.live[gone]
             with self.assertRaises(PairingError): self.pairs.propose('a','b')  # the live check fails
-            self.assertEqual(self.leases.current(),())
+            self.assertEqual(self.leases.writer(self.b),self.a)
             self.live[gone]=getattr(self,gone)
-            self.pairs.observe(getattr(self,gone))  # the same binding back: the lease stays gone
-            self.assertIsNone(self.leases.writer(self.b))
+            self.pairs.observe(getattr(self,gone))
+            self.assertEqual(self.owner.writers(),((self.a.reference,self.b.reference),))
 
-    def test_a_withdrawn_or_replaced_chat_drops_the_lease(self):
+    def test_a_lease_survives_a_withdraw_and_the_chat_returning(self):
+        # One discovery pass that misses a chat withdraws it; that is not a close either.
         self.owner.lease(self.a.reference,self.b.reference,enabled=True)
         self.pairs.withdraw('a')
-        self.assertEqual(self.leases.current(),())
+        self.pairs.withdraw('b')
+        self.assertEqual(self.leases.writer(self.b),self.a)
         self.pairs.observe(self.a)
+        self.pairs.observe(self.b)
+        self.assertTrue(self.leases.holds(self.a,self.b))
+
+    def test_a_different_binding_for_a_session_drops_only_its_leases(self):
+        d=chat('d')
+        self.live['d']=d
+        self.pairs.observe(d)
         self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.owner.lease(self.c.reference,d.reference,enabled=True)
+        self.pairs.withdraw('c')  # c away, not replaced: c -> d stays
         self.live['b']=replace(self.b,permission_revision=2)
-        self.pairs.observe(self.live['b'])
-        self.assertEqual(self.leases.current(),())
+        self.pairs.observe(self.live['b'])  # recipient b replaced
+        self.assertEqual(self.leases.current(),((self.c.reference,d.reference),))
+        self.owner.lease(self.a.reference,self.live['b'].reference,enabled=True)
+        self.pairs.withdraw('a')
+        self.live['a']=replace(self.a,permission_revision=2)
+        self.pairs.observe(self.live['a'])  # writer a replaced, after an absence
+        self.assertEqual(self.leases.current(),((self.c.reference,d.reference),))
 
-    def test_closed_chats_never_fill_lease_capacity(self):
+    def test_replaced_bindings_never_fill_lease_capacity(self):
         for index in range(MAX_LEASES+1):
-            recipient=chat('r%d'%index)
-            self.live['r%d'%index]=recipient
-            self.pairs.observe(recipient)
-            self.owner.lease(self.a.reference,recipient.reference,enabled=True)
-            self.pairs.withdraw('r%d'%index)
+            self.owner.lease(self.a.reference,self.live['b'].reference,enabled=True)
+            self.live['b']=replace(self.live['b'],permission_revision=index+2)
+            self.pairs.observe(self.live['b'])
         self.assertEqual(self.leases.current(),())
 
-    def test_every_grant_revoke_and_close_is_logged_beside_the_pairings_store(self):
+    def test_every_grant_revoke_and_replacement_is_logged_beside_the_pairings_store(self):
         self.owner.lease(self.a.reference,self.b.reference,enabled=True)
         self.owner.lease(self.a.reference,self.b.reference,enabled=False)
         self.owner.lease(self.c.reference,self.b.reference,enabled=True)
         self.owner.revoke(self.a.reference,self.b.reference,by='pm')  # no such lease: no line
-        self.pairs.withdraw('c')
+        self.pairs.withdraw('c')  # not a close: no line
+        self.live['c']=replace(self.c,permission_revision=2)
+        self.pairs.observe(self.live['c'])
         self.assertEqual([(entry['event'],entry['by'],entry['writer'],entry['recipient']) for entry in self.log()],
             [('grant','owner',self.a.reference,self.b.reference),('revoke','owner',self.a.reference,self.b.reference),
-             ('grant','owner',self.c.reference,self.b.reference),('closed','bridge',self.c.reference,self.b.reference)])
+             ('grant','owner',self.c.reference,self.b.reference),('replaced','bridge',self.c.reference,self.b.reference)])
         self.assertEqual(self.log()[0]['at'],'1970-01-01T00:01:40Z')
 
     def test_a_grant_that_cannot_be_logged_is_refused(self):
         (Path(self.temp.name)/LEASE_LOG).mkdir()
         with self.assertRaises(PairingError): self.owner.lease(self.a.reference,self.b.reference,enabled=True)
         self.assertEqual(self.leases.current(),())
+
+    def test_an_unlogged_replacing_grant_leaves_the_old_writer_its_lease(self):
+        self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        with patch.object(self.owner,'_log',side_effect=OSError('disk full')):
+            with self.assertRaises(PairingError): self.owner.lease(self.c.reference,self.b.reference,enabled=True)
+        self.assertEqual(self.leases.writer(self.b),self.a)
+        self.assertEqual(self.owner.writer_grants(),((self.a.reference,self.b.reference,100.0),))
 
     def test_changed_recipient_or_writer_binding_has_no_lease(self):
         self.owner.lease(self.a.reference,self.b.reference,enabled=True)
