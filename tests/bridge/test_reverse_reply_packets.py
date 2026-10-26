@@ -3,9 +3,10 @@ from dataclasses import replace
 import unittest
 
 from optional.bridge.hosts.codex.delivery import CodexDesktopAdapter,native_id
-from optional.bridge.core.messages import reply_operation_id
+from optional.bridge.core.messages import reply_operation_id,OutboundMessage,NativeResult
 from tests.bridge.test_codex_delivery import CodexDeliveryTests
 from tests.bridge.test_claude_peer import ClaudePeerTests
+from tests.bridge.test_codex_runtime_delivery import DirectRuntimeDeliveryTests
 
 
 class CodexReplyPacketTests(CodexDeliveryTests):
@@ -41,6 +42,26 @@ class ClaudeReplyPacketTests(ClaudePeerTests):
         self.assertEqual(self.received[0],{'type':'auth','token':'b'*32})
 
 
+class CompletedCodexReplyTests(DirectRuntimeDeliveryTests):
+    def test_completed_reply_author_leaves_parent_known_and_sends_zero_native_bytes(self):
+        adapter=self.populate()
+        parent=OutboundMessage('parent-operation',self.recipient.identity.session_id,
+            self.recipient,self.sender,'original parent body')
+        self.controller.outbox.admit(parent)
+        self.controller.outbox.run_dispatch(parent.operation_id,lambda message:NativeResult(
+            message.operation_id,message.recipient.reference,'recipient-accepted','parent-native'))
+        calls=self.controller.frontend(self.direct_source.observe).calls
+        proof=calls.issue(parent.intent,self.metadata)
+        self.controller.core.reply_to(parent.operation_id,'exact returned body',proof)
+        child=self.controller.outbox.reply_delivery(parent.operation_id)['child']
+        self.controller.adapter(adapter)
+        self.complete_source()
+        self.assertTrue(self.controller._live(self.sender))
+        self.assertEqual(self.controller.core.dispatch_once(child).state,'failed')
+        self.assertEqual(self.rpc.requests,[])
+        self.assertEqual(self.controller.outbox.reply(parent.operation_id),'exact returned body')
+        self.assertEqual(self.controller.outbox.receipt(parent.operation_id).state,'reply-received')
+
 def load_tests(loader,tests,pattern):
-    return unittest.TestSuite(kind(name) for kind in (CodexReplyPacketTests,ClaudeReplyPacketTests)
+    return unittest.TestSuite(kind(name) for kind in (CodexReplyPacketTests,ClaudeReplyPacketTests,CompletedCodexReplyTests)
         for name in sorted(kind.__dict__) if name.startswith('test_'))

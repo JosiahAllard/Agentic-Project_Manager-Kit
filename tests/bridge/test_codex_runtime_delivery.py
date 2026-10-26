@@ -193,6 +193,9 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
         self.assertEqual((params['threadId'],params['turnId']),(self.sender.identity.native_session_id,self.turn))
         self.assertEqual(params['arguments']['threadId'],self.recipient.identity.native_session_id)
         self.assertEqual(params['arguments']['prompt'].split('\n\n',1)[1],self.claude_message.text)
+        self.assertIn(Capability.SEND,adapter.describe().capabilities)
+        self.assertIsNone(adapter.reconcile(self.claude_message,result.native_id))
+        self.assertEqual(len(self.rpc.requests),1)
 
     def test_a_reply_return_from_another_host_needs_the_lease_too(self):
         adapter=self.leased()
@@ -238,6 +241,94 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
         for writer in (replace(self.sender,account_ref='other-account'),self.recipient):
             self.controller.leases._leases[self.recipient.reference]=(writer,self.recipient,time.monotonic()+60)
             self.refused(adapter,self.claude_message,'codex-direct-route-unavailable')
+
+    def test_source_or_target_context_drift_prevents_any_native_message_bytes(self):
+        adapter=self.leased()
+        self.grant()
+        self.context['approval_policy']='on-request'
+        self.write()
+        self.refused(adapter,self.claude_message)
+        self.context['approval_policy']='never'
+        self.write()
+        self.target_path.write_bytes(self.target_path.read_bytes().replace(b'"approval_policy":"never"',
+            b'"approval_policy":"on-request"'))
+        self.refused(adapter,self.claude_message)
+
+    def test_known_capture_epoch_change_after_lease_invalidates_before_write(self):
+        self.leased()
+        self.grant()
+        with self.factory._delivery_lease(self.claude_message) as lease:
+            self.metadata['x-codex-turn-metadata']['auto_review_enabled']=False
+            self.direct_source.observe(self.metadata)
+            self.assertFalse(lease.recheck())
+        self.assertEqual(self.rpc.requests,[])
+
+    def test_explicit_desktop_image_mismatch_has_no_native_write(self):
+        adapter=self.leased()
+        self.grant()
+        with self.factory._delivery_lease(self.claude_message) as lease:
+            self.factory.desktop_executable=Path(__file__).resolve()
+            self.assertFalse(lease.recheck())
+        self.assertNotIn(Capability.SEND,adapter.describe().capabilities)
+        self.refused(adapter,self.claude_message)
+
+    def test_current_native_login_change_prevents_direct_write(self):
+        adapter=self.leased()
+        self.grant()
+        self.write_login(user='different-current-user')
+        self.refused(adapter,self.claude_message)
+
+    def test_distinct_app_channel_cannot_be_used_for_selected_target(self):
+        self.leased()
+        self.grant()
+        second=OwnedNativeRPC(self.recipient.identity.native_session_id)
+        self.addCleanup(second.close)
+        # A second app-owned endpoint is still the wrong scheduling channel.
+        runtime=self.direct_source.observe.__self__
+        previous=runtime.native
+        replacement=NativeChannel(PipeTarget(second.name,os.getpid(),own_ctime()),Path(sys.executable).resolve())
+        runtime.native=replace(previous,channel=replacement)
+        with self.factory._delivery_lease(self.claude_message) as lease:
+            runtime.native=previous
+            self.assertFalse(lease.recheck())
+        self.assertEqual(self.rpc.requests,[])
+        self.assertEqual(second.requests,[])
+
+    def test_different_target_frontend_app_endpoint_denies_before_any_native_body(self):
+        adapter=self.leased()
+        self.grant()
+        other_source,native,listener=runtime_fixtures.CodexRuntimeTests.channel_source(self)
+        event={'timestamp':'2026-10-12T12:00:00Z','type':'event_msg','payload':{
+            'type':'task_started','turn_id':self.target_meta['x-codex-turn-metadata']['turn_id']}}
+        with self.target_path.open('ab') as stream: stream.write(json.dumps(event).encode()+b'\n')
+        other_target=other_source.observe(self.target_meta).sender
+        self.controller.owner.change(self.other.reference,other_target.reference,enabled=True)
+        self.controller.owner.lease(self.sender.reference,other_target.reference,enabled=True)
+        message=replace(self.claude_message,recipient=other_target)
+        self.refused(adapter,message,'codex-direct-app-channel-mismatch')
+
+    def test_writer_finishing_after_lease_capture_invalidates_before_write(self):
+        self.leased()
+        self.grant()
+        with self.factory._delivery_lease(self.claude_message) as lease:
+            self.assertTrue(lease.recheck())
+            self.complete_source()
+            self.assertFalse(lease.recheck())
+        self.assertEqual(self.rpc.requests,[])
+
+    def test_writer_finishes_after_helper_connect_and_no_body_is_dispatched(self):
+        from unittest.mock import patch
+        from optional.bridge.hosts.codex.delivery_transport import NativeToolsPipe
+        adapter=self.leased()
+        self.grant()
+        original=NativeToolsPipe.call
+        def call(pipe,endpoint,request, *, before_write):
+            def finish_source_then_check():
+                self.complete_source('task_aborted')
+                return before_write()
+            return original(pipe,endpoint,request,before_write=finish_source_then_check)
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call',call):
+            self.refused(adapter,self.claude_message)
 
     def test_a_codex_sender_is_refused_with_or_without_a_lease(self):
         adapter=self.leased()

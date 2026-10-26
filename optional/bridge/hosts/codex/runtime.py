@@ -315,9 +315,9 @@ class CodexSources:
         return _DirectDesktopAdapter(self,timeout=timeout,start_timeout=start_timeout)
 
     def _leased_writer(self,message):
-        """The owner-leased Codex writer for another host's sender, or None.
+        """The owner-leased Codex writer for a sender of another host, or None.
 
-        A Codex sender never borrows a writer: it is its own executor or nothing.
+        A Codex sender gets none: the bridge does not carry Codex-to-Codex.
         """
         if type(message) is not OutboundMessage or message.sender.identity.adapter_id.startswith('codex-'):
             return None
@@ -360,7 +360,7 @@ class CodexSources:
                     self.controller._require()
                     self.controller.pairs.require_selected(message.sender,message.recipient)
                     # A leased writer must still hold the owner's lease and be live itself.
-                    if leased is not None and (not self.controller.leases.holds(writer,message.recipient)
+                    if (not self.controller.leases.holds(writer,message.recipient)
                             or not self.controller._live(writer)):
                         return False
                     if (not self.controller._live(message.sender) or not self.controller._live(message.recipient)
@@ -404,5 +404,5 @@ class _DirectDesktopAdapter(CodexDesktopAdapter):
         if not self.factory._has_desktop_facility():
             return AdapterDescription('codex-desktop',(),
                 'Requires a configured desktop executable and current verified app-owned channel; '
-                'direct distinct selected Codex sources, or another host through an owner-granted writer lease.')
+                'a sender of another host through an owner-granted writer lease; never Codex to Codex.')
         return super().describe()

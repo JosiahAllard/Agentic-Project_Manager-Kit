@@ -28,8 +28,8 @@ class DesktopLease:
     executor: CodexContext
     endpoint: NativeEndpoint = field(repr=False)
     recheck: object = field(repr=False)
-    # None: the sender is its own executor. Otherwise the owner-leased Codex
-    # writer that carries delivery for a sender of another host.
+    # The owner-leased Codex writer that carries delivery for a sender of another
+    # host. None is refused: a Codex sender is never its own executor.
     writer: ChatBinding | None = None
 
 
@@ -56,8 +56,8 @@ class CodexDesktopAdapter:
         if capabilities and self._receipts is not None:
             capabilities += (Capability.READ_STATUS,)
         return AdapterDescription('codex-desktop', capabilities,
-            'SEND is restricted to a distinct selected Codex source, or an owner-leased Codex writer '
-            'for another host, with a frontend-issued lease; '
+            'SEND is restricted to a sender of another host, through an owner-leased Codex writer '
+            'and a frontend-issued lease; never Codex to Codex; '
             'private tools/call protocol; acceptance means scheduling only; '
             'exact native receipt observation is a separate host port.')
 
