@@ -7,6 +7,7 @@ process's tree, whatever the actor says (only its name is kept), so the window a
 only when the owner runs it. A scratch store (tests, the screenshot demo) takes the actor as given.
 """
 import datetime as dt
+import os
 import re
 
 from kitlib.lock import api as lock_api
@@ -17,6 +18,7 @@ NOW_SLACK = dt.timedelta(seconds=30)    # a window starting this close to now st
 DEFAULT_NOTE = "reserve window"
 SCOPES = ("whole", "half", "slots")
 MAX_SLOT = 1023                         # a slot number above this is a typo, not a slot
+NO_STATS = "1970-01-01T00:00:00Z"       # since and until of the snapshot's stats: no history file
 BARE = re.compile(r"\d{1,2}:\d{2}")
 
 
@@ -40,10 +42,26 @@ class Client:
 
     # reads
     def snapshot(self):
-        return self.api.snapshot(store=self.store)
+        """The snapshot with an empty stats range: the window shows no stats, and stats over the
+        default 7 days would read and parse every history line of the month on each refresh."""
+        return self.api.snapshot(store=self.store, since=NO_STATS, until=NO_STATS)
 
     def history(self, days=7):
         return self.api.history(store=self.store, days=days)
+
+    def history_stamp(self):
+        """(name, size, mtime_ns) of each file in the store's history folder, or None when the
+        store has no folder to look at (a stand-in): what changes when a history line is
+        written, read without parsing a line."""
+        path = getattr(self.store, "path", None)
+        if path is None:
+            return None
+        try:
+            folder = path("history")
+            return tuple(sorted((n, st.st_size, st.st_mtime_ns) for n, st in
+                                ((n, os.stat(os.path.join(folder, n))) for n in os.listdir(folder))))
+        except OSError:
+            return None
 
     # writes: each returns the API's {ok, result | error, snapshot}
     def reserve(self, scope, start, end, note, now=None):
@@ -70,6 +88,26 @@ class Client:
 
     def division(self, division):
         return self.api.set_division(self.actor, division, store=self.store)
+
+
+class HistoryCache:
+    """The history lines the window last read, read again only when the history files changed
+    (Client.history_stamp: they are only appended to) or when forced (the Refresh button).
+    Parsing them is most of a refresh's reading. One caller at a time."""
+
+    def __init__(self):
+        self.lines, self.stamp = None, None
+
+    def due(self, stamp, force=False):
+        return force or self.lines is None or stamp is None or stamp != self.stamp
+
+    def get(self, stamp, fetch, force=False):
+        """The lines while the history files have `stamp` (taken before fetch, so a line written
+        meanwhile is read again next time); fetch() reads them. A fetch that raises leaves the
+        cache as it was."""
+        if self.due(stamp, force):
+            self.lines, self.stamp = fetch(), stamp
+        return self.lines
 
 
 # ------------------------------------------------------------------ specs

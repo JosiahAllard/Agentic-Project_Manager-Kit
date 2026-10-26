@@ -49,6 +49,8 @@ def segments(day0, s, e):
     """[(day column, first row, end row)] of [s, e) clipped to the DAYS shown from day0, one
     piece per day; rows are fractional (23:15 is 46.5)."""
     out = []
+    if e <= day0 or s >= day0 + dt.timedelta(days=DAYS):     # wholly outside: most history
+        return out
     for d in range(DAYS):
         ds, de = day0 + dt.timedelta(days=d), day0 + dt.timedelta(days=d + 1)
         a, b = max(s, ds), min(e, de)
@@ -187,11 +189,13 @@ def lost(agent_hold, strong):
     return gone, by
 
 
-def build(snap, history_rows=(), now=None):
+def build(snap, history_rows=(), now=None, memo=None):
     """The window's view of snapshot `snap` and history lines at `now` (aware; default now):
     holds (owner and game, the schedule's boxes), agent_holds, colour {run id: colour}, strip,
     lanes, details / queue / bookings ([(text, tags)] for the side panels), cores {head, cpu,
-    gpu} (the slot map), memory {free_mb, total_mb} or None, warnings [text]."""
+    gpu} (the slot map), memory {free_mb, total_mb} or None, warnings [text]. memo: a dict the
+    caller keeps between builds, so the strip's history items are made once for the same
+    history_rows object (`is`) on the same local day and offset (_hist_items)."""
     now = (now or dt.datetime.now(dt.timezone.utc)).astimezone()
     snap = snap or {}
     holds = [x for x in (_timed(h) for h in snap.get("holds") or []) if x]
@@ -204,7 +208,7 @@ def build(snap, history_rows=(), now=None):
     colour = {r.get("id"): RUN_COLOURS[k % len(RUN_COLOURS)] for k, r in enumerate(runs)}
     qd = snap.get("queue") or {}
     queue = qd.get("entries") if isinstance(qd.get("entries"), list) else []
-    strip = _strip(runs, queue, agent_holds, history_rows or (), now)
+    strip = _strip(runs, queue, agent_holds, history_rows or (), now, memo)
     v = {"now": now, "holds": strong, "agent_holds": agent_holds, "runs": runs, "colour": colour,
          "strip": strip, "lanes": min(MAX_LANES, max(1, assign_lanes(strip)))}
     v["details"] = _details(runs, colour, now)
@@ -228,7 +232,7 @@ def _result(d):
     return "ok" if code == 0 else "failed"
 
 
-def _strip(runs, queue, agent_holds, history_rows, now):
+def _strip(runs, queue, agent_holds, history_rows, now, memo=None):
     out = []
     for r in runs:
         s = to_local(r.get("held_since") or r.get("since")) or now
@@ -259,6 +263,16 @@ def _strip(runs, queue, agent_holds, history_rows, now):
                         pools_text(h.get("slots")) or "no slots", day_time(h["_s"]), day_time(h["_e"]),
                         "; lost %s to %s" % (pools_text(h["_lost"]), ", ".join(h["_lost_to"]) or "?")
                         if h["_lost"] else "")})
+    return out + _hist_items(history_rows, now, memo)
+
+
+def _hist_items(history_rows, now, memo=None):
+    """The strip's items for history lines. They change with the lines and, through when(), with
+    now's local day and offset only: memo (build's) answers again while all three are the same."""
+    key = (now.date(), now.utcoffset())
+    if memo is not None and memo.get("rows") is history_rows and memo.get("key") == key:
+        return memo["items"]
+    out = []
     for d in history_rows:
         s, e = to_local(d.get("held_since") or d.get("since")), to_local(d.get("ended"))
         if not (s and e):
@@ -279,6 +293,8 @@ def _strip(runs, queue, agent_holds, history_rows, now):
                         if d.get("peak_cpu_cores") is not None and d.get("peak_mem_mb") is not None else "",
                         "; its docker work was not measured" if d.get("partial") else "",
                         "; exit %s" % d["code"] if d.get("code") not in (None, 0) else "")})
+    if memo is not None:
+        memo.update(rows=history_rows, key=key, items=out)
     return out
 
 

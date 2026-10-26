@@ -61,8 +61,8 @@ class.
 
 `kitlib/maintlint/holds.py` and `kitlib/maintlint/backlog.py`:
 - `keyword-hold`: an offerable record whose summary, requires or expect names the owner's go or a
-  live client, but which no hold keeps out of the offer. The patterns are copied from
-  `kitlib.backloglint`, and the body is not read. The fix is a `block --on owner|live-client`
+  live client, but which no hold keeps out of the offer. The patterns are carried over from
+  the retired `backlog_lint` tool, and the body is not read. The fix is a `block --on owner|live-client`
   whose reason the PM writes, because an owner hold must cite what it waits on.
 - `unpriced`: the records `backlog.py needs-priority` lists.
 - `dead-pull`: a pull with no branch by its `pulled_by` (`offer.in_flight_split`). A failed git

@@ -26,13 +26,50 @@ class Lookup(unittest.TestCase):
         self.assertFalse(lookup.running_stem(procs, 'y-'))
 
 
-def windowed(name, pid=10, win=20, con=30):
+def rc_off(pid, name, parent=1):
+    """A session launched with `start --no-remote-control`: found by -n."""
+    return dict(session(pid, name, parent=parent),
+                CommandLine="claude --agent coordinator --permission-mode auto -n '%s' 'x'" % name)
+
+
+def windowed(name, pid=10, win=20, con=30, rc=True):
     """A session pid, its powershell window (the script the launcher writes) and conhost."""
-    text = window.script(name, 'coordinator', '/r', window.claude_command(name, 'go', 'coordinator'))
-    return [session(pid, name, parent=win),
+    text = window.script(name, 'coordinator', '/r', window.claude_command(name, 'go', 'coordinator',
+                                                                         remote_control=rc))
+    return [rc_off(pid, name, win) if not rc else session(pid, name, parent=win),
             {'Name': 'powershell.exe', 'ProcessId': win, 'ParentProcessId': con,
              'CommandLine': 'powershell.exe -NoExit -EncodedCommand ' + window.encode(text)},
             {'Name': 'conhost.exe', 'ProcessId': con, 'ParentProcessId': 4, 'CommandLine': 'conhost.exe x'}]
+
+
+class RcOff(unittest.TestCase):
+    def setUp(self):
+        self.h = Home(self)
+
+    def test_lookup_finds_an_rc_off_session_by_name_and_only_whole_names(self):
+        procs = [rc_off(1, 'x-a1'), rc_off(2, 'x-a1-r2')]
+        live = lookup.claude_sessions(procs)
+        self.assertEqual([p['ProcessId'] for p in lookup.find_exact(live, 'x-a1')], [1])
+        self.assertTrue(lookup.running_stem(procs, 'x-'))
+
+    def test_an_unrelated_claude_matches_no_name(self):
+        other = dict(session(5, 'x'), CommandLine='claude --resume abc --permission-mode auto')
+        self.assertIsNone(lookup.rc_name(other['CommandLine']))
+        self.assertEqual(lookup.find_exact(lookup.claude_sessions([other]), 'x'), [])
+        self.assertEqual(lookup.find_exact(lookup.claude_sessions([other]), 'abc'), [])
+        host = FakeHost(self.h.root, [other])
+        with self.assertRaises(stop.Refused):
+            stop.stop(self.h.settings, host, 'x')
+        self.assertEqual(host.killed, [])
+
+    def test_stop_stops_an_rc_off_session_and_its_window(self):
+        host = FakeHost(self.h.root, windowed('x-a1', rc=False))
+        out = stop.stop(self.h.settings, host, 'x-a1')
+        self.assertEqual(host.killed, [(10, 1010), (20, 1020), (30, 1030)])
+        self.assertIn("stopped 'x-a1' claude PID 10, window PID 20, conhost PID 30", out[0])
+
+    def test_rc_wins_over_n_when_both_are_given(self):
+        self.assertEqual(lookup.rc_name("claude --remote-control 'a' -n 'b'"), 'a')
 
 
 class Stop(unittest.TestCase):

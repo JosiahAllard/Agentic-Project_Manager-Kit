@@ -3,12 +3,21 @@ through kitlib.lock.api, by the owner's decision. The Api's lock routes reach th
 through a door (kitlib.hubsite.api, "Machine lock"); kitlib.hubsite.serve gives the machine's
 server this one.
 
-    LockDoor(make_store=None, actor=None)
+    LockDoor(make_store=None, actor=None, clock=None)
       .revision()                    the lock store's revision (lock api.revision)
       .view(remote=False)            {lock_revision, view, writer}: the schedule window's view of
                                      one snapshot and the history it draws, as kitlib.lockui.model
                                      to_json gives it (remote: the tunnel's fixed phrases), and
                                      who the lock takes this hub for (writer())
+
+The view is the costly read (an open page asks for one each time the lock's revision moves,
+about once a second). It is built the way the schedule window builds its own (kitlib.lockui
+actions and model): the snapshot with no stats (actions.NO_STATS; the view shows none), the
+history lines read again only when the history files changed (actions.HistoryCache, by
+Client.history_stamp) and the strip's history items made once for the same lines (build's
+memo). A built view, local and remote each, is answered again for VIEW_FRESH_S (clock(), default
+time.monotonic) while the lock's revision and the history stamp are the same, so pages waiting
+on the same change share one build. One view is built at a time.
       .stats(days, since, until)     lock api.stats; a bad time or day count is HubError invalid
       .writer()                      'owner' when the lock takes this hub's process for the owner
                                      (lock api is_owner of who), else 'agent'; one that cannot be
@@ -53,6 +62,7 @@ machine's kitlib.lock.store.Store).
 import datetime
 import re
 import threading
+import time
 
 from kitlib.lock import api as lock_api
 from kitlib.lockui import actions
@@ -76,6 +86,7 @@ CODES = {'invalid': ('invalid', 'lock'), 'forbidden': ('forbidden', 'lock'),
          'not_found': ('not_found', 'id'), 'conflict': ('conflict', 'lock'),
          'busy': ('conflict', 'lock'), 'store': ('unavailable', 'lock')}
 HOLD_KEYS = ('id', 'owner', 'scope', 'start', 'end', 'note', 'by')
+VIEW_FRESH_S = 1.0      # a built view answers again this long while the lock and history are the same
 RESULT_KEYS = {'end_run': ('id', 'requested'), 'move_to_top': ('id', 'position'),
                'game_mode': ('enabled',), 'division': ('applied', 'reason')}
 
@@ -116,12 +127,17 @@ def _parsed(fn, field, *args):
 
 
 class LockDoor(object):
-    def __init__(self, make_store=None, actor=None):
+    def __init__(self, make_store=None, actor=None, clock=None):
         self._make = make_store or _machine_store
         self._mutex = threading.Lock()
         self._write_mutex = threading.Lock()
         self._actor = dict(actor or {})
         self._store = None
+        self._clock = clock or time.monotonic
+        self._view_mutex = threading.Lock()     # one view built at a time; the caches below
+        self._history = actions.HistoryCache()  # the history lines, by the history files' stamp
+        self._strip_memo = {}                   # model.build's memo of the strip's history items
+        self._views = {}                        # remote -> ((revision, stamp), built at, answer)
 
     def _lock_store(self):
         with self._mutex:
@@ -145,11 +161,21 @@ class LockDoor(object):
 
     def view(self, remote=False):
         store = self._lock_store()
-        snap = lock_api.snapshot(store)
-        rows = lock_api.history(store, days=model.BACK_DAYS + 1)
-        return {'lock_revision': snap.get('revision'),
-                'view': model.to_json(model.build(snap, rows), snap, remote=remote),
-                'writer': self.writer()}
+        with self._view_mutex:
+            key = (lock_api.revision(store), actions.Client(store=store).history_stamp())
+            at = self._clock()
+            got = self._views.get(bool(remote))
+            if got is not None and got[0] == key and 0 <= at - got[1] < VIEW_FRESH_S:
+                return dict(got[2])
+            snap = lock_api.snapshot(store, since=actions.NO_STATS, until=actions.NO_STATS)
+            rows = self._history.get(key[1], lambda: lock_api.history(
+                store, days=model.BACK_DAYS + 1))
+            out = {'lock_revision': snap.get('revision'),
+                   'view': model.to_json(model.build(snap, rows, memo=self._strip_memo), snap,
+                                         remote=remote),
+                   'writer': self.writer()}
+            self._views[bool(remote)] = (key, at, out)
+            return dict(out)
 
     def stats(self, days=None, since=None, until=None):
         try:

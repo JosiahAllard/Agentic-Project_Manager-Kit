@@ -21,7 +21,6 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/hub-mcp.md` | hub MCP server: the Action Hub's api as MCP tools, the owner's tools pinned | the hub from an agent | kw: hub-mcp, hub, mcp
 - `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
-- `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
 - `docs/backlog-store.md` | backlog store design | changing the store | kw: backlog-store, store
 - `docs/branch-overlap.md` | branch overlap: unmerged branches touching a file set | checking a sweep's exclusions | kw: branch_overlap, overlap
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
@@ -91,7 +90,6 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `knowledge/asset-generation/README.md` | asset generation knowledge base | generating assets | kw: asset-generation, knowledge
 - `knowledge/asset-generation/BEST_PRACTICES.md` | best practices | generating assets | kw: best-practices, assets
 - `knowledge/asset-generation/MODELS.md` | approved models | picking a model | kw: models, assets
-- `tests/backloglint/fixtures/*.md` | backlog lint test fixtures | editing backlog_lint tests | kw: fixtures, backlog-lint
 
 ## Tools
 
@@ -106,7 +104,6 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/codemap.py` | where code lives (`docs/doc-tools.md`) | kw: codemap
 - `tools/backlog.py` | backlog store (`docs/backlog.md`) | kw: backlog
 - `tools/backlog_audit.py` | backlog audit check (`docs/backlog.md` "Audit log") | kw: backlog_audit
-- `tools/backlog_lint.py` | backlog lint (`docs/backlog-lint.md`) | kw: backlog_lint
 - `tools/maint_lint.py` | maintenance lint, read-only (`docs/maint-lint.md`) | kw: maint_lint
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land

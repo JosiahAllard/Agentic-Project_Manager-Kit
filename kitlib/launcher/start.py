@@ -140,11 +140,13 @@ def window_text(settings, host, name, role, folder, command, config_dir):
 
 def start(settings, host, repo=None, repo_path=None, account=None, org=None, prompt=None, brief=None,
           default_prompt=DEFAULT_PROMPT, name=None, predecessor=None, no_agent=False, agent=None,
-          model=None, effort=None, autocompact=None, whatif=False, home_worktree=False):
+          model=None, effort=None, autocompact=None, whatif=False, home_worktree=False,
+          remote_control=True):
     """Open a session's window; the lines it says. The repo folder is --repo-path, or the
     launcher.repos entry for --repo. autocompact None is DEFAULT_AUTOCOMPACT; 0 passes no
     --autocompact (the CLI's own window). home_worktree: an agent session whose folder is a main
-    checkout starts in its home worktree instead (home_folder)."""
+    checkout starts in its home worktree instead (home_folder). remote_control False: no
+    --remote-control on the command line (window.claude_command; for measurement)."""
     if autocompact is None:
         autocompact = DEFAULT_AUTOCOMPACT
     if bool(repo) == bool(repo_path):
@@ -175,7 +177,8 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
         if add_dir:
             prompt += HOME_NOTE % (start_in, add_dir)
             folder = start_in
-    command = window.claude_command(name, prompt, run_as(agent), model, effort, autocompact, add_dir=add_dir)
+    command = window.claude_command(name, prompt, run_as(agent), model, effort, autocompact, add_dir=add_dir,
+                                   remote_control=remote_control)
     text = window_text(settings, host, name, role, folder, command, config_dir)
     if whatif:
         return out + ['Would open a new window running:', '  powershell -NoExit -Command "%s"' % text]
