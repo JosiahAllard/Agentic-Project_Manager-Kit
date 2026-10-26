@@ -200,7 +200,7 @@ Rules:
    shell's resolve_path); hook commands come from one helper (hookmain.manifest_command), as the
    multi-host plan already ruled.
 5. A Linux primitive that cannot give the Windows guarantee says so in its name or raises; it never
-   silently does less (see 2.3 and owner question 4).
+   silently does less (see 2.3 and owner question 4, answered).
 
 ### 2.2 Windows mechanism to Linux mechanism
 
@@ -228,7 +228,7 @@ Rules:
 | pythonw, CREATE_NO_WINDOW, console hook, winwatch | nothing: Linux spawns no console windows | the no-window carrier is a no-op |
 | pid shield, PidHold | inferred: nothing needed; pidfd where a hold is wanted | rests on Claude Code on Linux not killing a tool call's tree by pid (unknown, section 9; slice 7 probes it) |
 | Git Bash lookup | /bin/bash | kitlib/proc/bash.py answers /bin/bash |
-| conhost + PowerShell session window | tmux session (or a configured terminal command) | owner question 6 |
+| conhost + PowerShell session window | tmux session (or a configured terminal command) | both supported, tmux by default (question 6, answered) |
 | Get-CimInstance Win32_Process | /proc scan | pmstart, launcher/stop |
 | `.exe` process names in hosts.json | per-platform names (`claude`, `node`, `codex`) | hosts.json gains a per-platform field in slice 2: lock/store.py agent_hosts (the lock's caller walk) matches these names |
 
@@ -285,8 +285,8 @@ daemons do; not a same-user process that sets out to leave its cgroup.
 Fallback when the user has no delegated cgroup v2 (old systemd, containers, WSL without
 systemd): process group + sched_setaffinity + PR_SET_PDEATHSIG + an RLIMIT_AS cap. It is
 cooperative: a child that calls setsid or resets its affinity escapes. The backend names it
-`Contain(weak=True)`, the lock's status shows `containment: weak`, and owner question 4 decides
-whether heavy runs may use it at all.
+`Contain(weak=True)`, the lock's status shows `containment: weak`, and the owner allows heavy runs on it
+(question 4) once the research step in section 9 finds nothing stronger.
 
 ### 2.4 Lock hardware detection on Linux
 
@@ -313,10 +313,9 @@ layout adopted only while nothing is live or queued, under the queue lock. Two g
 own. A container sees the host's CPUs in /sys while its cgroup allows fewer, so the allowed set
 comes from sched_getaffinity and the cgroup's cpuset.cpus.effective, never from /sys alone; the
 backend closes that one. Two kit users on one box each get a store and would book the same CPUs
-twice. Proposal, pending owner question 10: the store moves to a machine path
-(`/var/lib/pm-kit/machine-lock`, group-writable by a `pm-kit` group) when machine setup finds
-more than one kit user; under the recommended answer (one kit user per box) machine setup
-instead refuses a second user. The same double-booking is why owner question 11 (WSL) matters.
+twice. Answered (question 10): one kit user per box, and machine setup refuses a second, so
+there is no shared store. The same double-booking is why WSL is refused until native parity
+(question 11).
 
 The proving test feeds four synthetic /sys and /proc trees, written by hand into the test data
 (fake_hardware, extended) from the kernel's documented layout: a plain desktop, a hybrid part
@@ -391,8 +390,9 @@ refusing) comes after both.
   per slice.
 - When the pool runs on Linux (slice 5), the leg switches to `tools/kit_tests.py`; once the lock
   has a real Linux store root (slice 9), to `gate.py --full` with a CI lock profile.
-- Proposal, pending owner question 8: a Windows leg (windows-latest) once Linux is green, so a
-  Windows regression from a shared change is caught off the owner's machine too.
+- Answered (question 8): this whole section is a later phase, for Linux and Windows alike; the
+  initial goal is the plugin working on Linux, so no CI leg precedes the first backend. The
+  Windows leg (windows-latest) follows once Linux is green.
 - CI adds only strictness: nothing in the landing path reads it until the owner says so.
 
 ## 5. Per-platform shell text
@@ -435,8 +435,8 @@ tools/machine_setup.py. machine_setup's steps on Linux:
 11. kit command: `~/.local/bin/kit`.
 
 Each step reports what it could not do (no linger, no delegation, no sudo) as a named problem,
-and the lock refuses heavy runs while containment is missing unless owner question 4 says
-otherwise. Plugin refresh: pluginsource's detached refresh uses the detach backend.
+and heavy runs go ahead on weak containment, shown as weak, where the research step in
+section 9 finds nothing stronger (question 4). Plugin refresh: pluginsource's detached refresh uses the detach backend.
 
 ## 7. macOS
 
@@ -461,7 +461,11 @@ given a root (verified, to set `testing`), so slice 3 makes the Linux stub's "no
 platform" error count as "testing" when a root is given and refuse when none is. Nothing on
 Linux uses the machine's store, and the CI leg does not run gate.py, until slice 9.
 
-1. **CI leg and test markers.** `.github/workflows/linux.yml`, kitlib/ci/ratchet.py with its thin
+Answered (question 8): CI is a later phase, so slice 1 waits for it and slices 2 to 16 prove
+their Linux cases locally on the owner's Linux box or VM; the CI mentions in their proofs
+apply when that phase comes. The earlier order, a CI leg before the first backend, is void.
+
+1. **CI leg and test markers (later phase, question 8).** `.github/workflows/linux.yml`, kitlib/ci/ratchet.py with its thin
    entry point tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, the
    mechanical move of the 155 platform skips (section 4). Risk High (CI config). Proof: the leg
    runs green on the baseline; a planted failure fails it; `kit_tests --list` shows the same skip
@@ -531,7 +535,7 @@ Linux uses the machine's store, and the CI leg does not run gate.py, until slice
     Risk Medium. Proof: a launched session is found by name and stopped; no breakaway flag off
     Windows.
 12. **Hook interpreter.** per-platform interpreters (hookmain INTERPRETERS), the manifest form
-    owner question 9 picks. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
+    the per-platform rendered manifests of question 9. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
     runs the hook on both; a missing interpreter blocks rather than passes; the rendered Windows
     hooks.json of each host is byte-identical to the base's.
 13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
@@ -540,12 +544,12 @@ Linux uses the machine's store, and the CI leg does not run gate.py, until slice
     in the named lines; a step with one `{run:}` form renders byte-identical to the base's; Codex's
     rendered Windows output, and its dialect default on Windows ('powershell'), are unchanged.
 14. **Machine setup on Linux.** installer/machine-setup.sh, machinesetup steps on the seam,
-    tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL unless owner question
-    11 brings it in). Risk High (install). Proof: machine setup on a fresh Ubuntu container ends
+    tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL until native parity,
+    question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu container ends
     with no problems and the lock status shows strong containment.
 15. **Peer messaging and the bridge.** peer.py on Claude Code's Linux socket (after a probe), the
-    bridge's leader lock and transport on Unix sockets, procwatch. Risk High (networking). May
-    stay Windows-only at first (owner question 7).
+    bridge's leader lock and transport on Unix sockets, procwatch. Risk High (networking). After
+    Windows parity, not in the first build (question 7).
 16. **Docs.** owner setup docs, ARCHITECTURE.md's platform line, AGENTS.md's "Windows only",
     the multi-host plan's section 6 marked superseded. Risk Low. Proof: docs gate.
 
@@ -564,8 +568,13 @@ does not overlap another lock slice); the others are in order.
   not; slice 7 probes it on a Linux box before it lands.
 - Unknown: how the owner's self-hosted runner delegates cgroups to the runner user; slice 5 may
   need `sudo systemd-run` in CI only, which tests the backend but not the delegation step.
+- Open work, research (question 4): before the plan settles on the weak fallback, confirm that
+  no stronger option exists without cgroup v2 delegation. Candidates: a systemd-run --user
+  scope; a rootless or user-namespace cgroup; the container's own cgroup, where writable; a
+  pidfd or subreaper watchdog that kills strays when the slot ends. A plan revision with this
+  research follows; slice 5 waits for it.
 - Risk: the weak containment fallback looks like it works. Mitigation: named, shown in status,
-  refused for heavy runs by default.
+  allowed for heavy runs by the owner's answer (question 4).
 - Risk: guard semantics drift between Windows and Linux. Mitigation: one placer with a platform
   argument, and the guard tests run both placers on every platform (they are pure).
 - Risk: the seam move changes Windows behaviour by accident. Mitigation: re-exports first, the
@@ -586,32 +595,29 @@ does not overlap another lock slice); the others are in order.
 3. **Spending.** ANSWERED (owner, 2026-10-26): a Linux box or VM, with real hardware and GPU
    tests. No hosted-runner spend is planned, so the repository's visibility no longer matters
    to cost.
-4. **No cgroup v2 delegation.** (a) refuse heavy runs and say why; (b) run them with weak
-   containment, shown as weak; (c) refuse the whole lock. Recommendation: (a).
-5. **Supported Linux.** (a) systemd distributions, kernel 5.14+, Ubuntu 24.04 as the reference;
-   (b) any Linux with cron fallbacks everywhere; (c) Ubuntu only. Recommendation: (a), with cron
-   kept only for scheduled jobs.
-6. **Session windows.** (a) tmux sessions, attachable from any terminal; (b) a configured
-   terminal emulator command; (c) both, tmux by default. Recommendation: (c).
-7. **The bridge and peer messaging on Linux.** (a) after parity of the rest; (b) in the first
-   pass; (c) never. Recommendation: (a).
-8. **A Windows CI leg** (section 4 writes it as a proposal pending this answer). (a) yes, after
-   the Linux leg is green; (b) no, the owner's machine stays the only Windows proof.
-   Recommendation: (a); it catches shared-code regressions off the owner's machine. Question 3
-   is answered with no hosted spend, so a hosted windows-latest leg's cost is unchecked.
-9. **Hook manifest form.** (a) machine setup installs a `pythonw` shim on the Linux PATH so one
-   committed manifest serves both; (b) per-platform manifests rendered side by side; (c) one
-   manifest running `python3 || pythonw` through the shell. Recommendation: (b), because a
-   missing shim fails open (section 3), while a rendered manifest is checked by the render test.
-10. **Multi-user boxes** (section 2.4 writes the shared store as a proposal pending this
-    answer). (a) one kit user per Linux box: machine setup refuses a second; (b) a shared machine
-    store under /var/lib with a group. Recommendation: (a) now, (b) when a second user appears.
-11. **WSL.** (a) out: tools/kit.py refuses WSL (its kernel release names Microsoft) like any
-    unsupported platform; (b) in: WSL2 with systemd counts as a Linux box; (c) later, after
-    native Linux parity, as its own decision. Recommendation: (c), refusing WSL meanwhile. A kit in
-    WSL beside the Windows kit on one machine would keep a second lock store for the same CPUs
-    and memory and double-book them (section 2.4), and WSL's cgroup delegation and systemd are
-    not the reference target (question 5).
+4. **No cgroup v2 delegation.** ANSWERED (owner, 2026-10-26): heavy runs must work on Linux,
+   with full cgroup v2 containment on native Linux as planned. Before the plan settles on the
+   weak fallback, research must confirm no stronger option exists without delegation
+   (candidates in section 9). Where nothing stronger exists (Docker included), heavy runs go
+   ahead with weak containment, shown as `containment: weak`; the owner accepts that risk.
+5. **Supported Linux.** ANSWERED (owner, 2026-10-26): any Linux distribution, with cron
+   fallbacks where systemd is absent; breadth over systemd-only, in line with full Linux support
+   out of the box.
+6. **Session windows.** ANSWERED (owner, 2026-10-26): both supported; tmux by default, a
+   configured terminal command if set.
+7. **The bridge and peer messaging on Linux.** ANSWERED (owner, 2026-10-26): after Windows
+   parity, not in the first build.
+8. **A Windows CI leg.** ANSWERED (owner, 2026-10-26): CI for both Linux and Windows comes in a
+   later phase; the initial goal is the plugin working on Linux. So the earlier rule of a Linux
+   CI leg before the first backend lands no longer holds; the self-hosted box or VM and the
+   real-hardware and GPU answers (questions 2 and 3) apply when that phase comes.
+9. **Hook manifest form.** ANSWERED (owner, 2026-10-26): per-platform manifests, rendered for
+   each platform.
+10. **Multi-user boxes.** ANSWERED (owner, 2026-10-26): one kit user per box; machine setup
+    refuses a second.
+11. **WSL.** ANSWERED (owner, 2026-10-26): later, after native Linux parity; refused meanwhile
+    (tools/kit.py refuses WSL, whose kernel release names Microsoft). A kit in WSL beside the
+    Windows kit would keep a second lock store for the same CPUs and memory.
 
 ## 11. Proposed build records
 
@@ -620,7 +626,7 @@ carries its own scope.
 
 | Slug | Summary | Scope |
 |---|---|---|
-| linux-ci-leg | Linux CI leg, ratchet baseline, platform test markers | .github/workflows/linux.yml, kitlib/ci/, tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, tests/ (skip moves) |
+| linux-ci-leg | Later phase: Linux CI leg, ratchet baseline, platform test markers | .github/workflows/linux.yml, kitlib/ci/, tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, tests/ (skip moves) |
 | linux-import-seam | Import-clean kitlib, kitlib/platform skeleton, no-os-checks test, hook block while unready, per-platform process names | kitlib/platform/, kitlib/proc/win32.py, kitlib/proc/pipe.py, kitlib/gate/outfile.py, kitlib/lock/layout.py, kitlib/lock/store.py, kitlib/proc/cpu.py, kitlib/proc/process.py, kitlib/proc/shield.py, kitlib/proc/winwatch.py, kitlib/host/hookmain.py, kitlib/host/registry.py, hosts.json, tests/platform/, tests/host/, tests/gate/ |
 | linux-locks | flock named locks, run liveness, treelock and writelock, on a test store root | kitlib/platform/linux/locks.py, kitlib/lock/store.py, kitlib/fs/treelock.py, kitlib/fs/writelock.py, tests/lock/, tests/fs/ |
 | linux-process-identity | /proc identity, ancestry, kill; the boot folded into the Linux ctime | kitlib/platform/linux/process.py, kitlib/proc/process.py, kitlib/lock/run.py, tests/proc/, tests/lock/ |
