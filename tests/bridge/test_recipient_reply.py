@@ -63,7 +63,7 @@ class RecipientReplyTests(DispatchTests):
             self.core.reply('op', b'test-caller-proof')
         with self.assertRaisesRegex(DeliveryError, 'reply-route-not-selected'):
             self.core.reply_to('op', 'not allowed', b'recipient-proof')
-        self.assertIn(self.b, self.pairings.registered())  # a refused route drops no chat
+        self.assertNotIn(self.b, self.pairings.registered())  # a refused route still prunes a dead chat
 
     def test_reply_to_from_a_sender_no_longer_live_names_that_refusal(self):
         self.admit()

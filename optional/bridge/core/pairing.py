@@ -352,9 +352,15 @@ class PairingStore:
             if type(sender) is not ChatBinding or type(recipient) is not ChatBinding:
                 raise PairingError('chat-not-observed')
             # The route row first: a route that is off is refused as such, whatever the
-            # chats' liveness, and a refused route never drops a chat from the observed list.
+            # chats' liveness. The live checks still run, since they drop a dead chat from
+            # the observed list (the owner window's only prune for hosts with no withdraw).
             if self._db.execute('SELECT 1 FROM routes WHERE sender=? AND recipient=? AND enabled=1',
                                 (sender.logical_reference, recipient.logical_reference)).fetchone() is None:
+                for binding in (sender, recipient):
+                    try:
+                        self._observed(binding)
+                    except PairingError:
+                        pass
                 raise PairingError('chat-route-not-selected')
             self._observed(sender)
             self._observed(recipient)
