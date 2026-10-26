@@ -25,35 +25,44 @@ needs it says so.
 - kitlib/proc/win32.py builds `ctypes.WinDLL("kernel32")` (and ntdll, advapi32, iphlpapi) at
   import (verified). Every module that imports it fails to import on Linux: process, cpu, job,
   shield, winwatch, and through them lock/store, lock/run, lock/layout, records/inflight and the
-  test pool. kitlib/proc/pipe.py does the same at import.
+  test pool. kitlib/proc/pipe.py does the same at import, and so does kitlib/gate/outfile.py (an
+  unguarded `import msvcrt` and a module-level `ctypes.WinDLL('kernel32')`, the gate's claim on
+  its output file). A module-level `from ctypes import wintypes` is in nine kitlib modules
+  (gate/outfile, lock/layout, lock/store, proc/cpu, proc/pipe, proc/process, proc/shield,
+  proc/win32, proc/winwatch); whether it imports on Linux is unknown (section 9).
 - The committed Claude hook manifest (hosts/claude/shell/hooks/hooks.json) runs `pythonw`, and
   kitlib/host/hookmain.py keeps `INTERPRETERS = {'windows': 'pythonw'}`; hosts.json lists
   `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified).
 
 ### 1.2 The surface, counted
 
-A scan of the 1,265 tracked Python files (529 outside tests/) for each mechanism. The PM's first
-counts are in the last column; where they differ, this scan's figure stands.
+Counted at 9c8746da8 over the tracked Python files, `git ls-files '*.py'`: 1,264 files, 528 of
+them outside tests/. Each row is the number of those files that `git grep -l -i -E '<pattern>'`
+matches, the alternatives in the pattern column joined by `|`. The PM's first counts are in the last column; where they differ, this scan's
+figure stands.
 
-| Mechanism | Files (all) | Outside tests | PM's count |
-|---|---|---|---|
-| Direct Win32 (ctypes windll/WinDLL, msvcrt, winreg, wintypes) | 75 | 42 | ~40 (outside tests: right) |
-| Job objects: API calls | 4 | 3 | 8 |
-| Job objects: mentioned | 22 | | |
-| CPU affinity / processor groups: API calls | 6 | 4 | 8 |
-| CPU affinity / cpu sets: mentioned | 26 | | |
-| WMI / CIM | 19 | 8 | 17 |
-| Named pipes | about 20 | | 22 (about right) |
-| Scheduled tasks | 28 | 14 | 26 |
-| PowerShell (spawned or written) | 153 | 62 | 92 (between the two) |
-| Branches on os.name / sys.platform | 119 | 23 | ~107 (96 of the 119 are test skips) |
-| creationflags | 72 | 27 | |
-| Named mutexes | 4 | 3 | |
-| msvcrt | 6 | 5 | |
+| Mechanism | Pattern | Files (all) | Outside tests | PM's count |
+|---|---|---|---|---|
+| Direct Win32 | windll, WinDLL, msvcrt, winreg, wintypes | 76 | 44 | ~40 |
+| Job objects: API calls | AssignProcessToJobObject, CreateJobObject, SetInformationJobObject, QueryInformationJobObject | 4 | 3 | 8 |
+| Job objects: mentioned | `job object` | 20 | 14 | |
+| CPU affinity / cpu sets: API calls | SetProcessAffinityMask, SetThreadGroupAffinity, SetProcessDefaultCpuSets, GetSystemCpuSetInformation, SetThreadSelectedCpuSets | 3 | 3 | 8 |
+| CPU affinity / cpu sets: mentioned | `affinity`, `cpu.?set` | 27 | 14 | |
+| WMI / CIM | `Win32_`, Get-CimInstance, Invoke-CimMethod, wmic, wmiprvse | 15 | 7 | 17 |
+| Named pipes | CreateNamedPipe, `named.pipe`, `\\.\\pipe` | 8 | 6 | 22 |
+| Scheduled tasks | ScheduledTask, schtasks | 26 | 13 | 26 |
+| PowerShell (spawned or written) | powershell, pwsh | 153 | 62 | 92 |
+| Branches on the platform | `os\.name`, `sys\.platform` | 119 | 23 | ~107 |
+| creationflags | creationflags | 66 | 22 | |
+| Named mutexes | CreateMutex, OpenMutex, `named mutex` | 4 | 3 | |
+| msvcrt | msvcrt | 6 | 5 | |
 
-So the code that needs a POSIX backend is about 42 library files, not 40 spread evenly: it
-concentrates in kitlib/proc, kitlib/lock, kitlib/fs/treelock.py, kitlib/config, kitlib/launcher,
-kitlib/machinesetup, the scheduled-task writers and the bridge.
+Of the 119 files that branch on the platform, 96 are in tests/; 68 test files carry a platform
+skip (section 1.5). The 44 Direct Win32 files outside tests/ are 25 in kitlib, 18 in optional/
+(14 of them the bridge) and 1 in hosts/ (the Claude peer worker). So the library code that needs
+a POSIX backend is about 25 kitlib files: it concentrates in kitlib/proc, kitlib/lock,
+kitlib/fs/treelock.py, kitlib/config, kitlib/launcher, kitlib/machinesetup and the
+scheduled-task writers, with the bridge apart.
 
 ### 1.3 Mechanism by mechanism (verified unless marked)
 
@@ -74,9 +83,12 @@ kitlib/machinesetup, the scheduled-task writers and the bridge.
 - **Detach**: kitlib/lock/detach.py CREATE_PS asks WMI (Win32_Process Create through PowerShell)
   to start the run outside the caller's tree and job; gate/submit.py and tools/machine_lock.py
   `--detach` use it.
-- **Shields with no Linux need**: shield.py shield (a DACL against Claude Code's tree kill),
-  PidHold (handles that stop pid reuse), console.py (hooks CreateProcess so no console window
-  flashes), winwatch.py (user32 window watch), spawn.py no_window_flags and pythonw_beside.
+- **Shields**: shield.py shield (a DACL against Claude Code's tree kill), PidHold (handles that
+  stop pid reuse), console.py (hooks CreateProcess so no console window flashes), winwatch.py
+  (user32 window watch), spawn.py no_window_flags and pythonw_beside. The console and window ones
+  have no Linux need (Linux opens no console windows). That the shield and PidHold have none
+  either is inference, not verified: it assumes Claude Code on Linux does not kill a tool call's
+  tree by pid, which section 9 lists as unknown; slice 7 probes it.
 - **Machine lock store**: lock/store.py real_root is `~/.claude/machine-lock` under the profile
   from SHGetKnownFolderPath; lock() is a named mutex `Global\MachineLock.<name>` (queue, holds,
   resources, revision, games, run.<id>), WAIT_ABANDONED counting as acquired. RunMutex is the
@@ -119,10 +131,16 @@ kitlib/machinesetup, the scheduled-task writers and the bridge.
 
 ### 1.4 Shell text
 
-Every content file matches a PowerShell pattern, but nearly all of that is one shared root-search
-line. The real PowerShell-only text is two of the 21 skills (shell-and-worktree-traps,
-branch-sync) and lines in five of the 13 roles, about a dozen lines outside
-shell-and-worktree-traps. 61 docs mention PowerShell. The content renderer (kitlib/host/content.py,
+`git grep -il powershell -- content` matches 4 of the 13 roles (coordinator, docs-writer, lander,
+test-runner) and 1 of the 21 skills (shell-and-worktree-traps, 28 lines, all Windows-shell
+traps). In three of those roles the only match is the `powershell` entry of the capabilities
+list (a host tool, mapped by the renderer); lander also has one prose line. Windows-shell text
+outside that skill, by `git grep -n -E 'Get-ChildItem|Select-Object|\$env:|cmd\.exe|cmd /c|Set-Location'
+-- content ':!content/skills/shell-and-worktree-traps'`, is 10 lines: the shared root-search
+example in five roles (analyst, coordinator, docs-writer, lander, test-runner), coordinator's
+`$env:` line, lander's and machine-lock-run's `Select-Object` lines, branch-sync's
+`Set-Location`/`cmd /c` line and mutation-testing's cmd.exe line. `git grep -il powershell --
+docs` matches 25 docs. The content renderer (kitlib/host/content.py,
 kitlib/content) has per-host tokens only ({{name}}, {{agent:}}, {{model:}}, {{tool:}}); there is
 no per-platform text. The hub's owner to-do steps (hubsite/todosteps.py) render `{run:<command>}`
 as PowerShell, following the owner's ruling that hand steps carry commands. Codex's dialect
@@ -130,8 +148,11 @@ default is 'powershell' (hosts/codex events.py).
 
 ### 1.5 Tests and CI
 
-- No CI: no workflow, no .github folder. The repository is public on GitHub.
-- 69 test files carry about 159 `skipUnless(os.name == 'nt', ...)` with free-text reasons.
+- No CI: no workflow, no .github folder. That the repository is public on GitHub is unverified:
+  this plan did not check its visibility, and question 3's "free" rests on it.
+- `git grep -c -E "skip(Unless|If)\((os\.name|sys\.platform)" -- '*.py'` finds 142 platform
+  skips in 68 test files, with free-text reasons; `skip(Unless|If)\(WINDOWS` finds 13 more in 6
+  files that skip through a module constant (`WINDOWS = os.name == 'nt'`).
 - The kit's own runners need job objects: tools/kit_tests.py (the pool) and gate.py (the pool and
   the machine lock, which fails closed). A first Linux leg cannot use either.
 - tests/realgit.py `real_git(reason)` is the house pattern for a marker with a reasons table.
@@ -144,7 +165,9 @@ default is 'powershell' (hosts/codex events.py).
 
 ```
 kitlib/platform/
-  __init__.py     picks the backend once from sys.platform; exports NAME ('windows'|'linux')
+  __init__.py     picks the backend once from sys.platform; exports NAME ('windows'|'linux'|
+                  'unsupported'); on any other platform (darwin included) there is no backend
+                  folder and every primitive raises PlatformUnsupported naming sys.platform
   api.py          the contract: names, signatures, docstrings; no OS code
   windows/        re-exports today's kitlib/proc and kitlib/lock primitives unchanged
   linux/
@@ -163,11 +186,14 @@ Rules:
 
 1. Outside kitlib/platform, kitlib/proc's Windows modules and tests, no module reads os.name or
    sys.platform. A test (tests/platform/test_no_os_checks.py) enforces it with an allowlist of the
-   23 library files that branch today; the allowlist only shrinks.
+   23 files outside tests/ that branch today (section 1.2); the allowlist only shrinks.
 2. The Windows backend starts as re-exports, so moving a caller onto the seam changes no Windows
    behaviour; the Windows suite proves each move.
-3. No module imports a Windows DLL at import time. win32.py and pipe.py bind lazily (first call),
-   so an import on Linux works and a call fails with a clear "not on this platform" error.
+3. No module imports a Windows DLL at import time. proc/win32.py, proc/pipe.py and
+   gate/outfile.py bind lazily (first call), so an import on Linux works and a call fails with a
+   clear "not on this platform" error. On Windows this moves one failure: a DLL or export that is
+   missing fails today at import, and after the change at first call; slice 2 proves that the
+   Windows imports still succeed and that a missing export still raises, naming the function.
 4. Guard path text goes through one function per shell (kitlib/guard/paths.py norm and the
    shell's resolve_path); hook commands come from one helper (hookmain.manifest_command), as the
    multi-host plan already ruled.
@@ -178,7 +204,7 @@ Rules:
 
 | Windows | Linux | Notes |
 |---|---|---|
-| (pid, FILETIME ctime) identity | (pid, starttime from /proc/<pid>/stat field 22) plus boot_id | the nest token becomes `rid:pid:starttime`; boot_id from /proc/sys/kernel/random/boot_id stops a reboot from reviving a token |
+| (pid, FILETIME ctime) identity | (pid, starttime from /proc/<pid>/stat field 22) plus boot_id | starttime is in clock ticks since boot, so it repeats across reboots; the nest token gains the boot (below) |
 | Toolhelp parent walk | /proc/<pid>/stat ppid, checked against each starttime | same ancestry rule |
 | NtQueryInformationProcess command line | /proc/<pid>/cmdline | NUL-separated, no CRT re-quoting |
 | Job object (kill on close, CPU mask, memory, peak) | cgroup v2 leaf under the user's delegated slice | see 2.3 |
@@ -198,17 +224,30 @@ Rules:
 | icacls | chmod 0700 / 0600 | |
 | Desktop `.lnk` | `.desktop` file in `~/.local/share/applications` | |
 | pythonw, CREATE_NO_WINDOW, console hook, winwatch | nothing: Linux spawns no console windows | the no-window carrier is a no-op |
-| pid shield, PidHold | nothing needed: no tree kill by pid; pidfd where a hold is wanted | |
+| pid shield, PidHold | inferred: nothing needed; pidfd where a hold is wanted | rests on Claude Code on Linux not killing a tool call's tree by pid (unknown, section 9; slice 7 probes it) |
 | Git Bash lookup | /bin/bash | kitlib/proc/bash.py answers /bin/bash |
 | conhost + PowerShell session window | tmux session (or a configured terminal command) | owner question 6 |
 | Get-CimInstance Win32_Process | /proc scan | pmstart, launcher/stop |
-| `.exe` process names in hosts.json | per-platform names (`claude`, `node`, `codex`) | hosts.json gains a per-platform field |
+| `.exe` process names in hosts.json | per-platform names (`claude`, `node`, `codex`) | hosts.json gains a per-platform field in slice 2: lock/store.py agent_hosts (the lock's caller walk) matches these names |
+
+The nest token today is three fields: lock/run.py (Slot, into MACHINE_LOCK_RUN) and
+lock/background.py (into MACHINE_LOCK_BG) write `"%s:%d:%d" % (run.id, pid, ctime)`, and
+lock/run.py NEST_RE is `^(<run id>):(\d+):(\d+)$` (verified). On
+Linux it becomes four fields, `<run id>:<pid>:<starttime>:<boot>`, where `<boot>` is the 32 hex
+digits of /proc/sys/kernel/random/boot_id with the dashes removed. NEST_RE gains an optional
+fourth group, `(?::([0-9a-f]{32}))?`; Windows keeps writing three fields, byte for byte. On Linux
+nest_check refuses a token with no fourth field ("the token names no boot") and one whose boot is
+not the current boot_id ("the token is from another boot"), before the ancestor check. The run
+record's ctime field holds starttime on Linux, with a `boot` field beside it, so the record check
+compares both.
 
 ### 2.3 The Job contract on Linux
 
 The lock's promises rest on job objects: a slot's processes stay on its CPUs and under its
-memory, the whole tree dies with the slot, and no child escapes. On Linux the equal mechanism is
-a cgroup v2 leaf the kit owns:
+memory, the whole tree dies with the slot, and no child gets out of it by the means ordinary
+tools use. On Linux the nearest mechanism is a cgroup v2 leaf the kit owns. The threat model it
+must meet: a child that calls setsid, double forks or resets its own affinity, as build tools and
+daemons do; not a same-user process that sets out to leave its cgroup.
 
 - create: `systemd-run --user --scope --unit=pmkit-<rid> -p AllowedCPUs=<list> -p
   MemoryMax=<n>` for a fresh command, or mkdir of a leaf under the kit's delegated subtree for an
@@ -220,8 +259,13 @@ a cgroup v2 leaf the kit owns:
   fallback; tree_working_set: memory.current.
 - terminate, end, kill_on_close: cgroup.kill (kernel 5.14+); kill_on_close is a watchdog that holds
   the cgroup and kills it when the owner's pidfd closes.
-- No escape: a child cannot leave a cgroup it has no write access to; setsid and double fork do
-  not move it (this is stronger than process groups).
+- Escape, against that threat model: setsid and double fork do not move a process between
+  cgroups, where they do leave a process group, so the leaf holds the tree that ordinary tools
+  make. It is not a security boundary: a same-user process can write its own pid into any
+  cgroup.procs it has write access to, which includes the rest of the user's delegated subtree.
+  Here a job object is stricter (a process cannot leave its job, and the kit never allows
+  breakaway, section 1.3). The plan accepts that difference and states it in the docs rather than
+  defending against a deliberate move.
 
 Fallback when the user has no delegated cgroup v2 (old systemd, containers, WSL without
 systemd): process group + sched_setaffinity + PR_SET_PDEATHSIG + an RLIMIT_AS cap. It is
@@ -251,13 +295,21 @@ lock/layout.detect keeps its dict; a Linux reader fills it from /sys and /proc w
 
 No double-booking: unchanged in rule. One store per user (`<profile>/.claude/machine-lock`), a new
 layout adopted only while nothing is live or queued, under the queue lock. Two gaps are Linux's
-own and the backend closes them: two users on one box each get a store, so the store moves to a
-machine path (`/var/lib/pm-kit/machine-lock`, group-writable by a `pm-kit` group) when machine
-setup finds more than one kit user, and a container sees the host's CPUs in /sys while its cgroup
-allows fewer, so the allowed set comes from sched_getaffinity and the cgroup's cpuset.cpus.effective,
-never from /sys alone. The proving test feeds recorded /sys trees (fake_hardware, extended) for a
-plain desktop, a hybrid part, a box with gaps and a container, and checks that no two slots
-share an id.
+own. A container sees the host's CPUs in /sys while its cgroup allows fewer, so the allowed set
+comes from sched_getaffinity and the cgroup's cpuset.cpus.effective, never from /sys alone; the
+backend closes that one. Two kit users on one box each get a store and would book the same CPUs
+twice. Proposal, pending owner question 10: the store moves to a machine path
+(`/var/lib/pm-kit/machine-lock`, group-writable by a `pm-kit` group) when machine setup finds
+more than one kit user; under the recommended answer (one kit user per box) machine setup
+instead refuses a second user. The same double-booking is why owner question 11 (WSL) matters.
+
+The proving test feeds four synthetic /sys and /proc trees, written by hand into the test data
+(fake_hardware, extended) from the kernel's documented layout: a plain desktop, a hybrid part
+(cpu_core and cpu_atom), a box with gaps in its CPU ids and a container whose cpuset allows
+fewer CPUs than /sys lists. It checks that no two slots share an id. No real machine was recorded
+for them, and none is needed for the division logic; the hybrid and gap trees are the ones a CI
+runner cannot give (a hosted runner is a plain VM, inferred). The CI leg adds the runner's own
+live /sys as a fifth, plain case.
 
 ## 3. Guard path semantics and the safety review
 
@@ -287,30 +339,43 @@ On Linux a path is absolute when it starts with `/`; there are no drives, no MSY
 (the placer asks once per mount, read from /proc/self/mountinfo, and folds when in doubt, which
 refuses more). ledger_glob compares both sides the same way.
 
-The ordering rule that keeps Linux safe meanwhile: **until the guard slice lands, the guard
-refuses every write on Linux.** Today the Claude manifest's `pythonw` does not exist on Linux, and
-a hook command that cannot start is, for Claude Code, a non-blocking error (inferred from its hook
-contract): the tool call goes ahead unguarded. So slice 2 adds a check in hookmain that blocks
-every guarded tool call when the platform is not one the guard declares ready, and the hook
-manifest slice (12) cannot land before the guard slice (8).
+What keeps Linux safe meanwhile is the front door, not the guard. **Until slice 14, tools/kit.py
+refuses Linux** (`the kit runs on Windows only`, verified in tools/kit.py main), so there is no
+supported way to set up or launch the kit on a Linux box. The guard cannot be that stop: the
+Claude manifest's `pythonw` does not exist on Linux, and a hook command that cannot start is, for
+Claude Code, a non-blocking error (inferred from its hook contract), so the tool call goes ahead
+unguarded and no check inside hookmain ever runs. A plugin installed on Linux by hand, around
+kit.py, is therefore unguarded until slice 12 gives the hook a Linux interpreter; that is a known
+limit of slices 2 to 11, stated in the docs, not something the guard prevents.
+
+Slice 2 still adds a check in hookmain that blocks every guarded tool call when the platform is
+not one the guard declares ready. It does nothing on Linux until a hook can start there (slice
+12), and the order puts slice 8 (the guard declares Linux ready) before slice 12, so in the
+planned order it never fires on Linux; it is the backstop if that order is broken. Its proof in
+slice 2 is a hookmain unit test that calls the hook entry with the platform set to an unready
+one, not a live hook on Linux. Slice 12 cannot land before slice 8, and slice 14 (kit.py stops
+refusing) comes after both.
 
 ## 4. CI and test marking
 
 - `.github/workflows/linux.yml`: ubuntu-latest (24.04), actions/setup-python at the Python the
   kit runs on (3.14 on the owner's machine today), git configured with a throwaway identity.
 - The first leg runs `python -m unittest discover -s tests -t .` in a ratchet mode, not
-  kit_tests.py or gate.py (both need job objects and the lock). A small script
-  (tools/ci_ratchet.py) runs the suite, writes the failing and erroring test ids, and compares them
-  with tests/linux-baseline.txt: a new failure fails the leg, a fixed one must be removed from the
-  baseline in the same branch. Import failures count as failures.
+  kit_tests.py or gate.py (both need job objects and the lock). The ratchet logic lives in
+  kitlib/ci/ratchet.py (run the suite, collect the failing and erroring test ids, compare them
+  with tests/linux-baseline.txt), with tests in tests/ci/; tools/ci_ratchet.py is the thin entry
+  point (arguments, printing, exit code), as AGENTS.md lays out. A new failure fails the leg, a
+  fixed one must be removed from the baseline in the same branch. Import failures count as
+  failures.
 - tests/platforms.py gives `windows_only(reason)` and `posix_only(reason)`, built like
-  tests/realgit.py with a reasons table keyed by module.Class. The 159 bare `skipUnless(os.name ==
-  'nt')` move to it in one mechanical branch, so `kit_tests --list` can count Windows-only tests by
-  reason and the count is reported per slice.
-- When the pool runs on Linux (slice 5), the leg switches to `tools/kit_tests.py`; when the lock
-  runs (slice 7), to `gate.py --full` with a CI lock profile.
-- A Windows leg (windows-latest) follows once Linux is green, so a Windows regression from a
-  shared change is caught off the owner's machine too.
+  tests/realgit.py with a reasons table keyed by module.Class. The 142 platform skips in 68 files
+  and the 13 `skipUnless(WINDOWS, ...)` in 6 files (section 1.5) move to it in one mechanical
+  branch, so `kit_tests --list` can count Windows-only tests by reason and the count is reported
+  per slice.
+- When the pool runs on Linux (slice 5), the leg switches to `tools/kit_tests.py`; once the lock
+  has a real Linux store root (slice 9), to `gate.py --full` with a CI lock profile.
+- Proposal, pending owner question 8: a Windows leg (windows-latest) once Linux is green, so a
+  Windows regression from a shared change is caught off the owner's machine too.
 - CI adds only strictness: nothing in the landing path reads it until the owner says so.
 
 ## 5. Per-platform shell text
@@ -318,14 +383,16 @@ manifest slice (12) cannot land before the guard slice (8).
 - Skills and roles: a renderer token `{{os:windows|linux}}...{{/os}}` would double every rendered
   file; the plan prefers the smaller fix: write the shared text shell-neutral (most of it is
   already: `git`, `python`), and give shell-and-worktree-traps one section per platform, picked by
-  the agent from its own platform line. Only the dozen PowerShell-only lines change.
+  the agent from its own platform line. Only the 10 Windows-shell lines outside that skill change
+  (section 1.4), and the `powershell` capability maps to no tool on Linux.
 - The hub's to-do steps: `{run:<command>}` gains per-OS forms (`{run.windows:...}`,
   `{run.linux:...}`); the hub shows the form for the machine the step is for (the owner's
   machine record says its OS), and a step with only one form shows it with its shell named. The
   "hand steps carry commands" ruling is kept: every step still carries the command to run.
 - Codex's dialect default follows the platform (bash on Linux).
-- Docs: each owner-facing setup doc gets a Linux block beside the Windows one; the 61 docs that
-  mention PowerShell are sorted in the docs slice: most are Windows-internal and say so.
+- Docs: each owner-facing setup doc gets a Linux block beside the Windows one; the 25 docs that
+  mention PowerShell (section 1.4) are sorted in the docs slice: most are Windows-internal and say
+  so.
 
 ## 6. Install and machine setup on a fresh Linux box
 
@@ -356,8 +423,11 @@ otherwise. Plugin refresh: pluginsource's detached refresh uses the detach backe
 
 ## 7. macOS
 
-Out of scope for this plan. The seam keeps a `darwin` slot so the work can follow, but nothing
-here builds or tests it: macOS has no cgroups (the lock could only limit concurrency, the old
+Out of scope for this plan. On darwin the seam picks no backend: kitlib.platform.NAME is
+'unsupported', there is no darwin folder, and every primitive raises PlatformUnsupported, so
+kitlib imports there (as on Linux after slice 2) and any OS call refuses by name; tools/kit.py
+keeps refusing darwin after slice 14. A darwin backend would be a new folder beside linux/, built
+by its own plan; nothing here builds or tests it: macOS has no cgroups (the lock could only limit concurrency, the old
 question 2), no /proc, launchd instead of systemd, and case-insensitive paths by default. Owner
 question 1 asks to confirm.
 
@@ -366,62 +436,96 @@ question 1 asks to confirm.
 Each slice is one branch, landed in this order unless marked; "Proof" is the test that must be
 green before it lands. Risk uses the kit's levels.
 
-1. **CI leg and test markers.** `.github/workflows/linux.yml`, tools/ci_ratchet.py,
-   tests/platforms.py, tests/linux-baseline.txt, the mechanical move of the nt skips. Risk High
-   (CI config). Proof: the leg runs green on the baseline; a planted failure fails it;
-   `kit_tests --list` shows the same skip count on Windows before and after.
+The machine lock's real store root is `real_root()` in lock/store.py, built on `profile_dir()`
+(SHGetKnownFolderPath, verified); its Linux form comes only in slice 9 (linux/paths.py). So
+slices 3 to 7 build and prove the lock on Linux against a test store, `Store(root=<a temp
+folder>)`, the way the Windows lock tests already do. Store.__init__ calls real_root() even when
+given a root (verified, to set `testing`), so slice 3 makes the Linux stub's "not on this
+platform" error count as "testing" when a root is given and refuse when none is. Nothing on
+Linux uses the machine's store, and the CI leg does not run gate.py, until slice 9.
+
+1. **CI leg and test markers.** `.github/workflows/linux.yml`, kitlib/ci/ratchet.py with its thin
+   entry point tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, the
+   mechanical move of the 155 platform skips (section 4). Risk High (CI config). Proof: the leg
+   runs green on the baseline; a planted failure fails it; `kit_tests --list` shows the same skip
+   count on Windows before and after.
 2. **Import-clean kitlib and the seam skeleton.** kitlib/platform/ (api, windows re-exports,
-   linux stubs that raise), lazy DLL binding in proc/win32.py and proc/pipe.py, the
-   no-os-checks test with its allowlist, and hookmain's block-while-unready check. tools/kit.py
-   keeps refusing. Risk High. Proof: on Linux every kitlib module imports (a test walks them);
-   on Windows the full suite is unchanged; a guarded tool call on Linux blocks.
+   linux stubs that raise, PlatformUnsupported for any other platform), lazy DLL binding in
+   proc/win32.py, proc/pipe.py and gate/outfile.py, the no-os-checks test with its allowlist,
+   hookmain's block-while-unready check, and the per-platform `process_names` in hosts.json
+   (windows: today's `.exe` names; linux: `claude`, `node`, `codex`), read by
+   kitlib/host/registry.py for the running platform, so the lock's caller walk (lock/store.py
+   agent_hosts) finds the agent host on Linux from the first lock slice on. tools/kit.py keeps
+   refusing. Risk High. Proof, Linux: every kitlib module imports (a test walks them); a hookmain
+   unit test with an unready platform blocks the guarded tool call (no live hook: none can start
+   on Linux before slice 12, section 3); registry.union('process_names') gives the linux names.
+   Proof, Windows: the full suite is unchanged; hookmain's output for a fixed set of hook events
+   is byte-identical to the base's; registry.union('process_names') returns the same tuple as
+   the base; every kitlib module still imports, and a test that removes one export from a bound
+   DLL shows the lazy binding still raises, now at first call, naming the function (today it
+   fails at import).
 3. **Locks.** linux/locks.py: flock named locks, run liveness, treelock and writelock on fcntl;
-   lock/store.py lock() and RunMutex through the seam. Risk High (concurrency). Proof: two
-   processes contend for a named lock; a killed holder frees it; run_dead sees a killed run;
-   the treelock tests run on both.
-4. **Process identity and kill.** linux/process.py; lock/run.py nest token with starttime and
-   boot_id. Risk High. Proof: ancestry, descendants, command_line and kill_tree on a spawned
-   tree; a nest token from before a pid reuse is refused.
+   lock/store.py lock() and RunMutex through the seam, on a test store root. Risk High
+   (concurrency). Proof: two processes contend for a named lock; a killed holder frees it;
+   run_dead sees a killed run; the treelock tests run on both; Store() with no root refuses on
+   Linux by name.
+4. **Process identity and kill.** linux/process.py; lock/run.py and lock/background.py write the
+   four-field nest token, and nest_check reads it (section 2.2). Risk High. Proof: ancestry,
+   descendants, command_line and kill_tree on a spawned tree; a nest token from before a pid
+   reuse is refused; a token carrying another boot's id (the boot_id read through a seam the test
+   points at a file) is refused as "from another boot", and one with no boot field is refused on
+   Linux; on Windows the token is still three fields, byte for byte.
 5. **Containment and the pool.** linux/contain.py (cgroup v2 and the weak fallback), cpu
    affinity, tooldeps/pool.py and pytests/runner.py on the seam; the CI leg moves to
    kit_tests.py. Risk High. Proof: a child that calls setsid stays in the cgroup and dies with
    it; memory.peak is read; kill_on_close kills the tree when the owner dies; the weak mode is
    reported as weak.
-6. **Lock hardware.** linux/hardware.py feeding lock/layout.detect; fake_hardware gains recorded
-   /sys trees. Risk High (lock logic). Proof: the four recorded machines divide with no shared
-   id; the Windows layout tests are unchanged.
-7. **Lock runs, detach and the gate.** lock/run.py Slot, give-back, release, detach and
-   gate/submit on the seam; the CI leg moves to gate.py --full. Risk High. Proof: a detached run
-   survives its caller; give-back narrows cpuset.cpus; a landing runs end to end in CI on a
-   throwaway repository.
+6. **Lock hardware.** linux/hardware.py feeding lock/layout.detect; fake_hardware gains the four
+   synthetic /sys and /proc trees of section 2.4. Risk High (lock logic). Proof: the four
+   synthetic trees, and the CI runner's live /sys, divide with no shared id; the Windows layout
+   tests are unchanged.
+7. **Lock runs and detach.** lock/run.py Slot, give-back, release, detach and gate/submit on the
+   seam, on a test store root. Risk High. Proof: a detached run survives its caller; give-back
+   narrows cpuset.cpus. On a Linux box with Claude Code (owner questions 2 and 3), a probe of
+   whether ending a tool call kills its tree by pid; if it does, a shield is added here before
+   the slice lands (sections 1.3 and 9).
 8. **Guard path semantics.** The placer, the ten findings in section 3 as tests first, then the
    fixes; the guard declares Linux ready. Lands alone after a strong-tier review. Risk High.
    Proof: each finding's test refuses on Linux; the Windows guard suite is unchanged.
 9. **Paths and configuration.** linux/paths.py: pointer, profile, temp, environment; config/user.py
-   and config/pointer.py on the seam; worktree/holders.py and classify.py from /proc (holders
-   stops failing open). Risk Medium. Proof: machine config resolves on Linux from the pointer
-   file; holders finds a process whose cwd is in a worktree.
+   and config/pointer.py on the seam; lock/store.py real_root on the Linux profile, so the
+   machine's store exists on Linux; worktree/holders.py and classify.py from /proc (holders stops
+   failing open); the CI leg moves to gate.py --full with a CI lock profile. Risk Medium (High
+   for the store root). Proof: machine config resolves on Linux from the pointer file; holders
+   finds a process whose cwd is in a worktree; Store() opens the real root; a landing runs end to
+   end in CI on a throwaway repository.
 10. **Scheduled jobs.** linux/schedule.py; autostart, hubsite autostart, worktree and temp
     sweeps, automatic tasks, consoletasks read-back. Risk Medium. Proof: units render and
     round-trip through read-back; with user systemd in CI, a timer fires once.
 11. **Sessions.** launcher window (tmux), stop, pmstart process listing, autotasks launch flags.
     Risk Medium. Proof: a launched session is found by name and stopped; no breakaway flag off
     Windows.
-12. **Hook interpreter and hosts.json.** per-platform interpreters and process names, the
-    manifest form owner question 9 picks. Needs slice 8. Risk High (hook entry). Proof: the
-    rendered manifest runs the hook on both; a missing interpreter blocks rather than passes.
-13. **Shell text.** shell-and-worktree-traps sections, the dozen role/skill lines, hub to-do step
-    forms, Codex dialect. Risk Low. Proof: content render check; hub renders each form.
+12. **Hook interpreter.** per-platform interpreters (hookmain INTERPRETERS), the manifest form
+    owner question 9 picks. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
+    runs the hook on both; a missing interpreter blocks rather than passes; the rendered Windows
+    hooks.json of each host is byte-identical to the base's.
+13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
+    hub to-do step forms, Codex dialect. Risk Low. Proof: content render check; hub renders each
+    form. Windows stays byte-identical: every rendered Windows file differs from the base's only
+    in the named lines; a step with one `{run:}` form renders byte-identical to the base's; Codex's
+    rendered Windows output, and its dialect default on Windows ('powershell'), are unchanged.
 14. **Machine setup on Linux.** installer/machine-setup.sh, machinesetup steps on the seam,
-    tools/kit.py stops refusing Linux. Risk High (install). Proof: machine setup on a fresh
-    Ubuntu container ends with no problems and the lock status shows strong containment.
+    tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL unless owner question
+    11 brings it in). Risk High (install). Proof: machine setup on a fresh Ubuntu container ends
+    with no problems and the lock status shows strong containment.
 15. **Peer messaging and the bridge.** peer.py on Claude Code's Linux socket (after a probe), the
     bridge's leader lock and transport on Unix sockets, procwatch. Risk High (networking). May
     stay Windows-only at first (owner question 7).
 16. **Docs.** owner setup docs, ARCHITECTURE.md's platform line, AGENTS.md's "Windows only",
     the multi-host plan's section 6 marked superseded. Risk Low. Proof: docs gate.
 
-Slices 9 to 11 and 13 can run in parallel after slice 7; the others are in order.
+Slices 9 to 11 and 13 can run in parallel after slice 7 (slice 9 touches lock/store.py, so it
+does not overlap another lock slice); the others are in order.
 
 ## 9. Risks and unknowns
 
@@ -429,6 +533,11 @@ Slices 9 to 11 and 13 can run in parallel after slice 7; the others are in order
   on some older versions); slice 2 checks and binds it lazily either way.
 - Unknown: Claude Code's Linux messaging address, its hook interpreter lookup, its managed
   settings path and its session file fields; slice 15 and 12 probe first.
+- Unknown: whether Claude Code on Linux kills a tool call's process tree by pid when it ends the
+  call, as it does on Windows (the reason for the pid shield). Sections 1.3 and 2.2 infer it does
+  not; slice 7 probes it on a Linux box before it lands.
+- Unverified: that the repository is public on GitHub and that standard hosted runners cost
+  nothing for it (questions 2 and 3 rest on both); the coordinator checks before slice 1.
 - Unknown: how GitHub's hosted runners delegate cgroups to the runner user; slice 5 may need
   `sudo systemd-run` in CI only, which tests the backend but not the delegation step.
 - Risk: the weak containment fallback looks like it works. Mitigation: named, shown in status,
@@ -443,15 +552,19 @@ Slices 9 to 11 and 13 can run in parallel after slice 7; the others are in order
 
 ## 10. Questions for the owner
 
-1. **macOS.** (a) out for now, the seam keeps a slot; (b) in, with concurrency-only locking;
-   (c) in, later, as its own plan. Recommendation: (a), stated in the docs.
-2. **Linux CI runner.** (a) GitHub-hosted ubuntu-latest, free for this public repository;
-   (b) a self-hosted runner on a Linux box; (c) Docker Desktop on this machine, run by hand.
-   Recommendation: (a), with (c) for local checks; no runner on the owner's machine.
-3. **Spending.** (a) none: hosted standard runners cost nothing for a public repository;
+1. **macOS.** (a) out for now: the seam names darwin unsupported and refuses it by name;
+   (b) in, with concurrency-only locking; (c) in, later, as its own plan. Recommendation: (a),
+   stated in the docs.
+2. **Linux CI runner.** (a) GitHub-hosted ubuntu-latest; (b) a self-hosted runner on a separate
+   Linux box; (c) a self-hosted runner in a Linux VM on the owner's Windows machine.
+   Recommendation: (a); (c) would run CI's heavy work on the owner's machine outside the
+   machine lock's view. A Linux container on the owner's machine for a quick local check is a
+   tool, not a runner, and needs no decision.
+3. **Spending.** (a) none: standard hosted runners, free for a public repository (unverified:
+   the plan did not check the repository's visibility or the current terms, section 9);
    (b) larger hosted runners for faster full runs; (c) a Linux box or VM for real hardware and
-   GPU tests. Recommendation: (a) now; (c) only if the owner wants GPU slots tested on real
-   hardware.
+   GPU tests. Recommendation: (a) now, once the check confirms it is free; (c) only if the owner
+   wants GPU slots tested on real hardware.
 4. **No cgroup v2 delegation.** (a) refuse heavy runs and say why; (b) run them with weak
    containment, shown as weak; (c) refuse the whole lock. Recommendation: (a).
 5. **Supported Linux.** (a) systemd distributions, kernel 5.14+, Ubuntu 24.04 as the reference;
@@ -461,15 +574,23 @@ Slices 9 to 11 and 13 can run in parallel after slice 7; the others are in order
    terminal emulator command; (c) both, tmux by default. Recommendation: (c).
 7. **The bridge and peer messaging on Linux.** (a) after parity of the rest; (b) in the first
    pass; (c) never. Recommendation: (a).
-8. **A Windows CI leg.** (a) yes, after the Linux leg is green; (b) no, the owner's machine
-   stays the only Windows proof. Recommendation: (a); it is free and catches shared-code
-   regressions.
+8. **A Windows CI leg** (section 4 writes it as a proposal pending this answer). (a) yes, after
+   the Linux leg is green; (b) no, the owner's machine stays the only Windows proof.
+   Recommendation: (a); it catches shared-code regressions off the owner's machine, and under
+   question 3 (a) it costs nothing.
 9. **Hook manifest form.** (a) machine setup installs a `pythonw` shim on the Linux PATH so one
    committed manifest serves both; (b) per-platform manifests rendered side by side; (c) one
    manifest running `python3 || pythonw` through the shell. Recommendation: (b), because a
    missing shim fails open (section 3), while a rendered manifest is checked by the render test.
-10. **Multi-user boxes.** (a) one kit user per Linux box; (b) a shared machine store under
-    /var/lib with a group. Recommendation: (a) now, (b) when a second user appears.
+10. **Multi-user boxes** (section 2.4 writes the shared store as a proposal pending this
+    answer). (a) one kit user per Linux box: machine setup refuses a second; (b) a shared machine
+    store under /var/lib with a group. Recommendation: (a) now, (b) when a second user appears.
+11. **WSL.** (a) out: tools/kit.py refuses WSL (its kernel release names Microsoft) like any
+    unsupported platform; (b) in: WSL2 with systemd counts as a Linux box; (c) later, after
+    native Linux parity, as its own decision. Recommendation: (c), refusing WSL meanwhile. A kit in
+    WSL beside the Windows kit on one machine would keep a second lock store for the same CPUs
+    and memory and double-book them (section 2.4), and WSL's cgroup delegation and systemd are
+    not the reference target (question 5).
 
 ## 11. Proposed build records
 
@@ -478,18 +599,18 @@ carries its own scope.
 
 | Slug | Summary | Scope |
 |---|---|---|
-| linux-ci-leg | Linux CI leg, ratchet baseline, platform test markers | .github/workflows/linux.yml, tools/ci_ratchet.py, tests/platforms.py, tests/linux-baseline.txt, tests/ (skip moves) |
-| linux-import-seam | Import-clean kitlib, kitlib/platform skeleton, no-os-checks test, hook block while unready | kitlib/platform/, kitlib/proc/win32.py, kitlib/proc/pipe.py, kitlib/host/hookmain.py, tests/platform/ |
-| linux-locks | flock named locks, run liveness, treelock and writelock | kitlib/platform/linux/locks.py, kitlib/lock/store.py, kitlib/fs/treelock.py, kitlib/fs/writelock.py, tests/lock/, tests/fs/ |
-| linux-process-identity | /proc identity, ancestry, kill; nest token with starttime and boot_id | kitlib/platform/linux/process.py, kitlib/proc/process.py, kitlib/lock/run.py, tests/proc/, tests/lock/ |
+| linux-ci-leg | Linux CI leg, ratchet baseline, platform test markers | .github/workflows/linux.yml, kitlib/ci/, tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, tests/ (skip moves) |
+| linux-import-seam | Import-clean kitlib, kitlib/platform skeleton, no-os-checks test, hook block while unready, per-platform process names | kitlib/platform/, kitlib/proc/win32.py, kitlib/proc/pipe.py, kitlib/gate/outfile.py, kitlib/host/hookmain.py, kitlib/host/registry.py, hosts.json, tests/platform/, tests/host/, tests/gate/ |
+| linux-locks | flock named locks, run liveness, treelock and writelock, on a test store root | kitlib/platform/linux/locks.py, kitlib/lock/store.py, kitlib/fs/treelock.py, kitlib/fs/writelock.py, tests/lock/, tests/fs/ |
+| linux-process-identity | /proc identity, ancestry, kill; four-field nest token with starttime and boot | kitlib/platform/linux/process.py, kitlib/proc/process.py, kitlib/lock/run.py, kitlib/lock/background.py, tests/proc/, tests/lock/ |
 | linux-containment | cgroup v2 Job contract, weak fallback, pool and unit runner on Linux | kitlib/platform/linux/contain.py, kitlib/platform/linux/cpu.py, kitlib/proc/job.py, kitlib/tooldeps/pool.py, kitlib/pytests/runner.py, tests/proc/, tests/tooldeps/ |
-| linux-lock-hardware | /sys and /proc hardware detection, recorded machines | kitlib/platform/linux/hardware.py, kitlib/lock/layout.py, tests/lock/ |
-| linux-lock-runs | slots, give-back, detach and gate on Linux | kitlib/lock/run.py, kitlib/lock/detach.py, kitlib/gate/submit.py, kitlib/platform/linux/detach.py, tests/lock/, tests/gate/ |
+| linux-lock-hardware | /sys and /proc hardware detection, synthetic /sys trees | kitlib/platform/linux/hardware.py, kitlib/lock/layout.py, tests/lock/ |
+| linux-lock-runs | slots, give-back, detach and gate submit on Linux, on a test store root | kitlib/lock/run.py, kitlib/lock/detach.py, kitlib/gate/submit.py, kitlib/platform/linux/detach.py, tests/lock/, tests/gate/ |
 | linux-guard-paths | Guard placer for POSIX paths and the safety findings | kitlib/guard/, tests/guard/ |
-| linux-config-paths | Pointer, profile, temp, environment; worktree holders from /proc | kitlib/platform/linux/paths.py, kitlib/config/, kitlib/worktree/holders.py, kitlib/worktree/classify.py, tests/config/, tests/worktree/ |
+| linux-config-paths | Pointer, profile, temp, environment, the lock store's real root; worktree holders from /proc; CI leg on gate.py | kitlib/platform/linux/paths.py, kitlib/config/, kitlib/lock/store.py, kitlib/worktree/holders.py, kitlib/worktree/classify.py, .github/workflows/linux.yml, tests/config/, tests/lock/, tests/worktree/ |
 | linux-scheduled-jobs | systemd user timers for every scheduled task, read-back | kitlib/platform/linux/schedule.py, kitlib/launcher/autostart.py, kitlib/hubsite/autostart.py, kitlib/worktree/task.py, kitlib/machinesetup/, kitlib/pmstart/consoletasks.py, tests/ |
 | linux-sessions | tmux sessions, stop, process listing, launch flags | kitlib/launcher/, kitlib/pmstart/, kitlib/autotasks/, tests/launcher/, tests/pmstart/ |
-| linux-hook-manifests | Per-platform hook interpreter, manifests and process names | hosts.json, kitlib/host/hookmain.py, kitlib/host/content.py, hosts/*/shell/, tests/host/ |
+| linux-hook-manifests | Per-platform hook interpreter and manifests | hosts.json, kitlib/host/hookmain.py, kitlib/host/content.py, hosts/*/shell/, tests/host/ |
 | linux-shell-text | Per-platform skill text, hub to-do step forms, Codex dialect | content/, kitlib/hubsite/todosteps.py, hosts/codex/adapter/, tests/hubsite/, tests/content/ |
 | linux-machine-setup | Fresh-box machine setup and installer, kit.py stops refusing Linux | installer/machine-setup.sh, kitlib/machinesetup/, tools/machine_setup.py, tools/kit.py, tests/machinesetup/ |
 | linux-peer-bridge | Peer messaging and the bridge on Unix sockets, procwatch | hosts/claude/adapter/peer.py, hosts/claude/adapter/peer_worker.py, optional/bridge/, kitlib/machinesetup/procwatch.py, tests/ |
