@@ -35,6 +35,7 @@ from kitlib.guard import ownercommits as oc
 
 TRAILER = oc.TRAILER
 VALUE = 'hub:A-<n>'
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def doc_id(value):
@@ -46,6 +47,15 @@ def doc_id(value):
 
 def trailer(value):
     return '%s: %s' % (TRAILER, value)
+
+
+def base_route(root, did):
+    """The sentence naming the way to commit the approval `did` when HEAD is not its base: a
+    worktree made at that base (docs/new-worktree.md "A base commit"), or a new approval."""
+    return ('Commit it from a worktree at that base: python %s -C %s <area>/<slug> --approval '
+            'hub:%s (docs/new-worktree.md "A base commit"), then merge that branch into this one; '
+            'or ask the owner again from this HEAD.'
+            % (os.path.join(KIT_ROOT, 'tools', 'new_worktree.py'), root, did))
 
 
 def retry_command(tool, value, sha):
@@ -178,9 +188,8 @@ def prewrite_error(root, did, doc, paths, head):
         if why:
             return why
     if head != doc['head']:
-        return ('the approval is for base %s, and HEAD is %s. An approval applies to its own '
-                'base commit only; ask the owner again from this HEAD.'
-                % (doc['head'][:12], (head or 'unborn')[:12]))
+        return ('the approval is for base %s, and HEAD is %s. %s'
+                % (doc['head'][:12], (head or 'unborn')[:12], base_route(root, did)))
     unchanged = []
     for f in doc['files']:
         content = f.get('content')

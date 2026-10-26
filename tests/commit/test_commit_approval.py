@@ -272,6 +272,7 @@ class WhatIsRefusedBeforeAnythingIsWritten(ApprovalCase):
         self.git('commit', '-q', '-m', 'later')
         out = self.assert_refused('the approval is for base %s' % self.base[:12], 'CLAUDE.md')
         self.assertIn('HEAD is %s' % self.head()[:12], out)
+        self.assertIn('new_worktree.py -C %s <area>/<slug> --approval hub:A-001' % self.wt, out)
         self.assertEqual(self.read('CLAUDE.md'), 'rules\n')
 
     def test_a_named_path_the_approval_does_not_hold(self):
