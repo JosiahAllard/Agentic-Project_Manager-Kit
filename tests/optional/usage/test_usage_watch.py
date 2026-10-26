@@ -215,6 +215,52 @@ class StatuslineRoundTrip(unittest.TestCase):
             self.assertEqual(r["five_reset"], dt.datetime(2026, 10, 4, 15, 0, tzinfo=UTC))
             self.assertEqual([f for f in os.listdir(d) if f.endswith(".tmp")], [])
 
+    def test_failed_move_leaves_no_tmp(self):
+        # Hold the target open with no sharing, as a reader would: the move fails.
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "usage-status.json")
+            status(target, 1, 1, "2026-10-04T12:00:00.0000000+00:00")
+            h = k32.CreateFileW(target, 0x80000000, 0, None, 3, 0x80, None)   # GENERIC_READ, share none
+            self.assertNotEqual(h, wintypes.HANDLE(-1).value)
+            try:
+                five = int(dt.datetime(2026, 10, 4, 15, 0, tzinfo=UTC).timestamp())
+                p = self.run_statusline({"session_id": "s1", "model": {"display_name": "Opus"},
+                                         "rate_limits": {"five_hour": {"used_percentage": 42, "resets_at": five}}}, d)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(p.stdout.strip(), "[Opus]  5h 42%")
+                self.assertEqual([f for f in os.listdir(d) if f.endswith(".tmp")], [])
+            finally:
+                k32.CloseHandle(h)
+
+    def test_stale_tmp_swept_and_others_kept(self):
+        five = int(dt.datetime(2026, 10, 4, 15, 0, tzinfo=UTC).timestamp())
+        with tempfile.TemporaryDirectory() as d:
+            names = {"old": "usage-status.json.123.tmp", "new": "usage-status.json.456.tmp",
+                     "other": "other.json.789.tmp", "odd": "usage-status.json.abc.tmp"}
+            for n in names.values():
+                with open(os.path.join(d, n), "w") as f:
+                    f.write("x")
+            old = os.path.getmtime(os.path.join(d, names["old"])) - 3600
+            for n in (names["old"], names["other"], names["odd"]):
+                os.utime(os.path.join(d, n), (old, old))
+            os.mkdir(os.path.join(d, "sub"))
+            with open(os.path.join(d, "sub", "usage-status.json.1.tmp"), "w") as f:
+                f.write("x")
+            os.utime(os.path.join(d, "sub", "usage-status.json.1.tmp"), (old, old))
+            p = self.run_statusline({"session_id": "s1", "model": {"display_name": "Opus"},
+                                     "rate_limits": {"five_hour": {"used_percentage": 42, "resets_at": five}}}, d)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            left = set(os.listdir(d))
+            self.assertNotIn(names["old"], left)
+            self.assertLessEqual({names["new"], names["other"], names["odd"], "sub", "usage-status.json"}, left)
+            self.assertTrue(os.path.exists(os.path.join(d, "sub", "usage-status.json.1.tmp")))
+
     def test_no_rate_limits_writes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             p = self.run_statusline({"session_id": "s1", "model": {"display_name": "Opus"}}, d)
