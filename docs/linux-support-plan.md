@@ -36,7 +36,7 @@ needs it says so.
 
 ### 1.2 The surface, counted
 
-Counted at 9c8746da8 over the tracked Python files, `git ls-files '*.py'`: 1,264 files, 528 of
+Counted on this branch on 2026-10-25, after its merge of main, over the tracked Python files, `git ls-files '*.py'`: 1,264 files, 528 of
 them outside tests/. Each row is the number of those files that `git grep -l -i -E '<pattern>'`
 matches, the alternatives in the pattern column joined by `|`. The PM's first counts are in the last column; where they differ, this scan's
 figure stands.
