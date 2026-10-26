@@ -70,7 +70,8 @@ _REFS = {"type": "array", "items": {"type": "string"},
          "description": "Ids of other hub documents this one names."}
 _URGENT = {"type": "boolean"}
 _RECORD_SAYS = ("The backlog record the question is about: {repo, id}, repo a repository the "
-                "hub has configured (the kit's own records: pm). The hub reads it now and "
+                "hub has configured (the kit's own records: the PM repository's folder name, "
+                "which hub_view view 'repos' lists). The hub reads it now and "
                 "refuses a repo it has not configured, a record that repo's backlog does not "
                 "have or has completed, and a record it cannot read (unavailable).")
 _RECORD = {"type": "object", "description": _RECORD_SAYS,
@@ -154,12 +155,10 @@ TOOLS = {
               "record": _RECORD, "class": _one_of(hubapi.QUESTION_CLASSES, _CLASS_SAYS)},
              ["title"]), "POST", "/questions", AGENT),
     "hub_question_log": (
-        "Records the ruling an answered question became (POST /questions/<id>/log); the question "
-        "is then logged. The ruling must be an id a ledger file holds; replace corrects the "
-        "ruling of a question already logged.",
-        _obj({"id": _ID, "ruling": {"type": "string", "description": "The ruling's id."},
-              "replace": {"type": "boolean"}, "unfiled": _UNFILED,
-              "if_version": _PIN}, ["id", "ruling", "if_version"]),
+        "Marks an answered or filed question logged once its answer is in the ledger "
+        "(POST /questions/<id>/log); no ledger id is given. Refused (invalid) for a question "
+        "that is neither answered nor filed, a logged one included.",
+        _obj({"id": _ID, "unfiled": _UNFILED, "if_version": _PIN}, ["id", "if_version"]),
         "POST", "/questions/{id}/log", AGENT),
     "hub_question_done": (
         "Marks an answered or filed question handled when it became no ruling "
@@ -231,9 +230,8 @@ TOOLS = {
         "POST", "/stories/{id}", AGENT),
     "hub_to_pm_reply": (
         "Replies to a note the owner sent the PM (POST /to_pm/<id>/reply); the note is then done.",
-        _obj({"id": _ID, "reply": {"type": "string"},
-              "ruling": {"type": "string", "description": "The ruling it became, if any."},
-              "if_version": _PIN}, ["id"]), "POST", "/to_pm/{id}/reply", AGENT),
+        _obj({"id": _ID, "reply": {"type": "string"}, "if_version": _PIN}, ["id"]),
+        "POST", "/to_pm/{id}/reply", AGENT),
     "hub_inbox_post": (
         "Puts a document in the owner's inbox (POST /inbox): an answer to something the owner "
         "asked, or a report.",

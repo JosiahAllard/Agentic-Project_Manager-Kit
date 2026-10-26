@@ -109,8 +109,9 @@ the server alone decides what a role may do.
                                                      record it is about, refused unless the
                                                      hub reads it now in that configured repo;
                                                      else --class: what kind of question it is
-  hub.py questions log Q-1 <ruling id> [--replace] [--unfiled WHY] --if-version V
-                                                     `LOGGED Q-1 <ruling id>`
+  hub.py questions log Q-1 [--unfiled WHY] --if-version V
+                                                     `LOGGED Q-1`: an answered question the
+                                                     PM logged in the ledger (no id is given)
   hub.py questions done Q-1 --why TEXT [--unfiled WHY] --if-version V
                                                      `DONE Q-1`: an answered question that
                                                      needs no ruling. A bound answer not filed
@@ -161,7 +162,7 @@ the server alone decides what a role may do.
   hub.py to-pm [--status S] [--repo R]              `P-1 queued [repo] text` for each
   hub.py to-pm add --text T [--kind K] [--repo R] [--urgent]            (owner) `QUEUED P-2`
   hub.py to-pm send                                 (owner) `SENT P-1 P-2`, or `SENT nothing`
-  hub.py to-pm reply P-1 TEXT [<ruling id>] [--if-version V]            `REPLIED P-1`
+  hub.py to-pm reply P-1 TEXT [--if-version V]                          `REPLIED P-1`
   hub.py inbox                                      `M-1 unread [repo] title` for each
   hub.py inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...]
         [--from NAME]                                `POSTED M-2`
@@ -429,7 +430,7 @@ def _leaf(subs, name, what):
 
 def _client_verbs(sub):
     S = hubvalidate.STATUSES
-    q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
+    q = _listed(sub, 'questions', 'list the questions; add: ask one; log: mark it logged; '
                 'done: handled with no ruling; edit, withdraw: change or remove one you asked; '
                 'file: file answers into their records again', S['questions'], since=True)
     x = _leaf(q, 'show', 'one question with its options, context and answer')
@@ -451,11 +452,8 @@ def _client_verbs(sub):
     _question_class(x, 'with no --record: what kind of question it is')
     x.add_argument('--from', dest='who', metavar='KEY',
                    help='your launcher session key: the answer comes back to it (default: pm)')
-    x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
+    x = _leaf(q, 'log', 'mark an answered question logged, its answer being in the ledger')
     x.add_argument('id')
-    x.add_argument('ruling', metavar='ruling-id')
-    x.add_argument('--replace', action='store_true',
-                   help='correct the ruling of a question already logged')
     _unfiled(x)
     _pins(x, required=True)
     x = _leaf(q, 'done', 'mark an answered question handled with no ruling (a one-off go)')
@@ -559,7 +557,6 @@ def _client_verbs(sub):
     x = _leaf(m, 'reply', 'answer a message the owner sent')
     x.add_argument('id')
     x.add_argument('reply', metavar='TEXT')
-    x.add_argument('ruling', nargs='?', metavar='ruling-id')
     _pins(x)
 
     i = _listed(sub, 'inbox', 'list the inbox; add, read', repo=False)
@@ -1096,17 +1093,15 @@ def _questions(a, stop):
             record=a.record, **{'from': a.who, 'class': a.question_class}))
         return _wrote(a, got, 'ASKED %s' % got.get('id'))
     if a.sub == 'log':
-        body = {'ruling': a.ruling, 'if_version': a.if_version}
-        if a.replace:
-            body['replace'] = True      # sent only when asked: a hub not yet restarted refuses unknown fields
+        body = {'if_version': a.if_version}
         if a.unfiled is not None:
             body['unfiled'] = a.unfiled
         got = hub.post(_one('questions', a) + '/log', client.AGENT, body)
-        return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
+        return _wrote(a, got, 'LOGGED %s' % got.get('id'))
     if a.sub == 'done':
         body = {'why': a.why, 'if_version': a.if_version}
         if a.unfiled is not None:
-            body['unfiled'] = a.unfiled     # sent only when asked, as --replace is
+            body['unfiled'] = a.unfiled     # sent only when asked: an older hub refuses unknown fields
         got = hub.post(_one('questions', a) + '/done', client.AGENT, body)
         return _wrote(a, got, 'DONE %s' % got.get('id'))
     if a.sub == 'file':
@@ -1235,7 +1230,7 @@ def _to_pm(a, stop):
         return _show(a, got, ['SENT %s' % (' '.join(sent) or 'nothing')])
     if a.sub == 'reply':
         got = hub.post(_one('to_pm', a) + '/reply', client.AGENT, _body(
-            reply=a.reply, ruling=a.ruling, if_version=a.if_version))
+            reply=a.reply, if_version=a.if_version))
         return _wrote(a, got, 'REPLIED %s' % got.get('id'))
     return _list(a, 'to_pm')
 

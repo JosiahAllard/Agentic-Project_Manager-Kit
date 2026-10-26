@@ -127,7 +127,7 @@ class RefusedTest(DoneCase):
     def test_a_logged_question_is_refused(self):
         qid = self.answered()
         self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': RULING, 'if_version': self.version(qid)})
+                {'if_version': self.version(qid)})
         self.refused('invalid', 'status', qid, {'why': 'w', 'if_version': self.version(qid)})
 
     def test_a_question_already_done_is_refused(self):

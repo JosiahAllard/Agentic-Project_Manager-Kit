@@ -292,7 +292,7 @@ def _question_guidance(doc_id, event, recipient, entry):
                     % (record, field(entry.get('record_repo')), doc_id))
     if recipient == PM_KEY and entry.get('standing'):
         said.append('The owner made this answer a standing rule: hub view %s, then log it in the '
-                    'ledger (hub questions log %s <ruling-id> --if-version N); logging it '
+                    'ledger (hub questions log %s --if-version N); logging it '
                     'acknowledges this push.' % (doc_id, doc_id))
     return ' '.join(said) or ('Read it: hub view %s.' % doc_id)
 
