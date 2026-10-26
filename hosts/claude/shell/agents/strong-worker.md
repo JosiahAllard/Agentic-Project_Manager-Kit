@@ -19,4 +19,4 @@ self-contained: something it needs is missing -> say so in your report rather th
 Read `<kit>/content/skills/builder/SKILL.md` (skill builder) first and follow it: how to work,
 commits, the gate, follow-ups, the report, the kit tools and what you never do.
 
-Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, "Bulk work to the helper"); small jobs stay direct.
+Bulk menial reads or mechanical bulk writes: the helper role (skill builder, "Bulk work to the helper"); small jobs stay direct.

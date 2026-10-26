@@ -81,7 +81,8 @@
                  gate.py --full selects them, whatever paths the merge changes; a step that
                  passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
-                 --fresh or --full; a batch reuses per step like one branch). A merge that is docs-only under the base's config
+                 --fresh or --full; a batch reuses per step like one branch; one branch also
+                 from its tip's --full record of this tree, reuse.same_tree). A merge that is docs-only under the base's config
                  (not --full) runs only the "gate".docs_only steps (docs/gate.md "Docs-only
                  changes"). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),

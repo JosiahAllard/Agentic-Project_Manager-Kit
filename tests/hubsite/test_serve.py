@@ -1029,15 +1029,15 @@ class RecordViewsCase(ServeCase):
                              {'lines': ['add'], 'record': {'repo': 'Alpha', 'id': 'A-2',
                                                            'where': 'open'}})
             self.assertEqual(views.record_edit('ALPHA', 'A-2', 'c:v', [('effort', ['s'])], [],
-                                               None, 'R-1')['record']['id'], 'A-2')
-            self.assertEqual(views.record_delete('Alpha', 'A-2', 'w', None), {'lines': ['delete']})
+                                               None)['record']['id'], 'A-2')
+            self.assertEqual(views.record_delete('Alpha', 'A-2', 'w'), {'lines': ['delete']})
         # each write is followed by a read of that repository, so the snapshot shows it
         reread = ('reread', 'Alpha', 'C:\\alpha')
         self.assertEqual(seen, [('add', 'C:\\alpha', 'A-2', 's', ['x'], None, None), reread,
                                 ('record', 'Alpha', 'A-2'),
                                 ('edit', 'C:\\alpha', 'A-2', 'c:v', [('effort', ['s'])], [],
-                                 None, 'R-1'), reread, ('record', 'Alpha', 'A-2'),
-                                ('delete', 'C:\\alpha', 'A-2', 'w', None), reread])
+                                 None), reread, ('record', 'Alpha', 'A-2'),
+                                ('delete', 'C:\\alpha', 'A-2', 'w'), reread])
 
     def test_a_bad_id_or_a_repository_not_configured_is_refused_before_any_write(self):
         views, _ = self.site()
@@ -1972,7 +1972,8 @@ class MachineCase(unittest.TestCase):
         with mock.patch.object(serve.pmstart, '_toplevel', toplevel):
             src = serve.machine_sources(self.home)
             self.assertEqual(asked, [], 'reading the sources ran git')
-            want = ['extra', 'Gamerepo', 'kitrepo', 'pmrepo']
+            names = ['extra', 'Gamerepo', 'kitrepo', 'pmrepo']
+            want = names + ['g']                    # the session's key is an alias
             self.assertEqual(src.known_repos(), want)
             store = self.store(src)
             for _ in range(3):
@@ -1982,9 +1983,29 @@ class MachineCase(unittest.TestCase):
             self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
             self.assertEqual(src.known_repos(), want)
             for _ in range(3):                      # the repos view, on every snapshot
-                self.assertEqual([r['name'] for r in src.repos([])], want)
+                self.assertEqual([r['name'] for r in src.repos([])], names)
         self.assertEqual(len(asked), 2, asked)      # the two folders, once each, for every call
         self.assertEqual(asked[0], os.path.dirname(path))
+
+    def test_a_session_key_is_an_alias_of_its_repo_so_its_tag_has_no_warning(self):
+        self.sessions(json.dumps({'kit': {'repo': 'kitrepo'}, 'pm-kit': {'repo': 'kitrepo'}}))
+        with mock.patch.object(serve.pmstart, '_toplevel', lambda d: 'kitrepo'):
+            src = serve.machine_sources(self.home)
+            store = self.store(src)
+            for tag in ('kit', 'PM-KIT'):
+                self.assertEqual(store.add('questions', question(repo=tag)).warnings, [])
+            r = store.add('questions', question(repo='ghost'))
+            self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
+            menu = src.repos([])
+            self.assertEqual(menu, [{'name': 'kitrepo', 'aliases': ['kit', 'pm-kit']}])
+
+    def test_a_missing_sessions_file_leaves_the_session_keys_out(self):
+        self.config({'pm_start': {'sessions_file': os.path.join(self.home, 'missing', 's.json')}})
+        src = serve.machine_sources(self.home)
+        self.assertEqual(src.known_repos(), ())
+        self.assertEqual(serve._session_aliases({'sessions_file': os.path.join(self.home, 'x')}), {})
+        r = self.store(src).add('questions', question(repo='kit'))      # the write still lands
+        self.assertEqual([f.code for f in r.warnings], ['repo-alias'])   # today's behaviour
 
     def test_a_sessions_file_whose_json_is_not_an_object_gives_no_repo_names(self):
         for text in ('[]', 'null', '5', '"s"'):
@@ -2020,7 +2041,7 @@ class MachineCase(unittest.TestCase):
 
         with mock.patch('kitlib.git.cmd.subprocess_run', no_git):
             src = serve.machine_sources(self.home)
-            self.assertEqual(src.known_repos(), ['extra', 'Gamerepo'])
+            self.assertEqual(src.known_repos(), ['extra', 'Gamerepo', 'g'])
             self.assertEqual(self.store(src).add('questions', question(repo='gamerepo')).warnings,
                              [])
         self.assertEqual(len(ran), 2, ran)          # git was tried, for both folders

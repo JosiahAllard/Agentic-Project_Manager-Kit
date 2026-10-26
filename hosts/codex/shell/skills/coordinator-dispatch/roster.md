@@ -14,10 +14,10 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - deep-worker: its own launched session for the hardest issues; never a subagent dispatch.
 - analyst: the read type - review of one branch against its brief (skill `specialty-review`; never the author) and research (skill `specialty-research`). Builds and edits nothing.
 - lander: optional wrapper that submits one reviewed branch (or a batch) for landing, waits for the result and reports. Never edits code.
-- docs-writer: the docs type - settled facts into docs (skill `specialty-records`) and specs extended from the owner's answers (skill `specialty-spec`). Docs only.
+- docs-writer: the docs type - settled facts into docs and specs extended from the owner's answers (skill `specialty-docs`). Docs only.
 - test-runner: runs test tiers in a given worktree; reports PASS/FAIL plus failing lines.
 - helper: light, read+edit only; dispatched by builders for bulk menial reads and mechanical bulk writes (a mechanical rename across 10 or more files included: the helper edits each listed file, any script stays with the builder; weak-worker still never does renames), never by a coordinator for a story.
-- Specialty skills, loaded by the role the brief names: `specialty-review`, `specialty-research` (analyst); `specialty-records`, `specialty-spec` (docs-writer); `specialty-tech-art`, `specialty-3d-assets`, `specialty-rigging`, `specialty-sound` (a worker type, see `creative.md` beside the skill).
+- Specialty skills, loaded by the role the brief names: `specialty-review`, `specialty-research` (analyst); `specialty-docs` (docs-writer); `specialty-tech-art`, `specialty-3d-assets`, `specialty-rigging`, `specialty-sound` (a worker type, see `creative.md` beside the skill).
 - consultant: a long-lived launched session per repository that answers engineering questions.
 
 ## Choosing
@@ -76,6 +76,6 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   the consultant's calls as delegated.
 - Research (the analyst with skill `specialty-research`) = ideas, modes, mechanics, prior art;
   read-only. Raise a research dispatch to the standard tier. Output = concepts for the owner to
-  pick; the chosen one -> the docs-writer with skill `specialty-spec` before any builder sees it.
+  pick; the chosen one -> the docs-writer with skill `specialty-docs` before any builder sees it.
 - Pass/fail checks whose log nobody needs -> the cheapest role the profile lists; none
   listed -> the worker.

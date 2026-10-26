@@ -819,6 +819,17 @@ class PagesTest(ApiCase):
                 self.refused('invalid', 'html', 'POST', '/pages', AGENT,
                              {'id': 'bad', 'title': 't', 'html': html})
 
+    def test_a_per_repo_ledger_id_in_a_page_id_is_refused(self):
+        h = 'H' + '-kit-' + '0007'
+        for doc_id in (h, 'plan-' + h, h + '-plan', 'x_' + h):
+            with self.subTest(id=doc_id):
+                obj = self.refused('invalid', 'id', 'POST', '/pages', AGENT,
+                                   {'id': doc_id, 'title': 't', 'html': PAGE})
+                self.assertIn('holds', obj['error']['message'])
+        for doc_id in ('H-kit', 'Hx-kit-0007', 'planH-kit-0007'):
+            with self.subTest(id=doc_id):
+                self.ok('POST', '/pages', AGENT, {'id': doc_id, 'title': 't', 'html': PAGE})
+
     def test_ids_shaped_like_items_or_rulings_are_refused(self):
         for doc_id in ('Q-1', 'q-001', 'M-2', 'T-3', 'P-4', 'S-5', 'A-6', 'R-21',
                        'plan-Q-1', 'Q-1.v2', 'R-21-plan', 'x_T-3', 'notes.M-12.draft'):
@@ -1157,10 +1168,16 @@ class FixTest(ApiCase):
         self.ok('POST', '/to_pm/send', OWNER)
         path = '/to_pm/%s/reply' % pid
         self.refused('invalid', 'ruling', 'POST', path, AGENT, {'reply': 'r', 'ruling': 7})
-        obj = self.ok('POST', path, AGENT, {'reply': 'r', 'ruling': ' decision-7 '})
+        for text in ('decision-7', 'D-7', 'R-1', R7 + ' ' + R8):
+            with self.subTest(ruling=text):
+                obj = self.refused('invalid', 'ruling', 'POST', path, AGENT,
+                                   {'reply': 'r', 'ruling': text})
+                self.assertIn('ruling must be a ledger ruling id', obj['error']['message'])
+        self.assertEqual(self.store.get('to_pm', pid)['status'], 'sent')
+        obj = self.ok('POST', path, AGENT, {'reply': 'r', 'ruling': ' ' + HK25 + ' '})
         d = self.store.get('to_pm', pid)
         self.assertEqual((obj['status'], d['status'], d['reply'], d['ruling']),
-                         ('done', 'done', 'r', 'decision-7'))
+                         ('done', 'done', 'r', HK25))
         other = self.note()
         self.ok('POST', '/to_pm/send', OWNER)
         self.ok('POST', '/to_pm/%s/reply' % other, AGENT, {'reply': 'r'})
@@ -2541,14 +2558,14 @@ class WriteViews(object):
     def record_add(self, repo, id, summary, scopes, effort, ref):
         return self._do('add', repo, id, summary, scopes, effort, ref)
 
-    def record_edit(self, repo, id, version, changes, unset, body, ruling):
-        return self._do('edit', repo, id, version, changes, unset, body, ruling)
+    def record_edit(self, repo, id, version, changes, unset, body):
+        return self._do('edit', repo, id, version, changes, unset, body)
 
-    def record_delete(self, repo, id, why, ruling):
-        return self._do('delete', repo, id, why, ruling)
+    def record_delete(self, repo, id, why):
+        return self._do('delete', repo, id, why)
 
-    def record_unblock(self, repo, id, on, reason, ruling):
-        return self._do('unblock', repo, id, on, reason, ruling)
+    def record_unblock(self, repo, id, on, reason):
+        return self._do('unblock', repo, id, on, reason)
 
 
 class RecordWriteRouteTest(ApiCase):
@@ -2563,18 +2580,29 @@ class RecordWriteRouteTest(ApiCase):
                          {'lines': ['DONE'], 'ok': True, 'revision': self.store.revision})
         self.ok('POST', '/records/kit/EX-1/edit', OWNER,
                 {'version': 'c:v', 'changes': {'effort': 's', 'scope': ['a', 'b']},
-                 'unset': ['ref'], 'body': 'B\n', 'ruling': 'R-1'})
+                 'unset': ['ref'], 'body': 'B\n'})
         self.ok('POST', '/records/kit/EX-1/delete', OWNER, {'why': 'w', 'confirm': 'EX-1'})
         self.ok('POST', '/records/kit/EX-1/unblock', OWNER, {})
         self.ok('POST', '/records/kit/EX-1/unblock', OWNER,
-                {'on': 'item:EX-2', 'reason': 'landed', 'ruling': 'R-2'})
+                {'on': 'item:EX-2', 'reason': 'landed'})
         self.assertEqual(self.views.calls, [
             ('add', 'kit', 'EX-2', 's', ['tools/x.py'], None, None),
             ('edit', 'kit', 'EX-1', 'c:v', [('effort', ['s']), ('scope', ['a', 'b'])], ['ref'],
-             'B\n', 'R-1'),
-            ('delete', 'kit', 'EX-1', 'w', None),
-            ('unblock', 'kit', 'EX-1', None, None, None),
-            ('unblock', 'kit', 'EX-1', 'item:EX-2', 'landed', 'R-2')])
+             'B\n'),
+            ('delete', 'kit', 'EX-1', 'w'),
+            ('unblock', 'kit', 'EX-1', None, None),
+            ('unblock', 'kit', 'EX-1', 'item:EX-2', 'landed')])
+
+    def test_a_ruling_in_the_body_is_an_unknown_field_and_never_reaches_the_view(self):
+        ruling = 'R-' + '9001'          # made up, built so no file holds a ruling id
+        for path, body in (('/records/kit/EX-1/edit', {'version': 'c:v', 'ruling': ruling}),
+                           ('/records/kit/EX-1/delete', {'why': 'w', 'confirm': 'EX-1',
+                                                         'ruling': ruling}),
+                           ('/records/kit/EX-1/unblock', {'ruling': ruling})):
+            with self.subTest(path=path):
+                obj = self.refused('invalid', 'ruling', 'POST', path, OWNER, body)
+                self.assertIn("this route takes no 'ruling' field", obj['error']['message'])
+        self.assertEqual(self.views.calls, [])
 
     def test_the_writes_are_the_owners(self):
         for method, path, body in (('POST', '/records/kit', {'id': 'A', 'summary': 's',
@@ -3153,6 +3181,14 @@ class ScheduleTest(ApiCase):
                 got = self.ok('POST', '/schedules', OWNER, self.body(repo=given))
                 self.assertEqual(got['id'], 'maint-lint-Kit')
                 self.assertEqual(self.store.get('schedules', got['id'])['repo'], 'Kit')
+
+    def test_a_session_key_is_stored_as_its_repository_name(self):
+        known = lambda: ('Alpha', 'alpha-key')
+        known.session_keys = lambda: {'Alpha': ['alpha-key']}
+        self.store.known_repos = known
+        got = self.ok('POST', '/schedules', OWNER, self.body(repo='alpha-key'))
+        self.assertEqual(got['id'], 'maint-lint-Alpha')
+        self.assertEqual(self.store.get('schedules', got['id'])['repo'], 'Alpha')
 
     def test_a_repo_the_store_knows_from_the_config_counts(self):
         self.store.known_repos = lambda: ('Alpha',)
@@ -3953,7 +3989,7 @@ class UnblockStoreTest(trw.Case):
                 return {'repo': repo, 'id': rid}
 
         views = serve.SiteViews(None, serve.Sources(), backlog_views=Backlog())
-        out = views.record_unblock('r', 'FOO', None, None, None)
+        out = views.record_unblock('r', 'FOO', None, None)
         self.assertEqual(out['record'], {'repo': 'r', 'id': 'FOO'})
         self.assertEqual(reread, [('r', root)])
         self.assertEqual(self.field('FOO', 'state'), ['open'])

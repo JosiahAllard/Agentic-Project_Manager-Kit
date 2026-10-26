@@ -184,9 +184,9 @@ repository that is not there, a 400 for a name that cannot be one), so their mes
 phrases with no path, no id and nothing the caller sent; only anything else is `unavailable`.
 Both are read now, never cached, and neither is part of GET snapshot.
   record_add(repo, id, summary, scopes, effort, ref)               the owner's four writes to
-  record_edit(repo, id, version, changes, unset, body, ruling)     a repository's backlog store
-  record_delete(repo, id, why, ruling)                             (OWNER routes; kitlib.hubsite.
-  record_unblock(repo, id, on, reason, ruling)                     recordwrite)
+  record_edit(repo, id, version, changes, unset, body)             a repository's backlog store
+  record_delete(repo, id, why)                                     (OWNER routes; kitlib.hubsite.
+  record_unblock(repo, id, on, reason)                             recordwrite)
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
   record_answer(repo, id, qid, at, title, label, note, via, other, waiting)
@@ -386,8 +386,8 @@ _ID_SPLIT = re.compile(r'([0-9]+)')
 _NAME = re.compile(r'[\x21-\x7e]+(?: [\x21-\x7e]+)*')
 _SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
 # A hub item's id or a ruling's anywhere in a page id ("Pages"): hubvalidate._REF's pattern, plus
-# A and R, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
-_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])[QMTPSAR]-\d+(?![A-Za-z0-9])', re.I)
+# A and R and the per-repo ledger id H-<repo>-nnnn, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
+_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])(?:[QMTPSAR]-\d+|H-[a-z0-9][a-z0-9-]*-\d+)(?![A-Za-z0-9])', re.I)
 PAGE_HTML_MAX = pagecheck.MAX_BYTES
 
 
@@ -1818,6 +1818,7 @@ def to_pm_reply(api, req):
         changes['ruling'] = b['ruling'].strip()
         if not changes['ruling']:
             raise _invalid('ruling, when given, names the decision: it cannot be blank', 'ruling')
+        _ruling(api, changes['ruling'])         # a ledger ruling id that exists, as questions log
     doc_id = req.params['id']
     d = api.doc('to_pm', doc_id, b)
     if d.get('status') != 'sent':
@@ -2014,28 +2015,27 @@ def record_add(api, req):
 
 def record_edit(api, req):
     repo, rid = _segment(req, 'repo'), _segment(req, 'id')
-    b = _fields(req, ('version', 'changes', 'unset', 'body', 'ruling'), ('version',))
+    b = _fields(req, ('version', 'changes', 'unset', 'body'), ('version',))
     changes = _typed(b, 'changes', (dict,), 'an object of field names and values') or {}
     out = _record_view(api, 'record_edit', repo, rid, _text(b, 'version'),
                        [(k, _strings(changes, k)) for k in changes], _strings(b, 'unset'),
-                       _text(b, 'body'), _text(b, 'ruling'))
+                       _text(b, 'body'))
     return dict(out, ok=True)
 
 
 def record_delete(api, req):
     repo, rid = _segment(req, 'repo'), _segment(req, 'id')
-    b = _fields(req, ('why', 'confirm', 'ruling'), ('why', 'confirm'))
+    b = _fields(req, ('why', 'confirm'), ('why', 'confirm'))
     if _text(b, 'confirm') != rid:
         raise _invalid('confirm must repeat the record id to delete it', 'confirm')
-    out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'), _text(b, 'ruling'))
+    out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'))
     return dict(out, ok=True)
 
 
 def record_unblock(api, req):
     repo, rid = _segment(req, 'repo'), _segment(req, 'id')
-    b = _fields(req, ('on', 'reason', 'ruling'))
-    out = _record_view(api, 'record_unblock', repo, rid, _text(b, 'on'), _text(b, 'reason'),
-                       _text(b, 'ruling'))
+    b = _fields(req, ('on', 'reason'))
+    out = _record_view(api, 'record_unblock', repo, rid, _text(b, 'on'), _text(b, 'reason'))
     return dict(out, ok=True)
 # ---- end of the owner's record writes
 
@@ -2253,8 +2253,10 @@ def _schedule_repo(api, name):
     known_repos gives, a repos/ document's name (its id when it has none), or one of its aliases.
     `invalid`, field repo, for any other."""
     names, aliases = {}, {}
+    keys = getattr(api.store.known_repos, 'session_keys', None)     # {repo: [hub keys]}
+    keyed = {k.lower(): r for r, ks in (keys() if keys else {}).items() for k in ks}
     for n in api.store.known_repos() or ():
-        if isinstance(n, str) and n.strip():
+        if isinstance(n, str) and n.strip() and n.strip().lower() not in keyed:
             names.setdefault(n.strip().lower(), n.strip())
     for doc_id, d in sorted(api.store.docs('repos').items()):
         own = d.get('name') if isinstance(d.get('name'), str) and d['name'].strip() else doc_id
@@ -2262,6 +2264,9 @@ def _schedule_repo(api, name):
         for a in d.get('aliases') if isinstance(d.get('aliases'), list) else ():
             if isinstance(a, str) and a.strip():
                 aliases.setdefault(a.strip().lower(), own)
+    for k, r in keyed.items():              # a session key stands for its repository
+        if r.lower() in names:
+            aliases.setdefault(k, names[r.lower()])
     want = name.strip().lower()
     found = names.get(want) or aliases.get(want)
     if found is None:

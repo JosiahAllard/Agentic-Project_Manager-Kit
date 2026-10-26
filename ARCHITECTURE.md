@@ -64,7 +64,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
   - agents, named pm-kit:<name>
   - hooks: the kit header and the coordinator SessionStart hook; the guard stays in each account's settings
   - tools: the lock goes into kitlib; the rest become optional packages
-  - generic skills: backlog-ops, branch-review, branch-sync, builder, coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch, machine-lock-run, mutation-testing, session-handoff, shell-and-worktree-traps, subagent-dispatch
+  - generic skills: backlog-ops, branch-review, branch-sync, builder, coordinator-dispatch, flaky-test-triage, land-branch, machine-lock-run, mutation-testing, session-handoff, shell-and-worktree-traps
 - **Into the repos' .claude/skills:** a skill tied to one repository's engine, models or worktree tools stays in that repository.
 - **Never in the kit:** autoMode, git identity, preferences, memory, the knowledge contents and synced skills.
 

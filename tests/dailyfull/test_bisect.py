@@ -1,8 +1,9 @@
 """kitlib.dailyfull.bisect and kitlib.dailyfull.file: after a red daily run, the first-parent
 commit that turned it red, and the backlog record filed for it through the real store (a ref
-store in the scratch repository, pushed to its bare remote). The record's price comes from the
-machine config's `daily_red_ruling`, read under a temp home (tests/home.py), never the real one.
-The ruling id is made up, built at run time so no ruling id is written here."""
+store in the scratch repository, pushed to its bare remote). The record is always priced at
+priority 2 by an agent: the retired `daily_red_ruling`, set in a temp home's machine config
+(tests/home.py, never the real one), changes nothing. The ruling id is made up, built at run
+time so no ruling id is written here."""
 import os
 import tempfile
 import unittest
@@ -120,16 +121,19 @@ class Culprit(BisectCase):
         self.assertEqual(rec.get('priority_by'), 'agent')
         self.assertIsNone(rec.get('priority_ruling'))
         self.assertEqual(rec.all('scope'), ['RED'])
-        self.assertEqual(found['note'], filing.NO_RULING)
-        self.assertIn('daily: %s' % filing.NO_RULING, self.lines)
+        self.assertNotIn('note', found)
 
-    def test_with_daily_red_ruling_set_it_is_filed_at_priority_1_by_the_pm(self):
+    def test_the_retired_daily_red_ruling_still_files_at_priority_2_by_an_agent(self):
+        # retired: the machine config still loads with it, and nothing reads it
         machine_config(self.home, {'daily_red_ruling': RULING})
         culprit, r = self.red_history()
-        rec = self.record(filing.record_id('KIT', culprit))
-        self.assertEqual(rec.get('priority'), '1', self.lines)
-        self.assertEqual(rec.get('priority_by'), 'pm')
-        self.assertEqual(rec.get('priority_ruling'), RULING)
+        rid = filing.record_id('KIT', culprit)
+        self.assertEqual(r['bisect']['filed'], rid, self.lines)
+        rec = self.record(rid)
+        self.assertEqual((rec.get('priority'), rec.get('priority_by')), ('2', 'agent'), self.lines)
+        self.assertIsNone(rec.get('priority_ruling'))
+        self.assertNotIn(RULING, rec.text)
+        self.assertFalse(any(RULING in line for line in self.lines), self.lines)
         self.assertNotIn('note', r['bisect'])
 
     def test_a_second_red_run_files_nothing_new(self):

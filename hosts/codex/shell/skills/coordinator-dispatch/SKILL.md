@@ -1,11 +1,11 @@
 ---
 name: coordinator-dispatch
-description: Use as a coordinator before any dispatch - writing a brief, choosing the role and tier, pulling the record, a creative (art, 3D, sound) brief, assigning shared resources or a measurement, requesting a deep-worker session, resuming agents that all died at once, and the daily prune and weekly tool-set upkeep runs. Load skill subagent-dispatch too for the dispatch traps.
+description: Use as a coordinator before any dispatch - writing a brief, choosing the role and tier, pulling the record, a creative (art, 3D, sound) brief, assigning shared resources or a measurement, requesting a deep-worker session, resuming agents that all died at once, and the daily prune and weekly tool-set upkeep runs. Covers the dispatch traps: briefing, the worktree, agents that cannot write files, lost reports.
 ---
 
 # Coordinator: dispatch
 
-Dispatch traps (built-in planners that cannot write, output files are no rescue path): skill `subagent-dispatch`. Roles are named bare here; your host's instructions say how a role name becomes its dispatch name.
+Roles are named bare here; your host's instructions say how a role name becomes its dispatch name.
 
 ## Before the agent starts
 
@@ -47,8 +47,16 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
   higher); unlisted is not a reason - list routine paths at their real level.
 - Briefs to the docs-writer role give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
-  logs split into more per-area files as they fill.
+  logs split into more per-area files as they fill. The evidence and deletion rules for a brief or
+  report that records findings: `specialty-docs` `doc-writing.md`, "Findings and doc edits".
 - A brief for an owner-approved change tells the author to commit with `commit.py --owner-approval hub:A-n --model "<model name>"` and leave the work tree at the approval's base; never to copy the approved content in first.
+
+## Dispatch traps
+
+- Dispatch only where the task, the repo's rules or your role allow it. The analyst and the host's built-in explorer or planner stay read-only; a built-in planner may have no file-write tool at all: brief it to return the plan in its report body.
+- Ask for the report in the agent's result: a text report of about 40 lines at most, never a report file (the host refuses subagent report files). A host's own task-output file is not a rescue path for a lost report (it can come back 0 bytes).
+- Before resuming or replacing a failed agent, look at what it left running: jobs, lock runs, ports, its worktree's state.
+- Never hand a refusal to another agent to get round it (skill backlog-ops, "Refusals"); never assume one host's built-in agents, tools or file names exist on another.
 
 ## Which role, which tier
 

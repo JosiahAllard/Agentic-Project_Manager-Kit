@@ -51,10 +51,10 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   effort each runs at and what it is for.
 - **Skills** (`content/skills/<name>/SKILL.md`, the plugin's skills folder itself, never copied:
   docs/content.md): backlog-ops, backlog-pricing, branch-review, branch-sync, builder,
-  coordinator-dispatch, doc-claims-discipline, flaky-test-triage, hub-ops, ledger-ops, land-branch (uses
+  coordinator-dispatch, flaky-test-triage, hub-ops, ledger-ops, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
-  shell-and-worktree-traps, subagent-dispatch, specialty-3d-assets, specialty-rigging,
-  specialty-tech-art, specialty-sound, specialty-review, specialty-research, specialty-records, specialty-spec.
+  shell-and-worktree-traps, specialty-3d-assets, specialty-rigging,
+  specialty-tech-art, specialty-sound, specialty-review, specialty-research, specialty-docs.
   branch-review and coordinator-dispatch hold the
   coordinator's procedure, loaded only when needed. Skills name kit tools by path
   (`tests/skills` checks each exists); `tools/doc_index.py`, `tools/doc_budget.py` and

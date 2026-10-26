@@ -608,7 +608,7 @@ def scope_of(top, cls):
 
 def add_line(top, branch, head, classes):
     """The `backlog.py add` line a FLAKE prints: the builder reports it; the coordinator decides
-    on filing it (skill builder, "Gate")."""
+    on filing it (skill builder, step 10)."""
     ids = [t for c in classes for t in c['ids']]
     name = re.sub(r'[^A-Za-z0-9]+', '-', classes[0]['cls'].split('.')[-1]).strip('-').upper()
     scopes = sorted({scope_of(top, c['cls']) for c in classes})

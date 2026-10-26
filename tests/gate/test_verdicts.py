@@ -10,7 +10,6 @@ from unittest import mock
 
 from kitlib.gate import verdicts as V
 from tests.gate.fixtures import GateRepoCase
-from tests.realgit import real_git
 
 
 def given(branch, tip, base='0' * 10, **over):
@@ -216,8 +215,6 @@ class SelfReviewSize(QueueCase):
         self.assertIn('a High-risk verdict needs a reviewer other than', str(cm.exception))
 
 
-@real_git('diff --find-renames over diff.renames=false: the fake lets the config turn rename '
-          'detection off')
 class SelfReviewSizeRenames(QueueCase):
     """diff_lines finds renames whatever the repository's diff.renames says, so a moved file
     counts only its edits towards "landing".self_review_max_lines."""

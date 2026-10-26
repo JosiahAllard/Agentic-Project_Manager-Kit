@@ -1789,7 +1789,9 @@ def ledger_what(what):
 
 
 def lock_state_dir(ctx):
-    """The machine lock's state folder: <home>/.claude/machine-lock (kitlib.lock.store)."""
+    """The machine lock's state folder: <home>/.claude/machine-lock (kitlib.lock.store.real_root).
+    It may be a junction to the store on another volume; lock_state judges its target, by either
+    spelling, through jail.real (tests/guard/test_lock_state_junction.py)."""
     return os.path.join(ctx.home, '.claude', 'machine-lock')
 
 
@@ -7424,14 +7426,67 @@ def git_worktree_remove(ctx, gc, role, text):
     head, why = ctx.git.resolve('HEAD', target)
     merged, why2 = ctx.git.is_ancestor(head, main, gc.dir) if head else (None, why)
     if merged is not True:
+        word, mark_why = stale_mark_word(ctx, target, head) if merged is False and head else (False, None)
+        if word:
+            return None                         # a stale mark that holds: the PM's word
         how = ('Merge it first; unmerged work goes to the PM, who decides (python %s -C %s %s --abandon "<why>" '
                'only on the PM\'s word).' % (kit_tool(ctx, 'worktree_remove'),
                                              quote(main_top) if main_top else '"<main checkout>"',
                                              os.path.basename(target)))
+        if mark_why:
+            how += ' A stale mark does not count: %s.' % mark_why
         return refuse('git-worktree-remove', role, '`%s` removes a worktree whose commit is not merged into %s (%s). '
                       '%s Its unmerged commits:' % (text, main, why2 or 'not an ancestor', how),
                       'git -C %s log --oneline %s..HEAD' % (quote(target), main))
     return None
+
+
+def stale_mark_word(ctx, target, head):
+    """`(True, None)` when the clean worktree at `target`, HEAD `head`, carries a stale mark that
+    holds (kitlib.worktree.marks: a mark recorded by `worktree_remove.py --mark-stale`, read from
+    `<git common dir>/kit-stale-marks.json`): the PM's word to remove it unmerged. It holds on the
+    nightly sweep's void checks (sweep.sweep_skip): the mark names this path and this tip, and
+    nothing in the tree, its git dir (but index, index.lock and the folder's own time), its
+    branch's reflog or the tip's commit date is newer than the mark. The sweep's other checks are
+    not made here: the idle bar, `git worktree lock`, exemption, worktree-folder placement, a branch
+    checked out elsewhere, holders, open claims, machine lock and landing hold. marks.mark makes
+    them all when it marks (with classify.live_reason) but the DELETE-access holder probe
+    (holders.blockers): of holders it checks only processes' current folders, through the L
+    rule. So what is open is that probe and a change after the mark: the mark is the decision that
+    the tree is idle and later activity voids it; a later `git worktree lock` writes `locked` into
+    the walked git dir and voids it while it is held (no `--force` is read); a mark naming another
+    path is void. Known limits: a file held open in the
+    tree other than as a current folder (neither the mark nor this runs holders.blockers), and a
+    later exemption, second checkout, holder (no process probe runs here), claim, machine-lock
+    run or landing that writes nothing there, are not seen (docs/guard.md, the
+    git-worktree-remove row). Else `(False, why)`: why is None when the tree's branch has no
+    mark (detached included), else why no mark counts. Fails closed: a marks file, branch, git
+    common dir or last activity that cannot be read is no word.
+    The tree walk (sweep.last_activity) runs only here, on an unmerged remove that found a mark."""
+    from kitlib.worktree import marks, sweep  # the walk and its git reads: only on this path
+    place = ctx.place(target)
+    if not place.common:
+        return False, 'git cannot place its repository (%s)' % (place.detail or 'no git common dir')
+    branch, why = ctx.git.current_branch(target)
+    if branch is None:
+        return False, 'its branch cannot be read (%s)' % why
+    if not branch:
+        return False, None                    # a detached HEAD: a mark names a branch
+    got, why = marks.load(os.path.join(place.common, marks.FILE_NAME))
+    if got is None:
+        return False, 'the stale marks cannot be read (%s)' % why
+    mark = marks.find(got, branch)
+    if mark is None:
+        return False, None
+    void = marks.void_reason(mark, target, head)
+    if void is None:
+        seen, why = sweep.last_activity(ctx.main_top(target) or target, target, branch)
+        if seen is None:
+            return False, 'its stale mark cannot be checked: its last activity cannot be read (%s)' % why
+        void = marks.void_reason(mark, target, head, seen)
+    if void:
+        return False, 'its stale mark is void: %s' % void
+    return True, None
 
 
 def _branch_of(ref):

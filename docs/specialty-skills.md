@@ -1,6 +1,6 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Built: the seven `content/skills/specialty-*` skills (branch A); the `analyst` and `docs-writer` types and the cutover (branch B). Its last commit named the types in `templates/common/AGENTS.md`, `content/skills/subagent-dispatch/SKILL.md`, `docs/gate.md` and `docs/go-live.md`; the Role-policy modes line in `docs/guard.md` follows after kit/guard-v2 lands (that branch owns the file). The roster it assumes is the current one:
+Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Built: the seven `content/skills/specialty-*` skills (branch A); the `analyst` and `docs-writer` types and the cutover (branch B). Its last commit named the types in `templates/common/AGENTS.md`, `content/skills/subagent-dispatch/SKILL.md` (since folded into coordinator-dispatch and builder), `docs/gate.md` and `docs/go-live.md`; the Role-policy modes line in `docs/guard.md` follows after kit/guard-v2 lands (that branch owns the file). The roster it assumes is the current one:
 senior-worker on opus/high with strong-worker on opus/medium (content/roles/senior-worker.md and strong-worker.md), and a
 weak-worker on haiku 5.5 (content/roles/weak-worker.md).
 
@@ -52,7 +52,7 @@ know-how. Every inference is marked "inference"; the rest is read from the code.
 |---|---|---|---|
 | weak-worker, worker, strong-worker, senior-worker | per the tier and weak-worker changes | write, builder | the brief picks one per task; specialty skills ride on these |
 | read type (reviewer + researcher) | light / high | read, read-only | skills `specialty-review`, `specialty-research` |
-| docs type (records + spec-writer) | standard / medium, raised for specs | write, docs | skills `specialty-records`, `specialty-spec` |
+| docs type (records + spec-writer) | standard / medium, raised for specs | write, docs | skill `specialty-docs` |
 | lander, test-runner, coordinator, pm, consultant, deep-worker | unchanged | unchanged | |
 
 Retired: asset-smith, tech-artist, sound-smith, researcher, reviewer, records, spec-writer (7 files);
@@ -75,8 +75,7 @@ and names start with a letter (`_NAME` in `kitlib/host/content.py`).
 | specialty-sound | sound-smith | worker; senior-worker for design | measure clips, ends in a question for the owner |
 | specialty-review | reviewer | read type | brief + diff range + logs, report format |
 | specialty-research | researcher | read type | concepts with evidence, spec-writer hand-off |
-| specialty-records | records | docs type | transcribe, never decide |
-| specialty-spec | spec-writer | docs type | findings first, defaults labelled, inferences marked |
+| specialty-docs | records, spec-writer | docs type | records: transcribe, never decide; spec: findings first, defaults labelled, inferences marked |
 
 Each SKILL.md opens with a "Dispatch" line: the minimum worker tier (never weak-worker for creative
 work) and the profile sections it reads (the creative roles read **Art**, **Shared resources**). The
@@ -91,7 +90,7 @@ the reviewer is pinned to the light tier (since the reviewer split) and the "Rev
 read-only (`kitlib/guard/rolepolicy.py` `RULES`); identical to today.
 
 What replaces the researcher's `write` capability (decided): the report is returned as text, plus a
-file in the agent's scratch folder for long notes (the rule already in `subagent-dispatch` step 4).
+file in the agent's scratch folder for long notes (the report itself as text, never a report file: `coordinator-dispatch` "Dispatch traps").
 Scratch is outside the checkout, so `rolepolicy.check` role-edit never fires. No `writes`, no repo
 write path; `write` is dropped from the capabilities. This is the researcher's behaviour today (its
 body says scratch only).
@@ -138,7 +137,7 @@ widening of a strict path. Keep both.
    Reviewer-model rule takes the read type's name.
 4. "Creative dispatches" points at the three skills; the profile's roster line ("less art or audio")
    becomes "specialty skills not used", stated by a repo with no art or audio (an owner edit, to-do 3).
-5. `subagent-dispatch` step 3 and `branch-review` step 3 take the new read type name.
+5. `coordinator-dispatch` "Dispatch traps" and `branch-review` step 3 take the new read type name.
 
 ## Guard and rolepolicy mapping
 
@@ -219,7 +218,7 @@ Order: A, then B (after the tier and weak-worker changes land: `docs/ROSTER.md` 
 | branch | files | risk | size | waits for |
 |---|---|---|---|---|
 | A skills | `content/skills/specialty-*/` (7), rendered `hosts/codex/shell/skills/`; tests/skills, tests/content | strict `content/skills/**`; High | L | nothing |
-| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch`, `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | A, the tier changes |
+| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch` (since folded into coordinator-dispatch and builder), `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | A, the tier changes |
 | C guard | none (research returns text plus a scratch file, no `writes`): not built | | | |
 | D repo migration | to-do 1 to 3 (owner paths); non-owner docs in repos (a) and (b) | docs Low; owner paths owner-only | S | B landed |
 

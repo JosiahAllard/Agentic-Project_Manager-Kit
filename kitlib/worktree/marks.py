@@ -1,5 +1,5 @@
-"""Stale marks: a coordinator's word that an UNLANDED worktree is stale, so the nightly sweep
-abandons it under its archive tag (docs/worktree-remove.md "Stale marks").
+"""Stale marks: a record that an UNLANDED worktree is stale, made by `--mark-stale` (below), so
+the nightly sweep abandons it under its archive tag (docs/worktree-remove.md "Stale marks").
 tools/worktree_remove.py is the entry point (`<branch> --mark-stale "<why>"`, `<branch>
 --unmark-stale`); kitlib.worktree.sweep reads the marks and acts on them; kitlib.worktree.classify
 shows them.

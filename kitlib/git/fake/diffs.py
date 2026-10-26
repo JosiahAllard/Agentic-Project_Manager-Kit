@@ -622,6 +622,8 @@ def emit(ctx, repo, changes, opts, reader, fmts):
 def renames_wanted(repo, opts):
     if opts.get('no-renames'):
         return False
+    if opts.get('find-renames'):    # an explicit option beats diff.renames, as in git
+        return True
     v = repo.config.get('diff.renames')
     if v is not None:
         low = v.strip().lower()
