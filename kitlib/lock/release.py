@@ -50,7 +50,10 @@ LOCK_PATHS = ("tools/machine_lock.py", "kitlib/__init__.py", "kitlib/lock/", "ki
               # kitlib/config/policy.py takes names_of (a role's old and new names) from
               # kitlib/content/__init__.py, whose render function imports kitlib/roster/__init__.py
               # (never run by the lock tool; listed because the import walk counts it)
-              "kitlib/content/__init__.py", "kitlib/roster/__init__.py")
+              "kitlib/content/__init__.py", "kitlib/roster/__init__.py",
+              # the running platform's name (registry.process_names) and the Windows DLL loader
+              # kitlib/proc binds through
+              "kitlib/platform/__init__.py", "kitlib/platform/dll.py")
 
 MISSING = "store folder (missing)"
 

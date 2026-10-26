@@ -55,7 +55,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | `owner_paths` | Its instruction and settings paths in a repository. A folder ends in `/`. They are read-only to agents. |
 | `worktrees_directory` | The repo path its agent worktrees go in |
 | `state_directory` | Its per-user folder name |
-| `process_names` | Its agent process images. The lock uses them to tell an agent host from other processes. |
+| `process_names` | Its agent process images on each platform: `{"windows": ["claude.exe", "node.exe"], "linux": ["claude", "node"]}`, with an entry for each of the host's `platforms` (a platform it does not declare yet may be listed ahead). The lock uses the running platform's list to tell an agent host from other processes, and treats every caller as an agent when no host lists any for it. |
 | `mcp_tool_format` | How it names an MCP tool, using `{plugin}`, `{server}` and `{tool}` |
 | `session_env` | The variable that holds its session id. The lock shows it but never trusts it. |
 | `skills_directory` | The repo path it reads a repository's own skills from |

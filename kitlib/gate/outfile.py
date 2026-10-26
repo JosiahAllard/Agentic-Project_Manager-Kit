@@ -11,10 +11,9 @@ before its header. The lock covers no byte anyone reads or writes, and it ends w
 a pipe, NUL; PowerShell 5.1's `>` writes the file itself, through a pipe) claims nothing.
 """
 import ctypes
-import msvcrt
 from ctypes import wintypes
 
-_K32 = ctypes.WinDLL('kernel32', use_last_error=True)
+from kitlib.platform.dll import LazyDLL
 
 FILE_TYPE_DISK = 1
 LOCKFILE_FAIL_IMMEDIATELY = 0x1
@@ -29,17 +28,16 @@ class _OVERLAPPED(ctypes.Structure):
                 ('hEvent', wintypes.HANDLE)]
 
 
-_K32.GetFileType.argtypes = [wintypes.HANDLE]
-_K32.GetFileType.restype = wintypes.DWORD
-_K32.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
-                            wintypes.DWORD, ctypes.POINTER(_OVERLAPPED)]
-_K32.LockFileEx.restype = wintypes.BOOL
-_K32.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
-                              ctypes.POINTER(_OVERLAPPED)]
-_K32.UnlockFileEx.restype = wintypes.BOOL
-_K32.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD,
-                                           wintypes.DWORD]
-_K32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+# A private kernel32 instance, loaded at first use (kitlib.platform.dll), so this module imports on
+# any platform; each function gets its (restype, argtypes) then.
+_K32 = LazyDLL('kernel32', {
+    'GetFileType': (wintypes.DWORD, [wintypes.HANDLE]),
+    'LockFileEx': (wintypes.BOOL, [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                   wintypes.DWORD, ctypes.POINTER(_OVERLAPPED)]),
+    'UnlockFileEx': (wintypes.BOOL, [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                     ctypes.POINTER(_OVERLAPPED)]),
+    'GetFinalPathNameByHandleW': (wintypes.DWORD, [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD,
+                                                   wintypes.DWORD])}, use_last_error=True)
 
 
 def _range():
@@ -86,7 +84,9 @@ def claim(stream):
     """(Claim or None, refused, warning) for the gate whose stdout is `stream`: a disk file
     another gate holds is (None, the REFUSED lines, None); a disk file is (Claim, None, None); no
     file descriptor, or not a disk file, is (None, None, None); a lock Windows refuses for another
-    reason is (None, None, a WARNING line), and the gate runs (fail open)."""
+    reason is (None, None, a WARNING line), and the gate runs (fail open). Windows only: msvcrt is
+    imported here, so the module imports on any platform."""
+    import msvcrt
     try:
         handle = msvcrt.get_osfhandle(stream.fileno())
     except (AttributeError, OSError, ValueError):

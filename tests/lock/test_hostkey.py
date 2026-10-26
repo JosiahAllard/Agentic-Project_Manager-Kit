@@ -9,10 +9,13 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
+import kitlib.platform
 from kitlib.host import registry
 from kitlib.lock import api
 from kitlib.lock import store
+from kitlib.proc import process
 
 from .helpers import OWNER, REPO, agent
 
@@ -63,11 +66,31 @@ class HostRegistry(unittest.TestCase):
             json.dump(data, f)
         return path
 
+    def on(self, name):
+        patch = mock.patch.object(kitlib.platform, 'NAME', name)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_the_kits_registry_keeps_todays_agent_images(self):
+        self.on('windows')
         self.assertEqual(store.agent_hosts(), frozenset({'claude.exe', 'node.exe', 'codex.exe'}))
 
+    def test_on_linux_the_agent_images_are_the_registrys_linux_names(self):
+        self.on('linux')
+        self.assertEqual(store.agent_hosts(), frozenset({'claude', 'node', 'codex'}))
+
+    def test_no_names_for_this_platform_raises_so_each_caller_fails_closed(self):
+        me = [os.getpid(), process.own_ctime()]
+        self.on('unsupported')
+        with self.assertRaises(registry.RegistryError):
+            store.agent_hosts()
+        # A caller reads that as an agent: this test process is no agent host and no WMI start,
+        # so with an empty name set it would pass as the owner.
+        self.assertEqual(store.tree_role([me]), 'agent')
+
     def test_agent_images_follow_the_registry_lower_cased(self):
-        path = self.registry(process_names=['Other.EXE'])
+        self.on('windows')
+        path = self.registry(process_names={'windows': ['Other.EXE']})
         self.assertEqual(store.agent_hosts(path),
                          frozenset({'other.exe', 'codex.exe'}))     # the first host changed, Codex's kept
         chain = [(1, 11), (2, 22)]

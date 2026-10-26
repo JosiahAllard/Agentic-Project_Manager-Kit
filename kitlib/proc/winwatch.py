@@ -75,6 +75,7 @@ import threading
 import time
 from ctypes import wintypes
 
+from kitlib.platform.dll import windll
 from kitlib.proc import process, win32
 
 CONSOLE = "ConsoleWindowClass"
@@ -102,19 +103,21 @@ CMDLINE_CAP = 2000      # proc_info(): the most characters of a command line kep
 TEXT_CAP = 300          # Window.detail_lines(): the most characters of a command line shown
 UNREADABLE = "(unreadable)"     # proc_info(): a field the process no longer lets be read
 
-WINEVENTPROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
-                                  wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
-WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-
 _API = []
 
 
 class _Api:
-    """Private user32 and kernel32 instances, so no prototype here touches win32.K32's."""
+    """Private user32 and kernel32 instances, so no prototype here touches win32.K32's, and the
+    two callback types, all made at first use (kitlib.platform.dll.windll; ctypes has no
+    WINFUNCTYPE off Windows), so this module imports on any platform."""
 
     def __init__(self):
-        u, k = ctypes.WinDLL("user32", use_last_error=True), ctypes.WinDLL("kernel32",
-                                                                            use_last_error=True)
+        u, k = windll("user32", use_last_error=True), windll("kernel32", use_last_error=True)
+        self.WINEVENTPROC = WINEVENTPROC = ctypes.WINFUNCTYPE(
+            None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND, wintypes.LONG, wintypes.LONG,
+            wintypes.DWORD, wintypes.DWORD)
+        self.WNDENUMPROC = WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND,
+                                                            wintypes.LPARAM)
         H, DW, BOOL, HWND = wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, wintypes.HWND
         P_MSG = ctypes.POINTER(wintypes.MSG)
         for f, r, a in (
@@ -470,7 +473,7 @@ class Monitor:
             msg = wintypes.MSG()
             api.u32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_NOREMOVE)  # makes the queue
             self._seed()
-            self._proc = WINEVENTPROC(self._on_event)
+            self._proc = api.WINEVENTPROC(self._on_event)
             for ev in (EVENT_OBJECT_SHOW, EVENT_OBJECT_NAMECHANGE):
                 h = api.u32.SetWinEventHook(ev, ev, None, self._proc, 0, 0, WINEVENT_OUTOFCONTEXT)
                 if not h:
@@ -499,7 +502,8 @@ class Monitor:
                 if cls == TERMINAL:
                     self._tab_seen.add((hwnd, window_text(hwnd)))
             return True
-        _api().u32.EnumWindows(WNDENUMPROC(each), 0)
+        api = _api()
+        api.u32.EnumWindows(api.WNDENUMPROC(each), 0)
 
     def _owner(self, pid):
         if self._ours is None or not pid:

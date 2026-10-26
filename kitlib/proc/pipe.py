@@ -18,11 +18,15 @@ import os
 from pathlib import Path
 import time
 
+from kitlib.platform.dll import LazyDLL
+
 from .errors import ProcError
 from .process import proc_ctime
 
-K = ctypes.WinDLL('kernel32', use_last_error=True)
-A = ctypes.WinDLL('advapi32', use_last_error=True)
+# Private kernel32 and advapi32 instances (no prototype here touches kitlib.proc.win32's), loaded
+# at first use (kitlib.platform.dll): this module imports on any platform.
+K = LazyDLL('kernel32', use_last_error=True)
+A = LazyDLL('advapi32', use_last_error=True)
 INVALID = ctypes.c_void_p(-1).value
 
 
@@ -32,32 +36,45 @@ def bind(dll, name, arguments, result):
     return function
 
 
-close = bind(K, 'CloseHandle', [w.HANDLE], w.BOOL)
-local_free = bind(K, 'LocalFree', [w.HANDLE], w.HANDLE)
-create_file = bind(K, 'CreateFileW', [w.LPCWSTR, w.DWORD, w.DWORD, w.LPVOID,
-                                   w.DWORD, w.DWORD, w.HANDLE], w.HANDLE)
-create_pipe = bind(K, 'CreateNamedPipeW', [w.LPCWSTR, w.DWORD, w.DWORD, w.DWORD,
-                                        w.DWORD, w.DWORD, w.DWORD, w.LPVOID], w.HANDLE)
-connect_pipe = bind(K, 'ConnectNamedPipe', [w.HANDLE, w.LPVOID], w.BOOL)
-disconnect_pipe = bind(K, 'DisconnectNamedPipe', [w.HANDLE], w.BOOL)
-peek = bind(K, 'PeekNamedPipe', [w.HANDLE, w.LPVOID, w.DWORD, w.LPVOID,
-                               ctypes.POINTER(w.DWORD), w.LPVOID], w.BOOL)
-read = bind(K, 'ReadFile', [w.HANDLE, w.LPVOID, w.DWORD, ctypes.POINTER(w.DWORD), w.LPVOID], w.BOOL)
-write = bind(K, 'WriteFile', [w.HANDLE, w.LPCVOID, w.DWORD, ctypes.POINTER(w.DWORD), w.LPVOID], w.BOOL)
-server_pid = bind(K, 'GetNamedPipeServerProcessId', [w.HANDLE, ctypes.POINTER(w.ULONG)], w.BOOL)
-client_pid = bind(K, 'GetNamedPipeClientProcessId', [w.HANDLE, ctypes.POINTER(w.ULONG)], w.BOOL)
-open_process = bind(K, 'OpenProcess', [w.DWORD, w.BOOL, w.DWORD], w.HANDLE)
-open_token = bind(A, 'OpenProcessToken', [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)], w.BOOL)
-token_info = bind(A, 'GetTokenInformation', [w.HANDLE, ctypes.c_int, w.LPVOID, w.DWORD,
-                                           ctypes.POINTER(w.DWORD)], w.BOOL)
-sid_text = bind(A, 'ConvertSidToStringSidW', [w.LPVOID, ctypes.POINTER(w.LPWSTR)], w.BOOL)
-security_info = bind(A, 'GetSecurityInfo', [w.HANDLE, ctypes.c_int, w.DWORD,
-                                         ctypes.POINTER(w.LPVOID), w.LPVOID, w.LPVOID,
-                                         w.LPVOID, ctypes.POINTER(w.LPVOID)], w.DWORD)
-from_sddl = bind(A, 'ConvertStringSecurityDescriptorToSecurityDescriptorW',
-                 [w.LPCWSTR, w.DWORD, ctypes.POINTER(w.LPVOID), w.LPVOID], w.BOOL)
-to_sddl = bind(A, 'ConvertSecurityDescriptorToStringSecurityDescriptorW',
-               [w.LPVOID, w.DWORD, w.DWORD, ctypes.POINTER(w.LPWSTR), w.LPVOID], w.BOOL)
+def _later(dll, name, arguments, result):
+    """bind() at the first call rather than now: the module-level functions below, so importing
+    this module loads no DLL. A missing export raises at that call, naming the function."""
+    bound = []
+
+    def call(*args):
+        if not bound:
+            bound.append(bind(dll, name, arguments, result))
+        return bound[0](*args)
+    call.__name__ = call.__qualname__ = name
+    return call
+
+
+close = _later(K, 'CloseHandle', [w.HANDLE], w.BOOL)
+local_free = _later(K, 'LocalFree', [w.HANDLE], w.HANDLE)
+create_file = _later(K, 'CreateFileW', [w.LPCWSTR, w.DWORD, w.DWORD, w.LPVOID,
+                                      w.DWORD, w.DWORD, w.HANDLE], w.HANDLE)
+create_pipe = _later(K, 'CreateNamedPipeW', [w.LPCWSTR, w.DWORD, w.DWORD, w.DWORD,
+                                           w.DWORD, w.DWORD, w.DWORD, w.LPVOID], w.HANDLE)
+connect_pipe = _later(K, 'ConnectNamedPipe', [w.HANDLE, w.LPVOID], w.BOOL)
+disconnect_pipe = _later(K, 'DisconnectNamedPipe', [w.HANDLE], w.BOOL)
+peek = _later(K, 'PeekNamedPipe', [w.HANDLE, w.LPVOID, w.DWORD, w.LPVOID,
+                                  ctypes.POINTER(w.DWORD), w.LPVOID], w.BOOL)
+read = _later(K, 'ReadFile', [w.HANDLE, w.LPVOID, w.DWORD, ctypes.POINTER(w.DWORD), w.LPVOID], w.BOOL)
+write = _later(K, 'WriteFile', [w.HANDLE, w.LPCVOID, w.DWORD, ctypes.POINTER(w.DWORD), w.LPVOID], w.BOOL)
+server_pid = _later(K, 'GetNamedPipeServerProcessId', [w.HANDLE, ctypes.POINTER(w.ULONG)], w.BOOL)
+client_pid = _later(K, 'GetNamedPipeClientProcessId', [w.HANDLE, ctypes.POINTER(w.ULONG)], w.BOOL)
+open_process = _later(K, 'OpenProcess', [w.DWORD, w.BOOL, w.DWORD], w.HANDLE)
+open_token = _later(A, 'OpenProcessToken', [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)], w.BOOL)
+token_info = _later(A, 'GetTokenInformation', [w.HANDLE, ctypes.c_int, w.LPVOID, w.DWORD,
+                                              ctypes.POINTER(w.DWORD)], w.BOOL)
+sid_text = _later(A, 'ConvertSidToStringSidW', [w.LPVOID, ctypes.POINTER(w.LPWSTR)], w.BOOL)
+security_info = _later(A, 'GetSecurityInfo', [w.HANDLE, ctypes.c_int, w.DWORD,
+                                            ctypes.POINTER(w.LPVOID), w.LPVOID, w.LPVOID,
+                                            w.LPVOID, ctypes.POINTER(w.LPVOID)], w.DWORD)
+from_sddl = _later(A, 'ConvertStringSecurityDescriptorToSecurityDescriptorW',
+                    [w.LPCWSTR, w.DWORD, ctypes.POINTER(w.LPVOID), w.LPVOID], w.BOOL)
+to_sddl = _later(A, 'ConvertSecurityDescriptorToStringSecurityDescriptorW',
+                  [w.LPVOID, w.DWORD, w.DWORD, ctypes.POINTER(w.LPWSTR), w.LPVOID], w.BOOL)
 
 
 def sid_string(sid):

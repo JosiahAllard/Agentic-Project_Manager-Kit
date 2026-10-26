@@ -25,9 +25,14 @@
       ],
       "worktrees_directory": ".codex/worktrees",
       "state_directory": ".codex",
-      "process_names": [
-        "codex.exe"
-      ],
+      "process_names": {
+        "windows": [
+          "codex.exe"
+        ],
+        "linux": [
+          "codex"
+        ]
+      },
       "mcp_tool_format": "mcp__{server}__{tool}",
       "session_env": "CODEX_THREAD_ID",
       "skills_directory": ".codex/skills",
