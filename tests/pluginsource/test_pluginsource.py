@@ -231,8 +231,8 @@ class CachePruneAfterRefreshTest(Base):
     """A refresh that went through prunes each account's old plugin cache versions, every guard of
     prune_caches kept (the installed one, the newest, one replaced in the last day, one in use)."""
 
-    def account(self, versions, installed):
-        (f,) = self.k.folders('.claude')
+    def account(self, versions, installed, name='.claude', seed=True):
+        (f,) = self.k.folders(name)
         cache = P.cache_dir(f)
         old = time.time() - 30 * 86400
         for i, v in enumerate(versions):
@@ -241,7 +241,8 @@ class CachePruneAfterRefreshTest(Base):
         with open(os.path.join(f, 'plugins', 'installed_plugins.json'), 'w', encoding='utf-8') as fh:
             json.dump({'version': 2, 'plugins': {P.PLUGIN_ID: [
                 {'scope': 'user', 'installPath': os.path.join(cache, installed)}]}}, fh)
-        self.k.seed_migrated([f])
+        if seed:
+            self.k.seed_migrated([f])
         return f, cache
 
     def reads(self, texts=()):
@@ -254,6 +255,16 @@ class CachePruneAfterRefreshTest(Base):
         self.assertEqual(self.refresh([f], in_use=self.reads([named])), 0, self.lines)
         self.assertEqual(sorted(os.listdir(cache)), ['0.1.0-main.2', '0.1.0-main.3', '0.1.0-main.4'])
         self.assertIn('pruned cache %s' % os.path.join(cache, '0.1.0-main.1'), self.lines)
+
+    def test_a_refused_folder_keeps_its_old_versions_while_the_updated_one_is_pruned(self):
+        versions = ['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3']
+        a, a_cache = self.account(versions, installed='0.1.0-main.3')
+        b, b_cache = self.account(versions, installed='0.1.0-main.3', name='.claude-b', seed=False)
+        self.assertEqual(self.refresh([a, b], in_use=self.reads()), 1, self.lines)   # b refused
+        self.assertIn('REFUSED %s: not migrated to the export yet' % b, '\n'.join(self.lines))
+        self.assertEqual(sorted(os.listdir(a_cache)), ['0.1.0-main.3'])    # installed and newest
+        self.assertEqual(sorted(os.listdir(b_cache)), versions)
+        self.assertFalse([l for l in self.lines if l.startswith('pruned cache') and b_cache in l])
 
     def test_nothing_is_pruned_when_a_folder_failed_on_a_migrate_or_unread(self):
         f, cache = self.account(['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3'],

@@ -1074,7 +1074,7 @@ def _apply(kit, s, sha, state, fresh, todo, steps, migrate, folders, runner, out
     if migrate:
         _old_cache_lines(kit, sha, folders, out)
     if not todo:
-        _prune_old_caches(folders, in_use, migrate, out, now)
+        _prune_old_caches(folders, state, in_use, migrate, out, now)
         return 0
     if runner is None or not runner.available():
         out('REFUSED: claude is not on PATH: the export is made, no account folder was refreshed')
@@ -1102,20 +1102,24 @@ def _apply(kit, s, sha, state, fresh, todo, steps, migrate, folders, runner, out
             code = 1
             out('FAILED %s: claude %s exited %s: %s' % (f, cmd_line, rc, (text or '').strip()[-400:]))
     if code == 0:
-        _prune_old_caches(folders, in_use, migrate, out, now)
+        _prune_old_caches(folders, state, in_use, migrate, out, now)
     return code
 
 
-def _prune_old_caches(folders, in_use, migrate, out, now):
-    """After an update that went through, the old versions in each account folder's plugins
-    cache go (prune_caches with apply, every guard of it kept: the installed version, the newest,
-    one replaced less than IN_USE_YOUNG_DAYS ago, one in use, a link). Prints a line per version
-    removed or failed, never the kept ones, and changes no exit code. A migrate run removes none:
-    it only lists the old caches (_old_cache_lines)."""
+def _prune_old_caches(folders, state, in_use, migrate, out, now):
+    """After an update that went through, the old versions in the plugins cache of each account
+    folder that `state` records migrated and refreshed with rc 0 go; a refused folder, not yet
+    migrated, is never touched. prune_caches runs with apply, every guard of it kept: the
+    installed version, the newest, one replaced less than IN_USE_YOUNG_DAYS ago, one in use, a
+    link. Prints a line per version removed or failed, never the kept ones, and changes no exit
+    code. A migrate run removes none: it only lists the old caches (_old_cache_lines)."""
     if migrate:
         return
+    done = [f for f in folders if migrated(state, f) and _record(state, f).get('rc') == 0]
+    if not done:
+        return
     try:
-        rows = prune_caches(folders, in_use, apply=True, now=now)
+        rows = prune_caches(done, in_use, apply=True, now=now)
     except (OSError, ValueError) as e:
         out('WARNING: the old plugin caches were not pruned: %s' % e)
         return

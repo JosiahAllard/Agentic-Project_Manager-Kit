@@ -176,6 +176,17 @@ class RefuseTest(Case):
         self.refused(Home(self.base, config="[plugins.\"pm-kit@pm-kit-local\"]\nenabled = true\n"
                           "[marketplaces.pm-kit-local]\nsource = 'https://example.invalid/x.git'\n"))
 
+    def test_a_marketplace_with_only_the_claude_plugin_manifest_is_refused(self):
+        h = Home(self.base)
+        agents = os.path.join(h.market, '.agents')
+        other = os.path.join(h.market, '.claude-plugin')
+        os.makedirs(other)
+        shutil.move(os.path.join(agents, 'plugins', 'marketplace.json'),
+                    os.path.join(other, 'marketplace.json'))
+        shutil.rmtree(agents)
+        self.refused(h)                                # nothing written, nothing deleted
+        self.assertIn('has no .agents/plugins/marketplace.json', self.text())
+
     def test_a_junction_on_the_way_to_the_cache_is_refused(self):
         h = Home(self.base, cache=False)
         real = os.path.join(self.base, 'real-cache')
