@@ -12,7 +12,8 @@ entries (kitlib.lock.queue.plan), never from the active records' `layout` string
 - a layout.json that is missing, unreadable or invalid to this kit version is not rewritten while
   a run is live, only once none is (kitlib.lock.layout.in_force).
 
-The refusal these guard against was the older kit's own check, which compared the strings."""
+The refusal these guard against is the installed machine_lock.py's own check, which compares the
+strings."""
 import datetime
 import json
 import os

@@ -200,7 +200,7 @@ Keys, all in "tool_tests":
 
 ### Running it from the gate
 
-`python_tests` and `python_tests_floor` are no gate keys: a `.kit.json` that sets one fails to load (unknown key, kitlib/config/schema.py `SECTIONS`; docs/gate.md "Not ported", PM kit row). Write the run as an ordinary step instead, and put the floor in its `pass` patterns:
+`python_tests` and `python_tests_floor` are no gate keys: a `.kit.json` that sets one fails to load (unknown key, kitlib/config/schema.py `SECTIONS`; docs/gate.md "Not ported", the `python_tests` row). Write the run as an ordinary step instead, and put the floor in its `pass` patterns:
 
 ```json
 {"name": "tools-tests",

@@ -102,7 +102,7 @@ class Slot(StoreCase):
         self.assertEqual((self.store.read("queue.json") or {}).get("entries", []), [])
 
     def test_a_held_runs_record_carries_the_installed_tools_layout_key(self):
-        # The older kit's installed machine_lock.py refuses every run
+        # The installed machine_lock.py refuses every run
         # while a live record's `layout` is not its own key. On this store's fake hardware (HW in
         # helpers.py) that key is the string below (lay.slot_key), not layout_key's.
         self.confine(1)

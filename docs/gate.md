@@ -313,14 +313,14 @@ STUCK is only a push that may have landed and cannot be told (step 8). Nothing i
 
 A gate-OK record is written for the merge before the push. When the push is refused (NOT LANDED) or did not land (cleared from STUCK), the record for that merge commit stays in the record folder, with its .git copy (Gate-OK record, "Where the records are"). It is stale but harmless: records are keyed by commit (`gate_ok.record_path`), that commit is not on main, and a reader verifying any other commit never reads it. Only a later push of that same merge commit would find it; it can be deleted by hand (the owner's: no agent's file writes reach the record folder).
 
-**First switch.** A repo's first switch from the old PM kit is landed by the owner, by hand. Its base `.kit.json` fails to load with the kit loader (old key spellings such as `gate.hook`, `doc_budget.owner_email`/`agent_emails`/`owner_only`/`owner_only_except`, and dropped keys such as `dependency_pin_check`, `python_tests_audit*`, `python_tests`, `python_tests_floor` and `trailers`). Five sites then refuse: the pre-push hook (kitlib/guard/prepush.py), the guard's git-push-main rule (kitlib/guard/rules.py `git_push`), the land.py preconditions (kitlib/gate/land.py), the trailers check (kitlib/trailerscheck) and review_pack's base read.
+**First switch.** The first switch of a repo whose `.kit.json` still uses old key spellings is landed by the owner, by hand. Its base `.kit.json` fails to load with the kit loader (old key spellings such as `gate.hook`, `doc_budget.owner_email`/`agent_emails`/`owner_only`/`owner_only_except`, and dropped keys such as `dependency_pin_check`, `python_tests_audit*`, `python_tests`, `python_tests_floor` and `trailers`). Five sites then refuse: the pre-push hook (kitlib/guard/prepush.py), the guard's git-push-main rule (kitlib/guard/rules.py `git_push`), the land.py preconditions (kitlib/gate/land.py), the trailers check (kitlib/trailerscheck) and review_pack's base read.
 
 1. Rewrite the base `.kit.json` to the kit spelling: rename the old keys, drop the removed ones (docs/kit-json.md). The renames (kitlib/config/schema.py `SECTIONS`; docs/kit-json.md and docs/doc-tools.md): `gate.hook` becomes the top-level `hook` (its module name is `hook.module`); `doc_budget.owner_email`, `doc_budget.agent_emails`, `doc_budget.owner_only` and `doc_budget.owner_only_except` become `owner.email`, `owner.agent_emails`, `owner.paths` and `owner.paths_except`. `python_tests_audit*` is dropped only as a `gate` key: it is still valid under `hook.options`, which is passed to the hook module unread, when the repo's hook module reads it.
 2. Check that it loads with the kit loader: `python <kit>/tools/preflight.py -C <repo>` (`<repo>` is the checkout, worktree or not, that holds the rewritten `.kit.json`) loads the repo's `.kit.json` and, when it does not load, prints `preflight: refused: kit configuration: <the load error>` and exits 2. (`python -m json.tool` checks syntax only.)
 3. The owner commits and pushes that switch commit. The kit's own pre-push hook refuses this push when it is installed in that repo: it reads the base `.kit.json` from the remote's main (kitlib/guard/prepush.py `_cfg`, `kitlib.config.load_at`), and the old spelling fails to load. Until main loads, pre-push refuses every branch push, not only the switch push. Push before the kit hook is installed in that repo, or push that one switch commit with `--no-verify` from the owner's own terminal (the guard refuses `--no-verify` pushes in agent sessions: rules git-push-main and git-push-pmdata), then install the hook. `gate.py land`, pre-push and the trailers check refuse until main loads.
 4. After that, normal landings work (docs/go-live.md "Landing tool").
 
-Reopen the first-switch landing item if a repo ever has to switch from the old PM kit.
+Reopen the first-switch landing item if a repo's `.kit.json` ever still uses the old key spellings.
 
 ### Pinned tools
 
@@ -560,17 +560,17 @@ These are general behaviour the kit gate leaves out, or repo-specific behaviour,
 
 | From | What | Why |
 |---|---|---|
-| PM kit gate.py | `-C` hand-off | retired |
-| PM kit gate.py | `--hook-arg` / `gate_hook` | replaced by the hook module's `GATE_CHECKS` |
-| PM kit gate.py | `python_tests`, `python_tests_floor`, py-drops | no gate keys: a config that sets one fails to load (unknown key); write the test run as a step with a `pass` floor (docs/test-tools.md) |
-| PM kit gate.py | trailer check (`trailers`) | ported as the `cmd` step over `{here}/trailers.py` (docs/repo-checks.md "trailers"); `trailers` is no gate key: a config that sets it fails to load (unknown key) |
-| PM kit gate.py | `kill_retry`, pid shield | `kill_retry` is no step key: a config that sets it fails to load (unknown key). A stop, Ctrl+C or error ends a step's whole process tree through the slot's job, a subtree whose top already exited included (tests/lock/test_slot_treekill.py), but for a build daemon another job's client uses or may use (any MSBuild node or compiler server among them), which is spared with its tree ("Build daemons" above, `Slot.end_tree`). `--pid-hold` in `setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args` is refused too: the pid hold is opt-in for agent test runs (docs/test-tools.md "The pid shield") |
-| PM kit gate.py | pin-check / offline hatch, doc-budget, forbidden paths | repo checks: the doc budget is a `cmd` step over `{here}/doc_budget.py -C <root>` (docs/doc-tools.md); forbidden paths are a `cmd` step over `{here}/forbidden.py` (docs/repo-checks.md); machine paths over `tools/machine_paths.py -C <root>` (0 OK, 1 FAILED, 2 NOT CHECKED; docs/commit.md) |
-| PM kit gate.py | dotnet zero-test regexes | repo data: the gate's `zero_tests` |
-| PM kit gate.py | machine-state print on failure | the lock's own status shows it |
-| PM kit gate.py | `--merged` merge train | a batch landing (Landing, Batch) is merged and gated whole, never as a train of partial landings |
-| PM kit gate.py | `--setup` print, `cmd_windows` | `setup` runs as a step; one argv per step |
-| PM kit gate.py | worktree removal after landing | ported as the branch cleanup (Landing, Branch cleanup), which runs the `worktree_remove.py` code |
+| the replaced gate.py | `-C` hand-off | retired |
+| the replaced gate.py | `--hook-arg` / `gate_hook` | replaced by the hook module's `GATE_CHECKS` |
+| the replaced gate.py | `python_tests`, `python_tests_floor`, py-drops | no gate keys: a config that sets one fails to load (unknown key); write the test run as a step with a `pass` floor (docs/test-tools.md) |
+| the replaced gate.py | trailer check (`trailers`) | is the `cmd` step over `{here}/trailers.py` (docs/repo-checks.md "trailers"); `trailers` is no gate key: a config that sets it fails to load (unknown key) |
+| the replaced gate.py | `kill_retry`, pid shield | `kill_retry` is no step key: a config that sets it fails to load (unknown key). A stop, Ctrl+C or error ends a step's whole process tree through the slot's job, a subtree whose top already exited included (tests/lock/test_slot_treekill.py), but for a build daemon another job's client uses or may use (any MSBuild node or compiler server among them), which is spared with its tree ("Build daemons" above, `Slot.end_tree`). `--pid-hold` in `setup`, a step's `cmd`, `full_cmd`, `daily_cmd` or `merged_args` is refused too: the pid hold is opt-in for agent test runs (docs/test-tools.md "The pid shield") |
+| the replaced gate.py | pin-check / offline hatch, doc-budget, forbidden paths | repo checks: the doc budget is a `cmd` step over `{here}/doc_budget.py -C <root>` (docs/doc-tools.md); forbidden paths are a `cmd` step over `{here}/forbidden.py` (docs/repo-checks.md); machine paths over `tools/machine_paths.py -C <root>` (0 OK, 1 FAILED, 2 NOT CHECKED; docs/commit.md) |
+| the replaced gate.py | dotnet zero-test regexes | repo data: the gate's `zero_tests` |
+| the replaced gate.py | machine-state print on failure | the lock's own status shows it |
+| the replaced gate.py | `--merged` merge train | a batch landing (Landing, Batch) is merged and gated whole, never as a train of partial landings |
+| the replaced gate.py | `--setup` print, `cmd_windows` | `setup` runs as a step; one argv per step |
+| the replaced gate.py | worktree removal after landing | is the branch cleanup (Landing, Branch cleanup), which runs the `worktree_remove.py` code |
 | a repo's land.py | review-pack precondition, records-only rule | repo policy; a check step |
 | a repo's land.py | land_scope classify | dropped: every landing gates the whole merged tree |
 | a repo's gate reuse | log hashes, forecast, stale-base notes, `--force` names | the per-step cache key is the evidence (Gate reuse); `--fresh`, `--full` and `--only` force a run, and `merged_args` makes another key |
