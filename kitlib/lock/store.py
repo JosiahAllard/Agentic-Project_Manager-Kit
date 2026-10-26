@@ -1,5 +1,5 @@
 """The lock's store: a folder of JSON records, read and written under
-named Win32 mutexes, plus each run's liveness mutex.
+named Win32 mutexes (flocks on Linux), plus each run's liveness mutex.
 
     active/<run>.json      a live run's record (.stop: a stop request)
     ended/<id>.json        ended runs and holds, kept ENDED_KEEP_S
@@ -13,8 +13,14 @@ named Win32 mutexes, plus each run's liveness mutex.
     background/<run>.d     a background run's control folder
     revision               a counter every write bumps (kitlib.lock.api.wait_change)
 
+On Linux the mutexes are flocks (kitlib.platform.linux.locks), on files in the store:
+
+    locks/<name>.lock      a named lock (Store.lock)
+    runs/<run>.alive       a run's liveness lock (Store.run_mutex), removed when it is let go
+
 Store(root) is the machine's store when root is None; any other root is a scratch store with
-mutexes of its own (tests). Timings live in Settings, so a test shortens them by parameter, not
+mutexes of its own (tests). On Linux the machine's store has no root yet (slice 9 of
+docs/linux-support-plan.md section 8), so Store() raises PlatformUnsupported there. Timings live in Settings, so a test shortens them by parameter, not
 by environment (the old MACHINE_LOCK_TEST_* seams). Nothing here prints: `say` is the caller's.
 
 Under the kit's tests the machine's store is fenced (fence; docs/test-tools.md "Home fence"): it
@@ -34,7 +40,9 @@ import threading
 import time
 from ctypes import wintypes
 
+import kitlib.platform
 from kitlib.host import registry
+from kitlib.platform import PlatformUnsupported
 from kitlib.proc import process
 from kitlib.proc import win32
 from kitlib.proc.win32 import K32, ADV
@@ -87,7 +95,13 @@ class Settings:
 
 def profile_dir():
     """The user's profile folder from Windows (FOLDERID_Profile), never from the environment: a
-    caller's USERPROFILE or HOME cannot move the store."""
+    caller's USERPROFILE or HOME cannot move the store. Off Windows: PlatformUnsupported (the
+    Linux profile folder comes with slice 9 of docs/linux-support-plan.md section 8)."""
+    if kitlib.platform.NAME != "windows":
+        raise PlatformUnsupported(
+            "the machine's lock store has no root on %s yet: its profile folder comes from Windows "
+            "(SHGetKnownFolderPath) until slice 9 of docs/linux-support-plan.md section 8; a "
+            "scratch store is Store(root=<a folder>)" % kitlib.platform.NAME)
     class GUID(ctypes.Structure):
         _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD),
                     ("d4", ctypes.c_ubyte * 8)]
@@ -484,9 +498,14 @@ class Store:
     store gives no file path and names no mutex: path and mutex_name raise HomeFenced (fence)."""
 
     def __init__(self, root=None, settings=None, say=None, hardware=None, kinds_path=None):
-        real = real_root()
+        try:
+            real = real_root()
+        except PlatformUnsupported:     # Linux until slice 9: a given root is a scratch store
+            if root is None:
+                raise
+            real = None
         self.root = os.path.abspath(root or real)
-        self.testing = os.path.normcase(self.root) != os.path.normcase(real)
+        self.testing = real is None or os.path.normcase(self.root) != os.path.normcase(real)
         self.settings = settings or Settings()
         self.say = say or (lambda text: None)
         self.hardware = hardware            # kitlib.lock.layout: None = detect this machine
@@ -518,8 +537,14 @@ class Store:
     @contextlib.contextmanager
     def lock(self, name, wait_s=None):
         """A named store mutex, held while its records are read and written. Raises OSError when
-        it is not had within wait_s (default settings.store_lock_s). Recursive for its thread."""
+        it is not had within wait_s (default settings.store_lock_s). Recursive for its thread.
+        On Linux: a flock on locks/<name>.lock (kitlib.platform.linux.locks.hold)."""
         wait_s = self.settings.store_lock_s if wait_s is None else wait_s
+        if kitlib.platform.NAME == "linux":
+            from kitlib.platform.linux import locks
+            with locks.hold(self.path("locks", name + ".lock"), wait_s, name):
+                yield
+            return
         h = K32.CreateMutexW(ctypes.byref(mutex_sa()), False, self.mutex_name(name))
         if not h:
             raise ctypes.WinError(ctypes.get_last_error())
@@ -534,12 +559,21 @@ class Store:
             K32.CloseHandle(h)
 
     def run_mutex(self, rid):
+        """Run rid's liveness signal, held until its release(): RunMutex, or on Linux a flock on
+        runs/<rid>.alive (kitlib.platform.linux.locks.RunLock)."""
+        if kitlib.platform.NAME == "linux":
+            from kitlib.platform.linux import locks
+            return locks.RunLock(self.path("runs", rid + ".alive"))
         return RunMutex(self.mutex_name("run." + rid))
 
     def run_dead(self, e):
         """True when entry or record e's wrapper is surely gone: its pid and creation time name
         no live process, or its run mutex is gone, abandoned or unowned. A mutex this process may
-        not open leaves it to the pid and creation time."""
+        not open leaves it to the pid and creation time. On Linux the run lock alone decides
+        until the pid and creation time can be checked there (slice 4 of
+        docs/linux-support-plan.md section 8)."""
+        if kitlib.platform.NAME == "linux":
+            return self.run_mutex_held(str(e["id"])) is False
         try:
             if not process.alive(int(e.get("pid") or 0), e.get("ctime")):
                 return True
@@ -552,7 +586,12 @@ class Store:
         (no such mutex, ERROR_FILE_NOT_FOUND), abandoned or unowned (an unowned one is taken and
         let go at once); None when it cannot be told: any other failure to open it (access
         denied, say). This assumes the checker and the wrappers share the Global namespace
-        (mutex_name): a wrapper's mutex is then seen from any session on the machine."""
+        (mutex_name): a wrapper's mutex is then seen from any session on the machine. On Linux:
+        a probe of runs/<rid>.alive (kitlib.platform.linux.locks.run_lock_held), the same three
+        answers."""
+        if kitlib.platform.NAME == "linux":
+            from kitlib.platform.linux import locks
+            return locks.run_lock_held(self.path("runs", rid + ".alive"))
         h = K32.OpenMutexW(win32.SYNCHRONIZE | win32.MUTEX_MODIFY_STATE, False,
                            self.mutex_name("run." + rid))
         if not h:
@@ -604,7 +643,8 @@ class Store:
 
     def bump(self):
         """revision + 1, under the revision mutex. A bump that cannot be had is skipped: the
-        next write bumps, and wait_change also wakes on its timeout."""
+        next write bumps, and wait_change also wakes on its timeout. A lock the platform cannot
+        take (PlatformUnsupported) is raised, never skipped."""
         try:
             with self.lock("revision", 2):
                 n = self.revision() + 1
@@ -613,6 +653,8 @@ class Store:
                 with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                     f.write(str(n))
                 os.replace(tmp, self.path("revision"))
+        except PlatformUnsupported:
+            raise
         except OSError:
             pass
 

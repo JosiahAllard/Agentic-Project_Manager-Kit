@@ -10,7 +10,10 @@ The lock is an operating-system byte-range lock (msvcrt.locking, LockFile) on on
 the end of the lock file; for a tree that file is `<git common dir>/kit-tree-<name>-<hash>.lock`
 (lock_name). The common dir exists before
 the tree is first added, every checkout of the repository sees it, `git worktree prune` never
-removes it, and it is never tracked. The OS lock is the exclusion: the system drops it when the
+removes it, and it is never tracked. On Linux the lock is a flock on the whole file
+(kitlib.platform.linux.locks), never fcntl.lockf, whose locks belong to the process: a flock, like
+a Windows handle's lock, excludes another descriptor in the same process, and Linux locks are
+advisory, so readers are never blocked there either. The OS lock is the exclusion: the system drops it when the
 holder exits, however it exits, so a dead holder never blocks a run, and a pid that was reused
 cannot fake one. The file's text is only the holder's record (pid, the process's creation time,
 since), for the busy message. A release empties it; a holder that died leaves its record, and the
@@ -26,9 +29,10 @@ import time
 
 try:
     import msvcrt
-except ImportError:          # not Windows: TreeLock refuses (the kit is Windows only)
+except ImportError:          # not Windows: a flock on Linux (_linux), a refusal elsewhere
     msvcrt = None
 
+NBLCK = msvcrt.LK_NBLCK if msvcrt else None     # _lock_byte's mode; on Linux always LOCK_NB
 LOCK_AT = 1 << 30            # the locked byte: past any record, so readers are never blocked
 READ_TRIES = 10              # a busy reader re-reads an empty record (a take writing it) this often
 READ_SLEEP = 0.05
@@ -62,6 +66,15 @@ def describe(record):
     """`held by pid N since T` for a holder's record."""
     record = record or {}
     return 'held by pid %s since %s' % (record.get('pid', '?'), record.get('since', '?'))
+
+
+def _linux():
+    """kitlib.platform.linux.locks on Linux (imported only then), else None."""
+    import kitlib.platform
+    if kitlib.platform.NAME != 'linux':
+        return None
+    from kitlib.platform.linux import locks
+    return locks
 
 
 def _own_start():
@@ -104,26 +117,33 @@ class TreeLock(object):
         self.took_over = {}
 
     def _lock_byte(self, mode):
+        if msvcrt is None:
+            _linux().lock_fd(self.fd)
+            return
         os.lseek(self.fd, LOCK_AT, os.SEEK_SET)
         msvcrt.locking(self.fd, mode, 1)
 
     def acquire(self):
-        if msvcrt is None:
-            raise TreeLockError('the tree lock needs Windows (msvcrt)')
+        linux = None if msvcrt else _linux()
+        if msvcrt is None and linux is None:
+            import kitlib.platform
+            raise TreeLockError('the tree lock needs Windows (msvcrt) or Linux (flock), not this '
+                                'platform (%s)' % kitlib.platform.NAME)
         if self.fd is not None:
             raise TreeLockError('%s is already held by this lock object' % self.path)
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOINHERIT', 0)
+        flags = (os.O_RDWR | os.O_CREAT | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOINHERIT', 0)
+                 | getattr(os, 'O_CLOEXEC', 0))
         try:
             fd = os.open(self.path, flags, 0o644)
         except OSError as e:
             raise TreeLockError('cannot open %s: %s' % (self.path, e))
         self.fd = fd
         try:
-            self._lock_byte(msvcrt.LK_NBLCK)
+            self._lock_byte(NBLCK)
         except OSError as e:
             self.fd = None
             os.close(fd)
-            if e.errno in BUSY_ERRNOS:
+            if e.errno in (linux.BUSY_ERRNOS if linux else BUSY_ERRNOS):
                 raise TreeBusy(self.path, self._holder())
             raise TreeLockError('cannot lock %s: %s' % (self.path, e))
         try:
@@ -165,8 +185,11 @@ class TreeLock(object):
             except OSError:
                 pass             # the record stays; the lock is still dropped below
             try:
-                os.lseek(fd, LOCK_AT, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                if msvcrt is None:
+                    _linux().unlock_fd(fd)
+                else:
+                    os.lseek(fd, LOCK_AT, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             except OSError:
                 pass             # closing the handle drops it too
         finally:
