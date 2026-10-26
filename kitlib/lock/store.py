@@ -44,6 +44,7 @@ import kitlib.platform
 from kitlib.host import registry
 from kitlib.platform import PlatformUnsupported
 from kitlib.platform.linux import locks
+from kitlib.platform.linux import process as procfs
 from kitlib.proc import process
 from kitlib.proc import win32
 from kitlib.proc.win32 import K32, ADV
@@ -427,7 +428,9 @@ def wrapper_state(pid, ctime):
     created at another time. None when that cannot be told: the process cannot be opened (another
     user's or a protected one; a reused pid can name one, such as a SYSTEM svchost, and
     process.alive then says alive without its creation time), or ctime is missing. A pid without
-    a matching creation time is never proof of life (run_live then asks the run mutex)."""
+    a matching creation time is never proof of life (run_live then asks the run mutex).
+    On Linux the same three answers from /proc (kitlib.platform.linux.process identity): an ended
+    process is a zombie, and None is a stat or boot id that cannot be read."""
     try:
         pid = int(pid)
         ctime = None if ctime is None else int(ctime)
@@ -435,6 +438,14 @@ def wrapper_state(pid, ctime):
         return None
     if pid <= 0:
         return False
+    if kitlib.platform.NAME == "linux":
+        try:
+            seen = procfs.identity(pid)
+        except (OSError, ValueError):
+            return None
+        if seen is None or seen[1]:
+            return False
+        return None if ctime is None else seen[0] == ctime
     h = K32.OpenProcess(win32.QUERY_LIMITED | win32.SYNCHRONIZE, False, pid)
     if not h:
         return False if ctypes.get_last_error() == win32.ERROR_INVALID_PARAMETER else None
@@ -568,11 +579,8 @@ class Store:
     def run_dead(self, e):
         """True when entry or record e's wrapper is surely gone: its pid and creation time name
         no live process, or its run mutex is gone, abandoned or unowned. A mutex this process may
-        not open leaves it to the pid and creation time. On Linux the run lock alone decides
-        until the pid and creation time can be checked there (slice 4 of
-        docs/linux-support-plan.md section 8)."""
-        if kitlib.platform.NAME == "linux":
-            return self.run_mutex_held(str(e["id"])) is False
+        not open leaves it to the pid and creation time. On Linux the same: process.alive reads
+        /proc there, and the run mutex is the run lock (run_mutex_held)."""
         try:
             if not process.alive(int(e.get("pid") or 0), e.get("ctime")):
                 return True

@@ -28,6 +28,7 @@ import signal
 import subprocess
 import time
 
+import kitlib.platform
 from kitlib.lock import game
 from kitlib.lock import giveback as gbk
 from kitlib.lock import holds as hl
@@ -40,6 +41,7 @@ from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED
                                EXIT_USAGE, LockError, Store, caller, iso, local_text,
                                new_id, parse_iso, read_record, remove, session_of, tree_role,
                                utc_now, write_json)
+from kitlib.platform.linux import process as procfs
 from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
 from kitlib.proc.job import Job, JobError, cores_text
 
@@ -85,7 +87,11 @@ def filetime_now():
     GetSystemTimeAsFileTime reads it. _end_others compares process creation times
     (kitlib.proc.process times) with it. That a process created after this call never has an
     earlier creation time rests on Windows stamping creation times from this same system clock:
-    inferred from the documented clocks, not measured, and void if the clock is set back."""
+    inferred from the documented clocks, not measured, and void if the clock is set back.
+    On Linux: the seam's stamp in the Linux ctime's encoding, the boot and the clock ticks since
+    it (kitlib.platform.linux.process stamp_now)."""
+    if kitlib.platform.NAME == "linux":
+        return procfs.stamp_now()
     ft = win32.FILETIME()
     win32.K32.GetSystemTimeAsFileTime(ctypes.byref(ft))
     return ft.value()

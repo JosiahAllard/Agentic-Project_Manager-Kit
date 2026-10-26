@@ -41,7 +41,7 @@ class Backends(unittest.TestCase):
     def test_the_linux_hardware_primitives_are_the_readers(self):
         linux = importlib.import_module('kitlib.platform.linux')
         hardware = importlib.import_module('kitlib.platform.linux.hardware')
-        self.assertEqual(sorted(linux.BUILT), ['hardware'])
+        self.assertEqual(sorted(linux.BUILT), ['hardware', 'process'])
         for name in api.HARDWARE:
             with self.subTest(name=name):
                 self.assertIs(getattr(linux, name), getattr(hardware, name))
@@ -50,7 +50,7 @@ class Backends(unittest.TestCase):
         linux = importlib.import_module('kitlib.platform.linux')
         self.assertEqual(sorted(linux.__all__), sorted(api.NAMES))
         for area, (names, slice_number) in api.AREAS.items():
-            if area == 'hardware':
+            if area in linux.BUILT:
                 continue
             for name in names:
                 with self.subTest(name=name):
