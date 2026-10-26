@@ -1,12 +1,20 @@
 """kitlib.gate.steps: selection by what changed, and judging a step by its log."""
 import builtins
+import importlib.util
+import io
+import os
 import time
 import unittest
 from unittest import mock
 
 from kitlib.gate import steps as S
+from tests.gitfixture import TempRepo
 
 ROOT = 'C:/repo'
+PYTESTS = os.path.join(S.KIT_TOOLS, 'pytests.py')
+_spec = importlib.util.spec_from_file_location('kit_pytests_entry_for_steps_tests', PYTESTS)
+pytests_cli = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(pytests_cli)
 
 
 def gate_of(*specs, **top):
@@ -48,6 +56,27 @@ class Build(unittest.TestCase):
         self.assertEqual(fm.cmd[1:], ['kt.py', '--full', ROOT, '--merged'])
         (plain,) = S.build(gate_of(cmd('s')), ROOT, 'b', 't', full=True)     # no full_cmd: cmd
         self.assertEqual(plain.cmd[1:], ['-c', 'pass'])
+
+    def test_a_full_merged_landing_of_a_pytests_step_passes_its_usage_check(self):
+        # KIT-GATE-FULL-MERGED-ARGS: retribution's tools-tests step (cmd --select, full_cmd
+        # --all, merged_args --merged) in a full landing's merged-tree gate built
+        # `pytests.py --all --audit --merged`, which pytests refused as USAGE.
+        here = '{here}/pytests.py'
+        g = gate_of(cmd('tools-tests', cmd=['{python}', here, '-C', '{root}', '--select',
+                                            '--base', '{base}', '--audit'],
+                        full_cmd=['{python}', here, '-C', '{root}', '--all', '--audit'],
+                        merged_args=['--merged']))
+        repo = TempRepo()                       # no tools folder: the run refuses past the usage
+        self.addCleanup(repo.cleanup)
+        (fm,) = S.build(g, repo.root, 'b', 'tools', merged=True, full=True)
+        self.assertEqual(os.path.normcase(fm.cmd[1]), os.path.normcase(PYTESTS))
+        self.assertEqual(fm.cmd[2:], ['-C', repo.root, '--all', '--audit', '--merged'])
+        out = io.StringIO()
+        self.assertEqual(pytests_cli.main(fm.cmd[2:], out=out), 2)
+        self.assertEqual(out.getvalue(), 'pytests: refused: the checkout has no tools folder tools\n')
+        out = io.StringIO()                     # named modules: --merged still has no meaning
+        self.assertEqual(pytests_cli.main(['-C', repo.root, 'test_x', '--merged'], out=out), 2)
+        self.assertEqual(out.getvalue(), 'USAGE: --merged goes with --select or --all\n')
 
     def test_daily_cmd_replaces_full_cmd_and_cmd_only_in_a_daily_run(self):
         g = gate_of(cmd('t', cmd=['{python}', 'kt.py', '--select'],

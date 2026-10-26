@@ -2,7 +2,7 @@
 its own job object (docs/test-tools.md).
 
   pytests.py [-C DIR] [--audit] [--jobs N] [--unit-timeout S] <test module> ...
-  pytests.py [-C DIR] --all [--audit] [--jobs N] [--unit-timeout S]
+  pytests.py [-C DIR] --all [--merged] [--audit] [--jobs N] [--unit-timeout S]
   pytests.py [-C DIR] --select [--base B] [--merged] [--changed PATH ...] [--plan] [--audit]
   add --pid-hold to any run: hold pids for it (opt-in, agent runs only; the gate refuses it)
   pytests.py --child <unit> -C ROOT [--shard I/N] [--path D] [--audit]      (internal)
@@ -13,7 +13,8 @@ untracked files, B = --base, default docs/gate.md "Default base": <remote>/<main
 resolves, else the main branch, a line saying when the local one differs; or the --changed
 list) go through kitlib.tooldeps' selection (its `always_run` included); prints `pytests: <why>` and
 `pytests: <names>`, then runs them (--plan: stops there). When git cannot say what changed it
-REFUSES and no test runs. The log, units, kill and shield: kitlib/pytests/runner.py.
+REFUSES and no test runs. --merged (a landing's merged-tree gate, a step's merged_args) makes
+--select run every module when a tools file changed; with --all it changes nothing. The log, units, kill and shield: kitlib/pytests/runner.py.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pytests, prints and exits.
 Exit codes: 0 every unit passed (or nothing selected, or --plan), 1 a unit failed or timed out,
@@ -90,8 +91,13 @@ def main(argv=None, out=None):
     if a.select and (a.all or a.modules):
         say('USAGE: --select picks the modules itself; name none and no --all')
         return USAGE
-    if not a.select and (a.plan or a.base or a.merged or a.changed is not None):
-        say('USAGE: --plan, --base, --merged and --changed go with --select')
+    if not a.select and (a.plan or a.base or a.changed is not None):
+        say('USAGE: --plan, --base and --changed go with --select')
+        return USAGE
+    # --merged only widens a selection; --all already runs every module, so the pair a landing's
+    # merged-tree gate builds from a full_cmd and merged_args (kitlib.gate.steps.build) is accepted.
+    if a.merged and not (a.select or a.all):
+        say('USAGE: --merged goes with --select or --all')
         return USAGE
     if not a.select and a.all == bool(a.modules):
         say('USAGE: name test modules or --all, not both and not neither')
