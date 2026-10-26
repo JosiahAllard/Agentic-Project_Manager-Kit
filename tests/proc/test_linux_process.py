@@ -1,17 +1,24 @@
 """The process primitives on Linux (docs/linux-support-plan.md section 8, slice 4): /proc readers
 behind kitlib.proc.process's names, the ctime `(boot << 64) | starttime`. On a real spawned tree:
 ancestry, descendants, command_line and kill_tree; a parent created after its child ends a walk;
-a pid at another ctime is not killed; an ended, unreaped process (a zombie) is gone.
+a pid at another ctime is not killed; an ended, unreaped process (a zombie) is gone. Hidden: a
+stat /proc does not show (hidepid=2, another user's) is no process only when signal 0 finds none,
+and a stat that cannot be read cannot be told; a comm with spaces and ')' is read whole.
 
 Backends runs on every platform: the Linux backend's process area is that module, and on Windows
 kitlib.proc.process keeps its own functions."""
+import builtins
+import errno
 import importlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
+from unittest import mock
 
 from kitlib.platform import api
 from kitlib.proc import process
@@ -25,6 +32,11 @@ CHILD = ('import subprocess, sys, time\n'
          'print(g.pid, flush=True)\n'
          'time.sleep(60)\n')
 LOW64 = (1 << 64) - 1
+# A child that names itself argv[1] (its comm), says so and sleeps.
+COMM_CHILD = ('import sys, time\n'
+              'open("/proc/self/comm", "w").write(sys.argv[1])\n'
+              'print(flush=True)\n'
+              'time.sleep(60)\n')
 
 
 def procfs():
@@ -166,6 +178,69 @@ class Ended(unittest.TestCase):
     def test_a_ctime_that_is_not_a_number_cannot_be_told(self):
         self.assertTrue(process.alive(os.getpid(), 'not a number'))
         self.assertTrue(process.alive(os.getpid(), None))
+
+
+@posix_only('the process primitives read /proc on Linux')
+class Hidden(unittest.TestCase):
+    def setUp(self):
+        self.empty = tempfile.mkdtemp(prefix='kit-proc-hidden-')     # a /proc that lists nothing
+        self.addCleanup(shutil.rmtree, self.empty, True)
+        self.me, self.ct = os.getpid(), process.own_ctime()
+        self.assertIsNotNone(self.ct)
+
+    def unknown(self, pid, ct):
+        from kitlib.lock import store
+        self.assertTrue(process.alive(pid, ct))
+        self.assertIsNone(store.wrapper_state(pid, ct))
+        self.assertIsNone(process.proc_ctime(pid))
+        with self.assertRaises(OSError):
+            procfs().identity(pid)
+
+    def test_a_hidden_stat_of_a_process_signal_0_may_not_reach_cannot_be_told(self):
+        # hidepid=2: another user's process has no /proc entry here, and kill(pid, 0) is EPERM.
+        eperm = PermissionError(errno.EPERM, 'Operation not permitted')
+        with mock.patch.object(procfs(), 'PROC', self.empty), \
+                mock.patch.object(procfs().os, 'kill', side_effect=eperm) as kill:
+            self.unknown(self.me, self.ct)
+        kill.assert_called_with(self.me, 0)
+
+    def test_a_hidden_stat_of_a_process_signal_0_finds_cannot_be_told(self):
+        with mock.patch.object(procfs(), 'PROC', self.empty):
+            self.unknown(self.me, self.ct)
+
+    def test_a_hidden_stat_of_a_pid_signal_0_finds_no_process_for_is_gone(self):
+        from kitlib.lock import store
+        p = subprocess.Popen([sys.executable, '-c', 'pass'])
+        ct = process.proc_ctime(p.pid)
+        p.wait(30)
+        with mock.patch.object(procfs(), 'PROC', self.empty):
+            self.assertFalse(process.alive(p.pid, ct))
+            self.assertIs(store.wrapper_state(p.pid, ct), False)
+            self.assertIsNone(procfs().identity(p.pid))
+
+    def test_a_stat_that_cannot_be_read_cannot_be_told(self):
+        stat = '/proc/%d/stat' % self.me
+
+        def opener(path, *a, **k):
+            if path == stat:
+                raise PermissionError(errno.EACCES, 'Permission denied', path)
+            return builtins.open(path, *a, **k)
+        with mock.patch.object(procfs(), 'open', opener, create=True):
+            self.unknown(self.me, self.ct)
+
+    def test_a_comm_with_spaces_and_parentheses_is_read_whole(self):
+        name = 'a b) (c) d'
+        p = subprocess.Popen([sys.executable, '-c', COMM_CHILD, name], stdout=subprocess.PIPE)
+        self.addCleanup(p.wait, 30)
+        self.addCleanup(p.kill)                 # only this test's own child, by its handle
+        p.stdout.readline()
+        self.addCleanup(p.stdout.close)
+        ct = process.proc_ctime(p.pid)
+        self.assertEqual(ct & LOW64, starttime(p.pid))
+        self.assertIn((p.pid, self.me, name), process.snapshot())
+        self.assertIs(process.alive(p.pid, ct), True)
+        self.assertEqual(process._ancestor(p.pid), (ct, False, None))
+        self.assertEqual(process.ancestors_of(p.pid, ct)[0], (self.me, self.ct))
 
 
 if __name__ == '__main__':

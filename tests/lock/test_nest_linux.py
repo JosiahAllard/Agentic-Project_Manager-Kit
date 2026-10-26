@@ -3,8 +3,9 @@ ctime `(boot << 64) | starttime` (kitlib.platform.linux.process):
 
 - a record or token written before a reboot names no live process after it (the boot id is the
   seam BOOT_ID, pointed at a file), and one naming a reused pid (another starttime) names none;
-- wrapper_state's three answers, and run_dead / run_live deciding by pid and ctime first, the run
-  lock after (as on Windows);
+- wrapper_state's three answers; run_dead and run_live's reap need the pid and ctime gone and
+  the run lock free too (a checker in its own pid namespace sees no wrapper's pid, but sees its
+  flock);
 - nest_check takes a token whose wrapper is a live ancestor holding its record, and refuses one
   from another boot or a reused pid;
 - _end_others ends a job process created before its stamp and not one created after it."""
@@ -75,10 +76,9 @@ class Reboot(Base):
             self.assertTrue(process.alive(me, after))
             self.assertIs(store_mod.wrapper_state(me, before), False)
             self.assertIs(store_mod.wrapper_state(me, after), True)
-            m = self.store.run_mutex(RID)               # its run lock held all the while
-            self.addCleanup(m.release)
-            self.assertFalse(self.store.run_live({'id': RID, 'pid': me, 'ctime': before}))
-            self.assertTrue(self.store.run_dead({'id': RID, 'pid': me, 'ctime': before}))
+            old = {'id': RID, 'pid': me, 'ctime': before}
+            self.assertFalse(self.store.run_live(old))
+            self.assertTrue(self.store.run_dead(old))
             self.assertFalse(self.store.run_dead({'id': RID, 'pid': me, 'ctime': after}))
 
     def test_a_boot_id_that_cannot_be_read_cannot_be_told(self):
@@ -108,19 +108,48 @@ class WrapperState(Base):
         self.assertIs(store_mod.wrapper_state(p.pid, ct), False)
         self.assertIs(store_mod.wrapper_state(p.pid, None), False)
 
-    def test_run_dead_decides_by_the_pid_first_then_the_run_lock(self):
+    def gone_record(self):
+        """A record whose pid and ctime name a process that has ended and been reaped."""
         p = subprocess.Popen([sys.executable, '-c', 'pass'])
         ct = process.proc_ctime(p.pid)
         p.wait(30)
+        self.assertIs(store_mod.wrapper_state(p.pid, ct), False)
+        return {'id': RID, 'state': 'held', 'kind': 'build', 'pid': p.pid, 'ctime': ct,
+                'has': {'cpu': 1}}
+
+    def test_run_dead_needs_the_pid_gone_and_the_run_lock_free(self):
+        d = self.gone_record()
         m = self.store.run_mutex(RID)
         self.addCleanup(m.release)
-        self.assertTrue(self.store.run_dead({'id': RID, 'pid': p.pid, 'ctime': ct}))
-        self.assertFalse(self.store.run_live({'id': RID, 'pid': p.pid, 'ctime': ct}))
+        # The pid check alone says gone (a checker in its own pid namespace sees none): the
+        # held run lock keeps it.
+        self.assertFalse(self.store.run_dead(d))
+        self.assertTrue(self.store.run_live(d))
         me = {'id': RID, 'pid': os.getpid(), 'ctime': process.own_ctime()}
         self.assertFalse(self.store.run_dead(me))
         self.assertTrue(self.store.run_live(me))
         m.release()
-        self.assertTrue(self.store.run_dead(me))        # alive, but its run lock is gone
+        self.assertTrue(self.store.run_dead(d))
+        self.assertFalse(self.store.run_live(d))
+        self.assertFalse(self.store.run_dead(me))       # its run lock is free, but it is alive
+
+    def test_a_record_whose_pid_is_gone_is_not_reaped_while_its_run_lock_is_held(self):
+        d = self.gone_record()
+        self.store.write('active/%s.json' % RID, d)
+        m = self.store.run_mutex(RID)
+        self.addCleanup(m.release)
+        self.assertEqual([x['id'] for x in self.store.live_runs(prune=True)], [RID])
+        self.assertIsNotNone(self.store.read('active/%s.json' % RID))
+        self.assertIsNone(self.store.read('ended/%s.json' % RID))
+        m.release()
+        self.assertEqual(self.store.live_runs(prune=True), [])
+        self.assertIsNone(self.store.read('active/%s.json' % RID))
+        self.assertEqual(self.store.read('ended/%s.json' % RID)['reaped'],
+                         'its wrapper process is gone')
+
+    def test_a_record_without_a_run_id_whose_pid_is_gone_is_not_live(self):
+        d = dict(self.gone_record(), id=None)
+        self.assertFalse(self.store.run_live(d))
 
 
 @posix_only('the lock reads /proc on Linux')

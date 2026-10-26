@@ -48,14 +48,33 @@ def boot():
         raise OSError('%s is not a boot id: %r' % (BOOT_ID, text)) from None
 
 
+def _exists(pid):
+    """Does some process have pid, by signal 0? False only on ESRCH; a process this one may not
+    signal (EPERM, another user's) exists."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _stat(pid):
     """(state, ppid, starttime, comm) from /proc/<pid>/stat, or None when no process has pid.
     Raises OSError when it cannot be read otherwise. comm may hold spaces and parentheses, so
-    the fields are read after its last ')'."""
+    the fields are read after its last ')'. A stat that is not there is no process only when
+    signal 0 finds none (ESRCH, _exists): /proc mounted hidepid=2 hides another user's process
+    that a signal still finds, and that one raises (it cannot be told)."""
+    if pid <= 0:
+        return None
     try:
         with open('%s/%d/stat' % (PROC, pid), 'rb') as f:
             data = f.read()
     except (FileNotFoundError, ProcessLookupError, NotADirectoryError):
+        if _exists(pid):
+            raise OSError(errno.EACCES, '%s/%d/stat is hidden, but a process has the pid'
+                          % (PROC, pid)) from None
         return None
     head, close = data.find(b'('), data.rfind(b')')
     fields = data[close + 2:].split()
