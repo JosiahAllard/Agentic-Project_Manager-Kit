@@ -3,6 +3,23 @@
 Run a whole team of Claude Code agents on one Windows machine, across every repository you own,
 without them trampling each other's work or the machine itself.
 
+## What works today
+
+Live since 2026-10-15, with landings in three repositories, and covered by tests:
+
+- Backlog store and its guards
+- Gate with the machine lock
+- Landing queue, verdicts and strict paths
+- Action Hub: questions, to-dos and pages
+- Coordinator, PM and worker roles, rendered for Claude and Codex
+- Guard hook and pre-push hook
+- Launcher and session hand-offs
+- Worktree cleanup
+- Daily full test run
+
+Not done: Linux support is in progress (plan slices 1, 2 and 6 are built; the kit still refuses
+Linux), and the Codex bridge is not live yet.
+
 ## The problem
 
 One Claude Code session is easy to supervise. Ten are not. Two agents edit the same checkout,
@@ -49,12 +66,6 @@ test and land code at the same time. The kit lays the rails they run on:
 
 One person running several Claude Code sessions across several git repositories on one Windows
 PC. It needs Windows, Python 3 (standard library only), git and Claude Code.
-
-## Status
-
-Early. Most of the kit is built and tested but held for review before it goes live, and machine
-setup has not yet been run on a real machine. docs/go-live.md lists what
-is still to switch on.
 
 ## What you get
 
@@ -134,3 +145,7 @@ it in place.
 | The backlog | docs/backlog.md |
 | The PM's private ledger | docs/ledger.md |
 | How the kit is built | ARCHITECTURE.md |
+
+## License
+
+MIT. See LICENSE.
