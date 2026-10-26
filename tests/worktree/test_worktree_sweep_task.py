@@ -46,6 +46,7 @@ class TaskCase(RemoveCase):
         return got.code, '\n'.join(got.lines), runner
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Task(TaskCase):
 
     def test_print_only_registers_nothing(self):

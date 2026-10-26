@@ -64,6 +64,7 @@ class TaskScript(unittest.TestCase):
             self.assertNotIn(word, autostart.TASK_NAME.lower())
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Install(unittest.TestCase):
     def test_whatif_prints_the_script_and_runs_nothing(self):
         run = Recorder()
@@ -155,6 +156,7 @@ class Install(unittest.TestCase):
         self.assertTrue(issubclass(autostart.AutostartError, serve.ServeError))
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class TaskState(unittest.TestCase):
     """task_state and start_task, which hub.py restart uses: the PowerShell runner is injected, so
     no test reads or starts a real task."""

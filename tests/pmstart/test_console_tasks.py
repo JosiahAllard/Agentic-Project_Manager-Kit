@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 from kitlib import pluginsource, pmstart
@@ -198,6 +199,7 @@ class FakeRun:
         return subprocess.CompletedProcess(args, self.code, self.stdout, self.stderr)
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Read(unittest.TestCase):
     def test_parse_names_and_exec_actions(self):
         self.assertEqual(ct.parse(XML), [

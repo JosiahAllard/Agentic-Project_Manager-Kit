@@ -103,6 +103,7 @@ class AfterReboot(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(h.state, 'after-reboot.log')))
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Autostart(unittest.TestCase):
     def empty_python(self):
         """A python.exe path in a folder the test makes and leaves empty: no pythonw.exe beside it,
