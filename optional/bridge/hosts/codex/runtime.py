@@ -165,6 +165,35 @@ class _Runtime:
             except Exception:
                 return False
 
+    def rollout_identity(self,binding, *, expected):
+        """The captured chat's rollout file identity, for verify_successor."""
+        with self._lock:
+            self.require()
+            if type(binding) is not ChatBinding or expected.facts.binding(self.host_id)!=binding:
+                raise DeliveryError('codex-native-rollout-unverified')
+            return self.observer.rollout_identity(expected.facts.thread_id)
+
+    def verify_successor(self,binding, *, expected, rollout):
+        """After a write to this chat: still the same chat, though its turn may have moved on.
+
+        The delivery itself starts a new turn, so verify (exact captured turn) would
+        fail on a write that landed. This checks identity only, from the capture
+        held at lease time, and never touches the pairing store's observed list.
+        """
+        with self._lock:
+            try:
+                self.require()
+                if type(binding) is not ChatBinding or expected.facts.binding(self.host_id)!=binding:
+                    return False
+                if self.account.observe()!=expected.facts.account_ref:
+                    return False
+                self.observer.observe_successor(expected.facts,session_sha256=expected.session_sha256,
+                    context_sha256=expected.context_sha256,rollout=rollout)
+                self.require()
+                return self.account.observe()==expected.facts.account_ref
+            except Exception:
+                return False
+
     def snapshot(self,binding):
         with self._lock:
             if self._closed or type(binding) is not ChatBinding:
@@ -382,9 +411,38 @@ class CodexSources:
                         and target.snapshot(message.recipient) is target_capture)
                 except Exception:
                     return False
+            target_rollout=target.rollout_identity(message.recipient,expected=target_capture)
+            def confirm():
+                # After the write: the delivery has started a new turn in the recipient, so
+                # recheck (exact captured turn, and _live, which drops a failed chat from the
+                # observed list) would refuse a write that landed. Identity only: the same
+                # app process, image and channels, the lease still granted and the
+                # recipient's same rollout with its captured turn followed by any newer one.
+                try:
+                    self._runtime_list()
+                    self.controller._require()
+                    if not self.controller.leases.holds(writer,message.recipient):
+                        return False
+                    if (getattr(source.native,'channel',None)!=source_channel
+                            or getattr(target.native,'channel',None)!=target_channel
+                            or self.desktop_executable!=image or not process
+                            or get_pid(process)!=source_endpoint.pid
+                            or handle_ctime(process)!=source_endpoint.creation or wait(process,0)!=258
+                            or process_image(source_endpoint.pid)!=image
+                            or process_sids(source_endpoint.pid)[0]!=source.observer.user
+                            or source.observer.user!=target.observer.user
+                            or not source.alive()
+                            or not target.verify_successor(message.recipient,expected=target_capture,
+                                rollout=target_rollout)):
+                        return False
+                    self.controller._require()
+                    return True
+                except Exception:
+                    return False
             if not recheck():
                 raise BeforeWriteError('codex-direct-context-unverified')
-            yield DesktopLease(message.recipient,source_capture.facts,source_endpoint,recheck,writer=leased)
+            yield DesktopLease(message.recipient,source_capture.facts,source_endpoint,recheck,writer=leased,
+                confirm=confirm)
         finally:
             if process: close(process)
 
