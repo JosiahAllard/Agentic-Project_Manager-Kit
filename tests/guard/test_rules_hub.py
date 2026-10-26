@@ -893,7 +893,8 @@ class OwnerVerbs(Hub):
 
     def test_the_alternative_names_the_kit_hub_tool(self):
         d = decide(self.run_hub('answer Q-1 --choice 1')(True), self.ctx(OWNER))
-        self.assertEqual(d.instead, 'python "%s" questions add --title "<what the owner should decide>"' % self.hub)
+        self.assertEqual(d.instead, 'python "%s" questions add --title "<what the owner should decide>" '
+                                    '(--record <repo>:<id> | --class <rule|machine|cross-repo|go>)' % self.hub)
 
 
 class ParsedRuns(Hub):

@@ -85,6 +85,8 @@ class ApiCase(unittest.TestCase):
 
     def question(self, **kw):
         body = {'title': 't', 'repo': 'kit', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         return self.ok('POST', '/questions', AGENT, body)['id']
 
@@ -179,7 +181,8 @@ class QuestionTest(ApiCase):
     def test_add(self):
         obj = self.ok('POST', '/questions', AGENT, {
             'title': 'Which?', 'repo': 'kit', 'from': 'pm', 'context': 'c', 'options': OPTIONS,
-            'recommended': 1, 'refs': ['S-001'], 'urgent': True, 'story': 'S-001'})
+            'recommended': 1, 'refs': ['S-001'], 'urgent': True, 'story': 'S-001',
+            'class': 'go'})
         self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-1000', 1, True))
         self.assertEqual(obj['revision'], self.store.revision)
         self.assertIsInstance(obj['warnings'], list)
@@ -206,7 +209,7 @@ class QuestionTest(ApiCase):
         self.refused('invalid', None, 'POST', '/questions', AGENT,
                      {'title': 't', 'options': ['not an option']})
         self.refused('invalid', 'urgent', 'POST', '/questions', AGENT,
-                     {'title': 't', 'urgent': 'yes'})
+                     {'title': 't', 'urgent': 'yes', 'class': 'go'})
 
     def test_answer_with_an_option(self):
         qid = self.question()
@@ -735,7 +738,7 @@ class ReadTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         self.assertEqual(self.ok('GET', '/pending', AGENT)['items'],
                          [{'kind': 'question', 'id': qid, 'title': 't', 'repo': 'kit',
-                           'at': NOW, 'from': 'pm', 'route': 'pm'}])
+                           'at': NOW, 'from': 'pm', 'class': 'go', 'route': 'pm'}])
 
     def test_snapshot(self):
         qid = self.question()
@@ -1199,8 +1202,8 @@ class FixTest(ApiCase):
         self.assertEqual(self.store.get('stories', sid)['via'], 'web')
         self.ok('POST', '/stories/%s' % sid, AGENT, {'status': 'review', 'if_version': 1})
         self.assertEqual(self.store.get('stories', sid)['via'], 'api')     # none given
-        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS},
-                      via='cli')['id']
+        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS,
+                                                    'class': 'go'}, via='cli')['id']
         self.assertEqual(self.store.get('questions', qid)['via'], 'cli')
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}, via='web')
         d = self.store.get('questions', qid)
@@ -1436,7 +1439,8 @@ class SecondFixTest(ApiCase):
                 ('POST', '/todos/%s/edit' % made, AGENT,
                  {'from': 'pm', 'if_version': 1, 'title': 'u'}),
                 ('POST', '/todos/%s/delete' % made, AGENT, {'from': 'pm', 'if_version': 2}),
-                ('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS}),
+                ('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS,
+                                                'class': 'go'}),
                 ('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}),
                 ('POST', '/questions/%s/log' % qid, AGENT, {'ruling': R7,
                                                             'if_version': 2}),
@@ -2095,7 +2099,7 @@ class ThirdFixTest(ApiCase):
 
     def test_an_agents_from_on_a_question_is_a_session_key_or_the_pm(self):
         self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit-2'})
-        body = {'title': 't', 'options': OPTIONS}
+        body = {'title': 't', 'options': OPTIONS, 'class': 'go'}
         for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
                     'a  b', 'pm kit-2', 'Kit-2'):
             with self.subTest(bad=bad):
@@ -2278,8 +2282,8 @@ class RecordRouteTest(ApiCase):
 
 class BindViews(object):
     """The record view as SiteViews gives it, for a question bound to a record: repo names match
-    without case and the record answers with the configured name; DONE-1 is completed; repo
-    `down` cannot be read."""
+    without case and the record answers with the configured name; DONE-1 is completed; RO-1 is
+    open in a store the hub cannot write (`writable` false); repo `down` cannot be read."""
 
     def __init__(self):
         self.calls = []
@@ -2292,9 +2296,12 @@ class BindViews(object):
             raise HubError('not_found', 'repo not known', 'repo')
         if id == 'bad..id':
             raise HubError('invalid', 'not a record id', 'id')
-        if id not in ('EX-1', 'EX-2', 'DONE-1'):
+        if id not in ('EX-1', 'EX-2', 'DONE-1', 'RO-1'):
             raise HubError('not_found', 'no such record', 'id')
-        return {'repo': 'kit', 'id': id, 'where': 'completed' if id == 'DONE-1' else 'open'}
+        got = {'repo': 'kit', 'id': id, 'where': 'completed' if id == 'DONE-1' else 'open'}
+        if id == 'RO-1':
+            got['writable'] = False
+        return got
 
 
 class QuestionRecordTest(ApiCase):
@@ -2341,6 +2348,18 @@ class QuestionRecordTest(ApiCase):
                 self.assertIn(says, obj['error']['message'])
         self.assertEqual(self.store.docs('questions'), {})
 
+    def test_a_record_in_a_store_the_hub_cannot_write_is_refused_on_ask_and_edit(self):
+        # its answer could never be filed (recordwrite answer: no_store), so it is never bound
+        bind = {'repo': 'kit', 'id': 'RO-1'}
+        obj = self.refused('invalid', 'record', 'POST', '/questions', AGENT,
+                           {'title': 't', 'record': bind})
+        self.assertIn('record kit:RO-1: repo kit names no backlog store the hub may write',
+                      obj['error']['message'])
+        self.assertEqual(self.store.docs('questions'), {})
+        qid = self.question()
+        self.refused('invalid', 'record', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     {'from': 'pm', 'if_version': 1, 'record': bind})
+
     def test_a_record_is_refused_when_the_server_has_no_record_view(self):
         self.api = api.Api(self.store, views=Views(), clock=CLOCK)
         obj = self.refused('unavailable', 'record', 'POST', '/questions', AGENT,
@@ -2371,7 +2390,8 @@ class QuestionRecordTest(ApiCase):
         for version, cleared in ((3, None), (4, '')):
             with self.subTest(cleared=cleared):
                 self.ok('POST', '/questions/%s/edit' % qid, AGENT,
-                        {'from': 'pm', 'if_version': version, 'record': cleared})
+                        {'from': 'pm', 'if_version': version, 'record': cleared,
+                         'class': 'go'})      # unbound, it needs a class again
                 self.assertIsNone(self.doc(qid)['record'])
         self.assertEqual(self.views.calls, [('kit', 'EX-1'), ('kit', 'EX-2')])
         self.refused('not_found', 'record', 'POST', '/questions/%s/edit' % qid, AGENT,
@@ -2400,6 +2420,82 @@ class QuestionRecordTest(ApiCase):
         self.assertEqual([f.field for f in found], ['record'])
         self.assertEqual(schema.check('questions', {'status': 'open', 'title': 't',
                                                     'record': None}), [])
+
+
+class QuestionClassTest(ApiCase):
+    """A question bound to no record declares its class (docs/action-hub.md "A question's
+    class"): rule, machine, cross-repo or go."""
+
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = BindViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def ask(self, **kw):
+        return dict({'title': 't', 'repo': 'kit', 'options': OPTIONS}, **kw)
+
+    def doc(self, qid):
+        return self.store.docs('questions')[qid]
+
+    def edit(self, qid, **kw):
+        return dict({'from': 'pm', 'if_version': self.doc(qid)['version']}, **kw)
+
+    def test_each_class_is_kept_on_the_question(self):
+        self.assertEqual(api.QUESTION_CLASSES, ('rule', 'machine', 'cross-repo', 'go'))
+        for name in api.QUESTION_CLASSES:
+            with self.subTest(name=name):
+                qid = self.ok('POST', '/questions', AGENT, self.ask(**{'class': name}))['id']
+                self.assertEqual(self.doc(qid)['class'], name)
+                self.assertNotIn('record', self.doc(qid))
+
+    def test_a_question_with_neither_a_record_nor_a_class_is_refused(self):
+        obj = self.refused('invalid', 'class', 'POST', '/questions', AGENT, self.ask())
+        self.assertIn('--record REPO:ID or --class', obj['error']['message'])
+        for bad in ('Go', 'other', '', 3, None):
+            with self.subTest(bad=bad):
+                self.refused('invalid', 'class', 'POST', '/questions', AGENT,
+                             self.ask(**{'class': bad}))
+        self.assertEqual(self.views.calls, [])
+
+    def test_a_bound_question_takes_no_class(self):
+        obj = self.refused('invalid', 'class', 'POST', '/questions', AGENT,
+                           self.ask(record={'repo': 'kit', 'id': 'EX-1'}, **{'class': 'go'}))
+        self.assertIn('bound to a record', obj['error']['message'])
+        self.assertEqual(self.views.calls, [], 'refused before the backlog is read')
+
+    def test_unbinding_needs_a_class_and_binding_drops_it(self):
+        qid = self.ok('POST', '/questions', AGENT,
+                      self.ask(record={'repo': 'kit', 'id': 'EX-1'}))['id']
+        self.refused('invalid', 'class', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     self.edit(qid, record=None))
+        self.refused('invalid', 'class', 'POST', '/questions/%s/edit' % qid, AGENT,
+                     self.edit(qid, **{'class': 'rule'}))
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                self.edit(qid, record=None, **{'class': 'rule'}))
+        self.assertEqual((self.doc(qid).get('record'), self.doc(qid)['class']), (None, 'rule'))
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT, self.edit(qid, **{'class': 'machine'}))
+        self.assertEqual(self.doc(qid)['class'], 'machine')
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                self.edit(qid, record={'repo': 'kit', 'id': 'EX-1'}))
+        self.assertEqual((self.doc(qid)['record'], self.doc(qid).get('class')),
+                         ({'repo': 'kit', 'id': 'EX-1'}, None))
+
+    def test_an_old_question_with_neither_still_takes_an_edit_of_its_text(self):
+        doc = self.store.add('questions', {'status': 'open', 'title': 'old', 'repo': 'kit',
+                                           'from': 'pm', 'options': OPTIONS})
+        qid = doc['id'] if isinstance(doc, dict) else doc.id
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT, self.edit(qid, title='older'))
+        self.assertEqual(self.doc(qid)['title'], 'older')
+
+    def test_a_pending_answer_carries_its_class(self):
+        classed = self.ok('POST', '/questions', AGENT, self.ask(**{'class': 'cross-repo'}))['id']
+        bound = self.ok('POST', '/questions', AGENT,
+                        self.ask(record={'repo': 'kit', 'id': 'EX-1'}))['id']
+        for qid in (classed, bound):
+            self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        got = {p['id']: p for p in self.ok('GET', '/pending', AGENT)['items']}
+        self.assertEqual(got[classed]['class'], 'cross-repo')
+        self.assertNotIn('class', got[bound])
 
 
 class SweepViews(BindViews):
@@ -2467,10 +2563,12 @@ class QuestionBindTest(ApiCase):
         self.assertEqual(sorted((m['record']['repo'], m['record']['id'] or '', m['why'])
                                 for m in got['misses']),
                          [('down', '', 'the repository could not be read'),
-                          ('kit', 'EX-3', 'Q-1002 is answered, not open'),
                           ('kit', 'EX-5', 'cites no question'),
                           ('kit', 'EX-6', 'Q-9999 is not a hub question')])
-        self.assertEqual((got['applied'], got['skipped'], got['failed']), (False, [], []))
+        # Q-1002 is answered, which binds now, but EX-4 cites it too
+        self.assertEqual((got['applied'], got['skipped'], got['failed']),
+                         (False, [{'question': 'Q-1002', 'why': 'cited by more than one record'}],
+                          []))
         self.assertEqual(self.views.fresh, [False])     # EX-7 cites two, on no owner block: unread
 
     def test_apply_reads_the_backlog_fresh(self):
@@ -2486,17 +2584,70 @@ class QuestionBindTest(ApiCase):
         self.assertEqual(docs['Q-1001']['record'], {'repo': 'kit', 'id': 'EX-2'})
         self.assertNotIn('record', docs['Q-1002'])
         self.assertNotIn('record', docs['Q-1003'])      # only a multi-cite record names it
+        # asked with a class, a question bound to its record drops it; one left unbound keeps it
+        self.assertEqual([docs[q].get('class') for q in ('Q-1000', 'Q-1001', 'Q-1002')],
+                         [None, None, 'go'])
         again = self.bind(apply=True)       # nothing left to do: both are bound already
         self.assertEqual((again['pairs'], [(s['question'], s['why']) for s in again['skipped']]),
                          ([], [('Q-1000', 'already bound to this record'),
-                               ('Q-1001', 'already bound to this record')]))
+                               ('Q-1001', 'already bound to this record'),
+                               ('Q-1002', 'cited by more than one record')]))
+
+    def test_apply_binds_an_answered_question_and_files_its_answer_at_once(self):
+        self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
+        filed = []
+        self.views.record_answer = lambda *a: filed.append(a[:3]) or {'lines': []}
+        dry = self.bind(apply=False)
+        self.assertEqual(dry['pairs'], [{'question': 'Q-1002', 'bound': False,
+                                         'record': {'repo': 'kit', 'id': 'EX-1'}}])
+        self.assertEqual(filed, [])
+        got = self.bind(apply=True)
+        self.assertEqual([(p['question'], p['bound'], p['filing']) for p in got['pairs']],
+                         [('Q-1002', True, {'filed': True})])
+        d = self.store.docs('questions')['Q-1002']
+        self.assertEqual((d['record'], d['status']), ({'repo': 'kit', 'id': 'EX-1'}, 'filed'))
+        self.assertEqual(filed, [('kit', 'EX-1', 'Q-1002')])
+
+    def test_an_answered_question_whose_filing_fails_is_bound_and_left_for_the_pm(self):
+        self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
+
+        def busy(*a):
+            raise HubError('store', 'C:\\work is busy', '')
+        self.views.record_answer = busy
+        got = self.bind(apply=True)
+        self.assertEqual([(p['question'], p['bound'], p['filing']) for p in got['pairs']],
+                         [('Q-1002', True, {'filed': False, 'code': 'store',
+                                            'message': api.FILING_SAYS['store']})])
+        d = self.store.docs('questions')['Q-1002']
+        self.assertEqual((d['record'], d['status'], d['filing']['code']),
+                         ({'repo': 'kit', 'id': 'EX-1'}, 'answered', 'store'))
+
+    def test_a_filing_that_moved_or_found_no_answer_says_so(self):
+        for got, want in (({'id': 'Q-1002', 'filed': False, 'moved': True},
+                           {'filed': False, 'moved': True}),
+                          (None, {'filed': False, 'unanswered': True})):
+            with self.subTest(got=got):
+                self.setUp()
+                self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
+                with mock.patch.object(api, 'file_answer', lambda *a, **kw: got):
+                    pairs = self.bind(apply=True)['pairs']
+                self.assertEqual([(p['question'], p['filing']) for p in pairs],
+                                 [('Q-1002', want)])
+
+    def test_a_question_marked_done_or_logged_is_still_a_miss(self):
+        self.views.ITEMS = [{'id': 'EX-1', 's': 'parked', 'q': 'Q-1002'}]
+        self.ok('POST', '/questions/Q-1002/done', AGENT, {'why': 'a one-off go', 'if_version': 2})
+        got = self.bind(apply=True)
+        self.assertEqual(([m['why'] for m in got['misses'] if m['record']['repo'] == 'kit'],
+                          got['pairs']), (['Q-1002 is done, not open or answered'], []))
 
     def test_a_question_a_multi_cite_record_also_cites_is_bound_to_neither(self):
         self.views.ITEMS.append({'id': 'EX-9', 's': 'parked', 'q': 'Q-1000 and Q-1004'})
         got = self.bind(apply=True)
         self.assertEqual([p['question'] for p in got['pairs']], ['Q-1001'])
         self.assertEqual([(s['question'], s['why']) for s in got['skipped']],
-                         [('Q-1000', 'cited by more than one record')])
+                         [('Q-1000', 'cited by more than one record'),
+                          ('Q-1002', 'cited by more than one record')])
         self.assertNotIn('record', self.store.docs('questions')['Q-1000'])
 
     def test_cites_come_from_blocked_on_and_the_blocked_on_body_line(self):
@@ -2522,7 +2673,8 @@ class QuestionBindTest(ApiCase):
         self.assertEqual(got['pairs'], [])
         self.assertEqual({(s['question'], s['why']) for s in got['skipped']},
                          {('Q-1000', 'bound to another record'),
-                          ('Q-1001', 'cited by more than one record')})
+                          ('Q-1001', 'cited by more than one record'),
+                          ('Q-1002', 'cited by more than one record')})
         self.assertNotIn('record', self.store.docs('questions')['Q-1001'])
 
     def test_a_record_that_fails_its_check_is_reported_and_the_rest_are_bound(self):
@@ -2983,6 +3135,8 @@ class PushStatusTest(ApiCase):
 
     def answered(self, **kw):
         body = {'title': 't', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         qid = self.ok('POST', '/questions', AGENT, body)['id']
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
@@ -4171,10 +4325,11 @@ class FilingTest(ApiCase):
         self.assertEqual(len(self.views.filed), 7, 'each retry did try the record')
         self.assertEqual(self.doc(qid), first, 'nothing written: the first `at` is kept')
         self.assertEqual(self.store.revision, revision)
-        # the version the asker read still holds for its log
-        self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': R7, 'if_version': first['version']})
-        self.assertEqual(self.doc(qid)['status'], 'logged')
+        # the version the asker read still holds, but an answer that may still file is not
+        # logged before it does (docs/action-hub.md "Filing the answer")
+        self.refused('invalid', 'filing', 'POST', '/questions/%s/log' % qid, AGENT,
+                     {'ruling': R7, 'if_version': first['version']})
+        self.assertEqual(self.doc(qid), first)
 
     def test_a_retry_that_fails_another_way_marks_the_new_failure(self):
         qid = self.bound()
@@ -4252,8 +4407,9 @@ class FilingTest(ApiCase):
         self.assertIn('the PM handles this answer', d['filing']['message'])
         self.assertEqual(self.pending(), [qid])
         self.ok('POST', '/questions/%s/log' % qid, AGENT,
-                {'ruling': R7, 'if_version': d['version']})
-        self.assertEqual(self.doc(qid)['status'], 'logged')
+                {'ruling': R7, 'if_version': d['version'], 'unfiled': 'the record is closed'})
+        self.assertEqual((self.doc(qid)['status'], self.doc(qid)['unfiled_why']),
+                         ('logged', 'the record is closed'))
         self.assertEqual(self.refile(), {'ok': True, 'filed': [], 'failed': [],
                                          'revision': self.store.revision})
         self.assertEqual(len(self.views.filed), 1, 'a logged question is never filed')
@@ -4341,6 +4497,78 @@ class FilingTest(ApiCase):
                 t.join(30)
         self.assertEqual(self.doc(qid)['status'], 'filed')
         self.assertEqual(len(said), 1)
+
+    def handle(self, qid, verb, **body):
+        """(path, role, body) of POST questions/{qid}/log (verb 'log', ruling R7) or /done
+        (why), at the question's version."""
+        body = dict({'ruling': R7} if verb == 'log' else {'why': 'handled'}, **body)
+        body['if_version'] = self.doc(qid)['version']
+        return '/questions/%s/%s' % (qid, verb), AGENT, body
+
+    def test_an_unfiled_answer_whose_filing_can_still_succeed_is_neither_logged_nor_done(self):
+        codes = []
+        for fail in (HubError('store', 'busy', ''), HubError('unavailable', 'no view', 'views'),
+                     ValueError('a bug')):
+            qid = self.bound()
+            self.views.fail = fail
+            self.answer(qid)
+            codes.append(self.doc(qid)['filing']['code'])
+            for verb in ('log', 'done'):
+                for more in ({}, {'unfiled': 'the store is busy'}):
+                    with self.subTest(code=codes[-1], verb=verb, more=more):
+                        obj = self.refused('invalid', 'filing', 'POST',
+                                           *self.handle(qid, verb, **more))
+                        self.assertIn('%s is bound to kit:EX-1 and its answer is not filed yet'
+                                      % qid, obj['error']['message'])
+                        self.assertIn('hub.py questions file %s' % qid, obj['error']['message'])
+            self.views.fail = None
+            self.assertEqual(self.refile({'id': qid})['filed'], [qid])
+            self.ok('POST', *self.handle(qid, 'done'))
+            self.assertEqual(self.doc(qid)['status'], 'done')
+        self.assertEqual(codes, ['store', 'unavailable', 'internal'])
+
+    def test_an_answer_no_filing_has_marked_yet_is_refused_too(self):
+        qid = self.bound()
+        with mock.patch.object(api, 'file_answer', side_effect=Crash):
+            with self.assertRaises(Crash):
+                self.api.call('POST', BASE + '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        self.assertIsNone(self.doc(qid).get('filing'))
+        for verb in ('log', 'done'):
+            self.refused('invalid', 'filing', 'POST', *self.handle(qid, verb))
+
+    def test_a_final_filing_failure_is_handled_only_with_unfiled_and_keeps_its_why(self):
+        for fail, verb in ((HubError('not_found', 'gone', 'id'), 'log'),
+                           (HubError('invalid', 'refused', ''), 'done'),
+                           (HubError('no_store', 'C:\\pm names no store', 'repo'), 'log')):
+            with self.subTest(code=fail.code):
+                qid = self.bound()
+                self.views.fail = fail
+                self.answer(qid)
+                self.assertEqual(self.doc(qid)['filing']['code'], fail.code)
+                obj = self.refused('invalid', 'unfiled', 'POST', *self.handle(qid, verb))
+                self.assertIn('could not be filed into kit:EX-1 (%s)' % fail.code,
+                              obj['error']['message'])
+                self.refused('invalid', 'unfiled', 'POST', *self.handle(qid, verb, unfiled=' '))
+                self.ok('POST', *self.handle(qid, verb, unfiled='  the record was closed  '))
+                d = self.doc(qid)
+                self.assertEqual((d['status'], d['unfiled_why']),
+                                 ('logged' if verb == 'log' else 'done', 'the record was closed'))
+
+    def test_unfiled_is_refused_where_no_filing_failed(self):
+        unbound = self.question()
+        self.answer(unbound)
+        filed = self.bound()
+        self.answer(filed)
+        self.assertEqual(self.doc(filed)['status'], 'filed')
+        for qid in (unbound, filed):
+            for verb in ('log', 'done'):
+                with self.subTest(qid=qid, verb=verb):
+                    obj = self.refused('invalid', 'unfiled', 'POST',
+                                       *self.handle(qid, verb, unfiled='why'))
+                    self.assertIn('only an answer whose filing failed', obj['error']['message'])
+        self.ok('POST', *self.handle(unbound, 'done'))
+        self.ok('POST', *self.handle(filed, 'log'))
+        self.assertNotIn('unfiled_why', self.doc(filed))
 
 
 class StateViews(FileViews):
@@ -4612,6 +4840,9 @@ class AnswerStoreTest(trw.Case):
         self.assertEqual(self.field('FOO', 'state'), ['open'])
         self.assertEqual(self.store.get('questions', 'Q-1000')['filed_as'], 'freed')
 
+    def test_the_record_view_says_a_named_store_is_writable(self):
+        self.assertIs(self.read('FOO')['writable'], True)
+
 
 class AnswerNoStoreTest(trw.Case):
     """An answer bound to a record of a repository whose .kit.json names no backlog store: the
@@ -4657,6 +4888,20 @@ class AnswerNoStoreTest(trw.Case):
                          [{'id': 'Q-1000', 'code': 'no_store',
                            'message': api.FILING_SAYS['no_store']}])
         self.assertEqual(self.store.get('questions', 'Q-1000')['version'], version)
+
+    def test_the_real_record_view_refuses_the_binding_when_it_is_asked(self):
+        self.seed(**rec('FOO', state='parked', q='Q-1000', parked_at='2026-10-01'))
+        root = self.repo.root
+        self.assertIs(self.read('FOO')['writable'], False)
+        self.views._backlog.record = lambda repo, rid: hbacklog.read_record('r', root, rid)
+        status, got = self.api.call('POST', BASE + '/questions', AGENT,
+                                    {'title': 'Which one?', 'options': OPTIONS,
+                                     'record': {'repo': 'r', 'id': 'FOO'}})
+        self.assertEqual((status, got['error']['code'], got['error']['field']),
+                         (400, 'invalid', 'record'), got)
+        self.assertIn('names no backlog store the hub may write', got['error']['message'])
+        self.assertNotIn(root, got['error']['message'])
+        self.assertEqual(self.store.docs('questions'), {})
 
 
 if __name__ == '__main__':

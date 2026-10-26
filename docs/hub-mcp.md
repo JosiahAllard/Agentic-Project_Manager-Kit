@@ -58,10 +58,10 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 
 | tool | arguments (required first) | endpoint |
 |---|---|---|
-| `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story`, `record` | `POST /questions` |
-| `hub_question_log` | `id`, `ruling`, `if_version`; `replace` (corrects a logged question's ruling) | `POST /questions/<id>/log` |
-| `hub_question_done` | `id`, `why`, `if_version` | `POST /questions/<id>/done` |
-| `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent`, `record` | `POST /questions/<id>/edit` |
+| `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story`, `record`, `class` | `POST /questions` |
+| `hub_question_log` | `id`, `ruling`, `if_version`; `replace` (corrects a logged question's ruling), `unfiled` | `POST /questions/<id>/log` |
+| `hub_question_done` | `id`, `why`, `if_version`; `unfiled` | `POST /questions/<id>/done` |
+| `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent`, `record`, `class` | `POST /questions/<id>/edit` |
 | `hub_question_withdraw` | `id`, `from`, `if_version` | `POST /questions/<id>/delete` |
 | `hub_todo_add` | `title`; `detail`, `commands`, `steps` ("To-do steps"), `repo`, `refs`, `urgent`, `from` | `POST /todos` |
 | `hub_todo_ack` | `id`; `if_version` | `POST /todos/<id>/ack` |
@@ -115,6 +115,11 @@ unbinds it. A `record` that is no object is refused before any call (`invalid`, 
 the hub then reads the record and refuses what it cannot bind, failing closed when it cannot read
 it (docs/action-hub.md "A question bound to a record";
 `Creator.test_a_record_is_passed_to_the_hub_as_given_and_null_unbinds`).
+
+Every question has a `record` or a `class` (`rule`, `machine`, `cross-repo` or `go`), never
+both: `hub_ask` without either is refused (`invalid`, field `class`), as is a `class` on a bound
+question; binding one with `hub_question_edit` (or `questions bind`) drops its class, and
+unbinding it needs a class in the same edit (docs/action-hub.md "A question's class").
 
 The four edit and withdraw tools change only an open item the caller added: `from` must be the
 item's own (`pm` for one with none), checked as a claim because all agents share one token

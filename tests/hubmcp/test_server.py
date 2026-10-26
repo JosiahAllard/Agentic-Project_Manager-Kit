@@ -605,6 +605,29 @@ class Creator(Case):
         self.assertIn("null unbinds",
                       srv.TOOLS["hub_question_edit"][1]["properties"]["record"]["description"])
 
+    def test_a_class_and_unfiled_are_passed_to_the_hub_as_given(self):
+        said = srv.TOOLS["hub_ask"][1]["properties"]["class"]
+        self.assertEqual(said["enum"], list(api.QUESTION_CLASSES))
+        self.assertIn("record", said["description"])
+        for name, args in (("hub_ask", {"title": "t", "class": "go"}),
+                           ("hub_question_edit", {"id": "Q-1", "from": "pm", "if_version": 2,
+                                                  "class": "rule", "record": None}),
+                           ("hub_question_log", {"id": "Q-1", "ruling": "R-1", "if_version": 2,
+                                                 "unfiled": "the record is closed"}),
+                           ("hub_question_done", {"id": "Q-1", "why": "w", "if_version": 2,
+                                                  "unfiled": "the record is closed"})):
+            with self.subTest(name=name):
+                payload, is_error = self.rpc(self.server(), name, args)
+                self.assertFalse(is_error, payload)
+                self.assertEqual(self.ask.calls[-1]["body"],
+                                 {k: v for k, v in args.items() if k != "id"})
+        calls = len(self.ask.calls)
+        payload, is_error = self.rpc(self.server(), "hub_ask", {"title": "t", "class": "other"})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                         ("invalid", "class"))
+        self.assertEqual(len(self.ask.calls), calls)
+
     def test_a_record_that_is_no_object_never_reaches_the_hub(self):
         for name, args in (("hub_ask", {"title": "t", "record": "pm:KIT-X"}),
                            ("hub_ask", {"title": "t", "record": None}),
@@ -744,7 +767,7 @@ class Live(httpfix.ListenerCase):
                               load_settings=lambda: Settings(self.lis.port, store=store))
 
     def test_an_agent_asks_lists_and_logs_through_the_listener(self):
-        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?", "class": "go",
                                                       "options": httpfix.OPTIONS})
         self.assertFalse(is_error, payload)
         doc_id = payload["id"]
@@ -761,7 +784,7 @@ class Live(httpfix.ListenerCase):
         self.assertEqual(self.errors(), [])
 
     def test_an_answered_question_is_marked_done_with_a_why_and_no_ruling(self):
-        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?", "class": "go",
                                                       "options": httpfix.OPTIONS})
         qid = payload["id"]
         payload, is_error = self.mcp.call("hub_question_done",
@@ -796,7 +819,7 @@ class Live(httpfix.ListenerCase):
         self.assertEqual(self.errors(), [])
 
     def test_the_creator_edits_and_withdraws_through_the_listener(self):
-        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?", "class": "go",
                                                       "options": httpfix.OPTIONS})
         self.assertFalse(is_error, payload)
         qid = payload["id"]
@@ -880,9 +903,10 @@ class LiveKeys(httpfix.ListenerCase):
 
     def test_a_question_comes_from_a_session_key_or_pm_only(self):
         for who in ("k-one", api.AGENT_FROM):
-            payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": who})
+            payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": who, "class": "go"})
             self.assertFalse(is_error, payload)
-        payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": "some agent"})
+        payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": "some agent",
+                                                      "class": "go"})
         self.assertTrue(is_error)
         self.assertEqual((payload["status"], payload["error"]["code"], payload["error"]["field"]),
                          (400, "invalid", "from"))

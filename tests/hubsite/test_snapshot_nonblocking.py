@@ -111,7 +111,8 @@ class SnapshotCase(unittest.TestCase):
         serve._follow_rounds(self.views_b, self.views)
         self.api = api.Api(self.store, self.views)
         status, obj = self.api.call('POST', api.BASE + '/questions', api.AGENT,
-                                    {'title': 'a question', 'repo': 'kit', 'options': OPTIONS})
+                                    {'title': 'a question', 'repo': 'kit', 'options': OPTIONS,
+                                     'class': 'go'})
         self.assertEqual(status, 200, obj)
         self.qid = obj['id']
         return dict(pairs)

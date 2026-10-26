@@ -515,7 +515,8 @@ def read_record(name, root, rid, opener=open_read):
     header line is not `key: value`), "fields" ([key, value] pairs in file order), "body",
     "blockers" ([{"value", "kind", "target"}]; target the id an `item:` names), "hold"
     ({"owner_ask", "hold_ruling", "q"}), "branch" (`branch_block`, or None), "removed" (None, or
-    {"how": closed|retired|deleted|removed, "commit", "at", "subject"})}.
+    {"how": closed|retired|deleted|removed, "commit", "at", "subject"}), "writable"
+    (`writable`)}.
 
     The branch is shown for a pulled record (its `pulled_by:`, "source" "pulled_by") and a parked
     one: its `parked_from:` when it has one, else the last `pulled_by:` its file held
@@ -570,7 +571,18 @@ def read_record(name, root, rid, opener=open_read):
             "blockers": blockers,
             "hold": {"owner_ask": rec.get("owner_ask"), "hold_ruling": rec.get("hold_ruling"),
                      "q": rec.get("q")},
-            "branch": branch, "removed": removed}
+            "branch": branch, "removed": removed, "writable": writable(root)}
+
+
+def writable(root):
+    """False when the repository at `root` names no "backlog".store in its `.kit.json`: the
+    implicit default store, which the hub's record writes refuse (kitlib.hubsite.recordwrite
+    _open), so an answer bound to its records could not be filed. True when it names one; None
+    when its `.kit.json` cannot be read."""
+    try:
+        return kconfig.load(root).written("backlog", "store") is not None
+    except Exception:               # noqa: BLE001 - the record was read: this only adds a hint
+        return None
 
 
 def record_template(name, root):

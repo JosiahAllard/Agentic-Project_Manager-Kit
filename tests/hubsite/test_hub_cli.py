@@ -1231,7 +1231,7 @@ class VerbCase(CliCase):
         return path
 
     def ask(self, title='which way'):
-        return self.ok('questions', 'add', '--title', title, '--repo', 'kit',
+        return self.ok('questions', 'add', '--title', title, '--repo', 'kit', '--class', 'go',
                        '--option', 'left::go left', '--option', 'right :: go right')
 
 
@@ -1297,10 +1297,11 @@ class PendingCase(VerbCase):
         self.assertEqual(len(want['items']), 2, want)
         self.assertEqual(json.loads('\n'.join(self.ok('pending', '--json'))), want)
         self.assertEqual(self.ok('pending'), [
-            '%s %s [%s] to=%s from=%s %s' % (i['kind'], i['id'], i['repo'] or '-', i['route'],
-                                             i['from'], i['title'])
+            '%s %s [%s] to=%s from=%s %s%s' % (i['kind'], i['id'], i['repo'] or '-', i['route'],
+                                               i['from'], 'class=%s ' % i['class']
+                                               if 'class' in i else '', i['title'])
             for i in want['items']])
-        self.assertIn('Q-1000 [kit] to=pm from=pm which way', self.ok('pending')[0])
+        self.assertIn('Q-1000 [kit] to=pm from=pm class=go which way', self.ok('pending')[0])
 
     def filed_pair(self):
         """Q-1000 answered and filed into its record (as the store holds it), Q-1001 only answered."""
@@ -1316,6 +1317,21 @@ class PendingCase(VerbCase):
         self.assertTrue(lines['Q-1000'].endswith(' which way (filed)'), lines)
         self.assertTrue(lines['Q-1001'].endswith(' other way'), lines)
 
+    def test_pending_for_pm_lists_classed_answers_apart_for_its_audit(self):
+        self.ask()
+        self.ok('questions', 'add', '--title', 'which go', '--repo', 'kit', '--class', 'go',
+                '--option', 'a::b')
+        self.hub.store.update('questions', 'Q-1000', {'class': None})   # one asked before classes
+        for qid in ('Q-1000', 'Q-1001'):
+            self.ok('answer', qid, '--choice', '0')
+        self.assertEqual(self.ok('pending', '--for', 'pm'), [
+            'question Q-1000 [kit] to=pm from=pm which way',
+            'AUDIT classed answers, no record to file into:',
+            'question Q-1001 [kit] to=pm from=pm class=go which go'])
+        self.assertEqual(self.ok('pending'), [
+            'question Q-1000 [kit] to=pm from=pm which way',
+            'question Q-1001 [kit] to=pm from=pm class=go which go'])
+
     def test_wait_pending_marks_a_filed_question(self):
         self.filed_pair()
         lines = {l.split()[3]: l for l in self.ok('wait', '--pending', '--timeout', '5')}
@@ -1327,7 +1343,8 @@ class WriteCase(VerbCase):
     def test_a_question_is_asked_answered_and_logged(self):
         context = self.file('context.md', 'the context\nof it\n')
         self.assertEqual(self.ok(
-            'questions', 'add', '--title', 'which way', '--repo', 'kit', '--context-file', context,
+            'questions', 'add', '--title', 'which way', '--repo', 'kit', '--class', 'go',
+            '--context-file', context,
             '--option', 'left::go left', '--option', 'right::go right', '--recommended', '0',
             '--refs', 'B-1', 'B-2', '--urgent', '--from', 'pm'), ['ASKED Q-1000'])
         doc = self.direct('/questions')['items'][0]
@@ -1383,7 +1400,7 @@ class WriteCase(VerbCase):
         self.assertIn('REFUSED: Q-9 is not a question', self.refused('questions', 'show', 'Q-9'))
 
     def test_questions_show_marks_the_recommended_option_and_prints_context_and_other(self):
-        self.ok('questions', 'add', '--title', 'which road', '--context-file',
+        self.ok('questions', 'add', '--title', 'which road', '--class', 'go', '--context-file',
                 self.file('context.md', 'why it matters'), '--option', 'up::go up',
                 '--option', 'down::go down', '--recommended', '1')
         out = self.ok('questions', 'show', 'Q-1000')
@@ -1506,7 +1523,7 @@ class WriteCase(VerbCase):
         self.assertEqual(len(self.direct('/todos')['items']), 1)
 
     def test_a_question_is_edited_and_withdrawn_by_its_asker(self):
-        self.ok('questions', 'add', '--title', 'which way', '--from', 'pm', '--urgent',
+        self.ok('questions', 'add', '--title', 'which way', '--from', 'pm', '--urgent', '--class', 'go',
                 '--option', 'left::go left')
         context = self.file('context.md', 'new context\n')
         self.assertEqual(self.ok('questions', 'edit', 'Q-1000', '--from', 'pm', '--if-version',
@@ -1724,6 +1741,7 @@ class DirectQuestionCase(VerbCase):
 
     def asks(self, sender, title):
         return self.ok('questions', 'add', '--title', title, '--repo', 'kit', '--from', sender,
+                       '--class', 'go',
                        '--option', 'a::b', '--option', 'c::d')[0].split()[1]
 
     def test_a_question_from_a_launcher_key_comes_back_to_it_alone(self):
@@ -1734,7 +1752,8 @@ class DirectQuestionCase(VerbCase):
         got = json.loads('\n'.join(self.ok('pending', '--json', '--for', 'kit')))
         self.assertEqual([(i['id'], i['from']) for i in got['items']], [(mine, 'kit')])
         # the PM's list holds every answered question, each to be logged, whoever asked it
-        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending', '--for', 'pm')),
+        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending', '--for', 'pm')
+                                if not line.startswith('AUDIT ')),      # the classed ones
                          sorted([mine, theirs, pms]))
         self.assertEqual(sorted(line.split()[1] for line in self.ok('pending')),
                          sorted([mine, theirs, pms]))
@@ -1749,8 +1768,8 @@ class DirectQuestionCase(VerbCase):
         kind = self.direct('/pending')['items'][0]['kind']
         # kit has never waited: the PM handles its answer too
         self.assertEqual(sorted(self.ok('pending')),
-                         sorted(['%s %s [kit] to=pm from=kit mine' % (kind, mine),
-                                 '%s %s [kit] to=pm from=pm pms' % (kind, pms)]))
+                         sorted(['%s %s [kit] to=pm from=kit class=go mine' % (kind, mine),
+                                 '%s %s [kit] to=pm from=pm class=go pms' % (kind, pms)]))
         rev = self.hub.store.revision
         self.assertEqual(self.ok('wait', '--pending', '--for', 'kit', '--timeout', '5'),
                          ['HUB %d %s %s to=kit from=kit mine' % (rev, kind, mine)])
@@ -1766,7 +1785,7 @@ class DirectQuestionCase(VerbCase):
         self.assertEqual((code, out, err), (4, '', ''))
 
     def test_a_question_from_an_unknown_key_is_refused(self):
-        err = self.refused('questions', 'add', '--title', 't', '--from', 'coordinator',
+        err = self.refused('questions', 'add', '--title', 't', '--from', 'coordinator', '--class', 'go',
                            '--option', 'a::b', '--option', 'c::d')
         self.assertTrue(err.startswith('REFUSED invalid: '), err)
         self.assertIn('known: kit, other, pm', err)
@@ -1857,7 +1876,20 @@ class RecordArgumentCase(CliCase):
         self.assertEqual(self.run_asking('questions', 'bind', '--dry-run', '--apply')[0], 2)
         self.assertEqual(self.sent, [])
         answer = {'ok': True, 'pairs': [{'question': 'Q-1000', 'bound': True,
-                                         'record': {'repo': 'kit', 'id': 'EX-1'}}],
+                                         'record': {'repo': 'kit', 'id': 'EX-1'}},
+                                        {'question': 'Q-1005', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-5'},
+                                         'filing': {'filed': True}},
+                                        {'question': 'Q-1006', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-6'},
+                                         'filing': {'filed': False, 'code': 'store',
+                                                    'message': 'busy'}},
+                                        {'question': 'Q-1007', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-7'},
+                                         'filing': {'filed': False, 'moved': True}},
+                                        {'question': 'Q-1008', 'bound': True,
+                                         'record': {'repo': 'kit', 'id': 'EX-8'},
+                                         'filing': {'filed': False, 'unanswered': True}}],
                   'failed': [{'question': 'Q-1001', 'code': 'not_found', 'message': 'gone'}],
                   'misses': [{'record': {'repo': 'kit', 'id': 'EX-3'}, 'why': 'cites no question'},
                              {'record': {'repo': 'down', 'id': None},
@@ -1870,7 +1902,11 @@ class RecordArgumentCase(CliCase):
         code, out, err = self.run_asking('questions', 'bind', '--apply')
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(out.splitlines(), [
-            'BOUND Q-1000 kit:EX-1', 'NOT BOUND Q-1001: gone (not_found)',
+            'BOUND Q-1000 kit:EX-1', 'BOUND Q-1005 kit:EX-5', 'FILED Q-1005',
+            'BOUND Q-1006 kit:EX-6', 'NOT FILED Q-1006: busy (store)',
+            'BOUND Q-1007 kit:EX-7', 'NOT FILED Q-1007: moved (filed by the answer handler)',
+            'BOUND Q-1008 kit:EX-8', 'NOT FILED Q-1008: no longer answered',
+            'NOT BOUND Q-1001: gone (not_found)',
             'MISS kit:EX-3: cites no question', 'MISS down: the repository could not be read',
             'MULTI kit:EX-4 cites Q-1002 Q-1003',
             'SKIP Q-1004: bound to another record'])
@@ -1977,6 +2013,28 @@ class ArgumentCase(CliCase):
         self.assertEqual((code, err), (0, ''), out)
         self.assertEqual(seen, [('POST', '/questions/Q-001/log',
                                  {'ruling': 'D-7', 'if_version': 4, 'replace': True})])
+        for argv, path, body in (
+                (('questions', 'add', '--title', 't', '--class', 'cross-repo'), '/questions',
+                 {'title': 't', 'class': 'cross-repo'}),
+                (('questions', 'edit', 'Q-001', '--from', 'pm', '--class', 'rule',
+                  '--no-record', '--if-version', '2'), '/questions/Q-001/edit',
+                 {'from': 'pm', 'class': 'rule', 'record': None, 'if_version': 2})):
+            with self.subTest(argv=argv):
+                (code, out, err), seen = self.sent(*argv)
+                self.assertEqual((code, err), (0, ''), out)
+                self.assertEqual(seen, [('POST', path, body)])
+        self.assertEqual(self.run_cli('questions', 'add', '--title', 't', '--class', 'other',
+                                      '--port', '8791')[0], 2)
+        for verb, more, body in (('log', ('D-7',), {'ruling': 'D-7'}),
+                                 ('done', ('--why', 'w'), {'why': 'w'})):
+            with self.subTest(verb=verb):
+                (code, out, err), seen = self.sent('questions', verb, 'Q-001', *more,
+                                                   '--unfiled', 'the record is gone',
+                                                   '--if-version', '4')
+                self.assertEqual((code, err), (0, ''), out)
+                self.assertEqual(seen, [('POST', '/questions/Q-001/' + verb,
+                                         dict(body, if_version=4,
+                                              unfiled='the record is gone'))])
         (code, out, err), seen = self.sent('stories', 'set', 'S-001', '--status', 'review',
                                            '--if-version', '0')
         self.assertEqual((code, err), (0, ''), out)
@@ -2123,7 +2181,7 @@ class ValidateCase(CliCase):
 
     def test_a_text_recommended_that_names_an_option_is_exit_0_with_its_warning(self):
         hub = self.server()
-        self.assertEqual(self.run_cli('questions', 'add', '--title', 'which way', '--option',
+        self.assertEqual(self.run_cli('questions', 'add', '--title', 'which way', '--class', 'go', '--option',
                                       'left::go left', '--option', 'right::go right',
                                       '--recommended', '0', '--port', str(hub.port))[0], 0)
         hub.close()

@@ -880,7 +880,9 @@ def hub_read_alternative(ctx):
 
 
 def hub_ask_alternative(ctx):
-    return 'python %s questions add --title "<what the owner should decide>"' % kit_tool(ctx, 'hub')
+    # a question needs a record or a class (docs/action-hub.md "A question's class")
+    return ('python %s questions add --title "<what the owner should decide>" '
+            '(--record <repo>:<id> | --class <rule|machine|cross-repo|go>)' % kit_tool(ctx, 'hub'))
 
 
 def hub_secrets_refusal(event, ctx, role, what):

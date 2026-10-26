@@ -77,7 +77,17 @@ _RECORD = {"type": "object", "description": _RECORD_SAYS,
            "properties": {"repo": {"type": "string"}, "id": {"type": "string"}},
            "required": ["repo", "id"], "additionalProperties": False}
 _RECORD_EDIT = dict(_RECORD, type=["object", "null"],
-                    description=_RECORD_SAYS + " null unbinds the question.")
+                    description=_RECORD_SAYS + " null unbinds the question (with class, unless "
+                                               "it has one).")
+_CLASS_SAYS = ("What kind of question it is, for one bound to no record (docs/action-hub.md "
+               "\"A question's class\"): rule (a standing rule, or a delegation run line), "
+               "machine, cross-repo, or go (a one-off landing or archive go). A question needs "
+               "record or class, never both: refused (invalid, field class) otherwise.")
+_UNFILED = {"type": "string", "description": "Why a question bound to a record is handled while "
+                                             "its answer could not be filed there for good "
+                                             "(not_found, invalid, no_store); stored on the "
+                                             "question. Refused (invalid, field filing) while "
+                                             "the filing can still be retried."}
 
 
 def _obj(props, required=()):
@@ -141,14 +151,14 @@ TOOLS = {
                                                                 "recommend."},
               "repo": _REPO, "from": _ASK_FROM, "refs": _REFS, "urgent": _URGENT,
               "story": {"type": "string", "description": "The story this question is about."},
-              "record": _RECORD},
+              "record": _RECORD, "class": _one_of(hubapi.QUESTION_CLASSES, _CLASS_SAYS)},
              ["title"]), "POST", "/questions", AGENT),
     "hub_question_log": (
         "Records the ruling an answered question became (POST /questions/<id>/log); the question "
         "is then logged. The ruling must be an id a ledger file holds; replace corrects the "
         "ruling of a question already logged.",
         _obj({"id": _ID, "ruling": {"type": "string", "description": "The ruling's id."},
-              "replace": {"type": "boolean"},
+              "replace": {"type": "boolean"}, "unfiled": _UNFILED,
               "if_version": _PIN}, ["id", "ruling", "if_version"]),
         "POST", "/questions/{id}/log", AGENT),
     "hub_question_done": (
@@ -158,7 +168,7 @@ TOOLS = {
         "a blank why.",
         _obj({"id": _ID, "why": {"type": "string", "description": "Why the answer needs no "
                                                                    "ruling."},
-              "if_version": _PIN}, ["id", "why", "if_version"]),
+              "unfiled": _UNFILED, "if_version": _PIN}, ["id", "why", "if_version"]),
         "POST", "/questions/{id}/done", AGENT),
     "hub_todo_add": (
         "Adds a to-do for the owner (POST /todos). An agent's open to-do needs commands or "
@@ -187,7 +197,8 @@ TOOLS = {
                           "description": "The choices: [{label, description}]."},
               "recommended": {"type": "integer", "description": "The index of the option you "
                                                                 "recommend."},
-              "refs": _REFS, "urgent": _URGENT, "record": _RECORD_EDIT},
+              "refs": _REFS, "urgent": _URGENT, "record": _RECORD_EDIT,
+              "class": _one_of(hubapi.QUESTION_CLASSES, _CLASS_SAYS)},
              ["id", "from", "if_version"]),
         "POST", "/questions/{id}/edit", AGENT),
     "hub_question_withdraw": (

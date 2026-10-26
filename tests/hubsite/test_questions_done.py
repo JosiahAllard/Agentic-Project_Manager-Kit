@@ -49,6 +49,8 @@ class DoneCase(unittest.TestCase):
 
     def answered(self, **kw):
         body = {'title': 'land kit/x?', 'repo': 'kit', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         qid = self.ok('POST', '/questions', AGENT, body)['id']
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
@@ -118,7 +120,8 @@ class DoneTest(DoneCase):
 
 class RefusedTest(DoneCase):
     def test_an_open_question_is_refused(self):
-        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS})['id']
+        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS,
+                                                    'class': 'go'})['id']
         self.refused('invalid', 'status', qid, {'why': 'w', 'if_version': self.version(qid)})
 
     def test_a_logged_question_is_refused(self):
@@ -152,6 +155,12 @@ class RefusedTest(DoneCase):
                            {'why': 'w', 'from': 'other', 'if_version': self.version(qid)})
         self.assertIn('only its asker or pm', obj['error']['message'])
         self.assertEqual(self.store.get('questions', qid), before)
+
+    def test_unfiled_is_refused_on_a_question_bound_to_no_record(self):
+        qid = self.answered()
+        obj = self.refused('invalid', 'unfiled', qid,
+                           {'why': 'w', 'unfiled': 'no record', 'if_version': self.version(qid)})
+        self.assertIn('only an answer whose filing failed', obj['error']['message'])
 
     def test_the_owner_cannot_mark_one_done(self):
         qid = self.answered()

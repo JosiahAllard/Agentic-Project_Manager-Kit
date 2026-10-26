@@ -100,16 +100,22 @@ the server alone decides what a role may do.
                                                      (the recommended marked), context, answer
                                                      and note; any status
   hub.py questions add --title T [--repo R] [--context-file F] [--option "label::description"
-        ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID]
-        [--from KEY]                                 `ASKED Q-2`, then a line for each warning;
+        ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n]
+        (--record REPO:ID | --class rule|machine|cross-repo|go) [--from KEY]
+                                                     `ASKED Q-2`, then a line for each warning;
                                                      --from: the asker's launcher session key
                                                      (default pm), refused when the hub does
                                                      not know it; --record: the open backlog
                                                      record it is about, refused unless the
-                                                     hub reads it now in that configured repo
-  hub.py questions log Q-1 <ruling id> [--replace] --if-version V   `LOGGED Q-1 <ruling id>`
-  hub.py questions done Q-1 --why TEXT --if-version V       `DONE Q-1`: an answered question
-                                                     that needs no ruling
+                                                     hub reads it now in that configured repo;
+                                                     else --class: what kind of question it is
+  hub.py questions log Q-1 <ruling id> [--replace] [--unfiled WHY] --if-version V
+                                                     `LOGGED Q-1 <ruling id>`
+  hub.py questions done Q-1 --why TEXT [--unfiled WHY] --if-version V
+                                                     `DONE Q-1`: an answered question that
+                                                     needs no ruling. A bound answer not filed
+                                                     is refused until it files; --unfiled says
+                                                     why one that never can is handled anyway
   hub.py questions file [Q-1]                       `FILED Q-1`, `NOT FILED Q-1: <why> (<code>)`
                                                      or `nothing to file`: each answer to a
                                                      question bound to a record not filed yet,
@@ -117,13 +123,16 @@ the server alone decides what a role may do.
   hub.py questions bind --dry-run | --apply          (PM) `BIND Q-1 repo:ID` per open question a
                                                      parked record's q or an owner-blocked
                                                      record cites, then `MISS`, `MULTI`, `SKIP`
-                                                     lines; --apply binds them (open questions
-                                                     only), `BOUND` / `NOT BOUND` for each
+                                                     lines; --apply binds them (open or
+                                                     answered questions), `BOUND` / `NOT BOUND`
+                                                     for each, and files an answered one at
+                                                     once: `FILED` / `NOT FILED Q-1: <why>`
   hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
         [--option "label::description" ...] [--recommended N] [--refs ID ...]
-        [--urgent | --no-urgent] [--record REPO:ID | --no-record]
+        [--urgent | --no-urgent] [--record REPO:ID | --no-record] [--class C]
                                                      `EDITED Q-1`; an --option list replaces
-                                                     the old one; --no-record unbinds it
+                                                     the old one; --no-record unbinds it (with
+                                                     --class unless it has one)
   hub.py questions withdraw Q-1 --from KEY --if-version V    `WITHDRAWN Q-1`
                                                      edit and withdraw: an open question whose
                                                      from is KEY (pm when it has none)
@@ -191,7 +200,9 @@ the server alone decides what a role may do.
                                                      when its creator K cannot be reached);
                                                      --for KEY: only the items for session KEY
                                                      (--for pm: the ones routed to the PM and
-                                                     every answered question)
+                                                     every answered question, the classed
+                                                     answers last, after an `AUDIT` line);
+                                                     class=C on a classed question
   hub.py wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID...]]
       waits until the store changes after revision REV (default: the revision at the call), or,
       with --pending, until an item is pending (one that is pending already ends it at once);
@@ -331,6 +342,18 @@ def _bind_lines(got):
     for p in got.get('pairs') or []:
         word = 'BOUND' if p.get('bound') else 'BIND'
         lines.append('%s %s %s' % (word, p.get('question'), named(p.get('record'))))
+        f = p.get('filing')
+        if not isinstance(f, dict):
+            continue
+        if f.get('filed'):
+            lines.append('FILED %s' % p.get('question'))
+        elif f.get('moved'):
+            lines.append('NOT FILED %s: moved (filed by the answer handler)' % p.get('question'))
+        elif f.get('unanswered'):
+            lines.append('NOT FILED %s: no longer answered' % p.get('question'))
+        else:
+            lines.append('NOT FILED %s: %s (%s)' % (p.get('question'), f.get('message'),
+                                                    f.get('code')))
     lines += ['NOT BOUND %s: %s (%s)' % (f.get('question'), f.get('message'), f.get('code'))
               for f in got.get('failed') or []]
     lines += ['MISS %s: %s' % (named(m.get('record')), m.get('why'))
@@ -339,6 +362,20 @@ def _bind_lines(got):
               for m in got.get('multi') or []]
     lines += ['SKIP %s: %s' % (s.get('question'), s.get('why')) for s in got.get('skipped') or []]
     return lines or ['nothing to bind']
+
+
+def _question_class(x, what):
+    """--class on questions add and edit (docs/action-hub.md "A question's class")."""
+    x.add_argument('--class', dest='question_class', choices=api.QUESTION_CLASSES,
+                   help=what + ': rule (a standing rule or a delegation run line), machine, '
+                        'cross-repo or go (a one-off landing or archive go)')
+
+
+def _unfiled(x):
+    """--unfiled on questions log and done (docs/action-hub.md "Filing the answer")."""
+    x.add_argument('--unfiled', metavar='WHY',
+                   help='why an answer whose filing into its record failed for good (not '
+                        'found, invalid, no store) is handled without it')
 
 
 def _asks(p):
@@ -411,6 +448,7 @@ def _client_verbs(sub):
     x.add_argument('--story', metavar='S-n')
     x.add_argument('--record', type=_record, metavar='REPO:ID',
                    help='the backlog record the question is about (checked by the hub)')
+    _question_class(x, 'with no --record: what kind of question it is')
     x.add_argument('--from', dest='who', metavar='KEY',
                    help='your launcher session key: the answer comes back to it (default: pm)')
     x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
@@ -418,15 +456,18 @@ def _client_verbs(sub):
     x.add_argument('ruling', metavar='ruling-id')
     x.add_argument('--replace', action='store_true',
                    help='correct the ruling of a question already logged')
+    _unfiled(x)
     _pins(x, required=True)
     x = _leaf(q, 'done', 'mark an answered question handled with no ruling (a one-off go)')
     x.add_argument('id')
     x.add_argument('--why', required=True, help='why the answer needs no ruling')
+    _unfiled(x)
     _pins(x, required=True)
     x = _leaf(q, 'file', 'file each answer to a question bound to a record that is not filed '
               'yet into its record (the hub does at once and at start)')
     x.add_argument('id', nargs='?', help='only this question')
-    x = _leaf(q, 'bind', 'bind open questions to the records that cite them (the PM)')
+    x = _leaf(q, 'bind', 'bind open or answered questions to the records that cite them, '
+              'filing an answered one at once (the PM)')
     mode = x.add_mutually_exclusive_group(required=True)
     mode.add_argument('--dry-run', dest='dry_run', action='store_true',
                       help='list what would be bound, and what cannot be')
@@ -448,6 +489,7 @@ def _client_verbs(sub):
                       help='bind the question to this backlog record (checked by the hub)')
     bind.add_argument('--no-record', dest='no_record', action='store_true',
                       help='bind the question to no record')
+    _question_class(x, 'the class of a question bound to no record')
     _creator(_leaf(q, 'withdraw', 'remove an open question you asked'), 'KEY')
 
     x = _asks(sub.add_parser('answer', help='answer a question (the owner)'))
@@ -1051,17 +1093,21 @@ def _questions(a, stop):
         got = hub.post('/questions', client.AGENT, _body(
             title=a.title, repo=getattr(a, 'repo', None), context=context, options=a.options,
             recommended=a.recommended, refs=a.refs, urgent=a.urgent, story=a.story,
-            record=a.record, **{'from': a.who}))
+            record=a.record, **{'from': a.who, 'class': a.question_class}))
         return _wrote(a, got, 'ASKED %s' % got.get('id'))
     if a.sub == 'log':
         body = {'ruling': a.ruling, 'if_version': a.if_version}
         if a.replace:
             body['replace'] = True      # sent only when asked: a hub not yet restarted refuses unknown fields
+        if a.unfiled is not None:
+            body['unfiled'] = a.unfiled
         got = hub.post(_one('questions', a) + '/log', client.AGENT, body)
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
     if a.sub == 'done':
-        got = hub.post(_one('questions', a) + '/done', client.AGENT,
-                       {'why': a.why, 'if_version': a.if_version})
+        body = {'why': a.why, 'if_version': a.if_version}
+        if a.unfiled is not None:
+            body['unfiled'] = a.unfiled     # sent only when asked, as --replace is
+        got = hub.post(_one('questions', a) + '/done', client.AGENT, body)
         return _wrote(a, got, 'DONE %s' % got.get('id'))
     if a.sub == 'file':
         got = hub.post('/questions/file', client.AGENT, _body(id=a.id))
@@ -1075,7 +1121,8 @@ def _questions(a, stop):
     if a.sub == 'edit':
         context = _text_of(a.context_file, 'context') if a.context_file else None
         body = _body(title=a.title, context=context, options=a.options,
-                     recommended=a.recommended, refs=a.refs, record=a.record)
+                     recommended=a.recommended, refs=a.refs, record=a.record,
+                     **{'class': a.question_class})
         if a.no_record:
             body['record'] = None
         got = hub.post(_one('questions', a) + '/edit', client.AGENT, _edits(a, body))
@@ -1293,9 +1340,21 @@ def _title(p):
 
 def _pending(a, stop):
     got = _hub(a).get('/pending', client.ANY, {'for': a.for_key})
-    return _show(a, got, ['%s %s [%s] %s %s' % (p.get('kind'), p.get('id'), p.get('repo') or '-',
-                                                 _routed(p), _title(p))
-                          for p in got.get('items') or []])
+    items = got.get('items') or []
+    lines = [_pending_line(p) for p in items]
+    classed = [p for p in items if p.get('class')]
+    if a.for_key == api.AGENT_FROM and classed:
+        # the PM's audit: an answer with a class has no record to be filed into
+        lines = ([_pending_line(p) for p in items if not p.get('class')]
+                 + ['AUDIT classed answers, no record to file into:']
+                 + [_pending_line(p) for p in classed])
+    return _show(a, got, lines)
+
+
+def _pending_line(p):
+    """`<kind> <id> [repo] to=R from=K [class=C] title` of pending item p."""
+    return '%s %s [%s] %s %s%s' % (p.get('kind'), p.get('id'), p.get('repo') or '-', _routed(p),
+                                   'class=%s ' % p['class'] if p.get('class') else '', _title(p))
 
 
 def _wait(a, stop):

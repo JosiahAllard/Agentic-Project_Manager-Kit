@@ -53,6 +53,8 @@ class DirectCase(unittest.TestCase):
 
     def ask(self, **kw):
         body = {'title': 't', 'repo': 'kit', 'options': OPTIONS}
+        if 'record' not in kw:
+            body['class'] = 'go'            # a question needs a record or a class
         body.update(kw)
         return self.ok('POST', '/questions', AGENT, body)['id']
 
@@ -82,7 +84,8 @@ class FromTest(DirectCase):
         for who in ('coordinator', 'Kit', 'you', 'kitx'):
             with self.subTest(who=who):
                 obj = self.refused('from', 'POST', '/questions', AGENT,
-                                   {'title': 't', 'options': OPTIONS, 'from': who})
+                                   {'title': 't', 'options': OPTIONS, 'from': who,
+                                    'class': 'go'})
                 said = obj['error']['message']
                 self.assertIn('not a session the hub knows', said)
                 self.assertIn('kit, pm, zeta', said)
@@ -91,7 +94,7 @@ class FromTest(DirectCase):
 
     def test_the_session_keys_are_read_afresh_on_each_add(self):
         self.refused('from', 'POST', '/questions', AGENT,
-                     {'title': 't', 'options': OPTIONS, 'from': 'newrepo'})
+                     {'title': 't', 'options': OPTIONS, 'from': 'newrepo', 'class': 'go'})
         self.keys.add('newrepo')
         qid = self.ask(**{'from': 'newrepo'})
         self.assertEqual(self.store.get('questions', qid)['from'], 'newrepo')
@@ -101,7 +104,7 @@ class FromTest(DirectCase):
             raise OSError(r'C:\secret\sessions.json is locked')
         self.api = api.Api(self.store, clock=CLOCK, session_keys=broken)
         obj = self.refused('from', 'POST', '/questions', AGENT,
-                           {'title': 't', 'options': OPTIONS, 'from': 'kit'})
+                           {'title': 't', 'options': OPTIONS, 'from': 'kit', 'class': 'go'})
         self.assertNotIn('secret', obj['error']['message'])
         self.assertIn('known: pm)', obj['error']['message'])
         qid = self.ask(**{'from': 'pm'})

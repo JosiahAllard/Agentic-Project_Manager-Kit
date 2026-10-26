@@ -35,7 +35,7 @@ class LauncherKeysCase(unittest.TestCase):
     def ask(self, who):
         return api.Api(self.store, clock=CLOCK, session_keys=api.launcher_keys).call(
             'POST', BASE + '/questions', AGENT,
-            {'title': 't', 'options': OPTIONS, 'from': who})
+            {'title': 't', 'options': OPTIONS, 'from': who, 'class': 'go'})
 
     def test_the_keys_are_read_when_the_launcher_can_no_longer_be_imported(self):
         with mock.patch.object(lsettings, 'load', lambda home=None: object()), \

@@ -277,7 +277,8 @@ ends it at once the same way. A connection dropped mid-request still ends it wit
 The PM reads and writes the hub only through `tools/hub.py` or the hub MCP server (docs/hub-mcp.md),
 both with the agent's token. A coordinator writes only its own questions: it posts each with
 `hub.py questions add --from <its launcher session key>` (the `hub key:` line of its session-start
-context, `kitlib.coordinatorstart.hub_key`), reads `hub.py pending --for <its key>` once at start,
+context, `kitlib.coordinatorstart.hub_key`) and `--record REPO:ID` or `--class C` ("A question's
+class"), reads `hub.py pending --for <its key>` once at start,
 runs no background wait (the hub pushes the answer, "Push notifications"), and acts on the answer
 itself when it comes. A to-do for its
 own work it files with `hub.py todos add --from <its key>`, and acknowledges it (`todos ack`) once
@@ -301,12 +302,12 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 |---|---|
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
 | `questions show Q-1 [--json]` | the `Q-1 v2 answered [repo] title` line, then its options (the recommended one marked), context, answer and note |
-| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--record REPO:ID] [--from KEY]` | `ASKED Q-2`, then any warning lines |
-| `questions log Q-1 <ruling id> [--replace] --if-version V` | `LOGGED Q-1 <ruling id>` |
-| `questions done Q-1 --why TEXT --if-version V` | `DONE Q-1` |
+| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] (--record REPO:ID \| --class rule\|machine\|cross-repo\|go) [--from KEY]` | `ASKED Q-2`, then any warning lines |
+| `questions log Q-1 <ruling id> [--replace] [--unfiled WHY] --if-version V` | `LOGGED Q-1 <ruling id>` |
+| `questions done Q-1 --why TEXT [--unfiled WHY] --if-version V` | `DONE Q-1` |
 | `questions file [Q-1]` | `FILED Q-1` and `NOT FILED Q-2: <why> (<code>)` lines, or `nothing to file` ("Filing the answer") |
-| `questions bind --dry-run \| --apply` (PM) | `BIND Q-1 repo:ID` (dry run) or `BOUND Q-1 repo:ID` lines, `NOT BOUND Q-1: <why> (<code>)` for a pair that failed, then `MISS repo:ID: <why>` (`MISS repo: <why>` when the whole repository could not be read), `MULTI repo:ID cites Q-1 Q-2`, `SKIP Q-1: <why>`, or `nothing to bind` ("Binding the open questions") |
-| `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent] [--record REPO:ID \| --no-record]` | `EDITED Q-1` |
+| `questions bind --dry-run \| --apply` (PM) | `BIND Q-1 repo:ID` (dry run) or `BOUND Q-1 repo:ID` lines (each answered one followed by `FILED Q-1` or `NOT FILED Q-1: <why> (<code>)`), `NOT BOUND Q-1: <why> (<code>)` for a pair that failed, then `MISS repo:ID: <why>` (`MISS repo: <why>` when the whole repository could not be read), `MULTI repo:ID cites Q-1 Q-2`, `SKIP Q-1: <why>`, or `nothing to bind` ("Binding the open questions") |
+| `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent] [--record REPO:ID \| --no-record] [--class C]` | `EDITED Q-1` |
 | `questions withdraw Q-1 --from KEY --if-version V` | `WITHDRAWN Q-1` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
 | `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
@@ -327,7 +328,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `inbox` | `M-1 unread [repo] title` |
 | `inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...] [--from NAME]` | `POSTED M-2` |
 | `inbox read M-1 [--undo] [--if-version V]` (owner) | `READ M-1` or `UNREAD M-1` |
-| `pending [--for KEY]` | `<kind> <id> [repo] to=<route> from=<key> title` |
+| `pending [--for KEY]` | `<kind> <id> [repo] to=<route> from=<key> [class=C] title`; with `--for pm` the classed answers come last, after an `AUDIT classed answers, no record to file into:` line ("A question's class") |
 | `wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID ...]]` | `HUB <rev> <kind> <id> to=<route> from=<key> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
 | `validate [--store PATH]` | `VALIDATE <LEVEL> <document> <field>: <message> [<code>]` |
 | `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]` | see "Serving it" |
@@ -564,11 +565,28 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 | answer | owner | `{choice: index or "other", label, note, at}` |
 | ruling | PM | the ruling id it was logged as |
 | done_why, done_at | PM | why the answer needed no ruling, and when it was marked done (ISO time) |
+| unfiled_why | PM | why an answer whose filing failed for good was logged or marked done anyway ("Filing the answer") |
 | record | PM, coordinator | `{repo, id}`: the backlog record the question is about; absent or null on an unbound question (every question asked before the field existed reads so) |
+| class | PM, coordinator | `rule`, `machine`, `cross-repo` or `go`: what kind of question one bound to no record is ("A question's class"); absent or null on a bound question and on one asked before the field existed |
 | filing | hub | `{at, code, message}`: why the last filing of the answer failed; null once filed or answered again |
 | filed_at | hub | when the answer was filed into the record (ISO time); null after a re-answer |
 | filed_as | hub | what the filing did to the record: `pulled`, `freed`, `held`, or null when the record's state could not be read; null after a re-answer ("Filing the answer") |
 | standing | owner | `{at, via}`: the owner made the answer a standing rule, for the PM to log ("A standing rule"); null after a re-answer without the box |
+
+### A question's class
+A question is asked with `record` (below) or with `class`, never both and never neither
+(`questions add --class C`, MCP `hub_ask` `class`; `kitlib.hubsite.api` `QUESTION_CLASSES`,
+`_class`): `rule` (a standing rule, a delegation run line included), `machine` (this machine),
+`cross-repo` (work across repositories) or `go` (a one-off landing or archive go). Either is
+refused `invalid`, field `class`, before any backlog is read. An edit that unbinds a question
+(`--no-record`, a null `record`) needs `class` too unless it has one; an edit that binds one
+drops its class; `class` on a question that stays bound is refused. A question asked before the
+field existed has neither and still takes an edit of anything else. `GET /pending` carries `class`
+on a classed, unbound question, and `hub.py pending --for pm` lists those answers apart, after an
+`AUDIT` line: they have no record to be filed into, so the PM audits each when it logs it or marks
+it done. The page shows a `class: C` chip on the card. Tests: tests/hubsite/test_api.py
+`QuestionClassTest`, tests/hubsite/test_hub_cli.py `PendingCase`, tests/hubsite/test_page.py
+`DomTest`, tests/hubmcp/test_server.py `Creator`.
 
 ### A question bound to a record
 `record` is given when the question is asked (`questions add --record REPO:ID`, MCP `hub_ask`
@@ -578,8 +596,10 @@ uses (`kitlib.hubsite.backlog` `Views.record`: the configured repositories only,
 fetch), and stores `repo` as the configured name. The kit's own records are repo `pm`. Each of
 these is refused, field `record`, and nothing is written (`kitlib.hubsite.api` `_bound`):
 - `invalid`: a `record` that is not exactly `{repo, id}` with two non-blank strings, a name that
-  can be no repository or record id, or a record that is completed (closed, retired or taken out
-  of the store);
+  can be no repository or record id, a record that is completed (closed, retired or taken out
+  of the store), or one in a repository whose `.kit.json` names no `"backlog".store` (the record
+  view's `writable` false, `kitlib.hubsite.backlog` `writable`): its answer could never be filed
+  ("Filing the answer", `no_store`), so it is asked unbound;
 - `not_found`: a repo the hub has not configured, or an id that repo's backlog does not have;
 - `unavailable`: a record the hub cannot check (a server with no backlog views, no checkout of the
   repo on this machine, a store that cannot be read). It fails closed: an answer is meant to be
@@ -597,11 +617,16 @@ repository's backlog (`--apply` reads it fresh, a fetch round; `--dry-run` the h
 not to fetch for a look): a parked record's `q:` line, and an owner-blocked record's `owner_ask`,
 `q`, `blocked_on` and `Blocked on` lines, each give the Q-nnn they cite (Q-012 is Q-12). A record
 citing one open hub question is a pair. It answers `{pairs, misses, multi, skipped, failed}`: a
-`miss` is a record whose question is not in the hub or is not open (an answered or closed question
-is never bound), a parked record citing none, or a repository or record that could not be read;
-`multi` are records citing several questions, left alone; `skipped` is a question already bound or
-cited by two records. `--dry-run` writes nothing; `--apply` sets `record` on each pair's open,
-unbound question, checked as `_bound` checks it (a failure is in `failed`). Tests:
+`miss` is a record whose question is not in the hub or is neither open nor answered (a filed,
+logged or done question is never bound), a parked record citing none, or a repository or record
+that could not be read; `multi` are records citing several questions, left alone; `skipped` is a
+question already bound or cited by two records. `--dry-run` writes nothing; `--apply` sets
+`record` on each pair's open or answered, unbound question, checked as `_bound` checks it (a
+failure is in `failed`), and files an answered one at once (`file_answer`), its pair carrying
+`filing` `{filed, code, message}` (`FILED Q-1` or `NOT FILED Q-1: <why> (<code>)`), `{filed:
+false, moved: true}` when the answer handler filed it first (`NOT FILED Q-1: moved (filed by the
+answer handler)`), or `{filed: false, unanswered: true}` when it was no longer answered (`NOT
+FILED Q-1: no longer answered`). Tests:
 tests/hubsite/test_api.py `QuestionBindTest`.
 
 #### Filing the answer
@@ -655,7 +680,15 @@ filing failed with. A crash after step 1 or after step 2 is mended there. The an
 own answer carries `filing` (`{id, filed, version, revision}`, `{id, filed: false, code,
 message}`, or `{id, filed: false, moved: true}`), and its
 `status`, `version` and `revision` are those of the last write. An unbound question is never
-filed: the PM logs it as before. Tests: tests/hubsite/test_api.py `FilingTest`,
+filed: the PM logs it as before.
+
+An answered, bound question not filed is neither logged nor marked done (`questions log`,
+`questions done`, `kitlib.hubsite.api` `_unfiled`): while its last code may still file (every
+code outside the final set, such as `store`, `unavailable` and `internal`, or no filing yet) both
+are refused `invalid`, field `filing`: file it first. For a final code (`not_found`, `invalid`, `no_store`, `FINAL_FILING`) they need
+`--unfiled "<why>"` (body `unfiled`), refused `invalid`, field `unfiled`, when absent or blank; the
+why is kept as `unfiled_why`. `unfiled` on any other question is refused the same way. Tests:
+tests/hubsite/test_api.py `FilingTest`,
 `AnswerStoreTest`, `AnswerNoStoreTest`, `FiledAsTest`; tests/hubsite/test_record_write.py
 `Answer`; tests/hubsite/test_push.py `AckTest`; tests/delegations/test_run.py `HubTrigger`.
 

@@ -155,7 +155,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - The owner does not watch your window. A question for the owner, and a command for the owner
   to run for your own work, you post on the Action Hub yourself and act on its answer yourself
   (skill `hub-ops`: questions, to-dos, pages; you run no background hub wait, the hub pushes the
-  answers to you). A question about one of your records is asked with `--record <repo>:<ID>`
+  answers to you). Every question is asked with `--record <repo>:<ID>` or `--class <C>` (skill
+  hub-ops). A question about one of your records is asked with `--record <repo>:<ID>`
   and the record parked on it (`set-status <ID> parked --q <Q-id>`, skill backlog-ops); then move
   on, with no relay to the PM. The hub files the answer into the record and ends the park; take
   the item up from the record and mark the question done (skill hub-ops). Anything else that needs the owner (a typed go, a
