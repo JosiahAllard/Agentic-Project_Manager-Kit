@@ -1,15 +1,15 @@
 """The Win32 bindings kitlib.proc and kitlib.lock share: one kernel32, ntdll and advapi32 instance
 each, with every prototype set once (two modules setting different argtypes on one function was a
 hazard of the four copies this replaces: machine_lock, winproc, pid_shield, pytests).
-Windows only, standard library only.
+Windows only, standard library only. Each DLL is a kitlib.platform.dll.LazyDLL: it loads, and
+each function gets its prototype below, when that function is first used, so this module imports
+on any platform (docs/linux-support-plan.md section 2.1, rule 3) and a call off Windows raises
+PlatformUnsupported.
 """
 import ctypes
 from ctypes import wintypes
 
-K32 = ctypes.WinDLL("kernel32", use_last_error=True)
-NTDLL = ctypes.WinDLL("ntdll")
-ADV = ctypes.WinDLL("advapi32", use_last_error=True)
-IPHLP = ctypes.WinDLL("iphlpapi")             # GetExtendedTcpTable returns its error code
+from kitlib.platform.dll import LazyDLL
 
 H, DW, BOOL = wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL
 
@@ -123,7 +123,7 @@ def pid_list(n):
         "_fields_": [("assigned", DW), ("listed", DW), ("ids", ctypes.c_size_t * n)]})()
 
 
-for _n, _r, _a in (
+K32_PROTOTYPES = {_n: (_r, _a) for _n, _r, _a in (
         ("CreateMutexW", H, (wintypes.LPVOID, BOOL, wintypes.LPCWSTR)),
         ("OpenMutexW", H, (DW, BOOL, wintypes.LPCWSTR)),
         ("ReleaseMutex", BOOL, (H,)),
@@ -156,20 +156,20 @@ for _n, _r, _a in (
         ("GetSystemCpuSetInformation", BOOL, (wintypes.LPVOID, wintypes.ULONG,
                                               ctypes.POINTER(wintypes.ULONG), H, wintypes.ULONG)),
         ("SetProcessAffinityMask", BOOL, (H, ctypes.c_size_t)),
-        ("SetProcessDefaultCpuSets", BOOL, (H, ctypes.POINTER(wintypes.ULONG), wintypes.ULONG))):
-    getattr(K32, _n).restype, getattr(K32, _n).argtypes = _r, _a
+        ("SetProcessDefaultCpuSets", BOOL, (H, ctypes.POINTER(wintypes.ULONG), wintypes.ULONG)))}
+K32 = LazyDLL("kernel32", K32_PROTOTYPES, use_last_error=True)
 
-NTDLL.NtResumeProcess.restype, NTDLL.NtResumeProcess.argtypes = ctypes.c_long, (H,)
-NTDLL.NtQueryInformationProcess.restype = ctypes.c_long
-NTDLL.NtQueryInformationProcess.argtypes = (H, ctypes.c_int, wintypes.LPVOID, wintypes.ULONG,
-                                            ctypes.POINTER(wintypes.ULONG))
+NTDLL = LazyDLL("ntdll", {
+    "NtResumeProcess": (ctypes.c_long, (H,)),
+    "NtQueryInformationProcess": (ctypes.c_long, (H, ctypes.c_int, wintypes.LPVOID, wintypes.ULONG,
+                                                  ctypes.POINTER(wintypes.ULONG)))})
 PROCESS_COMMAND_LINE_INFORMATION = 60       # Windows 8.1+: a UNICODE_STRING and its text
 PROCESS_BASIC_INFORMATION_CLASS = 0         # PROCESS_BASIC_INFORMATION (below)
 
 # The TCP connection table with each row's owning pid (kitlib.proc.tcp)
-IPHLP.GetExtendedTcpTable.restype = DW
-IPHLP.GetExtendedTcpTable.argtypes = (wintypes.LPVOID, ctypes.POINTER(DW), BOOL, wintypes.ULONG,
-                                      ctypes.c_int, wintypes.ULONG)
+IPHLP = LazyDLL("iphlpapi", {                # GetExtendedTcpTable returns its error code
+    "GetExtendedTcpTable": (DW, (wintypes.LPVOID, ctypes.POINTER(DW), BOOL, wintypes.ULONG,
+                                 ctypes.c_int, wintypes.ULONG))})
 AF_INET, AF_INET6 = 2, 23
 TCP_TABLE_OWNER_PID_ALL = 5
 MIB_TCP_STATE_ESTAB = 5
@@ -187,22 +187,21 @@ class PROCESS_BASIC_INFORMATION(ctypes.Structure):
                 ("InheritedFromUniqueProcessId", ctypes.c_size_t)]
 
 
-ADV.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = BOOL
-ADV.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (
-    wintypes.LPCWSTR, DW, ctypes.POINTER(wintypes.LPVOID), wintypes.LPVOID)
-ADV.OpenSCManagerW.restype, ADV.OpenSCManagerW.argtypes = H, (wintypes.LPCWSTR, wintypes.LPCWSTR, DW)
-ADV.OpenServiceW.restype, ADV.OpenServiceW.argtypes = H, (H, wintypes.LPCWSTR, DW)
-ADV.CloseServiceHandle.restype, ADV.CloseServiceHandle.argtypes = BOOL, (H,)
-ADV.GetSecurityInfo.restype, ADV.GetSecurityInfo.argtypes = DW, (
-    H, ctypes.c_int, DW, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
-    ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))
-ADV.SetSecurityInfo.restype, ADV.SetSecurityInfo.argtypes = DW, (
-    H, ctypes.c_int, DW, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-ADV.CreateWellKnownSid.restype, ADV.CreateWellKnownSid.argtypes = BOOL, (
-    ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(DW))
-ADV.SetEntriesInAclW.restype, ADV.SetEntriesInAclW.argtypes = DW, (
-    wintypes.ULONG, ctypes.POINTER(EXPLICIT_ACCESS_W), ctypes.c_void_p,
-    ctypes.POINTER(ctypes.c_void_p))
+ADV = LazyDLL("advapi32", {
+    "ConvertStringSecurityDescriptorToSecurityDescriptorW": (BOOL, (
+        wintypes.LPCWSTR, DW, ctypes.POINTER(wintypes.LPVOID), wintypes.LPVOID)),
+    "OpenSCManagerW": (H, (wintypes.LPCWSTR, wintypes.LPCWSTR, DW)),
+    "OpenServiceW": (H, (H, wintypes.LPCWSTR, DW)),
+    "CloseServiceHandle": (BOOL, (H,)),
+    "GetSecurityInfo": (DW, (
+        H, ctypes.c_int, DW, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))),
+    "SetSecurityInfo": (DW, (
+        H, ctypes.c_int, DW, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)),
+    "CreateWellKnownSid": (BOOL, (ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(DW))),
+    "SetEntriesInAclW": (DW, (
+        wintypes.ULONG, ctypes.POINTER(EXPLICIT_ACCESS_W), ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p)))}, use_last_error=True)
 
 
 def last_error():
