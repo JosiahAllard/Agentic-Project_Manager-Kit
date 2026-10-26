@@ -242,9 +242,10 @@ class SetupAutostartCli(CliCase):
         self.assertEqual(calls, [(os.path.abspath(HUB.__file__), True)])
         self.assertFalse(os.path.exists(self.tokens))
 
+    @mock.patch('kitlib.platform.NAME', 'windows')
     def test_the_real_whatif_from_this_checkout_prints_the_task(self):
-        # install(run=spawn.run) binds spawn.run at import, so patching autostart.spawn.run would
-        # not reach it; spawn.run looks subprocess.run up at call time, so patch that.
+        # The Windows form, on every platform. A real install would run spawn.run, which calls
+        # subprocess.run; patching subprocess.run catches any real call, from whichever caller.
         with mock.patch('subprocess.run') as run:
             code, out, err = self.run_cli('setup', '--autostart', '--whatif')
         self.assertEqual((code, err), (0, ''))

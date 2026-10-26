@@ -292,6 +292,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("-n 'alpha-coord-a2'", out)
 
+    @mock.patch('kitlib.platform.NAME', 'windows')    # the Linux branch would install a real job
     def test_install_autostart_what_if_with_no_pythonw_exits_1_as_the_install_does(self):
         d = tempfile.mkdtemp(prefix='kit-autostart-')                  # empty: no pythonw.exe
         self.addCleanup(shutil.rmtree, d, True)

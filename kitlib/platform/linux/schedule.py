@@ -229,6 +229,12 @@ def _sd_unescape(text):
     return text.replace('%%', '%').replace('$$', '$')
 
 
+def _sd_pct(text):
+    """A value systemd expands specifiers in but no $ variables (WorkingDirectory=,
+    Description=): only % doubled."""
+    return text.replace('%', '%%')
+
+
 def exec_line(argv):
     """ExecStart's value: each word double-quoted, \\ and " escaped, % and $ doubled."""
     return ' '.join('"%s"' % _sd_escape(a).replace('\\', '\\\\').replace('"', '\\"') for a in argv)
@@ -246,9 +252,9 @@ def service_text(job):
     kind = job.when[0]
     timed = kind in ('daily', 'every')
     lines = [MARK + job.name, '[Unit]',
-             'Description=%s' % _sd_escape(job.description or 'pm-kit job %s' % job.name), '',
+             'Description=%s' % _sd_pct(job.description or 'pm-kit job %s' % job.name), '',
              '[Service]', 'Type=%s' % ('oneshot' if timed else 'simple'),
-             'WorkingDirectory=%s' % _sd_escape(job.workdir),
+             'WorkingDirectory=%s' % _sd_pct(job.workdir),
              'ExecStart=%s' % exec_line(job.argv)]
     if timed:
         lines.append('TimeoutStartSec=%s' % ('%dmin' % job.limit_min if job.limit_min else 'infinity'))
@@ -266,7 +272,7 @@ def timer_text(job):
     else:
         timing = ['OnCalendar=*:0/%d' % value]
     return '\n'.join([MARK + job.name, '[Unit]',
-                      'Description=%s' % _sd_escape(job.description or 'pm-kit job %s' % job.name),
+                      'Description=%s' % _sd_pct(job.description or 'pm-kit job %s' % job.name),
                       '', '[Timer]'] + timing + ['', '[Install]', 'WantedBy=timers.target']) + '\n'
 
 
@@ -288,7 +294,11 @@ def enabled_unit(job):
 
 def cron_line(job):
     """The crontab line: the schedule, `cd <folder> &&`, timeout(1) when the job has a limit, the
-    command shell-quoted with % escaped (cron's newline), output dropped, then the marker."""
+    command shell-quoted with % escaped (cron's newline), output dropped, then the marker. cron
+    takes a backslash before a backslash as that backslash's escape, which leaves the % after
+    them bare, so an argument's backslash just before a % is first parted from it with '' (it is
+    inside a shlex.quote'd single-quoted word, where '' closes and reopens the quote and adds
+    nothing)."""
     kind = job.when[0]
     if kind == 'daily':
         h, m = job.when[1].split(':')
@@ -303,7 +313,8 @@ def cron_line(job):
              if job.limit_min else [])
     command = 'cd %s && %s >/dev/null 2>&1' % (shlex.quote(job.workdir),
                                                ' '.join(shlex.quote(a) for a in limit + list(job.argv)))
-    return '%s %s %s%s' % (when, command.replace('%', '\\%'), MARK, job.name)
+    command = command.replace('\\%', "\\''%").replace('%', '\\%')
+    return '%s %s %s%s' % (when, command, MARK, job.name)
 
 
 def _cron_marked(line):
@@ -333,16 +344,16 @@ def parse_cron(line):
             else:
                 when = ('daily', '%02d:%02d' % (int(h), int(m)))
         words = shlex.split(rest)
+        workdir = None
+        if len(words) >= 3 and words[0] == 'cd' and words[2] == '&&':
+            workdir, words = words[1], words[3:]
+        if words[-2:] == ['>/dev/null', '2>&1']:
+            words = words[:-2]
+        limit = None
+        if words[:1] == ['timeout'] and len(words) >= 3 and words[1].startswith('--kill-after='):
+            limit, words = int(words[2]) // 60 or None, words[3:]
     except (ValueError, IndexError):
         return _task(name, CRON, [], None, None, line=line)
-    workdir = None
-    if len(words) >= 3 and words[0] == 'cd' and words[2] == '&&':
-        workdir, words = words[1], words[3:]
-    if words[-2:] == ['>/dev/null', '2>&1']:
-        words = words[:-2]
-    limit = None
-    if words[:1] == ['timeout'] and len(words) >= 3 and words[1].startswith('--kill-after='):
-        limit, words = int(words[2]) // 60 or None, words[3:]
     return _task(name, CRON, words, workdir, when, line=line, limit_min=limit)
 
 
@@ -552,7 +563,7 @@ def remove(name, home=None, run=None, which=None):
         r = _run(run, ['systemctl', '--user', 'disable', '--now'] + [os.path.basename(p) for p in mine],
                  'job %s' % name)
         for p in mine:
-            os.remove(p)
+            _remove_file(p, name, lines)
         _run(run, ['systemctl', '--user', 'daemon-reload'], 'job %s' % name)
         lines.append('removed %s%s' % (', '.join(os.path.basename(p) for p in mine),
                                        '' if r.returncode == 0 else ' (disable said: %s)' % _said(r)))
@@ -564,9 +575,18 @@ def remove(name, home=None, run=None, which=None):
             lines.append('removed the crontab line of %s' % name)
     path = desktop_path(name, home)
     if _owner(_read(path)) == name:
-        os.remove(path)
+        _remove_file(path, name, lines)
         lines.append('removed %s' % path)
     return lines
+
+
+def _remove_file(path, name, done):
+    """os.remove(path); ScheduleError naming the job, the file and what `done` already says."""
+    try:
+        os.remove(path)
+    except OSError as e:
+        raise ScheduleError('job %s: cannot remove %s: %s%s' % (
+            name, path, e, '; already: %s' % '; '.join(done) if done else ''))
 
 
 def _words(argv):
@@ -615,7 +635,7 @@ def _from_units(folder):
         when = _timer_when(_ini(timer)) if timer is not None and _owner(timer) == name else (
             ('boot',) if keys.get('KillMode') == 'process' else ('logon',))
         limit = keys.get('TimeoutStartSec', '')
-        tasks.append(_task(name, SYSTEMD, argv, _sd_unescape(keys.get('WorkingDirectory', '')) or None,
+        tasks.append(_task(name, SYSTEMD, argv, keys.get('WorkingDirectory', '').replace('%%', '%') or None,
                            when, unit=unit(name) + ('.timer' if timer is not None else '.service'),
                            limit_min=int(limit[:-3]) if limit.endswith('min') and limit[:-3].isdigit()
                            else None, file=path))

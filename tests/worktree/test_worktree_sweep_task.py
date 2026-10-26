@@ -178,6 +178,7 @@ class Quoting(unittest.TestCase):
             self.assertEqual(task.quoted('a%sb' % q), "'a%s%sb'" % (q, q))
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')
 class Entry(TaskCase):
 
     def test_the_entry_point_prints_usage_to_stderr(self):

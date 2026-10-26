@@ -9,6 +9,7 @@ a throwaway job pm-kit-test-<pid> to the real user systemd, or to the real cront
 to run once, then removes it.
 """
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,26 @@ from kitlib.platform.linux import schedule as S
 from tests.platforms import posix_only
 
 LIVE = os.environ.get('KIT_LINUX_LIVE_SCHEDULE') == '1'
+
+
+def cron_sees(command):
+    """The command as cron hands it to the shell (Vixie cron and cronie, do_command): a bare %
+    ends it (the rest is stdin), \\% is a literal %, any other backslash stays as it is."""
+    out, escaped = [], False
+    for ch in command:
+        if escaped:
+            if ch == '%':
+                out[-1] = '%'
+            else:
+                out.append(ch)
+            escaped = False
+            continue
+        if ch == '\\':
+            escaped = True
+        elif ch == '%':
+            break
+        out.append(ch)
+    return ''.join(out)
 
 
 def which_cron(name):
@@ -126,6 +147,22 @@ class Systemd(Case):
         self.assertEqual(run.ran('systemctl', '--user', 'enable'),
                          [['systemctl', '--user', 'enable', 'pm-kit-coordinators-after-reboot.service']])
         self.assertIn('enabled', lines[0])
+
+    def test_a_dollar_in_the_folder_is_written_as_it_is_and_reads_back(self):
+        """WorkingDirectory= expands specifiers (%) but no $ variables: only % is doubled."""
+        folder = os.path.join(self.home, 'a $HOME b 5%')
+        job = S.Job('odd-folder', [self.py, os.path.join(folder, 'x.py')], folder, ('daily', '03:00'),
+                    'costs $5 at 5%', None)
+        S.install(job, S.SYSTEMD, self.home, FakeSystem())
+        unit = os.path.join(S.unit_dir(self.home), 'pm-kit-odd-folder')
+        service, timer = S._read(unit + '.service'), S._read(unit + '.timer')
+        self.assertIn('\nWorkingDirectory=%s\n' % folder.replace('%', '%%'), service)
+        self.assertIn('\nDescription=costs $5 at 5%%\n', service)
+        self.assertIn('\nDescription=costs $5 at 5%%\n', timer)
+        self.assertNotIn('$$', service.split('ExecStart=')[0])
+        task = S.find(job.name, S.written(self.home))
+        self.assertEqual(task['workdir'], folder)
+        self.assertTrue(S.same(task, job), (task, job))
 
     def test_a_logon_server_keeps_the_default_kill_mode(self):
         S.install(self.job(('logon',), 'hub'), S.SYSTEMD, self.home, FakeSystem())
@@ -257,9 +294,53 @@ class Cron(Case):
         S.remove('demo-worktree-sweep', self.home, run, which_cron)
         self.assertEqual(run.crontab, '0 1 * * * /bin/mine # pm-kit job: lookalike-not\n')
 
+    def test_a_backslash_before_a_percent_stays_literal(self):
+        """cron's own % handling (cron_sees), then the shell's words: every argument arrives as it
+        was, a backslash right before a % included."""
+        folder = os.path.join(self.home, 'w\\%d')
+        argv = [self.py, os.path.join(folder, 'a\\%b.py'), 'c\\\\%d', '%', '\\', '50%\\']
+        job = S.Job('slash-pct', argv, folder, ('every', 15), 'x', None)
+        line = S.cron_line(job)
+        words = shlex.split(cron_sees(line.split(None, 5)[5]), comments=True)
+        self.assertEqual(words, ['cd', folder, '&&'] + argv + ['>/dev/null', '2>&1'])
+        task = S.parse_cron(line)
+        self.assertTrue(S.same(task, job), (task, job))
+
+    def test_a_bad_timeout_number_is_an_unreadable_line_not_an_error(self):
+        line = ('*/15 * * * * cd /k && timeout --kill-after=30s soon /usr/bin/python3 /k/x.py '
+                '>/dev/null 2>&1 # pm-kit job: tick')
+        task = S.parse_cron(line)
+        self.assertEqual((task['path'], task['argv'], task['when'], task['line']),
+                         ('tick', [], None, line))
+        run = FakeSystem(systemd=False, crontab=line + '\n')
+        found = S.find('tick', S.read_back(self.home, run, which_cron))
+        self.assertFalse(S.same(found, self.job(('every', 15), 'tick', 10)))
+
     def test_unmarked_lines_are_not_tasks(self):
         self.assertIsNone(S.parse_cron('0 1 * * * /bin/mine'))
         self.assertIsNone(S.parse_cron('# a comment'))
+
+
+class Remove(Case):
+    def test_a_unit_that_cannot_be_removed_is_a_refusal(self):
+        S.install(self.job(), S.SYSTEMD, self.home, FakeSystem())
+        with mock.patch('os.remove', side_effect=PermissionError(13, 'Permission denied')):
+            with self.assertRaises(S.ScheduleError) as e:
+                S.remove('demo-worktree-sweep', self.home, FakeSystem(), which_none)
+        self.assertIn('job demo-worktree-sweep: cannot remove ', str(e.exception))
+        self.assertIn('pm-kit-demo-worktree-sweep.timer', str(e.exception))
+        self.assertIn('Permission denied', str(e.exception))
+
+    def test_an_entry_that_cannot_be_removed_says_what_already_went(self):
+        run = FakeSystem(systemd=False, crontab='')
+        S.install(self.job(('every', 15), 'tick'), S.CRON, self.home, run)
+        S.install(S.Job('tick', [self.py, os.path.join(self.kit, 'x.py')], self.kit, ('logon',), 'x'),
+                  S.AUTOSTART, self.home, run, which_cron, environ={'XDG_CURRENT_DESKTOP': 'GNOME'})
+        with mock.patch('os.remove', side_effect=PermissionError(13, 'Permission denied')):
+            with self.assertRaises(S.ScheduleError) as e:
+                S.remove('tick', self.home, run, which_cron)
+        self.assertIn('cannot remove %s' % S.desktop_path('tick', self.home), str(e.exception))
+        self.assertIn('already: removed the crontab line of tick', str(e.exception))
 
 
 class Autostart(Case):
