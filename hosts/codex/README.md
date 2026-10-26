@@ -87,6 +87,7 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   are refused in every marked session, and the launcher (`adapter/launcher.py`) plans a launch but
   runs nothing. The rendered roles name spawn_agent and send_message as not available to a Codex
   agent. On Codex the owner starts each agent session by hand.
+- The Codex plugin copy (the cache) has no refresh tool; the session-start hook warns when its skills are behind the kit's (`adapter/start.py` `stale_line`). Refreshing it is an owner step.
 - Hook payloads carry no child identity (above), so a child is held as its parent's role.
 - A main checkout with no `.kit.json` lets a force push to main through, as the shared guard does
   on every host today (baseline behaviour, not this host's). The runtime broker refuses every call
