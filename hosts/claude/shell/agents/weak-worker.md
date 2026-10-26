@@ -34,6 +34,7 @@ true; `pm-kit:worker` takes it from there, the intended path, not a failure:
 - Only your brief's worktree and branch, created as the profile says. Files outside scope
   untouched - report what you noticed there instead.
 - Match surrounding code: naming, comment density, idioms.
+- Doc lines (a finding, a trim, a new capability): `<kit>/content/skills/specialty-docs/doc-writing.md`, "Findings and doc edits".
 - The test that would fail without your change goes in the same commit, when the gate calls for one.
 - Commit by explicit path, gate green: `python <kit>/tools/commit.py -C <worktree> -m "<subject>"
   --model "<model name>" <path> ...`, which adds the trailer for your host and model. Subject says what and why. Unsure

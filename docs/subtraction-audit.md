@@ -29,7 +29,7 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   lane-keyed lock in `records/landing.py`; allowrules `repo_lanes`/`FULL`; `--lane` in `land.py`
   and `gate.py`. Why: no repo sets lanes. Size: ~150-250 code lines (estimate), ~80 test hits in
   19 files. Risk: M. Installed allow lines carry `--submit --lane full` (allowrules,
-  `test_rules.py:47`); `lander.md:57` and the land-branch skill show `[--lane]`. Regenerate and
+  `test_rules.py:47`); the lander role's submit step and the land-branch skill showed `[--lane]` before this change. Regenerate and
   fix in one change. Done: lanes, `--lane` and the lane-keyed lock are gone, the allow lines are
   the plain submit only, and `landing.lanes` is a retired key that loads and is ignored.
 - **Candidate 4, DONE** (kitlib/gate, config schema). Gate keys `python_tests=='pytests'`,

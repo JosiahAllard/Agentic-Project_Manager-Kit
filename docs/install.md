@@ -374,18 +374,18 @@ An account set up by `machine_setup.py` has per-item junctions under `~/.claude`
 skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
 
 **Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
-Only the 23 current kit skill names (the directories under `content/skills`) and the retired `subagent-dispatch` are touched; any other link stays.
+Only the 21 current kit skill names (the directories under `content/skills`) and the retired `subagent-dispatch`, `doc-claims-discipline`, `specialty-records` and `specialty-spec` are touched; any other link stays.
 `cmd /c rmdir` removes the link only, never the target:
 
 ```powershell
-$kit = 'backlog-ops','backlog-pricing','branch-review','branch-sync','builder','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','hub-ops','ledger-ops','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','specialty-3d-assets','specialty-rigging','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-records','specialty-spec'
+$kit = 'backlog-ops','backlog-pricing','branch-review','branch-sync','builder','coordinator-dispatch','flaky-test-triage','hub-ops','ledger-ops','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','doc-claims-discipline','specialty-records','specialty-spec','specialty-3d-assets','specialty-rigging','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-docs'
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
   Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
   ForEach-Object { cmd /c rmdir "$($_.FullName)" }
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType -and $_.Name -in $kit }
 ```
 
-The last command must print nothing. Then `ListSkills` shows each of the 23 names once.
+The last command must print nothing. Then `ListSkills` shows each of the 21 names once.
 
 **Stage 1b.** Gated on the plugin shipping the kit's agents under the pm-kit: names; do not do this before.
 
