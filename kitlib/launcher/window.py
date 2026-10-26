@@ -66,9 +66,10 @@ def q(text):
 
 
 def claude_command(name, prompt, agent=None, model=None, effort=None, autocompact=None, resume=None,
-                   add_dir=None):
+                   add_dir=None, remote_control=True):
     """`add_dir`: a folder the session's file tools may also use (`--add-dir`; a home worktree's
-    main checkout, docs/launcher.md "The home worktree")."""
+    main checkout, docs/launcher.md "The home worktree"). `remote_control` False drops only the
+    `--remote-control <name>` pair (a measurement; lookup finds the session by `-n`)."""
     parts = ['claude']
     if resume:
         parts += ['--resume', q(resume)]
@@ -83,7 +84,8 @@ def claude_command(name, prompt, agent=None, model=None, effort=None, autocompac
     if add_dir:
         parts += ['--add-dir', q(add_dir)]
     parts += ['--permission-mode', 'auto'] if not resume else []
-    parts += ['--remote-control', q(name), '-n', q(name), q(prompt)]
+    parts += ['--remote-control', q(name)] if remote_control else []
+    parts += ['-n', q(name), q(prompt)]
     return ' '.join(parts)
 
 

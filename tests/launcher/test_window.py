@@ -5,6 +5,21 @@ import unittest
 from kitlib.launcher import window
 
 
+class ClaudeCommand(unittest.TestCase):
+    DEFAULT = ("claude --agent a --model 'm' --effort high --autocompact 5 --add-dir 'd' "
+               "--permission-mode auto --remote-control 'n' -n 'n' 'it''s'")
+
+    def test_the_default_command_line_is_unchanged(self):
+        self.assertEqual(window.claude_command('n', "it's", 'a', 'm', 'high', 5, add_dir='d'), self.DEFAULT)
+        self.assertEqual(window.claude_command('n', 'p', remote_control=True),
+                         "claude --permission-mode auto --remote-control 'n' -n 'n' 'p'")
+
+    def test_no_remote_control_drops_only_that_pair(self):
+        got = window.claude_command('n', "it's", 'a', 'm', 'high', 5, add_dir='d', remote_control=False)
+        self.assertEqual(got, self.DEFAULT.replace(" --remote-control 'n'", ''))
+        self.assertIn(" -n 'n' ", got)
+
+
 class ScriptOrder(unittest.TestCase):
     def setUp(self):
         self.text = window.script('alpha-coord-a2', 'coordinator', '/repos/alpha', 'claude --x',
