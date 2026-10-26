@@ -593,7 +593,7 @@ it done. The page shows a `class: C` chip on the card. Tests: tests/hubsite/test
 `record`) or by an edit while it is open (`questions edit --record REPO:ID`, `--no-record` or a null
 `record` to unbind it). The hub reads the record then, through the record view the record page
 uses (`kitlib.hubsite.backlog` `Views.record`: the configured repositories only, read now with no
-fetch), and stores `repo` as the configured name. The kit's own records are bound under the PM repository's folder name, as the hub names every configured repository (`project-manager:<ID>` on this machine); `pm:<ID>` and `kit:<ID>` are refused `not_found`. Each of
+fetch), and stores `repo` as the configured name. The kit's own records are bound under the PM repository's folder name, as the hub names every configured repository (`<pm-folder>:<ID>`); `pm:<ID>` and `kit:<ID>` are refused `not_found`. Each of
 these is refused, field `record`, and nothing is written (`kitlib.hubsite.api` `_bound`):
 - `invalid`: a `record` that is not exactly `{repo, id}` with two non-blank strings, a name that
   can be no repository or record id, a record that is completed (closed, retired or taken out
