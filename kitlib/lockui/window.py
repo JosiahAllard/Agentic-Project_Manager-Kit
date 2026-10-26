@@ -669,7 +669,7 @@ class DivisionDialog(Dialog):
         hw, lay = snap.get("hardware") or {}, snap.get("layout") or {}
         gpus = ", ".join("%s (%s MB)" % (g.get("name"), g.get("vram_mb")) for g in hw.get("gpus") or [])
         mem = (hw.get("memory_mb") or {}).get("total")
-        lines = ["Hardware: %s threads, %d cores, %d CCD%s%s; gpus: %s" % (
+        lines = ["Hardware: %s threads, %d cores, %d L3 domain%s%s; gpus: %s" % (
             hw.get("threads"), len(hw.get("cores") or []), len(hw.get("ccds") or []),
             "" if len(hw.get("ccds") or []) == 1 else "s",
             ", %s MB memory" % format(mem, ",") if mem else "", gpus or "none"),
