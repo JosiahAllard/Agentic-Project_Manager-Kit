@@ -176,22 +176,27 @@ class Routes(Case):
     def test_a_write_carries_the_agent_token_and_names_itself_mcp(self):
         s = self.server()
         payload, is_error = self.rpc(s, "hub_question_log",
-                                     {"id": "Q 1/x", "ruling": "R-9", "if_version": 3})
+                                     {"id": "Q 1/x", "if_version": 3})
         self.assertFalse(is_error, payload)
         call = self.ask.calls[-1]
         self.assertEqual((call["method"], call["path"]),
                          ("POST", api.BASE + "/questions/Q%201%2Fx/log"))
-        self.assertEqual(call["body"], {"ruling": "R-9", "if_version": 3})
+        self.assertEqual(call["body"], {"if_version": 3})
         self.assertEqual(call["token"], self.agent)
         self.assertEqual(call["via"], serve.VIA_MCP)
         self.assertEqual(call["port"], 8790)
 
-    def test_the_question_log_tool_passes_replace_in_the_body(self):
-        payload, is_error = self.rpc(self.server(), "hub_question_log",
-                                     {"id": "Q-1", "ruling": "R-9", "if_version": 3, "replace": True})
-        self.assertFalse(is_error, payload)
-        self.assertEqual(self.ask.calls[-1]["body"],
-                         {"ruling": "R-9", "if_version": 3, "replace": True})
+    def test_the_log_and_reply_tools_take_no_ruling_id(self):
+        for name, args in (("hub_question_log", {"id": "Q-1", "if_version": 3, "ruling": "R-9"}),
+                           ("hub_question_log", {"id": "Q-1", "if_version": 3, "replace": True}),
+                           ("hub_to_pm_reply", {"id": "P-1", "reply": "r", "ruling": "R-9"})):
+            with self.subTest(name=name, args=sorted(args)):
+                payload, is_error = self.rpc(self.server(), name, args)
+                self.assertTrue(is_error, payload)
+                self.assertIn("unknown argument", json.dumps(payload))
+        self.assertEqual(self.ask.calls, [], "a refused call asks the hub nothing")
+        self.assertEqual(srv.TOOLS["hub_question_log"][1]["required"], ["id", "if_version"])
+        self.assertNotIn("ruling", srv.TOOLS["hub_to_pm_reply"][1]["properties"])
 
     def test_a_read_puts_its_arguments_in_the_query(self):
         self.rpc(self.server(), "hub_list", {"collection": "todos", "status": "all", "repo": "r"})
@@ -257,7 +262,7 @@ class Arguments(Case):
                 ("hub_ask", {"title": 5}, "title"),
                 ("hub_list", {"collection": "inbox"}, "collection"),
                 ("hub_story_set", {"id": "S-1", "status": "submitted", "if_version": 1}, "status"),
-                ("hub_question_log", {"id": " ", "ruling": "R", "if_version": 1}, "id"),
+                ("hub_question_log", {"id": " ", "if_version": 1}, "id"),
                 ("hub_question_done", {"id": "Q-1", "if_version": 1}, "why"),
                 ("hub_question_done", {"id": "Q-1", "why": "w"}, "if_version"),
                 ("hub_todo_ack", {"id": "T-1", "if_version": True}, "if_version")):
@@ -601,7 +606,10 @@ class Creator(Case):
                 self.assertEqual(self.ask.calls[-1]["body"]["record"], args["record"])
         said = srv.TOOLS["hub_ask"][1]["properties"]["record"]
         self.assertEqual((said["type"], said["required"]), ("object", ["repo", "id"]))
-        self.assertIn("pm", said["description"])
+        # the kit's own records are under the PM repository's folder name, never 'pm'
+        self.assertIn("the PM repository's folder name", said["description"])
+        self.assertIn("hub_view view 'repos'", said["description"])
+        self.assertNotIn("records: pm", said["description"])
         self.assertIn("null unbinds",
                       srv.TOOLS["hub_question_edit"][1]["properties"]["record"]["description"])
 
@@ -612,7 +620,7 @@ class Creator(Case):
         for name, args in (("hub_ask", {"title": "t", "class": "go"}),
                            ("hub_question_edit", {"id": "Q-1", "from": "pm", "if_version": 2,
                                                   "class": "rule", "record": None}),
-                           ("hub_question_log", {"id": "Q-1", "ruling": "R-1", "if_version": 2,
+                           ("hub_question_log", {"id": "Q-1", "if_version": 2,
                                                  "unfiled": "the record is closed"}),
                            ("hub_question_done", {"id": "Q-1", "why": "w", "if_version": 2,
                                                   "unfiled": "the record is closed"})):
@@ -657,7 +665,7 @@ class Errors(Case):
     def test_a_refusal_comes_back_as_the_hubs_error(self):
         self.ask.answer = (409, api.error_body("conflict", "Q-1 changed", "if_version"))
         payload, is_error = self.rpc(self.server(), "hub_question_log",
-                                     {"id": "Q-1", "ruling": "R-1", "if_version": 1})
+                                     {"id": "Q-1", "if_version": 1})
         self.assertTrue(is_error)
         self.assertEqual(payload, {"ok": False, "status": 409, "error": {
             "code": "conflict", "message": "Q-1 changed", "field": "if_version"}})
@@ -777,7 +785,7 @@ class Live(httpfix.ListenerCase):
         self.assertFalse(is_error, payload)
         self.assertEqual([i["id"] for i in payload["items"]], [doc_id])
         payload, is_error = self.mcp.call("hub_question_log",
-                                          {"id": doc_id, "ruling": "R-1", "if_version": 1})
+                                          {"id": doc_id, "if_version": 1})
         self.assertTrue(is_error)
         self.assertEqual(payload["error"]["code"], "invalid")      # not answered yet: the hub says
         self.assertEqual(payload["status"], 400)
