@@ -259,9 +259,9 @@ class Modes(unittest.TestCase):
         r = self.tool('--old-kit', os.path.dirname(TOOL), '--pm-settings', 'x')
         self.assertEqual(r.returncode, 2)
         self.assertIn('--pm-settings goes with the default mode only', r.stderr)
-        r = self.tool('--stubs')
+        r = self.tool('--stack', 'python')
         self.assertEqual(r.returncode, 2)
-        self.assertIn('--stubs goes with --repo only', r.stderr)
+        self.assertIn('--stack goes with --repo only', r.stderr)
 
 
 if __name__ == '__main__':
