@@ -67,26 +67,23 @@ class UserConfigTest(unittest.TestCase):
 
     def test_keys_other_modules_own_are_accepted_as_objects(self):
         """The machine config's shape on 2026-10-07: pm_start and coordinator_start beside the ledger,
-        plus pm_watch and backlog_lint, which kitlib.pmwatch and kitlib.backloglint read."""
+        plus pm_watch, which kitlib.pmwatch reads."""
         self.write({'ledger_path': self.ledger,
                     'pm_start': {'hub_url': 'https://example.invalid/hub', 'hub_source': 'hub.html',
                                  'pm_watch_cmd': 'python pm_watch.py', 'memory_dir': self.home,
                                  'handoff_file': 'HANDOFF.md', 'reminders_file': 'r.json',
                                  'sessions_file': 's.json', 'standing': ['a rule']},
                     'coordinator_start': {'standing': ['a rule'], 'cap': {'items': 5}},
-                    'pm_watch': {'repos': ['kit']},
-                    'backlog_lint': {'repos': {'kit': {'root': self.home}}}})
+                    'pm_watch': {'repos': ['kit']}})
         got = user.user_config(self.home)
         self.assertEqual(got['ledger_path'], self.ledger)
         self.assertEqual(got['pm_start']['sessions_file'], 's.json')
         self.assertEqual(got['coordinator_start']['cap'], {'items': 5})
-        self.assertEqual(got['backlog_lint']['repos']['kit'], {'root': self.home})
 
     def test_an_owned_key_must_be_an_object_and_unknown_keys_still_refuse(self):
         for body, why in (({'pm_start': ['x']}, 'pm_start must be an object'),
                           ({'coordinator_start': 'x'}, 'coordinator_start must be an object'),
                           ({'pm_watch': 'x'}, 'pm_watch must be an object'),
-                          ({'backlog_lint': []}, 'backlog_lint must be an object'),
                           ({'pm_start': {}, 'pm_wtach': {}}, 'unknown key(s) pm_wtach')):
             self.write(body)
             with self.assertRaises(config.ConfigError) as cm:
@@ -172,6 +169,14 @@ class RetiredKeyTest(unittest.TestCase):
         got = self.read()
         self.assertEqual(got['ledger_path'], self.ledger)
         self.assertNotIn('standing_delegation', got)
+
+    def test_the_retired_backlog_lint_still_loads_and_is_not_returned(self):
+        self.assertIn('backlog_lint', user.RETIRED)
+        self.assertNotIn('backlog_lint', user.SCHEMA)
+        self.write({'ledger_path': self.ledger, 'backlog_lint': {'repos': {'kit': {'root': self.home}}}})
+        got = self.read()
+        self.assertEqual(got['ledger_path'], self.ledger)
+        self.assertNotIn('backlog_lint', got)
 
     def test_the_retired_daily_red_ruling_still_loads_and_is_not_returned(self):
         self.assertIn('daily_red_ruling', user.RETIRED)

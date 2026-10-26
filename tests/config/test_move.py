@@ -185,6 +185,12 @@ class Move(unittest.TestCase):
         self.assertEqual(code, move.OK, out)
         self.assertIn('drop    daily_red_ruling (retired)', out)
 
+    def test_backlog_lint_is_dropped(self):
+        self.config({'backlog_lint': {'repos': {}}})
+        code, out = self.run_move()
+        self.assertEqual(code, move.OK, out)
+        self.assertIn('drop    backlog_lint (retired)', out)
+
     def pm_data(self, **change):
         value = {'path': self.pm, 'branch': 'main', 'remote': 'origin'}
         value.update(change)

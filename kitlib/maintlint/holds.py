@@ -10,7 +10,7 @@ client, but which no hold keeps out of the offer (docs/maint-lint.md "Backlog ch
   findings(snap, backlog_cmd)     one Finding per offerable record with a hit
 
 KEYWORDS, HOLD_MEMBERS, TEXT_FIELDS, record_text and keyword_hit are copied from
-kitlib.backloglint (the store reader's Record has the same `all`); its fix_hold is not: an owner
+the retired backlog_lint tool (the store reader's Record has the same `all`); its fix_hold is not: an owner
 hold must cite what it waits on (kitlib.backlog.record.block_citation_error), which only the PM
 can name, so the fix printed here leaves the citation to them. Nothing here writes.
 """

@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import backloglint, coordinatorstart, pmstart, pmwatch
+from kitlib import coordinatorstart, pmstart, pmwatch
 from kitlib.config import ConfigError, migration, user
 from kitlib.machinesetup import default_config_dirs
 from tests.home import machine_config, pm_repo
@@ -21,8 +21,7 @@ from tests.home import machine_config, pm_repo
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'optional', 'agenttemp'))
 import agent_temp_sweep as sweep                                   # noqa: E402
 
-READER_KEYS = {'pm_start': {'hub_url': 'u'}, 'coordinator_start': {'k': 1}, 'pm_watch': {'w': 1},
-               'backlog_lint': {'repos': {}}}
+READER_KEYS = {'pm_start': {'hub_url': 'u'}, 'coordinator_start': {'k': 1}, 'pm_watch': {'w': 1}}
 
 
 class _Home(unittest.TestCase):
@@ -282,7 +281,6 @@ class ReadersTest(_Home):
             self.assertEqual(coordinatorstart.load_config(), {'k': 1})
             self.assertEqual(pmwatch.load_config(), {'w': 1})
             self.assertEqual(pmwatch.configured_notice_dir(), self.home)
-            self.assertEqual(backloglint.load_config(), {})
 
     def test_each_reader_takes_a_home_file_or_a_bad_location_for_a_config_error_never_no_config(self):
         # the home file holds every key, so a reader that read it or read "absent" would answer
@@ -307,7 +305,6 @@ class ReadersTest(_Home):
                             ('coordinatorstart', coordinatorstart.load_config, ConfigError),
                             ('pmwatch', pmwatch.load_config, ConfigError),
                             ('pmwatch notice dir', pmwatch.configured_notice_dir, ConfigError),
-                            ('backloglint', backloglint.load_config, backloglint.LintConfigError),
                             ('agent_temp_sweep', sweep.load, sweep.SweepConfigError)):
                         with self.subTest(name):
                             with self.assertRaises(error) as cm:
