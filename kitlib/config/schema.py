@@ -284,9 +284,6 @@ SECTIONS = {
     'review_pack': {
         'coauthor': Field(Bool(), False, 'list the branch\'s commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks'),
     },
-    'stubs': {
-        'tools': Field(Strs, None, 'ignored: the kit writes no tool stubs; kept so an older .kit.json that sets it still loads'),
-    },
     'testlist': {
         'junit': Field(Strs, ['**/build/test-results/**/*.xml'], 'JUnit result globs'),
         'trx': Field(Strs, ['**/*.trx'], '.NET result globs'),
@@ -341,7 +338,7 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo'), 'landing': ('lanes', 'lock_file')}
 # Whole sections no tool reads any more. A config that still carries one loads: the section is
 # dropped unchecked, whatever it holds. Any other unknown section still refuses.
-RETIRED_SECTIONS = ('ruling_cites',)
+RETIRED_SECTIONS = ('ruling_cites', 'stubs')
 
 
 def section_type(name):
