@@ -214,8 +214,9 @@ class Profiles(Case):
         path = self.put(data)
         self.assertEqual(len(registry.profiles(path)), 2)
         with mock.patch.object(kitlib.platform, 'NAME', 'windows'):
-            self.assertEqual(registry.union('process_names', path),
-                             ('claude.exe', 'node.exe', 'other.exe'))
+            self.assertEqual(registry.process_names(path), ('claude.exe', 'node.exe', 'other.exe'))
+        owner_paths = data['claude']['profile']['owner_paths'] + data['other']['profile']['owner_paths']
+        self.assertEqual(registry.union('owner_paths', path), tuple(dict.fromkeys(owner_paths)))
         self.assertEqual(registry.union('session_env', path), ('CLAUDE_CODE_SESSION_ID', 'OTHER_SESSION'))
 
     def test_the_kit_registry_names_claudes_session_trailer_and_codex_has_none(self):
@@ -259,13 +260,13 @@ class Profiles(Case):
 
 
 class ProcessNames(Case):
-    """process_names is per platform: each host's profile carries the running platform's list
-    (kitlib.platform.NAME), so union() is this platform's agent images (docs/linux-support-plan.md
-    slice 2)."""
+    """process_names is per platform: each host's profile carries the whole map, and
+    registry.process_names() is the running platform's agent images (kitlib.platform.NAME, read
+    at that call) over every host (docs/linux-support-plan.md slice 2)."""
 
     def union(self, name, path=None):
         with mock.patch.object(kitlib.platform, 'NAME', name):
-            return registry.union('process_names', path)
+            return registry.process_names(path)
 
     def test_the_kit_registry_gives_each_platforms_agent_images(self):
         self.assertEqual(self.union('windows'), ('claude.exe', 'node.exe', 'codex.exe'))
@@ -286,6 +287,10 @@ class ProcessNames(Case):
             with self.subTest(process_names=names):
                 with self.assertRaisesRegex(registry.RegistryError, 'process_names'):
                     registry.load(self.put(data))
+
+    def test_the_profile_keeps_every_platforms_images(self):
+        self.assertEqual(registry.host('claude').profile.process_names,
+                         (('windows', ('claude.exe', 'node.exe')), ('linux', ('claude', 'node'))))
 
     def test_a_platform_the_host_does_not_declare_may_be_listed_ahead(self):
         data = kit_hosts()

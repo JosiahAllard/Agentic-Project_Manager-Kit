@@ -118,7 +118,8 @@ class HostProfile:
     """The host data the core reads, each field with a consumer (plan 2.1): `owner_paths` the
     host's own instruction and settings paths, `worktrees_directory` the repo path its agent
     worktrees go in, `state_directory` its per-user folder name, `process_names` its agent process
-    images (the lock's agent-host test), `mcp_tool_format` how it names an MCP tool, with
+    images per platform, ((platform, images), ...) (the lock's agent-host test reads the running
+    platform's: registry.process_names), `mcp_tool_format` how it names an MCP tool, with
     {plugin}, {server} and {tool} fields, `session_env` the environment variable its session id
     is in (the lock shows it, never trusts it), `skills_directory` the repo path it reads a
     repository's own skills from, `attribution` its commits' Co-Authored-By (Attribution),

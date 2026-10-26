@@ -9,6 +9,7 @@
   default_profile(path)       the default host's HostProfile
   profiles(path)              every host's HostProfile, in file order
   union(field, path)          a profile field's distinct values over every host, in file order
+  process_names(path)         the running platform's agent images over every host, in file order
   host_folders(path)          the repo folder each host keeps its own files in (".claude")
   state_path(home, *parts)    a path in the kit's per-user state folder (~/.claude)
 
@@ -21,8 +22,9 @@ An entry: {"adapter": "<module>", "shell": "<repo path>", "platforms": ["windows
 "capabilities": {...}, "profile": {...}, "hook": {...},
 "tiers": {"light", "standard", "strong", "deep" -> model}} and, on exactly one host,
 "default": true. The profile's "process_names" is per platform ({"windows": [...], "linux": [...]},
-one entry for each of the host's "platforms"), and its HostProfile carries the running platform's
-list (kitlib.platform.NAME), so union('process_names') is this platform's agent images.
+one entry for each of the host's "platforms"); its HostProfile carries the whole map as
+((platform, images), ...), and process_names() reads the running platform's list of each
+(kitlib.platform.NAME, imported only then), so loading the registry needs no kitlib.platform.
 kitlib.kitrelease.bootstrap reads "shell" itself, with json alone, because it
 runs before kitlib is trusted; boot/hook.py reads "shell" and "hook" the same way, before the kit
 boots (HookSpec).
@@ -239,16 +241,15 @@ def _env_prefixes(where, value):
 
 def _process_names(where, value, platforms):
     """{platform: [image, ...]} over PLATFORMS, with an entry for each platform the host declares
-    (one it does not declare yet may be listed ahead), read as the running platform's names
-    (kitlib.platform.NAME, read now): () when the host has none for it."""
+    (one it does not declare yet may be listed ahead), kept whole as ((platform, images), ...).
+    It is not resolved to the running platform here: loading the registry never imports
+    kitlib.platform, so the hook reaches run(), where a kitlib that will not import is a deny."""
     if (not isinstance(value, dict) or not set(platforms) <= set(value)
             or not set(value) <= set(PLATFORMS)):
         raise RegistryError('hosts.json: %s must map each of %s, and at least the host platforms '
                             '(%s), to its process images'
                             % (where, ', '.join(PLATFORMS), ', '.join(platforms)))
-    by_platform = {k: _texts('%s.%s' % (where, k), v) for k, v in value.items()}
-    from kitlib import platform
-    return by_platform.get(platform.NAME, ())
+    return tuple((k, _texts('%s.%s' % (where, k), v)) for k, v in value.items())
 
 
 def _profile(name, raw, platforms):
@@ -361,6 +362,17 @@ def union(field, path=None):
     for profile in profiles(path):
         value = getattr(profile, field)
         out.extend(value if isinstance(value, tuple) else (value,))
+    return tuple(dict.fromkeys(out))
+
+
+def process_names(path=None):
+    """The distinct agent process images of the running platform (kitlib.platform.NAME, read
+    now) over every host, in file order: () when no host lists that platform. RegistryError as
+    load()."""
+    from kitlib import platform
+    out = []
+    for profile in profiles(path):
+        out.extend(dict(profile.process_names).get(platform.NAME, ()))
     return tuple(dict.fromkeys(out))
 
 

@@ -210,7 +210,7 @@ def agent_hosts(registry_path=None):
     platform's list of each (kitlib.platform.NAME). A hosts.json that cannot be read raises
     RegistryError, which each caller here treats as an agent (fail closed), and so does one where
     no host names its processes on this platform: an empty set would make every caller an owner."""
-    names = registry.union("process_names", registry_path)
+    names = registry.process_names(registry_path)
     if not names:
         raise registry.RegistryError("hosts.json: no registered host names its agent processes on "
                                      "this platform")
