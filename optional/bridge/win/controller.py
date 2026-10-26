@@ -14,7 +14,7 @@ from optional.bridge.win.evidence import regular
 from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.core.callers import CallProofs
 from optional.bridge.core.dispatch import CoreBroker
-from optional.bridge.core.messages import DeliveryError
+from optional.bridge.core.messages import DeliveryError,SenderAuthority,launch_mark
 from optional.bridge.core.mcp import Server
 from optional.bridge.core.outbox import Outbox,MAX_MESSAGES,MAX_PENDING
 from optional.bridge.core.owner import OwnerControls,OwnerDecisions,WriterLeases
@@ -30,6 +30,8 @@ class Controller:
         regular(root,directory=True)
         self.root,self.leader=root.resolve(strict=True),leader
         self._peers,self._sources,self._lock={},[],threading.RLock()
+        # session id -> (exact binding, launch mark, the CallProofs of the frontend that attested it)
+        self._launched={}
         self._closed=False
         self._pending_cursor=None
         self.pairs=self.outbox=self.leases=None
@@ -87,14 +89,39 @@ class Controller:
         description=adapter.describe()
         self.core.adapters[description.adapter_id]=adapter
 
-    def frontend(self,observe):
-        """Bind a source observer only after the private native channel is verified."""
+    def frontend(self,observe, *, mark=None):
+        """Bind a source observer only after the private native channel is verified. `mark` is
+        that frontend's launch mark (README "Launch mark"): every authority it attests carries it."""
         self._require()
+        mark=launch_mark(mark)
+        if observe is not None and not callable(observe): raise DeliveryError('invalid-caller-observer')
         with self._lock:
             if len(self._sources)>=128: raise DeliveryError('frontend-capacity')
-            calls=CallProofs(observe=observe)
+            calls=CallProofs(observe=None if observe is None else
+                lambda metadata:self._marked(calls,observe(metadata),mark))
             self._sources.append(calls)
         return Server(self.core,calls)
+
+    def _marked(self,calls,authority,mark):
+        """The attested authority with the frontend's mark; the latest attestation of a chat is
+        its record, and an unmarked one clears it."""
+        if type(authority) is not SenderAuthority: return authority
+        sender=authority.sender
+        with self._lock:
+            if calls in self._sources:
+                session=sender.identity.session_id
+                if mark is None: self._launched.pop(session,None)
+                elif session in self._peers: self._launched[session]=(sender,mark,calls)
+        return SenderAuthority(sender,authority.task_root,launched=mark)
+
+    def launched(self,binding):
+        """The launch mark of the live frontend that last attested this exact live binding, or
+        None. Grants nothing by itself; which marks count is the caller's rule."""
+        if type(binding) is not ChatBinding or not self._live(binding): return None
+        with self._lock:
+            record=self._launched.get(binding.identity.session_id)
+            if record is None or record[0]!=binding or record[2] not in self._sources: return None
+            return record[1]
 
     def _authorize(self,intent,proof):
         self._require()
@@ -108,6 +135,8 @@ class Controller:
         """Private lifecycle cleanup; an exited frontend leaves no reusable authority."""
         with self._lock:
             if server.calls in self._sources: self._sources.remove(server.calls)
+            for session,record in tuple(self._launched.items()):
+                if record[2] is server.calls: del self._launched[session]
 
     def dispatch_pending(self,limit=32, *, continue_check=None):
         self._require()
@@ -140,6 +169,7 @@ class Controller:
         with self._lock:
             self._sources.clear()
             self._peers.clear()
+            self._launched.clear()
 
     def __enter__(self): return self
 

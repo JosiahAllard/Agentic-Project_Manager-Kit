@@ -46,15 +46,32 @@ def expiry(value):
         raise DeliveryError('invalid-message-expiry')
 
 
+MAX_LAUNCH_MARK = 64
+
+
+def launch_mark(value):
+    """A launch mark (kitlib.sessionmark: README "Launch mark") as a plain bounded name, or None
+    when unmarked. Anything else is refused, never shortened or cleaned."""
+    if value is None:
+        return None
+    if (type(value) is not str or not 1 <= len(value) <= MAX_LAUNCH_MARK or not value.isascii()
+            or not value[0].isalnum() or any(not (c.isalnum() or c in '-_') for c in value)):
+        raise DeliveryError('invalid-launch-mark')
+    return value
+
+
 @dataclass(frozen=True)
 class SenderAuthority:
     sender: ChatBinding
     task_root: str
+    # The mark of the kit launch that started the attesting frontend's session; grants nothing here.
+    launched: str | None = None
 
     def __post_init__(self):
         if type(self.sender) is not ChatBinding:
             raise DeliveryError('invalid-sender-authority')
         identifier(self.task_root)
+        launch_mark(self.launched)
 
 
 @dataclass(frozen=True)

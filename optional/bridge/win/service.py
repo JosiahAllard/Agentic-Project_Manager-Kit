@@ -35,10 +35,12 @@ class BrokerService:
             # provenance. No ticket or source identity is returned to the caller.
             self.hook_sink(peer,encode(frame['hook'])[:-1])
             return {'protocol':1,'response':None}
-        if set(frame) not in ({'protocol','request'},{'protocol','request','channel'}):
+        # 'mark' is optional so a frontend started before it existed keeps working.
+        if (not {'protocol','request'}<=set(frame)<={'protocol','request','channel','mark'}
+                or 'mark' in frame and type(frame['mark']) is not str):
             raise DeliveryError('invalid-private-request')
-        # This field is the frontend's private publication, not model arguments.
-        native=self.inspector.inspect(peer,channel=frame.get('channel'))
+        # These fields are the frontend's private publication, not model arguments.
+        native=self.inspector.inspect(peer,channel=frame.get('channel'),mark=frame.get('mark'))
         for stale,(previous,server) in tuple(self.frontends.items()):
             if not running(previous.pid,previous.creation):
                 self.controller.detach_frontend(server)
@@ -61,8 +63,10 @@ class BrokerService:
                 if prepare is not None: self.sources[key]=source
                 observe=attest
             else: observe=source
-            current=(native,self.controller.frontend(observe))
+            current=(native,self.controller.frontend(observe,mark=native.mark))
             self.frontends[key]=current
+        # A frontend reads its mark once at start, so a different one is not that frontend's.
+        elif current[0].mark!=native.mark: raise DeliveryError('frontend-mark-changed')
         elif current[0]!=native: raise DeliveryError('frontend-host-changed')
         message=frame['request']
         source=self.sources.get(key)
