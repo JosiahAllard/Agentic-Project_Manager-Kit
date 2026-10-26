@@ -20,7 +20,10 @@ their own. Each call reads the file again: it is small, and a cache would outliv
 An entry: {"adapter": "<module>", "shell": "<repo path>", "platforms": ["windows", ...],
 "capabilities": {...}, "profile": {...}, "hook": {...},
 "tiers": {"light", "standard", "strong", "deep" -> model}} and, on exactly one host,
-"default": true. kitlib.kitrelease.bootstrap reads "shell" itself, with json alone, because it
+"default": true. The profile's "process_names" is per platform ({"windows": [...], "linux": [...]},
+one entry for each of the host's "platforms"), and its HostProfile carries the running platform's
+list (kitlib.platform.NAME), so union('process_names') is this platform's agent images.
+kitlib.kitrelease.bootstrap reads "shell" itself, with json alone, because it
 runs before kitlib is trusted; boot/hook.py reads "shell" and "hook" the same way, before the kit
 boots (HookSpec).
 """
@@ -234,7 +237,21 @@ def _env_prefixes(where, value):
     return prefixes
 
 
-def _profile(name, raw):
+def _process_names(where, value, platforms):
+    """{platform: [image, ...]} over PLATFORMS, with an entry for each platform the host declares
+    (one it does not declare yet may be listed ahead), read as the running platform's names
+    (kitlib.platform.NAME, read now): () when the host has none for it."""
+    if (not isinstance(value, dict) or not set(platforms) <= set(value)
+            or not set(value) <= set(PLATFORMS)):
+        raise RegistryError('hosts.json: %s must map each of %s, and at least the host platforms '
+                            '(%s), to its process images'
+                            % (where, ', '.join(PLATFORMS), ', '.join(platforms)))
+    by_platform = {k: _texts('%s.%s' % (where, k), v) for k, v in value.items()}
+    from kitlib import platform
+    return by_platform.get(platform.NAME, ())
+
+
+def _profile(name, raw, platforms):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
                          'mcp_tool_format', 'session_env', 'skills_directory', 'attribution',
@@ -246,7 +263,7 @@ def _profile(name, raw):
         _texts(w + '.owner_paths', p['owner_paths']),
         _relpath(w + '.worktrees_directory', p['worktrees_directory']),
         _text(w + '.state_directory', p['state_directory']),
-        _texts(w + '.process_names', p['process_names']),
+        _process_names(w + '.process_names', p['process_names'], platforms),
         _text(w + '.mcp_tool_format', p['mcp_tool_format']),
         session_env,
         _relpath(w + '.skills_directory', p['skills_directory']),
@@ -272,7 +289,7 @@ def _entry(name, raw):
                             % (name, ', '.join(PLATFORMS)))
     capabilities = _capabilities(name, raw['capabilities'])
     return Host(name, adapter, _relpath(name + '.shell', raw['shell']), platforms,
-                capabilities, _profile(name, raw['profile']), _hook(name, raw['hook'], capabilities),
+                capabilities, _profile(name, raw['profile'], platforms), _hook(name, raw['hook'], capabilities),
                 tuple((t, _text('%s.tiers.%s' % (name, t), tiers[t])) for t in TIERS),
                 _flag(name + '.default', raw.get('default', False)))
 

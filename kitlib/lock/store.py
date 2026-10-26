@@ -206,10 +206,14 @@ LEGACY_HOST_KEY = "claude"
 def agent_hosts(registry_path=None):
     """The lower-case image names of the processes that host agents: every registered host's
     profile process_names (hosts.json; Claude Code runs as claude.exe, or node.exe when installed
-    from npm, and so does its desktop app's terminal panel; Codex as codex.exe). A hosts.json
-    that cannot be read raises RegistryError, which each caller here treats as an agent (fail
-    closed)."""
+    from npm, and so does its desktop app's terminal panel; Codex as codex.exe), the running
+    platform's list of each (kitlib.platform.NAME). A hosts.json that cannot be read raises
+    RegistryError, which each caller here treats as an agent (fail closed), and so does one where
+    no host names its processes on this platform: an empty set would make every caller an owner."""
     names = registry.union("process_names", registry_path)
+    if not names:
+        raise registry.RegistryError("hosts.json: no registered host names its agent processes on "
+                                     "this platform")
     return frozenset(n.lower() for n in names)
 
 

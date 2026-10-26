@@ -5,7 +5,9 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
+import kitlib.platform
 from kitlib.host import HostCapabilities, HostProfile, registry
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -207,11 +209,13 @@ class Validation(Case):
 class Profiles(Case):
     def test_profiles_and_union_cover_every_host_in_file_order(self):
         data = second(kit_hosts())
-        data['other']['profile']['process_names'] = ['other.exe', 'node.exe']
+        data['other']['profile']['process_names'] = {'windows': ['other.exe', 'node.exe']}
         data['other']['profile']['session_env'] = 'OTHER_SESSION'
         path = self.put(data)
         self.assertEqual(len(registry.profiles(path)), 2)
-        self.assertEqual(registry.union('process_names', path), ('claude.exe', 'node.exe', 'other.exe'))
+        with mock.patch.object(kitlib.platform, 'NAME', 'windows'):
+            self.assertEqual(registry.union('process_names', path),
+                             ('claude.exe', 'node.exe', 'other.exe'))
         self.assertEqual(registry.union('session_env', path), ('CLAUDE_CODE_SESSION_ID', 'OTHER_SESSION'))
 
     def test_the_kit_registry_names_claudes_session_trailer_and_codex_has_none(self):
@@ -252,6 +256,44 @@ class Profiles(Case):
         self.assertEqual(registry.state_path(home, 'tools', 'x.py'),
                          os.path.join(home, '.claude', 'tools', 'x.py'))
         self.assertEqual(registry.default_profile().skills_directory, '.claude/skills')
+
+
+class ProcessNames(Case):
+    """process_names is per platform: each host's profile carries the running platform's list
+    (kitlib.platform.NAME), so union() is this platform's agent images (docs/linux-support-plan.md
+    slice 2)."""
+
+    def union(self, name, path=None):
+        with mock.patch.object(kitlib.platform, 'NAME', name):
+            return registry.union('process_names', path)
+
+    def test_the_kit_registry_gives_each_platforms_agent_images(self):
+        self.assertEqual(self.union('windows'), ('claude.exe', 'node.exe', 'codex.exe'))
+        self.assertEqual(self.union('linux'), ('claude', 'node', 'codex'))
+
+    def test_a_platform_no_host_lists_gives_no_names(self):
+        self.assertEqual(self.union('unsupported'), ())
+        data = kit_hosts()
+        data['claude']['profile']['process_names'] = {'windows': ['claude.exe']}
+        self.assertEqual(self.union('linux', self.put(data)), ())
+
+    def test_a_list_or_a_map_missing_a_host_platform_or_naming_another_is_refused(self):
+        for names in (['claude.exe'], {}, {'linux': ['claude']}, {'windows': []},
+                      {'windows': 'claude.exe'}, {'windows': ['claude.exe'], 'amiga': ['x']},
+                      {'windows': ['claude.exe', 3]}):
+            data = kit_hosts()
+            data['claude']['profile']['process_names'] = names
+            with self.subTest(process_names=names):
+                with self.assertRaisesRegex(registry.RegistryError, 'process_names'):
+                    registry.load(self.put(data))
+
+    def test_a_platform_the_host_does_not_declare_may_be_listed_ahead(self):
+        data = kit_hosts()
+        self.assertEqual(data['claude']['platforms'], ['windows'])
+        data['claude']['profile']['process_names'] = {'windows': ['a.exe'], 'macos': ['a']}
+        path = self.put(data)
+        self.assertEqual(self.union('windows', path), ('a.exe',))
+        self.assertEqual(self.union('linux', path), ())
 
 
 class Selection(Case):
