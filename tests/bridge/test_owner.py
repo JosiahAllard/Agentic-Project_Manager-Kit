@@ -5,10 +5,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from optional.bridge.core.owner import (LEASE_LOG,MAX_LEASES,OwnerControls,OwnerDecisions,
-    WriterGrant,WriterLeases)
+from optional.bridge.core.owner import MAX_LEASES,OwnerControls,OwnerDecisions,WriterGrant,WriterLeases
 from optional.bridge.core.pairing import PairingError,PairingStore
 from tests.bridge.test_pairing import chat
+
+LEASE_LOG='writer-leases.log'  # the documented name (README, Writer leases)
 
 
 class OwnerTests(unittest.TestCase):
