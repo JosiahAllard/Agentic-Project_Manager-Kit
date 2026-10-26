@@ -15,7 +15,7 @@ import uuid
 
 from optional.bridge.hosts.codex.runtime import CodexSources
 from optional.bridge.core.contracts import Capability
-from optional.bridge.core.messages import BeforeWriteError,OutboundMessage,reply_operation_id
+from optional.bridge.core.messages import BeforeWriteError,DeliveryError,OutboundMessage,reply_operation_id
 from kitlib.proc.pipe import (INVALID,SecurityAttributes,connect_pipe,create_file,create_pipe,
     disconnect_pipe,from_sddl,local_free,peek,process_sids,read,write,close)
 from optional.bridge.win.channel import NativeChannel
@@ -47,6 +47,7 @@ class OwnedNativeRPC:
                 connect_pipe(handle,None)
         finally: local_free(security)
         self.response='success'
+        self.on_request=None
         self.thread=threading.Thread(target=self.run,daemon=True)
         self.thread.start()
 
@@ -76,6 +77,7 @@ class OwnedNativeRPC:
                     if len(data)<4 or len(data)<4+struct.unpack('<I',data[:4])[0]: continue
                     request=json.loads(data[4:].decode('utf-8'))
                     self.requests.append(request)
+                    if self.on_request is not None: self.on_request()  # native side effects before the answer
                     result={'success':True,'structuredContent':{'threadId':self.target}}
                     if self.response=='malformed': result['content']=[{'type':'text','text':'{"isError":true}'}]
                     output=json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}).encode()
@@ -337,6 +339,94 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
         self.refused(adapter,self.message,'codex-direct-route-unavailable')
         self.grant()
         self.refused(adapter,self.message,'codex-direct-route-unavailable')
+
+    def recipient_turn_moves_on(self):
+        # What a delivered message does in the recipient: a new turn starts after the captured one.
+        turn=str(uuid.uuid4())
+        context={**self.context,'turn_id':turn}
+        records=[{'timestamp':'2026-10-12T12:00:01Z','type':'turn_context','payload':context},
+            {'timestamp':'2026-10-12T12:00:01Z','type':'event_msg','payload':{'type':'task_started','turn_id':turn}}]
+        with self.target_path.open('ab') as stream:
+            for record in records: stream.write(json.dumps(record,separators=(',',':')).encode()+b'\n')
+
+    def test_a_write_that_starts_the_recipients_next_turn_is_accepted_and_keeps_the_peer(self):
+        adapter=self.leased()
+        self.grant()
+        self.rpc.on_request=self.recipient_turn_moves_on
+        result=adapter.send(self.claude_message)
+        self.assertEqual(result.state,'recipient-accepted')
+        self.assertEqual(len(self.rpc.requests),1)
+        self.assertIn(self.recipient,self.controller.pairs.registered())  # the post-write check drops no chat
+
+    def unconfirmed_after_write(self,change):
+        adapter=self.leased()
+        self.grant()
+        self.rpc.on_request=change
+        with self.assertRaises(DeliveryError) as caught: adapter.send(self.claude_message)
+        self.assertNotIsInstance(caught.exception,BeforeWriteError)  # it may have landed: unknown
+        self.assertEqual(caught.exception.code,'codex-native-result-unconfirmed')
+        self.assertEqual(len(self.rpc.requests),1)
+
+    def test_desktop_image_changed_after_the_write_is_unknown(self):
+        def change():
+            self.recipient_turn_moves_on()
+            self.factory.desktop_executable=Path(__file__).resolve()
+        self.unconfirmed_after_write(change)
+
+    def test_recipient_rollout_replaced_after_the_write_is_unknown(self):
+        def change():
+            self.recipient_turn_moves_on()
+            spare=self.target_path.with_name(self.target_path.name+'.new')
+            spare.write_bytes(self.target_path.read_bytes())
+            os.replace(spare,self.target_path)  # the same records in a different file
+        self.unconfirmed_after_write(change)
+
+    def test_captured_turn_missing_after_the_write_is_unknown(self):
+        def change():
+            captured=self.target_meta['x-codex-turn-metadata']['turn_id'].encode()
+            data=self.target_path.read_bytes()
+            self.target_path.write_bytes(data.replace(captured,str(uuid.uuid4()).encode()))
+        self.unconfirmed_after_write(change)
+
+
+class RolloutAppendDuringLiveCheckTests(unittest.TestCase):
+    """A chat appending to its rollout while a live check reads it is not a dead chat."""
+    write=DirectRuntimeDeliveryTests.write
+    write_login=DirectRuntimeDeliveryTests.write_login
+    tearDown=DirectRuntimeDeliveryTests.tearDown
+    setUp=DirectRuntimeDeliveryTests.setUp
+    populate=DirectRuntimeDeliveryTests.populate
+
+    def appending(self,times):
+        from optional.bridge.hosts.codex import context as context_module
+        real=context_module.JsonLineDecoder
+        marker=self.recipient.identity.native_session_id.encode()
+        path,appended=self.target_path,[]
+        class Appending(real):
+            def feed(decoder,line):
+                if marker in line and len(appended)<times:
+                    appended.append(1)
+                    with path.open('ab') as stream:
+                        stream.write(b'{"timestamp":"2026-10-12T12:00:02Z","type":"response_item","payload":{}}\n')
+                return real.feed(decoder,line)
+        from unittest.mock import patch
+        return patch.object(context_module,'JsonLineDecoder',Appending),appended
+
+    def test_one_append_during_the_read_keeps_the_recipient_observed(self):
+        self.populate()
+        patcher,appended=self.appending(1)
+        with patcher:
+            self.controller.pairs.require_selected(self.sender,self.recipient)
+        self.assertEqual(len(appended),1)
+        self.assertIn(self.recipient,self.controller.pairs.registered())
+
+    def test_an_append_during_every_try_is_still_refused(self):
+        from optional.bridge.core.pairing import PairingError
+        self.populate()
+        patcher,appended=self.appending(1000)
+        with patcher, self.assertRaises(PairingError):
+            self.controller.pairs.require_selected(self.sender,self.recipient)
+        self.assertEqual(len(appended),3)  # bounded: RECORD_TRIES reads, then refused
 
 
 class OwnedNativeRPCFixtureTests(unittest.TestCase):

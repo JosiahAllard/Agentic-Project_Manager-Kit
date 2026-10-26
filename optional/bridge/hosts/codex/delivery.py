@@ -31,6 +31,9 @@ class DesktopLease:
     # The owner-leased Codex writer that carries delivery for a sender of another
     # host. None is refused: a Codex sender is never its own executor.
     writer: ChatBinding | None = None
+    # The host's identity check after a write. A delivery moves the recipient's turn
+    # on, so the pre-write recheck can fail on a write that landed. None: recheck.
+    confirm: object = field(default=None, repr=False)
 
 
 def native_id(message):
@@ -76,6 +79,7 @@ class CodexDesktopAdapter:
             if (type(lease) is not DesktopLease or lease.recipient != message.recipient
                     or type(lease.executor) is not CodexContext or lease.executor.kind != 'desktop'
                     or type(lease.endpoint) is not NativeEndpoint or not callable(lease.recheck)
+                    or lease.confirm is not None and not callable(lease.confirm)
                     or any(type(value) is not str or UUID.fullmatch(value) is None
                         for value in (lease.executor.thread_id, lease.executor.turn_id))):
                 raise BeforeWriteError('codex-desktop-lease-unverified')
@@ -115,7 +119,8 @@ class CodexDesktopAdapter:
                     may_have_written = True
                     raise
                 may_have_written = True
-                if lease.recheck() is not True:
+                confirm = lease.recheck if lease.confirm is None else lease.confirm
+                if confirm() is not True:
                     raise ValueError('context changed')
                 if type(result) is not dict or result.get('success') is not True or result.get('isError', False) is not False:
                     raise ValueError('no native success')

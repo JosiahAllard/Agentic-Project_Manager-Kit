@@ -26,6 +26,7 @@ from kitlib.proc.process import handle_ctime
 MAX_ENTRIES, MAX_DIRECTORIES = 100000, 4096
 MAX_ROLLOUT_BYTES = 256*1024*1024
 MAX_AUTHORITY_BYTES = 128*1024
+RECORD_TRIES = 3
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z')
 HEADER = re.compile(rb'\A\{\s*"timestamp"\s*:\s*"[0-9TtZz:.+ -]{1,64}"\s*,\s*"type"\s*:\s*"([a-z_]+)"\s*,\s*"payload"\s*:\s*')
 EVENT = re.compile(rb'\A\{\s*"type"\s*:\s*"([a-z_]+)"')
@@ -227,7 +228,24 @@ class CodexObserver:
         if len(matches)!=1: raise ContextError('native-rollout-missing-or-ambiguous')
         return matches[0]
 
-    def _records(self, path):
+    def _records(self, path, *, contexts=None):
+        """The rollout's authority records, read whole while the file stands still.
+
+        A running chat appends to its rollout, so a read that overlaps an append is
+        retried, at most RECORD_TRIES times in all; a file that changes during every
+        try is refused as before. Failing one read must not drop a live chat.
+        contexts, when given, collects (turn_id, sha) of every turn_context in order.
+        """
+        for attempt in range(RECORD_TRIES):
+            if contexts is not None:
+                contexts.clear()
+            try:
+                return self._read_records(path,contexts)
+            except ContextError as error:
+                if error.code!='native-rollout-changed' or attempt==RECORD_TRIES-1:
+                    raise
+
+    def _read_records(self, path, contexts):
         before=_regular(path)
         if not 0<before.st_size<=MAX_ROLLOUT_BYTES: raise ContextError('native-rollout-size-limit')
         session=context=lifecycle=None
@@ -268,7 +286,9 @@ class CodexObserver:
                 if kind=='session_meta':
                     if session is not None: raise ContextError('repeated-native-session')
                     session=payload
-                elif kind=='turn_context': context=payload
+                elif kind=='turn_context':
+                    context=payload
+                    if contexts is not None: contexts.append((payload.get('turn_id'),_sha(payload)))
                 elif kind=='event_msg' and payload.get('type') in LIFECYCLE: lifecycle=payload
             after=os.fstat(stream.fileno())
             if (_version(after)!=_version(before) or after.st_ctime_ns!=opened.st_ctime_ns
@@ -330,6 +350,46 @@ class CodexObserver:
         if facts!=captured:
             raise ContextError('captured-native-context-changed')
         return facts
+
+    def rollout_identity(self, thread):
+        """The (device, file id) of a chat's one rollout file."""
+        info=_regular(self._find(thread))
+        return info.st_dev,info.st_ino
+
+    def observe_successor(self, captured, *, session_sha256, context_sha256, rollout):
+        """After a delivery wrote to this chat: the same chat, its turn possibly moved on.
+
+        A delivered message starts a new turn in the recipient, so the captured turn
+        need not be the last one. The rollout must be the same file (rollout, from
+        rollout_identity), its session record unchanged, and the captured turn's
+        exact turn_context still present; newer turns after it are accepted. This
+        is identity evidence after a write only: it authorizes no write.
+        """
+        try:
+            self.require_host()
+            if (type(captured) is not CodexContext or type(rollout) is not tuple
+                    or any(type(value) is not str or not re.fullmatch('[0-9a-f]{64}',value)
+                        for value in (session_sha256,context_sha256))):
+                raise ContextError('captured-native-context-unverified')
+            path=self._find(captured.thread_id)
+            info=_regular(path)
+            if (info.st_dev,info.st_ino)!=rollout:
+                raise ContextError('native-rollout-replaced')
+            contexts=[]
+            session,_context,_lifecycle=self._records(path,contexts=contexts)
+            if type(session) is not dict or session.get('id')!=captured.thread_id or _sha(session)!=session_sha256:
+                raise ContextError('native-session-identity-mismatch')
+            if (captured.turn_id,context_sha256) not in contexts:
+                raise ContextError('captured-native-context-changed')
+            info=_regular(path)
+            if (info.st_dev,info.st_ino)!=rollout:
+                raise ContextError('native-rollout-replaced')
+            self.require_host()
+            return True
+        except ContextError:
+            raise
+        except Exception:
+            raise ContextError('native-evidence-unavailable') from None
 
     def close(self):
         if self._handle:
