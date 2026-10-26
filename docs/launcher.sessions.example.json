@@ -24,7 +24,7 @@
         "stem": "kit-coordinator",
         "state": "<kit repo>/docs/ops/state.local.md",
         "account": 1,
-        "name": "kit-coordinator-a1"
+        "name": "demo-coordinator-a1"
     },
     "research": {
         "repo": "app",
