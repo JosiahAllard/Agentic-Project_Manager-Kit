@@ -17,6 +17,8 @@ NOW_SLACK = dt.timedelta(seconds=30)    # a window starting this close to now st
 DEFAULT_NOTE = "reserve window"
 SCOPES = ("whole", "half", "slots")
 MAX_SLOT = 1023                         # a slot number above this is a typo, not a slot
+NO_STATS = "1970-01-01T00:00:00Z"       # since and until of the snapshot's stats: no history file
+HISTORY_MAX_S = 300                     # the longest HistoryCache answers without reading again
 BARE = re.compile(r"\d{1,2}:\d{2}")
 
 
@@ -40,7 +42,9 @@ class Client:
 
     # reads
     def snapshot(self):
-        return self.api.snapshot(store=self.store)
+        """The snapshot with an empty stats range: the window shows no stats, and stats over the
+        default 7 days would read and parse every history line of the month on each refresh."""
+        return self.api.snapshot(store=self.store, since=NO_STATS, until=NO_STATS)
 
     def history(self, days=7):
         return self.api.history(store=self.store, days=days)
@@ -70,6 +74,31 @@ class Client:
 
     def division(self, division):
         return self.api.set_division(self.actor, division, store=self.store)
+
+
+class HistoryCache:
+    """The history lines the window last read, read again only when they may have changed: at
+    the first look, on a look whose revision differs from the one they were read at, on the look
+    after that (a run's history line is written just after the write that moves the revision),
+    when forced (the Refresh button), and once they are max_age_s old (a revision bump the store
+    skipped). Parsing them is most of an idle refresh's work. One caller at a time."""
+
+    def __init__(self, max_age_s=HISTORY_MAX_S):
+        self.max_age_s = max_age_s
+        self.lines, self.rev, self.at, self.again = None, None, None, False
+
+    def due(self, rev, now_s, force=False):
+        return (force or self.lines is None or rev is None or rev != self.rev or self.again
+                or now_s - self.at >= self.max_age_s)
+
+    def get(self, rev, fetch, now_s, force=False):
+        """The lines for revision rev at monotonic time now_s; fetch() reads them. A fetch that
+        raises leaves the cache as it was."""
+        if self.due(rev, now_s, force):
+            lines = fetch()
+            self.again = rev is None or rev != self.rev
+            self.lines, self.rev, self.at = lines, rev, now_s
+        return self.lines
 
 
 # ------------------------------------------------------------------ specs

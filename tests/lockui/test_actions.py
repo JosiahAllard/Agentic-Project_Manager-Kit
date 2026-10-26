@@ -60,7 +60,8 @@ class Mapping(unittest.TestCase):
 
     def test_reads(self):
         self.c.snapshot()
-        self.assertEqual(self.last(), ("snapshot", (), {"store": self.store}))
+        self.assertEqual(self.last(), ("snapshot", (), {"store": self.store, "since": a.NO_STATS,
+                                                        "until": a.NO_STATS}))
         self.c.history(days=3)
         self.assertEqual(self.last(), ("history", (), {"store": self.store, "days": 3}))
 
@@ -252,12 +253,80 @@ class Specs(unittest.TestCase):
                          "forbidden: owner only")
 
 
+class HistoryCacheTest(unittest.TestCase):
+    """The window's history lines: read again only when they may have changed."""
+
+    def setUp(self):
+        self.reads = 0
+        self.cache = a.HistoryCache(max_age_s=300)
+
+    def fetch(self):
+        self.reads += 1
+        return ["lines %d" % self.reads]
+
+    def look(self, rev, at, force=False):
+        return self.cache.get(rev, self.fetch, at, force)
+
+    def test_an_unchanged_revision_is_not_read_again(self):
+        self.assertEqual(self.look(5, 0), ["lines 1"])
+        self.assertEqual(self.look(5, 30), ["lines 2"])     # the look after a change reads again
+        for at in (60, 90, 120, 299):
+            self.assertEqual(self.look(5, at), ["lines 2"])
+        self.assertEqual(self.reads, 2)
+
+    def test_a_moved_revision_is_read_then_read_once_more(self):
+        self.look(5, 0)
+        self.look(5, 30)
+        self.look(6, 60)
+        self.look(6, 90)        # the history line of a run that just ended comes after its bump
+        self.look(6, 120)
+        self.assertEqual(self.reads, 4)
+
+    def test_forced_old_or_unknown_revision_reads(self):
+        self.look(5, 0)
+        self.look(5, 30)
+        self.look(5, 40, force=True)
+        self.assertEqual(self.reads, 3)
+        self.look(5, 340)       # max_age_s after the last read
+        self.assertEqual(self.reads, 4)
+        self.look(None, 341)
+        self.assertEqual(self.reads, 5)
+
+    def test_a_failed_read_leaves_the_cache_as_it_was(self):
+        self.look(5, 0)
+        self.look(5, 30)
+
+        def boom():
+            raise OSError("gone")
+        with self.assertRaises(OSError):
+            self.cache.get(6, boom, 60)
+        self.assertEqual(self.look(6, 61), ["lines 3"])
+
+
 class Integration(StoreCase):
     """The client against a real (scratch) store: the owner actor is taken as given there."""
 
     def setUp(self):
         super().setUp()
         self.c = a.Client(store=self.store, actor=OWNER)
+
+    def test_the_snapshot_reads_no_history_for_stats(self):
+        from kitlib.lock import api
+        from kitlib.lock.store import iso, utc_now
+        end = utc_now() - dt.timedelta(hours=1)
+        self.store.history_append({"id": "r-20261008T000000Z-aaaa", "repo": "kit", "slug": "g",
+                                   "kind": "engine-test", "since": iso(end - dt.timedelta(hours=1)),
+                                   "held_since": iso(end - dt.timedelta(minutes=30)),
+                                   "ended": iso(end), "code": 0, "how": "done", "cores": [0],
+                                   "gpus": []})
+        self.assertEqual(len(api.snapshot(self.store)["stats"]["rows"]), 1)
+        with mock.patch.object(self.store, "history_records",
+                               wraps=self.store.history_records) as seen:
+            snap = self.c.snapshot()
+        self.assertEqual(snap["stats"]["rows"], [])
+        self.assertEqual(seen.call_count, 1)
+        self.assertEqual(seen.call_args.kwargs["since"].year, 1970)    # a range with no file
+        self.assertEqual(len(self.c.history()), 1)
 
     def test_reserve_then_edit_then_release(self):
         now = dt.datetime.now(UTC)

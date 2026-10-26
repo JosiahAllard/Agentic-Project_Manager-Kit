@@ -20,10 +20,12 @@ and Division... are the owner's settings.
 
 The lock is read on a worker thread (a snapshot can take a while); its result comes back to the
 Tk thread by a queue the window polls with root.after. A write shows the snapshot it returns.
+The history lines are read again only when the lock's revision moved (actions.HistoryCache).
 """
 import datetime as dt
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -72,6 +74,7 @@ class App:
         self.busy = False        # a read is on the worker thread
         self.gen = 0             # bumped by each write: a read begun before it is stale
         self.results = queue.Queue()
+        self.history_cache = act.HistoryCache()
         self.timer = None        # the next refresh's after id
         root.title(TITLE)
         dark_theme(root)
@@ -157,25 +160,33 @@ class App:
         return t
 
     # ---------------------------------------------------------------- data
-    def read(self, gen):
-        """(gen, snapshot, history lines, error): one look at the lock; never raises."""
+    def read(self, gen, force=False):
+        """(gen, snapshot, history lines, error): one look at the lock; never raises. The
+        history lines come from self.history_cache, read again only when they may have changed
+        (act.HistoryCache) or when forced."""
         try:
-            return gen, self.client.snapshot(), self.client.history(days=BACK_DAYS + 1), None
+            snap = self.client.snapshot()
+            rev = snap.get("revision") if isinstance(snap, dict) else None
+            hist = self.history_cache.get(
+                rev, lambda: self.client.history(days=BACK_DAYS + 1), time.monotonic(), force)
+            return gen, snap, hist, None
         except Exception as e:          # the window stays up and says why
             return gen, None, None, e
 
     def refresh(self, schedule=True):
         """Reads the lock and shows it; with schedule, the next refresh follows REFRESH_MS
-        later whatever happened. Threaded, the read runs on a worker and poll() shows it."""
+        later whatever happened. Threaded, the read runs on a worker and poll() shows it. One
+        without schedule (the Refresh button, a write that brought no snapshot) reads the
+        history lines again too."""
         if schedule:
             self.timer = None
         if not self.threaded:
-            self.apply(self.read(self.gen), schedule)
+            self.apply(self.read(self.gen, not schedule), schedule)
             return
         if self.busy:                   # a read is out; it schedules the next
             return
         self.busy = True
-        threading.Thread(target=lambda g=self.gen: self.results.put(self.read(g)),
+        threading.Thread(target=lambda g=self.gen, f=not schedule: self.results.put(self.read(g, f)),
                          daemon=True).start()
         self.root.after(POLL_MS, self.poll, schedule)
 
