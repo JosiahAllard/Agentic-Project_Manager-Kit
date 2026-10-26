@@ -15,7 +15,7 @@
       "owner_paths": ["FAKE.md", ".fakehost/"],
       "worktrees_directory": ".fakehost/worktrees",
       "state_directory": ".fakehost",
-      "process_names": ["fakehost.exe"],
+      "process_names": {"windows": ["fakehost.exe"]},
       "mcp_tool_format": "{server}.{tool}",
       "session_env": "FAKEHOST_SESSION_ID",
       "skills_directory": ".fakehost/skills",

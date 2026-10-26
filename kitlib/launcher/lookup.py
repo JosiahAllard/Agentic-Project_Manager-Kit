@@ -1,13 +1,25 @@
 """Finding a running Claude session by its Remote Control name (docs/launcher.md "Lookup").
 
 A launched session is a claude.exe with a command line, not the Store app's (under WindowsApps).
-Its name is the --remote-control argument, matched exactly and case-sensitively as a whole token:
+Its name is the --remote-control argument (else -n), matched exactly and case-sensitively as a whole token:
 "x-a1" never matches "x-a1-r2". Process rows are dicts with Name, CommandLine, ExecutablePath,
 ProcessId and ParentProcessId (kitlib.pmstart.list_processes, or a test's list).
 """
+import re
+
 from kitlib import pmstart
 
-rc_name = pmstart.rc_name
+_N = re.compile(r"""(?:^|\s)-n\s+(?:"([^"]*)"|'([^']*)'|(\S+))""")
+
+
+def rc_name(cmd):
+    """The session's name: its --remote-control value, else, for a session launched without it
+    (launch.py start --no-remote-control), its -n value; None for neither."""
+    n = pmstart.rc_name(cmd)
+    if n:
+        return n
+    m = _N.search(cmd or '')
+    return next((g for g in m.groups() if g), None) if m else None
 list_processes = pmstart.list_processes
 
 

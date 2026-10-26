@@ -77,6 +77,8 @@ def parser():
                    help='compact window in tokens (default %d; 0: the CLI default)' % start.DEFAULT_AUTOCOMPACT)
     s.add_argument('--what-if', action='store_true', help='print the window script, start nothing')
     s.add_argument('--home-worktree', action='store_true', help=HOME_HELP)
+    s.add_argument('--no-remote-control', action='store_true',
+                   help='start without --remote-control (for measuring its cost; found by -n)')
 
     d = sub.add_parser('deep', help='a deep-worker session')
     d.add_argument('--repo-path', required=True)
@@ -149,7 +151,8 @@ def parser():
 
 SESSION_EXCLUSIVE = (('org', '--org'), ('brief', '--brief'), ('name', '--name'), ('agent', '--agent'),
                      ('no_agent', '--no-agent'), ('model', '--model'), ('effort', '--effort'),
-                     ('autocompact', '--autocompact'), ('predecessor', '--predecessor'))
+                     ('autocompact', '--autocompact'), ('predecessor', '--predecessor'),
+                     ('no_remote_control', '--no-remote-control'))
 
 
 def session_conflicts(a):
@@ -172,7 +175,7 @@ def run(a, settings, host):
         return start.start(settings, host, a.repo, a.repo_path, a.account, a.org, a.prompt, a.brief,
                            name=a.name, predecessor=a.predecessor, no_agent=a.no_agent, agent=a.agent,
                            model=a.model, effort=a.effort, autocompact=a.autocompact, whatif=a.what_if,
-                           home_worktree=a.home_worktree)
+                           home_worktree=a.home_worktree, remote_control=not a.no_remote_control)
     if a.cmd == 'deep':
         return start.deep(settings, host, a.repo_path, a.requester, a.slug, a.brief, a.brief_text, a.account,
                           a.autocompact, a.model, a.effort, a.force, a.plan, a.brief_dir,

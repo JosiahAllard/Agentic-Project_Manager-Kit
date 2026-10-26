@@ -56,7 +56,7 @@ An account is signed in when one of its folders holds `.credentials.json`; a lau
 
 ## Lookup
 
-A launched session is a `claude.exe` that is not the Store app (under `WindowsApps`); its name is the `--remote-control` argument, matched exactly as a whole token (`x-a1` never matches `x-a1-r2`). `kitlib/launcher/lookup.py` reuses `kitlib.pmstart`'s parser.
+A launched session is a `claude.exe` that is not the Store app (under `WindowsApps`); its name is the `--remote-control` argument, matched exactly as a whole token (`x-a1` never matches `x-a1-r2`). `kitlib/launcher/lookup.py` reuses `kitlib.pmstart`'s parser. A session launched with `start --no-remote-control` (no `--remote-control` on its command line; the flag exists to measure what Remote Control costs, and `--session` refuses it) is found by its `-n` argument instead; `--remote-control` wins when both are present, and `stop` accepts either in the window's script. Nothing without one of them has a name (tests/launcher/test_lookup_stop.py `RcOff`).
 
 ## The window
 
