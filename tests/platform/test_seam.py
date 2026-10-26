@@ -38,10 +38,20 @@ class Backends(unittest.TestCase):
                 self.assertIs(getattr(windows, name), today)
         self.assertEqual(sorted(windows.__all__), sorted(api.NAMES))
 
-    def test_every_linux_primitive_is_a_stub_naming_itself_and_its_slice(self):
+    def test_the_linux_hardware_primitives_are_the_readers(self):
+        linux = importlib.import_module('kitlib.platform.linux')
+        hardware = importlib.import_module('kitlib.platform.linux.hardware')
+        self.assertEqual(sorted(linux.BUILT), ['hardware'])
+        for name in api.HARDWARE:
+            with self.subTest(name=name):
+                self.assertIs(getattr(linux, name), getattr(hardware, name))
+
+    def test_every_other_linux_primitive_is_a_stub_naming_itself_and_its_slice(self):
         linux = importlib.import_module('kitlib.platform.linux')
         self.assertEqual(sorted(linux.__all__), sorted(api.NAMES))
         for area, (names, slice_number) in api.AREAS.items():
+            if area == 'hardware':
+                continue
             for name in names:
                 with self.subTest(name=name):
                     with self.assertRaisesRegex(platform.PlatformUnsupported,

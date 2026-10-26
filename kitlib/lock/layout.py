@@ -4,7 +4,8 @@ Hardware (detect, or fake_hardware in tests) is what Windows reports, on any mac
 processors in every processor group (past 64), physical cores with SMT and efficiency class, L3
 domains (a CPU may have several), CPU sets (scheduling class), memory, and display adapters of any vendor
 through DXGI (CIM as the fallback). nvidia-smi is never needed to size the pools; it only adds
-live use (kitlib.lock.api).
+live use (kitlib.lock.api). On Linux, detect is detect_linux: the same dict, read from /sys and
+/proc (kitlib.platform.linux.hardware, docs/linux-support-plan.md section 2.4).
 
 The division is the owner's (machine.json); any key missing takes its default:
 
@@ -35,7 +36,9 @@ import subprocess
 import time
 from ctypes import wintypes
 
+import kitlib.platform
 from kitlib.lock import kinds
+from kitlib.platform.linux import hardware as linux_hw
 from kitlib.proc import cpu, process
 
 POOLS = ("cpu", "gpu")
@@ -185,7 +188,10 @@ def detect():
     no card). A layout from such a look never replaces a layout.json from a good look, and is
     otherwise written provisional (in_force). CIM answering for DXGI is not a failed look. One
     listing of the groups gives both `groups` and `threads`, so the two never disagree, and a
-    failed listing is not asked again: a second answer would mark "groups" failed over every group."""
+    failed listing is not asked again: a second answer would mark "groups" failed over every group.
+    On Linux: detect_linux()."""
+    if kitlib.platform.NAME == "linux":
+        return detect_linux()
     problems, failed = [], []
     listed = cpu.listed_groups()
     if listed is None:
@@ -217,6 +223,62 @@ def detect():
             "l3": [cpu.bits(m) for m in cpu.l3_domains()], "cpu_sets": cpu.cpu_sets(),
             "memory_mb": mem.get("total_mb"), "gpus": gpus,
             "source": {"cpu": "windows", "gpu": gsrc}, "problems": problems, "failed": failed}
+
+
+def detect_linux(root="/", affinity=None, run=None):
+    """detect()'s dict from /sys and /proc under root (kitlib.platform.linux.hardware; affinity:
+    the ids sched_getaffinity gives, None to ask; run: subprocess.run for nvidia-smi). Never
+    raises. Thread ids are the allowed set with its gaps; groups chunk them by 64 (id // 64, as
+    cpu.gid numbers them), and cpu_sets is [] (Linux has none). failed: "groups" when cpu/online
+    could not be read (the affinity stands in), "cores" when a thread's topology could not (it
+    counts as one core), "gpus" when the drm class could not be read; no drm class is no card."""
+    problems, failed = [], []
+    try:
+        ids = linux_hw.allowed(root, affinity)
+    except (OSError, ValueError) as e:
+        problems.append("Linux did not list the online CPUs (%s); the affinity stands in" % e)
+        failed.append("groups")
+        ids = linux_hw.standin(affinity)
+    try:
+        cores, missing = linux_hw.cores(root, ids)
+    except (OSError, ValueError) as e:
+        cores, missing = [{"threads": [i], "smt": False, "efficiency": 0} for i in ids], ids
+        problems.append("the CPU topology: %s" % e)
+    if missing:
+        problems.append("Linux did not give the topology of %d thread(s); each counts as one core"
+                        % len(missing))
+        failed.append("cores")
+    try:
+        l3 = linux_hw.l3(root, ids)
+    except (OSError, ValueError) as e:
+        problems.append("the L3 caches: %s" % e)
+        l3 = []
+    try:
+        mem = linux_hw.memory(root)
+    except (OSError, ValueError) as e:
+        problems.append("/proc/meminfo: %s" % e)
+        mem = {}
+    try:
+        adapters, gp = linux_hw.adapters(root, run)
+        problems.extend(gp)
+        for a in adapters:
+            if not a["name"]:
+                a["name"] = "%s 0x%04X" % (VENDORS.get(a["vendor_id"], "0x%04X" % a["vendor_id"]),
+                                           a["device_id"])
+        gpus, gsrc = gpu_entries(adapters, "sysfs"), "sysfs"
+    except (OSError, ValueError) as e:
+        problems.append("the drm cards: %s" % e)
+        failed.append("gpus")
+        gpus, gsrc = [], "none"
+    groups = {}
+    for t in ids:
+        groups.setdefault(t // 64, []).append(t)
+    return {"threads": ids,
+            "groups": [{"group": g, "threads": ts} for g, ts in sorted(groups.items())],
+            "cores": [{"threads": c["threads"], "smt": bool(c["smt"]), "efficiency": c["efficiency"]}
+                      for c in cores],
+            "l3": l3, "cpu_sets": [], "memory_mb": mem.get("total_mb"), "gpus": gpus,
+            "source": {"cpu": "linux", "gpu": gsrc}, "problems": problems, "failed": failed}
 
 
 def fake_hardware(threads=24, smt=2, l3=1, gpus=1, vram_mb=12288, group_size=64,

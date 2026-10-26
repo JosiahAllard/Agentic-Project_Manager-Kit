@@ -378,7 +378,8 @@ lock/layout.detect keeps its dict; a Linux reader fills it from /sys and /proc w
   working. cpu_sets is [].
 - memory_mb: MemTotal from /proc/meminfo; a cgroup memory.max on the kit's own slice caps it.
 - gpus: /sys/class/drm/card*/device (vendor, device, mem_info_vram_total for AMD), NVIDIA's VRAM
-  from `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader` or /proc/driver/nvidia;
+  from `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader` (matched to
+  the card by bus id) or, name only, /proc/driver/nvidia;
   live use stays with api.gpu_use (nvidia-smi already).
 
 No double-booking: unchanged in rule. One store per user (`<profile>/.claude/machine-lock`), a new
@@ -397,7 +398,7 @@ machine setup run inside a container warns and does not refuse. WSL double-books
 so it stays refused until the later phase after native parity (question 11).
 
 The proving test feeds four synthetic /sys and /proc trees, written by hand into the test data
-(fake_hardware, extended) from the kernel's documented layout: a plain desktop, a hybrid part
+(tests/lock/linux_trees.py) from the kernel's documented layout: a plain desktop, a hybrid part
 (cpu_core and cpu_atom), a box with gaps in its CPU ids and a container whose cpuset allows
 fewer CPUs than /sys lists. It checks that no two slots share an id. No real machine was recorded
 for them, and none is needed for the division logic; the hybrid and gap trees are ones a live box
@@ -614,6 +615,10 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    synthetic /sys and /proc trees of section 2.4. Risk High (lock logic). Proof: the four
    synthetic trees, and the VM's live /sys, divide with no shared id; the Windows layout
    tests are unchanged.
+   Built on kit/linux-lock-hardware: kitlib/platform/linux/hardware.py, layout.detect_linux, the
+   seam's four hardware primitives; the VM's live /sys run (tests/lock/test_layout_linux.py
+   LiveSys) waits for the VM. Deviation: fake_hardware stays unchanged; the four trees live in
+   tests/lock/linux_trees.py, read through the real reader.
 7. **Lock runs and detach.** lock/run.py Slot, give-back, release, detach and gate/submit on the
    seam, on a test store root, and the call sites of slice 5's `leftovers` mechanism (Slot.release
    and end_sparing). Risk High. Proof: a detached run survives its caller; give-back narrows
