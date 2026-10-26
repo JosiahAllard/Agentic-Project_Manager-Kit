@@ -443,4 +443,4 @@ if kitlib.platform.NAME == "linux":
                   "proc_ctime", "alive", "_ancestor", "ancestry", "ancestors_of", "own_ancestors",
                   "descendants", "command_line", "terminate_verified", "kill_tree"):
         globals()[_name] = getattr(_procfs, _name)
-
+    del _name
