@@ -360,18 +360,19 @@ class ServiceAttests(unittest.TestCase):
         class Native:
             # A running process, as the real inspector returns: the broker refuses an exited one.
             pid, creation = os.getpid(), own_ctime()
+            mark = None
 
         class Server:
             def handle(self, message):
                 return {'handled': message}
 
         class Controller:
-            def frontend(self, observe):
+            def frontend(self, observe, *, mark=None):
                 observed.append(observe)
                 return Server()
 
         class Inspector:
-            def inspect(self, peer, channel=None):
+            def inspect(self, peer, channel=None, mark=None):
                 return Native()
         service = BrokerService.__new__(BrokerService)
         service.closed, service.controller, service.inspector = False, Controller(), Inspector()
