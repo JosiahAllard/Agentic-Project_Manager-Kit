@@ -38,6 +38,42 @@ class RecipientReplyTests(DispatchTests):
         with self.assertRaisesRegex(DeliveryError, 'reply-route-not-selected'):
             self.core.reply('op', b'test-caller-proof')
 
+    def test_a_recipient_no_longer_live_is_not_reported_as_an_unselected_route(self):
+        # Both directions stay selected: a dead chat is a different refusal from a route off.
+        self.admit()
+        self.adapter.response = NativeResult('op', self.b.reference, 'recipient-accepted', 'native-op')
+        self.core.dispatch_once('op')
+        self.proofs[b'recipient-proof'] = SenderAuthority(self.b, 'recipient-turn')
+        self.core.reply_to('op', 'explicit reply', b'recipient-proof')
+        del self.live['b']
+        with self.assertRaisesRegex(DeliveryError, 'reply-chat-not-observed'):
+            self.core.reply('op', b'test-caller-proof')
+        with self.assertRaisesRegex(DeliveryError, 'reply-chat-not-observed'):
+            self.core.reply('op', b'test-caller-proof')  # now dropped from the observed list too
+
+    def test_a_route_that_is_off_is_reported_as_such_even_with_a_dead_chat(self):
+        self.select(False)
+        self.pairings.owner_select(self.pairings.propose('a', 'b', bidirectional=False), b'test-owner-proof')
+        self.admit()
+        self.adapter.response = NativeResult('op', self.b.reference, 'reply-received', 'native-op', 'stored reply')
+        self.core.dispatch_once('op')
+        self.proofs[b'recipient-proof'] = SenderAuthority(self.b, 'recipient-turn')
+        del self.live['b']
+        with self.assertRaisesRegex(DeliveryError, 'reply-route-not-selected'):
+            self.core.reply('op', b'test-caller-proof')
+        with self.assertRaisesRegex(DeliveryError, 'reply-route-not-selected'):
+            self.core.reply_to('op', 'not allowed', b'recipient-proof')
+        self.assertNotIn(self.b, self.pairings.registered())  # a refused route still prunes a dead chat
+
+    def test_reply_to_from_a_sender_no_longer_live_names_that_refusal(self):
+        self.admit()
+        self.adapter.response = NativeResult('op', self.b.reference, 'recipient-accepted', 'native-op')
+        self.core.dispatch_once('op')
+        self.proofs[b'recipient-proof'] = SenderAuthority(self.b, 'recipient-turn')
+        del self.live['a']
+        with self.assertRaisesRegex(DeliveryError, 'reply-chat-not-observed'):
+            self.core.reply_to('op', 'explicit reply', b'recipient-proof')
+
     def test_reply_before_native_dispatch_is_rejected(self):
         self.admit()
         self.proofs[b'recipient-proof'] = SenderAuthority(self.b, 'recipient-turn')

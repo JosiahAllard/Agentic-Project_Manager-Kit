@@ -12,6 +12,15 @@ from .outbox import Outbox
 from .pairing import PairingError, PairingStore
 
 
+def _reply_refusal(error):
+    """A disabled reverse route and a chat no longer observed live are different refusals."""
+    if error.code == 'chat-route-not-selected':
+        return 'reply-route-not-selected'
+    if error.code in ('chat-not-observed', 'chat-live-binding-unverified'):
+        return 'reply-chat-not-observed'
+    return 'reply-route-not-selected'
+
+
 class CoreBroker:
     def __init__(self, pairings, outbox, adapters, *, authorize=None, dispatch_check=None):
         if type(pairings) is not PairingStore or type(outbox) is not Outbox or type(adapters) is not dict:
@@ -97,8 +106,8 @@ class CoreBroker:
         message = self._read(operation, proof)
         try:
             self.pairings.require_selected(message.recipient, message.sender)
-        except PairingError:
-            raise DeliveryError('reply-route-not-selected') from None
+        except PairingError as error:
+            raise DeliveryError(_reply_refusal(error)) from None
         return self.outbox.reply(operation)
 
     def reply_to(self, operation, text, proof):
@@ -113,8 +122,8 @@ class CoreBroker:
         try:
             with self.pairings.selected_guard(message.recipient, message.sender):
                 return self.outbox.recipient_reply(operation, text,reverse_reply=True)
-        except PairingError:
-            raise DeliveryError('reply-route-not-selected') from None
+        except PairingError as error:
+            raise DeliveryError(_reply_refusal(error)) from None
 
     def events(self, operation, proof, *, after=0, limit=32):
         self._read(operation, proof)
