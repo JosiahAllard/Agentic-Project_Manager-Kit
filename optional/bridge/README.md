@@ -100,7 +100,9 @@ nominates no channel, and the other halves keep working.
     a private port), the service restarts, or either chat's session is observed with a different
     binding (for example a permission change). A failed live check, a turn change or a chat missed
     by one discovery pass ends nothing: the write-time checks below refuse while the chat is away.
-    The window shows when it was granted
+    A closed chat keeps its lease (it cannot deliver, and it still holds one of the 32 slots)
+    until Stop, a revoke or a restart. The window lists every lease with its grant time, marks one
+    whose chat is not listed now, and its "Stop selected lease" stops it by reference
   - is logged: every grant, revoke and replacement appends one JSON line (`at`, `event`, `by`,
     `writer`, `recipient`; chat references only) to `writer-leases.log` beside `pairings.sqlite`.
     A grant that cannot be logged is refused, and a writer it would have replaced keeps its lease

@@ -113,7 +113,7 @@ class WriterLeaseTests(unittest.TestCase):
         self.assertEqual(granted,100.0)
         self.now+=10*365*24*3600
         self.assertEqual(self.leases.writer(self.b),self.a)
-        self.assertEqual(self.owner.writer_grants(),((self.a.reference,self.b.reference,100.0),))
+        self.assertEqual(self.owner.writer_grants(),((self.a.reference,self.b.reference,100.0,True),))
 
     def test_pm_can_revoke_a_lease_and_only_owner_or_pm_may(self):
         self.owner.lease(self.a.reference,self.b.reference,enabled=True)
@@ -161,6 +161,22 @@ class WriterLeaseTests(unittest.TestCase):
         self.pairs.observe(self.live['a'])  # writer a replaced, after an absence
         self.assertEqual(self.leases.current(),((self.c.reference,d.reference),))
 
+    def test_a_lease_whose_chat_is_unlisted_is_shown_and_stopping_it_frees_its_slot(self):
+        recipients=[chat('r%d'%index) for index in range(MAX_LEASES)]
+        for recipient in recipients:
+            self.live[recipient.identity.session_id]=recipient
+            self.pairs.observe(recipient)
+            self.owner.lease(self.a.reference,recipient.reference,enabled=True)
+            self.pairs.withdraw(recipient.identity.session_id)  # closed or missed: not listed now
+        grants=self.owner.writer_grants()
+        self.assertEqual(len(grants),MAX_LEASES)
+        self.assertEqual({grant[3] for grant in grants},{False})
+        self.assertEqual(self.owner.writers(),())  # only fully listed leases
+        with self.assertRaises(PairingError): self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.assertTrue(self.owner.lease(self.a.reference,recipients[0].reference,enabled=False))
+        self.owner.lease(self.a.reference,self.b.reference,enabled=True)  # the slot is free again
+        self.assertEqual(self.leases.writer(self.b),self.a)
+
     def test_replaced_bindings_never_fill_lease_capacity(self):
         for index in range(MAX_LEASES+1):
             self.owner.lease(self.a.reference,self.live['b'].reference,enabled=True)
@@ -191,7 +207,7 @@ class WriterLeaseTests(unittest.TestCase):
         with patch.object(self.owner,'_log',side_effect=OSError('disk full')):
             with self.assertRaises(PairingError): self.owner.lease(self.c.reference,self.b.reference,enabled=True)
         self.assertEqual(self.leases.writer(self.b),self.a)
-        self.assertEqual(self.owner.writer_grants(),((self.a.reference,self.b.reference,100.0),))
+        self.assertEqual(self.owner.writer_grants(),((self.a.reference,self.b.reference,100.0,True),))
 
     def test_changed_recipient_or_writer_binding_has_no_lease(self):
         self.owner.lease(self.a.reference,self.b.reference,enabled=True)

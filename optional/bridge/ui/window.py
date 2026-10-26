@@ -49,6 +49,11 @@ class Window:
         self.lend.pack(side='left')
         self.unlend=ttk.Button(writers,text='Stop',command=lambda:self._lease(False))
         self.unlend.pack(side='left',padx=8)
+        # Stops the lease selected in the list below by its references; it works for a
+        # lease whose chat is no longer listed (closed, between turns or not yet rediscovered).
+        self.stop_row=ttk.Button(writers,text='Stop selected lease',command=self._stop_selected,
+            state='disabled' if preview else 'normal')
+        self.stop_row.pack(side='left')
         self.selected=tk.StringVar(value='Select two chats to choose a connection.')
         ttk.Label(frame,textvariable=self.selected).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Current connections',font=('Segoe UI',11,'bold')).pack(anchor='w')
@@ -57,6 +62,7 @@ class Window:
         self.status=tk.StringVar(value='Preview only. Connections are not changed.' if preview else 'No chat is connected just because it is listed.')
         ttk.Label(frame,textvariable=self.status,wraplength=920).pack(anchor='w',pady=(8,0))
         self._order=[]
+        self._lease_rows={}
         self.refresh()
 
     def _selection(self,event=None):
@@ -82,14 +88,33 @@ class Window:
             self.routes.delete(0,tk.END)
             for source,target in self.owner.connections():
                 self.routes.insert(tk.END,self.choices[source].title+' → '+self.choices[target].title)
-            for writer,target,granted in self.owner.writer_grants():
-                self.routes.insert(tk.END,self.choices[writer].title+' delivers to '+self.choices[target].title
-                    +' for other apps, since '+_when(granted))
+            self._lease_rows={}
+            for writer,target,granted,listed in self.owner.writer_grants():
+                self._lease_rows[self.routes.size()]=(writer,target)
+                self.routes.insert(tk.END,self._title(writer)+' delivers to '+self._title(target)
+                    +' for other apps, since '+_when(granted)+('' if listed else ' (a chat is not listed now; it cannot deliver)'))
             if not self.preview and not choices: self.status.set('No available chats yet. Open a supported chat with the bridge plugin enabled.')
             self._selection()
         except Exception:
             self.status.set('Chat discovery is unavailable. Existing connections are not changed by this refresh.')
             for button in (self.connect,self.disconnect,self.lend,self.unlend): button.configure(state='disabled')
+
+    def _title(self,reference):
+        choice=self.choices.get(reference)
+        return choice.title if choice is not None else 'chat '+reference[:8]+' (not listed)'
+
+    def _stop_selected(self):
+        if self.preview: return
+        rows=[self._lease_rows[index] for index in self.routes.curselection() if index in self._lease_rows]
+        if len(rows)!=1:
+            self.status.set('Select one lease in the list to stop it.')
+            return
+        try:
+            self.owner.lease(*rows[0],enabled=False)
+            self.status.set('That lease is stopped.')
+        except Exception:
+            self.status.set('The lease could not be stopped. Refresh and try again.')
+        self.refresh()
 
     def _change(self,enabled):
         if self.preview or len(self._order)!=2: return

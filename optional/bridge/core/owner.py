@@ -71,7 +71,8 @@ class WriterLeases:
     def grant(self,writer,recipient,grant,proof):
         """Owner-control port only; must not be exported as an ordinary agent tool.
 
-        Returns the grant time, or for a stop whether a lease was removed.
+        A grant returns (grant time, the entry it replaced or None), both read under
+        the lease lock; a stop returns whether a lease was removed.
         """
         if (type(writer) is not ChatBinding or type(recipient) is not ChatBinding
                 or type(grant) is not WriterGrant or type(grant.enabled) is not bool
@@ -90,9 +91,9 @@ class WriterLeases:
                 return True
             if recipient.reference not in self._leases and len(self._leases)>=MAX_LEASES:
                 raise PairingError('writer-lease-capacity')
-            granted=self.clock()
+            granted,replaced=self.clock(),self._leases.get(recipient.reference)
             self._leases[recipient.reference]=(writer,recipient,granted)
-            return granted
+            return granted,replaced
 
     def lease_for(self,writer_ref,recipient_ref):
         """The exact (writer, recipient) bindings of a current lease, or None."""
@@ -101,14 +102,10 @@ class WriterLeases:
             if current is None or current[0].reference!=writer_ref: return None
             return current[0],current[1]
 
-    def entry(self,recipient_ref):
-        """The current (writer, recipient, grant time) entry for this recipient, or None."""
-        with self._lock: return self._leases.get(recipient_ref)
-
     def withdraw(self,writer,recipient, *, restore=None):
         """Undo exactly this lease with no owner proof, putting back the entry it replaced.
 
-        restore must be the owner-granted entry this lease replaced, from entry().
+        restore must be the owner-granted entry this lease replaced, as grant() returned it.
         """
         with self._lock:
             current=self._leases.get(recipient.reference)
@@ -205,13 +202,18 @@ class OwnerControls:
 
     def writers(self):
         """Current writer leases between visible chats, as (writer, recipient) references."""
-        return tuple(lease[:2] for lease in self.writer_grants())
+        return tuple(lease[:2] for lease in self.writer_grants() if lease[3])
 
     def writer_grants(self):
-        """Current writer leases between visible chats, as (writer, recipient, grant time)."""
+        """Every current writer lease, as (writer, recipient, grant time, both chats listed).
+
+        A lease whose chat is not listed (closed, between turns or missed by discovery)
+        is still returned, so the owner can see and Stop it; it cannot deliver.
+        """
         if self.leases is None: return ()
         observed={peer.reference for peer in self.pairings.registered()}
-        return tuple(lease for lease in self.leases.granted() if all(ref in observed for ref in lease[:2]))
+        return tuple((writer,recipient,granted,writer in observed and recipient in observed)
+            for writer,recipient,granted in self.leases.granted())
 
     def lease(self,writer_ref,recipient_ref, *, enabled):
         """Owner button: let the writer chat carry delivery to the recipient chat, or stop it.
@@ -230,8 +232,7 @@ class OwnerControls:
         if (checked.sender_ref,checked.recipient_ref)!=(writer_ref,recipient_ref):
             raise PairingError('visible-chat-changed')
         grant=WriterGrant(writer_ref,recipient_ref,True)
-        replaced=self.leases.entry(recipient_ref)
-        granted=self.leases.grant(writer,recipient,grant,self.decisions.mint(grant))
+        granted,replaced=self.leases.grant(writer,recipient,grant,self.decisions.mint(grant))
         try:
             # A binding replaced between the check and the grant was dropped before
             # this lease existed, so refuse it here.
