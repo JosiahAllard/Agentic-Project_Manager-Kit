@@ -65,7 +65,7 @@ ROWS = [
      'deny', 'unreadable', 'bash "{temp}/script.sh"'),
     ('unreadable: a double-quoted bash -c wait from PowerShell', lambda w: ps(
         'bash -c "until [ -f $F ]; do sleep 5; done"', w.wt, sub=True),
-     'deny', 'unreadable', 'powershell -NoProfile -ExecutionPolicy Bypass -File "{temp}/script.ps1"'),
+     'deny', 'unreadable', 'powershell -NoProfile -File "{temp}/script.ps1"'),
     # an odd single and double quote: the guard never rewrites the line, so the
     # alternative is the script file
     ('unreadable: an unclosed quote gives the script, subagent', lambda w: bash(
@@ -74,7 +74,7 @@ ROWS = [
     ('unreadable alternative, bash script, is allowed', lambda w: bash('bash "%s/script.sh"' % W.fwd(w.temp), w.wt, sub=True),
      None, None, None),
     ('unreadable alternative, PowerShell script, is allowed', lambda w: ps(
-        'powershell -NoProfile -ExecutionPolicy Bypass -File "%s/script.ps1"' % W.fwd(w.temp), w.wt, sub=True),
+        'powershell -NoProfile -File "%s/script.ps1"' % W.fwd(w.temp), w.wt, sub=True),
      None, None, None),
     ('busy-wait: PowerShell while Start-Sleep', lambda w: ps('while (-not (Test-Path x)) { Start-Sleep -Seconds 5 }', w.wt),
      'deny', 'busy-wait',

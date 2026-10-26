@@ -197,7 +197,7 @@ WHY = 'The guard could not read this command; write the program name literally. 
 SCRIPT = (' Make every program name and nested shell text literal (a nested bash -c in single quotes; a '
           'variable it needs exported), or write the commands to a script file with the Write tool, then run it:')
 SCRIPT_RUNS = {'bash': ('script.sh', 'bash "%s"'),
-               'powershell': ('script.ps1', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%s"')}
+               'powershell': ('script.ps1', 'powershell -NoProfile -File "%s"')}
 
 
 def heavy_patterns(cfg):
