@@ -164,8 +164,8 @@ RELATION_CACHE = 2
 def parse_l3(raw):
     """[global mask] of each L3 cache domain in raw (RelationCache records), lowest thread first.
     CACHE_RELATIONSHIP is Level BYTE @8, Type DWORD @16, GroupCount WORD @38 (0 before Windows 11:
-    one group), GroupMasks[] @40, each a GROUP_AFFINITY of 16 bytes. On a Ryzen each L3 is one
-    CCD (game mode books one)."""
+    one group), GroupMasks[] @40, each a GROUP_AFFINITY of 16 bytes. A CPU can have several L3
+    domains (game mode books one)."""
     out = set()
     for off, size in _records(raw, RELATION_CACHE):
         if size < 56 or raw[off + 8] != 3:
