@@ -91,7 +91,8 @@ def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
     quoted = window.q(name)
     if parent and parent.get('Name') == 'powershell.exe' and parent.get('CommandLine'):
         text = window_script(parent['CommandLine'])
-        if text and ('--remote-control ' + quoted) in text and ('WindowTitle = ' + quoted) in text:
+        if (text and ('--remote-control ' + quoted in text or ' -n ' + quoted in text)
+                and ('WindowTitle = ' + quoted) in text):
             win = parent
             gp = by_pid.get(int(parent.get('ParentProcessId') or 0))
             if gp and gp.get('Name') == 'conhost.exe':
