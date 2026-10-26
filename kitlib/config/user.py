@@ -146,7 +146,7 @@ MARK_ROOT = Obj({
 
 # Keys the machine config no longer has. A file written before the removal still loads: the key
 # is dropped whatever it holds, never refused and never returned. An unknown key is still refused.
-RETIRED = ('ledger_refs', 'standing_delegation', 'daily_red_ruling')
+RETIRED = ('ledger_refs', 'standing_delegation', 'daily_red_ruling', 'backlog_lint')
 
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
@@ -168,7 +168,6 @@ SCHEMA = {
     'conductor_start': Field(Owned('kitlib.coordinatorstart'), None, 'the old name of coordinator_start, read when coordinator_start is absent; removed after the switch'),
     'pm_watch': Field(Owned('kitlib.pmwatch'), None, 'the PM watcher settings'),
     'launcher': Field(Owned('kitlib.launcher'), None, 'the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")'),
-    'backlog_lint': Field(Owned('kitlib.backloglint'), None, 'the backlog lint repositories'),
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
     'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs), and the shared temp folder (gate fallback logs, the worktree sweep log, private index folders, comfy_gen's GPU self-lock and state) while its drive is there, made if missing; on Windows, as the test and gate folder, it is skipped when it is, holds or sits inside a session temp (`agent_temp_sweep` `dir`, or the user environment's AGENT_TEMP, TEMP or TMP); unset or skipped: the first of these clear of every session temp: `kit-temp`, then `kit-work`, at the root of the checkout's drive (not the system temp folder's drive), the system temp folder (%LOCALAPPDATA%\\Temp), `kit-work` beside it (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
     'machine_path_folders': Field(ListOf(Str(pattern=r'[^\\/:*?"<>|\s]+', what='a folder name')), None, 'the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
@@ -183,7 +182,7 @@ SCHEMA = {
 POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
                'guard_rules', 'guard_mark_roots', 'guard_agent_marks',
                'guard_mcp_tools', 'guard_mcp_prefix', 'pm_start', 'coordinator_start', 'pm_watch',
-               'backlog_lint', 'machine_lock', 'temp_dir', 'agent_temp_sweep',
+               'machine_lock', 'temp_dir', 'agent_temp_sweep',
                'machine_path_folders', 'plugin')
 LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
 # Never in the PM repository's files: a ConfigError there, except a RETIRED key, which is ignored
@@ -828,7 +827,7 @@ def config_file(home=None):
 def readable_file(home=None):
     """The machine config's policy file a reader opens (locate()): the PM repository's
     config.json for OK, the known-absent home file for NONE. ConfigError when the config cannot
-    be read (UNMOVED, LEFTOVER, BAD): a reader that opens the file itself (pmstart, pmwatch, backloglint,
+    be read (UNMOVED, LEFTOVER, BAD): a reader that opens the file itself (pmstart, pmwatch,
     ...) must not take a file it cannot use for an absent one."""
     loc = locate(home)
     if loc.error:

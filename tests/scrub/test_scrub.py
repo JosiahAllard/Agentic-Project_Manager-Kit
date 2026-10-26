@@ -21,7 +21,6 @@ MADE_UP = re.compile('R' + r'-9[0-9]{3}|H-[a-z0-9][a-z0-9-]*-9[0-9]{3}')    # bu
 # parse ruling ids. test_no_cites and test_builtin read it too.
 FIXTURE_FOLDERS = (
     ('tests/backlog/', 'backlog pricing checks a ruling against a fixture ledger'),
-    ('tests/backloglint/fixtures/', "a record's priority_ruling field"),
     ('tests/ledger/', 'kitlib/ledger parses ledger headers'),
 )
 ALLOWED = tuple(p for p, _ in FIXTURE_FOLDERS)

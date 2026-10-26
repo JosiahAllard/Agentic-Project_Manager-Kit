@@ -71,7 +71,7 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   `landing.lock_file` is a retired key that loads and is ignored.
 - **Candidate 13, REMOVE (owner)** (kitlib/backloglint, tools). `kitlib/backloglint`,
   `tools/backlog_lint.py`, tests. Why: needs machine key `backlog_lint`, set nowhere; never runs.
-  Size: ~429 + 502 test lines. Risk: L. The owner decides configure or cut.
+  Size: ~429 + 502 test lines. Risk: L. The owner decides configure or cut. Done: cut (KIT-MAINT-LINT-WEEKLY); its keyword hold check lives on in kitlib/maintlint/holds.py, and `backlog_lint` is a retired machine config key.
 
 ## Kept
 

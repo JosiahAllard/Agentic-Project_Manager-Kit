@@ -1,4 +1,4 @@
-"""kitlib.maintlint.holds: the keyword hold check copied from kitlib.backloglint, read on an
+"""kitlib.maintlint.holds: the keyword hold check carried over from the retired backlog_lint tool, read on an
 in-memory snapshot."""
 import unittest
 
