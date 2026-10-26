@@ -38,7 +38,10 @@ class CodexDeliveryTests(unittest.TestCase):
             str(Path.cwd()), (1, 2), 'a' * 64, 'b' * 64, os.getpid(), own_ctime())
         self.target_context = replace(self.context, thread_id=str(uuid.uuid4()), turn_id=str(uuid.uuid4()))
         self.recipient = self.target_context.binding('fixture-host')
-        self.sender = self.context.binding('fixture-host')
+        # The bridge carries no Codex-to-Codex: the sender is another host's chat and the
+        # Codex writer that executes the delivery is the owner-leased one.
+        self.writer = self.context.binding('fixture-host')
+        self.sender = self.other_host_sender()
         self.message = OutboundMessage('fixture-operation', 'fixture-task', self.sender, self.recipient,
             'private-content\n\U0001f30e\u00e9' * 1200)
         self.requests, self.errors, self.threads = [], [], []
@@ -71,7 +74,7 @@ class CodexDeliveryTests(unittest.TestCase):
     @contextmanager
     def lease(self, message):
         self.assertIs(message, self.message)
-        yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
+        yield DesktopLease(self.recipient, self.context, self.endpoint, self.check, writer=self.writer)
 
     def serve(self, response=None, *, wrong_id=False, stall=False, raw=None):
         # The fake server waits for the helper for as long as the test runs: when the helper
@@ -159,7 +162,7 @@ class CodexDeliveryTests(unittest.TestCase):
         self.assertEqual(header.splitlines()[0],'Bridge operation: '+self.message.operation_id)
         self.assertIn('bridge_reply',header)
         self.assertEqual(body,self.message.text)
-        self.assertEqual(request['params']['threadId'], self.context.thread_id)
+        self.assertEqual(request['params']['threadId'], self.writer.identity.native_session_id)
         self.assertEqual(request['params']['turnId'], self.context.turn_id)
         self.assertEqual(request['params']['tool'], 'send_message_to_thread')
         self.assertEqual(request['params']['namespace'], 'codex_app')
@@ -203,7 +206,7 @@ class CodexDeliveryTests(unittest.TestCase):
         checks = iter((True, False))
         @contextmanager
         def lease(message):
-            yield DesktopLease(self.recipient, self.context, self.endpoint, lambda: next(checks))
+            yield DesktopLease(self.recipient, self.context, self.endpoint, lambda: next(checks), writer=self.writer)
         with self.assertRaises(BeforeWriteError):
             CodexDesktopAdapter(lease=lease, timeout=2).send(self.message)
         self.threads[0].join(3)
@@ -215,7 +218,7 @@ class CodexDeliveryTests(unittest.TestCase):
         for recipient, executor in ((self.sender, self.context), (self.recipient, unrelated)):
             @contextmanager
             def lease(message):
-                yield DesktopLease(recipient, executor, self.endpoint, self.check)
+                yield DesktopLease(recipient, executor, self.endpoint, self.check, writer=self.writer)
             with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call') as call:
                 with self.assertRaises(BeforeWriteError):
                     CodexDesktopAdapter(lease=lease).send(self.message)
@@ -283,13 +286,13 @@ class CodexDeliveryTests(unittest.TestCase):
             start.assert_not_called()
 
     def test_self_target_and_cross_host_executor_substitution_are_before_write(self):
-        for executor, sender in ((self.target_context, self.sender), (self.context,
+        for executor, sender, writer in ((self.target_context, self.sender, self.writer), (self.context,
                 ChatBinding(SessionIdentity('claude', 'claude-native', 'claude-terminal', 'incarnation',
-                    WorkspaceIdentity('fixture-host', 'project', 'workspace')), 'account', 1))):
+                    WorkspaceIdentity('fixture-host', 'project', 'workspace')), 'account', 1), None)):
             message = replace(self.message, sender=sender)
             @contextmanager
             def lease(message):
-                yield DesktopLease(self.recipient, executor, self.endpoint, self.check)
+                yield DesktopLease(self.recipient, executor, self.endpoint, self.check, writer=writer)
             with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call') as call:
                 with self.assertRaises(BeforeWriteError):
                     CodexDesktopAdapter(lease=lease).send(message)
@@ -298,7 +301,7 @@ class CodexDeliveryTests(unittest.TestCase):
     def test_before_write_refusal_keeps_the_code_of_the_check_that_refused(self):
         @contextmanager
         def self_target(message):
-            yield DesktopLease(self.recipient, self.target_context, self.endpoint, self.check)
+            yield DesktopLease(self.recipient, self.target_context, self.endpoint, self.check, writer=self.writer)
         with self.assertRaises(BeforeWriteError) as caught:
             CodexDesktopAdapter(lease=self_target).send(self.message)
         self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
@@ -313,10 +316,10 @@ class CodexDeliveryTests(unittest.TestCase):
             WorkspaceIdentity('fixture-host', 'project', 'workspace')), 'account', 1)
 
     def test_a_leased_writer_carries_another_hosts_message_as_the_executor(self):
-        message = replace(self.message, sender=self.other_host_sender())
+        message = self.message
         @contextmanager
         def lease(message):
-            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check, writer=self.sender)
+            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check, writer=self.writer)
         with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call',
                 return_value={'success': True}) as call:
             result = CodexDesktopAdapter(lease=lease).send(message)
@@ -328,11 +331,14 @@ class CodexDeliveryTests(unittest.TestCase):
 
     def test_writer_rules_refuse_before_any_native_call(self):
         claude = self.other_host_sender()
+        codex = replace(self.message, sender=self.writer)
         third = replace(self.context, thread_id=str(uuid.uuid4())).binding('fixture-host')
         cases = (
             # A Codex sender never borrows a writer, even one that is its own executor.
-            (self.message, self.context, self.sender),
-            (self.message, self.context, third),
+            (codex, self.context, self.writer),
+            (codex, self.context, third),
+            # ...and with no writer at all it has no executor: no Codex-to-Codex fallback.
+            (codex, self.context, None),
             # The writer must be a binding, not the sender itself, and the executor.
             (replace(self.message, sender=claude), self.context, 'not-a-binding'),
             (replace(self.message, sender=claude), self.context, claude),
@@ -349,11 +355,19 @@ class CodexDeliveryTests(unittest.TestCase):
                 call.assert_not_called()
             self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
 
-    def test_another_hosts_sender_without_a_writer_is_never_its_own_executor(self):
-        message = replace(self.message, sender=self.other_host_sender())
+    def test_a_sender_without_a_writer_is_never_its_own_executor(self):
+        @contextmanager
+        def unleased(message):
+            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
+        message = replace(self.message, sender=self.writer)
         with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call') as call:
             with self.assertRaises(BeforeWriteError) as caught:
-                CodexDesktopAdapter(lease=lambda message: self.lease(self.message)).send(message)
+                CodexDesktopAdapter(lease=unleased).send(message)
+            call.assert_not_called()
+        self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call') as call:
+            with self.assertRaises(BeforeWriteError) as caught:
+                CodexDesktopAdapter(lease=unleased).send(self.message)
             call.assert_not_called()
         self.assertEqual(caught.exception.code, 'codex-desktop-executor-not-selected')
         # Any other failure before the write keeps the generic code and hides its detail.
@@ -391,7 +405,7 @@ class CodexDeliveryTests(unittest.TestCase):
     def test_before_write_refusal_after_a_possible_write_stays_uncertain(self):
         @contextmanager
         def lease(message):
-            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
+            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check, writer=self.writer)
             raise BeforeWriteError('codex-desktop-context-changed')
         with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call',
                 return_value={'success': True}):
@@ -606,7 +620,7 @@ class CodexDeliveryTests(unittest.TestCase):
         self.serve()
         @contextmanager
         def lease(message):
-            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
+            yield DesktopLease(self.recipient, self.context, self.endpoint, self.check, writer=self.writer)
             raise BeforeWriteError('lease-exit-denial')
         with self.assertRaises(DeliveryError) as caught:
             CodexDesktopAdapter(lease=lease, timeout=2).send(self.message)

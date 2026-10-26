@@ -28,8 +28,8 @@ class DesktopLease:
     executor: CodexContext
     endpoint: NativeEndpoint = field(repr=False)
     recheck: object = field(repr=False)
-    # None: the sender is its own executor. Otherwise the owner-leased Codex
-    # writer that carries delivery for a sender of another host.
+    # The owner-leased Codex writer that carries delivery for a sender of another
+    # host. None is refused: a Codex sender is never its own executor.
     writer: ChatBinding | None = None
 
 
@@ -56,8 +56,8 @@ class CodexDesktopAdapter:
         if capabilities and self._receipts is not None:
             capabilities += (Capability.READ_STATUS,)
         return AdapterDescription('codex-desktop', capabilities,
-            'SEND is restricted to a distinct selected Codex source, or an owner-leased Codex writer '
-            'for another host, with a frontend-issued lease; '
+            'SEND is restricted to a sender of another host, through an owner-leased Codex writer '
+            'and a frontend-issued lease; never Codex to Codex; '
             'private tools/call protocol; acceptance means scheduling only; '
             'exact native receipt observation is a separate host port.')
 
@@ -83,13 +83,10 @@ class CodexDesktopAdapter:
             # Native self-target dispatch is unsafe in the observed companion.
             # An unrelated relay thread must never substitute for this source;
             # only an owner-leased writer may, and never for a Codex sender.
-            if lease.writer is None:
-                expected = message.sender
-            elif (type(lease.writer) is not ChatBinding or lease.writer == message.sender
+            if (type(lease.writer) is not ChatBinding or lease.writer == message.sender
                     or message.sender.identity.adapter_id.startswith('codex-')):
                 raise BeforeWriteError('codex-desktop-executor-not-selected')
-            else:
-                expected = lease.writer
+            expected = lease.writer
             if executor != expected or executor == message.recipient:
                 raise BeforeWriteError('codex-desktop-executor-not-selected')
             try:
