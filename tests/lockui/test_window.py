@@ -25,7 +25,7 @@ GOOD = {"revision": 1, "holds": [], "runs": [], "queue": {"entries": []}, "slots
 class FakeClient:
     def __init__(self, snap=None, fail=None):
         self.snap, self.fail = snap if snap is not None else GOOD, fail
-        self.reads, self.threads = 0, set()
+        self.reads, self.threads, self.history_reads, self.stamp = 0, set(), 0, (("h", 1, 1),)
 
     def snapshot(self):
         self.reads += 1
@@ -35,7 +35,11 @@ class FakeClient:
         return self.snap
 
     def history(self, days=7):
+        self.history_reads += 1
         return []
+
+    def history_stamp(self):
+        return self.stamp
 
     def game_mode(self, enabled):
         return {"ok": True, "result": {}, "snapshot": dict(GOOD, revision=2,
@@ -94,6 +98,19 @@ class Window(unittest.TestCase):
         app = self.window.App(self.root, FakeClient(fail=OSError("gone")), threaded=False)
         self.assertIn("gone", app.info.get())
         self.assertTrue(self.pending_afters())
+
+    def test_timed_refreshes_read_history_only_when_its_files_change(self):
+        c = FakeClient()
+        app = self.window.App(self.root, c, auto_refresh=False, threaded=False)
+        for _ in range(4):
+            app.refresh()                       # the timer's refresh
+        self.assertEqual((c.reads, c.history_reads), (5, 1))
+        c.stamp = (("h", 2, 2),)                # a run ended: its line was written
+        app.refresh()
+        app.refresh()
+        self.assertEqual((c.reads, c.history_reads), (7, 2))
+        app.refresh(schedule=False)             # the Refresh button reads it all
+        self.assertEqual((c.reads, c.history_reads), (8, 3))
 
     def test_reads_run_off_the_tk_thread(self):
         c = FakeClient()

@@ -60,7 +60,8 @@ class Mapping(unittest.TestCase):
 
     def test_reads(self):
         self.c.snapshot()
-        self.assertEqual(self.last(), ("snapshot", (), {"store": self.store}))
+        self.assertEqual(self.last(), ("snapshot", (), {"store": self.store, "since": a.NO_STATS,
+                                                        "until": a.NO_STATS}))
         self.c.history(days=3)
         self.assertEqual(self.last(), ("history", (), {"store": self.store, "days": 3}))
 
@@ -252,12 +253,85 @@ class Specs(unittest.TestCase):
                          "forbidden: owner only")
 
 
+class HistoryCacheTest(unittest.TestCase):
+    """The window's history lines: read again only when the history files changed."""
+
+    def setUp(self):
+        self.reads = 0
+        self.cache = a.HistoryCache()
+
+    def fetch(self):
+        self.reads += 1
+        return ["lines %d" % self.reads]
+
+    def look(self, stamp, force=False):
+        return self.cache.get(stamp, self.fetch, force)
+
+    def test_an_unchanged_stamp_is_not_read_again(self):
+        for _ in range(5):
+            self.assertEqual(self.look((("2026-10.jsonl", 10, 1),)), ["lines 1"])
+        self.assertEqual(self.reads, 1)
+
+    def test_a_changed_stamp_forced_or_none_reads(self):
+        self.look((("2026-10.jsonl", 10, 1),))
+        self.assertEqual(self.look((("2026-10.jsonl", 20, 2),)), ["lines 2"])
+        self.assertEqual(self.look((("2026-10.jsonl", 20, 2),), force=True), ["lines 3"])
+        self.look(None)
+        self.look(None)
+        self.assertEqual(self.reads, 5)
+
+    def test_a_failed_read_leaves_the_cache_as_it_was(self):
+        self.look((("2026-10.jsonl", 10, 1),))
+
+        def boom():
+            raise OSError("gone")
+        with self.assertRaises(OSError):
+            self.cache.get((("2026-10.jsonl", 20, 2),), boom)
+        self.assertEqual(self.look((("2026-10.jsonl", 20, 2),)), ["lines 2"])
+
+    def test_no_stamp_from_a_stand_in_store(self):
+        self.assertIsNone(a.Client(store=object(), api_mod=FakeApi()).history_stamp())
+
+
 class Integration(StoreCase):
     """The client against a real (scratch) store: the owner actor is taken as given there."""
 
     def setUp(self):
         super().setUp()
         self.c = a.Client(store=self.store, actor=OWNER)
+
+    def test_the_snapshot_reads_no_history_for_stats(self):
+        from kitlib.lock import api
+        from kitlib.lock.store import iso, utc_now
+        end = utc_now() - dt.timedelta(hours=1)
+        self.store.history_append({"id": "r-20261008T000000Z-aaaa", "repo": "kit", "slug": "g",
+                                   "kind": "engine-test", "since": iso(end - dt.timedelta(hours=1)),
+                                   "held_since": iso(end - dt.timedelta(minutes=30)),
+                                   "ended": iso(end), "code": 0, "how": "done", "cores": [0],
+                                   "gpus": []})
+        self.assertEqual(len(api.snapshot(self.store)["stats"]["rows"]), 1)
+        with mock.patch.object(self.store, "history_records",
+                               wraps=self.store.history_records) as seen:
+            snap = self.c.snapshot()
+        self.assertEqual(snap["stats"]["rows"], [])
+        self.assertEqual(seen.call_count, 1)
+        self.assertEqual(seen.call_args.kwargs["since"].year, 1970)    # a range with no file
+        self.assertEqual(len(self.c.history()), 1)
+
+    def test_the_history_stamp_moves_when_a_line_is_written(self):
+        from kitlib.lock.store import iso, utc_now
+        empty = self.c.history_stamp()
+        end = utc_now()
+        line = {"id": "r-20261008T000000Z-bbbb", "repo": "kit", "slug": "g",
+                "kind": "engine-test", "since": iso(end - dt.timedelta(hours=1)),
+                "held_since": iso(end - dt.timedelta(minutes=30)), "ended": iso(end), "code": 0,
+                "how": "done", "cores": [0], "gpus": []}
+        self.store.history_append(line)
+        one = self.c.history_stamp()
+        self.assertNotEqual(one, empty)
+        self.assertEqual(self.c.history_stamp(), one)
+        self.store.history_append(dict(line, id="r-20261008T000000Z-cccc"))
+        self.assertNotEqual(self.c.history_stamp(), one)
 
     def test_reserve_then_edit_then_release(self):
         now = dt.datetime.now(UTC)
