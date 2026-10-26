@@ -43,6 +43,7 @@ from ctypes import wintypes
 import kitlib.platform
 from kitlib.host import registry
 from kitlib.platform import PlatformUnsupported
+from kitlib.platform.linux import locks
 from kitlib.proc import process
 from kitlib.proc import win32
 from kitlib.proc.win32 import K32, ADV
@@ -541,7 +542,6 @@ class Store:
         On Linux: a flock on locks/<name>.lock (kitlib.platform.linux.locks.hold)."""
         wait_s = self.settings.store_lock_s if wait_s is None else wait_s
         if kitlib.platform.NAME == "linux":
-            from kitlib.platform.linux import locks
             with locks.hold(self.path("locks", name + ".lock"), wait_s, name):
                 yield
             return
@@ -562,7 +562,6 @@ class Store:
         """Run rid's liveness signal, held until its release(): RunMutex, or on Linux a flock on
         runs/<rid>.alive (kitlib.platform.linux.locks.RunLock)."""
         if kitlib.platform.NAME == "linux":
-            from kitlib.platform.linux import locks
             return locks.RunLock(self.path("runs", rid + ".alive"))
         return RunMutex(self.mutex_name("run." + rid))
 
@@ -590,7 +589,6 @@ class Store:
         a probe of runs/<rid>.alive (kitlib.platform.linux.locks.run_lock_held), the same three
         answers."""
         if kitlib.platform.NAME == "linux":
-            from kitlib.platform.linux import locks
             return locks.run_lock_held(self.path("runs", rid + ".alive"))
         h = K32.OpenMutexW(win32.SYNCHRONIZE | win32.MUTEX_MODIFY_STATE, False,
                            self.mutex_name("run." + rid))
