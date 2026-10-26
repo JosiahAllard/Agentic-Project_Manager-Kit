@@ -67,7 +67,7 @@ def in_worktree(path):
     return False
 
 
-def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isfile, base_prefix=None):
+def install(launch_py, python=None, whatif=False, run=None, isfile=os.path.isfile, base_prefix=None):
     """Register the task; the lines it says. whatif: print the script, register nothing. Refused
     from a kit worktree: the task would point at a launch.py that goes when the worktree does.
     The task's pythonw.exe is the one beside `python` when it is given, else the one in this
@@ -75,11 +75,13 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
     sys.base_prefix in tests), never a PATH lookup. Refused, with nothing registered, when that
     pythonw.exe is under WindowsApps (the Store alias) or is not a file: the task would register
     and then not start at sign-in. whatif refuses the same way, its lines (the script and an
-    `install-autostart would refuse:` line) on the LaunchError. On Linux: linux_install."""
+    `install-autostart would refuse:` line) on the LaunchError. run: spawn.run when None, looked
+    up at the call. On Linux: linux_install."""
     if in_worktree(launch_py):
         raise LaunchError('install-autostart from the main kit checkout, not a worktree: %s' % launch_py)
     if platform.NAME == 'linux':
         return linux_install(launch_py, python, whatif, run=run, isfile=isfile)
+    run = run or spawn.run
     given = python is not None
     python = python or pythonw_mod.base_pythonw(base_prefix)
     text = task_script(python, launch_py)

@@ -86,7 +86,11 @@ def dry_run(tool, main, python, timeout=DRY_RUN_TIMEOUT, run=None):
     """Run the sweep once without --apply (it removes nothing) and return its report lines, read
     as UTF-8. RuntimeError when it exits any way but 0 (1: refused, failed or deferred by a held
     lock; 2: usage or a refused .kit.json) or takes over `timeout` seconds, so the task is not
-    registered. run: the tests' subprocess.run."""
+    registered. run: the tests' subprocess.run; else spawn.run, or on Linux
+    kitlib.platform.linux.schedule.subprocess_run."""
+    if run is None and platform.NAME == 'linux':
+        from kitlib.platform.linux import schedule
+        run = schedule.subprocess_run
     run = run or spawn.run
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
     try:

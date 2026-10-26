@@ -107,13 +107,14 @@ def refusals(hub_py, python=None, isfile=os.path.isfile, run=None, environ=None)
     return out
 
 
-def install(hub_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isfile):
+def install(hub_py, python=None, whatif=False, run=None, isfile=os.path.isfile):
     """Register the task; the lines it says. whatif: the script and why a real install would
     refuse, registering nothing (so it runs from a worktree too). Refused with nothing
     registered from a kit worktree, or when the pythonw.exe the task would run is not a file.
-    On Linux: linux_install."""
+    run: spawn.run when None, looked up at the call. On Linux: linux_install."""
     if platform.NAME == 'linux':
         return linux_install(hub_py, python, whatif, run, isfile)
+    run = run or spawn.run
     python = python or pythonw_mod.base_pythonw()
     text = task_script(python, hub_py)
     why = refusals(hub_py, python, isfile)

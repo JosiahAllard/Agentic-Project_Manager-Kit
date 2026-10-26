@@ -317,6 +317,13 @@ class Linux(unittest.TestCase):
     def task(self):
         return self.schedule.find(autostart.LINUX_JOB, self.schedule.written(self.home))
 
+    def test_install_with_no_run_hands_the_linux_job_none(self):
+        """None, not spawn.run: the Linux job then runs its commands without spawn's Windows
+        console check."""
+        with mock.patch.object(autostart, 'linux_install', return_value=['done']) as got:
+            autostart.install(self.hub, self.py)
+        self.assertIsNone(got.call_args[0][3])
+
     def test_install_task_state_and_start_task_go_to_the_linux_job(self):
         with mock.patch.object(autostart, 'linux_install', return_value=['x']) as got:
             self.assertEqual(autostart.install(self.hub, self.py, run='RUN', isfile=present), ['x'])

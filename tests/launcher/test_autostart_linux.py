@@ -45,6 +45,13 @@ class Linux(unittest.TestCase):
             self.assertEqual(autostart.install(self.launch, self.py, run='RUN', isfile=present), ['done'])
         got.assert_called_once_with(self.launch, self.py, False, run='RUN', isfile=present)
 
+    def test_install_with_no_run_hands_the_linux_job_none(self):
+        """None, not spawn.run: the Linux job then runs its commands without spawn's Windows
+        console check."""
+        with mock.patch.object(autostart, 'linux_install', return_value=['done']) as got:
+            autostart.install(self.launch, self.py, isfile=present)
+        self.assertIsNone(got.call_args[1]['run'])
+
     def test_a_worktree_is_still_refused_first(self):
         folder = sorted(registry.union('worktrees_directory'))[0]
         wt = os.path.join(self.kit, *(folder.split('/') + ['x', 'tools', 'launch.py']))

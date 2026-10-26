@@ -16,6 +16,7 @@ import tempfile
 import time
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 from kitlib.platform.linux import schedule as S
 from tests.platforms import posix_only
@@ -339,6 +340,26 @@ class Linger(unittest.TestCase):
         self.assertIn(S.LINGER_COMMAND, note)
         self.assertIsNone(S.linger_note(FakeSystem(linger='yes'), 1000))
         self.assertFalse([a for a, _ in run.calls if 'enable-linger' in a])
+
+
+class DefaultRunner(unittest.TestCase):
+    """With no `run`, commands go through subprocess_run: subprocess.run with creation flags 0,
+    never kitlib.proc.spawn.run, whose no-window check asks Windows for its console and so
+    fails on Linux (it did, on the reference machine, before this)."""
+
+    def test_subprocess_run_drops_any_creation_flags(self):
+        done = subprocess.CompletedProcess(['x'], 0, '', '')
+        with mock.patch('subprocess.run', return_value=done) as got:
+            self.assertIs(S.subprocess_run(['x'], creationflags=0x08000000, text=True), done)
+        got.assert_called_once_with(['x'], creationflags=0, text=True)
+
+    def test_a_command_with_no_run_given_never_reaches_spawn(self):
+        done = subprocess.CompletedProcess(['crontab', '-l'], 0, '0 * * * * x\n', '')
+        with mock.patch('kitlib.proc.spawn.run', side_effect=AssertionError('spawn.run')), \
+                mock.patch('subprocess.run', return_value=done) as got:
+            self.assertEqual(S.read_crontab(), '0 * * * * x\n')
+        self.assertEqual(got.call_args[0][0], ['crontab', '-l'])
+        self.assertEqual(got.call_args[1]['creationflags'], 0)
 
 
 @posix_only('installs a real systemd user timer and crontab line')

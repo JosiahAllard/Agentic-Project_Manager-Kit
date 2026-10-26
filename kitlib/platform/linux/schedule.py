@@ -33,7 +33,6 @@ import subprocess
 import sys
 
 from kitlib.platform import PlatformUnsupported
-from kitlib.proc import spawn
 
 SYSTEMD = 'systemd'
 CRON = 'cron'
@@ -135,10 +134,18 @@ def when_text(when):
 
 # ------------------------------------------------------------------------------ running commands
 
+def subprocess_run(argv, **kw):
+    """subprocess.run on Linux: there is no console window to choose, so creation flags are 0
+    whatever `kw` says (POSIX refuses any other value). Not kitlib.proc.spawn.run, whose
+    no-window check asks Windows for its console."""
+    kw.pop('creationflags', None)
+    return subprocess.run(argv, creationflags=0, **kw)
+
+
 def _run(run, argv, what, input_text=None, timeout=TIMEOUT_S):
     """CompletedProcess of `argv` (text). ScheduleError naming `what` when it cannot run or times
     out; the caller reads the exit code."""
-    run = run or spawn.run
+    run = run or subprocess_run
     kw = dict(capture_output=True, text=True, timeout=timeout)
     if input_text is not None:
         kw['input'] = input_text

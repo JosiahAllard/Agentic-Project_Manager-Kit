@@ -135,6 +135,15 @@ class WorktreeSweep(Base):
         self.main = os.path.join(self.root, 'repo')
         self.tool = os.path.join(self.kit, 'tools', 'worktree_remove.py')
 
+    def test_the_dry_run_with_no_run_given_never_reaches_spawn(self):
+        import subprocess
+        done = subprocess.CompletedProcess([], 0, 'nothing to sweep\n', '')
+        with mock.patch('kitlib.proc.spawn.run', side_effect=AssertionError('spawn.run')), \
+                mock.patch('subprocess.run', return_value=done) as got:
+            self.assertEqual(worktreesweep.dry_run(self.tool, self.main, sys.executable),
+                             ['nothing to sweep'])
+        self.assertEqual(got.call_args[1]['creationflags'], 0)
+
     def step(self, plan, **kw):
         worktreesweep._repo_step(plan, self.ctx(**kw), 'demo', self.main, 'demo', self.tool,
                                  self.host.task_list(), None)
