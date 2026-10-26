@@ -217,7 +217,7 @@ Rules:
 | WMI Win32_Process Create (detach) | `systemd-run --user --scope` with user systemd, else `setsid` (double fork) where there is no systemd | systemd-run also places the run in its own cgroup |
 | Named mutex, WAIT_ABANDONED | fcntl.flock on a lock file in the store, opened O_CLOEXEC | the kernel drops it when the holder dies: the same "abandoned counts as free" meaning |
 | RunMutex (liveness) | the run holds flock on `runs/<id>.alive`; readers probe with LOCK_NB | run_dead and run_live keep their meaning |
-| msvcrt.locking (treelock) | fcntl.lockf on the same lock file | byte range kept |
+| msvcrt.locking (treelock) | fcntl.flock on the same lock file | the whole file: Linux locks are advisory, so readers are never blocked; lockf is per process (slice 3) |
 | Register-ScheduledTask | systemd user `.timer` + `.service` units; loginctl enable-linger only where user systemd exists | cron (`crontab -l`/`crontab -`, `@reboot`) is first-class where there is no user systemd (question 5) |
 | Task at logon (the hub server start) | an XDG autostart `.desktop` entry in `~/.config/autostart`; a shell-profile line as the fallback where there is no desktop session | settled at plan review; cron has no logon form |
 | schtasks /Query /XML | `systemctl --user list-timers --output=json`, unit files | consoletasks reads the kit's own unit names |
@@ -593,6 +593,13 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    (concurrency). Proof: two processes contend for a named lock; a killed holder frees it;
    run_dead sees a killed run; the treelock tests run on both; Store() with no root refuses on
    Linux by name.
+   Built on kit/linux-locks: kitlib/platform/linux/locks.py (hold, RunLock, run_lock_held,
+   lock_fd), the Linux branches of Store.lock, run_mutex, run_mutex_held and run_dead, and
+   TreeLock's; tests/lock/test_store_linux.py and tests/fs/test_treelock.py. run_dead on Linux
+   reads the run lock alone until slice 4. Deviation: the treelock takes flock, not lockf, because
+   a lockf lock belongs to the process: two descriptors in one process (writelock's threads) never
+   exclude each other, and closing any descriptor on the file (writelock's own touch of it) drops
+   the lock.
 4. **Process identity and kill.** linux/process.py with the boot folded into ctime, and the
    seam's stamp (today lock/run.py filetime_now) in the same encoding (section 2.2); the callers
    that compare (pid, ctime) are not edited: lock/run.py nest_check and end_sparing,
