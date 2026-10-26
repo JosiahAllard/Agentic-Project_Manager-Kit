@@ -30,8 +30,8 @@ class Derive(unittest.TestCase):
         self.assertEqual(L["gpus"], 1)
         self.assertTrue(lay.valid_layout(L))
 
-    # The installed machine_lock.py's key for the fake hardware in the test below, copied from
-    # that tool's refusal. It refuses every run while a live record carries another string.
+    # The key a separately installed machine_lock.py (not this kit's) gives the fake hardware in
+    # the test below, copied from that tool's refusal. It refuses every run while a live record carries another string.
     LIVE_TOOL_KEY = "t24 g1 cpu 12 x 2 gpu 2 m9b5a6751"
 
     def test_slot_key_is_the_installed_tools_key(self):
@@ -49,9 +49,9 @@ class Derive(unittest.TestCase):
                 self.assertNotEqual(lay.slot_key(lay.derive(hw, d)), base)
 
     # Pins of today's text: they pass before and after any change that keeps it. slot_key goes
-    # into every run record, where the installed machine_lock.py compares it; layout_key is
-    # layout.json's key, which every kit version recomputes (valid_layout). A change to either
-    # text has to be made on purpose.
+    # into every run record, where a separately installed machine_lock.py (not this kit's)
+    # compares it; layout_key is layout.json's key, which every kit version recomputes
+    # (valid_layout). A change to either text has to be made on purpose.
     def test_slot_key_text_for_two_cards_and_for_none(self):
         # g is the count of shared cards and gpu the count of gpu slots (two per card; one
         # placeholder slot with no card). The m part is LIVE_TOOL_KEY's with any count of
