@@ -188,7 +188,7 @@ LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
 # Never in the PM repository's files: a ConfigError there, except a RETIRED key, which is ignored
 # (`pm_data` is derived: locate).
 DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data', 'standing_delegation',
-                'daily_red_ruling')
+                'daily_red_ruling', 'backlog_lint')
 # POLICY_KEYS paths that may be written relative to the PM repository (resolved).
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
