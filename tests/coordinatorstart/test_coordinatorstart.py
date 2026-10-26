@@ -370,8 +370,9 @@ class ContextTest(unittest.TestCase):
                                        "plain": {"repo": "alpha", "stem": "alpha-plain"}})}
         lines = self.build({}, read=reader(files)).splitlines()
         self.assertEqual([l for l in lines if "hub key" in l],
-                         ["- hub key: kitc (hub.py questions add --from kitc; read hub.py pending "
-                          "--for kitc once at start; answers come by push)"])
+                         ["- hub key: kitc (hub.py questions add --from kitc --record REPO:ID|"
+                          "--class C; read hub.py pending --for kitc once at start; answers come "
+                          "by push)"])
         self.assertNotIn("wait", "\n".join(lines))   # no session keeps a background hub wait
 
     def test_several_matching_entries_give_hub_key_unknown_never_the_first_key(self):

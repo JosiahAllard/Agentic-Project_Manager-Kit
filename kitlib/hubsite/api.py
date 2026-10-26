@@ -1388,7 +1388,7 @@ def questions_bind(api, req):
                 if d is None or d.get('status') not in BINDS_FROM or d.get('record'):
                     raise HubError('conflict', '%s moved meanwhile' % p['question'], 'id')
                 bound = _bound(api, p['record'])
-                api.change('questions', p['question'], d, {'record': bound}, req)
+                api.change('questions', p['question'], d, {'record': bound, 'class': None}, req)
                 p['bound'] = True
                 if d.get('status') == 'answered':
                     # an answer the PM has not handled yet: filed now, as a bound answer is

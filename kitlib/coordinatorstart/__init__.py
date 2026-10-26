@@ -165,8 +165,8 @@ def hub_key(sessions, entry):
     (docs/action-hub.md "For the PM"). LookupError when no key holds it."""
     for k, v in sessions.items():
         if v is entry and not str(k).startswith("_"):
-            return ["hub key: %s (hub.py questions add --from %s; read hub.py pending --for %s once "
-                    "at start; answers come by push)" % (k, k, k)]
+            return ["hub key: %s (hub.py questions add --from %s --record REPO:ID|--class C; read "
+                    "hub.py pending --for %s once at start; answers come by push)" % (k, k, k)]
     raise LookupError("no sessions.json key holds this session's entry")
 
 
