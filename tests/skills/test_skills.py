@@ -3,7 +3,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kitlib.stubs import SHARED
 from tests.shipped import ROOT, frontmatter, violations
 
 SKILLS = ROOT / "content" / "skills"      # every host ships these (docs/content.md)
@@ -100,8 +99,8 @@ class SkillFilesTest(unittest.TestCase):
 
     def test_kit_tools_named_exist(self):
         """Kit-only paths are written `<kit>/<path>` in a skill and in an agent
-        file, and exist in the kit; a repo-relative `tools/<name>.py` is one a repo has through a stub
-        (kitlib.stubs.SHARED) or supplies itself."""
+        file, and exist in the kit; a repo-relative path is one a repository supplies itself
+        (REPO_FILES)."""
         for p in _shipped_text_files():
             text = _shipped_text(p)
             for rel in PLUGIN_RX.findall(text):
@@ -112,9 +111,8 @@ class SkillFilesTest(unittest.TestCase):
                 if GODOT_SKILL in p.parents:     # a repo-local template, not loaded as a plugin: no root variable
                     self.assertTrue(rel in REPO_FILES or (ROOT / rel).exists(), f"{p.parent.name} names {rel}")
                     continue
-                self.assertTrue(rel in REPO_FILES or (rel.startswith("tools/") and
-                                                      rel[len("tools/"):-len(".py")] in SHARED),
-                                f"{p.parent.name}/{p.name} names {rel}: not a stub tool; write {_kit_form(p)}/{rel}")
+                self.assertTrue(rel in REPO_FILES,
+                                f"{p.parent.name}/{p.name} names {rel}: not a repository file; write {_kit_form(p)}/{rel}")
 
     def test_no_repo_relative_kit_doc_or_template(self):
         """A kit doc (`docs/<name>.md` that exists in the kit's docs/) or a `templates/` file is written

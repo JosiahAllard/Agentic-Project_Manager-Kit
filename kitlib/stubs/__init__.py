@@ -1,66 +1,35 @@
-"""A repository's stubs for the kit's tools (one kit copy, repos hold stubs only;
-docs/install.md). tools/kit_stubs.py is the entry point.
+"""The kit location a printed owner command names, and the outcome type of tools/kit_stubs.py.
 
-A stub is `<checkout>/<tools_dir>/<name>.py` (`.kit.json` "repo".tools_dir): a few lines that run
-`<kit>/tools/<name>.py` in a child Python with the stub's arguments. The kit's location is written
-into the stub when it is written (kit_root(): the kit this library is in, or the live checkout
-when it runs from an export: KIT_LIVE_ROOT under a pin, else the main checkout the export's marker
-names; an export naming none is refused, never written; `live_kit`): no environment variable
-names the kit, the repository or its config. The child runs in the caller's directory when
-that is inside the stub's checkout, else in the stub's checkout, so a kit tool's default `-C .`
-names the checkout the stub is in (a linked worktree's stub acts on that worktree). When it moves
-the caller, the child gets `[stub checkout, caller directory]` in CALLER_VAR, so a tool can see
-where it was called from (the gate refuses a caller in another checkout); a stub reads no
-variable. A stub whose kit tool is missing exits 2 and says so; Ctrl+C exits 130.
-
-Which tools: `.kit.json` "stubs".tools when set, else every SHARED name the kit has as a command
-(a `tools/<name>.py` with a `__main__` block). Naming a tool the kit does not have is a ConfigError,
-but for a RETIRED one in "stubs".tools: that name is dropped, and write and check print
-`retired  <path> (delete it)` for a stub of it still in the repository (a note, not a problem).
-
-write: writes each stub (creating or replacing it), one line per file; it never replaces a file that
-is not a stub unless `replace` (the switch-over from a repository's own copies); `dry_run` says what
-it would do and writes nothing. check: OK when every wanted stub exists with exactly the text write
-would give it; a stub that runs another kit location is stale. Stubs are opt-in: check on a
-repository that uses none (no "stubs".tools, no `tools` given, no stub) is OK and says so.
-
-The `memory` verb of tools/kit_stubs.py is kitlib.stubs.memory: the agent memory folder a
-repository names in its .claude/settings.json, not a stub.
-
-Exit codes: OK 0; PROBLEMS 1 (a file kept, missing, stale or not a stub, each named); CONFIG 2 (the
-configuration was refused, or the kit is an export whose marker names no main checkout).
+tools/kit_stubs.py has one verb, `memory`: kitlib.stubs.memory, the agent memory folder a
+repository names in its .claude/settings.local.json (docs/install.md). Its owner command names the
+kit by kit_root(): the kit this library is in, or the live checkout when it runs from an export
+(KIT_LIVE_ROOT under a pin, else the main checkout the export's marker names; `live_kit`), never
+an export a later prune may remove.
 """
-import ast
 import collections
 import os
-import re
-
-from kitlib.config import ConfigError, load
-
-OK, PROBLEMS, CONFIG = 0, 1, 2
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+Outcome = collections.namedtuple('Outcome', 'code lines')
+
 
 def kit_root():
-    """The kit a stub runs, read at each call: KIT_ROOT, or the live kit checkout when this code
-    runs from an export (kitlib.pluginsource.live_root: KIT_LIVE_ROOT, set by kitlib.gate.pin; else
-    the main checkout the export's marker names, `live_kit`). A downstream gate's kit-stubs step
-    runs a pinned export's kit_stubs.py, the session start hook runs the plugin's export, and the
-    stubs a repository has committed name the main checkout, never an export a prune may remove.
-    An export whose marker names no main checkout gives the export itself here, for reading its
-    tool list only: `run` and `problem_line` refuse it (`live_kit`) before any stub text."""
+    """The kit a printed command names, read at each call: KIT_ROOT, or the live kit checkout when
+    this code runs from an export (kitlib.pluginsource.live_root: KIT_LIVE_ROOT, set by
+    kitlib.gate.pin; else the main checkout the export's marker names, `live_kit`). An export whose
+    marker names no main checkout gives the export itself."""
     from kitlib import pluginsource
     kit = pluginsource.live_root(KIT_ROOT)
     return live_kit(kit)[0] or kit
 
 
 def live_kit(kit):
-    """(folder, None): the kit a stub may name for `kit`, which is `kit` itself unless it is an
-    export (it holds kitlib.pluginsource.MARKER: the plugin's export or a pin's, both of which a
-    prune may remove); for an export, the main checkout its marker names
+    """(folder, None): the kit a printed command may name for `kit`, which is `kit` itself unless it
+    is an export (it holds kitlib.pluginsource.MARKER: the plugin's export or a pin's, both of which
+    a prune may remove); for an export, the main checkout its marker names
     (kitlib.pluginsource.export_checkout) when that holds kit.json and a tools folder. (None, why)
-    for an export whose marker names no such checkout: no stub may name it."""
+    for an export whose marker names no such checkout."""
     from kitlib import pluginsource
     if not os.path.isfile(os.path.join(kit, pluginsource.MARKER)):
         return kit, None
@@ -69,274 +38,5 @@ def live_kit(kit):
             os.path.join(checkout, 'tools')):
         return os.path.normpath(checkout), None
     return None, ('%s is an export of the kit, which a later prune may remove, and its marker names '
-                  'no main checkout of the kit; run kit_stubs.py from the kit\'s main checkout, or '
+                  'no main checkout of the kit; run the tool from the kit\'s main checkout, or '
                   'refresh the plugin (docs/plugin-source.md "Layout")' % os.path.normpath(kit))
-
-
-MARK ='Stub generated by kit_stubs.py'
-# The variable a stub sets for its tool when it moves the caller out of their directory:
-# [stub checkout, caller directory] (kitlib.gate.caller reads it).
-CALLER_VAR = 'KIT_STUB_CALLER'
-
-# SHARED: the kit tools a repository runs through stubs by default (libraries are kitlib
-# modules and get no stub). KIT_ONLY: the kit tools that get
-# no stub (they act on the machine, the owner's files or the kit itself, not on a repository
-# checkout named by -C or the current directory). Both live in kitlib.kitcmd, the `kit` command
-# that replaces stubs; every `tools/*.py` command is in exactly one of them (tests/stubs: a new
-# tool fails until it is classified).
-from kitlib.kitcmd import KIT_ONLY, SHARED                          # noqa: E402
-# Tools the kit no longer has. A "stubs".tools list written before the removal still loads: the
-# name is dropped, never refused, and a stub of it left in the repository is named for deletion
-# (a note line, not a problem). An unknown name is still a ConfigError.
-RETIRED = ('ruling_cites', 'ledger_refs', 'board')
-
-Outcome = collections.namedtuple('Outcome', 'code lines')
-
-_MAIN_GUARD = re.compile(r'''^if\s+__name__\s*==\s*['"]__main__['"]\s*:''', re.M)
-_KIT_LINE = re.compile(r'^KIT = (.*)$', re.M)
-
-TEMPLATE = '''"""%(mark)s: runs the kit's tools/%(name)s.py on this checkout. Do not
-edit; regenerate with `python <kit>/tools/kit_stubs.py write`."""
-import json
-import os
-import subprocess
-import sys
-
-KIT = %(kit)s
-ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), %(up)s))
-TOOL = os.path.join(KIT, 'tools', %(name)r + '.py')
-CALLER = %(caller)r
-
-
-def main():
-    if not os.path.isfile(TOOL):
-        sys.stderr.write('refused: no kit tool at %%s; rewrite the stubs with kit_stubs.py write\\n'
-                         %% TOOL)
-        return 2
-    here = os.path.normcase(os.path.abspath(os.getcwd()))
-    inside = (here + os.sep).startswith(os.path.normcase(ROOT).rstrip(os.sep) + os.sep)
-    env = dict(os.environ)
-    env.pop(CALLER, None)
-    if not inside:
-        env[CALLER] = json.dumps([ROOT, os.getcwd()])
-    try:
-        return subprocess.call([sys.executable, TOOL] + sys.argv[1:],
-                               cwd=os.getcwd() if inside else ROOT, env=env)
-    except KeyboardInterrupt:
-        return 130
-
-
-if __name__ == '__main__':
-    sys.exit(main())
-'''
-
-
-def _read(path):
-    try:
-        with open(path, encoding='utf-8', newline='') as f:
-            return f.read()
-    except (FileNotFoundError, IsADirectoryError, PermissionError, UnicodeDecodeError):
-        return None
-
-
-def commands(kit=None):
-    """The kit's tool commands: each `tools/<name>.py` with a `__main__` block, but kit_stubs.
-    `kit` defaults to kit_root() here and below."""
-    tdir = os.path.join(kit or kit_root(), 'tools')
-    if not os.path.isdir(tdir):
-        return []
-    out = []
-    for n in sorted(os.listdir(tdir)):
-        if n.endswith('.py') and n != 'kit_stubs.py' and _MAIN_GUARD.search(
-                _read(os.path.join(tdir, n)) or ''):
-            out.append(n[:-3])
-    return out
-
-
-def wanted(cfg, kit=None, tools=None):
-    """The names to stub: `tools`, else "stubs".tools, else SHARED as far as the kit has them.
-    A RETIRED name in "stubs".tools is dropped. ConfigError for any other name the kit has no
-    command for, and for a RETIRED name given as `tools`."""
-    kit = kit or kit_root()
-    have = commands(kit)
-    names = tools
-    if names is None:
-        names = cfg.section('stubs').get('tools')
-        if names is not None:
-            names = [n for n in names if n not in RETIRED]
-    if names is None:
-        return [n for n in SHARED if n in have]
-    bad = sorted(set(names) - set(have))
-    if bad:
-        raise ConfigError('not kit tool commands (no %s/tools/<name>.py with a __main__ block): %s; '
-                          'if the kit removed the tool, run `python <kit>/tools/kit_stubs.py write '
-                          '-C <repo>` from the current kit (an older kit does not know the '
-                          'removal) and drop the name from "stubs".tools'
-                          % (kit, ', '.join(bad)))
-    return list(dict.fromkeys(names))
-
-
-def stub_text(name, tools_dir='tools', kit=None):
-    """The stub for `name` in a tools directory `tools_dir` (repo-relative) deep, running `kit`."""
-    kit = kit or kit_root()
-    depth = len([p for p in tools_dir.replace('\\', '/').split('/') if p and p != '.'])
-    return TEMPLATE % {'mark': MARK, 'name': name, 'kit': repr(os.path.normpath(kit)),
-                       'up': repr('/'.join(['..'] * max(depth, 1))), 'caller': CALLER_VAR}
-
-
-def stub_kit(text):
-    """The kit location a stub's text runs, or None."""
-    m = _KIT_LINE.search(text or '')
-    return m.group(1).strip() if m else None
-
-
-def _check_one(path, exists, have, want, kit):
-    """None when the stub at `path` is current, else (the `check` line, the other kit it runs or None)."""
-    if not exists:
-        return 'missing  %s' % path, None
-    if have is None or MARK not in have:
-        return 'not a stub  %s' % path, None
-    if have != want:
-        other = stub_kit(have)
-        if other == repr(os.path.normpath(kit)):
-            return 'stale    %s' % path, None
-        return 'stale    %s (runs the kit at %s)' % (path, other), other
-    return None
-
-
-def _plain(quoted):
-    """A stub's `KIT = ...` value (a repr'd path) as the plain path; anything else unchanged."""
-    try:
-        value = ast.literal_eval(quoted) if quoted else quoted
-    except (ValueError, SyntaxError):
-        return quoted
-    return value if isinstance(value, str) else quoted
-
-
-def unclassified(kit=None):
-    """The kit's commands in neither SHARED nor KIT_ONLY (tests/stubs fails while there is one)."""
-    return [n for n in commands(kit) if n not in SHARED and n not in KIT_ONLY]
-
-
-def _opted(cfg, tdir, names, tools=None):
-    """Whether a repository uses stubs (they are opt-in): `tools` was given, its `.kit.json` sets
-    "stubs".tools, or a wanted name's file in `tdir` is a stub. One that does none (a PM data
-    folder calling the kit's tools by full path, with no tools folder) uses no stubs by design."""
-    if tools is not None or cfg.section('stubs').get('tools') is not None:
-        return True
-    return any(MARK in (_read(os.path.join(tdir, n + '.py')) or '') for n in names)
-
-
-def problem_line(root, kit=None):
-    """None when the checkout `root` has every wanted stub current, or uses no stubs, else one line
-    for a session start: how many are missing or stale, which, the write command, and the kit a
-    stale one runs. A configuration that cannot be read gives a "could not check" line.
-
-    Stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7: skills and roles run
-    `<kit>/tools/<x>.py -C <checkout>`): a repository uses them when its `.kit.json` sets
-    "stubs".tools or it holds at least one stub. One that does neither gets no line.
-
-    Run from an export whose marker names no main checkout (`live_kit`), a repository that uses
-    stubs gets a "could not check" line with no command: a write from there would name the export
-    in every stub. The tool list is read from the kit as given, so the opt-in test comes first."""
-    label = os.path.basename(os.path.normpath(root))
-    given = kit or kit_root()
-    kit, why = live_kit(given)
-    try:
-        cfg = load(root)
-        names = wanted(cfg, kit or given)
-    except ConfigError as e:
-        return 'could not check stubs (%s): %s' % (label, e)
-    tdir = os.path.normpath(os.path.join(root, cfg.tools_dir))
-    opted = _opted(cfg, tdir, names)
-    if not opted:
-        return None
-    if why:
-        return 'could not check stubs (%s): %s' % (label, why)
-    bad, others = [], []
-    for name in names:
-        path = os.path.join(tdir, name + '.py')
-        exists = os.path.exists(path)
-        have = _read(path) if exists else None
-        found = _check_one(path, exists, have, stub_text(name, cfg.tools_dir, kit), kit)
-        if found and not found[0].startswith('not a stub'):    # the repository's own tool is no problem
-            bad.append(name)
-            other = _plain(found[1])
-            if other and other not in others:
-                others.append(other)
-    if not bad:
-        return None
-    return 'stubs (%s): %d missing/stale: %s; run python %s -C %s%s' % (
-        label, len(bad), ', '.join(bad),
-        os.path.join(kit, 'tools', 'kit_stubs.py') + ' write', root,
-        ' (stale ones run the kit at %s)' % ', '.join(others) if others else '')
-
-
-def _retired_notes(tdir):
-    """One `retired  <path> (delete it)` line per stub of a RETIRED tool still in `tdir`. A note:
-    it is no problem and changes no exit code, and nothing here deletes the file. A file of that
-    name that is not a stub (the repository's own) is left unnamed."""
-    out = []
-    for name in RETIRED:
-        path = os.path.join(tdir, name + '.py')
-        if MARK in (_read(path) or ''):
-            out.append('retired  %s (delete it)' % path)
-    return out
-
-
-def run(root, verb, tools=None, replace=False, dry_run=False, kit=None):
-    """Outcome(code, lines) of `write` or `check` for the checkout `root`. `kit` (default
-    kit_root()) goes through `live_kit`: an export is replaced by the main checkout its marker
-    names, and one whose marker names none is refused (CONFIG) before anything is written. `check`
-    on a repository that uses no stubs (`_opted`) is OK, whatever the kit: there is nothing to
-    check, so the tool list is read from the kit as given and the opt-in test comes first."""
-    if verb not in ('write', 'check'):
-        raise ValueError(verb)
-    given = kit or kit_root()
-    kit, why = live_kit(given)
-    try:
-        cfg = load(root)
-        names = wanted(cfg, kit or given, tools)
-    except ConfigError as e:
-        return Outcome(CONFIG, ['kit_stubs: refused: %s' % e])
-    rel = cfg.tools_dir
-    tdir = os.path.normpath(os.path.join(root, rel))
-    if verb == 'check' and not _opted(cfg, tdir, names, tools):
-        return Outcome(OK, _retired_notes(tdir) + [
-            'kit_stubs: uses no stubs (no "stubs".tools in .kit.json and no stub in %s); '
-            'nothing to check' % tdir])
-    if why:
-        return Outcome(CONFIG, ['kit_stubs: refused: %s' % why])
-    lines, problems = [], []
-    for name in names:
-        path = os.path.join(tdir, name + '.py')
-        want = stub_text(name, rel, kit)
-        have = _read(path) if os.path.exists(path) else None
-        exists = os.path.exists(path)
-        if verb == 'check':
-            found = _check_one(path, exists, have, want, kit)
-            if found:
-                problems.append(found[0])
-            continue
-        if have == want:
-            lines.append('ok       %s' % path)
-            continue
-        if exists and (have is None or MARK not in have) and not replace:
-            problems.append('not a stub (kept; --replace to overwrite)  %s' % path)
-            continue
-        if os.path.isdir(path):
-            problems.append('a folder (kept)  %s' % path)
-            continue
-        if dry_run:
-            lines.append('would write  %s' % path)
-            continue
-        os.makedirs(tdir, exist_ok=True)
-        with open(path, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(want)
-        lines.append('wrote    %s' % path)
-    lines.extend(_retired_notes(tdir))
-    lines.extend(problems)
-    if verb == 'check':
-        lines.append('kit_stubs: %s' % ('%d problem(s)' % len(problems) if problems
-                                         else '%d stub(s) current' % len(names)))
-    return Outcome(PROBLEMS if problems else OK, lines)
