@@ -4,6 +4,7 @@ Controller discovery and native liveness checks are supplied by service assembly
 This UI changes only bridge connections, never native permissions or chat state.
 It owns no agent-facing server and exposes no owner write through MCP.
 """
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -41,8 +42,8 @@ class Window:
         writers=ttk.Frame(frame)
         writers.pack(fill='x',pady=(0,12))
         # A writer lease: the first chat (a Codex app chat with an active turn) carries
-        # delivery to the second for a chat of another app. It lasts one hour.
-        self.lend=ttk.Button(writers,text='Let first chat deliver to second for other apps (1 hour)',
+        # delivery to the second for a chat of another app. It lasts until Stop or either chat closes.
+        self.lend=ttk.Button(writers,text='Let first chat deliver to second for other apps',
             command=lambda:self._lease(True))
         self.lend.pack(side='left')
         self.unlend=ttk.Button(writers,text='Stop',command=lambda:self._lease(False))
@@ -80,8 +81,9 @@ class Window:
             self.routes.delete(0,tk.END)
             for source,target in self.owner.connections():
                 self.routes.insert(tk.END,self.choices[source].title+' → '+self.choices[target].title)
-            for writer,target in self.owner.writers():
-                self.routes.insert(tk.END,self.choices[writer].title+' delivers to '+self.choices[target].title+' for other apps')
+            for writer,target,granted in self.owner.writer_grants():
+                self.routes.insert(tk.END,self.choices[writer].title+' delivers to '+self.choices[target].title
+                    +' for other apps, since '+_when(granted))
             if not self.preview and not choices: self.status.set('No available chats yet. Open a supported chat with the bridge plugin enabled.')
             self._selection()
         except Exception:
@@ -100,9 +102,14 @@ class Window:
     def _lease(self,enabled):
         if self.preview or len(self._order)!=2: return
         try:
-            self.owner.lease(*self._order,enabled=enabled)
-            self.status.set('The first chat now delivers to the second for other apps for one hour. '
-                'It must stay in an active turn.' if enabled else 'The first chat no longer delivers to the second.')
+            granted=self.owner.lease(*self._order,enabled=enabled)
+            self.status.set('Since '+_when(granted)+' the first chat delivers to the second for other apps, '
+                'until you click Stop or either chat closes. It delivers only during an active turn.'
+                if enabled else 'The first chat no longer delivers to the second.')
         except Exception:
             self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
         self.refresh()
+
+
+def _when(granted):
+    return time.strftime('%Y-%m-%d %H:%M',time.localtime(granted))

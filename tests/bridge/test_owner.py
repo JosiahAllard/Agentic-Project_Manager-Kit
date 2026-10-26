@@ -1,10 +1,11 @@
 """Owner controls use exact visible references and private one-use decisions."""
 from dataclasses import replace
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from optional.bridge.core.owner import (LEASE_SECONDS,MAX_LEASES,OwnerControls,OwnerDecisions,
+from optional.bridge.core.owner import (LEASE_LOG,MAX_LEASES,OwnerControls,OwnerDecisions,
     WriterGrant,WriterLeases)
 from optional.bridge.core.pairing import PairingError,PairingStore
 from tests.bridge.test_pairing import chat
@@ -70,7 +71,7 @@ class OwnerTests(unittest.TestCase):
 
 
 class WriterLeaseTests(unittest.TestCase):
-    """A writer lease is an owner click, one use, exact chats, timed, and in memory."""
+    """A writer lease is an owner click, one use, exact chats, until revoked, logged, and in memory."""
     def setUp(self):
         OwnerTests.setUp(self)
         self.c=chat('c')
@@ -100,13 +101,73 @@ class WriterLeaseTests(unittest.TestCase):
         self.owner.lease(self.a.reference,self.b.reference,enabled=False)
         self.assertEqual(self.leases.writer(self.b),self.c)
 
-    def test_lease_lapses_after_its_hour(self):
-        self.owner.lease(self.a.reference,self.b.reference,enabled=True)
-        self.now+=LEASE_SECONDS-1
+    def log(self):
+        path=Path(self.temp.name)/LEASE_LOG
+        if not path.exists(): return []
+        return [json.loads(line) for line in path.read_text(encoding='ascii').splitlines()]
+
+    def test_lease_has_no_expiry_and_keeps_its_grant_time(self):
+        granted=self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.assertEqual(granted,100.0)
+        self.now+=10*365*24*3600
         self.assertEqual(self.leases.writer(self.b),self.a)
-        self.now+=1
+        self.assertEqual(self.owner.writer_grants(),((self.a.reference,self.b.reference,100.0),))
+
+    def test_pm_can_revoke_a_lease_and_only_owner_or_pm_may(self):
+        self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        with self.assertRaises(PairingError): self.owner.revoke(self.a.reference,self.b.reference,by='agent')
+        self.assertFalse(self.owner.revoke(self.c.reference,self.b.reference,by='pm'))  # not the writer
+        self.assertEqual(self.leases.writer(self.b),self.a)
+        self.assertTrue(self.owner.revoke(self.a.reference,self.b.reference,by='pm'))
         self.assertIsNone(self.leases.writer(self.b))
-        self.assertEqual(self.owner.writers(),())
+        self.assertFalse(self.owner.revoke(self.a.reference,self.b.reference,by='pm'))
+
+    def test_a_closed_writer_or_recipient_chat_drops_the_lease(self):
+        for gone in ('a','b'):
+            self.live['a'],self.live['b']=self.a,self.b
+            for peer in (self.a,self.b): self.pairs.observe(peer)
+            self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+            del self.live[gone]
+            with self.assertRaises(PairingError): self.pairs.propose('a','b')  # the live check fails
+            self.assertEqual(self.leases.current(),())
+            self.live[gone]=getattr(self,gone)
+            self.pairs.observe(getattr(self,gone))  # the same binding back: the lease stays gone
+            self.assertIsNone(self.leases.writer(self.b))
+
+    def test_a_withdrawn_or_replaced_chat_drops_the_lease(self):
+        self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.pairs.withdraw('a')
+        self.assertEqual(self.leases.current(),())
+        self.pairs.observe(self.a)
+        self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.live['b']=replace(self.b,permission_revision=2)
+        self.pairs.observe(self.live['b'])
+        self.assertEqual(self.leases.current(),())
+
+    def test_closed_chats_never_fill_lease_capacity(self):
+        for index in range(MAX_LEASES+1):
+            recipient=chat('r%d'%index)
+            self.live['r%d'%index]=recipient
+            self.pairs.observe(recipient)
+            self.owner.lease(self.a.reference,recipient.reference,enabled=True)
+            self.pairs.withdraw('r%d'%index)
+        self.assertEqual(self.leases.current(),())
+
+    def test_every_grant_revoke_and_close_is_logged_beside_the_pairings_store(self):
+        self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.owner.lease(self.a.reference,self.b.reference,enabled=False)
+        self.owner.lease(self.c.reference,self.b.reference,enabled=True)
+        self.owner.revoke(self.a.reference,self.b.reference,by='pm')  # no such lease: no line
+        self.pairs.withdraw('c')
+        self.assertEqual([(entry['event'],entry['by'],entry['writer'],entry['recipient']) for entry in self.log()],
+            [('grant','owner',self.a.reference,self.b.reference),('revoke','owner',self.a.reference,self.b.reference),
+             ('grant','owner',self.c.reference,self.b.reference),('closed','bridge',self.c.reference,self.b.reference)])
+        self.assertEqual(self.log()[0]['at'],'1970-01-01T00:01:40Z')
+
+    def test_a_grant_that_cannot_be_logged_is_refused(self):
+        (Path(self.temp.name)/LEASE_LOG).mkdir()
+        with self.assertRaises(PairingError): self.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.assertEqual(self.leases.current(),())
 
     def test_changed_recipient_or_writer_binding_has_no_lease(self):
         self.owner.lease(self.a.reference,self.b.reference,enabled=True)

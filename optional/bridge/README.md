@@ -96,10 +96,15 @@ nominates no channel, and the other halves keep working.
   of another host has none, so the owner may lend one: in the window, select a Codex desktop chat
   (the writer) and then the Codex recipient, and click the lease button. The lease:
   - names one writer for one recipient, and a new grant for that recipient replaces the old one
-  - lasts one hour; clicking again renews it, and Stop ends it
+  - has no expiry: it lasts until the owner clicks Stop, the PM revokes it (`OwnerControls.revoke`,
+    a private port), or either chat closes (fails its live check, is withdrawn or is replaced), which
+    drops it; the window shows when it was granted
+  - is logged: every grant, revoke and close appends one JSON line (`at`, `event`, `by`, `writer`,
+    `recipient`; chat references only) to `writer-leases.log` beside `pairings.sqlite`, and a grant
+    that cannot be logged is refused
   - is granted with a one-use owner proof; a route choice's proof never grants a lease, and a
     lease's proof never selects a route
-  - lives in the service's memory only, so a restart drops it; it is never written to disk
+  - lives in the service's memory only, so a restart drops it; only its log is written to disk
   - is never an MCP tool, and no agent can grant, renew or read it
   - selects no route: the sender's own route to the recipient must still be selected
 

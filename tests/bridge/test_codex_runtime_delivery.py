@@ -332,8 +332,7 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
         self.complete_source()
         self.refused(adapter,self.claude_message)
 
-    def test_revoked_or_expired_lease_invalidates_an_open_scope_before_write(self):
-        from optional.bridge.core.owner import LEASE_SECONDS  # here, so the guard test runs at the base
+    def test_revoked_lease_invalidates_an_open_scope_before_write_and_time_does_not(self):
         adapter=self.leased()
         self.grant()
         with self.factory._delivery_lease(self.claude_message) as lease:
@@ -344,7 +343,9 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
         self.grant()
         with self.factory._delivery_lease(self.claude_message) as lease:
             self.assertTrue(lease.recheck())
-            self.controller.leases._clock=lambda:time.monotonic()+LEASE_SECONDS+1
+            self.controller.leases.clock=lambda:time.time()+10*365*24*3600  # no expiry
+            self.assertTrue(lease.recheck())
+            self.assertTrue(self.controller.owner.revoke(self.sender.reference,self.recipient.reference,by='pm'))
             self.assertFalse(lease.recheck())
         self.refused(adapter,self.claude_message,'codex-direct-route-unavailable')
 
