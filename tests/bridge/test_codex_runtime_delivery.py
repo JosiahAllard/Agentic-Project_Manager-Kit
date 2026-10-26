@@ -388,6 +388,64 @@ class LeasedWriterDeliveryTests(unittest.TestCase):
             self.target_path.write_bytes(data.replace(captured,str(uuid.uuid4()).encode()))
         self.unconfirmed_after_write(change)
 
+    def rewrite_record(self,kind,edit):
+        # In place (the same file): the first record of kind, edited.
+        lines=self.target_path.read_bytes().splitlines(keepends=True)
+        for index,raw in enumerate(lines):
+            record=json.loads(raw)
+            if record['type']==kind:
+                edit(record['payload'])
+                lines[index]=json.dumps(record,separators=(',',':')).encode()+b'\n'
+                break
+        self.target_path.write_bytes(b''.join(lines))
+
+    def test_captured_turn_context_content_changed_after_the_write_is_unknown(self):
+        def change():
+            self.recipient_turn_moves_on()
+            self.rewrite_record('turn_context',lambda payload:payload.update(approval_policy='on-request'))
+        self.unconfirmed_after_write(change)  # the same turn_id, a different context
+
+    def test_recipient_session_record_changed_after_the_write_is_unknown(self):
+        def change():
+            self.recipient_turn_moves_on()
+            self.rewrite_record('session_meta',lambda payload:payload.update(cwd=payload.get('cwd','')+'-moved'))
+        self.unconfirmed_after_write(change)
+
+    def test_lease_revoked_during_the_send_is_unknown(self):
+        def change():
+            self.recipient_turn_moves_on()
+            self.grant(False)
+        self.unconfirmed_after_write(change)
+
+    def app_process_reads_differently(self,name):
+        # After the write, the app process handle reads as another process (pid) or another start (ctime).
+        from unittest.mock import patch
+        from optional.bridge.hosts.codex import runtime as runtime_module
+        real,real_pid=getattr(runtime_module,name),runtime_module.get_pid
+        def changed(handle):
+            value=real(handle)
+            return value+1 if real_pid(handle)==os.getpid() else value
+        def change():
+            self.recipient_turn_moves_on()
+            patcher=patch.object(runtime_module,name,changed)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.unconfirmed_after_write(change)
+
+    def test_app_process_pid_changed_after_the_write_is_unknown(self):
+        self.app_process_reads_differently('get_pid')
+
+    def test_app_process_ctime_changed_after_the_write_is_unknown(self):
+        self.app_process_reads_differently('handle_ctime')
+
+    def test_app_channel_changed_after_the_write_is_unknown(self):
+        def change():
+            self.recipient_turn_moves_on()
+            runtime=self.direct_source.observe.__self__
+            channel=NativeChannel(PipeTarget(self.rpc.name+'-other',os.getpid(),own_ctime()),Path(sys.executable).resolve())
+            runtime.native=replace(runtime.native,channel=channel)
+        self.unconfirmed_after_write(change)
+
 
 class RolloutAppendDuringLiveCheckTests(unittest.TestCase):
     """A chat appending to its rollout while a live check reads it is not a dead chat."""
@@ -427,6 +485,41 @@ class RolloutAppendDuringLiveCheckTests(unittest.TestCase):
         with patcher, self.assertRaises(PairingError):
             self.controller.pairs.require_selected(self.sender,self.recipient)
         self.assertEqual(len(appended),3)  # bounded: RECORD_TRIES reads, then refused
+
+    def partial_line(self,complete_on):
+        # The chat is mid-append: the rollout ends without a newline. complete_on: the read
+        # (counted by the recipient's session record) during which the line is finished.
+        from optional.bridge.hosts.codex import context as context_module
+        from unittest.mock import patch
+        real=context_module.JsonLineDecoder
+        marker=self.recipient.identity.native_session_id.encode()
+        path,reads=self.target_path,[]
+        with path.open('ab') as stream:
+            stream.write(b'{"timestamp":"2026-10-12T12:00:02Z","type":"response_item","payload":{')
+        class Completing(real):
+            def feed(decoder,line):
+                if marker in line:
+                    reads.append(1)
+                    if len(reads)==complete_on:
+                        with path.open('ab') as stream: stream.write(b'}}\n')
+                return real.feed(decoder,line)
+        return patch.object(context_module,'JsonLineDecoder',Completing),reads
+
+    def test_a_read_that_ends_mid_line_is_retried_and_keeps_the_recipient_observed(self):
+        self.populate()
+        patcher,reads=self.partial_line(2)
+        with patcher:
+            self.controller.pairs.require_selected(self.sender,self.recipient)
+        self.assertEqual(len(reads),3)  # mid-line, then changed while finishing, then whole
+        self.assertIn(self.recipient,self.controller.pairs.registered())
+
+    def test_a_line_never_finished_is_still_refused_after_the_bound(self):
+        from optional.bridge.core.pairing import PairingError
+        self.populate()
+        patcher,reads=self.partial_line(None)
+        with patcher, self.assertRaises(PairingError):
+            self.controller.pairs.require_selected(self.sender,self.recipient)
+        self.assertEqual(len(reads),3)
 
 
 class OwnedNativeRPCFixtureTests(unittest.TestCase):

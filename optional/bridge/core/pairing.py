@@ -349,11 +349,15 @@ class PairingStore:
         """A necessary route gate; native caller attribution/refusals remain separate gates."""
         with self._lock:
             self._ready()
-            self._observed(sender)
-            self._observed(recipient)
+            if type(sender) is not ChatBinding or type(recipient) is not ChatBinding:
+                raise PairingError('chat-not-observed')
+            # The route row first: a route that is off is refused as such, whatever the
+            # chats' liveness, and a refused route never drops a chat from the observed list.
             if self._db.execute('SELECT 1 FROM routes WHERE sender=? AND recipient=? AND enabled=1',
                                 (sender.logical_reference, recipient.logical_reference)).fetchone() is None:
                 raise PairingError('chat-route-not-selected')
+            self._observed(sender)
+            self._observed(recipient)
 
     @contextmanager
     def selected_guard(self, sender, recipient):

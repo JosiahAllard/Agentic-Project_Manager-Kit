@@ -422,8 +422,9 @@ class Outbox:
                 except Exception as uncertain:
                     db.execute('ROLLBACK TO native_receipt')
                     self._release_reservation(db,operation)
-                    # The generic reason, with the adapter's own code appended when it has a
-                    # valid one, so a live miss says which check after the write failed.
+                    # The generic reason, with the adapter's own code appended when it is an
+                    # identifier. The code names the adapter's outcome class (for Codex always
+                    # codex-native-result-unconfirmed), not which check after the write failed.
                     reason='native-outcome-uncertain'
                     try:reason=identifier(reason+':'+uncertain.code)
                     except Exception:pass

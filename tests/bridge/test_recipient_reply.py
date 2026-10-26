@@ -51,6 +51,20 @@ class RecipientReplyTests(DispatchTests):
         with self.assertRaisesRegex(DeliveryError, 'reply-chat-not-observed'):
             self.core.reply('op', b'test-caller-proof')  # now dropped from the observed list too
 
+    def test_a_route_that_is_off_is_reported_as_such_even_with_a_dead_chat(self):
+        self.select(False)
+        self.pairings.owner_select(self.pairings.propose('a', 'b', bidirectional=False), b'test-owner-proof')
+        self.admit()
+        self.adapter.response = NativeResult('op', self.b.reference, 'reply-received', 'native-op', 'stored reply')
+        self.core.dispatch_once('op')
+        self.proofs[b'recipient-proof'] = SenderAuthority(self.b, 'recipient-turn')
+        del self.live['b']
+        with self.assertRaisesRegex(DeliveryError, 'reply-route-not-selected'):
+            self.core.reply('op', b'test-caller-proof')
+        with self.assertRaisesRegex(DeliveryError, 'reply-route-not-selected'):
+            self.core.reply_to('op', 'not allowed', b'recipient-proof')
+        self.assertIn(self.b, self.pairings.registered())  # a refused route drops no chat
+
     def test_reply_to_from_a_sender_no_longer_live_names_that_refusal(self):
         self.admit()
         self.adapter.response = NativeResult('op', self.b.reference, 'recipient-accepted', 'native-op')

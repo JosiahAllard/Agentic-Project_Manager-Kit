@@ -27,6 +27,8 @@ MAX_ENTRIES, MAX_DIRECTORIES = 100000, 4096
 MAX_ROLLOUT_BYTES = 256*1024*1024
 MAX_AUTHORITY_BYTES = 128*1024
 RECORD_TRIES = 3
+# A read that overlapped an append: the file changed, or it ended mid-line.
+RETRIED_READS = ('native-rollout-changed', 'native-rollout-incomplete')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z')
 HEADER = re.compile(rb'\A\{\s*"timestamp"\s*:\s*"[0-9TtZz:.+ -]{1,64}"\s*,\s*"type"\s*:\s*"([a-z_]+)"\s*,\s*"payload"\s*:\s*')
 EVENT = re.compile(rb'\A\{\s*"type"\s*:\s*"([a-z_]+)"')
@@ -231,9 +233,9 @@ class CodexObserver:
     def _records(self, path, *, contexts=None):
         """The rollout's authority records, read whole while the file stands still.
 
-        A running chat appends to its rollout, so a read that overlaps an append is
-        retried, at most RECORD_TRIES times in all; a file that changes during every
-        try is refused as before. Failing one read must not drop a live chat.
+        A running chat appends to its rollout, so a read that overlaps an append (the
+        file changed, or it ended mid-line) is retried, at most RECORD_TRIES times in
+        all; a file that does so on every try is refused as before. Failing one read must not drop a live chat.
         contexts, when given, collects (turn_id, sha) of every turn_context in order.
         """
         for attempt in range(RECORD_TRIES):
@@ -242,7 +244,7 @@ class CodexObserver:
             try:
                 return self._read_records(path,contexts)
             except ContextError as error:
-                if error.code!='native-rollout-changed' or attempt==RECORD_TRIES-1:
+                if error.code not in RETRIED_READS or attempt==RECORD_TRIES-1:
                     raise
 
     def _read_records(self, path, contexts):
