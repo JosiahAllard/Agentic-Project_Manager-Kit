@@ -141,16 +141,16 @@ class Reader(TreeCase):
         self.assertEqual(run.calls, [["nvidia-smi", "--query-gpu=pci.bus_id,name,memory.total",
                                       "--format=csv,noheader"]])
         self.assertEqual([(c["name"], c["vram_mb"], c["luid"]) for c in cards],
-                         [("NVIDIA GeForce RTX 4090", 24564, "pci:0000:01:00.0")])
+                         [("NVIDIA Example GPU", 24564, "pci:0000:01:00.0")])
 
     def test_no_nvidia_smi_names_the_card_from_proc_and_says_so(self):
         # The folder is the bus id (0000:01:00.0) on Linux; a Windows test folder cannot hold a
         # colon, and the reader keys by the file's Bus Location line, so any folder name serves.
         info = {"proc/driver/nvidia/gpus/card-a/information":
-                "Model: \t\t NVIDIA GeForce RTX 4090\nIRQ:   \t\t 140\n"
+                "Model: \t\t NVIDIA Example GPU\nIRQ:   \t\t 140\n"
                 "Bus Location: \t 0000:01:00.0\n"}
         cards, problems = hardware.adapters(self.tree("desktop", extra=info), smi_runner(None))
-        self.assertEqual([(c["name"], c["vram_mb"]) for c in cards], [("NVIDIA GeForce RTX 4090", 0)])
+        self.assertEqual([(c["name"], c["vram_mb"]) for c in cards], [("NVIDIA Example GPU", 0)])
         self.assertEqual(len(problems), 1)
         self.assertIn("nvidia-smi", problems[0])
 

@@ -226,9 +226,14 @@ def _uevent_slot(root, card):
         return None
 
 
+def _run(args, **kwargs):
+    # no window flag applies on Linux: 0 is the one value POSIX accepts
+    return subprocess.run(args, creationflags=0, **kwargs)
+
+
 def nvidia_smi(run=None):
     """{bus id: (name, vram_mb)} from nvidia-smi. Raises OSError when it cannot answer."""
-    run = run or subprocess.run
+    run = run or _run
     try:
         r = run(SMI, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:

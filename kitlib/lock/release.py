@@ -53,7 +53,9 @@ LOCK_PATHS = ("tools/machine_lock.py", "kitlib/__init__.py", "kitlib/lock/", "ki
               "kitlib/content/__init__.py", "kitlib/roster/__init__.py",
               # the running platform's name (registry.process_names) and the Windows DLL loader
               # kitlib/proc binds through
-              "kitlib/platform/__init__.py", "kitlib/platform/dll.py")
+              "kitlib/platform/__init__.py", "kitlib/platform/dll.py",
+              # kitlib/lock/layout.py reads Linux hardware through the Linux backend and its seam
+              "kitlib/platform/api.py", "kitlib/platform/linux/")
 
 MISSING = "store folder (missing)"
 

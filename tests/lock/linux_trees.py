@@ -91,13 +91,13 @@ def _desktop():
          "sys/class/drm/renderD128/dev": "226:128\n"},
         card(0, 0x10DE, 0x2684, "0000:01:00.0"))
     return {"files": files, "affinity": set(range(16)),
-            "smi": "00000000:01:00.0, NVIDIA GeForce RTX 4090, 24564 MiB\n",
+            "smi": "00000000:01:00.0, NVIDIA Example GPU, 24564 MiB\n",
             "expect": {"threads": list(range(16)),
                        "cores": [[n, n + 8] for n in range(8)],
                        "efficiency": [0] * 8,
                        "l3": [list(range(16))],
                        "memory_mb": 32000,
-                       "gpus": [("NVIDIA GeForce RTX 4090", 0x10DE, 24564, 2)]}}
+                       "gpus": [("NVIDIA Example GPU", 0x10DE, 24564, 2)]}}
 
 
 def _hybrid():
