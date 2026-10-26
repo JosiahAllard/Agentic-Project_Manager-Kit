@@ -152,7 +152,7 @@ def answered(snap, cmd, questions=None):
                    'to cite' % (cmd, rec.stem))
         else:
             first = ('' if got in ('logged', 'filed') else
-                     'the PM logs the answer (hub.py questions log %s <ruling> --if-version V), '
+                     'the PM logs the answer (hub.py questions log %s --if-version V), '
                      'then ' % q)
             fix = '%s%s unpark %s, giving the ruling it was logged as' % (first, cmd, rec.stem)
         out.append(Finding('answered-question', rec.stem,

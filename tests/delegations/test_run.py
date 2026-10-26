@@ -356,7 +356,8 @@ class Triggers(Fixture):
 
 
 class HubTrigger(Fixture):
-    """A question Q-1001 the owner answered with the run line, logged as H-kit-0001."""
+    """A question Q-1001 the owner answered with the run line, logged as H-kit-0001, the one
+    live owner entry whose Source names it: the hub keeps no ledger id on the question."""
 
     LINE = 'run D-001 name=alpha'
 
@@ -364,7 +365,7 @@ class HubTrigger(Fixture):
         Fixture.setUp(self)
         self.add(decides='the owner chose run D-001 name=alpha', prov='selected',
                  source='hub Q-1001 and Q-1002')
-        self.q = {'id': 'Q-1001', 'status': 'logged', 'repo': 'kit', 'ruling': 'H-kit-0001',
+        self.q = {'id': 'Q-1001', 'status': 'logged', 'repo': 'kit',
                   'options': [{'label': self.LINE}, {'label': 'not now'}],
                   'answer': {'choice': 0, 'label': self.LINE, 'note': '', 'via': 'web',
                              'at': (NOW - datetime.timedelta(hours=1)).astimezone().isoformat()}}
@@ -399,10 +400,9 @@ class HubTrigger(Fixture):
 
     def test_a_filed_question_is_refused_until_its_asker_logs_it(self):
         self.q['status'] = 'filed'
-        self.q.pop('ruling')
         self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}
         self.deny('is filed in its record but not logged')
-        self.deny('log it first: `hub.py questions log %s <ruling id>`' % self.q['id'])
+        self.deny('log it first: `hub.py questions log %s --if-version V`' % self.q['id'])
 
     def test_a_filed_question_once_logged_runs(self):
         self.q['record'] = {'repo': 'kit', 'id': 'EX-1'}
@@ -429,20 +429,38 @@ class HubTrigger(Fixture):
         self.q['answer']['at'] = '2026-10-20T11:00:00'
         self.deny('has no offset')
 
-    def test_a_ruling_that_is_not_the_owners_is_refused(self):
+    def test_an_old_logged_question_still_carrying_a_ruling_is_found_by_source(self):
+        self.q['ruling'] = 'H-kit-0099'     # an older hub stored an id; nothing reads it now
+        self.assertEqual(self.go().entry, 'H-kit-0002')
+        self.assertIn('Source: under H-kit-0001: D-001 Q-1001', self.text())
+
+    def _no_owner_entry(self):
+        lwrite.retire(self.ledger, 'H-kit-0001', 'spent', 'made for the test',
+                      repos=self.cfg['ledger_repos'], split=True)
+
+    def test_an_entry_that_is_not_the_owners_does_not_count(self):
+        self._no_owner_entry()
         lwrite.add(self.ledger, 'kit', 'delegated', 'q', 'a', 'd', 'under H-kit-0001: hub Q-1001',
                    when=stamp(datetime.timedelta(minutes=30)), repos=self.cfg['ledger_repos'], split=True)
-        self.q['ruling'] = 'H-kit-0002'
-        self.deny("is not the owner's")
+        self.deny("no live owner ledger entry's Source names it")
 
-    def test_a_ruling_whose_source_does_not_name_the_question_is_refused(self):
+    def test_a_source_naming_another_question_does_not_count(self):
+        self._no_owner_entry()
         self.add(decides='x', prov='typed', source='hub Q-10012')
-        self.q['ruling'] = 'H-kit-0002'
-        self.deny('does not name Q-1001')
+        self.deny("no live owner ledger entry's Source names it")
 
-    def test_a_ruling_that_is_no_id_is_refused(self):
-        self.q['ruling'] = 'yes'
-        self.deny('is not a ledger id')
+    def test_two_live_owner_entries_naming_the_question_are_refused(self):
+        self.add(decides='x', prov='typed', source='hub Q-1001 again')
+        self.deny('more than one live owner ledger entry names it in its Source '
+                  '(H-kit-0001, H-kit-0002)')
+        self.assertNotIn('delegated', self.text())
+
+    def test_a_superseded_entry_does_not_count(self):
+        lwrite.add(self.ledger, 'kit', 'typed', 'q', 'a', 'run D-001 name=alpha', 'hub Q-1001',
+                   supersedes='H-kit-0001', when=stamp(datetime.timedelta(minutes=30)),
+                   repos=self.cfg['ledger_repos'], split=True)
+        self.assertEqual(self.go().entry, 'H-kit-0003')
+        self.assertIn('Source: under H-kit-0002: D-001 Q-1001', self.text())
 
     def test_a_hub_that_does_not_answer_is_refused(self):
         self.deny('cannot read Q-1001 from the hub', hub=Hub(error=hubserve.NotRunning(8765)))

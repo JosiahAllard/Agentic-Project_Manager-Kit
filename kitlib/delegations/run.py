@@ -21,8 +21,9 @@ the new approval's id. Run in this order:
      (on the Dev Drive, outside checkouts and owner-only places), no ledger entry records the
      approval, and the hub verifies it for this operation, its repo and the run line's SHA-256.
      A hub trigger: the logged question's chosen option label is the run line, chosen in
-     the last MAX_AGE, and its ruling is a live owner ledger entry whose Source names the
-     question. An owner ledger id: a live owner entry, written in the last MAX_AGE, whose Decides
+     the last MAX_AGE, and exactly one live owner ledger entry whose Source names the question
+     (one another such entry supersedes does not count) is its order (hub_entry). An owner
+     ledger id: a live owner entry, written in the last MAX_AGE, whose Decides
      is the run line.
   5. the preconditions: file-exists, branch-landed, checklist-line. A hub approval is then
      consumed on the hub, pinned to the version it verified at: of two racing runners one wins,
@@ -448,12 +449,40 @@ def used(texts, anchor, trigger):
 
 # --- The order --------------------------------------------------------------------------------
 
+def hub_entry(texts, qid):
+    """The id of the one live owner entry whose Source names the question `qid` as a whole word;
+    RunRefused when there is none or more than one. The hub stores no ledger id on a logged
+    question (an owner decision), so the Source is what ties the two. An entry that another
+    such entry supersedes is left out: superseding does not retire it."""
+    named = re.compile(r'\b%s\b' % re.escape(qid))
+    found = {}
+    for _, text in texts:
+        for rid, block in fmt.split_entries(text)[1]:
+            e = fmt.parse_block(block)[0]
+            if (e and not e.get('retired') and e.get('prov') in fmt.OWNER_PROVS
+                    and named.search(e.get('Source') or '')):
+                found[rid] = e
+    gone = set()
+    for e in found.values():
+        sup = e.get('Supersedes') or '-'
+        if sup.strip() != '-':
+            gone.update(fmt.RID_RE.findall(sup))
+    left = sorted(rid for rid in found if rid not in gone)
+    if not left:
+        raise RunRefused("%s: no live owner ledger entry's Source names it: log the owner's "
+                         'answer (ledger.py add, its Source naming %s) first' % (qid, qid))
+    if len(left) > 1:
+        raise RunRefused('%s: more than one live owner ledger entry names it in its Source (%s): '
+                         'supersede or retire all but one' % (qid, ', '.join(left)))
+    return left[0]
+
+
 def hub_order(op, qid, line, hub, texts, now):
     """The Order of a hub question; RunRefused unless the owner chose the run line on it.
 
-    The question must be logged: its ruling is what binds the run. A question bound to a
-    record goes from answered to filed, and only its asker's `hub.py questions log` binds a
-    ruling to it, so a filed question is refused with that step named."""
+    The question must be logged, and its owner ledger entry is found by Source (hub_entry). A
+    question bound to a record goes from answered to filed, and only its asker's `hub.py
+    questions log` logs it, so a filed question is refused with that step named."""
     if 'hub-answer' not in op.trigger:
         raise RunRefused('%s does not take a hub answer (its triggers: %s)' % (op.id, ', '.join(op.trigger)))
     if not op.reversible:
@@ -469,7 +498,7 @@ def hub_order(op, qid, line, hub, texts, now):
     if q is not None and q.get('status') == 'filed':
         raise RunRefused('%s is filed in its record but not logged: its asker logs the answer '
                          'in the ledger first, then it runs; log it first: `hub.py questions log '
-                         '%s <ruling id>`' % (qid, qid))
+                         '%s --if-version V`' % (qid, qid))
     if q is None:
         raise RunRefused('%s is not a logged hub question: the owner answers it, the PM logs the '
                          'answer in the ledger and on the hub, then it runs' % qid)
@@ -490,13 +519,7 @@ def hub_order(op, qid, line, hub, texts, now):
     if at.tzinfo is None:
         raise RunRefused('%s: the answer time %r has no offset' % (qid, ans.get('at')))
     _age(at, now, '%s\'s answer' % qid)
-    ruling = q.get('ruling').strip() if isinstance(q.get('ruling'), str) else ''
-    if not fmt.is_id(ruling):
-        raise RunRefused('%s: its ruling %r is not a ledger id' % (qid, ruling))
-    e = owner_entry(texts, ruling)
-    if not re.search(r'\b%s\b' % re.escape(qid), e.get('Source') or ''):
-        raise RunRefused("%s: its ruling %s's Source does not name %s" % (qid, ruling, qid))
-    return Order(HUB, qid, ruling)
+    return Order(HUB, qid, hub_entry(texts, qid))
 
 
 def owner_order(op, rid, line, texts, now):
