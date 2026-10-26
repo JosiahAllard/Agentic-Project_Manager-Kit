@@ -12,14 +12,16 @@ of docs/linux-support-plan.md every Linux run is a broken run: the tests package
 On Windows the gate (`gate.py --full`) runs the suite; this tool is for the platforms it does not.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.ci.ratchet, prints, exits.
-It loads no kitlib.proc, kitlib.config or kitlib.git, so it runs where those cannot import.
+It loads no kitlib.proc beyond kitlib/__init__'s console hook, and no kitlib.config or kitlib.git,
+so it runs where those cannot import.
 Exit codes: 0 green (the failing tests are exactly the baseline), 1 a difference, 2 USAGE, a
 malformed or missing baseline, or a broken run (the tests package did not import, the child died,
-timed out or printed no result, or no test ran).
+timed out or printed no result, no test ran, or this tool met an unexpected error).
 """
 import argparse
 import os
 import sys
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -54,7 +56,16 @@ def main(argv=None, out=None):
         out.write(line + '\n')
         out.flush()
     a = build_parser().parse_args(argv)
-    root = os.path.abspath(a.root)
+    try:
+        return _run(a, say)
+    except Exception:
+        say('ci_ratchet: BROKEN RUN: an unexpected error')
+        say(traceback.format_exc().rstrip())
+        return USAGE
+
+
+def _run(a, say):
+    root =os.path.abspath(a.root)
     if not os.path.isdir(os.path.join(root, 'tests')):
         say('ci_ratchet: refused: no tests folder in %s' % root)
         return USAGE

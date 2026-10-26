@@ -14,7 +14,8 @@ number of tests run and the platform markers by reason (tests/platforms.py REASO
 dies, times out or prints no such line is a broken run, as is one that ran no test.
 
 This module must import where kitlib.proc cannot (Linux, before slice 2 of the plan): it uses
-subprocess with an explicit creationflags= and loads no kitlib.proc, kitlib.config or kitlib.git.
+subprocess with an explicit creationflags= and loads no kitlib.proc beyond kitlib/__init__'s
+console hook, and no kitlib.config or kitlib.git.
 The child's environment is the caller's without the session's kit binding
 (kitlib.tooldeps.childenv.scrubbed); the tests package sets its own home and time fences."""
 import collections
@@ -159,6 +160,17 @@ def _result(stdout):
     return None
 
 
+def _markers(markers):
+    """The result's markers, checked: a list of [platform, reason, count]; ValueError else."""
+    if not isinstance(markers, list):
+        raise ValueError('markers is not a list: %r' % (markers,))
+    for m in markers:
+        if not (isinstance(m, list) and len(m) == 3 and isinstance(m[0], str)
+                and isinstance(m[1], str) and type(m[2]) is int):
+            raise ValueError('a marker is not [platform, reason, count]: %r' % (m,))
+    return markers
+
+
 def run_suite(root, timeout=RUN_TIMEOUT, environ=None):
     """Run the whole suite under `root` in one child: a Run. `environ` (default os.environ) is
     scrubbed of the session's kit binding. The child's output goes to files, not pipes, so a test's
@@ -185,7 +197,7 @@ def run_suite(root, timeout=RUN_TIMEOUT, environ=None):
         return _broken(found['broken'], found.get('trace') or output)
     try:
         failing, imports = sorted(found['failing']), sorted(found['imports'])
-        ran, markers = int(found['ran']), found['markers']
+        ran, markers = int(found['ran']), _markers(found['markers'])
     except (KeyError, TypeError, ValueError) as e:
         return _broken('the result line is malformed: %s' % e, output)
     if ran == 0:

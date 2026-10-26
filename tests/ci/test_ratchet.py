@@ -13,6 +13,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 from kitlib.ci import ratchet
 
@@ -229,6 +230,42 @@ class Baselines(Tree):
             self.assertIn('broken run', f.read())
 
 
+class Results(Tree):
+    """The child's result line: garbled or malformed is a broken run, never a pass."""
+
+    GOOD = {'failing': [], 'imports': [], 'ran': 1, 'markers': [['windows', 'why', 2]]}
+
+    def test_a_garbled_or_non_object_line_is_no_result(self):
+        for line in ('{"failing": [', '[1, 2]', '"text"'):
+            with self.subTest(line=line):
+                self.assertIsNone(ratchet._result('noise\n' + ratchet.MARK + line + '\n'))
+        self.assertEqual(ratchet._result(ratchet.MARK + json.dumps(self.GOOD)), self.GOOD)
+
+    def test_a_garbled_line_is_a_broken_run(self):
+        root = self.tree(test_a=PASSING)
+        with mock.patch.object(ratchet, '_result', return_value=None):
+            run = self.run_suite(root)
+        self.assertIn('no result line', run.broken)
+
+    def test_a_malformed_result_is_a_broken_run(self):
+        bad = [{k: v for k, v in self.GOOD.items() if k != 'ran'},
+               dict(self.GOOD, ran='many'),
+               dict(self.GOOD, failing=None),
+               dict(self.GOOD, markers={'windows': 2}),
+               dict(self.GOOD, markers=[['windows', 'why']]),
+               dict(self.GOOD, markers=[['windows', 'why', '2']]),
+               dict(self.GOOD, markers=[['windows', 3, 2]])]
+        root = self.tree(test_a=PASSING)
+        for found in bad:
+            with self.subTest(found=found), \
+                    mock.patch.object(ratchet, '_result', return_value=found):
+                run = self.run_suite(root)
+            self.assertIn('the result line is malformed', run.broken)
+            self.assertEqual(run.failing, [])
+        with mock.patch.object(ratchet, '_result', return_value=dict(self.GOOD)):
+            self.assertIsNone(self.run_suite(root).broken)
+
+
 class Cli(Tree):
 
     def main(self, *argv):
@@ -264,6 +301,28 @@ class Cli(Tree):
         rc, out = self.main('-C', root, '--baseline', bad)
         self.assertEqual(rc, 2, out)
         self.assertIn('ci_ratchet: refused:', out)
+
+    def test_the_default_baseline_is_used_and_may_be_missing(self):
+        root = self.tree(test_a=PASSING)
+        rc, out = self.main('-C', root)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('baseline %s (0 id(s))' % ratchet.default_baseline(root), out)
+
+    def test_no_default_baseline_is_2(self):
+        root = self.tree(test_a=PASSING)
+        with mock.patch.object(ratchet, 'default_baseline', return_value=None):
+            rc, out = self.main('-C', root)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('ci_ratchet: refused: no default baseline on', out)
+
+    def test_an_unexpected_error_is_a_broken_run(self):
+        root = self.tree(test_a=PASSING)
+        listed = self.write(root, 'base.txt', '# none\n')
+        with mock.patch.object(ratchet, 'run_suite', side_effect=RuntimeError('boom')):
+            rc, out = self.main('-C', root, '--baseline', listed)
+        self.assertEqual(rc, 2, out)
+        self.assertIn('ci_ratchet: BROKEN RUN: an unexpected error', out)
+        self.assertIn('RuntimeError: boom', out)
 
     def test_usage_is_2(self):
         err = io.StringIO()

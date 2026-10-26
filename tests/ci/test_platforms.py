@@ -36,9 +36,19 @@ class Markers(unittest.TestCase):
         self.assertEqual(platforms.REASONS[key + '.test_m'], ('posix', 'a file mode bit'))
 
     def test_a_module_level_key_is_module_and_qualname(self):
-        key = '%s.Probe' % __name__
-        self.assertEqual(platforms.REASONS[key], ('windows', PROBE_REASON))
-        self.assertEqual(platforms.REASONS[key + '.probe'], ('posix', PROBE_REASON))
+        """A scratch module, so the suite's real REASONS keep only the suite's markers."""
+        source = ('from tests import platforms\n'
+                  '@platforms.windows_only("the probe")\n'
+                  'class Probe:\n'
+                  '    @platforms.posix_only("the probe")\n'
+                  '    def probe(self):\n'
+                  '        pass\n')
+        key = 'tests.ci.scratch_probe.Probe'
+        self.forget(key)
+        self.forget(key + '.probe')
+        exec(compile(source, '<scratch_probe>', 'exec'), {'__name__': 'tests.ci.scratch_probe'})
+        self.assertEqual(platforms.REASONS[key], ('windows', 'the probe'))
+        self.assertEqual(platforms.REASONS[key + '.probe'], ('posix', 'the probe'))
 
     def test_it_skips_off_its_platform(self):
         for flag, marker in (('WINDOWS', platforms.windows_only), ('POSIX', platforms.posix_only)):
@@ -89,18 +99,6 @@ class Markers(unittest.TestCase):
                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1]), [])
-
-
-PROBE_REASON = 'the probe of the module-level key'
-
-
-@platforms.windows_only(PROBE_REASON)
-class Probe:
-    """Not a TestCase: the module-level keys, with no test of the suite skipped for them."""
-
-    @platforms.posix_only(PROBE_REASON)
-    def probe(self):
-        pass
 
 
 if __name__ == '__main__':

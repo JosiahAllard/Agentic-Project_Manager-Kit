@@ -118,9 +118,9 @@ What it built:
   and `budget(seconds)`. Both read the environment at each call, so a test that patches it is
   seen at once.
 - Wiring: tests/__init__.py sets the marker unless it is set; kit_tests' `child_env`
-  (kitlib/tooldeps/childenv.py) does the same for every unit. A pool worker replaces its environment for each unit, which is
-  why kit_tests marks the units itself, as it does the home fence's marker. kit_tests' own
-  process stays unmarked.
+  (kitlib/tooldeps/childenv.py) does the same for every unit. A pool worker replaces its
+  environment for each unit, which is why kit_tests marks the units itself, as it does the home
+  fence's marker. kit_tests' own process stays unmarked.
 - `kitlib.agentstart`: `text` and `lines` take `budget=None`, resolved in `lines` with
   `clock.budget(BUDGET)`. A budget passed in is used as is.
 - tests/clock/test_clock.py:
