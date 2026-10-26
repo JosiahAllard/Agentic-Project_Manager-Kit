@@ -42,6 +42,7 @@ class ToolTest(unittest.TestCase):
         env = gitfixture.fixture_env({'USERPROFILE': self.k.home, 'HOME': self.k.home,
                                       'LOCALAPPDATA': self.lad})
         env.pop('CLAUDE_CONFIG_DIR', None)
+        env.pop('CODEX_HOME', None)                             # the Codex home: <temp home>\.codex
         env['ProgramW6432'] = env['ProgramFiles'] = self.pf     # never the machine's managed settings
         env['PATH'] = self.bin + os.pathsep + env.get('PATH', '')
         return subprocess.run([sys.executable, TOOL, '--kit', self.k.kit] + list(args), env=env,

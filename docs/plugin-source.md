@@ -1,6 +1,6 @@
 # Plugin source
 
-Every account folder's Claude Code installs the `pm-kit` plugin from an export of pushed kit main, never from the kit checkout. `tools/plugin_refresh.py` makes the export and runs `claude plugin` in each account folder; logic in `kitlib/pluginsource` (export, marketplace, prune, state, the refresh lock) and `kitlib/pluginsource/claude.py` (the account folders and the `claude` runner). Tests: `tests/pluginsource`, `tests/pmstart/test_plugin_current.py`, `tests/pmwatch/test_plugin.py`.
+Every account folder's Claude Code installs the `pm-kit` plugin from an export of pushed kit main, never from the kit checkout. `tools/plugin_refresh.py` makes the export and runs `claude plugin` in each account folder; logic in `kitlib/pluginsource` (export, marketplace, prune, state, the refresh lock) and `kitlib/pluginsource/claude.py` (the account folders and the `claude` runner). `kitlib/pluginsource/codex.py` mirrors the Codex plugin copy ("Codex copy"). Tests: `tests/pluginsource`, `tests/pmstart/test_plugin_current.py`, `tests/pmwatch/test_plugin.py`.
 
 With no `home`, `claude.account_folders` and `claude.Runner` find the user's home through `kitlib.config.user.home_dir()`, which the kit's tests fence (docs/test-tools.md "Home fence"), so a test passes a temp home or the folders themselves.
 
@@ -8,7 +8,7 @@ With no `home`, `claude.account_folders` and `claude.Runner` find the user's hom
 
 The export root is the machine config's `plugin.export_dir`, by default `%LOCALAPPDATA%\pm-kit\plugin` (docs/kit-json.md "Machine config keys"; `kitlib.pluginsource` `settings`). A root inside the kit checkout, or under the agent temp sweep root (`agent_temp_sweep.dir`, whose sweep removes unused entries), is refused (`kitlib.pluginsource` `placement_errors`, checked by `check` and `settings`). It holds:
 
-- `<sha12>/`: the tracked files of one kit main commit, from `git ls-tree` of the commit and one `git cat-file` batch (`kitlib.pluginsource` `export`), so no worktree, `.git` or untracked file is in it. Symlinks and submodules are skipped and listed in the marker. It is written as `<sha12>.tmp` and renamed, so a folder by the final name is always whole.
+- `<sha12>/`: the tracked files of one kit main commit, from `git ls-tree` of the commit and one `git cat-file` batch (`kitlib.pluginsource` `export`), so no worktree, `.git` or untracked file is in it. The top-level `tests/` folder is left out (`LEFT_OUT`, as `kitlib.kitrelease` leaves tests out of a release): it was half of each export, and nothing reads the kit's tests from an export, since a gate runs `tools/kit_tests.py` from its own checkout. Symlinks and submodules are skipped and listed in the marker. It is written as `<sha12>.tmp` and renamed, so a folder by the final name is always whole.
 - `<sha12>/.pm-kit-export`: the marker, `{sha, version, exported_at, skipped, made_by, checkout}`. Prune only removes folders that have one. `checkout` is the main checkout of the kit repository the export was made from (`kitlib.git.repo` `main_checkout_toplevel`; left out when git cannot place it), and `kitlib.pluginsource` `export_checkout` returns it while it still holds a `.git` folder. A `tools/land.py` or `tools/gate.py` started from the export pins through that checkout as a start from it would (docs/gate.md "Pinned tools"). `tools/kit_stubs.py memory` run from the export reads it too, for the kit its printed command names (`kitlib.stubs.live_kit`, docs/install.md "Agent memory folder: tools/kit_stubs.py memory"). An export made before the key existed has none: its tools run live, and the command `kit_stubs.py memory` prints names the export, until a refresh replaces it.
 - `<sha12>/.claude-plugin/plugin.json`: the kit's manifest with its one `version` value stamped `<kit version>-main.<commit count>` (`kitlib.pluginsource` `stamp`, `stamped_version`), so `claude plugin update` sees a new version at every push without a commit on main. Every other byte, a BOM included, is kept.
 - `.claude-plugin/marketplace.json`: the marketplace `pm-kit`, whose one plugin `pm-kit` is `./<sha12>` (`write_marketplace`). It is rewritten through a temp file and `os.replace`, with no BOM. The names never change, so agent names (`pm-kit:<agent>`) and allow entries stay the same.
@@ -31,6 +31,8 @@ The export root is the machine config's `plugin.export_dir`, by default `%LOCALA
    - `CLAUDE_CONFIG_DIR` is set to the folder, except for `~/.claude`, where it is removed.
    - Each folder's result goes into `state.json`. A failed folder does not stop the others, and the exit code is then 1.
    - A folder whose last refresh at the same sha succeeded is skipped. When the export, the marketplace and every folder are already current, nothing runs.
+4. When every folder's update went through, it prunes the old versions in each account folder's plugins cache, as `--prune-caches --apply` does, with every rule of "Old caches" kept (`kitlib.pluginsource` `_prune_old_caches`). It prints `pruned cache <path>` for each version removed and `WARNING: could not remove <path>: <why>` for each that could not be; kept versions get no line, and the exit code does not change. A failed folder, a `--migrate` run and a run without `claude` prune no cache.
+5. It mirrors the Codex plugin copy from the export (see "Codex copy"), also when the Claude side had nothing to do. It never changes the exit code.
 
 Every mode, dry runs included, first prints `WARNING: pm-kit marketplace <where> is <path>, not the export <root> (...)` for each account folder's `plugins\known_marketplaces.json` `pm-kit` `installLocation`, and the managed settings file's `extraKnownMarketplaces` `pm-kit` source path, that is not the export root (`kitlib.pluginsource` `marketplace_mismatches`; the file's path from the default host adapter's `managed_settings_path`, through `kitlib.machinesetup.extras` `Host.managed_path`). It reads only and fixes nothing. A missing file or entry gives no line, a file that cannot be read gives a `could not check` line, and neither changes the exit code. The session start runs the same check (see "Behind warnings").
 
@@ -73,7 +75,7 @@ A migrate never deletes an old cache. The migrate report lists, for each account
 
 ## Old caches
 
-Claude Code copies each install into `<folder>\plugins\cache\pm-kit\pm-kit\<version>` (`kitlib.pluginsource` `cache_dir`), and never removes the old versions. `python tools/plugin_refresh.py --prune-caches` lists them in every account folder (or those `--folder` names); it is a dry run, and with `--apply` it removes them, under the refresh lock, by claim as in "Prune". It cannot be combined with `--migrate` (exit 2). Kept (`prune_caches`):
+Claude Code copies each install into `<folder>\plugins\cache\pm-kit\pm-kit\<version>` (`kitlib.pluginsource` `cache_dir`), and never removes the old versions. A refresh whose updates all went through removes them itself (step 4 of "Refresh"), by the rules below. `python tools/plugin_refresh.py --prune-caches` lists them in every account folder (or those `--folder` names); it is a dry run, and with `--apply` it removes them, under the refresh lock, by claim as in "Prune". It cannot be combined with `--migrate` (exit 2). Kept (`prune_caches`):
 
 - every version of an account, when the in-use read is not whole, the account's `plugins\installed_plugins.json` is missing, cannot be read or names no `pm-kit@pm-kit` install (`claude` `installed_path`), or a link or junction lies on the way to the cache;
 - the version the install record's `installPath` names;
@@ -82,6 +84,21 @@ Claude Code copies each install into `<folder>\plugins\cache\pm-kit\pm-kit\<vers
 - a link or junction, which is never followed or removed.
 
 Each line is `kept <path> (<why>)`, `would remove <path>`, `removed <path>` or `FAILED to remove <path> (<why>)`, then the counts. The exit code is 1 when a removal failed, else 0.
+
+## Codex copy
+
+Codex installs the plugin by copying its marketplace folder into `<CODEX_HOME>\plugins\cache\pm-kit-local\pm-kit\<version>`, and copies it again from the marketplace folder later, so `--apply` writes both, or Codex would bring an old copy back (`kitlib.pluginsource.codex`). The Codex home is `<--home>\.codex` when `--home` is given, else `CODEX_HOME`, else `~\.codex`. The step:
+
+- Reads the targets from `<CODEX_HOME>\config.toml` only, and never writes it: the `[plugins."pm-kit@pm-kit-local"]` entry; the `[marketplaces.pm-kit-local]` `source` folder (an absolute local path, resolved with `realpath`); that folder's `.agents\plugins\marketplace.json` (else `.claude-plugin\marketplace.json`) entry for `pm-kit`, a path that starts with `./` and stays under the folder; and the cache folder of the version the marketplace copy's `plugin.json` (else `.codex-plugin\plugin.json`) gives.
+- Refuses, writing nothing, when any of these is missing or malformed, when a target is not one config.toml names, or when a link or junction lies on the way below the Codex home or the marketplace folder. With no config.toml it prints that Codex is not set up and writes nothing. A missing cache folder (Codex has not installed that version) is a note, and the marketplace copy is still written.
+- Mirrors the parts the export's `hosts/codex/shell` holds, `skills`, `agents`, `hooks` and `.codex-plugin`, into each target. A part already the same, byte for byte, is left alone. Each other part is copied to a sibling `<part>.pmkit-new-<pid>`; the old part is renamed aside to `<part>.pmkit-old-<pid>`; the copy is put in place with `os.replace`; then the old part is removed. Windows refuses the rename while a file in the part is open, so a part Codex holds open is left as it was, with the note `busy: ... close Codex and run the refresh again`. A replace that fails after the rename puts the old part back. A part that is a link or junction is refused, never followed. A leftover sibling from a stopped run is removed first.
+- Changes no version and no other file: `plugin.json`, `mcp.json`, `boot\` and `mcp\` stay as Codex installed them.
+- Runs under `refresh.pid`, and only in the owner's session: a session `PM_KIT_ROLE` marks (a PM's `pm_watch` auto refresh, which inherits it) prints `codex: skipped` and writes nothing. Known limit: the guard does not refuse `plugin_refresh.py --apply` to an agent, and a subagent of the owner's own session is unmarked, so this check does not stop one.
+- Prints lines that start `codex:`, and never changes the exit code.
+
+When `hooks\hooks.json` changes, Codex asks the owner to trust the pm-kit hook again at its next start; the refresh prints `hooks changed` then. Close Codex before the refresh, since it holds the MCP files open.
+
+INFERENCE, not observed on a live Codex install: the `config.toml` keys, the marketplace manifest's place and entry shape, and the cache path come from the Codex plugin documentation and the owner's install notes. Where the real layout differs, the step refuses and writes nothing.
 
 ## Behind warnings
 

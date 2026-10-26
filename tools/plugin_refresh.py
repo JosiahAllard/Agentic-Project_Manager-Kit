@@ -5,7 +5,12 @@ account folder's install from it (docs/plugin-source.md).
   plugin_refresh.py --apply             export, point the marketplace at it, prune (keeping every
                                         export a running process, scheduled task or pin lease
                                         names), then per account folder: claude plugin marketplace
-                                        update pm-kit, claude plugin update pm-kit@pm-kit, in order
+                                        update pm-kit, claude plugin update pm-kit@pm-kit, in order;
+                                        then the old versions in each account folder's plugins
+                                        cache go (as --prune-caches --apply), and the Codex plugin
+                                        copy config.toml names (the marketplace copy and the cache)
+                                        gets the export's hosts/codex/shell parts; a session
+                                        PM_KIT_ROLE marks leaves the Codex copy alone
   plugin_refresh.py --migrate [--apply] once per machine, from an install of the kit checkout: per
                                         folder marketplace remove, marketplace add <export root>,
                                         install; lists the old caches (never removes them).
@@ -17,7 +22,8 @@ account folder's install from it (docs/plugin-source.md).
                                         running process or scheduled task names
   options: --folder DIR (repeatable: only the account folders named; any other DIR is refused)
            --kit DIR (default: the checkout this file is in; run from an export, the checkout its
-                      marker records, else refused)   --home DIR (default: the user's home)
+                      marker records, else refused)   --home DIR (default: the user's home; the
+                      Codex home is then DIR\\.codex, else CODEX_HOME, else ~\\.codex)
 
 Every mode first prints a WARNING line for each account folder's known_marketplaces.json
 installLocation, and the managed settings file's extraKnownMarketplaces path, that is not the
@@ -34,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import pluginsource                                      # noqa: E402
 from kitlib.config.types import ConfigError                          # noqa: E402
-from kitlib.pluginsource import claude                               # noqa: E402
+from kitlib.pluginsource import claude, codex                        # noqa: E402
 
 EXIT_USAGE = 2
 
@@ -83,7 +89,8 @@ def main(argv=None):
     if a.prune_caches:
         return prune_caches(s, folders, in_use, a.apply, out)
     return pluginsource.refresh(os.path.abspath(a.kit), s, folders, out, apply=a.apply,
-                                migrate=a.migrate, runner=claude.Runner(a.home), in_use=in_use)
+                                migrate=a.migrate, runner=claude.Runner(a.home), in_use=in_use,
+                                codex_home=None if a.migrate else codex.codex_home(a.home))
 
 
 def marketplace_warnings(export_dir, folders):

@@ -3,6 +3,7 @@ runs, prune, the refresh pid file and the behind lines (docs/plugin-source.md)."
 import datetime
 import json
 import os
+import time
 import unittest
 from unittest import mock
 
@@ -53,6 +54,22 @@ class ExportTest(Base):
         self.assertEqual(files, ['.claude-plugin/marketplace.json', '.claude-plugin/plugin.json',
                                  P.MARKER, 'README.md', 'tools/x.py'])
         self.assertFalse(os.path.exists(folder + '.tmp'))
+
+    def test_the_kits_tests_folder_is_left_out(self):
+        """Half an export was the kit's tests/, which nothing reads from an export (a gate runs
+        tools/kit_tests.py from its own checkout); a tests folder deeper down stays."""
+        r = self.k.repo
+        r.write('tests/test_x.py', 'x = 1\n')
+        r.write('tests/sub/data.txt', 'y\n')
+        r.write('docs/tests/notes.md', 'kept\n')
+        r.commit('tests', 'tests/test_x.py', 'tests/sub/data.txt', 'docs/tests/notes.md')
+        r.git('push', '-q', 'origin', 'main')
+        sha = P.remote_main(self.k.kit, 'origin')
+        folder, _v = P.export(self.k.kit, sha, self.k.root, NOW)
+        self.assertFalse(os.path.exists(os.path.join(folder, 'tests')))
+        self.assertTrue(os.path.isfile(os.path.join(folder, 'docs', 'tests', 'notes.md')))
+        self.assertTrue(os.path.isfile(os.path.join(folder, 'tools', 'x.py')))
+        self.assertNotIn('tests/', json.dumps(P.read_marker(folder).get('skipped') or []))
 
     def test_a_main_the_kit_has_not_fetched_is_refused(self):
         sha = self.k.push_from_clone()
@@ -208,6 +225,47 @@ class FolderRunTest(Base):
         self.assertEqual([c[0][2] for c in proc.calls], ['remove', 'add'])
         self.assertEqual(P.read_state(self.k.root)['folders'][two]['step'],
                          'plugin marketplace add %s' % self.k.root)
+
+
+class CachePruneAfterRefreshTest(Base):
+    """A refresh that went through prunes each account's old plugin cache versions, every guard of
+    prune_caches kept (the installed one, the newest, one replaced in the last day, one in use)."""
+
+    def account(self, versions, installed):
+        (f,) = self.k.folders('.claude')
+        cache = P.cache_dir(f)
+        old = time.time() - 30 * 86400
+        for i, v in enumerate(versions):
+            os.makedirs(os.path.join(cache, v, 'tools'))
+            os.utime(os.path.join(cache, v), (old + i * 60, old + i * 60))
+        with open(os.path.join(f, 'plugins', 'installed_plugins.json'), 'w', encoding='utf-8') as fh:
+            json.dump({'version': 2, 'plugins': {P.PLUGIN_ID: [
+                {'scope': 'user', 'installPath': os.path.join(cache, installed)}]}}, fh)
+        self.k.seed_migrated([f])
+        return f, cache
+
+    def reads(self, texts=()):
+        return lambda: P.InUse([t.lower() for t in texts], set(), [])
+
+    def test_apply_removes_the_unused_old_versions(self):
+        f, cache = self.account(['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3', '0.1.0-main.4'],
+                                installed='0.1.0-main.3')
+        named = 'node %s' % os.path.join(cache, '0.1.0-main.2', 'x.js')
+        self.assertEqual(self.refresh([f], in_use=self.reads([named])), 0, self.lines)
+        self.assertEqual(sorted(os.listdir(cache)), ['0.1.0-main.2', '0.1.0-main.3', '0.1.0-main.4'])
+        self.assertIn('pruned cache %s' % os.path.join(cache, '0.1.0-main.1'), self.lines)
+
+    def test_nothing_is_pruned_when_a_folder_failed_on_a_migrate_or_unread(self):
+        f, cache = self.account(['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3'],
+                                installed='0.1.0-main.3')
+        self.assertEqual(self.refresh([f], FakeProc(fail={('<default>', 'update'): 1}),
+                                      in_use=self.reads()), 1)
+        self.assertEqual(len(os.listdir(cache)), 3)
+        self.assertEqual(self.refresh([f], migrate=True, in_use=self.reads()), 0, self.lines)
+        self.assertEqual(len(os.listdir(cache)), 3)
+        self.assertEqual(self.refresh([f]), 0, self.lines)              # in use not read: all kept
+        self.assertEqual(len(os.listdir(cache)), 3)
+        self.assertFalse([l for l in self.lines if l.startswith('pruned cache')])
 
 
 class PruneTest(Base):
