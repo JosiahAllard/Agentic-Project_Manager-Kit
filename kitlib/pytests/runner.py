@@ -78,6 +78,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
+import kitlib.platform
 from kitlib.config import ConfigError, load as load_config
 from kitlib.config import schema
 from kitlib.config.types import check as check_type
@@ -273,7 +274,11 @@ def _why(e):
 def shield_unit(proc):
     """Shield the unit's own process from kills by pid for its whole life (kitlib.proc.shield).
     Called by Job.start while the child is still suspended; raises OSError, having written
-    nothing, when it cannot."""
+    nothing, when it cannot: off Windows always (PlatformUnsupported), as the shield is a
+    process DACL; there the unit runs unshielded, its note says so."""
+    if kitlib.platform.NAME != 'windows':
+        raise kitlib.platform.PlatformUnsupported('the pid shield is a Windows process DACL; '
+                                                  'this platform has none')
     pid_shield.release(pid_shield.shield(proc, process_dacl))
 
 

@@ -28,6 +28,8 @@ import signal
 import subprocess
 import sys
 
+import kitlib.platform
+
 from . import bash, cpu, win32
 from .console import CONSOLE_CHOICE, has_console  # noqa: F401  (job.has_console stays a name)
 from .process import process_working_set
@@ -451,3 +453,10 @@ def cores_text(mask):
     if mask is None:
         return "all cores"
     return "cores " + cpu.mask_text(mask) if mask else "no cores"
+
+
+# On Linux the Job is containment's (kitlib.platform.linux.contain): the same methods and
+# meanings on a cgroup scope, or on the weak tier it reports. Windows keeps the Job above.
+if kitlib.platform.NAME == "linux":
+    from kitlib.platform.linux import contain as _contain
+    Job = _contain.Job      # noqa: F811

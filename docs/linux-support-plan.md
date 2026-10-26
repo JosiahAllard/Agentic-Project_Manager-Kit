@@ -618,6 +618,15 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    and on a weak-mode box: a child that calls setsid stays in the cgroup and dies with it (S1);
    memory.peak is read; kill_on_close kills the tree when the owner dies; each lower tier is
    reported with what it lacks; the probes never trust an exit code.
+   Built on kit/linux-containment: kitlib/platform/linux/contain.py (kitlib.proc.job.Job on
+   Linux) and cpu.py (the seam's affinity primitives); pool.py holds a worker's processes by
+   pidfd; tests/proc/test_linux_contain.py and test_linux_cpu.py, and the pool tests on Linux.
+   The watchdog runs inside the job's cgroup (J/w), so it never outlives the job, and every
+   cgroup.kill is checked to target the job's own cgroup. Deviations: W1 is probed and reported,
+   not built (no unprivileged user namespaces on the VM; a later record); W2 has no subreaper (an
+   environment token finds orphans, contain.py says why); leftovers() moves stragglers to a scope
+   of their own through systemd; processes() is None; a Linux job runs one command; the pid
+   shield is Windows only, so each Linux unit and worker carries the "could not shield" note.
 6. **Lock hardware.** linux/hardware.py feeding lock/layout.detect; fake_hardware gains the four
    synthetic /sys and /proc trees of section 2.4. Risk High (lock logic). Proof: the four
    synthetic trees, and the VM's live /sys, divide with no shared id; the Windows layout
