@@ -22,6 +22,7 @@ from unittest import mock
 from tests import gitfixture
 
 from .helpers import REPO, StoreCase
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import release
@@ -74,7 +75,7 @@ class LockPaths(unittest.TestCase):
     """LOCK_PATHS is what a release must not change while a run is live: the entry point and every
     kitlib module it imports. A new import outside them fails here, not in a live release."""
 
-    @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+    @windows_only("the lock is Windows only")
     def test_every_module_the_lock_tool_reaches_is_a_lock_path(self):
         reached = reached_kitlib_files(REPO)
         self.assertIn("kitlib/lock/store.py", reached)       # the walk itself works
@@ -83,25 +84,25 @@ class LockPaths(unittest.TestCase):
         self.assertTrue(release.is_lock_path("tools/machine_lock.py"))
         self.assertTrue(release.is_lock_path("kitlib/lock/kinds.json"))
 
-    @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+    @windows_only("the lock is Windows only")
     def test_every_lock_path_exists(self):
         for p in release.LOCK_PATHS:
             self.assertTrue(os.path.exists(os.path.join(REPO, *p.rstrip("/").split("/"))), p)
 
-    @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+    @windows_only("the lock is Windows only")
     def test_other_paths_are_not_lock_paths(self):
         for p in ("docs/go-live.md", "kitlib/lockmcp/server.py", "kitlib/locker.py",
                   "tools/machine_lock.pyc", "tools/gate.py", "kitlib/gate/land.py"):
             self.assertFalse(release.is_lock_path(p), p)
 
-    @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+    @windows_only("the lock is Windows only")
     def test_backslash_paths_are_normalised(self):
         self.assertTrue(release.is_lock_path("kitlib\\lock\\store.py"))
         self.assertTrue(release.is_lock_path("tools\\machine_lock.py"))
         self.assertFalse(release.is_lock_path("kitlib\\lockmcp\\server.py"))
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class OwnerLive(unittest.TestCase):
     """release._owner_live(d, alive): False only when alive() says the owner is surely gone."""
 

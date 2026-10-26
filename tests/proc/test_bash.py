@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from kitlib.proc import bash
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import job
@@ -93,7 +94,7 @@ class GitBash(unittest.TestCase):
         self.assertIsNone(bash.git_bash(env, which=self.no_git))
 
 
-@unittest.skipUnless(os.name == "nt", "Windows job objects")
+@windows_only("Windows job objects")
 class InAJob(unittest.TestCase):
     def test_a_bare_bash_in_a_job_runs_git_bash(self):
         if bash.git_bash() is None:

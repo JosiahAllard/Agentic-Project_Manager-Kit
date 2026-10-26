@@ -18,6 +18,7 @@ from kitlib.pmstart import consoletasks as ct
 from kitlib.proc import spawn
 from tests.home import temp_home
 from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
+from tests.platforms import windows_only
 
 REAL_READ = ct.read_tasks      # before setUpModule patches it off this machine
 NOW = datetime.datetime(2026, 10, 13, 9, 0)
@@ -249,7 +250,7 @@ class Read(unittest.TestCase):
                     REAL_READ(run=run)
 
 
-@unittest.skipUnless(sys.platform == "win32", "schtasks is Windows'")
+@windows_only("schtasks is Windows'")
 class RealRead(unittest.TestCase):
     def test_this_machines_task_list_parses(self):
         """One read-only `schtasks /Query /XML ONE`; skips when schtasks cannot answer in time."""

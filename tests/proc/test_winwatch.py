@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from ctypes import wintypes
@@ -191,7 +192,7 @@ class Watched(unittest.TestCase):
         return seen
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class RealWindows(Watched):
     """The probe child's off-screen window, of PROBE_CLASS: no window the user can see, and one no
     other monitor records (a gate's, around this test run, records winwatch.WATCHED only)."""
@@ -256,7 +257,7 @@ class RealWindows(Watched):
         self.assertEqual([x.pid for x in self.mon.pseudos() if x.pid == p.pid], [])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 @unittest.skipUnless(os.environ.get(WINDOW_TESTS_ENV) == "1",
                      "opens a console window the user sees; %s=1 runs it" % WINDOW_TESTS_ENV)
 class ConsoleWindow(Watched):
@@ -282,7 +283,7 @@ class ConsoleWindow(Watched):
         self.assertTrue(winwatch.report_lines(windows)[0].startswith("windows opened: "))
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class StartStop(unittest.TestCase):
     def test_start_and_stop_leave_no_thread(self):
         before = len(watchers())
@@ -324,7 +325,7 @@ class StartStop(unittest.TestCase):
         self.assertIsNone(winwatch.Monitor(ours=lambda pid: "in")._owner(1234))
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class ProcInfo(unittest.TestCase):
     """proc_info: what spawned a window, read from the process; never an exception."""
 
@@ -378,7 +379,7 @@ class ProcInfo(unittest.TestCase):
         self.assertEqual(cmd, "x" * winwatch.CMDLINE_CAP + "...")
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class ReadOrder(unittest.TestCase):
     """Whose a window is (ours) is read before proc_info, so the extra reads never widen the time
     in which the program can exit before ours() sees it."""

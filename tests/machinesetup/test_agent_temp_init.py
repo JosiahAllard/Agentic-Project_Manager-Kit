@@ -19,6 +19,7 @@ from kitlib.config import user as kuser
 from kitlib.config.migration import OLD_DIR_NAME
 from tests.home import PM_REPO_FENCE_ENV
 from tests.machinesetup import test_machinesetup as T
+from tests.platforms import windows_only
 
 
 def at():
@@ -134,7 +135,7 @@ class TaskRegistered(unittest.TestCase):
         self.assertEqual(seen['cmd'], ['schtasks', '/Query', '/TN', 'agent-temp-sweep'])
         self.assertEqual(seen['timeout'], at().TASK_TIMEOUT)
 
-    @unittest.skipUnless(os.name == 'nt', 'the not-found text is Windows\' own')
+    @windows_only('the not-found text is Windows\' own')
     def test_not_found_is_not_registered(self):
         import ctypes
         _, run = self.query(1, err='ERROR: %s\n' % ctypes.FormatError(2))

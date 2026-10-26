@@ -13,6 +13,7 @@ import unittest
 import uuid
 
 from kitlib.proc.errors import ProcError
+from tests.platforms import windows_only
 
 if os.name == 'nt':
     from ctypes import wintypes as w
@@ -77,7 +78,7 @@ class Child:
             stream.close()
 
 
-@unittest.skipUnless(os.name == 'nt', 'Windows only')
+@windows_only('Windows only')
 class PrivatePipes(unittest.TestCase):
     def test_reply_pipe_reuses_same_address_for_second_closed_client(self):
         name = pipe_name()
@@ -215,7 +216,7 @@ finally:
 '''
 
 
-@unittest.skipUnless(os.name == 'nt', 'Windows only')
+@windows_only('Windows only')
 class ClientIdentity(unittest.TestCase):
     def setUp(self):
         self.name = pipe_name()

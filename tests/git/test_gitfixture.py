@@ -10,6 +10,7 @@ from kitlib import sessionmark
 from tests import gitfixture
 from tests.home import temp_home
 from tests.realgit import real_git as on_real_git
+from tests.platforms import windows_only
 
 
 def real_git(cwd, *args):
@@ -138,7 +139,7 @@ FIXTURE_STEPS = '\n'.join([
 ])
 
 
-@unittest.skipUnless(os.name == 'nt', 'Windows only')
+@windows_only('Windows only')
 class InProcess(unittest.TestCase):
     """The fixture's own git (building a repository, commit, worktree) runs in this process on
     the fake git even on real git, so a @real_git class pays processes only for what it tests."""

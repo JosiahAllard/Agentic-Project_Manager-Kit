@@ -24,6 +24,7 @@ from tests.lock.helpers import KINDS, StoreCase
 from tests.lock.test_run import one_usable_slot
 
 from .test_run import Case, TEST_ADD, TEST_MUL, tool
+from tests.platforms import windows_only
 
 if os.name == 'nt':
     from kitlib.lock import run as lockrun
@@ -114,7 +115,7 @@ class BookMode(unittest.TestCase):
         wait()
         self.assertEqual((ints.seen, ints.mode), (3, R.HOLD))
 
-    @unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+    @windows_only('the lock is Windows only')
     def test_the_wait_is_the_lock_s_queue_wait(self):
         self.assertIs(R.Interrupts().wait_code, lockrun.acquire.__code__)
 

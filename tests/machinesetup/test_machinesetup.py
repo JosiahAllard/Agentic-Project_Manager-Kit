@@ -18,6 +18,7 @@ from kitlib import machinesetup as M
 from kitlib.machinesetup import common, extras, settings
 from kitlib.config import user as kuser
 from tests.home import fence_decoy, pm_repo, temp_home
+from tests.platforms import windows_only
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_setup.py')
@@ -142,7 +143,7 @@ class FakeHost(object):
              'args': [fwd(os.path.join(kit, 'boot', 'hook.py')), 'claude', 'PreToolUse']}]}]}
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
+@windows_only('directory junctions are Windows only')
 class Base(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='machinesetup-')
@@ -704,7 +705,7 @@ class Parts(unittest.TestCase):
         for tok in ('python', '-File', 'x.py', '"'):
             self.assertEqual(settings.expand(tok, home), '')
 
-    @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
+    @windows_only('directory junctions are Windows only')
     def test_is_link_finds_a_junction_without_os_path_isjunction(self):
         """os.path.isjunction is Python 3.12+; the reparse-tag fallback serves older ones."""
         root = tempfile.mkdtemp(prefix='machinesetup-')
@@ -736,7 +737,7 @@ class Parts(unittest.TestCase):
         self.assertEqual(args[1:], ['claude', 'PreToolUse'])
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
+@windows_only('directory junctions are Windows only')
 class Tool(Base):
     def test_a_missing_old_kit_is_usage(self):
         """--old-kit names a folder that is not there: usage, before any home is looked up. With

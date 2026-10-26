@@ -19,6 +19,7 @@ from kitlib.git import cmd
 from kitlib.worktree import holders, remove
 from tests import gitfixture
 from tests.realgit import real_git
+from tests.platforms import windows_only
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'worktree_remove.py')
@@ -1012,7 +1013,7 @@ class AbandonPulled(RemoveCase):
         self.assertNotIn('not checked', out)
 
 
-@unittest.skipUnless(WINDOWS, 'the holder probes are Windows ones')
+@windows_only('the holder probes are Windows ones')
 class AbandonBranch(RemoveCase):
     """`<branch> --branch --abandon`: an unlanded local branch with no worktree."""
 
@@ -1117,7 +1118,7 @@ class AbandonBranch(RemoveCase):
         self.assertIn('tagged    archive/two -> ', out)
 
 
-@unittest.skipUnless(WINDOWS, 'the holder probes are Windows ones')
+@windows_only('the holder probes are Windows ones')
 @real_git('check-ref-format --branch @{-1}: the fake does not resolve @{-N} (no checkout reflog)')
 class AbandonBranchRevisionSyntax(RemoveCase):
     """Moved out of AbandonBranch for the real-git tier."""

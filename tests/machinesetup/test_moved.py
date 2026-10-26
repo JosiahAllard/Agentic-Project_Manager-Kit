@@ -14,6 +14,7 @@ from unittest import mock
 from kitlib import machinesetup as M
 from kitlib.machinesetup import common, links, settings
 from tests.machinesetup import test_machinesetup as T
+from tests.platforms import windows_only
 
 HOOKS = ('guard.py', 'pm_session_start.py', 'coordinator_session_start.py')
 WORDS = {'guard.py': ['claude', 'PreToolUse'], 'pm_session_start.py': ['claude', 'SessionStart', 'pm'],
@@ -159,7 +160,7 @@ class MovedHooks(unittest.TestCase):
         self.assertEqual((plan.changes, plan.refusals), ([], []), 'the re-pointed hook is the PM hook')
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
+@windows_only('directory junctions are Windows only')
 class MovedSkillLinks(unittest.TestCase):
     """Machine setup makes no link (docs/machine-setup.md "Links"): a skill link into a folder the
     skills have left is a leftover, reported with the command that removes it, not re-pointed."""

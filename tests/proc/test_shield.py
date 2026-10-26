@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 from tests import testutil
+from tests.platforms import windows_only
 
 if os.name == 'nt':
     from kitlib.proc import job, shield, win32
@@ -41,7 +42,7 @@ def can_terminate(pid):
     return False
 
 
-@unittest.skipUnless(os.name == 'nt', 'the shield is Windows-only')
+@windows_only('the shield is Windows-only')
 class TheShield(unittest.TestCase):
 
     def suspended(self):
@@ -128,7 +129,7 @@ def listed_pids():
         size *= 2
 
 
-@unittest.skipUnless(os.name == 'nt', 'the pid hold is Windows-only')
+@windows_only('the pid hold is Windows-only')
 class TheHold(unittest.TestCase):
 
     def hold(self, linger):
@@ -223,7 +224,7 @@ class TheHold(unittest.TestCase):
                                            'returned error %s' % out.strip())
 
 
-@unittest.skipUnless(os.name == 'nt', 'the shield is Windows-only')
+@windows_only('the shield is Windows-only')
 class ShieldedBeforeResume(unittest.TestCase):
     """Job.start's before_resume runs while the child is suspended: a shield set there is on
     before the child runs one instruction (how kitlib.pytests starts each unit)."""
@@ -252,7 +253,7 @@ class ShieldedBeforeResume(unittest.TestCase):
         self.assertEqual(out.strip(), 'False', err)
 
 
-@unittest.skipUnless(os.name == 'nt', 'the pid hold is Windows-only')
+@windows_only('the pid hold is Windows-only')
 class APublishedHoldIsFoundWhileItRuns(unittest.TestCase):
     """PidHold.publish / inherited: a process that publishes its warmed hold is found by a process
     it starts, only while that hold runs."""
@@ -313,7 +314,7 @@ class APublishedHoldIsFoundWhileItRuns(unittest.TestCase):
         self.assertFalse(shield.inherited())
 
 
-@unittest.skipUnless(os.name == 'nt', 'the pid hold is Windows-only')
+@windows_only('the pid hold is Windows-only')
 class TheHoldIsMadeOnceAndClosedAtExit(unittest.TestCase):
     """shield.hold: two first calls at once make one PidHold (not two, one leaked), and the
     one it makes is closed at interpreter exit."""

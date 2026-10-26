@@ -6,6 +6,7 @@ import os
 import unittest
 
 from tests.lock.helpers import StoreCase, clean_env
+from tests.platforms import windows_only
 
 try:
     from kitlib.lock import run as rm
@@ -70,7 +71,7 @@ class HistoryExpect(StoreCase):
         self.assertEqual(m(None, "kit/x", False), "other")
         self.assertEqual(m(None, None, True), "other")
 
-    @unittest.skipUnless(os.name == "nt", "the lock runs on Windows")
+    @windows_only("the lock runs on Windows")
     def test_book_takes_the_estimate_of_its_own_mode(self):
         self.confine(1)
         self.many(700, **LAND)

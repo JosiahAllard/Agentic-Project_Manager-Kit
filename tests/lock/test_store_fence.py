@@ -29,6 +29,7 @@ from kitlib.lock.store import EXIT_BUSY, LockError, Settings, Store, iso, real_r
 from kitlib.proc import process
 from tests.home import unmarked_env
 from tests.lock.helpers import StoreCase, clean_env
+from tests.platforms import windows_only
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The marker, spelled here so that a renamed constant fails a test instead of following it.
@@ -77,7 +78,7 @@ class Case(unittest.TestCase):
         return r.returncode, lines, out
 
 
-@unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+@windows_only('the lock is Windows only')
 class MachineStoreFenced(Case):
     def refused(self, call, *args):
         with self.assertRaises(user.HomeFenced) as cm:
@@ -134,7 +135,7 @@ class MachineStoreFenced(Case):
         self.assertEqual(fake.mock_calls, [])       # nothing was asked of the file system
 
 
-@unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+@windows_only('the lock is Windows only')
 class ScratchStore(Case):
     def test_a_scratch_store_is_untouched_by_the_fence(self):
         self.assertTrue(os.environ.get(MARK))
@@ -194,7 +195,7 @@ class ScratchStore(Case):
                     use(store(method))
 
 
-@unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+@windows_only('the lock is Windows only')
 class RealRun(Case):
     def test_an_unfenced_process_gets_the_machines_store_as_before(self):
         # the child has no marker and a temp USERPROFILE and HOME; it only computes
@@ -215,7 +216,7 @@ class RealRun(Case):
         self.assertEqual(user.real_profile(), lockstore.profile_dir())
 
 
-@unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+@windows_only('the lock is Windows only')
 class DeadRecordsReaped(StoreCase):
     """A booking moves a record whose run is surely gone (Store.run_live) from active/ to ended/,
     after its first look at the queue (so the queue's prune still says which dead runs it

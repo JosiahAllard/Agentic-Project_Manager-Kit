@@ -21,6 +21,7 @@ from unittest import mock
 from kitlib import kitcmd, pluginsource, stubs
 from kitlib.config import ConfigError
 from kitlib.config.user import HomeFenced
+from tests.platforms import windows_only
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SHA = 'a1b2c3d4e5f6'
@@ -176,7 +177,7 @@ class Names(Exports):
         self.assertIn('kit', kitcmd.KIT_ONLY)
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'the kit runs on Windows only')
+@windows_only('the kit runs on Windows only')
 class Run(Exports):
     """A real child: a python running kitcmd.run in a directory of its own, on a fake export."""
 

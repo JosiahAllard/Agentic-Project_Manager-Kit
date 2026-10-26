@@ -16,6 +16,7 @@ from kitlib.config.types import ConfigError
 from kitlib.worktree import sweep
 from tests.home import machine_config
 from tests.worktree import test_worktree_sweep
+from tests.platforms import windows_only
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRIVE = os.path.splitdrive(HERE)[0]
@@ -37,7 +38,8 @@ def refuse(name):
     raise AssertionError('the registry was read for %s' % name)
 
 
-@unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+@windows_only('drive letters are Windows only')
+@unittest.skipUnless(DRIVE, 'drive letters are Windows only')
 class WorkTempAvoidsSessionTemps(unittest.TestCase):
 
     def setUp(self):
@@ -104,7 +106,8 @@ class WorkTempAvoidsSessionTemps(unittest.TestCase):
         self.assertEqual(self.temp({}, env), self.kit_temp)
 
 
-@unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+@windows_only('drive letters are Windows only')
+@unittest.skipUnless(DRIVE, 'drive letters are Windows only')
 class DefaultWorkTemp(unittest.TestCase):
 
     def test_it_ignores_temp_dir_and_avoids_the_extra_folders(self):
@@ -184,9 +187,8 @@ class SessionTemps(unittest.TestCase):
         with mock.patch.object(winreg, 'OpenKey', side_effect=OSError('gone')):
             self.assertIsNone(user._user_env('TEMP'))
 
-    if os.name != 'nt':
-        test_user_env_expands_an_expandable_value = unittest.skip('winreg is Windows only')(
-            test_user_env_expands_an_expandable_value)
+    test_user_env_expands_an_expandable_value = windows_only('winreg is Windows only')(
+        test_user_env_expands_an_expandable_value)
 
 
 class MakeTempFallback(unittest.TestCase):
@@ -280,7 +282,8 @@ class SharedTempFollowsTempDir(HomeConfig):
         self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home),
                          os.path.join(r'C:\lad', 'Temp'))
 
-    @unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+    @windows_only('drive letters are Windows only')
+    @unittest.skipUnless(DRIVE, 'drive letters are Windows only')
     def test_a_temp_dir_on_a_drive_that_is_not_there_gives_the_system_temp(self):
         gone = next(c + ':' for c in 'QRSTUVWXYJKLMNOP' if not os.path.isdir(c + ':' + os.sep))
         self.write({'temp_dir': gone + os.sep + 'kit'})
@@ -295,7 +298,8 @@ class SharedTempFollowsTempDir(HomeConfig):
             self.assertEqual(user.shared_temp(self.ENV, 'win32'),
                              os.path.join(r'C:\lad', 'Temp'))
 
-    @unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+    @windows_only('drive letters are Windows only')
+    @unittest.skipUnless(DRIVE, 'drive letters are Windows only')
     def test_work_temps_own_candidates_never_take_the_shared_temp(self):
         """work_temp's chain past temp_dir uses the system temp, so a temp_dir it skipped as a
         session temp never comes back through shared_temp."""

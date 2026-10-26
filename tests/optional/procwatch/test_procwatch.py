@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from tests.platforms import windows_only
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'procwatch')
@@ -366,7 +367,7 @@ class ParsePs(unittest.TestCase):
         self.assertEqual(W.parse_ps_l(""), {})
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class MsysTable(unittest.TestCase):
     """winproc.msys_table: a failed ps gives no table, never a partial one."""
 
@@ -427,7 +428,7 @@ class LogPath(unittest.TestCase):
         sibling = self.tool + "-x.log"                  # shares a prefix, not inside
         self.assertEqual(PW.log_path(sibling, home=self.home, here=self.tool), sibling)
 
-    @unittest.skipUnless(os.name == "nt", "junctions are Windows only")
+    @windows_only("junctions are Windows only")
     def test_a_path_through_a_link_onto_the_tool_folder_is_moved(self):
         link = os.path.join(self.tmp.name, "linked")
         r = subprocess.run(["cmd", "/c", "mklink", "/J", link, self.tool], capture_output=True, text=True)
@@ -493,7 +494,7 @@ def _terminate(W, pid):
         W.close(h)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class GitPs(unittest.TestCase):
     """GIT_PS_EXE replaces Git for Windows' default ps.exe locations."""
 
@@ -507,7 +508,7 @@ class GitPs(unittest.TestCase):
             self.assertEqual(W.git_ps(env), W.GIT_PS_DEFAULT)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Live(unittest.TestCase):
     def test_collect_sees_an_orphan_and_kill_terminates_only_it(self):
         import winproc as W

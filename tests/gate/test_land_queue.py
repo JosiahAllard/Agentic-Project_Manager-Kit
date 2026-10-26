@@ -23,6 +23,7 @@ from kitlib.lock.store import EXIT_USAGE, LockError
 from tests import testutil
 from tests.gate import fixtures
 from tests.gate.test_land import BRANCH, HANG_S, LandCase
+from tests.platforms import windows_only
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -209,7 +210,7 @@ class FirstComeFirstServed(QueueCase):
 
 
 class GoneHolder(QueueCase):
-    @unittest.skipUnless(os.name == 'nt', 'pid reuse is checked on Windows')
+    @windows_only('pid reuse is checked on Windows')
     def test_a_dead_pid_stays_unused_until_the_test_ends(self):
         # The helper once kept only the pid, the Popen's handle closed with it,
         # and Windows could give the pid to a live process mid-test

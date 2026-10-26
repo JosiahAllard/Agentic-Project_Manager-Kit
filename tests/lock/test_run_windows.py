@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from .helpers import StoreCase, clean_env
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import run as rm
@@ -51,7 +52,7 @@ class FakeMonitor:
         return self.windows
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Watch(StoreCase):
     def setUp(self):
         super().setUp()
@@ -202,7 +203,7 @@ class Watch(StoreCase):
         self.assertIn("[not this run]", self.said[i + 2])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class RealMonitor(StoreCase):
     def test_a_no_window_command_opens_none_of_its_own(self):
         """The real monitor around run_command: the command opens no window (a console-less

@@ -11,6 +11,7 @@ import time
 import types
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import process, win32
@@ -43,7 +44,7 @@ def signed(status):
     return ctypes.c_int(status).value
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Process(unittest.TestCase):
     def test_the_snapshot_lists_this_process_and_its_parent(self):
         snap = {pid: ppid for pid, ppid, _n in process.snapshot()}

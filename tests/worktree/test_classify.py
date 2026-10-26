@@ -19,6 +19,7 @@ from tests import gitfixture
 from tests.home import result_drive
 from tests.realgit import real_git
 from tests.worktree.test_worktree_remove import TOOL, WINDOWS, RemoveCase
+from tests.platforms import windows_only
 
 LATER = 3 * 24 * 3600
 NO_STORE = ('no backlog store is named: this repository\'s .kit.json names no "backlog".store'
@@ -607,13 +608,13 @@ class Live(ClassifyCase):
         self.assertEqual(self.row(data, path)['reason'],
                          'unreadable: its last activity (access denied)')
 
-    @unittest.skipUnless(WINDOWS, 'held_folder opens folders for delete: Windows only')
+    @windows_only('held_folder opens folders for delete: Windows only')
     def test_an_unread_process_and_no_held_folder_leaves_the_class(self):
         path = self.workstream('free')
         rc, out, data = self.run_classify(procs=lambda: (([], 1, 1), None))
         self.assertEqual(self.row(data, path)['class'], 'C')
 
-    @unittest.skipUnless(WINDOWS, 'held_folder opens folders for delete: Windows only')
+    @windows_only('held_folder opens folders for delete: Windows only')
     def test_an_unread_process_and_a_held_folder_is_l(self):
         path = self.workstream('stood')
         inner = os.path.join(path, 'sub')
@@ -633,7 +634,7 @@ class Live(ClassifyCase):
                          'for delete (Windows error 32): a process we could not read may hold it'
                          % inner)
 
-    @unittest.skipUnless(WINDOWS, 'held_folder opens folders for delete: Windows only')
+    @windows_only('held_folder opens folders for delete: Windows only')
     def test_an_unread_process_and_a_tree_past_walk_max_is_l(self):
         path = self.workstream('big')
         with mock.patch.object(holders, 'WALK_MAX', 1):
@@ -654,7 +655,7 @@ class Live(ClassifyCase):
                          'open for delete is made on Windows only: a process we could not read '
                          'may hold it' % path)
 
-    @unittest.skipUnless(WINDOWS, 'the process scan is Windows only')
+    @windows_only('the process scan is Windows only')
     def test_the_real_process_scan_finds_this_process_in_a_tree(self):
         path = self.workstream('here')
         self.land('kit/here')

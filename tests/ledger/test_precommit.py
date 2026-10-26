@@ -18,6 +18,7 @@ from kitlib.ledger import precommit
 from tests import gitfixture
 from tests.realgit import real_git
 from tests.home import machine_config
+from tests.platforms import windows_only
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOKS = os.path.join(KIT_ROOT, 'githooks')
@@ -295,7 +296,7 @@ class TargetsTest(unittest.TestCase):
         self.assertEqual(precommit.staged_targets(self.root, staged, paths),
                          ['rulings/LEDGER.md', 'rulings/STANDING.md'])
 
-    @unittest.skipUnless(os.name == 'nt', 'case-insensitive paths are a Windows matter')
+    @windows_only('case-insensitive paths are a Windows matter')
     def test_case_and_separators_do_not_hide_the_ledger(self):
         ledger = os.path.join(self.root, 'rulings', 'LEDGER.md')
         self.assertEqual(precommit.staged_targets(self.root, ['Rulings/ledger.MD'], (ledger,)),

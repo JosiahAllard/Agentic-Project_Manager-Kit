@@ -10,12 +10,13 @@ from unittest import mock
 from tests.gate.test_live_pin import PROBE, isolated, temp_places
 from tests.gate.test_pin_sigint import _PinSubprocess, _pin
 from tests.pluginsource import Kit
+from tests.platforms import windows_only
 
 if os.name == 'nt':
     from kitlib.proc import job, win32
 
 
-@unittest.skipUnless(os.name == 'nt', 'Windows only')
+@windows_only('Windows only')
 class NoWindow(unittest.TestCase):
 
     def setUp(self):

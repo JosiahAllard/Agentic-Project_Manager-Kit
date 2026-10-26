@@ -10,6 +10,7 @@ from unittest import mock
 
 from kitlib.git import checkout, repo
 from tests import gitfixture
+from tests.platforms import windows_only
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CLI = os.path.join(KIT, 'tools', 'worktree_paths.py')
@@ -79,7 +80,7 @@ class WorktreePaths(Repo):
             checkout.write_text(DOC, 'a\r\nb\r\n', self.w)
         self.assertEqual(_read(os.path.join(self.w, DOC)), BASE)
 
-    @unittest.skipUnless(os.name == 'nt', 'a directory junction is a Windows feature')
+    @windows_only('a directory junction is a Windows feature')
     def test_a_junction_inside_the_worktree_pointing_into_main_is_refused(self):
         # `mklink /J` needs no elevation. The junction's spelled path is inside the worktree; only
         # resolving it shows the write would land in the main checkout.
