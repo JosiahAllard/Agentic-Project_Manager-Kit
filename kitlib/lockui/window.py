@@ -20,12 +20,11 @@ and Division... are the owner's settings.
 
 The lock is read on a worker thread (a snapshot can take a while); its result comes back to the
 Tk thread by a queue the window polls with root.after. A write shows the snapshot it returns.
-The history lines are read again only when the lock's revision moved (actions.HistoryCache).
+The history lines are read again only when the history files changed (actions.HistoryCache).
 """
 import datetime as dt
 import queue
 import threading
-import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -75,6 +74,7 @@ class App:
         self.gen = 0             # bumped by each write: a read begun before it is stale
         self.results = queue.Queue()
         self.history_cache = act.HistoryCache()
+        self.strip_memo = {}     # m.build's: the history items, while the lines are the same
         self.timer = None        # the next refresh's after id
         root.title(TITLE)
         dark_theme(root)
@@ -166,9 +166,8 @@ class App:
         (act.HistoryCache) or when forced."""
         try:
             snap = self.client.snapshot()
-            rev = snap.get("revision") if isinstance(snap, dict) else None
-            hist = self.history_cache.get(
-                rev, lambda: self.client.history(days=BACK_DAYS + 1), time.monotonic(), force)
+            hist = self.history_cache.get(self.client.history_stamp(),
+                                          lambda: self.client.history(days=BACK_DAYS + 1), force)
             return gen, snap, hist, None
         except Exception as e:          # the window stays up and says why
             return gen, None, None, e
@@ -222,7 +221,7 @@ class App:
         carries none)."""
         if hist is None:
             hist = self.hist
-        view = m.build(snap or {}, hist)
+        view = m.build(snap or {}, hist, memo=self.strip_memo)
         self.snap, self.hist, self.view = snap or {}, hist, view
         if self.picked and not any(h["id"] == self.picked for h in self.view["holds"]):
             self.picked = None

@@ -306,6 +306,23 @@ class ToJson(unittest.TestCase):
         d.update(over)
         return d
 
+    def test_the_memo_makes_history_items_once_for_the_same_lines_and_day(self):
+        rows, memo = [self.line(1), self.line(2)], {}
+        plain = m.build(snap(), rows, now=NOW)
+        first = m.build(snap(), rows, now=NOW, memo=memo)
+        hist = [it for it in first["strip"] if it["type"] == "hist"]
+        self.assertEqual(hist, [it for it in plain["strip"] if it["type"] == "hist"])
+        again = m.build(snap(), rows, now=NOW + dt.timedelta(minutes=1), memo=memo)
+        self.assertTrue(all(any(x is y for y in again["strip"]) for x in hist))    # not remade
+        other = m.build(snap(), list(rows), now=NOW, memo=memo)                  # new lines
+        self.assertFalse(any(x is y for x in hist for y in other["strip"]))
+        before = memo["items"]
+        later = m.build(snap(), memo["rows"], now=NOW + dt.timedelta(days=1), memo=memo)
+        self.assertIsNot(memo["items"], before)                                  # a new day
+        self.assertEqual([it["text"] for it in later["strip"] if it["type"] == "hist"],
+                         [it["text"] for it in m.build(snap(), rows, now=NOW + dt.timedelta(days=1))[
+                             "strip"] if it["type"] == "hist"])
+
     def test_history_items_carry_repo_kind_and_result(self):
         rows = [self.line(1), self.line(2, code=3, how="done", repo="game", kind="measure"),
                 self.line(3, how="cancelled", code=1), self.line(4, how="interrupted", code=130)]
@@ -458,6 +475,7 @@ class Grid(unittest.TestCase):
                                     self.DAY0 + dt.timedelta(minutes=45)), [(0, 0.0, 1.5)])
         self.assertEqual(m.segments(self.DAY0, self.DAY0 + dt.timedelta(days=m.DAYS),
                                     self.DAY0 + dt.timedelta(days=m.DAYS, hours=1)), [])
+        self.assertEqual(m.segments(self.DAY0, self.DAY0 - dt.timedelta(hours=3), self.DAY0), [])
 
 
 class Prompts(unittest.TestCase):

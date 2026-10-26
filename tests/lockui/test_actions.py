@@ -254,53 +254,43 @@ class Specs(unittest.TestCase):
 
 
 class HistoryCacheTest(unittest.TestCase):
-    """The window's history lines: read again only when they may have changed."""
+    """The window's history lines: read again only when the history files changed."""
 
     def setUp(self):
         self.reads = 0
-        self.cache = a.HistoryCache(max_age_s=300)
+        self.cache = a.HistoryCache()
 
     def fetch(self):
         self.reads += 1
         return ["lines %d" % self.reads]
 
-    def look(self, rev, at, force=False):
-        return self.cache.get(rev, self.fetch, at, force)
+    def look(self, stamp, force=False):
+        return self.cache.get(stamp, self.fetch, force)
 
-    def test_an_unchanged_revision_is_not_read_again(self):
-        self.assertEqual(self.look(5, 0), ["lines 1"])
-        self.assertEqual(self.look(5, 30), ["lines 2"])     # the look after a change reads again
-        for at in (60, 90, 120, 299):
-            self.assertEqual(self.look(5, at), ["lines 2"])
-        self.assertEqual(self.reads, 2)
+    def test_an_unchanged_stamp_is_not_read_again(self):
+        for _ in range(5):
+            self.assertEqual(self.look((("2026-10.jsonl", 10, 1),)), ["lines 1"])
+        self.assertEqual(self.reads, 1)
 
-    def test_a_moved_revision_is_read_then_read_once_more(self):
-        self.look(5, 0)
-        self.look(5, 30)
-        self.look(6, 60)
-        self.look(6, 90)        # the history line of a run that just ended comes after its bump
-        self.look(6, 120)
-        self.assertEqual(self.reads, 4)
-
-    def test_forced_old_or_unknown_revision_reads(self):
-        self.look(5, 0)
-        self.look(5, 30)
-        self.look(5, 40, force=True)
-        self.assertEqual(self.reads, 3)
-        self.look(5, 340)       # max_age_s after the last read
-        self.assertEqual(self.reads, 4)
-        self.look(None, 341)
+    def test_a_changed_stamp_forced_or_none_reads(self):
+        self.look((("2026-10.jsonl", 10, 1),))
+        self.assertEqual(self.look((("2026-10.jsonl", 20, 2),)), ["lines 2"])
+        self.assertEqual(self.look((("2026-10.jsonl", 20, 2),), force=True), ["lines 3"])
+        self.look(None)
+        self.look(None)
         self.assertEqual(self.reads, 5)
 
     def test_a_failed_read_leaves_the_cache_as_it_was(self):
-        self.look(5, 0)
-        self.look(5, 30)
+        self.look((("2026-10.jsonl", 10, 1),))
 
         def boom():
             raise OSError("gone")
         with self.assertRaises(OSError):
-            self.cache.get(6, boom, 60)
-        self.assertEqual(self.look(6, 61), ["lines 3"])
+            self.cache.get((("2026-10.jsonl", 20, 2),), boom)
+        self.assertEqual(self.look((("2026-10.jsonl", 20, 2),)), ["lines 2"])
+
+    def test_no_stamp_from_a_stand_in_store(self):
+        self.assertIsNone(a.Client(store=object(), api_mod=FakeApi()).history_stamp())
 
 
 class Integration(StoreCase):
@@ -327,6 +317,21 @@ class Integration(StoreCase):
         self.assertEqual(seen.call_count, 1)
         self.assertEqual(seen.call_args.kwargs["since"].year, 1970)    # a range with no file
         self.assertEqual(len(self.c.history()), 1)
+
+    def test_the_history_stamp_moves_when_a_line_is_written(self):
+        from kitlib.lock.store import iso, utc_now
+        empty = self.c.history_stamp()
+        end = utc_now()
+        line = {"id": "r-20261008T000000Z-bbbb", "repo": "kit", "slug": "g",
+                "kind": "engine-test", "since": iso(end - dt.timedelta(hours=1)),
+                "held_since": iso(end - dt.timedelta(minutes=30)), "ended": iso(end), "code": 0,
+                "how": "done", "cores": [0], "gpus": []}
+        self.store.history_append(line)
+        one = self.c.history_stamp()
+        self.assertNotEqual(one, empty)
+        self.assertEqual(self.c.history_stamp(), one)
+        self.store.history_append(dict(line, id="r-20261008T000000Z-cccc"))
+        self.assertNotEqual(self.c.history_stamp(), one)
 
     def test_reserve_then_edit_then_release(self):
         now = dt.datetime.now(UTC)

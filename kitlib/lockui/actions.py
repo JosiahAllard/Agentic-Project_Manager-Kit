@@ -7,6 +7,7 @@ process's tree, whatever the actor says (only its name is kept), so the window a
 only when the owner runs it. A scratch store (tests, the screenshot demo) takes the actor as given.
 """
 import datetime as dt
+import os
 import re
 
 from kitlib.lock import api as lock_api
@@ -18,7 +19,6 @@ DEFAULT_NOTE = "reserve window"
 SCOPES = ("whole", "half", "slots")
 MAX_SLOT = 1023                         # a slot number above this is a typo, not a slot
 NO_STATS = "1970-01-01T00:00:00Z"       # since and until of the snapshot's stats: no history file
-HISTORY_MAX_S = 300                     # the longest HistoryCache answers without reading again
 BARE = re.compile(r"\d{1,2}:\d{2}")
 
 
@@ -49,6 +49,20 @@ class Client:
     def history(self, days=7):
         return self.api.history(store=self.store, days=days)
 
+    def history_stamp(self):
+        """(name, size, mtime_ns) of each file in the store's history folder, or None when the
+        store has no folder to look at (a stand-in): what changes when a history line is
+        written, read without parsing a line."""
+        path = getattr(self.store, "path", None)
+        if path is None:
+            return None
+        try:
+            folder = path("history")
+            return tuple(sorted((n, st.st_size, st.st_mtime_ns) for n, st in
+                                ((n, os.stat(os.path.join(folder, n))) for n in os.listdir(folder))))
+        except OSError:
+            return None
+
     # writes: each returns the API's {ok, result | error, snapshot}
     def reserve(self, scope, start, end, note, now=None):
         """A whole or half owner hold over the dragged window [start, end) (aware datetimes)."""
@@ -77,27 +91,22 @@ class Client:
 
 
 class HistoryCache:
-    """The history lines the window last read, read again only when they may have changed: at
-    the first look, on a look whose revision differs from the one they were read at, on the look
-    after that (a run's history line is written just after the write that moves the revision),
-    when forced (the Refresh button), and once they are max_age_s old (a revision bump the store
-    skipped). Parsing them is most of an idle refresh's work. One caller at a time."""
+    """The history lines the window last read, read again only when the history files changed
+    (Client.history_stamp: they are only appended to) or when forced (the Refresh button).
+    Parsing them is most of a refresh's reading. One caller at a time."""
 
-    def __init__(self, max_age_s=HISTORY_MAX_S):
-        self.max_age_s = max_age_s
-        self.lines, self.rev, self.at, self.again = None, None, None, False
+    def __init__(self):
+        self.lines, self.stamp = None, None
 
-    def due(self, rev, now_s, force=False):
-        return (force or self.lines is None or rev is None or rev != self.rev or self.again
-                or now_s - self.at >= self.max_age_s)
+    def due(self, stamp, force=False):
+        return force or self.lines is None or stamp is None or stamp != self.stamp
 
-    def get(self, rev, fetch, now_s, force=False):
-        """The lines for revision rev at monotonic time now_s; fetch() reads them. A fetch that
-        raises leaves the cache as it was."""
-        if self.due(rev, now_s, force):
-            lines = fetch()
-            self.again = rev is None or rev != self.rev
-            self.lines, self.rev, self.at = lines, rev, now_s
+    def get(self, stamp, fetch, force=False):
+        """The lines while the history files have `stamp` (taken before fetch, so a line written
+        meanwhile is read again next time); fetch() reads them. A fetch that raises leaves the
+        cache as it was."""
+        if self.due(stamp, force):
+            self.lines, self.stamp = fetch(), stamp
         return self.lines
 
 
