@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from .helpers import REPO
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import detach as dt
@@ -20,7 +21,7 @@ if os.name == "nt":
 TOOL = os.path.join(REPO, "tools", "machine_lock.py")
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Command(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -79,7 +80,7 @@ class FakeRun:
         return subprocess.CompletedProcess(args, self.code, self.stdout, self.stderr)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class Create(unittest.TestCase):
     def test_wmi_gets_the_command_line_cwd_and_environment_and_no_show_window(self):
         run = FakeRun()
@@ -124,7 +125,7 @@ class Create(unittest.TestCase):
                 self.assertTrue(why)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class WrapperPid(unittest.TestCase):
     def lookup(self, snaps, ctimes, wait_s=1.0):
         snaps = list(snaps)

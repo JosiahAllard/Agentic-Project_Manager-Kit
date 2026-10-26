@@ -19,6 +19,7 @@ from unittest import mock
 
 from kitlib.worktree import remove
 from tests import gitfixture
+from tests.platforms import windows_only
 
 
 class WindowCase(unittest.TestCase):
@@ -338,7 +339,7 @@ class DisposableInTheWindow(WindowCase):
         self.assertTrue(os.path.isfile(os.path.join(self.path, 'later.tmp')), out)
 
 
-@unittest.skipUnless(os.name == 'nt', 'junctions are Windows')
+@windows_only('junctions are Windows')
 class JunctionAppearsInTheWindow(WindowCase):
 
     def test_a_junction_created_after_the_checks_never_costs_its_target(self):

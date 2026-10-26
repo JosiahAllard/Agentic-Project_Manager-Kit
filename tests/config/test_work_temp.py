@@ -10,6 +10,7 @@ from unittest import mock
 from kitlib.config import user
 from kitlib.config.types import ConfigError
 from tests.home import machine_config
+from tests.platforms import windows_only
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRIVE = os.path.splitdrive(HERE)[0]
@@ -29,7 +30,8 @@ def missing_drive():
     return None
 
 
-@unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+@windows_only('drive letters are Windows only')
+@unittest.skipUnless(DRIVE, 'drive letters are Windows only')
 class WorkTemp(unittest.TestCase):
 
     def setUp(self):

@@ -19,6 +19,7 @@ from kitlib.gate import land, result, runner
 from kitlib.git import cmd
 from kitlib.records import landing
 from tests.gate import fixtures
+from tests.platforms import windows_only
 
 BRANCH = 'kit/feature'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -235,7 +236,7 @@ class AfterLanding(CleanupCase):
         self.assertTrue(os.path.isdir(wt))
 
 
-@unittest.skipUnless(WINDOWS, 'the holder probes are Windows ones')
+@windows_only('the holder probes are Windows ones')
 class InUse(CleanupCase):
     def test_a_worktree_in_use_is_kept_and_reported(self):
         wt, tip = self.pushed('feature', {'a.py': 'x = 1\n'})

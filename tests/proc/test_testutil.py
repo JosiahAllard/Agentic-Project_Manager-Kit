@@ -7,12 +7,13 @@ import sys
 import unittest
 
 from tests import testutil
+from tests.platforms import windows_only
 
 if os.name == 'nt':
     from kitlib.proc import shield, win32
 
 
-@unittest.skipUnless(os.name == 'nt', 'the shield is Windows-only')
+@windows_only('the shield is Windows-only')
 class TheProbe(unittest.TestCase):
 
     def run_probe(self, shielded):
@@ -41,7 +42,7 @@ class TheProbe(unittest.TestCase):
         self.assertEqual(out, 'False', err)
 
 
-@unittest.skipUnless(os.name == 'nt', 'pid reuse is checked on Windows')
+@windows_only('pid reuse is checked on Windows')
 class TheDeadProcess(unittest.TestCase):
 
     def test_its_pid_stays_an_exited_process_while_the_popen_is_kept(self):

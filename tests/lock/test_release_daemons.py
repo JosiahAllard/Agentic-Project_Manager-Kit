@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 from .helpers import StoreCase, clean_env
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import run as rm
@@ -785,7 +786,7 @@ class ReleaseLeavesASharedDaemon(ReleaseCase):
                         "the gradle daemon outlived the run")
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class CommandLine(unittest.TestCase):
     def test_reads_a_live_process_and_checks_its_ctime(self):
         cl = process.command_line(os.getpid())

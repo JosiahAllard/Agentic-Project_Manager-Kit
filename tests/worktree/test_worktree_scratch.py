@@ -13,6 +13,7 @@ from unittest import mock
 from kitlib.worktree import remove, scratch
 from tests import gitfixture
 from tests.realgit import real_git
+from tests.platforms import windows_only
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'worktree_remove.py')
@@ -208,7 +209,7 @@ class Refused(ScratchCase):
         rc, out = self.run_scratch(path)
         self.assertKept(path, rc, out, 'holds the registered worktree')
 
-    @unittest.skipUnless(WINDOWS, 'junctions are Windows')
+    @windows_only('junctions are Windows')
     def test_a_junction_on_the_way_is_refused(self):
         real_parent = os.path.join(self.root, 'real')
         os.makedirs(real_parent)
@@ -414,7 +415,7 @@ class Failures(ScratchCase):
         with open(target, encoding='utf-8') as fh:
             self.assertEqual(fh.read(), 'rewritten\n')
 
-    @unittest.skipUnless(WINDOWS, 'junctions are Windows')
+    @windows_only('junctions are Windows')
     def test_a_folder_made_a_junction_after_the_check_is_kept(self):
         path = self.scratch_tree()
         self.fx.write('README.md', 'hello, topic\n', root=path)
@@ -467,7 +468,7 @@ class Refs(ScratchCase):
         self.assertRemoved(path, rc, out)
         self.assertIn('in refs/tags/z-reach', out)
 
-    @unittest.skipUnless(WINDOWS, 'junctions are Windows')
+    @windows_only('junctions are Windows')
     def test_a_tree_in_the_worktree_folder_through_its_junction_is_refused(self):
         ctx, refused = remove.open_ctx(self.repo)
         self.assertIsNone(refused)

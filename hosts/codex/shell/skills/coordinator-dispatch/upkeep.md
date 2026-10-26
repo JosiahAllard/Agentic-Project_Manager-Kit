@@ -16,5 +16,6 @@ Read from skill `coordinator-dispatch`, "Upkeep".
   abandoned by hand, `<branch> --branch --abandon "<why>"`, on the PM's word.
 - **Grow the tool set.** Weekly, run the repetition report on the repo
   (`<kit>/optional/usage/repetition_report.py`): repeated shell shapes, or a scratch script
-  written twice, become lines in the repo's `docs/ops/tool-requests.md`; build the top one as
+  written twice, become lines in the tool-requests file the coordinator profile's **Plan and
+  instructions** section names; build the top one as
   ordinary work (`tools/` is High risk).

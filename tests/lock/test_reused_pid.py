@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 from .helpers import OWNER, StoreCase
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import api
@@ -53,7 +54,7 @@ def mutex_fails(code):
     return mock.patch.object(K32, "OpenMutexW", fake)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class ReusedPid(StoreCase):
     """A record whose pid names a process this user may not open is live only while its run
     mutex is held."""
@@ -230,7 +231,7 @@ class ReusedPid(StoreCase):
             self.assertTrue(hl.claim_alive(self.store, h))
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class OwnerLiveUnknown(unittest.TestCase):
     """release._owner_live: when alive cannot tell (None, or True for a record with no creation
     time), the run is gone only when its run mutex is surely gone."""

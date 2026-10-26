@@ -59,6 +59,7 @@ from tests.gate.fixtures import queue_review, test_env
 from tests.home import pm_repo, result_drive, temp_home
 from tests.lock.helpers import StoreCase
 from tests.realgit import real_git
+from tests.platforms import windows_only
 
 OWNER = 'owner@example.invalid'
 WORKER = 'worker@example.invalid'
@@ -362,7 +363,7 @@ class AnyPlatform(Cycle, unittest.TestCase):
 
 
 @real_git(HOOKS)
-@unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+@windows_only('the lock is Windows only')
 class OnWindows(Cycle, StoreCase):
     """The cycle with the steps run in the machine lock's real job objects, on a scratch store."""
 

@@ -18,6 +18,7 @@ from tests import gitfixture
 from tests.realgit import real_git
 from tests.worktree.test_classify import LATER, ClassifyCase, free, no_procs
 from tests.worktree.test_worktree_remove import TOOL, WINDOWS
+from tests.platforms import windows_only
 
 
 def load_tool():
@@ -247,7 +248,7 @@ class Untouched(ApplyCase):
         self.assertIn('main checkout only', out)
         self.kept(done)
 
-    @unittest.skipUnless(WINDOWS, 'holders.blockers opens folders for delete: Windows only')
+    @windows_only('holders.blockers opens folders for delete: Windows only')
     def test_a_holder_the_process_seam_misses_is_refused_by_the_remove_path(self):
         # The process seam reports nobody, so classify judges the tree A; the remove path's own
         # holder check (an open for delete) finds the real process and refuses.

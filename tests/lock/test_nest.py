@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from .helpers import StoreCase, clean_env, unopenable
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.lock import run as rm
@@ -135,7 +136,7 @@ class NestCheck(StoreCase):
         self.assertIsNone(self.store.read("queue.json"))        # it never queued for its own
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class NestNeed(unittest.TestCase):
     PARENT = {"id": RID, "kind": "cpu-eval", "has": {"cpu": 6}}
 

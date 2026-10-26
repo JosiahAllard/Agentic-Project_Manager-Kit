@@ -15,6 +15,7 @@ from kitlib.config import pointer, user
 from kitlib.machinesetup import pointer as mpointer
 from kitlib.preflight import configline
 from tests import gitfixture
+from tests.platforms import windows_only
 from tests.preflight.test_preflight import Fixture
 from tools import machine_setup
 
@@ -118,9 +119,8 @@ class TheFence(unittest.TestCase):
                 mpointer.Registry().write('Q:\\pm')
         self.assertIn('never write the registry', str(e.exception))
 
-    if os.name != 'nt':
-        test_the_registry_is_never_written_under_the_fence = unittest.skip('winreg is Windows only')(
-            test_the_registry_is_never_written_under_the_fence)
+    test_the_registry_is_never_written_under_the_fence = windows_only('winreg is Windows only')(
+        test_the_registry_is_never_written_under_the_fence)
 
 
 class Repo(unittest.TestCase):

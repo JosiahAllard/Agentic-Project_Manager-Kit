@@ -9,6 +9,7 @@ from unittest import mock
 
 from kitlib.tooldeps import selfrun
 from tests.gitfixture import rmtree
+from tests.platforms import windows_only
 
 DAY = 24 * 3600
 
@@ -75,7 +76,7 @@ class PruneStale(unittest.TestCase):
     def test_a_parent_that_cannot_be_listed_is_nothing(self):
         self.assertEqual(selfrun.prune_stale(os.path.join(self.parent, 'none')), (0, 0))
 
-    @unittest.skipUnless(os.name == 'nt', 'Windows refuses to rename a folder with a file open')
+    @windows_only('Windows refuses to rename a folder with a file open')
     def test_a_folder_with_a_file_open_in_it_is_kept_whole(self):
         path = self.folder('kit-tests-busy', DAY + 60)
         held = open(os.path.join(path, 'sub', 'a.txt'))

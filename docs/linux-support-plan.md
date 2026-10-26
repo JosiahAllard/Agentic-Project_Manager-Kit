@@ -566,9 +566,10 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
 1. **Test markers and the ratchet.** kitlib/ci/ratchet.py with its thin entry point
    tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, the mechanical
    move of the 155 platform skips (section 4); no workflow and no .github. Risk High (the skip
-   move touches many tests). Proof: the ratchet, run by hand on a Linux machine, is green on
-   the baseline and a planted failure fails it; `kit_tests --list` shows the same skip count
-   on Windows before and after.
+   move touches many tests). Proof: the ratchet's own tests (a planted failure fails it, a
+   broken run is never green), and a manual run on a Linux VM that reports the broken run:
+   until slice 2 the tests package does not import there, so no Linux run is green yet;
+   `kit_tests --list` shows the same skip count on Windows before and after.
 2. **Import-clean kitlib and the seam skeleton.** kitlib/platform/ (api, windows re-exports,
    linux stubs that raise, PlatformUnsupported for any other platform), lazy DLL binding in
    proc/win32.py, proc/pipe.py and gate/outfile.py, a lazy or guarded `wintypes` import in

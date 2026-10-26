@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import job, process, spawn, win32
@@ -96,7 +97,7 @@ class _SignalHook:
         return getattr(signal, name)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class CtrlCWhileStarting(unittest.TestCase):
     def setUp(self):
         if threading.current_thread() is not threading.main_thread():
@@ -299,7 +300,7 @@ class CtrlCWhileStarting(unittest.TestCase):
         self.restored()
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class UnderSigDfl(unittest.TestCase):
     """SIG_DFL ends the process at once; in a process of its own, the child it started must be
     ended too, never left suspended in no job (or running in a job nobody ends)."""

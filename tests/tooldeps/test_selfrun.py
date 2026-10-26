@@ -18,6 +18,7 @@ from kitlib.proc import shield
 from kitlib.tooldeps import selfrun
 from tests.gitfixture import rmtree
 from tests.home import TempHomeCase
+from tests.platforms import windows_only
 
 
 def fake_unit(log, lock, status=None, ran=3, pause=0.4):
@@ -66,7 +67,7 @@ class Jobs(unittest.TestCase):
         self.assertEqual(n, selfrun.FALLBACK_JOBS)
         self.assertIn('not a processor mask', why)
 
-    @unittest.skipUnless(os.name == 'nt', 'the lock is Windows only')
+    @windows_only('the lock is Windows only')
     def test_the_variable_is_the_one_the_lock_sets(self):
         from kitlib.lock import giveback
         from kitlib.lock import run as lock_run
@@ -74,7 +75,7 @@ class Jobs(unittest.TestCase):
         self.assertEqual(selfrun.GIVE_ENV, giveback.GIVE_ENV)
 
 
-@unittest.skipUnless(os.name == 'nt', 'the Git for Windows launcher')
+@windows_only('the Git for Windows launcher')
 class GitDirect(unittest.TestCase):
     def setUp(self):
         self.git = tempfile.mkdtemp(prefix='kit-selfrun-')
@@ -668,7 +669,7 @@ class Empty(TempHomeCase):
             self.assertEqual(selfrun.count_tests(self.root, ['tests.testutil']), {})
 
 
-@unittest.skipUnless(os.name == 'nt', 'units run in Windows job objects')
+@windows_only('units run in Windows job objects')
 class RealUnits(TempHomeCase):
     def setUp(self):
         super().setUp()         # TempHomeCase: the run folder (user.make_temp); units inherit it

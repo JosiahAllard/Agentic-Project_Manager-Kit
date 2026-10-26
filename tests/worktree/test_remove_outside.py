@@ -17,6 +17,7 @@ from kitlib.config import load
 from kitlib.worktree import remove
 from tests import gitfixture
 from tests.realgit import real_git
+from tests.platforms import windows_only
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'worktree_remove.py')
@@ -188,7 +189,7 @@ class Refused(OutsideCase):
         rc, out = self.run_remove(path)
         self.assertKept(path, rc, out, 'inside the main checkout')
 
-    @unittest.skipUnless(WINDOWS, 'junctions are Windows')
+    @windows_only('junctions are Windows')
     def test_a_junction_on_the_way_is_refused(self):
         real_parent = os.path.join(self.outside, 'real')
         os.makedirs(real_parent)
@@ -344,7 +345,7 @@ class Spelling(OutsideCase):
         got = remove.remove(self.repo, 'outside/red', cwd=os.path.dirname(self.outside))
         self.assertRemoved(path, got.code, '\n'.join(got.lines))
 
-    @unittest.skipUnless(WINDOWS, '8.3 short names are Windows')
+    @windows_only('8.3 short names are Windows')
     def test_a_short_name_spelling_is_the_same_tree_not_a_junction(self):
         import ctypes
         import shutil

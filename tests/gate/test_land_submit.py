@@ -26,6 +26,7 @@ from tests import gitfixture, testutil
 from tests.gate.test_land import BRANCH, HANG_S, KIT_ROOT, LandCase
 from tests.home import machine_config
 from tests.lock.test_detach_cli import console_windows_of
+from tests.platforms import windows_only
 
 LAND_PY = os.path.join(KIT_ROOT, 'tools', 'land.py')
 GATE_PY = os.path.join(KIT_ROOT, 'tools', 'gate.py')
@@ -904,7 +905,7 @@ class LeaseChild(unittest.TestCase):
         self.assertFalse(os.path.exists(self.leases))
 
 
-@unittest.skipUnless(os.name == 'nt', 'the detached start is Windows only')
+@windows_only('the detached start is Windows only')
 class RealCarrier(unittest.TestCase):
     """submit.detach for real, on the command's pythonw, carrier and python.exe running a 2 s
     sleep: the process WMI starts is pythonw.exe, the python.exe that runs the program is its
@@ -937,7 +938,7 @@ class RealCarrier(unittest.TestCase):
         self.assertEqual(seen, [], 'a console window belonged to the detached start')
 
 
-@unittest.skipUnless(os.name == 'nt', 'the detached start is Windows only')
+@windows_only('the detached start is Windows only')
 class RealDetach(SubmitCase):
     """tools/land.py --submit and tools/gate.py land --submit, run for real on a landing from a
     linked worktree: each prints its one SUBMITTED line and exits 0, and the detached landing it

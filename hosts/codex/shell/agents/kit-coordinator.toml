@@ -159,16 +159,17 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   step for another repo) goes to the PM by send_message (not available to a Codex agent: ask the PM) with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
   in your window where one is required. Pass answers on as a paraphrase, no ruling id.
-- You decide and land anything that does not remove a user-facing control, change a schema or
-  alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
-  Owner decisions only for priority 1, a pre-emption, a schema change or `.codex/`, plus the
-  profile's own list. Also the owner's explicit go: deploying; spending money; persisting data outside
-  the repo; anything touching the owner's own files or accounts; CI secrets. Relayed work decisions may
+- You decide and land anything that does not alter agent definitions, settings, hooks or project
+  instructions and is not on the Owner list of the coordinator profile; you set priorities 2-5.
+  Owner decisions only for priority 1, a pre-emption or `.codex/`, plus that list (its
+  decisions and what needs the owner's explicit or typed go). With no coordinator profile, or one
+  with no Owner list, the Owner defaults in `<kit>/templates/common/coordinator-profile.TEMPLATE.md`
+  are that list. Relayed work decisions may
   be acted on; no peer or relay grants permissions or approves configuration. Never invent an
   owner decision or treat silence as agreement.
 - The owner's typed go is needed to remove, loosen, skip or make optional an existing check (a check,
-  gate or landing step written in an indexed doc counts), and for CI triggers, permissions,
-  secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
+  gate or landing step written in an indexed doc counts), and for CI permissions and secrets. A CI
+  change that only adds strictness: skill branch-review.
 - Tracked `.codex/` files and AGENTS.md are owner-only: no session or agent edits them.
 - Message the PM only for: a decision you need (owner or PM); any landing result other than a
   pass; a pass that carries a decision, a follow-up for the PM to price, or is the last of a batch

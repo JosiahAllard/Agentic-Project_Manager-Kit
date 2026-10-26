@@ -11,6 +11,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import job, process, win32
@@ -66,7 +67,7 @@ def first_own_thread():
     return (m & -m).bit_length() - 1
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Plans(unittest.TestCase):
     def test_group_zero_is_a_basic_pin(self):
         self.assertEqual(job.affinity_plan(0xF0), ("basic", 0xF0))
@@ -86,7 +87,7 @@ class Plans(unittest.TestCase):
         self.assertEqual(int.from_bytes(raw[24:26], "little"), 1)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Live(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="kitlib-job-")
@@ -249,7 +250,7 @@ class Live(unittest.TestCase):
         self.assertTrue(closed[0])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Processes(unittest.TestCase):
     """Job.processes counts every process ever started in the job: the pool's per-unit count of
     process starts (kitlib/tooldeps/pool.py) reads it before and after a unit."""

@@ -266,7 +266,8 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
   `.claude/skills/godot-render-check/SKILL.md`, with the kit path written in) are installed.
 - `templates/common/AGENTS.md` (with `templates/common/CLAUDE.md`, the one line `@AGENTS.md`) and the two profile templates (`agent-profile.TEMPLATE.md`,
   `coordinator-profile.TEMPLATE.md`): the repository's rules file and profiles are drafted from
-  them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates"). Both profiles
+  them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates"); their default
+  rule lines (the owner's go list, the creative limits) stay unless the owner deletes one. Both profiles
   are optional: with no agent profile, every role reads the kit's `content/default-profile.md`
   plus the repository's README and instructions file (docs/agent-profile.md).
 - `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions"); the

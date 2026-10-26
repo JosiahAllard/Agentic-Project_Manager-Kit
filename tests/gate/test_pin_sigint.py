@@ -29,6 +29,7 @@ from unittest import mock
 from tests import gitfixture
 from tests.gate.test_live_pin import PROBE, isolated, pins_root, temp_places
 from tests.pluginsource import Kit
+from tests.platforms import windows_only
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -75,7 +76,7 @@ print(json.dumps(out), flush=True)
 '''
 
 
-@unittest.skipUnless(os.name == 'nt', 'Windows console Ctrl+C')
+@windows_only('Windows console Ctrl+C')
 class ChildInheritance(unittest.TestCase):
 
     def setUp(self):

@@ -14,6 +14,7 @@ from kitlib import machinesetup as M
 from kitlib.machinesetup import common, links, settings
 from tests.machinesetup import test_fresh as F
 from tests.machinesetup import test_machinesetup as T
+from tests.platforms import windows_only
 
 
 def links_under(top):
@@ -65,7 +66,7 @@ class OldKitRun(T.Base):
         self.assertNotIn('/s', [w for l in out.splitlines() if 'rmdir' in l for w in l.split()])
 
 
-@unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
+@windows_only('directory junctions are Windows only')
 class Leftovers(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='machinesetup-nolink-')

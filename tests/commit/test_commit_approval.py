@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == 'nt':
     import _winapi
@@ -378,7 +379,7 @@ class WhatThePathCheckRefuses(ApprovalCase):
             self.assertEqual(fh.read(), 'rules\n')
         self.assert_not_consumed()
 
-    @unittest.skipUnless(os.name == 'nt', 'a directory junction is a Windows feature')
+    @windows_only('a directory junction is a Windows feature')
     def test_an_approved_path_reached_through_a_link_out_of_the_work_tree(self):
         folder = self.outside()
         link = os.path.join(self.wt, '.github')

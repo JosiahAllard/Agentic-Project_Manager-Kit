@@ -5,6 +5,7 @@ import os
 import subprocess
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import job, spawn, win32
@@ -12,7 +13,7 @@ if os.name == "nt":
 NEW_GROUP = 0x200
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class FlagsTest(unittest.TestCase):
     """What each wrapper hands subprocess, with and without a console."""
 
@@ -77,7 +78,7 @@ class FlagsTest(unittest.TestCase):
                 spawn.run(["prog"])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class ConsolePythonTest(unittest.TestCase):
 
     def test_the_python_beside_a_pythonw(self):
@@ -96,7 +97,7 @@ class ConsolePythonTest(unittest.TestCase):
             self.assertIsNone(spawn.console_python(os.path.join("C:\\", "py", "pythonw.exe")))
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class PythonwBesideTest(unittest.TestCase):
 
     def test_the_pythonw_in_the_folder_of_either_python_checked_for_nothing(self):
@@ -106,7 +107,7 @@ class PythonwBesideTest(unittest.TestCase):
             self.assertEqual(spawn.pythonw_beside(want), want)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class CarryTest(unittest.TestCase):
     """carry(argv): start the program with no console window, wait, its exit code. No AGENT_TEMP
     here (agent_temp_env gives None); the environment carry passes is AgentTempEnvTest's, in

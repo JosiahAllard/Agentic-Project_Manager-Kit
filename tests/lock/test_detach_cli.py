@@ -16,6 +16,7 @@ from unittest import mock
 
 from .helpers import REPO, StoreCase, clean_env
 from .test_cli import load_tool
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import process
@@ -37,7 +38,7 @@ class FakeRun:
         return subprocess.CompletedProcess(args, self.code, self.stdout, self.stderr)
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class DetachCli(StoreCase):
     """main(['run', ..., '--detach']) with the WMI call faked: what it asks WMI to start."""
 
@@ -151,7 +152,7 @@ def console_windows_of(pids):
     return out
 
 
-@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+@windows_only("the lock is Windows only")
 class DetachEndToEnd(StoreCase):
     """A real detach on a scratch store: WMI starts the carrier, the run's wrapper books the
     scratch store, runs a 2 s sleep and ends. While it runs, neither the wrapper nor its command

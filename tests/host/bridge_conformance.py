@@ -21,6 +21,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tests.platforms import windows_only
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -97,7 +98,7 @@ class BridgeConformance(object):
                             self.assertEqual(hook['args'][-1], str(marker))
                             self.assertTrue(Path(hook['args'][-2]).is_file(), hook)
 
-    @unittest.skipUnless(os.name == 'nt', 'the bridge is Windows only (named pipes)')
+    @windows_only('the bridge is Windows only (named pipes)')
     def test_bridge_delivery_describes_and_sends_on_a_fake_pipe(self):
         from optional.bridge.core.contracts import AdapterDescription, Capability, CONTRACT_VERSION
         from optional.bridge.core.messages import BeforeWriteError, DeliveryError, NativeResult

@@ -1,0 +1,7 @@
+# The Linux ratchet's baseline (tools/ci_ratchet.py; docs/test-tools.md "Platform markers and the
+# ratchet"): the test ids that fail on Linux, one per line, sorted, none twice. A branch that fixes
+# one takes it out in the same branch; a new failure is never added to make a run green.
+#
+# Until slice 2 of docs/linux-support-plan.md every Linux run is a broken run (exit 2): the tests
+# package fails to import (tests/__init__ -> kitlib.config.pointer -> kitlib.git -> kitlib.proc.win32,
+# ctypes.WinDLL), so no test runs and this list cannot be filled yet. It stays empty until then.

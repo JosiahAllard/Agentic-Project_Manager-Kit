@@ -5,6 +5,7 @@ import os
 import struct
 import unittest
 from unittest import mock
+from tests.platforms import windows_only
 
 if os.name == "nt":
     from kitlib.proc import cpu
@@ -58,7 +59,7 @@ def cpu_set(sid, group, lp, core, llc, eff=0, sched=0, parked=False):
     return bytes(b)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Synthetic(unittest.TestCase):
     def test_cores_in_two_groups_get_global_ids(self):
         raw = (core_record([(0, 0b11)]) + core_record([(0, 0b1100)])
@@ -114,7 +115,7 @@ class Synthetic(unittest.TestCase):
                           for c in got], [(256, 0, 0, 0, 1, False), (257, 67, 1, 1, 0, True)])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class GroupFallback(unittest.TestCase):
     """groups() stands in group 0 alone when Windows will not list the groups; listed_groups()
     says so (None), so a caller can tell the stand-in from Windows' answer."""
@@ -143,7 +144,7 @@ class GroupFallback(unittest.TestCase):
         self.assertFalse(stood_in)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("Windows only")
 class Live(unittest.TestCase):
     def test_windows_lists_this_machines_groups(self):
         self.assertIsNotNone(cpu.listed_groups())
