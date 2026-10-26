@@ -440,17 +440,18 @@ class HubTrigger(Fixture):
 
     def test_an_entry_that_is_not_the_owners_does_not_count(self):
         self._no_owner_entry()
-        lwrite.add(self.ledger, 'kit', 'delegated', 'q', 'a', 'd', 'under H-kit-0001: hub Q-1001',
+        lwrite.add(self.ledger, 'kit', 'delegated', 'q', 'a', 'd',
+                   'under H-kit-0001: hub %s' % self.q['id'],
                    when=stamp(datetime.timedelta(minutes=30)), repos=self.cfg['ledger_repos'], split=True)
         self.deny("no live owner ledger entry's Source names it")
 
     def test_a_source_naming_another_question_does_not_count(self):
         self._no_owner_entry()
-        self.add(decides='x', prov='typed', source='hub Q-10012')
+        self.add(decides='x', prov='typed', source='hub %s2' % self.q['id'])    # a longer id, not this one
         self.deny("no live owner ledger entry's Source names it")
 
     def test_two_live_owner_entries_naming_the_question_are_refused(self):
-        self.add(decides='x', prov='typed', source='hub Q-1001 again')
+        self.add(decides='x', prov='typed', source='hub %s again' % self.q['id'])
         self.deny('more than one live owner ledger entry names it in its Source '
                   '(H-kit-0001, H-kit-0002)')
         self.assertNotIn('delegated', self.text())
