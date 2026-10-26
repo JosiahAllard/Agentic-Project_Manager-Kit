@@ -135,11 +135,11 @@ class Resolve(unittest.TestCase):
         self.m = Machine(self)
 
     def test_a_launcher_key_is_its_sessions_json_name(self):
-        self.m.put(self.m.state, 'sessions.json', {'kit': {'name': 'kit-coordinator-a1'}})
-        self.m.session(11, 'kit-coordinator-a1', folder=os.path.join(self.m.acct, pipes.REGISTRY))
+        self.m.put(self.m.state, 'sessions.json', {'kit': {'name': 'demo-coordinator-a1'}})
+        self.m.session(11, 'demo-coordinator-a1', folder=os.path.join(self.m.acct, pipes.REGISTRY))
         t = self.m.hub().resolve('kit')
-        self.assertEqual((t.record['pid'], t.name, t.ambiguous), (11, 'kit-coordinator-a1', False))
-        self.assertEqual(self.m.hub().resolve('kit-coordinator-a1').record['pid'], 11)
+        self.assertEqual((t.record['pid'], t.name, t.ambiguous), (11, 'demo-coordinator-a1', False))
+        self.assertEqual(self.m.hub().resolve('demo-coordinator-a1').record['pid'], 11)
         self.assertIsNone(self.m.hub().resolve('nobody'))
 
     def test_a_stopped_sessions_record_is_never_a_target(self):
@@ -186,9 +186,9 @@ class Deliver(unittest.TestCase):
         self.m = Machine(self)
 
     def test_no_live_session_is_no_session_and_nothing_is_written(self):
-        self.m.put(self.m.state, 'sessions.json', {'kit': {'name': 'kit-coordinator-a1'}})
+        self.m.put(self.m.state, 'sessions.json', {'kit': {'name': 'demo-coordinator-a1'}})
         self.assertEqual(self.m.hub().deliver('kit', 'hello'),
-                         push.Sent(push.NO_SESSION, 'kit-coordinator-a1', None, False))
+                         push.Sent(push.NO_SESSION, 'demo-coordinator-a1', None, False))
         self.assertEqual(self.m.hub().deliver(push.PM_KEY, 'hello'), push.Sent(push.NO_SESSION, None, None, False))
         self.assertEqual(self.m.writes, [])
 
