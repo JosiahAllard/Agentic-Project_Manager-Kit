@@ -28,6 +28,8 @@ whether batches are allowed.
 ## Shared resources that must be serialised
 Locks, ports, devices, accounts and anything else two agents must not use at once, and how each
 is taken and released. Never pre-empt a holder.
+- Default, kept unless the owner deletes it: pages, renders and clips an agent wrote outside the
+  repository are deleted by the owner only.
 
 ## Risk map
 High-risk paths (a change there gets a stronger worker and a fresh reviewer) and low-risk ones.
@@ -38,9 +40,31 @@ How to move or rename without changing behaviour.
 ## Records
 Where the backlog and decisions live, which agent writes which records, and what tracked files
 must never contain.
+- Conventions digest (the consultant reads it on start): `docs/conventions-digest.md`.
 
 ## Art
-What visual work exists, how a change is shown to the owner, or "Not applicable."
+What visual work exists, how a change is shown to the owner, or "Not applicable." (which drops the
+defaults below). Which generator makes which asset. Each line is a default kept unless the owner
+deletes it:
+- Paid generation (an API key, a paid service, a credits node) needs the owner's approval for that
+  specific task. Never sign up for, spend on, or reach for a shelved source. Shelved sources: <list, or none>.
+- Never wire a new asset into the game, or replace an existing one, unless the brief says to:
+  changing how the game looks or sounds is the owner's decision.
+- Never change gameplay, physics or netcode to make something look or sound better: report the
+  conflict.
+- Generation sessions are recorded as keyword lines in `docs/ops/assets.md`, failures included.
+- Asset policy: <where the repository keeps it>; anything it does not yet allow is the owner's decision.
 
 ## Audio
-What audio work exists and how it is judged, or "Not applicable."
+What audio work exists and how it is judged, or "Not applicable." (which drops the defaults
+below). Which generator makes which sound. Each line is a default kept unless the owner deletes it:
+- Paid generation needs the owner's approval for that specific task. Never sign up for, spend on,
+  or reach for a shelved source. Shelved sources: <list, or none>.
+- Never wire a new sound into the game, or replace an existing one, unless the brief says to:
+  changing how the game sounds is the owner's decision.
+- Never change gameplay, physics or netcode to make something sound better: report the conflict.
+- Generation sessions are recorded as keyword lines in `docs/ops/assets.md`, failures included.
+- Asset policy: <where the repository keeps it>; anything it does not yet allow is the owner's decision.
+- Text to speech: announcer lines only.
+- Local music generation: music only (menu, match and victory themes, stingers over a few seconds),
+  never sound effects.

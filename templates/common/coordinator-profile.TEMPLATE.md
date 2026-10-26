@@ -9,6 +9,7 @@ coordinator; point to the repository's docs and tools rather than copying them.
 Where the roadmap, backlog and reference docs live (the doc-index topics that find them), how a
 brief names the exact section or row it implements, and who sets priorities and which decisions
 only the owner makes.
+- Tool requests (the weekly upkeep run, skill coordinator-dispatch "Upkeep"): `docs/ops/tool-requests.md`.
 
 ## Risk map, for review depth
 Which paths or areas are high risk (a branch there gets a fresh reviewer and a stronger worker)
@@ -19,5 +20,10 @@ The agent types this repository actually has, which kind of work goes to which, 
 must not be used here. The coordinator uses only the types listed.
 
 ## Owner
-How the owner is reached, which questions go to the owner and through whom, what needs the owner's explicit go
-(deploying, spending, persisting data outside the repository), and how often the owner wants a digest.
+How the owner is reached, which questions go to the owner and through whom, and how often the owner
+wants a digest. The list below is the coordinator's: work on it is not the coordinator's to decide or
+land alone. Each line is a default the repository keeps unless the owner deletes it:
+- Owner decisions: removing a user-facing control; a schema change.
+- The owner's explicit go: deploying; spending money; persisting data outside the repository;
+  anything touching the owner's own files or accounts.
+- The owner's typed go: a CI change to triggers, runners or deploy steps.
