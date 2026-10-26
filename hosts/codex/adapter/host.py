@@ -28,6 +28,9 @@ hands it to kitlib.host.hookmain.dispatch.
                        not handed out here
   launcher()           hosts.codex.adapter.launcher: launch plans only; it runs nothing yet
   plugin_installer()   None
+  plugin_copy(home, environ)   optional (tools/_host.py plugin_copies): the step plugin_refresh
+                       --apply runs to mirror the export into the Codex plugin copy
+                       (hosts.codex.adapter.plugin_copy.Step; docs/plugin-source.md)
   content()            hosts.codex.adapter.content (the content renderer)
 """
 import json
@@ -115,6 +118,10 @@ class CodexAdapter(object):
 
     def plugin_installer(self):
         return None
+
+    def plugin_copy(self, home=None, environ=None):
+        from hosts.codex.adapter import plugin_copy
+        return plugin_copy.Step(home, environ)
 
 
 ADAPTER = CodexAdapter()
