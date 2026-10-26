@@ -36,7 +36,7 @@ needs it says so.
 
 ### 1.2 The surface, counted
 
-Counted on this branch on 2026-10-25, after its merge of main, over the tracked Python files, `git ls-files '*.py'`: 1,264 files, 528 of
+Counted on this branch on 2026-10-25 over the tracked Python files, `git ls-files '*.py'`: 1,264 files, 528 of
 them outside tests/. Each row is the number of those files that `git grep -l -i -E '<pattern>'`
 matches, the alternatives in the pattern column joined by `|`. The PM's first counts are in the last column; where they differ, this scan's
 figure stands.
@@ -190,8 +190,10 @@ Rules:
 2. The Windows backend starts as re-exports, so moving a caller onto the seam changes no Windows
    behaviour; the Windows suite proves each move.
 3. No module imports a Windows DLL at import time. proc/win32.py, proc/pipe.py and
-   gate/outfile.py bind lazily (first call), so an import on Linux works and a call fails with a
-   clear "not on this platform" error. On Windows this moves one failure: a DLL or export that is
+   gate/outfile.py bind lazily (first call), and the six other modules with a module-level
+   `from ctypes import wintypes` (lock/layout.py, lock/store.py, proc/cpu.py, proc/process.py,
+   proc/shield.py, proc/winwatch.py) take it lazily or behind a guard, so an import on Linux
+   works and a call fails with a clear "not on this platform" error. On Windows this moves one failure: a DLL or export that is
    missing fails today at import, and after the change at first call; slice 2 proves that the
    Windows imports still succeed and that a missing export still raises, naming the function.
 4. Guard path text goes through one function per shell (kitlib/guard/paths.py norm and the
@@ -204,7 +206,7 @@ Rules:
 
 | Windows | Linux | Notes |
 |---|---|---|
-| (pid, FILETIME ctime) identity | (pid, starttime from /proc/<pid>/stat field 22) plus boot_id | starttime is in clock ticks since boot, so it repeats across reboots; the nest token gains the boot (below) |
+| (pid, FILETIME ctime) identity | (pid, starttime from /proc/<pid>/stat field 22) plus boot_id | starttime is in clock ticks since boot, so it repeats across reboots; the seam folds the boot into the ctime value (below) |
 | Toolhelp parent walk | /proc/<pid>/stat ppid, checked against each starttime | same ancestry rule |
 | NtQueryInformationProcess command line | /proc/<pid>/cmdline | NUL-separated, no CRT re-quoting |
 | Job object (kill on close, CPU mask, memory, peak) | cgroup v2 leaf under the user's delegated slice | see 2.3 |
@@ -232,14 +234,26 @@ Rules:
 
 The nest token today is three fields: lock/run.py (Slot, into MACHINE_LOCK_RUN) and
 lock/background.py (into MACHINE_LOCK_BG) write `"%s:%d:%d" % (run.id, pid, ctime)`, and
-lock/run.py NEST_RE is `^(<run id>):(\d+):(\d+)$` (verified). On
-Linux it becomes four fields, `<run id>:<pid>:<starttime>:<boot>`, where `<boot>` is the 32 hex
-digits of /proc/sys/kernel/random/boot_id with the dashes removed. NEST_RE gains an optional
-fourth group, `(?::([0-9a-f]{32}))?`; Windows keeps writing three fields, byte for byte. On Linux
-nest_check refuses a token with no fourth field ("the token names no boot") and one whose boot is
-not the current boot_id ("the token is from another boot"), before the ancestor check. The run
-record's ctime field holds starttime on Linux, with a `boot` field beside it, so the record check
-compares both.
+lock/run.py NEST_RE is `^(<run id>):(\d+):(\d+)$` (verified). The run record's ctime, the
+token's ctime and every liveness check compare the same opaque integer: nest_check (lock/run.py),
+process.alive(pid, ctime) (proc/process.py), and lock/store.py wrapper_state and the run-record
+liveness reads that call alive or wrapper_state (verified). So the boot goes into the value, not
+beside it: on Linux the seam's ctime is `(boot << 64) | starttime`, where `boot` is
+/proc/sys/kernel/random/boot_id read as one 128-bit integer (its 32 hex digits, dashes
+removed). Two processes of different boots never share a ctime, so a record or token written
+before a reboot names no live process after it, and every caller above refuses it with no change
+to its code. Within one boot the order is starttime's, so the ordering uses stay right: the
+end-of-run pass (lock/run.py end_sparing, which ages processes against a stamp taken before
+listing them) and winwatch's parent check (a parent's ctime is not after its child's). The seam's
+stamp, today lock/run.py filetime_now, returns the same encoding on Linux: the current boot
+shifted, or-ed with the ticks since boot. starttime counts clock ticks (10 ms at the usual 100 Hz),
+so two processes can share one; a tie errs safe in both ordering uses (a process stamped in the
+stamp's own tick is not aged; an equal parent is still a parent), as Windows's coarse FILETIME
+does today. The token stays three fields, NEST_RE is unchanged, Windows's ctime is still the
+FILETIME byte for byte, and the format comments in lock/run.py, lock/background.py and
+lock/bg_client.py (`<run id>:<pid>:<ctime>`) stay true. A search for fixed-width uses of ctime
+(struct packing, c_ulonglong, conversion to a time) in kitlib, hosts and tools found none, so a
+value wider than 64 bits reaches only Python ints, `%d` and JSON, which all take it.
 
 ### 2.3 The Job contract on Linux
 
@@ -263,9 +277,10 @@ daemons do; not a same-user process that sets out to leave its cgroup.
   cgroups, where they do leave a process group, so the leaf holds the tree that ordinary tools
   make. It is not a security boundary: a same-user process can write its own pid into any
   cgroup.procs it has write access to, which includes the rest of the user's delegated subtree.
-  Here a job object is stricter (a process cannot leave its job, and the kit never allows
-  breakaway, section 1.3). The plan accepts that difference and states it in the docs rather than
-  defending against a deliberate move.
+  Here a job object is stricter (a process cannot leave its job, and the Job class never allows
+  breakaway; the automatic-tasks tick, which launches with CREATE_BREAKAWAY_FROM_JOB on purpose,
+  is the one exception, section 1.3). The plan accepts that difference and states it in the docs
+  rather than defending against a deliberate move.
 
 Fallback when the user has no delegated cgroup v2 (old systemd, containers, WSL without
 systemd): process group + sched_setaffinity + PR_SET_PDEATHSIG + an RLIMIT_AS cap. It is
@@ -451,7 +466,9 @@ Linux uses the machine's store, and the CI leg does not run gate.py, until slice
    count on Windows before and after.
 2. **Import-clean kitlib and the seam skeleton.** kitlib/platform/ (api, windows re-exports,
    linux stubs that raise, PlatformUnsupported for any other platform), lazy DLL binding in
-   proc/win32.py, proc/pipe.py and gate/outfile.py, the no-os-checks test with its allowlist,
+   proc/win32.py, proc/pipe.py and gate/outfile.py, a lazy or guarded `wintypes` import in
+   lock/layout.py, lock/store.py, proc/cpu.py, proc/process.py, proc/shield.py and
+   proc/winwatch.py (rule 3), the no-os-checks test with its allowlist,
    hookmain's block-while-unready check, and the per-platform `process_names` in hosts.json
    (windows: today's `.exe` names; linux: `claude`, `node`, `codex`), read by
    kitlib/host/registry.py for the running platform, so the lock's caller walk (lock/store.py
@@ -469,12 +486,17 @@ Linux uses the machine's store, and the CI leg does not run gate.py, until slice
    (concurrency). Proof: two processes contend for a named lock; a killed holder frees it;
    run_dead sees a killed run; the treelock tests run on both; Store() with no root refuses on
    Linux by name.
-4. **Process identity and kill.** linux/process.py; lock/run.py and lock/background.py write the
-   four-field nest token, and nest_check reads it (section 2.2). Risk High. Proof: ancestry,
-   descendants, command_line and kill_tree on a spawned tree; a nest token from before a pid
-   reuse is refused; a token carrying another boot's id (the boot_id read through a seam the test
-   points at a file) is refused as "from another boot", and one with no boot field is refused on
-   Linux; on Windows the token is still three fields, byte for byte.
+4. **Process identity and kill.** linux/process.py with the boot folded into ctime, and the
+   seam's stamp (today lock/run.py filetime_now) in the same encoding (section 2.2); the callers
+   that compare (pid, ctime) are not edited: lock/run.py nest_check and end_sparing,
+   proc/process.py alive, lock/store.py wrapper_state and its run-record readers, lock/background.py
+   and lock/bg_client.py (whose `<run id>:<pid>:<ctime>` comment stays true). Risk High. Proof:
+   ancestry, descendants, command_line and kill_tree on a spawned tree; a nest token from before a
+   pid reuse is refused; with the boot_id read through a seam the test points at a file, a run
+   record and a nest token written under a previous boot, at the pid and starttime of a live
+   process, are judged dead by process.alive and wrapper_state and refused by nest_check; the
+   end-of-run pass ages a process started before its stamp and spares one started after; on
+   Windows the ctime, the token and the record are byte for byte the base's.
 5. **Containment and the pool.** linux/contain.py (cgroup v2 and the weak fallback), cpu
    affinity, tooldeps/pool.py and pytests/runner.py on the seam; the CI leg moves to
    kit_tests.py. Risk High. Proof: a child that calls setsid stays in the cgroup and dies with
@@ -486,7 +508,8 @@ Linux uses the machine's store, and the CI leg does not run gate.py, until slice
    tests are unchanged.
 7. **Lock runs and detach.** lock/run.py Slot, give-back, release, detach and gate/submit on the
    seam, on a test store root. Risk High. Proof: a detached run survives its caller; give-back
-   narrows cpuset.cpus. On a Linux box with Claude Code (owner questions 2 and 3), a probe of
+   narrows cpuset.cpus. On a Linux box with Claude Code (the Linux box or VM of owner question
+   3 (c), or any Linux machine the owner lends for the probe), a probe of
    whether ending a tool call kills its tree by pid; if it does, a shield is added here before
    the slice lands (sections 1.3 and 9).
 8. **Guard path semantics.** The placer, the ten findings in section 3 as tests first, then the
@@ -530,7 +553,8 @@ does not overlap another lock slice); the others are in order.
 ## 9. Risks and unknowns
 
 - Unknown: whether `from ctypes import wintypes` imports on Linux on the kit's Python (it raised
-  on some older versions); slice 2 checks and binds it lazily either way.
+  on some older versions); slice 2 checks, and makes it lazy or guarded either way in all nine
+  modules of section 1.1 (rule 3).
 - Unknown: Claude Code's Linux messaging address, its hook interpreter lookup, its managed
   settings path and its session file fields; slice 15 and 12 probe first.
 - Unknown: whether Claude Code on Linux kills a tool call's process tree by pid when it ends the
@@ -600,9 +624,9 @@ carries its own scope.
 | Slug | Summary | Scope |
 |---|---|---|
 | linux-ci-leg | Linux CI leg, ratchet baseline, platform test markers | .github/workflows/linux.yml, kitlib/ci/, tools/ci_ratchet.py, tests/ci/, tests/platforms.py, tests/linux-baseline.txt, tests/ (skip moves) |
-| linux-import-seam | Import-clean kitlib, kitlib/platform skeleton, no-os-checks test, hook block while unready, per-platform process names | kitlib/platform/, kitlib/proc/win32.py, kitlib/proc/pipe.py, kitlib/gate/outfile.py, kitlib/host/hookmain.py, kitlib/host/registry.py, hosts.json, tests/platform/, tests/host/, tests/gate/ |
+| linux-import-seam | Import-clean kitlib, kitlib/platform skeleton, no-os-checks test, hook block while unready, per-platform process names | kitlib/platform/, kitlib/proc/win32.py, kitlib/proc/pipe.py, kitlib/gate/outfile.py, kitlib/lock/layout.py, kitlib/lock/store.py, kitlib/proc/cpu.py, kitlib/proc/process.py, kitlib/proc/shield.py, kitlib/proc/winwatch.py, kitlib/host/hookmain.py, kitlib/host/registry.py, hosts.json, tests/platform/, tests/host/, tests/gate/ |
 | linux-locks | flock named locks, run liveness, treelock and writelock, on a test store root | kitlib/platform/linux/locks.py, kitlib/lock/store.py, kitlib/fs/treelock.py, kitlib/fs/writelock.py, tests/lock/, tests/fs/ |
-| linux-process-identity | /proc identity, ancestry, kill; four-field nest token with starttime and boot | kitlib/platform/linux/process.py, kitlib/proc/process.py, kitlib/lock/run.py, kitlib/lock/background.py, tests/proc/, tests/lock/ |
+| linux-process-identity | /proc identity, ancestry, kill; the boot folded into the Linux ctime | kitlib/platform/linux/process.py, kitlib/proc/process.py, kitlib/lock/run.py, tests/proc/, tests/lock/ |
 | linux-containment | cgroup v2 Job contract, weak fallback, pool and unit runner on Linux | kitlib/platform/linux/contain.py, kitlib/platform/linux/cpu.py, kitlib/proc/job.py, kitlib/tooldeps/pool.py, kitlib/pytests/runner.py, tests/proc/, tests/tooldeps/ |
 | linux-lock-hardware | /sys and /proc hardware detection, synthetic /sys trees | kitlib/platform/linux/hardware.py, kitlib/lock/layout.py, tests/lock/ |
 | linux-lock-runs | slots, give-back, detach and gate submit on Linux, on a test store root | kitlib/lock/run.py, kitlib/lock/detach.py, kitlib/gate/submit.py, kitlib/platform/linux/detach.py, tests/lock/, tests/gate/ |
