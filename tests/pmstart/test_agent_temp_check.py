@@ -12,7 +12,7 @@ from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
 NOW = datetime.datetime(2026, 10, 11, 9, 0)
 REAL_TASK_EXISTS = pmstart.agent_temp_task_exists      # before setUpModule patches it off this machine
 FAKES = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
-             liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
+             liveness={"read": lambda p: "{}"}, repos={},
              watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0},
              cdrive={"environ": {}})
 

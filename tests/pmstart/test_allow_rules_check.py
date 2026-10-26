@@ -117,7 +117,7 @@ class AllowRulesCheckTest(unittest.TestCase):
     def test_checklist_wiring(self):
         self.local({'permissions': {'allow': [self.rule(GONE)]}})
         fakes = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={'read': lambda p: '[]'},
-                     liveness={'read': lambda p: '{}'}, stubs={'repos': {}, 'check': lambda p: None},
+                     liveness={'read': lambda p: '{}'}, repos={},
                      memory={'repos': {}, 'pm_repo': lambda cfg: None, 'folder': lambda top: None},
                      allow_rules={'repos': {'alpha': self.repo}, 'pm_repo': lambda cfg: None,
                                   'settings': self.settings},

@@ -676,29 +676,6 @@ def launcher_repos():
     return settings.load().repos
 
 
-def stubs(repos=None, check=None):
-    """One line per repository in launcher.repos whose stubs are missing or stale (kitlib.stubs.problem_line),
-    none when all are current. Stubs are opt-in (decision 21 in docs/multi-host-plan.md section 7),
-    so a repository that uses none has no line. A folder that is not there, or a check that raises,
-    is that repo's own "could not check stubs" line."""
-    from kitlib import stubs as kstubs
-    check = check or kstubs.problem_line
-    repos = launcher_repos() if repos is None else repos
-    lines = []
-    for name in sorted(repos):
-        path = repos[name]
-        if not os.path.isdir(path):
-            lines.append("could not check stubs (%s): no repository folder %s" % (name, path))
-            continue
-        try:
-            line = check(path)
-        except Exception as e:
-            line = "could not check stubs (%s): %s: %s" % (name, type(e).__name__, e)
-        if line:
-            lines.append(line)
-    return lines
-
-
 def pm_memory_repo(cfg, main_top=None):
     """The main checkout of the PM's own repository (the one holding sessions_file), or None when
     sessions_file is not set or not there. `main_top` is kitlib.git.repo.main_checkout_toplevel
@@ -1086,6 +1063,7 @@ def checklist(cfg, now=None, procs=None, **fakes):
     today = (now or datetime.datetime.now()).date()
     lines = []
     box = {}
+    repos = {"repos": fakes["repos"]} if "repos" in fakes else {}
 
     def procs_once():
         if "p" not in box:
@@ -1108,18 +1086,13 @@ def checklist(cfg, now=None, procs=None, **fakes):
         # A plugin_current fake's settings and folders stand for this check's too.
         ("plugin_enabled", lambda: plugin_enabled(**fakes.get("plugin_enabled", {
             k: v for k, v in fakes.get("plugin_current", {}).items() if k in ("settings", "folders")}))),
-        ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
-        # A stubs fake's repos stand for launcher.repos here too.
-        ("memory", lambda: memory(cfg, **fakes.get("memory", {k: v for k, v in fakes.get("stubs", {}).items()
-                                                              if k == "repos"}))),
-        ("allow_rules", lambda: allow_rules(cfg, **fakes.get("allow_rules", {k: v for k, v in fakes.get(
-            "stubs", {}).items() if k == "repos"}))),
+        # A repos fake stands for launcher.repos in each check that reads it.
+        ("memory", lambda: memory(cfg, **fakes.get("memory", repos))),
+        ("allow_rules", lambda: allow_rules(cfg, **fakes.get("allow_rules", repos))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
         ("cdrive", lambda: cdrive_lines(**fakes.get("cdrive", {}))),
-        # A stubs fake's repos stand for launcher.repos here too.
-        ("worktree_sweep", lambda: worktree_sweep_lines(**fakes.get("worktree_sweep", {
-            k: v for k, v in fakes.get("stubs", {}).items() if k == "repos"}))),
+        ("worktree_sweep", lambda: worktree_sweep_lines(**fakes.get("worktree_sweep", repos))),
         ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]

@@ -581,53 +581,6 @@ class LedgerLineTest(unittest.TestCase):
         self.assertTrue(line.endswith("rules --repo alpha"), line)
 
 
-class StubsLineTest(unittest.TestCase):
-
-    def test_silent_when_current_and_one_line_when_not(self):
-        with tempfile.TemporaryDirectory() as d:
-            os.makedirs(os.path.join(d, "alpha"))
-            seen = []
-
-            def check(p):
-                seen.append(p)
-                return None
-            self.assertEqual(coordinatorstart.stubs_line(ENTRY, d, check), [])
-            self.assertEqual(seen, [os.path.join(d, "alpha")])
-            self.assertEqual(coordinatorstart.stubs_line(ENTRY, d, lambda p: "stubs (alpha): 1 missing/stale: gate"),
-                             ["stubs (alpha): 1 missing/stale: gate"])
-
-    def test_missing_folder_is_could_not_check_not_a_traceback(self):
-        self.assertEqual(coordinatorstart.stubs_line(ENTRY, "D:/no/such/root", lambda p: None),
-                         ["could not check stubs: no repository folder %s" % os.path.join("D:/no/such/root", "alpha")])
-
-    def test_no_repos_root_is_a_key_error(self):
-        with self.assertRaises(KeyError):
-            coordinatorstart.stubs_line(ENTRY, None)
-
-    def test_context_prints_the_check_last_and_isolates_it(self):
-        with tempfile.TemporaryDirectory() as d:
-            os.makedirs(os.path.join(d, "alpha"))
-            text = ContextTest().build({"repos_root": d, "cap": {"alpha": [{"cap": 4}]}},
-                                       cwd=d + "/alpha", stubs_check=lambda p: "stubs (alpha): 2 missing/stale: a, b")
-            self.assertEqual(text.splitlines()[-1], "- stubs (alpha): 2 missing/stale: a, b")
-
-    def test_context_has_no_stubs_line_when_current(self):
-        with tempfile.TemporaryDirectory() as d:
-            os.makedirs(os.path.join(d, "alpha"))
-            t = ContextTest()
-            text = t.build({"repos_root": d, "cap": {"alpha": [{"cap": 4}]}}, cwd=d + "/alpha", stubs_check=lambda p: None)
-            self.assertNotIn("stubs", text)
-
-    def test_a_raising_check_is_a_could_not_check_stubs_line(self):
-        with tempfile.TemporaryDirectory() as d:
-            os.makedirs(os.path.join(d, "alpha"))
-
-            def boom(p):
-                raise OSError("disk gone")
-            text = ContextTest().build({"repos_root": d, "cap": {"alpha": [{"cap": 4}]}}, cwd=d + "/alpha", stubs_check=boom)
-            self.assertIn("could not check stubs: OSError: disk gone", text)
-
-
 @real_git('the hook child runs git check-ignore (the auto-tasks check): the fake lacks check-ignore')
 class HookTest(unittest.TestCase):
     def run_hook(self, role, config):
@@ -666,7 +619,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         text = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(text.split("\n")[1], "- s")
-        for name in ("cap", "machine state", "other coordinators", "stubs"):
+        for name in ("cap", "machine state", "other coordinators"):
             self.assertIn("could not check %s:" % name, text)
         self.assertNotIn("rulings", text.lower())
 
