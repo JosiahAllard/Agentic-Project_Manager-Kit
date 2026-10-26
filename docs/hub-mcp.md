@@ -59,7 +59,7 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | tool | arguments (required first) | endpoint |
 |---|---|---|
 | `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story`, `record`, `class` | `POST /questions` |
-| `hub_question_log` | `id`, `ruling`, `if_version`; `replace` (corrects a logged question's ruling), `unfiled` | `POST /questions/<id>/log` |
+| `hub_question_log` | `id`, `if_version`; `unfiled` | `POST /questions/<id>/log` |
 | `hub_question_done` | `id`, `why`, `if_version`; `unfiled` | `POST /questions/<id>/done` |
 | `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent`, `record`, `class` | `POST /questions/<id>/edit` |
 | `hub_question_withdraw` | `id`, `from`, `if_version` | `POST /questions/<id>/delete` |
@@ -68,7 +68,7 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | `hub_todo_edit` | `id`, `from`, `if_version`; `title`, `detail`, `commands`, `repo`, `refs`, `urgent` | `POST /todos/<id>/edit` |
 | `hub_todo_withdraw` | `id`, `from`, `if_version` | `POST /todos/<id>/delete` |
 | `hub_story_set` | `id`, `status` (`api.AGENT_STORY_STATUSES`), `if_version`; `reviewer`, `review_note`, `backlog_id`, `closed_note` | `POST /stories/<id>` |
-| `hub_to_pm_reply` | `id`; `reply`, `ruling`, `if_version` | `POST /to_pm/<id>/reply` |
+| `hub_to_pm_reply` | `id`; `reply`, `if_version` | `POST /to_pm/<id>/reply` |
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
 | `hub_page_publish` | `id`, `title`, `html_file`; `summary`, `repo`, `from`, `refs`, `if_version` | `POST /pages` |
 | `hub_approval_request` | `checkout`, `title`, `files` (`[{path, content_file}]`); `repo`, `head`, `reason` | `POST /approvals` |
@@ -106,8 +106,9 @@ included (`invalid`, field `from`, status 400: `kitlib/hubsite/api.py` `question
 `LiveKeys.test_a_question_comes_from_a_session_key_or_pm_only`). The `from` of `hub_todo_add`
 and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
 
-`hub_question_log` refuses (`invalid`, field `ruling`) a ruling that is not a ledger id and one that
-no ledger file holds; `replace: true` corrects the ruling of a question already logged.
+`hub_question_log` and `hub_to_pm_reply` take no ruling id (the hub stores none); `ruling` or
+`replace` is an unknown argument. `hub_question_log` is refused (`invalid`, field `status`) for a
+question that is neither answered nor filed, a logged one included.
 
 The `record` of `hub_ask` and `hub_question_edit` is `{repo, id}`, both required: the backlog
 record the question is about (the kit's own records are bound under the PM repository's folder name, `<pm-folder>:<ID>`); `null` on `hub_question_edit`

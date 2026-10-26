@@ -74,8 +74,8 @@ class.
 - `answered-question`: a parked record whose question (`q`) the owner has answered on the Action
   Hub (status answered, logged or done). The hub's questions are read, read-only, with the agent token
   through `kitlib.hubsite.client`, as `tools/hub.py` reads them, and only when a record is parked.
-  The fix is `unpark <ID>`, giving the ruling it was logged as, after the PM logs the answer when
-  it is not logged yet; for a question the PM marked done (`hub.py questions done`), `unpark
+  The fix is `unpark <ID>`, giving the ruling it was logged as (the ledger entry whose Source names
+  the question; the hub keeps no id), after the PM logs the answer when it is not logged yet; for a question the PM marked done (`hub.py questions done`), `unpark
   <ID>` alone, with no ruling to cite. No ruling id is shown. A hub that cannot be asked gives a NOT CHECKED note.
 - `audit`: `kitlib.backlog.audit_check.run` over 7 days, with no fetch. It gives one count finding
   per kind (UNAUDITED, UNKNOWN, UNMAPPED, UNVERIFIED), for example "12 store change(s) in 7 days with no audit

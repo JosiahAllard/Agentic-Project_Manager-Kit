@@ -286,8 +286,8 @@ it has acted on it; it hands every other step (notes, stories) to the PM. Who ha
 item: "Who handles a pending item" below. For a question, the server takes `--from` only when it is `pm` or a
 key of the launcher's sessions.json, read again on each add; any other value is refused, and a
 question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
-until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), or
-marks it done when it needs no ruling (`questions done`), as for any other answer, so each `pending` read lists it again and a plain wait would print it again at once: a caller
+until the PM logs the ruling in the rulings ledger and then marks the question logged (`questions
+log`, which takes no ruling id: the ledger entry's Source names the question), or marks it done when it needs no ruling (`questions done`), as for any other answer, so each `pending` read lists it again and a plain wait would print it again at once: a caller
 that does wait passes `--except` and every id it has acted on (`wait --pending --for
 <its key> --except Q-7 T-3`), which leaves those ids out and ends only on another item. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
@@ -303,7 +303,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
 | `questions show Q-1 [--json]` | the `Q-1 v2 answered [repo] title` line, then its options (the recommended one marked), context, answer and note |
 | `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] (--record REPO:ID \| --class rule\|machine\|cross-repo\|go) [--from KEY]` | `ASKED Q-2`, then any warning lines |
-| `questions log Q-1 <ruling id> [--replace] [--unfiled WHY] --if-version V` | `LOGGED Q-1 <ruling id>` |
+| `questions log Q-1 [--unfiled WHY] --if-version V` | `LOGGED Q-1` |
 | `questions done Q-1 --why TEXT [--unfiled WHY] --if-version V` | `DONE Q-1` |
 | `questions file [Q-1]` | `FILED Q-1` and `NOT FILED Q-2: <why> (<code>)` lines, or `nothing to file` ("Filing the answer") |
 | `questions bind --dry-run \| --apply` (PM) | `BIND Q-1 repo:ID` (dry run) or `BOUND Q-1 repo:ID` lines (each answered one followed by `FILED Q-1` or `NOT FILED Q-1: <why> (<code>)`), `NOT BOUND Q-1: <why> (<code>)` for a pair that failed, then `MISS repo:ID: <why>` (`MISS repo: <why>` when the whole repository could not be read), `MULTI repo:ID cites Q-1 Q-2`, `SKIP Q-1: <why>`, or `nothing to bind` ("Binding the open questions") |
@@ -324,7 +324,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `to-pm [--status S] [--repo R]` | `P-1 queued [repo] text` |
 | `to-pm add --text T [--kind K] [--repo R] [--urgent]` (owner) | `QUEUED P-2` |
 | `to-pm send` (owner) | `SENT P-1 P-2` or `SENT nothing` |
-| `to-pm reply P-1 TEXT [<ruling id>] [--if-version V]` | `REPLIED P-1` |
+| `to-pm reply P-1 TEXT [--if-version V]` | `REPLIED P-1` |
 | `inbox` | `M-1 unread [repo] title` |
 | `inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...] [--from NAME]` | `POSTED M-2` |
 | `inbox read M-1 [--undo] [--if-version V]` (owner) | `READ M-1` or `UNREAD M-1` |
@@ -337,8 +337,11 @@ Notes on the table:
 - `todos` lines carry no version; `todos --json` gives each to-do's `version`.
 - `questions add --story` is the story a follow-up belongs to; `stories set`, `questions log`,
   `questions done` and every `edit` and `withdraw` require `--if-version`.
-- `questions log` refuses (`invalid`, field `ruling`) a ruling that is not a ledger id and one that
-  no ledger file holds; `--replace` corrects the ruling of a question already logged.
+- `questions log` and `to-pm reply` take no ruling id: the hub stores none (an owner decision), and
+  the API refuses a body with `ruling` (`invalid`, field `ruling`). `questions log` is refused
+  (`invalid`, field `status`) for a question that is neither answered nor filed, so a logged
+  question is not logged again. Update note: a hub started before this change still requires
+  `ruling` on a log and refuses these forms; it needs one restart.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged or done,
   stories submitted, To PM items sent, to-dos done or added by the owner without `pm_ack`, and
   approvals the owner decided that are not consumed (`kitlib.hubsite.store.pending_items`; an
@@ -464,7 +467,7 @@ It is not the store's git push (the `push` setting).
   line names the record (`<repo>:<id>`) and what to do: pick it up (`pulled`, the asker), read
   it with no ack needed (`pulled` to the PM that asked, and `freed`, which also says to start a
   coordinator of the record's repository), and, for a standing rule, log it in the ledger
-  (`hub questions log <id> <ruling-id>`), which acknowledges it.
+  (`hub questions log <id> --if-version N`), which acknowledges it.
 - Until when: each recipient is sent each item until it is acknowledged. The asking session
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
@@ -563,7 +566,7 @@ tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.p
 | urgent | PM | true sorts it to the top with an Urgent marker; only for items that block work or have a deadline |
 | refs, story | PM | ids it refers to; the story a follow-up question belongs to |
 | answer | owner | `{choice: index or "other", label, note, at}` |
-| ruling | PM | the ruling id it was logged as |
+| ruling | PM | older hubs only, no longer written: the ruling id it was logged as |
 | done_why, done_at | PM | why the answer needed no ruling, and when it was marked done (ISO time) |
 | unfiled_why | PM | why an answer whose filing failed for good was logged or marked done anyway ("Filing the answer") |
 | record | PM, coordinator | `{repo, id}`: the backlog record the question is about; absent or null on an unbound question (every question asked before the field existed reads so) |
@@ -650,7 +653,7 @@ The hub files the owner's answer to a bound question into the record itself, in 
    too), `held` otherwise (it still waits on more, or it was open), and null when a read that
    decides it cannot tell (no record view, a view that raised, no fields, a completed record). The push reads it to choose who hears ("Push notifications"). A filed
    question stays pending for its asker, with `filed` true, until the asker logs it (`questions
-   log`, where a ruling is bound) or marks it done (`questions done`), so an asker busy
+   log`, once its ruling is in the ledger) or marks it done (`questions done`), so an asker busy
    when the owner answers still finds the answer in the push and on its next `pending --for KEY`. It is the
    PM's only when the PM asked it or its asker cannot be reached ("Who handles a pending item").
    The page shows a filed card as `filed in <record id> · waiting for <asker> to read it` (the PM
@@ -793,7 +796,8 @@ to To PM items do not go to inbox/.
 | refs, finding | owner | ids the note names; `finding`, an `act` note's only, is the finding's fingerprint |
 | status | owner, PM | `queued`, `sent` (Send all), `done` (PM) |
 | created_at, sent_at | server | ISO times; sent_at is null until sent |
-| reply, ruling | PM | the answer, complete on its own (null or empty shows as "noted"); the ruling it was filed as |
+| reply | PM | the answer, complete on its own (null or empty shows as "noted") |
+| ruling | PM | older hubs only, no longer written: the ruling it was filed as |
 | done_at | server | ISO time the PM replied; the Done window and order use it |
 
 PM steps: each sent item is pending. Answer a Question with its reply; for an FYI reply with a
