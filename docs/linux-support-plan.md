@@ -149,7 +149,7 @@ default is 'powershell' (hosts/codex events.py).
 ### 1.5 Tests and CI
 
 - No CI: no workflow, no .github folder. That the repository is public on GitHub is unverified:
-  this plan did not check its visibility, and question 3's "free" rests on it.
+  this plan did not check its visibility; no longer needed for cost (question 3 answered).
 - `git grep -c -E "skip(Unless|If)\((os\.name|sys\.platform)" -- '*.py'` finds 142 platform
   skips in 68 test files, with free-text reasons; `skip(Unless|If)\(WINDOWS` finds 13 more in 6
   files that skip through a module constant (`WINDOWS = os.name == 'nt'`).
@@ -373,8 +373,10 @@ refusing) comes after both.
 
 ## 4. CI and test marking
 
-- `.github/workflows/linux.yml`: ubuntu-latest (24.04), actions/setup-python at the Python the
-  kit runs on (3.14 on the owner's machine today), git configured with a throwaway identity.
+- `.github/workflows/linux.yml`: runs on the owner's self-hosted Linux runner (answered: not
+  GitHub-hosted; any Linux build, a VM included), Python at the version the kit runs on (3.14 on
+  the owner's machine today), git configured with a throwaway identity. The box has real
+  hardware and GPUs, so the live /sys case below is that box's.
 - The first leg runs `python -m unittest discover -s tests -t .` in a ratchet mode, not
   kit_tests.py or gate.py (both need job objects and the lock). The ratchet logic lives in
   kitlib/ci/ratchet.py (run the suite, collect the failing and erroring test ids, compare them
@@ -443,8 +445,8 @@ Out of scope for this plan. On darwin the seam picks no backend: kitlib.platform
 kitlib imports there (as on Linux after slice 2) and any OS call refuses by name; tools/kit.py
 keeps refusing darwin after slice 14. A darwin backend would be a new folder beside linux/, built
 by its own plan; nothing here builds or tests it: macOS has no cgroups (the lock could only limit concurrency, the old
-question 2), no /proc, launchd instead of systemd, and case-insensitive paths by default. Owner
-question 1 asks to confirm.
+question 2), no /proc, launchd instead of systemd, and case-insensitive paths by default. The
+owner confirmed this scope (question 1).
 
 ## 8. Slices
 
@@ -560,10 +562,8 @@ does not overlap another lock slice); the others are in order.
 - Unknown: whether Claude Code on Linux kills a tool call's process tree by pid when it ends the
   call, as it does on Windows (the reason for the pid shield). Sections 1.3 and 2.2 infer it does
   not; slice 7 probes it on a Linux box before it lands.
-- Unverified: that the repository is public on GitHub and that standard hosted runners cost
-  nothing for it (questions 2 and 3 rest on both); the coordinator checks before slice 1.
-- Unknown: how GitHub's hosted runners delegate cgroups to the runner user; slice 5 may need
-  `sudo systemd-run` in CI only, which tests the backend but not the delegation step.
+- Unknown: how the owner's self-hosted runner delegates cgroups to the runner user; slice 5 may
+  need `sudo systemd-run` in CI only, which tests the backend but not the delegation step.
 - Risk: the weak containment fallback looks like it works. Mitigation: named, shown in status,
   refused for heavy runs by default.
 - Risk: guard semantics drift between Windows and Linux. Mitigation: one placer with a platform
@@ -576,19 +576,16 @@ does not overlap another lock slice); the others are in order.
 
 ## 10. Questions for the owner
 
-1. **macOS.** (a) out for now: the seam names darwin unsupported and refuses it by name;
-   (b) in, with concurrency-only locking; (c) in, later, as its own plan. Recommendation: (a),
-   stated in the docs.
-2. **Linux CI runner.** (a) GitHub-hosted ubuntu-latest; (b) a self-hosted runner on a separate
-   Linux box; (c) a self-hosted runner in a Linux VM on the owner's Windows machine.
-   Recommendation: (a); (c) would run CI's heavy work on the owner's machine outside the
-   machine lock's view. A Linux container on the owner's machine for a quick local check is a
-   tool, not a runner, and needs no decision.
-3. **Spending.** (a) none: standard hosted runners, free for a public repository (unverified:
-   the plan did not check the repository's visibility or the current terms, section 9);
-   (b) larger hosted runners for faster full runs; (c) a Linux box or VM for real hardware and
-   GPU tests. Recommendation: (a) now, once the check confirms it is free; (c) only if the owner
-   wants GPU slots tested on real hardware.
+1. **macOS.** ANSWERED (owner, 2026-10-26): out of this plan; macOS gets its own plan later.
+   The seam names darwin unsupported and refuses it by name (section 7).
+2. **Linux CI runner.** ANSWERED (owner, 2026-10-26): a self-hosted box; support any Linux
+   build, VM included; the primary target is full Linux support out of the box. Not
+   GitHub-hosted. I read this as leaving open whether the box is separate hardware or a VM on
+   the owner's Windows machine, and so whether its heavy work sits outside the machine lock's
+   view. A Linux container for a quick local check is a tool, not a runner.
+3. **Spending.** ANSWERED (owner, 2026-10-26): a Linux box or VM, with real hardware and GPU
+   tests. No hosted-runner spend is planned, so the repository's visibility no longer matters
+   to cost.
 4. **No cgroup v2 delegation.** (a) refuse heavy runs and say why; (b) run them with weak
    containment, shown as weak; (c) refuse the whole lock. Recommendation: (a).
 5. **Supported Linux.** (a) systemd distributions, kernel 5.14+, Ubuntu 24.04 as the reference;
@@ -600,8 +597,8 @@ does not overlap another lock slice); the others are in order.
    pass; (c) never. Recommendation: (a).
 8. **A Windows CI leg** (section 4 writes it as a proposal pending this answer). (a) yes, after
    the Linux leg is green; (b) no, the owner's machine stays the only Windows proof.
-   Recommendation: (a); it catches shared-code regressions off the owner's machine, and under
-   question 3 (a) it costs nothing.
+   Recommendation: (a); it catches shared-code regressions off the owner's machine. Question 3
+   is answered with no hosted spend, so a hosted windows-latest leg's cost is unchecked.
 9. **Hook manifest form.** (a) machine setup installs a `pythonw` shim on the Linux PATH so one
    committed manifest serves both; (b) per-platform manifests rendered side by side; (c) one
    manifest running `python3 || pythonw` through the shell. Recommendation: (b), because a
