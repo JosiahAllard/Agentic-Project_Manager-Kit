@@ -198,5 +198,88 @@ class Entry(TaskCase):
         self.assertEqual(runner.calls, [])
 
 
+class FakeJobs(object):
+    """kitlib.platform.linux.schedule as task.run's `jobs`: the real Job and describe (into a
+    temporary home), a recorded install."""
+
+    def __init__(self, home, python, kind='systemd', error=None):
+        from kitlib.platform.linux import schedule
+        self.schedule, self.home, self._python = schedule, home, python
+        self.kind, self.error, self.installed = kind, error, []
+        self.ScheduleError = schedule.ScheduleError
+
+    def python(self):
+        return self._python
+
+    def choose(self, job):
+        if self.error:
+            raise self.ScheduleError(self.error)
+        return self.kind
+
+    def describe(self, job, kind):
+        return self.schedule.describe(job, kind, self.home)
+
+    def install(self, job, kind):
+        self.installed.append((job, kind))
+        return ['the unit %s' % job.name]
+
+
+class Linux(TaskCase):
+    """task.run on Linux (docs/linux-support-plan.md slice 10): the same flags, the pm-kit job of
+    the task's name instead of the PowerShell line; the runner is never called."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch('kitlib.platform.NAME', 'linux')
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.home = os.path.join(self.fx.base, 'home')
+        self.jobs = FakeJobs(self.home, self.pythonw)
+
+    def run_linux(self, *argv, jobs=None):
+        runner = Runner()
+        got = task.run(list(argv), runner, self.repo, self.tool, jobs=jobs or self.jobs)
+        self.assertEqual(runner.calls, [])
+        return got.code, '\n'.join(got.lines)
+
+    def test_print_only_describes_the_job_and_writes_nothing(self):
+        rc, out = self.run_linux()
+        self.assertEqual(rc, 0, out)
+        name = task.task_name(gitdefaults.repo_name(self.repo))
+        self.assertIn('pm-kit job %s (daily at 03:00) as a systemd user unit' % name, out)
+        self.assertIn('OnCalendar=*-*-* 03:00:00', out)
+        self.assertIn('printed   nothing was registered', out)
+        self.assertEqual(self.jobs.installed, [])
+        self.assertFalse(os.path.exists(self.home))
+
+    def test_owner_confirmed_installs_the_sweep_job(self):
+        rc, out = self.run_linux('--register', '--owner-confirmed')
+        self.assertEqual(rc, 0, out)
+        (job, kind), = self.jobs.installed
+        self.assertEqual(kind, 'systemd')
+        main = os.path.normpath(self.repo)
+        self.assertEqual(job.argv, [self.pythonw, os.path.normpath(self.tool), '-C', main,
+                                    '--sweep-merged', '--apply'])
+        self.assertEqual(job.workdir, main)
+        self.assertEqual(job.when, ('daily', task.AT))
+        self.assertIn('registered the unit', out)
+
+    def test_bare_register_is_still_refused_first(self):
+        rc, out = self.run_linux('--register')
+        self.assertEqual(rc, 1, out)
+        self.assertIn("refused   --register is the owner's act", out)
+        self.assertEqual(self.jobs.installed, [])
+
+    def test_no_backend_or_no_python_is_refused(self):
+        rc, out = self.run_linux('--register', '--owner-confirmed',
+                                 jobs=FakeJobs(self.home, self.pythonw, error='no user systemd and no crontab'))
+        self.assertEqual((rc, out), (1, 'refused   no user systemd and no crontab'))
+        missing = FakeJobs(self.home, os.path.join(self.fx.base, 'none', 'python3'))
+        rc, out = self.run_linux('--register', '--owner-confirmed', jobs=missing)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('refused   no python at', out)
+        self.assertEqual(missing.installed, [])
+
+
 if __name__ == '__main__':
     unittest.main()

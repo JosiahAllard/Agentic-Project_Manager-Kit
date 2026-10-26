@@ -289,5 +289,130 @@ class SetupAutostartCli(CliCase):
         self.assertIn('USAGE: --whatif needs --autostart', err)
 
 
+class Linux(unittest.TestCase):
+    """The hub job on Linux (docs/linux-support-plan.md slice 10), with kitlib.platform.NAME
+    patched to 'linux', a temporary home and a fake systemctl: a systemd user service
+    pm-kit-hub.service, else an XDG autostart entry, else refused; never a shell startup file."""
+    DESKTOP = {'DESKTOP_SESSION': 'gnome'}
+
+    def setUp(self):
+        from kitlib.platform.linux import schedule
+        from tests.platform.test_linux_schedule import FakeSystem
+        self.schedule, self.Fake = schedule, FakeSystem
+        self.home = tempfile.mkdtemp(prefix='hub-autostart-linux-')
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.kit = os.path.join(self.home, 'kit')
+        self.hub = os.path.join(self.kit, 'tools', 'hub.py')
+        self.py = os.path.abspath(sys.executable)
+        patch = mock.patch('kitlib.platform.NAME', 'linux')
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def install(self, run, environ=None, whatif=False, isfile=present):
+        return autostart.linux_install(self.hub, self.py, whatif, run, isfile, home=self.home,
+                                       environ={} if environ is None else environ)
+
+    def task(self):
+        return self.schedule.find(autostart.LINUX_JOB, self.schedule.written(self.home))
+
+    def test_install_task_state_and_start_task_go_to_the_linux_job(self):
+        with mock.patch.object(autostart, 'linux_install', return_value=['x']) as got:
+            self.assertEqual(autostart.install(self.hub, self.py, run='RUN', isfile=present), ['x'])
+        got.assert_called_once_with(self.hub, self.py, False, 'RUN', present)
+        with mock.patch.object(autostart, 'linux_state', return_value='Ready') as got:
+            self.assertEqual(autostart.task_state(run='RUN'), 'Ready')
+        got.assert_called_once_with('RUN')
+        with mock.patch.object(autostart, 'linux_start') as got:
+            autostart.start_task(run='RUN')
+        got.assert_called_once_with('RUN')
+
+    def test_with_systemd_it_is_the_hub_service_wanted_by_the_session(self):
+        run = self.Fake(linger='yes')
+        lines = self.install(run)
+        self.assertEqual(sorted(os.listdir(self.schedule.unit_dir(self.home))), ['pm-kit-hub.service'])
+        task = self.task()
+        self.assertEqual(task['backend'], self.schedule.SYSTEMD)
+        self.assertEqual(task['argv'], [self.py, os.path.abspath(self.hub), 'serve'])
+        self.assertEqual(task['workdir'], self.kit)
+        self.assertEqual(task['when'], ('logon',))
+        text = self.schedule._read(task['file'])
+        self.assertIn('WantedBy=default.target', text)
+        self.assertEqual(run.ran('systemctl', '--user', 'enable'),
+                         [['systemctl', '--user', 'enable', 'pm-kit-hub.service']])
+        self.assertIn('Remove it with: systemctl --user disable', '\n'.join(lines))
+
+    def test_without_systemd_a_desktop_session_gets_an_autostart_entry(self):
+        self.install(self.Fake(systemd=False), self.DESKTOP)
+        self.assertEqual(self.task()['backend'], self.schedule.AUTOSTART)
+        self.assertEqual(os.listdir(os.path.join(self.home, '.config')), ['autostart'])
+
+    def test_neither_is_refused_naming_both_and_writes_nothing(self):
+        run = self.Fake(systemd=False)
+        with self.assertRaises(autostart.AutostartError) as e:
+            self.install(run)
+        self.assertIn('no user systemd', str(e.exception))
+        self.assertIn('no desktop session', str(e.exception))
+        self.assertEqual(os.listdir(self.home), [])
+        why = autostart.refusals(self.hub, self.py, present, run, {})
+        self.assertEqual(len(why), 1, why)
+        lines = self.install(run, whatif=True)
+        self.assertEqual(lines, ['setup --autostart would refuse: %s' % why[0]])
+
+    def test_a_missing_python_a_worktree_and_an_export_are_refused(self):
+        run = self.Fake()
+        self.assertIn('no python at', autostart.refusals(self.hub, self.py, absent, run, {})[0])
+        for wt in WORKTREE_HUB:
+            self.assertIn('not a worktree', autostart.refusals(wt, self.py, present, run, {})[0])
+        os.makedirs(self.kit)
+        with open(os.path.join(self.kit, pluginsource.MARKER), 'w') as f:
+            f.write('{}')
+        with self.assertRaises(autostart.AutostartError):
+            self.install(run)
+        self.assertFalse(os.path.exists(os.path.join(self.home, '.config')))
+
+    def test_whatif_writes_nothing(self):
+        lines = self.install(self.Fake(), whatif=True)
+        self.assertEqual(lines[0], 'Would write:')
+        self.assertEqual(os.listdir(self.home), [])
+
+    def test_no_shell_startup_file_is_written(self):
+        self.install(self.Fake())
+        self.assertEqual(os.listdir(self.home), ['.config'])
+
+    def test_the_state_is_the_services_in_the_task_schedulers_words(self):
+        self.assertIsNone(autostart.linux_state(self.Fake(), self.home))
+        self.install(self.Fake())
+        for active, unit_file, want in (('active', 'enabled', 'Running'),
+                                        ('activating', 'enabled', 'Queued'),
+                                        ('inactive', 'enabled', 'Ready'),
+                                        ('failed', 'enabled', 'Ready'),
+                                        ('active', 'disabled', 'Disabled'),
+                                        ('inactive', 'masked', 'Disabled')):
+            run = self.Fake(show={'LoadState': 'loaded', 'UnitFileState': unit_file,
+                                  'ActiveState': active})
+            self.assertEqual(autostart.linux_state(run, self.home), want, (active, unit_file))
+        gone = self.Fake(show={'LoadState': 'not-found', 'ActiveState': 'inactive'})
+        self.assertIsNone(autostart.linux_state(gone, self.home))
+
+    def test_an_autostart_entry_is_ready_or_disabled_and_cannot_be_started(self):
+        self.install(self.Fake(systemd=False), self.DESKTOP)
+        self.assertEqual(autostart.linux_state(self.Fake(), self.home), 'Ready')
+        with open(self.task()['file'], 'a') as f:
+            f.write('Hidden=true\n')
+        self.assertEqual(autostart.linux_state(self.Fake(), self.home), 'Disabled')
+        with self.assertRaises(autostart.AutostartError) as e:
+            autostart.linux_start(self.Fake(), self.home)
+        self.assertIn('autostart entry', str(e.exception))
+
+    def test_start_starts_the_service(self):
+        with self.assertRaises(autostart.AutostartError):
+            autostart.linux_start(self.Fake(), self.home)
+        self.install(self.Fake())
+        run = self.Fake()
+        autostart.linux_start(run, self.home)
+        self.assertEqual(run.ran('systemctl', '--user', 'start'),
+                         [['systemctl', '--user', 'start', 'pm-kit-hub.service']])
+
+
 if __name__ == '__main__':
     unittest.main()

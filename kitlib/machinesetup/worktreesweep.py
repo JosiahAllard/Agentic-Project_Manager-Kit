@@ -14,12 +14,15 @@ stale task is a note carrying the line instead.
 The task runs the kit's live main checkout (`tool_root`): pluginsource.live_root, else the
 checkout an export's marker records, else the kit itself. A kit in a branch worktree, or an export
 with neither, registers nothing: the copy is unreviewed, or goes away with a later prune. Two
-repositories that take one task name get none. Nothing here prints or exits.
+repositories that take one task name get none. On Linux the task is the pm-kit job of the same
+name (linux_job, kitlib.worktree.task.linux_job), and a job that differs from it is written
+again too. Nothing here prints or exits.
 """
 import os
 import re
 import subprocess
 
+from kitlib import platform
 from kitlib import pluginsource
 from kitlib.config import ConfigError, load as load_kit_config
 from kitlib.git import repo as gitrepo
@@ -230,7 +233,43 @@ def _unique(plan, resolved):
     return out
 
 
+def linux_job(main, name, tool, python=None):
+    """The Linux job of the repository's task (kitlib.worktree.task.linux_job)."""
+    from kitlib.platform.linux import schedule
+    from kitlib.worktree import task as wtask
+    return wtask.linux_job(main, name, tool, python or schedule.python())
+
+
+def _linux_repo_step(plan, ctx, label, main, name, tool, tasks):
+    """_repo_step on Linux: the dry run and the job when the job is missing or differs."""
+    from kitlib.platform.linux import schedule
+    from . import linuxjobs
+    job = linux_job(main, name, tool)
+    have = find(tasks, job.name)
+    if schedule.same(have, job):
+        return
+    if not getattr(ctx, 'worktree_sweep', True):
+        plan.note('extras', 'pm-kit job %s (%s) is %s (--no-worktree-sweep); a run without '
+                            '--no-worktree-sweep writes it (%s: %s)'
+                  % (job.name, label, 'not as planned' if have else 'not written',
+                     schedule.when_text(job.when), ' '.join(job.argv)))
+        return
+    host = ctx.host
+
+    def sweep():
+        said = host.worktree_sweep_dry_run(tool, main)
+        return Report('worktree sweep dry run (nothing removed): ' + l for l in said)
+
+    plan.add('extras', 'run the worktree sweep once without --apply for %s: %s -C %s --sweep-merged'
+             % (label, tool, main), sweep,
+             detail=['prints what the job\'s first run would remove, before the job is written; '
+                     'stops the run, writing nothing, when the sweep refuses, fails or is deferred'])
+    linuxjobs.plan_job(plan, ctx, job, 'update' if have else 'write')
+
+
 def _repo_step(plan, ctx, label, main, name, tool, tasks, export):
+    if platform.NAME == 'linux':
+        return _linux_repo_step(plan, ctx, label, main, name, tool, tasks)
     task = task_name(name)
     have = find(tasks, task)
     gone = removed_export(have, export) if have and export else None

@@ -7,9 +7,14 @@ token, so every session and agent would run elevated. The same task name replace
 task in place, and the task under its old name, OLD_TASK_NAME, is unregistered in the same script
 (else both run after a reboot and start every session twice; one release, removed after the
 switch, W2b). Remove it with: Unregister-ScheduledTask -TaskName '<TASK_NAME>'.
+
+On Linux it is the pm-kit job LINUX_JOB (kitlib.platform.linux.schedule): a systemd user service
+started with the user's session (at sign-in, or at boot with linger), else a crontab @reboot line,
+running this python and launch.py after-reboot in the kit folder.
 """
 import os
 
+from kitlib import platform
 from kitlib.host import registry
 from kitlib.launcher import pythonw as pythonw_mod
 from kitlib.launcher import window
@@ -18,6 +23,7 @@ from kitlib.proc import spawn
 
 TASK_NAME = 'Claude coordinators after reboot'
 OLD_TASK_NAME = 'Claude conductors after reboot'   # unregistered by install (removed after the switch, W2b)
+LINUX_JOB = 'coordinators-after-reboot'
 
 
 
@@ -69,9 +75,11 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
     sys.base_prefix in tests), never a PATH lookup. Refused, with nothing registered, when that
     pythonw.exe is under WindowsApps (the Store alias) or is not a file: the task would register
     and then not start at sign-in. whatif refuses the same way, its lines (the script and an
-    `install-autostart would refuse:` line) on the LaunchError."""
+    `install-autostart would refuse:` line) on the LaunchError. On Linux: linux_install."""
     if in_worktree(launch_py):
         raise LaunchError('install-autostart from the main kit checkout, not a worktree: %s' % launch_py)
+    if platform.NAME == 'linux':
+        return linux_install(launch_py, python, whatif, run=run, isfile=isfile)
     given = python is not None
     python = python or pythonw_mod.base_pythonw(base_prefix)
     text = task_script(python, launch_py)
@@ -98,3 +106,36 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
                            % (r.returncode, (r.stderr or '').strip()[:300]))
     return ["Installed '%s' and unregistered '%s' if it was there. Test it without rebooting (starts only a "
             "throwaway 'autostart-test' session):" % (TASK_NAME, OLD_TASK_NAME), '  ' + test]
+
+
+def linux_job(launch_py, python):
+    """The Linux job: `python launch_py after-reboot` in the kit folder, at each start of the
+    user's session."""
+    from kitlib.platform.linux import schedule
+    kit = os.path.dirname(os.path.dirname(os.path.abspath(launch_py)))
+    return schedule.Job(LINUX_JOB, [python, os.path.abspath(launch_py), 'after-reboot'], kit,
+                        ('boot',), 'pm-kit coordinators after reboot')
+
+
+def linux_install(launch_py, python=None, whatif=False, run=None, isfile=os.path.isfile,
+                  home=None, which=None):
+    """install on Linux: the job LINUX_JOB to user systemd, else cron. Refused, with nothing
+    written, when `python` (default: this interpreter's base install) is not a file or neither
+    backend is there. whatif: what would be written. A note when linger is off."""
+    from kitlib.platform.linux import schedule
+    python = python or schedule.python()
+    if not isfile(python):
+        raise LaunchError('no python at %s for the after-reboot job; nothing was written' % python)
+    job = linux_job(launch_py, python)
+    try:
+        kind = schedule.choose(job, run, which)
+        if whatif:
+            return ['Would write:'] + schedule.describe(job, kind, home)
+        lines = schedule.install(job, kind, home, run, which)
+    except schedule.ScheduleError as e:
+        raise LaunchError(str(e))
+    note = schedule.linger_note(run) if kind == schedule.SYSTEMD else None
+    return lines + ([note] if note else []) + [
+        "Test it without rebooting (starts only a throwaway 'autostart-test' session):",
+        '  python3 "%s" after-reboot --test' % launch_py,
+        'Remove it with: %s' % schedule.undo_text(LINUX_JOB, kind)]

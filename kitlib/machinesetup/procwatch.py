@@ -7,10 +7,12 @@ the carrier `tools/no_window.py` first, as the agent temp sweep task does; the s
 own file, not a link in the home folder, and the log goes in the agents' temp folder
 (kitlib.machinesetup.agenttemp.choose), not the home folder. A task already registered is
 re-registered (`-Force`) so a task written by hand, or before this, takes the kit's definition.
+On Linux nothing is planned yet (procwatch's rules are Windows processes): a note says so.
 Nothing here prints or exits.
 """
 import os
 
+from kitlib import platform
 from kitlib.launcher.pythonw import base_pythonw
 from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
@@ -59,6 +61,10 @@ def task_step(plan, ctx, folder):
     """Plan the task when ctx.procwatch: `folder` is the agents' temp folder survey chose (None when
     there is none: a note, nothing planned). Called from extras.survey."""
     if not getattr(ctx, 'procwatch', False):
+        return
+    if platform.NAME == 'linux':
+        plan.note('extras', 'procwatch task: not on Linux yet (its rules are Windows processes); '
+                            'nothing planned')
         return
     kill = bool(getattr(ctx, 'procwatch_kill', False))
     if not folder:
