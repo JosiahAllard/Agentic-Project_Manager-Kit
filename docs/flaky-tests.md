@@ -60,8 +60,8 @@ Steps 1 to 3 are built (see "First build step"); step 4 is how the fence behaves
 
 1. `kitlib/clock.py`: `budget(seconds)` returns `seconds`, or `CEILING` (600 s, past
    `kitlib.tooldeps.selfrun.UNIT_TIMEOUT`) in a fenced process (`KIT_TIME_FENCE=1`).
-2. tests/__init__.py sets `KIT_TIME_FENCE=1` beside `KIT_FAKE_GIT`; tools/kit_tests.py
-   `child_env` keeps it for the units. Production never sets it.
+2. tests/__init__.py sets `KIT_TIME_FENCE=1` beside `KIT_FAKE_GIT`; kit_tests'
+   `child_env` (kitlib/tooldeps/childenv.py) keeps it for the units. Production never sets it.
 3. A degrade budget takes `budget=None` and resolves it with `clock.budget(BUDGET)` at call
    time. A test of the over-budget path passes an explicit budget and blocks the work on an
    Event, as tests/agentstart/test_agentstart.py `test_the_budget_cuts_what_is_left` already
@@ -117,8 +117,8 @@ What it built:
 - `kitlib/clock.py`: `FENCE_ENV` (`KIT_TIME_FENCE`), `CEILING` (600 s), `fenced(environ=None)`
   and `budget(seconds)`. Both read the environment at each call, so a test that patches it is
   seen at once.
-- Wiring: tests/__init__.py sets the marker unless it is set; tools/kit_tests.py `child_env`
-  does the same for every unit. A pool worker replaces its environment for each unit, which is
+- Wiring: tests/__init__.py sets the marker unless it is set; kit_tests' `child_env`
+  (kitlib/tooldeps/childenv.py) does the same for every unit. A pool worker replaces its environment for each unit, which is
   why kit_tests marks the units itself, as it does the home fence's marker. kit_tests' own
   process stays unmarked.
 - `kitlib.agentstart`: `text` and `lines` take `budget=None`, resolved in `lines` with
@@ -129,7 +129,8 @@ What it built:
   - a kit child started with the test's environment is fenced, and one built without the
     marker is not;
   - `child_env` marks the units and keeps an outer value;
-  - outside tests/, in a file of any kind, only kitlib/clock.py, tools/kit_tests.py and this doc name the marker.
+  - outside tests/, in a file of any kind, only kitlib/clock.py, tools/kit_tests.py,
+    kitlib/tooldeps/childenv.py and this doc name the marker.
 - tests/agentview/test_agentview.py `Start`:
   - `test_a_dispatched_role_on_claude_shows_the_agent_start_block` runs the hook's default
     budget with a `repo.classify` stub that takes 1.2 s, and asserts `NOT CHECKED` and no
