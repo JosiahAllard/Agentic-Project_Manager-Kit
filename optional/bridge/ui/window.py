@@ -86,9 +86,9 @@ class Window:
                 self.table.insert('',tk.END,iid=choice.reference,values=(choice.title,choice.runtime,choice.workspace))
             self.table.selection_set([ref for ref in old if ref in self.choices])
             self.routes.delete(0,tk.END)
+            self._lease_rows={}  # reset before any row, so a failed refresh leaves no stale index map
             for source,target in self.owner.connections():
                 self.routes.insert(tk.END,self.choices[source].title+' → '+self.choices[target].title)
-            self._lease_rows={}
             for writer,target,granted,listed in self.owner.writer_grants():
                 self._lease_rows[self.routes.size()]=(writer,target)
                 self.routes.insert(tk.END,self._title(writer)+' delivers to '+self._title(target)
@@ -110,8 +110,8 @@ class Window:
             self.status.set('Select one lease in the list to stop it.')
             return
         try:
-            self.owner.lease(*rows[0],enabled=False)
-            self.status.set('That lease is stopped.')
+            if self.owner.lease(*rows[0],enabled=False): self.status.set('That lease is stopped.')
+            else: self.status.set('That lease was already gone or replaced. Nothing was stopped.')
         except Exception:
             self.status.set('The lease could not be stopped. Refresh and try again.')
         self.refresh()
