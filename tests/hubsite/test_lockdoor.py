@@ -3,10 +3,12 @@ kitlib.hubsite.lockdoor, the door they read the lock through, in-process (its wr
 tests.hubsite.test_lock_writes). The routes are
 the owner's: an agent is refused every one. Listeners bind port 0 on the loopback address; the
 real door reads a scratch lock store (tests.lock.helpers), never this machine's."""
+import datetime
 import json
 import os
 import threading
 import unittest
+from unittest import mock
 
 from kitlib.hubsite import api, httpd
 from kitlib.hubsite.api import BASE, OWNER
@@ -307,6 +309,85 @@ class DoorCase(lh.StoreCase):
         self.assertEqual(len(got), 1, 'the wait outlived the hub store')
         status, obj = got[0]
         self.assertEqual((status, obj['error']['code']), (503, 'store'))
+
+
+class ViewCacheCase(lh.StoreCase):
+    """LockDoor.view's caches: the built view by the lock's revision and the history files'
+    stamp (for VIEW_FRESH_S), and the history lines by the stamp alone."""
+
+    def setUp(self):
+        lh.StoreCase.setUp(self)
+        from kitlib.hubsite import lockdoor
+        self.lockdoor = lockdoor
+        self.t = 100.0
+        self.door = lockdoor.LockDoor(make_store=lambda: self.store, clock=lambda: self.t)
+        api_mod = lockdoor.lock_api
+        self.snaps = mock.patch.object(api_mod, 'snapshot', wraps=api_mod.snapshot)
+        self.hist = mock.patch.object(api_mod, 'history', wraps=api_mod.history)
+        self.snapshot, self.history = self.snaps.start(), self.hist.start()
+        self.addCleanup(self.snaps.stop)
+        self.addCleanup(self.hist.stop)
+
+    def ended(self, rid):
+        """A history line for a run that ended a minute ago, written with no revision bump."""
+        now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        iso = lambda t: t.isoformat().replace('+00:00', 'Z')
+        self.store.history_append({'id': rid, 'repo': 'kit', 'slug': 'suite', 'kind': 'gate',
+                                   'since': iso(now - datetime.timedelta(minutes=5)),
+                                   'held_since': iso(now - datetime.timedelta(minutes=4)),
+                                   'ended': iso(now - datetime.timedelta(minutes=1)),
+                                   'how': 'done', 'code': 0})
+
+    def counts(self):
+        return self.snapshot.call_count, self.history.call_count
+
+    def test_the_same_lock_and_history_answer_the_built_view_again(self):
+        self.ended('r-0')
+        first = self.door.view()
+        self.assertEqual(self.counts(), (1, 1))
+        self.t += self.lockdoor.VIEW_FRESH_S / 2
+        again = self.door.view()
+        self.assertEqual(self.counts(), (1, 1), 'an unchanged lock built the view again')
+        self.assertEqual(again, first)
+        self.assertIsNot(again, first)      # each caller gets its own answer to add to
+        # the snapshot is asked for no stats: the view shows none
+        _args, kw = self.snapshot.call_args
+        self.assertEqual((kw['since'], kw['until']), ('1970-01-01T00:00:00Z',) * 2)
+
+    def test_a_revision_change_builds_again_and_keeps_the_history_lines(self):
+        self.ended('r-0')
+        first = self.door.view()
+        self.store.bump()
+        moved = self.door.view()
+        self.assertEqual(self.counts(), (2, 1), 'a revision alone read the history again')
+        self.assertEqual(moved['lock_revision'], first['lock_revision'] + 1)
+        self.assertEqual(moved['view']['revision'], moved['lock_revision'])
+        self.assertEqual(len(moved['view']['strip']), len(first['view']['strip']))
+
+    def test_a_history_change_builds_again_and_reads_the_lines(self):
+        self.ended('r-0')
+        first = self.door.view()
+        self.ended('r-1')                   # no bump: only the history files moved
+        self.assertEqual(self.store.revision(), first['lock_revision'])
+        later = self.door.view()
+        self.assertEqual(self.counts(), (2, 2))
+        self.assertEqual(len(later['view']['strip']), len(first['view']['strip']) + 1)
+
+    def test_an_old_view_is_built_again(self):
+        self.door.view()
+        self.t += self.lockdoor.VIEW_FRESH_S
+        self.door.view()
+        self.assertEqual(self.snapshot.call_count, 2, 'a view older than VIEW_FRESH_S was kept')
+
+    def test_the_local_and_the_remote_view_are_kept_apart(self):
+        local = self.door.view()
+        remote = self.door.view(remote=True)
+        self.assertEqual(self.snapshot.call_count, 2)
+        self.door.view()
+        self.door.view(remote=True)
+        self.assertEqual(self.snapshot.call_count, 2)
+        self.assertEqual(self.door.view()['view'], local['view'])
+        self.assertEqual(self.door.view(remote=True)['view'], remote['view'])
 
 
 if __name__ == '__main__':
