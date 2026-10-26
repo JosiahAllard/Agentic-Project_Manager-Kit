@@ -55,9 +55,8 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   former-name start function in `user.py`; the `ALLOWED` list of the old-name scrub test. Why:
   to be removed after the switch. Size: ~100 lines (estimate). Risk: M. An existing record
   (blocked) covers the coordinator rename shims.
-- **Candidate 9, SHRINK** (config schema). `schema.py:347` RETIRED backlog keys
-  (`retired_docs`, `rename_script`, `ledger_repo`), `:350` RETIRED_SECTIONS `ruling_cites`,
-  `stubs/__init__.py:94`. Why: still set by two other repos' `.kit.json`. Size: ~20 lines.
+- **Candidate 9, SHRINK** (config schema). `schema.py:338` RETIRED backlog keys
+  (`retired_docs`, `rename_script`, `ledger_repo`), `:341` RETIRED_SECTIONS `ruling_cites`. Why: still set by two other repos' `.kit.json`. Size: ~20 lines.
   Risk: L once the owner edits those files.
 - **Candidate 10, SHRINK** (machine config). `user.py:128` RETIRED `('ledger_refs',)`. Why: still
   in the machine config. Size: ~5 lines. Risk: L once the owner drops the key.

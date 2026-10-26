@@ -67,7 +67,7 @@ def backlog_command(root, *args):
 def close_command(root, *args):
     """The command line that runs the backlog write `args` for the repository whose main checkout
     is `root`: -C names a worktree placeholder (WORKTREE), never `root`. The repository's own
-    tools/backlog.py (the kit's, or a stub) when it has one, else the kit's."""
+    tools/backlog.py when it has one (the kit's own repository), else the kit's."""
     if os.path.isfile(os.path.join(root, 'tools', 'backlog.py')):
         tool = 'tools/backlog.py'
     else:
