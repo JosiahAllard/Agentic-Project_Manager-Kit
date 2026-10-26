@@ -20,9 +20,10 @@ except ImportError:                                                  # not Windo
 
 from kitlib import platform
 from kitlib.launcher import pythonw as pythonw_mod
+from kitlib.platform.linux import schedule
 from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
-from . import agenttemp, procwatch
+from . import agenttemp, linuxjobs, procwatch
 from .common import Report, kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
@@ -133,27 +134,22 @@ class Host(object):
     def job_backend(self, job):
         """Linux: the backend the pm-kit job `job` goes to (schedule.choose: ScheduleError when
         there is none)."""
-        from kitlib.platform.linux import schedule
         return schedule.choose(job)
 
     def job_describe(self, job, kind):
         """Linux: the lines saying what job_install(job) writes (schedule.describe)."""
-        from kitlib.platform.linux import schedule
         return schedule.describe(job, kind)
 
     def job_install(self, job):
         """Linux: write and enable the pm-kit job `job` (schedule.install); its lines."""
-        from kitlib.platform.linux import schedule
         return Report(schedule.install(job))
 
     def systemd(self):
         """Linux: whether the user's systemd manager answers."""
-        from kitlib.platform.linux import schedule
         return schedule.has_systemd()
 
     def linger(self):
         """Linux: whether linger is on for this user (True, False, None: unknown)."""
-        from kitlib.platform.linux import schedule
         return schedule.linger()
 
     def sweep_dry_run(self, kit, home=None):
@@ -272,7 +268,6 @@ def survey(plan, ctx):
     procwatch.task_step(plan, ctx, folder)
     auto_task_step(plan, ctx)
     if platform.NAME == 'linux':
-        from . import linuxjobs
         linuxjobs.linger_note(plan, ctx)
     if ctx.fresh:
         plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
@@ -327,7 +322,6 @@ def auto_task_same(task, pythonw, argument):
 def auto_job(root, python=None):
     """The Linux job of AUTO_TASK: `python <root>/AUTO_TOOL tick` in `root`, every
     AUTO_EVERY_MINUTES minutes, ended after 10."""
-    from kitlib.platform.linux import schedule
     root = os.path.normpath(root)
     return schedule.Job(AUTO_TASK, [python or schedule.python(), os.path.join(root, AUTO_TOOL), 'tick'],
                         root, ('every', AUTO_EVERY_MINUTES),
@@ -365,8 +359,6 @@ def auto_task_step(plan, ctx):
         return
     have = worktreesweep.find(tasks, AUTO_TASK)
     if linux:
-        from kitlib.platform.linux import schedule
-        from . import linuxjobs
         job = auto_job(root)
         if not schedule.same(have, job):
             linuxjobs.plan_job(plan, ctx, job, 'update' if have else 'write')

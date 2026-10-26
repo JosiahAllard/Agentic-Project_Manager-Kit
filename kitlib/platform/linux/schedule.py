@@ -33,6 +33,7 @@ import subprocess
 import sys
 
 from kitlib.platform import PlatformUnsupported
+from kitlib.proc import spawn
 
 SYSTEMD = 'systemd'
 CRON = 'cron'
@@ -137,7 +138,7 @@ def when_text(when):
 def _run(run, argv, what, input_text=None, timeout=TIMEOUT_S):
     """CompletedProcess of `argv` (text). ScheduleError naming `what` when it cannot run or times
     out; the caller reads the exit code."""
-    run = run or subprocess.run
+    run = run or spawn.run
     kw = dict(capture_output=True, text=True, timeout=timeout)
     if input_text is not None:
         kw['input'] = input_text
@@ -616,7 +617,7 @@ def _from_units(folder):
 
 def _timer_when(keys):
     cal = keys.get('OnCalendar', '')
-    m = re.match(r'^\*-\*-\* (\d\d:\d\d):00$', cal)
+    m = re.match(r'^\*-\*-\* ([0-9]{2}:[0-9]{2}):00$', cal)
     if m:
         return ('daily', m.group(1))
     m = re.match(r'^\*:0/(\d+)$', cal)
