@@ -42,7 +42,6 @@ Exit 0 `no overlap`; 1 `OVERLAP`; 2 usage or `CANNOT ANSWER`; 130 Ctrl+C. `CANNO
 - **A branch's changes:** `git diff --name-only --no-renames <merge base> <tip>`, so a rename counts as its old and its new path.
 - **A match:** a changed file overlaps a member when the backlog pull collision check would call them colliding (`kitlib.backlog.scope.members_collide`). The comparison goes component by component, case-blind, and one side must be a prefix of the other.
   - Some comparisons cannot be decided: a name holding a comma, a control character other than a tab, leading or trailing whitespace, a backslash, or a wildcard character (`*?[]{}`), or one starting with a drive letter (`c:x`). Such a comparison counts as an overlap, with an `undecidable, so counted` note.
-  - A tab is an ordinary character, as it is to the collision check (`members_collide` reads members with `tab_ok=True`).
   - The one departure is `none` in any case: it is compared as a path, so a root file `none` matches `none` and `none/**`.
 
 ## Output
@@ -51,6 +50,7 @@ Exit 0 `no overlap`; 1 `OVERLAP`; 2 usage or `CANNOT ANSWER`; 130 Ctrl+C. `CANNO
 - `note` lines for --branch naming no branch, and for the base's own branch left out, follow the `set` line.
 - Then one block per branch with hits: `<branch>  [<ref> <sha>, ...]: N overlapping`, then `  <path>  (matches <member>)` per hit.
   - A hit that only some of the branch's refs have ends `[only <ref>]`.
+- `--branch` with no changed file leaves an empty set: `no overlap: the set is empty ...`, exit 0.
 - The last line is the verdict: `OVERLAP: ...`, `no overlap: ...` or `CANNOT ANSWER: ...`.
   - It gives the branches checked, the refs behind them, the merged refs skipped and the refs left out.
 - A ref git gives no answer for is a `CANNOT READ` line. The verdict is then `CANNOT ANSWER`, never `no overlap`.
