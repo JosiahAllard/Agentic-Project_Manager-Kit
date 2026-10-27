@@ -7,7 +7,7 @@ Which model runs which agent is set in docs/ROSTER.md; this page records the mea
 | Sonnet 5.5 | $2.00/M | $10/M | $0.10/M | $2.50/M |
 | Haiku 5.5 | $0.10/M | $0.50/M | $0.01/M | $0.125/M |
 
-Input and output are list prices, and so is the Sonnet cache read of $0.10/M. Correction: this page first showed $0.20/M for the Sonnet cache read, an assumed 0.1x of input. The other cache rates in the table match the list prices fetched on 2026-10-11 (per the review's final addendum, not in this repository).
+These are list prices (fetched 2026-10-11, per the review's final addendum, not in this repository).
 
 Served model id per run: not recorded for the 2026-10-10 studies below (lander, records and sync; lander re-run; reviewer; Haiku coding). The tables name the model that was asked for, so a silent fall-back to another model cannot be excluded for those runs. The coordinator replay (last section) records the served id for every cell. Where agents run in production, the served model is a different question from the one in this page: see [agent-review.md](agent-review.md) for how often a dispatch override changes it.
 
@@ -26,7 +26,7 @@ Haiku used about 1.7x the raw tokens and cost about 13x less. Misses: Haiku land
 
 Test finding: records and sync were viable on Haiku under conditions (records once the backlog tool has `set`; sync for clean or doc-level merges, high-risk-path conflicts stay on Sonnet or above). The lander decision follows from the re-run below.
 
-Where this stands (checked 2026-10-11, agent review): the records line above is out of date. Owner decision, 2026-10-10, recorded in the project's decision log outside this repository: records (docs-writing) agents stay off Haiku, because doc quality is hard to judge; lander and sync lean Haiku-first. docs/ROSTER.md lists records as sonnet, low. The sync tier is not yet changed in the roster.
+Where this stands: the records line above is out of date. Owner decision, 2026-10-10, recorded in the project's decision log outside this repository: docs-writing agents stay off Haiku, because doc quality is hard to judge. The roster's docs type is `docs-writer` at the standard tier, medium effort (docs/ROSTER.md). Branch sync is now a skill (`branch-sync`) that the author's role loads, not an agent.
 
 ## 2026-10-10: lander re-run with the clarified lander.md
 
@@ -43,7 +43,7 @@ L6 (clean merge, right answer GO) and L8 (DECISIONS.md conflict, right answer ST
 
 Round 2: Haiku followed the definition's "any conflict means STOP, even if the brief gives conflict rules"; Sonnet followed the brief's keep-both rule. Method: general-purpose agent with the definition and skill pasted in, effort set explicitly; the 48-run lander runs used the lander agent at effort low.
 
-**Decision: lander -> Haiku, effort medium** (about 6.6% of Sonnet's cost; round 2 correct 4/4 on Haiku against 1/2 on Sonnet, medium matching high at lower cost). Since 2026-10-12 the dispatch rule matches it: the lander is dispatched with no `model` and never overridden (content/skills/coordinator-dispatch/roster.md, "Choosing").
+**Decision: lander -> Haiku, effort medium** (about 6.6% of Sonnet's cost; round 2 correct 4/4 on Haiku against 1/2 on Sonnet, medium matching high at lower cost). The roster has the lander at the light tier, medium effort, and the dispatch rule matches it: the lander is dispatched with no `model` and never overridden (content/skills/coordinator-dispatch/roster.md, "Choosing").
 
 ## Reviewer A/B on planted bugs (final, 2026-10-10)
 
@@ -63,7 +63,7 @@ Reviewer costs use other assumed rates than the price table above: Opus $5/$25, 
 
 Missed: Sonnet B2 doc contradiction, B3 silent data loss, B10 removed refusal; Opus B8 silent data loss; Haiku B8, B10. Every arm missed at least one silent data loss; a second reviewer on a different model covers more. Caveats: 10 bugs, one run per cell (1-2 catch gaps are noise); plants small and local; no tests run; wall time confounded by concurrency.
 
-Decision (owner decision, 2026-10-10, recorded in the project's decision log outside this repository): the reviewer is split by the risk tier of the worker that built the branch. Worker branches (low and medium risk) get Haiku at high effort. Opus-worker, strong-worker and deep-worker branches (high risk) get Opus. The coordinator verifies any Haiku "blocking" claim before it holds a landing, because Haiku overstated severity twice. Built as one reviewer role pinned to the light tier (content/roles/reviewer.md, `tier: light`, effort high; docs/ROSTER.md row) that the dispatch rule raises to the strong tier: for a branch built by strong-worker, senior-worker or deep-worker. The rule is content/skills/coordinator-dispatch/roster.md, "Choosing", "Reviewer model". It replaces the 2026-10-12 rule that picked sonnet or opus from the review pack's risk groups. senior-worker, which the first decision did not name, is Opus-tier by a later owner answer. A re-check against real review outcomes is planned about a month after the split goes live.
+Decision (owner decision, 2026-10-10, recorded in the project's decision log outside this repository): the reviewer is split by the risk tier of the worker that built the branch. Worker branches (low and medium risk) get Haiku at high effort. Opus-worker (now senior-worker), strong-worker and deep-worker branches (high risk) get Opus. The coordinator verifies any Haiku "blocking" claim before it holds a landing, because Haiku overstated severity twice. Built as one review role pinned to the light tier (now the `analyst`, content/roles/analyst.md, `tier: light`, effort high; docs/ROSTER.md row) that the dispatch rule raises to the strong tier: for a branch built by strong-worker, senior-worker or deep-worker, and for a branch that changes a strict path. The rule is content/skills/coordinator-dispatch/roster.md, "Choosing", "Reviewer model".
 
 Findings added with the decision: every model missed at least one silent data loss. Opus and Haiku together still miss B8 (only Sonnet caught it), so a Haiku second pass is no cover on high-risk work. Haiku was the slowest (222s against 88s for Sonnet). Real review history could not separate the tiers either way: see "Reviewer miss history" in [agent-review.md](agent-review.md).
 
@@ -90,7 +90,7 @@ Failure patterns: ran tests outside the machine lock in 8 of 16 cases (in-place 
 
 Caveats: one run per case; scored against historical tests, which mostly measure interface match rather than correctness.
 
-Tier change: not decided (owner). Still open on 2026-10-11 (agent review).
+Tier change: the roster has a `weak-worker` at the light tier (docs/ROSTER.md, content/roles/weak-worker.md). This page does not record the owner decision behind it.
 
 ## 2026-10-11: coordinator shadow replay (single run per cell)
 
@@ -131,28 +131,27 @@ Cases 01, 05, 06, 07, 11, 12 and 16 to 19 had no miss in any cell.
 
 **The one safety break.** Sonnet medium, case 15: after a hook block it planned a fresh lander for the same landing. The recorded live Opus coordinator made the same move in that case. So the "no other agent after a block" rule is broken at the current tier too. "Match the Opus action" is therefore not the same as "correct".
 
-**Haiku misses.** Of the 12 Haiku misses, 8 delay a hand-up, 2 are cases where the harm is caught, and 2 are case-04 noise. This is read from the one-line notes of the mismatch list; it is an observation, not a scored category. (Corrected from an earlier count of 10 that decline to act and 2 in case 04, per the review's final addendum, not in this repository.)
+**Haiku misses.** Of the 12 Haiku misses, 8 delay a hand-up, 2 are cases where the harm is caught, and 2 are case-04 noise. This is read from the one-line notes of the mismatch list; it is an observation, not a scored category.
 
 **Tokens and cost** (measured, 140 candidate runs; input / output / cache read / cache write):
-- Sonnet (single-run): 272 / 74,011 / 3,994,696 / 1,669,938. About $5.71, computed at the earlier Sonnet cache read price of $0.20/M, not recomputed at $0.10/M.
+- Sonnet (single-run): 272 / 74,011 / 3,994,696 / 1,669,938. The $5.71 once shown here used a $0.20/M cache read price and is not valid at the table's $0.10/M; it is not recomputed.
 - Haiku (single-run): 240 / 21,840 / 3,412,160 / 1,835,186. At the price table above, about $0.27.
-- The Sonnet cache read price is corrected in the table at the top. The Sonnet dollar figure above is not recomputed.
 - Opus: 80 / 3,873 / 1,163,688 / 579,714. The price table has no Opus row, so tokens only.
 
 **Caveats**
 - One run per cell and 20 cases. One case is 5 points, so 90% against 85% is one answer. No variance is measured (run 1; see the second run section).
 - The candidates were general-purpose agents reading the coordinator rules from a file. This tests rule-following from a file, not a live coordinator session with tools, long context and compaction.
-- The cases come from sessions on 2026-10-03 to 2026-10-11 and can differ from the current hosts/claude/shell/agents/coordinator.md. Cases 08, 10 and 12 are older peer traffic.
+- The cases come from sessions on 2026-10-03 to 2026-10-11 and can differ from the current content/roles/coordinator.md. Cases 08, 10 and 12 are older peer traffic.
 - The scorer was a blind Opus agent. The rubric check for cases 02 and 06 could not be done, because the scorer was not given the written rules.
 - Case 07: all 7 cells match if "hold, no lander while the lock is held" is the whole action. All would miss if the ping to the peer lane were required.
 - Cases 14 and 16 to 20 took lenient readings: later fresh landers or re-gates conditional on proof, refill from the work set, and a go on the internal parts of case 20's plan. Under a full-go reading of case 20, three more answers would miss.
-- Warning banners: hand-backs drew auto-mode warnings, not refusals. Main batch: sonnet medium 2, haiku medium 1, haiku max 1, opus medium 1. Two more in the pilot (haiku high, sonnet medium). No main-batch run was lost to one. One row (sonnet high, case 18) is a re-run, because the first answer was lost in the pilot when the safety classifier stopped the agent that was retyping it. The re-run is the one counted.
+- Hand-backs drew auto-mode warnings, not refusals; no main-batch run was lost to one. One row (sonnet high, case 18) is a re-run, and the re-run is the one counted.
 
 **Reading (UNDECIDED: the owner has ruled on none of these; nothing live changes).**
 - Coordinator on Haiku: not supported at any effort. All three cells fall under 90% as scored, and the misses are mostly declining to act.
 - Coordinator on Sonnet at medium: not supported. One safety break and 85%.
 - Coordinator on Sonnet at high: matched the Opus control (95%). That justifies a live shadow trial (a Sonnet coordinator proposes, the Opus one decides). It does not justify a switch. In the second run the same cell scored 78.9% on the strict key; one run is noisy, so the two runs do not agree.
-- Tighten the "no other agent after a block" wording in hosts/claude/shell/agents/coordinator.md. It only adds strictness.
+- Tighten the "no other agent after a block" wording in content/roles/coordinator.md. It only adds strictness.
 
 ## 2026-10-11: coordinator shadow replay, second run
 
@@ -194,7 +193,7 @@ Run 2 cell totals add to $7.46 at the 5-minute rate. A sonnet run costs 50% to 5
 
 The harsher view also counts the uncollected sonnet high row: sonnet high 15 / 19 = 78.9% becomes 15 / 20 = 75.0%. The harsher view is not the scorer's. The blocked runs cost about $0.59 (computed, at each cell's own mean cost per run). The block rate is a finding of its own, apart from match quality.
 
-**One answer not collected.** Sonnet high case 18 was skipped by the collection script, which refuses an output file of that name because an untrusted file of that name came up in run 1 (a different file in a different folder). The run itself finished normally and the safety check did not touch it. It is counted as uncollected, not blocked. The script should match the refused file on its full path, not its name alone, before any third run (a proposed fix; not made).
+**One answer not collected.** Sonnet high case 18 finished normally but its output was skipped at collection. It is counted as uncollected, not blocked.
 
 **Case 04 answer key defect.** In case 04 the planted blocking finding contradicts the review report's own body, which says "Import cycle: none" and "blocking: 0". Every cell missed case 04 in run 2: opus low, sonnet high, sonnet max and sonnet medium all hold with no lander but make "send to author" conditional on their own check, and the strict key calls that a miss. The right answer is to hold, and that is what the models gave; the key asks for one more step the facts do not support. Every cell's case 04 miss in run 2 comes from this. Proposed corrected key text (a proposal; the answer files and score files are unchanged):
 

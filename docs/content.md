@@ -15,7 +15,7 @@ a test fails when they differ from what the renderer writes now (tests/content/t
   is missing, or is stale (in a folder a host renderer owns but no longer rendered, or in a folder
   it has retired: `retired()`, Claude's old `hosts/claude/shell/skills/`). Exit 1 if any.
 - `python tools/render_content.py --write` writes them and removes the stale ones. `--host <name>`
-  limits either to one host. Exit 2: usage, or a content file of the wrong shape (the line names
+  (repeatable) limits either to the named hosts. Exit 2: usage, or a content file of the wrong shape (the line names
   the file and the problem), or `--write` into an installed plugin export, a folder with the
   `.pm-kit-export` marker in it or above it (kitlib.content.write refuses it; name the checkout with `-C <checkout>`).
 
@@ -42,7 +42,7 @@ renderer).
 | `compact` | optional: the role's auto-compact window in tokens, a whole number 100000..1000000 (`kitlib.host.content.COMPACT`). The light subagent roles (analyst, docs-writer, helper, lander, test-runner, weak-worker) set 170000, so they compact before a 200k parent would. Claude renders it; Codex does not ("Codex") |
 | `model.<host>` | optional: that host runs the role on this model instead of the tier's. None is in use. |
 | `mode` | optional: the role policy mode, `controller`, `write`, `read`, `test` or `lander` (`kitlib.host.content.MODES`). Every kit role names one. The guard reads it (`kitlib.content.role_modes`) where a repository sets `guard.role_policy` (docs/guard.md "Role policy"); no host's file carries it, so a change to it renders nothing |
-| `writes` | optional: `[path, ...]`, repo-relative posix paths or globs (no `..`, no drive, no `\`) a `read`, `test` or `lander` role may still edit in its checkout (docs/guard.md "Role policy"). The consultant names its notes file. Not rendered either |
+| `writes` | optional: `[path, ...]`, repo-relative posix paths or globs (no `..`, no drive, no `\`) a `read`, `test` or `lander` role may still edit in its checkout (docs/guard.md "Role policy"). The loader accepts it; no role file uses it today. Not rendered either |
 | `group` | optional: the role's group in the backlog policy (`kitlib/backlog/roles.py`) where its `mode` alone does not give it. Without it the group is the mode's: `controller` lead, `write` builder, `read` and `test` read-only, `lander` lander. The one value in use is `docs` (docs-writer: a `write` role that adds records but never pulls them), and it needs mode `write` (`kitlib.host.content.GROUP_MODES`). Not rendered |
 | `run` | optional: `session`, a role started only as its own launched session, never dispatched as a subagent (pm, coordinator, deep-worker, consultant). The backlog policy holds such a role only from a launcher session mark (`SESSION_ONLY`); pm, which the policy names for its owner-level rows, is held so whatever its file says. Role files are not owner paths, so a `mode`, `group` or `run` change moves a role between backlog groups once it lands. Not rendered |
 | `summary` | optional: one line, the role's "use for" cell in docs/ROSTER.md (its description when absent). Not in any host's file |
@@ -94,7 +94,7 @@ profile there, never written a second time in the renderer (Claude: `PROFILE_TOK
 | token | meaning | Claude | Codex |
 |---|---|---|---|
 | `{{agent:<role>}}` | the name the host dispatches a role by | `pm-kit:<role>` | `kit-<role>` |
-| `{{model:<tier>}}` | the host's model for a tier | hosts.json `tiers`: `{{model:strong}}` is `opus` | `the account's model` while hosts.json maps the tier to `account-default` |
+| `{{model:<tier>}}` | the host's model for a tier | hosts.json `tiers`: `{{model:strong}}` is `opus` | `<tier>-tier` (`strong-tier`) while hosts.json maps the tier to `account-default`, else the model |
 | `{{tool:<capability>}}` | the host's tool for a capability (the front matter's names) | the renderer's `TOOLS`: `{{tool:message}}` is `SendMessage`, `{{tool:dispatch}}` `Agent` | the renderer's `TOOLS` (inferred names): `send_message`, `spawn_agent`, `apply_patch`; a capability with no Codex tool says so |
 | `{{profile_path}}` | a repository's agent profile | `.claude/agent-profile.md` | `.codex/agent-profile.md` |
 | `{{coordinator_profile_path}}` | a repository's coordinator profile | `.claude/coordinator-profile.md` | `.codex/coordinator-profile.md` |
@@ -118,7 +118,7 @@ when YAML needs it), `tools` (the capabilities as Claude tool names; none for `a
 one tier map),
 `effort` when set, `autoCompactWindow` for `compact`, and for `cache: long` the `experimental` map with
 `cacheTtl: 1h`; the front matter opens with the generated-file line as a YAML comment.
-`autoCompactWindow` in agent front matter is a ceiling, read in Claude Code 2.1.309's own code (not tried
+`autoCompactWindow` in agent front matter is a ceiling, read in Claude Code 2.1.309's own code (INFERRED, not tried
 live): the CLI's agent schema takes an integer 100000..1000000, a plugin agent keeps it, and a subagent
 runs on its parent's window unless that is larger, when it runs on the agent's; the
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable still beats both. So a 170000 agent under a
@@ -136,14 +136,14 @@ An agent body gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so a role names the 
 opening with the generated-file line,
 `name` (`kit-<name>`), `description`, `model` (none while the tier maps to `account-default`: the
 account's model runs; docs/ROSTER.md), `model_reasoning_effort` (the role's `effort`, else its tier's),
-`sandbox_mode` (the role's `sandbox`) and `developer_instructions`, the body with Codex's token values
+`sandbox_mode` (`read-only` for a `read` or `lander` mode role, else the role's `sandbox`) and `developer_instructions`, the body with Codex's token values
 as a TOML multi-line string. A Codex agent file has no tool list, so `capabilities` and `cache` are not
 rendered; nor is `compact`, because no per-agent compact key in a Codex agent file has been established
 (no Codex install here to check). It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders; the
 copy stays until a live Codex install shows it loads skills from outside its plugin folder
 (hosts/codex/README.md "Not verified"). Its
 manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
-`hosts/codex/shell/mcp.json` (the read-only lock server) and `hosts/codex/shell/hooks/hooks.json`
+`hosts/codex/shell/mcp.json` (the read-only lock server and the hub server) and `hosts/codex/shell/hooks/hooks.json`
 (every declared hook event running `boot/hook.py codex <event>`, the plugin's copy, as one
 command string). Its `vendored(root)` ships byte copies of `boot/kitboot.py` and `boot/hook.py` in
 `hosts/codex/shell/boot/`, and `hosts/codex/shell/hosts.json`, hosts.json's Codex entry alone: the
@@ -225,10 +225,9 @@ The coordinator's SessionStart hook stays a separate entry: hooks.json runs both
 joins their context. Keeping it apart keeps its path, which settings re-pointed by machine setup
 still name (docs/machine-setup.md "Settings"), and its role check.
 
-A plugin's SubagentStart reaches the subagent: on 2026-10-16 a subagent dispatched on the owner's
-machine with the plugin enabled opened with "SubagentStart hook additional context: PM kit header"
-and the plugin's kit folder, from the plugin's hooks.json entry (hosts/claude/adapter/content.py
-HOOKS). So a dispatched agent gets the header without its brief naming the kit folder.
+A plugin's SubagentStart reaches the subagent, from the plugin's hooks.json entry
+(hosts/claude/adapter/content.py `HOOKS`). So a dispatched agent gets the header without its brief
+naming the kit folder.
 
 At SubagentStart a dispatched kit role also gets the agent-start block after the header
 (kitlib.agentstart; docs/preflight.md "Agent start block"): `start_text` adds it when the payload's
