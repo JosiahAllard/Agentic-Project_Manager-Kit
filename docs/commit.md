@@ -10,7 +10,7 @@ Two tools. `tools/commit.py` is the entry over `kitlib/commit`. `tools/machine_p
 
 `commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME] [--owner-authored] --allow-empty` commits no paths: HEAD's tree unchanged, only the message and its trailers, for a branch that needs only a `Closes:` or `Part-of:` line. It is refused (exit 1) when anything is staged, a merge is in progress, or the branch is unborn ("no HEAD to keep"); a hook that changes the commit's tree (a pre-commit hook staging a file) has the commit undone and refused (`commit_only`, `undo_commit`); a PATH, `--owner-approval` or `--consume` with it is a usage error (exit 2). Every other check below runs as for any commit, and the host trailer is added as usual (`Request.allow_empty`, `commit_only`). Without the flag, no PATH is still a usage error: no paths never means an empty commit.
 
-`--host NAME` names the agent host for the Co-Authored-By trailer: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). `--provider` is its old name, accepted for one release. A name `hosts.json` lacks is a usage error (exit 2) before any work. The trailer comes from `kitlib.attribution`: Claude's is `Claude <model>` as below; Codex's needs the actual explicit model id, emits `Codex <model-id> <noreply@openai.com>` and never uses CLAUDE_AGENT_MODEL. Explicit paths, owner identity/approval, staged-file and document checks keep their rules. The shared trailer classifier recognizes both forms.
+`--host NAME` names the agent host for the Co-Authored-By trailer: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). `--provider` is its old name, still accepted. A name `hosts.json` lacks is a usage error (exit 2) before any work. The trailer comes from `kitlib.attribution`: Claude's is `Claude <model>` as below; Codex's needs the actual explicit model id, emits `Codex <model-id> <noreply@openai.com>` and never uses CLAUDE_AGENT_MODEL. Explicit paths, owner identity/approval, staged-file and document checks keep their rules. The shared trailer classifier recognizes both forms.
 
 It stages exactly the PATHs named and commits them in the work tree that DIR is in (default: here). `-C` is resolved by `kitlib.git.repo.toplevel`.
 - A path is relative to that work tree's root, or absolute inside it.
@@ -123,12 +123,3 @@ docs/kit-json.md lists every key with its default.
 - `checkout_guard.rule_pointer` is the refusal's pointer to where the rule is written down.
 - `repo.main_branch` is named in the `--lander-main-checkout` usage error.
 - `machine_paths.*` (allow, fixtures, known_binary, scan, fallback_vars) is read by both tools. commit.py reads it through `scan_staged`.
-
-## Not ported
-
-Each item below was dropped on purpose (port brief).
-- **Backlog claim folding.** The kit backlog has no claim queue.
-- **The `-C` hand-off** (chdir to main, `KIT_CALLER_CWD`, a glued `-Cdir`, `-C` given twice), `KIT_REPO_ROOT`, `KIT_CONFIG` and `_repo_guard`. Here `-C` is a plain option, and argparse takes the last value given.
-- **machine_paths built-in allow entries.** These were the PM kit's `_paths.py` fallbacks, its `test_paths.py` table, the kit stubs and backlog.py's ledger. They named the older kit's files and one drive. A repository that relied on them needs explicit `allow` or `fixtures` entries.
-- **`machine_paths.piece_fixtures`.** kitlib has no pieces-table resolver, so the key is gone and a config that sets it is refused as an unknown key. Use `fixtures` with the file's glob.
-- **The doc_budget PowerShell twin.** Only `tools/doc_budget.py` is run.

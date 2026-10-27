@@ -28,7 +28,7 @@ When the branch has not landed, it prints three more lines:
 Each log base is `kitlib.gate.runner.log_base`:
 
 - with `"landing".log_dir` set, that folder under the checkout;
-- otherwise `<kit temp>/<repo name>-gate`, where the kit temp is `kitlib.config.user.work_temp` of the checkout and the repo name is `"repo".name`, else the checkout folder's name. Then `runner.fallback_log_base` (`<shared temp>/<repo name>-gate`, the shared temp being the machine config's `temp_dir` when its drive exists and the folder can be made, else the system temp folder `%LOCALAPPDATA%/Temp`: `kitlib.config.user.shared_temp`) is read as well: a gate that could not make the default base writes there, and so did every gate before the kit temp moved. A machine config that cannot be read leaves only that base, with a `note` line.
+- otherwise `<kit temp>/<repo name>-gate`, where the kit temp is `kitlib.config.user.work_temp` of the checkout and the repo name is `"repo".name` (docs/kit-json.md; unset, the remote URL's last part, else the main checkout's folder name). With no `name` written, each checkout's own folder name is tried as well (`log_bases`). Then `runner.fallback_log_base` (`<shared temp>/<repo name>-gate`, the shared temp being the machine config's `temp_dir` when its drive exists and the folder can be made, else the system temp folder `%LOCALAPPDATA%/Temp`: `kitlib.config.user.shared_temp`) is read as well: a gate that could not make the default base writes there, and so did every gate before the kit temp moved. A machine config that cannot be read leaves only that base, with a `note` line.
 
 Known limits: only the bases of today's rule are read. A gate that ran while `work_temp` was still a session's TEMP (before it kept out of session temps: docs/test-tools.md "Temp folders") wrote its logs under that older kit temp, which is not read, so such a branch shows no verdict until it is gated again. Likewise fallback logs written under `%LOCALAPPDATA%/Temp` before the shared temp followed `temp_dir` are not read on a machine that sets `temp_dir`.
 
@@ -49,12 +49,3 @@ The kit gate prints these lines to stdout and writes none of them into its step 
 
 - `.kit.json` "repo": `main_branch`, `remote`, `name`.
 - "landing": `log_dir`. The landing lock is always `kit-landing.lock` in the git common dir (kitlib.records.landing `LOCK_NAME`).
-
-## Not ported
-
-- The `"landing".verdict_pattern` key, and its tests (a configured pattern, its `failed` group, its compile check). The kit's verdict lines are fixed, so `kitlib.config` now refuses the key as unknown.
-- `--root`: `-C` replaces it.
-- The source tests dropped with retired mechanisms:
-  - an absolute `lock_file` and a relative one under the shared temp: the lock is always `kit-landing.lock` in the common dir;
-  - an absolute `log_dir`: `log_dir` is repo-relative (RelPath);
-  - the flat-folder slash rule (`feat/x` -> `feat_x`): the kit's `log_folder` gives `feat-x`.

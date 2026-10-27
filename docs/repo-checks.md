@@ -59,9 +59,3 @@ A repository runs these as `cmd` steps in its `.kit.json` "gate" (docs/gate.md, 
 ```
 
 An empty `{base}` falls back to each tool's own default base.
-
-## Not ported
-
-- `_repo_guard.check_same_repo` and the `KIT_REPO_ROOT` root override: one kit copy, no environment override; `-C` replaces them.
-- The forbidden tool's module-level `STORE` path: the store comes from `.kit.json` per checkout.
-- The pieces fallback to `tools/pieces.json` when `.kit.json` has no "pieces": `kitlib.config` reads a section only from `.kit.json` or the file it names. Its test (`test_the_legacy_file_counts`) is replaced by one asserting the file alone is no table.
