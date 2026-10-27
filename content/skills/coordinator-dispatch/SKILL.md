@@ -40,7 +40,7 @@ Roles are named bare here; your host's instructions say how a role name becomes 
   to look up, never a pasted rule. Where the repo has a brief template (`--find brief`), follow it.
 - Every agent starts with `python <kit>/tools/preflight.py -C <worktree>`. Briefs point at `python <kit>/tools/codemap.py -C <worktree>`
   and `python <kit>/tools/doc_index.py -C <worktree> --section "<heading>"` before any search; agents use their search
-  and file-read tools, not shell grep, cat or sed. Review (analyst) and lander briefs name
+  and file-read tools, not shell grep, cat or sed. Review (analyst) briefs name
   `python <kit>/tools/review_pack.py -C <repo> <branch>` as their first call.
 - In a large file the brief names the sections or line ranges to read; the agent reads ranges (codemap or a search first), never the whole file, unless it is rewriting all of it.
 - Every coding brief states its risk level and why (path in the risk map, or the reason it is
