@@ -1,6 +1,6 @@
 # Kit tool architecture
 
-The shape every kit tool follows. Change this file only with the owner's approval.
+The shape every kit tool follows. Change this file only by an ordinary reviewed commit; the owner's approval is needed only for the owner-only paths `.kit.json` lists (`owner.paths`; docs/kit-json.md).
 
 ## Layers
 
