@@ -1,11 +1,11 @@
 # Launcher
 
-`tools/launch.py` starts, hands off and stops the PM's long-running Claude sessions, each in its own minimized window. Logic: `kitlib/launcher` (no argparse, print or exit); the machine-facing calls (process list, registry with `REG_EXPAND_SZ` values expanded as .NET did, window, stopping a process) sit in `kitlib/launcher/host.py` so tests fake them (`tests/launcher/fakes.py`). The old-to-new map is in "History: ported from" below.
+`tools/launch.py` starts, hands off and stops the PM's long-running Claude sessions, each in its own minimized window. Logic: `kitlib/launcher` (no argparse, print or exit); the machine-facing calls (process list, registry with `REG_EXPAND_SZ` values expanded as .NET did, window, stopping a process) sit in `kitlib/launcher/host.py` so tests fake them (`tests/launcher/fakes.py`).
 
 ```
-launch.py start (--repo NAME | --repo-path DIR | --session KEY) (--account N | --org N) [--agent A | --no-agent] [--brief F] [--prompt P] [--name N] [--predecessor N] [--model M] [--effort E] [--autocompact T] [--what-if] [--home-worktree]
-launch.py deep --repo-path DIR (--brief FILE | --brief-text TEXT) --requester NAME --slug SLUG [--account N|auto] [--force] [--plan] [--home-worktree]
-launch.py consultant --repo-path DIR [--repo SLUG] [--account N|auto] [--notes-path P] [--force] [--replace] [--plan] [--home-worktree]
+launch.py start (--repo NAME | --repo-path DIR | --session KEY) (--account N | --org N) [--agent A | --no-agent] [--brief F] [--prompt P] [--name N] [--predecessor N] [--model M] [--effort E] [--autocompact T] [--what-if] [--home-worktree] [--no-remote-control]
+launch.py deep --repo-path DIR (--brief FILE | --brief-text TEXT) --requester NAME --slug SLUG [--account N|auto] [--model M] [--effort E] [--autocompact T] [--force] [--plan] [--home-worktree]
+launch.py consultant --repo-path DIR [--repo SLUG] [--account N|auto] [--model M] [--effort E] [--autocompact T] [--notes-path P] [--force] [--replace] [--plan] [--home-worktree]
 launch.py homes (--repo NAME | --repo-path DIR) [--remove NAME] [--what-if]
 launch.py stop --name NAME [--successor NAME] [--pid N] [--dry-run]
 launch.py handoff (--session KEY | --all) [--account N|auto] [--recycle] [--stem NEW] [--state FILE] [--what-if] [--home-worktree]
@@ -76,7 +76,7 @@ Every window sets `PM_KIT_ROLE` (docs/guard.md "Session mark") and `PM_KIT_SESSI
 | the PM session `after-reboot` resumes | `pm` |
 | `start --agent <other>` | the agent's own name |
 
-An agent name (`--agent`, `coordinator_agent`, a sessions.json `agent`) may carry the kit plugin's prefix, `<plugin>:<name>` (`kitlib.agentname.PREFIX`; docs/guard.md "Agent names"); `window.AGENT` and `settings.check` accept it and no other colon. `role_for` compares the names without it, so `<plugin>:coordinator` is the coordinator, and the mark never carries it. The default session name (below) and the `ROLE_AUTOCOMPACT` lookup use the name without it too. The plugin registers its agents only under the prefix, so the launcher passes a bare kit agent name (`start.KIT_AGENTS`, the roles in `content/roles/`, rendered as `hosts/claude/shell/agents/`) to `--agent` as `pm-kit:<name>` (`start.run_as`): the default `coordinator` starts `--agent pm-kit:coordinator`. A renamed agent's former name (`start.AGENT_ALIASES`: `opus-worker`, now `senior-worker`) starts as its new one, for one release. A prefixed name and any other name (a repo's own agent) pass as given (tests/launcher/test_start.py). There is no bare fallback: a configured `coordinator_agent` of `coordinator` is qualified too, so a repo's own file named after a kit agent is never started by the launcher, and on an account without the plugin the only ways round it are `start --no-agent` or an agent name that is not a kit agent's.
+An agent name (`--agent`, `coordinator_agent`, a sessions.json `agent`) may carry the kit plugin's prefix, `<plugin>:<name>` (`kitlib.agentname.PREFIX`; docs/guard.md "Agent names"); `window.AGENT` and `settings.check` accept it and no other colon. `role_for` compares the names without it, so `<plugin>:coordinator` is the coordinator, and the mark never carries it. The default session name (below) and the `ROLE_AUTOCOMPACT` lookup use the name without it too. The plugin registers its agents only under the prefix, so the launcher passes a bare kit agent name (`start.KIT_AGENTS`, the roles in `content/roles/`, rendered as `hosts/claude/shell/agents/`) to `--agent` as `pm-kit:<name>` (`start.run_as`): the default `coordinator` starts `--agent pm-kit:coordinator`. A renamed agent's former name (`start.AGENT_ALIASES`: `opus-worker`, now `senior-worker`) starts as its new one. A prefixed name and any other name (a repo's own agent) pass as given (tests/launcher/test_start.py). There is no bare fallback: a configured `coordinator_agent` of `coordinator` is qualified too, so a repo's own file named after a kit agent is never started by the launcher, and on an account without the plugin the only ways round it are `start --no-agent` or an agent name that is not a kit agent's.
 
 Only the launcher's PM resume carries the `pm` mark; no settings file sets `PM_KIT_ROLE`, so a PM session opened by hand or in the desktop app is unmarked. The consultant is not marked `coordinator`: it never dispatches or lands, and the coordinator start hook should not fire for it; under the guard it is held like any non-owner session.
 
@@ -154,23 +154,3 @@ In `launcher.state_dir`, machine state outside git; copy the examples to start:
 - `push-outbox.json`, `push-undelivered.jsonl`: the hub's push notifications, written by the hub server, never by the launcher (docs/action-hub.md "Push notifications").
 
 JSON is read with or without a BOM and written UTF-8 without one.
-
-## History: ported from
-
-The old scripts are superseded; this table is the record of where each went.
-
-| PM repo `launcher/` | Kit |
-|---|---|
-| `start-conductor.ps1` | `launch.py start`; `kitlib/launcher/start.py` `start`, `start_entry` |
-| `start-deep.ps1` | `launch.py deep`; `start.py` `deep` |
-| `start-consultant.ps1` | `launch.py consultant`; `start.py` `consultant` |
-| `stop-session.ps1` | `launch.py stop`; `kitlib/launcher/stop.py` |
-| `session-lookup.ps1` | `kitlib/launcher/lookup.py` |
-| `handoff.ps1` | `launch.py handoff`; `kitlib/launcher/handoff.py` |
-| `pick-account.ps1` | `launch.py pick-account`; `kitlib/launcher/accounts.py` |
-| `usage.ps1` | `launch.py usage`; `kitlib/launcher/usage.py` |
-| `after-reboot.ps1` | `launch.py after-reboot`; `kitlib/launcher/reboot.py` |
-| `install-autostart.ps1` | `launch.py install-autostart`; `kitlib/launcher/autostart.py` |
-| `sessions.example.json`, `conductors.example.json` | `docs/launcher.sessions.example.json`, `docs/launcher.coordinators.example.json` |
-
-Changed in the port: every account must be signed in to launch on, and `pick-account` considers signed-in accounts only; folders, repos and accounts come from `launcher` settings; the PM session id comes from coordinators.json; `stop` re-checks the command line at the creation time it stops; the desktop app is a Store `claude.exe` or one with no Remote Control name; `start --session` is new; the session mark is set for every kind.
