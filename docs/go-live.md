@@ -19,8 +19,12 @@ The kit is live and the go-live holds are released: three repositories, this kit
 
 ## Coordinator rename
 
-The kit no longer reads the old name anywhere. What is left outside the kit:
+The kit no longer reads the old name anywhere (the fallbacks are removed). The record of the switch, kept because tests/scrub/test_no_conductor.py allows these lines, then what is left outside the kit:
 
+- Launcher (done): the old `start-conductor.ps1` is retired; the kit's `launch.py` runs `launcher.coordinator_agent` (default `coordinator`, started as `pm-kit:coordinator`) and always marks it `coordinator`.
+- Launcher state and task (done): `<state_dir>\conductors.json` was renamed `coordinators.json`, `install-autostart` was run from the main kit checkout under the new task name, and each coordinator moved to a `coordinator` stem with `launch.py handoff --session <key> --stem <repo>-coordinator` (docs/launcher.md "Hand-off").
+- `~/.claude/settings.json` (done): the SessionStart command called the old-path stub `hooks/conductor_session_start.py`; it now names `hosts/claude/shell/hooks/coordinator_session_start.py`.
+- The machine config (done): key `conductor_start` became `coordinator_start`; the old key is now an unknown key, refused like any other.
 - Each repo: `.claude/conductor-profile.md` becomes `.claude/coordinator-profile.md` (also in each repo's doc-budget `capped` list), `docs/ops/conductor-runbook.md` becomes `coordinator-runbook.md`, and the owner-only CLAUDE.md and `.claude` files lose the word.
 - Installed copies: `~/.claude/agents/conductor.md` (replaced by the plugin's coordinator.md), `~/.claude/tools/usage/conductor_profile.py` and its test, the `conductor-dispatch` skill, `~/.claude/conductor-profile.TEMPLATE.md`.
 
