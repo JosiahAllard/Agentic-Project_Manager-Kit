@@ -27,6 +27,7 @@ class Linux(unittest.TestCase):
 
     def test_live_session_names_skip_a_node_that_runs_no_hosts_cli(self):
         rows = [dict(ROW, Name='node', CommandLine='node app.js --remote-control X'),
+                dict(ROW, Name='node', CommandLine='node /srv/codex/app.js --remote-control V'),
                 dict(ROW, Name='node', CommandLine='node /usr/local/bin/claude --remote-control Y'),
                 dict(ROW, CommandLine='claude --remote-control Z'),
                 dict(ROW, Name='node', CommandLine='node /usr/lib/node_modules/@openai/codex/bin/codex.js '

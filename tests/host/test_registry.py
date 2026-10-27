@@ -177,8 +177,17 @@ class Validation(Case):
                 lambda e: e['profile'].update(cli_program=''),
                 lambda e: e['profile'].update(cli_program='bin/claude'),
                 lambda e: e['profile'].pop('cli_package'),
+                lambda e: e['profile'].update(cli_program='.'),
+                lambda e: e['profile'].update(cli_program='..'),
                 lambda e: e['profile'].update(cli_package=' '),
                 lambda e: e['profile'].update(cli_package='a/b'),
+                lambda e: e['profile'].update(cli_package='claude-code'),
+                lambda e: e['profile'].update(cli_package='@a'),
+                lambda e: e['profile'].update(cli_package='@a/b/c'),
+                lambda e: e['profile'].update(cli_package='@./x'),
+                lambda e: e['profile'].update(cli_package='@../x'),
+                lambda e: e['profile'].update(cli_package='@a/..'),
+                lambda e: e['profile'].update(cli_package='@A/b'),
                 lambda e: e.pop('hook'),
                 lambda e: e['hook'].update(extra=1),
                 lambda e: e['hook'].update(tool_event='Nope'),
@@ -255,7 +264,7 @@ class Profiles(Case):
 
     def test_each_host_names_its_cli_program_and_package_folder(self):
         self.assertEqual([(p.cli_program, p.cli_package) for p in registry.profiles()],
-                         [('claude', 'claude-code'), ('codex', 'codex')])
+                         [('claude', '@anthropic-ai/claude-code'), ('codex', '@openai/codex')])
 
     def test_the_kit_state_folder_is_the_default_hosts(self):
         data = second(kit_hosts())

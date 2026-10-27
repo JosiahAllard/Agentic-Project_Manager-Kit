@@ -504,18 +504,37 @@ def cli_names(path=None):
     return tuple((p.cli_program, p.cli_package) for p in registry.profiles(path))
 
 
+def _in_package(parts, package):
+    """True when the path parts hold node_modules followed directly by the scoped package's two
+    parts (@scope, name), with the file below them."""
+    seg = package.split("/")
+    return any(parts[i] == "node_modules" and parts[i + 1:i + 1 + len(seg)] == seg
+               for i in range(len(parts) - len(seg) - 1))
+
+
 def runs_cli(cmd, clis):
     """True when a Linux command line (/proc's arguments joined by spaces) runs one of `clis`,
-    ((program, package folder), ...): its program, or the first word after it that is not an
-    option (node's script), has the program as its last path part or lies under the package
-    folder. `node app.js --remote-control x` runs none."""
+    ((program, scoped npm package), ...): its program, or the first word after it that is not an
+    option (node's script), has the program as its last path part or lies in the package
+    directly under a node_modules folder. `node app.js --remote-control x` runs none, nor
+    `node ~/src/claude-code/x.js`."""
     words = (cmd or "").split()
     script = next((w for w in words[1:] if not w.startswith("-")), "")
     for word in words[:1] + [script]:
         parts = word.split("/")
-        if any(parts[-1] == program or package in parts[:-1] for program, package in clis):
+        if any(parts[-1] == program or _in_package(parts, package) for program, package in clis):
             return True
     return False
+
+
+def linux_clis(path=None):
+    """cli_names() on Linux, for runs_a_cli; None elsewhere (a Windows image is the CLI's own)."""
+    return cli_names(path) if platform.NAME == 'linux' else None
+
+
+def runs_a_cli(row, clis):
+    """A process row runs a host's CLI: always when clis is None (linux_clis off Linux)."""
+    return clis is None or runs_cli(row.get("CommandLine"), clis)
 
 
 def live_session_names(procs):
@@ -523,11 +542,10 @@ def live_session_names(procs):
     nor on Linux a process that runs no host's CLI (runs_cli)."""
     names = set()
     images = session_images()
-    clis = cli_names() if platform.NAME == 'linux' else None
+    clis = linux_clis()
     for p in procs:
         if (p.get("Name") in images and p.get("CommandLine")
-                and STORE_DIR not in (p.get("ExecutablePath") or "")
-                and (clis is None or runs_cli(p["CommandLine"], clis))):
+                and STORE_DIR not in (p.get("ExecutablePath") or "") and runs_a_cli(p, clis)):
             n = rc_name(p["CommandLine"])
             if n:
                 names.add(n)

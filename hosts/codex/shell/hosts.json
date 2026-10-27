@@ -50,7 +50,7 @@
         "OPENAI_"
       ],
       "cli_program": "codex",
-      "cli_package": "codex"
+      "cli_package": "@openai/codex"
     },
     "hook": {
       "tool_event": "PreToolUse",

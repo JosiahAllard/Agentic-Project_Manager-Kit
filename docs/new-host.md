@@ -64,7 +64,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | `session_process` | The process image of a session it launches |
 | `env_prefixes` | The environment variable prefixes its sessions own (`CLAUDE_`). A child launched on another host never inherits them (`kitlib.sessionmark.child_environment`). |
 | `cli_program` | The name its CLI runs as on Linux (`claude`). |
-| `cli_package` | The folder its npm package installs into (`claude-code`). With `cli_program` it tells a Linux `node` process that runs the CLI from any other (`kitlib.pmstart.runs_cli`). |
+| `cli_package` | Its npm package's scoped name, `@scope/name` (`@anthropic-ai/claude-code`). With `cli_program` it tells a Linux `node` process that runs the CLI from any other: its script lies in the package directly under a `node_modules` folder (`kitlib.pmstart.runs_cli`). |
 
 ## 2. The adapter: `hosts/<name>/adapter/`
 

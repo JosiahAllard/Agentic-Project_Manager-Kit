@@ -639,3 +639,16 @@ class HookTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinuxCli(unittest.TestCase):
+    """On Linux own_name and others take only a process that runs a host's CLI
+    (pmstart.runs_a_cli): a node with --remote-control that runs anything else is no session."""
+    def test_own_name_and_others_skip_a_node_that_runs_no_cli(self):
+        rc = "node /usr/local/bin/claude --remote-control %s -n x"
+        procs = [proc(1, 0, "node", rc % "alpha-coordinator-a2-n6", exe="/usr/bin/node"),
+                 proc(2, 1, "node", "node app.js --remote-control alpha-coordinator-a2-n9", exe="/usr/bin/node"),
+                 proc(3, 2, "bash", "bash", exe="/usr/bin/bash")]
+        with mock.patch("kitlib.platform.NAME", "linux"):
+            self.assertEqual(coordinatorstart.own_name(procs, {}, 3), "alpha-coordinator-a2-n6")
+            self.assertEqual(coordinatorstart.others(ENTRY, procs, {}, 3), [])

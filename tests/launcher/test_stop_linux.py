@@ -151,9 +151,24 @@ class Linux(unittest.TestCase):
 
     def test_a_name_holding_whitespace_is_refused(self):
         procs = [claude(10, 'my', 20), shell(20, 'my'), TMUX]
-        for name in ('my project-session-a1', 'my	x'):
-            with self.subTest(name=name), self.assertRaisesRegex(stop.Refused, 'whitespace'):
+        for name in ('my project-session-a1', 'my\tx', "my'x", 'my"x', 'my\\x'):
+            with self.subTest(name=name), self.assertRaisesRegex(stop.Refused, 'whitespace, a quote or a backslash'):
                 stop.plan(procs, name)
+        with self.assertRaisesRegex(stop.Refused, 'a quote or a backslash'):
+            stop.plan(procs, 'my', successor="b's")
+
+    def test_a_codex_node_is_no_stop_target_lookup_takes_the_default_host_only(self):
+        row = self.node(10, 'node /usr/lib/node_modules/@openai/codex/bin/codex.js --remote-control x -n x')
+        with self.assertRaisesRegex(stop.Refused, "no claude with --remote-control exactly 'x'"):
+            stop.plan([row, shell(20, 'x'), TMUX], 'x')
+
+    def test_a_script_in_a_claude_code_folder_outside_node_modules_is_no_session(self):
+        procs = [self.node(1, 'node ~/src/claude-code/x.js --remote-control x -n x'),
+                 self.node(2, 'node /usr/lib/node_modules/claude-code/cli.js --remote-control x -n x'),
+                 self.node(3, 'node /usr/lib/@anthropic-ai/claude-code/cli.js --remote-control x -n x'),
+                 self.node(4, 'node /usr/lib/node_modules/@anthropic-ai/claude-code --remote-control x -n x'),
+                 self.node(5, 'node /n/node_modules/x/node_modules/@anthropic-ai/claude-code/cli.js -n x')]
+        self.assertEqual([p['ProcessId'] for p in lookup.claude_sessions(procs)], [5])
 
     def test_the_reread_must_still_run_the_cli_or_nothing_is_stopped(self):
         row = self.node(10, 'node /usr/local/bin/claude --remote-control x -n x go')

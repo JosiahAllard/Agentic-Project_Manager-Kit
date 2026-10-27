@@ -35,7 +35,7 @@
       "session_process": "claude.exe",
       "env_prefixes": ["CLAUDE_", "ANTHROPIC_"],
       "cli_program": "claude",
-      "cli_package": "claude-code"
+      "cli_package": "@anthropic-ai/claude-code"
     },
     "hook": {
       "tool_event": "PreToolUse",
@@ -76,7 +76,7 @@
       "session_process": "codex.exe",
       "env_prefixes": ["CODEX_", "OPENAI_"],
       "cli_program": "codex",
-      "cli_package": "codex"
+      "cli_package": "@openai/codex"
     },
     "hook": {
       "tool_event": "PreToolUse",

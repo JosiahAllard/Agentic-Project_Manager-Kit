@@ -171,7 +171,8 @@ def shown(text):
 
 
 def check_name(name, derived=False):
-    """LaunchError on Linux for a session name holding whitespace (linuxwin.check_name); derived:
+    """LaunchError on Linux for a session name holding whitespace, a quote or a backslash
+    (linuxwin.check_name); derived:
     the name was made from the folder's name. Nothing on Windows."""
     if _linux():
         from kitlib.launcher import linuxwin

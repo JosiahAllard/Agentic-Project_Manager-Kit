@@ -128,7 +128,7 @@ class HostProfile:
     --remote-control value names the session), `env_prefixes` the environment variable prefixes
     its sessions own (a child launched on another host never inherits them;
     kitlib.sessionmark.child_environment), `cli_program` the name its CLI runs as on Linux and
-    `cli_package` the folder its npm package installs into, which tell a node process that runs
+    `cli_package` its npm package's scoped name (@scope/name), which tell a node process that runs
     the CLI from any other (kitlib.pmstart.runs_cli; kitlib.launcher.lookup and stop)."""
     owner_paths: tuple
     worktrees_directory: str

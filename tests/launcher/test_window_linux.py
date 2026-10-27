@@ -16,6 +16,7 @@ from kitlib.launcher import settings as S
 from tests.launcher.fakes import FakeHost, Home, role_of
 from tests.launcher.test_reboot import PM
 from tests.launcher.test_start import Base
+from tests.launcher.test_start_home import HomeBase
 
 
 class FakeTmux(object):
@@ -158,7 +159,7 @@ class LinuxStart(Base):
         self.assertIn('in a new terminal window (xterm)', out)
 
     def test_a_name_holding_whitespace_is_refused_and_nothing_starts(self):
-        for name in ('my project-coordinator-a1', 'x	coordinator'):
+        for name in ('my project-coordinator-a1', 'x\tcoordinator'):
             with self.subTest(name=name), self.assertRaisesRegex(S.LaunchError, 'whitespace'):
                 start.start(self.h.settings, self.host, repo='alpha', account='1', name=name, prompt='go')
         self.assertEqual(self.host.opened, [])
@@ -166,9 +167,18 @@ class LinuxStart(Base):
     def test_a_default_name_from_a_folder_with_a_space_is_refused_and_says_name(self):
         folder = os.path.join(self.h.root, 'My Project')
         os.makedirs(folder)
-        with self.assertRaisesRegex(S.LaunchError, "whitespace: 'my project-session-.*--name"):
+        with self.assertRaisesRegex(S.LaunchError, "a backslash: 'my project-session-[^']*' "
+                                                   "\\(made from the folder's name\\) .*--name"):
             start.start(self.h.settings, self.host, repo_path=folder, account='1', prompt='go',
                         no_agent=True)
+        self.assertEqual(self.host.opened, [])
+
+    def test_a_name_holding_a_quote_or_a_backslash_is_refused_and_nothing_starts(self):
+        for name in ("bob's-a1", 'a"b-a1', 'a\\b-a1'):
+            with self.subTest(name=name), self.assertRaisesRegex(S.LaunchError, 'a quote or a backslash'):
+                start.start(self.h.settings, self.host, repo='alpha', account='1', name=name, prompt='go')
+            with self.subTest(name=name), self.assertRaisesRegex(S.LaunchError, 'a quote or a backslash'):
+                window.script(name, 'plain', '/r', 'claude')
         self.assertEqual(self.host.opened, [])
 
     def test_the_script_refuses_a_name_holding_whitespace_too(self):
@@ -200,6 +210,22 @@ class LinuxReboot(unittest.TestCase):
             out = reboot.run(h.settings, host, test=True)
         self.assertEqual(out[-1], "started autostart-test in tmux session 'autostart-test' "
                                   "(tmux attach -t 'autostart-test')")
+
+
+class LinuxHomeWorktree(HomeBase):
+    def setUp(self):
+        HomeBase.setUp(self)
+        patch = mock.patch('kitlib.platform.NAME', 'linux')
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_spaced_name_makes_no_home_worktree_and_opens_nothing(self):
+        for whatif in (True, False):
+            with self.subTest(whatif=whatif), self.assertRaisesRegex(S.LaunchError, 'whitespace'):
+                self.go(name='my deep-a1', whatif=whatif)
+        self.assertEqual(self.host.homes, [])
+        self.assertEqual(self.host.opened, [])
+        self.no_folder()
 
 
 class Uptime(unittest.TestCase):

@@ -56,27 +56,31 @@ def tmux_name(name):
     return _UNSAFE.sub('_', str(name))
 
 
-def spaced(name):
-    """The refusal for a session name holding whitespace (a %s left for a note), or None. /proc
-    joins a process's arguments with spaces, so `--remote-control my project-a1` reads as `my`:
-    lookup could not find the session and `stop --name my` would end it."""
-    if any(c.isspace() for c in str(name or '')):
-        return ("On Linux a session name cannot hold whitespace: '%s'%%s (/proc joins a process's "
-                "arguments with spaces, so lookup and stop would read only its first word); pass "
-                "--name without whitespace." % str(name).replace('%', '%%'))
+UNQUOTED = '\'"\\'          # characters /proc cannot show unambiguously: it keeps no quoting
+
+
+def bad_name(name):
+    """The refusal for a session name holding whitespace, a quote or a backslash (a %s left for a
+    note), or None. /proc joins a process's arguments with spaces and keeps no quoting, so
+    `--remote-control my project-a1` reads as `my`: lookup could not find the session and
+    `stop --name my` would end it."""
+    if any(c.isspace() or c in UNQUOTED for c in str(name or '')):
+        return ("On Linux a session name cannot hold whitespace, a quote or a backslash: '%s'%%s "
+                "(/proc joins a process's arguments with spaces and keeps no quoting, so lookup and "
+                "stop would misread it); pass --name without them." % str(name).replace('%', '%%'))
     return None
 
 
 def check_name(name, derived=False):
-    """LaunchError for a name holding whitespace (spaced); derived: made from the folder's name."""
-    why = spaced(name)
+    """LaunchError for a name bad_name refuses; derived: made from the folder's name."""
+    why = bad_name(name)
     if why:
         raise LaunchError(why % (" (made from the folder's name)" if derived else ''))
 
 
 def script(name, role, folder, command, config_dir=None, agent_temp=None):
     """The window's bash, one statement per line. config_dir None: the default folder
-    (CLAUDE_CONFIG_DIR unset). LaunchError for a name holding whitespace (check_name)."""
+    (CLAUDE_CONFIG_DIR unset). LaunchError for a name check_name refuses."""
     if not role:
         raise ValueError('every launched session carries a PM_KIT_ROLE mark')
     check_name(name)

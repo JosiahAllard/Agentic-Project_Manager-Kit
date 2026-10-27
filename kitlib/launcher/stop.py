@@ -67,7 +67,7 @@ def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
     if not name or name.strip() != name:
         raise Refused('--name must be the exact session name, no surrounding spaces.')
     for n in (name, successor):
-        why = platform.NAME == 'linux' and linuxwin.spaced(n)
+        why = platform.NAME == 'linux' and linuxwin.bad_name(n)
         if why:
             raise Refused(why % '')
     if successor and successor == name:
