@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zlib
 from unittest import mock
 
 from kitlib.config import user as kuser
@@ -623,7 +624,7 @@ class FakeRefusesWhatAttributesLeaveUnmodelled(unittest.TestCase):
     attributes source or attribute, and a text attribute whose line ending core.eol would pick,
     ends the test as Unsupported (tests/git/test_fake_differential.py compares the rest)."""
 
-    KIT = '* text=auto eol=lf\n*.cmd text eol=crlf\n*.bat text eol=crlf\n'
+    KIT = '* text=auto eol=lf\n*.cmd -text\n*.bat -text\n'
 
     def setUp(self):
         if not cmd.fake_active():
@@ -647,10 +648,13 @@ class FakeRefusesWhatAttributesLeaveUnmodelled(unittest.TestCase):
     def test_the_kits_own_file_is_read(self):
         # the control: each refusal below comes from what it adds, not from a file being there
         self._attrs(self.KIT)
-        self.r.write('t.cmd', 'x\n')
+        with open(self.r.path('t.cmd'), 'wb') as f:
+            f.write(b'x\r\n')
         self.r.git('add', '--', '.gitattributes', 'f.txt', 't.cmd')
         self.r.git('commit', '-q', '-m', 'attributes')
         self.assertEqual(self.r.git('status', '--porcelain=v1'), '')
+        self.assertEqual(self.r.git('rev-parse', 'HEAD:t.cmd'),                   # stored as-is
+                         hashlib.sha1(b'blob 3\0x\r\n').hexdigest())
         os.remove(self.r.path('t.cmd'))
         self.r.git('checkout', '--', 't.cmd')
         with open(self.r.path('t.cmd'), 'rb') as f:
@@ -686,6 +690,59 @@ class FakeRefusesWhatAttributesLeaveUnmodelled(unittest.TestCase):
         self.r.write('sub/g.txt', 'g\n')
         self._unsupported('below the root', 'status', '--porcelain=v1')
         self._unsupported('below the root', 'hash-object', 'sub/g.txt')
+
+    def _nested_branch(self, name='sub/.gitattributes'):
+        """Branch kit/nested: HEAD plus `name` ('* eol=crlf') and sub/a.txt, its trees written as
+        objects (the fake refuses an index that tracks a nested .gitattributes)."""
+        from kitlib.git import fake
+        env = gitfixture.fixture_env()
+
+        def run(argv, data=None):
+            rc, out, err = fake.run(argv, self.r.root, data, env)
+            self.assertEqual(rc, 0, err)
+            return out.strip()
+
+        def tree(entries):        # [(mode bytes, name bytes, hex oid)], git's tree order
+            def order(e):
+                return e[1] + (b'/' if e[0] == b'40000' else b'')
+            body = b''.join(m + b' ' + n + b'\0' + bytes.fromhex(o) for m, n, o in sorted(entries, key=order))
+            raw = b'tree %d\0' % len(body) + body       # a loose object (the fake hashes only blobs)
+            oid = hashlib.sha1(raw).hexdigest()
+            folder = self.r.path('.git', 'objects', oid[:2])
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, oid[2:]), 'wb') as f:
+                f.write(zlib.compress(raw))
+            return oid
+
+        blob = lambda data: run(['hash-object', '-w', '--stdin'], data).decode()
+        sub = tree([(b'100644', name.split('/')[1].encode(), blob(b'* eol=crlf\n')),
+                    (b'100644', b'a.txt', blob(b'a\nb\n'))])
+        root = []
+        for line in run(['ls-tree', 'HEAD']).decode().splitlines():
+            head, path = line.split('\t', 1)
+            mode, _typ, oid = head.split()
+            root.append((mode.encode(), path.encode(), oid))
+        root.append((b'40000', b'sub', sub))
+        commit = run(['commit-tree', tree(root), '-p', 'HEAD', '-m', 'nested attributes']).decode()
+        self.r.git('branch', 'kit/nested', commit)
+
+    def test_a_checkout_that_writes_a_gitattributes_below_the_root_is_unsupported(self):
+        # the nested file is not on disk until the checkout writes it, so the paths under it
+        # must not be judged by the disk (git would write sub/a.txt with CRLF)
+        self._attrs(self.KIT)
+        self.r.git('add', '--', '.gitattributes', 'f.txt')
+        self.r.git('commit', '-q', '-m', 'attributes')
+        self._nested_branch()
+        self._unsupported('checking out a .gitattributes below the root', 'switch', '-q', 'kit/nested')
+        self._unsupported('checking out a .gitattributes below the root', 'reset', '-q', '--hard', 'kit/nested')
+        self.assertFalse(os.path.lexists(self.r.path('sub')))      # refused before any write
+
+    def test_a_checkout_that_writes_a_case_variant_gitattributes_is_unsupported(self):
+        self.r.write('f.txt', 'x\n')
+        self.r.git('add', '--', 'f.txt')
+        self.r.git('commit', '-q', '-m', 'f')
+        self._nested_branch('sub/.GitAttributes')
+        self._unsupported('checking out a .gitattributes', 'switch', '-q', 'kit/nested')
 
     def test_a_gitattributes_that_is_not_a_file_is_unsupported(self):
         os.makedirs(self.r.path('.gitattributes'))

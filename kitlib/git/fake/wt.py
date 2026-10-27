@@ -503,6 +503,7 @@ class Tree:
         returns a fresh Entry."""
         if mode == S_IFLNK:
             raise Unsupported('checking out a symlink (%s)' % path)
+        refuse_nested_attributes([path])
         got = self.repo.objects.read(oid)
         if got is None:
             raise GitExit(128, 'fatal: unable to read %s\n' % oid)
@@ -791,6 +792,15 @@ def rejected_error(rejects, cmd='checkout', action='switch branches'):
     return GitExit(1, ''.join(parts) + 'Aborting\n')
 
 
+def refuse_nested_attributes(paths):
+    """Unsupported when a checkout would write a .gitattributes below the root or in another case:
+    git reads it for the paths under it, and Convert._no_nested, which looks at the disk, would
+    judge them before the file is there."""
+    for p in paths:
+        if p != '.gitattributes' and p.rsplit('/', 1)[-1].lower() == '.gitattributes':
+            raise Unsupported('checking out a .gitattributes below the root or in another case (%s)' % p)
+
+
 def twoway(tree, old, new, reset=False, cmd='checkout', action='switch branches', errfn=None):
     """Move the index and work tree from flat tree `old` to flat tree `new` ({path: (mode, oid)},
     modes as ints), keeping local changes as git's twoway_merge does. Raises GitExit with git's
@@ -875,6 +885,7 @@ def twoway(tree, old, new, reset=False, cmd='checkout', action='switch branches'
         if errfn is not None:
             raise errfn(rejects)
         raise rejected_error(rejects, cmd, action)
+    refuse_nested_attributes(p for p, act, _n in plan if act == 'write')
     tree.conv.checkout_from(_result_entry(index, plan, '.gitattributes'))
     for path, act, n in plan:
         if act == 'delete':

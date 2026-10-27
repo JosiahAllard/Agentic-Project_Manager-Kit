@@ -473,6 +473,7 @@ def _abort(ctx, repo):
                 idx_side[p] = (e.mode, e.oid)
         # unmerged paths: their work-tree files are overwritten from HEAD (one unpack_trees in
         # git, its result index HEAD's: the checkout reads HEAD's .gitattributes)
+        _wt.refuse_nested_attributes(p for p in ix.unmerged() if p in hs)
         tree.conv.checkout_from(hs.get('.gitattributes'))
         for p in ix.unmerged():
             ix.remove(p)
