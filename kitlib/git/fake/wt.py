@@ -2,11 +2,17 @@
 comparing the index with the files (read-cache.c ie_match_stat, racy-git rules), the untracked and
 ignored walk (dir.c), and writing or removing files for a checkout (unpack-trees.c twoway_merge).
 
-Conversion follows core.autocrlf only: any .gitattributes (worktree root, a tracked one, or one
-met during a walk), $GIT_DIR/info/attributes or a core.attributesFile that exists is Unsupported.
+Conversion follows core.autocrlf and the work tree's root .gitattributes, in the subset
+`Attributes` reads (convert.c convert_attrs, attr.c): basename patterns with the text and eol
+attributes. Any other attribute, a macro, a pattern with a '/', a .gitattributes below the root
+(tracked or met during a walk), $GIT_DIR/info/attributes, a core.attributesFile that exists,
+attr.tree and GIT_ATTR_SOURCE are Unsupported. Files are hashed under the work tree's attributes
+(git's checkin direction); a checkout writes them under the result index's .gitattributes
+(the checkout direction, unpack-trees.c check_updates).
 core.filemode false (Git for Windows) keeps the index's mode; a symlink entry is Unsupported.
 """
 import os
+import re
 import stat as _stat
 
 from . import config as _config
@@ -54,16 +60,95 @@ def is_binary(s):
     return bool(s.lonecr or s.nul or (s.printable >> 7) < s.nonprintable)
 
 
-def _will_lf_to_crlf(s):
+# convert.c's crlf actions, after convert_attrs has settled them. CRLF_TEXT and CRLF_AUTO with
+# no eol (their line ending comes from core.eol or the platform) never get here: action()
+# raises Unsupported for them unless core.autocrlf decides.
+BINARY, AUTO_INPUT, AUTO_CRLF, TEXT_INPUT, TEXT_CRLF = (
+    'binary', 'auto-input', 'auto-crlf', 'text-input', 'text-crlf')
+_AUTO = (AUTO_INPUT, AUTO_CRLF)
+_LONE_LF = re.compile(rb'(?<!\r)\n')
+
+
+def _will_lf_to_crlf(s, action):
+    """convert.c will_convert_lf_to_crlf."""
+    if action not in (AUTO_CRLF, TEXT_CRLF):
+        return False
     if s.lonelf == 0:
         return False
-    if s.lonecr or s.crlf:
-        return False
-    return not is_binary(s)
+    if action == AUTO_CRLF:
+        if s.lonecr or s.crlf:
+            return False
+        if is_binary(s):
+            return False
+    return True
+
+
+# -- attributes -----------------------------------------------------------------------------
+
+_UNSPECIFIED = object()
+_ATTR_MAX_LINE = 2048                      # attr.c ATTR_MAX_LINE_LENGTH: a longer line is skipped
+_STATES = {'text': ('text', True), '-text': ('text', False), '!text': ('text', _UNSPECIFIED),
+           'text=auto': ('text', 'auto'), 'eol=lf': ('eol', 'lf'), 'eol=crlf': ('eol', 'crlf')}
+
+
+def _ascii_lower(s):
+    return ''.join(chr(ord(c) + 32) if 'A' <= c <= 'Z' else c for c in s)
+
+
+class Attributes:
+    """One .gitattributes file in the subset modelled (attr.c parse_attr_line, fill): each line a
+    pattern with no '/' (matched against the basename, as attr.c's match_basename does, folding
+    ASCII case under core.ignorecase) and states of `text` (set, -, !, =auto) and `eol` (=lf,
+    =crlf). For each attribute the last matching line wins. Anything else in the file (another
+    attribute, a macro such as `binary`, a negative, quoted or escaped pattern, a character
+    class, a pattern with a '/', an over-long line) is Unsupported."""
+
+    def __init__(self, data, origin, icase):
+        self.icase = icase
+        self.lines = []                       # (pattern, [(attribute, value)])
+        if b'\0' in data:
+            raise Unsupported('a NUL byte in %s' % origin)
+        text = data.decode('utf-8', 'surrogateescape')
+        if text.startswith('﻿'):
+            text = text[1:]
+        for n, line in enumerate(text.split('\n'), 1):
+            where = '%s line %d' % (origin, n)
+            if len(line.rstrip('\r')) >= _ATTR_MAX_LINE:
+                raise Unsupported('an over-long line in %s' % where)
+            words = line.replace('\t', ' ').replace('\r', ' ').split(' ')
+            words = [w for w in words if w]
+            if not words or words[0].startswith('#'):
+                continue
+            pattern = words[0]
+            if pattern[0] in '!"' or any(c in pattern for c in '/\\['):
+                raise Unsupported('the pattern %r in %s' % (pattern, where))
+            states = []
+            for w in words[1:]:
+                st = _STATES.get(w)
+                if st is None:
+                    raise Unsupported('the attribute %r in %s' % (w, where))
+                states.append(st)
+            self.lines.append((_ascii_lower(pattern) if icase else pattern, states))
+
+    def lookup(self, path):
+        """{'text': True | False | 'auto' | _UNSPECIFIED, 'eol': 'lf' | 'crlf' | _UNSPECIFIED}."""
+        base = path.replace('\\', '/').rsplit('/', 1)[-1]
+        if self.icase:
+            base = _ascii_lower(base)
+        got = {'text': _UNSPECIFIED, 'eol': _UNSPECIFIED}
+        for pattern, states in self.lines:
+            if states and _ignore.wildmatch(pattern, base, pathname=False):
+                for name, value in states:
+                    got[name] = value
+        return got
+
+
+_FROM_WORKTREE = object()
 
 
 class Convert:
-    """Line-ending rules of one repository (core.autocrlf: 'true', 'input' or None)."""
+    """Line-ending rules of one repository (core.autocrlf: 'true', 'input' or None, and the
+    root .gitattributes)."""
 
     def __init__(self, repo):
         self.repo = repo
@@ -75,16 +160,26 @@ class Convert:
         else:
             from .config import parse_bool
             self.mode = 'true' if parse_bool(v, 'core.autocrlf') else None
+        self.icase = repo.config.bool('core.ignorecase', False)
         self._checked = False
+        self._checkin = None                 # Attributes or False (none), read on first use
+        self._out_source = _FROM_WORKTREE    # checkout direction: a blob oid, or the work tree
+        self._checkout = None
+        self._dirs_seen = set()
 
     def guard(self, index=None):
-        """Unsupported when attributes could change conversion."""
+        """Unsupported when attributes this model does not read could change conversion: info/
+        attributes, the global attributes file, attr.tree, GIT_ATTR_SOURCE, and (with `index`)
+        a tracked .gitattributes below the root or one the work tree lacks (git would read the
+        index's copy instead)."""
+        repo = self.repo
         if not self._checked:
             self._checked = True
-            repo = self.repo
+            if repo.config.get('attr.tree') is not None:
+                raise Unsupported('attr.tree')
+            if repo.env.get('GIT_ATTR_SOURCE'):
+                raise Unsupported('GIT_ATTR_SOURCE')
             cand = [os.path.join(repo.commondir, 'info', 'attributes')]
-            if repo.worktree:
-                cand.append(os.path.join(repo.worktree, '.gitattributes'))
             af = repo.config.get('core.attributesfile')
             if af:
                 cand.append(_config.expand_user(af, repo.env, 'core.attributesfile'))
@@ -97,49 +192,147 @@ class Convert:
                     raise Unsupported('git attributes (%s)' % p.replace('\\', '/'))
         if index is not None:
             for (p, _s) in index.entries:
-                if p == '.gitattributes' or p.endswith('/.gitattributes'):
-                    raise Unsupported('a tracked .gitattributes (%s)' % p)
+                name = p.rsplit('/', 1)[-1]
+                if name.lower() != '.gitattributes':
+                    continue
+                if p != '.gitattributes':
+                    raise Unsupported('a tracked .gitattributes below the root or in another case (%s)' % p)
+                if repo.worktree and not os.path.lexists(os.path.join(repo.worktree, '.gitattributes')):
+                    raise Unsupported('a tracked .gitattributes missing from the work tree')
+
+    # -- which attributes --
+    def _worktree_attrs(self):
+        if not self.repo.worktree:
+            return False
+        full = os.path.join(self.repo.worktree, '.gitattributes')
+        try:
+            st = os.lstat(full)
+        except OSError:
+            return False
+        if not _stat.S_ISREG(st.st_mode):
+            raise Unsupported('a .gitattributes that is not a file')
+        with open(full, 'rb') as f:
+            return Attributes(f.read(), '.gitattributes', self.icase)
+
+    def checkin_attrs(self):
+        if self._checkin is None:
+            self._checkin = self._worktree_attrs()
+        return self._checkin
+
+    def checkout_from(self, entry):
+        """Writes from here on follow the result index's .gitattributes, `entry` (mode, oid), or
+        with None the work tree's file as it is at the first write (attr.c, GIT_ATTR_CHECKOUT)."""
+        self._out_source = _FROM_WORKTREE if entry is None else entry
+        self._checkout = None
+
+    def checkout_attrs(self):
+        if self._checkout is None:
+            src = self._out_source
+            if src is _FROM_WORKTREE:
+                self._checkout = self._worktree_attrs()
+            else:
+                mode, oid = src
+                if (mode & 0o170000) != 0o100000:
+                    raise Unsupported('a .gitattributes that is not a file')
+                got = self.repo.objects.read(oid)
+                if got is None:
+                    raise GitExit(128, 'fatal: unable to read %s\n' % oid)
+                self._checkout = Attributes(got[1], '.gitattributes', self.icase)
+        return self._checkout
+
+    def _no_nested(self, path):
+        """Unsupported when a directory on `path` holds a .gitattributes (git reads each)."""
+        if not self.repo.worktree:
+            return
+        parts = path.replace('\\', '/').split('/')[:-1]
+        if os.path.isabs(path) or any(x in ('', '.', '..') or ':' in x for x in parts):
+            return              # a hash-object path outside the work tree: no directory to check
+        for i in range(1, len(parts) + 1):
+            d = '/'.join(parts[:i])
+            if d in self._dirs_seen:
+                continue
+            if os.path.lexists(os.path.join(self.repo.worktree, d, '.gitattributes')):
+                raise Unsupported('a .gitattributes below the root (%s/.gitattributes)' % d)
+            self._dirs_seen.add(d)
+
+    def ruled(self, path, attrs=None):
+        """True when a line of the work tree's .gitattributes sets text or eol for `path`."""
+        self._no_nested(path)
+        attrs = self.checkin_attrs() if attrs is None else attrs
+        if not attrs:
+            return False
+        got = attrs.lookup(path)
+        return got['text'] is not _UNSPECIFIED or got['eol'] is not _UNSPECIFIED
+
+    def action(self, path, attrs=None):
+        """convert.c convert_attrs: the crlf action for `path` (work-tree attributes unless
+        `attrs` is given)."""
+        self._no_nested(path)
+        attrs = self.checkin_attrs() if attrs is None else attrs
+        if not attrs:
+            return {None: BINARY, 'true': AUTO_CRLF, 'input': AUTO_INPUT}[self.mode]
+        got = attrs.lookup(path)
+        text, eol = got['text'], got['eol']
+        if text is _UNSPECIFIED and eol is _UNSPECIFIED:
+            return {None: BINARY, 'true': AUTO_CRLF, 'input': AUTO_INPUT}[self.mode]
+        if text is False:
+            return BINARY
+        safecrlf = self.repo.config.get('core.safecrlf')
+        if safecrlf is not None and safecrlf.strip().lower() != 'warn':
+            raise Unsupported('core.safecrlf with .gitattributes')
+        if eol == 'lf':
+            return AUTO_INPUT if text == 'auto' else TEXT_INPUT
+        if eol == 'crlf':
+            return AUTO_CRLF if text == 'auto' else TEXT_CRLF
+        # text or text=auto with no eol: text_eol_is_crlf()
+        if self.mode == 'true':
+            return AUTO_CRLF if text == 'auto' else TEXT_CRLF
+        if self.mode == 'input':
+            return AUTO_INPUT if text == 'auto' else TEXT_INPUT
+        raise Unsupported('the text attribute with no eol (core.eol) for %s' % path)
 
     def to_git(self, path, data, index_has_cr=None, warn=None):
-        """`data` as git stores it. index_has_cr() says whether the index blob holds a CR; warn
-        gets git's safecrlf warning text."""
-        if self.mode is None or not data:
+        """`data` as git stores it (convert.c crlf_to_git). index_has_cr() says whether the
+        index blob holds a CR; warn gets git's safecrlf warning text."""
+        action = self.action(path)
+        if action == BINARY or not data:
             return data
         s = gather_stats(data)
         convert = bool(s.crlf)
-        if is_binary(s):
-            return data
-        if convert and index_has_cr is not None and index_has_cr():
-            convert = False
+        if action in _AUTO:
+            if is_binary(s):
+                return data
+            if convert and index_has_cr is not None and index_has_cr():
+                convert = False
         if warn is not None:
-            new_crlf, new_lonelf = s.crlf, s.lonelf
+            t = Stats()
+            t.nul, t.lonecr, t.printable, t.nonprintable = s.nul, s.lonecr, s.printable, s.nonprintable
+            t.crlf, t.lonelf = s.crlf, s.lonelf
             if convert:
-                new_lonelf += new_crlf
-                new_crlf = 0
-            if self.mode == 'true':
-                t = Stats()
-                t.nul, t.lonecr, t.printable, t.nonprintable = s.nul, s.lonecr, s.printable, s.nonprintable
-                t.crlf, t.lonelf = new_crlf, new_lonelf
-                if _will_lf_to_crlf(t):
-                    new_crlf += new_lonelf
-                    new_lonelf = 0
-            if s.crlf and not new_crlf:
+                t.lonelf += t.crlf
+                t.crlf = 0
+            if _will_lf_to_crlf(t, action):
+                t.crlf += t.lonelf
+                t.lonelf = 0
+            if s.crlf and not t.crlf:
                 warn("warning: in the working copy of '%s', CRLF will be replaced by LF the next "
                      "time Git touches it\n" % path)
-            elif s.lonelf and not new_lonelf:
+            elif s.lonelf and not t.lonelf:
                 warn("warning: in the working copy of '%s', LF will be replaced by CRLF the next "
                      "time Git touches it\n" % path)
         if not convert:
             return data
+        # auto: no lone CR (that is binary), so every CR is a CRLF's; text: a CR before an LF
         return data.replace(b'\r\n', b'\n')
 
-    def to_worktree(self, data):
-        if self.mode != 'true' or not data:
+    def to_worktree(self, path, data):
+        """The blob `data` as a checkout writes it (convert.c crlf_to_worktree)."""
+        action = self.action(path, self.checkout_attrs())
+        if not data or action not in (AUTO_CRLF, TEXT_CRLF):
             return data
-        s = gather_stats(data)
-        if not _will_lf_to_crlf(s):
+        if not _will_lf_to_crlf(gather_stats(data), action):
             return data
-        return data.replace(b'\n', b'\r\n')
+        return _LONE_LF.sub(b'\r\n', data)
 
 
 # -- reading files --------------------------------------------------------------------------
@@ -233,9 +426,39 @@ class Tree:
             racy = racy_mtime is not None and e.mtime >= racy_mtime
             if not racy:
                 return False, st
-        if e.size and (st.st_size & 0xffffffff) != e.size and self.conv.mode is None:
+        # read-cache.c ie_modified: a size that differs is a change, content unread. Under
+        # core.autocrlf alone (no attribute rules the path) the content is compared instead.
+        if (e.size and (st.st_size & 0xffffffff) != e.size
+                and (self.conv.mode is None or self.conv.ruled(e.path))):
             return True, st
         return self.hash_path(e.path) != e.oid, st
+
+    def checkout_dirty(self, e, racy_mtime=None):
+        """(changed?, st) as a checkout of `e` over its file decides (entry.c checkout_entry,
+        unpack-trees.c oneway_merge: ie_match_stat). For a path an attribute rules, stat data
+        that differs rewrites the file even when its content hashes the same: two files can
+        store the same blob with different line endings."""
+        mod, st = self.modified(e, racy_mtime)
+        if mod or st is None:
+            return mod, st
+        if self.conv.ruled(e.path) and self._stat_differs(e, st):
+            return True, st
+        return False, st
+
+    def _stat_differs(self, e, st):
+        """statinfo.c match_stat_data as Git for Windows builds it (no USE_NSEC: whole seconds):
+        mtime and size, and ctime under core.trustctime unless core.checkStat is minimal."""
+        if e.mtime // 10 ** 9 != st.st_mtime_ns // 10 ** 9:
+            return True
+        if e.size != (st.st_size & 0xffffffff):
+            return True
+        checkstat = (self.repo.config.get('core.checkstat') or 'default').strip().lower()
+        if checkstat not in ('default', 'minimal'):
+            raise Unsupported('core.checkStat %s' % checkstat)
+        if (checkstat == 'default' and self.repo.config.bool('core.trustctime', True)
+                and e.ctime // 10 ** 9 != _ctime(st) // 10 ** 9):
+            return True
+        return False
 
     def refresh(self, report=None):
         """Bring stat data up to date for clean entries; `report(path, why)` for others.
@@ -276,7 +499,7 @@ class Tree:
         got = self.repo.objects.read(oid)
         if got is None:
             raise GitExit(128, 'fatal: unable to read %s\n' % oid)
-        data = self.conv.to_worktree(got[1])
+        data = self.conv.to_worktree(path, got[1])
         full = self.repo.wt_path(path)
         parent = os.path.dirname(full)
         self._make_dirs(path)
@@ -410,8 +633,9 @@ class Walk:
                 isdir = de.is_dir(follow_symlinks=False)
             except OSError:
                 continue
-            if name == '.gitattributes':
-                raise Unsupported('a .gitattributes in the work tree (%s%s)' % (rel, name))
+            if name.lower() == '.gitattributes' and (rel or name != '.gitattributes'):
+                raise Unsupported('a .gitattributes below the root or in another case (%s%s)'
+                                  % (rel, name))
             out.append((name, isdir))
         out.sort(key=lambda t: (t[0] + ('/' if t[1] else '')).encode('utf-8', 'surrogateescape'))
         return out
@@ -584,7 +808,7 @@ def twoway(tree, old, new, reset=False, cmd='checkout', action='switch branches'
             elif cur is None or not _same(cur, n):
                 plan.append((path, 'write', n))
             else:
-                mod, _st = tree.modified(cur_e, racy)
+                mod, _st = tree.checkout_dirty(cur_e, racy)
                 if mod:
                     plan.append((path, 'write', n))
             continue
@@ -644,6 +868,7 @@ def twoway(tree, old, new, reset=False, cmd='checkout', action='switch branches'
         if errfn is not None:
             raise errfn(rejects)
         raise rejected_error(rejects, cmd, action)
+    tree.conv.checkout_from(_result_entry(index, plan, '.gitattributes'))
     for path, act, n in plan:
         if act == 'delete':
             index.remove(path)
@@ -653,6 +878,15 @@ def twoway(tree, old, new, reset=False, cmd='checkout', action='switch branches'
             e = tree.write_blob(path, n[1], n[0])
             index.remove(path)
             index.add(e)
+
+
+def _result_entry(index, plan, path):
+    """(mode, oid) of `path` in the index a two-way merge leaves, or None."""
+    for p, act, n in plan:
+        if p == path:
+            return n if act == 'write' else None
+    e = index.get(path)
+    return (e.mode, e.oid) if e is not None else None
 
 
 def _uptodate(tree, e, racy):

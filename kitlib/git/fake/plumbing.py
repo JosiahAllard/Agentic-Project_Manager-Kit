@@ -682,6 +682,19 @@ class _IdentCtx:
 _HASHOBJ = _u.Spec('hash-object', flags='w stdin no-filters literally stdin-paths', values='t path')
 
 
+def _attr_path(ctx, repo, path):
+    """`path` (relative to the cwd) as git looks its attributes up: relative to the work tree
+    (hash-object.c prefix_filename), or as given when it lies outside it."""
+    full = os.path.normpath(os.path.join(ctx.cwd, path))
+    try:
+        rel = os.path.relpath(full, repo.worktree)
+    except ValueError:                       # another drive
+        return path
+    if rel == os.curdir or rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return path
+    return rel.replace(os.sep, '/')
+
+
 @command('hash-object')
 def hash_object(ctx, args):
     opts, pos, dd = _u.parse(_HASHOBJ, args)
@@ -705,7 +718,7 @@ def hash_object(ctx, args):
             from . import wt as _wt
             conv = _wt.Convert(repo)
             conv.guard()
-            data = conv.to_git(opts['path'], data)
+            data = conv.to_git(_attr_path(ctx, repo, opts['path']), data)
         datas.append(data)
     for p in pos:
         with open(os.path.join(ctx.cwd, p), 'rb') as f:
@@ -714,7 +727,7 @@ def hash_object(ctx, args):
             from . import wt as _wt
             conv = _wt.Convert(repo)
             conv.guard()
-            data = conv.to_git(p, data)
+            data = conv.to_git(_attr_path(ctx, repo, p), data)
         datas.append(data)
     from .objects import hash_object as _ho
     for data in datas:

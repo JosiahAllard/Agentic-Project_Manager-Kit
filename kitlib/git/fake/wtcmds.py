@@ -1256,6 +1256,7 @@ def _checkout_paths(ctx, repo, rev, items, quiet):
                     if was is None or (was.mode, was.oid) != (src[p][0], src[p][1]):
                         ix.add(_index.Entry(p, src[p][0], src[p][1]))
                         fresh.add(p)
+            tree.conv.guard(ix)      # git falls back to the index's .gitattributes: Unsupported
         matched = []
         for p in ix.paths():
             hit = ps.matched_items(p)
@@ -1277,7 +1278,7 @@ def _checkout_paths(ctx, repo, rev, items, quiet):
             return 1
         for p in matched:
             e = ix.get(p)
-            if p in fresh or tree.modified(e, ix.mtime_ns)[0]:
+            if p in fresh or tree.checkout_dirty(e, ix.mtime_ns)[0]:
                 ix.add(tree.write_blob(p, e.oid, e.mode))
         lk.write()
     # not --quiet prints nothing more: git's "Updated N paths" count goes to a terminal only, and

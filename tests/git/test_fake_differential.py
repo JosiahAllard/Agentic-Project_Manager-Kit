@@ -29,6 +29,14 @@ WT = '<WT>'         # a linked worktree's path in a script: <base>/wt
 WT2 = '<WT2>'       # a second one: <base>/wt2
 
 
+def _file_bytes(path):
+    try:
+        with open(path, 'rb') as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
 def _alarm(err):
     return any(line.startswith(('fatal:', 'error:')) for line in err.splitlines())
 
@@ -80,7 +88,10 @@ class Side(object):
         return r.returncode, self.normal(r.stdout)
 
 
-# A script is a list of steps: ('git', argv[, cwd]) or ('write', relpath, text[, cwd]).
+# A script is a list of steps: ('git', argv[, cwd]), ('write', relpath, text[, cwd]),
+# ('bytes', relpath, data) (the file's exact bytes), ('mtime', relpath, ns) (the file's mtime),
+# ('setup', argv) (real git on both sides: a state the fake cannot reach itself) or
+# ('read', relpath) (the two sides' file bytes compared, None when it is absent).
 BRANCH_AND_LAND = [
     ('write', 'a.txt', 'a\n'),
     ('git', ['add', '--', 'a.txt']),
@@ -251,6 +262,143 @@ WORKTREE_CONFIG = [
     ('git', ['config', '--get', 'kit.scope'], WT),
 ]
 
+# A root .gitattributes that sets text and eol (the kit's own file is the first three lines):
+# hashing follows the work tree's file, a checkout writes under the result index's.
+_KIT_ATTRS = '* text=auto eol=lf\n*.cmd text eol=crlf\n*.bat text eol=crlf\n'
+_OLD = 1600000000 * 10 ** 9
+_ATTR_FILES = ['crlf.txt', 'eq.txt', 'tool.cmd', 'mixed.bat', 'bin.dat', 'lonecr.txt']
+ATTRIBUTES = [
+    ('git', ['switch', '-q', '-c', 'kit/attr']),
+    ('write', '.gitattributes', _KIT_ATTRS),
+    ('bytes', 'crlf.txt', b'one\r\ntwo\r\n'),
+    ('bytes', 'eq.txt', b'a\r\nb\n'),
+    ('bytes', 'tool.cmd', b'@echo off\nexit /b 0\n'),
+    ('bytes', 'mixed.bat', b'a\r\nb\nc'),
+    ('bytes', 'bin.dat', b'\x00\x01\r\n'),
+    ('bytes', 'lonecr.txt', b'a\rb\r\n'),
+    ('git', ['status', '--porcelain=v1', '--untracked-files=all']),
+    ('git', ['hash-object'] + _ATTR_FILES),
+    ('git', ['add', '--', '.gitattributes'] + _ATTR_FILES),
+    ('git', ['ls-files', '-s']),
+    ('git', ['status', '--porcelain=v1']),
+    ('git', ['diff', '--name-only']),
+    ('git', ['commit', '-q', '-m', 'attributes']),
+    # a checkout writes each file in its own line ending
+    ('bytes', 'tool.cmd', b'changed\n'),
+    ('git', ['checkout', '--', 'tool.cmd', 'mixed.bat']),
+    ('read', 'tool.cmd'),
+    ('read', 'mixed.bat'),
+    # the same blob in other line endings: status's size check calls it modified, diff does not
+    ('bytes', 'crlf.txt', b'one\ntwo\n'),
+    ('git', ['status', '--porcelain=v1']),
+    ('git', ['diff', '--name-only']),
+    ('git', ['diff']),
+    ('git', ['checkout', '--', 'crlf.txt']),
+    ('read', 'crlf.txt'),
+    # the same blob and the same size: a checkout rewrites a file whose stat differs, in whole
+    # seconds (Git for Windows keeps no nanoseconds); _OLD is never racy against the index
+    ('bytes', 'eq.txt', b'a\nb\r\n'),
+    ('mtime', 'eq.txt', _OLD),
+    ('git', ['checkout', '--', 'eq.txt']),
+    ('read', 'eq.txt'),
+    ('bytes', 'eq.txt', b'a\r\nb\n'),
+    ('mtime', 'eq.txt', _OLD),
+    ('git', ['add', '--', 'eq.txt']),
+    ('bytes', 'eq.txt', b'a\nb\r\n'),
+    ('mtime', 'eq.txt', _OLD + 300000000),
+    ('git', ['checkout', '--', 'eq.txt']),
+    ('read', 'eq.txt'),
+    ('mtime', 'eq.txt', _OLD + 2000000000),
+    ('git', ['reset', '-q', '--hard', 'HEAD']),
+    ('read', 'eq.txt'),
+    ('git', ['status', '--porcelain=v1']),
+    # commit -a hashes under the attributes too
+    ('bytes', 'tool.cmd', b'@echo off\r\nexit /b 2\r\n'),
+    ('git', ['commit', '-q', '-a', '-m', 'tool']),
+    ('git', ['ls-files', '-s']),
+    # a branch switch writes under the result index's .gitattributes: none on main, then the
+    # branch's, which the same checkout writes
+    ('git', ['switch', '-q', 'main']),
+    ('read', '.gitattributes'),
+    ('read', 'tool.cmd'),
+    ('git', ['switch', '-q', 'kit/attr']),
+    ('read', '.gitattributes'),
+    ('read', 'tool.cmd'),
+    ('read', 'mixed.bat'),
+    ('read', 'crlf.txt'),
+    ('git', ['status', '--porcelain=v1']),
+    # merge --abort writes an unmerged path from HEAD under HEAD's attributes (real git makes
+    # the conflict: the fake refuses a merge with a .gitattributes on a side)
+    ('git', ['switch', '-q', '-c', 'kit/del']),
+    ('git', ['rm', '-q', '--', 'tool.cmd']),
+    # the merge takes this side's .gitattributes into the work tree; the abort must not read it
+    ('write', '.gitattributes', '* text=auto eol=lf\n'),
+    ('git', ['add', '--', '.gitattributes']),
+    ('git', ['commit', '-q', '-m', 'drop tool']),
+    ('git', ['switch', '-q', 'kit/attr']),
+    ('bytes', 'tool.cmd', b'@echo on\nexit /b 3\n'),
+    ('git', ['commit', '-q', '-a', '-m', 'tool again']),
+    ('read', 'tool.cmd'),
+    ('setup', ['merge', '-q', '-m', 'conflict', 'kit/del']),
+    ('git', ['status', '--porcelain=v1']),
+    ('read', '.gitattributes'),
+    ('git', ['merge', '--abort']),
+    ('read', 'tool.cmd'),
+    ('read', '.gitattributes'),
+    ('git', ['status', '--porcelain=v1']),
+]
+
+# core.autocrlf decides where an attribute sets text with no eol, and for the paths no line
+# rules ('!text' unsets text again).
+_AUTOCRLF_ATTRS = '*.txt text\nraw.txt -text\n*.lf eol=lf\nauto.x text=auto\nkeep.txt !text\n'
+_AUTOCRLF_FILES = ['t.txt', 'raw.txt', 'n.lf', 'auto.x', 'keep.txt', 'plain.md']
+_AUTOCRLF_READS = [('read', p) for p in ['.gitattributes'] + _AUTOCRLF_FILES]
+# m.txt's stat is set back each time it is written, so that its entry is never racily clean:
+# git and the fake would otherwise answer by the clock.
+ATTRIBUTES_AUTOCRLF = [
+    ('bytes', 'm.txt', b'a\r\nb\n'),
+    ('mtime', 'm.txt', _OLD),
+    ('git', ['add', '--', 'm.txt']),
+    ('git', ['commit', '-q', '-m', 'a blob with a CRLF and a lone LF']),
+    ('git', ['config', 'core.autocrlf', 'true']),
+    ('git', ['switch', '-q', '-c', 'kit/attr']),
+    ('write', '.gitattributes', _AUTOCRLF_ATTRS),
+    ('bytes', 't.txt', b'a\r\nb\nc'),
+    ('bytes', 'raw.txt', b'a\r\nb\n'),
+    ('bytes', 'n.lf', b'a\r\nb\n'),
+    ('bytes', 'auto.x', b'x\ny\n'),
+    ('bytes', 'keep.txt', b'k\r\n'),
+    ('bytes', 'plain.md', b'm\nn\n'),
+    ('git', ['hash-object'] + _AUTOCRLF_FILES),
+    ('git', ['add', '--', '.gitattributes'] + _AUTOCRLF_FILES),
+    ('git', ['ls-files', '-s']),
+    ('git', ['commit', '-q', '-m', 'attributes']),
+    ('git', ['switch', '-q', 'main']),
+    ('git', ['switch', '-q', 'kit/attr']),
+] + _AUTOCRLF_READS + [
+    ('git', ['status', '--porcelain=v1']),
+    # a path an attribute rules: a size that differs is a change to status, not to diff
+    ('bytes', 't.txt', b'a\nb\nc'),
+    ('git', ['status', '--porcelain=v1']),
+    ('git', ['diff', '--name-only']),
+    ('git', ['reset', '-q', '--hard', 'HEAD']),
+    ('read', 't.txt'),
+    # text with a CRLF output turns only the blob's lone LFs into CRLF
+    ('bytes', 'm.txt', b'z\n'),
+    ('git', ['checkout', '--', 'm.txt']),
+    ('read', 'm.txt'),
+    ('mtime', 'm.txt', _OLD),
+    ('git', ['status', '--porcelain=v1']),
+    ('git', ['checkout', '-q', 'HEAD', '--', 'm.txt']),
+    ('mtime', 'm.txt', _OLD),
+    ('git', ['config', 'core.autocrlf', 'input']),
+    ('git', ['switch', '-q', 'main']),
+    ('git', ['switch', '-q', 'kit/attr']),
+] + _AUTOCRLF_READS + [
+    ('git', ['hash-object'] + _AUTOCRLF_FILES),
+    ('git', ['status', '--porcelain=v1']),
+]
+
 # Real git reads both repositories after a script.
 END_STATE = [
     ['for-each-ref', '--format=%(refname) %(objectname)'],
@@ -280,6 +428,25 @@ class FakeAgainstRealGit(unittest.TestCase):
                     s.repo.write(step[1], step[2],
                                  root=s._arg(step[3]) if len(step) > 3 else None)
                 continue
+            if step[0] == 'bytes':
+                for s in sides:
+                    with open(s.repo.path(step[1]), 'wb') as f:
+                        f.write(step[2])
+                continue
+            if step[0] == 'mtime':
+                for s in sides:
+                    os.utime(s.repo.path(step[1]), ns=(step[2], step[2]))
+                continue
+            if step[0] == 'setup':
+                got = [s.real(step[1])[0] for s in sides]
+                self.assertEqual(got[0], got[1], 'set-up step %d git %s' % (n, ' '.join(step[1])))
+                continue
+            if step[0] == 'read':
+                got = [_file_bytes(s.repo.path(step[1])) for s in sides]
+                if got[0] != got[1]:
+                    diffs.append('step %d read %s:\n  fake: %r\n  real: %r' % (
+                        n, step[1], got[0], got[1]))
+                continue
             argv, cwd = step[1], step[2] if len(step) > 2 else None
             got = [s.git(argv, cwd) for s in sides]
             if got[0] != got[1]:
@@ -307,6 +474,12 @@ class FakeAgainstRealGit(unittest.TestCase):
 
     def test_worktree_config(self):
         self.run_script(BRANCH_AND_LAND[:3] + WORKTREE_CONFIG)
+
+    def test_gitattributes_line_endings(self):
+        self.run_script(BRANCH_AND_LAND[:3] + ATTRIBUTES)
+
+    def test_gitattributes_under_core_autocrlf(self):
+        self.run_script(BRANCH_AND_LAND[:3] + ATTRIBUTES_AUTOCRLF)
 
 
 if __name__ == '__main__':
