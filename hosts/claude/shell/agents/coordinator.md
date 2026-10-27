@@ -134,7 +134,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   items and holds (work set item | state; in flight branch | agent | state; landings submitted (branch | tip);
   landings not yet reported (branch | tip | result); waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
   repo's records (landing notes), never the note, except landings not yet reported. No narrative. A successor reads it as stale.
-- Write it, and anything under your host's config folder (`~/.claude`, `$env:CLAUDE_CONFIG_DIR`),
+- Write it, and anything under your host's config folder (`~/.claude`, the environment variable `CLAUDE_CONFIG_DIR`),
   with Edit/Write, never a shell command: a shell write there blocks on an approval prompt and
   leaves you idle.
 - **No implementation.** Code, tests, docs, config, CI -> an agent. Carve-out: a trivial
@@ -194,7 +194,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Implement beyond the one-line carve-out.
 - Land, merge or push yourself, except by `land.py --submit`. Pass anything to jump the landing
   queue or break a landing lock.

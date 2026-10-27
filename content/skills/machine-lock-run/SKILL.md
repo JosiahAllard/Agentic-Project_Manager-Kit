@@ -22,7 +22,7 @@ Refusals: exit 6 busy (`--no-wait`), 8 `--max-wait` ran out: waiting is normal. 
 ## Never
 
 - Run heavy work unlocked because the queue is busy, or take an environment variable claiming a lock as proof of one.
-- Truncate a locked run's live output (`head`, `Select-Object -First`): it kills the wrapper.
+- Truncate a locked run's live output (`head`, or any first-N filter): it kills the wrapper.
 - Touch another run's lock, records or processes, or use `stop --force`, `hold`, `division` or `game`: report the run id and `status` text to your coordinator.
 - Time a measurement under load without labelling it "shared machine".
 
