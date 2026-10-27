@@ -12,7 +12,7 @@ from kitlib.launcher import settings as S
 from kitlib.launcher.host import Host
 
 NOW = datetime.datetime(2026, 10, 10, 12, 0, tzinfo=datetime.timezone.utc)
-ROLE = re.compile(r"\$env:PM_KIT_ROLE = '([^']*)'")
+ROLE = re.compile(r"(?:\$env:PM_KIT_ROLE = |^export PM_KIT_ROLE=)'([^']*)'", re.M)
 EXE = r'C:\bin\claude.exe'
 
 
@@ -31,6 +31,7 @@ class FakeHost(Host):
         Host.__init__(self, home, dict(env or {}))
         self.procs = list(procs)
         self.opened, self.killed, self.slept, self.piped = [], [], [], []
+        self.open_kw = []           # open_window's keyword arguments, one dict a window (Linux)
         self.ignored, self.mypid, self.uptime = ignored, own_pid, uptime
         self.where, self.homes = None, []      # place()'s kind (None: place() fails the test); home_worktree calls
 
@@ -43,10 +44,11 @@ class FakeHost(Host):
     def now(self):
         return NOW
 
-    def open_window(self, text):
+    def open_window(self, text, **kw):
         if not role_of(text):
             raise AssertionError('a window without a PM_KIT_ROLE mark: %s' % text[:200])
         self.opened.append(text)
+        self.open_kw.append(kw)
 
     def git_ignored(self, repo, path):
         return self.ignored
