@@ -1283,8 +1283,9 @@ def cd_move(cmd, cwd, home=None, home_vars=False, linked=False):
     linux_bash = cmd.shell == BASH and paths.posix()
     if linux_bash and words[0].text not in LINUX_BASH_CD:
         return False, cwd, linked               # `CD x`, `chdir x`: no cd bash runs on Linux
-    if linux_bash and (BASH_CD_UNSURE_RE.search(cmd.source or '') or BASH_CD_UNSURE_RE.search(cmd.line or '')):
-        return True, None, False                # CDPATH, or cd made physical by set -P, on the line
+    # CDPATH, or cd made physical by set -P, on the line: a place starting with `/` and holding no
+    # `..` goes where its text says all the same
+    unsure = linux_bash and bool(BASH_CD_UNSURE_RE.search(cmd.source or '') or BASH_CD_UNSURE_RE.search(cmd.line or ''))
     name = re.split(r'[\\/]', verb)[-1]
     if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
         if verb not in PS_QUALIFIED_CD:
@@ -1311,6 +1312,8 @@ def cd_move(cmd, cwd, home=None, home_vars=False, linked=False):
         if rest and not rest[0].dyn and rest[0].text == '--':
             rest = rest[1:]
         if not rest and verb in ('cd', 'chdir', 'set-location', 'sl'):
+            if unsure:
+                return True, None, False
             if linux_bash:
                 return (True,) + _linux_cd(home_folder(home), cwd, home, logical, linked)
             return True, resolve_path(home_folder(home), cwd, cmd.shell, home, logical=logical), False
@@ -1321,7 +1324,9 @@ def cd_move(cmd, cwd, home=None, home_vars=False, linked=False):
         p = home_text(p, home, dyn=True) if home_vars else None
         if p is None:
             return True, None, False
-    if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
+    if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?['):
+        return True, None, False
+    if unsure and not (p.startswith('/') and '..' not in p.split('/')):
         return True, None, False
     if linux_bash and p.startswith('+'):
         return True, None, False                # pushd +N turns the stack

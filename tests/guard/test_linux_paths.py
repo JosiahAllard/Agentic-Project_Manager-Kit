@@ -722,5 +722,78 @@ class Ready(unittest.TestCase):
         self.assertEqual(guard.READY_PLATFORMS, ('windows', 'linux'))
 
 
+class CdLinkFlag(LinuxCase):
+    """shell._linux_cd's link flag: a cd from a folder entered through a link, or one whose text
+    passes through a link on the way, keeps the flag, so a later `..` (folded by bash from a $PWD
+    the guard does not keep) is unknown. Links: d -> /work/repo/src, /home/u/l -> <wt>/a/b."""
+    unplaced_denied = True
+
+    def setUp(self):
+        LinuxCase.setUp(self)
+        wt = self.w.wt
+        p = mock.patch('posixpath.realpath', fake_links({wt + '/d': '/work/repo/src', '/home/u/l': wt + '/a/b'}))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_relative_cd_from_a_linked_folder_keeps_the_flag(self):
+        self.refused('cd d && cd sub && cd .. && touch f', rules.UNPLACED)
+
+    def test_a_dot_dot_cd_onto_a_link_sets_the_flag(self):
+        self.refused('cd x/../d && cd .. && touch f', rules.UNPLACED)
+
+    def test_two_dot_dots_after_a_cd_below_a_link_are_unknown(self):
+        self.refused('cd /home/u/l && cd c && cd ../.. && touch f', rules.UNPLACED)
+
+
+class CdUnsureLine(LinuxCase):
+    """shell.cd_move: an unsure name on the line (CDPATH, cdable_vars, set -P, `physical`) leaves a
+    cd's folder unknown, but not a place starting with `/` and holding no `..`, which none of them
+    redirects; a place holding `[` (a pattern) is unknown."""
+    unplaced_denied = True
+
+    def test_an_absolute_cd_on_a_line_naming_physical_is_still_placed(self):
+        self.refused('echo physical; cd /work/repo && echo x > STANDING.md', 'main-checkout')
+        self.refused('CDPATH=/x cd /work/repo && echo x > STANDING.md', 'main-checkout')
+
+    def test_an_absolute_cd_with_dot_dot_on_such_a_line_is_unknown(self):
+        self.refused('CDPATH=/x cd /work/repo/.claude/.. && echo x > f', rules.UNPLACED)
+
+    def test_a_cd_to_a_pattern_is_unknown(self):
+        self.refused('cd [d]; echo x > ../f', rules.UNPLACED)
+
+
+class ChdirRealNone(LinuxCase):
+    """shell.chdir_real's None: the folder does not exist, or it is the starting command's folder
+    reached through a link (a bash started there keeps the inherited $PWD)."""
+
+    def setUp(self):
+        LinuxCase.setUp(self)
+        p = mock.patch('posixpath.realpath', fake_links({self.w.wt + '/d': self.w.wt + '/sub'}))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_missing_folder_is_none(self):
+        self.assertIsNone(sh.chdir_real(self.w.wt + '/nowhere', self.w.wt))
+
+    def test_the_outer_folder_through_a_link_is_none(self):
+        self.assertIsNone(sh.chdir_real(self.w.wt + '/sub', self.w.wt + '/d'))
+        self.assertEqual(sh.chdir_real(self.w.wt + '/sub', self.w.wt + '/sub'), self.w.wt + '/sub')
+
+
+class GateResultFolder(LinuxCase):
+    """rules.gate_result on Linux: a gate result folder under a git directory that holds HEAD and
+    objects (not named .git) is matched with `/` paths."""
+
+    def test_a_write_under_a_bare_git_directory_is_refused(self):
+        git = self.w.wt + '/store'
+        real_isfile = posixpath.isfile
+        with mock.patch('posixpath.isfile', lambda q: q == git + '/HEAD' or real_isfile(q)):
+            self.dirs = self.dirs + (git, git + '/objects')
+            d = decide(event('Write', {'file_path': git + '/kit-gate-result/x.gate.json', 'content': ''},
+                             self.w.wt, sub=True), self.w.ctx())
+        self.assertIsNotNone(d)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'gate-result'), d.reason)
+
+
 if __name__ == '__main__':
     unittest.main()

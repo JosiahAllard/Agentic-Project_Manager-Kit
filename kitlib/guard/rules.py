@@ -1991,7 +1991,7 @@ def gate_result(event, ctx, target, role, what):
         for k in range(1, len(parts)):
             if parts[k].lower() != GATE_RESULT:
                 continue
-            gitdir = '\\'.join(parts[:k])
+            gitdir = ('/' if paths.posix() else '\\').join(parts[:k])
             if parts[k - 1].lower() == '.git' or (os.path.isfile(os.path.join(gitdir, 'HEAD')) and
                                                   os.path.isdir(os.path.join(gitdir, 'objects'))):
                 return refuse('gate-result', role, '%s: %s is in the gate result folder %s, which only the '
