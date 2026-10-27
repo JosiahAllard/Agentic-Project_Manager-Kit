@@ -22,7 +22,7 @@ The export root is the machine config's `plugin.export_dir`, by default `%LOCALA
 
 1. It reads the sha of `refs/heads/main` on the kit's remote (`plugin.remote`, default `origin`) with `git ls-remote`. This writes no ref and fetches nothing. When the kit's objects do not hold that commit, it refuses with "fetch the kit first". A local commit that has not been pushed is never exported.
 2. It exports that commit and points `marketplace.json` at it, then prunes old export folders (see "Prune" below). When one of these steps (the export, the marketplace write, the state write, the prune) fails, it prints `REFUSED: the <step> failed: <error>`, runs no `claude` and exits 1 (`kitlib.pluginsource` `_apply`).
-3. In each account folder (`claude.account_folders`), it runs `claude plugin marketplace update pm-kit` and then `claude plugin update pm-kit@pm-kit` (the exact subcommands are an open question, see "Open questions"):
+3. In each account folder (`claude.account_folders`), it runs `claude plugin marketplace update pm-kit` and then `claude plugin update pm-kit@pm-kit` (only `plugin update` is observed; the rest are inferred, see "Open questions"):
    - The folders are `~/.claude`, every other `~/.claude-*` (except the kit's own machine folders, `machinesetup.default_config_dirs`), and the folders of the machine config's `launcher.accounts` and `launcher.orgs`, each counted once.
    - `--folder DIR` (repeatable) limits the run to the folders named. A name that is not one of those folders is refused with `REFUSED: not an account folder on this machine: <names>`, and nothing runs (`kitlib.pluginsource` `pick_folders`).
    - A folder that is not migrated (its `state.json` record has no `migrated: true`) is refused with `REFUSED <folder>: not migrated to the export yet: python "<kit>/tools/plugin_refresh.py" --migrate --apply --folder "<folder>"`. The other folders still run, and the exit code is 1, in a dry run too.
@@ -122,10 +122,17 @@ INFERENCE, not observed on a live Codex install: the `config.toml` keys, the mar
 
 ## Open questions
 
-These are not confirmed. Each is marked with what would settle it.
+Observed on this machine (2026-10-27), then what is still inference.
 
-- **In place or copied.** The plugins reference (https://code.claude.com/docs/en/plugins/loading, "In-place and copied plugins") says a relative-path plugin of a marketplace added from a local path "loads in place from its path inside the marketplace folder", and every other marketplace plugin is copied into `cache/<marketplace>/<plugin>/<version>/`. An install from the kit checkout as its own marketplace was observed copied into `plugins/cache/pm-kit/pm-kit/0.1.0`, the whole working tree (158 MB, `.claude/worktrees` included). This is UNRESOLVED. Either way the export holds pushed main only. To settle it, look under one account's `plugins/cache` after `--migrate --apply`.
-- **Cache folder.** The cache folder of a copied plugin is `<CLAUDE_CONFIG_DIR>/plugins/cache/...`. This is inferred from the observation above, and it is where `old_cache` points.
-- **Version format.** The stamped version format (`0.1.0-main.<n>`) is assumed to be accepted by `claude plugin update`. To settle it, run the first `--apply`.
-- **The claude subcommands.** INFERENCE, not run against a real `claude` here (the tests use a fake one that logs its arguments): that `claude plugin marketplace update pm-kit`, `claude plugin update pm-kit@pm-kit`, `claude plugin marketplace remove pm-kit`, `claude plugin marketplace add <path>` and `claude plugin install pm-kit@pm-kit -s user` exist with these names and flags, and that `-s user` installs at user scope (`kitlib.pluginsource` `UPDATE_STEPS`, `migrate_steps`). To settle it, run `--migrate --apply --folder` on one folder and read its output and `state.json`.
-- **Open files in old sessions.** INFERENCE: that a session started before a migrate or refresh keeps its MCP server running from the folder it loaded, and holds files there open, so removing that folder before every session restarts can fail or break the session. This is why prune keeps what a process names and recent exports, and removes by claim, so a folder with an open file is kept whole. To settle it, list the open handles under an old cache while such a session runs.
+OBSERVED:
+
+- **Copied, not in place.** Each account folder holds `plugins/cache/pm-kit/pm-kit/<version>/` (about 12 MB), `installed_plugins.json` `installPath` points there, and the marketplace source is the local export root (an export folder is about 17 MB). The plugins reference (https://code.claude.com/docs/en/plugins/loading, "In-place and copied plugins") says a relative-path plugin of a local-path marketplace loads in place; here it is copied. Either way the export holds pushed main only.
+- **Cache folder.** `<CLAUDE_CONFIG_DIR>/plugins/cache/pm-kit/pm-kit/<version>`, where `old_cache` points.
+- **Version format.** The stamped `<kit version>-main.<n>` (for example `0.4.0-main.4607`, `kitlib.pluginsource` `stamped_version`) is accepted: `state.json` records it with `claude plugin update` rc 0.
+- **`claude plugin update pm-kit@pm-kit`** works: `state.json` has rc 0 in every account folder.
+- **Prune** removes old exports and keeps what a process, a scheduled task or a pin lease names (`refresh.log`).
+
+INFERENCE:
+
+- **The other claude subcommands.** `claude plugin marketplace update pm-kit`, `marketplace remove pm-kit`, `marketplace add <path>` and `install pm-kit@pm-kit -s user` are inferred from the end state (every `known_marketplaces.json` points at the export root, and `state.json` has `migrated: true`); no log line shows them. The tests use a fake `claude` that logs its arguments (`kitlib.pluginsource` `UPDATE_STEPS`, `migrate_steps`). To settle it, run `--migrate --apply --folder` on one folder and read its output.
+- **Open files in old sessions.** That a session started before a migrate or refresh keeps its MCP server running from the folder it loaded, and holds files there open, so removing that folder before every session restarts can fail or break the session. The handle behaviour is not observed. It is why prune keeps what a process names and recent exports, and removes by claim, so a folder with an open file is kept whole. To settle it, list the open handles under an old cache while such a session runs.
