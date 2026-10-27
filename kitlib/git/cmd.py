@@ -138,7 +138,7 @@ def _run(argv, cwd=None, input=None, timeout=None, env=None):
     cannot block the caller), and the caller waits for it with the deadline. After the tree is
     ended the pipes close and the thread finishes; if something outside the job still holds a pipe
     the thread is left to it after KILL_GRACE and the call returns anyway."""
-    job = _job.Job(kill_on_close=False)
+    job = _job.Job(kill_on_close=False, short=True)
     try:
         p = job.start(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                       stdin=subprocess.PIPE if input is not None else None)

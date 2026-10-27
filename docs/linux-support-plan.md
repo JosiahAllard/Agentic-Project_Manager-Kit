@@ -627,6 +627,14 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    environment token finds orphans, contain.py says why); leftovers() moves stragglers to a scope
    of their own through systemd; processes() is None; a Linux job runs one command; the pid
    shield is Windows only, so each Linux unit and worker carries the "could not shield" note.
+   Short Jobs (`Job(short=True)`: the calls in git/cmd.py (git), records/inflight.py (the
+   configured in_flight command) and machinesetup/extras.py run_tree (the claude CLI); Windows
+   ignores it) share one carrier scope: contain.py Carrier moves the child in with busctl
+   AttachProcessesToUnit into its own cgroup under the carrier, reads the placement back, and
+   falls back to the Job's own scope if either fails. Why: a systemd user scope per call costs
+   about 84 ms on the VM, against about 17 ms attached. Known limits: one shared carrier unit
+   (killing one short job never reaches another, but stopping the carrier, or systemd-oomd
+   choosing it, ends them all), and the first call, which creates it, costs about 70-90 ms.
 6. **Lock hardware.** linux/hardware.py feeding lock/layout.detect; fake_hardware gains the four
    synthetic /sys and /proc trees of section 2.4. Risk High (lock logic). Proof: the four
    synthetic trees, and the VM's live /sys, divide with no shared id; the Windows layout

@@ -32,8 +32,7 @@ DEEP_WORKER = 'deep-worker'
 CONSULTANT = 'consultant'
 PM = 'pm'
 PLAIN = 'plain'
-_BY_AGENT = {'coordinator': COORDINATOR, 'conductor': COORDINATOR,
-             'deep-worker': DEEP_WORKER, 'consultant': CONSULTANT}
+_BY_AGENT = {'coordinator': COORDINATOR, 'deep-worker': DEEP_WORKER, 'consultant': CONSULTANT}
 MODEL = re.compile(r'^[A-Za-z0-9._-]+(\[1m\])?$')
 # an agent name, bare or with the kit plugin's prefix (kitlib.agentname); no other colon
 AGENT = re.compile(r'^(?:%s)?[A-Za-z0-9_-]+$' % re.escape(agentname.PREFIX))
@@ -48,8 +47,8 @@ PERSIST = "$env:CLAUDE_CODE_FORCE_SESSION_PERSISTENCE = '1'"
 
 
 def role_for(agent, coordinator_agent='coordinator'):
-    """The PM_KIT_ROLE a session running as `agent` gets: coordinator for the coordinator agent
-    (and the old `conductor` name), deep-worker, consultant; `plain` for a session with no agent;
+    """The PM_KIT_ROLE a session running as `agent` gets: coordinator for the coordinator agent,
+    deep-worker, consultant; `plain` for a session with no agent;
     any other agent's own name. Never empty: an unmarked session would count as the owner's. Both
     names are compared without the kit plugin's prefix, and the mark never carries it."""
     if not agent:

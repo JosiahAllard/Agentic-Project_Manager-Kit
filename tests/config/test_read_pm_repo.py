@@ -75,11 +75,12 @@ class TwoFilesTest(_PmRepo):
         self.write(self.local, {'guard_mcp_prefix': 'mcp__x'})
         self.refused('%s: guard_mcp_prefix belongs in %s, not here' % (self.local, self.policy))
 
-    def test_a_dropped_key_in_either_file_is_refused(self):
+    def test_the_removed_old_coordinator_start_key_is_an_unknown_key(self):
+        self.assertNotIn('conductor_start', user.SCHEMA)
+        self.assertNotIn('conductor_start', user.DROPPED_KEYS)
         for path in (self.policy, self.local):
-            for key in ('conductor_start',):
-                self.write(path, {key: {}})
-                self.refused('%s: %s is a key the move drops' % (path, key))
+            self.write(path, {'conductor_start': {}})
+            self.refused('conductor_start')
             os.remove(path)
 
     def test_a_retired_key_in_either_file_loads_and_is_not_returned(self):

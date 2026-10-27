@@ -105,7 +105,7 @@ class Judge(unittest.TestCase):
         from kitlib.launcher import autostart
         from kitlib.machinesetup import agenttemp
         from kitlib.worktree import task as wtask
-        for name in (autostart.TASK_NAME, autostart.OLD_TASK_NAME, agenttemp.TASK, wtask.task_name("r")):
+        for name in (autostart.TASK_NAME, agenttemp.TASK, wtask.task_name("r")):
             with self.subTest(name=name):
                 self.assertTrue(ct.is_kit(task("\\" + name, "python.exe"), roots=set()))
 
