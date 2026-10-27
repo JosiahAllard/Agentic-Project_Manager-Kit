@@ -255,7 +255,8 @@ class SharedTempFollowsTempDir(HomeConfig):
         with self.assertRaises(RuntimeError):
             user.system_temp({}, 'win32')
         with mock.patch.object(tempfile, 'gettempdir', return_value='/tmp/x'):
-            self.assertEqual(user.system_temp({}, 'linux'), '/tmp/x')
+            self.assertEqual(user.system_temp({}, 'linux'), '/tmp')
+            self.assertEqual(user.system_temp({}, 'darwin'), '/tmp/x')
 
     def test_a_set_temp_dir_is_the_shared_temp(self):
         configured = os.path.join(self.home, 'kit-shared')

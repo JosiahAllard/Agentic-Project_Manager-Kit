@@ -18,7 +18,7 @@ class Fenced(unittest.TestCase):
         test."""
         for patch in (mock.patch.object(user, '_FENCED_HOME', recorded),
                       mock.patch.object(user, '_PROFILE', None),
-                      mock.patch.object(user, '_windows_profile',
+                      mock.patch.object(user, '_system_profile',
                                         side_effect=AssertionError('Windows was asked')),
                       mock.patch.dict(os.environ)):
             patch.start()

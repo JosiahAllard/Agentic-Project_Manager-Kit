@@ -6,6 +6,13 @@ It is `HKLM\\SOFTWARE\\pm-kit`, value `pm_repo`, a REG_SZ, read in the 64-bit re
 administrator can write it (tools/machine_setup.py --pm-repo, docs/machine-setup.md "PM repo
 pointer"), so an agent cannot point the kit at another PM repository.
 
+On Linux (docs/linux-support-plan.md slice 9) there is no registry: the value is one line of UTF-8
+text in the file /etc/pm-kit/pointer, which only an administrator can write, else in the user's
+<profile>/.config/pm-kit/pointer, the profile folder from the password database and never from
+$HOME or $XDG_CONFIG_HOME (kitlib.platform.linux.paths.read_pointer). A machine file that is there
+but bad is the answer: the user's file is then not read. There the value is an absolute path with
+no drive.
+
 The value is the absolute path of the PM repository's main or data work tree, never a pm/<slug>
 worktree: an existing folder that is the top of a git work tree; when its repository's common dir
 holds kit-pm-data.json (kitlib.pmdata), the work tree must be on the recorded data branch, and with
@@ -20,9 +27,11 @@ preflight's `pointer` line reports it.
 import collections
 import os
 
+import kitlib.platform
 from kitlib import pmdata
 from kitlib.config import user
 from kitlib.git import refs, repo
+from kitlib.platform.linux import paths as linux_paths
 
 KEY_PATH = r'SOFTWARE\pm-kit'
 KEY_NAME = r'HKLM' + '\\' + KEY_PATH
@@ -51,9 +60,11 @@ def read_raw():
 
 
 def registry():
-    """read_raw's answer from the registry, fenced or not: only for the test fence's one
-    exception (tests.real_install_config, which reads it before the fence); everything else
-    calls read_raw."""
+    """read_raw's answer from the registry (on Linux, from the pointer files), fenced or not:
+    only for the test fence's one exception (tests.real_install_config, which reads it before the
+    fence); everything else calls read_raw."""
+    if kitlib.platform.NAME == 'linux':
+        return linux_paths.read_pointer()
     try:
         winreg = _winreg()
     except ImportError:
@@ -73,6 +84,16 @@ def registry():
     return value, None
 
 
+def _absolute(path):
+    """Whether `path` is absolute as the seam's platform spells one: with a drive on Windows, a
+    leading / on Linux (so a path with a drive is not), else as this host's os.path says."""
+    if kitlib.platform.NAME == 'windows':
+        return os.path.isabs(path) and bool(os.path.splitdrive(path)[0])
+    if kitlib.platform.NAME == 'linux':
+        return linux_paths.is_absolute(path)
+    return os.path.isabs(path)
+
+
 def check(path, classify=None, branch=None):
     """None when `path` can be the pointer's value; else why not, in words. `classify` and
     `branch` replace repo.classify and refs.current_branch (the guard reads both from files)."""
@@ -81,7 +102,7 @@ def check(path, classify=None, branch=None):
 
 def _check(path, classify=None, branch=None):
     """(check's answer, the kitlib.pmdata Record of path's repository or None)."""
-    if not os.path.isabs(path) or not os.path.splitdrive(path)[0]:
+    if not _absolute(path):
         return '%s is not an absolute path' % path, None
     if not os.path.isdir(path):
         return 'no folder at %s' % path, None

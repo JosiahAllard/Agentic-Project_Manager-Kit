@@ -12,6 +12,7 @@ import time
 import unittest
 from unittest import mock
 
+import kitlib.platform
 from kitlib import kitroot, pmdata
 from kitlib.records import gate_ok
 from kitlib.worktree import classify, holders, marks, remove, sweep
@@ -646,7 +647,8 @@ class Live(ClassifyCase):
 
     def test_an_unread_process_off_windows_is_l_and_says_not_probed(self):
         path = self.workstream('offwin')
-        with mock.patch.object(holders, 'WINDOWS', False):
+        with mock.patch.object(holders, 'WINDOWS', False), \
+                mock.patch.object(kitlib.platform, 'NAME', 'unsupported'):
             rc, out, data = self.run_classify(procs=lambda: (([], 1, 1), None))
         row = self.row(data, path)
         self.assertEqual(row['class'], 'L', row)
@@ -654,6 +656,18 @@ class Live(ClassifyCase):
                          'unreadable: 1 process(es) could not be read and %s was not probed: the '
                          'open for delete is made on Windows only: a process we could not read '
                          'may hold it' % path)
+
+    def test_an_unread_process_on_linux_is_l_and_says_why(self):
+        path = self.workstream('onlinux')
+        with mock.patch.object(holders, 'WINDOWS', False), \
+                mock.patch.object(kitlib.platform, 'NAME', 'linux'):
+            rc, out, data = self.run_classify(procs=lambda: (([], 1, 1), None))
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'L', row)
+        self.assertEqual(row['reason'],
+                         'unreadable: 1 process(es) could not be read and %s was not probed: '
+                         'Linux has no open that shows which folders a process holds: a process '
+                         'we could not read may hold it' % path)
 
     @windows_only('the process scan is Windows only')
     def test_the_real_process_scan_finds_this_process_in_a_tree(self):

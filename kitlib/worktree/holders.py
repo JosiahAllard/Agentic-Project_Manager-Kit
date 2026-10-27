@@ -12,13 +12,28 @@ everything, and closes the handle again; a path another handle denies delete on 
 ERROR_SHARING_VIOLATION (32). `cwd_holders(root)` only NAMES processes for the cwd case and says how
 many it could not read, so "named nobody" is never "nothing holds it". Every walk here stops past
 WALK_MAX entries and never descends a link or junction (`prune`). Nothing here deletes anything.
+
+On Linux (docs/linux-support-plan.md slice 9) nothing denies a delete, so `blockers` and
+`cwd_holders` read /proc instead (kitlib.platform.linux.paths.process_paths): every path inside
+`root` that a process of this user uses (its current folder, root, program, an open file or a
+mapped file) is HELD. A process of this user that cannot be read in full makes the root UNREAD, as
+does a tree the scan's mount table shows at another path too: its device mounted again where the
+roots overlap (a bind mount), a mount inside it or at or above the one holding it, or no mount
+holding it (paths.aliased), since a process there uses the tree under a path not under `root`.
+A /proc that cannot be listed, hides processes of this user by a mount option, or belongs to a
+PID namespace other than the first (a container, a WSL2 distro) makes it NOT_SEARCHED. Each is a
+refusal: the answer is empty only when every process of this user was read and none uses the tree.
+Another user's processes cannot be seen.
 """
 import ctypes
 import os
 import re
 import stat
 
-WINDOWS = os.name == 'nt'
+import kitlib.platform
+from kitlib.platform.linux import paths as linux_paths
+
+WINDOWS = kitlib.platform.NAME == 'windows'
 
 DELETE = 0x00010000
 SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004      # read | write | delete
@@ -34,6 +49,14 @@ TH32CS_SNAPPROCESS = 0x2
 # free, idle or clean.
 WALK_MAX = 200000
 NOT_SEARCHED = -1                   # `blockers`: the tree was past WALK_MAX, not probed in full
+#                                     (on Linux: /proc could not be listed, hides processes of
+#                                     this user by a mount option, or belongs to a PID
+#                                     namespace other than the first)
+HELD = -2                           # `blockers` on Linux: a process of this user uses this path
+UNREAD = -3                         # `blockers` on Linux: a process of this user could not be read,
+#                                     its device is mounted again where the roots overlap, a mount
+#                                     stands inside it or over the one holding it, or no mount
+#                                     holds it (paths.aliased)
 SHOWN = 20                          # a refusal names this many files or links, then counts the rest
 LINK_ADVICE = "remove the link by hand first; git's handling of it is untested"
 
@@ -82,10 +105,25 @@ def kernel32():
     return lib
 
 
+def _linux():
+    return kitlib.platform.NAME == 'linux'
+
+
+def _under(path, target):
+    """True when the /proc path `path` is the folder `target` (a canon form) or under it."""
+    flat = os.path.normcase(path)
+    if target.endswith(os.sep):                 # the root of the file system
+        return flat.startswith(target)
+    return flat == target or flat.startswith(target + os.sep)
+
+
 def blockers(root):
-    """Every path under `root` that cannot be deleted right now, as (path, windows error); [] off
-    Windows. A walk error is reported too, and past WALK_MAX entries the root is reported with
-    NOT_SEARCHED. A link or junction is probed as itself and never descended."""
+    """Every path under `root` that cannot be deleted right now, as (path, windows error); on
+    Linux, as (path, HELD), with (root, UNREAD) and (root, NOT_SEARCHED) (module text); [] on any
+    other platform. A walk error is reported too, and past WALK_MAX entries the root is reported
+    with NOT_SEARCHED. A link or junction is probed as itself and never descended."""
+    if _linux():
+        return _linux_blockers(root)
     if not WINDOWS:
         return []
     lib = kernel32()
@@ -112,6 +150,25 @@ def blockers(root):
     for failure in walk_errors:
         found.append((plain(str(getattr(failure, 'filename', root))),
                       getattr(failure, 'winerror', None) or 0))
+    return found
+
+
+def _linux_blockers(root):
+    whole = os.path.abspath(root)
+    try:
+        scan = linux_paths.process_paths()
+    except OSError:                       # no /proc, an empty one, or not this system's
+        return [(whole, NOT_SEARCHED)]
+    if not scan.total:
+        return [(whole, NOT_SEARCHED)]
+    target = canon(root)
+    found, named = [], set()
+    for _pid, _name, _kind, path in scan.entries:
+        if path not in named and _under(path, target):
+            named.add(path)
+            found.append((path, HELD))
+    if scan.unreadable or linux_paths.aliased(scan.mounts, os.path.realpath(whole)):
+        found.append((whole, UNREAD))         # unread, or reachable by a path /proc names apart
     return found
 
 
@@ -226,7 +283,17 @@ def current_directory(pid):
 
 def cwd_holders(root):
     """(holders, unreadable, total): processes whose current directory is at or under `root`, as
-    (pid, image, cwd). `unreadable` is how many this scan could not open."""
+    (pid, image, cwd). `unreadable` is how many this scan could not open. On Linux, from /proc:
+    processes of this user only, `unreadable` counting those of this user; ([], 0, 0) when /proc
+    cannot be listed, and on any other platform."""
+    if _linux():
+        try:
+            scan = linux_paths.process_paths(('cwd',))
+        except OSError:
+            return [], 0, 0
+        target = canon(root)
+        return ([(pid, name, where) for pid, name, _kind, where in scan.entries
+                 if _under(where, target)], scan.unreadable, scan.total)
     if not WINDOWS:
         return [], 0, 0
     target = canon(root).rstrip('\\')
@@ -262,13 +329,26 @@ def describe(root, why, cwd=None):
     kept apart: nothing holds it; named current-directory holders; blocked with no cwd holder (a
     file handle, or a process the scan could not open). `cwd`: the caller's directory (default
     this process's), for the "THIS command is a holder" line."""
+    linux = _linux()
     if not why:
-        return ['  free     nothing is holding it: every entry answered a DELETE-access open just',
+        first = ('  free     nothing is holding it: no process of this user uses anything in it'
+                 if linux else
+                 '  free     nothing is holding it: every entry answered a DELETE-access open just')
+        return [first,
                 '           now. No process to chase and nothing to wait for - a human can delete',
                 '           the directory, and this tool never will.']
     out = []
     for path, err in why:
         note = ('held open (ERROR_SHARING_VIOLATION)' if err == SHARING_VIOLATION else
+                'in use by a process of this user (its current folder, root, program, an open'
+                ' file or a mapped file)' if err == HELD else
+                'not known to be free: a process of this user could not be read in full, or the'
+                ' tree shows at another path too (its device mounted again where the roots'
+                ' overlap, a mount inside it or over it, or no mount holding it)' if err == UNREAD
+                else 'not searched: the process list (%s) cannot be read, hides processes of this'
+                ' user (a mount option) or belongs to a PID namespace other than the first, so'
+                ' not known to be free'
+                % linux_paths.PROC if err == NOT_SEARCHED and linux else
                 'not probed in full: more than %d entries, so not known to be free' % WALK_MAX
                 if err == NOT_SEARCHED else 'error %d' % err)
         out.append('  blocked  %s  %s' % (path, note))
@@ -281,8 +361,12 @@ def describe(root, why, cwd=None):
         out += ['  holder   no process has its current directory in here, so the block is an open',
                 '           file handle (an ordinary read handle is enough), or a process this scan',
                 '           could not open. Nothing here is proof of absence.']
-    out.append('  scanned  %d process(es), %d unreadable (not this user, or protected)'
-               % (total, unreadable))
+    if linux:
+        out.append("  scanned  %d process(es), %d of this user unreadable; another user's"
+                   " processes are not seen" % (total, unreadable))
+    else:
+        out.append('  scanned  %d process(es), %d unreadable (not this user, or protected)'
+                   % (total, unreadable))
     if any(pid == mine for pid, _, _ in holders) or inside(cwd or os.getcwd(), root):
         return out + ['  do       THIS command is one of the holders: it was started with its working',
                       '           directory inside the tree, so it is standing on what it was asked to',

@@ -168,7 +168,7 @@ class RealRunTest(ChildCase):
         resolved = mock.Mock(side_effect=os.path.realpath)
         with mock.patch.dict(os.environ), \
                 mock.patch.object(user, '_FENCED_HOME', None), \
-                mock.patch.object(user, '_windows_profile', asked), \
+                mock.patch.object(user, '_system_profile', asked), \
                 mock.patch.object(os.path, 'realpath', resolved):
             os.environ.pop(MARK, None)
             got = user.home_dir()
@@ -223,7 +223,7 @@ class FailClosedTest(unittest.TestCase):
         self.addCleanup(gitfixture.rmtree, marker)
         with mock.patch.dict(os.environ, {MARK: marker}), \
                 mock.patch.object(user, '_PROFILE', None), \
-                mock.patch.object(user, '_windows_profile', side_effect=OSError('no answer')):
+                mock.patch.object(user, '_system_profile', side_effect=OSError('no answer')):
             with self.assertRaises(user.HomeFenced) as cm:
                 user.home_dir()
         self.assertIn('Home fence', str(cm.exception))
@@ -265,7 +265,7 @@ class SpellingTest(ChildCase):
     def as_profile(self, folder):
         """Until the test ends, `folder` is the profile folder Windows reports to this process."""
         for patch in (mock.patch.object(user, '_PROFILE', None),
-                      mock.patch.object(user, '_windows_profile', return_value=folder)):
+                      mock.patch.object(user, '_system_profile', return_value=folder)):
             patch.start()
             self.addCleanup(patch.stop)
 
