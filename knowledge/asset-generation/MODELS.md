@@ -26,10 +26,12 @@ before shipping if a model is updated.
   conditions on the output mesh has not been checked.
 - **Pixal3D**'s bundled components keep their own licences (its NOTICE file), which have not
   been read.
+## Reference-only models (owner decision)
+
 - **Krea 2** (revenue limit) and **Hunyuan3D 2.1** (region exclusions): **the owner decided
   that their outputs are REFERENCE ONLY**: fine for look-dev, blockouts and
   contact sheets, never shipped as game assets. Shippable images use **Z-Image**, and
-  shippable 3D uses **TRELLIS.2** (subject to the two caveats above).
+  shippable 3D uses **TRELLIS.2** (subject to the unchecked caveats above).
 
 ## Installed but not approved
 

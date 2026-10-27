@@ -26,7 +26,7 @@ python <kit>/optional/comfy/compare_sheet.py OUT.html [LABEL=]IMAGE ... [--cols 
 - It only talks to ComfyUI on this machine (`127.0.0.1:8188`). Every generating command
   starts ComfyUI if it is down and stops it again if the tool started it; a ComfyUI the owner
   started is left running. Agents never install, download or update anything in it.
-- It takes the machine-wide GPU lock for each command (see below) and writes a sidecar
+- It takes the machine-wide GPU lock for each generating command (see below) and writes a sidecar
   `<file>.json` next to every output: model, licence, prompt, seed, settings, date and
   seconds taken. Copy those fields into the repository's attribution record.
 - Each command saves ComfyUI's own copies into its own folder,
@@ -39,7 +39,7 @@ python <kit>/optional/comfy/compare_sheet.py OUT.html [LABEL=]IMAGE ... [--cols 
   has not picked yet go there too; delete the rejected ones on the branch before
   it lands. (Owner's rule.)
 - `<kit>/optional/comfy/comfy_api.py` converts any installed ComfyUI template into an API prompt, so a new
-  workflow does not need hand-building: `comfy_gen.py template --template NAME --print-api`.
+  workflow does not need hand-building: `comfy_gen.py template --template NAME --out DIR --name STEM --print-api`.
 
 ## Rules every agent follows
 
