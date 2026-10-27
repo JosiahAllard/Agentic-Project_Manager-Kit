@@ -132,7 +132,7 @@ class LockMcpByMark(unittest.TestCase):
 
 class AgentSessions(unittest.TestCase):
     """kill-by-name and lock-state hold subagents and the marks in guard_agent_marks (default:
-    coordinator, conductor, deep-worker, consultant, pm); the owner's session and other marks
+    coordinator, deep-worker, consultant, pm); the owner's session and other marks
     (plain) are exempt."""
 
     def setUp(self):
@@ -158,9 +158,9 @@ class AgentSessions(unittest.TestCase):
                 self.assertIsNone(check(PLAIN))
                 self.assertIsNone(check({}))
 
-    def test_old_conductor_mark_is_still_held(self):
-        # the live launcher sets the old mark until go-live renames it
-        self.assertEqual(self.kill({context.ROLE_ENV: 'conductor'}).verdict, 'deny')
+    def test_the_retired_old_coordinator_mark_is_not_held(self):
+        # the old mark was a one-release fallback; no launcher sets it now (docs/guard.md "Session mark")
+        self.assertIsNone(self.kill({context.ROLE_ENV: 'conductor'}))
 
     def test_a_plugin_prefixed_mark_is_held_as_the_bare_mark(self):
         # docs/guard.md "Agent names": without the strip these sessions would pass as unheld marks

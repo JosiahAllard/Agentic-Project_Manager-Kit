@@ -2,8 +2,7 @@
 
   gate-allow   a run of tools/gate.py allow (kitlib/gate/budget.py `allow`: it raises the gate
                runs a branch may make; docs/gate.md "The branch gate budget") by any session but
-               the owner's own or a main session marked coordinator (or its old mark, MARKS) or
-               pm. Every subagent is refused, whatever role its payload names, and so is any
+               the owner's own or a main session marked coordinator or pm (MARKS). Every subagent is refused, whatever role its payload names, and so is any
                other marked main session (deep-worker, consultant, plain).
 
 A gate.py run is read as rules.tool_run reads a kit tool: the script in any path form, python
@@ -24,8 +23,8 @@ RULE = 'gate-allow'
 UNIDENTIFIED = 'unidentified'                   # kitlib.host.hookmain.UNIDENTIFIED
 SCRIPTS = ('gate.py', 'gate')                   # commands.wrapper's names for the gate
 VERB = 'allow'
-# the main sessions that may allow more runs: the coordinator (and its old mark) and the PM
-MARKS = ('coordinator', 'conductor', 'pm')
+# the main sessions that may allow more runs: the coordinator and the PM
+MARKS = ('coordinator', 'pm')
 WHY = ('`gate.py allow` raises the gate runs a branch may make past the branch gate budget, and only '
        'its coordinator (or the PM) runs it (docs/gate.md "The branch gate budget").')
 INSTEAD = ('stop and send your coordinator what each gate run found and why another is needed; '

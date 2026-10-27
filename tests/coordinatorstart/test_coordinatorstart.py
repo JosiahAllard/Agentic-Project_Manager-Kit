@@ -39,7 +39,7 @@ class RenderTest(unittest.TestCase):
     def test_a_plugin_prefixed_mark_is_the_coordinator_and_no_other_prefix(self):
         with tempfile.TemporaryDirectory() as d:
             p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"standing": ["one"]}}))
-            for role in (P + "coordinator", P.upper() + "coordinator", P + "conductor"):
+            for role in (P + "coordinator", P.upper() + "coordinator"):
                 self.assertEqual(coordinatorstart.render(env={"PM_KIT_ROLE": role}, path=p, live=False),
                                  "Coordinator session start:\n- one", role)
             for role in ("some-plugin:coordinator", P + "pm", P):
@@ -623,17 +623,13 @@ class HookTest(unittest.TestCase):
             self.assertIn("could not check %s:" % name, text)
         self.assertNotIn("rulings", text.lower())
 
-    def test_old_role_and_old_config_key_still_work(self):
-        r = self.run_hook("conductor", json.dumps({"conductor_start": {"standing": ["wind down"]}}))
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("- wind down", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
-
-    def test_new_key_wins_over_the_old_key(self):
-        r = self.run_hook("coordinator", json.dumps({"conductor_start": {"standing": ["old"]},
-                                                     "coordinator_start": {"standing": ["new"]}}))
-        text = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("- new", text)
-        self.assertNotIn("- old", text)
+    def test_the_retired_old_mark_and_old_key_are_not_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = write(os.path.join(d, "c.json"), json.dumps({"coordinator_start": {"standing": ["s"]}}))
+            for role in ("conductor", P + "conductor"):
+                self.assertIsNone(coordinatorstart.render(env={"PM_KIT_ROLE": role}, path=p), role)
+            old = write(os.path.join(d, "old.json"), json.dumps({"conductor_start": {"standing": ["old"]}}))
+            self.assertIsNone(coordinatorstart.load_config(old))
 
     def test_bad_json_exit_0(self):
         r = self.run_hook("coordinator", "{bad")

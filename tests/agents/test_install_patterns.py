@@ -119,8 +119,7 @@ class RealScrubPatternsTest(unittest.TestCase):
             'temp_dir': self.home,                                     # unlisted: left out
             'pm_start': {'hub_url': 'https://example.invalid/a/hubid', 'sessions_file': sessions,
                          'repos': ['alpha'], 'standing': ['unlisted']},
-            'coordinator_start': {'cap': {'beta': 2}},
-            'conductor_start': {'cap': {'gamma': 1}}}))           # shadowed, as install_names reads
+            'coordinator_start': {'cap': {'beta': 2}}}))
         got, seen = self.opened(tests.real_install_config)
         self.assertEqual(got, ({'scrub_patterns': ['acme', 'widgetco'],
                                 'machine_path_folders': ['Src'],
@@ -132,12 +131,6 @@ class RealScrubPatternsTest(unittest.TestCase):
         self.assertEqual([what for _rx, what in pats], ['install name', 'install name'])
         self.assertEqual([rx.pattern for rx, _what in pats], ['acme', 'widgetco'])
         self.assertEqual([what for _rx, what in shipped.machine_patterns()], ['machine path'])
-
-    def test_conductor_start_cap_when_coordinator_start_is_unset(self):
-        self.write_config(json.dumps({'conductor_start': {'cap': {'gamma': 1}}}))
-        cfg, _why = tests.real_install_config()
-        self.assertEqual(cfg, {'scrub_patterns': None, 'machine_path_folders': None,
-                               'pm_start': {}, 'cap': {'gamma': 1}})
 
     def test_no_config_file_is_a_named_skip(self):
         cfg, why = tests.real_install_config()

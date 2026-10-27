@@ -25,7 +25,7 @@ class Sessions(unittest.TestCase):
         d = self.stash({}, sub=True)
         self.assertEqual((d.verdict, d.rule), ('deny', RULE), d.reason)
         self.assertTrue(d.reason.endswith(rules.tag(RULE, 'subagent')), d.reason)
-        for mark in ('coordinator', 'conductor', 'deep-worker', 'consultant', 'pm'):
+        for mark in ('coordinator', 'deep-worker', 'consultant', 'pm'):
             with self.subTest(mark):
                 d = self.stash({context.ROLE_ENV: mark}, cmd='git stash pop', shell=ps)
                 self.assertEqual((d.verdict, d.rule), ('deny', RULE), d and d.reason)

@@ -99,7 +99,7 @@ class GateAllow(unittest.TestCase):
             self.each(self.refused, agent_type='worker', env=mark(m))
 
     def test_another_marked_main_session_is_refused(self):
-        for m in ('deep-worker', 'consultant', 'plain', 'pm-kit:deep-worker', 'worker'):
+        for m in ('deep-worker', 'consultant', 'plain', 'pm-kit:deep-worker', 'worker', 'conductor'):
             self.each(self.refused, sub=False, env=mark(m))
 
     def test_the_refusal_names_the_session(self):
@@ -118,7 +118,7 @@ class GateAllow(unittest.TestCase):
         self.each(self.passed, sub=False, env={})
 
     def test_a_coordinator_or_pm_main_session_may_allow(self):
-        for m in ('coordinator', 'conductor', 'pm', 'pm-kit:coordinator', 'PM', 'Pm-Kit:pm'):
+        for m in ('coordinator', 'pm', 'pm-kit:coordinator', 'PM', 'Pm-Kit:pm'):
             self.each(self.passed, sub=False, env=mark(m))
 
     # ------------------------------------------------------------ not a gate.py allow run

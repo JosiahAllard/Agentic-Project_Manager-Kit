@@ -10,7 +10,6 @@ The pointer (kitlib.config.pointer) names the PM repository; the move writes its
 - owner-delegations.json (tracked), managed-settings.json and hub/* (git-ignored), byte for byte.
 
 Dropped (DROPPED): ledger_refs, standing_delegation, daily_red_ruling and backlog_lint (retired, user.RETIRED),
-coordinator_start's old key (OLD_START: carried over as coordinator_start when that is absent),
 and a pm_data that matches the pointer. A pm_data that does not match is a refusal. Never copied: NEVER_COPIED, named as files to delete.
 
 survey() reads and plans and writes nothing; apply() writes what survey() planned and checks it
@@ -26,7 +25,6 @@ import re
 import tempfile
 
 from kitlib import pmdata
-from kitlib.coordinatorstart import LEGACY_KEY as OLD_START
 from kitlib.git import cmd as gitcmd
 from kitlib.git import refs, repo
 
@@ -41,8 +39,7 @@ POLICY = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
           'machine_lock', 'temp_dir', 'agent_temp_sweep', 'machine_path_folders',
           'plugin')
 LOCAL = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
-DROPPED = ('ledger_refs', OLD_START, 'pm_data', 'standing_delegation', 'daily_red_ruling',
-           'backlog_lint')
+DROPPED = ('ledger_refs', 'pm_data', 'standing_delegation', 'daily_red_ruling', 'backlog_lint')
 # The policy keys written relative to the PM repository when they lie inside it.
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
@@ -148,12 +145,6 @@ def split(data, pm, plan):
             plan.policy[k] = v
         elif k in user.RETIRED:
             plan.dropped.append((k, 'retired'))
-        elif k == OLD_START:
-            if 'coordinator_start' in data:
-                plan.dropped.append((k, 'coordinator_start is set, so this key was never read'))
-            else:
-                plan.policy['coordinator_start'] = v
-                plan.dropped.append((k, 'carried over as coordinator_start'))
         elif k == 'pm_data':
             why = pm_data_mismatch(v, pm)
             if why:
