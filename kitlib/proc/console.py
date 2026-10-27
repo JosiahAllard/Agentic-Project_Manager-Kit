@@ -45,7 +45,8 @@ So ensure gives it a console control handler that takes Ctrl+C and Ctrl+Break fo
 (_take_ctrl). A handler is not inherited: a child on the console gets them as before
 (docs/daily-full.md "The schedule").
 
-Windows only: off Windows install() does nothing.
+Windows only: off Windows install() does nothing, and has_console() answers True without asking
+kernel32, so kitlib.proc.spawn and no_window_flags add nothing there.
 """
 import _thread
 import os
@@ -119,7 +120,12 @@ def _k32():
 def has_console():
     """True when this process is attached to a console, with a window or without one.
     GetConsoleProcessList, not GetConsoleWindow: a console made with CREATE_NO_WINDOW, or by
-    ensure_windowless_console, has a GetConsoleWindow() of 0 (kitlib/proc/job.py, measured)."""
+    ensure_windowless_console, has a GetConsoleWindow() of 0 (kitlib/proc/job.py, measured).
+    Off Windows always True, and kernel32 is never asked: no start there opens a console window,
+    so a child needs no flag for one (docs/linux-support-plan.md section 1.3, "Shields")."""
+    import kitlib.platform
+    if kitlib.platform.NAME != 'windows':
+        return True
     from ctypes import wintypes
     one = (wintypes.DWORD * 1)()
     return _k32().GetConsoleProcessList(one, 1) != 0
