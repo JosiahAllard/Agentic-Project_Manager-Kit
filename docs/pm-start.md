@@ -76,8 +76,8 @@ start that are still `filed`, waiting for their askers (`kitlib.pmstart` `filed_
 docs/action-hub.md "Filing the answer"). An answer its asker has logged or marked done since is
 not counted, and one answered again counts only once it is filed again, by that filing's time.
 A filed answer that changed nothing for the PM to do (`filed_as` `held`, or `pulled` with a
-worker on the record) is pushed to nobody or to its asker alone (docs/action-hub.md "Push
-notifications"), so this line is where the PM sees the ones still unread. It is information,
+worker on the record) is pushed to its asker, or the record's coordinator, not to the PM
+(docs/action-hub.md "Push notifications"), so this line is where the PM sees the ones still unread. It is information,
 not a step.
 - The stamp: `pm-start-last.json`, `{"at": <ISO time with its offset>}`, in the folder of the
   pm_watch state file (the `pm_watch` config's `state_file`, else
