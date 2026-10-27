@@ -663,6 +663,22 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    for the store root). Proof: machine config resolves on Linux from the pointer file; holders
    finds a process whose cwd is in a worktree; Store() opens the real root; a landing runs end to
    end on a throwaway repository on the VM.
+   Built on kit/linux-config-paths: kitlib/platform/linux/paths.py (the profile folder from the
+   password database, never $HOME; the pointer file /etc/pm-kit/pointer, else
+   <profile>/.config/pm-kit/pointer, never $XDG_CONFIG_HOME, and a bad machine file is the answer;
+   /tmp as the system temp whatever TMPDIR says; a /proc scan of this user's processes).
+   user.real_profile and the home fence, lock/store.py profile_dir and real_root, pointer.registry
+   and check (an absolute path with no drive), system_temp, work_temp and default_work_temp read
+   the seam; user.py and holders.py leave test_no_os_checks' list. holders.blockers on Linux: a
+   path in the tree that a process of this user uses (cwd, root, exe, an open or mapped file) is
+   HELD, a process of this user that cannot be read in full makes the root UNREAD, and no /proc is
+   NOT_SEARCHED, each a refusal; cwd_holders, describe and classify.process_cwds read /proc too.
+   The heavy defaults gain the Linux Godot names and flatpak Blender (section 3, finding 8). The
+   live proofs (test_store_linux RealMachineStore, test_holders_linux Live) and the landing on the
+   VM wait for the VM. Deviations: environment.d moves to slice 14 (machine setup writes it);
+   another user's processes cannot be seen, so holders answers for this user's only; the user
+   pointer file is the user's to write, so an agent can write it too: guarding it is its own
+   record.
 10. **Scheduled jobs.** linux/schedule.py with systemd user timers and cron (first-class);
     autostart (coordinators after reboot), hubsite autostart (the hub's start at logon: XDG
     autostart, shell-profile fallback), worktree and temp sweeps, automatic tasks, consoletasks
