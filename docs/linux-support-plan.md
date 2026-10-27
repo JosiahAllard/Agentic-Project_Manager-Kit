@@ -92,7 +92,7 @@ scheduled-task writers, with the bridge apart.
   (user32 window watch), spawn.py no_window_flags and pythonw_beside. The console and window ones
   have no Linux need (Linux opens no console windows). That the shield and PidHold have none
   either is inference, not verified: it assumes Claude Code on Linux does not kill a tool call's
-  tree by pid, which section 9 lists as unknown; slice 7 probes it.
+  tree by pid, which section 9 lists as unknown; KIT-LINUX-TREE-KILL-PROBE probes it, required before slice 14.
 - **Machine lock store**: lock/store.py real_root is `~/.claude/machine-lock` under the profile
   from SHGetKnownFolderPath; lock() is a named mutex `Global\MachineLock.<name>` (queue, holds,
   resources, revision, games, run.<id>), WAIT_ABANDONED counting as acquired. RunMutex is the
@@ -230,7 +230,7 @@ Rules:
 | icacls | chmod 0700 / 0600 | |
 | Desktop `.lnk` | `.desktop` file in `~/.local/share/applications` | |
 | pythonw, CREATE_NO_WINDOW, console hook, winwatch | nothing: Linux spawns no console windows | the no-window carrier is a no-op |
-| pid shield, PidHold | inferred: nothing needed; pidfd where a hold is wanted | rests on Claude Code on Linux not killing a tool call's tree by pid (unknown, section 9; slice 7 probes it) |
+| pid shield, PidHold | inferred: nothing needed; pidfd where a hold is wanted | rests on Claude Code on Linux not killing a tool call's tree by pid (unknown, section 9; KIT-LINUX-TREE-KILL-PROBE probes it, required before slice 14) |
 | Git Bash lookup | /bin/bash | kitlib/proc/bash.py answers /bin/bash |
 | conhost + PowerShell session window | tmux session by default, a configured terminal command if set | question 6 |
 | Get-CimInstance Win32_Process | /proc scan | pmstart, launcher/stop |
@@ -646,10 +646,13 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
 7. **Lock runs and detach.** lock/run.py Slot, give-back, release, detach and gate/submit on the
    seam, on a test store root, and the call sites of slice 5's `leftovers` mechanism (Slot.release
    and end_sparing). Risk High. Proof: a detached run survives its caller; give-back narrows
-   cpuset.cpus; a straggler of a released slot is moved to `leftovers`. On a Linux box with Claude Code (the owner's Linux box or VM, question
-   3), a probe of
-   whether ending a tool call kills its tree by pid; if it does, a shield is added here before
-   the slice lands (sections 1.3 and 9).
+   cpuset.cpus; a straggler of a released slot is moved to `leftovers`. The tree-kill probe (does
+   ending a tool call kill its tree by pid) and slice 7's live proofs (test_slot_linux,
+   test_detach_linux Live) moved to their own record, KIT-LINUX-TREE-KILL-PROBE, when slice 7
+   landed. It is required before Linux is switched on (slice 14), and a shield, if the probe
+   shows one is needed, lands there (sections 1.3 and 9).
+   Built on kit/linux-lock-runs. Deviation: Slot release unpins the job before the leftovers
+   move (S2 and W2), so a straggler moved out gets every cpu back.
 8. **Guard path semantics.** The placer, the ten findings in section 3 as tests first, then the
    fixes; the guard declares Linux ready. Lands alone after a strong-tier review. Risk High.
    Proof: each finding's test refuses on Linux; the Windows guard suite is unchanged.
@@ -686,7 +689,7 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
     exists; each missing piece named; the tmux check; the second-user rule, a per-user warning
     without the root step and a machine-wide refusal with it; the container warning; the WSL
     refusal), tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL until native
-    parity, question 11). Risk High (install). Proof: machine setup on a fresh Ubuntu 24.04 VM
+    parity, question 11). Waits on KIT-LINUX-TREE-KILL-PROBE. Risk High (install). Proof: machine setup on a fresh Ubuntu 24.04 VM
     with the delegation drop-in ends with no problems and the lock status shows S1; separately,
     machine setup in a default Docker container probes to its lower tier and the lock status
     shows it as such (setup warns that it is in a container). No proof claims strong containment
@@ -713,7 +716,7 @@ does not overlap another lock slice); the others are in order.
   settings path and its session file fields; slice 15 and 12 probe first.
 - Unknown: whether Claude Code on Linux kills a tool call's process tree by pid when it ends the
   call, as it does on Windows (the reason for the pid shield). Sections 1.3 and 2.2 infer it does
-  not; slice 7 probes it on a Linux box before it lands.
+  not; KIT-LINUX-TREE-KILL-PROBE probes it on a Linux box, required before slice 14.
 - Unknown (CI phase): how the owner's self-hosted runner delegates cgroups to the runner user.
 - Unknown: the containment research of section 2.3 is read from documentation; slice 5 probes
   each tier on a real box (whether `AllowedCPUs` has an effect without cpuset delegation, whether
