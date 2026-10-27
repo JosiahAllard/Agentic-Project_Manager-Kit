@@ -181,7 +181,7 @@ class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
                  'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home',
-                 'split', 'line')
+                 'split', 'line', 'cwd_link', 'cwd_home_link')
 
     def __init__(self, source, shell, depth, home=None, line=None):
         self.words, self.redirects, self.subs = [], [], []
@@ -191,6 +191,9 @@ class Command(object):
         self.home = home            # the folder `~` names, its Parsed's home (home_folder: None is the user's)
         self.cwd = None
         self.cwd_home = None        # cwd, with a cd to a home variable ($HOME/x) followed too (track)
+        # Linux bash: cwd (cwd_home) is a real path a cd reached through a link, so the shell's
+        # $PWD, which a later cd -L folds `..` from, is another text (track, _linux_cd)
+        self.cwd_link = self.cwd_home_link = False
         self.piped_out = self.piped_in = False
         self.groups = ()            # the ( ) or { } groups it is inside, outermost first: (id, '(' or '{')
         self.prev_op = self.next_op = None      # the operators around it: ; && || & newline ( ) { } |
@@ -1254,8 +1257,14 @@ def is_cd_word(text, shell):
     return text.lower() in CD_VERBS | CD_UNKNOWN
 
 
-def cd_target(cmd, cwd, home=None, home_vars=False):
-    """(is a cd, the directory after it): None when the text cannot tell. `~` is `home`
+def cd_target(cmd, cwd, home=None, home_vars=False, linked=False):
+    """(is a cd, the directory after it): cd_move without the link flag."""
+    return cd_move(cmd, cwd, home, home_vars, linked)[:2]
+
+
+def cd_move(cmd, cwd, home=None, home_vars=False, linked=False):
+    """(is a cd, the directory after it, entered through a link): None when the text cannot tell.
+    `linked` says `cwd` was entered through a link (Command.cwd_link; _linux_cd). `~` is `home`
     (home_folder); with `home_vars`, a target that starts with a home variable (home_text) is
     read too, bash cd's own options and a `--` are passed over, and a bash or PowerShell cd with
     no place goes home (bash's cd, and PowerShell 7's; Windows PowerShell's stays put, but only a
@@ -1269,22 +1278,22 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     the folder /d (cmd's drive switch is Windows')."""
     words = cd_words(cmd)
     if not words:
-        return False, cwd
+        return False, cwd, linked
     verb = words[0].text.lower()
     linux_bash = cmd.shell == BASH and paths.posix()
     if linux_bash and words[0].text not in LINUX_BASH_CD:
-        return False, cwd                       # `CD x`, `chdir x`: no cd bash runs on Linux
+        return False, cwd, linked               # `CD x`, `chdir x`: no cd bash runs on Linux
     if linux_bash and (BASH_CD_UNSURE_RE.search(cmd.source or '') or BASH_CD_UNSURE_RE.search(cmd.line or '')):
-        return True, None                       # CDPATH, or cd made physical by set -P, on the line
+        return True, None, False                # CDPATH, or cd made physical by set -P, on the line
     name = re.split(r'[\\/]', verb)[-1]
     if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
         if verb not in PS_QUALIFIED_CD:
-            return True, None                   # a qualified cd word PowerShell does not run
+            return True, None, False            # a qualified cd word PowerShell does not run
         verb = PS_QUALIFIED_CD[verb]
     if verb in CD_UNKNOWN:
-        return True, None
+        return True, None, False
     if verb not in CD_VERBS:
-        return False, cwd
+        return False, cwd, linked
     rest = words[1:]
     if cmd.shell == PS and len(rest) == 1 and rest[0].text.lower() == '$null':
         rest = []                               # no place, never a folder named $null
@@ -1303,42 +1312,48 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
             rest = rest[1:]
         if not rest and verb in ('cd', 'chdir', 'set-location', 'sl'):
             if linux_bash:
-                return True, _linux_cd(home_folder(home), cwd, home, logical)
-            return True, resolve_path(home_folder(home), cwd, cmd.shell, home, logical=logical)
+                return (True,) + _linux_cd(home_folder(home), cwd, home, logical, linked)
+            return True, resolve_path(home_folder(home), cwd, cmd.shell, home, logical=logical), False
     if len(rest) != 1:
-        return True, None
+        return True, None, False
     p = rest[0].text
     if rest[0].dyn:
         p = home_text(p, home, dyn=True) if home_vars else None
         if p is None:
-            return True, None
+            return True, None, False
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
-        return True, None
+        return True, None, False
     if linux_bash and p.startswith('+'):
-        return True, None                       # pushd +N turns the stack
+        return True, None, False                # pushd +N turns the stack
     if cmd.shell == PS and ps_filesystem_relative(p) is not None:
-        return True, None                       # read from the process's directory, not the location
+        return True, None, False                # read from the process's directory, not the location
     if linux_bash:
-        return True, _linux_cd(p, cwd, home, logical)
-    return True, resolve_path(p, cwd, cmd.shell, home, logical=logical)
+        return (True,) + _linux_cd(p, cwd, home, logical, linked)
+    return True, resolve_path(p, cwd, cmd.shell, home, logical=logical), False
 
 
-def _linux_cd(p, cwd, home, logical):
-    """Where bash's cd to `p` from `cwd` goes on Linux, as a real path (realpath), or None when the
-    text cannot tell: the folder does not exist, or (cd -L, `logical`) the logical reading, `..`
-    folded from the text, is not the real path of the text read physically. bash's cd -L moves to
-    the folded folder, and to the unfolded text when that is missing; either way the folder kept
-    is then both the shell's $PWD and its real directory, so a later cd -L folds from it as bash
-    does. A cd through a link, a `..` after one, or from a folder whose path holds one, is unknown."""
+def _linux_cd(p, cwd, home, logical, linked=False):
+    """(where bash's cd to `p` from `cwd` goes on Linux, entered through a link): the folder is a
+    real path (realpath), None when the text cannot tell; it need not exist yet. `linked` says
+    `cwd` was entered through a link, so the shell's $PWD is another text than `cwd`. A place with
+    no `..` is the real path of its text: bash's -L and -P readings land on the same folder. It
+    is entered through a link when its logical text (or $PWD before it) is not that real path. A
+    place with a `..` (cd -L, `logical`): bash folds it from $PWD's text, and takes the unfolded
+    text when the folded folder is missing; so after a cd through a link, or when the real path
+    of the folded text is not the real path of the unfolded one, it is unknown. cd -P reads the
+    text physically, and its $PWD is that real path."""
     phys = resolve_path(p, cwd, BASH, home)
     if phys is None:
-        return None
+        return None, False
     real = paths.norm(phys, real=True, fold=False)
-    if not os.path.isdir(real):
-        return None
-    if logical and resolve_path(p, cwd, BASH, home, logical=True) != real:
-        return None
-    return real
+    if not logical:
+        return real, False
+    text = resolve_path(p, cwd, BASH, home, logical=True)
+    if '..' in p.split('/'):
+        if linked or paths.norm(text, real=True, fold=False) != real:
+            return None, False
+        return real, text != real
+    return real, text != real or (linked and not p.startswith(('/', '~')))
 
 
 def chdir_real(path, outer=None):
@@ -1372,7 +1387,7 @@ def _keyword_cd(c):
     return 0 < first and k < len(c.words) and is_cd_word(c.words[k].text, c.shell)
 
 
-def track(cmds, cwd, home=None, cwd_home=None):
+def track(cmds, cwd, home=None, cwd_home=None, linked=False, linked_home=False):
     """Each command's cwd, in order: a cd changes it for the commands after it. A bash ( ) group
     is a subshell: a cd inside it holds to its end, then the directory before it comes back; a
     bash { } group shares the directory. A cd the text cannot tell, one inside a PowerShell or
@@ -1381,40 +1396,42 @@ def track(cmds, cwd, home=None, cwd_home=None):
     that holds them; a cd inside a PowerShell one makes its holder's directory unknown, and every
     later one's. `~` is `home` (home_folder). cwd_home is the directory tracked from `cwd_home` (default `cwd`) with
     a cd to a home variable read too (cd_target home_vars): only for the rules that deny, since a
-    line can set the variable to another folder."""
-    here = cwd
-    here_h = cwd if cwd_home is None else cwd_home
-    open_ = []                  # (group, the directory before it, its cwd_home)
+    line can set the variable to another folder. `linked` (`linked_home`) says `cwd` (`cwd_home`)
+    was entered through a link (Command.cwd_link, cd_move), carried with each directory."""
+    here, here_l = cwd, linked
+    here_h, here_hl = (cwd, linked) if cwd_home is None else (cwd_home, linked_home)
+    open_ = []                  # (group, the directory before it, its cwd_home, and their link flags)
     sub_from = {}               # id(command): (cwd, cwd_home) its substitutions start in
     for c in cmds:
         common = 0
         while common < len(open_) and common < len(c.groups) and open_[common][0] == c.groups[common]:
             common += 1
         while len(open_) > common:
-            g, before, before_h = open_.pop()
+            g, before, before_h, before_l, before_hl = open_.pop()
             if g[1] == '(' and c.shell == BASH:
-                here, here_h = before, before_h
+                here, here_h, here_l, here_hl = before, before_h, before_l, before_hl
         for g in c.groups[common:]:
-            open_.append((g, here, here_h))
-        sub_from[id(c)] = (here, here_h)
+            open_.append((g, here, here_h, here_l, here_hl))
+        sub_from[id(c)] = (here, here_h, here_l, here_hl)
         # PowerShell runs a $( ) or an argument's ( ) in the caller's scope: a cd there moves this
         # command and every one after it (bash's $( ) is a subshell)
         if c.shell == PS and any(cd_target(x, None, home)[0] for x in flatten(c.subs)):
             here = here_h = None
         c.cwd, c.cwd_home = here, here_h
-        changed, to = cd_target(c, here, home)
-        to_h = cd_target(c, here_h, home, home_vars=True)[1]
+        c.cwd_link, c.cwd_home_link = here_l, here_hl
+        changed, to, to_l = cd_move(c, here, home, linked=here_l)
+        _, to_h, to_hl = cd_move(c, here_h, home, home_vars=True, linked=here_hl)
         if _keyword_cd(c):
             changed, to, to_h = True, None, None
         if changed:
             unsure = (c.piped_in or c.piped_out or '||' in (c.prev_op, c.next_op) or (c.next_op == '&' and c.shell == BASH)
                       or (c.groups and c.shell != BASH))
-            here = None if unsure else to
-            here_h = None if unsure else to_h
+            here, here_l = (None, False) if unsure or to is None else (to, to_l)
+            here_h, here_hl = (None, False) if unsure or to_h is None else (to_h, to_hl)
     for c in cmds:
         if c.subs:
-            at, at_h = sub_from[id(c)]
-            track(c.subs, at, home, at_h)
+            at, at_h, at_l, at_hl = sub_from[id(c)]
+            track(c.subs, at, home, at_h, at_l, at_hl)
     return cmds
 
 
@@ -1427,17 +1444,17 @@ def flatten(cmds):
     return out
 
 
-def parse(text, shell, cwd, depth=0, parsed=None, home=None, cwd_home=None):
+def parse(text, shell, cwd, depth=0, parsed=None, home=None, cwd_home=None, linked=False, linked_home=False):
     """Parsed for `text` read as `shell` (BASH, PS or CMD), starting in `cwd` (and `cwd_home`,
     default `cwd`: track). `~` is `home` (home_folder). With `parsed`, the commands are added to
-    it (a nested shell's text) and its home is the one read."""
+    it (a nested shell's text) and its home is the one read. `linked` (`linked_home`): track."""
     parsed = parsed if parsed is not None else Parsed(text, shell, cwd, home)
     if depth > MAX_DEPTH:
         parsed.flag('shells nested deeper than %d' % MAX_DEPTH)
         return parsed, []
     sc = _Scan(text, shell, depth, parsed)
     top = sc.commands()
-    track(top, cwd, home=parsed.home, cwd_home=cwd_home)
+    track(top, cwd, home=parsed.home, cwd_home=cwd_home, linked=linked, linked_home=linked_home)
     cmds = flatten(top)
     parsed.commands.extend(cmds)
     return parsed, cmds

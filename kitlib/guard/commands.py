@@ -1577,7 +1577,8 @@ MAX_NESTS = 64
 
 def _nest(parsed, cmd, text, shell, cwd, cwd_home):
     """Parse `text` as commands `cmd` runs, at `cwd` (cwd_home: shell.track), into parsed;
-    returns those commands."""
+    returns those commands. A nested shell started in `cmd`'s own directory inherits its $PWD, so
+    that directory's link flag (Command.cwd_link) goes with it; env -C's real folder has none."""
     if cmd.depth + 1 > sh.MAX_DEPTH:
         parsed.flag('shells nested deeper than %d' % sh.MAX_DEPTH)
         return []
@@ -1585,7 +1586,10 @@ def _nest(parsed, cmd, text, shell, cwd, cwd_home):
         parsed.flag('more than %d nested shell texts' % MAX_NESTS)
         return []
     parsed.nests += 1
-    _p, cmds = sh.parse(text, shell, cwd, depth=cmd.depth + 1, parsed=parsed, cwd_home=cwd_home)
+    linked = cwd is not None and cwd == cmd.cwd and cmd.cwd_link
+    linked_home = cwd_home is not None and cwd_home == cmd.cwd_home and cmd.cwd_home_link
+    _p, cmds = sh.parse(text, shell, cwd, depth=cmd.depth + 1, parsed=parsed, cwd_home=cwd_home,
+                        linked=linked, linked_home=linked_home)
     for c in cmds:
         if c.nested_in is None:
             c.nested_in = cmd

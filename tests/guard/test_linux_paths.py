@@ -26,8 +26,8 @@ UNKNOWN = [('/', 'ext4'), ('/data', 'somefs')]
 
 class LinuxCase(unittest.TestCase):
     mounts = [('/', 'ext4')]
-    # the folders that exist (posixpath.isdir, by real path): a bash cd on Linux into any other is
-    # unknown (shell._linux_cd)
+    # the folders that exist (posixpath.isdir, by real path): an env -C into any other is unknown
+    # (shell.chdir_real)
     dirs = ('/work/repo', '/work/repo/.claude/worktrees/wt', '/work/repo/.claude/worktrees/wt/sub',
             '/home/u', '/d')
     unplaced_denied = False     # hold the rule unplaced at deny (world.deny_unplaced), else its default
@@ -450,8 +450,7 @@ class DotDotAfterALink(LinuxCase):
     """shell.resolve_path (paths.physical): Linux takes `..` after a symbolic link from where the
     link points (the kernel resolves it after the link), so `link/..` is the target's parent, never
     the link's own folder: a worktree link d -> /work/repo/src makes d/../f the main checkout's f.
-    A cd into the link goes where the text cannot tell (CdRealPath): unplaced, held at deny here."""
-    unplaced_denied = True
+    A cd into the link is its real path, so a `..` write after it is refused at the default mode."""
 
     def setUp(self):
         LinuxCase.setUp(self)
@@ -501,9 +500,10 @@ class DotDotAfterALink(LinuxCase):
 class LogicalCd(LinuxCase):
     """shell.cd_target on Linux: bash's cd (and pushd) is -L by default, folding `..` in its place
     against $PWD, not after the link; only cd -P is physical. With a link in -> x/y in the
-    worktree, the logical reading of in/.. (the worktree) is not its physical one (x), and cd in
-    names a folder by a link, so both go where the text cannot tell (CdRealPath); cd -P in/.. is
-    x. A write is still read physically from the tracked folder (resolve_path)."""
+    worktree, cd in is the real x/y, entered through a link; the logical reading of in/.. (the
+    worktree) is not its physical one (x), and a `..` after cd in folds from a $PWD the guard does
+    not keep, so both go where the text cannot tell (CdRealPath); cd -P in/.. is x. A write is
+    read physically from the tracked folder (resolve_path)."""
     dirs = LinuxCase.dirs + ('/work/repo/.claude/worktrees/wt/x', '/work/repo/.claude/worktrees/wt/x/y')
     unplaced_denied = True
 
@@ -535,11 +535,12 @@ class LogicalCd(LinuxCase):
         self.assertEqual(self.cd('cd -P in/..', home_vars=True), (True, wt + '/x'))
         self.assertEqual(self.cd('cd -P in', home_vars=True), (True, wt + '/x/y'))
 
-    def test_a_cd_into_the_link_is_unknown(self):
-        self.assertEqual(self.cd('cd in'), (True, None))
-        self.refused('cd in && echo x > ../f', rules.UNPLACED)
+    def test_a_cd_into_the_link_is_its_real_path(self):
+        self.assertEqual(self.cd('cd in'), (True, self.w.wt + '/x/y'))
+        self.refused('cd in && cd .. && touch f', rules.UNPLACED)
 
     def test_a_write_from_inside_the_link_is_read_physically(self):
+        self.assertIsNone(self.sub('cd in && echo x > ../f'))
         self.assertEqual(sh.resolve_path('../f', self.w.wt + '/in'), self.w.wt + '/x/f')
 
     def test_cdpath_set_minus_p_and_pushd_plus_n_are_unknown(self):
@@ -549,11 +550,12 @@ class LogicalCd(LinuxCase):
 
 
 class CdRealPath(LinuxCase):
-    """shell.cd_target and the env -C folder on Linux: the folder tracked is a real path. A cd
-    whose logical reading (`..` folded from the text) is not the real path of its text, or whose
-    folder does not exist, goes where the text cannot tell: bash falls back to the unfolded text
-    when the folded folder is missing, and a shell started by env -C in a folder reached through a
-    link starts at its real path. A CDPATH, SHELLOPTS, cdable_vars or set -P anywhere on the line
+    """shell.cd_move and the env -C folder on Linux: the folder tracked is a real path. A cd with no
+    `..` is the real path of its text, existing or not, and a link on the way marks it entered
+    through a link. A cd with a `..` goes where the text cannot tell after one so entered, or when
+    the real path of its logical reading (`..` folded from the text) is not that of its text read
+    physically: bash falls back to the unfolded text when the folded folder is missing. A shell
+    started by env -C in a folder reached through a link starts at its real path. A CDPATH, SHELLOPTS, cdable_vars or set -P anywhere on the line
     makes a cd in any nested shell, eval or substitution unknown too. A write after a cd the text
     cannot tell is unplaced (a warned allow by default), held at deny here as the owner's machine
     config can (world.deny_unplaced)."""
@@ -591,8 +593,21 @@ class CdRealPath(LinuxCase):
     def test_cdable_vars_is_unknown(self):
         self.unplaced("shopt -s cdable_vars; bash -c 'cd docs && echo x > STANDING.md'")
 
-    def test_a_cd_into_a_missing_folder_is_unknown(self):
-        self.unplaced('cd nowhere; echo x > f')
+    def test_a_cd_into_a_link_then_a_dot_dot_write_is_refused_at_the_default_mode(self):
+        with mock.patch.dict(modes.DEFAULTS, {rules.UNPLACED: modes.WARN}):
+            self.refused('cd d && echo x > ../f', 'main-checkout')
+
+    def test_a_cd_into_a_folder_made_on_the_line_is_known(self):
+        with mock.patch.dict(modes.DEFAULTS, {rules.UNPLACED: modes.WARN}):
+            d = guard.decide(action(bash('mkdir x && cd x && touch f', self.w.wt, sub=True)), self.w.ctx())
+        self.assertEqual(d.verdict, 'allow', d.reason)
+        self.assertNotEqual(d.rule, rules.WARNED, d.reason)
+        self.assertEqual(sh.cd_target(sh.parse('cd x', sh.BASH, self.w.wt)[1][0], self.w.wt), (True, self.w.wt + '/x'))
+
+    def test_a_dot_dot_after_a_cd_into_a_link_is_unknown(self):
+        self.unplaced('cd d && cd .. && touch f')
+        self.unplaced("cd d && bash -c 'cd .. && touch f'")
+        self.unplaced('cd d && x=$(cd ..; touch f)')
 
     def test_unplaced_warns_at_its_default_mode(self):
         with mock.patch.dict(modes.DEFAULTS, {rules.UNPLACED: modes.WARN}):
