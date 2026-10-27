@@ -42,8 +42,10 @@ def no_window_flags(flags, console=None):
     """Popen creationflags for a child of this process: `flags` plus CREATE_NO_WINDOW when this
     process has no console (`console` False; None asks has_console()) and `flags` makes no console
     choice of its own (CREATE_NEW_CONSOLE, DETACHED_PROCESS or CREATE_NO_WINDOW). Otherwise
-    `flags` unchanged, so a child of a console parent shares that console as before."""
-    if flags & CONSOLE_CHOICE:
+    `flags` unchanged, so a child of a console parent shares that console as before. Off Windows
+    `flags` unchanged whatever `console` says: there is no console window to choose, and POSIX
+    refuses any creationflags but 0."""
+    if kitlib.platform.NAME != 'windows' or flags & CONSOLE_CHOICE:
         return flags
     if console is None:
         console = has_console()
