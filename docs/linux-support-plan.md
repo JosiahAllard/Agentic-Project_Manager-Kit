@@ -650,7 +650,7 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    ending a tool call kill its tree by pid) and slice 7's live proofs (test_slot_linux,
    test_detach_linux Live) moved to their own backlog record when slice 7
    landed. It is required before Linux is switched on (slice 14), and a shield, if the probe
-   shows one is needed, lands there (sections 1.3 and 9).
+   shows one is needed, lands with that record, before slice 14 (sections 1.3 and 9).
    Built on kit/linux-lock-runs. Deviation: Slot release unpins the job before the leftovers
    move (S2 and W2), so a straggler moved out gets every cpu back.
 8. **Guard path semantics.** The placer, the ten findings in section 3 as tests first, then the
