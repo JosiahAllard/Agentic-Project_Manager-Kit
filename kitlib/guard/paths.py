@@ -33,10 +33,11 @@ import kitlib.platform
 
 # fstypes whose names compare without case (as Linux mounts them by default)
 FOLDING_FS = frozenset(('vfat', 'msdos', 'exfat', 'cifs', 'smb3', 'smbfs', 'hfs', 'hfsplus'))
-# fstypes whose names compare with case
+# fstypes whose names compare with case. nfs, nfs4 and zfs are not listed: they can fold (the
+# server's filesystem, a dataset's casesensitivity), so they are in doubt
 CASE_FS = frozenset((
-    'ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'zfs', 'f2fs', 'jfs', 'reiserfs', 'nilfs2', 'bcachefs',
-    'tmpfs', 'ramfs', 'overlay', 'squashfs', 'erofs', 'nfs', 'nfs4', 'proc', 'sysfs', 'devtmpfs',
+    'ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'f2fs', 'jfs', 'reiserfs', 'nilfs2', 'bcachefs',
+    'tmpfs', 'ramfs', 'overlay', 'squashfs', 'erofs', 'proc', 'sysfs', 'devtmpfs',
     'devpts', 'cgroup2', 'securityfs', 'debugfs', 'tracefs', 'mqueue', 'hugetlbfs', 'fusectl',
     'configfs', 'pstore', 'bpf', 'efivarfs', 'binfmt_misc'))
 MOUNTINFO = '/proc/self/mountinfo'

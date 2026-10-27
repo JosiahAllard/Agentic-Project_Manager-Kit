@@ -286,6 +286,119 @@ class Placed(LinuxCase):
             self.assertFalse(context._placed(p), p)
 
 
+class TarFolders(LinuxCase):
+    """rules._TarDirs.move: tar reads each -C from the one in force with `/` joins; only a
+    leading `/` (or `~`) is rooted, and `\\` is a name's character."""
+
+    def denied(self, command):
+        d = self.sub(command)
+        self.assertIsNotNone(d, command)
+        self.assertEqual(d.verdict, 'deny', '%s: %s' % (command, d.reason))
+
+    def test_dot_then_dot_dot_reaches_the_main_checkout(self):
+        self.denied('tar -C . -C .. -xf a.tar')
+
+    def test_a_folder_then_dot_dot_dot_dot_reaches_the_main_checkout(self):
+        self.denied('tar -C x -C ../.. -xf a.tar')
+
+    def test_a_backslash_folder_is_read_in_the_one_in_force(self):
+        self.denied("tar -C /work/repo -C '\\x' -xf a.tar")
+
+    def test_folders_in_the_worktree_pass(self):
+        self.assertIsNone(self.sub('tar -C x -C y -xf a.tar'))
+        self.assertIsNone(self.sub('tar -C /work/repo/.claude/worktrees/wt -C y -xf a.tar'))
+
+
+class CurlOutputDir(LinuxCase):
+    """rules._under: on Linux an -o name is absolute only when it starts with `/`; a quoted `\\x`
+    or `C:/x` is a name in --output-dir."""
+
+    def test_a_backslash_or_drive_name_is_placed_in_the_output_dir(self):
+        for name in ("'\\x'", "'C:/x'"):
+            command = 'curl --output-dir /work/repo -o %s https://example.invalid/a' % name
+            d = self.sub(command)
+            self.assertIsNotNone(d, command)
+            self.assertEqual(d.verdict, 'deny', '%s: %s' % (command, d.reason))
+
+    def test_an_absolute_name_ignores_the_output_dir(self):
+        self.assertIsNone(self.sub('curl --output-dir /work/repo -o /work/repo/.claude/worktrees/wt/x '
+                                   'https://example.invalid/a'))
+
+
+class InTempStrict(LinuxCase):
+    """rules._in_temp lifts checks (worktree remove's clean check, the scratch repository
+    exemption), so on Linux it compares with the strict fold: a mount in doubt does not fold."""
+    mounts = UNKNOWN
+
+    def test_a_case_variant_of_the_temp_folder_is_not_temp(self):
+        self.w.temp = '/data/Tmp'
+        self.assertFalse(rules._in_temp(self.w.ctx(), '/data/tmp/x'))
+        self.assertTrue(rules._in_temp(self.w.ctx(), '/data/Tmp/x'))
+
+
+class InTempFolding(InTempStrict):
+    mounts = VFAT
+
+    def test_a_case_variant_of_the_temp_folder_is_not_temp(self):
+        self.w.temp = '/media/usb/Tmp'
+        self.assertTrue(rules._in_temp(self.w.ctx(), '/media/usb/tmp/x'))
+
+
+class InDoubtFilesystems(LinuxCase):
+    """nfs, nfs4 and zfs can fold case (a server's or a dataset's setting), so they are in doubt:
+    folded for what the guard refuses, not for what it allows."""
+    mounts = [('/', 'ext4'), ('/data', 'nfs4')]
+
+    def test_they_fold_only_for_refusals(self):
+        for fstype in ('nfs', 'nfs4', 'zfs'):
+            self.assertTrue(paths._folds(fstype, False), fstype)
+            self.assertFalse(paths._folds(fstype, True), fstype)
+
+    def test_a_case_variant_of_the_temp_folder_on_nfs_is_refused(self):
+        self.w.temp = '/data/Tmp'
+        self.refused('echo x > /data/tmp/f', 'write-jail')
+
+
+class InsideOnLinux(LinuxCase):
+    """jail.inside: on Linux a root's trailing `\\` is part of its name, not a separator."""
+
+    def test_a_trailing_backslash_is_kept(self):
+        self.assertFalse(jail.inside('/a/x', '/a\\'))
+        self.assertTrue(jail.inside('/a\\/x', '/a\\'))
+        self.assertTrue(jail.inside('/a/x', '/a/'))
+
+
+class MountInfo(unittest.TestCase):
+    """paths._read_mounts: /proc/self/mountinfo's mount point (field 5, octal escapes decoded) and
+    fstype (the first field after ` - `); a later line at the same point wins."""
+    TABLE = ('22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n'
+             '30 22 8:17 / /media/my\\040usb rw,relatime shared:5 - vfat /dev/sdb1 rw\n'
+             '31 22 0:50 / /data rw - nfs4 host:/x rw\n'
+             '32 22 0:51 / /data rw master:2 - tmpfs tmpfs rw\n'
+             'not a mountinfo line\n')
+
+    def read(self, text):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        f = os.path.join(folder, 'mountinfo')
+        if text is not None:
+            with open(f, 'w', encoding='utf-8', newline='\n') as out:
+                out.write(text)
+        with mock.patch.object(paths, 'MOUNTINFO', f):
+            return paths._read_mounts()
+
+    def test_the_table_is_read(self):
+        self.assertEqual(self.read(self.TABLE),
+                         [('/', 'ext4'), ('/data', 'tmpfs'), ('/media/my usb', 'vfat')])
+
+    def test_no_table_or_an_empty_one_is_none(self):
+        self.assertIsNone(self.read(None))
+        self.assertIsNone(self.read(''))
+
+    def test_octal_escapes_are_decoded(self):
+        self.assertEqual(paths._unescape('/a\\040b\\011c\\134d'), '/a b\tc\\d')
+
+
 class Ready(unittest.TestCase):
     def test_the_guard_declares_linux_ready(self):
         self.assertEqual(guard.READY_PLATFORMS, ('windows', 'linux'))

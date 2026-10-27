@@ -3240,8 +3240,8 @@ class Under(sh.Word):
 
 
 def _under(folder, w):
-    """`w` placed in `folder` (curl --output-dir), unless it is absolute."""
-    if folder is None or re.match(r'^(?:[A-Za-z]:)?[\\/]', w.text):
+    """`w` placed in `folder` (curl --output-dir), unless it is absolute (on Linux: starts with `/`)."""
+    if folder is None or (w.text.startswith('/') if paths.posix() else re.match(r'^(?:[A-Za-z]:)?[\\/]', w.text)):
         return w
     return Under(folder, w)
 
@@ -3318,9 +3318,13 @@ class _TarDirs:
         not `sure`: it may not be a -C, so the folders in force stay possible too."""
         new = []
         for b in self.bases:
-            rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+            if paths.posix():                   # Linux: `\` is a name's character, no drives
+                rooted, join = folder.text.startswith(('/', '~')), posixpath.join
+            else:
+                rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+                join = ntpath.join
             new.append(folder if b is None or rooted else
-                       sh.Word(ntpath.join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
+                       sh.Word(join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
         self.bases = new if sure else self.bases + new
         self.seen += new
         self.unsure = self.unsure or not sure
@@ -6351,8 +6355,11 @@ def shared_ref_held(event, ctx):
 
 
 def _in_temp(ctx, path):
-    real = jail.real(path)
-    return any(jail.inside(real, jail.real(r)) for r in jail.temp_roots(ctx))
+    """True when `path` lies in a temp root (jail.temp_roots). It lifts checks, so it compares with
+    the jail's strict fold (jail.real strict: on Linux a mount in doubt does not fold)."""
+    strict = paths.posix()
+    real = jail.real(path, strict)
+    return any(jail.inside(real, jail.real(r, strict)) for r in jail.temp_roots(ctx))
 
 
 def _scratch_repo(ctx, place):

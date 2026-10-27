@@ -55,13 +55,14 @@ def real(path, strict=False):
 
 
 def allow_real(path):
-    """real(path, strict=True) on Linux, real(path) elsewhere (the same fold, read once)."""
+    """real(path, strict=True) on Linux; None elsewhere, where the strict fold is real(path)'s own
+    (the caller then uses the real() it already has)."""
     return real(path, strict=True) if paths.posix() else None
 
 
 def inside(path, root):
     """True when the real()ed `path` is `root` or below it."""
-    return path == root or path.startswith(root.rstrip('\\/') + os.sep)
+    return path == root or path.startswith(root.rstrip('/' if paths.posix() else '\\/') + os.sep)
 
 
 class Root(object):
