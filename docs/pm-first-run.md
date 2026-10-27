@@ -35,7 +35,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
 
 5a. **Set up the agents' temp folder.** Run `python <kit>/tools/agent_temp_init.py`; the dry run
    prints the plan for the temp folder alone: the `AGENT_TEMP` folder, the `agent_temp_sweep` config
-   key, the folder's permissions and the sweep task line (docs/machine-setup.md "Agent temp init").
+   key, the folder's permissions and the sweep task line (docs/machine-setup.md "Extras").
    It refuses a folder the sweep would refuse, such as `%LOCALAPPDATA%\Temp`. The owner applies it
    with `--apply`, which also registers the sweep task after printing a dry run of the sweep
    (`--no-sweep-task` leaves it out). Success: the PM checklist prints no `agent_temp` lines
@@ -64,8 +64,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    repository (the hub server's backlog view finds the repository from the sessions file's folder,
    `kitlib.hubsite.serve` `_repo_pairs`, and fails outside a git repo). Fill `pm_start` in the user config with their paths, and
    `pm_watch_cmd` (docs/pm-start.md "Config"); set `pm_watch.sessions_file` to the same file
-   (docs/pm-watch.md "Config"). `pm_watch.py` reads usage
-   in-process from the machine config's `launcher` key and exits 2 without it; `usage_script` is refused.
+   (docs/pm-watch.md "Config"); `pm_watch.py` exits 2 without the machine config's `launcher` key.
    Then, as a hand step, the owner adds the SessionStart hook from docs/pm-start.md to the
    settings only the PM session loads (machine setup's `-PmSettings` above writes it).
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
@@ -77,7 +76,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    when neither that file nor `.claude/settings.json` has the key. The key is a machine path, so it
    goes in the git-ignored local file: there is nothing to commit. Set
    `pm_start.memory_dir` to the PM repository's folder (docs/pm-start.md "Config"). A machine
-   config key to put the folder elsewhere is coming; until then the drive's root is used.
+   config key to put the folder elsewhere does not exist yet: the drive's root is used.
    Success: the session start has no `memory (...)` or `pm_start.memory_dir` line.
 
 8. **Start the Action Hub.** `python <kit>/tools/hub.py setup` makes the token files, then the
