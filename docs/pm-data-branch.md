@@ -87,6 +87,10 @@ A clone of the public remote has `main` only. `installer/new-repo.ps1 -PmData <p
 | A contaminated branch reaches `main` | `ancestry_refusal` before the merge, then the pre-push root check |
 | `git gc` / shallow clones of the data worktree's repo | out of scope; the root commit must stay reachable from `pmdata` |
 
+## Tasks
+
+Tasks 1-8 have landed on kit main.
+
 ## Decided by the owner
 
 - **Pre-commit dispatch.** The kit's `githooks/pre-commit` runs only the kit's own checks; it does not chain to a repository-local hook (`core.hooksPath` is repository-wide, so such a hook never runs). Repository hooks may be wanted later, so the hook has one dispatch point where a chain step could slot in without rework: `kitlib/githooks/precommit.py` `CHECKS`, today the content render check, then the ledger check (docs/ledger.md "Pre-commit check", docs/content.md "Render on commit"). The `sh` front end `githooks/pre-commit` starts python only when `.kit.json` names `pre_commit_check`, so a step that must run in a repository that has not opted in also needs one condition there, beside that test. No chaining code is built now.
