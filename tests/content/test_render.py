@@ -54,9 +54,7 @@ class RealContentTest(unittest.TestCase):
 
     def test_the_traps_skill_has_a_section_per_platform(self):
         text = read(os.path.join(KIT_ROOT, 'content', 'skills', 'shell-and-worktree-traps', 'SKILL.md'))
-        text = text.decode('utf-8').replace('
-', '
-')
+        text = text.decode('utf-8').replace('\r\n', '\n')
         heads = re.findall(r'^## (.+)$', text, re.M)
         self.assertEqual(heads, ['Windows', 'Linux'])
         windows, linux = text.split('\n## Linux\n')
