@@ -843,7 +843,7 @@ def run_dir(inv):
     w = inv.workdir
     if w.dyn or sp_workdir_unplaceable(w.text):
         return None
-    return sh.resolve_path(w.text, inv.cmd.cwd, shell=sh.PS, home=inv.cmd.home)
+    return sh.chdir_real(sh.resolve_path(w.text, inv.cmd.cwd, shell=sh.PS, home=inv.cmd.home), inv.cmd.cwd)
 
 
 def _sp_shell_text(inv, parsed):
@@ -898,7 +898,7 @@ def _shell_text(inv, parsed):
         if not rest:
             return None
         where = None if val.dyn else sh.resolve_path(val.text, inv.cmd.cwd, home=parsed.home)
-        return span_text(inv.cmd, rest), inv.cmd.shell, where
+        return span_text(inv.cmd, rest), inv.cmd.shell, sh.chdir_real(where, inv.cmd.cwd)
     if name in ('source', '.') and inv.cmd.shell == sh.BASH:
         if a and a[0].dyn:
             parsed.flag('a script sourced from text that is not literal')

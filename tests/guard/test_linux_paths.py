@@ -12,11 +12,11 @@ import unittest
 from unittest import mock
 
 from kitlib import guard
-from kitlib.guard import context, jail, paths, rules
+from kitlib.guard import context, jail, modes, paths, rules
 from kitlib.guard import shell as sh
 from tests.platforms import posix_only
 
-from .claudehost import decide
+from .claudehost import action, decide
 from .linux import PosixWorld, on_linux
 from .world import bash, event
 
@@ -26,12 +26,24 @@ UNKNOWN = [('/', 'ext4'), ('/data', 'somefs')]
 
 class LinuxCase(unittest.TestCase):
     mounts = [('/', 'ext4')]
+    # the folders that exist (posixpath.isdir, by real path): a bash cd on Linux into any other is
+    # unknown (shell._linux_cd)
+    dirs = ('/work/repo', '/work/repo/.claude/worktrees/wt', '/work/repo/.claude/worktrees/wt/sub',
+            '/home/u', '/d')
+    unplaced_denied = False     # hold the rule unplaced at deny (world.deny_unplaced), else its default
 
     def setUp(self):
         cm = on_linux(self.mounts)
         cm.__enter__()
         self.addCleanup(cm.__exit__, None, None, None)
         self.w = PosixWorld()
+        p = mock.patch('posixpath.isdir', lambda path: posixpath.realpath(path) in self.dirs)
+        p.start()
+        self.addCleanup(p.stop)
+        if self.unplaced_denied:
+            p = mock.patch.dict(modes.DEFAULTS, {rules.UNPLACED: modes.DENY})
+            p.start()
+            self.addCleanup(p.stop)
 
     def sub(self, command, cwd=None, ctx=None):
         """The Decision for a subagent's Bash `command` in `cwd` (the worktree), None for an allow."""
@@ -437,7 +449,9 @@ def fake_links(links):
 class DotDotAfterALink(LinuxCase):
     """shell.resolve_path (paths.physical): Linux takes `..` after a symbolic link from where the
     link points (the kernel resolves it after the link), so `link/..` is the target's parent, never
-    the link's own folder: a worktree link d -> /work/repo/src makes d/../f the main checkout's f."""
+    the link's own folder: a worktree link d -> /work/repo/src makes d/../f the main checkout's f.
+    A cd into the link goes where the text cannot tell (CdRealPath): unplaced, held at deny here."""
+    unplaced_denied = True
 
     def setUp(self):
         LinuxCase.setUp(self)
@@ -486,9 +500,12 @@ class DotDotAfterALink(LinuxCase):
 
 class LogicalCd(LinuxCase):
     """shell.cd_target on Linux: bash's cd (and pushd) is -L by default, folding `..` in its place
-    against $PWD, not after the link; only cd -P is physical. A write is still read physically
-    from the tracked folder (resolve_path). With a link in -> x/y in the worktree, cd in, then
-    cd .., then cd .. is the worktrees folder, not the worktree."""
+    against $PWD, not after the link; only cd -P is physical. With a link in -> x/y in the
+    worktree, the logical reading of in/.. (the worktree) is not its physical one (x), and cd in
+    names a folder by a link, so both go where the text cannot tell (CdRealPath); cd -P in/.. is
+    x. A write is still read physically from the tracked folder (resolve_path)."""
+    dirs = LinuxCase.dirs + ('/work/repo/.claude/worktrees/wt/x', '/work/repo/.claude/worktrees/wt/x/y')
+    unplaced_denied = True
 
     def setUp(self):
         LinuxCase.setUp(self)
@@ -513,18 +530,79 @@ class LogicalCd(LinuxCase):
 
     def test_cd_minus_l_and_minus_p(self):
         wt = self.w.wt
-        self.assertEqual(self.cd('cd in/..'), (True, wt))
-        self.assertEqual(self.cd('cd -L in/..', home_vars=True), (True, wt))
+        self.assertEqual(self.cd('cd in/..'), (True, None))
+        self.assertEqual(self.cd('cd -L in/..', home_vars=True), (True, None))
         self.assertEqual(self.cd('cd -P in/..', home_vars=True), (True, wt + '/x'))
+        self.assertEqual(self.cd('cd -P in', home_vars=True), (True, wt + '/x/y'))
+
+    def test_a_cd_into_the_link_is_unknown(self):
+        self.assertEqual(self.cd('cd in'), (True, None))
+        self.refused('cd in && echo x > ../f', rules.UNPLACED)
 
     def test_a_write_from_inside_the_link_is_read_physically(self):
-        self.assertIsNone(self.sub('cd in && echo x > ../f'))
         self.assertEqual(sh.resolve_path('../f', self.w.wt + '/in'), self.w.wt + '/x/f')
 
     def test_cdpath_set_minus_p_and_pushd_plus_n_are_unknown(self):
         for text in ('export CDPATH=/work/repo; cd x', 'CDPATH=/work/repo cd x', 'set -P; cd x',
                      'set -o physical; cd x', 'pushd +1', 'pushd -1'):
             self.assertEqual(self.cd(text), (True, None), text)
+
+
+class CdRealPath(LinuxCase):
+    """shell.cd_target and the env -C folder on Linux: the folder tracked is a real path. A cd
+    whose logical reading (`..` folded from the text) is not the real path of its text, or whose
+    folder does not exist, goes where the text cannot tell: bash falls back to the unfolded text
+    when the folded folder is missing, and a shell started by env -C in a folder reached through a
+    link starts at its real path. A CDPATH, SHELLOPTS, cdable_vars or set -P anywhere on the line
+    makes a cd in any nested shell, eval or substitution unknown too. A write after a cd the text
+    cannot tell is unplaced (a warned allow by default), held at deny here as the owner's machine
+    config can (world.deny_unplaced)."""
+    dirs = ('/work/repo', '/work/repo/src', '/work/repo/build', '/work/repo/docs',
+            '/work/repo/.claude/worktrees/wt', '/work/repo/.claude/worktrees/wt/sub',
+            '/work/repo/.claude/worktrees/wt/docs')
+    unplaced_denied = True
+
+    def setUp(self):
+        LinuxCase.setUp(self)
+        p = mock.patch('posixpath.realpath', fake_links({self.w.wt + '/d': self.w.main + '/src'}))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def unplaced(self, command):
+        self.refused(command, rules.UNPLACED)
+
+    def test_a_cd_whose_folded_folder_is_missing_is_unknown(self):
+        self.unplaced('cd d/../build && echo x > f')
+
+    def test_a_shell_started_by_env_minus_c_through_a_link_starts_at_its_real_path(self):
+        self.refused("env -C d bash -c 'cd .. && echo x > f'", 'main-checkout')
+        self.assertEqual(sh.chdir_real(self.w.wt + '/d', self.w.wt), '/work/repo/src')
+
+    def test_cdpath_on_the_line_reaches_a_nested_shell(self):
+        self.unplaced("CDPATH=/work/repo bash -c 'cd docs && echo x > STANDING.md'")
+
+    def test_cdpath_on_the_line_reaches_an_eval(self):
+        self.unplaced("export CDPATH=/work/repo; eval 'cd docs; echo x > STANDING.md'")
+
+    def test_set_minus_p_on_the_line_reaches_a_substitution(self):
+        self.unplaced('set -P; x=$(cd d/..; touch f)')
+        self.unplaced('CDPATH=/work/repo; x=`cd docs; echo x > STANDING.md`')
+
+    def test_cdable_vars_is_unknown(self):
+        self.unplaced("shopt -s cdable_vars; bash -c 'cd docs && echo x > STANDING.md'")
+
+    def test_a_cd_into_a_missing_folder_is_unknown(self):
+        self.unplaced('cd nowhere; echo x > f')
+
+    def test_unplaced_warns_at_its_default_mode(self):
+        with mock.patch.dict(modes.DEFAULTS, {rules.UNPLACED: modes.WARN}):
+            d = guard.decide(action(bash('cd d/../build && echo x > f', self.w.wt, sub=True)), self.w.ctx())
+        self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+        self.assertIn('cannot tell where it writes', d.reason)
+
+    def test_a_plain_cd_in_the_worktree_is_still_tracked(self):
+        self.assertIsNone(self.sub('cd sub && echo x > f'))
+        self.assertIsNone(self.sub("bash -c 'cd sub && echo x > f'"))
 
 
 class DotDotAfterARealLink(unittest.TestCase):

@@ -181,10 +181,11 @@ class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
                  'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home',
-                 'split')
+                 'split', 'line')
 
-    def __init__(self, source, shell, depth, home=None):
+    def __init__(self, source, shell, depth, home=None, line=None):
         self.words, self.redirects, self.subs = [], [], []
+        self.line = line            # the outermost line's text, its Parsed's (a nested shell's and a substitution's too)
         self.start = self.end = None
         self.source, self.shell, self.depth = source, shell, depth
         self.home = home            # the folder `~` names, its Parsed's home (home_folder: None is the user's)
@@ -954,7 +955,8 @@ class _Scan(object):
         ids = [0]
 
         def new(prev):
-            c = Command(self.s, self.shell, self.depth, getattr(self.parsed, 'home', None))
+            c = Command(self.s, self.shell, self.depth, getattr(self.parsed, 'home', None),
+                        getattr(self.parsed, 'text', None))
             c.groups = tuple(stack)
             c.prev_op = prev
             return c
@@ -1156,10 +1158,11 @@ HOME_VAR_RE = re.compile(r'(?i)^(?:(?:\$(?:env:)?HOMEDRIVE|\$\{(?:env:)?HOMEDRIV
                          r'%(?:HOME|USERPROFILE)%)(?=$|[\\/])')
 # bash cd's own options (cd -P, cd -L -e)
 BASH_CD_OPT_RE = re.compile(r'^-[LPe@]+$')
-# a line that may change where bash's cd goes on Linux: CDPATH, or set -P / set -o physical (and
-# SHELLOPTS) making every cd physical; cd_target then reads its place as unknown
+# a line that may change where bash's cd goes on Linux: CDPATH, cdable_vars (and BASHOPTS), or
+# set -P / set -o physical (and SHELLOPTS) making every cd physical; cd_target then reads the
+# place of every cd the line runs as unknown, in its nested shells, evals and substitutions too
 BASH_ASSIGN_WORD_RE = re.compile(r'^[A-Za-z_]\w*\+?=')   # FOO=x before a command (cd_words)
-BASH_CD_UNSURE_RE = re.compile(r'CDPATH|SHELLOPTS|\bphysical\b|\bset\b[^;&|\n]*\s[-+]\w*P')
+BASH_CD_UNSURE_RE = re.compile(r'CDPATH|SHELLOPTS|BASHOPTS|cdable_vars|\bphysical\b|\bset\b[^;&|\n]*\s[-+]\w*P')
 
 
 def home_text(text, home=None, dyn=False):
@@ -1271,8 +1274,8 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     linux_bash = cmd.shell == BASH and paths.posix()
     if linux_bash and words[0].text not in LINUX_BASH_CD:
         return False, cwd                       # `CD x`, `chdir x`: no cd bash runs on Linux
-    if linux_bash and BASH_CD_UNSURE_RE.search(cmd.source or ''):
-        return True, None                       # CDPATH, or cd made physical by set -P
+    if linux_bash and (BASH_CD_UNSURE_RE.search(cmd.source or '') or BASH_CD_UNSURE_RE.search(cmd.line or '')):
+        return True, None                       # CDPATH, or cd made physical by set -P, on the line
     name = re.split(r'[\\/]', verb)[-1]
     if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
         if verb not in PS_QUALIFIED_CD:
@@ -1299,6 +1302,8 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
         if rest and not rest[0].dyn and rest[0].text == '--':
             rest = rest[1:]
         if not rest and verb in ('cd', 'chdir', 'set-location', 'sl'):
+            if linux_bash:
+                return True, _linux_cd(home_folder(home), cwd, home, logical)
             return True, resolve_path(home_folder(home), cwd, cmd.shell, home, logical=logical)
     if len(rest) != 1:
         return True, None
@@ -1313,7 +1318,42 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
         return True, None                       # pushd +N turns the stack
     if cmd.shell == PS and ps_filesystem_relative(p) is not None:
         return True, None                       # read from the process's directory, not the location
+    if linux_bash:
+        return True, _linux_cd(p, cwd, home, logical)
     return True, resolve_path(p, cwd, cmd.shell, home, logical=logical)
+
+
+def _linux_cd(p, cwd, home, logical):
+    """Where bash's cd to `p` from `cwd` goes on Linux, as a real path (realpath), or None when the
+    text cannot tell: the folder does not exist, or (cd -L, `logical`) the logical reading, `..`
+    folded from the text, is not the real path of the text read physically. bash's cd -L moves to
+    the folded folder, and to the unfolded text when that is missing; either way the folder kept
+    is then both the shell's $PWD and its real directory, so a later cd -L folds from it as bash
+    does. A cd through a link, a `..` after one, or from a folder whose path holds one, is unknown."""
+    phys = resolve_path(p, cwd, BASH, home)
+    if phys is None:
+        return None
+    real = paths.norm(phys, real=True, fold=False)
+    if not os.path.isdir(real):
+        return None
+    if logical and resolve_path(p, cwd, BASH, home, logical=True) != real:
+        return None
+    return real
+
+
+def chdir_real(path, outer=None):
+    """The folder a program started in `path` (env -C, Start-Process -WorkingDirectory) runs in, as
+    cd_target keeps a folder: on Linux its real path, None when it is no existing folder, or when
+    it is the folder of `outer` (the starting command's) but `outer` is not that real path: a bash
+    started there keeps the inherited $PWD, which a later cd -L folds from. Elsewhere `path`."""
+    if path is None or not paths.posix():
+        return path
+    real = paths.norm(path, real=True, fold=False)
+    if not os.path.isdir(real):
+        return None
+    if outer and outer != real and paths.norm(outer, real=True, fold=False) == real:
+        return None
+    return real
 
 
 BASH_PREFIX_WORDS = {'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time'}
