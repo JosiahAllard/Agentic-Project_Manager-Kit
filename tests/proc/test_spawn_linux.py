@@ -1,7 +1,7 @@
 """kitlib.proc.spawn off Windows: run, call and popen hand subprocess the caller's call unchanged,
-and nothing asks kernel32 for a console (KIT-LINUX-SPAWN-RUN). kitlib.platform.NAME is patched to
-'linux' and kernel32 is made to fail, so these run on any machine; RealStartTest starts a real
-python on the running platform."""
+and nothing asks kernel32 for a console. kitlib.platform.NAME is patched to 'linux' and kernel32 is
+made to fail, so these run on any machine; RealStartTest starts a real python on the running
+platform."""
 import subprocess
 import sys
 import unittest
