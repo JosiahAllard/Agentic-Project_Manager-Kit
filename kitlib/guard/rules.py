@@ -2587,11 +2587,12 @@ def pipe_stand_in_word(cmd, w):
 class NetWrite(object):
     """One path a .NET file call writes (net_writes): `word` its argument, dyn when the line
     computes it (a variable, an expression, a string with $ or a backtick), with its span in the
-    source; `end` the offset just past the call's closing parenthesis."""
-    __slots__ = ('word', 'end')
+    source; `end` the offset just past the call's closing parenthesis; `paths` every path argument
+    of the call, written or read (Copy's source too), `word` among them (net_retarget)."""
+    __slots__ = ('word', 'end', 'paths')
 
-    def __init__(self, word, end):
-        self.word, self.end = word, end
+    def __init__(self, word, end, paths=None):
+        self.word, self.end, self.paths = word, end, paths if paths is not None else [word]
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
@@ -2871,11 +2872,15 @@ def net_writes(cmd):
         args, end = _net_args(src, k + 1)
         written, found = _net_written(method, len(args))
         unread = unread or not found or _net_lost(src[k + 1:end])
-        for i in written:
+        words = {}
+        for i in sorted(set(written) | ({0} if method.startswith('copy') and args else set())):
             text, s, e = args[i]
             if text is None and src[s:e].lower() == '$null':
                 continue
-            out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+            words[i] = sh.Word(src[s:e] if text is None else text, text is None, s, e)
+        for i in written:
+            if i in words:
+                out.append(NetWrite(words[i], end, [words[j] for j in sorted(words)]))
     for x in out:
         m = None if x.word.dyn else NET_DEVICE_RE.match(x.word.text)
         if m:                                   # \\?\<drive>:\x is <drive>:\x; the span stays the argument's
@@ -2906,26 +2911,37 @@ NET_UNPLACED = ('a .NET call whose path the guard does not read or cannot place:
                 'device path, or one the line computes. ' + NET_PROCESS_DIR)
 
 
-def net_process_dir(event, ctx, role, what, target, rewrite):
-    """An agent session's .NET write to a literal relative path (net_relative), already judged where
-    the PowerShell location puts it (`target`): refused all the same, under write-jail, since .NET
-    writes it against the process's directory, which Set-Location does not move and the guard
-    cannot see (a docs-writer's [IO.File]::WriteAllText('docs/ROSTER.md', ...) from its worktree
-    wrote the main checkout). The alternative is the same call with `target`, the absolute path the
-    location gives, which .NET reads the same from any directory."""
+def net_process_dir(event, ctx, role, what, relative, target, rewrite):
+    """An agent session's .NET write whose call names a literal relative path (net_relative, the
+    texts `relative`: the path written, or Copy's source), already judged where the PowerShell
+    location puts it (`target`): refused all the same, under write-jail, since .NET reads it
+    against the process's directory, which Set-Location does not move and the guard cannot see (a
+    docs-writer's [IO.File]::WriteAllText('docs/ROSTER.md', ...) from its worktree wrote the main
+    checkout). The alternative is the same call with every relative path the absolute one the
+    location gives (net_retarget), which .NET reads the same from any directory."""
     if not agent_session(event, ctx):
         return None
-    return refuse('write-jail', role, '%s, a relative path: .NET reads it against the process\'s working directory '
-                  '([Environment]::CurrentDirectory), which cd and Set-Location do not move, so the guard cannot '
-                  'tell where it lands. An agent session gives .NET an absolute path. The same write at the path '
-                  'the PowerShell location gives:' % what, rewrite(fwd(target)))
+    return refuse('write-jail', role, '%s; the call names the relative path %s: .NET reads it against the process\'s '
+                  'working directory ([Environment]::CurrentDirectory), which cd and Set-Location do not move, so '
+                  'the guard cannot tell what it names. An agent session gives .NET absolute paths. The same call '
+                  'with the paths the PowerShell location gives:' % (what, ', '.join(relative)), rewrite(fwd(target)))
 
 
-def net_retarget(cmd, x, path):
+def net_retarget(cmd, x, path, place=None):
     """The command `cmd` through the end of its .NET call, with the NetWrite `x`'s argument
-    replaced by `path`."""
+    replaced by `path` and, with `place` (Word -> path or None), each other literal relative path
+    argument of the call (net_relative: Copy's source, Move's other path) by the path it gives, so
+    the alternative names no path .NET would read from the process's directory."""
     start = cmd.words[0].start if cmd.words else cmd.start
-    return (cmd.source[start:x.word.start] + literal_word(path) + cmd.source[x.word.end:x.end]).strip()
+    out, k = [], start
+    for o in sorted(x.paths, key=lambda o: o.start):
+        own = (o.start, o.end) == (x.word.start, x.word.end)     # net_writes may have re-read x.word (a device path)
+        new = path if own else place(o) if place is not None and net_relative(o) else None
+        if new is None:
+            continue
+        out.append(cmd.source[k:o.start] + literal_word(new))
+        k = o.end
+    return (''.join(out) + cmd.source[k:x.end]).strip()
 
 
 def _cluster_values(args, value_shorts, value_longs, k):
@@ -4216,7 +4232,8 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     rewrite = None if stand_in else word_rewrite(cmd, w)
     attached = attached_lead(cmd, w) if rewrite is not None and not isinstance(w, Under) else None
     if (w.start, w.end) in net:
-        rewrite, attached = (lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)), None
+        rewrite, attached = (lambda path, x=net[(w.start, w.end)]: net_retarget(
+            cmd, x, path, lambda o: write_place(ctx, cmd, o, base)[0])), None
     if checked is not None:
         x = checked[0]
         # -C'dir' spelt other than its text: the value's span is the whole word, so the rewrite spells -C again
@@ -4246,8 +4263,13 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         d = asked.firm(d)
         if d:
             return d, searched
-    if target is not None and base is OUTER and (w.start, w.end) in net and net_relative(w):
-        d = asked.firm(net_process_dir(event, ctx, role, what, target, rewrite))
+    # the relative path this write names, or a relative one the call only reads (Copy's source);
+    # another relative path it writes is judged as its own target first (Move's into the main checkout)
+    others = net[(w.start, w.end)].paths if (w.start, w.end) in net else []
+    relative = [o.text for o in others if net_relative(o)]
+    if target is not None and base is OUTER and others and \
+            (net_relative(w) or any(net_relative(o) and (o.start, o.end) not in net for o in others)):
+        d = asked.firm(net_process_dir(event, ctx, role, what, relative, target, rewrite))
         if d:
             return d, searched
     # A computed PowerShell target, or a path read from a directory the guard cannot tell (after a

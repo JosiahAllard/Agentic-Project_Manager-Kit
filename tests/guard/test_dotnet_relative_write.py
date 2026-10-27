@@ -65,6 +65,39 @@ class Relative(Base):
                 self.allowed(self.run_ps(d.instead))
                 self.denied(self.run_ps(t, env=COORDINATOR, sub=False), 'write-jail')
 
+    def test_two_path_calls_make_every_relative_path_absolute(self):
+        # one refusal; its alternative names no relative path, so .NET reads none from the process's directory
+        wt = W.fwd(self.w.wt)
+        for t, want in (("[IO.File]::Copy('a.txt', 'b.txt')", '[IO.File]::Copy("{0}/a.txt", "{0}/b.txt")'),
+                        ("[IO.File]::Move('a.txt', 'b.txt')", '[IO.File]::Move("{0}/a.txt", "{0}/b.txt")'),
+                        ("[IO.File]::Replace('a.txt', 'b.txt', 'c.bak')",
+                         '[IO.File]::Replace("{0}/a.txt", "{0}/b.txt", "{0}/c.bak")'),
+                        ("[IO.File]::Replace('a.txt', 'b.txt', $null)",
+                         '[IO.File]::Replace("{0}/a.txt", "{0}/b.txt", $null)')):
+            with self.subTest(text=t):
+                d = self.denied(self.run_ps(t), 'write-jail')
+                self.assertEqual(d.instead, want.format(wt))
+                self.allowed(self.run_ps(d.instead))
+
+    def test_move_takes_one_refusal(self):
+        d = self.denied(self.run_ps("[IO.File]::Move('a.txt', 'sub/b.txt')"), 'write-jail')
+        self.assertIn('a.txt, sub/b.txt', d.reason)
+        self.allowed(self.run_ps(d.instead))
+
+    def test_a_double_quoted_relative_path(self):
+        d = self.denied(self.run_ps('[IO.File]::WriteAllText("docs/ROSTER.md", $text)'), 'write-jail')
+        self.assertEqual(d.instead, '[IO.File]::WriteAllText("%s/docs/ROSTER.md", $text)' % W.fwd(self.w.wt))
+        self.allowed(self.run_ps(d.instead))
+
+    def test_new_object_streamwriter(self):
+        for t in ("$s = New-Object IO.StreamWriter('x.txt')",
+                  "$s = New-Object -TypeName System.IO.StreamWriter -ArgumentList 'x.txt'",
+                  "$s = New-Object System.IO.StreamWriter 'x.txt', $true"):
+            with self.subTest(text=t):
+                d = self.denied(self.run_ps(t), 'write-jail')
+                self.assertIn(W.fwd(self.w.wt) + '/x.txt', d.instead)
+                self.allowed(self.run_ps(d.instead))
+
     def test_a_relative_path_into_the_main_checkout_keeps_its_rule(self):
         self.denied(self.run_ps(OBSERVED, cwd=self.w.main), 'main-checkout')
         self.denied(self.run_ps(r"[IO.File]::WriteAllText('..\..\..\x.txt', 'y')"), 'main-checkout')

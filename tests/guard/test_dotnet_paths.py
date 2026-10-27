@@ -100,7 +100,10 @@ class Absolute(Base):
     def test_copy_writes_its_destination_only(self):
         self.allowed(self.run_ps(r"[IO.File]::Copy('{main}\a.txt', '{wt}\b.txt', $true)"))
         self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', '{main}\b.txt')"), 'main-checkout')
-        self.allowed(self.run_ps(r"[IO.File]::Copy('a.txt', '{wt}\b.txt')"))
+        # a relative source is read from the process's directory: refused, both paths made absolute
+        d = self.denied(self.run_ps(r"[IO.File]::Copy('a.txt', '{wt}\b.txt')"), 'write-jail')
+        self.assertEqual(d.instead, '[IO.File]::Copy("{0}/a.txt", "{0}/b.txt")'.format(W.fwd(self.w.wt)))
+        self.allowed(self.run_ps(d.instead))
         self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', 'b.txt')"), 'write-jail')
         self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', 'b.txt')", cwd=self.w.main), 'main-checkout')
 
