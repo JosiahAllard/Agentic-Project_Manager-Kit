@@ -603,10 +603,12 @@ def window_results(slot, say, seen=None):
     """Stops the lock run's window monitor (kitlib.lock.run.Slot.watch_stop, kitlib.proc.winwatch)
     and says its report: `windows opened: N` and a line per window. Returns [] (a window warns),
     or with WINDOWS_FAIL a FAIL result named `windows` when the run opened one. Fills
-    seen['windows'] when `seen` is a dict."""
+    seen['windows'] when `seen` is a dict. Each line is said through _say_safe: it runs inside
+    the held slot, where a console that cannot print a window's title (cp1252, U+2733) would
+    end the run `error` though every step passed."""
     windows = slot.watch_stop()
     for line in slot.window_lines(fails=WINDOWS_FAIL):
-        say(line)
+        _say_safe(say, line)
     if seen is not None:
         seen['windows'] = None if windows is None else [w.as_dict() for w in windows]
     n = len(winwatch.counted(windows))
@@ -614,6 +616,21 @@ def window_results(slot, say, seen=None):
         return []
     return [{'name': 'windows', 'status': 'FAIL', 'seconds': None, 'log': None,
              'reasons': ['%d console window(s) opened' % n]}]
+
+
+def ascii_line(line):
+    """`line` as text escaped to ASCII (backslashreplace): any console can print it."""
+    return str(line).encode('ascii', 'backslashreplace').decode('ascii')
+
+
+def _say_safe(say, line):
+    """say(ascii_line(line)); a stream that cannot be written (closed, broken: OSError, or an
+    encoding error) drops the line rather than raising. Any other exception from `say` is
+    raised: a report line is never worth ending the run over, a bug in `say` still shows."""
+    try:
+        say(ascii_line(line))
+    except (UnicodeError, OSError):
+        pass
 
 
 def lock_refusal(e):
@@ -705,7 +722,7 @@ def zero_count_warnings(gate):
         lines = list(S.zero_count_passes(gate))
     except Exception as e:          # noqa: BLE001 - a warning never fails or stops the gate
         lines = ['the zero-count "pass" check could not run: %s: %s' % (type(e).__name__, e)]
-    return [str(line).encode('ascii', 'backslashreplace').decode('ascii') for line in lines]
+    return [ascii_line(line) for line in lines]
 
 
 def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False, slug=None,

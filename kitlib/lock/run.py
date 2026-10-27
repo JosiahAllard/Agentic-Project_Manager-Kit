@@ -926,7 +926,8 @@ class Launcher:
 
 class Slot:
     """A held run (book()). start/wait/release, or the launcher; a context manager that
-    releases (how "error" and the tree ended when the block raised, "interrupted" on Ctrl+C)."""
+    releases (how "error" and the tree ended when the block raised, "interrupted" on Ctrl+C).
+    A block that raised names its exception on the ended record (exception_fields)."""
 
     def __init__(self, store, run, L, own, parent, mutex, env, on_release_cmd, kind_entry,
                  shares, log=None, gate=False):
@@ -1299,9 +1300,25 @@ class Slot:
         if et is KeyboardInterrupt:
             self.release(130, "interrupted")
         elif et is not None:
+            if self.run is not None and not self.released:
+                self.run.rec.update(exception_fields(et, ev))
             self.release(1, "error")
         else:
             self.release()
+
+
+def exception_fields(et, ev):
+    """What a run's ended record says of the exception that ended its block `error` (how stays
+    error): `exception`, its type (a builtin's bare name, else module.qualname), and
+    `exception_text`, str(ev) cut to 200 characters and escaped to ASCII."""
+    mod = getattr(et, "__module__", None)
+    name = getattr(et, "__qualname__", None) or getattr(et, "__name__", "?")
+    try:
+        text = str(ev)[:200]
+    except Exception:                       # noqa: BLE001 - a __str__ that raises
+        text = "?"
+    return {"exception": name if mod in (None, "builtins") else "%s.%s" % (mod, name),
+            "exception_text": text.encode("ascii", "backslashreplace").decode("ascii")}
 
 
 def _relayout(store, L):

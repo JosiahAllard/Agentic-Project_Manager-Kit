@@ -4,6 +4,7 @@ result record of a gate an exception stopped (docs/gate.md "Result record"). Fou
 (a step's reason quoting its log, or a console window's title) had a character cp1252 has no byte
 for, and the exception reached the record before the run's log folder did."""
 import io
+import json
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from unittest import mock
 
 from kitlib import gate as G
 from kitlib.gate import result, runner, steps
+from kitlib.lock import run as lockrun
 from tests import gitfixture, inproc
 from tests.gate import fixtures
 from tests.home import result_drive
@@ -107,6 +109,63 @@ class ErrorRecordNamesItsLogs(fixtures.GateRepoCase):
         rec = result.read(wt, 'kit/early')[0]
         self.assertEqual((rec['verdict'], rec['tip'], rec['log']), ('error', tip, None))
         self.assertIn('RuntimeError: boom', rec['summary'])
+
+
+def ended_records(store):
+    """The lock's ended run records in `store`, as dicts."""
+    folder = store.path('ended')
+    out = []
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else ():
+        if name.endswith('.json'):
+            with open(os.path.join(folder, name), encoding='utf-8') as f:
+                out.append(json.load(f))
+    return out
+
+
+class LockRecordOfTheGate(fixtures.GateRepoCase):
+    """The machine-lock run a gate books (runner.gated, `with slot:`): a console window line the
+    caller's console cannot encode never ends it `error`, and an exception that does end it
+    `error` is named on its ended record (kitlib.lock.run.Slot.__exit__)."""
+
+    def test_a_window_title_cp1252_cannot_encode_leaves_the_run_done(self):
+        wt, _ = self.branch('window', {'a.py': 'x = 1\n'})
+        out = cp1252_stream()
+
+        def say(line):
+            print(line, file=out)
+        with mock.patch.object(lockrun.Slot, 'window_lines', return_value=[WINDOW]):
+            res = runner.branch_gate(wt, log_dir=self.logs, book_kw=self.book_kw, say=say)
+        self.assertEqual(res.code, G.OK, res.lines)
+        recs = ended_records(self.store)
+        self.assertEqual([r['how'] for r in recs], ['done'], recs)
+        self.assertNotIn('exception', recs[0])
+        self.assertIn(WINDOW.replace(STAR, '\\u2733'), written(out))
+
+    def test_an_exception_in_the_slot_is_named_on_the_ended_record(self):
+        wt, _ = self.branch('boom', {'a.py': 'x = 1\n'})
+        boom = UnicodeEncodeError('charmap', STAR, 0, 1, 'character maps to <undefined>')
+        with mock.patch.object(runner, 'run_steps', side_effect=boom):
+            with self.assertRaises(UnicodeEncodeError):
+                runner.branch_gate(wt, log_dir=self.logs, book_kw=self.book_kw)
+        recs = ended_records(self.store)
+        self.assertEqual(len(recs), 1, recs)
+        rec = recs[0]
+        self.assertEqual((rec['how'], rec['code'], rec['exception']),
+                         ('error', 1, 'UnicodeEncodeError'), rec)
+        self.assertEqual(rec['exception_text'], str(boom))
+
+    def test_the_text_is_cut_to_200_characters_and_escaped_and_the_type_named_with_its_module(self):
+        wt, _ = self.branch('long', {'a.py': 'x = 1\n'})
+        with mock.patch.object(runner, 'run_steps', side_effect=Boom(STAR + 'x' * 300)):
+            with self.assertRaises(Boom):
+                runner.branch_gate(wt, log_dir=self.logs, book_kw=self.book_kw)
+        rec = ended_records(self.store)[0]
+        self.assertEqual(rec['exception'], __name__ + '.Boom')
+        self.assertEqual(rec['exception_text'], '\\u2733' + 'x' * 199)
+
+
+class Boom(Exception):
+    """An exception of no builtin type: the ended record names it with its module."""
 
 
 if __name__ == '__main__':
