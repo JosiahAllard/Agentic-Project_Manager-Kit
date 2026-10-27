@@ -60,5 +60,5 @@ Use the Grep and read_file tools, not shell grep, cat or sed.
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
-- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root such as `C:\\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 """

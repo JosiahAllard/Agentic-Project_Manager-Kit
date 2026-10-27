@@ -194,7 +194,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root such as `C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Implement beyond the one-line carve-out.
 - Land, merge or push yourself, except by `land.py --submit`. Pass anything to jump the landing
   queue or break a landing lock.

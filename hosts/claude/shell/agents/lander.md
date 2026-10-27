@@ -112,7 +112,7 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root such as `C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Force-push, or push anything but the main branch through the landing command.
 - `git add -A`, `git commit -a`, or staging anything you did not change.
 - Remove a worktree other than the one you were told to land, or an untracked file the brief did not name.
