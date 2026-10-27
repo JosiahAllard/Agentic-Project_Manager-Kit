@@ -465,5 +465,49 @@ class RealPowerShell(unittest.TestCase):
         self.assertEqual(r.stdout.decode().split(), ['errors', '0', 'errors', '0'])
 
 
+class PerOsRun(unittest.TestCase):
+    """{run: {windows, linux}} (docs/linux-support-plan.md section 5): the form for the target OS."""
+    FORMS = {'run': {'windows': 'dir C:\\x', 'linux': 'ls /x'}}
+
+    def test_a_string_run_is_verbatim_for_every_os(self):
+        for target in ('windows', 'linux'):
+            self.assertEqual(todosteps.render([{'run': 'python t.py'}], os=target), ['python t.py'])
+        self.assertEqual(todosteps.render([{'run': 'python t.py'}]), ['python t.py'])
+        self.assertEqual(todosteps.summary([{'run': 'python t.py'}]), ['run python t.py'])
+        self.assertEqual(todosteps.summary([{'run': 'python t.py'}], os='linux'), ['run python t.py'])
+
+    def test_the_form_of_the_target_os_is_rendered(self):
+        self.assertEqual(todosteps.render([self.FORMS]), ['dir C:\\x'])
+        self.assertEqual(todosteps.render([self.FORMS], os='windows'), ['dir C:\\x'])
+        self.assertEqual(todosteps.render([self.FORMS], os='linux'), ['ls /x'])
+        self.assertEqual(todosteps.summary([self.FORMS], os='linux'), ['run ls /x'])
+
+    def test_a_step_with_one_form_names_its_shell(self):
+        win = {'run': {'windows': 'dir'}}
+        lin = {'run': {'linux': 'ls'}}
+        self.assertEqual(todosteps.render([win], os='linux'), ['dir'])
+        self.assertEqual(todosteps.render([lin], os='windows'), ['ls'])
+        self.assertEqual(todosteps.summary([win], os='linux'), ['run dir (PowerShell only)'])
+        self.assertEqual(todosteps.summary([lin], os='windows'), ['run ls (bash only)'])
+        self.assertEqual(todosteps.summary([lin], os='linux'), ['run ls'])
+
+    def test_bad_forms_and_os_are_refused(self):
+        for run in ({}, {'mac': 'ls'}, {'linux': ''}, {'linux': 3}, {'linux': 'ls', 'x': 'y'},
+                    {'windows': 'a\ud800'}):
+            with self.subTest(run=run), self.assertRaises(StepError):
+                todosteps.render([{'run': run}])
+        with self.assertRaises(StepError):
+            todosteps.render([{'run': 'x'}], os='mac')
+        with self.assertRaises(StepError):
+            todosteps.summary([{'run': 'x'}], os='')
+
+    def test_check_judges_every_form(self):
+        for run in ({'windows': 'dir', 'linux': 'notepad x.txt'},
+                    {'linux': 'git worktree add w'}, {'windows': 'python gate.py'}):
+            with self.subTest(run=run), self.assertRaises(Refused):
+                todosteps.check({'steps': [{'run': run}]})
+        todosteps.check({'steps': [self.FORMS]})
+
+
 if __name__ == '__main__':
     unittest.main()

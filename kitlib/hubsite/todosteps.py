@@ -5,10 +5,15 @@ refused by. Pure logic: nothing here prints, reads a file or calls the hub.
 A step is a dict with exactly one verb key:
   {edit: <file>, old: <text>, new: <text>}  an exact literal replace of the one place `old` is;
   {open: <file>, line: <n>}                 the file in Notepad++ (line optional);
-  {run: <command>}                          a PowerShell command, passed through verbatim.
+  {run: <command>}                          a PowerShell command, passed through verbatim;
+  {run: {windows: <cmd>, linux: <cmd>}}     one command per OS (one or both keys): the form of
+                                            the target OS is the command, the other form is not
+                                            shown; a step with one form shows it on the other OS
+                                            with its shell named in the summary.
 
-render(steps) -> [command]: one command per step, in order (StepError on a bad step).
-summary(steps) -> [line]: what each step does, for the to-do's detail.
+render(steps, os) -> [command]: one command per step, in order (StepError on a bad step or an `os`
+that is not one of OSES; default DEFAULT_OS). A string `run` is the same on every OS.
+summary(steps, os) -> [line]: what each step does, for the to-do's detail.
 check(fields) -> None: Refused when the agent-written text of a to-do (title, detail, commands,
 run steps) asks for plain Notepad, describes a hand edit in prose, or is coordinator work.
 
@@ -43,6 +48,9 @@ TEXT_MAX = 16384            # characters in old or new
 PATH_MAX = 1024
 PREVIEW = 60                # characters of a base64 text shown in its comment
 RUN_SHOWN = 60              # characters of a run command shown in its summary line
+OSES = ('windows', 'linux')  # the keys of a per-OS run, and the targets render takes
+DEFAULT_OS = 'windows'
+SHELLS = {'windows': 'PowerShell', 'linux': 'bash'}
 VERBS = {'edit': ('edit', 'old', 'new'), 'open': ('open', 'line'), 'run': ('run',)}
 
 _QUOTES = "'\u2018\u2019\u201a\u201b"
@@ -149,6 +157,29 @@ def _text(where, name, v, empty):
     return v
 
 
+def _command(where, cmd):
+    if not isinstance(cmd, str) or not cmd.strip():
+        raise StepError('%s is a non-empty string' % where)
+    _no_surrogate(where, 'the command', cmd)
+
+
+def check_os(os):
+    if os not in OSES:
+        raise StepError('os is one of %s, not %r' % (', '.join(OSES), os), 'os')
+    return os
+
+
+def _form(run, os):
+    """(command, only): the command of run for os, and the OS it is for when run has no form
+    for os (the one form it has is shown); only is None for a command that fits os."""
+    if isinstance(run, str):
+        return run, None
+    if os in run:
+        return run[os], None
+    [(other, cmd)] = run.items()
+    return cmd, other
+
+
 def _steps(steps):
     """[(verb, values)] for steps, each checked; StepError on the first bad one."""
     if not isinstance(steps, list) or not steps:
@@ -183,9 +214,16 @@ def _steps(steps):
             v = {'path': _path(where, s['open']), 'line': line}
         else:
             cmd = s['run']
-            if not isinstance(cmd, str) or not cmd.strip():
-                raise StepError('%s: run is a non-empty string' % where)
-            _no_surrogate(where, 'the run command', cmd)
+            if isinstance(cmd, dict):
+                bad = sorted(str(k) for k in cmd if k not in OSES)
+                if not cmd or bad:
+                    raise StepError('%s: run takes %s, not %s' % (
+                        where, ' and/or '.join(OSES), ', '.join(bad) or 'nothing'))
+                for k in OSES:
+                    if k in cmd:
+                        _command('%s: run.%s' % (where, k), cmd[k])
+            else:
+                _command(where + ': run', cmd)
             v = {'run': cmd}
         out.append((verb, v))
     return out
@@ -258,9 +296,9 @@ _OPEN = ("$x=$null; foreach ($d in $env:ProgramFiles, ${env:ProgramFiles(x86)}) 
          "else { 'MISS '+$p+': Notepad++ is not in Program Files or Program Files (x86)' }")
 
 
-def _render(verb, v):
+def _render(verb, v, os):
     if verb == 'run':
-        return v['run']
+        return _form(v['run'], os)[0]
     p, pn = _literal('p', v['path'])
     if verb == 'open':
         line = " '-n%d'" % v['line'] if v['line'] else ''
@@ -270,13 +308,17 @@ def _render(verb, v):
     return _block([p, o, n], [pn, on, nn], _EDIT)
 
 
-def render(steps):
-    """The PowerShell command of each step, in order. StepError on a bad step."""
-    return [_render(verb, v) for verb, v in _steps(steps)]
+def render(steps, os=DEFAULT_OS):
+    """The command of each step for os, in order (PowerShell for a string, an edit and an open).
+    StepError on a bad step or an os that is not in OSES."""
+    check_os(os)
+    return [_render(verb, v, os) for verb, v in _steps(steps)]
 
 
-def summary(steps):
-    """One line per step saying what it does. StepError on a bad step."""
+def summary(steps, os=DEFAULT_OS):
+    """One line per step saying what it does (a run with no form for os says whose shell its one
+    form is for). StepError on a bad step or an os that is not in OSES."""
+    check_os(os)
     out = []
     for verb, v in _steps(steps):
         if verb == 'edit':
@@ -286,8 +328,10 @@ def summary(steps):
             out.append('open %s%s in Notepad++'
                        % (v['path'], ' at line %d' % v['line'] if v['line'] else ''))
         else:
-            cmd = ' '.join(v['run'].split())
-            out.append('run ' + (cmd if len(cmd) <= RUN_SHOWN else cmd[:RUN_SHOWN] + '...'))
+            cmd, only = _form(v['run'], os)
+            cmd = ' '.join(cmd.split())
+            out.append('run ' + (cmd if len(cmd) <= RUN_SHOWN else cmd[:RUN_SHOWN] + '...')
+                       + (' (%s only)' % SHELLS[only] if only else ''))
     return out
 
 
@@ -303,8 +347,13 @@ def _texts(fields):
             yield 'commands', 'commands[%d]' % i, c, True
     steps = fields.get('steps')
     for i, s in enumerate(steps if isinstance(steps, list) else ()):
-        if isinstance(s, dict) and isinstance(s.get('run'), str):
-            yield 'steps', 'steps[%d]' % i, s['run'], True
+        run = s.get('run') if isinstance(s, dict) else None
+        if isinstance(run, dict):
+            for k in OSES:
+                if isinstance(run.get(k), str):
+                    yield 'steps', 'steps[%d].run.%s' % (i, k), run[k], True
+        elif isinstance(run, str):
+            yield 'steps', 'steps[%d]' % i, run, True
 
 
 def check(fields):
