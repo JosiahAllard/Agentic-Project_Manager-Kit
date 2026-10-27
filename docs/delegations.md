@@ -141,7 +141,7 @@ With no `dev_drive` set, every request and every approval run is refused.
 
 After the preconditions (step 5), the runner makes a new empty folder under the machine's temp folder, then consumes the approval on the hub (POST `/approvals/A-nnn/consume`), pinned to the version it verified. Of two runners racing, one wins. A runner that cannot consume it, or that is answered with any status but `consumed`, runs nothing and logs nothing.
 
-The claim (step 6) then writes one entry, under the runner lock, not committed: the run entry, provenance `delegated`, Decides the run line, Source `under hub:A-nnn: D-nnn hub:A-nnn`. The approval is its own anchor: the owner signed it on the hub, and the hub verified and consumed it, so the ledger accepts a delegated entry under it with no owner entry (docs/ledger.md "Provenance"). The runner never writes an owner-provenance entry for an approval.
+The claim (step 6) then writes one entry, under the runner lock, not committed: the run entry, provenance `delegated`, Decides the run line, Source `under hub:A-nnn: D-nnn hub:A-nnn`. The approval is its own anchor: the owner signed it on the hub, and the hub verified and consumed it, so the ledger accepts a delegated entry under it with no owner entry (docs/ledger.md "Format"). The runner never writes an owner-provenance entry for an approval.
 
 An approval is given only with `--approval`; `--trigger hub:...` is refused.
 
@@ -153,13 +153,10 @@ How `commit.py --owner-approval` uses an approval is different: it writes no led
 
 - An approved run's scope covers only the paths named on its command line. Where the program writes by default (an installer's own folder, a tool's cache or log) is not judged.
 - Owner-written command tokens such as `-C..` or `...` are not judged as paths. An agent's argument values cannot take these forms: `schema.check_arg` refuses `..` and a leading `-`.
-- The scope is checked before the order, the preconditions and the claim, and the run starts after them. A checkout or a link made inside a judged folder in between is not seen.
+- The scope, the preconditions and the `.exe` are checked before the order and the claim, and the run starts after them. A checkout or a link made inside a judged folder, a precondition that stops holding, or a swap of the `.exe` by anything that can write its folder, in between is not seen.
 - The scope check does not see everything: a bare repository (a folder that is a repository without `.git`), a hard link, and a junction made after the check are not found.
 - An approval is consumed on the hub before its entry is written. If the ledger then refuses it (the lock is busy, the file cannot be written), the approval is used up and nothing ran: the agent asks for a new one.
 - The approval path, like `commit.py --owner-approval`, trusts whatever answers on the hub's local port (`approvals.verify_op`, `approvals.consume_op`). With no hub there the runner refuses, but an agent's own listener on that port that answers `valid` and then `consumed` makes the runner run the command. It then gets only the run entry, a `delegated` entry under the approval, and never an owner entry. That is weaker than the hub order check below, where a forged listener alone is not enough: an approval run has no owner ledger entry to check, so the listener's answers are all that stands.
-
-- D-003 is not runnable yet: its only trigger, `standing:pm-start-checklist`, is a standing trigger, and the runner refuses both standing triggers.
-- D-001 cannot run: its command is a PowerShell cmdlet, and the runner starts only an `.exe` from an argument list, never a shell.
 - A `branch-landed` branch deleted after it landed fails closed: with neither a local nor a remote-tracking branch, its tip cannot be told from a branch never pushed.
 - Retiring a run's `delegated` entry re-arms its trigger and anchor. The 24 h bound on the order limits how long that lasts.
 - The run's `delegated` entry is not committed. Discarding the ledger file's change (a checkout, a restore or a stash of it) removes the entry and re-arms its trigger and anchor; the 24 h bound on the order still applies. Until the entry is committed, the ledger file has an uncommitted change, so the PM's next `ledger.py add --commit` refuses.
@@ -167,9 +164,7 @@ How `commit.py --owner-approval` uses an approval is different: it writes no led
 - The hub order check trusts whatever listens on `127.0.0.1:<port>`. With the hub down, an agent's own listener there could serve a forged logged answer; the check that one live owner ledger entry names the question is then all that is left.
 - Whether an agent can read the hub owner token, and that an unmarked window counts as the owner, are not settled here.
 - An agent that can write the user's registry `Path` (HKCU `Environment`, or the `Volatile Environment` values it is filled from), or a folder already on the machine or user PATH, can still put its own `.exe` in place of the operation's program.
-- The `.exe` is found and checked before the order check, the preconditions and the claim, and started after them. Anything that can write its folder can swap it in between.
 - `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE` and `OS` come from the caller as they are, so a caller can still set them for the child (a `TEMP` folder it writes, for example).
 - The child and the runner's own Python load files from the owner's profile: `~/.gitconfig`, the PowerShell profile, the user site folder's `usercustomize.py` (when the runner is not started with `-I`). Anything that can write those, or HKCU `Volatile Environment`, which names the profile folders, steers the run.
-- The preconditions are checked before the claim and the run, so one can stop holding in between.
 - Without `-I`, `sitecustomize.py` or `usercustomize.py` on `PYTHONPATH`, and `PYTHONHOME`, run before the `PYTHON*` refusal; only `-I` protects.
 - Not proven: under a logon that is not interactive (a service, a scheduled task or SSH), HKCU `Volatile Environment` may be missing. The child then gets no `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `HOMEDRIVE` or `HOMEPATH`. That fails safe, but git and PowerShell then behave differently.
