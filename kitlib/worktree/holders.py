@@ -16,9 +16,11 @@ WALK_MAX entries and never descends a link or junction (`prune`). Nothing here d
 On Linux (docs/linux-support-plan.md slice 9) nothing denies a delete, so `blockers` and
 `cwd_holders` read /proc instead (kitlib.platform.linux.paths.process_paths): every path inside
 `root` that a process of this user uses (its current folder, root, program, an open file or a
-mapped file) is HELD; a process of this user that cannot be read in full makes the root UNREAD;
-no /proc makes it NOT_SEARCHED. Each is a refusal: the answer is empty only when every process of
-this user was read and none uses the tree. Another user's processes cannot be seen.
+mapped file) is HELD; a process of this user that cannot be read in full makes the root UNREAD, as
+does a tree its mount table shows at another path too (a bind mount: a process there holds the
+tree under a path not under `root`); no /proc makes it NOT_SEARCHED. Each is a refusal: the
+answer is empty only when every process of this user was read and none uses the tree. Another
+user's processes cannot be seen.
 """
 import ctypes
 import os
@@ -46,7 +48,8 @@ WALK_MAX = 200000
 NOT_SEARCHED = -1                   # `blockers`: the tree was past WALK_MAX, not probed in full
 #                                     (on Linux: /proc could not be listed)
 HELD = -2                           # `blockers` on Linux: a process of this user uses this path
-UNREAD = -3                         # `blockers` on Linux: a process of this user could not be read
+UNREAD = -3                         # `blockers` on Linux: a process of this user could not be read,
+#                                     or the tree shows at another path too (a bind mount)
 SHOWN = 20                          # a refusal names this many files or links, then counts the rest
 LINK_ADVICE = "remove the link by hand first; git's handling of it is untested"
 
@@ -157,8 +160,8 @@ def _linux_blockers(root):
         if path not in named and _under(path, target):
             named.add(path)
             found.append((path, HELD))
-    if scan.unreadable:
-        found.append((whole, UNREAD))
+    if scan.unreadable or linux_paths.aliased(scan.mounts, os.path.realpath(whole)):
+        found.append((whole, UNREAD))         # unread, or reachable by a path /proc names apart
     return found
 
 
@@ -332,8 +335,8 @@ def describe(root, why, cwd=None):
         note = ('held open (ERROR_SHARING_VIOLATION)' if err == SHARING_VIOLATION else
                 'in use by a process of this user (its current folder, root, program, an open'
                 ' file or a mapped file)' if err == HELD else
-                'not known to be free: a process of this user could not be read in full'
-                if err == UNREAD else
+                'not known to be free: a process of this user could not be read in full, or the'
+                ' tree shows at another path too (a bind mount)' if err == UNREAD else
                 'not searched: the process list (%s) cannot be read, so not known to be free'
                 % linux_paths.PROC if err == NOT_SEARCHED and linux else
                 'not probed in full: more than %d entries, so not known to be free' % WALK_MAX

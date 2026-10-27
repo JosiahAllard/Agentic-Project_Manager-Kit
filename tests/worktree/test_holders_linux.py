@@ -29,6 +29,19 @@ SELF = 4242                     # the pid of the scan's own process (paths._pid)
 TOP = os.path.abspath(os.sep)   # where it stands: / as this host spells it
 MNT, OTHER_MNT = 'mnt:[4026531841]', 'mnt:[4026532999]'     # mount namespaces (ns/mnt links)
 PROC_OPTIONS = 'rw,nosuid,nodev,noexec,relatime'
+# the / of the fake mount table: the root of the drive the temp trees are on (/ on Linux)
+FS_TOP = os.path.splitdrive(os.path.realpath(tempfile.gettempdir()))[0] + os.sep
+DISK = '8:1'                    # the device of the file system mounted at FS_TOP
+
+
+def escape(path):
+    """`path` escaped as the kernel escapes a mountinfo path."""
+    return path.replace('\\', '\\134').replace(' ', '\\040')
+
+
+def inside(path):
+    """Where `path` (under FS_TOP) is inside the file system mounted at FS_TOP: /a/b."""
+    return '/' + os.path.relpath(path, FS_TOP).replace(os.sep, '/')
 
 
 class FakeProc(object):
@@ -63,15 +76,20 @@ class FakeProc(object):
         self.add(SELF, cwd=TOP, comm='kit-test')
         self.mount(PROC_OPTIONS)
 
-    def mount(self, options, fstype='proc', point=None):
-        """SELF's mountinfo: / on ext4, then the fake /proc (or `point`) of `fstype` mounted with
-        superblock `options`, its path escaped as the kernel escapes one."""
+    def mount(self, options, fstype='proc', point=None, more=(), top=FS_TOP):
+        """SELF's mountinfo: `top` (FS_TOP: / as the temp trees are spelt) on ext4, then `more`
+        mounts (device, root inside its file system, mount point), then the fake /proc (or
+        `point`) of `fstype` mounted with superblock `options` (a tuple: one mount each), every
+        path escaped as the kernel escapes one."""
         point = self.root if point is None else point
-        escaped = point.replace('\\', '\\134').replace(' ', '\\040')
         with open(os.path.join(self.root, str(SELF), 'mountinfo'), 'w', newline='\n') as f:
-            f.write('21 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n')
-            f.write('22 21 0:21 / %s rw,nosuid,nodev,noexec,relatime shared:12 - %s proc %s\n'
-                    % (escaped, fstype, options))
+            f.write('21 1 %s / %s rw,relatime shared:1 - ext4 /dev/sda1 rw\n' % (DISK, escape(top)))
+            for n, (device, root, where) in enumerate(more):
+                f.write('%d 21 %s %s %s rw,relatime shared:1 - ext4 /dev/sdx rw\n'
+                        % (30 + n, device, escape(root), escape(where)))
+            for n, each in enumerate((options,) if isinstance(options, str) else options):
+                f.write('%d 21 0:21 / %s rw,nosuid,nodev,noexec,relatime shared:12 - %s proc %s\n'
+                        % (22 + n * 100, escape(point), fstype, each))
 
     def owner(self, folder):
         got = self.owners.get(folder)
@@ -103,12 +121,14 @@ class FakeProc(object):
 
     def add(self, pid, cwd='/', uid=ME, comm='python3', state='S', root='/', exe='/usr/bin/python3',
             fds=(), maps=(), owner=None, status=True, tasks=None, mnt=MNT):
-        """Process `pid` of real user `uid` (its status), whose /proc folder `owner` owns (`uid`
-        when None; root for one the kernel marks not dumpable). status=False writes no Uid line.
+        """Process `pid` of real user `uid` (its status; a tuple gives the real, effective, saved
+        and file system users), whose /proc folder `owner` owns (the effective user when None;
+        root for one the kernel marks not dumpable). status=False writes no Uid line.
         A link value of None leaves that link out (it reads ENOENT); an exception is raised when it
         is read. `mnt` is its mount namespace link. `tasks` {tid: {'cwd':, 'root':, 'exe':, 'fds':,
         'maps':}} are its other threads."""
         folder = os.path.join(self.root, str(pid))
+        uids = (uid,) * 4 if isinstance(uid, int) else uid
         self._links(folder, cwd, root, exe, fds, maps)
         if mnt is not None:
             self.links[os.path.join(folder, 'ns', 'mnt')] = mnt
@@ -119,8 +139,8 @@ class FakeProc(object):
         with open(os.path.join(folder, 'status'), 'w', newline='\n') as f:
             f.write('Name:\t%s\nState:\t%s\n' % (comm, state))
             if status:
-                f.write('Uid:\t%d\t%d\t%d\t%d\n' % (uid, uid, uid, uid))
-        self.owners[folder] = uid if owner is None else owner
+                f.write('Uid:\t%d\t%d\t%d\t%d\n' % uids)
+        self.owners[folder] = uids[1] if owner is None else owner
         os.makedirs(os.path.join(folder, 'task', str(pid)))
         for tid, links in (tasks or {}).items():
             self._links(os.path.join(folder, 'task', str(tid)), links.get('cwd', '/'),
@@ -204,6 +224,12 @@ class Blockers(Base):
                 10, tasks={11: {'root': denied}}),
             'a live leader whose task list is unreadable': lambda: self._replace(
                 self.proc.add(10), 'task', 'file'),
+            'a live leader whose thread is in another mount namespace': lambda: self.proc.add(
+                10, tasks={11: {'mnt': OTHER_MNT}}),
+            'a live leader whose thread namespace is denied': lambda: self.proc.add(
+                10, tasks={11: {'mnt': denied}}),
+            'a live leader whose thread namespace is missing': lambda: self.proc.add(
+                10, tasks={11: {'mnt': None}}),
             'its mount namespace denied': lambda: self.proc.add(10, mnt=denied),
             'its mount namespace missing while alive': lambda: self.proc.add(10, mnt=None),
             'another mount namespace': lambda: self.proc.add(10, cwd='/workspaces/x', mnt=OTHER_MNT),
@@ -278,6 +304,50 @@ class Blockers(Base):
                 self.proc.mount('rw,%s' % option)
                 self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
 
+    def test_any_proc_mount_at_proc_that_hides_processes_is_not_searched(self):
+        for options in (('rw,hidepid=2', 'rw,gid=10'), ('rw,gid=10', 'rw,subset=pid', 'rw')):
+            with self.subTest(options=options):
+                self.proc.mount(options)
+                self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+        self.proc.mount(('rw,hidepid=1', 'rw,gid=10'))
+        self.assertEqual(holders.blockers(self.tree), [])
+
+    def test_a_tree_its_file_system_shows_at_another_path_too_is_unread_not_free(self):
+        # a bind mount: a process standing in the other path holds the tree under a path that is
+        # not under it, so the tree is not known to be free
+        elsewhere = os.path.join(FS_TOP, 'srv-bind')
+        cases = {
+            'the whole file system again': [(DISK, '/', elsewhere)],
+            'a folder above the tree': [(DISK, inside(os.path.dirname(self.real)), elsewhere)],
+            'the tree itself': [(DISK, inside(self.real), elsewhere)],
+            'a folder inside the tree': [(DISK, inside(self.sub), elsewhere)],
+            'the tree on its own disk, mounted twice': [
+                ('8:5', '/', os.path.dirname(self.real)), ('8:5', '/', elsewhere)],
+        }
+        for name, more in cases.items():
+            with self.subTest(name):
+                self.proc.mount(PROC_OPTIONS, more=more)
+                self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
+
+    def test_another_folder_or_disk_mounted_elsewhere_leaves_the_tree_free(self):
+        elsewhere = os.path.join(FS_TOP, 'srv-bind')
+        cases = {
+            'another folder of its file system': [(DISK, inside(self.real) + '-other', elsewhere)],
+            'another disk': [('8:2', '/', elsewhere)],
+            'the disk it was on, once it has its own': [
+                ('8:5', '/', os.path.dirname(self.real)), (DISK, '/', elsewhere)],
+        }
+        for name, more in cases.items():
+            with self.subTest(name):
+                self.proc.mount(PROC_OPTIONS, more=more)
+                self.assertEqual(holders.blockers(self.tree), [])
+
+    def test_a_tree_no_mount_covers_is_unread(self):
+        # this process's mount table does not reach the tree (a chroot): where else it shows is
+        # not known
+        self.proc.mount(PROC_OPTIONS, top=os.path.join(FS_TOP, 'nowhere'))
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
+
     def test_a_proc_that_hides_only_others_contents_is_searched(self):
         for option in ('hidepid=0', 'hidepid=1', 'hidepid=off', 'hidepid=noaccess', 'gid=10'):
             with self.subTest(option=option):
@@ -307,6 +377,16 @@ class Blockers(Base):
     def test_this_user_as_either_the_real_user_or_the_folder_owner_is_this_user_s(self):
         self.proc.add(10, cwd=self.sub, uid=OTHER, owner=ME)    # run as this user by another
         self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
+
+    def test_this_user_as_any_of_the_four_status_users_is_this_user_s(self):
+        # real, effective, saved, file system: a setuid program run by another user, or one that
+        # dropped to this user, in a folder the kernel gives root
+        for uids in ((OTHER, ME, OTHER, OTHER), (OTHER, OTHER, ME, OTHER),
+                     (OTHER, OTHER, OTHER, ME)):
+            with self.subTest(uids=uids):
+                self.proc.reset()
+                self.proc.add(10, cwd=self.sub, uid=uids, owner=ROOT)
+                self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
 
     def test_status_naming_another_user_is_another_user_s_even_in_a_root_folder(self):
         self.proc.add(10, cwd=self.sub, uid=OTHER, owner=ROOT)
@@ -346,11 +426,12 @@ class Blockers(Base):
 
 
 class MountOptions(unittest.TestCase):
-    def test_the_last_proc_mount_at_the_point_is_read_and_unescaped(self):
+    def test_every_proc_mount_at_the_point_is_read_and_unescaped(self):
         text = ('21 1 8:1 / / rw - ext4 /dev/sda1 rw\n'
                 '22 21 0:21 / /my\\040proc rw,nosuid shared:12 - proc proc rw,hidepid=2\n'
                 '23 21 0:22 / /my\\040proc rw master:3 - proc proc rw,gid=10\n')
-        self.assertEqual(paths.proc_options(text, '/my proc'), {'rw', 'gid=10'})
+        self.assertEqual(paths.proc_options(text, '/my proc'),
+                         {'rw', 'nosuid', 'hidepid=2', 'gid=10'})
         self.assertIsNone(paths.proc_options(text, '/proc'))
 
 
