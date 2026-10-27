@@ -70,7 +70,7 @@ class Agents(unittest.TestCase):
         c = kcontent.load(ROOT)
         text = cc.renderer().render(c)['hosts/codex/shell/agents/kit-test-runner.toml'].decode('utf-8')
         self.assertNotIn('new_worktree.py', text)
-        self.assertIn('stay in that existing worktree, never create one', text)
+        self.assertIn('run every command in that existing worktree (never create one', text)
 
     def test_no_rendered_role_names_the_other_hosts_values(self):
         from hosts.claude.adapter import content as claude
