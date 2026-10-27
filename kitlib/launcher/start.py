@@ -276,10 +276,6 @@ def start_entry(settings, host, key, account=None, prompt=None, whatif=False, ho
     if lookup.running_stem(host.processes(), entry['stem']):
         raise LaunchError("A session of '%s' (stem %s) is already running; stop it first or use handoff."
                           % (key, entry['stem']))
-    old = lookup.legacy_running(host.processes(), key, entry)   # one-release guard (W2b removes it)
-    if old:
-        raise LaunchError("A session under the old stem %s is running for '%s' (repo %s); stop it first "
-                          "(one-release guard for the conductor-to-coordinator rename)." % (old, key, entry.get('repo')))
     out = []
     if account == 'current':
         account, note = A.resolve_current(settings, host.now(), host.environ)

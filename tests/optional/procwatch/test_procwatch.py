@@ -273,16 +273,17 @@ class Classify(unittest.TestCase):
         self.assertEqual(ps[951]["verdict"], "EXPECTED")
         self.assertFalse(any(p["kill_ok"] for p in ps.values() if p["rule"] in ("cpu-burner", "cpu-runaway")))
 
-    def test_old_agent_name_is_still_the_coordinator(self):
+    def test_the_retired_old_agent_name_is_no_coordinator(self):
         old = proc(502, 4180, "claude.exe", '"claude.exe" --agent conductor -n repo-b', age=8 * HOUR)
         ps = by_pid(PW.classify([proc(4180, 1, "explorer.exe", image=r"C:\Windows\explorer.exe", age=30 * HOUR), old,
                                  proc(901, 502, "python.exe", "python gate.py", age=MIN)], 3.0))
-        self.assertEqual(ps[901]["origin"], "coordinator claude.exe repo-b")
+        self.assertEqual(ps[901]["origin"], "claude.exe 502 session")
 
     def test_a_plugin_prefixed_agent_name_is_still_the_coordinator(self):
         explorer = proc(4180, 1, "explorer.exe", image=r"C:\Windows\explorer.exe", age=30 * HOUR)
         for agent, want in (("some-plugin:coordinator", "coordinator claude.exe repo-c"),
-                            ("some.plugin_2:conductor", "coordinator claude.exe repo-c"),
+                            ("some.plugin_2:coordinator", "coordinator claude.exe repo-c"),
+                            ("some-plugin:conductor", "claude.exe 503 session"),
                             ("some-plugin:reviewer", "claude.exe 503 session")):
             with self.subTest(agent):
                 claude = proc(503, 4180, "claude.exe", f'"claude.exe" --agent {agent} -n repo-c', age=8 * HOUR)

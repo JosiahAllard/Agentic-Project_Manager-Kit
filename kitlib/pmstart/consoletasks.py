@@ -44,9 +44,9 @@ OPTION = re.compile(r'^--?[A-Za-z][\w-]*[:=]')     # `-opt:` / `--opt=` before a
 
 
 def kit_names():
-    """The task names the kit registers itself: the launcher's sign-in task (and its old name) and
-    the agent temp sweep. `NAME_SUFFIXES` covers the per-repository ones."""
-    return {autostart.TASK_NAME, autostart.OLD_TASK_NAME, agenttemp.TASK}
+    """The task names the kit registers itself: the launcher's sign-in task and the agent
+    temp sweep. `NAME_SUFFIXES` covers the per-repository ones."""
+    return {autostart.TASK_NAME, agenttemp.TASK}
 
 
 def _norm(path):

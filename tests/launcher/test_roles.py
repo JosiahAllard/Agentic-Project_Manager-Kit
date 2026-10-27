@@ -15,7 +15,7 @@ class RoleFor(unittest.TestCase):
     def test_the_mapping(self):
         self.assertEqual(window.role_for(None), 'plain')
         self.assertEqual(window.role_for('coordinator'), 'coordinator')
-        self.assertEqual(window.role_for('conductor'), 'coordinator')
+        self.assertEqual(window.role_for('conductor'), 'conductor')     # the retired old name: its own name
         self.assertEqual(window.role_for('lead', 'lead'), 'coordinator')
         self.assertEqual(window.role_for('deep-worker'), 'deep-worker')
         self.assertEqual(window.role_for('consultant'), 'consultant')
@@ -25,7 +25,7 @@ class RoleFor(unittest.TestCase):
         # docs/guard.md "Agent names": the mark never carries the prefix
         self.assertEqual(window.role_for(P + 'deep-worker'), 'deep-worker')
         self.assertEqual(window.role_for(P + 'consultant'), 'consultant')
-        self.assertEqual(window.role_for(P + 'conductor'), 'coordinator')
+        self.assertEqual(window.role_for(P + 'conductor'), 'conductor')
         self.assertEqual(window.role_for(P + 'analyst'), 'analyst')
         self.assertEqual(window.role_for(P + 'coordinator', P + 'coordinator'), 'coordinator')
         self.assertEqual(window.role_for('lead', P + 'lead'), 'coordinator')
