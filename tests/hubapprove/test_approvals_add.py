@@ -297,8 +297,8 @@ class WhatIsRefusedBeforeAnyCall(Case):
                      reason='r' * (ap.MAX_REASON + 1))
 
 
-@real_git('hash-object --path applies a path\'s attributes: the fake reads no .gitattributes '
-          'and takes no --path')
+@real_git('the class sets * text=auto with no eol: the fake refuses text with no eol '
+          '(core.eol would decide)')
 class ContentGitWouldStageAsAnotherBlob(Case):
     """The consumer's staged check compares the blob git stages with the approved one, so content
     git's clean filter would change is refused here, before the owner is asked."""

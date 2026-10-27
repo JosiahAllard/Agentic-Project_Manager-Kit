@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zlib
 from unittest import mock
 
 from kitlib.config import user as kuser
@@ -618,10 +619,163 @@ class FakeHomeFence(unittest.TestCase):
         self.assertIn(d.replace('\\', '/'), str(c.exception))
 
 
+class FakeRefusesWhatAttributesLeaveUnmodelled(unittest.TestCase):
+    """The fake reads the root .gitattributes for text and eol (wt.Attributes); every other
+    attributes source or attribute, and a text attribute whose line ending core.eol would pick,
+    ends the test as Unsupported (tests/git/test_fake_differential.py compares the rest)."""
+
+    KIT = '* text=auto eol=lf\n*.cmd -text\n*.bat -text\n'
+
+    def setUp(self):
+        if not cmd.fake_active():
+            self.skipTest('the run is on real git (kit_tests.py --real-git)')
+        self.r = gitfixture.TempRepo()
+        self.addCleanup(self.r.cleanup)
+
+    def _unsupported(self, words, *argv, env=None):
+        from kitlib.git import fake
+        with self.assertRaises(fake.Unsupported) as cm:
+            if env is None:
+                self.r.git(*argv, check=False)
+            else:
+                fake.run(list(argv), self.r.root, None, env)
+        self.assertIn(words, str(cm.exception))
+
+    def _attrs(self, text):
+        self.r.write('.gitattributes', text)
+        self.r.write('f.txt', 'x\n')
+
+    def test_the_kits_own_file_is_read(self):
+        # the control: each refusal below comes from what it adds, not from a file being there
+        self._attrs(self.KIT)
+        with open(self.r.path('t.cmd'), 'wb') as f:
+            f.write(b'x\r\n')
+        self.r.git('add', '--', '.gitattributes', 'f.txt', 't.cmd')
+        self.r.git('commit', '-q', '-m', 'attributes')
+        self.assertEqual(self.r.git('status', '--porcelain=v1'), '')
+        self.assertEqual(self.r.git('rev-parse', 'HEAD:t.cmd'),                   # stored as-is
+                         hashlib.sha1(b'blob 3\0x\r\n').hexdigest())
+        os.remove(self.r.path('t.cmd'))
+        self.r.git('checkout', '--', 't.cmd')
+        with open(self.r.path('t.cmd'), 'rb') as f:
+            self.assertEqual(f.read(), b'x\r\n')
+
+    def test_a_macro_or_another_attribute_is_unsupported(self):
+        for line, words in (('*.png binary\n', "attribute 'binary'"), ('*.txt diff\n', "attribute 'diff'"),
+                            ('*.txt eol=native\n', "attribute 'eol=native'"),
+                            ('[attr]mine text\n', 'pattern'), ('*.txt crlf\n', "attribute 'crlf'")):
+            self._attrs(self.KIT + line)
+            self._unsupported(words, 'add', '--', 'f.txt')     # the file is read when a path is hashed
+
+    def test_a_pattern_beyond_a_basename_is_unsupported(self):
+        for line in ('sub/*.txt text\n', '!*.txt text\n', '"q.txt" text\n', '[ab].txt text\n',
+                     'a\\*.txt text\n'):
+            self._attrs(line)
+            self._unsupported('pattern', 'add', '--', 'f.txt')
+
+    def test_text_with_no_eol_and_no_autocrlf_is_unsupported(self):
+        # core.eol or the platform would decide the line ending
+        for line in ('* text\n', '* text=auto\n'):
+            self._attrs(line)
+            self._unsupported('core.eol', 'add', '--', 'f.txt')
+
+    def test_core_safecrlf_with_attributes_is_unsupported(self):
+        self._attrs(self.KIT)
+        self.r.git('config', 'core.safecrlf', 'true')
+        self._unsupported('core.safecrlf', 'add', '--', 'f.txt')
+
+    def test_a_gitattributes_below_the_root_is_unsupported(self):
+        self._attrs(self.KIT)
+        self.r.write('sub/.gitattributes', '* -text\n')
+        self.r.write('sub/g.txt', 'g\n')
+        self._unsupported('below the root', 'status', '--porcelain=v1')
+        self._unsupported('below the root', 'hash-object', 'sub/g.txt')
+
+    def _nested_branch(self, name='sub/.gitattributes'):
+        """Branch kit/nested: HEAD plus `name` (* eol=crlf), sub/-a.txt and sub/a.txt, its trees
+        written as objects (the fake refuses an index that tracks a nested .gitattributes)."""
+        from kitlib.git import fake
+        env = gitfixture.fixture_env()
+
+        def run(argv, data=None):
+            rc, out, err = fake.run(argv, self.r.root, data, env)
+            self.assertEqual(rc, 0, err)
+            return out.strip()
+
+        def tree(entries):        # [(mode bytes, name bytes, hex oid)], git's tree order
+            def order(e):
+                return e[1] + (b'/' if e[0] == b'40000' else b'')
+            body = b''.join(m + b' ' + n + b'\0' + bytes.fromhex(o) for m, n, o in sorted(entries, key=order))
+            raw = b'tree %d\0' % len(body) + body       # a loose object (the fake hashes only blobs)
+            oid = hashlib.sha1(raw).hexdigest()
+            folder = self.r.path('.git', 'objects', oid[:2])
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, oid[2:]), 'wb') as f:
+                f.write(zlib.compress(raw))
+            return oid
+
+        blob = lambda data: run(['hash-object', '-w', '--stdin'], data).decode()
+        # sub/-a.txt sorts before the .gitattributes: a checkout writes it first
+        sub = tree([(b'100644', b'-a.txt', blob(b'x\n')),
+                    (b'100644', name.split('/')[1].encode(), blob(b'* eol=crlf\n')),
+                    (b'100644', b'a.txt', blob(b'a\nb\n'))])
+        root = []
+        for line in run(['ls-tree', 'HEAD']).decode().splitlines():
+            head, path = line.split('\t', 1)
+            mode, _typ, oid = head.split()
+            root.append((mode.encode(), path.encode(), oid))
+        root.append((b'40000', b'sub', sub))
+        commit = run(['commit-tree', tree(root), '-p', 'HEAD', '-m', 'nested attributes']).decode()
+        self.r.git('branch', 'kit/nested', commit)
+
+    def test_a_checkout_that_writes_a_gitattributes_below_the_root_is_unsupported(self):
+        # the nested file is not on disk until the checkout writes it, so the paths under it
+        # must not be judged by the disk (git would write sub/a.txt with CRLF)
+        self._attrs(self.KIT)
+        self.r.git('add', '--', '.gitattributes', 'f.txt')
+        self.r.git('commit', '-q', '-m', 'attributes')
+        self._nested_branch()
+        # refused before any write (a refusal once the index tracks it would come too late)
+        self._unsupported('.gitattributes below the root', 'switch', '-q', 'kit/nested')
+        self.assertFalse(os.path.lexists(self.r.path('sub')))
+        self.assertEqual(self.r.git('rev-parse', '--abbrev-ref', 'HEAD').strip(), 'main')
+        self._unsupported('.gitattributes below the root', 'reset', '-q', '--hard', 'kit/nested')
+        self.assertFalse(os.path.lexists(self.r.path('sub')))
+
+    def test_a_checkout_that_writes_a_case_variant_gitattributes_is_unsupported(self):
+        self.r.write('f.txt', 'x\n')
+        self.r.git('add', '--', 'f.txt')
+        self.r.git('commit', '-q', '-m', 'f')
+        self._nested_branch('sub/.GitAttributes')
+        self._unsupported('in another case', 'switch', '-q', 'kit/nested')
+        self.assertFalse(os.path.lexists(self.r.path('sub')))
+
+    def test_a_gitattributes_that_is_not_a_file_is_unsupported(self):
+        os.makedirs(self.r.path('.gitattributes'))
+        self.r.write('f.txt', 'x\n')
+        self._unsupported('not a file', 'add', '--', 'f.txt')
+
+    def test_a_tracked_gitattributes_missing_from_the_work_tree_is_unsupported(self):
+        # git would read the index's copy (attr.c, GIT_ATTR_CHECKIN)
+        self._attrs(self.KIT)
+        self.r.git('add', '--', '.gitattributes', 'f.txt')
+        self.r.git('commit', '-q', '-m', 'attributes')
+        os.remove(self.r.path('.gitattributes'))
+        self._unsupported('missing from the work tree', 'status', '--porcelain=v1')
+
+    def test_attr_tree_and_attr_source_are_unsupported(self):
+        self._attrs(self.KIT)
+        self.r.git('config', 'attr.tree', 'HEAD')
+        self._unsupported('attr.tree', 'status', '--porcelain=v1')
+        self.r.git('config', '--unset', 'attr.tree')
+        env = gitfixture.fixture_env({'GIT_ATTR_SOURCE': 'HEAD'})
+        self._unsupported('GIT_ATTR_SOURCE', 'status', '--porcelain=v1', env=env)
+
+
 @real_git('differential: the fake against real git, which the unit tier never starts')
 class FakeHashObjectPath(unittest.TestCase):
     """`hash-object --path=<path> --stdin` on the fake answers what real git answers for the same
-    bytes and path (with no attributes file: the fake raises Unsupported for one)."""
+    bytes and path, under core.autocrlf and a root .gitattributes."""
     DATA = [b'', b'hello\n', b'a\r\nb\n', b'a\nb\n', b'a\r\nb\nc', b'bin\x00\r\n\xff']
 
     def setUp(self):
@@ -630,9 +784,9 @@ class FakeHashObjectPath(unittest.TestCase):
         self.addCleanup(self.r.cleanup)
         self.env = gitfixture.fixture_env(cmd.LOCALE_ENV)
 
-    def both(self, data, *extra):
+    def both(self, data, *extra, path='sub/f.txt'):
         from kitlib.git import fake
-        args = ['hash-object'] + list(extra) + ['--path=sub/f.txt', '--stdin']
+        args = ['hash-object'] + list(extra) + ['--path=' + path, '--stdin']
         rc, out, _ = fake.run(args, self.r.root, data, self.env)
         real = subprocess.run(['git'] + args, cwd=self.r.root, input=data, env=self.env,
                               capture_output=True)
@@ -649,6 +803,36 @@ class FakeHashObjectPath(unittest.TestCase):
             self.r.git('config', 'core.autocrlf', mode)
             for data in self.DATA:
                 self.both(data)
+
+    def test_a_root_gitattributes_converts_as_real_git_does(self):
+        from kitlib.git import fake
+        cases = ['* text=auto eol=lf\n*.cmd text eol=crlf\n', '*.txt text eol=crlf\n',
+                 '*.TXT eol=lf\n', 'f.* -text\n', '* text=auto eol=crlf\n*.txt !text\n',
+                 '*.txt text\n', '* text=auto\n', '﻿# comment\r\n*.txt text eol=lf\r\n']
+        for text in cases:
+            with open(self.r.path('.gitattributes'), 'w', encoding='utf-8', newline='') as f:
+                f.write(text)
+            for mode in ('true', 'input', 'false'):
+                self.r.git('config', 'core.autocrlf', mode)
+                for data in self.DATA:
+                    if mode == 'false' and text in ('*.txt text\n', '* text=auto\n'):
+                        # no eol and no autocrlf: core.eol decides, which the fake leaves alone
+                        with self.assertRaises(fake.Unsupported, msg=(text, data)):
+                            self.both(data)
+                    else:
+                        with self.subTest(attributes=text, autocrlf=mode, data=data):
+                            self.both(data)
+
+    def test_core_ignorecase_folds_a_pattern_as_real_git_does(self):
+        with open(self.r.path('.gitattributes'), 'w', encoding='utf-8', newline='\n') as f:
+            f.write('*.TXT eol=crlf\n')
+        self.r.git('config', 'core.autocrlf', 'false')
+        for path in ('sub/f.txt', 'sub/F.Txt'):
+            got = set()
+            for icase in ('true', 'false'):
+                self.r.git('config', 'core.ignorecase', icase)
+                got.add(self.both(b'a\r\nb\r\n', path=path))
+            self.assertEqual(len(got), 2, (path, 'the case of the pattern changed nothing'))
 
     def test_path_and_no_filters_together_die_as_git_does(self):
         from kitlib.git import fake
