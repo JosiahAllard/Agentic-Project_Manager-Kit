@@ -247,10 +247,9 @@ export root as the marketplace `pm-kit` and installs `pm-kit@pm-kit` in every ac
 each kit landing `python tools/plugin_refresh.py --apply` refreshes them. Each is a dry run without
 `--apply`. Migrate one folder first (`--folder DIR`, repeatable), check a session there, then the
 rest; `--apply` refuses a folder that is not migrated (docs/plugin-source.md "Migrating"). The
-exact `claude plugin` subcommands and flags these run are inferences (docs/plugin-source.md
-"Open questions"). Whether Claude Code loads a relative-path plugin of a local marketplace in
-place or copies it into its plugin cache is not settled (docs/plugin-source.md "Open
-questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the live checkout:
+`claude plugin` subcommands these run are inferences except `plugin update`, and Claude Code
+copies the plugin into its cache (observed; docs/plugin-source.md
+"Open questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the live checkout:
 the skills and agents write every kit path as `<kit>/<path>` (tests/skills and
 tests/content/test_skill_commands.py check it); the kit header hook tells each session and
 subagent the folder `<kit>` stands for (docs/content.md "Kit header"). `${CLAUDE_PLUGIN_ROOT}` is

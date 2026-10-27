@@ -13,7 +13,7 @@ and skill files and docs/ROSTER.md's tables; commit what it writes.
 | Its model on one host | `model.<host>: <model>` in the front matter, over the tier's | render |
 | The model per tier | `hosts.json` `tiers` for that host | render (docs/ROSTER.md shows the table) |
 | Its line in docs/ROSTER.md | the role file's `summary` (its `description` when absent) | render |
-| What a role may write | the role file's `mode` and `writes` (docs/guard.md "Role policy"); a repository can override the mode with `.kit.json` `roles.<name>.mode` and turns the policy on with `guard.role_policy` | the guard reads them live; render too, since a host may derive the role's sandbox from its mode |
+| What a role may write | the role file's `mode`, and its optional `writes` paths (the loader accepts them; no role file uses them today; docs/guard.md "Role policy"); a repository can override the mode with `.kit.json` `roles.<name>.mode` and turns the policy on with `guard.role_policy` | the guard reads them live; render too, since a host may derive the role's sandbox from its mode |
 | The rules a mode is held to | `kitlib/guard/rolepolicy.py` (`RULES`, `LOCK_VERBS`) | nothing to render |
 | Its backlog rights | the role file's `mode`, `group` and `run` give its group; what each group may do is `kitlib/backlog/roles.py` (owner-only) | render |
 | A skill | `content/skills/<name>/` | render |
