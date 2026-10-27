@@ -22,11 +22,17 @@ gives the folder of a process it marks not dumpable to root, so the owner alone 
 process whose user cannot be told (no status, and a folder of this user's or root's that cannot be
 read) counts as unreadable, as does a process of this user that cannot be read in full, so a caller
 can refuse rather than call a tree free. A process that ends while it is read (its folder gone) is
-skipped; a zombie leader whose other threads still run has their cwd, root and open files read from
-/proc/<pid>/task instead. A process of another user is counted in `total` only: this user cannot
-see what it uses. A /proc that lists no process, or not this one, is not this system's process
-list: OSError, as when it cannot be listed. PROC, _uid, _pid, _owner, _status_uid, _link, _pw_dir
-and is_absolute are the seams a test points at a folder tree of its own. This module imports on
+skipped. A live leader's other threads (/proc/<pid>/task) give their cwd and root as well, since
+one that called unshare(CLONE_FS) has its own; a zombie leader whose other threads still run has
+every kind read from them instead. A process of this user in another mount namespace (a
+devcontainer, rootless podman) names paths of another tree, so it counts as unreadable, as does
+one whose namespace cannot be read. A process of another user is counted in `total` only: this
+user cannot see what it uses. A /proc that lists no process, or not this one, is mounted with an
+option that hides processes of this user (hidepid=2 or 4, invisible, ptraceable, subset=pid), or
+whose mount options or whose own mount namespace cannot be read, gives OSError, as when it cannot
+be listed. Not seen: a thread's own open-file table (CLONE_FILES unshared). PROC, _uid, _pid,
+_owner, _status_uid, _link, _pw_dir and is_absolute are the seams a test points at a folder tree
+of its own (this process's mountinfo is read under PROC too). This module imports on
 any platform; its reads need Linux.
 """
 import collections
@@ -228,13 +234,13 @@ def _collect(folder, pid, name, kinds, found):
             found.append((pid, name, kind, path))
 
 
-TASK_KINDS = ('cwd', 'root', 'fd')               # what one thread can hold on its own
+LIVE_TASK_KINDS = ('cwd', 'root')     # what a thread of a live leader can hold apart from it
 
 
 def _threads(folder, pid, name, kinds, found):
-    """For a leader that is a zombie: read the cwd, root and open files of each other thread in
-    /proc/<pid>/task, which still run. None when there is none (the process has ended), else
-    whether every one was read; a thread whose folder goes away while read has ended."""
+    """Read `kinds` of each thread in /proc/<pid>/task but the leader. None when there is no
+    other thread or the list is gone (the process ended), else whether every one was read; a
+    thread whose folder goes away while read has ended."""
     try:
         tids = [t for t in os.listdir(os.path.join(folder, 'task')) if t.isdigit() and t != str(pid)]
     except OSError as e:
@@ -245,7 +251,7 @@ def _threads(folder, pid, name, kinds, found):
     for tid in tids:
         task = os.path.join(folder, 'task', tid)
         try:
-            _collect(task, pid, name, [k for k in kinds if k in TASK_KINDS], found)
+            _collect(task, pid, name, kinds, found)
         except OSError:
             if os.path.isdir(task):
                 whole = False
@@ -253,7 +259,9 @@ def _threads(folder, pid, name, kinds, found):
 
 
 def _process(folder, pid, kinds):
-    """(entries, read in full) for the process of `folder`, or None when it ended while read."""
+    """(entries, read in full) for the process of `folder`, or None when it ended while read. A
+    live leader's other threads give their cwd and root too (one that called unshare(CLONE_FS)
+    has its own); a zombie leader's give every kind, since the leader gives none."""
     name, found = _name(folder), []
     try:
         _collect(folder, pid, name, kinds, found)
@@ -270,13 +278,101 @@ def _process(folder, pid, kinds):
         if whole is None:
             return None
         return found, whole
-    return found, True
+    whole = _threads(folder, pid, name, [k for k in kinds if k in LIVE_TASK_KINDS], found)
+    return found, whole is not False
+
+
+HIDING = ('hidepid=2', 'hidepid=invisible', 'hidepid=4', 'hidepid=ptraceable', 'subset=pid')
+
+
+def _unescape(field):
+    """A mountinfo path field with the kernel's octal escapes (\\040 for a space) undone."""
+    out, i = [], 0
+    while i < len(field):
+        if field[i] == '\\' and field[i + 1:i + 4].isdigit() and len(field[i + 1:i + 4]) == 3:
+            out.append(chr(int(field[i + 1:i + 4], 8)))
+            i += 4
+        else:
+            out.append(field[i])
+            i += 1
+    return ''.join(out)
+
+
+def proc_options(text, point):
+    """The options (per mount and superblock) of the last proc file system mounted at `point` in
+    mountinfo `text`, a set; None when there is none."""
+    got = None
+    for line in text.splitlines():
+        head, sep, tail = line.partition(' - ')
+        fields, rest = head.split(), tail.split()
+        if not sep or len(fields) < 6 or len(rest) < 3:
+            continue
+        if _unescape(fields[4]) == point and rest[0] == 'proc':
+            got = set(fields[5].split(',')) | set(rest[2].split(','))
+    return got
+
+
+def _check_proc(me_folder):
+    """OSError unless the /proc at PROC shows every process of this user: its mount options (from
+    this process's mountinfo) are known and hide none (hidepid=2 or 4, invisible, ptraceable,
+    subset=pid hide those this user cannot trace). Returns this process's mount namespace."""
+    try:
+        with open(os.path.join(me_folder, 'mountinfo'), 'rb') as f:
+            text = os.fsdecode(f.read())
+    except OSError as e:
+        raise OSError(e.errno, 'cannot read its mount options: %s' % e.strerror, PROC) from None
+    options = proc_options(text, PROC)
+    if options is None:
+        raise OSError(errno.ENOENT, 'is not a proc file system in this mount table', PROC)
+    hiding = sorted(options.intersection(HIDING))
+    if hiding:
+        raise OSError(errno.EACCES, 'is mounted with %s, which hides processes of this user'
+                      % ','.join(hiding), PROC)
+    try:
+        return _link(os.path.join(me_folder, 'ns', 'mnt'))
+    except OSError as e:
+        raise OSError(e.errno, 'cannot read this process\'s mount namespace: %s' % e.strerror,
+                      PROC) from None
+
+
+def _same_mounts(folder, mine):
+    """True when the process of `folder` shares this process's mount namespace `mine`; False when
+    it is another (its paths name another tree) or cannot be read; None when it ended. A zombie
+    leader has none of its own: its other threads' decide, and with none it has ended."""
+    try:
+        return _link(os.path.join(folder, 'ns', 'mnt')) == mine
+    except OSError:
+        try:
+            state = _state(folder)
+        except OSError:
+            return False
+    if state is None:
+        return None
+    if state not in EXITED:
+        return False
+    try:
+        tids = [t for t in os.listdir(os.path.join(folder, 'task'))
+                if t.isdigit() and t != os.path.basename(folder)]
+    except OSError as e:
+        return None if e.errno in GONE else False
+    seen = False
+    for tid in tids:
+        task = os.path.join(folder, 'task', tid)
+        try:
+            if _link(os.path.join(task, 'ns', 'mnt')) != mine:
+                return False
+            seen = True
+        except OSError:
+            if os.path.isdir(task):
+                return False
+    return True if seen else None
 
 
 def process_paths(kinds=KINDS):
     """Scan of every process /proc lists (see the module's text). OSError when PROC cannot be
-    listed, lists no process, or does not list this one (not this system's process list): then
-    nothing is known."""
+    listed, lists no process, does not list this one (not this system's process list), is
+    mounted to hide processes, or its mount options or this process's mount namespace cannot be
+    read: then nothing is known."""
     me = _uid()
     pids = [n for n in os.listdir(PROC) if n.isdigit()]
     if not pids:
@@ -284,6 +380,7 @@ def process_paths(kinds=KINDS):
     if str(_pid()) not in pids:
         raise OSError(errno.ENOENT, 'does not list this process (%d), so it is not this '
                       "system's process list" % _pid(), PROC)
+    mine = _check_proc(os.path.join(PROC, str(_pid())))
     entries, unreadable = [], 0
     for n in pids:
         folder = os.path.join(PROC, n)
@@ -291,6 +388,12 @@ def process_paths(kinds=KINDS):
         if whose is None or whose == OTHERS:
             continue
         if whose == UNKNOWN:                     # not known to be another user's
+            unreadable += 1
+            continue
+        same = _same_mounts(folder, mine)
+        if same is None:
+            continue
+        if not same:                             # its paths are another mount table's
             unreadable += 1
             continue
         got = _process(folder, int(n), kinds)

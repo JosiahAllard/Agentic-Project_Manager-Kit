@@ -27,11 +27,14 @@ from tests.platforms import posix_only
 ME, OTHER, ROOT = 1000, 1001, 0
 SELF = 4242                     # the pid of the scan's own process (paths._pid)
 TOP = os.path.abspath(os.sep)   # where it stands: / as this host spells it
+MNT, OTHER_MNT = 'mnt:[4026531841]', 'mnt:[4026532999]'     # mount namespaces (ns/mnt links)
+PROC_OPTIONS = 'rw,nosuid,nodev,noexec,relatime'
 
 
 class FakeProc(object):
     """A fake /proc in a temp folder, holding this process (SELF) until clear(). add() makes one
-    process; links and folder owners are tables, the real user is its status file."""
+    process; links and folder owners are tables, the real user is its status file. SELF's
+    mountinfo shows the fake /proc mounted with mount() options (PROC_OPTIONS at first)."""
 
     def __init__(self, case):
         self.root = tempfile.mkdtemp(prefix='kit-fake-proc-')
@@ -58,6 +61,17 @@ class FakeProc(object):
         """Only this process, standing at TOP."""
         self.clear()
         self.add(SELF, cwd=TOP, comm='kit-test')
+        self.mount(PROC_OPTIONS)
+
+    def mount(self, options, fstype='proc', point=None):
+        """SELF's mountinfo: / on ext4, then the fake /proc (or `point`) of `fstype` mounted with
+        superblock `options`, its path escaped as the kernel escapes one."""
+        point = self.root if point is None else point
+        escaped = point.replace('\\', '\\134').replace(' ', '\\040')
+        with open(os.path.join(self.root, str(SELF), 'mountinfo'), 'w', newline='\n') as f:
+            f.write('21 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n')
+            f.write('22 21 0:21 / %s rw,nosuid,nodev,noexec,relatime shared:12 - %s proc %s\n'
+                    % (escaped, fstype, options))
 
     def owner(self, folder):
         got = self.owners.get(folder)
@@ -75,7 +89,7 @@ class FakeProc(object):
             raise got
         return got
 
-    def _links(self, folder, cwd, root, exe, fds):
+    def _links(self, folder, cwd, root, exe, fds, maps):
         os.makedirs(os.path.join(folder, 'fd'))
         for kind, value in (('cwd', cwd), ('root', root), ('exe', exe)):
             if value is not None:
@@ -83,15 +97,21 @@ class FakeProc(object):
         for n, value in enumerate(fds):
             open(os.path.join(folder, 'fd', str(n)), 'w').close()
             self.links[os.path.join(folder, 'fd', str(n))] = value
+        with open(os.path.join(folder, 'maps'), 'w', newline='\n') as f:
+            for path in maps:
+                f.write('7f0000000000-7f0000001000 r--p 00000000 08:01 123      %s\n' % path)
 
     def add(self, pid, cwd='/', uid=ME, comm='python3', state='S', root='/', exe='/usr/bin/python3',
-            fds=(), maps=(), owner=None, status=True, tasks=None):
+            fds=(), maps=(), owner=None, status=True, tasks=None, mnt=MNT):
         """Process `pid` of real user `uid` (its status), whose /proc folder `owner` owns (`uid`
         when None; root for one the kernel marks not dumpable). status=False writes no Uid line.
         A link value of None leaves that link out (it reads ENOENT); an exception is raised when it
-        is read. `tasks` {tid: {'cwd':, 'root':, 'fds':}} are its other threads."""
+        is read. `mnt` is its mount namespace link. `tasks` {tid: {'cwd':, 'root':, 'exe':, 'fds':,
+        'maps':}} are its other threads."""
         folder = os.path.join(self.root, str(pid))
-        self._links(folder, cwd, root, exe, fds)
+        self._links(folder, cwd, root, exe, fds, maps)
+        if mnt is not None:
+            self.links[os.path.join(folder, 'ns', 'mnt')] = mnt
         with open(os.path.join(folder, 'comm'), 'w') as f:
             f.write(comm + '\n')
         with open(os.path.join(folder, 'stat'), 'w') as f:
@@ -100,14 +120,14 @@ class FakeProc(object):
             f.write('Name:\t%s\nState:\t%s\n' % (comm, state))
             if status:
                 f.write('Uid:\t%d\t%d\t%d\t%d\n' % (uid, uid, uid, uid))
-        with open(os.path.join(folder, 'maps'), 'w', newline='\n') as f:
-            for path in maps:
-                f.write('7f0000000000-7f0000001000 r--p 00000000 08:01 123      %s\n' % path)
         self.owners[folder] = uid if owner is None else owner
         os.makedirs(os.path.join(folder, 'task', str(pid)))
         for tid, links in (tasks or {}).items():
             self._links(os.path.join(folder, 'task', str(tid)), links.get('cwd', '/'),
-                        links.get('root', '/'), None, links.get('fds', ()))
+                        links.get('root', '/'), links.get('exe', exe), links.get('fds', ()),
+                        links.get('maps', ()))
+            if links.get('mnt', MNT) is not None:
+                self.links[os.path.join(folder, 'task', str(tid), 'ns', 'mnt')] = links.get('mnt', MNT)
         return folder
 
 
@@ -178,6 +198,15 @@ class Blockers(Base):
                 10, cwd=None, state='Z', tasks={11: {'cwd': denied}}),
             'a zombie leader whose task list is unreadable': lambda: self._replace(
                 self.proc.add(10, cwd=None, state='Z'), 'task', 'file'),
+            'a live leader whose thread cwd is denied': lambda: self.proc.add(
+                10, tasks={11: {'cwd': denied}}),
+            'a live leader whose thread root is denied': lambda: self.proc.add(
+                10, tasks={11: {'root': denied}}),
+            'a live leader whose task list is unreadable': lambda: self._replace(
+                self.proc.add(10), 'task', 'file'),
+            'its mount namespace denied': lambda: self.proc.add(10, mnt=denied),
+            'its mount namespace missing while alive': lambda: self.proc.add(10, mnt=None),
+            'another mount namespace': lambda: self.proc.add(10, cwd='/workspaces/x', mnt=OTHER_MNT),
         }
         for name, make in cases.items():
             with self.subTest(name):
@@ -204,18 +233,75 @@ class Blockers(Base):
         self.assertEqual(holders.blockers(self.tree), [])
 
     def test_a_zombie_leader_s_running_thread_holds_the_tree(self):
-        for links in ({'cwd': self.sub}, {'root': self.sub}, {'fds': ['/dev/null', self.sub]}):
+        inner = os.path.join(self.sub, 'f.so')
+        for links, held in (({'cwd': self.sub}, self.sub), ({'root': self.sub}, self.sub),
+                            ({'fds': ['/dev/null', self.sub]}, self.sub), ({'exe': inner}, inner),
+                            ({'maps': ['/usr/lib/libc.so.6', inner]}, inner)):
             with self.subTest(links=links):
                 self.proc.reset()
                 self.proc.add(10, cwd=None, state='Z', tasks={11: links})
+                self.assertEqual(holders.blockers(self.tree), [(held, holders.HELD)])
+
+    def test_a_zombie_leader_s_namespace_is_its_threads(self):
+        # an exited leader has no ns/mnt link of its own
+        self.proc.add(10, cwd=None, state='Z', mnt=None)                # no thread: ended
+        self.proc.add(11, cwd=None, state='Z', mnt=None, tasks={12: {'cwd': self.sub}})
+        self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
+        for links in ({'mnt': OTHER_MNT}, {'mnt': PermissionError(errno.EACCES, 'denied')}):
+            with self.subTest(links=links):
+                self.proc.reset()
+                self.proc.add(11, cwd=None, state='Z', mnt=None, tasks={12: links})
+                self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
+
+    def test_a_live_leader_s_thread_standing_in_the_tree_holds_it(self):
+        # a thread that called unshare(CLONE_FS) and then chdir or chroot
+        for links in ({'cwd': self.sub}, {'root': self.sub}):
+            with self.subTest(links=links):
+                self.proc.reset()
+                self.proc.add(10, cwd='/home/u', tasks={11: links})
                 self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
 
-    def test_a_process_of_this_user_the_kernel_marks_not_dumpable_is_seen(self):
-        # its /proc folder is root's; status still names this user as its real user
-        self.proc.add(10, cwd=self.sub, owner=ROOT, comm='ssh-agent')
-        self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
-        self.proc.reset()
-        self.proc.add(10, cwd=PermissionError(errno.EACCES, 'Permission denied'), owner=ROOT)
+    def test_a_process_in_another_mount_namespace_is_unread_not_free(self):
+        # a devcontainer or rootless podman process of this user: its paths are another tree's
+        self.proc.add(10, cwd='/workspaces/kit', fds=['/workspaces/kit/x'], mnt=OTHER_MNT)
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
+
+    def test_this_process_s_mount_namespace_unread_is_not_searched(self):
+        self.proc.links[os.path.join(self.proc.root, str(SELF), 'ns', 'mnt')] = PermissionError(
+            errno.EACCES, 'Permission denied')
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+
+    def test_a_proc_mounted_to_hide_processes_is_not_searched(self):
+        for option in ('hidepid=2', 'hidepid=invisible', 'hidepid=4', 'hidepid=ptraceable',
+                       'subset=pid'):
+            with self.subTest(option=option):
+                self.proc.mount('rw,%s' % option)
+                self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+
+    def test_a_proc_that_hides_only_others_contents_is_searched(self):
+        for option in ('hidepid=0', 'hidepid=1', 'hidepid=off', 'hidepid=noaccess', 'gid=10'):
+            with self.subTest(option=option):
+                self.proc.mount('rw,%s' % option)
+                self.assertEqual(holders.blockers(self.tree), [])
+
+    def test_mount_options_not_known_is_not_searched(self):
+        cases = {
+            'no proc mount at PROC': lambda: self.proc.mount(PROC_OPTIONS, point='/elsewhere'),
+            'another file system at PROC': lambda: self.proc.mount(PROC_OPTIONS, fstype='tmpfs'),
+            'no mountinfo': lambda: os.remove(os.path.join(self.proc.root, str(SELF), 'mountinfo')),
+        }
+        for name, make in cases.items():
+            with self.subTest(name):
+                self.proc.reset()
+                make()
+                self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+
+    def test_a_process_of_this_user_the_kernel_marks_not_dumpable_is_unread_not_free(self):
+        # as a real kernel shows ssh-agent: its /proc folder is root's and its links are denied;
+        # status still names this user as its real user
+        denied = PermissionError(errno.EACCES, 'Permission denied')
+        self.proc.add(10, cwd=denied, root=denied, exe=denied, mnt=denied, owner=ROOT,
+                      comm='ssh-agent')
         self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
 
     def test_this_user_as_either_the_real_user_or_the_folder_owner_is_this_user_s(self):
@@ -257,6 +343,15 @@ class Blockers(Base):
             open(path, 'w').close()
         else:
             os.makedirs(path)
+
+
+class MountOptions(unittest.TestCase):
+    def test_the_last_proc_mount_at_the_point_is_read_and_unescaped(self):
+        text = ('21 1 8:1 / / rw - ext4 /dev/sda1 rw\n'
+                '22 21 0:21 / /my\\040proc rw,nosuid shared:12 - proc proc rw,hidepid=2\n'
+                '23 21 0:22 / /my\\040proc rw master:3 - proc proc rw,gid=10\n')
+        self.assertEqual(paths.proc_options(text, '/my proc'), {'rw', 'gid=10'})
+        self.assertIsNone(paths.proc_options(text, '/proc'))
 
 
 class CwdHolders(Base):
