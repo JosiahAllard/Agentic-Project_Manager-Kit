@@ -38,12 +38,13 @@ is_pm), and the PM (PM_KEY) always, once.
 Filed answers (`filed`, by the question's `filed_as`, kitlib.hubsite.api _filed_as):
   pulled      its asker alone: someone is working on the record (the PM when the PM asked,
               sent once: the worker on the record reads the answer)
-  freed       the PM alone, sent once, and only when no live session can take the record up:
-              the delivery object's resolve(key) (None: none live) finds none of the asker, the
-              record's repository and the question's repo; with no resolve the PM is told
-  held        nobody: the record waits on more, and the asker reads it in its pending list
-              (the PM start's digest counts the answers filed since the last start that are
-              still `filed`, waiting for their askers: a logged or done one drops out)
+  freed, held one recipient (_live_session: the delivery object's resolve(key), None for
+              none live; no resolve counts as none live): the asker while it is live, until it
+              picks it up; else the coordinator of the record's repository or the question's
+              repo (each through Api.repo_key, then as it is) while one is live, sent once;
+              else, freed: the PM, sent once (start a coordinator); held: the asker all the
+              same (it reads it at its next start too). The PM that asked is told once. A held
+              push says plainly the record is not freed: its park or block stays.
 An answer that is a standing rule (`standing`) also goes to the PM, who logs it, whatever its
 filed_as; a `standing` change of an answer already pushed adds the PM to the push still owed.
 
@@ -93,7 +94,8 @@ seconds, None with no beat) is the snapshot's and GET health's `watcher` (Api.wa
 Files, in `folder` (the launcher's state_dir):
   push-outbox.json         {"<kind>:<id>": {kind, id, event, fingerprint, status, repo, from,
                            first_at, recipients: {key: {attempt, next_at, last, once}}}} (a
-                           question's also filed_as, record, record_repo, freed, asker_pm and
+                           question's also filed_as, record, record_repo, freed, asker_pm,
+                           coordinator and
                            standing when they apply: its guidance), times in
                            epoch seconds, replaced whole after each round that changed it. At
                            start an entry whose item changed since is fired afresh; one whose
@@ -282,6 +284,24 @@ def _question_guidance(doc_id, event, recipient, entry):
         said.append('The owner\'s answer to your question is filed into record %s, which is '
                     'being worked on, so its worker reads it: hub view %s. For your information, '
                     'no ack needed.' % (record, doc_id))
+    elif (event == 'filed' and entry.get('filed_as') in ('freed', 'held')
+          and not (recipient == PM_KEY and (entry.get('freed') or not entry.get('asker_pm')))):
+        # to the PM only when it asked (the freed ping and a standing rule say their own)
+        if entry.get('filed_as') == 'held':
+            said.append('The owner\'s answer is filed but does not free record %s: the record '
+                        'stays as it was (still parked or blocked if it was), so do not take it '
+                        'up as freed; act on what the answer says.' % record)
+        else:
+            said.append('The owner\'s answer is filed and frees record %s: its park or block '
+                        'ended, and it is open to take up.' % record)
+        if recipient == field(entry.get('coordinator')):
+            said.append('It was asked by %s, which is not running: hub view %s. For your '
+                        'information, no ack needed.' % (field(entry.get('from')), doc_id))
+        elif recipient == PM_KEY:
+            said.append('hub view %s. For your information, no ack needed.' % doc_id)
+        else:
+            said.append('Read it: hub pending --for %s (or hub view %s). Picking it up '
+                        'acknowledges this push.' % (recipient, doc_id))
     elif event == 'answered':
         said.append('Read it: hub pending --for %s (or hub view %s). Picking it up acknowledges '
                     'this push.' % (recipient, doc_id))
@@ -661,9 +681,25 @@ class PushWorker(object):
                                      'once': r == PM_KEY or held == r}
                 if r == PM_KEY:
                     flags['asker_pm'] = True
-            elif filed_as == 'freed' and not self._coordinator_live(doc, sender if mine else ''):
-                recipients[PM_KEY] = {'attempt': 0, 'next_at': now, 'last': None, 'once': True}
-                flags['freed'] = True
+            elif filed_as in ('freed', 'held'):
+                # the asker while it is live, else the record's coordinator while it is; with
+                # neither, a freed record pings the PM, a held answer stays owed to its asker
+                live = self._live_session(doc, sender if mine else '')
+                if not mine:
+                    r = PM_KEY                  # the PM asked: told once
+                    flags['asker_pm'] = True
+                elif live == sender or (live is None and filed_as == 'held'):
+                    r = sender
+                elif live is not None:
+                    r = live                    # the record's coordinator: told once
+                    flags['coordinator'] = live
+                else:
+                    r = PM_KEY
+                if r == PM_KEY and filed_as == 'freed' and live is None:
+                    flags['freed'] = True       # the PM is to start a coordinator
+                if not (r == sender and mine and held == r and first):   # picked it up already
+                    recipients[r] = {'attempt': 0, 'next_at': now, 'last': None,
+                                     'once': r != sender or not mine or held == r}
             if standing:
                 st = recipients.setdefault(PM_KEY, {'attempt': 0, 'next_at': now, 'last': None,
                                                     'once': False})
@@ -671,7 +707,7 @@ class PushWorker(object):
             flags['record'] = '%s:%s' % (record.get('repo') or '', record.get('id') or '')
             flags['record_repo'] = record.get('repo') or ''
         if not recipients:
-            self._drop(key)             # held, or freed with its coordinator running: no push
+            self._drop(key)             # its asker picked it up already: no push
             return
         entry = {'kind': 'question', 'id': doc_id, 'event': event, 'fingerprint': fp,
                  'status': doc.get('status'),
@@ -683,17 +719,19 @@ class PushWorker(object):
         self._outbox[key] = entry
         self._dirty = True
 
-    def _coordinator_live(self, doc, asker):
-        """True when a live session can take up the record doc's answer freed: its asker, or
-        the coordinator keyed by the record's repository or the question's repo, resolves to a
-        live session (the delivery object's `resolve`, None for none). False when the delivery
-        object cannot tell (no `resolve`, or it raised): the PM is told."""
+    def _live_session(self, doc, asker):
+        """The first key with a live session (the delivery object's `resolve`, None for none)
+        of: question doc's asker, then the coordinator of the record's repository and of the
+        question's repo, each through Api.repo_key and as it is. None when none is live or the
+        delivery object cannot tell (no `resolve`; a key whose resolve raised counts as not
+        live, logged)."""
         resolve = getattr(self.push, 'resolve', None)
         if not callable(resolve):
-            return False
+            return None
         record = doc.get('record') if isinstance(doc.get('record'), dict) else {}
         keys = []
-        for k in (asker, record.get('repo'), doc.get('repo')):
+        for k in (asker, self._repo_key(record.get('repo')), record.get('repo'),
+                  self._repo_key(doc.get('repo')), doc.get('repo')):
             if isinstance(k, str) and k and k not in keys and k not in (PM_KEY, OWNER_FROM):
                 keys.append(k)
         for k in keys:
@@ -701,10 +739,10 @@ class PushWorker(object):
                 continue
             try:
                 if resolve(k) is not None:
-                    return True
+                    return k
             except Exception as e:      # noqa: BLE001 - a host fault: the PM hears it
                 self.log('push: resolve(%s) failed: %s' % (field(k), type(e).__name__))
-        return False
+        return None
 
     def _asked_by(self, entry):
         """True when the entry's item is from a session other than the PM's (a recipient)."""
