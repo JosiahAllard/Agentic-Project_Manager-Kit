@@ -5,7 +5,7 @@ description: Use when your brief says to load it - reviewing one branch you did 
 
 # Specialty: branch review
 
-Dispatch: analyst (the read type; the strong tier only by the "Reviewer model" rule in `content/skills/coordinator-dispatch/roster.md`, rendered in `<kit>/docs/ROSTER.md`), never a worker type; reads the repo profile's risk notes and standing review checks.
+Dispatch: analyst (the read type; the strong tier only by the "Reviewer model" rule in the dispatch skill's roster file (`<kit>/content/skills/coordinator-dispatch/roster.md`)), never a worker type; reads the repo profile's risk notes and standing review checks.
 
 You have no stake: you did not write the branch, you never review a change you wrote, and you do not fix it. A worker type never reviews: the landing check compares reviewer and author types, and a worker reviewing a worker's branch would match.
 
