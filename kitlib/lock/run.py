@@ -47,7 +47,6 @@ from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED
                                utc_now, write_json)
 from kitlib.platform.linux import process as procfs
 from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
-from kitlib.lock.jobset import JobSet
 from kitlib.proc.job import Job, JobError, cores_text
 
 POOLS, PICK = lay.POOLS, qm.PICK
@@ -718,14 +717,24 @@ def tell_daemons(store, rid, rec, done):
 
 
 def move_leftovers(store, rid, job):
-    """Before run rid's job is closed without a kill: moves what still runs in it out of it
-    (Job.leftovers, Linux: into a scope of its own, or, on W2, out of the job's kill), so it runs
-    on, unpinned, and the run's own scope ends. A job with no leftovers (a Windows job object,
-    which cannot let a process out) moves none. A move that fails is said and never fails the
-    release: what is left runs on in the job, unpinned, as on Windows. Returns the pids moved."""
+    """Before run rid's job is closed without a kill: unpins it (job.unpin), then moves what still
+    runs in it out of it (Job.leftovers, Linux: into a scope of its own, or, on W2, out of the
+    job's kill), so it runs on, unpinned, and the run's own scope ends. The unpin comes first:
+    on S2 and W2 the pin is each process's affinity, and the job's own unpin (at its close)
+    reaches only the processes still in it, so a moved one, and what it starts later, would keep
+    cores the lock has given to other runs. An unpin that fails is said and the move goes on. A
+    job with no leftovers (a Windows job object, which cannot let a process out) is neither
+    unpinned nor moved here. A move that fails is said and never fails the release: what is left
+    runs on in the job, unpinned, as on Windows. Returns the pids moved."""
     move = getattr(job, "leftovers", None)
     if move is None or not jobset.is_open(job):
         return []
+    try:
+        job.unpin()
+    except Exception as e:                  # noqa: BLE001 - the move and the release go on
+        with contextlib.suppress(Exception):
+            store.say("WARNING: run %s: its job could not be unpinned before what it left was "
+                      "moved out: %s" % (rid, e))
     try:
         moved = list(move() or [])
     except Exception as e:                  # noqa: BLE001 - the release goes on
@@ -951,7 +960,7 @@ class Slot:
         try:
             # A run with no cores of its own stays on its parent's: the job nests in the parent's.
             # Where a job starts one command (Linux), a job per command (kitlib.lock.jobset).
-            self.job = JobSet(mask, make=Job) if jobset.one_command() else Job(mask)
+            self.job = jobset.JobSet(mask, make=Job) if jobset.one_command() else Job(mask)
         except JobError as e:
             raise LockError(1, "could not start the command: %s" % e)
         if own["cpu"]:
