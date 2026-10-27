@@ -668,7 +668,7 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    <profile>/.config/pm-kit/pointer, never $XDG_CONFIG_HOME, and a bad machine file is the answer;
    /tmp as the system temp whatever TMPDIR says; a /proc scan of this user's processes).
    user.real_profile and the home fence, lock/store.py profile_dir and real_root, pointer.registry
-   and check (a leading / on Linux, so C:\pm is refused), system_temp, work_temp and
+   and check (a leading / on Linux, so a path with a drive is refused), system_temp, work_temp and
    default_work_temp read the seam; user.py and holders.py leave test_no_os_checks' list.
    holders.blockers on Linux: a path in the tree that a process of this user uses (cwd, root, exe,
    an open or mapped file) is HELD; a process of this user that cannot be read in full, or whose

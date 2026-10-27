@@ -55,7 +55,7 @@ def _pw_dir():
 
 
 def is_absolute(path):
-    """Whether `path` is absolute as Linux spells one (a leading /; 'C:\\pm' is not)."""
+    """Whether `path` is absolute as Linux spells one (a leading /; a path with a drive is not)."""
     return posixpath.isabs(path)
 
 

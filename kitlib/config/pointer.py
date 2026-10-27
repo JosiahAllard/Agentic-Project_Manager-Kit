@@ -86,7 +86,7 @@ def registry():
 
 def _absolute(path):
     """Whether `path` is absolute as the seam's platform spells one: with a drive on Windows, a
-    leading / on Linux (so 'C:\\pm' is not), else as this host's os.path says."""
+    leading / on Linux (so a path with a drive is not), else as this host's os.path says."""
     if kitlib.platform.NAME == 'windows':
         return os.path.isabs(path) and bool(os.path.splitdrive(path)[0])
     if kitlib.platform.NAME == 'linux':
