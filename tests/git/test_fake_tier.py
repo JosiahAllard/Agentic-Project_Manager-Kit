@@ -692,8 +692,8 @@ class FakeRefusesWhatAttributesLeaveUnmodelled(unittest.TestCase):
         self._unsupported('below the root', 'hash-object', 'sub/g.txt')
 
     def _nested_branch(self, name='sub/.gitattributes'):
-        """Branch kit/nested: HEAD plus `name` ('* eol=crlf') and sub/a.txt, its trees written as
-        objects (the fake refuses an index that tracks a nested .gitattributes)."""
+        """Branch kit/nested: HEAD plus `name` (* eol=crlf), sub/-a.txt and sub/a.txt, its trees
+        written as objects (the fake refuses an index that tracks a nested .gitattributes)."""
         from kitlib.git import fake
         env = gitfixture.fixture_env()
 
@@ -715,7 +715,9 @@ class FakeRefusesWhatAttributesLeaveUnmodelled(unittest.TestCase):
             return oid
 
         blob = lambda data: run(['hash-object', '-w', '--stdin'], data).decode()
-        sub = tree([(b'100644', name.split('/')[1].encode(), blob(b'* eol=crlf\n')),
+        # sub/-a.txt sorts before the .gitattributes: a checkout writes it first
+        sub = tree([(b'100644', b'-a.txt', blob(b'x\n')),
+                    (b'100644', name.split('/')[1].encode(), blob(b'* eol=crlf\n')),
                     (b'100644', b'a.txt', blob(b'a\nb\n'))])
         root = []
         for line in run(['ls-tree', 'HEAD']).decode().splitlines():
