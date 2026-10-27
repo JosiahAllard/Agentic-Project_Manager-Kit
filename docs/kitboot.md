@@ -2,8 +2,7 @@
 
 Every host entry runs `boot/kitboot.py` before it imports kitlib (ARCHITECTURE.md "Packaging";
 docs/multi-host-plan.md section 2.5). It is standard library only and imports nothing from the
-kit: it decides which kit may be imported. It was lifted from the Codex plugin's `profile.py` and
-`release_binding.py`.
+kit: it decides which kit may be imported.
 
 ## Which kit runs
 
@@ -31,7 +30,7 @@ other folder is refused.
 
 Every refusal is `BootError`. The entries fail closed on it: the guard exits 2 (a block, the
 reason on stderr), a session-start hook says in plain text that the kit did not load, and the lock
-MCP server and the hub tools exit.
+MCP server and the hub MCP server exit.
 
 ## Who calls it
 
@@ -41,6 +40,7 @@ MCP server and the hub tools exit.
   byte copy of `boot/` and finds the kit through `PM_KIT_ROOT`, or the checkout it sits in
   (`boot/hook.py` `kit_here`).
 - `mcp/lock_server.py` and `mcp/hub_server.py`.
+- The Codex shell's entry scripts (`hosts/codex/shell/scripts/`, for example `kit.py` and `launch.py`) and its MCP servers, through the plugin's own copy of `boot/kitboot.py`.
 
 Each puts `boot/` on `sys.path` relative to its own file, then calls `kitboot.boot()`. Tests:
 `tests/boot`.

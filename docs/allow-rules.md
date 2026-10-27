@@ -18,7 +18,7 @@ python <kit>/tools/allow_rules.py -C <any checkout of the repository>
 - **stderr** carries these notes:
   - `target:`, the file to paste into;
   - `export:`, the export folder the lines name;
-  - a `stale:` line for each rule in the repository's settings that names another export;
+  - a `stale:` line for each other export folder that rules in the repository's `settings.local.json` or `settings.json` name (with the rule count and `gone` or `not current`), or for a settings file that cannot be read;
   - a `note:` when the kit running the tool is not the current export.
 - **Exit codes:** 0 when the lines are printed. 2 with `REFUSED: <reason>` on stderr (nothing on stdout) or on a usage error.
 
@@ -29,7 +29,9 @@ The lines name:
 Both are written with forward slashes.
 
 The tool refuses when:
+- the plugin settings do not load;
 - there is no current export;
+- git cannot place the checkout in a repository;
 - K or R holds a space, a quote, a backtick, `( ) * ? [ ] ; & | $ % < >`, a control character (U+0000-U+001F, U+007F), or any other character a deny line names (`_UNSAFE` in `kitlib/allowrules/__init__.py`). A bare rule cannot spell such a path, and a deny naming a character of the path would refuse every submit; the quoted-only form is not emitted.
 
 ## The lines
@@ -79,7 +81,7 @@ The metacharacter denies close what an allow's inner `*` would otherwise carry:
 - PowerShell's other parameter dashes, U+2013-U+2015. Windows PowerShell 5.1 passes them to python as written, so `–C` is no `-C` there; they are denied anyway, since no submit needs one;
 - PowerShell's other argument separators (`SEPARATORS`). Each splits a native argument as a space does, so `T<U+00A0>--<U+00A0>kit/a` reaches `land.py` as `T`, `--`, `kit/a` and would step around the spaced `-- ` deny. With them denied, a space is the only separator an allow's `*` carries.
 
-How PowerShell treats `#`, CR, NUL, these quotes, dashes and separators was probed on Windows PowerShell 5.1 on 2026-10-19: a script printed its `sys.argv` for each case run through `Invoke-Expression`. The same probe showed that a bare `--` reaches python as written, and that a comma neither splits a native argument (`T,-C` arrives as one) nor forms a `--` token (`T,--` is a parse error). PowerShell 7 was not probed.
+How PowerShell treats `#`, CR, NUL, these quotes, dashes and separators was probed on Windows PowerShell 5.1: a script printed its `sys.argv` for each case run through `Invoke-Expression`. The same probe showed that a bare `--` reaches python as written, and that a comma neither splits a native argument (`T,-C` arrives as one) nor forms a `--` token (`T,--` is a parse error). PowerShell 7 was not probed.
 
 A legitimate submit holds none of them. A summary with spaces needs quotes, so it is denied. So is a summary with `;`, `&`, `%`, `$`, `(`, `|` or a brace. Use a one-word summary or leave it out.
 
@@ -95,7 +97,7 @@ It models Claude Code; it is not Claude Code. Its rules:
 - Bash compares case-sensitively; PowerShell compares case-insensitively.
 
 What rests on Claude Code's documentation and what does not. "The doc" means the code.claude.com
-permissions, permission-modes and settings pages, read 2026-10-19:
+permissions, permission-modes and settings pages, as last read for this tool:
 
 - **From the doc:**
   - `*` and `:*`;
@@ -130,7 +132,7 @@ with a prefix of it, unless the tool sets `allow_abbrev=False`.
 
 ## Open note
 
-The allows name the export folder under `%LOCALAPPDATA%`. If an agent could write that folder, an
+The script-spelling allows name the export folder under `plugin.export_dir`. If an agent could write that folder, an
 allow would run code the agent wrote. Whether the guard refuses agent writes there is not checked
 here. The `kit land` allow names no folder at all: it runs whichever `kit` the shell finds first on
 the PATH, so the same holds for every folder on the PATH before the kit's own. The kit command
