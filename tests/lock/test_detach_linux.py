@@ -1,10 +1,13 @@
 """kitlib.platform.linux.detach, kitlib.lock.detach's Linux backend: the argv it builds, the
 scope or the bare setsid start, the trampoline's answer read back, and its failures; and
 kitlib.lock.detach sending each call there on Linux. The trampoline itself runs here for real
-(it needs /proc only to find a unit, which these runs name none of or never reach). The
-detached run surviving its caller is the VM's to prove (docs/linux-support-plan.md slice 7)."""
+(it needs /proc only to find a unit, which these runs name none of or never reach). Live: the
+detached run outliving its caller's whole scope, through the user's systemd (skipped without
+one; docs/linux-support-plan.md slice 7)."""
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -15,7 +18,7 @@ from unittest import mock
 import kitlib.platform
 from kitlib.platform.linux import contain
 from kitlib.platform.linux import detach as ld
-from tests.platforms import windows_only
+from tests.platforms import posix_only, windows_only
 
 if os.name == "nt":
     from kitlib.lock import detach as dt
@@ -203,6 +206,89 @@ class Trampoline(unittest.TestCase):
         self.addCleanup(kill, pid)
         self.assertTrue(alive(pid))
         self.assertEqual(ld.wrapper_pid(pid), pid)
+
+
+LIVE_PREFIX = "pmkit-detachtest-%d" % os.getpid()
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The caller: starts the detached run (it writes its own pid to argv[2]), says both pids, waits.
+CALLER = """import os, sys, time
+sys.path.insert(0, sys.argv[1])
+from kitlib.platform.linux import detach as ld
+run = [sys.executable, '-c', 'import os, sys, time; open(sys.argv[1], "w").write(str(os.getpid())); '
+       'time.sleep(120)', sys.argv[2]]
+pid, why = ld.create(run, sys.argv[1], dict(os.environ))
+print(os.getpid(), os.getsid(0), pid, why, flush=True)
+time.sleep(120)
+"""
+
+
+def live_units():
+    r = subprocess.run(["systemctl", "--user", "list-units", "--all", "--plain", "--no-legend",
+                        LIVE_PREFIX + "-*"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                       timeout=30, check=False)
+    return [line.split()[0] for line in r.stdout.decode().splitlines() if line.split()]
+
+
+def ended(pid):
+    """True when pid is no process, or an ended one (a zombie its new parent has not reaped)."""
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            text = f.read()
+    except OSError:
+        return True
+    return text[text.rindex(")") + 2] in "ZX"
+
+
+def wait_for(test, what, timeout=15.0):
+    end = time.monotonic() + timeout
+    while not test():
+        if time.monotonic() > end:
+            raise AssertionError("not within %g s: %s" % (timeout, what))
+        time.sleep(0.05)
+
+
+@posix_only("systemd scopes are Linux")
+class Live(unittest.TestCase):
+    """For real, through the user's systemd: a caller in a scope of its own starts a detached run,
+    then the caller's whole scope is killed; the run lives on in its own detach scope."""
+
+    def setUp(self):
+        p = mock.patch.dict(os.environ, {contain.PREFIX_ENV: LIVE_PREFIX})
+        p.start()
+        self.addCleanup(p.stop)
+        if ld.scope(dict(os.environ)) is None:
+            self.skipTest("no user systemd reachable here")
+        self.addCleanup(lambda: wait_for(lambda: not live_units(),
+                                         "no unit of %s left (%s)" % (LIVE_PREFIX, live_units())))
+
+    def test_a_detached_run_outlives_its_caller_s_whole_scope_in_a_scope_of_its_own(self):
+        d = tempfile.mkdtemp()
+        own = os.path.join(d, "pid")
+        self.addCleanup(shutil.rmtree, d, True)
+        unit = "%s-caller-%d.scope" % (LIVE_PREFIX, os.getpid())
+        caller = subprocess.Popen(["systemd-run", "--user", "--scope", "--quiet", "--collect",
+                                   "--unit", unit, "--", sys.executable, "-I", "-c", CALLER,
+                                   ROOT, own], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: caller.poll() is None and (caller.kill(), caller.wait()))
+        line = caller.stdout.readline().split()
+        caller.stdout.close()
+        self.assertEqual(line[3:], ["None"], line)
+        caller_pid, caller_sid, pid = int(line[0]), int(line[1]), int(line[2])
+        self.addCleanup(lambda: ended(pid) or kill(pid))
+        wait_for(lambda: os.path.exists(own) and os.path.getsize(own), "the run wrote its pid")
+        with open(own) as f:
+            self.assertEqual(int(f.read()), pid, "create says the run's own pid")
+        self.assertRegex(contain.cgroup_of(pid), r"/%s-detach-[^/]+\.scope$" % LIVE_PREFIX)
+        self.assertNotEqual(os.getsid(pid), caller_sid, "a session of its own")
+        subprocess.run(["systemctl", "--user", "kill", "--signal=SIGKILL", unit], check=True,
+                       timeout=30)
+        self.assertEqual(caller.wait(15), -signal.SIGKILL, "the caller (pid %d) is killed"
+                         % caller_pid)
+        time.sleep(0.5)
+        self.assertTrue(alive(pid), "the detached run outlives its caller's scope")
+        self.assertRegex(contain.cgroup_of(pid), r"/%s-detach-[^/]+\.scope$" % LIVE_PREFIX)
+        kill(pid)
+        wait_for(lambda: ended(pid), "the run ended")
 
 
 @windows_only("kitlib.lock imports on Windows only")
