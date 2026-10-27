@@ -281,6 +281,23 @@ class Ends(unittest.TestCase):
         self.assertTrue(s.closed)
         self.assertFalse(js.is_open(s))
 
+    def test_end_and_close_reach_every_job_though_one_raises_then_raise_the_first(self):
+        for name, args in (("end", (True,)), ("close", ())):
+            s, made = jobset()
+            s.start(["a"])
+            s.start(["b"])
+            s.start(["c"])
+            first, second = JobError("refused to kill j0"), JobError("refused to kill j1")
+            for job, err in zip(made, (first, second)):
+                setattr(job, name, mock.Mock(side_effect=err))
+            with self.assertRaises(JobError) as cm:
+                getattr(s, name)(*args)
+            self.assertIs(cm.exception, first, name)
+            for job in made[:2]:
+                getattr(job, name).assert_called_once_with(*args)
+            self.assertTrue(made[2].closed, "%s: the last job still ended" % name)
+            self.assertTrue(s.closed, name)
+
     def test_leftovers_asks_every_job_and_names_each_that_could_not(self):
         s, made = jobset()
         s.start(["a"])

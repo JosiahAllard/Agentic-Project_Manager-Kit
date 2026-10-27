@@ -203,19 +203,25 @@ class JobSet:
         return moved
 
     def end(self, kill):
-        """kill: every process in every job ended; else they live on, unpinned. Closes them."""
-        try:
-            for job in list(self.jobs):
-                job.end(kill)
-        finally:
-            self.closed = True
+        """kill: every process in every job ended; else they live on, unpinned. Closes them.
+        Every job is ended though one raises; then the first error is raised again."""
+        self._all("end", kill)
 
     def close(self):
-        try:
-            for job in list(self.jobs):
-                job.close()
-        finally:
-            self.closed = True
+        """Closes every job though one raises; then the first error is raised again."""
+        self._all("close")
+
+    def _all(self, name, *args):
+        first = None
+        for job in list(self.jobs):
+            try:
+                getattr(job, name)(*args)
+            except BaseException as e:      # noqa: BLE001 - the rest still end; raised below
+                if first is None:
+                    first = e
+        self.closed = True
+        if first is not None:
+            raise first
 
     def __enter__(self):
         return self
