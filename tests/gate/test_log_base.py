@@ -45,7 +45,8 @@ class SharedTemp(unittest.TestCase):
 
     def test_elsewhere_keeps_tempfile(self):
         with mock.patch('tempfile.gettempdir', return_value='/tmp/x'):
-            self.assertEqual(user.shared_temp({}, 'linux'), '/tmp/x')
+            self.assertEqual(user.shared_temp({}, 'darwin'), '/tmp/x')
+            self.assertEqual(user.shared_temp({}, 'linux'), '/tmp')   # Linux: /tmp, whatever TMPDIR says
 
 
 @windows_only('drive letters are Windows only')
