@@ -10,6 +10,7 @@ import itertools
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -85,6 +86,22 @@ class OwnerPins(unittest.TestCase):
         self.assertTrue(rule.allowed(claude, codex))
         self.assertTrue(rule.allowed(codex, claude))
         self.assertTrue(rule.allowed(claude, chat('d', adapter='claude-peer')))
+
+
+    def test_every_adapter_id_a_served_half_writes_names_its_own_peer(self):
+        # The rule maps a binding to a peer by its adapter id; an id it cannot map would slip
+        # past every refused pair. The service also refuses such an adapter at install time.
+        rule, literal = registry.host_pairs(), re.compile(
+            r"(?:AdapterDescription\(\s*|adapter_id\s*=\s*)'([^']+)'")
+        installed = registry.installed()
+        for peer in registry.names():
+            ids = {found for path in registry.half_dir(peer).rglob('*.py')
+                   for found in literal.findall(path.read_text(encoding='utf-8'))}
+            if installed[peer].delivery is not None:
+                self.assertTrue(ids, peer)
+            for adapter_id in ids:
+                with self.subTest(peer=peer, adapter_id=adapter_id):
+                    self.assertEqual(rule.peer_of(adapter_id), peer)
 
 
 class Walk:

@@ -116,7 +116,7 @@ class Runtime:
                     raise DeliveryError('native-delivery-builder-unavailable')
                 adapter=builder(provider,self)
                 self.adapters.append(adapter)
-                controller.adapter(adapter)
+                controller.adapter(adapter,peer=kind)
         except Exception:
             self.close()
             raise

@@ -84,10 +84,16 @@ class Controller:
                 dict(description) if type(description) is dict else {})
         return self.pairs.observe(binding)
 
-    def adapter(self,adapter):
-        """Install controller-owned adapter code; ordinary MCP tools cannot call this."""
+    def adapter(self,adapter, *, peer=None):
+        """Install controller-owned adapter code; ordinary MCP tools cannot call this.
+
+        `peer`: the listed peer whose half supplies the adapter (the service's Runtime always
+        names it). Its adapter id must name that peer, or the host-pair rule could not see the
+        id and would let a refused pair through."""
         self._require()
         description=adapter.describe()
+        if peer is not None and self.core.host_pairs.peer_of(description.adapter_id)!=peer:
+            raise DeliveryError('native-adapter-peer-mismatch')
         self.core.adapters[description.adapter_id]=adapter
 
     def frontend(self,observe):
