@@ -482,7 +482,14 @@ def _abort(ctx, repo):
                 ix.add(e)
             else:
                 tree.remove_file(p)
-        _wt.twoway(tree, idx_side, hs, reset=True)
+        # reset --merge is a oneway merge without reset: a path whose index entry is HEAD's keeps
+        # its work-tree file, unstaged changes included (probed); every other path's file matches
+        # its entry (checked above) and goes to HEAD. An untracked file in the way of a HEAD path
+        # the index lacks is not modelled.
+        def refuse(rejects):
+            return Unsupported('merge --abort over an untracked file (%s)'
+                               % ', '.join(p for ps in rejects.values() for p in ps))
+        _wt.twoway(tree, idx_side, hs, errfn=refuse)
         lk.write()
     _wc.clear_merge_state(repo)
     return 0

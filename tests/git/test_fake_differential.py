@@ -434,6 +434,31 @@ AUTOCRLF_UNMERGED_CR = [
     ('git', ['ls-files', '-s']),
 ]
 
+# merge --abort is reset --merge: a file with a change git did not stage, on a path the merge
+# left alone (index == HEAD), keeps that change; the unmerged path goes back to HEAD.
+MERGE_ABORT_KEEPS_UNSTAGED = [
+    ('write', '.gitattributes', '*.txt text eol=lf\n'),
+    ('write', 'c.txt', 'base\n'),
+    ('git', ['add', '--', '.gitattributes', 'c.txt']),
+    ('git', ['commit', '-q', '-m', 'base']),
+    ('git', ['switch', '-q', '-c', 'kit/other']),
+    ('write', 'c.txt', 'other\n'),
+    ('git', ['commit', '-q', '-a', '-m', 'other']),
+    ('git', ['switch', '-q', 'main']),
+    ('write', 'c.txt', 'ours\n'),
+    ('git', ['commit', '-q', '-a', '-m', 'ours']),
+    ('write', 'README.md', 'hello\nlocal\n'),
+    ('write', '.gitattributes', '*.txt text eol=lf\n# local\n'),
+    ('setup', ['merge', '-q', '-m', 'conflict', 'kit/other']),
+    ('git', ['status', '--porcelain=v1']),
+    ('git', ['merge', '--abort']),
+    ('read', 'README.md'),
+    ('read', '.gitattributes'),
+    ('read', 'c.txt'),
+    ('git', ['status', '--porcelain=v1']),
+    ('git', ['diff', '--name-only']),
+]
+
 # Real git reads both repositories after a script.
 END_STATE = [
     ['for-each-ref', '--format=%(refname) %(objectname)'],
@@ -521,6 +546,9 @@ class FakeAgainstRealGit(unittest.TestCase):
 
     def test_an_unmerged_path_reads_its_stage_2_blob_for_a_crlf(self):
         self.run_script(BRANCH_AND_LAND[:3] + AUTOCRLF_UNMERGED_CR)
+
+    def test_merge_abort_keeps_an_unstaged_change_the_merge_left_alone(self):
+        self.run_script(BRANCH_AND_LAND[:3] + MERGE_ABORT_KEEPS_UNSTAGED)
 
 
 if __name__ == '__main__':
