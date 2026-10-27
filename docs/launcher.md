@@ -154,3 +154,21 @@ In `launcher.state_dir`, machine state outside git; copy the examples to start:
 - `push-outbox.json`, `push-undelivered.jsonl`: the hub's push notifications, written by the hub server, never by the launcher (docs/action-hub.md "Push notifications").
 
 JSON is read with or without a BOM and written UTF-8 without one.
+
+## History: ported from
+
+The old scripts are superseded; this table is the record of where each went.
+
+| PM repo `launcher/` | Kit |
+|---|---|
+| `start-conductor.ps1` | `launch.py start`; `kitlib/launcher/start.py` `start`, `start_entry` |
+| `start-deep.ps1` | `launch.py deep`; `start.py` `deep` |
+| `start-consultant.ps1` | `launch.py consultant`; `start.py` `consultant` |
+| `stop-session.ps1` | `launch.py stop`; `kitlib/launcher/stop.py` |
+| `session-lookup.ps1` | `kitlib/launcher/lookup.py` |
+| `handoff.ps1` | `launch.py handoff`; `kitlib/launcher/handoff.py` |
+| `pick-account.ps1` | `launch.py pick-account`; `kitlib/launcher/accounts.py` |
+| `usage.ps1` | `launch.py usage`; `kitlib/launcher/usage.py` |
+| `after-reboot.ps1` | `launch.py after-reboot`; `kitlib/launcher/reboot.py` |
+| `install-autostart.ps1` | `launch.py install-autostart`; `kitlib/launcher/autostart.py` |
+| `sessions.example.json`, `conductors.example.json` | `docs/launcher.sessions.example.json`, `docs/launcher.coordinators.example.json` |
