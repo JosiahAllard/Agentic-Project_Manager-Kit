@@ -118,7 +118,7 @@ when YAML needs it), `tools` (the capabilities as Claude tool names; none for `a
 one tier map),
 `effort` when set, `autoCompactWindow` for `compact`, and for `cache: long` the `experimental` map with
 `cacheTtl: 1h`; the front matter opens with the generated-file line as a YAML comment.
-`autoCompactWindow` in agent front matter is a ceiling, read in Claude Code 2.1.309's own code (not tried
+`autoCompactWindow` in agent front matter is a ceiling, read in Claude Code 2.1.309's own code (INFERRED, not tried
 live): the CLI's agent schema takes an integer 100000..1000000, a plugin agent keeps it, and a subagent
 runs on its parent's window unless that is larger, when it runs on the agent's; the
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable still beats both. So a 170000 agent under a

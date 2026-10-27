@@ -90,5 +90,5 @@ experimental:
   docs-writer and weak-worker. The pricing computation in docs/agent-review.md, "Context and cache findings", is untested
   and does not cover docs-writer or weak-worker.
 - Check it took: in one run's usage block for any of these four roles, the cache-creation split
-  counts tokens in the one-hour field and none in the five-minute field. Not yet observed for any
+  counts tokens in the one-hour field and none in the five-minute field. NOT OBSERVED for any
   of them.

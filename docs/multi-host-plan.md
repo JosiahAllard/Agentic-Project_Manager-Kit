@@ -4,13 +4,9 @@ Status: approved direction. The owner's decisions are in §0, and ARCHITECTURE.m
 
 **Goal:** one host-neutral kit, with a thin entry-point plugin for each AI platform. The platforms
 today are Claude Code and Codex, and adding another should mean adding a folder, not forking the
-kit. The tools are shared already. The hooks, agent definitions, skills and instructions are
-still written separately for each host. The agent-to-agent bridge from the Codex branches is a
-host-neutral service that each host plugs into.
-
-Sources read: `main`, `origin/codex/companion-plugin` and
-`origin/codex/robust-bridge-plan` (their tips when the plan was written). The bridge branch carries all of companion-plugin
-except its last 4 commits.
+kit. The tools, the hook entry, the role and skill text and the release value are shared; a host
+adds its adapter and shell. The agent-to-agent bridge is a host-neutral optional service that
+each host plugs into.
 
 ## 0. Owner decisions (2026-10-13)
 
@@ -35,58 +31,7 @@ except its last 4 commits.
 
 ## 1. Where things stand
 
-### What is shared and works
-- The tools (`tools/` → `kitlib/`): gate, lock, commit, worktree, ledger, pending and the others.
-- `kitlib.guard.decide`. Codex calls it too, with no copy.
-- `kitlib.lockmcp.server`. Both hosts' lock MCP entry points wrap it.
-- `kitlib.attribution`, from the Codex branch. It removed the trailer logic that commit and
-  syncbase each held.
-- `kitlib.packageexport` and `kitlib.kitrelease`: one immutable runtime release that both
-  plugins can bind to.
-- `kitlib.hoststart.shared_checks`: PM and coordinator start checks with no host in them.
-  Only Codex uses it so far.
-
-### What is duplicated or forked
-| Concern | Claude (`main`) | Codex (branch) | Problem |
-|---|---|---|---|
-| Agent definitions | 15 × `claude/agents/*.md`, 63–170 lines of detailed prose each | 16 × `codex/agents/*.toml`, generated from `codex/roles.json`, about 6 lines each with the same 900-character preamble | Two rosters (Codex adds `pm` and `implementation-worker` and drops `opus-worker`). The prose is written twice. No test checks the committed TOMLs against their generator. |
-| Skills | 12 under `claude/skills/` | 15 under `codex/skills/`; 11 have the same names | Each shared skill is a full rewrite: only the `name:` line survives. The procedures drift, e.g. branch-sync has 10 steps on one side and 3 paragraphs on the other. |
-| Instructions | `CLAUDE.md` and `AGENTS.md` are near-duplicates, and CLAUDE.md is stale (`hooks/` vs `claude/`). `templates/common/CLAUDE.md` has no AGENTS.md twin. | Codex reads AGENTS.md | Two files hold the same rules. |
-| Hook entries | `claude/hooks/guard.py` (97 lines), `coordinator_session_start.py`, `pm_session_start.py` | `codex/hooks/guard.py` (53 lines), `session_start.py` | The boilerplate is written twice: fail-closed deny, settings entry, pythonw lookup. |
-| Guard input | `kitlib.guard.decide` takes the **raw Claude PreToolUse payload** (`tool_name`, `agent_id`, `agent_type`) and `hook_output()` emits Claude JSON from inside kitlib | `codex/pmkit_codex/actions.py` reshapes Codex payloads into *Claude-shaped* events | The neutral `Action` that ARCHITECTURE.md "Host split" promises was never built. Codex works around that by pretending to be Claude. |
-| Role policy | Implicit in guard rules | Extra layer in `guard_adapter.evaluate_bound` and `kit_adapter._workflow`: per-role edit bans, owner paths read-only, `shell_gap`, lock-verb allowlist | Policy with no host in it lives in a host folder, so Claude does not get it. |
-| Role marker | `PM_KIT_ROLE` | `PM_KIT_CODEX_ROLE` | Two variables for one concept. |
-| Host selection | none | `--host` on new_worktree, `--provider` on commit, sync_base, ledger and pending | Two flag names for one concept, chosen separately in each tool. |
-| Session discovery | `claude/claude_host.py`, injected into pmwatch by hand | `codex/pmkit_codex/session_host.py` implements `SessionHost` | Claude has not adopted the protocol it is named after. |
-| Release binding | the plugin runs from the source checkout | `codex/pmkit_codex/profile.py` and `release_binding.py` verify the pinned release before importing kitlib | Claude would need the same bootstrap, and it lives in a Codex folder. |
-
-### Structural faults
-1. **Reversed layer dependency.** `kitlib/hosts/__init__.py` uses `importlib` to load
-   `claude.host_profile` and `codex.host_profile`. So kitlib depends on the host folders, which
-   breaks the rule "kitlib never imports this package" (`claude/__init__.py`).
-2. **A half-used abstraction.** Of the `kitlib.hosts.HostProfile` fields, only `name` and the
-   worktree fields have consumers. `process_names`, `role_environment`, `state_directory`,
-   `owner_paths` and `lock_tool` are declared and read nowhere. A second, unrelated class named
-   `HostProfile` lives in `codex/pmkit_codex/profile.py`.
-3. **Claude leaks into kitlib**, around 60 sites. The main ones:
-   - `.claude/worktrees` defaults
-   - `~/.claude/machine-lock`
-   - `CLAUDE_CODE_SESSION_ID` and the lock actor key `"claude"`
-   - `CLAUDE_AGENT_MODEL`
-   - the `mcp__plugin_pm-kit_machine-lock__` prefix in guard rules
-   - the whole of `kitlib/launcher` and `kitlib/pluginsource/claude.py`
-   - `claude.exe` Remote Control names in pmstart and coordinatorstart
-
-   Each one is a place where a third host would need an `if`.
-4. **The bridge's interface is not declared.** `kitlib/bridge/ports.py` holds the seam as first
-   designed, and nothing imports it. The real seam is duck-typed in `bridgewin/bootstrap.py`.
-   `tools/bridge_service.py` wires hosts with `if 'claude'` / `if 'codex'`, and `hook_sink` is
-   looked up only for `'claude'`.
-5. **Production code imports probe code.** `kitlib.bridgeprobe.winpipe` is the named-pipe base
-   for production code. `bridgeprobe.runtime.ProbeError` and the Phase 0
-   `bridge/bootstrap.py` helpers (`identifier`, `digest`) are imported almost everywhere.
-   About 3,500 of the bridge's ~11,100 code lines are probe, Phase 0 or scaffold code.
-
+The plan below is built through step 10 and §7 (steps 11-20); the section that follows describes the target shape as it stands. What is shared today is the tools (`tools/` over `kitlib/`), the guard (kitlib.guard.decide over a neutral Action), the lock MCP server, kitlib.attribution, kitlib.packageexport, kitlib.kitrelease and kitlib.hoststart.shared_checks. The pre-refactor inventory of what each host duplicated (agent definitions, skills, hook entries, role marker, release binding) and the structural faults it caused is in git history.
 
 ## 2. Target shape
 
@@ -96,7 +41,7 @@ folder per host, so a new platform is slotted in by adding a folder:
 ```
  ┌───────────────────────────────────────────────────────────────────┐
  │ 4. Host shells: hosts/<name>/shell/  (data + entries ≤20 lines)    │
- │    manifests, hook registration, rendered agents/skills/instr.    │
+ │    manifests, hook registration, rendered agents (and skills)     │
  ├───────────────────────────────────────────────────────────────────┤
  │ 3. Host adapters: hosts/<name>/adapter/  (Python)                 │
  │    implements kitlib.host.HostAdapter: event parse/render,        │
@@ -108,7 +53,7 @@ folder per host, so a new platform is slotted in by adding a folder:
  │ 1. Core: kitlib/*  (tools' logic, guard rules, role policy, lock, │
  │    gate, release); tools/ (thin CLIs)                             │
  └───────────────────────────────────────────────────────────────────┘
-   content/   canonical roles, skills, instructions (host-neutral)
+   content/   canonical roles and skills (host-neutral)
    optional/bridge/  bridge core + per-host bridge halves (optional install)
    hosts.json registry: host name → adapter module, shell dir
 ```
@@ -121,12 +66,11 @@ kitlib/host/           the host contract
 tools/                 shared CLIs (read PM_KIT_HOST)
 content/roles/         one file per role
 content/skills/        one folder per skill, identical on every host
-content/instructions/  AGENTS.md body and the profile template
 hosts.json             {"claude": {...}, "codex": {...}}
 hosts/claude/adapter/  Python adapter
-hosts/claude/shell/    .claude-plugin/, hooks/hooks.json, agents/, skills/ (rendered)
+hosts/claude/shell/    hooks/hooks.json, agents/ (rendered)
 hosts/codex/adapter/
-hosts/codex/shell/     plugin.json, mcp.json, hooks/hooks.json, agents/, skills/ (rendered)
+hosts/codex/shell/     plugin.json, mcp.json, hooks/hooks.json, agents/ and skills/ (rendered)
 optional/bridge/       bridge core, service, frontend; hosts' bridge halves under
                        optional/bridge/hosts/<name>/
 kit.json               the one version and release identity (§2.5)
@@ -196,8 +140,8 @@ from `hosts/` or `optional/`.
 - Codex's policy that names no host moves into kitlib as `kitlib/guard/rolepolicy.py` and
   applies to every host: role edit bans, read-only owner paths (`ConfigView`), the
   shell-cwd-in-checkout check, the lock-verb allowlist and `shell_gap`.
-- **One hook entry per host event, ≤20 lines.** For example, `hosts/<name>/shell/hooks/run.py
-  <event>` runs the kit's boot check (§2.5), builds the adapter and calls
+- **One hook entry for every host** (decision 20): `boot/hook.py <host> <event>` runs the kit's
+  boot check (§2.5), builds the adapter and calls
   `kitlib.host.hookmain.run(adapter, event, stdin)`. The fail-closed deny, timeout handling and
   settings-entry rendering live in `hookmain` once.
 
@@ -208,16 +152,14 @@ format:
 - Codex: agents as `.toml` with `developer_instructions`, skills as `SKILL.md` folders, and
   `AGENTS.md`.
 
-Today both sets are written by hand. The plan writes each one **once** in `content/`. A script
-(`tools/render_content.py`, logic in `kitlib/content`) then asks every host adapter to write its
-own files from it. The written-out files are the "generated files":
+Roles and skills are written **once** in `content/`. A script (`tools/render_content.py`, logic
+in `kitlib/content`) asks every host adapter to write its own files from it. The written-out
+files are the "generated files":
 - `hosts/<name>/shell/agents/*`
-- `hosts/<name>/shell/skills/**`
-- the host's instructions file
+- `hosts/codex/shell/skills/**` (Claude loads `content/skills/` itself; decision 29)
 - the host's plugin manifest, which carries the one version (decision 6)
 
-Codex already works this way: `codex/roles.json` is rendered into `codex/agents/*.toml`, which
-are committed.
+`AGENTS.md` and `CLAUDE.md` are hand-written, not rendered.
 
 **Recommendation:** commit the generated files, with a test that fails when they differ from
 what the renderer writes now.
@@ -252,42 +194,24 @@ every install and update. It also means nobody reviews exactly what the agents r
   - Codex's `implementation-worker` merged into `worker` (decision 10).
   - `opus-worker` renamed `senior-worker` (decision 12).
 - **Skills.** `content/skills/<skill>/SKILL.md` is byte-identical on every host (decision 3).
-  The 11 forked skills are merged into one text each, which the owner decides on later.
-  Host-only skills (`coordinator-dispatch`, `kit-setup`, `kit-pm`, `kit-coordinator`,
-  `kit-worker`) are either made neutral and shipped everywhere, or their content moves into
-  role files or the host's instructions. A skill that only one host ships breaks decision 3.
+  Each forked skill is merged into one text, in the form decided in §5. A skill that only one
+  host ships breaks decision 3, so a host-only skill is made neutral and shipped everywhere, or
+  its content moves into role files or the host's instructions.
 - **Roster table.** `docs/ROSTER.md` holds each role's tier, plus a tier → model table per host.
   `kitlib/roster` checks it against `content/roles`. The `KIT_AGENTS` list in the launcher is
   derived from it, not copied by hand.
-- **Instructions.** `content/instructions/AGENTS.md` is the canonical text and renders to
-  `AGENTS.md`. `CLAUDE.md` renders as `@AGENTS.md` plus the one Claude-specific line. The repo
-  profile moves from `.claude/agent-profile.md` to a neutral `docs/agent-profile.md`, and the
-  old path stays as a stub during migration. `templates/common/` follows the same pattern for
-  target repos.
+- **Instructions.** `AGENTS.md` is the one rules file, and `CLAUDE.md` imports it with `@AGENTS.md`.
+  The repo profile is the neutral `docs/agent-profile.md`; each host's own-folder stub
+  (`.claude/agent-profile.md`, `.codex/agent-profile.md`) points to it.
 
 ### 2.4 The bridge as an optional install
-**What the Phase 0 probe code is.** Before building the bridge, the Codex agent wrote throwaway
-experiments to test whether each idea was possible on Windows. They covered:
-- isolating a helper in an AppContainer sandbox
-- electing one leader among several bridge processes
-- handing pipe handles between processes
-- passing work to a worker broker
-- reading Claude's and Codex's live session files and wire schemas to see what they contain
+**What the Phase 0 probe code was.** Before building the bridge, throwaway experiments tested
+whether each idea was possible on Windows (an AppContainer-isolated helper, leader election among
+bridge processes, pipe-handle passing, a worker broker, reading Claude's and Codex's live session
+files). It was never the working bridge. Three of its helpers had become load-bearing and were
+promoted (below); the rest was deleted (optional/bridge/README.md).
 
-They saved the results as evidence (`docs/bridge-phase0-*.md` and three `*-evidence.json`
-files). That code is:
-- `kitlib/bridgeprobe/` (1,858 lines)
-- `claude/bridge_phase0.py`
-- `tools/bridge_live_probe.py` and `tools/bridge_schema_probe.py`
-- `kitlib/bridge/{bootstrap,journal,pipeline,restart,delegation,schema_probe}.py`
-- the unused scaffold `kitlib/bridge/{ports,disabled,status}.py` and `tools/bridge.py`
-
-It is not the working bridge. Three of its helpers became load-bearing by accident:
-- `bridgeprobe/winpipe.py`: named pipes, pipe ACLs and process SIDs
-- `bridgeprobe.runtime.ProbeError`
-- `bridge/bootstrap.identifier` and `bridge/bootstrap.digest`
-
-**Plan:**
+**Plan (built in step 10):**
 - **Layout:** `optional/bridge/` holds the bridge core (`messages`, `outbox`, `dispatch`,
   `pairing`, `mcp`, `callers`, `owner`, `prompt`, `jsonwire`), the service and the MCP frontend.
   Each host's half lives in `optional/bridge/hosts/<name>/`. The core kit never imports any of
@@ -305,7 +229,7 @@ It is not the working bridge. Three of its helpers became load-bearing by accide
   `kitlib/ident.py`.
 - **Probe code:** once nothing imports it, delete it. Git history keeps it. A test asserts that
   nothing outside the deleted set imports it.
-- **Docs:** the 24 bridge docs and 3 evidence files collapse into:
+- **Docs:** the bridge docs and evidence files collapse into:
   - `optional/bridge/README.md`: design and contracts
   - `optional/bridge/STATUS.md`: a capability matrix per host and direction
   - the history, left in git
@@ -314,9 +238,7 @@ It is not the working bridge. Three of its helpers became load-bearing by accide
 - `kit.json` at the root holds the one `version` and is the input to the release identity
   (decision 6).
 - The renderer writes that version into every host manifest: `.claude-plugin/plugin.json` and
-  marketplace, and Codex `plugin.json` and `mcp.json`. Today Claude is at 0.1.0 and Codex at
-  0.3.5.
-- `kitlib.kitrelease` exports one release that contains the core, every host shell and, when
+  marketplace, and Codex `plugin.json` and `mcp.json`.- `kitlib.kitrelease` exports one release that contains the core, every host shell and, when
   installed, the bridge. Each release has one `PM_KIT_RELEASE_ID`.
 - Every host's entry points run the same stdlib-only boot check, `boot/kitboot.py`. It is
   lifted from Codex's `profile.py` and `release_binding.py`, and runs before any kitlib import.
@@ -371,11 +293,8 @@ behaviour unchanged.
 | 6 | Remove the Claude leaks from kitlib, one PR per cluster: lock actor key → `host`, session env, worktree defaults, MCP prefix, commit model env, hub paths, launcher, pluginsource. | 2 |
 | 7 | Move `claude/` → `hosts/claude/{adapter,shell}`. `kit.json` and the one release value. `boot/kitboot.py`. **Done**, with the rendered manifests and the kit header hook (docs/content.md "Manifests", "Kit header"; docs/kitboot.md; docs/machine-setup.md "Moved hook paths"). | 5, 6 |
 | 8 | Conformance suite, required in the gate. `docs/new-host.md`. **Done**: `tests/host/conformance.py`, run for Claude and for a test-only fake host (`tests/host/fakehost`); the bridge-port check is `tests/host/bridge_conformance.py` (step 10). | 3, 7 |
-| 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. **Ported** on its own branch (`claude/rebase-codex-host`): `hosts.json` registers Codex, `hosts/codex/` passes the suite on payloads in the branch's recorded shapes, `parse` may return several Actions (one `apply_patch`, several files) and an adapter may `screen`, the child-environment scrub is core (`kitlib.sessionmark.child_environment`, hosts.json `env_prefixes`), Codex's renderer fills every content token (docs/content.md "Tokens"). Nothing is installed; live parity is unverified (hosts/codex/README.md "Not verified"). The bridge owns the Codex bridge client at `optional/bridge/hosts/codex/client.py` (step 10). Codex's diagnostics either drop it or probe for it lazily and optionally by importing that module, and they never keep a copy. | 8 |
-| 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. **Ported, and merged after step 9** (branch `claude/rebase-bridge`, merged with step 9's result): optional/bridge/README.md (layout, port, install, what was deleted) and STATUS.md. Claude and Codex are both served. | 9 |
-
-Steps 3–4 and 5–6 can run in parallel. Tell the Codex agent about steps 9–10 now, so it can
-stop building on paths that are about to move.
+| 9 | **Rebase `codex/companion-plugin`** onto main as `hosts/codex/`: `actions.py` → adapter events, `guard_adapter` reduced to what only Codex has, roles rendered from `content/`, `PM_KIT_CODEX_ROLE` removed. It must pass the conformance suite. **Done:** `hosts.json` registers Codex, `hosts/codex/` passes the suite on payloads in the branch's recorded shapes, `parse` may return several Actions (one `apply_patch`, several files) and an adapter may `screen`, the child-environment scrub is core (`kitlib.sessionmark.child_environment`, hosts.json `env_prefixes`), Codex's renderer fills every content token (docs/content.md "Tokens"). Nothing is installed; live parity is unverified (hosts/codex/README.md "Not verified"). The bridge owns the Codex bridge client at `optional/bridge/hosts/codex/client.py` (step 10). Codex's diagnostics either drop it or probe for it lazily and optionally by importing that module, and they never keep a copy. | 8 |
+| 10 | **Rebase `codex/robust-bridge-plan`** as `optional/bridge/`: promote the helpers, declare the port, move the host halves, delete the probe code, collapse the docs. **Done:** optional/bridge/README.md (layout, port, install, what was deleted) and STATUS.md. Claude and Codex are both served. | 9 |
 
 ## 4. What does not change
 - Standard library only and Windows only. No argparse or printing in kitlib.
@@ -390,23 +309,9 @@ stop building on paths that are about to move.
 
 ## 5. The form of the shared skill text (decided: C)
 
-Decision 3 makes each skill's text identical on every host. The two forks differ in **form**,
-not only in host wording. Here is `branch-sync` side by side.
-
-**Claude's version (main, 19 lines): the full procedure.**
-- It has 10 numbered steps with the exact commands, such as `git merge --no-ff <hash>`,
-  `git merge-base --is-ancestor`, `git checkout <hash> -- <path>` and `git merge --abort`.
-- It names each trap, for example "a union resurrects rows the base retired", untracked `.uid`
-  files, and why `git commit --no-edit` is refused.
-- It names the tool to finish with (`tools/commit.py`) and what to prove after the merge.
-- An agent can follow it without opening another file.
-
-**Codex's version (branch, 16 lines): a pointer.**
-- Three paragraphs say: read `docs/sync-base.md` and the repo profile, use the shared sync
-  helper, never rebase or force-push, resolve only your own conflicts, re-gate and report.
-- The detail lives in the tool's doc, so an agent opens a second file to learn the steps.
-
-Neither is wrong. They trade off differently:
+Decision 3 makes each skill's text identical on every host. The two forks differed in **form**,
+not only in host wording: Claude's skills gave the full procedure (every step, command and trap),
+and Codex's pointed to the tool's doc. Neither is wrong. They trade off differently:
 
 | | A. Full procedure (Claude style) | B. Pointer (Codex style) | C. Checklist + pointer (hybrid) |
 |---|---|---|---|
@@ -428,7 +333,7 @@ differences today. None of them needs host blocks:
 
 **Recommendation: C.** Keep Claude's steps and "never" lists as one-liners, take the pointer
 from Codex, and add a test that every `tools/*.py` command a skill names exists and takes the
-flags it shows. The 11 merges in step 5 wait for this choice. Nothing else is blocked.
+flags it shows.
 
 ## 6. Platform seam (later refactor: Linux and macOS)
 
@@ -436,6 +341,10 @@ The kit is to run on Windows, Linux and macOS. That is a second axis, separate f
 any host on any OS. It is done **after** steps 0–10 as its own refactor (decision 15). Doing it
 then means each change has one moving part, and the host work can still be proved by the
 existing Windows suite.
+
+Status: docs/linux-support-plan.md supersedes this section for Linux (its own status line says
+how much is built). `kitlib/platform/` has `windows` and `linux` folders and no `darwin`; both
+hosts in `hosts.json` still declare `platforms: ["windows"]`. macOS is not started.
 
 ### Rules for the host work, starting now
 1. **No new Windows calls outside `kitlib/proc` and `kitlib/lock`.** This covers ctypes,
@@ -447,18 +356,18 @@ existing Windows suite.
 4. **Rendered hook commands are written by one helper** that chooses the interpreter command
    line (`pythonw` today). No manifest or settings entry hard-codes `pythonw`.
 
-Separately and early: Windows CI (GitHub Actions) for the gate, so every step has real proof.
+Planned, not built: Windows CI (GitHub Actions) for the gate. The repo has no `.github` folder.
 
 ### What is Windows-only today
 | Area | Today | Linux / macOS equivalent | Size |
 |---|---|---|---|
-| Process control (`kitlib/proc`: job objects, pid shield, tree kills, CPU pinning, process start time and parent chain) | Win32 through ctypes, about 1,900 lines | Process groups and `killpg`. Linux: cgroups v2 for memory and cores, `/proc` for identity. macOS: no cgroups and no core pinning, so a weaker model. | Large |
+| Process control (`kitlib/proc`: job objects, pid shield, tree kills, CPU pinning, process start time and parent chain) | Win32 through ctypes | Process groups and `killpg`. Linux: cgroups v2 for memory and cores, `/proc` for identity. macOS: no cgroups and no core pinning, so a weaker model. | Large |
 | Machine lock (`kitlib/lock/store.py`, `run.py`) | Win32 mutex and the owning-thread rule | `fcntl.flock` on a lock file | Medium |
 | Guard path rules (`kitlib/guard`) | Drive letters, backslashes, case-insensitive paths, junctions, PowerShell tokenizing | POSIX paths (case-sensitive on Linux, usually not on macOS), symlinks, Bash tokenizing | Medium–large |
-| Hook and child launching | `pythonw`, `CREATE_NO_WINDOW` and similar (34 files) | `python3` with no window flags | Small |
+| Hook and child launching | `pythonw`, `CREATE_NO_WINDOW` and similar | `python3` with no window flags | Small |
 | Installers | `installer/*.ps1` | Logic in Python (`machine_setup.py`), with thin `.ps1` and `.sh` wrappers | Medium |
 | Machine paths | `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, registry reads | `~/.local/state` and `~/.config`; `~/Library/Application Support` | Small |
-| Links | Junctions (35 files) | Symlinks | Small–medium |
+| Links | Junctions | Symlinks | Small–medium |
 | Scheduled work (sweep task, daily full, bridge startup) | Task Scheduler | systemd user timers or cron; launchd | Medium |
 | Folder holders (`worktree/holders.py`) | Finds processes that block deleting a folder | POSIX does not block deletes, so mostly a no-op | Small |
 | Small extras | Foreground-window lock, `msvcrt.locking`, `GetTickCount` | No-op, `fcntl`, `time.monotonic` | Small |
@@ -481,7 +390,7 @@ Separately and early: Windows CI (GitHub Actions) for the gate, so every step ha
   This lives in kitlib because it is OS code using only the standard library, not host code.
 - The rest of kitlib never checks `os.name` or `sys.platform`; a test enforces it.
 - Hosts declare their supported OSes in `hosts.json`.
-- CI runs the suite on all three OSes.
+- CI is to run the suite on all three OSes (planned; docs/linux-support-plan.md section 4).
 
 ### Questions for when this starts
 1. Which OS comes after Windows: Linux, macOS, or both together?
@@ -490,9 +399,9 @@ Separately and early: Windows CI (GitHub Actions) for the gate, so every step ha
 3. Can GitHub Actions run Windows, Ubuntu and macOS runners for this repo?
 4. Does the bridge stay Windows-only at first?
 
-## 7. Instructions, roles and zero repo setup (planned 2026-10-13)
+## 7. Instructions, roles and zero repo setup
 
-The §7 agenda was settled in a planning session with the owner. Steps 11-20 are built, each reviewed and merged on this branch (2026-10-13); the Windows gate and live host checks are still owed (docs/go-live.md).
+The §7 agenda was settled in a planning session with the owner. Steps 11-20 are built; the live host checks are tracked in docs/go-live.md.
 
 ### 7.0 Decisions
 
