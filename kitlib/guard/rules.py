@@ -552,7 +552,7 @@ def is_owner_session(event, ctx):
 
 def agent_session(event, ctx):
     """True for a subagent, or a session whose mark is one of guard_agent_marks (default
-    AGENT_MARKS: coordinator, its old name conductor, deep-worker, consultant and pm), case
+    AGENT_MARKS: coordinator, deep-worker, consultant and pm), case
     ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
     kit-json, the write jail, git-stash-shared) use it. The mark is compared without the kit plugin's prefix
     (kitlib.agentname.bare_mark), so a role_resolver that does not strip it fails closed too."""
@@ -563,9 +563,8 @@ def agent_session(event, ctx):
     return who.lower() in {str(m).lower() for m in marks}
 
 
-# every session kind the kit launcher marks but `plain` and other agents' names; 'conductor' is the
-# coordinator's old mark, until the launcher is renamed
-AGENT_MARKS = ('coordinator', 'conductor', 'deep-worker', 'consultant', 'pm')
+# every session kind the kit launcher marks but `plain` and other agents' names
+AGENT_MARKS = ('coordinator', 'deep-worker', 'consultant', 'pm')
 
 
 # ---------------------------------------------------------------- owner tools
@@ -6290,10 +6289,10 @@ def scratch_ref(name):
     return ref_name_ok(name) and name != 'HEAD' and (name.startswith('refs/tmp/') or per_worktree_ref(name))
 
 
-# the main sessions that may delete a stray ref in their own repository (the coordinator and its
-# old mark: AGENT_MARKS's first two), and the refs that are no stray ref, compared without case:
-# NTFS reads refs/HEADS/main as the loose file of refs/heads/main
-REF_CLEANUP_MARKS = AGENT_MARKS[:2]
+# the main sessions that may delete a stray ref in their own repository (the coordinator only),
+# and the refs that are no stray ref, compared without case: NTFS reads refs/HEADS/main as the
+# loose file of refs/heads/main
+REF_CLEANUP_MARKS = ('coordinator',)
 NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash', 'refs/backlog')
 
 
