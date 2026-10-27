@@ -66,8 +66,8 @@ A folder in no git work tree, or no absolute folder in the hook payload, is one 
 `python tools/preflight.py --board [-C DIR] [--base REV] [--write-state]` prints the whole report above, then the coordinator's board. `kitlib.preflight.board.lines` produces, in order (the base, lock and engines/ports lines are the report's own and are not repeated):
 
 1. When the local base differs from `<remote>/<base>` and no `--base` was given, the rows are measured against `<remote>/<base>` and the board says so: `board     rows measured against <remote>/<base> (local <base> differs)`. (The report's `vs base` line says it too, but only off the base branch.) No such line when they match.
-2. The header `branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched`, then one row per worktree that is on a branch other than the base. The `dirty` column counts tracked files only, and the owner-only paths come from `.kit.json` `owner`.
-3. `docs:` with the last line of `<kit>/tools/doc_index.py --stale -C <checkout>`.
+2. The header `branch | tip | ahead/behind | has base tip | last commit | dirty | owner-only touched`, then one row per worktree that is on a branch other than the base and whose folder exists (`(no worktrees besides the main checkout)` when there is none, `(worktrees UNKNOWN - <why>)` when git cannot list them). The `dirty` column counts tracked files only, and the owner-only paths come from `.kit.json` `owner`.
+3. `docs:` with the last line of `<kit>/tools/doc_index.py --stale -C <checkout>` (`no stale report` when it printed nothing, prefixed `doc_index --stale FAILED (exit N)` on a non-zero exit, and `docs: NOT CHECKED` when the kit has no such tool).
 
 In a row, `?` means git could not answer. `-` means "no owner-only paths", and `has base tip` is `yes` or `NO` only when git answered.
 
