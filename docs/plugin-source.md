@@ -1,8 +1,6 @@
 # Plugin source
 
-Every account folder's Claude Code installs the `pm-kit` plugin from an export of pushed kit main, never from the kit checkout. `tools/plugin_refresh.py` makes the export and runs `claude plugin` in each account folder; logic in `kitlib/pluginsource` (export, marketplace, prune, state, the refresh lock) and `kitlib/pluginsource/claude.py` (the account folders and the `claude` runner). `hosts/codex/adapter/plugin_copy.py` mirrors the Codex plugin copy ("Host plugin copies"). Tests: `tests/pluginsource`, `tests/pmstart/test_plugin_current.py`, `tests/pmwatch/test_plugin.py`.
-
-With no `home`, `claude.account_folders` and `claude.Runner` find the user's home through `kitlib.config.user.home_dir()`, which the kit's tests fence (docs/test-tools.md "Home fence"), so a test passes a temp home or the folders themselves.
+Every account folder's Claude Code installs the `pm-kit` plugin from an export of pushed kit main, never from the kit checkout. `tools/plugin_refresh.py` makes the export and runs `claude plugin` in each account folder; logic in `kitlib/pluginsource` (export, marketplace, prune, state, the refresh lock) and `kitlib/pluginsource/claude.py` (the account folders and the `claude` runner). `hosts/codex/adapter/plugin_copy.py` mirrors the Codex plugin copy ("Host plugin copies"). With no `home`, `claude.account_folders` and `claude.Runner` find the user's home through `kitlib.config.user.home_dir()`, which the kit's tests fence (docs/test-tools.md "Home fence").
 
 ## Layout
 
@@ -43,7 +41,7 @@ Without `claude` on PATH, the export is still made, no folder is refreshed, and 
 Before it removes anything, `tools/plugin_refresh.py --apply` reads what is in use (`kitlib.pluginsource` `read_in_use`):
 
 - every running process's command line and program path (one `Win32_Process` read, `kitlib.pmstart` `list_processes`);
-- every scheduled task's definition (`schtasks /Query /XML ONE`: program, arguments and working folder). A task that runs from an export folder breaks when the folder is removed. A non-elevated read works: verified 2026-10-19 with `schtasks /Query /XML /TN` on the hub and procwatch tasks, which returned the full XML with `<Arguments>` and exit 0;
+- every scheduled task's definition (`schtasks /Query /XML ONE`: program, arguments and working folder). A task that runs from an export folder breaks when the folder is removed. A non-elevated read works (observed 2026-10-19);
 - the pin leases, `<root>\pins\leases\<sha12>-<pid>.json`, by file name, live or not (pluginsource imports nothing from `kitlib.gate`).
 
 A `<sha12>` is in use when one of these names it as a whole path part (`in_use_sha12s`), followed by a separator, a quote, `;`, `,`, `)` or `&`. A read that fails is printed (`prune: what is in use could not be read whole (...)`), and the others still count. An empty process list counts as a failed read, since a real one always holds the reader itself.
