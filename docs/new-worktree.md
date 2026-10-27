@@ -1,8 +1,7 @@
 # new_worktree
 
-Held for the joint review: no repository runs it yet.
-
 `tools/new_worktree.py` makes a workstream's worktree in one call. Logic: `kitlib/worktree/new.py`; tests: `tests/worktree/test_new_worktree.py`.
+
 ## Hosts
 
 `--host NAME` picks the agent host whose worktree folder is used: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). A name `hosts.json` lacks is refused (exit 2) before any fetch. The folder (`kitlib/worktree/hostdirs.py`; tests `tests/worktree/test_host.py`):

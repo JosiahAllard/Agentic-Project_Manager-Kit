@@ -1,6 +1,6 @@
 # Preflight (with its board) and checkout guard
 
-Two read-only tools a session or coordinator runs to see where it stands: `preflight.py`, which with `--board` also prints the coordinator's board, and `checkout_guard.py`. Each is a thin entry point; the logic lives in `kitlib/preflight` and `kitlib/git/stray.py`. There is no separate board tool: `tools/board.py` was merged into `preflight.py --board`.
+Two read-only tools a session or coordinator runs to see where it stands: `preflight.py`, which with `--board` also prints the coordinator's board, and `checkout_guard.py`. Each is a thin entry point; the logic lives in `kitlib/preflight` and `kitlib/git/stray.py`. The board is `preflight.py --board`; there is no separate board tool.
 
 One rule runs through both: a reading that failed is printed as `?`, `UNKNOWN`, `unknown (<why>)` or `NOT CHECKED`. It is never printed as a value such as `0`, `-`, `free` or `(equal)`.
 
@@ -22,7 +22,7 @@ One rule runs through both: a reading that failed is printed as `?`, `UNKNOWN`, 
 - **report hooks**.
 - **engines and ports**: only when configured.
 - **config**: which machine config file is read, from `kitlib.preflight.configline` (docs/kit-json.md "Moving the machine config folder"): the PM repository's `.pm-kit` folder with the files in it, `none` (no pointer and no config in the home folder) or `BROKEN` with the reason (a config left in the home folder, a bad pointer, a file the strict reader refuses); keys are named, values never.
-- **pointer**: the PM-repo pointer (`HKLM\SOFTWARE\pm-kit` value `pm_repo`), from `configline.pointer_line` over `kitlib.config.pointer` (docs/kit-json.md "The PM repo pointer"): the PM repository's path, `none`, or `BROKEN` with the reason. Under the kit's tests the registry is never read.
+- **pointer**: the PM-repo pointer (on Windows `HKLM\SOFTWARE\pm-kit` value `pm_repo`; on Linux `/etc/pm-kit/pointer` or the user's `~/.config/pm-kit/pointer`, `kitlib.platform.linux.paths.read_pointer`), from `configline.pointer_line` over `kitlib.config.pointer` (docs/kit-json.md "The PM repo pointer"): the PM repository's path, `none`, or `BROKEN` with the reason. Under the kit's tests the registry is never read.
 - **traps**: `.kit.json` "preflight".traps when set; else `docs/ops/gotchas.md (read once per task; add yours)`, printed only when the checkout has that file (`kitlib/preflight/report.py`, `settings.DEFAULT_TRAPS_FILE`), so no line when it has neither.
 - **index**.
 - **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. Each runs the kit's own tool by its absolute path and names the checkout with `-C` (a repository holds no copy of the kit's tools, decision 21 in docs/multi-host-plan.md section 7). In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base.
@@ -88,7 +88,7 @@ Exit codes are preflight's own, above.
 - **1**: main.
 - **2**: unknown, or a usage error.
 
-`python tools/checkout_guard.py --main-stray [--allow-tracked] [PATH]` lists the main checkout's stray untracked or uncommitted files, from `kitlib.git.stray.check`, one `[FAIL]` line each. It does not guess which worktree wrote a stray (the PM kit's attribution was dropped by an owner ruling). Exit codes:
+`python tools/checkout_guard.py --main-stray [--allow-tracked] [PATH]` lists the main checkout's stray untracked or uncommitted files, from `kitlib.git.stray.check`, one `[FAIL]` line each. It does not guess which worktree wrote a stray. Exit codes:
 
 - **1**: any stray.
 - **0**: clean. Also 0 when git could not tell; then a WARNING line is printed.
@@ -112,14 +112,3 @@ All of these keys are in docs/kit-json.md.
   
 - `board.state_file`.
 - `owner`: the owner-only paths, through `Config.owner_rules`.
-
-## Not ported, and why
-
-- **No change of directory to the main checkout and no hand-off**. The main-checkout refusal is `kitlib.git.checkout.main_refusal`.
-- **No environment overrides**.
-- **No `KIT_REPO_ROOT` and no `check_same_repo`**: `-C` names the checkout.
-- **Old lock formats**: the old tier line, the single lock and the v2 pools. There is one lock now, read through its own CLI.
-- **The worktree-leftover warning** belongs to the worktree-remove tool.
-- **The main-checkout untracked listing**: `kitlib.git.stray` covers it.
-- **The path-based main-checkout guess** is replaced by `kitlib.git.repo.classify`.
-- **Decoding of C-quoted status paths**: `kitlib.git.refs.status` reads `-z` output, which is never quoted.

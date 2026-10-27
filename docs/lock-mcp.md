@@ -4,7 +4,7 @@
 
 - **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout. It is written on the standard library, because the `mcp` SDK is not installed and the kit uses no packages (CLAUDE.md). It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
 - **Plugin:** `.claude-plugin/plugin.json` names it `machine-lock`. That manifest holds this server, the skills (`content/skills/`), the agents (`hosts/claude/shell/agents/`) and the hooks of ARCHITECTURE.md "Packaging".
-- **Live through the plugin:** a Claude session with the `pm-kit` plugin enabled starts it from that manifest; no settings entry or `.mcp.json` names it. Observed 2026-10-14: a session's tools include `mcp__plugin_pm-kit_machine-lock__lock_snapshot` and the other tools below.
+- **Live through the plugin:** a Claude session with the `pm-kit` plugin enabled starts it from that manifest; no settings entry or `.mcp.json` names it. A session's tools are named `mcp__plugin_pm-kit_machine-lock__<tool>` (the prefix is inferred from Claude Code's plugin naming: `kitlib.lockmcp.tool_prefix`). The entry point boots the kit (`boot/kitboot.py`) before it imports kitlib, and exits when that check fails.
 
 ## Results
 
