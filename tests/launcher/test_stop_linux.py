@@ -129,6 +129,32 @@ class Linux(unittest.TestCase):
                  claude(4, 'd', 0, image='claude.exe')]
         self.assertEqual([p['ProcessId'] for p in lookup.claude_sessions(procs)], [1, 2])
 
+    def node(self, pid, cmd):
+        return {'Name': 'node', 'ProcessId': pid, 'ParentProcessId': 20, 'ExecutablePath': '/usr/bin/node',
+                'CommandLine': cmd}
+
+    def test_a_node_row_is_a_session_only_when_it_runs_the_claude_cli(self):
+        procs = [self.node(1, 'node app.js -n x'),
+                 self.node(2, 'node /home/u/claude-tools/app.js --remote-control x -n x'),
+                 self.node(3, 'node --inspect /srv/claude.js -n x'),
+                 self.node(4, 'node /usr/local/bin/claude --permission-mode auto --remote-control x -n x go'),
+                 self.node(5, 'node --max-old-space-size=4096 /usr/lib/node_modules/@anthropic-ai/'
+                              'claude-code/cli.js -n x go'),
+                 self.node(6, 'claude --remote-control x -n x go')]
+        self.assertEqual([p['ProcessId'] for p in lookup.claude_sessions(procs)], [4, 5, 6])
+
+    def test_stop_never_ends_an_unrelated_node_with_the_name(self):
+        host = FakeHost(self.h.root, [self.node(10, 'node app.js -n x'), shell(20, 'x'), TMUX])
+        with self.assertRaisesRegex(stop.Refused, "no claude with --remote-control exactly 'x'"):
+            stop.stop(self.h.settings, host, 'x')
+        self.assertEqual(host.killed, [])
+
+    def test_stop_ends_a_launched_claude_running_as_node(self):
+        row = self.node(10, 'node /usr/local/bin/claude --agent pm-kit:coordinator --permission-mode auto '
+                            '--remote-control x -n x go')
+        target, win = stop.plan([row, shell(20, 'x'), TMUX], 'x')[:2]
+        self.assertEqual((target['ProcessId'], win['ProcessId']), (10, 20))
+
 
 class Windows(unittest.TestCase):
     def test_windows_takes_claude_exe_only_and_says_claude_exe(self):

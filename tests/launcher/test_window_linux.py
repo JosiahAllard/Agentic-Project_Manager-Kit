@@ -175,6 +175,14 @@ class LinuxReboot(unittest.TestCase):
         self.assertEqual(host.open_kw, [{'name': 'pm-session', 'terminal': None}])
         self.assertEqual(lines, ['started pm-session'])
 
+    def test_the_test_session_line_names_the_tmux_session_and_how_to_attach(self):
+        h = Home(self)
+        host = FakeHost(h.root)
+        with mock.patch('kitlib.platform.NAME', 'linux'):
+            out = reboot.run(h.settings, host, test=True)
+        self.assertEqual(out[-1], "started autostart-test in tmux session 'autostart-test' "
+                                  "(tmux attach -t 'autostart-test')")
+
 
 class Uptime(unittest.TestCase):
     def setUp(self):

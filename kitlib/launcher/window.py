@@ -51,6 +51,7 @@ USER_ENV = ("foreach ($k in [Environment]::GetEnvironmentVariables('User').Keys)
 ENV_STEMS = 'CLAUDE|ANTHROPIC'
 PERSIST_ENV = 'CLAUDE_CODE_FORCE_SESSION_PERSISTENCE'
 CONFIG_ENV = 'CLAUDE_CONFIG_DIR'
+PROGRAM = 'claude'          # the CLI a window runs (claude_command); lookup's test of a node row
 CLEAR_CLAUDE = ("Get-ChildItem Env: | Where-Object { $_.Name -match '^(%s)' } | ForEach-Object "
                 "{ [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }") % ENV_STEMS
 PERSIST = "$env:%s = '1'" % PERSIST_ENV
@@ -86,7 +87,7 @@ def claude_command(name, prompt, agent=None, model=None, effort=None, autocompac
     """`add_dir`: a folder the session's file tools may also use (`--add-dir`; a home worktree's
     main checkout, docs/launcher.md "The home worktree"). `remote_control` False drops only the
     `--remote-control <name>` pair (a measurement; lookup finds the session by `-n`)."""
-    parts = ['claude']
+    parts = [PROGRAM]
     if resume:
         parts += ['--resume', q(resume)]
     if agent:
