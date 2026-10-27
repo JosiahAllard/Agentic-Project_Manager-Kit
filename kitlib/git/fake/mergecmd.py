@@ -4,10 +4,12 @@ both sides changed; every case ort would resolve with rename or directory-rename
 conflict other than a plain content conflict, is Unsupported. Messages are git 2.55's as probed.
 """
 import os
+import stat
 
 from . import command
 from . import diffs as _diffs
 from . import history as _hist
+from . import ignore as _ignore
 from . import index as _index
 from . import plumbing as _pl
 from . import refs as _refs
@@ -471,6 +473,12 @@ def _abort(ctx, repo):
         for (p, s), e in ix.entries.items():
             if s == 0:
                 idx_side[p] = (e.mode, e.oid)
+        # An untracked file in the way of a HEAD path the index lacks is not modelled. Refused
+        # here, before the first work-tree write: Locked puts the index back, not the files.
+        blocked = _in_the_way(repo, ix, hs)
+        if blocked:
+            raise Unsupported('merge --abort with an untracked file in the way (%s)'
+                              % ', '.join(blocked))
         # unmerged paths: their work-tree files are overwritten from HEAD (one unpack_trees in
         # git, its result index HEAD's: the checkout reads HEAD's .gitattributes)
         _wt.refuse_nested_attributes(p for p in ix.unmerged() if p in hs)
@@ -482,10 +490,40 @@ def _abort(ctx, repo):
                 ix.add(e)
             else:
                 tree.remove_file(p)
-        _wt.twoway(tree, idx_side, hs, reset=True)
+        # reset --merge is a oneway merge without reset: a path whose index entry is HEAD's keeps
+        # its work-tree file, unstaged changes included (probed); every other path's file matches
+        # its entry (checked above) and goes to HEAD. Both refusals twoway could raise were made
+        # above; this one is a backstop that names what twoway rejected.
+        def refuse(rejects):
+            return Unsupported('merge --abort refused by twoway (%s)' % '; '.join(
+                '%s: %s' % (kind, ', '.join(ps)) for kind, ps in sorted(rejects.items())))
+        _wt.twoway(tree, idx_side, hs, errfn=refuse)
         lk.write()
     _wc.clear_merge_state(repo)
     return 0
+
+
+def _in_the_way(repo, ix, hs):
+    """Paths in the way of a HEAD path the index has no entry for, as twoway would find them:
+    a directory with files, or an untracked file that is not ignored at the path or a parent."""
+    ign = None
+    found = []
+    for p in sorted(hs, key=_diffs.pkey):
+        if ix.stages(p):
+            continue
+        st = _wt.lstat(repo, p)
+        if st is not None and stat.S_ISDIR(st.st_mode):
+            if _wt._dir_has_files(repo.wt_path(p)):
+                found.append(p)
+            continue
+        blocker = p if st is not None else _wt._file_in_the_way(repo, p, ix)
+        if blocker is None:
+            continue
+        if ign is None:
+            ign = _ignore.Ignore(repo)
+        if not ign.is_ignored(blocker, False):
+            found.append(blocker)
+    return found
 
 
 # -- merge-tree -----------------------------------------------------------------------------

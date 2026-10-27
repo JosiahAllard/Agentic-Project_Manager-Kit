@@ -434,6 +434,35 @@ AUTOCRLF_UNMERGED_CR = [
     ('git', ['ls-files', '-s']),
 ]
 
+# merge --abort is reset --merge: a file with a change git did not stage, on a path the merge
+# left alone (index == HEAD), keeps that change; the unmerged path goes back to HEAD.
+MERGE_ABORT_KEEPS_UNSTAGED = [
+    ('write', '.gitattributes', '*.txt text eol=lf\n'),
+    ('write', 'c.txt', 'base\n'),
+    ('git', ['add', '--', '.gitattributes', 'c.txt']),
+    ('git', ['commit', '-q', '-m', 'base']),
+    ('git', ['switch', '-q', '-c', 'kit/other']),
+    ('write', 'c.txt', 'other\n'),
+    ('write', 'new.txt', 'added by the merge\n'),
+    ('git', ['add', '--', 'c.txt', 'new.txt']),
+    ('git', ['commit', '-q', '-m', 'other']),
+    ('git', ['switch', '-q', 'main']),
+    ('write', 'c.txt', 'ours\n'),
+    ('git', ['commit', '-q', '-a', '-m', 'ours']),
+    ('write', 'README.md', 'hello\nlocal\n'),
+    ('write', '.gitattributes', '*.txt text eol=lf\n# local\n'),
+    ('setup', ['merge', '-q', '-m', 'conflict', 'kit/other']),
+    ('git', ['status', '--porcelain=v1']),
+    ('read', 'new.txt'),
+    ('git', ['merge', '--abort']),
+    ('read', 'README.md'),
+    ('read', '.gitattributes'),
+    ('read', 'c.txt'),
+    ('read', 'new.txt'),                    # clean, added by the merge: the abort deletes it
+    ('git', ['status', '--porcelain=v1']),
+    ('git', ['diff', '--name-only']),
+]
+
 # Real git reads both repositories after a script.
 END_STATE = [
     ['for-each-ref', '--format=%(refname) %(objectname)'],
@@ -521,6 +550,38 @@ class FakeAgainstRealGit(unittest.TestCase):
 
     def test_an_unmerged_path_reads_its_stage_2_blob_for_a_crlf(self):
         self.run_script(BRANCH_AND_LAND[:3] + AUTOCRLF_UNMERGED_CR)
+
+    def test_merge_abort_keeps_an_unstaged_change_the_merge_left_alone(self):
+        self.run_script(BRANCH_AND_LAND[:3] + MERGE_ABORT_KEEPS_UNSTAGED)
+
+    def test_merge_abort_refuses_an_untracked_file_in_the_way_before_any_write(self):
+        # Fake only (real git is not probed here): the merge deletes d.txt and conflicts on
+        # c.txt; an untracked d.txt then stands where HEAD's would go back. The abort is
+        # Unsupported, and the conflicted file, the index and MERGE_HEAD are as they were.
+        s = Side(use_fake=True)
+        self.addCleanup(s.cleanup)
+        for path, text in (('c.txt', 'base\n'), ('d.txt', 'd\n')):
+            s.repo.write(path, text)
+        for argv in (['add', '--', 'c.txt', 'd.txt'], ['commit', '-q', '-m', 'base'],
+                     ['switch', '-q', '-c', 'kit/other'], ['rm', '-q', '--', 'd.txt']):
+            self.assertEqual(s.real(argv)[0], 0, argv)
+        s.repo.write('c.txt', 'other\n')
+        for argv in (['commit', '-q', '-a', '-m', 'other'], ['switch', '-q', 'main']):
+            self.assertEqual(s.real(argv)[0], 0, argv)
+        s.repo.write('c.txt', 'ours\n')
+        self.assertEqual(s.real(['commit', '-q', '-a', '-m', 'ours'])[0], 0)
+        self.assertEqual(s.real(['merge', '-q', '-m', 'conflict', 'kit/other'])[0], 1)
+        s.repo.write('d.txt', 'untracked\n')
+        merge_head = os.path.join(s.repo.root, '.git', 'MERGE_HEAD')
+        before = (_file_bytes(s.repo.path('c.txt')), s.real(['ls-files', '-s']),
+                  _file_bytes(merge_head))
+        self.assertIsNotNone(before[2])
+        rc, _out, _alarm_ = s.git(['merge', '--abort'])
+        self.assertTrue(str(rc).startswith('UNSUPPORTED:') and 'd.txt' in rc, rc)
+        after = (_file_bytes(s.repo.path('c.txt')), s.real(['ls-files', '-s']),
+                 _file_bytes(merge_head))
+        self.assertEqual(after, before)
+        self.assertEqual(_file_bytes(s.repo.path('d.txt')), b'untracked\n')
 
 
 if __name__ == '__main__':
