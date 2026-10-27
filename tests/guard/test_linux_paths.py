@@ -302,6 +302,14 @@ class TarFolders(LinuxCase):
         self.denied('tar -C x -C ../.. -xf a.tar')
 
     def test_a_backslash_folder_is_read_in_the_one_in_force(self):
+        dirs = rules._TarDirs()
+        for text in ('/work/repo', '\\x', '..', '/srv', '~/y'):
+            dirs.move(sh.Word(text, False, 0, 0), True)
+        self.assertEqual([w.text for w in dirs.seen],
+                         ['/work/repo', '/work/repo/\\x', '/work/repo/\\x/..', '/srv', '~/y'])
+
+    def test_a_backslash_folder_after_the_main_checkout_is_refused(self):
+        # the main checkout's own -C is judged too, so this line was refused before the fix as well
         self.denied("tar -C /work/repo -C '\\x' -xf a.tar")
 
     def test_folders_in_the_worktree_pass(self):
