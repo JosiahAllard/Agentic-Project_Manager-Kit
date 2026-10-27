@@ -1,0 +1,156 @@
+"""`machine_lock.py run -- ./gradlew` on Windows (kitlib.lock.run script_command): a name with no
+extension resolves as the shell would (shutil.which over PATHEXT, beside a name with a folder part,
+else the current folder and PATH), and a .bat or .cmd, resolved or named, starts through an
+explicit cmd.exe line the kit quotes itself, in the run's job. An argument cmd.exe would expand or
+split (`%`, `"`, a line break) is refused before the run books. Scratch store only."""
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+from . import test_cli
+from .helpers import StoreCase, clean_env
+
+if os.name == "nt":
+    from kitlib.lock import run as rm
+
+
+def make_scripts(folder, bat_lines):
+    """folder/gradlew (a shell script Windows cannot start) and folder/gradlew.bat beside it."""
+    with open(os.path.join(folder, "gradlew"), "w", newline="\n") as f:
+        f.write("#!/bin/sh\necho sh\n")
+    with open(os.path.join(folder, "gradlew.bat"), "w", newline="\r\n") as f:
+        f.write("\n".join(bat_lines) + "\n")
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class ScriptCommand(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lock-resolve-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        make_scripts(self.tmp, ["@exit /b 0"])
+        self.bat = os.path.join(self.tmp, "gradlew.bat")
+
+    def head(self):
+        return '"%s" /d /s /c ""%s"' % (rm.comspec(), self.bat)
+
+    def test_a_folder_name_resolves_to_the_bat_beside_it(self):
+        line = rm.script_command([os.path.join(self.tmp, "gradlew"), "build"])
+        self.assertEqual(line.lower(), (self.head() + ' build"').lower())
+
+    def test_a_bare_name_resolves_on_path(self):
+        line = rm.script_command(["gradlew", "build"], dict(clean_env(), PATH=self.tmp))
+        self.assertEqual(line.lower(), (self.head() + ' build"').lower())
+
+    def test_a_bat_named_by_its_full_path_gets_the_same_line(self):
+        self.assertEqual(rm.script_command([self.bat, "build"]), self.head() + ' build"')
+
+    def test_an_exe_or_no_match_is_left_as_given(self):
+        for cmd in (["python", "-c", "pass"], ["no-such-tool-xyz", "a"],
+                    [os.path.join(self.tmp, "nothing-here")], "gradlew build"):
+            self.assertIs(rm.script_command(cmd), cmd)
+
+    def test_arguments_are_quoted_for_cmd(self):
+        line = rm.script_command([self.bat, "plain", "a&b", "x y", "", "(c)", "C:\\d x\\"])
+        self.assertEqual(line, self.head() + ' plain "a&b" "x y" "" "(c)" "C:\\d x\\\\""')
+
+    def test_an_argument_cmd_would_expand_or_split_is_refused(self):
+        for arg, shown in (("%OS%", "`%`"), ('a"b', '`"`'), ("a\nb", "a line break"),
+                           ("a\rb", "a line break")):
+            with self.assertRaises(rm.ScriptArgError) as cm:
+                rm.script_command([os.path.join(self.tmp, "gradlew"), "ok", arg])
+            self.assertIsInstance(cm.exception, OSError)
+            self.assertIn("argument 2 of gradlew.bat holds %s" % shown, str(cm.exception))
+
+    def test_other_platforms_are_left_as_given(self):
+        cmd = [os.path.join(self.tmp, "gradlew"), "%OS%"]
+        with mock.patch("kitlib.platform.NAME", "linux"):
+            self.assertIs(rm.script_command(cmd), cmd)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class RunScript(StoreCase):
+    def setUp(self):
+        super().setUp()
+        self.said = []
+        self.store.say = self.said.append
+        self.confine(1)
+        patch = mock.patch.object(rm, "WATCH_WINDOWS", False)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.dir = os.path.join(self.tmp, "proj")
+        os.mkdir(self.dir)
+        self.out = os.path.join(self.tmp, "out.txt")
+
+    def run_cmd(self, cmd):
+        return rm.run_command(cmd, "engine-test", "kit", "resolve", cores=1, store=self.store,
+                              env=clean_env())
+
+    def test_an_extensionless_script_runs_its_bat_with_literal_arguments(self):
+        make_scripts(self.dir, ["@echo off", '>"%s" echo %%*' % self.out,
+                                '>>"%s" echo run=%%MACHINE_LOCK_RUN%%' % self.out, "exit /b 3"])
+        code = self.run_cmd([os.path.join(self.dir, "gradlew"), "a&echo:INJ", "x y"])
+        self.assertEqual(code, 3, self.said)
+        with open(self.out) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0], '"a&echo:INJ" "x y"')
+        self.assertNotIn("INJ", lines[1:])
+        self.assertRegex(lines[1], r"^run=r-\d{8}T\d{6}Z-[0-9a-f]{6}:\d+:\d+$")
+
+    def test_the_bat_runs_in_the_runs_job(self):
+        make_scripts(self.dir, ["@ping -n 3 127.0.0.1 >nul"])
+        s = rm.book("engine-test", "kit", "resolve", cores=1, store=self.store, env=clean_env())
+        with s:
+            p = s.start(rm.script_command([os.path.join(self.dir, "gradlew")]),
+                        stdout=subprocess.DEVNULL)
+            self.assertEqual(s.job.contains(p.pid), "in")
+            self.assertEqual(s.wait(p), (0, "done"))
+
+    def test_a_full_bat_path_with_a_percent_is_refused_before_the_run_books(self):
+        make_scripts(self.dir, ["@exit /b 0"])
+        self.assertEqual(self.run_cmd([os.path.join(self.dir, "gradlew.bat"), "%OS%"]), 1)
+        self.assertTrue(any(s.startswith("could not start the command: argument 1 of "
+                                         "gradlew.bat holds `%`") for s in self.said), self.said)
+        ended = self.store.path("ended")
+        self.assertFalse(os.path.isdir(ended) and os.listdir(ended), "the refused run was booked")
+        self.assertEqual(self.store.history_records(), [])
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class CliRefusal(StoreCase):
+    """machine_lock.py run refuses such an argument before it detaches, as it does a bare bash
+    (test_cli): a detached run's log would be the only place the refusal showed."""
+    flags, call = test_cli.Cli.flags, test_cli.Cli.call
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.tool = test_cli.load_tool()
+
+    def setUp(self):
+        super().setUp()
+        self.hw_path = os.path.join(self.tmp, "hardware.json")
+        with open(self.hw_path, "w", encoding="utf-8") as f:
+            json.dump(self.hw, f)
+
+    def test_it_is_refused_before_it_detaches_or_books(self):
+        make_scripts(self.tmp, ["@exit /b 0"])
+        with mock.patch.object(self.tool, "detach", return_value=0) as det:
+            for extra in ((), ("--detach",)):
+                with self.subTest(extra=extra):
+                    code, _, err = self.call("run", "--kind", "engine-test", "--repo", "kit",
+                                             "--slug", "t", "--cores", "1", "--no-wait", *extra,
+                                             cmd=[os.path.join(self.tmp, "gradlew"), "a%b"])
+                    self.assertEqual(code, 1, err)
+                    self.assertIn("could not start the command: argument 1 of gradlew.bat "
+                                  "holds `%`", err)
+        det.assert_not_called()
+        self.assertFalse(os.path.isdir(self.store.path("ended"))
+                         and os.listdir(self.store.path("ended")), "a refused run was booked")
+
+
+if __name__ == "__main__":
+    unittest.main()

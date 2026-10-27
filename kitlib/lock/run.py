@@ -27,6 +27,7 @@ import json
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -1604,25 +1605,93 @@ def bare_hint(cmd, err):
             "bare name: run it as .\\%s" % (name, here, NO_CWD_ENV, name))
 
 
+SCRIPT_EXTS = (".bat", ".cmd")
+# What cmd.exe expands or splits even inside double quotes: a .bat or .cmd cannot take it.
+CMD_UNSAFE = (("%", "`%`"), ('"', '`"`'), ("\n", "a line break"), ("\r", "a line break"))
+# What cmd.exe reads as syntax outside double quotes: an argument holding one is quoted.
+CMD_QUOTE = frozenset(" \t&|<>^(),;=")
+
+
+class ScriptArgError(OSError):
+    """An argument a .bat or .cmd cannot take literally (script_command); an OSError, so the
+    "could not start the command" path reports it."""
+
+
+def comspec():
+    """The cmd.exe that runs a .bat or .cmd: this process's ComSpec, else System32's."""
+    return os.environ.get("ComSpec") or os.path.join(
+        os.environ.get("SystemRoot") or r"C:\Windows", "System32", "cmd.exe")
+
+
+def _cmd_word(text, what):
+    """text as one word of the cmd.exe line script_command builds: as given when cmd reads no
+    syntax in it, else in double quotes (backslashes before the closing quote doubled, so the
+    program the script hands it to does not read an escaped quote). Raises ScriptArgError when
+    it holds what cmd expands or splits even inside quotes (CMD_UNSAFE)."""
+    for ch, shown in CMD_UNSAFE:
+        if ch in text:
+            raise ScriptArgError("%s holds %s; cmd.exe would expand or split a `%%`, `\"` or line "
+                                 "break, so a .bat or .cmd cannot take it literally" % (what, shown))
+    if text and not CMD_QUOTE.intersection(text):
+        return text
+    return '"%s%s"' % (text, "\\" * (len(text) - len(text.rstrip("\\"))))
+
+
+def script_command(cmd, env=None):
+    """What run_command starts for cmd (an argument list) on Windows: cmd as given, unless its
+    first item names a .bat or .cmd, as the shell finds it. A name with no PATHEXT extension
+    (./gradlew) resolves as shutil.which does: name+each PATHEXT extension, beside a name with
+    a folder part, else in the current folder (unless NoDefaultCurrentDirectoryInExePath) and on
+    env's PATH; CreateProcess tries the name itself (WinError 193 for a shell script) and appends
+    only .exe. A .bat or .cmd, so found or named (found as which finds it), starts as
+    `"<ComSpec>" /d /s /c ""<its full path>" <args>"`, a string the caller starts with
+    shell=False: cmd.exe is the process the run's job takes, and the batch's children inherit
+    the job. CreateProcess's own start of a .bat quotes for a program, not for cmd, so an
+    unquoted & or a % in an argument there runs as cmd syntax; here each argument goes through
+    _cmd_word (ScriptArgError for a %, " or line break). Anything else (an .exe or .com, no
+    match, a string cmd) and every other platform: cmd itself."""
+    if kitlib.platform.NAME != "windows" or not isinstance(cmd, (list, tuple)) or not cmd:
+        return cmd
+    name = str(cmd[0])
+    path = (os.environ if env is None else env).get("PATH")
+    # X_OK (which's default): a bare name is looked for in the current folder only as
+    # NoDefaultCurrentDirectoryInExePath allows, as cmd.exe and CreateProcess do.
+    found = shutil.which(name, path=path)
+    if not found or os.path.splitext(found)[1].lower() not in SCRIPT_EXTS:
+        return cmd
+    root, fext = os.path.splitext(os.path.abspath(found))
+    bat = root + fext.lower()           # which's PATHEXT case (.BAT): the file's own is moot
+    base = os.path.basename(bat)
+    if "%" in bat:                      # a path holds no " or line break
+        raise ScriptArgError("the path of %s holds `%%`; cmd.exe would expand it, so it cannot "
+                             "start %s" % (base, bat))
+    words = ['"%s"' % bat] + [_cmd_word(str(a), "argument %d of %s" % (i, base))
+                              for i, a in enumerate(cmd[1:], 1)]
+    return '"%s" /d /s /c "%s"' % (comspec(), " ".join(words))
+
+
 def run_command(cmd, kind, repo, slug, **kw):
     """`machine_lock.py run`: book, run cmd in the run's job, release, then say the run's window
     report (Slot.window_lines). Returns the command's exit code (130 on Ctrl+C, 1 when it could
     not start or stop cancelled it). Raises LockError when the run is refused or gives up
-    waiting. A bare bash with no Git Bash to run it (kitlib.proc.bash) is refused before the run
-    books: 1, no record. The command starts in this process's folder; a bare name there that does
-    not start is said with the .\\<name> form that runs (bare_hint)."""
+    waiting. A bare bash with no Git Bash to run it (kitlib.proc.bash), or an argument a .bat or
+    .cmd cannot take (script_command), is refused before the run books: 1, no record. The command
+    starts in this process's folder; a bare name there that does not start is said with the
+    .\\<name> form that runs (bare_hint). A .bat or .cmd, named or found for a name with no
+    extension, starts through cmd.exe (script_command); the record keeps cmd as given."""
     store = kw.get("store") or Store()
     kw["store"] = store
     try:
         bash.resolve(cmd, False, kw.get("env"))
-    except bash.BareBashError as e:
+        start = script_command(cmd, kw.get("env"))
+    except (bash.BareBashError, ScriptArgError) as e:
         store.say("could not start the command: %s" % e)
         return 1
     s = book(kind, repo, slug, cmd=cmd, **kw)
     code, how = 1, "not started"
     try:
         try:
-            p = s.start(cmd, give_back=True)
+            p = s.start(start, give_back=True)
         except OSError as e:
             store.say("could not start the command: %s%s" % (e, bare_hint(cmd, e)))
             return 1
