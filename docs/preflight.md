@@ -10,13 +10,13 @@ One rule runs through both: a reading that failed is printed as `?`, `UNKNOWN`, 
 
 - **fetch**: only with `--fetch`, and only when `git fetch <remote>` failed.
 - **repo, branch, base**: the base against `<remote>/<base>`, marked `(equal)` only when both refs were read and match.
-- **vs base**: off the base branch, the merge-base and behind/ahead counts. Without `--base`, when the local base differs from `<remote>/<base>` they are measured against `<remote>/<base>` and the line ends `(against <remote>/<base>)` (`settings.measure_rev`, gate.md "Default base").
+- **vs base**: off the base branch, the merge-base and behind/ahead counts. Without `--base`, when the local base differs from `<remote>/<base>` they are measured against `<remote>/<base>` and the line ends `(against <remote>/<base>)` (`settings.measure_rev`, gate.md "Default base"). When behind is not 0 it also ends `<- merge the hash the coordinator names before landing`.
 - **dirty**: from `git status`, a new folder counting as one entry; up to 12 are listed.
-- **worktrees**: each with its head and branch.
+- **worktrees**: each with its head and branch (`(detached HEAD)` or `(bare)` when it has none); up to 12 are listed.
 - **leftovers**: registered worktrees whose own commits are in `<remote>/<main_branch>` as it stands (`kitlib/preflight/leftovers.py`, `merged_worktrees` in docs/worktree-remove.md), as `leftovers WARN N under <worktrees_dir>` with the `worktree_remove.py <slug>` that removes each; `leftovers none` when there are none. The worktree preflight runs in, fresh worktrees and exempt folders are not listed. A failed read is `leftovers WARN ... not checked: <why>`. The stump and orphan lines are not listed here: `worktree_remove.py --check` lists those.
 - **backlog**: `backlog   WARN the default store refs/backlog/main holds N record(s) here (local ref, not fetched)` when that ref holds records and `.kit.json` does not name `"backlog": {"store": "ref"}` (`kitlib/preflight/defaultstore.py`). Named no store, the line says `backlog.py -C` on the checkout reads that read-only copy and gives `backlog.py -C "<PM data worktree>" list` for the live store when that worktree's `.kit.json` names one (`store.pm_data_live_store`), or says why that worktree was not found or that its `.kit.json` cannot be read, or, when there is none, it is this checkout or it names no store either (it then reads this same copy), that the ref may be named as the store; a PM data worktree naming `ref` makes the ref live, so no line (refs are shared by every worktree); named another store, it gives `backlog.py -C "<checkout>" list`. No line when the ref is named, absent or holds no `.md` record. The local ref is read, never fetched; a failed read is `backlog   WARN default store not checked: <why>`. WARN only: the exit code is unchanged.
 - **NOTE**: in the main checkout only. It names `<kit>/tools/new_worktree.py -C <checkout>` and `<worktrees_dir>/<slug>/`.
-- **docs**: `<kit>/tools/doc_budget.py -C <checkout>`, judged by `kitlib.verdict.line`.
+- **docs**: `<kit>/tools/doc_budget.py -C <checkout>`, judged by `kitlib.verdict.line`; `docs      NOT CHECKED` when the kit has no such tool.
 - **doc index**: `<kit>/tools/doc_index.py -C <checkout>` (`kitlib.docs.callers`), judged on `DOC INDEX OK` / `DOC INDEX FAILED`; no line when `.kit.json` "doc_index".enabled is false. With no index file the line passes and quotes the tool's one-line note that the listing check was skipped (the doc index is opt-in; docs/doc-tools.md "doc_index").
 - **stray lines**: from `kitlib.git.stray.check`.
 - **report hooks**.
@@ -25,7 +25,7 @@ One rule runs through both: a reading that failed is printed as `?`, `UNKNOWN`, 
 - **pointer**: the PM-repo pointer (on Windows `HKLM\SOFTWARE\pm-kit` value `pm_repo`; on Linux `/etc/pm-kit/pointer` or the user's `~/.config/pm-kit/pointer`, `kitlib.platform.linux.paths.read_pointer`), from `configline.pointer_line` over `kitlib.config.pointer` (docs/kit-json.md "The PM repo pointer"): the PM repository's path, `none`, or `BROKEN` with the reason. Under the kit's tests the registry is never read.
 - **traps**: `.kit.json` "preflight".traps when set; else `docs/ops/gotchas.md (read once per task; add yours)`, printed only when the checkout has that file (`kitlib/preflight/report.py`, `settings.DEFAULT_TRAPS_FILE`), so no line when it has neither.
 - **index**.
-- **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. Each runs the kit's own tool by its absolute path and names the checkout with `-C` (a repository holds no copy of the kit's tools, decision 21 in docs/multi-host-plan.md section 7). In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base.
+- **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. Each runs the kit's own tool by its absolute path and names the checkout with `-C` (a repository holds no copy of the kit's tools, decision 21 in docs/multi-host-plan.md section 7). In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base, and a closing reminder that patch scripts write through `kitlib.git.checkout.write_text`. `commit.py` lists the dirty paths (up to 12, else `<paths>` when one cannot be typed as is, such as a folder or a rename).
 - **lock**: the last line.
 
 Exit codes:
@@ -35,7 +35,9 @@ Exit codes:
 
 **The lock line** comes from the kit lock's own status. `kitlib/preflight/lockline.py` runs `<kit>/tools/machine_lock.py status --json` (docs/lock-api.md) and summarises it as:
 
-`cpu N/M: slot<range> repo/slug (kind, run id, X min[, OVERRUN +N min][, background]) | gpu ... | waiting N: #pos repo/slug (kind, needs, starts HH:MM | start not planned[, backfill][, parked]) | hold <scope> until <end>: <note> (<owner>)`
+`cpu N/M: slot<range> repo/slug (kind, run id, X min[, OVERRUN +N min][, background]) | gpu ... | waiting N: #pos repo/slug (kind, needs, starts HH:MM | start not planned[, backfill][, parked]) | hold <scope> until <end>: <note> (<owner>) | hold next: <scope> from <start> (<owner>)`
+
+A pool with no holder reads `cpu free (0/M)`. With no one waiting the line says `waiting 0`.
 
 The line reads `unknown (<why>)` in any of these cases:
 
