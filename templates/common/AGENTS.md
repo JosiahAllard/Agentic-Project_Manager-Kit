@@ -108,7 +108,8 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 - Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest), `-1` =
   held, the owner's question: never pulled, and its priority changes only with `--priority-by owner|pm`
   or a release to `-`. An agent prices (`--priority-by agent`, 2-5, never 1) at start the unpriced open
-  records, after checking each for duplicates, size and fit. The owner overrides later. An agent that
+  records that are not follow-ups, after checking each for duplicates, size and fit; a follow-up stays
+  unpriced until promoted into a work set, then is priced. The owner overrides later. An agent that
   cannot price a record asks the owner one question only the owner can answer - if the answer is
   in the tree, it isn't the owner's.
 - `blocked_on: owner` (the work waits on the owner) is not `priority: -1` (the price is the owner's).
@@ -132,7 +133,8 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
   a line number in anything durable (docs, records, DECISIONS lines, owner asks, profiles): line
   pins go stale within hours; `:line` only in transient output (reports, test output).
 - Docs land with the code they describe, on the same branch. An over-budget `.md` may not grow
-  (`python <kit>/tools/doc_budget.py -C <worktree>`).- Heavy runs take the machine lock (skill machine-lock-run); never kill a process you did not
+  (`python <kit>/tools/doc_budget.py -C <worktree>`).
+- Heavy runs take the machine lock (skill machine-lock-run); never kill a process you did not
   start (report its PID and command line). Detail: agent-profile, "Shared resources that must be
   serialised".
 - Scratch files go to the session scratchpad, never the repo. All text files are LF
