@@ -18,7 +18,7 @@
 
 ## Refusal log
 
-Every deny the hook answers adds one JSON line to `<pm_data>/audit/refusals.jsonl`, `<pm_data>` being the machine config's `pm_data.path` (`kitlib/guard/refusal_log.py` `record`). The design and its measurements are docs/guard-v2.md "Refusal log"; this is what the code does.
+Every deny the hook answers adds one JSON line to `<pm_data>/audit/refusals.jsonl`, `<pm_data>` being the machine config's `pm_data.path` (`kitlib/guard/refusal_log.py` `record`). This section holds the facts of the log; docs/guard-v2.md "Refusal log" keeps only design points.
 
 - **Who writes it:** `kitlib.host.hookmain.run`, for every host's hook, after the answer text and before the hook exits, whatever made the deny (a rule, `guard-error`, `guard-timeout`, the host's own screen). On Codex the kit-tool broker writes it too (`hosts/codex/adapter/runtime.py` `evaluate_bound`), for a deny and for its own error (`host-runtime-error`); Codex has no ask, so an ask is logged there as a deny. An allow and a warning add no line, nor does an ask on a host that keeps it (Claude Code).
 - **Fields,** in this order (`refusal_log.FIELDS`): `utc`, `host`, `rule` (`unknown` when the deny names none), `role` (`main` or `subagent`, as the guard judged the Action), `agent_role`, `agent`, `session` (the launcher's `PM_KIT_SESSION_NAME`), `tool`, `kind`, `repo` (the folder name of the call's main checkout, read with no git child; `-` for any other layout and for a name that is the user's profile folder or `USERNAME`), `instead_given`. An absent value is `-`. A call of several Actions is logged by its first.
