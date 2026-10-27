@@ -17,8 +17,8 @@ On Linux (docs/linux-support-plan.md slice 9) nothing denies a delete, so `block
 `cwd_holders` read /proc instead (kitlib.platform.linux.paths.process_paths): every path inside
 `root` that a process of this user uses (its current folder, root, program, an open file or a
 mapped file) is HELD; a process of this user that cannot be read in full makes the root UNREAD, as
-does a tree its mount table shows at another path too (a bind mount: a process there holds the
-tree under a path not under `root`); no /proc makes it NOT_SEARCHED. Each is a refusal: the
+does a tree its mount table shows at another path too, or with a mount inside it (a bind mount:
+a process there uses the tree under a path not under `root`); no /proc makes it NOT_SEARCHED. Each is a refusal: the
 answer is empty only when every process of this user was read and none uses the tree. Another
 user's processes cannot be seen.
 """

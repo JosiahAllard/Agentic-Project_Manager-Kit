@@ -674,9 +674,10 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    an open or mapped file) is HELD; a process of this user that cannot be read in full, whose
    user cannot be told, or in another mount namespace (a live leader's threads' too) makes the
    root UNREAD, as does a tree the scan's mount table shows at another path too (a bind mount of
-   the tree, a folder above it or one in it) or does not reach; a /proc that cannot be listed,
-   lists no process, does not list the scan's own, hides processes (hidepid=2 or invisible,
-   subset=pid, on any proc mount there) or whose mount options cannot be read is NOT_SEARCHED;
+   the tree, a folder above it or one in it), has another mount inside it, or does not reach; a
+   /proc that cannot be listed, lists no process, does not list the scan's own, hides processes
+   (hidepid=2 or invisible, subset=pid, on any proc mount there) or whose mount options cannot be
+   read is NOT_SEARCHED;
    each is a refusal. A process is this user's by any of its four status Uid users or its
    folder's owner (a not-dumpable one's folder is root's); each thread's cwd and root are read,
    and a zombie leader's running threads give every kind. cwd_holders, describe and classify.process_cwds read /proc too. The

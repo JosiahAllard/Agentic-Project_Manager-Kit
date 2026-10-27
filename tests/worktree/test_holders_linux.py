@@ -323,6 +323,10 @@ class Blockers(Base):
             'a folder inside the tree': [(DISK, inside(self.sub), elsewhere)],
             'the tree on its own disk, mounted twice': [
                 ('8:5', '/', os.path.dirname(self.real)), ('8:5', '/', elsewhere)],
+            'another folder mounted inside the tree': [
+                ('8:7', '/srv/data', os.path.join(self.real, 'data'))],
+            'another disk mounted at the tree, then one inside it': [
+                ('8:5', '/', self.real), ('8:7', '/', self.sub)],
         }
         for name, more in cases.items():
             with self.subTest(name):
@@ -334,6 +338,7 @@ class Blockers(Base):
         cases = {
             'another folder of its file system': [(DISK, inside(self.real) + '-other', elsewhere)],
             'another disk': [('8:2', '/', elsewhere)],
+            'the tree on its own disk, mounted once': [('8:5', '/', self.real)],
             'the disk it was on, once it has its own': [
                 ('8:5', '/', os.path.dirname(self.real)), (DISK, '/', elsewhere)],
         }

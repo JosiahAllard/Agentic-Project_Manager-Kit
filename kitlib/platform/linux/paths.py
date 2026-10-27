@@ -351,8 +351,9 @@ def aliased(text, path):
     """True when the tree at `path` (an absolute, resolved path) can be reached by another path in
     mountinfo `text`: its file system is mounted again where the mount's root and the tree's place
     inside that file system overlap (a bind mount of the tree, of a folder above it or of one in
-    it). True also when no mount holds `path` (this mount table does not reach it, a chroot): then
-    where else it shows is not known. A process standing in such another path holds the tree
+    it), or any other mount stands at or under `path` (a bind of another folder into the tree: a
+    process there names that folder's path). True also when no mount holds `path` (this mount
+    table does not reach it, a chroot): then where else it shows is not known. A process standing in such another path holds the tree
     under a path /proc does not show under it."""
     flat = os.path.normcase(path)
     table = [(device, root, os.path.normcase(point)) for device, root, point in _mounts(text)]
@@ -365,9 +366,10 @@ def aliased(text, path):
     device, root, point = table[best]
     rest = [part for part in path[len(point):].split(os.sep) if part]
     place = posixpath.join(root, *rest)
-    for n, (other, other_root, _point) in enumerate(table):
-        if n != best and other == device and (_at_or_under(place, other_root, '/')
-                                              or _at_or_under(other_root, place, '/')):
+    for n, (other, other_root, other_point) in enumerate(table):
+        if n != best and (_at_or_under(other_point, flat, os.sep)
+                          or other == device and (_at_or_under(place, other_root, '/')
+                                                  or _at_or_under(other_root, place, '/'))):
             return True
     return False
 
