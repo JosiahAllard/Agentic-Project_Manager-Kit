@@ -114,7 +114,7 @@ class NoticeTabTest(unittest.TestCase):
             await start();
             const nf = () => $$("#ftabs .tab").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.nf);
             const first = { nf: nf(), shown: text($("#list")), hash: location.hash };
-            await click($("#ftabs [data-nf=agents]"));
+            await click($("#ftabs [data-nf=usage]"));
             await back();
             return { first, after: { nf: nf(), hash: location.hash } };
         """, snapshot(views={"notices": NOTICES}), hash="#notices")
