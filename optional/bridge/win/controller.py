@@ -10,6 +10,7 @@ from pathlib import Path
 import threading
 
 from kitlib.proc.pipe import protect_file
+from optional.bridge import registry
 from optional.bridge.win.evidence import regular
 from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.core.callers import CallProofs
@@ -45,8 +46,10 @@ class Controller:
             self.outbox=Outbox(self.root/'outbox.sqlite',leadership_check=self.leader.owns,
                 prepare_new_file=protect_file)
             self.outbox.claim()
+            # peers.json's host-pair rule: a refused pair is refused at admission and before any send.
             self.core=CoreBroker(self.pairs,self.outbox,{},authorize=self._authorize,
-                dispatch_check=lambda message:self._live(message.sender) and self._live(message.recipient))
+                dispatch_check=lambda message:self._live(message.sender) and self._live(message.recipient),
+                host_pairs=registry.host_pairs())
             # Writer leases live only in this process: a restart drops every one.
             self.leases=WriterLeases(owner_check=self.decisions.authorize)
             self.owner=OwnerControls(self.pairs,self.decisions,describe=self._describe,leases=self.leases)
