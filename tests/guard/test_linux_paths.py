@@ -338,6 +338,42 @@ class CurlOutputDir(LinuxCase):
         self.assertIsNone(self.sub('curl --output-dir /work/repo/.claude/worktrees/wt -o '
                                    '/work/repo/.claude/worktrees/wt/x https://example.invalid/a'))
 
+    def test_a_trailing_backslash_of_the_output_dir_is_kept(self):
+        # on Linux `wt\` is a sibling folder of the worktree, not the worktree
+        command = "curl --create-dirs --output-dir '/work/repo/.claude/worktrees/wt\\' -o x https://example.invalid/a"
+        d = self.sub(command)
+        self.assertIsNotNone(d, command)
+        self.assertEqual(d.verdict, 'deny', '%s: %s' % (command, d.reason))
+
+
+class CopyIntoAddOnly(LinuxCase):
+    """rules.into_folder on Linux: a source's name is what follows its last `/`, so `a\\b` copied
+    into a folder lands at <folder>/a\\b; an add-only folder that already holds that name refuses."""
+
+    def setUp(self):
+        LinuxCase.setUp(self)
+        add, wt = '/work/add', self.w.wt
+        dirs, files = {add, wt}, {wt + '/a\\b', add + '/a\\b'}
+        for name, fake in (('isdir', lambda p: posixpath.normpath(p) in dirs),
+                           ('isfile', lambda p: posixpath.normpath(p) in files),
+                           ('lexists', lambda p: posixpath.normpath(p) in files | dirs),
+                           ('exists', lambda p: posixpath.normpath(p) in files | dirs)):
+            p = mock.patch('posixpath.' + name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(jail, 'data_roots', lambda ctx, cwd: [(add, jail.ADD_ONLY)])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_backslash_name_already_there_is_refused(self):
+        d = self.sub("cp 'a\\b' /work/add/")
+        self.assertIsNotNone(d)
+        self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_the_name_is_taken_after_the_last_slash_only(self):
+        into = (sh.Word('/work/add/', False, 0, 10), [sh.Word('x/a\\b\\', False, 0, 0)], False)
+        self.assertEqual(rules.into_folder('/work/add', into[0], into, self.w.wt), ['/work/add/a\\b\\'])
+
 
 class InTempStrict(LinuxCase):
     """rules._in_temp lifts checks (worktree remove's clean check, the scratch repository
@@ -448,6 +484,49 @@ class DotDotAfterALink(LinuxCase):
         self.assertIsNone(self.sub('echo x > in/../f'))
 
 
+class LogicalCd(LinuxCase):
+    """shell.cd_target on Linux: bash's cd (and pushd) is -L by default, folding `..` in its place
+    against $PWD, not after the link; only cd -P is physical. A write is still read physically
+    from the tracked folder (resolve_path). With a link in -> x/y in the worktree, cd in, then
+    cd .., then cd .. is the worktrees folder, not the worktree."""
+
+    def setUp(self):
+        LinuxCase.setUp(self)
+        wt = self.w.wt
+        p = mock.patch('posixpath.realpath', fake_links({wt + '/in': wt + '/x/y'}))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def cd(self, text, home_vars=False):
+        _parsed, cmds = sh.parse(text, sh.BASH, self.w.wt, home=self.w.home)
+        return sh.cd_target(cmds[-1], self.w.wt, self.w.home, home_vars=home_vars)
+
+    def denied(self, command):
+        d = self.sub(command)
+        self.assertIsNotNone(d, command)
+        self.assertEqual(d.verdict, 'deny', '%s: %s' % (command, d.reason))
+
+    def test_cd_dot_dot_after_a_link_folds_from_the_text(self):
+        self.denied('cd in && cd .. && cd .. && touch f')
+        self.denied('cd in/../.. && touch f')
+        self.denied('pushd in && pushd .. && pushd .. && touch f')
+
+    def test_cd_minus_l_and_minus_p(self):
+        wt = self.w.wt
+        self.assertEqual(self.cd('cd in/..'), (True, wt))
+        self.assertEqual(self.cd('cd -L in/..', home_vars=True), (True, wt))
+        self.assertEqual(self.cd('cd -P in/..', home_vars=True), (True, wt + '/x'))
+
+    def test_a_write_from_inside_the_link_is_read_physically(self):
+        self.assertIsNone(self.sub('cd in && echo x > ../f'))
+        self.assertEqual(sh.resolve_path('../f', self.w.wt + '/in'), self.w.wt + '/x/f')
+
+    def test_cdpath_set_minus_p_and_pushd_plus_n_are_unknown(self):
+        for text in ('export CDPATH=/work/repo; cd x', 'CDPATH=/work/repo cd x', 'set -P; cd x',
+                     'set -o physical; cd x', 'pushd +1', 'pushd -1'):
+            self.assertEqual(self.cd(text), (True, None), text)
+
+
 class DotDotAfterARealLink(unittest.TestCase):
     @posix_only('a symbolic link made on the real filesystem')
     def test_dot_dot_after_a_real_link_is_the_target_parent(self):
@@ -499,6 +578,9 @@ class BashCdOnLinux(LinuxCase):
 
     def test_a_write_after_a_failed_upper_case_cd_is_judged_where_it_runs(self):
         self.refused('cd /work/repo; CD .claude/worktrees/wt; echo x > STANDING.md', 'main-checkout')
+
+    def test_a_cd_after_an_assignment_moves_the_shell(self):
+        self.refused('X=1 cd /work/repo; echo x > STANDING.md', 'main-checkout')
 
 
 class BashCdOnWindows(unittest.TestCase):

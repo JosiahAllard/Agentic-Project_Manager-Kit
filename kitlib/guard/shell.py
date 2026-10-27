@@ -1156,6 +1156,10 @@ HOME_VAR_RE = re.compile(r'(?i)^(?:(?:\$(?:env:)?HOMEDRIVE|\$\{(?:env:)?HOMEDRIV
                          r'%(?:HOME|USERPROFILE)%)(?=$|[\\/])')
 # bash cd's own options (cd -P, cd -L -e)
 BASH_CD_OPT_RE = re.compile(r'^-[LPe@]+$')
+# a line that may change where bash's cd goes on Linux: CDPATH, or set -P / set -o physical (and
+# SHELLOPTS) making every cd physical; cd_target then reads its place as unknown
+BASH_ASSIGN_WORD_RE = re.compile(r'^[A-Za-z_]\w*\+?=')   # FOO=x before a command (cd_words)
+BASH_CD_UNSURE_RE = re.compile(r'CDPATH|SHELLOPTS|\bphysical\b|\bset\b[^;&|\n]*\s[-+]\w*P')
 
 
 def home_text(text, home=None, dyn=False):
@@ -1174,7 +1178,7 @@ def home_text(text, home=None, dyn=False):
     return text
 
 
-def resolve_path(p, cwd, shell=None, home=None):
+def resolve_path(p, cwd, shell=None, home=None, logical=False):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
     drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
     `FileSystem::<abs>` (after a leading separator too) is <abs>, `FileSystem::<rel>` is <rel> in
@@ -1183,7 +1187,8 @@ def resolve_path(p, cwd, shell=None, home=None):
     text is read as it always was. `~` is `home` (home_folder). On Linux (paths.posix) a path
     that starts with `/` is absolute and any other is read in `cwd`: no drive or share, no Git
     Bash /c/x mapping (C:x is a name in `cwd`), and a `..` is read from where the links before it
-    lead, as the kernel reads it (paths.physical)."""
+    lead, as the kernel reads it (paths.physical); with `logical` (bash's cd -L, cd_target) it is
+    folded from the text instead, as bash folds a cd's place against $PWD. Windows ignores it."""
     if not p:
         return None
     if shell == PS:
@@ -1202,9 +1207,11 @@ def resolve_path(p, cwd, shell=None, home=None):
     if paths.posix():
         # Linux: `/` starts an absolute path; no drive, no MSYS mapping, `\` is a name's character.
         # `..` is read after any link before it (paths.physical), never folded lexically first
-        if p.startswith('/'):
-            return paths.physical(p)
-        return paths.physical(cwd + '/' + p) if cwd and cwd.startswith('/') else None
+        if not p.startswith('/'):
+            if not (cwd and cwd.startswith('/')):
+                return None
+            p = cwd + '/' + p
+        return paths.norm('/' + p.lstrip('/'), fold=False) if logical else paths.physical(p)
     p = msys_to_win(p)
     if re.match(r'^[A-Za-z]:([\\/]|$)', p):
         return paths.norm(p if len(p) > 2 else p + '\\', fold=False)
@@ -1222,8 +1229,14 @@ def resolve_path(p, cwd, shell=None, home=None):
 
 def cd_words(cmd):
     """The command's words, with a bash `builtin` or `command` before a cd or popd left out
-    (`builtin cd ~`, `command cd x`: the cd itself runs)."""
+    (`builtin cd ~`, `command cd x`: the cd itself runs). On Linux a bash assignment before it
+    is left out too (`X=1 cd /x` moves the shell; CDPATH=... is read by cd_target)."""
     words = cmd.words
+    if cmd.shell == BASH and paths.posix():
+        k = 0
+        while k < len(words) - 1 and BASH_ASSIGN_WORD_RE.match(words[k].text):
+            k += 1
+        words = words[k:]
     if (cmd.shell == BASH and len(words) > 1 and not words[0].dyn and words[0].text in ('builtin', 'command')
             and is_cd_word(words[1].text, cmd.shell)):
         return words[1:]
@@ -1258,6 +1271,8 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     linux_bash = cmd.shell == BASH and paths.posix()
     if linux_bash and words[0].text not in LINUX_BASH_CD:
         return False, cwd                       # `CD x`, `chdir x`: no cd bash runs on Linux
+    if linux_bash and BASH_CD_UNSURE_RE.search(cmd.source or ''):
+        return True, None                       # CDPATH, or cd made physical by set -P
     name = re.split(r'[\\/]', verb)[-1]
     if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
         if verb not in PS_QUALIFIED_CD:
@@ -1274,13 +1289,17 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
         rest = rest[1:]
     elif rest and verb in ('cd', 'chdir') and not linux_bash and rest[0].text.lower() == '/d':
         rest = rest[1:]
+    logical = linux_bash                        # bash's cd -L: `..` taken from the text, not the links
     if home_vars and cmd.shell in (BASH, PS):
         while cmd.shell == BASH and rest and not rest[0].dyn and BASH_CD_OPT_RE.match(rest[0].text):
+            for ch in rest[0].text[1:]:
+                if ch in 'LP':
+                    logical = linux_bash and ch == 'L'
             rest = rest[1:]
         if rest and not rest[0].dyn and rest[0].text == '--':
             rest = rest[1:]
         if not rest and verb in ('cd', 'chdir', 'set-location', 'sl'):
-            return True, resolve_path(home_folder(home), cwd, cmd.shell, home)
+            return True, resolve_path(home_folder(home), cwd, cmd.shell, home, logical=logical)
     if len(rest) != 1:
         return True, None
     p = rest[0].text
@@ -1290,9 +1309,11 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
             return True, None
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
         return True, None
+    if linux_bash and p.startswith('+'):
+        return True, None                       # pushd +N turns the stack
     if cmd.shell == PS and ps_filesystem_relative(p) is not None:
         return True, None                       # read from the process's directory, not the location
-    return True, resolve_path(p, cwd, cmd.shell, home)
+    return True, resolve_path(p, cwd, cmd.shell, home, logical=logical)
 
 
 BASH_PREFIX_WORDS = {'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time'}

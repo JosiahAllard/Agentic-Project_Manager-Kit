@@ -3237,7 +3237,8 @@ class Under(sh.Word):
     __slots__ = ('folder', 'name')
 
     def __init__(self, folder, name):
-        sh.Word.__init__(self, folder.text.rstrip('/\\') + '/' + name.text, folder.dyn or name.dyn,
+        cut = '/' if paths.posix() else '/\\'          # on Linux `\` is a name's character
+        sh.Word.__init__(self, folder.text.rstrip(cut) + '/' + name.text, folder.dyn or name.dyn,
                          name.start, name.end)
         self.folder, self.name = folder, name
 
@@ -3967,7 +3968,12 @@ def into_folder(target, w, into, cwd, home=None):
         return [target]
     out = []
     for s in srcs:
-        base = re.split(r'[\\/]', s.text.rstrip('\\/'))[-1] if not s.dyn else ''
+        if s.dyn:
+            base = ''
+        elif paths.posix():
+            base = s.text.rstrip('/').split('/')[-1]    # Linux: `\` is a name's character
+        else:
+            base = re.split(r'[\\/]', s.text.rstrip('\\/'))[-1]
         if not base or base in ('.', '..') or GLOB_CHARS & set(base):
             return [target]
         if files_only:
