@@ -107,11 +107,14 @@ def create(argv, cwd, env, popen=None, timeout=CREATE_TIMEOUT_S, ready_s=READY_S
     else:
         head, unit, penv = sc
         data = {'argv': head + list(argv), 'unit': unit, 'wait_s': ready_s}
+    trampoline = [sys.executable, '-I', '-c', TRAMPOLINE]
+    kw = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd,
+              env=penv, text=True, start_new_session=True, close_fds=True)
     try:
-        t = (popen or subprocess.Popen)(
-            [sys.executable, '-I', '-c', TRAMPOLINE], stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=penv, text=True,
-            start_new_session=True, close_fds=True)
+        if popen is None:
+            t = subprocess.Popen(trampoline, creationflags=0, **kw)
+        else:
+            t = popen(trampoline, **kw)
     except (OSError, ValueError) as e:
         return None, 'failed: %s' % e
     try:
