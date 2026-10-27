@@ -8,7 +8,8 @@ a hook run by a windowed program) and the caller made no console choice of its o
 started with CREATE_NO_WINDOW, so it gets a console with no window instead of a new, visible one.
 From a process that has a console the call is the very one subprocess got before: no keyword is
 added, and the child shares that console. DETACHED_PROCESS is never added (a detached console
-program has no console at all, and one that asks for one opens a window).
+program has no console at all, and one that asks for one opens a window). Off Windows the call is
+always the one subprocess would get: no_window_flags adds nothing and kernel32 is never asked.
 
 They call subprocess through the module, at call time, so a test that fakes `subprocess.run` on
 any kit module (they all share the one module) still sees the start. A kit module that starts a
