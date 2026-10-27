@@ -1,6 +1,6 @@
 # PM data on a private branch of the kit repo
 
-Status: built. The owner's PM data repository moved onto `pmdata` with `pm_data.py init --adopt` on 2026-10-11; not yet confirmed working end to end (docs/go-live.md).
+Status: built. The owner's PM data repository moved onto `pmdata` with `pm_data.py init --adopt` on 2026-10-11. In daily use since 2026-10-11: committed on `pmdata` and pushed to the private remote throughout the day; the hub's git sync runs on it (docs/go-live.md). Unverified: no live test has yet shown the `git-push-pmdata` guard and the pre-push stage refusing a push to the public remote.
 
 One git repository holds the public kit and one user's private PM data (rulings ledger, backlog, refusals log, handoffs, state). The data lives on an orphan branch, `pmdata`, that shares no history with `main`, is never merged, and is pushed only to a second, private remote. Other users who clone the kit get `main` only.
 
