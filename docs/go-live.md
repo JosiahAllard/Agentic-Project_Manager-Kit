@@ -5,7 +5,7 @@ The kit is live and the go-live holds are released: three repositories, this kit
 ## Switches
 
 - Action Hub site, optional: reach the hub from a phone (docs/hub-remote-access.md) and start it at logon (`hub.py setup --autostart`, docs/action-hub.md "Serving it").
-- Specialty cutover (docs/specialty-skills.md "Build split", branch B; the plugin part is done). Owner to-dos 2 and 3 (docs/specialty-skills.md "Owner to-do"), for each downstream repo (status unknown): the `.kit.json` `doc_index.roles` keys and the profile lines naming a retired type.
+- Specialty cutover (docs/specialty-skills.md "Build split", branch B; the plugin part is done). Owner to-dos 1 and 2 (docs/specialty-skills.md "Owner to-do"), for each downstream repo (status unknown): the `.kit.json` `doc_index.roles` keys and the profile lines naming a retired type.
 - Repo switch-overs to the kit gate, lock and guard (each repository and the PM's).
 - Launcher: still to check live, that the guard hook sees the mark of a launcher-started deep-worker and pm session (the `[kit guard: ...]` tag says only `role=main` there, `kitlib/guard/rules.py` `tag_role`): a retired owner-only lock MCP tool name called from it is refused with `rule=lock-mcp` and a reason that says `This session is deep-worker.` or `This session is pm.` (`rules.lock_mcp`), and `Stop-Process -Name <name>` from it is refused with `rule=kill-by-name`, which the owner's unmarked session is not.
 - Guard write roots: `roles.lander.edit_main_checkout: true` in the `.kit.json` of each repository whose lander fetches and fast-forwards its main checkout from a worktree (docs/guard.md "Write jail", "Go-live (after the joint review)" step 7; status unknown).
