@@ -50,7 +50,7 @@ The commit message names the verb, id, session and any ruling, so `git log refs/
 
 ## Guards and hooks
 
-The kit's push_block judges pushes to the main branch only (kitlib/guard/prepush.py); it does not look at a push to the store ref.
+The kit's push_block skips its gate-OK check for the store ref and for any non-main branch; its leak and secrets checks run on every pushed ref (kitlib/guard/prepush.py).
 
 ## Migration
 
