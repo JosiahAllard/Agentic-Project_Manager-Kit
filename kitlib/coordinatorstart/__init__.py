@@ -31,8 +31,6 @@ from kitlib.records import landing
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
 ROLE = "coordinator"
-LEGACY_KEY = "conductor_start"   # the old names, read until the live config and launcher are renamed
-LEGACY_ROLE = "conductor"
 NAME_VAR = "PM_KIT_SESSION_NAME"  # optional: this session's Remote Control name (else the process tree)
 TIMEOUT = 10
 SOON_HOURS = 4
@@ -68,8 +66,8 @@ PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, foll
 
 def is_coordinator(env=None):
     """The session mark (ROLE_VAR, read by kitlib.sessionmark: the kit plugin's prefix removed) is
-    the coordinator's or its old name."""
-    return sessionmark.mark(os.environ if env is None else env) in (ROLE, LEGACY_ROLE)
+    the coordinator's."""
+    return sessionmark.mark(os.environ if env is None else env) == ROLE
 
 
 def load_config(path=None):
@@ -82,11 +80,7 @@ def load_config(path=None):
             data = json.load(f)
     except OSError:
         return None
-    cfg = None
-    if isinstance(data, dict):
-        cfg = data.get(KEY)
-        if not isinstance(cfg, dict):
-            cfg = data.get(LEGACY_KEY)
+    cfg = data.get(KEY) if isinstance(data, dict) else None
     return cfg if isinstance(cfg, dict) else None
 
 

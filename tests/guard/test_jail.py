@@ -19,7 +19,7 @@ from .world import bash, event, ps
 
 P = PLUGIN_NAME + ':'                 # kitlib.agentname.PREFIX (tests/agentname pins it)
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
-OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the old name of the coordinator's mark, still held
+OLD_MARK = {context.ROLE_ENV: 'conductor'}   # the coordinator's retired old mark: no longer held
 PM = {context.ROLE_ENV: 'pm'}
 DEEP = {context.ROLE_ENV: 'deep-worker'}
 CONSULTANT = {context.ROLE_ENV: 'consultant'}
@@ -270,8 +270,8 @@ class Siblings(Base):
 
 class Sessions(Base):
     """Agent sessions are the guard's (docs/guard.md "Session mark"): subagents and the marks in
-    guard_agent_marks (default: coordinator, conductor, deep-worker, consultant, pm). The owner's
-    unmarked session and other marks (plain) are not jailed."""
+    guard_agent_marks (default: coordinator, deep-worker, consultant, pm). The owner's
+    unmarked session and other marks (plain, the retired old coordinator mark) are not jailed."""
 
     def outside(self, env, sub=False):
         return self.write(os.path.join(self.w.plain, 'x.txt'), env=env, sub=sub)
@@ -281,7 +281,7 @@ class Sessions(Base):
 
     def test_coordinator(self):
         self.jailed(self.outside(COORDINATOR))
-        self.jailed(self.outside(OLD_MARK))
+        self.allowed(self.outside(OLD_MARK))
 
     def test_the_owner_is_exempt(self):
         self.allowed(self.outside({}))
@@ -1488,10 +1488,10 @@ class UnplacedGit(MainGit):
         return decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt), self.w.ctx(environ=environ))
 
     def held_everywhere(self, texts, tool='Bash'):
-        """git_env_jailed for a worker, and write-jail for the coordinator's mark and its old name."""
+        """git_env_jailed for a worker, and write-jail for the coordinator's mark."""
         self.git_env_jailed(texts, tool)
         for text in texts:
-            for environ in (COORDINATOR, OLD_MARK):
+            for environ in (COORDINATOR,):
                 with self.subTest(text, mark=environ[context.ROLE_ENV]):
                     self.jailed(self.marked(text, environ, tool))
 
@@ -1509,7 +1509,7 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
                 self.jailed(self.git(text, 'worker', tool=tool), 'unreadable')
-            for environ in (COORDINATOR, OLD_MARK, PM, DEEP, CONSULTANT):
+            for environ in (COORDINATOR, PM, DEEP, CONSULTANT):
                 with self.subTest(text, mark=environ[context.ROLE_ENV]):
                     d = self.jailed(self.marked(text, environ, tool), 'unplaced')
                     self.assertIn('run the git in its own call', d.reason)
@@ -1587,7 +1587,7 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.assertTrue(cm.read(text, sh.PS, W.fwd(self.w.wt)).clean, text)
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
-                for environ in (COORDINATOR, OLD_MARK):
+                for environ in (COORDINATOR,):
                     self.allowed(self.marked(text, environ, 'PowerShell'))
         for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Get-Content \"$env:TEMP\\x.txt\"; %s" % g):
             with self.subTest(text):
@@ -1611,7 +1611,7 @@ class UnplacedGit(MainGit):
                 self.assertTrue(p.clean, text)
                 self.assertEqual([c.git_env for c in p.commands], [False] * len(p.commands), text)
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
-                for environ in (COORDINATOR, OLD_MARK):
+                for environ in (COORDINATOR,):
                     with self.subTest(text, mark=environ[context.ROLE_ENV]):
                         self.allowed(self.marked(text, environ, 'PowerShell'))
         # a git variable set beside the string and an env write of the string's value still leave
@@ -1635,7 +1635,7 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
                 self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unreadable')
-                for environ in (COORDINATOR, OLD_MARK):
+                for environ in (COORDINATOR,):
                     with self.subTest(text, mark=environ[context.ROLE_ENV]):
                         self.jailed(self.marked(text, environ, 'PowerShell'), 'unplaced')
         # a single-quoted string and a backtick-escaped $ do not expand: iex runs the text as
@@ -1646,7 +1646,7 @@ class UnplacedGit(MainGit):
                 self.assertTrue(p.clean, text)
                 self.assertEqual([c.git_env for c in p.commands], [False] * len(p.commands), text)
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
-                for environ in (COORDINATOR, OLD_MARK):
+                for environ in (COORDINATOR,):
                     with self.subTest(text, mark=environ[context.ROLE_ENV]):
                         self.allowed(self.marked(text, environ, 'PowerShell'))
         # a string handed to Invoke-Expression is code, and a $( inside ${...} is a substitution:
@@ -1709,7 +1709,7 @@ class UnplacedGit(MainGit):
         for text in texts:
             with self.subTest(text):
                 self.denied(self.git(text, 'worker', tool=tool))
-            for environ in (COORDINATOR, OLD_MARK):
+            for environ in (COORDINATOR,):
                 with self.subTest(text, mark=environ[context.ROLE_ENV]):
                     self.denied(self.marked(text, environ, tool))
 

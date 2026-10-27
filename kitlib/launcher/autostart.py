@@ -4,9 +4,7 @@ It runs as the signed-in user, not elevated (LogonType Interactive, RunLevel Lim
 signs the user in by itself after a restart, so it still fires right after a reboot, and the
 windows open in the user's own desktop session. A task at startup (S4U) would get the full admin
 token, so every session and agent would run elevated. The same task name replaces an installed
-task in place, and the task under its old name, OLD_TASK_NAME, is unregistered in the same script
-(else both run after a reboot and start every session twice; one release, removed after the
-switch, W2b). Remove it with: Unregister-ScheduledTask -TaskName '<TASK_NAME>'.
+task in place. Remove it with: Unregister-ScheduledTask -TaskName '<TASK_NAME>'.
 
 On Linux it is the pm-kit job LINUX_JOB (kitlib.platform.linux.schedule): a systemd user service
 started with the user's session (at sign-in, or at boot with linger), else a crontab @reboot line,
@@ -22,7 +20,6 @@ from kitlib.launcher.settings import LaunchError
 from kitlib.proc import spawn
 
 TASK_NAME = 'Claude coordinators after reboot'
-OLD_TASK_NAME = 'Claude conductors after reboot'   # unregistered by install (removed after the switch, W2b)
 LINUX_JOB = 'coordinators-after-reboot'
 
 
@@ -51,8 +48,6 @@ def task_script(python, launch_py):
         '-StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)',
         'Register-ScheduledTask -TaskName %s -Action $action -Trigger $trigger -Principal $principal '
         '-Settings $settings -Force | Out-Null' % window.q(TASK_NAME),
-        'if (Get-ScheduledTask -TaskName %s -ErrorAction SilentlyContinue) { Unregister-ScheduledTask '
-        '-TaskName %s -Confirm:$false }' % (window.q(OLD_TASK_NAME), window.q(OLD_TASK_NAME)),
     ])
 
 
@@ -106,8 +101,8 @@ def install(launch_py, python=None, whatif=False, run=None, isfile=os.path.isfil
     if r.returncode != 0:
         raise RuntimeError('registering the task failed (powershell exit %d): %s'
                            % (r.returncode, (r.stderr or '').strip()[:300]))
-    return ["Installed '%s' and unregistered '%s' if it was there. Test it without rebooting (starts only a "
-            "throwaway 'autostart-test' session):" % (TASK_NAME, OLD_TASK_NAME), '  ' + test]
+    return ["Installed '%s'. Test it without rebooting (starts only a throwaway 'autostart-test' "
+            "session):" % TASK_NAME, '  ' + test]
 
 
 def linux_job(launch_py, python):

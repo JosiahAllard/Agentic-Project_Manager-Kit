@@ -5,9 +5,7 @@
                    starting with "_" is a note. agent true runs the coordinator agent, a string
                    that agent, false a plain session.
   coordinators.json {repo: account, pm_session_id, pm_folder, pm_account}: the account each
-                   repo's main coordinator is on, and the PM session reboot resumes. Its old
-                   name present and the new one absent is a refusal that names the rename, never
-                   read in its place.
+                   repo's main coordinator is on, and the PM session reboot resumes.
   pipes.json       {name: {pid, session_id, pipe, proc_start, entrypoint, recorded_at}}: the peer
                    pipe each launched session was seen on (kitlib.launcher.pipes); a hint, never
                    a token.
@@ -25,7 +23,6 @@ from kitlib.launcher.settings import LaunchError
 
 SESSIONS = 'sessions.json'
 COORDINATORS = 'coordinators.json'
-OLD_COORDINATORS = 'conductors.json'   # the old name, refused, never read (removed after the switch, W2b)
 
 
 def path(settings, name):
@@ -60,19 +57,9 @@ def read_sessions(settings):
     return data
 
 
-class RenameNeeded(LaunchError):
-    """A state file still under its old name: the owner renames it; nothing reads the old one."""
-
-
 def read_coordinators(settings):
-    """coordinators.json, or None when it is absent. Refused (RenameNeeded) while only the
-    old-named file exists, so a forgotten rename is said, not silently read or ignored."""
-    p = path(settings, COORDINATORS)
-    data = read_json(p)
-    if data is None and os.path.exists(path(settings, OLD_COORDINATORS)):
-        raise RenameNeeded('rename %s to %s (the state file was renamed; docs/launcher.md "State files")'
-                           % (path(settings, OLD_COORDINATORS), COORDINATORS))
-    return data
+    """coordinators.json, or None when it is absent."""
+    return read_json(path(settings, COORDINATORS))
 
 
 def entries(sessions):

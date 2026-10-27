@@ -76,8 +76,8 @@ def _cmd(p):
 
 
 # a coordinator session's claude.exe: `--agent coordinator`, or the agent as a plugin names it
-# (`<plugin>:coordinator`); the old name too. Matched against _cmd (lower case).
-COORDINATOR_ARG = re.compile(r"--agent (?:[\w.-]+:)?(?:coordinator|conductor)")
+# (`<plugin>:coordinator`). Matched against _cmd (lower case).
+COORDINATOR_ARG = re.compile(r"--agent (?:[\w.-]+:)?coordinator")
 
 
 def _in_git_usr_bin(p):

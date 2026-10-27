@@ -52,11 +52,11 @@ INSTALL_PM_START_KEYS = ('sessions_file', 'repos', 'hub_url')
 def install_config(cfg):
     """The install-name keys of a machine config `cfg` (user_config's dict) and nothing else:
     {'scrub_patterns', 'machine_path_folders', 'pm_start': the INSTALL_PM_START_KEYS it sets
-    (kitlib.pmstart known_repos reads sessions_file and repos), 'cap': coordinator_start's cap,
-    else conductor_start's}. These are what tests/scrub/test_generic.py install_names,
+    (kitlib.pmstart known_repos reads sessions_file and repos), 'cap': coordinator_start's cap}.
+    These are what tests/scrub/test_generic.py install_names,
     tests/shipped.py install_patterns and tests/scrub/test_builtin.py configured_folders read."""
     pm = cfg['pm_start'] or {}
-    start = cfg['coordinator_start'] or cfg['conductor_start'] or {}
+    start = cfg['coordinator_start'] or {}
     return {'scrub_patterns': cfg['scrub_patterns'],
             'machine_path_folders': cfg['machine_path_folders'],
             'pm_start': {k: pm[k] for k in INSTALL_PM_START_KEYS if k in pm},
