@@ -31,7 +31,7 @@ from kitlib.lock import queue as qm
 from kitlib.lock import game
 from kitlib.lock.run import (BG_ENV, NEST_ENV, ORIGIN_ENV, PICK, POOLS, XLA_DEFAULT_FRACTION,
                              XLA_FRACTION_ENV, Run, child_code, claim_id, docker_cpu_env,
-                             end_sparing, export_threads, pin_fields, settle)
+                             end_sparing, export_threads, move_leftovers, pin_fields, settle)
 from kitlib.lock.store import EXIT_REQUIRE, EXIT_USAGE, LockError, Store, iso, write_json
 from kitlib.proc.job import Job, cores_text
 
@@ -82,14 +82,17 @@ def end_child(job, p, store, run, wait_s=10):
     """Ends the job's tree as a foreground run's kill path does (kitlib.lock.run end_sparing): a
     build daemon another job's client uses or may use is left running with its tree, the job
     then closed unpinned, its judgement said and listed in the run's record (`daemons`); else
-    the whole job is ended. An interrupt inside end_sparing (a second Ctrl+C) ends the whole job
-    and goes up (the finally call site swallows it). Then it waits on its child p (bounded), so the Popen knows its process ended:
-    dropped unwaited, it warns "subprocess N is still running" (ResourceWarning)."""
+    the whole job is ended. A spared tree leaves the job where it can (move_leftovers). An
+    interrupt inside end_sparing (a second Ctrl+C) ends the whole job and goes up (the finally
+    call site swallows it). Then it waits on its child p (bounded), so the Popen knows its
+    process ended: dropped unwaited, it warns "subprocess N is still running" (ResourceWarning)."""
     try:
         spared = end_sparing(store, run.id, job, run.rec)
     except BaseException:
         job.end(kill=True)
         raise
+    if spared:
+        move_leftovers(store, run.id, job)
     job.end(kill=not spared)
     if p is not None:
         with contextlib.suppress(subprocess.TimeoutExpired, OSError):
@@ -278,6 +281,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                     rc = child_code(rc)
                     run.usage.sample(job)
                     run.usage.job_ended()
+                    move_leftovers(store, run.id, job)
                     job.end(kill=False)
                     job = p = None
                     unfreed = not bg_free(store, run)
