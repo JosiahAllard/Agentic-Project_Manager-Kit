@@ -54,7 +54,8 @@ class Rule(unittest.TestCase):
     def test_a_malformed_rule_is_refused(self):
         for peers, refused in (([], ()), (['a', 'a'], ()), (['A'], ()), (['a b'], ()), ([1], ()),
                                (['a'], [['a', 'b']]), (['a'], [['a']]), (['a'], [['a', 'a'], ['a', 'a']]),
-                               (['p%d' % n for n in range(33)], ())):
+                               (['p%d' % n for n in range(33)], ()), ([['a']], ()), (['a'], [[['a'], 'a']]),
+                               (['a'], [1]), (1, ())):
             with self.subTest(peers=peers, refused=refused), self.assertRaisesRegex(DeliveryError, 'invalid-host-pairs'):
                 HostPairs(peers, refused)
         with self.assertRaisesRegex(DeliveryError, 'invalid-host-pair-binding'):

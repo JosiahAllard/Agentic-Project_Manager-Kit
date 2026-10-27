@@ -121,7 +121,8 @@ class Registry(unittest.TestCase):
                '{"peers": [], "refused": []}', '{"peers": ["a", "a"], "refused": []}',
                '{"peers": ["A"], "refused": []}', '{"peers": ["a"], "refused": [["a", "b"]]}',
                '{"peers": ["a"], "refused": [["a"]]}', '{"peers": ["a"], "refused": [["a", "a"], ["a", "a"]]}',
-               '{"peers": "a", "refused": []}', '{"peers": ["a"], "refused": ["aa"]}')
+               '{"peers": "a", "refused": []}', '{"peers": ["a"], "refused": ["aa"]}',
+               '{"peers": [["a"]], "refused": []}', '{"peers": ["a"], "refused": [[["a"], "a"]]}')
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, 'peers.json')
             for text in bad:

@@ -20,11 +20,17 @@ REFUSED = 'host-pair-refused'
 
 class HostPairs:
     def __init__(self, peers, refused=()):
-        peers, refused = tuple(peers), tuple(tuple(pair) for pair in refused)
-        if (not 0 < len(peers) <= MAX_PEERS or len(set(peers)) != len(peers)
+        try:
+            peers, refused = tuple(peers), tuple(tuple(pair) for pair in refused)
+        except TypeError:
+            raise DeliveryError('invalid-host-pairs') from None
+        # Types first: the duplicate checks below hash every name and pair.
+        if (not 0 < len(peers) <= MAX_PEERS
                 or any(type(name) is not str or not PEER_NAME.fullmatch(name) for name in peers)
-                or len(set(refused)) != len(refused)
-                or any(len(pair) != 2 or any(name not in peers for name in pair) for pair in refused)):
+                or len(set(peers)) != len(peers)
+                or any(len(pair) != 2 or any(type(name) is not str or name not in peers for name in pair)
+                       for pair in refused)
+                or len(set(refused)) != len(refused)):
             raise DeliveryError('invalid-host-pairs')
         self.peers, self.refused = peers, frozenset(refused)
 
