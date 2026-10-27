@@ -2,7 +2,7 @@
 
 - **State, not story.** Living docs (`docs/ops/` registries, decision-log shards, open-item lists)
   hold open items only. Closing an item = deleting its line.
-- The backlog store (docs/backlog.md) is the only progress tracker and is never hand-edited:
+- The backlog store (<kit>/docs/backlog.md) is the only progress tracker and is never hand-edited:
   setting or closing a record is the kit's `backlog.py` tool, not a docs commit. There is no
   `STATUS.md` or `ROADMAP.md` to also update, and no rename log or per-story changelog to keep.
 - Entry format: `ID | status | area | keywords | ref (commit, file:line or doc section)`, 300
