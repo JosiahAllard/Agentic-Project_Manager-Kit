@@ -2893,15 +2893,32 @@ def net_placed(w):
 def net_relative(w):
     """True when the .NET argument Word `w` is a literal relative path (no drive, no leading slash,
     no ~): write_targets judges it where the PowerShell location puts it, as a bash one is, though
-    .NET reads it against the process's directory (NET_UNPLACED), which the guard does not judge
-    (docs/guard-v2.md B17)."""
+    .NET reads it against the process's directory (NET_PROCESS_DIR), which the guard cannot see;
+    so an agent session's is refused as well (net_process_dir)."""
     return not w.dyn and bool(w.text) and w.text[0] not in '\\/~' and ':' not in w.text
 
 
+# where .NET reads a path that is not absolute
+NET_PROCESS_DIR = ('.NET reads a relative or driveless path against the process\'s working directory '
+                   '([Environment]::CurrentDirectory), not the PowerShell location')
 # why a .NET write the guard cannot place is counted as a write to the directory the line runs in
 NET_UNPLACED = ('a .NET call whose path the guard does not read or cannot place: a driveless path, a share or '
-                'device path, or one the line computes. .NET reads a relative or driveless path against the '
-                'process\'s working directory ([Environment]::CurrentDirectory), not the PowerShell location')
+                'device path, or one the line computes. ' + NET_PROCESS_DIR)
+
+
+def net_process_dir(event, ctx, role, what, target, rewrite):
+    """An agent session's .NET write to a literal relative path (net_relative), already judged where
+    the PowerShell location puts it (`target`): refused all the same, under write-jail, since .NET
+    writes it against the process's directory, which Set-Location does not move and the guard
+    cannot see (a docs-writer's [IO.File]::WriteAllText('docs/ROSTER.md', ...) from its worktree
+    wrote the main checkout). The alternative is the same call with `target`, the absolute path the
+    location gives, which .NET reads the same from any directory."""
+    if not agent_session(event, ctx):
+        return None
+    return refuse('write-jail', role, '%s, a relative path: .NET reads it against the process\'s working directory '
+                  '([Environment]::CurrentDirectory), which cd and Set-Location do not move, so the guard cannot '
+                  'tell where it lands. An agent session gives .NET an absolute path. The same write at the path '
+                  'the PowerShell location gives:' % what, rewrite(fwd(target)))
 
 
 def net_retarget(cmd, x, path):
@@ -3716,10 +3733,12 @@ def write_targets(cmd, inv):
         out.append(t)
     if net_mentioned(cmd):
         net, unread = net_writes(cmd)
-        # a literal path is judged where it points, a relative one where the location puts it; for
-        # any other the directory the command runs in stands in, as a path it cannot place (NET_UNPLACED)
-        out.extend(x.word for x in net if net_placed(x.word) or net_relative(x.word))
-        if unread or any(not (net_placed(x.word) or net_relative(x.word)) for x in net):
+        # a literal path is judged where it points, a relative one where the location puts it (and,
+        # for an agent session, refused: net_process_dir), a computed one as a cmdlet's computed
+        # target is; for any other the directory the command runs in stands in, as a path it
+        # cannot place (NET_UNPLACED)
+        out.extend(x.word for x in net if net_placed(x.word) or net_relative(x.word) or x.word.dyn)
+        if unread or any(not (net_placed(x.word) or net_relative(x.word) or x.word.dyn) for x in net):
             out.append(here(cmd.words[0] if cmd.words else None))
     if inv is None:
         return out
@@ -4166,6 +4185,8 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     asked = Asked()                             # find's ask waits for this target's own refusal
     piped = pipe_stand_in_word(cmd, w)
     target, why = (None, PIPE_UNPLACED) if piped else write_place(ctx, cmd, w, base)
+    if target is None and w.dyn and (w.start, w.end) in net:
+        why = '%s; %s' % (why, NET_PROCESS_DIR)
     unread = py_unread(cmd, inv, w) or (NET_UNPLACED if net_stand_in(cmd, w) else None)
     # a kit tool acts on the checkout its -C names: that folder, not the one it runs in
     checked = kit_tool_dir(event, ctx, cmd, inv, cwd) if base is OUTER and unread == PY_PS_WHY else None
@@ -4194,7 +4215,7 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     # a value its option's word also spells (of=, --output=, -tDIR) keeps that option before it
     rewrite = None if stand_in else word_rewrite(cmd, w)
     attached = attached_lead(cmd, w) if rewrite is not None and not isinstance(w, Under) else None
-    if (w.start, w.end) in net and not w.dyn:
+    if (w.start, w.end) in net:
         rewrite, attached = (lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)), None
     if checked is not None:
         x = checked[0]
@@ -4223,6 +4244,10 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         if not placed:
             d = unplaced(d, role) or ledger_unread(ctx, role, what)   # a warned refusal leaves the ask
         d = asked.firm(d)
+        if d:
+            return d, searched
+    if target is not None and base is OUTER and (w.start, w.end) in net and net_relative(w):
+        d = asked.firm(net_process_dir(event, ctx, role, what, target, rewrite))
         if d:
             return d, searched
     # A computed PowerShell target, or a path read from a directory the guard cannot tell (after a
