@@ -29,7 +29,7 @@ standard tier (Claude: `model: sonnet`).
 <!-- rendered: roles -->
 | role | tier | effort | use for |
 |---|---|---|---|
-| analyst | light | high | The read type - branch review (skill specialty-review) and research (skill specialty-research); builds and edits nothing. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
+| analyst | light | high | The read type - branch review (skill specialty-review) and research (skill specialty-research); builds and edits nothing. Raised per dispatch only by the "Reviewer model" rule (strong tier) and the research rule (standard tier) in the dispatch skill's roster file. |
 | consultant | deep | high | Own long-lived launched session per repository (never dispatched; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | coordinator | strong | medium | Main session, never a subagent. Splits work, dispatches agents, reviews branches, queues every LAND verdict for landing at once, brings decisions to the owner. Writes no code. |
 | deep-worker | deep | xhigh | Own launched session (never dispatched; 1M via launcher). Root cause or concurrency work senior-worker failed at or plainly cannot do; never builds or plans. |

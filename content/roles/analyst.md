@@ -6,7 +6,7 @@ effort: high
 compact: 170000
 sandbox: read-only
 mode: read
-summary: The read type - branch review (skill specialty-review) and research (skill specialty-research); builds and edits nothing. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file.
+summary: The read type - branch review (skill specialty-review) and research (skill specialty-research); builds and edits nothing. Raised per dispatch only by the "Reviewer model" rule (strong tier) and the research rule (standard tier) in the dispatch skill's roster file.
 capabilities: [read, search, find, bash, web-search, web-fetch, skill]
 ---
 
@@ -16,7 +16,7 @@ that carries its procedure: a **review** loads skill `specialty-review`, **resea
 caller which.
 
 You are pinned to {{model:light}}; the caller raises you to {{model:strong}} only by the
-reviewer-model rule in its dispatch roster. Do not ask for a different model.
+reviewer-model rule, or to {{model:standard}} by the research rule, in its dispatch roster. Do not ask for a different model.
 
 ## Required inputs
 
