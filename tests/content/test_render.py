@@ -62,6 +62,18 @@ class RealContentTest(unittest.TestCase):
         self.assertNotIn('[IO.File]', linux)
         self.assertNotIn('PowerShell', linux)
 
+    def test_no_content_file_holds_a_raw_carriage_return(self):
+        # a CR byte in the middle of a line (a literal `$'\r'` written as the byte) is never meant
+        found = []
+        for folder, _, names in os.walk(os.path.join(KIT_ROOT, 'content')):
+            for name in names:
+                if name.endswith('.md'):
+                    path = os.path.join(folder, name)
+                    data = read(path).replace(b'\r\n', b'\n')
+                    if b'\r' in data:
+                        found.append(os.path.relpath(path, KIT_ROOT))
+        self.assertEqual(found, [])
+
     def test_no_windows_shell_line_is_left_outside_the_traps_skill(self):
         # shell-neutral text: the Windows commands live in shell-and-worktree-traps alone
         bad = re.compile(r'Get-ChildItem|Select-Object|\$env:|cmd\.exe|cmd /c|Set-Location')

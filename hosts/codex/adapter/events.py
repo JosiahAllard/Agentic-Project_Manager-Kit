@@ -108,7 +108,9 @@ def shell_kind(tool, data):
     if value is None:
         if tool == 'PowerShell':
             return 'powershell', ''
-        return default_dialect(), 'the call names no shell; give an explicit PowerShell or Git Bash shell'
+        kind = default_dialect()
+        return kind, ('the call names no shell; give an explicit %s shell'
+                      % ('PowerShell or Git Bash' if kind == 'powershell' else 'bash'))
     kind = dialect(value)
     if kind is None:
         why = 'the guard reads the shell %r only through PowerShell; use PowerShell or Git Bash' % (value,)

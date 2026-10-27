@@ -58,11 +58,13 @@ class Shell(unittest.TestCase):
 
     def test_the_default_dialect_follows_the_platform(self):
         ev = event('shell_command', {'command': 'pwd'})
-        for name, want in (('windows', 'powershell'), ('linux', 'bash')):
+        for name, want, named in (('windows', 'powershell', 'PowerShell or Git Bash'),
+                                  ('linux', 'bash', 'explicit bash shell')):
             with self.subTest(platform=name), mock.patch('kitlib.platform.NAME', name):
                 a = parse('PreToolUse', ev)
                 self.assertEqual(a.shell, want)
-                self.assertTrue(a.refusal)
+                self.assertIn(named, a.refusal)
+                self.assertEqual('PowerShell' in a.refusal, name == 'windows')
 
     def test_a_missing_or_unknown_interpreter_carries_a_refusal(self):
         for ev, shell in ((event('Bash', {'command': 'pwd'}), 'powershell'), (bash('dir', 'cmd.exe'), 'powershell'),
