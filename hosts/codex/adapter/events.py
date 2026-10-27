@@ -37,6 +37,7 @@ import ntpath
 import os
 import posixpath
 
+from kitlib import platform
 from kitlib.host import Action
 
 
@@ -56,10 +57,14 @@ MCP = 'mcp__'
 KINDS = {'SessionStart': 'session_start', 'PostCompact': 'session_start', 'SubagentStart': 'subagent_start'}
 TOOL_EVENT = 'PreToolUse'
 POWERSHELLS = {'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'}
-DEFAULT_DIALECT = 'powershell'          # Codex runs its shell tool in PowerShell on Windows
 ARGV_FLAGS = ('-lc', '-c', '-command', '-noprofile')
 BASHES = {'bash', 'bash.exe', 'sh', 'sh.exe'}
 PATCH_HEADERS = ('Add', 'Update', 'Delete')
+
+
+def default_dialect():
+    """Codex runs its shell tool in PowerShell on Windows and in bash elsewhere (read at call time)."""
+    return 'powershell' if platform.NAME == 'windows' else 'bash'
 
 
 def agent(payload):
@@ -97,13 +102,13 @@ CMD = {'cmd', 'cmd.exe'}
 
 def shell_kind(tool, data):
     """(dialect or None, refusal): the call's explicit interpreter's dialect; with none named, the
-    PowerShell tool's own, else DEFAULT_DIALECT and a refusal; cmd.exe (_shell judges its text in
+    PowerShell tool's own, else default_dialect() and a refusal; cmd.exe (_shell judges its text in
     cmd.exe's dialect, cmd_c) and one the guard cannot read, with a refusal."""
     value = data.get('shell')
     if value is None:
         if tool == 'PowerShell':
             return 'powershell', ''
-        return DEFAULT_DIALECT, 'the call names no shell; give an explicit PowerShell or Git Bash shell'
+        return default_dialect(), 'the call names no shell; give an explicit PowerShell or Git Bash shell'
     kind = dialect(value)
     if kind is None:
         why = 'the guard reads the shell %r only through PowerShell; use PowerShell or Git Bash' % (value,)

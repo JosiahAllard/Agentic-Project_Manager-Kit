@@ -389,6 +389,20 @@ class TodoTest(ApiCase):
                          ('you', 'open', NOW, True))
         self.refused('invalid', 'from', 'POST', '/todos', OWNER, {'title': 't', 'from': 'pm'})
 
+    def test_the_os_field_picks_a_step_form_and_an_unknown_one_is_refused(self):
+        steps = [{'run': {'windows': 'dir', 'linux': 'ls'}}]
+        for os_, want in ((None, 'dir'), ('windows', 'dir'), ('linux', 'ls')):
+            body = {'title': 't', 'steps': steps}
+            if os_:
+                body['os'] = os_
+            obj = self.ok('POST', '/todos', AGENT, body)
+            d = self.store.get('todos', obj['id'])
+            self.assertEqual(d['commands'], [want])
+            self.assertNotIn('os', d)
+        for bad in ('mac', '', 3):
+            self.refused('invalid', 'os', 'POST', '/todos', AGENT,
+                         {'title': 't', 'steps': steps, 'os': bad})
+
     def test_an_agent_cannot_add_a_todo_as_the_owner(self):
         for name in ('you', 'You', ' YOU '):
             self.refused('invalid', 'from', 'POST', '/todos', AGENT,

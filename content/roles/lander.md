@@ -73,7 +73,7 @@ Missing any: say what you need, do nothing.
    (<kit>/docs/gate.md "Waiting on a gate: who arms what"). `python <kit>/tools/land.py -C <main checkout> --queue`
    shows who holds and who waits. Never pass anything to jump the queue, and never
    break a landing lock: STUCK -> stop and report its lines. Do not truncate native output
-   through a pipe - in PowerShell, `Select-Object -First` fakes a non-zero exit code.
+   through a pipe - a first-N reader (`head`, or its PowerShell cmdlet) fakes a non-zero exit code.
 6. The wait prints `RESULT <verdict> land <branch> at <tip>: <line> (<log>)`; act on the verdict:
    - `pass`, `LANDED ...`: landed.
    - `fail` with `CONFLICT <branch> with main <sha>: the author merges main`: nothing left behind; report it,
@@ -114,7 +114,7 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root such as `C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Force-push, or push anything but the main branch through the landing command.
 - `git add -A`, `git commit -a`, or staging anything you did not change.
 - Remove a worktree other than the one you were told to land, or an untracked file the brief did not name.

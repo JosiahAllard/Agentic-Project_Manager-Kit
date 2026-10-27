@@ -1,9 +1,13 @@
 ---
 name: shell-and-worktree-traps
-description: Use before running shell commands on the Windows machine (Git Bash or PowerShell), checking line endings, capturing test output, or removing worktrees and branches. Covers silent PowerShell and Git Bash traps that produce wrong or stray results, and the worktree and gate rules workers break by accident.
+description: Use before running shell commands on the Windows or Linux machine (Git Bash or PowerShell on Windows, bash on Linux), checking line endings, capturing test output, or removing worktrees and branches. Covers silent shell traps, one section per platform, that produce wrong or stray results, and the worktree and gate rules workers break by accident.
 ---
 
 # Shell and worktree traps
+
+Two sections, one per platform: read the one your platform line names (Windows or Linux) and skip the other.
+
+## Windows
 
 1. Use absolute paths and your assigned worktree. Never leave a shell inside a worktree about to be removed: `cd` holds a Windows handle on the folder, and a later `git worktree remove` fails "Permission denied".
 2. Line endings: check the committed blob, `git show <rev>:<path>`. In Git Bash `grep -c $'\r'` matches every line, an always-true CRLF test; `.gitattributes` normalises on commit.
@@ -18,11 +22,35 @@ description: Use before running shell commands on the Windows machine (Git Bash 
 11. Read a tool's usage with `<tool> --help` alone, or into a file you read with Read; never pipe it to `head`, `tail` or `grep`.
 12. Wait on a background run as <kit>/docs/gate.md "Waiting on a gate: who arms what" says (a run of your own: `run_in_background` and its exit notice), never with a foreground `sleep` or a poll loop.
 
-## Never
+### Never (Windows)
 
 - `git worktree remove --force`, `git branch -D`, deleting another session's branch, or taking over another session's run.
 - `[IO.File]` or `[System.IO]` with a relative path.
 - Kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`, `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process you started, by its pid, while it still has the start time you saw.
+- Move an assigned worktree to another folder: the configured worktree location holds unless the owner assigns another.
+
+Details: `<kit>/docs/worktree-remove.md`; `<kit>/docs/new-worktree.md`.
+
+## Linux
+
+1. Use absolute paths and your assigned worktree. Never leave a shell inside a worktree about to be removed: a later `git worktree remove` of the folder you stand in fails or strands the shell in a deleted directory.
+2. Line endings: check the committed blob, `git show <rev>:<path>`. `grep -c $''` in bash counts real carriage returns, but a file edited on Windows and checked out here may differ from the blob; `.gitattributes` normalises on commit.
+3. Any script with regexes or escapes: write it to a file with your file-write tool and run it by absolute path. An unquoted heredoc (`<<EOF`) expands `$var`, backticks and `\`, so a script in it changes before Python or sed reads it; quote the marker (`<<'EOF'`) or write a file.
+4. Quote every path and variable: `"$x"`, never bare `$x`. A path with a space or a glob character splits or expands, and `rm -rf $dir/` with `dir` unset removes the root of the tree it runs in. Run shell probes with your scratch folder as the working directory, never the main checkout: a stray file in main stops every landing.
+5. A pipeline's exit status is its last command's: `cmd | tee log` is green when `cmd` failed. Run `set -o pipefail`, or write to a file and read `$?` of the command itself. Test output: tee the whole output to a file, then read the file; never grep it live. Never pipe a gate or locked run through a truncating reader (`head`): the writer gets SIGPIPE and dies.
+6. A cwd that a sourced file, `cd` or subshell changed does not carry between your tool calls: give each call its own absolute paths or `git -C`.
+7. Subprocesses: pass arguments as an array with the shell disabled.
+8. One foreground gate per worktree, on its assigned ports; never background one with a stray `&` or `nohup` (two at once fought over the same build), and a `&` job dies with its shell unless you detach it on purpose.
+9. Cleanup goes through the kit's tools (`python <kit>/tools/worktree_remove.py -C <main checkout> <worktree>`), only for a worktree that is yours to remove; otherwise report it to the lander or coordinator.
+10. Read a tool's usage with `<tool> --help` alone, or into a file you read with Read; never pipe it to `head`, `tail` or `grep`.
+11. Wait on a background run as <kit>/docs/gate.md "Waiting on a gate: who arms what" says (a run of your own: `run_in_background` and its exit notice), never with a foreground `sleep` or a poll loop.
+12. File permissions and symlinks: a checkout keeps the executable bit and symlinks as git recorded them; do not `chmod -R` a tree, and do not `cp -r` or `rm -rf` through a symlink that points out of the worktree.
+
+### Never (Linux)
+
+- `git worktree remove --force`, `git branch -D`, deleting another session's branch, or taking over another session's run.
+- Kill a process by name or command-line match (`pkill -f`, `killall`, `kill $(pgrep ...)`): other sessions' gates match too. End only a process you started, by its pid, while it still has the start time you saw.
+- `sudo`, `chmod -R`, or `rm -rf` on a path built from a variable.
 - Move an assigned worktree to another folder: the configured worktree location holds unless the owner assigns another.
 
 Details: `<kit>/docs/worktree-remove.md`; `<kit>/docs/new-worktree.md`.
