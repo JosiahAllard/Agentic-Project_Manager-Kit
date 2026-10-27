@@ -24,12 +24,18 @@ from its launcher (store.tree_role, over no ancestry) is agent. Both only ever l
 started (the run's wrapper, whose pid the run record holds). Nothing here prints. The carrier's
 line when it cannot start its program is kitlib.proc.console.note_carrier_failure, the one
 writer of the kit's console incident log.
+
+On Linux each call goes to kitlib.platform.linux.detach (a setsid trampoline, the run in a
+systemd user scope of its own where there is one; no carrier, no WMI): `command`, `tool_command`,
+`missing`, `create` and `wrapper_pid` keep their meaning, `marked` is shared.
 """
+import importlib
 import json
 import os
 import subprocess
 import time
 
+import kitlib.platform
 from kitlib.lock.run import ORIGIN_ENV
 from kitlib.lock.store import DETACHED_ENV
 from kitlib.proc import process, spawn
@@ -47,6 +53,13 @@ WRAPPER_WAIT_S = 10.0       # how long wrapper_pid looks for the carrier's pytho
 WRAPPER_POLL_S = 0.05
 
 
+def _linux():
+    """kitlib.platform.linux.detach on Linux (imported at call time), else None."""
+    if kitlib.platform.NAME == 'linux':
+        return importlib.import_module('kitlib.platform.linux.detach')
+    return None
+
+
 def pythons(python):
     """(pythonw.exe, python.exe) in the folder of `python` (either of the two). Neither is checked
     to exist here. Not the hooks' windowless() (kitlib/host/hookmain.py) or machine setup's
@@ -60,16 +73,31 @@ def pythons(python):
 def command(python, tool, head, rid, tail):
     """The detached run's argv: the pythonw beside `python`, the carrier beside `tool`, the
     python.exe beside `python`, then `-B tool` with `head` (the caller's arguments before `--`),
-    `--detached-id rid` and `tail` (`--` and the command)."""
+    `--detached-id rid` and `tail` (`--` and the command). Linux: `python -B tool ...`."""
+    if _linux():
+        return _linux().command(python, tool, head, rid, tail)
     pythonw, console = pythons(python)
     carrier = os.path.join(os.path.dirname(os.path.abspath(tool)), spawn.CARRIER)
     return ([pythonw, carrier, console, '-B', os.path.abspath(tool)] + list(head)
             + ['--detached-id', rid] + list(tail))
 
 
+def tool_command(python, tool, args):
+    """A detached tool's argv (the gate's detached landing): `command`'s shape without the lock's
+    --detached-id, so `missing` and `create` take it."""
+    if _linux():
+        return _linux().tool_command(python, tool, args)
+    pythonw, console = pythons(python)
+    tool = os.path.abspath(tool)
+    carrier = os.path.join(os.path.dirname(tool), spawn.CARRIER)
+    return [pythonw, carrier, console, '-B', tool] + list(args)
+
+
 def missing(argv):
-    """Why `command`'s argv cannot start (its pythonw, carrier or python.exe is not a file), or
-    None."""
+    """Why `command`'s argv cannot start (its pythonw, carrier or python.exe is not a file; Linux:
+    its python or tool), or None."""
+    if _linux():
+        return _linux().missing(argv)
     for what, path in zip(('pythonw.exe', 'the carrier', 'python.exe'), argv[:3]):
         if not os.path.isfile(path):
             return '%s is not a file: %s' % (what, path)
@@ -89,8 +117,10 @@ def marked(env):
 def create(argv, cwd, env, run=None, timeout=CREATE_TIMEOUT_S):
     """(pid, None) of the process Win32_Process.Create started for `argv` in `cwd` with `env`
     (a dict, marked as a detached start: `marked`), else (None, why). run: the tests' stand-in for
-    spawn.run (looked up at call time)."""
+    spawn.run (looked up at call time); on Linux, for subprocess.Popen (the trampoline's start)."""
     env = marked(env)
+    if _linux():
+        return _linux().create(argv, cwd, env, popen=run, timeout=timeout)
     data = {'cmd': subprocess.list2cmdline(argv), 'cwd': cwd,
             'env': ['%s=%s' % kv for kv in env.items()]}
     try:
@@ -110,7 +140,9 @@ def wrapper_pid(carrier, wait_s=WRAPPER_WAIT_S, poll_s=WRAPPER_POLL_S, snapshot=
     """The pid of the python.exe the carrier `carrier` started, or None when none was seen within
     `wait_s` seconds (the carrier and its python have ended already, or a snapshot failed). A
     process with the carrier's pid as parent but created before the carrier holds a reused pid and
-    is not it."""
+    is not it. Linux: `carrier` is the run itself."""
+    if _linux():
+        return _linux().wrapper_pid(carrier)
     start = ctime(carrier)
     if start is None:
         return None

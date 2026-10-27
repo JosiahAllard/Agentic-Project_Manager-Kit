@@ -83,7 +83,7 @@ from kitlib.gate import result, verdicts
 from kitlib.git import repo
 from kitlib.lock import detach as lockdetach
 from kitlib.lock import run as lockrun
-from kitlib.proc import process, spawn
+from kitlib.proc import process
 
 FLAG = '--submitted'
 # 2: the token's hash (token_sha256) and restore's checks (Trust, above). A schema-1 payload, an
@@ -201,13 +201,11 @@ def prune(root, now=None, keep_s=KEEP_S):
 
 
 def command(tool_file, args, python=None):
-    """The detached tool's argv: the pythonw.exe beside `python` (default: this interpreter), the
-    carrier beside `tool_file`, the python.exe beside `python`, then `-B tool_file` and `args`.
-    kitlib.lock.detach.command's shape, without the lock's --detached-id."""
-    pythonw, console = lockdetach.pythons(python or sys.executable)
-    tool = os.path.abspath(tool_file)
-    carrier = os.path.join(os.path.dirname(tool), spawn.CARRIER)
-    return [pythonw, carrier, console, '-B', tool] + list(args)
+    """The detached tool's argv (kitlib.lock.detach.tool_command): the pythonw.exe beside `python`
+    (default: this interpreter), the carrier beside `tool_file`, the python.exe beside `python`,
+    then `-B tool_file` and `args`; on Linux `python -B tool_file args`. kitlib.lock.detach
+    .command's shape, without the lock's --detached-id."""
+    return lockdetach.tool_command(python or sys.executable, tool_file, args)
 
 
 def detach(argv, cwd, env, run=None, timeout=START_TIMEOUT_S):

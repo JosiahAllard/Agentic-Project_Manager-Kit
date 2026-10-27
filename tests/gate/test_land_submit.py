@@ -160,6 +160,22 @@ class TheLine(SubmitCase):
         self.assertEqual(submit.command(LAND_PY, [])[:5],
                          [PYTHONW, CARRIER, CONSOLE_PY, '-B', LAND_PY])
 
+    def test_on_linux_the_command_is_the_python_and_the_tool_and_the_start_its_backend(self):
+        """kitlib.platform.linux.detach: no pythonw, no carrier; the start is its trampoline."""
+        from kitlib.platform.linux import detach as ld
+        tool = os.path.join(self.tmp, 'export', 'tools', 'land.py')
+        with mock.patch('kitlib.platform.NAME', 'linux'):
+            argv = submit.command(tool, ['-C', 'r', 'b'], python='/usr/bin/python3')
+            self.assertEqual(argv, [os.path.abspath('/usr/bin/python3'), '-B', tool,
+                                    '-C', 'r', 'b'])
+            self.assertEqual(submit.detach(argv, '/w', {}),
+                             (None, 'the detached start: python is not a file: %s' % argv[0]))
+            with mock.patch.object(ld, 'create', return_value=(4242, None)) as made:
+                ok = submit.command(LAND_PY, ['b'], python=sys.executable)
+                self.assertEqual(submit.detach(ok, '/w', {'A': '1'}), (4242, None))
+            self.assertEqual(made.call_args[0][0], ok)
+            self.assertEqual(made.call_args[0][2]['A'], '1')
+
     def test_the_detach_reads_the_start_scripts_answer(self):
         argv = submit.command(LAND_PY, ['b'])
         seen = []
