@@ -23,6 +23,22 @@ jobs nested in it, as on Windows. A top-level J is the scope `<prefix>-job-<pid>
 (prefix: KIT_SCOPE_PREFIX, default pmkit); a nested J is a directory the owner makes in its own
 job's cgroup (the scope is delegated, so the owner may), removed by close once it is empty.
 
+Short jobs (Job(short=True): a git call, where a scope of its own, about 85 ms, would cost more
+than the command): outside any kit job, each is a nested job in this process's carrier, one
+top-level job scope made at the first short job whose command, the holder (`sh -c 'read _'`),
+reads a pipe only this process writes, so the holder ends when this process does and systemd
+collects the scope once its jobs have ended too. The carrier kills nothing; each short job keeps
+its own cgroup, kill, watchdog and leftovers. A stub cannot move itself into the carrier from a
+login session's scope (cgroup v2 lets a process be moved only by a writer of the two cgroups'
+common ancestor, there root's user-<uid>.slice), so systemd moves it: the stub waits for `in` on
+its go pipe while the owner calls AttachProcessesToUnit and reads the stub's cgroup back. The
+same call serves a caller anywhere, so there is one path. When that call fails the carrier takes
+no more jobs; when it fails or the stub is not seen in place, the stub is ended before go and the
+job gets a scope of its own: the command runs once either way. In a kit job's leaf short is moot
+(the job nests there); on W2 there is no scope to share. Blast radius: stopping the carrier (or
+systemd-oomd choosing it) ends every short job of this process at once. A forked child makes its
+own carrier.
+
 Start, Windows' CREATE_SUSPENDED: the command runs through a sh stub that joins J/main (`echo 0`
 to its cgroup.procs, so the stub moves itself), checks /proc/self/cgroup, forks the watchdog, says
 so on a ready pipe and waits on a go pipe. Job.start reads the ready line, checks the stub's pid
@@ -101,11 +117,16 @@ W2_LACKS = ('a guaranteed kill (a tree walk and an environment marker: a process
 WHAT = {'S1': 'strong', 'S2': 'partial', 'W2': 'weak'}
 
 # $1 job cgroup name, $2 the job cgroup to join ('' : the scope systemd put it in), $3 ready fd,
-# $4 go fd, $5 watch fd, $6 armed (1/0), $7 variables to unset, then the command.
-STUB = r'''n=$1 j=$2 r=$3 g=$4 k=$5 arm=$6 un=$7; shift 7
+# $4 go fd, $5 watch fd, $6 armed (1/0), $7 variables to unset, $8 1: systemd puts it in $2/main
+# (a carried job: it waits for `in` on the go pipe first), then the command.
+STUB = r'''n=$1 j=$2 r=$3 g=$4 k=$5 arm=$6 un=$7 put=$8; shift 8
 own() {
   cg=; while IFS= read -r l; do case $l in 0::*) cg=${l#0::};; esac; done </proc/self/cgroup
 }
+if [ "$put" = 1 ]; then
+  IFS= read -r m <&$g
+  [ "$m" = in ] || exit 125
+fi
 own
 if [ -z "$j" ]; then
   case $cg in */"$n") j=$cg;; *) echo "x not in its scope: $cg" >&$r; exit 125;; esac
@@ -676,6 +697,94 @@ def w1_status():
     return 'W1 unavailable (%s)' % (out or 'its trial said nothing')
 
 
+# ------------------------------------------------------------------ the carrier
+class Carrier:
+    """This process's carrier: a top-level job scope (`name`, cgroup `cg`) whose command, the
+    holder, reads a pipe only this process writes and ends at its end of file. Short jobs are
+    nested in it. It kills nothing; `off` is why it takes no more jobs."""
+
+    def __init__(self, job):
+        self.pid, self.job, self.holder = os.getpid(), job, job.p
+        self.cg, self.name, self.off = job.cg, job.name, None
+
+    def alive(self):
+        return self.holder.poll() is None and os.path.isdir(cg_dir(self.cg))
+
+    def refuse(self, why):
+        with _carrier_lock:
+            if self.off is None:
+                self.off = why
+            self._end()
+
+    def _end(self):
+        """Lets the holder go (its pipe closed), so the scope ends once its jobs have."""
+        try:
+            self.holder.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.holder.wait(GONE_SECONDS)
+        except subprocess.TimeoutExpired:
+            self.holder.kill()
+            self.holder.wait()
+
+
+_carrier_lock = threading.Lock()
+_carrier = None
+
+
+def carrier(tier):
+    """This process's carrier for a short job of tier `tier` (made the first time, and again when
+    the last one has gone), or None: it takes no more jobs, or one cannot be made now."""
+    global _carrier
+    with _carrier_lock:
+        c = _carrier
+        if c is not None and c.pid == os.getpid():
+            if c.off is not None:
+                return None
+            if c.alive():
+                return c
+            c._end()
+        _carrier = None
+        job = ScopeJob(None, False, tier=Tier(tier.name, tier.lacks))
+        try:
+            job.start([SH, '-c', 'read _'], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL, cwd='/')
+        except (OSError, ValueError):
+            job.close()
+            return None
+        job.close()                          # released: its watchdog ends, the holder runs on
+        _carrier = Carrier(job)
+        return _carrier
+
+
+def drop_carrier():
+    """Lets this process's carrier go (a test's cleanup; an owner that is done with short jobs).
+    The next short job makes a new one."""
+    global _carrier
+    with _carrier_lock:
+        c, _carrier = _carrier, None
+        if c is not None and c.pid == os.getpid():
+            c._end()
+
+
+def _forked():
+    """In a forked child: the parent's carrier is not this process's (its holder's pipe closed
+    here, so the parent's exit still ends it)."""
+    global _carrier, _carrier_lock
+    _carrier_lock = threading.Lock()
+    c, _carrier = _carrier, None
+    if c is not None:
+        try:
+            c.holder.stdin.close()
+        except OSError:
+            pass
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_forked)
+
+
 # ------------------------------------------------------------------ the job
 _mixed = {}
 
@@ -684,9 +793,10 @@ class Job:
     """kitlib.proc.job.Job on Linux: Job(mask=None, kill_on_close=True) is a ScopeJob (S1, S2) or
     a WeakJob (W2) as probe() finds (`tier` instead: a test's or the trial's). One command per
     job: start a second time and it raises JobError. `pin`, `effective` and `note` mean what
-    they mean on Windows."""
+    they mean on Windows. short=True: a short command (a git call), carried in this process's
+    carrier scope instead of a scope of its own when it can be (the module docstring)."""
 
-    def __new__(cls, mask=None, kill_on_close=True, tier=None):
+    def __new__(cls, mask=None, kill_on_close=True, tier=None, short=False):
         if not issubclass(cls, (ScopeJob, WeakJob)):
             impl = ScopeJob if (tier or probe()).scoped else WeakJob
             if cls is not Job:              # a subclass of Job (a test's): mixed with the tier's
@@ -697,8 +807,9 @@ class Job:
             cls = impl
         return object.__new__(cls)
 
-    def __init__(self, mask=None, kill_on_close=True, tier=None):
+    def __init__(self, mask=None, kill_on_close=True, tier=None, short=False):
         self.tier = tier or probe()
+        self.short = bool(short)
         self.kill_on_close = bool(kill_on_close)
         self.note, self.p, self.closed = None, None, False
         self._child, self._k, self._g, self._peak = None, None, None, 0
@@ -793,7 +904,7 @@ class Job:
 
     def _abort(self, p):
         """A start that failed: the job's processes ended (the stub at least), its pipes closed,
-        so its watchdog ends too."""
+        so its watchdog ends too, and the caller's pipes to the stub closed (no one gets p)."""
         try:
             if not self._kill_all():
                 p.kill()
@@ -804,6 +915,12 @@ class Job:
         _close(self._k)
         self._g = self._k = None
         self._reap_watchdog()
+        for f in (p.stdin, p.stdout, p.stderr):
+            if f is not None:
+                try:
+                    f.close()
+                except OSError:
+                    pass
 
     def _reap_watchdog(self):
         pass
@@ -968,13 +1085,62 @@ def _popen(argv, kw, env, fds):
 class ScopeJob(Job):
     """S1 and S2: the job is a cgroup, J (the module docstring has its layout)."""
 
-    def __init__(self, mask=None, kill_on_close=True, tier=None):
-        Job.__init__(self, mask, kill_on_close, tier)
+    def __init__(self, mask=None, kill_on_close=True, tier=None, short=False):
+        Job.__init__(self, mask, kill_on_close, tier, short)
         self.cg = self.unit = self.name = None
         self.parent = self.tier.parent
+        self.carried = None                      # the carrier this job is in
         self.cpuset = self.tier.name == 'S1'     # the pin is the cgroup's, not affinity
 
     def _begin(self, cmd, env, kw):
+        """A short job outside any kit job goes in this process's carrier; when the carrier
+        cannot take it (none can be made, the move is refused or not seen), the stub is ended
+        before go and the job gets a scope of its own, so the command runs once."""
+        via = carrier(self.tier) if self.short and self.parent is None else None
+        if via is None:
+            return self._begin_in(cmd, env, kw, None)
+        self.parent, self.carried = via.cg, via
+        try:
+            return self._begin_in(cmd, env, kw, via)
+        except _jobmod().JobError as e:
+            self.parent = self.carried = self.cg = self.name = self.unit = self.wd = None
+            if getattr(e, 'refused', False):
+                via.refuse(str(e))
+        return self._begin_in(cmd, env, kw, None)
+
+    def _put(self, via, made, p):
+        """Asks systemd to move the stub p (it waits for `in`) into made/main of carrier `via`,
+        reads it back, and lets the stub on. JobError when the call fails (`refused` set: the route
+        is refused, so the carrier takes no more jobs) or the stub is not seen there; the stub is
+        ended first."""
+        ok, err = _call([_tool(BUSCTL) or BUSCTL, '--user', 'call', 'org.freedesktop.systemd1',
+                         '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager',
+                         'AttachProcessesToUnit', 'ssau', via.name,
+                         made[len(via.cg):] + '/' + LEAF, '1', str(p.pid)])
+        try:
+            got = cgroup_of(p.pid)
+        except OSError:
+            got = None
+        why = None
+        if not ok:
+            why = 'systemd did not move the command into the carrier: %s' % (err or '?')
+        elif got != made + '/' + LEAF:
+            why = 'the command is in %s, not the carrier\'s %s/%s' % (got, made, LEAF)
+        else:
+            try:
+                os.write(self._g, b'in\n')
+                return
+            except OSError as e:
+                why = 'the stub ended before it was let in (%s)' % e
+        _close(self._g)                 # the stub reads end of file and exits; killed anyway
+        self._g = None
+        p.kill()
+        p.wait()
+        e = _error(why)
+        e.refused = not ok              # the route itself: the carrier takes no more jobs
+        raise e
+
+    def _begin_in(self, cmd, env, kw, via):
         r_r, r_w = os.pipe()
         g_r, g_w = os.pipe()
         k_r, k_w = os.pipe()
@@ -1004,7 +1170,8 @@ class ScopeJob(Job):
                 self._make_nested(made)
                 argv, join, penv = [], made, env
             argv += [SH, '-c', STUB, 'pmkit-job', self.name, join] + list(FDS) + [
-                '1' if self.kill_on_close else '0', ' '.join(unset)] + cmd
+                '1' if self.kill_on_close else '0', ' '.join(unset),
+                '0' if via is None else '1'] + cmd
             p = _popen(argv, kw, penv, (r_w, g_r, k_r))
         except BaseException:
             for fd in (r_r, r_w, g_r, g_w, k_r, k_w):
@@ -1017,6 +1184,8 @@ class ScopeJob(Job):
             _close(fd)
         try:
             try:
+                if via is not None:
+                    self._put(via, made, p)
                 lines = self._ready(p, r_r)
             finally:
                 _close(r_r)
@@ -1261,8 +1430,8 @@ class WeakJob(Job):
     """W2: no cgroup. The members are the processes whose PMKIT_JOB names this job's token, and
     the command's descendants."""
 
-    def __init__(self, mask=None, kill_on_close=True, tier=None):
-        Job.__init__(self, mask, kill_on_close, tier)
+    def __init__(self, mask=None, kill_on_close=True, tier=None, short=False):
+        Job.__init__(self, mask, kill_on_close, tier, short)
         self.token = 'w' + _tag()
         self.spared = set()
         self._ctime = None

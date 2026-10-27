@@ -386,6 +386,7 @@ class Case(unittest.TestCase):
         self.strays = []
         self.addCleanup(self.no_units_left)
         self.addCleanup(self.kill_strays)
+        self.addCleanup(self.c.drop_carrier)
 
     def kill_strays(self):
         for pid in self.strays:
@@ -730,6 +731,209 @@ class Scope(Case):
         tier = self.c.probe(fresh=True)
         self.assertTrue(tier.scoped, tier.text)
         self.assertIn(tier.name, ('S1', 'S2'))
+
+
+def fake_busctl(folder, body):
+    """A busctl that runs `body` (sh) for AttachProcessesToUnit and the real one otherwise."""
+    path = os.path.join(folder, 'busctl')
+    real = shutil.which('busctl')
+    with open(path, 'w') as f:
+        f.write('#!/bin/sh\nfor a; do [ "$a" = AttachProcessesToUnit ] && { %s; }; done\n'
+                'exec %s "$@"\n' % (body, real))
+    os.chmod(path, 0o755)
+    return path
+
+
+@posix_only('cgroup scopes of the user systemd are Linux')
+class Carrier(Case):
+    """Short jobs nested in this process's carrier scope, moved there by systemd."""
+
+    def setUp(self):
+        super().setUp()
+        tier = self.c.probe()
+        if not tier.scoped or tier.parent is not None:
+            self.skipTest('no top-level cgroup scope here: %s' % tier.text)
+
+    def short(self, **kw):
+        return self.c.Job(short=True, **kw)
+
+    def run_short(self, argv, **kw):
+        job = self.short(**kw)
+        p = job.start(argv, stdout=subprocess.PIPE)
+        out = p.communicate(timeout=20)[0].decode()
+        job.close()
+        return job, p.returncode, out
+
+    def carriers(self):
+        return [u for u in unit_names() if '-job-' in u]
+
+    def test_short_jobs_share_one_carrier_each_in_a_cgroup_of_its_own(self):
+        a, rc, out = self.run_short(['sh', '-c', 'cat /proc/self/cgroup; exit 3'])
+        self.assertEqual(rc, 3)
+        b = self.short()
+        p = b.start(['sh', '-c', 'echo $$; cat /proc/self/cgroup'], stdout=subprocess.PIPE)
+        pid, cg = p.communicate(timeout=20)[0].decode().split()
+        self.assertEqual(int(pid), p.pid)
+        b.close()
+        self.assertIs(a.carried, b.carried)
+        top = a.carried.cg
+        self.assertTrue(self.c.TOP.match(top.rsplit('/', 1)[1]), top)
+        self.assertEqual(out.strip(), '0::%s/main' % a.cg)
+        self.assertEqual(cg, '0::%s/main' % b.cg)
+        self.assertNotEqual(a.cg, b.cg)
+        for job in (a, b):
+            self.assertEqual(job.cg.rsplit('/', 1)[0], top)
+            self.assertTrue(self.c.NESTED.match(job.name), job.name)
+            wait_until(lambda: not os.path.isdir(self.c.cg_dir(job.cg)), 'its cgroup went')
+        self.assertEqual(len(self.carriers()), 1, unit_names())
+
+    def test_terminating_one_short_job_leaves_another_running(self):
+        jobs = [self.short() for _ in range(2)]
+        procs = [j.start(['sleep', '300']) for j in jobs]
+        for j in jobs:
+            self.addCleanup(j.close)
+        self.assertTrue(jobs[0].terminate())
+        self.assertEqual(procs[0].wait(10), -signal.SIGKILL)
+        time.sleep(0.2)
+        self.assertIsNone(procs[1].poll())
+        self.assertEqual(jobs[1].contains(procs[1].pid), 'in')
+        jobs[1].close()                                    # kill_on_close
+        self.assertEqual(procs[1].wait(10), -signal.SIGKILL)
+
+    def test_an_owner_killed_by_sigkill_kills_its_short_job_and_spares_a_released_one(self):
+        p = self.owner('''
+            kill = Job(short=True)
+            c = kill.start(['sh', '-c', 'setsid sleep 300 & echo $!; exec sleep 300'],
+                           stdout=subprocess.PIPE)
+            g = c.stdout.readline().decode().strip()
+            keep = Job(kill_on_close=False, short=True)
+            d = keep.start(['sleep', '300'])
+            print(c.pid, g, kill.wd, d.pid, kill.carried.cg, flush=True)
+            time.sleep(300)
+        ''')
+        child, grand, wd, daemon, top = lines(p, 1)[0]
+        child, grand, wd, daemon = int(child), int(grand), int(wd), int(daemon)
+        self.strays += [child, grand, daemon]
+        p.kill()
+        p.wait()
+        for pid, what in ((child, 'the command'), (grand, 'its setsid child'),
+                          (wd, 'the watchdog')):
+            wait_until(lambda: gone(pid), '%s ended with its owner' % what)
+        time.sleep(0.2)
+        self.assertFalse(gone(daemon))                      # released: it runs on
+        self.assertTrue(unit_names(p.pid))                 # its carrier holds it
+        kill_own(daemon)
+        wait_until(lambda: not unit_names(p.pid), 'the carrier went with its last job')
+        self.assertFalse(os.path.isdir(self.c.cg_dir(top)))
+
+    def test_an_owner_that_exits_leaves_no_carrier(self):
+        p = self.owner('''
+            for _ in range(3):
+                job = Job(kill_on_close=False, short=True)
+                job.start(['true']).wait(20)
+                job.close()
+            print(job.carried.cg, flush=True)
+        ''')
+        top = lines(p, 1)[0][0]
+        self.assertEqual(p.wait(20), 0)
+        wait_until(lambda: not unit_names(p.pid), 'no unit of the owner left')
+        self.assertFalse(os.path.isdir(self.c.cg_dir(top)))
+
+    def test_a_carrier_that_was_killed_or_stopped_is_made_again_and_each_command_runs_once(self):
+        ran = self.marker()
+        argv = ['sh', '-c', 'echo x >> ' + ran]
+        first = self.run_short(argv)[0].carried
+        first.holder.kill()                                 # the holder killed
+        first.holder.wait()
+        second = self.run_short(argv)[0].carried
+        self.assertIsNot(second, first)
+        subprocess.run(['systemctl', '--user', 'stop', second.name], timeout=30, check=False)
+        third = self.run_short(argv)[0].carried
+        self.assertIsNot(third, second)
+        with open(ran) as f:
+            self.assertEqual(f.read().split(), ['x', 'x', 'x'])
+
+    def fell_back(self, body, refused):
+        folder = tempfile.mkdtemp(prefix='kit-contain-')
+        self.addCleanup(shutil.rmtree, folder, True)
+        ran = self.marker()
+        with mock.patch.object(self.c, 'BUSCTL', fake_busctl(folder, body)):
+            job, rc, out = self.run_short(['sh', '-c', 'echo x >> %s; cat /proc/self/cgroup'
+                                           % ran])
+            self.assertEqual(rc, 0)
+            self.assertIsNone(job.carried)                  # a scope of its own
+            self.assertIsNone(job.parent)
+            self.assertTrue(self.c.TOP.match(job.name), job.name)
+            self.assertEqual(out.strip(), '0::%s/main' % job.cg)
+            with open(ran) as f:
+                self.assertEqual(f.read().split(), ['x'])  # once
+            self.assertEqual(self.c._carrier.off is not None, refused)
+        job2 = self.run_short(['true'])[0]                  # the real busctl
+        self.assertEqual(job2.carried is None, refused)
+
+    def test_a_refused_move_gives_a_scope_of_its_own_and_turns_the_carrier_off(self):
+        self.fell_back('echo refused by the test >&2; exit 1', refused=True)
+
+    def test_a_move_not_seen_gives_a_scope_of_its_own(self):
+        self.fell_back('exit 0', refused=False)
+
+    def test_a_long_job_has_its_own_scope_and_a_short_job_in_a_kit_job_nests_there(self):
+        job = self.c.Job()
+        job.start(['true']).wait(20)
+        job.close()
+        self.assertIsNone(job.carried)
+        self.assertTrue(self.c.TOP.match(job.name), job.name)
+        outer = self.c.Job()
+        self.addCleanup(outer.close)
+        q = outer.start(self.owner_argv('''
+            job = Job(short=True)
+            job.start(['true']).wait(20)
+            job.close()
+            print(job.cg, job.carried, flush=True)
+        '''), stdout=subprocess.PIPE, cwd=os.getcwd(), env=self.owner_env())
+        out = q.communicate(timeout=30)[0].decode().split()
+        self.assertTrue(out[0].startswith(outer.cg + '/j-'), out)
+        self.assertEqual(out[1], 'None')
+        self.assertEqual(self.carriers(), [outer.name])
+
+    def test_a_forked_child_makes_its_own_carrier(self):
+        p = self.owner('''
+            def top():
+                job = Job(short=True)
+                job.start(['true']).wait(20)
+                job.close()
+                return job.carried.cg
+            mine = top()
+            r, w = os.pipe()
+            pid = os.fork()
+            if pid == 0:
+                os.write(w, top().encode())
+                os._exit(0)
+            os.close(w)
+            os.waitpid(pid, 0)
+            print(mine, os.read(r, 4096).decode(), top(), pid, flush=True)
+        ''')
+        mine, child, again, pid = lines(p, 1)[0]
+        self.assertNotEqual(mine, child)
+        self.assertIn('-job-%s-' % pid, child)              # the child's own
+        self.assertEqual(mine, again)
+        self.assertEqual(p.wait(20), 0)
+        for owner in (p.pid, int(pid)):
+            wait_until(lambda: not unit_names(owner), 'no unit of %d left' % owner)
+
+    def test_short_jobs_started_at_once_make_one_carrier(self):
+        busy_starts(self, lambda: self.short(kill_on_close=True), n=8)
+        self.assertEqual(len(self.carriers()), 1, unit_names())
+
+    def test_an_owner_killed_before_go_runs_no_short_command(self):
+        self.owner_dies_before_go('Job(kill_on_close=%s, short=True)', 'job.wd')
+
+    def test_a_weak_short_job_is_a_weak_job(self):
+        job = self.c.Job(tier=self.c.Tier('W2', self.c.W2_LACKS, why='forced'), short=True)
+        self.assertIsInstance(job, self.c.WeakJob)
+        job.start(['true']).wait(20)
+        job.close()
+        self.assertIsNone(self.c._carrier)
 
 
 @posix_only('the weak tier walks /proc')

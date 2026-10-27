@@ -232,7 +232,7 @@ def run_tree(cmd, timeout=None, **kw):
     their end: a claude installed through npm is a .cmd shim, so that child is cmd.exe and node is
     its child, which holds the pipe open and keeps run waiting for it. Returns CompletedProcess."""
     from kitlib.proc import job as kjob
-    j = kjob.Job(kill_on_close=False)
+    j = kjob.Job(kill_on_close=False, short=True)
     try:
         p = j.start(cmd, **kw)
         try:

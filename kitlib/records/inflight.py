@@ -121,7 +121,7 @@ def run(argv, cwd, timeout):
     environment kitlib.git.cmd.scrubbed_env() gives (an inherited GIT_DIR would make a git in it
     answer about another repository). Raises OSError when it cannot start, and
     subprocess.TimeoutExpired after `timeout` seconds, the job's whole tree ended first."""
-    job = _job.Job()                       # kill-on-close: nothing it started outlives the look
+    job = _job.Job(short=True)             # kill-on-close: nothing it started outlives the look
     try:
         p = job.start(argv, cwd=cwd, env=gitcmd.scrubbed_env(), stdin=subprocess.DEVNULL,
                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
