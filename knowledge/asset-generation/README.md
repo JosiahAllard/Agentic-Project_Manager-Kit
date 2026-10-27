@@ -2,7 +2,9 @@
 
 Every agent on this machine reads this folder before generating anything and writes nothing
 into it: the folder is part of the kit and read-only for agents, and session records go to the
-repository's `docs/ops/assets.md`. A change to a file here goes through a kit branch. It holds what we have learnt about making game assets with the owner's local
+repository's `docs/ops/assets.md`. A change to a file here goes through a kit branch.
+
+It holds what we have learnt about making game assets with the owner's local
 models: what works, what does not, and how to do it well. Nothing here is specific to one
 repository. Repository rules (asset policy, attribution format, art direction) live in each
 repository and win over this folder.
@@ -21,9 +23,10 @@ python <kit>/optional/comfy/render_glb.py  (run through Blender, see its docstri
 python <kit>/optional/comfy/compare_sheet.py OUT.html [LABEL=]IMAGE ... [--cols N]
 ```
 
-- It only talks to ComfyUI on this machine (`127.0.0.1:8188`). The owner starts and stops
-  ComfyUI; agents never start, install, download or update anything in it.
-- It takes the machine-wide GPU lock for each command (see below) and writes a sidecar
+- It only talks to ComfyUI on this machine (`127.0.0.1:8188`). Every generating command
+  starts ComfyUI if it is down and stops it again if the tool started it; a ComfyUI the owner
+  started is left running. Agents never install, download or update anything in it.
+- It takes the machine-wide GPU lock for each generating command (see below) and writes a sidecar
   `<file>.json` next to every output: model, licence, prompt, seed, settings, date and
   seconds taken. Copy those fields into the repository's attribution record.
 - Each command saves ComfyUI's own copies into its own folder,
@@ -35,8 +38,8 @@ python <kit>/optional/comfy/compare_sheet.py OUT.html [LABEL=]IMAGE ... [--cols 
   sidecar part of the branch as soon as it is generated. Candidates the owner
   has not picked yet go there too; delete the rejected ones on the branch before
   it lands. (Owner's rule.)
-- `comfy_api.py` converts any installed ComfyUI template into an API prompt, so a new
-  workflow does not need hand-building: `comfy_gen.py template --template NAME --print-api`.
+- `<kit>/optional/comfy/comfy_api.py` converts any installed ComfyUI template into an API prompt, so a new
+  workflow does not need hand-building: `comfy_gen.py template --template NAME --out DIR --name STEM --print-api`.
 
 ## Rules every agent follows
 
