@@ -407,13 +407,18 @@ store's git push (the `push` setting).
   `filed_as` ("Filing the answer"):
   - `pulled` (someone is working on the record): its asker alone, until it picks it up; when the PM
     asked, the PM, sent once, for its information.
-  - `freed` (the record was parked or blocked and is now open): the PM alone, sent once, and only when no
-    live session can take the record up: the delivery's `resolve` finds no live session for the asker,
-    the record's repository or the question's repo. A delivery with no `resolve` counts as none live, and
-    a key whose `resolve` raises as not live (logged), so the PM is told.
-  - `held` (the record still waits on more): nobody. The asker reads it in its pending list, and the PM
-    start's digest counts the answers filed since the last start that are still `filed`
-    (docs/pm-start.md "Filed answers"); a logged or done one drops out.
+  - `freed` (the record was parked or blocked and is now open) and `held` (the record still waits on
+    more): one recipient, by who is live (the delivery's `resolve`; a delivery with no `resolve` counts
+    as none live, and a key whose `resolve` raises as not live, logged; `push.py` `_live_session`): the
+    asker while it is live, until it picks it up; else the coordinator of the record's repository or of
+    the question's repo (each through the repository-to-key map an approval's push uses, `Api.repo_key`,
+    then as it is) while one is live, sent once; else, for `freed`, the PM, sent once, to start a
+    coordinator, and for `held`, the asker all the same (it also reads it at its next start). The PM that
+    asked is told once. Until 2026-10-27 `held` went to nobody and `freed` only to the PM, on the
+    assumption that a live session would find the answer by itself; live coordinators did not, and owner
+    answers sat unread (KIT-HUB-FILED-ANSWER-NO-PUSH). The PM start's digest still counts the answers
+    filed since the last start that are still `filed` (docs/pm-start.md "Filed answers"); a logged or
+    done one drops out.
 
   The phase a question goes through while it is being filed is skipped: a filed answer is judged against
   the question as it was before the answer (a first answer or a re-answer). An answer that is a standing
@@ -424,15 +429,19 @@ store's git push (the `push` setting).
   the session takes the message as a prompt. A to-do's line is `A done mark is not proof: verify each
   step on disk, then: hub todo ack <id>`: the owner marks a to-do done even when a step inside it failed.
   A filed answer's line names the record (`<repo>:<id>`) and what to do: pick it up (`pulled`, the
-  asker), read it with no ack needed (`pulled` to the PM that asked, and `freed`, which also says to
-  start a coordinator of the record's repository), and, for a standing rule, log it in the ledger (`hub
-  questions log <id> --if-version N`), which acknowledges it.
+  asker), read it with no ack needed (`pulled` to the PM that asked, and `freed` to the PM, which also
+  says to start a coordinator of the record's repository), and, for a standing rule, log it in the
+  ledger (`hub questions log <id> --if-version N`), which acknowledges it. A `freed` or `held` line says
+  first what the filing did: `frees record <repo>:<id>` (open to take up), or `does not free record
+  <repo>:<id>: the record stays as it was (still parked or blocked if it was), so do not take it up as
+  freed`; then read it (`hub pending --for <asker>`, which acknowledges it), or, to a coordinator or the
+  PM that asked, `hub view <id>` with no ack needed (a coordinator's names the asker that is not running).
 - Until when: each recipient is sent each item until it is acknowledged. The asking session acknowledges
   by picking the item up (`pending --for` or `wait --pending --for` hands it over), or by `todos ack`;
   the PM by `todos ack` for a to-do and by `questions log` or `questions done` for a question; for a
   question the hub filed into its record (status `filed`) asked by another session, by the filing itself,
-  since its asker reads it; for a filed answer's `pulled` note to the PM that asked it and its `freed`
-  ping, by the first written try; for a standing rule, only by logging it (a standing rule is never
+  since its asker reads it; for a filed answer's note to the PM that asked it, its `freed` ping and its
+  push to a record's coordinator, by the first written try; for a standing rule, only by logging it (a standing rule is never
   marked done); for a story, any change of its status (`stories set`), and for a note to the PM, its
   reply (`to-pm reply`). An approval's push is sent once to each: the first written try acknowledges it.
   An item withdrawn, reopened or answered again replaces or ends its push. A session that picked up a
@@ -496,10 +505,8 @@ store's git push (the `push` setting).
   - An approval's 20-hour reminder (`expiring`) is not sent when the server is down across the 20-hour
     mark after its `decided` push was delivered. The approval stays pending for its coordinator and the
     PM until it is consumed or expires.
-  - A `freed` answer's live check takes the asker, the record's repository and the question's repo as
-    session keys as they are, not through the repository-to-key map an approval's push uses
-    (`Api.repo_key`). A coordinator whose key is none of them is not found, so the PM is told when it need
-    not be: an extra ping, never a lost one.
+  - A filed answer's live check is read once, when the filing is seen: an asker that ends after it is
+    still tried (and reads it at its next start), and a coordinator started after it is not told.
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py.
 
