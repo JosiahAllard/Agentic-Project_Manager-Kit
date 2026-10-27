@@ -1707,6 +1707,18 @@ class DomTest(unittest.TestCase):
         # a tab chosen since, on the page as it is now, is the later word
         self.assertEqual(reload({"oq.section": "parked", "oq.sfilter": "done"})["tab"], ["done"])
 
+    def test_a_stored_agents_section_reopens_agents_and_a_stored_agents_infotab_falls_back_to_usage(self):
+        def reload(keys):
+            return dom("""
+                for (const [k, v] of Object.entries(KEYS)) localStorage.setItem(k, v);
+                await start();
+                return { section: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
+                         tabs: $$("#ftabs .tab").filter(t => t.getAttribute("aria-selected") === "true").map(t => t.dataset.nf) };
+            """.replace("KEYS", json.dumps(keys)), snapshot(views={}))
+        self.assertEqual(reload({"oq.section": "agents"})["section"], ["agents"])
+        got = reload({"oq.section": "info", "oq.infotab": "agents"})      # Agents was a Usage tab in an older page
+        self.assertEqual((got["section"], got["tabs"]), (["info"], ["usage"]))
+
     def test_a_usage_tie_goes_to_the_weekly_window_whichever_account_has_it(self):
         def chip(accounts):
             return dom("""
