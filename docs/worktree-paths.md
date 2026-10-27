@@ -1,6 +1,6 @@
 # Worktree paths
 
-Where a write from a worktree may go. An agent's patch script opened docs by a relative path with the main checkout as its cwd, and edited the main checkout instead of its worktree.
+Where a write from a worktree may go. A script that opens a relative path writes wherever its cwd is, the main checkout included; the rule below joins a relative path to the worktree instead.
 
 ## The rule
 
@@ -26,4 +26,4 @@ checkout.write_text('docs/x.md', text.replace('old', 'new'), root=r'<your worktr
 
 `tools/worktree_paths.py [-C WORKTREE] PATH...` prints each path resolved against the work tree `WORKTREE` is in (default: the current directory's), or `REFUSED: ...`. Exit 0 when every path is allowed, 2 when one is refused or on a usage error.
 
-Not ported: the PM copy's `ROOT` taken from where the module was loaded or from `KIT_REPO_ROOT`. Tests: tests/git/test_worktree_paths.py; `check_write` itself is tested in tests/git/test_git.py.
+Tests: tests/git/test_worktree_paths.py; `check_write` itself is tested in tests/git/test_git.py.
