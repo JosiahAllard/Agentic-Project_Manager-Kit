@@ -19,7 +19,7 @@ The kit is live and the go-live holds are released: three repositories, this kit
 
 ## Coordinator rename
 
-The kit no longer reads the old name anywhere (the fallbacks are removed). The record of the switch, kept because tests/scrub/test_no_conductor.py allows these lines, then what is left outside the kit:
+The kit no longer reads the old name anywhere (the fallbacks are removed). The record of the switch, kept because a scrub test allows these lines, then what is left outside the kit:
 
 - Launcher (done): the old `start-conductor.ps1` is retired; the kit's `launch.py` runs `launcher.coordinator_agent` (default `coordinator`, started as `pm-kit:coordinator`) and always marks it `coordinator`.
 - Launcher state and task (done): `<state_dir>\conductors.json` was renamed `coordinators.json`, `install-autostart` was run from the main kit checkout under the new task name, and each coordinator moved to a `coordinator` stem with `launch.py handoff --session <key> --stem <repo>-coordinator` (docs/launcher.md "Hand-off").
