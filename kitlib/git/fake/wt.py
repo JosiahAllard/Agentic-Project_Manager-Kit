@@ -376,12 +376,19 @@ class Tree:
         self.warnings = []
 
     def _index_has_cr(self, path):
+        """convert.c has_crlf_in_index: the index's blob for `path` (stage 0, else stage 2,
+        read-cache.c read_blob_data_from_index) holds a CRLF and is not binary."""
         def f():
             e = self.index.get(path)
             if e is None:
+                e = self.index.get(path, 2)
+            if e is None:
                 return False
             got = self.repo.objects.read(e.oid)
-            return got is not None and b'\r' in got[1]
+            if got is None or b'\r' not in got[1]:
+                return False
+            s = gather_stats(got[1])
+            return bool(s.crlf) and not is_binary(s)
         return f
 
     def blob_data(self, path, warn=False):

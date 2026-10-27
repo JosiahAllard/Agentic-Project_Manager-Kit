@@ -399,6 +399,20 @@ ATTRIBUTES_AUTOCRLF = [
     ('git', ['status', '--porcelain=v1']),
 ]
 
+# convert.c has_crlf_in_index: an index blob with a CRLF stops the conversion, unless the blob
+# is binary (a lone CR makes it so).
+AUTOCRLF_INDEX_CR = [
+    ('bytes', 'cr.txt', b'a\rb\r\n'),
+    ('bytes', 'crlf.txt', b'c\r\nd\r\n'),
+    ('git', ['add', '--', 'cr.txt', 'crlf.txt']),
+    ('git', ['commit', '-q', '-m', 'cr']),
+    ('git', ['config', 'core.autocrlf', 'true']),
+    ('bytes', 'cr.txt', b'a\r\nb\r\n'),
+    ('bytes', 'crlf.txt', b'c\r\nd\r\ne\r\n'),
+    ('git', ['add', '--', 'cr.txt', 'crlf.txt']),
+    ('git', ['ls-files', '-s']),
+]
+
 # Real git reads both repositories after a script.
 END_STATE = [
     ['for-each-ref', '--format=%(refname) %(objectname)'],
@@ -480,6 +494,9 @@ class FakeAgainstRealGit(unittest.TestCase):
 
     def test_gitattributes_under_core_autocrlf(self):
         self.run_script(BRANCH_AND_LAND[:3] + ATTRIBUTES_AUTOCRLF)
+
+    def test_a_binary_index_blob_with_a_cr_leaves_conversion_on(self):
+        self.run_script(BRANCH_AND_LAND[:3] + AUTOCRLF_INDEX_CR)
 
 
 if __name__ == '__main__':
