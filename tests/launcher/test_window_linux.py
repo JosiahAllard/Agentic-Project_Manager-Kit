@@ -47,7 +47,8 @@ class Linux(unittest.TestCase):
     def test_script_is_bash_one_step_a_line_in_the_windows_order(self):
         lines = self.text().split('\n')
         self.assertEqual(lines[0], "printf '\\033]0;%s\\007' 'alpha-coordinator-a1'")
-        self.assertEqual(lines[1:5], [linuxwin.CLEAR_CLAUDE, linuxwin.PERSIST,
+        self.assertEqual(lines[1:5], ['for v in "${!CLAUDE@}" "${!ANTHROPIC@}"; do unset "$v"; done',
+                                      'export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1',
                                       "export PM_KIT_ROLE='coordinator'",
                                       "export PM_KIT_SESSION_NAME='alpha-coordinator-a1'"])
         self.assertEqual(lines[5], "export CLAUDE_CONFIG_DIR='/home/u/.claude-a1'")

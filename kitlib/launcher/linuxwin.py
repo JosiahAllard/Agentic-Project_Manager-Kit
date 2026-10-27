@@ -28,6 +28,7 @@ import re
 import subprocess
 
 from kitlib import sessionmark
+from kitlib.launcher import window
 from kitlib.launcher.settings import LaunchError
 from kitlib.proc import spawn
 
@@ -36,8 +37,10 @@ SHELL_NAME = 'bash'         # the shell's process name (its comm)
 TMUX = 'tmux'
 ROLE_ENV = sessionmark.ENV
 NAME_ENV = 'PM_KIT_SESSION_NAME'
-CLEAR_CLAUDE = 'for v in "${!CLAUDE@}" "${!ANTHROPIC@}"; do unset "$v"; done'
-PERSIST = 'export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1'
+# the Windows window's variables (window.ENV_STEMS, PERSIST_ENV, CONFIG_ENV), in bash
+CLEAR_ENV = 'for v in %s; do unset "$v"; done' % ' '.join(
+    '"${!%s@}"' % stem for stem in window.ENV_STEMS.split('|'))
+PERSIST = 'export %s=1' % window.PERSIST_ENV
 STAY = 'exec %s -i' % SHELL
 _UNSAFE = re.compile(r'[^A-Za-z0-9_-]')
 
@@ -58,10 +61,10 @@ def script(name, role, folder, command, config_dir=None, agent_temp=None):
     (CLAUDE_CONFIG_DIR unset)."""
     if not role:
         raise ValueError('every launched session carries a PM_KIT_ROLE mark')
-    lines = ["printf '\\033]0;%%s\\007' %s" % q(name), CLEAR_CLAUDE, PERSIST,
+    lines = ["printf '\\033]0;%%s\\007' %s" % q(name), CLEAR_ENV, PERSIST,
              'export %s=%s' % (ROLE_ENV, q(role)), 'export %s=%s' % (NAME_ENV, q(name))]
-    lines.append('export CLAUDE_CONFIG_DIR=%s' % q(config_dir) if config_dir
-                 else 'unset CLAUDE_CONFIG_DIR')
+    lines.append('export %s=%s' % (window.CONFIG_ENV, q(config_dir)) if config_dir
+                 else 'unset %s' % window.CONFIG_ENV)
     if agent_temp:
         t = q(agent_temp)
         lines += ['mkdir -p -- %s' % t,

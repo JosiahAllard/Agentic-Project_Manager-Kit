@@ -26,20 +26,21 @@ def rc_name(cmd):
 list_processes = pmstart.list_processes
 
 
-def _claude_images():
-    """The process names a Claude session runs as: claude.exe; on Linux the claude host's Linux
-    process_names in hosts.json (claude, node). LaunchError when hosts.json cannot be read."""
+def _session_images():
+    """The process names a launched session runs as: claude.exe; on Linux the default host's
+    (the claude host's) Linux process_names in hosts.json (claude, node). LaunchError when
+    hosts.json cannot be read."""
     if platform.NAME != 'linux':
         return ('claude.exe',)
     try:
-        names = dict(registry.host('claude').profile.process_names).get('linux') or ()
+        names = dict(registry.default_profile().process_names).get('linux') or ()
     except registry.RegistryError as e:
-        raise LaunchError('cannot tell a Claude process on Linux: %s' % e)
+        raise LaunchError('cannot tell a session process on Linux: %s' % e)
     return tuple(names)
 
 
 def claude_sessions(procs):
-    images = _claude_images()
+    images = _session_images()
     return [p for p in procs
             if p.get('Name') in images and p.get('CommandLine')
             and pmstart.STORE_DIR not in (p.get('ExecutablePath') or '')]

@@ -46,9 +46,14 @@ SHOW_MIN_NO_ACTIVE = 7
 
 USER_ENV = ("foreach ($k in [Environment]::GetEnvironmentVariables('User').Keys) { if (@('Path','TEMP','TMP') "
             "-notcontains $k) { Set-Item -Path ('env:' + $k) -Value ([Environment]::GetEnvironmentVariable($k, 'User')) } }")
-CLEAR_CLAUDE = ("Get-ChildItem Env: | Where-Object { $_.Name -match '^(CLAUDE|ANTHROPIC)' } | ForEach-Object "
-                "{ [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }")
-PERSIST = "$env:CLAUDE_CODE_FORCE_SESSION_PERSISTENCE = '1'"
+# The host's variables, named once for the Windows and the Linux window (linuxwin): the stems a
+# window clears (CLAUDECODE too), the session-persistence switch and the account's config folder.
+ENV_STEMS = 'CLAUDE|ANTHROPIC'
+PERSIST_ENV = 'CLAUDE_CODE_FORCE_SESSION_PERSISTENCE'
+CONFIG_ENV = 'CLAUDE_CONFIG_DIR'
+CLEAR_CLAUDE = ("Get-ChildItem Env: | Where-Object { $_.Name -match '^(%s)' } | ForEach-Object "
+                "{ [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }") % ENV_STEMS
+PERSIST = "$env:%s = '1'" % PERSIST_ENV
 
 
 def role_for(agent, coordinator_agent='coordinator'):
@@ -110,8 +115,8 @@ def script(name, role, folder, command, config_dir=None, agent_temp=None):
         return linuxwin.script(name, role, folder, command, config_dir, agent_temp)
     lines = ['$Host.UI.RawUI.WindowTitle = %s' % q(name), USER_ENV, CLEAR_CLAUDE, PERSIST,
              '$env:%s = %s' % (ROLE_ENV, q(role)), '$env:%s = %s' % (NAME_ENV, q(name))]
-    lines.append('$env:CLAUDE_CONFIG_DIR = %s' % q(config_dir) if config_dir
-                 else 'Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue')
+    lines.append('$env:%s = %s' % (CONFIG_ENV, q(config_dir)) if config_dir
+                 else 'Remove-Item Env:%s -ErrorAction SilentlyContinue' % CONFIG_ENV)
     if agent_temp:
         lines += ['if (-not (Test-Path %s)) { New-Item -ItemType Directory -Force %s | Out-Null }'
                   % (q(agent_temp), q(agent_temp)),
