@@ -7,12 +7,15 @@ the recipient host's native channel, and never resends a message whose outcome i
 works today, per host and direction, is in `optional/bridge/STATUS.md`. Read it before relying on
 any of this: no message has yet been delivered end to end between live chats.
 
-**Claude and Codex are both served.** The bridge serves a host only when `hosts.json` registers
-it (`registry.py`), and `hosts.json` registers both (plan step 9). A profile for a host that is not
-registered is refused with `native-provider-unavailable`. The refusal happens while the
-configuration is checked, before that half's `bridge-profile.json` is read. Being served does not
-make a direction work: STATUS.md has the per-direction limits. Claude to Codex needs an
-owner-granted writer lease (Contracts, "Writer leases"), and the Codex terminal adapter is dead.
+**Claude and Codex are both served.** The bridge serves a peer only when its own list,
+`peers.json`, names it and the peer has a half (`registry.py`). That list is apart from the kit's
+`hosts.json`: a bridge peer need not be a kit host. It names Claude and Codex. A profile for a peer
+that is not listed is refused with `native-provider-unavailable`. The refusal happens while the
+configuration is checked, before that half's `bridge-profile.json` is read. Every pair of served
+peers may be connected, except a pair `peers.json` refuses (Contracts, "Host pairs"); today the
+one refused pair is Codex to Codex. Being served does not make a direction work: STATUS.md has
+the per-direction limits. Claude to Codex needs an owner-granted writer lease (Contracts, "Writer
+leases"), and the Codex terminal adapter is dead.
 
 This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 (docs/multi-host-plan.md section 2.4). Its design history, the Phase 0 evidence and the
@@ -22,9 +25,10 @@ This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 
 | Path | What |
 |---|---|
-| `core/` | Host-neutral and Win32-free: `messages` (records, `DeliveryError`), `outbox` (durable SQLite store), `dispatch` (`CoreBroker`), `pairing` (owner-selected routes), `owner` (owner decisions), `callers` (one-use caller proofs), `mcp` (the MCP tool server), `prompt` (delivered text header), `jsonwire` (bounded JSON lines), `contracts` (`AdapterDescription`, `Capability`, identities) |
+| `core/` | Host-neutral and Win32-free: `messages` (records, `DeliveryError`), `outbox` (durable SQLite store), `dispatch` (`CoreBroker`), `pairing` (owner-selected routes), `hostpairs` (`HostPairs`, the host-pair rule), `owner` (owner decisions), `callers` (one-use caller proofs), `mcp` (the MCP tool server), `prompt` (delivered text header), `jsonwire` (bounded JSON lines), `contracts` (`AdapterDescription`, `Capability`, identities) |
 | `port.py` | The port a host's half implements (below) |
-| `registry.py` | Which hosts are served: `hosts.json` names that have a half |
+| `peers.json` | The bridge's peers (`peers`) and the host pairs it refuses (`refused`, as `[sender, recipient]`) |
+| `registry.py` | Which peers are served: `peers.json` names that have a half; `host_pairs()` reads the rule |
 | `paths.py` | The entry scripts' kit paths, which the service verifies by command line |
 | `win/` | The Windows service: `runtime` (config, assembly, `run_service`), `lifecycle` (supervisor, private state root, service marker), `leader` (singleton mutex and pipe), `controller`, `service` (private RPC handler), `rpc`/`rpcworker`/`worker`/`transport` (owned helper processes over named pipes), `frontend` (the MCP stdio frontend and its kernel verification), `channel` (an inherited native app channel), `hosts` (native image sets), `evidence` (bounded stable file reads), `install` (installation preparation), `startup` (startup task), `owner_view`, `launch` (`-I -B`) |
 | `ui/window.py` | The owner's connection window (tkinter) |
@@ -35,11 +39,12 @@ This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 Layer rules:
 - The core kit never imports `optional/` (tests/host/test_layering.py).
 - The bridge imports from the kit only `kitlib.ident`, `kitlib.proc` (`pipe`, `errors`,
-  `process`, `job`), `kitlib.host.registry` (to read `hosts.json`) and, in the Claude half,
-  `hosts.claude.adapter.peer` (the peer wire format and pipe write). Its Win32 code is in
-  `win/`, the halves and `kitlib/proc`.
-- `core/` names no host and touches no Win32. Nothing outside `hosts/` names a host
-  (tests/bridge/test_port.py). The service loops over the served halves.
+  `process`, `job`) and, in the Claude half, `hosts.claude.adapter.peer` (the peer wire format and
+  pipe write). It does not read `hosts.json`. Its Win32 code is in `win/`, the halves and
+  `kitlib/proc`.
+- `core/` names no host and touches no Win32. No bridge code outside `hosts/` names a host
+  (tests/bridge/test_port.py); host names outside the halves are data, in `peers.json`. The
+  service loops over the served halves.
 
 ## The port (`port.py`)
 
@@ -76,9 +81,10 @@ uses only those it finds:
 | `ReturnChannel` | `close()` | An owned endpoint for replies or receipts. `port.OwnedDelivery(adapter, channel, ...)` closes it with the adapter. |
 | `HookSink` | `(peer, payload)` | Takes a native hook event from a verified helper process. The service routes the frame to the one provider that has a sink. Two sinks refuse the frame. |
 
-`registry.py` serves a host when `hosts.json` registers it and `optional/bridge/hosts/<module>/`
-exists. The module is the host name with `-` replaced by `_`. A folder for an unregistered host is
-never imported or read. The MCP frontend reads only the served halves' `channel_env`, from their
+`registry.py` serves a peer when `peers.json` lists it and `optional/bridge/hosts/<module>/`
+exists. The module is the peer name with `-` replaced by `_`. A folder for an unlisted peer is
+never imported or read. A `peers.json` that cannot be read or is malformed refuses with
+`invalid-bridge-peers`. The MCP frontend reads only the served halves' `channel_env`, from their
 `bridge-profile.json`, and imports no host code. A served half whose profile cannot be read
 nominates no channel, and the other halves keep working.
 
@@ -91,6 +97,15 @@ nominates no channel, and the other halves keep working.
   native id, adapter, account, workspace) and restored when it reopens. A queued message keeps its
   original full binding and is refused rather than moved onto a reopened process. Display titles
   grant nothing. No MCP tool writes owner policy.
+- **Host pairs** (`core/hostpairs.py`, `peers.json`). Which host may send to which, checked in the
+  core and named by no code: a chat belongs to the peer its adapter id names (the name, or the
+  name and `-`; the longest listed name wins). Every ordered pair of listed peers is allowed,
+  self pairs included, unless `refused` lists it, so a newly listed peer reaches every other one
+  with no pair written down. An adapter id no peer names is outside the rule. The service's broker
+  refuses a refused pair at admission (`host-pair-refused`, nothing queued) and again before any
+  send, so a message queued before the rule held is refused (`host-pair-refused`) without reaching
+  an adapter. `refused` holds `["codex", "codex"]`, the owner's decision; the Codex half's own
+  checks below stay as a backstop at the write.
 - **Writer leases** (`core/owner.py` `WriterLeases`, `hosts/codex/runtime.py`). A Codex chat is
   written only by a Codex desktop chat in an active turn, which is the native executor. A sender
   of another host has none, so the owner may lend one: in the window, select a Codex desktop chat
@@ -114,8 +129,9 @@ nominates no channel, and the other halves keep working.
 
   At every write the writer must hold the lease, be live, be in an active turn, be on the
   recipient's account and not be the recipient, or the send refuses before any byte. A reply
-  return from another host to a Codex chat uses the same lease. A Codex sender never uses a lease and is
-  refused (`codex-direct-route-unavailable`): the bridge does not carry Codex-to-Codex. The window's lease buttons have no test.
+  return from another host to a Codex chat uses the same lease. A Codex sender never uses a lease: the bridge does not carry
+  Codex-to-Codex. The host-pair rule refuses it first (`host-pair-refused`); the half still
+  refuses it at the write (`codex-direct-route-unavailable`). The window's lease buttons have no test.
 - **Caller proofs** (`core/callers.py`). For each call, the frontend's attestor turns private
   metadata into a sender and task root, bound to that exact intent. A proof is used once and lasts
   5 seconds. The sender and task root are never tool arguments.
@@ -221,7 +237,9 @@ Add `optional/bridge/hosts/<module>/` with:
 - `bridge-profile.json`, with `channel_env` if the host's app nominates a tool pipe
 - the provider, and optionally the delivery adapter
 
-The half is served only once the host is registered in `hosts.json` (docs/new-host.md).
+The half is served only once `peers.json` lists the peer (docs/new-host.md). A peer need not be
+a kit host in `hosts.json`. Its pairs with every other peer are allowed unless `refused` lists
+them, and `tests/bridge/test_host_pairs.py` walks them all with no change to the test.
 
 Its tests go in `tests/bridge/`. The host's conformance class then runs the bridge part of the
 suite by itself (`tests/host/bridge_conformance.py`, through `bridge_conformance.mixin(HOST)`).

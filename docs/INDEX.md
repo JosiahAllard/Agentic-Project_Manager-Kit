@@ -11,7 +11,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `CLAUDE.md` | Claude's pointer: imports AGENTS.md | always | kw: rules, claude
 - `AGENTS.md` | kit repo rules for every agent host (canonical) | always | kw: rules, agents
 - `README.md` | what the kit is | first look | kw: readme, overview
-- `ARCHITECTURE.md` | kit tool architecture (the contract; owner approves changes) | before changing a tool | kw: architecture, contract
+- `ARCHITECTURE.md` | kit tool architecture (the contract) | before changing a tool | kw: architecture, contract
 - `docs/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
 - `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile

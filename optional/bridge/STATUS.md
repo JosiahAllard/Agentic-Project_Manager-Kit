@@ -5,9 +5,10 @@ What the bridge does today, per host and direction. Design and install are in
 `codex/robust-bridge-plan` at its tip when the port was made. The port moved code and changed little behaviour; what it did
 change is listed in "Changes from the source".
 
-**Claude and Codex are both served.** `hosts.json` registers both (plan step 9), so the service
+**Claude and Codex are both served.** The bridge's own `peers.json` lists both, so the service
 and `bridge_prepare.py` accept a Codex profile, and the MCP frontend reads Codex's channel variable.
-Being served is not being deliverable. The limits below still hold:
+Every pair of the two may be connected except Codex to Codex, which `peers.json` refuses (README
+"Host pairs"). Being served is not being deliverable. The limits below still hold:
 - Claude to Codex is delivered only through an owner-granted writer lease (README "Writer
   leases"). No live run has shown it.
 - Only the Codex desktop app can deliver to a Codex chat.
@@ -36,10 +37,10 @@ Being served is not being deliverable. The limits below still hold:
 | From → to | Adapter | State |
 |---|---|---|
 | any → Claude terminal or desktop | `claude-peer`. It writes Claude's protocol-1 peer packet into the recipient's own pipe and receives status packets on an owned return pipe. | Built. It writes once, and the outcome is **unknown** (`native-outcome-unconfirmed`) until a correlated `held`, `refused` or `expired` packet arrives. Neither acceptance nor a reply is confirmed natively. Return expectations live only for the endpoint's lifetime (512 at most). Waking an idle chat is unproved. |
-| Codex → Codex | none | **Refused by design.** The bridge is for Claude and Codex and outside tools; Codex chats message each other through Codex's own messaging. A Codex sender with no writer lease is refused before writing (`codex-direct-route-unavailable`), and a lease never serves a Codex sender. |
+| Codex → Codex | none | **Refused by design.** The bridge is for Claude and Codex and outside tools; Codex chats message each other through Codex's own messaging. `peers.json` refuses the pair, so the broker refuses it at admission (`host-pair-refused`, nothing queued) and again before any send. Behind that, the Codex half still refuses a Codex sender before writing (`codex-direct-route-unavailable`), and a lease never serves one. |
 | Claude → Codex | `codex-desktop`, through an owner-granted **writer lease**: a Codex desktop chat in an active turn carries the message as the native executor | Built, fixtures only. The owner grants it in the window for one recipient until Stop, a PM revoke or either chat's binding being replaced (a turn change or a failed observation ends nothing); it lives in memory, a service restart drops it, and every grant is logged. A writer whose turn has ended is refused (`codex-direct-context-unverified`) until it makes a bridge call in a new active turn. The sender's own route must still be selected, and the writer must be live, in an active turn, on the recipient's account and not the recipient, at every write. Without a lease the adapter refuses before writing (`codex-direct-route-unavailable`). A reply return from another host to a Codex chat needs the lease too. A correlated success means "scheduled" only, never "ran" or "replied". The check after the write accepts the recipient's turn having moved on (the delivery starts a new turn) but still requires the same app process, image and channel, the lease, and the recipient's same rollout file holding the captured turn; it drops no chat from the observed list. A failure there gives **unknown**, its reason `native-outcome-uncertain:<adapter code>`. The tools pipe is a measured private protocol, not a public contract. Both chats must be in the same app, distinct and on the same account. |
 | Codex terminal as recipient | `codex-terminal` (`CodexTerminalAdapter`) | **Dead.** It advertises no capability and every send refuses before writing. No verified control channel to the original terminal exists (the default control socket was absent; the experimental queue methods are unproved). The service never installs it. |
-| Codex chat's reply → a Codex sender | the return delivery over `codex-desktop` | Recorded and readable, but **no native bytes are sent**: a Codex sender, a reply's author included, is refused (Codex to Codex is not bridged). |
+| Codex chat's reply → a Codex sender | none | Does not arise: the Codex-to-Codex message it would answer is refused at admission (`host-pair-refused`). A return delivery queued earlier is refused before any send, and the Codex half would refuse it at the write too. |
 
 Routes, durable queueing, receipts, events, refusals, replies and the owner window work the same
 for every host. They are core and service mechanics, and they are tested.
@@ -82,10 +83,14 @@ The port changes these behaviours, all visible to a caller or an operator:
 - **Hook routing:** a native hook frame goes to the one served provider that has a hook sink.
   When none or two have one, the frame is refused (`hook-producer-unavailable`). The source sent
   it to the provider named `claude`.
-- **Serving:** a host's half is used only when `hosts.json` registers the host. Claude and Codex
-  are both registered. A profile for an unregistered host fails the configuration check with
-  `native-provider-unavailable`, and its half's files are not read. The source wired Codex
-  whenever a profile named it.
+- **Serving:** a peer's half is used only when the bridge's `peers.json` lists the peer (not
+  `hosts.json`: a bridge peer need not be a kit host). Claude and Codex are both listed. A profile
+  for an unlisted peer fails the configuration check with `native-provider-unavailable`, and its
+  half's files are not read. The source wired Codex whenever a profile named it.
+- **Host pairs:** the core refuses a pair `peers.json` lists as refused, at admission and before
+  any send (`host-pair-refused`). Codex to Codex is the one refused pair; the source queued such a
+  message and the Codex half failed it at the write (`codex-direct-route-unavailable`). Every
+  other pair, Claude to Claude included, is unchanged.
 - **Channel variables:** these are data in each half's `bridge-profile.json` (`channel_env`), read
   only for served hosts. The source's frontend read `CODEX_APP_TOOLS_PIPE_PATH` unconditionally.
 - **Attesting:** the service calls `attest()` on any object a provider returns that has one.

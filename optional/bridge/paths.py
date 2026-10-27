@@ -13,6 +13,7 @@ SERVICE_REL = 'optional/bridge/tools/bridge_service.py'
 RPC_WORKER_REL = 'optional/bridge/tools/bridge_rpc_worker.py'
 PIPE_WORKER_REL = 'optional/bridge/tools/bridge_pipe_worker.py'
 HOSTS_REL = 'optional/bridge/hosts'
+PEERS_REL = 'optional/bridge/peers.json'
 
 WORKERS = {'bridge_pipe_worker.py': PIPE_WORKER_REL, 'bridge_rpc_worker.py': RPC_WORKER_REL}
 
