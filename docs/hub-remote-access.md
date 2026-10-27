@@ -210,8 +210,6 @@ may take up to 120 s, `kitlib.hubsite.gitsync.NET_TIMEOUT`). A `serve` started i
 refused while that server still holds the store. `--timeout S` is approximate: a request in flight
 may run past it (`kitlib.hubsite.control`).
 
-The start-up notes say that the tunnel listener is on, or why it is off.
-
 ## 9. Check
 
 1. On this PC:
@@ -248,8 +246,7 @@ The start-up notes say that the tunnel listener is on, or why it is off.
    its console logs the reason, at most once a minute per reason, never the token). The page shows
    that refusal in the server's words ("The hub server refused the read (this listener needs a
    valid Cloudflare Access token)") and tries again; it never tells you to pair, since pairing
-   cannot mend an Access refusal (`kitlib/hubsite/web/index.html`, the transport's `unpaired`
-   rule).
+   cannot mend an Access refusal.
 
 If the phone reaches the page but the hub says it is not paired or is read-only, remember that the
 tunnel listener pairs nothing for itself: a valid Access token makes you the owner there (its one
@@ -322,9 +319,6 @@ to company policy:
 
 Use no route that hides the domain from the filter: no other domain or proxy in front of it, no VPN
 or tunnel around the filter. That would break company policy.
-
-A WebSocket filter cannot be the cause: the hub uses none (the code is the fact). That no other
-port is needed is INFERENCE, as is what a company proxy does with 443.
 
 Routes you can use, each only if company policy allows it:
 

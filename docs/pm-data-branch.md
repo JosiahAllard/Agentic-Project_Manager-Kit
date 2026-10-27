@@ -1,6 +1,6 @@
 # PM data on a private branch of the kit repo
 
-Status: tasks 1-8 built. Task 9: the owner's PM data repository moved onto `pmdata` with `pm_data.py init --adopt` on 2026-10-11; not yet confirmed working end to end (docs/go-live.md).
+Status: built. The owner's PM data repository moved onto `pmdata` with `pm_data.py init --adopt` on 2026-10-11. In daily use since 2026-10-11: committed on `pmdata` and pushed to the private remote throughout the day; the hub's git sync runs on it (docs/go-live.md). Unverified: no live test has yet shown the `git-push-pmdata` guard and the pre-push stage refusing a push to the public remote.
 
 One git repository holds the public kit and one user's private PM data (rulings ledger, backlog, refusals log, handoffs, state). The data lives on an orphan branch, `pmdata`, that shares no history with `main`, is never merged, and is pushed only to a second, private remote. Other users who clone the kit get `main` only.
 
@@ -16,7 +16,7 @@ One git repository holds the public kit and one user's private PM data (rulings 
 | Machine config files | `.pm-kit/config.json` in the data worktree, tracked (the policy keys), and `local.json` beside it, git-ignored (`kitlib.config.user.LOCAL_KEYS`), read through the PM repo pointer (docs/kit-json.md "Machine config keys"); the session start says when `config.json` is not committed by the owner or has changes ("Moving the machine config folder") |
 | Hub store | `hub/<collection>/<doc_id>.json` in the data worktree: one folder per hub collection, one JSON file per document; written by the hub server (`tools/hub.py serve`) and committed and pushed to the data branch by its own git sync (`kitlib.hubsite.gitsync`; `hub.py status` prints it as the `git:` line). The data worktree's `.kit.json` needs the machine-path allow entry `{"glob": "hub/*", "line": ".", "why": "hub documents are the owner's own text"}` under `machine_paths.allow`, for a store folder `hub`; it is an allow-list, not a scrub. |
 
-The root commit is recorded when the branch is made, so the guard still knows it if the branch is renamed or deleted. The branch is called `pmdata`, not `pm`, so `pm/<slug>` work branches keep working (git refuses `refs/heads/pm/x` while `refs/heads/pm` exists; `pmdata/<slug>` would collide the same way, so no work branch uses that prefix). A test asserts `init` refuses the name `pm`.
+The root commit is recorded when the branch is made, so the guard still knows it if the branch is renamed or deleted. The branch is called `pmdata`, not `pm`, so `pm/<slug>` work branches keep working (git refuses `refs/heads/pm/x` while `refs/heads/pm` exists; `pmdata/<slug>` would collide the same way, so no work branch uses that prefix). `init` refuses the name `pm`.
 
 The data worktree's `.kit.json` (on `pmdata`) sets `repo.main_branch: "pmdata"` and `repo.remote` to the private remote, so every tool that reads "the main branch" and "the remote" there means the data branch and the private remote. Its `backlog.store` must be a folder, `main` or `branch`, never `ref`: the repository's one `refs/backlog/main` is not the data branch's, and the data branch must not share it. A checkout of the same repository whose `.kit.json` names no store reads that ref and is refused a write there, pointed at this worktree's store (docs/backlog.md "Stores"). `pm_data.py init` refuses a `.kit.json` that says `ref`.
 
@@ -35,7 +35,7 @@ A bare `git push` in the data worktree goes to the upstream, the private remote;
 
 ## Never configure a refspec
 
-`RefBackend.ensure_refspec` (`kitlib/backlog/store.py`) adds `+refs/backlog/main:refs/backlog/main` to `remote.<remote>.fetch` before it fetches; when the remote has no store, every later plain `git fetch` in that repo fails (the open stray-refspec defect). Nothing here may do the same. Every fetch and push in this design names its refspec on the command line (`git fetch origin refs/heads/main:refs/remotes/origin/main`, `git push private refs/heads/pmdata:refs/heads/pmdata`) and never edits `remote.*.fetch` or `remote.*.push`. The tests assert that `.git/config` is byte-identical after every verb except `init`.
+`RefBackend.ensure_refspec` (`kitlib/backlog/store.py`) adds `+refs/backlog/main:refs/backlog/main` to `remote.<remote>.fetch`, only once a fetch found the store on the remote (a refspec naming a ref the remote lacks makes every plain `git fetch` fail). Nothing here may add one. Every fetch and push in this design names its refspec on the command line (`git fetch origin refs/heads/main:refs/remotes/origin/main`, `git push private refs/heads/pmdata:refs/heads/pmdata`) and never edits `remote.*.fetch` or `remote.*.push`; `.git/config` is byte-identical after every verb except `init`.
 
 ## Pre-push guard
 
@@ -52,8 +52,8 @@ The private remote is judged by the URL git hands the hook (its second argument)
 
 ## Guard place and commit hooks
 
-- `kitlib.git.repo.classify` calls the data worktree LINKED, so the guard would let a subagent edit PM data and would read the kit's `.kit.json` for it. Add the configured `pm_data.path` as a MAIN-like place: the main-checkout rules (subagent edits, `checkout`, `reset --hard`, `clean`, `stash`, bulk add) apply to it, and its config is its own `.kit.json` (an exception to "a worktree's own `.kit.json` is never read": only this one path, which agents cannot edit).
-- `core.hooksPath` is one setting for the whole repository, so the kit's `githooks/` runs for the data worktree too. A repository-local `hooks/pre-commit` there (for example the ledger check) would never run. The existing opt-in `githooks/pre-commit` gains the ledger-staged condition: it runs `tools/ledger.py check --base HEAD` only when the commit changes the configured ledger file (or the standing digest beside it), and nothing else (docs/ledger.md "Pre-commit check").
+- `kitlib.git.repo.classify` calls the data worktree LINKED, which would let a subagent edit PM data and read the kit's `.kit.json` for it. So the configured `pm_data.path` is a MAIN-like place: the main-checkout rules (subagent edits, `checkout`, `reset --hard`, `clean`, `stash`, bulk add) apply to it, and its config is its own `.kit.json` (an exception to "a worktree's own `.kit.json` is never read": only this one path, which agents cannot edit).
+- `core.hooksPath` is one setting for the whole repository, so the kit's `githooks/` runs for the data worktree too. A repository-local `hooks/pre-commit` there (for example the ledger check) would never run. The opt-in `githooks/pre-commit` has a ledger-staged condition: it runs `tools/ledger.py check --base HEAD` only when the commit changes the configured ledger file (or the standing digest beside it), and nothing else (docs/ledger.md "Pre-commit check").
 
 ## Session start: keep the kit current
 
@@ -67,7 +67,7 @@ It never rebases, resets or forces, and never touches the data worktree. The hoo
 
 ## Other users
 
-A clone of the public remote has `main` only. `installer/new-repo.ps1` gains `-PmData <path>` (and `-PrivateRemote <url>`): it runs `pm_data.py init`, which makes an empty `pmdata` (one root commit, no files), the worktree at `<path>`, and the private remote if a URL is given. Without the switch nothing changes for a user who keeps data outside git.
+A clone of the public remote has `main` only. `installer/new-repo.ps1 -PmData <path>` (and `-PrivateRemote <url>`) runs `pm_data.py init`, which makes an empty `pmdata` (one root commit, no files), the worktree at `<path>`, and the private remote if a URL is given. Without the switch nothing changes for a user who keeps data outside git.
 
 ## Failure modes
 
@@ -87,48 +87,10 @@ A clone of the public remote has `main` only. `installer/new-repo.ps1` gains `-P
 | A contaminated branch reaches `main` | `ancestry_refusal` before the merge, then the pre-push root check |
 | `git gc` / shallow clones of the data worktree's repo | out of scope; the root commit must stay reachable from `pmdata` |
 
-## Code that must change (the spec disagrees with the code today)
-
-- `kitlib/ledger/vcs.py` `finish` pushes with a literal `origin` and `default_base` returns `origin/<main_branch>`. In this layout `origin` is the public remote, so `ledger.py add --push` would try to push `pmdata` there. Both read `repo.remote` from the ledger repository's config instead.
-- `kitlib/guard/prepush.py` `check` skipped any remote ref that is not `refs/heads/...` and judged only the main branch; it now runs the leak stage on every ref line first (see above).
-- `kitlib/config/user.py` `SCHEMA` has no `pm_data`; `tests/config/test_user_docs.py` keeps `docs/kit-json.md` equal to the schema, so the key and its doc line land in the same commit.
-- `kitlib/worktree/new.py` `create` loads the config of the main checkout (`load(main)`); the data worktree's own `.kit.json` is read only through the place rule above.
-
-## Tests
-
-Throwaway repositories (`tests/gitfixture.py`) with bare scratch remotes; no network.
-
-- `init`: root has no parent and an empty tree; `pmdata` and `main` share no commit (`merge-base` fails); worktree locked; `branch.pmdata.*` and `push.default` as specified; `.git/config` has no `remote.*.push` and no changed `remote.*.fetch`; refuses a `ref` backlog store, an equal URL, an existing branch without `--adopt`.
-- Bare `git push` in the data worktree reaches only the private remote; with no upstream it fails.
-- Pre-push (`tests/guard/test_prepush.py` `PmDataTest`, `PrivateTest`): `pmdata` to the public remote refused, by name and with `--all`; a branch with a data-branch commit cherry-picked refused by its objects; a branch merging `pmdata` refused; a light and an annotated tag on a data commit refused; `main` to public passes, an empty file in both branches included; `pmdata` to private passes, `.git/config` unchanged; a tag, `main` or another branch to private refused; an unreadable or malformed record, or a root missing from the clone, fails closed; a remote given as URL is judged as the matching remote; deleting `pmdata` on public allowed; any deletion on private refused; a private URL another remote also has counts as public; no record changes nothing; the leak stage runs before the main-branch rules; a push by the private remote's name to a URL it does not push to, or with `git -c remote.private.pushurl=<other>`, is public; a remote path differing only in case is another repository; a remote named `origin/<x>` does not hide objects from `--remotes=origin`; a data ref, the remotes, the objects or the git directory git cannot read refuses.
-- `ancestry_refusal` (`tests/gate/test_land_store.py` `PmDataAncestry`) refuses a branch containing the root before any merge, also with a folder store; an unreadable record, a missing root or an undecidable ancestry refuses.
-- Guard (`tests/guard/test_rules.py` `PmDataNoVerify`): `push --no-verify`, abbreviated too, denied as `git-push-pmdata` when the record exists, `push_block` off, in a subagent and a marked session, not in the owner's own; `git send-pack` and `git-send-pack` denied the same way, and so is a push with a computed word (`git push $F`, `--n$F`, `git $S`), unchanged without a record; the fallback catches both on an unreadable line.
-- Guard (`tests/guard/test_pmdata_gaps.py`): `git-remote-rewrite` for every repointing form, in a subagent, `pm` and `coordinator` session, not the owner's, not without a record, reads and other keys passing, `--global` judged by the machine config; `GIT_CONFIG_GLOBAL`/`SYSTEM`/`GIT_CONFIG` before a push pinned as changing nothing; a literal `HOME`-like variable before a push denied; a computed program from a linked worktree and `& (Get-Command git)`; config aliases and a push from a repository without a record passing (`AliasAndCopyCut`); `git remote-https`, `http-push` and the dashed programs, also on an unreadable line. `tests/guard/test_pmdata_fixes.py`: config aliases passing; `git config` options abbreviated (`--glo`, `--fil`, `--ed`) and `-f<path>`, for `git-remote-rewrite` and `git-hooks-path`; `HOME` set by `read`, `printf -v`, `for`, `getopts` and arithmetic passing, cmd's `set HOME` denied; a computed `git config` word; the adopt refusal while the data worktree is gone; an alias split at CR; `& (...)` not unreadable for the owner or without a record; an unknown directory with no machine `pm_data`.
-- `kit_sync`: clean fast-forward; dirty, off main, mid-merge, landing held, offline (unreachable remote), diverged; `.git/config` unchanged afterwards.
-- Guard place: a subagent edit under `pm_data.path` denied; the path's own `.kit.json` is the config used; other worktrees unchanged.
-- Ledger: `add --commit --push` pushes to `repo.remote`.
-- Scrub: the doc and shipped text carry no repo, owner or machine names (`tests/scrub`).
-
 ## Tasks
 
-Each lands independently on its own branch; sizes are S/M/L.
-
-| # | Task | Size | Gate and risk | Waits for | State |
-|---|---|---|---|---|---|
-| 1 | `kitlib/pmdata`: `pm_data` schema key, `kit-pm-data.json` read/write, `locate()`; docs/kit-json.md line | S | kit suite | - | done |
-| 2 | `tools/pm_data.py init/--adopt` and its tests | M | kit suite | 1 | done |
-| 3 | Pre-push leak stage and `ancestry_refusal` root; guard `--no-verify` row; docs/guard.md | M | kit suite; High risk (`kitlib/guard`), fresh reviewer | 1 | done |
-| 4 | Guard place: `pm_data.path` as MAIN-like with its own config | S | kit suite; High risk, fresh reviewer | 1 | done |
-| 5 | `ledger/vcs.py` uses `repo.remote` | S | kit suite | - | done |
-| 6 | `kitlib/pmstart` `kit_sync` check; docs/pm-start.md | M | kit suite | 1 | done |
-| 7 | `githooks/pre-commit` (ledger check on the ledger file) | S | kit suite; High risk (hooks) | 1 | done |
-| 8 | `new-repo.ps1 -PmData/-PrivateRemote`; docs/install.md | S | kit suite plus the installer's dry run | 2 | done |
-| 9 | Go-live: switch row in docs/go-live.md, then the migration in the PM's own data repository | S | joint review | 2-8 | migrated 2026-10-11; to confirm |
-
-## Open - needs the owner
-
-Nothing open.
+Tasks 1-8 have landed on kit main.
 
 ## Decided by the owner
 
-- **Pre-commit dispatch.** The kit's `githooks/pre-commit` runs only the kit's own checks; it does not chain to a repository-local hook (`core.hooksPath` is repository-wide, so such a hook never runs). Repository hooks may be wanted later, so the hook has one dispatch point where a chain step could slot in without rework: `kitlib/githooks/precommit.py` `CHECKS`, today the ledger check only (task 7; docs/ledger.md "Pre-commit check"). The `sh` front end `githooks/pre-commit` starts python only when `.kit.json` names `pre_commit_check`, so a step that must run in a repository that has not opted in also needs one condition there, beside that test. No chaining code is built now.
+- **Pre-commit dispatch.** The kit's `githooks/pre-commit` runs only the kit's own checks; it does not chain to a repository-local hook (`core.hooksPath` is repository-wide, so such a hook never runs). Repository hooks may be wanted later, so the hook has one dispatch point where a chain step could slot in without rework: `kitlib/githooks/precommit.py` `CHECKS`, today the content render check, then the ledger check (docs/ledger.md "Pre-commit check", docs/content.md "Render on commit"). The `sh` front end `githooks/pre-commit` starts python only when `.kit.json` names `pre_commit_check`, so a step that must run in a repository that has not opted in also needs one condition there, beside that test. No chaining code is built now.
