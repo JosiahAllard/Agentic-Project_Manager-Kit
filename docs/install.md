@@ -248,8 +248,8 @@ each kit landing `python tools/plugin_refresh.py --apply` refreshes them. Each i
 `--apply`. Migrate one folder first (`--folder DIR`, repeatable), check a session there, then the
 rest; `--apply` refuses a folder that is not migrated (docs/plugin-source.md "Migrating"). The
 `claude plugin` subcommands these run are inferences except `plugin update`, and Claude Code
-copies the plugin into its cache (observed; docs/plugin-source.md "Open questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the live checkout:
-the skills and agents write every kit path as `<kit>/<path>` (tests/skills and
+copies the plugin into its cache (observed; docs/plugin-source.md "Open questions"). Either way `${CLAUDE_PLUGIN_ROOT}` holds pushed kit main, not the live
+checkout: the skills and agents write every kit path as `<kit>/<path>` (tests/skills and
 tests/content/test_skill_commands.py check it); the kit header hook tells each session and
 subagent the folder `<kit>` stands for (docs/content.md "Kit header"). `${CLAUDE_PLUGIN_ROOT}` is
 substituted in a plugin skill's text (owner's machine test, Claude Code 2.1.302); agent text was
