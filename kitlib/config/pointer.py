@@ -26,7 +26,6 @@ preflight's `pointer` line reports it.
 """
 import collections
 import os
-import posixpath
 
 import kitlib.platform
 from kitlib import pmdata
@@ -86,10 +85,13 @@ def registry():
 
 
 def _absolute(path):
-    """Whether `path` is absolute as the running platform spells one: with a drive on Windows."""
+    """Whether `path` is absolute as the seam's platform spells one: with a drive on Windows, a
+    leading / on Linux (so 'C:\\pm' is not), else as this host's os.path says."""
     if kitlib.platform.NAME == 'windows':
         return os.path.isabs(path) and bool(os.path.splitdrive(path)[0])
-    return posixpath.isabs(path) or os.path.isabs(path)
+    if kitlib.platform.NAME == 'linux':
+        return linux_paths.is_absolute(path)
+    return os.path.isabs(path)
 
 
 def check(path, classify=None, branch=None):

@@ -33,6 +33,15 @@ def on_linux(case, pw_dir):
         case.addCleanup(patch.stop)
 
 
+def native_paths(case):
+    """For the rest of `case`: a path absolute as this host spells one counts as a Linux absolute
+    path (paths.is_absolute is os.path.isabs), so a test on any host can name real temp folders.
+    On Linux it changes nothing."""
+    patch = mock.patch.object(paths, 'is_absolute', os.path.isabs)
+    patch.start()
+    case.addCleanup(patch.stop)
+
+
 def write(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'wb') as f:
@@ -55,6 +64,12 @@ class Profile(unittest.TestCase):
                     paths.profile()
                 self.assertIn(said, str(cm.exception))
 
+    def test_a_windows_folder_is_no_linux_home(self):
+        on_linux(self, r'D:\home\u')
+        with self.assertRaises(OSError) as cm:
+            paths.profile()
+        self.assertIn('no absolute home folder', str(cm.exception))
+
     def test_the_windows_lookup_is_not_asked(self):
         on_linux(self, '/home/u')
         with mock.patch.object(user, '_windows_profile', side_effect=AssertionError('Windows asked')):
@@ -68,6 +83,7 @@ class Fence(unittest.TestCase):
         self.profile = tempfile.mkdtemp(prefix='kit-linux-profile-')
         self.addCleanup(shutil.rmtree, self.profile, True)
         on_linux(self, self.profile)
+        native_paths(self)
 
     def test_a_home_that_resolves_to_the_profile_is_refused(self):
         with mock.patch.dict(os.environ, {'HOME': self.profile, 'USERPROFILE': self.profile}):
@@ -94,6 +110,7 @@ class PointerFiles(unittest.TestCase):
         self.profile = os.path.join(self.base, 'home')
         self.user_file = os.path.join(self.profile, '.config', 'pm-kit', 'pointer')
         on_linux(self, self.profile)
+        native_paths(self)
         patch = mock.patch.object(paths, 'MACHINE_POINTER', self.machine)
         patch.start()
         self.addCleanup(patch.stop)
@@ -166,6 +183,11 @@ class PointerCheck(unittest.TestCase):
     def test_a_relative_path_is_still_refused(self):
         self.assertEqual(pointer.check('srv/pm'), 'srv/pm is not an absolute path')
 
+    def test_a_windows_path_is_not_absolute_on_linux(self):
+        for path in (r'C:\pm', 'C:/pm', r'\\server\share\pm'):
+            with self.subTest(path=path):
+                self.assertEqual(pointer.check(path), '%s is not an absolute path' % path)
+
     def test_windows_still_wants_a_drive(self):
         with mock.patch.object(kitlib.platform, 'NAME', 'windows'):
             self.assertEqual(pointer.check('/srv/pm'), '/srv/pm is not an absolute path')
@@ -179,6 +201,7 @@ class MachineConfigFromThePointerFile(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.base, True)
         self.profile = os.path.join(self.base, 'home')
         on_linux(self, self.profile)
+        native_paths(self)
         patch = mock.patch.object(paths, 'MACHINE_POINTER', os.path.join(self.base, 'no-etc'))
         patch.start()
         self.addCleanup(patch.stop)

@@ -40,29 +40,6 @@ class HeavyTest(TreeCase):
         for prog in ('godotenv', 'godotenv.exe', 'godot-tools', 'godots'):
             self.assertIsNone(policy.heavy_match(prog, [], entries), prog)
 
-    def test_linux_godot_names_are_heavy(self):
-        """Guard finding 8 (docs/linux-support-plan.md section 3): a versioned name, an AppImage,
-        a flatpak run and flatpak's exported launcher."""
-        entries = policy.heavy_programs()
-        for prog, args in (('godot4', []), ('/usr/bin/godot3', ['--path', 'game']),
-                           ('godot4.exe', []), ('Godot_v4.3-stable_linux.x86_64', []),
-                           ('Godot4.AppImage', []), ('Godot.AppImage', ['--headless']),
-                           ('flatpak', ['run', 'org.godotengine.Godot', '--headless']),
-                           ('/usr/bin/flatpak', ['run', '--branch=stable', 'org.godotengine.GodotSharp']),
-                           ('/var/lib/flatpak/exports/bin/org.godotengine.Godot', ['-e'])):
-            self.assertEqual(policy.heavy_match(prog, args, entries)['kind'], 'engine-run', (prog, args))
-        for prog, args in (('flatpak', ['run', 'org.gnome.Calculator']), ('flatpak', ['list']),
-                           ('flatpak', ['install', 'flathub', 'org.godotengine.Godot']),
-                           ('flatpak', ['update', 'org.godotengine.Godot']),
-                           ('flatpak', ['info', 'org.godotengine.GodotSharp']), ('godotenv', [])):
-            self.assertIsNone(policy.heavy_match(prog, args, entries), (prog, args))
-
-    def test_flatpak_blender_s_launcher_is_heavy_in_the_background(self):
-        entries = policy.heavy_programs()
-        launcher = '/var/lib/flatpak/exports/bin/org.blender.Blender'
-        self.assertEqual(policy.heavy_match(launcher, ['-b', 'x.blend'], entries)['kind'], 'render')
-        self.assertIsNone(policy.heavy_match(launcher, ['x.blend'], entries))
-
     def test_blender_is_heavy_only_in_the_background(self):
         entries = policy.heavy_programs()
         self.assertIsNone(policy.heavy_match('blender.exe', ['scene.blend'], entries))
@@ -97,8 +74,7 @@ class HeavyTest(TreeCase):
              'why': 'builds the world graph', '_note': 'dropped'}]}})
         entries = policy.heavy_programs(cfg)
         self.assertEqual([e['program'] for e in entries],
-                         ['godot', 'godot.*', 'godot_*', 'godot[0-9]*', 'org.godotengine.godot*', 'flatpak',
-                          'blender*', 'org.blender.blender*', 'dotnet', 'dotnet.exe', 'gradle', 'gradle.*',
+                         ['godot', 'godot.*', 'godot_*', 'blender*', 'dotnet', 'dotnet.exe', 'gradle', 'gradle.*',
                           'gradlew', 'gradlew.*', 'test.bat', 'graphbuild.bat'])
         self.assertNotIn('_note', entries[-1])
         self.assertEqual(policy.heavy_match('.\\TEST.BAT', ['fast'], entries)['kind'], 'engine-test')

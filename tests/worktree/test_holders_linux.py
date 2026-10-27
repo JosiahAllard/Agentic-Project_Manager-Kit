@@ -2,12 +2,13 @@
 docs/worktree-remove.md): holders.blockers, cwd_holders and describe, and classify.process_cwds,
 read from /proc (kitlib.platform.linux.paths.process_paths). blockers no longer fails open: a
 process of this user using the tree is HELD, one of this user that cannot be read is UNREAD, and
-no /proc is NOT_SEARCHED, each a refusal; it is empty only when every process of this user was read
-and none uses the tree.
+no /proc (or an empty one, or one that does not list this process) is NOT_SEARCHED, each a refusal;
+it is empty only when every process of this user was read and none uses the tree.
 
 The classes but Live run on every platform against a fake /proc: a folder tree with one folder per
-pid (comm, stat, fd/, maps) whose links (cwd, root, exe, fd/*) come from a table (paths._link),
-and whose owners come from another (paths._owner), with NAME patched to 'linux'. Live starts real
+pid (comm, stat, status, fd/, maps, task/) whose links (cwd, root, exe, fd/*) come from a table
+(paths._link) and whose folder owners come from another (paths._owner), holding this process
+(paths._pid), with NAME patched to 'linux'. Live starts real
 processes and runs on Linux only."""
 import errno
 import os
@@ -23,11 +24,14 @@ from kitlib.platform.linux import paths
 from kitlib.worktree import classify, holders
 from tests.platforms import posix_only
 
-ME, OTHER = 1000, 1001
+ME, OTHER, ROOT = 1000, 1001, 0
+SELF = 4242                     # the pid of the scan's own process (paths._pid)
+TOP = os.path.abspath(os.sep)   # where it stands: / as this host spells it
 
 
 class FakeProc(object):
-    """A fake /proc in a temp folder. add() makes one process; links and owners are tables."""
+    """A fake /proc in a temp folder, holding this process (SELF) until clear(). add() makes one
+    process; links and folder owners are tables, the real user is its status file."""
 
     def __init__(self, case):
         self.root = tempfile.mkdtemp(prefix='kit-fake-proc-')
@@ -36,10 +40,24 @@ class FakeProc(object):
         for patch in (mock.patch.object(kitlib.platform, 'NAME', 'linux'),
                       mock.patch.object(paths, 'PROC', self.root),
                       mock.patch.object(paths, '_uid', lambda: ME),
+                      mock.patch.object(paths, '_pid', lambda: SELF),
                       mock.patch.object(paths, '_owner', self.owner),
                       mock.patch.object(paths, '_link', self.link)):
             patch.start()
             case.addCleanup(patch.stop)
+        self.reset()
+
+    def clear(self):
+        """No process at all, this one included."""
+        shutil.rmtree(self.root)
+        os.makedirs(self.root)
+        self.links.clear()
+        self.owners.clear()
+
+    def reset(self):
+        """Only this process, standing at TOP."""
+        self.clear()
+        self.add(SELF, cwd=TOP, comm='kit-test')
 
     def owner(self, folder):
         got = self.owners.get(folder)
@@ -57,26 +75,39 @@ class FakeProc(object):
             raise got
         return got
 
-    def add(self, pid, cwd='/', uid=ME, comm='python3', state='S', root='/', exe='/usr/bin/python3',
-            fds=(), maps=()):
-        """Process `pid`. A link value of None leaves that link out (it reads ENOENT); an
-        exception is raised when it is read."""
-        folder = os.path.join(self.root, str(pid))
+    def _links(self, folder, cwd, root, exe, fds):
         os.makedirs(os.path.join(folder, 'fd'))
-        with open(os.path.join(folder, 'comm'), 'w') as f:
-            f.write(comm + '\n')
-        with open(os.path.join(folder, 'stat'), 'w') as f:
-            f.write('%d (%s) %s 1 1 1 0 -1' % (pid, comm, state))
-        with open(os.path.join(folder, 'maps'), 'w', newline='\n') as f:
-            for path in maps:
-                f.write('7f0000000000-7f0000001000 r--p 00000000 08:01 123      %s\n' % path)
-        self.owners[folder] = uid
         for kind, value in (('cwd', cwd), ('root', root), ('exe', exe)):
             if value is not None:
                 self.links[os.path.join(folder, kind)] = value
         for n, value in enumerate(fds):
             open(os.path.join(folder, 'fd', str(n)), 'w').close()
             self.links[os.path.join(folder, 'fd', str(n))] = value
+
+    def add(self, pid, cwd='/', uid=ME, comm='python3', state='S', root='/', exe='/usr/bin/python3',
+            fds=(), maps=(), owner=None, status=True, tasks=None):
+        """Process `pid` of real user `uid` (its status), whose /proc folder `owner` owns (`uid`
+        when None; root for one the kernel marks not dumpable). status=False writes no Uid line.
+        A link value of None leaves that link out (it reads ENOENT); an exception is raised when it
+        is read. `tasks` {tid: {'cwd':, 'root':, 'fds':}} are its other threads."""
+        folder = os.path.join(self.root, str(pid))
+        self._links(folder, cwd, root, exe, fds)
+        with open(os.path.join(folder, 'comm'), 'w') as f:
+            f.write(comm + '\n')
+        with open(os.path.join(folder, 'stat'), 'w') as f:
+            f.write('%d (%s) %s 1 1 1 0 -1' % (pid, comm, state))
+        with open(os.path.join(folder, 'status'), 'w', newline='\n') as f:
+            f.write('Name:\t%s\nState:\t%s\n' % (comm, state))
+            if status:
+                f.write('Uid:\t%d\t%d\t%d\t%d\n' % (uid, uid, uid, uid))
+        with open(os.path.join(folder, 'maps'), 'w', newline='\n') as f:
+            for path in maps:
+                f.write('7f0000000000-7f0000001000 r--p 00000000 08:01 123      %s\n' % path)
+        self.owners[folder] = uid if owner is None else owner
+        os.makedirs(os.path.join(folder, 'task', str(pid)))
+        for tid, links in (tasks or {}).items():
+            self._links(os.path.join(folder, 'task', str(tid)), links.get('cwd', '/'),
+                        links.get('root', '/'), None, links.get('fds', ()))
         return folder
 
 
@@ -111,10 +142,7 @@ class Blockers(Base):
                             (12, {'maps': ['/usr/lib/libc.so.6', inner, '[heap]']}),
                             (13, {'root': self.sub})):
             with self.subTest(kwargs=kwargs):
-                shutil.rmtree(self.proc.root)
-                os.makedirs(self.proc.root)
-                self.proc.links.clear()
-                self.proc.owners.clear()
+                self.proc.reset()
                 self.proc.add(pid, **kwargs)
                 got = holders.blockers(self.tree)
                 self.assertEqual(got, [(self.sub if 'root' in kwargs else inner, holders.HELD)])
@@ -142,15 +170,18 @@ class Blockers(Base):
             'cwd missing while alive': lambda: self.proc.add(10, cwd=None),
             'fd list unreadable': lambda: self._replace(self.proc.add(10), 'fd', 'file'),
             'maps unreadable': lambda: self._replace(self.proc.add(10), 'maps', 'folder'),
-            'owner unreadable': lambda: self.proc.owners.__setitem__(
-                self.proc.add(10), PermissionError(errno.EACCES, 'Permission denied')),
+            'not dumpable, its links denied': lambda: self.proc.add(10, owner=ROOT, cwd=denied),
+            'no status, its folder unreadable': lambda: self._no_status(denied),
+            'no status, its folder owned by root': lambda: self._no_status(ROOT),
+            'no Uid line, its folder owned by root': lambda: self.proc.add(10, status=False, owner=ROOT),
+            'a zombie leader whose thread is denied': lambda: self.proc.add(
+                10, cwd=None, state='Z', tasks={11: {'cwd': denied}}),
+            'a zombie leader whose task list is unreadable': lambda: self._replace(
+                self.proc.add(10, cwd=None, state='Z'), 'task', 'file'),
         }
         for name, make in cases.items():
             with self.subTest(name):
-                shutil.rmtree(self.proc.root)
-                os.makedirs(self.proc.root)
-                self.proc.links.clear()
-                self.proc.owners.clear()
+                self.proc.reset()
                 make()
                 self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
 
@@ -168,9 +199,52 @@ class Blockers(Base):
         os.makedirs(os.path.join(self.proc.root, '12'))    # listed, then gone before its owner
         self.assertEqual(holders.blockers(self.tree), [])
 
+    def test_a_zombie_leader_with_no_other_thread_has_ended(self):
+        self.proc.add(10, cwd=None, state='Z', tasks={})
+        self.assertEqual(holders.blockers(self.tree), [])
+
+    def test_a_zombie_leader_s_running_thread_holds_the_tree(self):
+        for links in ({'cwd': self.sub}, {'root': self.sub}, {'fds': ['/dev/null', self.sub]}):
+            with self.subTest(links=links):
+                self.proc.reset()
+                self.proc.add(10, cwd=None, state='Z', tasks={11: links})
+                self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
+
+    def test_a_process_of_this_user_the_kernel_marks_not_dumpable_is_seen(self):
+        # its /proc folder is root's; status still names this user as its real user
+        self.proc.add(10, cwd=self.sub, owner=ROOT, comm='ssh-agent')
+        self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
+        self.proc.reset()
+        self.proc.add(10, cwd=PermissionError(errno.EACCES, 'Permission denied'), owner=ROOT)
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
+
+    def test_this_user_as_either_the_real_user_or_the_folder_owner_is_this_user_s(self):
+        self.proc.add(10, cwd=self.sub, uid=OTHER, owner=ME)    # run as this user by another
+        self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
+
+    def test_status_naming_another_user_is_another_user_s_even_in_a_root_folder(self):
+        self.proc.add(10, cwd=self.sub, uid=OTHER, owner=ROOT)
+        self.proc.add(11, cwd=self.sub, uid=ROOT)
+        self.assertEqual(holders.blockers(self.tree), [])
+
     def test_no_proc_is_not_searched(self):
         shutil.rmtree(self.proc.root)
         self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+
+    def test_an_empty_proc_is_not_searched(self):
+        self.proc.clear()
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+
+    def test_a_proc_that_does_not_list_this_process_is_not_searched(self):
+        self.proc.clear()
+        self.proc.add(10, cwd='/home/u')                   # some other process list
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+
+    def _no_status(self, owner):
+        """Process 10 whose status cannot be read and whose folder `owner` owns (or raises)."""
+        folder = self.proc.add(10)
+        self._replace(folder, 'status', 'folder')
+        self.proc.owners[folder] = owner
 
     def _replace(self, folder, name, kind):
         """Make `folder`/`name` a `kind` ('file' or 'folder') where the other belongs."""
@@ -191,7 +265,7 @@ class CwdHolders(Base):
         self.proc.add(11, cwd='/home/u', fds=[self.sub])     # an fd is no cwd holder
         self.proc.add(12, cwd=PermissionError(errno.EACCES, 'Permission denied'))
         self.proc.add(13, cwd=self.sub, uid=OTHER)
-        self.assertEqual(holders.cwd_holders(self.tree), ([(10, 'godot', self.sub)], 1, 4))
+        self.assertEqual(holders.cwd_holders(self.tree), ([(10, 'godot', self.sub)], 1, 5))
 
     def test_no_proc_names_nobody(self):
         shutil.rmtree(self.proc.root)
@@ -216,7 +290,10 @@ class ProcessCwds(Base):
         self.proc.add(10, cwd=self.sub, comm='bash')
         self.proc.add(11, cwd=PermissionError(errno.EACCES, 'Permission denied'))
         self.proc.add(12, cwd='/', uid=OTHER)
-        self.assertEqual(classify.process_cwds(), (([(10, 'bash', self.sub)], 1, 3), None))
+        (cwds, unreadable, total), why = classify.process_cwds()
+        self.assertIsNone(why)
+        self.assertEqual(sorted(cwds), [(10, 'bash', self.sub), (SELF, 'kit-test', TOP)])
+        self.assertEqual((unreadable, total), (1, 4))
 
     def test_no_proc_is_no_answer(self):
         shutil.rmtree(self.proc.root)
@@ -225,7 +302,10 @@ class ProcessCwds(Base):
         self.assertIn('the process list cannot be read', why)
 
     def test_an_empty_list_is_no_answer(self):
-        self.assertEqual(classify.process_cwds(), (None, 'the process list came back empty'))
+        self.proc.clear()
+        got, why = classify.process_cwds()
+        self.assertIsNone(got)
+        self.assertIn('lists no process', why)
 
 
 @posix_only('real processes read through the real /proc')

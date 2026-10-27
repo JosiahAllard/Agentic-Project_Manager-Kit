@@ -147,7 +147,9 @@ def _linux_blockers(root):
     whole = os.path.abspath(root)
     try:
         scan = linux_paths.process_paths()
-    except OSError:
+    except OSError:                       # no /proc, an empty one, or not this system's
+        return [(whole, NOT_SEARCHED)]
+    if not scan.total:
         return [(whole, NOT_SEARCHED)]
     target = canon(root)
     found, named = [], set()

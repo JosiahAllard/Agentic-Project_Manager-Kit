@@ -668,13 +668,16 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    <profile>/.config/pm-kit/pointer, never $XDG_CONFIG_HOME, and a bad machine file is the answer;
    /tmp as the system temp whatever TMPDIR says; a /proc scan of this user's processes).
    user.real_profile and the home fence, lock/store.py profile_dir and real_root, pointer.registry
-   and check (an absolute path with no drive), system_temp, work_temp and default_work_temp read
-   the seam; user.py and holders.py leave test_no_os_checks' list. holders.blockers on Linux: a
-   path in the tree that a process of this user uses (cwd, root, exe, an open or mapped file) is
-   HELD, a process of this user that cannot be read in full makes the root UNREAD, and no /proc is
-   NOT_SEARCHED, each a refusal; cwd_holders, describe and classify.process_cwds read /proc too.
-   The heavy defaults gain the Linux Godot names and flatpak Blender (section 3, finding 8). The
-   live proofs (test_store_linux RealMachineStore, test_holders_linux Live) and the landing on the
+   and check (a leading / on Linux, so C:\pm is refused), system_temp, work_temp and
+   default_work_temp read the seam; user.py and holders.py leave test_no_os_checks' list.
+   holders.blockers on Linux: a path in the tree that a process of this user uses (cwd, root, exe,
+   an open or mapped file) is HELD; a process of this user that cannot be read in full, or whose
+   user cannot be told, makes the root UNREAD; a /proc that cannot be listed, lists no process or
+   does not list the scan's own is NOT_SEARCHED; each is a refusal. A process is this user's by
+   its status Uid line or its folder's owner (a not-dumpable one's folder is root's), and a zombie
+   leader's running threads are read from its task folder. cwd_holders, describe and
+   classify.process_cwds read /proc too. The Linux Godot and Blender heavy defaults (section 3,
+   finding 8) moved to their own record: they change Windows too. The live proofs (test_store_linux RealMachineStore, test_holders_linux Live) and the landing on the
    VM wait for the VM. Deviations: environment.d moves to slice 14 (machine setup writes it);
    another user's processes cannot be seen, so holders answers for this user's only; the user
    pointer file is the user's to write, so an agent can write it too: guarding it is its own

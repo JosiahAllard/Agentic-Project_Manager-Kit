@@ -171,11 +171,13 @@ class RunLiveness(Scratch):
 class MachineStore(unittest.TestCase):
     """The machine's store on Linux (slice 9): ~/.claude/machine-lock under the profile folder
     from the password database, never $HOME; fenced under the tests like the Windows one. Runs on
-    every platform: NAME and the password database are patched."""
+    every platform: NAME and the password database are patched, and the profile is absolute as
+    this host spells one (paths.is_absolute is os.path.isabs; on Linux the same test)."""
 
     def setUp(self):
         for patch in (mock.patch.object(kitlib.platform, 'NAME', 'linux'),
-                      mock.patch.object(paths, '_pw_dir', lambda: PW_DIR)):
+                      mock.patch.object(paths, '_pw_dir', lambda: PW_DIR),
+                      mock.patch.object(paths, 'is_absolute', os.path.isabs)):
             patch.start()
             self.addCleanup(patch.stop)
 
