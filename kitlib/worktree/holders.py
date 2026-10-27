@@ -46,10 +46,13 @@ TH32CS_SNAPPROCESS = 0x2
 # free, idle or clean.
 WALK_MAX = 200000
 NOT_SEARCHED = -1                   # `blockers`: the tree was past WALK_MAX, not probed in full
-#                                     (on Linux: /proc could not be listed)
+#                                     (on Linux: /proc could not be listed, hides processes of
+#                                     this user by a mount option, or is a PID namespace's)
 HELD = -2                           # `blockers` on Linux: a process of this user uses this path
 UNREAD = -3                         # `blockers` on Linux: a process of this user could not be read,
-#                                     or the tree shows at another path too (a bind mount)
+#                                     its device is mounted again where the roots overlap, a mount
+#                                     stands inside it or over the one holding it, or no mount
+#                                     holds it (paths.aliased)
 SHOWN = 20                          # a refusal names this many files or links, then counts the rest
 LINK_ADVICE = "remove the link by hand first; git's handling of it is untested"
 
@@ -336,8 +339,10 @@ def describe(root, why, cwd=None):
                 'in use by a process of this user (its current folder, root, program, an open'
                 ' file or a mapped file)' if err == HELD else
                 'not known to be free: a process of this user could not be read in full, or the'
-                ' tree shows at another path too (a bind mount)' if err == UNREAD else
-                'not searched: the process list (%s) cannot be read, so not known to be free'
+                ' tree shows at another path too (its device mounted again where the roots'
+                ' overlap, a mount inside it or over it, or no mount holding it)' if err == UNREAD
+                else 'not searched: the process list (%s) cannot be read, hides processes of this'
+                ' user (a mount option) or is a PID namespace\'s, so not known to be free'
                 % linux_paths.PROC if err == NOT_SEARCHED and linux else
                 'not probed in full: more than %d entries, so not known to be free' % WALK_MAX
                 if err == NOT_SEARCHED else 'error %d' % err)

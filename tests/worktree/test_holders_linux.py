@@ -327,6 +327,8 @@ class Blockers(Base):
                 ('8:7', '/srv/data', os.path.join(self.real, 'data'))],
             'another disk mounted at the tree, then one inside it': [
                 ('8:5', '/', self.real), ('8:7', '/', self.sub)],
+            'a later mount above the one holding the tree, hiding it': [
+                ('8:5', '/', os.path.dirname(self.real)), ('8:9', '/', FS_TOP)],
         }
         for name, more in cases.items():
             with self.subTest(name):
@@ -346,6 +348,21 @@ class Blockers(Base):
             with self.subTest(name):
                 self.proc.mount(PROC_OPTIONS, more=more)
                 self.assertEqual(holders.blockers(self.tree), [])
+
+    def test_a_scan_inside_a_pid_namespace_is_not_searched(self):
+        # the kit in a container: its /proc does not list the host's processes, which may use a
+        # worktree bound into it
+        status = os.path.join(self.proc.root, str(SELF), 'status')
+        with open(status, 'a', newline='\n') as f:
+            f.write('NSpid:\t%d\t7\n' % SELF)
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+        self.proc.reset()
+        with open(status, 'a', newline='\n') as f:
+            f.write('NSpid:\t%d\n' % SELF)                 # the first PID namespace only
+        self.assertEqual(holders.blockers(self.tree), [])
+        os.remove(status)
+        self.proc.add(SELF + 1)                              # still listed, its status gone
+        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
 
     def test_a_tree_no_mount_covers_is_unread(self):
         # this process's mount table does not reach the tree (a chroot): where else it shows is

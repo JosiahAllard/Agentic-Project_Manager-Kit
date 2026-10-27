@@ -33,12 +33,13 @@ devcontainer, rootless podman) names paths of another tree, so it counts as unre
 one whose namespace cannot be read. A process of another user is counted in `total` only: this
 user cannot see what it uses. A /proc that lists no process, or not this one, is mounted with an
 option that hides processes of this user (hidepid=2 or 4, invisible, ptraceable, subset=pid; on
-any proc mount there, not only the last), or
-whose mount options or whose own mount namespace cannot be read, gives OSError, as when it cannot
-be listed. Not seen: a thread's own open-file table (CLONE_FILES unshared). PROC, _uid, _pid,
-_owner, _status_uid, _link, _pw_dir and is_absolute are the seams a test points at a folder tree
-of its own (this process's mountinfo is read under PROC too). This module imports on
-any platform; its reads need Linux.
+any proc mount there, not only the last), or whose mount options or whose own mount namespace
+cannot be read, gives OSError, as when it cannot be listed; so does a scan run inside a PID
+namespace (a container: NSpid in its status), whose /proc lists none of the processes outside it.
+Not seen: a thread's own open-file table (CLONE_FILES unshared). PROC, _uid, _pid, _owner,
+_status_uid, _link, _pw_dir and is_absolute are the seams a test points at a folder tree of its
+own (this process's mountinfo and status are read under PROC too). This module imports on any
+platform; its reads need Linux.
 """
 import collections
 import errno
@@ -352,7 +353,8 @@ def aliased(text, path):
     mountinfo `text`: its file system is mounted again where the mount's root and the tree's place
     inside that file system overlap (a bind mount of the tree, of a folder above it or of one in
     it), or any other mount stands at or under `path` (a bind of another folder into the tree: a
-    process there names that folder's path). True also when no mount holds `path` (this mount
+    process there names that folder's path), or a later mount stands at or above the one holding
+    it (which then hides it). True also when no mount holds `path` (this mount
     table does not reach it, a chroot): then where else it shows is not known. A process standing in such another path holds the tree
     under a path /proc does not show under it."""
     flat = os.path.normcase(path)
@@ -364,6 +366,8 @@ def aliased(text, path):
     if best is None:
         return True
     device, root, point = table[best]
+    if any(_at_or_under(point, later, os.sep) for _d, _r, later in table[best + 1:]):
+        return True                           # mounted over it later: which one holds it is unread
     rest = [part for part in path[len(point):].split(os.sep) if part]
     place = posixpath.join(root, *rest)
     for n, (other, other_root, other_point) in enumerate(table):
@@ -374,11 +378,31 @@ def aliased(text, path):
     return False
 
 
+def _pid_namespaced(me_folder):
+    """True when this process is in a PID namespace below the first (its status `NSpid:` line names
+    more than one id: a container); OSError when its status cannot be read. A kernel with no such
+    line (before 4.1) answers False."""
+    with open(os.path.join(me_folder, 'status'), 'rb') as f:
+        for line in f:
+            if line.startswith(b'NSpid:'):
+                return len(line.split()) > 2
+    return False
+
+
 def _check_proc(me_folder):
-    """OSError unless the /proc at PROC shows every process of this user: its mount options (from
-    this process's mountinfo) are known and hide none (hidepid=2 or 4, invisible, ptraceable,
-    subset=pid hide those this user cannot trace; any proc mount there counts). Returns this
-    process's mount namespace and its mount table (the mountinfo text)."""
+    """OSError unless the /proc at PROC shows every process of this user: this process is in the
+    first PID namespace (inside another, /proc does not list the processes outside it, which may
+    use a tree bound in), and the mount options (from this process's mountinfo) are known and hide
+    none (hidepid=2 or 4, invisible, ptraceable, subset=pid hide those this user cannot trace; any
+    proc mount there counts). Returns this process's mount namespace and its mount table (the
+    mountinfo text)."""
+    try:
+        inner = _pid_namespaced(me_folder)
+    except OSError as e:
+        raise OSError(e.errno, 'cannot read this process\'s status: %s' % e.strerror, PROC) from None
+    if inner:
+        raise OSError(errno.EACCES, 'is a PID namespace\'s (this process\'s status NSpid line names '
+                      'more than one id): the processes outside it are not listed', PROC)
     try:
         with open(os.path.join(me_folder, 'mountinfo'), 'rb') as f:
             text = os.fsdecode(f.read())
