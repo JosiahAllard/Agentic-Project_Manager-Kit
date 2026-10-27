@@ -733,16 +733,20 @@ class FakeRefusesWhatAttributesLeaveUnmodelled(unittest.TestCase):
         self.r.git('add', '--', '.gitattributes', 'f.txt')
         self.r.git('commit', '-q', '-m', 'attributes')
         self._nested_branch()
-        self._unsupported('checking out a .gitattributes below the root', 'switch', '-q', 'kit/nested')
-        self._unsupported('checking out a .gitattributes below the root', 'reset', '-q', '--hard', 'kit/nested')
-        self.assertFalse(os.path.lexists(self.r.path('sub')))      # refused before any write
+        # refused before any write (a refusal once the index tracks it would come too late)
+        self._unsupported('.gitattributes below the root', 'switch', '-q', 'kit/nested')
+        self.assertFalse(os.path.lexists(self.r.path('sub')))
+        self.assertEqual(self.r.git('rev-parse', '--abbrev-ref', 'HEAD').strip(), 'main')
+        self._unsupported('.gitattributes below the root', 'reset', '-q', '--hard', 'kit/nested')
+        self.assertFalse(os.path.lexists(self.r.path('sub')))
 
     def test_a_checkout_that_writes_a_case_variant_gitattributes_is_unsupported(self):
         self.r.write('f.txt', 'x\n')
         self.r.git('add', '--', 'f.txt')
         self.r.git('commit', '-q', '-m', 'f')
         self._nested_branch('sub/.GitAttributes')
-        self._unsupported('checking out a .gitattributes', 'switch', '-q', 'kit/nested')
+        self._unsupported('in another case', 'switch', '-q', 'kit/nested')
+        self.assertFalse(os.path.lexists(self.r.path('sub')))
 
     def test_a_gitattributes_that_is_not_a_file_is_unsupported(self):
         os.makedirs(self.r.path('.gitattributes'))
