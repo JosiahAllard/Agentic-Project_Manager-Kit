@@ -1,10 +1,13 @@
-"""Which hosts the bridge serves: each host registered in hosts.json that has a bridge half.
+"""Which hosts the bridge serves: each peer optional/bridge/peers.json lists that has a bridge half.
 
-A half is the package optional/bridge/hosts/<module>/ (the host's name with '-' as '_') whose
-__init__ exports HOST, a port.BridgeHost of that name, beside its bridge-profile.json. A registered
-host without a half is not served, and a folder for an unregistered host is ignored: it is never
-imported and its files are never read. hosts.json is the source of truth (docs/new-host.md);
-nothing here names a host.
+peers.json is the bridge's own list, apart from the kit's hosts.json: a bridge peer need not be a
+kit host. It holds
+    peers      the peer names, in order
+    refused    the [sender, recipient] host pairs the bridge never delivers (core/hostpairs.py)
+A half is the package optional/bridge/hosts/<module>/ (the peer's name with '-' as '_') whose
+__init__ exports HOST, a port.BridgeHost of that name, beside its bridge-profile.json. A listed
+peer without a half is not served, and a folder for an unlisted peer is ignored: it is never
+imported and its files are never read. Nothing here names a host.
 
 bridge-profile.json is data the service and the MCP frontend read without importing the half:
     required, optional      the provider's setting names
@@ -16,16 +19,40 @@ import importlib
 import json
 import re
 
-from kitlib.host import registry as host_registry
-
+from .core.hostpairs import HostPairs
 from .core.messages import DeliveryError
-from .paths import HOSTS_REL, kit_file
+from .paths import HOSTS_REL, PEERS_REL, kit_file
 from .port import check_host
 
 PACKAGE = 'optional.bridge.hosts'
 SCHEMA_KEYS = ('required', 'optional', 'directories', 'names')
 ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,127}\Z')
 MAX_SCHEMA_BYTES = 4096
+PEERS = str(kit_file(PEERS_REL))     # tests patch this to a peers.json of their own
+PEERS_KEYS = {'peers', 'refused'}
+
+
+def read_peers(path=None):
+    """(peers, refused) from a peers.json (default: PEERS), checked as a HostPairs rule.
+    DeliveryError('invalid-bridge-peers') when it cannot be read or is malformed."""
+    try:
+        with open(PEERS if path is None else path, 'rb') as f:
+            data = f.read(MAX_SCHEMA_BYTES + 1)
+        if len(data) > MAX_SCHEMA_BYTES:
+            raise ValueError('size')
+        doc = json.loads(data.decode('utf-8'))
+        if (type(doc) is not dict or set(doc) != PEERS_KEYS or type(doc['peers']) is not list
+                or type(doc['refused']) is not list or any(type(pair) is not list for pair in doc['refused'])):
+            raise ValueError('shape')
+        rule = HostPairs(doc['peers'], doc['refused'])
+    except (OSError, ValueError, DeliveryError):
+        raise DeliveryError('invalid-bridge-peers') from None
+    return rule.peers, tuple(sorted(rule.refused))
+
+
+def host_pairs(path=None):
+    """The HostPairs rule of a peers.json (default: PEERS): which listed peer may send to which."""
+    return HostPairs(*read_peers(path))
 
 
 def module_name(name):
@@ -84,14 +111,14 @@ def read_profile(name, kit=None):
 
 
 def names(path=None, kit=None):
-    """The registered hosts that have a half, in hosts.json order. `path`: a hosts.json to read
-    instead of the kit's (default: kitlib.host.registry.PATH, which tests patch)."""
-    return tuple(name for name in host_registry.names(path) if has_half(name, kit))
+    """The listed peers that have a half, in peers.json order. `path`: a peers.json to read
+    instead of the kit's (default: PEERS, which tests patch)."""
+    return tuple(name for name in read_peers(path)[0] if has_half(name, kit))
 
 
 def half(name, path=None):
-    """The BridgeHost of `name`. DeliveryError('native-provider-unavailable') when the host is not
-    registered or has no half; DeliveryError('invalid-bridge-host') when its HOST is malformed."""
+    """The BridgeHost of `name`. DeliveryError('native-provider-unavailable') when the peer is not
+    listed or has no half; DeliveryError('invalid-bridge-host') when its HOST is malformed."""
     if name not in names(path):
         raise DeliveryError('native-provider-unavailable')
     module = importlib.import_module(PACKAGE + '.' + module_name(name))

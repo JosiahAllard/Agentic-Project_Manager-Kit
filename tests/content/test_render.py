@@ -52,6 +52,43 @@ class RealContentTest(unittest.TestCase):
     def test_no_drift(self):
         self.assertEqual(content.drift(KIT_ROOT, [claude_content.renderer()]), [])
 
+    def test_the_traps_skill_has_a_section_per_platform(self):
+        text = read(os.path.join(KIT_ROOT, 'content', 'skills', 'shell-and-worktree-traps', 'SKILL.md'))
+        text = text.decode('utf-8').replace('\r\n', '\n')
+        heads = re.findall(r'^## (.+)$', text, re.M)
+        self.assertEqual(heads, ['Windows', 'Linux'])
+        windows, linux = text.split('\n## Linux\n')
+        self.assertIn('[IO.File]', windows)
+        self.assertNotIn('[IO.File]', linux)
+        self.assertNotIn('PowerShell', linux)
+
+    def test_no_content_file_holds_a_raw_carriage_return(self):
+        # a CR byte in the middle of a line (a literal `$'\r'` written as the byte) is never meant
+        found = []
+        for folder, _, names in os.walk(os.path.join(KIT_ROOT, 'content')):
+            for name in names:
+                if name.endswith('.md'):
+                    path = os.path.join(folder, name)
+                    data = read(path).replace(b'\r\n', b'\n')
+                    if b'\r' in data:
+                        found.append(os.path.relpath(path, KIT_ROOT))
+        self.assertEqual(found, [])
+
+    def test_no_windows_shell_line_is_left_outside_the_traps_skill(self):
+        # shell-neutral text: the Windows commands live in shell-and-worktree-traps alone
+        bad = re.compile(r'Get-ChildItem|Select-Object|\$env:|cmd\.exe|cmd /c|Set-Location')
+        found = []
+        for folder, _, names in os.walk(os.path.join(KIT_ROOT, 'content')):
+            if os.path.basename(folder) == 'shell-and-worktree-traps':
+                continue
+            for name in names:
+                if name.endswith('.md'):
+                    path = os.path.join(folder, name)
+                    for n, line in enumerate(read(path).decode('utf-8').splitlines(), 1):
+                        if bad.search(line):
+                            found.append('%s:%d' % (os.path.relpath(path, KIT_ROOT), n))
+        self.assertEqual(found, [])
+
     def test_cli_default_is_check(self):
         out = io.StringIO()
         self.assertEqual(cli.main([], out), 0, out.getvalue())

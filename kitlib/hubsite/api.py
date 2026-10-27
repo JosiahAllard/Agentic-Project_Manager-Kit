@@ -1529,9 +1529,12 @@ def todo_steps(b, judge=True):
     `commands` that is not a list, a given command holding a lone surrogate, a bad step and, when
     `judge` (an agent's to-do or edit), text the owner's to-do rules forbid (todosteps.check).
     The rules judge the text as given, before any step is rendered: the owner's text is never
-    judged."""
+    judged. An `os` field ('windows' by default, or 'linux') names the OS the steps' per-OS
+    commands are for; it is not kept, and an unknown one is refused (`invalid`, field `os`).
+    The caller says it: a machine-OS source is left for a later slice."""
     b = dict(b)
     steps = b.pop('steps', None)
+    os_ = b.pop('os', todosteps.DEFAULT_OS)
     commands = _typed(b, 'commands', (list,), 'a list of strings')
     for i, c in enumerate(commands or ()):
         m = _SURROGATE.search(c) if isinstance(c, str) else None
@@ -1540,11 +1543,12 @@ def todo_steps(b, judge=True):
                            'of a character that cannot be written'
                            % (i, ord(m.group()), m.start()), 'commands')
     try:
+        todosteps.check_os(os_)
         if judge:
             todosteps.check(dict(b, steps=steps))
         if steps is not None:
-            b['commands'] = list(commands or []) + todosteps.render(steps)
-            lines = '\n'.join(todosteps.summary(steps))
+            b['commands'] = list(commands or []) + todosteps.render(steps, os_)
+            lines = '\n'.join(todosteps.summary(steps, os_))
             b['detail'] = (b['detail'].rstrip() + '\n\n' + lines) if b.get('detail') else lines
     except (todosteps.StepError, todosteps.Refused) as e:
         raise _invalid(str(e), e.field)
@@ -1553,7 +1557,7 @@ def todo_steps(b, judge=True):
 
 def todos_add(api, req):
     owner = req.role == OWNER
-    names = ('title', 'detail', 'commands', 'steps', 'repo', 'refs', 'urgent')
+    names = ('title', 'detail', 'commands', 'steps', 'os', 'repo', 'refs', 'urgent')
     b = _fields(req, names if owner else names + ('from',), required=('title',),
                 flags=('urgent',))
     for name in ('title', 'detail', 'repo', 'from'):

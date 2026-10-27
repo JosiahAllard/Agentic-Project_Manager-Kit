@@ -185,8 +185,9 @@ One list covers what is left to fix: `LEAK_ALLOWED`. It can only shrink.
 For agent-to-agent messaging, add `optional/bridge/hosts/<name>/` (the name with `-` as `_`),
 which exports `HOST`, an `optional.bridge.port.BridgeHost`, and has a `bridge-profile.json`
 (its settings, and as `channel_env` any variable the host's app nominates a tool pipe in). It is
-served only once the host's `hosts.json` entry exists
-(optional/bridge/README.md "The port", "Adding a host half"). The core never imports it. With the
+served only once the bridge's own list, `optional/bridge/peers.json`, names it; its `hosts.json`
+entry does not serve it. Every pair with the other peers is allowed unless `refused` there lists
+it (optional/bridge/README.md "The port", "Host pairs", "Adding a host half"). The core never imports it. With the
 bridge not installed, no host shell mentions it. Once the half exists, the conformance class runs the
 bridge part of the suite by itself: subclass `bridge_conformance.mixin(HOST)` beside
 `conformance.HostConformance` (`tests/host/bridge_conformance.py`), and supply `bridge_delivery()`

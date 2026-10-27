@@ -1,0 +1,4 @@
+{
+  "peers": ["claude", "codex"],
+  "refused": [["codex", "codex"]]
+}

@@ -41,7 +41,7 @@ def _profiles(values,kit):
     for kind,profile in values.items():
         # Schemas are installed native-provider data, never a configuration URL
         # or an executable/import named by a model or profile.
-        # Only a host hosts.json registers, with a half: an unregistered half is never read.
+        # Only a peer peers.json lists, with a half: an unlisted half is never read.
         if kind not in registry.names(kit=kit):raise DeliveryError('native-provider-unavailable')
         regular(registry.half_dir(kind,kit),directory=True)
         required,optional,directories,names=registry.profile_schema(
@@ -116,7 +116,7 @@ class Runtime:
                     raise DeliveryError('native-delivery-builder-unavailable')
                 adapter=builder(provider,self)
                 self.adapters.append(adapter)
-                controller.adapter(adapter)
+                controller.adapter(adapter,peer=kind)
         except Exception:
             self.close()
             raise
