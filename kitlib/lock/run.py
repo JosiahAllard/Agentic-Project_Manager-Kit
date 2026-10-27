@@ -717,6 +717,29 @@ def tell_daemons(store, rid, rec, done):
                           if d.get("pid") not in judged] + new
 
 
+def move_leftovers(store, rid, job):
+    """Before run rid's job is closed without a kill: moves what still runs in it out of it
+    (Job.leftovers, Linux: into a scope of its own, or, on W2, out of the job's kill), so it runs
+    on, unpinned, and the run's own scope ends. A job with no leftovers (a Windows job object,
+    which cannot let a process out) moves none. A move that fails is said and never fails the
+    release: what is left runs on in the job, unpinned, as on Windows. Returns the pids moved."""
+    move = getattr(job, "leftovers", None)
+    if move is None or not jobset.is_open(job):
+        return []
+    try:
+        moved = list(move() or [])
+    except Exception as e:                  # noqa: BLE001 - the release goes on
+        with contextlib.suppress(Exception):
+            store.say("WARNING: run %s: what it left could not be moved out of its job: %s; it "
+                      "runs on there, unpinned" % (rid, e))
+        return []
+    if moved:
+        with contextlib.suppress(Exception):
+            store.say("run %s: left %s running, moved out of its job"
+                      % (rid, ", ".join("pid %d" % p for p in moved)))
+    return moved
+
+
 def end_sparing(store, rid, job, rec):
     """Ends every process in run rid's job but a build daemon another job's client uses or may
     use, with that daemon's tree: every daemon kitlib.proc.daemons stop leaves, so any MSBuild
@@ -1246,8 +1269,12 @@ class Slot:
                         raise
                 self.watch_stop()           # while the job can still say whose a window is
                 # A spared daemon's tree is still in the job: closing it with kill-on-close set,
-                # or TerminateJobObject, would end it.
-                self.job.end(kill=how in KILL_HOW and not self.spared)
+                # or TerminateJobObject, would end it. What runs on leaves the job where it can
+                # (Linux: move_leftovers).
+                kill = how in KILL_HOW and not self.spared
+                if not kill:
+                    move_leftovers(self.store, self.id, self.job)
+                self.job.end(kill=kill)
                 if self.started:
                     on_release(self.store, self.on_release_cmd, self.env, how, self.run)
         finally:
