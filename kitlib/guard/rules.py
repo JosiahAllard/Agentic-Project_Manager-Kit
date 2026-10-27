@@ -1286,11 +1286,20 @@ def ledger_glob(ctx, target, start=0, above=False):
     path whose parts each match the folders it passes through names a folder above it
     (ledger_kind's `above`)."""
     first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
-    cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
+    posix = paths.posix()
+    cut = target.rfind('/', 0, first) if posix else max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
     b = file_key(base)
-    parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
-             if x and x != '.']
+    if posix:
+        # Linux: `/` alone separates, and each part folds as the held path's own does (paths.fold,
+        # by the mount that holds it), so both sides compare the same way
+        raw = [x.split(':', 1)[0] for x in rest.split('/') if x and x != '.']
+        top = paths.norm(os.path.abspath(base), real=True, fold=False).rstrip('/')
+        folded = paths.fold('/'.join([top] + raw)).split('/')
+        parts = [x.translate(DOS_WILDCARDS) for x in folded[len(folded) - len(raw):]] if raw else []
+    else:
+        parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
+                 if x and x != '.']
     wide = any('**' in x or x == '..' for x in parts)
     for kind, real in ledger_guarded(ctx):
         if kind == 'rulebook' and b == real:
@@ -4227,7 +4236,7 @@ def write_place(ctx, cmd, w, base=OUTER):
         target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
     elif w.dyn:
         target, why = None, 'a target that is not literal: %s' % w.text
-    elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
+    elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text) and not paths.posix():
         target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
     else:
         target = sh.resolve_path(w.text, here_dir, cmd.shell, getattr(ctx, 'home', None))
@@ -4521,6 +4530,8 @@ def is_root(text, cwd, ctx=None, shell=None):
         return False
     if ctx is not None and getattr(ctx, 'home', None) and same_dir(p, ctx.home):
         return True
+    if paths.posix():
+        return p in ('/', '//')                 # Linux: no drives; `/` (and `//`) is the root
     drive, rest = os.path.splitdrive(p)
     return bool(drive) and rest in ('', '\\', '/')
 

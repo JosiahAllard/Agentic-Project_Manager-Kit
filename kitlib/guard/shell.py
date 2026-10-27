@@ -639,6 +639,9 @@ class _Scan(object):
                     nx = self.peek(1)
                     if nx == '\n':
                         self.i += 2
+                    elif nx and paths.posix():
+                        out.append(nx)              # Linux: bash drops every unquoted backslash
+                        self.i += 2
                     elif nx in (' ', '\t') and ''.join(out).endswith(':'):
                         out.append('\\')            # C:\ before a space: a drive root, as meant
                         self.i += 1
@@ -1070,7 +1073,9 @@ _ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//)')
 def is_absolute(p):
     """True when the text `p` names its folder whatever the current one: a drive and a separator,
     or a share. A rooted \\x is not (it takes the current drive; os.path.isabs reads it as
-    absolute before Python 3.13)."""
+    absolute before Python 3.13). On Linux (paths.posix): a text that starts with `/`."""
+    if paths.posix():
+        return (p or '').startswith('/')
     return bool(_ABS_RE.match(p or ''))
 
 
@@ -1173,7 +1178,9 @@ def resolve_path(p, cwd, shell=None, home=None):
     `FileSystem::<abs>` (after a leading separator too) is <abs>, `FileSystem::<rel>` is <rel> in
     `cwd` (ps_filesystem_relative), any other provider or a drive not named by one ASCII letter
     is None (ps_unplaceable), and .\\x.txt::$DATA is a stream of a file in `cwd`; bash and cmd
-    text is read as it always was. `~` is `home` (home_folder)."""
+    text is read as it always was. `~` is `home` (home_folder). On Linux (paths.posix) a path
+    that starts with `/` is absolute and any other is read in `cwd`: no drive or share, no Git
+    Bash /c/x mapping (C:x is a name in `cwd`)."""
     if not p:
         return None
     if shell == PS:
@@ -1189,6 +1196,11 @@ def resolve_path(p, cwd, shell=None, home=None):
             p = home_folder(home) + p[1:]
         else:
             return None
+    if paths.posix():
+        # Linux: `/` starts an absolute path; no drive, no MSYS mapping, `\` is a name's character
+        if p.startswith('/'):
+            return paths.norm(p, fold=False)
+        return paths.norm(os.path.join(cwd, p), fold=False) if cwd and cwd.startswith('/') else None
     p = msys_to_win(p)
     if re.match(r'^[A-Za-z]:([\\/]|$)', p):
         return paths.norm(p if len(p) > 2 else p + '\\', fold=False)

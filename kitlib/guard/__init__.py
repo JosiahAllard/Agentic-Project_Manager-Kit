@@ -15,7 +15,7 @@ from .rules import ALLOW, ASK, DENY, decide
 
 # The platforms (kitlib.platform.NAME) whose path semantics the guard has been proven on. On any
 # other, kitlib.host.hookmain denies every guarded call (guard-error) before decide runs
-# (docs/linux-support-plan.md section 3). Linux joins in slice 8, which proves the guard there.
-READY_PLATFORMS = ('windows',)
+# (docs/linux-support-plan.md section 3). Linux joined in slice 8 (tests/guard/test_linux_paths.py).
+READY_PLATFORMS = ('windows', 'linux')
 
 __all__ = ['Ctx', 'Decision', 'ALLOW', 'DENY', 'ASK', 'decide', 'READY_PLATFORMS']

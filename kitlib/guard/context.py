@@ -165,7 +165,10 @@ def _tolerant_read(path):
 
 def _placed(path):
     """`path` names one place whatever folder the hook runs in: absolute, with a drive or a UNC
-    share (`C:books` and a rooted `/books` depend on the current folder)."""
+    share (`C:books` and a rooted `/books` depend on the current folder). On Linux (paths.posix):
+    absolute, starting with `/`; a relative or empty path is not placed (fail closed)."""
+    if paths.posix():
+        return isinstance(path, str) and path.startswith('/')
     return os.path.isabs(path) and bool(os.path.splitdrive(path)[0])
 
 

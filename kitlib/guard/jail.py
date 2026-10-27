@@ -30,7 +30,9 @@ refuses the writes inside that folder. A root's mode holds wherever it nests: a 
 it also lies in the checkout or temp, and one inside an add-only root may only be new.
 
 Paths compare after kitlib.guard.paths.norm(real=True): os.path.realpath (symlinks and junctions
-resolved, `..` folded), then os.path.normcase.
+resolved, `..` folded), then the case fold (os.path.normcase on Windows). On Linux whether a root
+allows a target is read with the strict fold (a mount in doubt does not fold); whether a
+read-only or add-only root holds it, and every other check here, with the default fold.
 """
 import os
 
@@ -46,9 +48,15 @@ OUTSIDE = 'outside'
 CHECKOUT, TEMP, DATA, MARK = 'your checkout', 'temp', 'data', 'mark'
 
 
-def real(path):
-    """`path` as the filesystem reaches it, case folded: links and junctions resolved."""
-    return paths.norm(path, real=True)
+def real(path, strict=False):
+    """`path` as the filesystem reaches it, case folded: links and junctions resolved. `strict`:
+    the fold for what the jail allows (paths.norm: on Linux, a mount in doubt does not fold)."""
+    return paths.norm(path, real=True, strict=strict)
+
+
+def allow_real(path):
+    """real(path, strict=True) on Linux, real(path) elsewhere (the same fold, read once)."""
+    return real(path, strict=True) if paths.posix() else None
 
 
 def inside(path, root):
@@ -57,11 +65,12 @@ def inside(path, root):
 
 
 class Root(object):
-    __slots__ = ('path', 'kind', 'mode', 'real')
+    __slots__ = ('path', 'kind', 'mode', 'real', 'strict')
 
     def __init__(self, path, kind, mode=OPEN):
         self.path, self.kind, self.mode = path, kind, mode
         self.real = real(path)
+        self.strict = allow_real(path) or self.real     # what it allows (real, strict)
 
     def label(self):
         if self.kind in (DATA, MARK):
@@ -102,11 +111,13 @@ def sibling(ctx, target, cwd):
     here, there = ctx.place(cwd), ctx.place(target)
     if here.kind not in (repo.MAIN, repo.LINKED) or not here.common:
         return False
-    if there.kind != repo.LINKED or not there.top or not there.common or real(there.common) != real(here.common):
+    strict = paths.posix()                      # what it allows: real, strict
+    if there.kind != repo.LINKED or not there.top or not there.common or \
+            real(there.common, strict) != real(here.common, strict):
         return False
     main = ctx.main_top(cwd)
-    t, top = real(target), real(there.top)
-    if not main or not inside(t, top) or not inside(top, real(main)):
+    t, top = real(target, strict), real(there.top, strict)
+    if not main or not inside(t, top) or not inside(top, real(main, strict)):
         return False
     return not touches_config(ctx, there.top)
 
@@ -220,7 +231,9 @@ def roots(ctx, cwd, is_root, mark=None):
 
 def judge(target, rs):
     """(verdict, root): (None, None) when `target` may be written; else OUTSIDE, READ_ONLY or
-    ADD_ONLY (the target exists) with the root that decided it."""
+    ADD_ONLY (the target exists) with the root that decided it. A read-only or add-only root
+    holds the target by the fold for what the guard refuses, an allowing one by the strict fold
+    (Root.strict): on Linux a mount in doubt never widens what may be written."""
     t = real(target)
     holders = [r for r in rs if inside(t, r.real)]
     for r in holders:
@@ -229,7 +242,8 @@ def judge(target, rs):
     for r in holders:
         if r.mode == ADD_ONLY and os.path.lexists(target):
             return ADD_ONLY, r
-    if holders:
+    ts = allow_real(target) or t
+    if any(inside(ts, r.strict) for r in rs):
         return None, None
     return OUTSIDE, None
 
