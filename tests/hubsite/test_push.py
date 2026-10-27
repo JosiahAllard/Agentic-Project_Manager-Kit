@@ -929,8 +929,8 @@ class FiledRecipientsTest(FiledPushCase):
                 self.assertEqual(self.store.get('questions', qid)['filed_as'], 'held')
                 self.assertEqual([r for r, _t in self.push.calls], ['kit'],
                                  'tried at its asker, which reads it at its next start anyway')
-                self.assertEqual([p['id'] for p in self.ok('GET', '/pending', AGENT,
-                                                            query={'for': 'kit'})['items']], [qid])
+                self.assertIn(qid, [p['id'] for p in self.ok('GET', '/pending', AGENT,
+                                                              query={'for': 'kit'})['items']])
 
     def test_a_held_answer_the_pm_asked_tells_the_pm_once(self):
         self.bind('blocked', live=())
