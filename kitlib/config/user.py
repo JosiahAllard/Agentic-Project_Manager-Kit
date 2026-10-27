@@ -158,14 +158,13 @@ SCHEMA = {
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
     'guard_mcp_tools': Field(ListOf(Str()), None, 'more full tool names the guard treats as the lock MCP\'s owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")'),
-    'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json, write-jail and git-stash-shared rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor (removed after the switch), deep-worker, consultant and pm (docs/guard.md "Session mark")'),
+    'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json, write-jail and git-stash-shared rules; it replaces the default list, so it names every mark it holds; unset: coordinator, deep-worker, consultant and pm (docs/guard.md "Session mark")'),
     'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")'),
     'guard_rules': Field(MapOf(Enum('deny', 'warn', 'off'), what='rule'), None, 'the guard\'s rule modes, {rule: deny|warn|off}, over the kit defaults (kitlib.guard.modes.DEFAULTS); set here only, never in .kit.json (docs/guard.md "Rule modes"); older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
     'hub': Field(Owned('kitlib.hubsite.settings'), None, 'the Action Hub site settings: port, tunnel_port, store, commit_every_s, push (unset: on only when store is unset and pm_data is set), backlog_refresh_s, access: {team, aud, emails}; unset: every default, and the site still runs; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config")'),
     'coordinator_start': Field(Owned('kitlib.coordinatorstart'), None, 'the coordinator session-start settings'),
-    'conductor_start': Field(Owned('kitlib.coordinatorstart'), None, 'the old name of coordinator_start, read when coordinator_start is absent; removed after the switch'),
     'pm_watch': Field(Owned('kitlib.pmwatch'), None, 'the PM watcher settings'),
     'launcher': Field(Owned('kitlib.launcher'), None, 'the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")'),
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
@@ -187,8 +186,7 @@ POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
 LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
 # Never in the PM repository's files: a ConfigError there, except a RETIRED key, which is ignored
 # (`pm_data` is derived: locate).
-DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data', 'standing_delegation',
-                'daily_red_ruling', 'backlog_lint')
+DROPPED_KEYS = ('ledger_refs', 'pm_data', 'standing_delegation', 'daily_red_ruling', 'backlog_lint')
 # POLICY_KEYS paths that may be written relative to the PM repository (resolved).
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
