@@ -18,6 +18,7 @@ from optional.bridge.win.frontend import serve_frontend,service_target
 from optional.bridge.win.lifecycle import Supervisor
 from kitlib.proc.job import Job
 from kitlib.proc.process import own_ctime
+from tests.bridge.registered import no_refused_pairs
 
 
 class FrontendRecoveryTests(unittest.TestCase):
@@ -31,6 +32,9 @@ class FrontendRecoveryTests(unittest.TestCase):
         self.workspace=self.root/'workspace'
         self.workspace.mkdir()
         self.kit=Path(__file__).resolve().parents[2]
+        # The durable-queue test sends between two Codex threads, a pair the bridge refuses;
+        # recovery, not the host-pair rule, is under test here (test_host_pairs.py covers that).
+        self.enterContext(no_refused_pairs())
         self.thread_id,self.turn=str(uuid.uuid4()),str(uuid.uuid4())
         self.meta={'x-codex-turn-metadata':{'thread_id':self.thread_id,'turn_id':self.turn,
             'thread_source':'user','auto_review_enabled':True,'node_repl_auto_review_required':True}}
