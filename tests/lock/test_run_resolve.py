@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from tests.platforms import windows_only
+
 from . import test_cli
 from .helpers import StoreCase, clean_env
 
@@ -26,7 +28,7 @@ def make_scripts(folder, bat_lines):
         f.write("\n".join(bat_lines) + "\n")
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("a .bat or .cmd and PATHEXT are Windows'")
 class ScriptCommand(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="lock-resolve-")
@@ -71,7 +73,7 @@ class ScriptCommand(unittest.TestCase):
             self.assertIs(rm.script_command(cmd), cmd)
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("a .bat or .cmd and PATHEXT are Windows'")
 class RunScript(StoreCase):
     def setUp(self):
         super().setUp()
@@ -119,7 +121,7 @@ class RunScript(StoreCase):
         self.assertEqual(self.store.history_records(), [])
 
 
-@unittest.skipUnless(os.name == "nt", "Windows only")
+@windows_only("a .bat or .cmd and PATHEXT are Windows'")
 class CliRefusal(StoreCase):
     """machine_lock.py run refuses such an argument before it detaches, as it does a bare bash
     (test_cli): a detached run's log would be the only place the refusal showed."""

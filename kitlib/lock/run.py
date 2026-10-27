@@ -1618,9 +1618,11 @@ class ScriptArgError(OSError):
 
 
 def comspec():
-    """The cmd.exe that runs a .bat or .cmd: this process's ComSpec, else System32's."""
-    return os.environ.get("ComSpec") or os.path.join(
-        os.environ.get("SystemRoot") or r"C:\Windows", "System32", "cmd.exe")
+    """The cmd.exe that runs a .bat or .cmd: this process's ComSpec, else SystemRoot's, else
+    the bare name (CreateProcess looks in the system folder before PATH)."""
+    root = os.environ.get("SystemRoot")
+    return (os.environ.get("ComSpec")
+            or (os.path.join(root, "System32", "cmd.exe") if root else "cmd.exe"))
 
 
 def _cmd_word(text, what):
