@@ -262,14 +262,15 @@ WORKTREE_CONFIG = [
     ('git', ['config', '--get', 'kit.scope'], WT),
 ]
 
-# A root .gitattributes that sets text and eol (the kit's own file is the first three lines):
-# hashing follows the work tree's file, a checkout writes under the result index's.
-_KIT_ATTRS = '* text=auto eol=lf\n*.cmd text eol=crlf\n*.bat text eol=crlf\n'
+# A root .gitattributes that sets text and eol: hashing follows the work tree's file, a checkout
+# writes under the result index's. (The kit's own file stores .cmd and .bat as-is, -text; here
+# they convert, to drive eol=crlf.)
+_ATTRS = '* text=auto eol=lf\n*.cmd text eol=crlf\n*.bat text eol=crlf\n'
 _OLD = 1600000000 * 10 ** 9
 _ATTR_FILES = ['crlf.txt', 'eq.txt', 'tool.cmd', 'mixed.bat', 'bin.dat', 'lonecr.txt']
 ATTRIBUTES = [
     ('git', ['switch', '-q', '-c', 'kit/attr']),
-    ('write', '.gitattributes', _KIT_ATTRS),
+    ('write', '.gitattributes', _ATTRS),
     ('bytes', 'crlf.txt', b'one\r\ntwo\r\n'),
     ('bytes', 'eq.txt', b'a\r\nb\n'),
     ('bytes', 'tool.cmd', b'@echo off\nexit /b 0\n'),
@@ -413,6 +414,26 @@ AUTOCRLF_INDEX_CR = [
     ('git', ['ls-files', '-s']),
 ]
 
+# An unmerged path has no stage 0: has_crlf_in_index reads stage 2 (ours, read-cache.c
+# read_blob_data_from_index), whose CRLF keeps the resolved file's CRLF on add.
+AUTOCRLF_UNMERGED_CR = [
+    ('bytes', 'c.txt', b'base\r\n'),
+    ('git', ['add', '--', 'c.txt']),
+    ('git', ['commit', '-q', '-m', 'base']),
+    ('git', ['switch', '-q', '-c', 'kit/other']),
+    ('bytes', 'c.txt', b'other\r\n'),
+    ('git', ['commit', '-q', '-a', '-m', 'other']),
+    ('git', ['switch', '-q', 'main']),
+    ('bytes', 'c.txt', b'ours\r\n'),
+    ('git', ['commit', '-q', '-a', '-m', 'ours']),
+    ('git', ['config', 'core.autocrlf', 'true']),
+    ('setup', ['merge', '-q', '-m', 'conflict', 'kit/other']),
+    ('git', ['ls-files', '-s']),
+    ('bytes', 'c.txt', b'resolved\r\n'),
+    ('git', ['add', '--', 'c.txt']),
+    ('git', ['ls-files', '-s']),
+]
+
 # Real git reads both repositories after a script.
 END_STATE = [
     ['for-each-ref', '--format=%(refname) %(objectname)'],
@@ -497,6 +518,9 @@ class FakeAgainstRealGit(unittest.TestCase):
 
     def test_a_binary_index_blob_with_a_cr_leaves_conversion_on(self):
         self.run_script(BRANCH_AND_LAND[:3] + AUTOCRLF_INDEX_CR)
+
+    def test_an_unmerged_path_reads_its_stage_2_blob_for_a_crlf(self):
+        self.run_script(BRANCH_AND_LAND[:3] + AUTOCRLF_UNMERGED_CR)
 
 
 if __name__ == '__main__':

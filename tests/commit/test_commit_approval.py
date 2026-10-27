@@ -427,7 +427,8 @@ class WhatThePathCheckRefuses(ApprovalCase):
         self.assert_not_consumed()
 
 
-@real_git('a git attribute changes the blob staged: the fake reads no .gitattributes')
+@real_git('* text=auto with no eol changes the blob staged: the fake refuses text with no eol '
+          '(core.eol would decide)')
 class WhatIsRefusedAfterTheWrite(ApprovalCase):
     """Refused once the approved content is in the work tree: the work tree is put back as it
     was and what this call staged is unstaged."""
