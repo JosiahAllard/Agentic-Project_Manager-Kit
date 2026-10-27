@@ -1286,11 +1286,20 @@ def ledger_glob(ctx, target, start=0, above=False):
     path whose parts each match the folders it passes through names a folder above it
     (ledger_kind's `above`)."""
     first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
-    cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
+    posix = paths.posix()
+    cut = target.rfind('/', 0, first) if posix else max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
     b = file_key(base)
-    parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
-             if x and x != '.']
+    if posix:
+        # Linux: `/` alone separates, and each part folds as the held path's own does (paths.fold,
+        # by the mount that holds it), so both sides compare the same way
+        raw = [x.split(':', 1)[0] for x in rest.split('/') if x and x != '.']
+        top = paths.norm(os.path.abspath(base), real=True, fold=False).rstrip('/')
+        folded = paths.fold('/'.join([top] + raw)).split('/')
+        parts = [x.translate(DOS_WILDCARDS) for x in folded[len(folded) - len(raw):]] if raw else []
+    else:
+        parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
+                 if x and x != '.']
     wide = any('**' in x or x == '..' for x in parts)
     for kind, real in ledger_guarded(ctx):
         if kind == 'rulebook' and b == real:
@@ -1982,7 +1991,7 @@ def gate_result(event, ctx, target, role, what):
         for k in range(1, len(parts)):
             if parts[k].lower() != GATE_RESULT:
                 continue
-            gitdir = '\\'.join(parts[:k])
+            gitdir = ('/' if paths.posix() else '\\').join(parts[:k])
             if parts[k - 1].lower() == '.git' or (os.path.isfile(os.path.join(gitdir, 'HEAD')) and
                                                   os.path.isdir(os.path.join(gitdir, 'objects'))):
                 return refuse('gate-result', role, '%s: %s is in the gate result folder %s, which only the '
@@ -3210,7 +3219,10 @@ def _curl(args, cmd_word):
     for o, v in opts:
         if o in ('-o', '--output') and v is not None:
             if v.text != '-':
-                out.append(_under(folder, v))
+                placed = _under(folder, v)
+                out.append(placed)
+                if folder is not None and placed is v:
+                    out.append(Under(folder, v))    # curl joins --output-dir to an absolute name too
         elif o in ('-D', '--dump-header', '-c', '--cookie-jar') and v is not None:
             if v.text != '-':
                 out.append(v)
@@ -3225,14 +3237,15 @@ class Under(sh.Word):
     __slots__ = ('folder', 'name')
 
     def __init__(self, folder, name):
-        sh.Word.__init__(self, folder.text.rstrip('/\\') + '/' + name.text, folder.dyn or name.dyn,
+        cut = '/' if paths.posix() else '/\\'          # on Linux `\` is a name's character
+        sh.Word.__init__(self, folder.text.rstrip(cut) + '/' + name.text, folder.dyn or name.dyn,
                          name.start, name.end)
         self.folder, self.name = folder, name
 
 
 def _under(folder, w):
-    """`w` placed in `folder` (curl --output-dir), unless it is absolute."""
-    if folder is None or re.match(r'^(?:[A-Za-z]:)?[\\/]', w.text):
+    """`w` placed in `folder` (curl --output-dir), unless it is absolute (on Linux: starts with `/`)."""
+    if folder is None or (w.text.startswith('/') if paths.posix() else re.match(r'^(?:[A-Za-z]:)?[\\/]', w.text)):
         return w
     return Under(folder, w)
 
@@ -3309,9 +3322,13 @@ class _TarDirs:
         not `sure`: it may not be a -C, so the folders in force stay possible too."""
         new = []
         for b in self.bases:
-            rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+            if paths.posix():                   # Linux: `\` is a name's character, no drives
+                rooted, join = folder.text.startswith(('/', '~')), posixpath.join
+            else:
+                rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+                join = ntpath.join
             new.append(folder if b is None or rooted else
-                       sh.Word(ntpath.join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
+                       sh.Word(join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
         self.bases = new if sure else self.bases + new
         self.seen += new
         self.unsure = self.unsure or not sure
@@ -3951,7 +3968,12 @@ def into_folder(target, w, into, cwd, home=None):
         return [target]
     out = []
     for s in srcs:
-        base = re.split(r'[\\/]', s.text.rstrip('\\/'))[-1] if not s.dyn else ''
+        if s.dyn:
+            base = ''
+        elif paths.posix():
+            base = s.text.rstrip('/').split('/')[-1]    # Linux: `\` is a name's character
+        else:
+            base = re.split(r'[\\/]', s.text.rstrip('\\/'))[-1]
         if not base or base in ('.', '..') or GLOB_CHARS & set(base):
             return [target]
         if files_only:
@@ -4227,7 +4249,7 @@ def write_place(ctx, cmd, w, base=OUTER):
         target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
     elif w.dyn:
         target, why = None, 'a target that is not literal: %s' % w.text
-    elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
+    elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text) and not paths.posix():
         target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
     else:
         target = sh.resolve_path(w.text, here_dir, cmd.shell, getattr(ctx, 'home', None))
@@ -4521,6 +4543,8 @@ def is_root(text, cwd, ctx=None, shell=None):
         return False
     if ctx is not None and getattr(ctx, 'home', None) and same_dir(p, ctx.home):
         return True
+    if paths.posix():
+        return p in ('/', '//')                 # Linux: no drives; `/` (and `//`) is the root
     drive, rest = os.path.splitdrive(p)
     return bool(drive) and rest in ('', '\\', '/')
 
@@ -6340,8 +6364,11 @@ def shared_ref_held(event, ctx):
 
 
 def _in_temp(ctx, path):
-    real = jail.real(path)
-    return any(jail.inside(real, jail.real(r)) for r in jail.temp_roots(ctx))
+    """True when `path` lies in a temp root (jail.temp_roots). It lifts checks, so it compares with
+    the jail's strict fold (jail.real strict: on Linux a mount in doubt does not fold)."""
+    strict = paths.posix()
+    real = jail.real(path, strict)
+    return any(jail.inside(real, jail.real(r, strict)) for r in jail.temp_roots(ctx))
 
 
 def _scratch_repo(ctx, place):
@@ -8481,10 +8508,14 @@ def _without(cmd, first, last):
 
 
 def _under_temp(ctx, d):
+    """True when the folder `d` is the temp folder or below it. It lifts the core.hooksPath checks,
+    so on Linux it compares with the strict fold (a mount in doubt does not fold) and a `\\` is a
+    name's character."""
     if not d:
         return False
-    top = paths.norm(ctx.tempdir, absolute=True).rstrip('\\/')
-    here_ = paths.norm(d, absolute=True)
+    strict = paths.posix()
+    top = paths.norm(ctx.tempdir, absolute=True, strict=strict).rstrip('/' if strict else '\\/')
+    here_ = paths.norm(d, absolute=True, strict=strict)
     return here_ == top or here_.startswith(top + os.sep)
 
 
