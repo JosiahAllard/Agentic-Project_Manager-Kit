@@ -40,7 +40,7 @@ Missing any: say what you need, do nothing.
 1. Work from the main checkout on the main branch, never inside the worktree you are about to
    remove. Confirm its `git status` is clean.
 2. The branch need not contain main: the landing tool merges the main it finds at its turn
-   and gates the merged tree. A conflict is a `CONFLICT` verdict, nothing changed.
+   and gates the merged tree. A conflict is a `fail` result with a `CONFLICT` line, nothing changed.
 3. **Size check** any doc both sides touched: an auto-merge can silently restore
    text main deleted. The merged file's line count must equal main's count plus
    the branch's net lines for that file
