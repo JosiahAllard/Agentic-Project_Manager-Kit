@@ -172,6 +172,26 @@ class BootstrapTests(unittest.TestCase):
         with Supervisor(config.state_root,config.kit_root,config.python,config.native_hosts) as running:
             self.assertTrue(running.leader.owns())
 
+    def test_a_half_adapter_whose_id_names_another_or_no_peer_is_refused(self):
+        # An id the host-pair rule cannot map would let a refused pair through, so the
+        # service will not install it for the half that built it.
+        config=self.load()
+        for adapter_id in ('stray-desktop','claude-peer'):
+            with self.subTest(adapter_id=adapter_id):
+                observed=[]
+                class Provider:
+                    def __init__(provider,controller,**settings): pass
+                    def close(provider): observed.append('provider-closed')
+                class Adapter:
+                    def describe(adapter): return AdapterDescription(adapter_id,(),'fixture')
+                    def close(adapter): observed.append('adapter-closed')
+                with self.assertRaisesRegex(DeliveryError,'native-adapter-peer-mismatch'):
+                    Supervisor(config.state_root,config.kit_root,config.python,config.native_hosts,
+                        runtime_builder=lambda controller:Runtime(controller,config,{'codex':Provider},
+                            delivery_factories={'codex':lambda provider,runtime:Adapter()}))
+                self.assertEqual(observed,['adapter-closed','provider-closed'])
+                self.assertFalse((config.state_root/'service.json').exists())
+
     def test_allocated_adapter_registration_and_cleanup_failure_release_service(self):
         config=self.load()
         observed=[]
