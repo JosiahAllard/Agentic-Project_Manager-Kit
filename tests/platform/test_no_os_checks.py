@@ -16,7 +16,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 ALLOWED = frozenset({
     'kitlib/__init__.py',
     'kitlib/ci/ratchet.py',
-    'kitlib/config/user.py',
     'kitlib/gate/detect.py',
     'kitlib/guard/context.py',
     'kitlib/guard/place.py',
@@ -32,7 +31,6 @@ ALLOWED = frozenset({
     'kitlib/redfirst/run.py',
     'kitlib/redfirst/verdict.py',
     'kitlib/tooldeps/selfrun.py',
-    'kitlib/worktree/holders.py',
     'optional/procwatch/procwatch.py',
     'optional/usage/_usage.py',
     'optional/usage/agent_costs.py',

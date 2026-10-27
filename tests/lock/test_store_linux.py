@@ -1,8 +1,8 @@
 """The lock store's exclusion on Linux (docs/linux-support-plan.md section 8, slice 3): a named
 lock (Store.lock) and a run's liveness lock (Store.run_mutex, run_mutex_held, run_dead) are flocks
 on files in a scratch store (kitlib.platform.linux.locks). Two processes contend for a named lock;
-a killed holder frees it; run_dead sees a killed run; Store() with no root refuses by name, since
-the machine's store has no Linux root until slice 9.
+a killed holder frees it; run_dead sees a killed run. Store() with no root is the machine's store
+under the profile folder from the password database (slice 9), fenced under the tests.
 
 BumpRaises runs on every platform: a lock the platform cannot take (PlatformUnsupported, an
 OSError) is raised by Store.bump, never skipped as a busy lock is, so a stub cannot hide there."""
@@ -15,11 +15,18 @@ import threading
 import unittest
 from unittest import mock
 
+import kitlib.platform
+from kitlib.config.user import HomeFenced
+from kitlib.lock import store as lockstore
 from kitlib.lock.store import Store
 from kitlib.platform import PlatformUnsupported
+from kitlib.platform.linux import paths
+from tests.home import unmarked_env
 from tests.platforms import posix_only
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The password database's home folder in MachineStore: /home/u on Linux (on Windows, with a drive).
+PW_DIR = os.path.abspath(os.path.join(os.sep, 'home', 'u'))
 RID = 'r-20261026T000000Z-abcd'
 # A child that holds, in the scratch store at argv[2], the named lock argv[4] (argv[3] "lock") or
 # the run lock of id argv[4] (argv[3] "run"), says "held", and keeps it until its stdin closes.
@@ -161,15 +168,30 @@ class RunLiveness(Scratch):
         self.assertFalse(self.store.run_dead({'id': RID, 'pid': os.getpid()}))
 
 
-@posix_only("the machine's lock store has no Linux root until slice 9")
 class MachineStore(unittest.TestCase):
-    def test_no_root_refuses_by_name(self):
-        with self.assertRaises(PlatformUnsupported) as cm:
-            Store()
-        text = str(cm.exception)
-        self.assertIn("the machine's lock store has no root on linux", text)
-        self.assertIn('slice 9', text)
-        self.assertIn('Store(root=<a folder>)', text)
+    """The machine's store on Linux (slice 9): ~/.claude/machine-lock under the profile folder
+    from the password database, never $HOME; fenced under the tests like the Windows one. Runs on
+    every platform: NAME and the password database are patched."""
+
+    def setUp(self):
+        for patch in (mock.patch.object(kitlib.platform, 'NAME', 'linux'),
+                      mock.patch.object(paths, '_pw_dir', lambda: PW_DIR)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_the_real_root_is_under_the_password_database_s_home(self):
+        with mock.patch.dict(os.environ, {'HOME': '/elsewhere'}):
+            self.assertEqual(lockstore.profile_dir(), PW_DIR)
+            self.assertEqual(lockstore.real_root(), os.path.join(PW_DIR, '.claude', 'machine-lock'))
+
+    def test_no_root_is_the_machine_s_store_and_it_is_fenced(self):
+        s = Store()
+        self.assertFalse(s.testing)
+        self.assertEqual(s.root, os.path.abspath(lockstore.real_root()))
+        for call in (lambda: s.path('queue.json'), lambda: s.mutex_name('queue'),
+                     lockstore.machine_home):
+            with self.assertRaises(HomeFenced):
+                call()
 
     def test_a_given_root_is_a_scratch_store(self):
         root = tempfile.mkdtemp(prefix='kit-lock-linux-')
@@ -177,6 +199,32 @@ class MachineStore(unittest.TestCase):
         s = Store(root=root)
         self.assertTrue(s.testing)
         self.assertEqual(s.root, os.path.abspath(root))
+        self.assertEqual(s.path('queue.json'), os.path.join(os.path.abspath(root), 'queue.json'))
+
+    def test_no_password_entry_is_an_os_error_not_a_scratch_store(self):
+        def missing():
+            raise KeyError('uid not found')
+        with mock.patch.object(paths, '_pw_dir', missing):
+            with self.assertRaises(OSError):
+                Store()
+            with self.assertRaises(OSError):
+                Store(root=tempfile.gettempdir())
+
+
+@posix_only('a real run on Linux: an unfenced child opens the machine store')
+class RealMachineStore(unittest.TestCase):
+    def test_an_unfenced_child_names_the_real_root(self):
+        import pwd
+        env = unmarked_env()
+        env['HOME'] = tempfile.gettempdir()
+        code = ('import sys; sys.path.insert(0, sys.argv[1]); from kitlib.lock.store import Store\n'
+                's = Store(); print(s.testing); print(s.root)')
+        r = subprocess.run([sys.executable, '-c', code, ROOT], env=env, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.split('\n')[:2],
+                         ['False', os.path.join(pwd.getpwuid(os.getuid()).pw_dir, '.claude',
+                                                'machine-lock')])
 
 
 class BumpRaises(unittest.TestCase):

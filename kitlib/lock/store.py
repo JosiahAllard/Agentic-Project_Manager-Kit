@@ -19,9 +19,10 @@ On Linux the mutexes are flocks (kitlib.platform.linux.locks), on files in the s
     runs/<run>.alive       a run's liveness lock (Store.run_mutex), removed when it is let go
 
 Store(root) is the machine's store when root is None; any other root is a scratch store with
-mutexes of its own (tests). On Linux the machine's store has no root yet (slice 9 of
-docs/linux-support-plan.md section 8), so Store() raises PlatformUnsupported there. Timings live in Settings, so a test shortens them by parameter, not
-by environment (the old MACHINE_LOCK_TEST_* seams). Nothing here prints: `say` is the caller's.
+mutexes of its own (tests). Its root is ~/.claude/machine-lock under the profile folder the
+system reports (profile_dir): Windows's, or on Linux the password database's (slice 9 of
+docs/linux-support-plan.md section 8), never $HOME or USERPROFILE. Timings live in Settings, so a
+test shortens them by parameter, not by environment (the old MACHINE_LOCK_TEST_* seams). Nothing here prints: `say` is the caller's.
 
 Under the kit's tests the machine's store is fenced (fence; docs/test-tools.md "Home fence"): it
 can be built and its root named, but Store.path and Store.mutex_name raise HomeFenced, so nothing
@@ -44,6 +45,7 @@ import kitlib.platform
 from kitlib.host import registry
 from kitlib.platform import PlatformUnsupported
 from kitlib.platform.linux import locks
+from kitlib.platform.linux import paths as linux_paths
 from kitlib.platform.linux import process as procfs
 from kitlib.proc import process
 from kitlib.proc import win32
@@ -96,14 +98,17 @@ class Settings:
 
 
 def profile_dir():
-    """The user's profile folder from Windows (FOLDERID_Profile), never from the environment: a
-    caller's USERPROFILE or HOME cannot move the store. Off Windows: PlatformUnsupported (the
-    Linux profile folder comes with slice 9 of docs/linux-support-plan.md section 8)."""
+    """The user's profile folder from Windows (FOLDERID_Profile), or on Linux from the password
+    database (kitlib.platform.linux.paths.profile), never from the environment: a caller's
+    USERPROFILE or HOME cannot move the store. OSError when the system does not answer; on any
+    other platform PlatformUnsupported."""
+    if kitlib.platform.NAME == "linux":
+        return linux_paths.profile()
     if kitlib.platform.NAME != "windows":
         raise PlatformUnsupported(
-            "the machine's lock store has no root on %s yet: its profile folder comes from Windows "
-            "(SHGetKnownFolderPath) until slice 9 of docs/linux-support-plan.md section 8; a "
-            "scratch store is Store(root=<a folder>)" % kitlib.platform.NAME)
+            "the machine's lock store has no root on %s: its profile folder comes from Windows "
+            "(SHGetKnownFolderPath) or Linux's password database; a scratch store is "
+            "Store(root=<a folder>)" % kitlib.platform.NAME)
     class GUID(ctypes.Structure):
         _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD),
                     ("d4", ctypes.c_ubyte * 8)]
@@ -504,7 +509,7 @@ class RunMutex:
 
 # ------------------------------------------------------------------ the store
 class Store:
-    """One lock store. root None: the machine's (~/.claude/machine-lock, from Windows);
+    """One lock store. root None: the machine's (~/.claude/machine-lock, profile_dir's);
     else a scratch store whose mutexes are named after its path. say(text): where the library's
     progress lines go (default: nowhere; the CLI prints them). Under the kit's tests the machine's
     store gives no file path and names no mutex: path and mutex_name raise HomeFenced (fence)."""
@@ -512,7 +517,7 @@ class Store:
     def __init__(self, root=None, settings=None, say=None, hardware=None, kinds_path=None):
         try:
             real = real_root()
-        except PlatformUnsupported:     # Linux until slice 9: a given root is a scratch store
+        except PlatformUnsupported:     # no backend here: a given root is a scratch store
             if root is None:
                 raise
             real = None

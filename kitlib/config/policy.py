@@ -43,6 +43,12 @@ from .types import ConfigError, check, is_note
 
 DOTNET_BUILDS = ['build', 'test', 'publish', 'run', 'pack', 'msbuild', 'vstest']
 GRADLE_INFO = ['--version', '-v', '--help', '-h', '-?', '--stop', '--status']
+# Godot as Linux names it (docs/linux-support-plan.md section 3, guard finding 8): a flatpak run
+# names its application id; flatpak's management commands on that id run nothing.
+GODOT_FLATPAKS = ['org.godotengine.Godot', 'org.godotengine.GodotSharp']
+FLATPAK_NOT_RUN = ['install', 'update', 'upgrade', 'uninstall', 'remove', 'info', 'list', 'search',
+                   'kill', 'ps', 'override', 'permission-show', 'permission-reset', 'make-current',
+                   'history', 'repair']
 
 HEAVY_DEFAULTS = (
     {'program': 'godot', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
@@ -51,8 +57,18 @@ HEAVY_DEFAULTS = (
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
     {'program': 'godot_*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    # Linux: godot4 and the like (and an AppImage, Godot4.AppImage), flatpak's exported launcher
+    # (exports/bin/org.godotengine.Godot), and `flatpak run org.godotengine.Godot`.
+    {'program': 'godot[0-9]*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+     'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'org.godotengine.godot*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+     'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'flatpak', 'kind': 'engine-run', 'when_args': GODOT_FLATPAKS,
+     'unless_args': FLATPAK_NOT_RUN, 'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
     {'program': 'blender*', 'kind': 'render', 'when_args': ['-b', '--background'], 'unless_args': [],
      'why': 'machine_lock classify.py render: a background Blender run'},
+    {'program': 'org.blender.blender*', 'kind': 'render', 'when_args': ['-b', '--background'],
+     'unless_args': [], 'why': 'machine_lock classify.py render: a background Blender run'},
     # A .NET command that compiles, and any Gradle run but its information flags (dotnet --info and
     # gradle --version are not heavy).
     {'program': 'dotnet', 'kind': 'build', 'when_args': DOTNET_BUILDS, 'unless_args': [],
