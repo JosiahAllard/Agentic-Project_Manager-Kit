@@ -9,8 +9,11 @@ import subprocess
 import sys
 import time
 
+from kitlib import platform
 from kitlib.config import user as kuser
 from kitlib.launcher import lookup, window
+
+UPTIME = '/proc/uptime'         # Linux: seconds since boot, first field
 
 
 def _user_env(name):
@@ -49,8 +52,10 @@ class Host(object):
     def now(self):
         return datetime.datetime.now().astimezone()
 
-    def open_window(self, text):
-        window.open_window(text)
+    def open_window(self, text, **kw):
+        """window.open_window: on Linux `kw` carries the session name and launcher.terminal
+        (window.open_args)."""
+        window.open_window(text, **kw)
 
     def git_ignored(self, repo, path):
         """True (ignored), False (not), or None (git could not say). Run console-less (a scheduled
@@ -92,6 +97,13 @@ class Host(object):
         return process.terminate_verified(pid, ctime)
 
     def uptime_minutes(self):
+        """Minutes since boot; inf when that cannot be read (or off Windows and Linux)."""
+        if platform.NAME == 'linux':
+            try:
+                with open(UPTIME, encoding='ascii') as f:
+                    return float(f.read().split()[0]) / 60.0
+            except (OSError, ValueError, IndexError):
+                return float('inf')
         if sys.platform != 'win32':
             return float('inf')
         import ctypes

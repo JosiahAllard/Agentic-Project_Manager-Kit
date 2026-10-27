@@ -59,6 +59,8 @@ TIERS = ('light', 'standard', 'strong', 'deep')
 _NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
 _ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
 _ENV_PREFIX = re.compile(r'[A-Z][A-Z0-9_]*_\Z')
+_FILE_NAME = re.compile(r'[A-Za-z0-9._@-]+\Z')
+_NPM_PACKAGE = re.compile(r'@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*\Z')
 _TRAILER_KEY = re.compile(r'[A-Za-z][A-Za-z0-9-]*\Z')
 _EMAIL = re.compile(r'[^\s<>@]+@[^\s<>@]+\Z')
 _MODULE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z')
@@ -239,6 +241,21 @@ def _env_prefixes(where, value):
     return prefixes
 
 
+def _file_name(where, value):
+    """One path part: a program's file name, no slash, no whitespace, not . or .."""
+    if not isinstance(value, str) or not _FILE_NAME.match(value) or value in ('.', '..'):
+        raise RegistryError('hosts.json: %s must be a file name, no / and no spaces, not . or ..' % where)
+    return value
+
+
+def _npm_package(where, value):
+    """A scoped npm package name, @scope/name, each part lower-case and starting with a letter or
+    digit (so never . or ..)."""
+    if not isinstance(value, str) or not _NPM_PACKAGE.match(value):
+        raise RegistryError('hosts.json: %s must be a scoped npm package name, @scope/name' % where)
+    return value
+
+
 def _process_names(where, value, platforms):
     """{platform: [image, ...]} over PLATFORMS, with an entry for each platform the host declares
     (one it does not declare yet may be listed ahead), kept whole as ((platform, images), ...).
@@ -256,7 +273,8 @@ def _profile(name, raw, platforms):
     w = '%s.profile' % name
     p = _object(w, raw, ('owner_paths', 'worktrees_directory', 'state_directory', 'process_names',
                          'mcp_tool_format', 'session_env', 'skills_directory', 'attribution',
-                         'agent_name_format', 'session_process', 'env_prefixes'))
+                         'agent_name_format', 'session_process', 'env_prefixes', 'cli_program',
+                         'cli_package'))
     session_env = _text(w + '.session_env', p['session_env'])
     if not _ENV_NAME.match(session_env):
         raise RegistryError('hosts.json: %s.session_env must be an environment variable name' % w)
@@ -271,7 +289,9 @@ def _profile(name, raw, platforms):
         _attribution(w + '.attribution', p['attribution']),
         _name_format(w + '.agent_name_format', p['agent_name_format']),
         _text(w + '.session_process', p['session_process']),
-        _env_prefixes(w + '.env_prefixes', p['env_prefixes']))
+        _env_prefixes(w + '.env_prefixes', p['env_prefixes']),
+        _file_name(w + '.cli_program', p['cli_program']),
+        _npm_package(w + '.cli_package', p['cli_package']))
 
 
 def _entry(name, raw):

@@ -17,12 +17,16 @@ only ctimes below the stamp).
   ancestry, ancestors_of, own_ancestors, descendants, command_line, terminate_verified, kill_tree
                       as kitlib.proc.process documents them
   stamp_now()         the seam's stamp (kitlib.lock.run filetime_now on Linux)
+  rows()              every process as kitlib.pmstart.list_processes's dicts (Name, CommandLine,
+                      ExecutablePath, ProcessId, ParentProcessId, Created), from /proc
+                      (docs/linux-support-plan.md section 8, slice 11)
 
 terminate_verified opens a pidfd on the pid first and reads its starttime after: the pidfd names
 the process it was opened on, so the signal reaches that process or none, and the starttime read
 after the open shows it is the one meant. Without pidfd_open (Linux 5.3, Python 3.9) it raises
 PlatformUnsupported rather than signal a pid that may have been reused. This module imports on any
 platform; its calls need Linux's /proc."""
+import datetime
 import errno
 import os
 import signal
@@ -32,6 +36,7 @@ from kitlib.platform import PlatformUnsupported
 
 PROC = '/proc'
 BOOT_ID = '/proc/sys/kernel/random/boot_id'
+STAT = '/proc/stat'         # its btime line: the boot's wall-clock time, seconds since the epoch
 EXITED = ('Z', 'X')         # stat states of a process that has ended: zombie, dead
 
 
@@ -329,3 +334,56 @@ def stamp_now():
     (CLOCK_BOOTTIME in SC_CLK_TCK units, floored as starttime is)."""
     ticks = time.clock_gettime_ns(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK') // 10 ** 9
     return _ctime(ticks)
+
+
+def _btime():
+    """The boot's wall-clock time (the btime line of STAT), or None when it cannot be read."""
+    try:
+        with open(STAT, encoding='ascii', errors='replace') as f:
+            for line in f:
+                if line.startswith('btime '):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _clk_tck():
+    return os.sysconf('SC_CLK_TCK')
+
+
+def _created(btime, starttime, tck):
+    """The local ISO time a process started (btime plus starttime ticks), or None."""
+    if btime is None or not tck:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(btime + starttime / tck).astimezone().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def rows(readlink=os.readlink):
+    """Every process /proc lists as a dict with Name (its comm), CommandLine (command_line; "" for
+    none), ExecutablePath (the /proc/<pid>/exe link, None when it cannot be read), ProcessId,
+    ParentProcessId and Created (the local ISO time it started, None when that cannot be told), the
+    keys kitlib.pmstart.list_processes gives on Windows. A process that ends or cannot be read
+    while it is listed is left out. Raises OSError when /proc cannot be listed."""
+    btime, tck = _btime(), _clk_tck()
+    out = []
+    for pid in _pids():
+        try:
+            st = _stat(pid)
+        except OSError:
+            continue
+        if st is None:
+            continue
+        cmd = command_line(pid)
+        if cmd is None:
+            continue
+        try:
+            exe = readlink('%s/%d/exe' % (PROC, pid))
+        except (OSError, ValueError):
+            exe = None
+        out.append({'Name': st[3], 'CommandLine': cmd, 'ExecutablePath': exe, 'ProcessId': pid,
+                    'ParentProcessId': st[1], 'Created': _created(btime, st[2], tck)})
+    return out

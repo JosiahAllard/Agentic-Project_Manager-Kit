@@ -11,7 +11,7 @@ import re
 import subprocess
 import time
 
-from kitlib import kitroot
+from kitlib import kitroot, platform
 from kitlib.config import user as kuser
 from kitlib.ledger import files as ledger_files, rulebook
 from kitlib.host import registry
@@ -47,7 +47,12 @@ def _read(path):
 
 def list_processes(timeout=TIMEOUT):
     """All processes as dicts with Name, CommandLine, ExecutablePath, ProcessId, ParentProcessId, Created (PowerShell Get-CimInstance).
-    subprocess.TimeoutExpired after `timeout` seconds (the session start's TIMEOUT by default)."""
+    subprocess.TimeoutExpired after `timeout` seconds (the session start's TIMEOUT by default).
+    On Linux the rows are read from /proc (kitlib.platform.linux.process.rows), with no timeout;
+    OSError when /proc cannot be listed."""
+    if platform.NAME == 'linux':
+        from kitlib.platform.linux import process as linux_process
+        return linux_process.rows()
     r = spawn.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS],
                   capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
@@ -481,7 +486,10 @@ _RC = re.compile(r"""(?:^|\s)--remote-control(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S
 
 def session_images(path=None):
     """The process images a host's launched session runs as (each hosts.json profile's
-    session_process; claude.exe on Claude), matched exactly against a process's Name."""
+    session_process; claude.exe on Claude), matched exactly against a process's Name. On Linux the
+    running platform's process_names over every host (registry.process_names): claude, node, codex."""
+    if platform.NAME == 'linux':
+        return frozenset(registry.process_names(path))
     return frozenset(registry.union('session_process', path))
 
 
@@ -491,13 +499,53 @@ def rc_name(cmd):
     return next((g for g in m.groups() if g), None) if m else None
 
 
+def cli_names(path=None):
+    """((cli_program, cli_package), ...) of every host in hosts.json, for runs_cli."""
+    return tuple((p.cli_program, p.cli_package) for p in registry.profiles(path))
+
+
+def _in_package(parts, package):
+    """True when the path parts hold node_modules followed directly by the scoped package's two
+    parts (@scope, name), with the file below them."""
+    seg = package.split("/")
+    return any(parts[i] == "node_modules" and parts[i + 1:i + 1 + len(seg)] == seg
+               for i in range(len(parts) - len(seg) - 1))
+
+
+def runs_cli(cmd, clis):
+    """True when a Linux command line (/proc's arguments joined by spaces) runs one of `clis`,
+    ((program, scoped npm package), ...): its program, or the first word after it that is not an
+    option (node's script), has the program as its last path part or lies in the package
+    directly under a node_modules folder. `node app.js --remote-control x` runs none, nor
+    `node ~/src/claude-code/x.js`."""
+    words = (cmd or "").split()
+    script = next((w for w in words[1:] if not w.startswith("-")), "")
+    for word in words[:1] + [script]:
+        parts = word.split("/")
+        if any(parts[-1] == program or _in_package(parts, package) for program, package in clis):
+            return True
+    return False
+
+
+def linux_clis(path=None):
+    """cli_names() on Linux, for runs_a_cli; None elsewhere (a Windows image is the CLI's own)."""
+    return cli_names(path) if platform.NAME == 'linux' else None
+
+
+def runs_a_cli(row, clis):
+    """A process row runs a host's CLI: always when clis is None (linux_clis off Linux)."""
+    return clis is None or runs_cli(row.get("CommandLine"), clis)
+
+
 def live_session_names(procs):
-    """Remote Control names of launched sessions (session_images); the Store app (under WindowsApps) is not one."""
+    """Remote Control names of launched sessions (session_images); the Store app (under WindowsApps) is not one,
+    nor on Linux a process that runs no host's CLI (runs_cli)."""
     names = set()
     images = session_images()
+    clis = linux_clis()
     for p in procs:
         if (p.get("Name") in images and p.get("CommandLine")
-                and STORE_DIR not in (p.get("ExecutablePath") or "")):
+                and STORE_DIR not in (p.get("ExecutablePath") or "") and runs_a_cli(p, clis)):
             n = rc_name(p["CommandLine"])
             if n:
                 names.add(n)

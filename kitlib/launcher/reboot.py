@@ -19,6 +19,7 @@ boot, when the PM transcript was written in the last 15 minutes. --test starts o
 import glob
 import os
 
+from kitlib import platform
 from kitlib.launcher import accounts as A
 from kitlib.launcher import lookup, state, window
 from kitlib.launcher import start as S
@@ -107,9 +108,12 @@ def run(settings, host, test=False, dry_run=False, say=None):
         if dry_run:
             tell('would start %s in %s' % (TEST_NAME, folder))
             return out
-        host.open_window(text)
-        log('started %s: its window opens minimized and unfocused (window.open_window), so look for it '
-            'on the taskbar' % TEST_NAME)
+        host.open_window(text, **window.open_args(TEST_NAME, settings))
+        if platform.NAME == 'linux':
+            log('started %s in %s' % (TEST_NAME, window.opened_in(TEST_NAME, settings.terminal)))
+        else:
+            log('started %s: its window opens minimized and unfocused (window.open_window), so look '
+                'for it on the taskbar' % TEST_NAME)
         return out
     try:
         cfg = state.read_coordinators(settings) or {}
@@ -182,7 +186,7 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         if dry_run:
             log('would resume pm-session (session %s, account %s) in %s' % (sid, pm_account, folder))
             return []
-        host.open_window(text)
+        host.open_window(text, **window.open_args('pm-session', settings))
     except Exception as e:                           # the PM account not signed in, or the window failed
         log('FAILED to resume pm-session : %s' % why(e))
         return []
