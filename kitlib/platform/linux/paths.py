@@ -34,8 +34,9 @@ one whose namespace cannot be read. A process of another user is counted in `tot
 user cannot see what it uses. A /proc that lists no process, or not this one, is mounted with an
 option that hides processes of this user (hidepid=2 or 4, invisible, ptraceable, subset=pid; on
 any proc mount there, not only the last), or whose mount options or whose own mount namespace
-cannot be read, gives OSError, as when it cannot be listed; so does a scan run inside a PID
-namespace (a container: NSpid in its status), whose /proc lists none of the processes outside it.
+cannot be read, gives OSError, as when it cannot be listed; so does a scan run in any PID
+namespace but the first (a container or a WSL2 distro: its ns/pid link is not INIT_PID) or whose
+PID namespace cannot be read, whose /proc lists none of the processes outside it.
 Not seen: a thread's own open-file table (CLONE_FILES unshared). PROC, _uid, _pid, _owner,
 _status_uid, _link, _pw_dir and is_absolute are the seams a test points at a folder tree of its
 own (this process's mountinfo and status are read under PROC too). This module imports on any
@@ -300,6 +301,8 @@ def _process(folder, pid, kinds, mine=None):
 
 
 HIDING = ('hidepid=2', 'hidepid=invisible', 'hidepid=4', 'hidepid=ptraceable', 'subset=pid')
+# the ns/pid link of the first PID namespace: its inode is fixed (PROC_PID_INIT_INO, Linux 3.8 on)
+INIT_PID = 'pid:[4026531836]'
 
 
 def _unescape(field):
@@ -378,31 +381,22 @@ def aliased(text, path):
     return False
 
 
-def _pid_namespaced(me_folder):
-    """True when this process is in a PID namespace below the first (its status `NSpid:` line names
-    more than one id: a container); OSError when its status cannot be read. A kernel with no such
-    line (before 4.1) answers False."""
-    with open(os.path.join(me_folder, 'status'), 'rb') as f:
-        for line in f:
-            if line.startswith(b'NSpid:'):
-                return len(line.split()) > 2
-    return False
-
-
 def _check_proc(me_folder):
     """OSError unless the /proc at PROC shows every process of this user: this process is in the
-    first PID namespace (inside another, /proc does not list the processes outside it, which may
-    use a tree bound in), and the mount options (from this process's mountinfo) are known and hide
-    none (hidepid=2 or 4, invisible, ptraceable, subset=pid hide those this user cannot trace; any
-    proc mount there counts). Returns this process's mount namespace and its mount table (the
-    mountinfo text)."""
+    first PID namespace (its ns/pid link is INIT_PID; inside another, as in a container, the /proc
+    it mounts lists none of the processes outside, which may use a tree bound in, and its status
+    NSpid line names one id all the same), and the mount options (from this process's mountinfo)
+    are known and hide none (hidepid=2 or 4, invisible, ptraceable, subset=pid hide those this
+    user cannot trace; any proc mount there counts). Returns this process's mount namespace and
+    its mount table (the mountinfo text)."""
     try:
-        inner = _pid_namespaced(me_folder)
+        pid_ns = _link(os.path.join(me_folder, 'ns', 'pid'))
     except OSError as e:
-        raise OSError(e.errno, 'cannot read this process\'s status: %s' % e.strerror, PROC) from None
-    if inner:
-        raise OSError(errno.EACCES, 'is a PID namespace\'s (this process\'s status NSpid line names '
-                      'more than one id): the processes outside it are not listed', PROC)
+        raise OSError(e.errno, 'cannot read this process\'s PID namespace: %s' % e.strerror,
+                      PROC) from None
+    if pid_ns != INIT_PID:
+        raise OSError(errno.EACCES, 'is the PID namespace %s\'s, not the first (%s): the processes '
+                      'outside it are not listed' % (pid_ns, INIT_PID), PROC)
     try:
         with open(os.path.join(me_folder, 'mountinfo'), 'rb') as f:
             text = os.fsdecode(f.read())

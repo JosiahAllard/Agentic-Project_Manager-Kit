@@ -674,10 +674,12 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    an open or mapped file) is HELD; a process of this user that cannot be read in full, whose
    user cannot be told, or in another mount namespace (a live leader's threads' too) makes the
    root UNREAD, as does a tree the scan's mount table shows at another path too (a bind mount of
-   the tree, a folder above it or one in it), has another mount inside it, or does not reach; a
-   /proc that cannot be listed, lists no process, does not list the scan's own, hides processes
-   (hidepid=2 or invisible, subset=pid, on any proc mount there) or whose mount options cannot be
-   read is NOT_SEARCHED;
+   the tree, a folder above it or one in it), has another mount inside it or a later mount at or
+   above the holding one, or does not reach; a /proc that cannot be listed, lists no process, does
+   not list the scan's own, hides processes (hidepid=2 or invisible, subset=pid, on any proc mount
+   there) or whose mount options cannot be read is NOT_SEARCHED, as is a scan in a PID namespace
+   other than the first (its ns/pid link is not pid:[4026531836]: a container or a WSL2 distro) or
+   whose ns/pid link cannot be read;
    each is a refusal. A process is this user's by any of its four status Uid users or its
    folder's owner (a not-dumpable one's folder is root's); each thread's cwd and root are read,
    and a zombie leader's running threads give every kind. cwd_holders, describe and classify.process_cwds read /proc too. The
@@ -685,7 +687,10 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    change Windows too. The live proofs (test_store_linux RealMachineStore, test_holders_linux
    Live) and the landing on the VM wait for the VM; the VM proof also measures how often an
    unreadable process of this user (ssh-agent, gpg-agent) leaves removals UNREAD. Known limits:
-   a bind mount over a tree's file system leaves its removals UNREAD; a user with no password
+   a bind mount over a tree's file system leaves its removals UNREAD; in a WSL2 distro (a PID
+   namespace of its own) every removal is NOT_SEARCHED; /proc is listed once, so a process that
+   forks and exits during the scan can leave a child started after the listing that inherits its
+   cwd unseen; a user with no password
    database entry has no profile folder, so the machine lock's store cannot be opened (and with no
    machine pointer file the pointer is BAD). Deviations: environment.d moves to slice 14 (machine setup writes it);
    another user's processes cannot be seen, so holders answers for this user's only; the user

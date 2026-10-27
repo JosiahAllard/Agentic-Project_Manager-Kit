@@ -16,11 +16,14 @@ WALK_MAX entries and never descends a link or junction (`prune`). Nothing here d
 On Linux (docs/linux-support-plan.md slice 9) nothing denies a delete, so `blockers` and
 `cwd_holders` read /proc instead (kitlib.platform.linux.paths.process_paths): every path inside
 `root` that a process of this user uses (its current folder, root, program, an open file or a
-mapped file) is HELD; a process of this user that cannot be read in full makes the root UNREAD, as
-does a tree its mount table shows at another path too, or with a mount inside it (a bind mount:
-a process there uses the tree under a path not under `root`); no /proc makes it NOT_SEARCHED. Each is a refusal: the
-answer is empty only when every process of this user was read and none uses the tree. Another
-user's processes cannot be seen.
+mapped file) is HELD. A process of this user that cannot be read in full makes the root UNREAD, as
+does a tree the scan's mount table shows at another path too: its device mounted again where the
+roots overlap (a bind mount), a mount inside it or at or above the one holding it, or no mount
+holding it (paths.aliased), since a process there uses the tree under a path not under `root`.
+A /proc that cannot be listed, hides processes of this user by a mount option, or belongs to a
+PID namespace other than the first (a container, a WSL2 distro) makes it NOT_SEARCHED. Each is a
+refusal: the answer is empty only when every process of this user was read and none uses the tree.
+Another user's processes cannot be seen.
 """
 import ctypes
 import os
@@ -47,7 +50,8 @@ TH32CS_SNAPPROCESS = 0x2
 WALK_MAX = 200000
 NOT_SEARCHED = -1                   # `blockers`: the tree was past WALK_MAX, not probed in full
 #                                     (on Linux: /proc could not be listed, hides processes of
-#                                     this user by a mount option, or is a PID namespace's)
+#                                     this user by a mount option, or belongs to a PID
+#                                     namespace other than the first)
 HELD = -2                           # `blockers` on Linux: a process of this user uses this path
 UNREAD = -3                         # `blockers` on Linux: a process of this user could not be read,
 #                                     its device is mounted again where the roots overlap, a mount
@@ -342,7 +346,8 @@ def describe(root, why, cwd=None):
                 ' tree shows at another path too (its device mounted again where the roots'
                 ' overlap, a mount inside it or over it, or no mount holding it)' if err == UNREAD
                 else 'not searched: the process list (%s) cannot be read, hides processes of this'
-                ' user (a mount option) or is a PID namespace\'s, so not known to be free'
+                ' user (a mount option) or belongs to a PID namespace other than the first, so'
+                ' not known to be free'
                 % linux_paths.PROC if err == NOT_SEARCHED and linux else
                 'not probed in full: more than %d entries, so not known to be free' % WALK_MAX
                 if err == NOT_SEARCHED else 'error %d' % err)

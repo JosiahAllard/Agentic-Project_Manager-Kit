@@ -28,6 +28,9 @@ ME, OTHER, ROOT = 1000, 1001, 0
 SELF = 4242                     # the pid of the scan's own process (paths._pid)
 TOP = os.path.abspath(os.sep)   # where it stands: / as this host spells it
 MNT, OTHER_MNT = 'mnt:[4026531841]', 'mnt:[4026532999]'     # mount namespaces (ns/mnt links)
+# PID namespaces (ns/pid links): the first one's inode is fixed (PROC_PID_INIT_INO, since Linux
+# 3.8); any other is a container's (a WSL2 distro shows one such as INNER_PID)
+INIT_PID, INNER_PID = 'pid:[4026531836]', 'pid:[4026532219]'
 PROC_OPTIONS = 'rw,nosuid,nodev,noexec,relatime'
 # the / of the fake mount table: the root of the drive the temp trees are on (/ on Linux)
 FS_TOP = os.path.splitdrive(os.path.realpath(tempfile.gettempdir()))[0] + os.sep
@@ -47,7 +50,8 @@ def inside(path):
 class FakeProc(object):
     """A fake /proc in a temp folder, holding this process (SELF) until clear(). add() makes one
     process; links and folder owners are tables, the real user is its status file. SELF's
-    mountinfo shows the fake /proc mounted with mount() options (PROC_OPTIONS at first)."""
+    mountinfo shows the fake /proc mounted with mount() options (PROC_OPTIONS at first), and its
+    PID namespace is the first (INIT_PID)."""
 
     def __init__(self, case):
         self.root = tempfile.mkdtemp(prefix='kit-fake-proc-')
@@ -74,6 +78,7 @@ class FakeProc(object):
         """Only this process, standing at TOP."""
         self.clear()
         self.add(SELF, cwd=TOP, comm='kit-test')
+        self.links[os.path.join(self.root, str(SELF), 'ns', 'pid')] = INIT_PID
         self.mount(PROC_OPTIONS)
 
     def mount(self, options, fstype='proc', point=None, more=(), top=FS_TOP):
@@ -350,19 +355,27 @@ class Blockers(Base):
                 self.assertEqual(holders.blockers(self.tree), [])
 
     def test_a_scan_inside_a_pid_namespace_is_not_searched(self):
-        # the kit in a container: its /proc does not list the host's processes, which may use a
-        # worktree bound into it
-        status = os.path.join(self.proc.root, str(SELF), 'status')
-        with open(status, 'a', newline='\n') as f:
-            f.write('NSpid:\t%d\t7\n' % SELF)
-        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
-        self.proc.reset()
-        with open(status, 'a', newline='\n') as f:
-            f.write('NSpid:\t%d\n' % SELF)                 # the first PID namespace only
-        self.assertEqual(holders.blockers(self.tree), [])
-        os.remove(status)
-        self.proc.add(SELF + 1)                              # still listed, its status gone
-        self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
+        # the kit in a container (docker, podman, a devcontainer, a WSL2 distro): the /proc it
+        # mounts lists only the processes inside, and its status NSpid line names one id, yet a
+        # process outside may use a worktree bound into it; only the namespace inode tells
+        self.assertEqual(holders.blockers(self.tree), [])            # the first PID namespace
+        link = os.path.join(self.proc.root, str(SELF), 'ns', 'pid')
+        cases = {
+            'a container\'s': INNER_PID,
+            'unreadable': PermissionError(errno.EACCES, 'Permission denied'),
+            'missing': None,
+        }
+        for name, value in cases.items():
+            with self.subTest(name):
+                self.proc.reset()
+                with open(os.path.join(self.proc.root, str(SELF), 'status'), 'a',
+                          newline='\n') as f:
+                    f.write('NSpid:\t%d\n' % SELF)
+                if value is None:
+                    del self.proc.links[link]
+                else:
+                    self.proc.links[link] = value
+                self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
 
     def test_a_tree_no_mount_covers_is_unread(self):
         # this process's mount table does not reach the tree (a chroot): where else it shows is
