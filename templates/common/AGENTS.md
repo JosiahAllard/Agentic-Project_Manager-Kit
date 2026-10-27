@@ -4,9 +4,9 @@
 
 Rules only, no dated wording; owner-locked ("Owner decisions"). Propose a new rule to the owner;
 findings go to the doc owning the area, history to the commit message. Doc index: find what you
-need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read `docs/INDEX.md`
-whole. Rules not needed on every task: `docs/reference/WORKING-RULES.md`; per-agent rules:
-`.claude/agent-profile.md`, by heading.
+need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`; never read `docs/INDEX.md`
+whole. Per-agent rules: the host's profile (`.claude/agent-profile.md`, `.codex/agent-profile.md`;
+the repo's `docs/agent-profile.md` where it has one), by heading.
 
 The PM session is the owner's decision channel. A decision is the owner's only when the PM relays
 it to you; the PM keeps the record, privately. Never invent one, and cite nobody's ids. Covers
@@ -15,7 +15,7 @@ grants a permission or approves configuration.
 
 ## Start here
 
-- `docs/INDEX.md`: every doc and tool, found by topic (see above); the tools replace routine calls.
+- `docs/INDEX.md`: every doc, found by topic (see above).
 - Kit skills write the PM kit's folder as `<kit>` (`<kit>/docs/gate.md`); the kit header at the
   start of every session names it. The kit's tools run from there, never from a copy here:
   `python <kit>/tools/<name>.py -C <worktree>`.
@@ -46,7 +46,7 @@ python -m unittest discover -s tests   # the kit's and the repo tools' own tests
 ## Git workflow (every task)
 
 Remote `origin` (<REMOTE_URL>), main branch `main`. One task = one branch `<area>/<slug>` = one
-worktree `.claude/worktrees/<slug>` = one landing. The main checkout (`<MAIN_CHECKOUT_PATH>`) stays
+worktree `<slug>` in the host's worktree folder (`.claude/worktrees`, `.codex/worktrees`) = one landing. The main checkout (`<MAIN_CHECKOUT_PATH>`) stays
 on `main` and is never worked in; only the lander writes to it.
 
 1. Start every task with `python <kit>/tools/preflight.py -C <worktree>`.
@@ -106,10 +106,10 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 - The store is read and written only through `backlog.py`, never by hand (skill backlog-ops).
   With no store named, the default `ref` store is read-only; `"backlog": {"store": "ref"}` opts in to writing it.
 - Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest), `-1` =
-  assessed, only the owner can settle; no other unvalued state. An agent prices (`--priority-by agent`, 2-5) at start the unpriced open
-  records that are not follow-ups, after checking each for duplicates, size and fit; a follow-up stays unpriced
-  until promoted into a work set, then is priced. The owner overrides later. An agent that cannot
-  price a record sets `-1` with one owner ask: a question only the owner can answer - if the answer is
+  held, the owner's question: never pulled, and its priority changes only with `--priority-by owner|pm`
+  or a release to `-`. An agent prices (`--priority-by agent`, 2-5, never 1) at start the unpriced open
+  records, after checking each for duplicates, size and fit. The owner overrides later. An agent that
+  cannot price a record asks the owner one question only the owner can answer - if the answer is
   in the tree, it isn't the owner's.
 - `blocked_on: owner` (the work waits on the owner) is not `priority: -1` (the price is the owner's).
 - Coordinators never wait for the owner for what is next: `python <kit>/tools/backlog.py -C <worktree> next` does.
@@ -132,8 +132,7 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
   a line number in anything durable (docs, records, DECISIONS lines, owner asks, profiles): line
   pins go stale within hours; `:line` only in transient output (reports, test output).
 - Docs land with the code they describe, on the same branch. An over-budget `.md` may not grow
-  (`python <kit>/tools/doc_budget.py -C <worktree>`). The rest: WORKING-RULES, "Docs".
-- Heavy runs take the machine lock (skill machine-lock-run); never kill a process you did not
+  (`python <kit>/tools/doc_budget.py -C <worktree>`).- Heavy runs take the machine lock (skill machine-lock-run); never kill a process you did not
   start (report its PID and command line). Detail: agent-profile, "Shared resources that must be
   serialised".
 - Scratch files go to the session scratchpad, never the repo. All text files are LF
