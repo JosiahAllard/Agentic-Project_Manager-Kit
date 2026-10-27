@@ -157,6 +157,24 @@ class LinuxStart(Base):
         self.assertEqual(self.host.open_kw, [{'name': 'x-coordinator-a1', 'terminal': ['xterm', '-e']}])
         self.assertIn('in a new terminal window (xterm)', out)
 
+    def test_a_name_holding_whitespace_is_refused_and_nothing_starts(self):
+        for name in ('my project-coordinator-a1', 'x	coordinator'):
+            with self.subTest(name=name), self.assertRaisesRegex(S.LaunchError, 'whitespace'):
+                start.start(self.h.settings, self.host, repo='alpha', account='1', name=name, prompt='go')
+        self.assertEqual(self.host.opened, [])
+
+    def test_a_default_name_from_a_folder_with_a_space_is_refused_and_says_name(self):
+        folder = os.path.join(self.h.root, 'My Project')
+        os.makedirs(folder)
+        with self.assertRaisesRegex(S.LaunchError, "whitespace: 'my project-session-.*--name"):
+            start.start(self.h.settings, self.host, repo_path=folder, account='1', prompt='go',
+                        no_agent=True)
+        self.assertEqual(self.host.opened, [])
+
+    def test_the_script_refuses_a_name_holding_whitespace_too(self):
+        with self.assertRaisesRegex(S.LaunchError, 'whitespace'):
+            window.script('a b', 'plain', '/r', 'claude')
+
     def test_whatif_shows_the_bash_command(self):
         out = '\n'.join(start.start(self.h.settings, self.host, repo='alpha', account='1',
                                     name='x-coordinator-a1', prompt='go', whatif=True))
@@ -225,6 +243,13 @@ class WindowsUnchanged(Base):
         self.assertIn(') in a new minimized window. Remote Control name: x-coordinator-a1', out)
         text, = self.host.opened
         self.assertIn("$env:PM_KIT_ROLE = 'coordinator'", text)
+
+    def test_windows_still_starts_a_name_holding_a_space(self):
+        with mock.patch('kitlib.platform.NAME', 'windows'):
+            start.start(self.h.settings, self.host, repo='alpha', account='1', name='my project-a1',
+                        prompt='go')
+            self.assertIn("'my project-a1'", window.script('my project-a1', 'plain', 'C:/r', 'claude'))
+        self.assertEqual(len(self.host.opened), 1)
 
 
 if __name__ == '__main__':

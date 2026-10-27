@@ -499,13 +499,35 @@ def rc_name(cmd):
     return next((g for g in m.groups() if g), None) if m else None
 
 
+def cli_names(path=None):
+    """((cli_program, cli_package), ...) of every host in hosts.json, for runs_cli."""
+    return tuple((p.cli_program, p.cli_package) for p in registry.profiles(path))
+
+
+def runs_cli(cmd, clis):
+    """True when a Linux command line (/proc's arguments joined by spaces) runs one of `clis`,
+    ((program, package folder), ...): its program, or the first word after it that is not an
+    option (node's script), has the program as its last path part or lies under the package
+    folder. `node app.js --remote-control x` runs none."""
+    words = (cmd or "").split()
+    script = next((w for w in words[1:] if not w.startswith("-")), "")
+    for word in words[:1] + [script]:
+        parts = word.split("/")
+        if any(parts[-1] == program or package in parts[:-1] for program, package in clis):
+            return True
+    return False
+
+
 def live_session_names(procs):
-    """Remote Control names of launched sessions (session_images); the Store app (under WindowsApps) is not one."""
+    """Remote Control names of launched sessions (session_images); the Store app (under WindowsApps) is not one,
+    nor on Linux a process that runs no host's CLI (runs_cli)."""
     names = set()
     images = session_images()
+    clis = cli_names() if platform.NAME == 'linux' else None
     for p in procs:
         if (p.get("Name") in images and p.get("CommandLine")
-                and STORE_DIR not in (p.get("ExecutablePath") or "")):
+                and STORE_DIR not in (p.get("ExecutablePath") or "")
+                and (clis is None or runs_cli(p["CommandLine"], clis))):
             n = rc_name(p["CommandLine"])
             if n:
                 names.add(n)

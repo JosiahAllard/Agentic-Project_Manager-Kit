@@ -66,6 +66,10 @@ def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
             raise Refused("'%s' names the PM session; never stopped." % n)
     if not name or name.strip() != name:
         raise Refused('--name must be the exact session name, no surrounding spaces.')
+    for n in (name, successor):
+        why = platform.NAME == 'linux' and linuxwin.spaced(n)
+        if why:
+            raise Refused(why % '')
     if successor and successor == name:
         raise Refused('--successor equals --name.')
     if pid is not None and int(pid) < 0:
@@ -153,7 +157,9 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None,
     # Creation times first, all of them, so the window and its host are the ones seen in the list.
     chosen = [(p, host.ctime(int(p['ProcessId']))) for p in (target, win, con) if p]
     tpid, tct = int(target['ProcessId']), chosen[0][1]
-    if tct is None or lookup.rc_name(host.command_line(tpid, tct)) != name:
+    cmd = host.command_line(tpid, tct) if tct is not None else None
+    if (tct is None or lookup.rc_name(cmd) != name
+            or (platform.NAME == 'linux' and not lookup.runs_cli(cmd))):
         raise LaunchError("PID %d is no longer the session '%s'; nothing stopped." % (tpid, name))
     if win is not None and platform.NAME == 'linux':
         wct = chosen[1][1]

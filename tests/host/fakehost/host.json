@@ -27,7 +27,9 @@
       },
       "agent_name_format": "{plugin}/{name}",
       "session_process": "fakehost.exe",
-      "env_prefixes": ["FAKEHOST_"]
+      "env_prefixes": ["FAKEHOST_"],
+      "cli_program": "fakehost",
+      "cli_package": "fakehost"
     },
     "hook": {
       "tool_event": "before_tool",

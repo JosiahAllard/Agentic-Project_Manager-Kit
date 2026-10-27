@@ -149,6 +149,22 @@ class Linux(unittest.TestCase):
             stop.stop(self.h.settings, host, 'x')
         self.assertEqual(host.killed, [])
 
+    def test_a_name_holding_whitespace_is_refused(self):
+        procs = [claude(10, 'my', 20), shell(20, 'my'), TMUX]
+        for name in ('my project-session-a1', 'my	x'):
+            with self.subTest(name=name), self.assertRaisesRegex(stop.Refused, 'whitespace'):
+                stop.plan(procs, name)
+
+    def test_the_reread_must_still_run_the_cli_or_nothing_is_stopped(self):
+        row = self.node(10, 'node /usr/local/bin/claude --remote-control x -n x go')
+        host = FakeHost(self.h.root, [row, shell(20, 'x'), TMUX])
+        real = host.command_line
+        host.command_line = lambda pid, ct: ('node app.js --remote-control x -n x' if int(pid) == 10
+                                             else real(pid, ct))
+        with self.assertRaisesRegex(stop.LaunchError, "PID 10 is no longer the session 'x'"):
+            stop.stop(self.h.settings, host, 'x')
+        self.assertEqual(host.killed, [])
+
     def test_stop_ends_a_launched_claude_running_as_node(self):
         row = self.node(10, 'node /usr/local/bin/claude --agent pm-kit:coordinator --permission-mode auto '
                             '--remote-control x -n x go')

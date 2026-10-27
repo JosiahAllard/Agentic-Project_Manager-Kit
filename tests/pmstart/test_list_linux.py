@@ -25,6 +25,14 @@ class Linux(unittest.TestCase):
         rows.assert_called_once_with()
         run.assert_not_called()
 
+    def test_live_session_names_skip_a_node_that_runs_no_hosts_cli(self):
+        rows = [dict(ROW, Name='node', CommandLine='node app.js --remote-control X'),
+                dict(ROW, Name='node', CommandLine='node /usr/local/bin/claude --remote-control Y'),
+                dict(ROW, CommandLine='claude --remote-control Z'),
+                dict(ROW, Name='node', CommandLine='node /usr/lib/node_modules/@openai/codex/bin/codex.js '
+                                                   '--remote-control W')]
+        self.assertEqual(pmstart.live_session_names(rows), {'Y', 'Z', 'W'})
+
     def test_session_images_are_the_linux_process_names(self):
         self.assertEqual(pmstart.session_images(), frozenset({'claude', 'node', 'codex'}))
 

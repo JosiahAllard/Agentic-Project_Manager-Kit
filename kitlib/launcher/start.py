@@ -170,7 +170,9 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
     if predecessor:
         prompt = predecessor_text(predecessor, role == window.COORDINATOR) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))
+    derived = not name
     name = name or '%s-%s-%s' % (repo_label.lower(), agentname.bare(agent) or 'session', tag)
+    window.check_name(name, derived)
     out, add_dir = [], None
     if home_worktree and role != window.PLAIN:
         start_in, add_dir, out = home_folder(host, folder, name, whatif)
