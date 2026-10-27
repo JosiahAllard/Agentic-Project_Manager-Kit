@@ -1,7 +1,8 @@
 """`machine_lock.py run -- ./gradlew` on Windows (kitlib.lock.run script_command): a name with no
-extension resolves as the shell would (shutil.which over PATHEXT, beside a name with a folder part,
-else the current folder and PATH), and a .bat or .cmd, resolved or named, starts through an
-explicit cmd.exe line the kit quotes itself, in the run's job. An argument cmd.exe would expand or
+extension resolves to a .bat or .cmd as the shell would (over PATHEXT, beside a name with a folder
+part; a bare name on PATH only, never the current folder, and never in place of an .exe
+CreateProcess finds), and a .bat or .cmd, resolved or named, starts through an explicit cmd.exe
+line (SystemRoot's) the kit quotes itself, in the run's job. An argument cmd.exe would expand or
 split (`%`, `"`, a line break) is refused before the run books. Scratch store only."""
 import json
 import os
@@ -37,7 +38,7 @@ class ScriptCommand(unittest.TestCase):
         self.bat = os.path.join(self.tmp, "gradlew.bat")
 
     def head(self):
-        return '"%s" /d /s /c ""%s"' % (rm.comspec(), self.bat)
+        return '"%s" /d /v:off /s /c ""%s"' % (rm.comspec(), self.bat)
 
     def test_a_folder_name_resolves_to_the_bat_beside_it(self):
         line = rm.script_command([os.path.join(self.tmp, "gradlew"), "build"])
@@ -56,8 +57,10 @@ class ScriptCommand(unittest.TestCase):
             self.assertIs(rm.script_command(cmd), cmd)
 
     def test_arguments_are_quoted_for_cmd(self):
-        line = rm.script_command([self.bat, "plain", "a&b", "x y", "", "(c)", "C:\\d x\\"])
-        self.assertEqual(line, self.head() + ' plain "a&b" "x y" "" "(c)" "C:\\d x\\\\""')
+        line = rm.script_command([self.bat, "plain", "a&b", "x y", "", "(c)", "C:\\d x\\",
+                                  "v\x0bt", "f\x0cf"])
+        self.assertEqual(line, self.head() + ' plain "a&b" "x y" "" "(c)" "C:\\d x\\\\" '
+                               '"v\x0bt" "f\x0cf""')
 
     def test_an_argument_cmd_would_expand_or_split_is_refused(self):
         for arg, shown in (("%OS%", "`%`"), ('a"b', '`"`'), ("a\nb", "a line break"),
@@ -66,6 +69,41 @@ class ScriptCommand(unittest.TestCase):
                 rm.script_command([os.path.join(self.tmp, "gradlew"), "ok", arg])
             self.assertIsInstance(cm.exception, OSError)
             self.assertIn("argument 2 of gradlew.bat holds %s" % shown, str(cm.exception))
+
+    def test_a_bare_name_keeps_an_exe_createprocess_finds(self):
+        shims, real = (os.path.join(self.tmp, d) for d in ("shims", "real"))
+        os.mkdir(shims)
+        os.mkdir(real)
+        for name in ("tool.bat", "python.bat"):
+            open(os.path.join(shims, name), "w").close()
+        open(os.path.join(real, "tool.exe"), "w").close()
+        env = dict(clean_env(), PATH=os.pathsep.join((shims, real)))
+        for cmd in (["tool", "%x%"], ["python", "-c", "print('%x%')"]):
+            self.assertIs(rm.script_command(cmd, env), cmd)
+
+    def test_a_bare_name_is_never_looked_for_in_the_current_folder(self):
+        empty = os.path.join(self.tmp, "empty")
+        os.mkdir(empty)
+        here = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, here)
+        env = dict(clean_env(), PATH=empty)
+        for nodefault in ("", "1"):
+            with mock.patch.dict(os.environ, NoDefaultCurrentDirectoryInExePath=nodefault):
+                for cmd in (["gradlew", "a"], ["gradlew.bat", "a"]):
+                    self.assertIs(rm.script_command(cmd, env), cmd)
+
+    def test_cmd_is_systemroots_and_nothing_else(self):
+        self.assertEqual(os.path.normcase(rm.comspec()), os.path.normcase(
+            os.path.join(os.environ["SystemRoot"], "System32", "cmd.exe")))
+        with mock.patch.dict(os.environ, ComSpec=os.path.join(self.tmp, "other.exe")):
+            self.assertTrue(rm.script_command([self.bat]).startswith('"%s" ' % rm.comspec()))
+        unset = {k: v for k, v in os.environ.items() if k.upper() != "SYSTEMROOT"}
+        for patched in (unset, dict(os.environ, SystemRoot=self.tmp)):
+            with mock.patch.dict(os.environ, patched, clear=True):
+                with self.assertRaises(rm.ScriptArgError) as cm:
+                    rm.script_command([self.bat, "build"])
+                self.assertEqual(str(cm.exception), "cmd.exe not found under SystemRoot")
 
     def test_other_platforms_are_left_as_given(self):
         cmd = [os.path.join(self.tmp, "gradlew"), "%OS%"]
@@ -94,12 +132,14 @@ class RunScript(StoreCase):
     def test_an_extensionless_script_runs_its_bat_with_literal_arguments(self):
         make_scripts(self.dir, ["@echo off", '>"%s" echo %%*' % self.out,
                                 '>>"%s" echo run=%%MACHINE_LOCK_RUN%%' % self.out, "exit /b 3"])
-        code = self.run_cmd([os.path.join(self.dir, "gradlew"), "a&echo:INJ", "x y"])
+        inj = os.path.join(self.tmp, "inj.txt")     # what an & read as cmd syntax would create
+        self.assertFalse(set(' %"').intersection(inj), inj)
+        code = self.run_cmd([os.path.join(self.dir, "gradlew"), "a&type nul>" + inj, "x y"])
         self.assertEqual(code, 3, self.said)
         with open(self.out) as f:
             lines = f.read().splitlines()
-        self.assertEqual(lines[0], '"a&echo:INJ" "x y"')
-        self.assertNotIn("INJ", lines[1:])
+        self.assertEqual(lines[0], '"a&type nul>%s" "x y"' % inj)
+        self.assertFalse(os.path.exists(inj), "the & ran as cmd syntax")
         self.assertRegex(lines[1], r"^run=r-\d{8}T\d{6}Z-[0-9a-f]{6}:\d+:\d+$")
 
     def test_the_bat_runs_in_the_runs_job(self):

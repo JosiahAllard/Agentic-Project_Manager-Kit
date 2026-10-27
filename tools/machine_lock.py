@@ -311,7 +311,7 @@ def cmd_run(a, cmd, store, argv):
         return EXIT_USAGE
     try:                            # before a detach, whose log is the only place it would show
         bash.resolve(cmd)
-        if a.cmd == "run":          # background starts its own way (kitlib.lock.background)
+        if a.cmd == "run":          # background starts cmd as given, no .bat line (not yet)
             script_command(cmd)
     except (bash.BareBashError, ScriptArgError) as e:
         say("could not start the command: %s" % e)
