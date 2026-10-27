@@ -27,9 +27,9 @@ Live since 2026-10-15, with landings in three repositories, and covered by tests
   docs/lock-api.md, docs/gate.md "The landing queue").
 - Also in use: worktree cleanup (`tools/worktree_remove.py`).
 
-Not done: Linux support is in progress (plan slices 1, 2 and 6 are built; the kit still refuses
-Linux; docs/linux-support-plan.md), and the Codex bridge is not live yet. Codex is a supported
-host for the roles, hooks and commit tools; the bridge between agents is the part that is not.
+Not done: Linux support is in progress (the kit still refuses Linux; docs/linux-support-plan.md),
+and the Codex bridge is not live yet. Codex is a supported host for the roles, hooks and commit
+tools; the bridge between agents is the part that is not.
 
 ## The problem
 
@@ -47,7 +47,7 @@ test and land code at the same time. The kit lays the rails they run on:
 - **Machine lock.** Heavy runs (full test suites, builds, renders, training) queue for CPU and
   GPU slots instead of fighting over them, so the machine never overloads. You see the queue at
   a glance and can hold the machine for yourself.
-- **Guard.** A Claude Code hook stops risky commands before they run: a destructive git command
+- **Guard.** A hook in each host stops risky commands before they run: a destructive git command
   in a main checkout, a search from a drive root, a heavy program run outside the lock. Every
   refusal names the command to use instead.
 - **Safe landing.** One tool carries a branch to main. It merges the branch, tests the merged
@@ -84,12 +84,14 @@ PC. It needs Windows, Python 3 (standard library only), git and Claude Code.
 |---|---|
 | `tools/` | The command-line tools: lock, gate and landing, worktrees, commit, backlog, ledger, preflight and more |
 | `kitlib/` | The library the tools call; all the logic lives here |
-| `hosts/claude/` | The Claude Code parts: `adapter/` (Python) and `shell/` (agents, skills, hooks) |
-| `boot/` | `kitboot.py`, the check every host entry runs before it imports kitlib |
+| `content/` | Every role and skill, written once and rendered for each host |
+| `hosts/claude/`, `hosts/codex/` | One folder per host: `adapter/` (Python) and `shell/` (agents, hooks; Codex also skills) |
+| `boot/` | `hook.py`, the one hook entry of every host, and `kitboot.py`, the check every host entry runs before it imports kitlib |
+| `mcp/` | The machine-lock and Action Hub MCP servers |
 | `githooks/` | The git hooks: pre-push, and a pre-commit ledger check that does nothing unless a repository opts in |
 | `installer/` | `machine-setup.ps1`, which sets a machine up for the kit, and `new-repo.ps1`, the optional committed setup of a repository |
 | `templates/` | A starter CLAUDE.md and per-language gate settings |
-| `optional/` | Extras: an image-generation client, a process watcher, usage reports |
+| `optional/` | Extras: the agent-to-agent bridge, an image-generation client, a process watcher, usage reports |
 | `reserve_ui.pyw` | The machine schedule window: double-click it to see and book the lock |
 
 ## Install
