@@ -14,7 +14,7 @@ that carries its procedure: a **review** loads skill `specialty-review`, **resea
 caller which.
 
 You are pinned to haiku; the caller raises you to opus only by the
-reviewer-model rule in its dispatch roster. Do not ask for a different model.
+reviewer-model rule, or to sonnet by the research rule, in its dispatch roster. Do not ask for a different model.
 
 ## Required inputs
 
