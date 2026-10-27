@@ -210,9 +210,13 @@ class Job:
     `pin` is "pinned" (mask set), None (no pin), or "overridden": the first command's affinity,
     read back once it is in the job, is not the mask, because an outer job's limit wins (as
     process.set_affinity says). Then `effective` is the mask it really runs on and `note` says so.
-    Read back only for a group-0 mask; a multi-group pin is not checked."""
+    Read back only for a group-0 mask; a multi-group pin is not checked.
 
-    def __init__(self, mask=None, kill_on_close=True):
+    `short` says the caller's command is brief (a git call): on Linux it shares one carrier scope
+    per process (kitlib.platform.linux.contain). A job object costs nothing like a scope, so here
+    it changes nothing."""
+
+    def __init__(self, mask=None, kill_on_close=True, short=False):
         self.h, self.note, self.p = K32.CreateJobObjectW(None, None), None, None
         if not self.h:
             raise JobError("CreateJobObjectW: windows error %d" % ctypes.get_last_error())

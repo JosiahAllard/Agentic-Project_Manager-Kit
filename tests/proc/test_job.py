@@ -249,6 +249,17 @@ class Live(unittest.TestCase):
         self.assertEqual(len(closed), 1)
         self.assertTrue(closed[0])
 
+    def test_a_short_job_is_the_same_job_object(self):
+        """short is for Linux's carrier scope; here it changes nothing."""
+        j = job.Job(short=True)
+        p = j.start([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            self.assertTrue(j.kill_on_close)
+            self.assertTrue(j.contains(p.pid))
+        finally:
+            j.end(kill=True)
+            p.wait(30)
+
 
 @windows_only("Windows only")
 class Processes(unittest.TestCase):
