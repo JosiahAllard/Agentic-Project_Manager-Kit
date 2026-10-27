@@ -16,6 +16,9 @@ each pool its parent holds enough of and takes only the rest; one that needs mor
 its parent has, but some, is refused (exit 2): it would wait for the rest while its parent waits
 for it. A run that inherits everything takes no queue place; its commands run in a job nested
 in its parent's (still measured and ended as a tree).
+
+On Linux a job starts one command (kitlib.platform.linux.contain), so a Slot's job is a
+kitlib.lock.jobset JobSet there: a job of its own per command, read, pinned and ended as one.
 """
 import contextlib
 import ctypes
@@ -32,6 +35,7 @@ import kitlib.platform
 from kitlib.lock import game
 from kitlib.lock import giveback as gbk
 from kitlib.lock import holds as hl
+from kitlib.lock import jobset
 from kitlib.lock import kinds as kinds_mod
 from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
@@ -43,6 +47,7 @@ from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED
                                utc_now, write_json)
 from kitlib.platform.linux import process as procfs
 from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
+from kitlib.lock.jobset import JobSet
 from kitlib.proc.job import Job, JobError, cores_text
 
 POOLS, PICK = lay.POOLS, qm.PICK
@@ -58,7 +63,8 @@ END_ENV = "MACHINE_LOCK_END"            # how the run ended, for --on-release
 XLA_FRACTION_ENV, XLA_DEFAULT_FRACTION = "XLA_PYTHON_CLIENT_MEM_FRACTION", "0.3"
 KILL_HOW = ("interrupted", "cancelled", "error")
 # A run watches for console windows (kitlib.proc.winwatch) from its first command's start to
-# its release (Slot.watch_stop); False turns the monitor off.
+# its release (Slot.watch_stop); False turns the monitor off. Windows only: there are no console
+# windows to watch elsewhere.
 WATCH_WINDOWS = True
 # end_sparing, when it spares a shared daemon: how many passes it ends the job's other
 # processes in, how long it waits after each for them to leave the job, and how long after the
@@ -742,7 +748,7 @@ def end_sparing(store, rid, job, rec):
     Each step catches Exception, so what can go up is a BaseException that is not an Exception,
     such as the KeyboardInterrupt of a second Ctrl+C. It goes up wherever it lands, the job then
     partly ended; the caller ends the whole job, or judges it again."""
-    if job is None or job.h is None:
+    if not jobset.is_open(job):
         return False
     try:
         found = daemons.find(job.pids())
@@ -876,7 +882,7 @@ class Launcher:
         return self.wait(self.start(cmd, **kw))
 
     def pids(self):
-        return self._slot.job.pids() if self._slot.job and self._slot.job.h else []
+        return self._slot.job.pids() if jobset.is_open(self._slot.job) else []
 
     def usage(self):
         return self._slot.usage_fields()
@@ -921,7 +927,8 @@ class Slot:
                 mask = lay.cores_mask(L, run.rec["cores"])
         try:
             # A run with no cores of its own stays on its parent's: the job nests in the parent's.
-            self.job = Job(mask)
+            # Where a job starts one command (Linux), a job per command (kitlib.lock.jobset).
+            self.job = JobSet(mask, make=Job) if jobset.one_command() else Job(mask)
         except JobError as e:
             raise LockError(1, "could not start the command: %s" % e)
         if own["cpu"]:
@@ -970,7 +977,8 @@ class Slot:
                 kw.setdefault(k, v)
         else:
             kw.setdefault("env", self.env)
-        if WATCH_WINDOWS and self.watch is None and self.windows is None:
+        if (WATCH_WINDOWS and kitlib.platform.NAME == "windows" and self.watch is None
+                and self.windows is None):
             self.watch_start()
         pin = self.job.pin
         p = self.job.start(docker_cpu_env(cmd, bool(self.gpus)), **kw)
