@@ -35,7 +35,7 @@ AGENTS.md (or equivalent) where they exist.
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\\ -Recurse`, `dir /s C:\\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Never search from a filesystem or drive root (`find /`, or a recursive listing of a drive root): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Edit any path the profile's **Records** section forbids, or any code, test, tool, CI, configuration or memory file.
 - Invent an owner decision, decide an open question on the owner's behalf, or invent a question for the owner.
 

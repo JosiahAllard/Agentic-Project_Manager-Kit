@@ -17,7 +17,7 @@ description: Use when you write or review a guard/regression test, or build or r
 Harness traps, each scored wrong silently:
 - Wrong checkout: assert the mutated file is inside the worktree whose tests run.
 - Stale `.pyc`: CPython keys `__pycache__` on source mtime (whole seconds) plus size, so a same-size rewrite within a second measures the previous version. Delete `__pycache__`, vary the size, or run with `-B`.
-- A test filter containing `|` handed to a shell is a pipe to cmd.exe: no result line, every guard untested. Pass argv as a list, no `shell=True`.
+- A test filter containing `|` handed to a shell is a pipe to the Windows command shell: no result line, every guard untested. Pass argv as a list, no `shell=True`.
 - A missing result line fails loudly; it is never a pass or a catch.
 
 ## Never
