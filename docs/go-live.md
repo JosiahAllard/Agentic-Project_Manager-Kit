@@ -1,6 +1,6 @@
 # Go-live list
 
-The kit is live and the go-live holds are released: this kit, griffball and retribution land through `gate.py land` on the owner's machine. What remains is each switch still to make, each decision still open and each fix still to land. Machine install is docs/install.md; the machine setup modes are docs/machine-setup.md.
+The kit is live and the go-live holds are released: three repositories, this kit among them, land through `gate.py land` on the owner's machine. What remains is each switch still to make, each decision still open and each fix still to land. Machine install is docs/install.md; the machine setup modes are docs/machine-setup.md.
 
 ## Switches
 
@@ -15,8 +15,14 @@ The kit is live and the go-live holds are released: this kit, griffball and retr
 - Hub repo aliases: set `aliases` on the hub store's repos/ docs for every short tag an old item still carries (docs/action-hub.md "repos/<name>").
 - Retirements: heavy_run, test-runner wrappers. The global reserve_ui.pyw is replaced by the kit window `reserve_ui.pyw` at the kit root, which stays.
 - Backlog store per repo: the switch-over branch (docs/backlog-store.md "Migration"). Until a repo's remote has a store, the landing close writes nothing and the ancestry check passes; the check still asks the remote (`ls-remote`) and refuses the landing when it cannot. `backlog.py` refuses two repos' current `.kit.json`: they still use the older kit's spellings, refused on purpose (tests/config/test_load.py `test_the_old_hook_and_owner_spellings_refuse`). The new spellings are in docs/kit-json.md and docs/doc-tools.md; each repo makes the key move on its switch-over branch.
-- Per repo, a coordinator rename leftover: `.claude/conductor-profile.md` becomes `.claude/coordinator-profile.md` (also in each repo's doc-budget `capped` list), `docs/ops/conductor-runbook.md` becomes `coordinator-runbook.md`, and the owner-only CLAUDE.md and `.claude` files lose the old word. Installed copies in the home folder: `~/.claude/agents/conductor.md`, `~/.claude/tools/usage/conductor_profile.py` and its test, the `conductor-dispatch` skill, `~/.claude/conductor-profile.TEMPLATE.md`.
 - PM data branch (docs/pm-data-branch.md): the PM's data repository moved onto the data branch with `tools/pm_data.py init --adopt` on 2026-10-11, with a private remote that is not the public one ("Making the branch"). Still to confirm: that it works as expected in use. The guard rule `git-push-pmdata` and the pre-push leak stage guard it once `kit-pm-data.json` exists ("Pre-push guard"); the data worktree's `.kit.json` must set the data branch, private remote and a non-`ref` backlog store ("Layout").
+
+## Coordinator rename
+
+The kit no longer reads the old name anywhere. What is left outside the kit:
+
+- Each repo: `.claude/conductor-profile.md` becomes `.claude/coordinator-profile.md` (also in each repo's doc-budget `capped` list), `docs/ops/conductor-runbook.md` becomes `coordinator-runbook.md`, and the owner-only CLAUDE.md and `.claude` files lose the word.
+- Installed copies: `~/.claude/agents/conductor.md` (replaced by the plugin's coordinator.md), `~/.claude/tools/usage/conductor_profile.py` and its test, the `conductor-dispatch` skill, `~/.claude/conductor-profile.TEMPLATE.md`.
 
 ## Machine config keys
 

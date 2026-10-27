@@ -1,6 +1,6 @@
 # Machine setup
 
-One reviewed command sets a machine up for the kit (plan decision 27, docs/multi-host-plan.md section 7). It writes nothing into any repository (the one exception is opt-in: the `--pm-settings` file you name, a local settings file the PM repository keeps out of its commits): a repository works with the kit with nothing committed in it, and the kit's first use there writes only local git settings (docs/install.md "What first use writes"). Three repositories land through `gate.py land` on the owner's machine: this kit, griffball and retribution.
+One reviewed command sets a machine up for the kit (plan decision 27, docs/multi-host-plan.md section 7). It writes nothing into any repository (the one exception is opt-in: the `--pm-settings` file you name, a local settings file the PM repository keeps out of its commits): a repository works with the kit with nothing committed in it, and the kit's first use there writes only local git settings (docs/install.md "What first use writes"). Three repositories land through `gate.py land` on the owner's machine: this kit and two others.
 
 ```
 powershell -NoProfile -File installer\machine-setup.ps1 [-OwnerEmail <email>] [-PmSettings <file>] [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>] [-NoSweepTask] [-Shortcut] [-Procwatch [-ProcwatchKill]] [-Apply]
