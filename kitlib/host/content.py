@@ -67,7 +67,7 @@ RUNS = ('session',)
 ALL = 'all'
 # The neutral capabilities. A host maps each to its own tool (or tools), keeping this order.
 CAPABILITIES = (
-    'read', 'edit', 'write', 'search', 'find', 'bash', 'powershell', 'worktree', 'artifact',
+    'read', 'edit', 'write', 'search', 'find', 'bash', 'powershell', 'worktree', 'enter-worktree', 'artifact',
     'dispatch', 'message', 'list-agents', 'stop-task', 'monitor', 'tool-search', 'skill',
     'ask-owner', 'cron-create', 'cron-list', 'cron-delete', 'web-search', 'web-fetch',
 )

@@ -16,7 +16,7 @@ worktrees or branches. Asked to: decline, say it is outside this agent's job.
 ## Required inputs
 
 - **Where to test**: a worktree path or "main checkout". Given a worktree path,
-  your first action is `{{tool:worktree}}` with that `path`.
+  your first action is to work in it ({{tool:enter-worktree}}; the given `path`).
 - **Which tier(s)**, by the names in the profile's **Test runner** section. None
   given: run the default that section names.
 - **Ports or other resources**, if the tier needs them. The profile says which
