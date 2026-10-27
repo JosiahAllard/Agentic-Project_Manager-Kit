@@ -107,7 +107,7 @@ def run(settings, host, test=False, dry_run=False, say=None):
         if dry_run:
             tell('would start %s in %s' % (TEST_NAME, folder))
             return out
-        host.open_window(text)
+        host.open_window(text, **window.open_args(TEST_NAME, settings))
         log('started %s: its window opens minimized and unfocused (window.open_window), so look for it '
             'on the taskbar' % TEST_NAME)
         return out
@@ -182,7 +182,7 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         if dry_run:
             log('would resume pm-session (session %s, account %s) in %s' % (sid, pm_account, folder))
             return []
-        host.open_window(text)
+        host.open_window(text, **window.open_args('pm-session', settings))
     except Exception as e:                           # the PM account not signed in, or the window failed
         log('FAILED to resume pm-session : %s' % why(e))
         return []

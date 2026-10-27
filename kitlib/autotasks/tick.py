@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 
+from kitlib import platform
 from kitlib.config import ConfigError, user as kuser
 from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError
 from kitlib.proc import spawn
@@ -250,9 +251,13 @@ def hub_schedules(home=None):
 
 def launch(command, log, cwd):
     """Start `command` detached from this process (its own process group, out of this one's job
-    when the job allows that), stdin empty, stdout and stderr to the file `log`; its pid."""
+    when the job allows that; on Linux its own session, start_new_session), stdin empty, stdout and stderr to the file `log`; its pid."""
     kw = dict(stdin=subprocess.DEVNULL, stderr=subprocess.STDOUT, cwd=cwd, env=spawn.agent_temp_env(),
               close_fds=True)
+    if platform.NAME != 'windows':      # Linux: its own session, so it outlives the tick's group
+        with open(log, 'wb') as out:
+            p = spawn.popen(command, stdout=out, start_new_session=True, **kw)
+        return p.pid
     group = subprocess.CREATE_NEW_PROCESS_GROUP
     with open(log, 'wb') as out:
         try:

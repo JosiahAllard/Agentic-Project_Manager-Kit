@@ -15,10 +15,20 @@ that window's conhost.exe when the window is its only child. Never by window tit
 process is stopped by pid and creation time, read when it is chosen, so a reused pid is never hit;
 the session's command line is read again at that creation time and must still carry the name.
 After a stop it drops the session's pipes.json entry (pipes.remove).
+
+On Linux (kitlib.platform.NAME 'linux') the session is a claude process (lookup.claude_sessions)
+and its window is its parent only when that parent is bash running the window's script for exactly
+this name (linuxwin.carries: the PM_KIT_SESSION_NAME line and the claude line, the name quoted);
+there is no conhost, and nothing above the shell (tmux, a terminal) is ever stopped. The shell's
+command line is read again at its creation time before anything is stopped, while claude still
+runs (when claude ends the shell execs an interactive bash, whose command line no longer carries
+the name); a shell that no longer carries it is left alone. The launcher never ends a tmux session:
+tmux closes it when the shell has gone.
 """
 import re
 
-from kitlib.launcher import lookup, pipes, state, window
+from kitlib import platform
+from kitlib.launcher import linuxwin, lookup, pipes, state, window
 from kitlib.launcher.settings import LaunchError
 
 PM_RC_NAME = 'pm-session'
@@ -36,6 +46,11 @@ def window_script(cmd):
     if m:
         return window.decode(m.group(1))
     return cmd
+
+
+def _image():
+    """The session process's name in the lines said: claude.exe, on Linux claude."""
+    return 'claude' if platform.NAME == 'linux' else 'claude.exe'
 
 
 def _pm_named(n):
@@ -60,19 +75,20 @@ def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
     if successor:
         succ = lookup.find_exact(claudes, successor)
         if not succ:
-            raise Refused("successor '%s' is not running (no claude.exe with --remote-control exactly that name)."
-                          % successor)
+            raise Refused("successor '%s' is not running (no %s with --remote-control exactly that name)."
+                          % (successor, _image()))
     hits = lookup.find_exact(claudes, name)
     if not hits:
-        raise Refused("no claude.exe with --remote-control exactly '%s'." % name)
+        raise Refused("no %s with --remote-control exactly '%s'." % (_image(), name))
     if pid:
         picked = [h for h in hits if int(h.get('ProcessId')) == int(pid)]
         if not picked:
-            raise Refused("PID %s is not a claude.exe named '%s' (matches: PIDs %s); stopping none."
-                          % (pid, name, lookup.pids(hits)))
+            raise Refused("PID %s is not a %s named '%s' (matches: PIDs %s); stopping none."
+                          % (pid, _image(), name, lookup.pids(hits)))
         hits = picked
     if len(hits) > 1:
-        raise Refused("%d claude.exe match '%s' (PIDs %s); stopping none." % (len(hits), name, lookup.pids(hits)))
+        raise Refused("%d %s match '%s' (PIDs %s); stopping none."
+                      % (len(hits), _image(), name, lookup.pids(hits)))
     target = hits[0]
     tpid = int(target['ProcessId'])
     if ((lookup.rc_name(target.get('CommandLine')) or '').startswith(PM_RC_NAME)
@@ -88,7 +104,11 @@ def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
     parent = by_pid.get(int(target.get('ParentProcessId') or 0))
     win = con = None
     quoted = window.q(name)
-    if parent and parent.get('Name') == 'powershell.exe' and parent.get('CommandLine'):
+    if platform.NAME == 'linux':
+        if (parent and parent.get('Name') == linuxwin.SHELL_NAME
+                and linuxwin.carries(parent.get('CommandLine'), name)):
+            win = parent
+    elif parent and parent.get('Name') == 'powershell.exe' and parent.get('CommandLine'):
         text = window_script(parent['CommandLine'])
         if (text and ('--remote-control ' + quoted in text or ' -n ' + quoted in text)
                 and ('WindowTitle = ' + quoted) in text):
@@ -101,7 +121,8 @@ def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
                     con = gp
     what = 'session PID %d: %s' % (tpid, target.get('CommandLine'))
     if win:
-        wtext = 'window PID %s (powershell.exe, same name)' % win['ProcessId']
+        wtext = 'window PID %s (%s, same name)' % (
+            win['ProcessId'], linuxwin.SHELL_NAME if platform.NAME == 'linux' else 'powershell.exe')
         if con:
             wtext += ' and its conhost.exe PID %s' % con['ProcessId']
     else:
@@ -134,6 +155,10 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None,
     tpid, tct = int(target['ProcessId']), chosen[0][1]
     if tct is None or lookup.rc_name(host.command_line(tpid, tct)) != name:
         raise LaunchError("PID %d is no longer the session '%s'; nothing stopped." % (tpid, name))
+    if win is not None and platform.NAME == 'linux':
+        wct = chosen[1][1]
+        if wct is None or not linuxwin.carries(host.command_line(int(win['ProcessId']), wct), name):
+            chosen, win = chosen[:1], None          # not the window any more: left alone
     result = host.terminate(tpid, tct)
     if result not in ('killed', 'gone'):
         raise LaunchError('could not stop PID %d (%s); nothing else stopped.' % (tpid, result))

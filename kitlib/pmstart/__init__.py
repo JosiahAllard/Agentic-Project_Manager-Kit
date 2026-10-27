@@ -11,7 +11,7 @@ import re
 import subprocess
 import time
 
-from kitlib import kitroot
+from kitlib import kitroot, platform
 from kitlib.config import user as kuser
 from kitlib.ledger import files as ledger_files, rulebook
 from kitlib.host import registry
@@ -47,7 +47,12 @@ def _read(path):
 
 def list_processes(timeout=TIMEOUT):
     """All processes as dicts with Name, CommandLine, ExecutablePath, ProcessId, ParentProcessId, Created (PowerShell Get-CimInstance).
-    subprocess.TimeoutExpired after `timeout` seconds (the session start's TIMEOUT by default)."""
+    subprocess.TimeoutExpired after `timeout` seconds (the session start's TIMEOUT by default).
+    On Linux the rows are read from /proc (kitlib.platform.linux.process.rows), with no timeout;
+    OSError when /proc cannot be listed."""
+    if platform.NAME == 'linux':
+        from kitlib.platform.linux import process as linux_process
+        return linux_process.rows()
     r = spawn.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS],
                   capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
@@ -481,7 +486,10 @@ _RC = re.compile(r"""(?:^|\s)--remote-control(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S
 
 def session_images(path=None):
     """The process images a host's launched session runs as (each hosts.json profile's
-    session_process; claude.exe on Claude), matched exactly against a process's Name."""
+    session_process; claude.exe on Claude), matched exactly against a process's Name. On Linux the
+    running platform's process_names over every host (registry.process_names): claude, node, codex."""
+    if platform.NAME == 'linux':
+        return frozenset(registry.process_names(path))
     return frozenset(registry.union('session_process', path))
 
 

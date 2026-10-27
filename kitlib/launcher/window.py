@@ -17,12 +17,17 @@
 Every value is single-quoted with quotes doubled. `open_window` starts it minimized and unfocused:
 `conhost.exe powershell.exe -NoExit -EncodedCommand <base64 UTF-16LE>` through WScript.Shell.Run
 with show flag 7 (SW_SHOWMINNOACTIVE; conhost honours it), so quotes in a prompt survive.
+
+On Linux (kitlib.platform.NAME 'linux', read at each call) q, script and open_window are
+kitlib.launcher.linuxwin's: bash in a tmux session, or in launcher.terminal's command. shown,
+opened_in and open_args give the platform's words for the launcher's lines and open_window's
+arguments.
 """
 import base64
 import re
 import subprocess
 
-from kitlib import agentname, sessionmark
+from kitlib import agentname, platform, sessionmark
 
 ROLE_ENV = sessionmark.ENV
 NAME_ENV = 'PM_KIT_SESSION_NAME'
@@ -59,8 +64,15 @@ def role_for(agent, coordinator_agent='coordinator'):
     return _BY_AGENT.get(name, name)
 
 
+def _linux():
+    return platform.NAME == 'linux'
+
+
 def q(text):
-    """A PowerShell single-quoted string."""
+    """A PowerShell single-quoted string (on Linux a bash one: linuxwin.q)."""
+    if _linux():
+        from kitlib.launcher import linuxwin
+        return linuxwin.q(text)
     return "'" + str(text).replace("'", "''") + "'"
 
 
@@ -93,6 +105,9 @@ def script(name, role, folder, command, config_dir=None, agent_temp=None):
     default folder (CLAUDE_CONFIG_DIR removed)."""
     if not role:
         raise ValueError('every launched session carries a PM_KIT_ROLE mark')
+    if _linux():
+        from kitlib.launcher import linuxwin
+        return linuxwin.script(name, role, folder, command, config_dir, agent_temp)
     lines = ['$Host.UI.RawUI.WindowTitle = %s' % q(name), USER_ENV, CLEAR_CLAUDE, PERSIST,
              '$env:%s = %s' % (ROLE_ENV, q(role)), '$env:%s = %s' % (NAME_ENV, q(name))]
     lines.append('$env:CLAUDE_CONFIG_DIR = %s' % q(config_dir) if config_dir
@@ -128,11 +143,39 @@ def runner_script(text):
         q(window_command(text)), SHOW_MIN_NO_ACTIVE)
 
 
-def open_window(text, run=subprocess.run):
-    """Start the window. RuntimeError when PowerShell reports a failure."""
+def open_window(text, run=subprocess.run, name=None, terminal=None):
+    """Start the window. RuntimeError when PowerShell reports a failure. On Linux
+    linuxwin.open_window(text, name, terminal)."""
+    if _linux():
+        from kitlib.launcher import linuxwin
+        return linuxwin.open_window(text, name, terminal)
     r = run(['powershell', '-NoProfile', '-NonInteractive', '-Command', runner_script(text)],
             capture_output=True, text=True, timeout=60,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if r.returncode != 0:
         raise RuntimeError('opening the window failed (powershell exit %d): %s'
                            % (r.returncode, (r.stderr or '').strip()[:300]))
+
+
+def shown(text):
+    """The --what-if line that shows the window's command."""
+    if _linux():
+        from kitlib.launcher import linuxwin
+        return '  %s -c %s' % (linuxwin.SHELL, linuxwin.q(text))
+    return '  powershell -NoExit -Command "%s"' % text
+
+
+def opened_in(name, terminal=None):
+    """Where a started window opened, for the "Started ..." line."""
+    if _linux():
+        from kitlib.launcher import linuxwin
+        return linuxwin.opened_in(name, terminal)
+    return 'a new minimized window'
+
+
+def open_args(name, settings):
+    """open_window's keyword arguments beside the text: none on Windows; on Linux the session name
+    (the tmux session's) and launcher.terminal."""
+    if _linux():
+        return {'name': name, 'terminal': settings.terminal}
+    return {}

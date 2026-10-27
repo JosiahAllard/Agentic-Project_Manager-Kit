@@ -181,10 +181,12 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
                                    remote_control=remote_control)
     text = window_text(settings, host, name, role, folder, command, config_dir)
     if whatif:
-        return out + ['Would open a new window running:', '  powershell -NoExit -Command "%s"' % text]
+        return out + ['Would open a new window running:', window.shown(text)]
     after_ms = pipes.launch_ms(host.now())      # the registry record the window makes starts after this
-    host.open_window(text)
-    out = out + ['Started %s (%s) in a new minimized window. Remote Control name: %s' % (name, label, name)]
+    kw = window.open_args(name, settings)
+    host.open_window(text, **kw)
+    out = out + ['Started %s (%s) in %s. Remote Control name: %s'
+                 % (name, label, window.opened_in(name, kw.get('terminal')), name)]
     try:            # the window is open: a fault here must not read as a failed launch
         said = host.record_pipe(settings, name, after_ms)
     except (OSError, ValueError, LaunchError) as e:
