@@ -59,6 +59,8 @@ def cmd_unsafe(text):
 BASH_ESC = ' \t"\'\\$`&|;<>(){}#*?[]!~'
 CD_VERBS = {'cd', 'chdir', 'set-location', 'sl', 'push-location', 'pushd'}
 CD_UNKNOWN = {'popd', 'pop-location'}
+# bash on Linux runs these by their exact name (no `CD`, no `chdir`)
+LINUX_BASH_CD = {'cd', 'pushd', 'popd'}
 # the one module-qualified spelling of each PowerShell cd cmdlet (another module, a `/`, an alias
 # behind a module is no command PowerShell runs: cd_target reads it as a cd to a place unknown)
 PS_QUALIFIED_CD = {'microsoft.powershell.management\\' + v: v
@@ -1180,7 +1182,8 @@ def resolve_path(p, cwd, shell=None, home=None):
     is None (ps_unplaceable), and .\\x.txt::$DATA is a stream of a file in `cwd`; bash and cmd
     text is read as it always was. `~` is `home` (home_folder). On Linux (paths.posix) a path
     that starts with `/` is absolute and any other is read in `cwd`: no drive or share, no Git
-    Bash /c/x mapping (C:x is a name in `cwd`)."""
+    Bash /c/x mapping (C:x is a name in `cwd`), and a `..` is read from where the links before it
+    lead, as the kernel reads it (paths.physical)."""
     if not p:
         return None
     if shell == PS:
@@ -1197,10 +1200,11 @@ def resolve_path(p, cwd, shell=None, home=None):
         else:
             return None
     if paths.posix():
-        # Linux: `/` starts an absolute path; no drive, no MSYS mapping, `\` is a name's character
+        # Linux: `/` starts an absolute path; no drive, no MSYS mapping, `\` is a name's character.
+        # `..` is read after any link before it (paths.physical), never folded lexically first
         if p.startswith('/'):
-            return paths.norm(p, fold=False)
-        return paths.norm(os.path.join(cwd, p), fold=False) if cwd and cwd.startswith('/') else None
+            return paths.physical(p)
+        return paths.physical(cwd + '/' + p) if cwd and cwd.startswith('/') else None
     p = msys_to_win(p)
     if re.match(r'^[A-Za-z]:([\\/]|$)', p):
         return paths.norm(p if len(p) > 2 else p + '\\', fold=False)
@@ -1221,9 +1225,17 @@ def cd_words(cmd):
     (`builtin cd ~`, `command cd x`: the cd itself runs)."""
     words = cmd.words
     if (cmd.shell == BASH and len(words) > 1 and not words[0].dyn and words[0].text in ('builtin', 'command')
-            and words[1].text.lower() in CD_VERBS | CD_UNKNOWN):
+            and is_cd_word(words[1].text, cmd.shell)):
         return words[1:]
     return words
+
+
+def is_cd_word(text, shell):
+    """True when `shell` runs the command word `text` as a cd verb (CD_VERBS, CD_UNKNOWN) in any
+    case; bash on Linux only by its exact name (LINUX_BASH_CD)."""
+    if shell == BASH and paths.posix():
+        return text in LINUX_BASH_CD
+    return text.lower() in CD_VERBS | CD_UNKNOWN
 
 
 def cd_target(cmd, cwd, home=None, home_vars=False):
@@ -1236,11 +1248,16 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     (ps_filesystem_relative: FileSystem::., FileSystem::sub) goes where the text cannot tell:
     PowerShell reads it from the process's directory, which no cd before it moved. A PowerShell
     `Microsoft.PowerShell.Management\\Set-Location` (or Push-, Pop-Location) is that cmdlet
-    (PS_QUALIFIED_CD); any other module-qualified cd word is a cd to a place unknown."""
+    (PS_QUALIFIED_CD); any other module-qualified cd word is a cd to a place unknown. Bash on
+    Linux runs cd, pushd and popd by their exact name only (is_cd_word), and its `cd /d` goes to
+    the folder /d (cmd's drive switch is Windows')."""
     words = cd_words(cmd)
     if not words:
         return False, cwd
     verb = words[0].text.lower()
+    linux_bash = cmd.shell == BASH and paths.posix()
+    if linux_bash and words[0].text not in LINUX_BASH_CD:
+        return False, cwd                       # `CD x`, `chdir x`: no cd bash runs on Linux
     name = re.split(r'[\\/]', verb)[-1]
     if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
         if verb not in PS_QUALIFIED_CD:
@@ -1255,7 +1272,7 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
         rest = []                               # no place, never a folder named $null
     if rest and rest[0].text.lower() in ('-path', '-literalpath', '-lp'):
         rest = rest[1:]
-    elif rest and verb in ('cd', 'chdir') and rest[0].text.lower() == '/d':
+    elif rest and verb in ('cd', 'chdir') and not linux_bash and rest[0].text.lower() == '/d':
         rest = rest[1:]
     if home_vars and cmd.shell in (BASH, PS):
         while cmd.shell == BASH and rest and not rest[0].dyn and BASH_CD_OPT_RE.match(rest[0].text):
@@ -1291,7 +1308,7 @@ def _keyword_cd(c):
     first = k
     if k + 1 < len(c.words) and c.words[k].text in ('builtin', 'command'):
         k += 1
-    return 0 < first and k < len(c.words) and c.words[k].text.lower() in CD_VERBS | CD_UNKNOWN
+    return 0 < first and k < len(c.words) and is_cd_word(c.words[k].text, c.shell)
 
 
 def track(cmds, cwd, home=None, cwd_home=None):

@@ -65,6 +65,33 @@ def norm(path, absolute=False, real=False, fold=True, strict=False):
     return os.path.normcase(p)
 
 
+def physical(path):
+    """Linux: the absolute `path` with `.` and doubled `/` dropped and each `..` read as the kernel
+    reads it, from the folder the path so far resolves to (realpath): after a symbolic link d ->
+    /x/src, d/.. is /x, never d's own folder. Where the as-written parent names the same folder
+    (no link before the `..`, or only links above it), the written form is kept. Never fold `..`
+    before this: os.path.normpath drops it lexically."""
+    out = ''
+    for part in path.split('/'):
+        if part in ('', '.'):
+            continue
+        if part != '..':
+            out += '/' + part
+            continue
+        lexical = out.rsplit('/', 1)[0]
+        target = _realpath(out or '/')
+        up = target.rstrip('/').rsplit('/', 1)[0] if target.startswith('/') else lexical
+        out = lexical if _realpath(lexical or '/') == (up or '/') else up
+    return out or '/'
+
+
+def _realpath(p):
+    try:
+        return os.path.realpath(p)
+    except (OSError, ValueError):
+        return p
+
+
 def fold(path, strict=False):
     """The case fold of norm() alone, on `path` as written (no `.` or `..` folded)."""
     return _fold_posix(path, strict) if posix() else os.path.normcase(path)

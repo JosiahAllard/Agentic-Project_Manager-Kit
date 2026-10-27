@@ -18,7 +18,7 @@ from tests.platforms import posix_only
 
 from .claudehost import decide
 from .linux import PosixWorld, on_linux
-from .world import bash
+from .world import bash, event
 
 VFAT = [('/', 'ext4'), ('/media/usb', 'vfat')]
 UNKNOWN = [('/', 'ext4'), ('/data', 'somefs')]
@@ -328,9 +328,15 @@ class CurlOutputDir(LinuxCase):
             self.assertIsNotNone(d, command)
             self.assertEqual(d.verdict, 'deny', '%s: %s' % (command, d.reason))
 
-    def test_an_absolute_name_ignores_the_output_dir(self):
-        self.assertIsNone(self.sub('curl --output-dir /work/repo -o /work/repo/.claude/worktrees/wt/x '
-                                   'https://example.invalid/a'))
+    def test_an_absolute_name_is_judged_alone_and_in_the_output_dir(self):
+        # curl joins --output-dir to every -o name, an absolute one too; each reading is judged
+        for command in ('curl --output-dir /work/repo -o /work/repo/.claude/worktrees/wt/x https://example.invalid/a',
+                        'curl --output-dir /work/repo/.claude/worktrees/wt -o /srv/x https://example.invalid/a'):
+            d = self.sub(command)
+            self.assertIsNotNone(d, command)
+            self.assertEqual(d.verdict, 'deny', '%s: %s' % (command, d.reason))
+        self.assertIsNone(self.sub('curl --output-dir /work/repo/.claude/worktrees/wt -o '
+                                   '/work/repo/.claude/worktrees/wt/x https://example.invalid/a'))
 
 
 class InTempStrict(LinuxCase):
@@ -374,6 +380,135 @@ class InsideOnLinux(LinuxCase):
         self.assertFalse(jail.inside('/a/x', '/a\\'))
         self.assertTrue(jail.inside('/a\\/x', '/a\\'))
         self.assertTrue(jail.inside('/a/x', '/a/'))
+
+
+def fake_links(links):
+    """A posixpath.realpath that follows `links` ({link: where it points}, absolute), chains too;
+    any other path is itself (normalised)."""
+    def realpath(p, *a, **k):
+        p = posixpath.normpath(p)
+        for _ in range(40):
+            for link, to in links.items():
+                if p == link or p.startswith(link + '/'):
+                    p = posixpath.normpath(to + p[len(link):])
+                    break
+            else:
+                return p
+        return p
+    return realpath
+
+
+class DotDotAfterALink(LinuxCase):
+    """shell.resolve_path (paths.physical): Linux takes `..` after a symbolic link from where the
+    link points (the kernel resolves it after the link), so `link/..` is the target's parent, never
+    the link's own folder: a worktree link d -> /work/repo/src makes d/../f the main checkout's f."""
+
+    def setUp(self):
+        LinuxCase.setUp(self)
+        wt = self.w.wt
+        links = {wt + '/d': '/work/repo/src', wt + '/a': wt + '/b', wt + '/b': '/work/repo/src',
+                 wt + '/in': wt + '/x/y'}
+        p = mock.patch('posixpath.realpath', fake_links(links))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def denied(self, command, **kw):
+        d = self.sub(command, **kw)
+        self.assertIsNotNone(d, command)
+        self.assertEqual(d.verdict, 'deny', '%s: %s' % (command, d.reason))
+
+    def test_resolve_path_takes_dot_dot_from_the_link_target(self):
+        self.assertEqual(sh.resolve_path('d/../STANDING.md', self.w.wt), '/work/repo/STANDING.md')
+        self.assertEqual(sh.resolve_path(self.w.wt + '/d/../f', None), '/work/repo/f')
+        self.assertEqual(sh.resolve_path('../f', self.w.wt + '/d'), '/work/repo/f')
+
+    def test_a_shell_write_through_a_link_and_dot_dot_is_refused(self):
+        self.denied('echo x > d/../STANDING.md')
+
+    def test_a_write_tool_call_through_a_link_and_dot_dot_is_refused(self):
+        payload = event('Write', {'file_path': self.w.wt + '/d/../STANDING.md', 'content': ''}, self.w.wt, sub=True)
+        d = decide(payload, self.w.ctx())
+        self.assertIsNotNone(d)
+        self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_a_cd_into_a_link_then_dot_dot_is_refused(self):
+        self.denied('cd d && echo x > ../f')
+
+    def test_a_chain_of_links_is_followed(self):
+        self.assertEqual(sh.resolve_path('a/../f', self.w.wt), '/work/repo/f')
+        self.denied('echo x > a/../f')
+
+    def test_dot_dot_after_a_plain_folder_stays_in_the_worktree(self):
+        self.assertEqual(sh.resolve_path('sub/../f', self.w.wt), self.w.wt + '/f')
+        self.assertIsNone(self.sub('echo x > sub/../f'))
+        self.assertIsNone(self.sub('cd sub && echo x > ../f'))
+
+    def test_a_link_inside_the_worktree_then_dot_dot_stays_in_it(self):
+        self.assertEqual(sh.resolve_path('in/../f', self.w.wt), self.w.wt + '/x/f')
+        self.assertIsNone(self.sub('echo x > in/../f'))
+
+
+class DotDotAfterARealLink(unittest.TestCase):
+    @posix_only('a symbolic link made on the real filesystem')
+    def test_dot_dot_after_a_real_link_is_the_target_parent(self):
+        base = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, True)
+        os.makedirs(os.path.join(base, 'wt', 'sub'))
+        os.makedirs(os.path.join(base, 'out', 'src'))
+        os.symlink(os.path.join(base, 'out', 'src'), os.path.join(base, 'wt', 'd'))
+        with on_linux():
+            self.assertEqual(paths.physical(base + '/wt/d/../f'), base + '/out/f')
+            self.assertEqual(paths.physical(base + '/wt/sub/../f'), base + '/wt/f')
+
+
+class UnderTempStrict(LinuxCase):
+    """rules._under_temp lifts the core.hooksPath checks for a repository under temp, so on Linux
+    it compares with the strict fold: on a mount in doubt a case variant of temp is not temp."""
+    mounts = UNKNOWN
+
+    def test_a_case_variant_of_the_temp_folder_is_not_temp(self):
+        self.w.temp = '/data/Tmp'
+        self.assertFalse(rules._under_temp(self.w.ctx(), '/data/tmp/r'))
+        self.assertTrue(rules._under_temp(self.w.ctx(), '/data/Tmp/r'))
+
+    def test_a_hooks_path_change_there_is_refused(self):
+        # the main session: a subagent's write jail refuses it first
+        self.w.temp = '/data/Tmp'
+        d = decide(bash('git -C /data/tmp/r config core.hooksPath /x', self.w.wt), self.w.ctx())
+        self.assertIsNotNone(d)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-hooks-path'), d.reason)
+
+
+class BashCdOnLinux(LinuxCase):
+    """shell.cd_target on Linux: bash runs `cd` (and pushd, popd) by that exact name, so `CD` or
+    `chdir` moves nothing, and `/d` is a folder, not cmd's drive switch."""
+
+    def cd(self, text, cwd):
+        _parsed, cmds = sh.parse(text, sh.BASH, cwd, home=self.w.home)
+        return sh.cd_target(cmds[0], cwd, self.w.home)
+
+    def test_only_the_exact_verb_is_a_cd(self):
+        for verb in ('CD', 'Cd', 'chdir', 'Set-Location', 'sl'):
+            self.assertEqual(self.cd('%s /work/repo' % verb, self.w.wt), (False, self.w.wt), verb)
+        self.assertEqual(self.cd('cd /work/repo', self.w.wt), (True, '/work/repo'))
+        self.assertEqual(self.cd('pushd /work/repo', self.w.wt), (True, '/work/repo'))
+
+    def test_slash_d_is_a_folder(self):
+        self.assertEqual(self.cd('cd /d', self.w.wt), (True, '/d'))
+        self.assertEqual(self.cd('cd /d /work/repo/.claude/worktrees/wt', '/work/repo'), (True, None))
+
+    def test_a_write_after_a_failed_upper_case_cd_is_judged_where_it_runs(self):
+        self.refused('cd /work/repo; CD .claude/worktrees/wt; echo x > STANDING.md', 'main-checkout')
+
+
+class BashCdOnWindows(unittest.TestCase):
+    """shell.cd_target on Windows is unchanged: Git Bash's cd verb in any case, and cmd's /d
+    passed over."""
+
+    def test_an_upper_case_cd_with_slash_d_is_a_cd(self):
+        _parsed, cmds = sh.parse('CD /d C:/x', sh.BASH, 'C:/w')
+        with mock.patch('kitlib.platform.NAME', 'windows'):
+            self.assertTrue(sh.cd_target(cmds[0], 'C:/w')[0])
 
 
 class MountInfo(unittest.TestCase):

@@ -3219,7 +3219,10 @@ def _curl(args, cmd_word):
     for o, v in opts:
         if o in ('-o', '--output') and v is not None:
             if v.text != '-':
-                out.append(_under(folder, v))
+                placed = _under(folder, v)
+                out.append(placed)
+                if folder is not None and placed is v:
+                    out.append(Under(folder, v))    # curl joins --output-dir to an absolute name too
         elif o in ('-D', '--dump-header', '-c', '--cookie-jar') and v is not None:
             if v.text != '-':
                 out.append(v)
@@ -8499,10 +8502,14 @@ def _without(cmd, first, last):
 
 
 def _under_temp(ctx, d):
+    """True when the folder `d` is the temp folder or below it. It lifts the core.hooksPath checks,
+    so on Linux it compares with the strict fold (a mount in doubt does not fold) and a `\\` is a
+    name's character."""
     if not d:
         return False
-    top = paths.norm(ctx.tempdir, absolute=True).rstrip('\\/')
-    here_ = paths.norm(d, absolute=True)
+    strict = paths.posix()
+    top = paths.norm(ctx.tempdir, absolute=True, strict=strict).rstrip('/' if strict else '\\/')
+    here_ = paths.norm(d, absolute=True, strict=strict)
     return here_ == top or here_.startswith(top + os.sep)
 
 
