@@ -9,6 +9,7 @@ from unittest.mock import patch
 import uuid
 
 from optional.bridge.core.messages import SenderAuthority
+from optional.bridge.core.pairing import PairingError
 from optional.bridge.win.controller import Controller
 from optional.bridge.win.leader import ServiceLeader
 from tests.bridge.test_dispatch import TestAdapter
@@ -117,6 +118,9 @@ class PmRouteTests(unittest.TestCase):
             self.frontend(peer, 'worker')
         self.assertEqual(self.code(self.connect(x, y, bidirectional=False)), 'host-pair-refused')
         self.assertEqual(self.controller.pm.current(), ())
+        # The owner window's controls apply the same rule (README "Host pairs").
+        with self.assertRaisesRegex(PairingError, 'host-pair-refused'):
+            self.controller.owner.change(x.reference, y.reference, enabled=True, bidirectional=False)
 
     def test_the_pm_never_removes_an_owner_route(self):
         self.controller.owner.change(self.a.reference, self.b.reference, enabled=True)

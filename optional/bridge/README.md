@@ -106,7 +106,10 @@ nominates no channel, and the other halves keep working.
   refuses a refused pair at admission (`host-pair-refused`, nothing queued) and again before any
   send, so a message queued before the rule held is refused (`host-pair-refused`) without reaching
   an adapter. `refused` holds `["codex", "codex"]`, the owner's decision; the Codex half's own
-  checks below stay as a backstop at the write.
+  checks below stay as a backstop at the write. The owner window applies the same rule
+  (`OwnerControls`, given `host_pairs` by the controller): it lists no owner route in a refused
+  direction, and Connect chats refuses one (`host-pair-refused`, nothing written; the window says
+  the bridge does not connect these two kinds of chat). Disconnect chats still works on such a pair.
 - **Writer leases** (`core/owner.py` `WriterLeases`, `hosts/codex/runtime.py`). A Codex chat is
   written only by a Codex desktop chat in an active turn, which is the native executor. A sender
   of another host has none, so the owner may lend one: in the window, select a Codex desktop chat

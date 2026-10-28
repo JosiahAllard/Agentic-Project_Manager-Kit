@@ -103,7 +103,7 @@ class Sort(unittest.TestCase):
     def test_what_is_not_read_counts_as_every_row_it_could_be(self):
         self.assertEqual(policy.sort(None), [n for n in roles.ACTIONS if n != 'read'])
         self.assertEqual(policy.sort('set', {'unknown': True}),
-                         ['set-text', 'set-price', 'set-price-owner', 'set-hold', 'set-other',
+                         ['set-text', 'set-price', 'set-price-owner', 'set-other',
                           'set-widen-collision', 'unblock-owner'])
         self.assertEqual(policy.sort('show', {'unknown': True}), ['read'])
         self.assertEqual(policy.sort('catch-up'), ['read'])
@@ -116,7 +116,7 @@ class TopOnly(unittest.TestCase):
     the ones only the owner and the PM may take."""
 
     def test_the_owner_gates_are_top_only(self):
-        gates = ['set-price-owner', 'set-hold', 'unblock-owner', 'close-held', 'retire-priced']
+        gates = ['set-price-owner', 'unblock-owner', 'close-held', 'retire-priced']
         for name in gates:
             self.assertEqual(roles.ACTIONS[name].allowed, roles.TOP, name)
         # and retarget, a rewrite of many records, not an owner gate on one

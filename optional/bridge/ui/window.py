@@ -8,6 +8,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+from optional.bridge.core.hostpairs import REFUSED as HOST_PAIR_REFUSED
 from optional.bridge.core.owner import OwnerControls
 
 REREAD_MS=5000
@@ -152,8 +153,10 @@ class Window:
         try:
             self.owner.change(*self._order,enabled=enabled,bidirectional=self.direction.get()=='Both directions')
             self.status.set('Chats connected. Each keeps its current permissions.' if enabled else 'Chats disconnected. The chats remain open.')
-        except Exception:
-            self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
+        except Exception as error:
+            if getattr(error,'code',None)==HOST_PAIR_REFUSED:
+                self.status.set('The bridge does not connect these two kinds of chat. Nothing was changed.')
+            else: self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
         self.refresh()
 
     def _lease(self,enabled):

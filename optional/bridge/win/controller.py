@@ -58,7 +58,9 @@ class Controller:
             # PM routes live only in this process too, and open a route only between chats
             # this controller sees as kit-launched now (README "PM routes").
             self.pm=PmRoutes(self.pairs,launched=self.launched,host_pairs=self.core.host_pairs)
-            self.owner=OwnerControls(self.pairs,self.decisions,describe=self._describe,leases=self.leases,pm=self.pm)
+            # The owner window lists and connects no direction the host-pair rule refuses.
+            self.owner=OwnerControls(self.pairs,self.decisions,describe=self._describe,leases=self.leases,pm=self.pm,
+                host_pairs=self.core.host_pairs)
         except Exception:
             self.close()
             raise
