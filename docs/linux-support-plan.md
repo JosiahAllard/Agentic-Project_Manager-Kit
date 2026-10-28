@@ -100,12 +100,15 @@ scheduled-task writers, with the bridge apart.
   stale kill of a reused pid that the Windows shield answers never comes. Stopping a call
   (Escape, TaskStop, or SIGTERM or SIGINT to claude) does kill its tree by pid: claude lists
   every process (`ps -A -o pid= -o ppid=`), sends SIGTERM to the shell's process group and to
-  each descendant by pid (the one in a session of its own too), polls every 100 ms, lists again
-  about 1.4 s later and sends SIGKILL to the group and each one still running. Each kill comes
-  at most about 200 ms after a fresh listing, and pids are handed out in order up to pid_max
-  (4194304 on the VM), so a reused pid is out of reach; a process reparented away from the call
-  (the kit's detach: a setsid double fork) is never reached. That kill is aimed at the live
-  tree, as a stop is meant to be.
+  each descendant by pid (the one in a session of its own too), polls every 100 ms and lists
+  again about 1.35 s later. The kept capture ends there; that it then sends SIGKILL to the group
+  and each one still running is inferred (the probe's members ignore SIGTERM, yet all ended,
+  and the call returned exit code 137). Each kill seen comes at most about 200 ms after a fresh
+  listing, and pids are handed out in order up to pid_max (4194304 on the VM), so a reused pid is
+  out of reach. A process already reparented away from the call when claude lists (the kit's
+  detach: a setsid double fork) is not reached; one still mid double fork at that moment is a
+  descendant and is, and this holds only while claude is not a child subreaper. That kill is
+  aimed at the live tree, as a stop is meant to be.
 - **Machine lock store**: lock/store.py real_root is `~/.claude/machine-lock` under the profile
   from SHGetKnownFolderPath; lock() is a named mutex `Global\MachineLock.<name>` (queue, holds,
   resources, revision, games, run.<id>), WAIT_ABANDONED counting as acquired. RunMutex is the
@@ -732,11 +735,11 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    answers UNREAD. (d) explains it: UNREAD came back for 50 of 50 removals of a free tree with no
    agent running, and the same with ssh-agent, with gpg-agent too, and after both ended. The
    user's own systemd manager (`systemd --user`), its `(sd-pam)` and the ssh login's
-   `sshd-session` are processes of this user whose `ns/mnt` cannot be read (not dumpable), and
+   `sshd-session` are processes of this user whose `ns/mnt` cannot be read (inferred: not dumpable), and
    they last as long as the login, so on a stock Ubuntu box every removal falls to the owner;
    ssh-agent and gpg-agent add nothing to that. It needs its own record (a fix or a ruling) before
-   slice 14. (c) is open: every landing test (tests/gate/test_land*.py) skips on Linux ("the
-   lock is Windows only") and tools/kit.py refuses Linux, so a landing cannot run end to end
+   slice 14. (c) is open: the end-to-end landing tests skip on Linux ("the lock is
+   Windows only"; in tests/gate/test_land*.py only a few unit tests run) and tools/kit.py refuses Linux, so a landing cannot run end to end
    there before slice 14.
    Known limits:
    a bind mount over a tree's file system leaves its removals UNREAD; in a WSL2 distro (a PID
@@ -832,6 +835,18 @@ $vm = $o + "kitvm@$ip"
    removes the folder and shows any unit or process a test left behind (report one, never
    leave it running).
 
+The tree-kill probe (section 1.3), to run again on a new Claude Code: its scripts are in
+`~/ccprobe` on the VM (`probe.sh <scenario>`, `all.sh` for every one), and a Linux claude in
+`~/ccinstall`. `mock.py` is a scripted stand-in for the Messages API on 127.0.0.1
+(`ANTHROPIC_BASE_URL`, a fake key, a fresh HOME), so claude runs one Bash call with no account.
+The call starts `tree.py`: P, the shell's child; A, a child of P in its group; B, a child of P in
+a session of its own; C, double forked away. P, A and B ignore SIGTERM, SIGINT and SIGHUP, and
+all four write beats and the signals they get. Scenarios: `finished`, `timeout` (moved to the
+background), `bgexit`, `esc` (Escape in tmux), `fgterm` and `fgint` (the signal to claude),
+`bgkill` and `timeoutkill` (TaskStop, found by ToolSearch). claude runs under
+`strace -f -tt -e trace=kill,tkill,tgkill,pidfd_send_signal,pidfd_open,setsid,setpgid,execve -e signal=none`;
+the report says which members kept beating after the call ended.
+
 ## 9. Risks and unknowns
 
 - Unknown: whether `from ctypes import wintypes` imports on Linux on the kit's Python (it raised
@@ -842,7 +857,7 @@ $vm = $o + "kitvm@$ip"
 - Settled (the tree-kill probe, on the reference VM with Claude Code 2.1.312): Claude Code on
   Linux kills no finished call's tree, and kills a stopped call's live tree by pid from a fresh
   listing, so no pid shield is needed (section 1.3). A later Claude Code may change it; section
-  1.3 gives the probe's design to run again.
+  8.1 gives the probe's design to run again.
 - Unknown (CI phase): how the owner's self-hosted runner delegates cgroups to the runner user.
 - Unknown: the containment research of section 2.3 is read from documentation; slice 5 probes
   each tier on a real box (whether `AllowedCPUs` has an effect without cpuset delegation, whether
