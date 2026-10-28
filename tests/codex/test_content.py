@@ -186,6 +186,18 @@ class Manifests(unittest.TestCase):
             head = "/bin/sh -c 'python3 \"$@\" || exit 2'" if event == 'PreToolUse' else start
             self.assertEqual(l['command'], head + script + event)
 
+    def test_the_linux_mcp_servers_run_python3(self):
+        """mcp.linux.json: mcp.json's servers, each run by python3 (stock Ubuntu has no `python`);
+        mcp.json, the Windows file, keeps `python`. Nothing else differs."""
+        files = cc.renderer().manifests(kcontent.load_kit(ROOT), kcontent.load(ROOT))
+        windows = json.loads(files[cc.MCP_REL])
+        linux = json.loads(files['hosts/codex/shell/mcp.linux.json'])
+        self.assertEqual(sorted(linux['mcpServers']), ['hub', 'machine-lock'])
+        for name, server in windows['mcpServers'].items():
+            self.assertEqual(server['command'], 'python')
+            self.assertEqual(linux['mcpServers'][name], dict(server, command='python3'))
+        self.assertEqual(dict(linux, mcpServers=None), dict(windows, mcpServers=None))
+
     def test_a_linux_argument_quoting_cannot_hold_is_refused(self):
         self.assertEqual(cc.posix_quote('codex'), 'codex')
         self.assertEqual(cc.posix_quote('${PLUGIN_ROOT}/a b.py'), '"${PLUGIN_ROOT}/a b.py"')

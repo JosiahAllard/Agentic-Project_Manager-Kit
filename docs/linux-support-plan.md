@@ -745,8 +745,10 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
     a start event's says the kit did not load), each host's hooks.linux.json beside its
     unchanged hooks.json, hosts.json platforms windows and linux for both hosts, and the seam:
     the plugin export writes the running platform's file as hooks.json
-    (kitlib.pluginsource.platform_hooks). The posix-only run of the lines (tests/host/
-    test_hook_linux.py) waits on a Linux machine.
+    (kitlib.pluginsource.platform_manifests). The posix-only run of the lines (tests/host/
+    test_hook_linux.py) waits on a Linux machine. The MCP servers follow the same seam
+    (KIT-LINUX-MCP-INTERPRETER): hookmain.mcp_interpreter picks python3 on Linux, rendered into
+    `.claude-plugin/plugin.linux.json` and Codex's `mcp.linux.json`, which the export swaps in.
 13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
     hub to-do step forms, Codex dialect. Risk Low. Proof: content render check; hub renders each
     form. Windows stays byte-identical: every rendered Windows file differs from the base's only

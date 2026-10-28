@@ -20,7 +20,10 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
   extensions.com.openai (the portable plugin format the Codex branch used).
 - `hosts/codex/shell/mcp.json`: the machine-lock MCP server, read-only on Codex
   (hosts/codex/shell/mcp/lock_server.py, hosts.codex.adapter.lock), and the hub MCP server
-  (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md).
+  (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md). That is the Windows file; each other
+  platform hosts.json gives Codex gets the same servers with that platform's MCP interpreter
+  (mcp_servers) in mcp_rel(platform), `mcp.<platform>.json`, which the plugin export writes in its
+  place.
 - `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the kit's one
   hook entry, boot/hook.py, as the plugin's copy ${PLUGIN_ROOT}/boot/hook.py with `codex` and the
   event's name. Codex reads a hook's command as one string, so it is
@@ -81,6 +84,13 @@ MCP_SERVERS = {SERVER_NAME: {'type': 'stdio', 'command': 'python',
                HUB_NAME: {'type': 'stdio', 'command': 'python',
                           'args': [PLUGIN_ROOT + '/mcp/hub_server.py'],
                           'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']}}
+
+
+def mcp_servers(platform='windows'):
+    """MCP_SERVERS, each command `platform`'s MCP interpreter (hookmain.mcp_interpreter)."""
+    command = hookmain.mcp_interpreter(platform)
+    return {name: dict(server, command=command) for name, server in MCP_SERVERS.items()}
+
 # hosts.json's Codex tiers are all ACCOUNT_DEFAULT: every role runs on the account's configured
 # Codex model and differs by reasoning effort, as the Codex branch's roles.json had it. The owner
 # names models per tier in hosts.json (docs/ROSTER.md) when Codex models are chosen.
@@ -306,15 +316,22 @@ class CodexContent:
         return out
 
     def manifests(self, kit, content, registry_path=None):
-        """{path: bytes} of plugin.json, mcp.json and hooks.json for `kit` ({"name", "version"})."""
+        """{path: bytes} of plugin.json, and mcp.json and hooks.json once for each platform
+        hosts.json gives Codex, for `kit` ({"name", "version"})."""
         plugin = {'$schema': PLUGIN_SCHEMA, 'name': kit['name'], 'version': kit['version'],
                   'description': DESCRIPTION, 'extensions': {'com.openai': {'hooks': './hooks/hooks.json'}}}
-        mcp = {'$schema': MCP_SCHEMA, 'mcpServers': MCP_SERVERS}
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
-        out = {MANIFEST_REL: dump(plugin), MCP_REL: dump(mcp)}
+        out = {MANIFEST_REL: dump(plugin)}
         for platform in registry.host(HOST, registry_path).platforms:
+            out[mcp_rel(platform)] = dump({'$schema': MCP_SCHEMA, 'mcpServers': mcp_servers(platform)})
             out[hooks_rel(platform)] = dump(self.hooks(registry_path, platform))
         return out
+
+
+def mcp_rel(platform):
+    """The MCP servers file for `platform`: MCP_REL on Windows, the one the plugin reads; beside it
+    `mcp.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its place."""
+    return MCP_REL if platform == 'windows' else MCP_REL[:-len('.json')] + '.%s.json' % platform
 
 
 def hooks_rel(platform):

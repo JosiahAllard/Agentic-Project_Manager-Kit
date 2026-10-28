@@ -172,6 +172,17 @@ class ManifestTest(unittest.TestCase):
                 self.assertEqual(l['args'][:3], ['-c', l['args'][1], 'kit-hook'])
                 self.assertIn('the kit did not load', l['args'][1])
 
+    def test_each_platform_gets_the_plugin_manifest_with_its_own_mcp_interpreter(self):
+        """plugin.linux.json: plugin.json with each MCP server run by python3 (stock Ubuntu has no
+        `python`); plugin.json, the Windows file, keeps `python`. Nothing else differs."""
+        windows = self.load('.claude-plugin', 'plugin.json')
+        linux = self.load('.claude-plugin', 'plugin.linux.json')
+        self.assertEqual(sorted(linux['mcpServers']), ['hub', 'machine-lock'])
+        for name, server in windows['mcpServers'].items():
+            self.assertEqual(server['command'], 'python')
+            self.assertEqual(linux['mcpServers'][name], dict(server, command='python3'))
+        self.assertEqual(dict(linux, mcpServers=None), dict(windows, mcpServers=None))
+
     def test_load_kit_refusals(self):
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root, True)
@@ -437,9 +448,11 @@ class TempTreeTest(unittest.TestCase):
     def test_a_kit_version_change_reaches_every_manifest(self):
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
         self.assertEqual(content.drift(self.root, self.rs),
-                         ['differs: .claude-plugin/marketplace.json', 'differs: .claude-plugin/plugin.json'])
+                         ['differs: .claude-plugin/marketplace.json', 'differs: .claude-plugin/plugin.json',
+                          'differs: .claude-plugin/plugin.linux.json'])
         content.write(self.root, self.rs)
         self.assertEqual(json.loads(read(self.path('.claude-plugin', 'plugin.json')))['version'], '9.8.7')
+        self.assertEqual(json.loads(read(self.path('.claude-plugin', 'plugin.linux.json')))['version'], '9.8.7')
 
     def test_an_installed_plugin_export_is_never_written(self):
         # --write run from an installed export once rewrote its plugin.json

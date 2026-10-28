@@ -52,7 +52,9 @@ class Source(unittest.TestCase):
                 ('hosts/claude/shell/hooks/hooks.json', manifest % 'claude'),
                 ('hosts/claude/shell/hooks/hooks.linux.json', manifest % 'claude'),
                 ('hosts/codex/shell/hooks/hooks.linux.json', manifest % 'codex'),
+                ('hosts/codex/shell/mcp.linux.json', manifest % 'codex'),
                 ('.claude-plugin/plugin.json', manifest % 'claude'),
+                ('.claude-plugin/plugin.linux.json', manifest % 'claude'),
                 ('.claude-plugin/marketplace.json', manifest % 'claude'),
                 ('hosts/claude/shell/agents', 'content/roles/'),                  # the folders themselves
                 ('hosts/codex/shell/skills/', 'content/skills/'),

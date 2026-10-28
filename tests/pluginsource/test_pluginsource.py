@@ -93,7 +93,28 @@ class ExportTest(Base):
                 self.assertEqual(read(folder, 'hosts/a/shell/hooks/hooks.json'), want)
                 self.assertEqual(read(folder, 'hosts/a/shell/hooks/hooks.linux.json'), 'linux')
                 self.assertEqual(read(folder, 'hosts/b/shell/hooks/hooks.json'), 'only windows')
-        self.assertEqual(P.platform_hooks(list(files), 'macos'), {})
+        self.assertEqual(P.platform_manifests(list(files), 'macos'), {})
+
+    def test_the_mcp_and_plugin_manifests_hold_the_running_platforms_file(self):
+        """Codex's mcp.json and Claude's plugin.json have a `.linux.json` beside them (their MCP
+        servers run python3 there); a Linux export writes those bytes in their place, plugin.json
+        still stamped, and a Windows export keeps the commit's own."""
+        r = self.k.repo
+        linux_manifest = MANIFEST.replace(b'"0.1.0"', b'"0.1.0", "linux": 1')
+        r.write('hosts/a/shell/mcp.json', 'windows')
+        r.write('hosts/a/shell/mcp.linux.json', 'linux')
+        with open(r.path('.claude-plugin', 'plugin.linux.json'), 'wb') as fh:
+            fh.write(linux_manifest)
+        r.commit('mcp', 'hosts/a/shell/mcp.json', 'hosts/a/shell/mcp.linux.json', '.claude-plugin/plugin.linux.json')
+        r.git('push', '-q', 'origin', 'main')
+        sha = P.remote_main(self.k.kit, 'origin')
+        for platform, mcp, manifest in (('windows', b'windows', MANIFEST), ('linux', b'linux', linux_manifest)):
+            with self.subTest(platform):
+                folder, version = P.export(self.k.kit, sha, os.path.join(self.k.root, platform), NOW, platform=platform)
+                with open(os.path.join(folder, 'hosts', 'a', 'shell', 'mcp.json'), 'rb') as fh:
+                    self.assertEqual(fh.read(), mcp)
+                with open(os.path.join(folder, '.claude-plugin', 'plugin.json'), 'rb') as fh:
+                    self.assertEqual(fh.read(), manifest.replace(b'"0.1.0"', ('"%s"' % version).encode()))
 
     def test_a_main_the_kit_has_not_fetched_is_refused(self):
         sha = self.k.push_from_clone()

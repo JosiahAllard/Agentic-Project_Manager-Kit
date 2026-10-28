@@ -246,7 +246,7 @@ the checkout git places the target in, and these paths in it (case folded):
 | `hosts/<host>/shell/agents/**` | `content/roles/<role>.md` (the host's agent-name prefix, `kit-` on Codex, dropped) |
 | `hosts/<host>/shell/skills/**` | the same file under `content/skills/`; Claude's old copy, a retired folder, too |
 | `hosts/<host>/shell/boot/**`, `hosts/<host>/shell/hosts.json` | `boot/`, `hosts.json` |
-| `hosts/<host>/shell/plugin.json`, `mcp.json`, `hooks/hooks.json`, `hooks/hooks.linux.json`; `.<host>-plugin/plugin.json` and `marketplace.json` at the root | `kit.json`, `hosts.json` and `hosts/<host>/adapter/content.py` |
+| `hosts/<host>/shell/plugin.json`, `mcp.json`, `mcp.linux.json`, `hooks/hooks.json`, `hooks/hooks.linux.json`; `.<host>-plugin/plugin.json`, `plugin.linux.json` and `marketplace.json` at the root | `kit.json`, `hosts.json` and `hosts/<host>/adapter/content.py` |
 
 The `agents`, `skills` and `boot` folders themselves count too, so `rm -r` of one is refused. git
 that restores, merges or removes these files (`git checkout -- <path>`, `git merge`, `git rm`) has
