@@ -738,7 +738,7 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    `sshd-session` are processes of this user whose `ns/mnt` cannot be read (the manager holds
    CAP_WAKE_ALARM; the other two are not dumpable), and
    they last as long as the login, so on a stock Ubuntu box every removal fell to the owner.
-   KIT-LINUX-HOLDERS-UNREAD-SYSTEMD settles that part: those three are this login's own and no
+   Its own record's fix settles that part: those three are this login's own and no
    longer make a tree unread (docs/worktree-remove.md "Classify": a process in the user manager's
    `init.scope`, and a never-exec'd fork whose parent, not PID 1, is another user's), so (b) passes
    on the VM, and 50 of 50 runs of the free-tree test there came back free. Still open: ssh-agent, gpg-agent and a desktop's gcr agent stay unread processes,
