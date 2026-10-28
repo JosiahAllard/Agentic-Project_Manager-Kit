@@ -433,6 +433,13 @@ class CommandLine(unittest.TestCase):
         with self.assertRaises(ValueError):
             hookmain.manifest_command('a.py', 'macos')
 
+    def test_the_mcp_interpreter_is_python3_on_linux_and_refused_for_an_unknown_platform(self):
+        """Stock Ubuntu has no `python`, only python3; Windows keeps the `python` its manifests name."""
+        self.assertEqual(hookmain.mcp_interpreter('windows'), 'python')
+        self.assertEqual(hookmain.mcp_interpreter('linux'), 'python3')
+        with self.assertRaises(ValueError):
+            hookmain.mcp_interpreter('macos')
+
     def test_the_settings_entry_wraps_it(self):
         entry = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')
         self.assertEqual(entry, {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
