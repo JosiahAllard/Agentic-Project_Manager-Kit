@@ -95,20 +95,19 @@ class ClosesByTrailer(StoreLandCase):
         self.assertEqual(self.notes(out), [])
         self.assertEqual(self.warnings(out), [])
 
-    def test_an_owner_held_record_main_pulled_is_a_warning_and_stays(self):
-        self.seed(pulled('HELD', by='main', priority='-1', priority_by='-',
-                         owner_ask='may this ship?'))
+    def test_an_owner_held_record_is_a_warning_and_stays(self):
+        # the owner's hold is `blocked_on: owner` (`priority: -1` is retired), so the record is
+        # never pulled: the landing leaves it and prints the close for the owner or the PM, in a
+        # worktree, never the main checkout
+        self.seed(priced('HELD', state='blocked', blocked_on='owner', owner_ask='may this ship?'))
         out = self.land(self.branch_with('fix\n\nCloses: HELD\n%s\n' % TRAILERS))
         self.assertEqual(self.stems(), ['HELD'])
         warn = self.warnings(out)
         self.assertEqual(len(warn), 1, out.lines)
-        # an owner-held close is the close-held row, and a landing runs no role check
-        self.assertIn('`close-held`', warn[0])
-        self.assertIn('no role check ran', warn[0])
-        self.assertIn('which a Closes trailer of its commits names', warn[0])
-        # the same plain command as a held record the branch pulled itself
-        # (test_land_store.CloseEdges)
-        self.assertTrue(warn[0].endswith('close HELD --reason "landed %s"' % out.merge), warn[0])
+        self.assertIn('which is blocked, not pulled', warn[0])
+        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close HELD --reason "landed %s"'
+                                         % (at_landing.WORKTREE, out.merge)), warn[0])
+        self.assertNotIn(self.repo.root, warn[0])
 
     def test_a_batch_reads_the_trailers_of_each_branch(self):
         self.seed(pulled('ONE', by='main'), pulled('TWO', by='main', scope=['b.py']),
