@@ -237,21 +237,37 @@ class PrivateListener(Pipe):
         return {'client_process_verified': True, 'client_user_verified': True}
 
 
+def win32_refusal(code):
+    """ProcError(code) carrying this thread's GetLastError as `winerror`, also named in its text."""
+    error = ProcError(code)
+    error.winerror = ctypes.get_last_error()
+    error.args = ('%s (Win32 error %d)' % (error.args[0], error.winerror),)
+    return error
+
+
 def protect_file(path):
-    """Restrict a newly created file to this user before advertising it; never a native key."""
+    """Restrict a newly created file to this user before advertising it; never a native key.
+
+    The protected DACL goes first, on its own: the file's owner holds WRITE_DAC implicitly, but
+    WRITE_OWNER only through an ACE, and a folder whose inherited ACEs give this user none (Modify
+    through Authenticated Users, Administrators deny-only in a filtered token) refused the old
+    single owner-and-DACL call with ERROR_ACCESS_DENIED. Once the DACL grants this user full
+    access, the owner is set to this user too, and both are read back."""
     user = process_sids(os.getpid())[0]
-    security = w.LPVOID()
-    if not from_sddl('O:%sD:P(A;;GA;;;%s)' % (user, user), 1, ctypes.byref(security), None):
-        raise ProcError('private-file-acl-creation-failed')
     set_security = bind(A, 'SetFileSecurityW', [w.LPCWSTR, w.DWORD, w.LPVOID], w.BOOL)
-    try:
-        if not set_security(str(path), 0x80000005, security):
-            raise ProcError('private-file-acl-set-failed')
-    finally:
-        local_free(security)
+    # PROTECTED_DACL|DACL_SECURITY_INFORMATION, then OWNER_SECURITY_INFORMATION.
+    for flags, sddl in ((0x80000004, 'D:P(A;;GA;;;%s)' % user), (0x1, 'O:%s' % user)):
+        security = w.LPVOID()
+        if not from_sddl(sddl, 1, ctypes.byref(security), None):
+            raise win32_refusal('private-file-acl-creation-failed')
+        try:
+            if not set_security(str(path), flags, security):
+                raise win32_refusal('private-file-acl-set-failed')
+        finally:
+            local_free(security)
     handle = create_file(str(path), 0x20000, 7, None, 3, 0, None)
     if handle == INVALID:
-        raise ProcError('private-file-acl-readback-failed')
+        raise win32_refusal('private-file-acl-readback-failed')
     try:
         owner, actual = descriptor(handle, 1)
         # Windows maps generic file access to FILE_ALL_ACCESS in the readback.
