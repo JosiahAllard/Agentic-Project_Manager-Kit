@@ -11,6 +11,7 @@ import os
 import struct
 import time
 
+from . import retry
 from .errors import GitExit, Unsupported
 
 S_IFREG = 0o100000
@@ -274,18 +275,18 @@ class IndexLock:
         still listed because another handle is open on it; real git reports that as a held lock
         (2.55.0.windows.5, probed 2026-10-14), and so does this. A denial with no file left (the
         delete completed in between) is tried again, as refs.RefLock.acquire does."""
-        for attempt in range(51):
+        began = retry.start()
+        while True:
             try:
                 self.fd = os.open(self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o666)
                 return self
             except FileExistsError:
                 raise self._held()
-            except PermissionError:
+            except PermissionError as e:
                 if os.path.lexists(self.lock):
                     raise self._held()
-                if attempt == 50:
-                    raise
-                time.sleep(0.01)
+                if not retry.pause(began):
+                    raise retry.gave_up(e, began) from e
 
     def _held(self):
         return GitExit(128, "fatal: Unable to create '%s': File exists.\n\nAnother git process seems "
@@ -300,13 +301,14 @@ class IndexLock:
         finally:
             os.close(self.fd)
             self.fd = None
-        for _ in range(50):
+        began = retry.start()
+        while True:
             try:
                 os.replace(self.lock, self.path)
                 return
-            except PermissionError:
-                time.sleep(0.01)
-        os.replace(self.lock, self.path)
+            except PermissionError as e:
+                if not retry.pause(began):
+                    raise retry.gave_up(e, began) from e
 
     def rollback(self):
         if self.fd is not None:
