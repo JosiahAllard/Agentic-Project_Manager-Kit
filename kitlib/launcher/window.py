@@ -13,7 +13,7 @@
      whose guard allows scratch writes only there finds all three; the PM resume too);
   7. the start folder (a home worktree with --home-worktree: home.py), then
      `claude ... [--add-dir '<main checkout>'] --permission-mode auto --remote-control '<name>' -n '<name>' '<prompt>'`
-     (a resume: `claude --resume '<id>' [--agent ...] --remote-control ...`).
+     (a resume: `claude --resume '<id>' [--fork-session] [--agent ...] --remote-control ...`).
 Every value is single-quoted with quotes doubled. `open_window` starts it minimized and unfocused:
 `conhost.exe powershell.exe -NoExit -EncodedCommand <base64 UTF-16LE>` through WScript.Shell.Run
 with show flag 7 (SW_SHOWMINNOACTIVE; conhost honours it), so quotes in a prompt survive.
@@ -82,13 +82,15 @@ def q(text):
 
 
 def claude_command(name, prompt, agent=None, model=None, effort=None, autocompact=None, resume=None,
-                   add_dir=None, remote_control=True):
+                   add_dir=None, remote_control=True, fork=False):
     """`add_dir`: a folder the session's file tools may also use (`--add-dir`; a home worktree's
     main checkout, docs/launcher.md "The home worktree"). `remote_control` False drops only the
-    `--remote-control <name>` pair (a measurement; lookup finds the session by `-n`)."""
+    `--remote-control <name>` pair (a measurement; lookup finds the session by `-n`). `fork` with
+    `resume`: `--fork-session`, the resumed conversation under a new session id (pm-relaunch)."""
     parts = ['claude']
     if resume:
         parts += ['--resume', q(resume)]
+        parts += ['--fork-session'] if fork else []
     if agent:
         parts += ['--agent', agent]
     if model:
