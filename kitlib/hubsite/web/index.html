@@ -111,9 +111,10 @@ h3.blk{font:600 .78rem var(--f-body);letter-spacing:.06em;text-transform:upperca
 .chip{font:600 .75rem/1.5 var(--f-body);padding:1px 8px;border-radius:var(--r-s);background:var(--accent-soft);color:var(--accent)}
 .chip.ok{background:var(--ok-soft);color:var(--ok)}
 .chip.rec{background:var(--rec-soft);color:var(--rec)}
-.q h2{font-size:1.08rem;margin:0;line-height:1.35;text-wrap:balance}
+.q h2{font-size:1.08rem;margin:0;line-height:1.35;text-wrap:balance;overflow-wrap:anywhere}
 .rfacts .scope{margin:2px 0 6px;padding-left:20px;overflow-wrap:anywhere}
 .rfacts .rbody{font:inherit;margin:2px 0 6px}
+.rfacts .full{overflow-wrap:anywhere}
 .ctx{margin:0;white-space:pre-wrap;color:var(--fg);max-width:68ch;overflow-wrap:anywhere}
 .refs{font:.78rem var(--f-mono);color:var(--muted);overflow-wrap:anywhere}
 fieldset{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
@@ -1422,8 +1423,10 @@ ul.hist .sch-line{display:block}
   }
 
   // The effort, scope and body of a record are not in the backlog view: the detail asks for the record (GET /records, the
-  // route the record page uses) when it opens, and fills its Effort, Scope and Body in; a failed read says so.
-  function recordFacts(repo, id){
+  // route the record page uses) when it opens, and fills its Effort, Scope and Body in; a failed read says so. The
+  // backlog view shortens a long title (kitlib.hubbacklog TITLE_MAX); the record's own summary, when it is not the
+  // `shown` title, is put first as Full title, so no title is cut off with no way to read the rest.
+  function recordFacts(repo, id, shown){
     const box = el("div", {class:"rfacts", id: "rf-" + id}, el("p", {class:"status", role:"status", text:"Reading the record…"}));
     (async () => {
       let kids;
@@ -1432,11 +1435,13 @@ ul.hist .sch-line{display:block}
         const fields = Array.isArray(d.fields) ? d.fields : [];
         const effort = fields.filter(f => f[0] === "effort").map(f => f[1]).join(", ");
         const scope = fields.filter(f => f[0] === "scope").map(f => f[1]).filter(Boolean);
-        kids = [el("p", {class:"kv"}, el("b", {text:"Effort: "}), effort || "none"),
+        const full = fields.filter(f => f[0] === "summary").map(f => String(f[1] || "")).join(" ").trim();
+        kids = [full && full !== String(shown || "") ? el("p", {class:"kv full"}, el("b", {text:"Full title: "}), full) : null,
+                el("p", {class:"kv"}, el("b", {text:"Effort: "}), effort || "none"),
                 el("div", {class:"kv"}, el("b", {text:"Scope: "}), scope.length ? el("ul", {class:"scope"}, ...scope.map(x => el("li", {text: String(x)}))) : "none"),
                 el("div", {class:"kv"}, el("b", {text:"Body: "}), d.body && String(d.body).trim() ? el("pre", {class:"ctx rbody", text: String(d.body).replace(/\s+$/, "")}) : "none")];
       } catch (e) { kids = [el("p", {class:"status err", role:"status", text:"Cannot read the record: " + why(e)})]; }
-      box.replaceChildren(...kids);
+      box.replaceChildren(...kids.filter(Boolean));
     })();
     return box;
   }
@@ -1445,7 +1450,7 @@ ul.hist .sch-line{display:block}
     const id = c.item || c.id;
     return el("article", {class:"q", id: "done-" + c.id},
       el("div", {class:"meta"}, el("span", {class:"id", text: id}), el("span", {class:"chip ok st-done", text:"Done"}), el("span", {class:"chip", text: String(c.repo || "")}), c.done_at ? el("span", {text: "done " + when(c.done_at)}) : null),
-      el("h2", {text: c.title || "(untitled)"}), recordFacts(c.repo, id),
+      el("h2", {text: c.title || "(untitled)"}), recordFacts(c.repo, id, c.title),
       el("div", {class:"act"}, el("button", {class:"primary", type:"button", text:"Open the record", onclick: () => openRecord(c.repo, id)})));
   }
   // The detail of a backlog row (open or parked): its fields from the server's backlog view, and the three buttons that
@@ -1457,7 +1462,7 @@ ul.hist .sch-line{display:block}
       el("div", {class:"meta"}, el("span", {class:"id", text: id}), el("span", {class:"chip", text: String(b.repo || "")}),
         parked ? (age ? el("span", {class:"age" + (b.old ? " old" : ""), title: "Parked " + when(b.parked_at) + (PARKED_FROM[b.parked_at_from] || ""), text: age}) : el("span", {class:"age", text:"parked, time unknown"})) : null),
       el("h2", {text: b.title || "(untitled)"}),
-      kv("Priority", b.priority == null ? "none" : b.priority), kv("Status", b.status), kv("Branch", b.branch), kv("Session", b.session), recordFacts(b.repo, id),
+      kv("Priority", b.priority == null ? "none" : b.priority), kv("Status", b.status), kv("Branch", b.branch), kv("Session", b.session), recordFacts(b.repo, id, b.title),
       b.q ? el("div", {class:"links"}, q ? el("button", {class:"link", type:"button", text: q.id + ": " + (q.title || ""), onclick: () => goQuestion(q.id)}) : el("span", {class:"refs", text: b.q})) : parked ? el("div", {class:"refs", text:"No question linked"}) : null,
       el("div", {class:"act"},
         el("button", {class:"primary", type:"button", text:"Edit fields", onclick: () => openRecord(b.repo, id, "fields")}),

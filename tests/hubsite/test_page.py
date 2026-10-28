@@ -5192,6 +5192,29 @@ class TriageViewsTest(unittest.TestCase):
         self.assertEqual(got["scope"], ["tools/x.py", "kitlib/y/"])                          # each scope path on its own line
         self.assertEqual(got["body"], "First body line.\nSecond <b>line</b>.")              # the body, as text
 
+    def test_a_title_the_backlog_view_shortened_is_shown_whole_in_the_detail(self):
+        # kitlib.hubbacklog clips a long summary (TITLE_MAX, then shorter to fit the document); the detail reads the
+        # record and shows its whole summary, so no title is cut off with no way to read the rest. A title shown
+        # whole is not repeated.
+        whole = "a long record title " * 12
+        clipped = whole[:159].rstrip() + "…"
+        views = dict(self.VIEWS, backlog=[dict(BACKLOG[0], items=[{"id": "B-1", "t": clipped, "p": 1, "s": "open"},
+                                                                  {"id": "B-2", "t": "two", "p": 2, "s": "open"}])])
+        recs = {"B-1": record(fields=[["id", "B-1"], ["summary", whole], ["effort", "m"]]),
+                "B-2": record(id="B-2", fields=[["id", "B-2"], ["summary", "two"], ["effort", "s"]])}
+        got = dom("""
+            const RECS = %s;
+            server.route = c => c.method === "GET" && c.path.startsWith("/records/alpha/") ? { status: 200, body: RECS[c.path.split("/").pop()] } : undefined;
+            await start();
+            await click($("#sections [data-s=backlog]"));
+            const one = text($("#pane-detail #rf-B-1"));
+            await click(document.getElementById("row-alpha:B-2"));
+            return { one, two: text($("#pane-detail #rf-B-2")) };
+        """ % json.dumps(recs), snapshot(views=views))
+        self.assertIn("Full title: " + whole.strip(), got["one"])
+        self.assertNotIn("Full title", got["two"])
+        self.assertIn("Effort: s", got["two"])
+
     def test_the_backlog_detail_says_so_when_the_record_cannot_be_read(self):
         got = dom("""
             server.route = c => c.method === "GET" && c.path.startsWith("/records/") ? { status: 404, body: { ok: false, error: { code: "not_found", message: "gone", field: "id" } } } : undefined;
