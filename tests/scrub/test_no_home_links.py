@@ -3,9 +3,8 @@
 link any more (docs/machine-setup.md "Links"), so a path through one breaks once the owner
 removes the leftovers. Code names the kit folder instead, and docs say `<kit>/tools/...`.
 
-The allowed hits are the passages that name a link to tell the owner to remove it or that it
-was removed; each is matched by its file and the markdown heading it stands under, and an
-entry that no longer matches anything fails too, so the list cannot go stale."""
+An allowed hit is matched by its file and the markdown heading it stands under, and an
+entry that no longer matches anything fails too, so the list cannot go stale. None is allowed now."""
 import re
 import unittest
 
@@ -16,12 +15,7 @@ HOME_LINK = re.compile(
     r'\.claude(?:-[\w.-]+)?[/\\]+(?:tools|knowledge)\b', re.I)
 HEADING = re.compile(r'^#{1,6}\s+(.*?)\s*$')
 
-ALLOWED = (
-    ('docs/install.md', 'After the plugin install: remove the per-item junctions',
-     'the steps that remove the links an earlier setup made'),
-    ('docs/go-live.md', 'Coordinator rename',
-     'the installed copies the rename retired, named where they were'),
-)
+ALLOWED = ()
 
 
 def hits(rel, text):
