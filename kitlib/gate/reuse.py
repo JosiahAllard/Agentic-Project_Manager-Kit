@@ -52,7 +52,7 @@ depends on such a file must not set reuse. The result taken is the one of the st
 stored, so the relaxation never reaches the cache. Anything that raises means every step runs.
 
 The input tree (input_tree). When main moved since the tip's gate, the merge's tree is not the
-tip's, and a step whose command names {base} (as retribution's tiers do) is never cached. In a
+tip's, and a step whose command names {base} (as a repository's test tiers may) is never cached. In a
 one-branch landing that landing_why lets reuse, and that same_tree does not serve, the gate-OK
 record the tip check accepted (kitlib.gate.land, Lander.tip_records: a --full record, or a
 default-mode one select_refusal took; never a docs-only one, and none for a tip that lands only on a
