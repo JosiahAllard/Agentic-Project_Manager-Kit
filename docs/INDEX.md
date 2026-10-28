@@ -42,6 +42,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/launcher.md` | launcher | starting sessions | kw: launcher, launch
 - `docs/ledger.md` | the rulings ledger | recording a ruling | kw: ledger, rulings
 - `docs/linux-support-plan.md` | Linux support plan (proposal): the platform seam, Linux backends, the guard's path review, CI, slices and owner questions | planning or building Linux support | kw: linux, platform, posix, cgroup, wsl, port
+- `docs/load-nodes.md` | load nodes: the registry and its repos opt-in, setting up a node, node.py list, status, run, follow and stop, choosing a machine, exit codes | sending heavy runs to another box | kw: load-node, node.py, loadnode, registry, offload
 - `docs/lock-api.md` | machine lock API | heavy runs | kw: lock, machine-lock
 - `docs/lock-mcp.md` | lock MCP server | lock from an agent | kw: lock-mcp, mcp
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
