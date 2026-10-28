@@ -117,13 +117,13 @@ class ScriptCommand(unittest.TestCase):
         with mock.patch.dict(os.environ, NoDefaultCurrentDirectoryInExePath=""):
             for name in ("gradlew.bat", "GRADLEW.BAT", "gradlew.bat.", "gradlew.bat . "):
                 with self.subTest(name=name):
-                    self.assertEqual(rm.script_command([name, "a"], env).lower(),
+                    self.assertEqual(str(rm.script_command([name, "a"], env)).lower(),
                                      (self.head() + ' a"').lower())
         with mock.patch.dict(os.environ, NoDefaultCurrentDirectoryInExePath="1"):
             cmd = ["gradlew.bat", "a"]      # CreateProcess skips the current folder: as given
             self.assertIs(rm.script_command(cmd, env), cmd)
             with mock.patch.dict(os.environ, PATH=self.tmp):    # its PATH, not the child's
-                self.assertEqual(rm.script_command(cmd, env).lower(),
+                self.assertEqual(str(rm.script_command(cmd, env)).lower(),
                                  (self.head() + ' a"').lower())
 
     def test_a_trailing_dot_or_space_after_a_folder_part_is_dropped(self):
