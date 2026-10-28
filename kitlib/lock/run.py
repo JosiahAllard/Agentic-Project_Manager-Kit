@@ -16,6 +16,9 @@ each pool its parent holds enough of and takes only the rest; one that needs mor
 its parent has, but some, is refused (exit 2): it would wait for the rest while its parent waits
 for it. A run that inherits everything takes no queue place; its commands run in a job nested
 in its parent's (still measured and ended as a tree).
+
+On Linux a job starts one command (kitlib.platform.linux.contain), so a Slot's job is a
+kitlib.lock.jobset JobSet there: a job of its own per command, read, pinned and ended as one.
 """
 import contextlib
 import ctypes
@@ -24,13 +27,17 @@ import json
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
+import sys
 import time
 
+import kitlib.platform
 from kitlib.lock import game
 from kitlib.lock import giveback as gbk
 from kitlib.lock import holds as hl
+from kitlib.lock import jobset
 from kitlib.lock import kinds as kinds_mod
 from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
@@ -40,6 +47,7 @@ from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED
                                EXIT_USAGE, LockError, Store, caller, iso, local_text,
                                new_id, parse_iso, read_record, remove, session_of, tree_role,
                                utc_now, write_json)
+from kitlib.platform.linux import process as procfs
 from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
 from kitlib.proc.job import Job, JobError, cores_text
 
@@ -56,7 +64,8 @@ END_ENV = "MACHINE_LOCK_END"            # how the run ended, for --on-release
 XLA_FRACTION_ENV, XLA_DEFAULT_FRACTION = "XLA_PYTHON_CLIENT_MEM_FRACTION", "0.3"
 KILL_HOW = ("interrupted", "cancelled", "error")
 # A run watches for console windows (kitlib.proc.winwatch) from its first command's start to
-# its release (Slot.watch_stop); False turns the monitor off.
+# its release (Slot.watch_stop); False turns the monitor off. Windows only: there are no console
+# windows to watch elsewhere.
 WATCH_WINDOWS = True
 # end_sparing, when it spares a shared daemon: how many passes it ends the job's other
 # processes in, how long it waits after each for them to leave the job, and how long after the
@@ -85,7 +94,11 @@ def filetime_now():
     GetSystemTimeAsFileTime reads it. _end_others compares process creation times
     (kitlib.proc.process times) with it. That a process created after this call never has an
     earlier creation time rests on Windows stamping creation times from this same system clock:
-    inferred from the documented clocks, not measured, and void if the clock is set back."""
+    inferred from the documented clocks, not measured, and void if the clock is set back.
+    On Linux: the seam's stamp in the Linux ctime's encoding, the boot and the clock ticks since
+    it (kitlib.platform.linux.process stamp_now)."""
+    if kitlib.platform.NAME == "linux":
+        return procfs.stamp_now()
     ft = win32.FILETIME()
     win32.K32.GetSystemTimeAsFileTime(ctypes.byref(ft))
     return ft.value()
@@ -99,9 +112,18 @@ def _ancestors():
         return set()
 
 
+def _own_pidns():
+    """This process's pid namespace (Linux), else None."""
+    return procfs.pidns() if kitlib.platform.NAME == "linux" else None
+
+
 def nest_check(store, value):
     """(parent, None) when MACHINE_LOCK_RUN's value names the run this process is inside (the
     named wrapper is one of its ancestors, alive, and its record says held), else (None, why).
+    On Linux a process in a job's own pid namespace (contain's W1) sees none of its ancestors past
+    that job's pid 1, so the wrapper is not one of them; there it is in the run when its record
+    lists this process's pid namespace in `jobns` (Slot.start records each job's before the
+    command runs) and the run's lock is held (store.run_mutex_held).
     parent = {id, pid, ctime, kind, shares, resource (None: it names none), has: {pool: slots it
     holds or inherited}, cores, gpus}.
     A record that is there but cannot be read (its wrapper's os.replace is swapping it) is read
@@ -112,7 +134,9 @@ def nest_check(store, value):
         if not m:
             return None, "malformed value"
         rid, pid, ct = m.group(1), int(m.group(2)), int(m.group(3))
-        if (pid, ct) not in _ancestors():
+        ancestor = (pid, ct) in _ancestors()
+        ns = None if ancestor else _own_pidns()
+        if not ancestor and ns is None:
             return None, "the named wrapper is not an ancestor of this run"
         path = store.path("active", rid + ".json")
         d, there = read_record(path, store.settings.queue_read_s)
@@ -124,7 +148,16 @@ def nest_check(store, value):
             return None, "the named run holds no lock"
         if (d.get("pid"), d.get("ctime")) != (pid, ct):
             return None, "the record names another wrapper"
-        if not process.alive(pid, ct):
+        if not ancestor:
+            jobns = d.get("jobns")
+            if not isinstance(jobns, list):
+                return None, "the named wrapper is not an ancestor of this run"
+            if ns not in jobns:
+                return None, ("the named wrapper is not an ancestor of this run, nor is this run "
+                              "in a job it started")
+            if store.run_mutex_held(rid) is not True:
+                return None, "the holder is dead"
+        elif not process.alive(pid, ct):
             return None, "the holder is dead"
         has = d.get("has") if isinstance(d.get("has"), dict) else {}
         return {"id": rid, "pid": pid, "ctime": ct, "kind": d.get("kind"),
@@ -155,10 +188,22 @@ def nest_need(parent, kind, need):
     return own, has, None
 
 
-def bg_ancestor(env):
-    """True when a background run's wrapper (MACHINE_LOCK_BG) is an ancestor of this process."""
+def bg_ancestor(env, store=None):
+    """True when a background run's wrapper (MACHINE_LOCK_BG) is an ancestor of this process.
+    On Linux, given the store, also when the wrapper's record names a pid namespace other than
+    this process's (a job's own, contain's W1): its ancestors cannot be seen from in there, so
+    it is taken as one (fail closed: the caller refuses a gpu lock)."""
     m = NEST_RE.match(env.get(BG_ENV) or "")
-    return bool(m) and (int(m.group(2)), int(m.group(3))) in _ancestors()
+    if not m:
+        return False
+    if (int(m.group(2)), int(m.group(3))) in _ancestors():
+        return True
+    ns = _own_pidns() if store is not None else None
+    if ns is None:
+        return False
+    d, _there = read_record(store.path("active", m.group(1) + ".json"))
+    theirs = d.get("pidns") if isinstance(d, dict) else None
+    return theirs is not None and theirs != ns
 
 
 def run_ancestors(detached, env):
@@ -298,6 +343,8 @@ class Run:
                     "ancestors": run_ancestors(detached, env), "role": run_role(detached, env),
                     "layout": lay.slot_key(L),
                     "log": getattr(log, "name", None) if log is not None else None}
+        if kitlib.platform.NAME == "linux":
+            self.rec["pidns"] = procfs.pidns()  # its pid is this namespace's (store.record_state)
         self.id = self.rec["id"]
         self.rel = "active/%s.json" % self.id
         self.log = log
@@ -705,6 +752,39 @@ def tell_daemons(store, rid, rec, done):
                           if d.get("pid") not in judged] + new
 
 
+def move_leftovers(store, rid, job):
+    """Before run rid's job is closed without a kill: unpins it (job.unpin), then moves what still
+    runs in it out of it (Job.leftovers, Linux: into a scope of its own, or, on W2, out of the
+    job's kill), so it runs on, unpinned, and the run's own scope ends. The unpin comes first:
+    on S2 and W2 the pin is each process's affinity, and the job's own unpin (at its close)
+    reaches only the processes still in it, so a moved one, and what it starts later, would keep
+    cores the lock has given to other runs. An unpin that fails is said and the move goes on. A
+    job with no leftovers (a Windows job object, which cannot let a process out) is neither
+    unpinned nor moved here. A move that fails is said and never fails the release: what is left
+    runs on in the job, unpinned, as on Windows. Returns the pids moved."""
+    move = getattr(job, "leftovers", None)
+    if move is None or not jobset.is_open(job):
+        return []
+    try:
+        job.unpin()
+    except Exception as e:                  # noqa: BLE001 - the move and the release go on
+        with contextlib.suppress(Exception):
+            store.say("WARNING: run %s: its job could not be unpinned before what it left was "
+                      "moved out: %s" % (rid, e))
+    try:
+        moved = list(move() or [])
+    except Exception as e:                  # noqa: BLE001 - the release goes on
+        with contextlib.suppress(Exception):
+            store.say("WARNING: run %s: what it left could not be moved out of its job: %s; it "
+                      "runs on there, unpinned" % (rid, e))
+        return []
+    if moved:
+        with contextlib.suppress(Exception):
+            store.say("run %s: left %s running, moved out of its job"
+                      % (rid, ", ".join("pid %d" % p for p in moved)))
+    return moved
+
+
 def end_sparing(store, rid, job, rec):
     """Ends every process in run rid's job but a build daemon another job's client uses or may
     use, with that daemon's tree: every daemon kitlib.proc.daemons stop leaves, so any MSBuild
@@ -736,7 +816,7 @@ def end_sparing(store, rid, job, rec):
     Each step catches Exception, so what can go up is a BaseException that is not an Exception,
     such as the KeyboardInterrupt of a second Ctrl+C. It goes up wherever it lands, the job then
     partly ended; the caller ends the whole job, or judges it again."""
-    if job is None or job.h is None:
+    if not jobset.is_open(job):
         return False
     try:
         found = daemons.find(job.pids())
@@ -870,7 +950,7 @@ class Launcher:
         return self.wait(self.start(cmd, **kw))
 
     def pids(self):
-        return self._slot.job.pids() if self._slot.job and self._slot.job.h else []
+        return self._slot.job.pids() if jobset.is_open(self._slot.job) else []
 
     def usage(self):
         return self._slot.usage_fields()
@@ -880,9 +960,26 @@ class Launcher:
             self._slot.end_tree()
 
 
+def note_jobns(run, then=None):
+    """A before_resume for a run's job start (Linux): when the job gives its command a pid
+    namespace of its own (p.pidns, contain's W1), the run's record lists it in `jobns` before
+    the command runs, so a run nested in it is seen to be (nest_check). Then then(p), if given.
+    A record that cannot be written is left: the nested run then takes its own lock."""
+    def before(p):
+        ns = getattr(p, "pidns", None)
+        if ns is not None and ns not in run.rec.setdefault("jobns", []):
+            run.rec["jobns"].append(ns)
+            with contextlib.suppress(OSError):
+                run.save()
+        if then is not None:
+            then(p)
+    return before
+
+
 class Slot:
     """A held run (book()). start/wait/release, or the launcher; a context manager that
-    releases (how "error" and the tree ended when the block raised, "interrupted" on Ctrl+C)."""
+    releases (how "error" and the tree ended when the block raised, "interrupted" on Ctrl+C).
+    A block that raised names its exception on the ended record (exception_fields)."""
 
     def __init__(self, store, run, L, own, parent, mutex, env, on_release_cmd, kind_entry,
                  shares, log=None, gate=False):
@@ -915,7 +1012,8 @@ class Slot:
                 mask = lay.cores_mask(L, run.rec["cores"])
         try:
             # A run with no cores of its own stays on its parent's: the job nests in the parent's.
-            self.job = Job(mask)
+            # Where a job starts one command (Linux), a job per command (kitlib.lock.jobset).
+            self.job = jobset.JobSet(mask, make=Job) if jobset.one_command() else Job(mask)
         except JobError as e:
             raise LockError(1, "could not start the command: %s" % e)
         if own["cpu"]:
@@ -964,8 +1062,11 @@ class Slot:
                 kw.setdefault(k, v)
         else:
             kw.setdefault("env", self.env)
-        if WATCH_WINDOWS and self.watch is None and self.windows is None:
+        if (WATCH_WINDOWS and kitlib.platform.NAME == "windows" and self.watch is None
+                and self.windows is None):
             self.watch_start()
+        if self.run is not None and kitlib.platform.NAME == "linux":
+            kw["before_resume"] = note_jobns(self.run, kw.get("before_resume"))
         pin = self.job.pin
         p = self.job.start(docker_cpu_env(cmd, bool(self.gpus)), **kw)
         self.started, self.tree_ended = True, False
@@ -1232,8 +1333,12 @@ class Slot:
                         raise
                 self.watch_stop()           # while the job can still say whose a window is
                 # A spared daemon's tree is still in the job: closing it with kill-on-close set,
-                # or TerminateJobObject, would end it.
-                self.job.end(kill=how in KILL_HOW and not self.spared)
+                # or TerminateJobObject, would end it. What runs on leaves the job where it can
+                # (Linux: move_leftovers).
+                kill = how in KILL_HOW and not self.spared
+                if not kill:
+                    move_leftovers(self.store, self.id, self.job)
+                self.job.end(kill=kill)
                 if self.started:
                     on_release(self.store, self.on_release_cmd, self.env, how, self.run)
         finally:
@@ -1249,9 +1354,25 @@ class Slot:
         if et is KeyboardInterrupt:
             self.release(130, "interrupted")
         elif et is not None:
+            if self.run is not None and not self.released:
+                self.run.rec.update(exception_fields(et, ev))
             self.release(1, "error")
         else:
             self.release()
+
+
+def exception_fields(et, ev):
+    """What a run's ended record says of the exception that ended its block `error` (how stays
+    error): `exception`, its type (a builtin's bare name, else module.qualname), and
+    `exception_text`, str(ev) cut to 200 characters and escaped to ASCII."""
+    mod = getattr(et, "__module__", None)
+    name = getattr(et, "__qualname__", None) or getattr(et, "__name__", "?")
+    try:
+        text = str(ev)[:200]
+    except Exception:                       # noqa: BLE001 - a __str__ that raises
+        text = "?"
+    return {"exception": name if mod in (None, "builtins") else "%s.%s" % (mod, name),
+            "exception_text": text.encode("ascii", "backslashreplace").decode("ascii")}
 
 
 def _relayout(store, L):
@@ -1416,7 +1537,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     shares = hl.shares_for(k, gpu_share)
     if parent and not any(own.values()) and (resource is None or parent.get("resource") == resource):
         return Slot(store, None, L, own, parent, None, env, on_release_cmd, k, shares, log, gate)
-    if own["gpu"] and bg_ancestor(env):
+    if own["gpu"] and bg_ancestor(env, store):
         raise LockError(EXIT_USAGE, "usage: a gpu lock inside a background run would pause that "
                                     "run; refused")
     # The id first, its run mutex held: an id another run has, live or ended, is never written
@@ -1537,25 +1658,155 @@ def bare_hint(cmd, err):
             "bare name: run it as .\\%s" % (name, here, NO_CWD_ENV, name))
 
 
+SCRIPT_EXTS = (".bat", ".cmd")
+# What cmd.exe expands or splits even inside double quotes: a .bat or .cmd cannot take it.
+CMD_UNSAFE = (("%", "`%`"), ('"', '`"`'), ("\n", "a line break"), ("\r", "a line break"))
+# What cmd.exe reads as syntax outside double quotes: an argument holding one is quoted.
+CMD_QUOTE = frozenset(" \t\x0b\x0c&|<>^(),;=")
+
+
+class ScriptArgError(OSError):
+    """A .bat or .cmd that cannot start as script_command would start it: an argument it cannot
+    take literally, or no cmd.exe under SystemRoot; an OSError, so the "could not start the
+    command" path reports it."""
+
+
+def comspec():
+    """The cmd.exe that runs a .bat or .cmd: %SystemRoot%\\System32\\cmd.exe, never ComSpec (another
+    shell would read the quoting otherwise) nor a bare cmd.exe (looked for in the current folder
+    first). Raises ScriptArgError when SystemRoot is unset or holds no such file."""
+    root = os.environ.get("SystemRoot")
+    exe = os.path.join(root, "System32", "cmd.exe") if root else None
+    if not exe or not os.path.isfile(exe):
+        raise ScriptArgError("cmd.exe not found under SystemRoot")
+    return exe
+
+
+def _path_dirs(path):
+    return [d.strip().strip('"') for d in (path or "").split(os.pathsep) if d.strip().strip('"')]
+
+
+def _create_process_dirs():
+    """Where CreateProcess looks for a bare name, PATH aside: this program's folder, the current
+    folder (unless NoDefaultCurrentDirectoryInExePath), then the system folders."""
+    root = os.environ.get("SystemRoot") or ""
+    dirs = [os.path.dirname(os.path.abspath(sys.executable))]
+    if not os.environ.get("NoDefaultCurrentDirectoryInExePath"):
+        dirs.append(os.getcwd())
+    if root:
+        dirs += [os.path.join(root, "System32"), os.path.join(root, "System"), root]
+    return dirs
+
+
+def _bare_script(name, path):
+    """The .bat or .cmd a bare name (no folder part) runs, or None (cmd as given). A name that
+    ends .bat or .cmd is the file CreateProcess would start, in its order: its folders (the
+    current one among them unless NoDefaultCurrentDirectoryInExePath), then this process's PATH;
+    else the first in `path`'s folders. An extensionless name is never looked for in the current
+    folder, and never in place of what CreateProcess starts today: one it finds as name.exe or
+    name.com (its folders, this process's PATH or `path`) stays as given, so a python.bat shim
+    ahead of python.exe on PATH leaves `python` alone; so does any other extension
+    (CreateProcess runs the name itself). Otherwise `path`'s folders in order, each over
+    PATHEXT's order; the first file there decides."""
+    ext = os.path.splitext(name)[1].lower()
+    if ext and ext not in SCRIPT_EXTS:
+        return None
+    if ext:
+        for d in _create_process_dirs() + _path_dirs(os.environ.get("PATH")):
+            if os.path.isfile(os.path.join(d, name)):
+                return os.path.join(d, name)
+        cands = [name]
+    else:
+        progs = (name + ".exe", name + ".com")
+        dirs = _create_process_dirs() + _path_dirs(os.environ.get("PATH")) + _path_dirs(path)
+        if any(os.path.isfile(os.path.join(d, n)) for d in dirs for n in progs):
+            return None
+        exts = (os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
+        cands = [name + e for e in exts if e]
+    for d in _path_dirs(path):
+        for c in cands:
+            p = os.path.join(d, c)
+            if os.path.isfile(p):
+                return p if os.path.splitext(p)[1].lower() in SCRIPT_EXTS else None
+    return None
+
+
+def _cmd_word(text, what):
+    """text as one word of the cmd.exe line script_command builds: as given when cmd reads no
+    syntax in it, else in double quotes (backslashes before the closing quote doubled, so the
+    program the script hands it to does not read an escaped quote). Raises ScriptArgError when
+    it holds what cmd expands or splits even inside quotes (CMD_UNSAFE)."""
+    for ch, shown in CMD_UNSAFE:
+        if ch in text:
+            raise ScriptArgError("%s holds %s; cmd.exe would expand or split a `%%`, `\"` or line "
+                                 "break, so a .bat or .cmd cannot take it literally" % (what, shown))
+    if text and not CMD_QUOTE.intersection(text):
+        return text
+    return '"%s%s"' % (text, "\\" * (len(text) - len(text.rstrip("\\"))))
+
+
+def script_command(cmd, env=None):
+    """What run_command starts for cmd (an argument list) on Windows: cmd as given, unless its
+    first item names a .bat or .cmd. A trailing dot or space after .bat or .cmd is dropped, as
+    Windows drops it (x.bat. starts x.bat). A name with a folder part (./gradlew) is looked up
+    only beside itself, as shutil.which does: itself when it ends in a PATHEXT extension, else
+    name+each PATHEXT extension (CreateProcess tries the name itself, WinError 193 for a shell
+    script, and appends only .exe). A bare name: _bare_script (x.bat where CreateProcess would
+    find it, the current folder included; else on env's PATH). A .bat or .cmd, so
+    found or named, starts as `"<SystemRoot>\\System32\\cmd.exe" /d /v:off /s /c ""<its full
+    path>" <args>"` (comspec), a string the caller starts with shell=False: cmd.exe is the
+    process the run's job takes, and the batch's children inherit the job. /v:off: delayed
+    expansion set in the registry would expand !VAR! in an argument. CreateProcess's own start of
+    a .bat quotes for a program, not for cmd, so an unquoted & or a % in an argument there runs
+    as cmd syntax; here each argument goes through _cmd_word (ScriptArgError for a %, " or line
+    break). Anything else (an .exe or .com, no match, a string cmd) and every other platform:
+    cmd itself."""
+    if kitlib.platform.NAME != "windows" or not isinstance(cmd, (list, tuple)) or not cmd:
+        return cmd
+    name = str(cmd[0])
+    trimmed = name.rstrip(" .")        # Windows drops them: CreateProcess starts x.bat for x.bat.
+    if os.path.splitext(trimmed)[1].lower() in SCRIPT_EXTS:
+        name = trimmed
+    path = (os.environ if env is None else env).get("PATH")
+    if os.path.dirname(name):
+        found = shutil.which(name, path=path)       # a folder part: beside itself only
+    else:
+        found = _bare_script(name, path)
+    if not found or os.path.splitext(found)[1].lower() not in SCRIPT_EXTS:
+        return cmd
+    root, fext = os.path.splitext(os.path.abspath(found))
+    bat = root + fext.lower()           # which's PATHEXT case (.BAT): the file's own is moot
+    base = os.path.basename(bat)
+    if "%" in bat:                      # a path holds no " or line break
+        raise ScriptArgError("the path of %s holds `%%`; cmd.exe would expand it, so it cannot "
+                             "start %s" % (base, bat))
+    words = ['"%s"' % bat] + [_cmd_word(str(a), "argument %d of %s" % (i, base))
+                              for i, a in enumerate(cmd[1:], 1)]
+    return '"%s" /d /v:off /s /c "%s"' % (comspec(), " ".join(words))
+
+
 def run_command(cmd, kind, repo, slug, **kw):
     """`machine_lock.py run`: book, run cmd in the run's job, release, then say the run's window
     report (Slot.window_lines). Returns the command's exit code (130 on Ctrl+C, 1 when it could
     not start or stop cancelled it). Raises LockError when the run is refused or gives up
-    waiting. A bare bash with no Git Bash to run it (kitlib.proc.bash) is refused before the run
-    books: 1, no record. The command starts in this process's folder; a bare name there that does
-    not start is said with the .\\<name> form that runs (bare_hint)."""
+    waiting. A bare bash with no Git Bash to run it (kitlib.proc.bash), or an argument a .bat or
+    .cmd cannot take (script_command), is refused before the run books: 1, no record. The command
+    starts in this process's folder; a bare name there that does not start is said with the
+    .\\<name> form that runs (bare_hint). A .bat or .cmd, named or found for a name with no
+    extension, starts through cmd.exe (script_command); the record keeps cmd as given."""
     store = kw.get("store") or Store()
     kw["store"] = store
     try:
         bash.resolve(cmd, False, kw.get("env"))
-    except bash.BareBashError as e:
+        start = script_command(cmd, kw.get("env"))
+    except (bash.BareBashError, ScriptArgError) as e:
         store.say("could not start the command: %s" % e)
         return 1
     s = book(kind, repo, slug, cmd=cmd, **kw)
     code, how = 1, "not started"
     try:
         try:
-            p = s.start(cmd, give_back=True)
+            p = s.start(start, give_back=True)
         except OSError as e:
             store.say("could not start the command: %s%s" % (e, bare_hint(cmd, e)))
             return 1

@@ -3,6 +3,7 @@ runs, prune, the refresh pid file and the behind lines (docs/plugin-source.md)."
 import datetime
 import json
 import os
+import time
 import unittest
 from unittest import mock
 
@@ -53,6 +54,67 @@ class ExportTest(Base):
         self.assertEqual(files, ['.claude-plugin/marketplace.json', '.claude-plugin/plugin.json',
                                  P.MARKER, 'README.md', 'tools/x.py'])
         self.assertFalse(os.path.exists(folder + '.tmp'))
+
+    def test_the_kits_tests_folder_is_left_out(self):
+        """Half an export was the kit's tests/, which nothing reads from an export (a gate runs
+        tools/kit_tests.py from its own checkout); a tests folder deeper down stays."""
+        r = self.k.repo
+        r.write('tests/test_x.py', 'x = 1\n')
+        r.write('tests/sub/data.txt', 'y\n')
+        r.write('docs/tests/notes.md', 'kept\n')
+        r.commit('tests', 'tests/test_x.py', 'tests/sub/data.txt', 'docs/tests/notes.md')
+        r.git('push', '-q', 'origin', 'main')
+        sha = P.remote_main(self.k.kit, 'origin')
+        folder, _v = P.export(self.k.kit, sha, self.k.root, NOW)
+        self.assertFalse(os.path.exists(os.path.join(folder, 'tests')))
+        self.assertTrue(os.path.isfile(os.path.join(folder, 'docs', 'tests', 'notes.md')))
+        self.assertTrue(os.path.isfile(os.path.join(folder, 'tools', 'x.py')))
+        self.assertNotIn('tests/', json.dumps(P.read_marker(folder).get('skipped') or []))
+
+    def test_each_hooks_json_holds_the_running_platforms_hooks_file(self):
+        """The renderers write hooks/hooks.json (Windows) and hooks/hooks.linux.json beside it; the
+        plugin names hooks.json, so a Linux export writes the Linux file's bytes there."""
+        r = self.k.repo
+        files = {'hosts/a/shell/hooks/hooks.json': 'windows', 'hosts/a/shell/hooks/hooks.linux.json': 'linux',
+                 'hosts/b/shell/hooks/hooks.json': 'only windows'}
+        for rel, text in files.items():
+            r.write(rel, text)
+        r.commit('hooks', *files)
+        r.git('push', '-q', 'origin', 'main')
+        sha = P.remote_main(self.k.kit, 'origin')
+
+        def read(folder, rel):
+            with open(os.path.join(folder, *rel.split('/')), encoding='utf-8') as fh:
+                return fh.read()
+        for platform, want in (('windows', 'windows'), ('linux', 'linux')):
+            with self.subTest(platform):
+                root = os.path.join(self.k.root, platform)
+                folder, _v = P.export(self.k.kit, sha, root, NOW, platform=platform)
+                self.assertEqual(read(folder, 'hosts/a/shell/hooks/hooks.json'), want)
+                self.assertEqual(read(folder, 'hosts/a/shell/hooks/hooks.linux.json'), 'linux')
+                self.assertEqual(read(folder, 'hosts/b/shell/hooks/hooks.json'), 'only windows')
+        self.assertEqual(P.platform_manifests(list(files), 'macos'), {})
+
+    def test_the_mcp_and_plugin_manifests_hold_the_running_platforms_file(self):
+        """Codex's mcp.json and Claude's plugin.json have a `.linux.json` beside them (their MCP
+        servers run python3 there); a Linux export writes those bytes in their place, plugin.json
+        still stamped, and a Windows export keeps the commit's own."""
+        r = self.k.repo
+        linux_manifest = MANIFEST.replace(b'"0.1.0"', b'"0.1.0", "linux": 1')
+        r.write('hosts/a/shell/mcp.json', 'windows')
+        r.write('hosts/a/shell/mcp.linux.json', 'linux')
+        with open(r.path('.claude-plugin', 'plugin.linux.json'), 'wb') as fh:
+            fh.write(linux_manifest)
+        r.commit('mcp', 'hosts/a/shell/mcp.json', 'hosts/a/shell/mcp.linux.json', '.claude-plugin/plugin.linux.json')
+        r.git('push', '-q', 'origin', 'main')
+        sha = P.remote_main(self.k.kit, 'origin')
+        for platform, mcp, manifest in (('windows', b'windows', MANIFEST), ('linux', b'linux', linux_manifest)):
+            with self.subTest(platform):
+                folder, version = P.export(self.k.kit, sha, os.path.join(self.k.root, platform), NOW, platform=platform)
+                with open(os.path.join(folder, 'hosts', 'a', 'shell', 'mcp.json'), 'rb') as fh:
+                    self.assertEqual(fh.read(), mcp)
+                with open(os.path.join(folder, '.claude-plugin', 'plugin.json'), 'rb') as fh:
+                    self.assertEqual(fh.read(), manifest.replace(b'"0.1.0"', ('"%s"' % version).encode()))
 
     def test_a_main_the_kit_has_not_fetched_is_refused(self):
         sha = self.k.push_from_clone()
@@ -208,6 +270,58 @@ class FolderRunTest(Base):
         self.assertEqual([c[0][2] for c in proc.calls], ['remove', 'add'])
         self.assertEqual(P.read_state(self.k.root)['folders'][two]['step'],
                          'plugin marketplace add %s' % self.k.root)
+
+
+class CachePruneAfterRefreshTest(Base):
+    """A refresh that went through prunes each account's old plugin cache versions, every guard of
+    prune_caches kept (the installed one, the newest, one replaced in the last day, one in use)."""
+
+    def account(self, versions, installed, name='.claude', seed=True):
+        (f,) = self.k.folders(name)
+        cache = P.cache_dir(f)
+        old = time.time() - 30 * 86400
+        for i, v in enumerate(versions):
+            os.makedirs(os.path.join(cache, v, 'tools'))
+            os.utime(os.path.join(cache, v), (old + i * 60, old + i * 60))
+        with open(os.path.join(f, 'plugins', 'installed_plugins.json'), 'w', encoding='utf-8') as fh:
+            json.dump({'version': 2, 'plugins': {P.PLUGIN_ID: [
+                {'scope': 'user', 'installPath': os.path.join(cache, installed)}]}}, fh)
+        if seed:
+            self.k.seed_migrated([f])
+        return f, cache
+
+    def reads(self, texts=()):
+        return lambda: P.InUse([t.lower() for t in texts], set(), [])
+
+    def test_apply_removes_the_unused_old_versions(self):
+        f, cache = self.account(['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3', '0.1.0-main.4'],
+                                installed='0.1.0-main.3')
+        named = 'node %s' % os.path.join(cache, '0.1.0-main.2', 'x.js')
+        self.assertEqual(self.refresh([f], in_use=self.reads([named])), 0, self.lines)
+        self.assertEqual(sorted(os.listdir(cache)), ['0.1.0-main.2', '0.1.0-main.3', '0.1.0-main.4'])
+        self.assertIn('pruned cache %s' % os.path.join(cache, '0.1.0-main.1'), self.lines)
+
+    def test_a_refused_folder_keeps_its_old_versions_while_the_updated_one_is_pruned(self):
+        versions = ['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3']
+        a, a_cache = self.account(versions, installed='0.1.0-main.3')
+        b, b_cache = self.account(versions, installed='0.1.0-main.3', name='.claude-b', seed=False)
+        self.assertEqual(self.refresh([a, b], in_use=self.reads()), 1, self.lines)   # b refused
+        self.assertIn('REFUSED %s: not migrated to the export yet' % b, '\n'.join(self.lines))
+        self.assertEqual(sorted(os.listdir(a_cache)), ['0.1.0-main.3'])    # installed and newest
+        self.assertEqual(sorted(os.listdir(b_cache)), versions)
+        self.assertFalse([l for l in self.lines if l.startswith('pruned cache') and b_cache in l])
+
+    def test_nothing_is_pruned_when_a_folder_failed_on_a_migrate_or_unread(self):
+        f, cache = self.account(['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3'],
+                                installed='0.1.0-main.3')
+        self.assertEqual(self.refresh([f], FakeProc(fail={('<default>', 'update'): 1}),
+                                      in_use=self.reads()), 1)
+        self.assertEqual(len(os.listdir(cache)), 3)
+        self.assertEqual(self.refresh([f], migrate=True, in_use=self.reads()), 0, self.lines)
+        self.assertEqual(len(os.listdir(cache)), 3)
+        self.assertEqual(self.refresh([f]), 0, self.lines)              # in use not read: all kept
+        self.assertEqual(len(os.listdir(cache)), 3)
+        self.assertFalse([l for l in self.lines if l.startswith('pruned cache')])
 
 
 class PruneTest(Base):

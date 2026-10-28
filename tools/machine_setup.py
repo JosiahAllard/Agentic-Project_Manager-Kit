@@ -20,8 +20,8 @@ It writes nothing into any repository: a repository works with the kit with noth
   machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--apply]
                                                        the committed repo setup instead: writes
                                                        .kit.json, the ignore lines, a starter
-                                                       docs/INDEX.md (and with --stubs, --stack
-                                                       their files) into the repository PATH
+                                                       docs/INDEX.md (and with --stack
+                                                       its files) into the repository PATH
                                                        (docs/install.md "Committed setup (--repo)")
   machine_setup.py --managed-settings [--home DIR] [--kit DIR] [--apply]
                                                        write Claude Code's machine-wide managed
@@ -38,6 +38,12 @@ It writes nothing into any repository: a repository works with the kit with noth
                                                        PATH instead; --apply needs an elevated
                                                        terminal (docs/machine-setup.md "PM repo
                                                        pointer")
+  machine_setup.py --delegation [--kit DIR] [--apply]  Linux, the one root step (run with sudo): the
+                                                       systemd drop-in that delegates the cgroup
+                                                       controllers to every user's manager (strong
+                                                       containment, S1) and /etc/pm-kit/kit-user,
+                                                       the box's one kit user, instead
+                                                       (docs/machine-setup.md "Linux")
   machine-wide options: --config-dir DIR (repeatable; default: the plugin's account folders, ~/.claude,
                              every ~/.claude-* folder but the machine config's own and each folder
                              of the launcher's accounts and orgs; with --old-kit, the first two)
@@ -63,7 +69,7 @@ It writes nothing into any repository: a repository works with the kit with noth
            --kit DIR (default: the checkout this file is in; in a plugin export, the main
                              checkout its marker records, refused when that is gone)
   repo options (--repo): --agent-email EMAIL (required) --main-branch NAME (default main)
-           --repo-name NAME --stack NAME --stubs --pm-data DIR [--private-remote URL]
+           --repo-name NAME --stack NAME --pm-data DIR [--private-remote URL]
   --fresh is the default mode's old name, still accepted. Every mode re-points settings hooks that
   run a retired kit hook script to boot/hook.py.
 
@@ -81,12 +87,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kitlib import machinesetup                                     # noqa: E402
 from kitlib import pluginsource                                     # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
+from kitlib.machinesetup import delegation as mdelegation           # noqa: E402
 from kitlib.machinesetup import owner as mowner                     # noqa: E402
 from kitlib.machinesetup import pointer as mpointer                 # noqa: E402
 from kitlib.machinesetup import repo as mrepo                       # noqa: E402
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'stubs', 'pm_data', 'private_remote')
+REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'pm_data', 'private_remote')
 MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'no_sweep_task',
                 'no_worktree_sweep', 'shortcut', 'procwatch', 'procwatch_kill',
                 'desktop', 'home')
@@ -104,6 +111,9 @@ def parser():
                            "kit's template instead (--apply needs an elevated terminal)")
     mode.add_argument('--pm-repo', help="set the PM-repo pointer in the registry to this PM repository's "
                                         'work tree instead (--apply needs an elevated terminal)')
+    mode.add_argument('--delegation', action='store_true',
+                      help='Linux: the root step (cgroup delegation and the kit-user marker) instead; '
+                           '--apply runs with sudo')
     p.add_argument('--owner-email', default=None, help="the owner's email (the machine config; with "
                    '--repo, .kit.json "owner".email)')
     p.add_argument('--pm-settings', default=None,
@@ -128,7 +138,6 @@ def parser():
     p.add_argument('--main-branch', default=None, help='--repo: the main branch (default main)')
     p.add_argument('--repo-name', default=None, help="--repo: the repository's short name")
     p.add_argument('--stack', default=None, help='--repo: a stack template (templates/stacks/<name>)')
-    p.add_argument('--stubs', action='store_true', help='--repo: write the kit tool stubs')
     p.add_argument('--pm-data', default=None, help="--repo: make the kit's PM data branch here after")
     p.add_argument('--private-remote', default=None, help='--repo, with --pm-data: its private remote')
     p.add_argument('--apply', action='store_true')
@@ -168,6 +177,13 @@ def main(argv=None):
                          % given[0].replace('_', '-'))
         code, _ = machinesetup.run_pointer(mpointer.PointerContext(a.pm_repo, a.kit), apply=a.apply, out=out)
         return code
+    if a.delegation:
+        given = [n for n in REPO_ONLY + MACHINE_ONLY + ('owner_email',) if getattr(a, n) not in (None, False)]
+        if given:
+            return usage('--%s does not go with --delegation (it takes --kit and --apply)'
+                         % given[0].replace('_', '-'))
+        code, _ = machinesetup.run_delegation(mdelegation.DelegationContext(a.kit), apply=a.apply, out=out)
+        return code
     if a.repo is not None:
         given = [n for n in MACHINE_ONLY if getattr(a, n) not in (None, False)]
         if given:
@@ -175,7 +191,7 @@ def main(argv=None):
         ctx = mrepo.RepoContext(a.repo, a.owner_email, a.agent_email, a.kit,
                                 main_branch=a.main_branch or 'main', repo_name=a.repo_name or '',
                                 stack=a.stack or '', pm_data=a.pm_data or '',
-                                private_remote=a.private_remote or '', stubs=a.stubs)
+                                private_remote=a.private_remote or '')
         code, _ = machinesetup.run_repo(ctx, apply=a.apply, out=out)
         return code
     given = [n for n in REPO_ONLY if getattr(a, n) not in (None, False)]

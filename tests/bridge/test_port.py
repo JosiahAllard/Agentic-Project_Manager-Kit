@@ -7,10 +7,11 @@ import os
 from pathlib import Path
 import unittest
 
+from kitlib.host import registry as host_registry
 from optional.bridge import port, registry
 from optional.bridge.core.contracts import AdapterDescription, Capability
 from optional.bridge.core.messages import BeforeWriteError, DeliveryError
-from tests.bridge.registered import codex_unregistered
+from tests.bridge.registered import codex_unlisted, write_peers
 from tests.host.test_leaks import occurrences
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,7 +81,7 @@ class Layout(unittest.TestCase):
     def test_no_host_shell_mentions_the_bridge(self):
         # The shells (hosts.json "shell") and Claude's root manifest: what a host loads. Adapter code
         # may use the word for other things (Codex's workflow names a 'bridge' dimension).
-        shells = [ROOT / '.claude-plugin'] + [ROOT / h.shell for h in registry.host_registry.load().values()]
+        shells = [ROOT / '.claude-plugin'] + [ROOT / h.shell for h in host_registry.load().values()]
         found = []
         for shell in shells:
             for path in shell.rglob('*'):
@@ -102,11 +103,37 @@ def halves_on_disk():
 
 
 class Registry(unittest.TestCase):
-    def test_served_hosts_are_registered_hosts_with_a_half(self):
+    def test_served_hosts_are_listed_peers_with_a_half(self):
         names = registry.names()
-        self.assertTrue(set(names) <= set(registry.host_registry.names()))
-        self.assertEqual(set(names), {n for n in registry.host_registry.names() if registry.has_half(n)})
+        peers, _ = registry.read_peers()
+        self.assertTrue(set(names) <= set(peers))
+        self.assertEqual(set(names), {n for n in peers if registry.has_half(n)})
         self.assertEqual(set(registry.installed()), set(names))
+
+    def test_the_bridge_serves_exactly_claude_and_codex(self):
+        """peers.json, not hosts.json, says what the bridge serves; today that is these two."""
+        self.assertEqual(registry.names(), ('claude', 'codex'))
+        self.assertEqual(registry.read_peers(), (('claude', 'codex'), (('codex', 'codex'),)))
+
+    def test_a_malformed_peers_json_is_refused(self):
+        import tempfile
+        bad = ('{broken', '[]', '{"peers": ["a"]}', '{"peers": ["a"], "refused": [], "x": 1}',
+               '{"peers": [], "refused": []}', '{"peers": ["a", "a"], "refused": []}',
+               '{"peers": ["A"], "refused": []}', '{"peers": ["a"], "refused": [["a", "b"]]}',
+               '{"peers": ["a"], "refused": [["a"]]}', '{"peers": ["a"], "refused": [["a", "a"], ["a", "a"]]}',
+               '{"peers": "a", "refused": []}', '{"peers": ["a"], "refused": ["aa"]}',
+               '{"peers": [["a"]], "refused": []}', '{"peers": ["a"], "refused": [[["a"], "a"]]}')
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'peers.json')
+            for text in bad:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(text)
+                with self.subTest(text=text), self.assertRaisesRegex(DeliveryError, 'invalid-bridge-peers'):
+                    registry.names(path)
+            with self.assertRaisesRegex(DeliveryError, 'invalid-bridge-peers'):
+                registry.read_peers(os.path.join(folder, 'missing.json'))
+            write_peers(path, ['claude'])
+            self.assertEqual(registry.names(path), ('claude',))
 
     def test_every_half_on_disk_exports_a_valid_host_of_its_name(self):
         import importlib
@@ -120,15 +147,14 @@ class Registry(unittest.TestCase):
             registry.half('no-such-host')
 
     def test_codex_is_served_with_its_channel_variable(self):
-        """hosts.json registers Codex (plan step 9), so its half is served for real."""
-        self.assertIn('codex', registry.host_registry.names())
+        """peers.json lists Codex, so its half is served for real."""
         self.assertIn('codex', registry.names())
         self.assertEqual(registry.half('codex').name, 'codex')
         self.assertIn('codex', registry.installed())
         self.assertIn('CODEX_APP_TOOLS_PIPE_PATH', registry.channel_env())
 
-    def test_without_its_hosts_json_entry_codex_is_refused(self):
-        with codex_unregistered():
+    def test_without_its_peers_json_entry_codex_is_refused(self):
+        with codex_unlisted():
             self.assertNotIn('codex', registry.names())
             with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
                 registry.half('codex')
@@ -164,15 +190,26 @@ class Registry(unittest.TestCase):
 
 
 class StrayHalves(unittest.TestCase):
-    """The MCP frontend reads only registered halves, as data: a stray or broken folder under
+    """The MCP frontend reads only listed halves, as data: a stray or broken folder under
     hosts/ is never imported and cannot take channel nomination down."""
 
-    def kit(self, folder, registered):
+    def kit(self, folder, listed):
         kit = Path(folder)
-        data = json.loads(Path(registry.host_registry.PATH).read_text(encoding='utf-8'))
-        self.assertTrue(set(registered) <= set(data))       # hosts the kit's hosts.json registers
-        (kit / 'hosts.json').write_text(json.dumps(data), encoding='utf-8')
-        return kit, str(kit / 'hosts.json')
+        peers, refused = registry.read_peers()
+        self.assertTrue(set(listed) <= set(peers))          # peers the kit's peers.json lists
+        return kit, write_peers(str(kit / 'peers.json'), peers, refused)
+
+    def test_a_listed_peer_need_not_be_a_kit_host(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            kit = Path(folder)
+            self.assertNotIn('newpeer', host_registry.names())
+            peers = write_peers(str(kit / 'peers.json'), ['claude', 'newpeer'])
+            schema = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a'],
+                      'channel_env': ['NEW_PIPE']}
+            self.half(kit, 'newpeer', json.dumps(schema))
+            self.assertEqual(registry.names(peers, kit), ('newpeer',))
+            self.assertEqual(registry.channel_env(peers, kit), ('NEW_PIPE',))
 
     def half(self, kit, module, schema, init='HOST = None\n'):
         folder = kit / 'optional' / 'bridge' / 'hosts' / module
@@ -183,36 +220,36 @@ class StrayHalves(unittest.TestCase):
     def test_a_stray_folder_is_neither_imported_nor_read(self):
         import tempfile
         with tempfile.TemporaryDirectory() as folder:
-            kit, hosts = self.kit(folder, ['codex'])
+            kit, peers = self.kit(folder, ['codex'])
             good = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a'],
                     'channel_env': ['GOOD_PIPE']}
             self.half(kit, 'codex', json.dumps(good))
             marker = kit / 'imported'
             self.half(kit, 'stray', '{broken', init='open(%r, "w").close()\nraise SystemExit(9)\n' % str(marker))
-            self.assertEqual(registry.channel_env(hosts, kit), ('GOOD_PIPE',))
-            self.assertNotIn('stray', registry.names(hosts, kit))
+            self.assertEqual(registry.channel_env(peers, kit), ('GOOD_PIPE',))
+            self.assertNotIn('stray', registry.names(peers, kit))
             self.assertFalse(marker.exists())
 
     def test_a_registered_half_with_a_broken_profile_nominates_nothing(self):
         import tempfile
         with tempfile.TemporaryDirectory() as folder:
-            kit, hosts = self.kit(folder, ['codex'])
+            kit, peers = self.kit(folder, ['codex'])
             self.half(kit, 'codex', '{broken')
-            first = next(iter(json.loads(Path(hosts).read_text(encoding='utf-8'))))
+            first = registry.read_peers(peers)[0][0]
             good = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a'],
                     'channel_env': ['OTHER_PIPE']}
             self.half(kit, registry.module_name(first), json.dumps(good))
-            self.assertEqual(registry.channel_env(hosts, kit), ('OTHER_PIPE',))
+            self.assertEqual(registry.channel_env(peers, kit), ('OTHER_PIPE',))
 
     def test_channel_variables_differing_only_by_case_are_one(self):
         import tempfile
         with tempfile.TemporaryDirectory() as folder:
-            kit, hosts = self.kit(folder, ['codex'])
-            first = next(iter(json.loads(Path(hosts).read_text(encoding='utf-8'))))
+            kit, peers = self.kit(folder, ['codex'])
+            first = registry.read_peers(peers)[0][0]
             schema = {'required': ['a'], 'optional': [], 'directories': [], 'names': ['a']}
             self.half(kit, registry.module_name(first), json.dumps({**schema, 'channel_env': ['APP_PIPE']}))
             self.half(kit, 'codex', json.dumps({**schema, 'channel_env': ['app_pipe', 'OTHER']}))
-            self.assertEqual(registry.channel_env(hosts, kit), ('APP_PIPE', 'OTHER'))
+            self.assertEqual(registry.channel_env(peers, kit), ('APP_PIPE', 'OTHER'))
 
     def test_reading_channel_variables_imports_no_half(self):
         import subprocess
@@ -320,7 +357,7 @@ class Assembly(unittest.TestCase):
         providers, deliveries = factories(config)
         self.assertEqual(set(providers), {'codex'})
         self.assertEqual(set(deliveries), {'codex'})
-        with codex_unregistered(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+        with codex_unlisted(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
             factories(config)
 
     def test_a_hook_frame_goes_to_the_one_provider_with_a_sink(self):
@@ -413,7 +450,7 @@ class ServiceAttests(unittest.TestCase):
 
 
 class UnregisteredProfiles(unittest.TestCase):
-    """A profile for a host hosts.json does not register is refused before its half is read."""
+    """A profile for a peer peers.json does not list is refused before its half is read."""
 
     def test_an_unregistered_kind_is_refused_without_reading_its_profile(self):
         from unittest import mock
@@ -428,7 +465,7 @@ class UnregisteredProfiles(unittest.TestCase):
         with mock.patch.object(registry, 'profile_path', side_effect=recorded):
             with self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
                 runtime._profiles({'unregistered-host': {}}, paths.KIT)
-            with codex_unregistered(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+            with codex_unlisted(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
                 runtime._profiles({'codex': {'profile_root': str(ROOT)}}, paths.KIT)
         self.assertEqual(read, [])
 
@@ -466,7 +503,7 @@ class UnregisteredProfiles(unittest.TestCase):
             # The image check is Win32 evidence (it refuses a link such as a POSIX python3);
             # the refusal under test comes after it, from the host registry.
             with mock.patch('optional.bridge.win.runtime.native_hosts', return_value=images), \
-                    codex_unregistered(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
+                    codex_unlisted(), self.assertRaisesRegex(DeliveryError, 'native-provider-unavailable'):
                 install.prepare(doc, Path(folder) / 'prepared')
             self.assertFalse((Path(folder) / 'prepared').exists())
 

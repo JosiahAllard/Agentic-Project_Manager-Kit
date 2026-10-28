@@ -19,9 +19,10 @@ On Linux the mutexes are flocks (kitlib.platform.linux.locks), on files in the s
     runs/<run>.alive       a run's liveness lock (Store.run_mutex), removed when it is let go
 
 Store(root) is the machine's store when root is None; any other root is a scratch store with
-mutexes of its own (tests). On Linux the machine's store has no root yet (slice 9 of
-docs/linux-support-plan.md section 8), so Store() raises PlatformUnsupported there. Timings live in Settings, so a test shortens them by parameter, not
-by environment (the old MACHINE_LOCK_TEST_* seams). Nothing here prints: `say` is the caller's.
+mutexes of its own (tests). Its root is ~/.claude/machine-lock under the profile folder the
+system reports (profile_dir): Windows's, or on Linux the password database's (slice 9 of
+docs/linux-support-plan.md section 8), never $HOME or USERPROFILE. Timings live in Settings, so a
+test shortens them by parameter, not by environment (the old MACHINE_LOCK_TEST_* seams). Nothing here prints: `say` is the caller's.
 
 Under the kit's tests the machine's store is fenced (fence; docs/test-tools.md "Home fence"): it
 can be built and its root named, but Store.path and Store.mutex_name raise HomeFenced, so nothing
@@ -44,6 +45,8 @@ import kitlib.platform
 from kitlib.host import registry
 from kitlib.platform import PlatformUnsupported
 from kitlib.platform.linux import locks
+from kitlib.platform.linux import paths as linux_paths
+from kitlib.platform.linux import process as procfs
 from kitlib.proc import process
 from kitlib.proc import win32
 from kitlib.proc.win32 import K32, ADV
@@ -95,14 +98,17 @@ class Settings:
 
 
 def profile_dir():
-    """The user's profile folder from Windows (FOLDERID_Profile), never from the environment: a
-    caller's USERPROFILE or HOME cannot move the store. Off Windows: PlatformUnsupported (the
-    Linux profile folder comes with slice 9 of docs/linux-support-plan.md section 8)."""
+    """The user's profile folder from Windows (FOLDERID_Profile), or on Linux from the password
+    database (kitlib.platform.linux.paths.profile), never from the environment: a caller's
+    USERPROFILE or HOME cannot move the store. OSError when the system does not answer; on any
+    other platform PlatformUnsupported."""
+    if kitlib.platform.NAME == "linux":
+        return linux_paths.profile()
     if kitlib.platform.NAME != "windows":
         raise PlatformUnsupported(
-            "the machine's lock store has no root on %s yet: its profile folder comes from Windows "
-            "(SHGetKnownFolderPath) until slice 9 of docs/linux-support-plan.md section 8; a "
-            "scratch store is Store(root=<a folder>)" % kitlib.platform.NAME)
+            "the machine's lock store has no root on %s: its profile folder comes from Windows "
+            "(SHGetKnownFolderPath) or Linux's password database; a scratch store is "
+            "Store(root=<a folder>)" % kitlib.platform.NAME)
     class GUID(ctypes.Structure):
         _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD),
                     ("d4", ctypes.c_ubyte * 8)]
@@ -421,13 +427,27 @@ def public(d):
 
 
 # ------------------------------------------------------------------ the run mutex
+def record_state(d):
+    """wrapper_state of record or entry d's pid and ctime, but None (cannot tell) on Linux when d
+    names a pid namespace (`pidns`, Run's record) other than this process's: a pid is a number
+    in one namespace, and a wrapper inside a job's namespace (contain's W1) or a checker inside
+    one sees the other's pids as other processes'."""
+    if kitlib.platform.NAME == "linux":
+        ns = d.get("pidns")
+        if ns is not None and ns != procfs.pidns():
+            return None
+    return wrapper_state(d.get("pid", 0), d.get("ctime"))
+
+
 def wrapper_state(pid, ctime):
     """Is the wrapper (pid, ctime) of a run record live? True when pid names a running process
     created at ctime. False when it surely names none: no such pid, one that has exited, or one
     created at another time. None when that cannot be told: the process cannot be opened (another
     user's or a protected one; a reused pid can name one, such as a SYSTEM svchost, and
     process.alive then says alive without its creation time), or ctime is missing. A pid without
-    a matching creation time is never proof of life (run_live then asks the run mutex)."""
+    a matching creation time is never proof of life (run_live then asks the run mutex).
+    On Linux the same three answers from /proc (kitlib.platform.linux.process identity): an ended
+    process is a zombie, and None is a stat or boot id that cannot be read."""
     try:
         pid = int(pid)
         ctime = None if ctime is None else int(ctime)
@@ -435,6 +455,14 @@ def wrapper_state(pid, ctime):
         return None
     if pid <= 0:
         return False
+    if kitlib.platform.NAME == "linux":
+        try:
+            seen = procfs.identity(pid)
+        except (OSError, ValueError):
+            return None
+        if seen is None or seen[1]:
+            return False
+        return None if ctime is None else seen[0] == ctime
     h = K32.OpenProcess(win32.QUERY_LIMITED | win32.SYNCHRONIZE, False, pid)
     if not h:
         return False if ctypes.get_last_error() == win32.ERROR_INVALID_PARAMETER else None
@@ -493,7 +521,7 @@ class RunMutex:
 
 # ------------------------------------------------------------------ the store
 class Store:
-    """One lock store. root None: the machine's (~/.claude/machine-lock, from Windows);
+    """One lock store. root None: the machine's (~/.claude/machine-lock, profile_dir's);
     else a scratch store whose mutexes are named after its path. say(text): where the library's
     progress lines go (default: nowhere; the CLI prints them). Under the kit's tests the machine's
     store gives no file path and names no mutex: path and mutex_name raise HomeFenced (fence)."""
@@ -501,7 +529,7 @@ class Store:
     def __init__(self, root=None, settings=None, say=None, hardware=None, kinds_path=None):
         try:
             real = real_root()
-        except PlatformUnsupported:     # Linux until slice 9: a given root is a scratch store
+        except PlatformUnsupported:     # no backend here: a given root is a scratch store
             if root is None:
                 raise
             real = None
@@ -568,11 +596,14 @@ class Store:
     def run_dead(self, e):
         """True when entry or record e's wrapper is surely gone: its pid and creation time name
         no live process, or its run mutex is gone, abandoned or unowned. A mutex this process may
-        not open leaves it to the pid and creation time. On Linux the run lock alone decides
-        until the pid and creation time can be checked there (slice 4 of
-        docs/linux-support-plan.md section 8)."""
+        not open leaves it to the pid and creation time. On Linux the run lock (run_mutex_held)
+        must be free, and the pid and creation time must not show the wrapper live
+        (record_state): a pid that names no process is never enough on its own, since a checker
+        in its own pid namespace sees no wrapper's pid, but any namespace sees its flock. Exactly
+        what run_live does not take as live."""
         if kitlib.platform.NAME == "linux":
-            return self.run_mutex_held(str(e["id"])) is False
+            return (record_state(e) is not True
+                    and self.run_mutex_held(str(e["id"])) is False)
         try:
             if not process.alive(int(e.get("pid") or 0), e.get("ctime")):
                 return True
@@ -604,15 +635,21 @@ class Store:
 
     def run_live(self, d):
         """Is record or entry d's wrapper live? Its pid and creation time decide when they can be
-        checked (wrapper_state). When they cannot (a process this user may not open, which a
+        checked (record_state: never across pid namespaces). When they cannot (a process this user may not open, which a
         reused pid can name, or a record with no creation time), its run mutex decides: a wrapper
         holds it from before its record is written until after the record leaves active/
         (run.claim_id, run.settle), so one gone, abandoned or unowned means the wrapper is gone.
-        A mutex this process may not open, or a d with no run id, counts as live."""
-        state = wrapper_state(d.get("pid", 0), d.get("ctime"))
+        A mutex this process may not open, or a d with no run id, counts as live. On Linux a
+        pid and creation time that name no process are not enough either: the run lock decides
+        then too, and only a free one is gone (run_dead: a checker in its own pid namespace sees
+        no wrapper's pid); with no run id to ask it by, the pid's answer stands."""
+        state = record_state(d)
+        rid = d.get("id")
+        if state is False and kitlib.platform.NAME == "linux":
+            return (isinstance(rid, str) and bool(ID_RE.match(rid))
+                    and self.run_mutex_held(rid) is not False)
         if state is not None:
             return state
-        rid = d.get("id")
         if not isinstance(rid, str) or not ID_RE.match(rid):
             return True
         return self.run_mutex_held(rid) is not False
@@ -689,7 +726,7 @@ class Store:
             elif prune:
                 ended = self.path("ended", n)
                 if not os.path.exists(ended):
-                    gone = wrapper_state(d.get("pid", 0), d.get("ctime")) is False
+                    gone = record_state(d) is False
                     try:
                         write_json(ended, dict(public(d), state="ended", code=None, how="reaped",
                                                ended=iso(), reaped="its wrapper process is gone"

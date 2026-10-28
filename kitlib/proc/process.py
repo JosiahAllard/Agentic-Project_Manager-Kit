@@ -1,11 +1,13 @@
 """Process information and verified kills: one implementation of what machine_lock.py, winproc.py
 and pytests.py each carried. Times are FILETIMEs (100 ns units since 1601); a process is
-named by (pid, creation time) wherever a reused pid could otherwise be hit.
+named by (pid, creation time) wherever a reused pid could otherwise be hit. On Linux the process
+names are kitlib.platform.linux.process's (the end of this file).
 """
 import ctypes
 import os
 from ctypes import wintypes
 
+import kitlib.platform
 from . import win32
 from .win32 import K32, FILETIME
 
@@ -431,3 +433,14 @@ def set_affinity(pid, ctime, mask):
         K32.CloseHandle(h)
 
 
+# On Linux the process names read /proc instead (kitlib.platform.linux.process; docs/
+# linux-support-plan.md section 8, slice 4), with the same meanings and (pid, ctime) identity,
+# the ctime `(boot << 64) | starttime`. The handle, memory and affinity functions above stay
+# Windows's: off Windows they raise PlatformUnsupported through kitlib.proc.win32.
+if kitlib.platform.NAME == "linux":
+    from kitlib.platform.linux import process as _procfs
+    for _name in ("snapshot", "process_parents", "listed_ctimes", "listed_ctime", "own_ctime",
+                  "proc_ctime", "alive", "_ancestor", "ancestry", "ancestors_of", "own_ancestors",
+                  "descendants", "command_line", "terminate_verified", "kill_tree"):
+        globals()[_name] = getattr(_procfs, _name)
+    del _name

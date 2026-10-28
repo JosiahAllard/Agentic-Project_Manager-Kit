@@ -552,7 +552,7 @@ def is_owner_session(event, ctx):
 
 def agent_session(event, ctx):
     """True for a subagent, or a session whose mark is one of guard_agent_marks (default
-    AGENT_MARKS: coordinator, its old name conductor, deep-worker, consultant and pm), case
+    AGENT_MARKS: coordinator, deep-worker, consultant and pm), case
     ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
     kit-json, the write jail, git-stash-shared) use it. The mark is compared without the kit plugin's prefix
     (kitlib.agentname.bare_mark), so a role_resolver that does not strip it fails closed too."""
@@ -563,9 +563,8 @@ def agent_session(event, ctx):
     return who.lower() in {str(m).lower() for m in marks}
 
 
-# every session kind the kit launcher marks but `plain` and other agents' names; 'conductor' is the
-# coordinator's old mark, until the launcher is renamed
-AGENT_MARKS = ('coordinator', 'conductor', 'deep-worker', 'consultant', 'pm')
+# every session kind the kit launcher marks but `plain` and other agents' names
+AGENT_MARKS = ('coordinator', 'deep-worker', 'consultant', 'pm')
 
 
 # ---------------------------------------------------------------- owner tools
@@ -1287,11 +1286,20 @@ def ledger_glob(ctx, target, start=0, above=False):
     path whose parts each match the folders it passes through names a folder above it
     (ledger_kind's `above`)."""
     first = min(target.index(c, start) for c in LEDGER_GLOB_CHARS if c in target[start:])
-    cut = max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
+    posix = paths.posix()
+    cut = target.rfind('/', 0, first) if posix else max(target.rfind('/', 0, first), target.rfind('\\', 0, first))
     base, rest = (target[:cut + 1], target[cut + 1:]) if cut >= 0 else ('.', target)
     b = file_key(base)
-    parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
-             if x and x != '.']
+    if posix:
+        # Linux: `/` alone separates, and each part folds as the held path's own does (paths.fold,
+        # by the mount that holds it), so both sides compare the same way
+        raw = [x.split(':', 1)[0] for x in rest.split('/') if x and x != '.']
+        top = paths.norm(os.path.abspath(base), real=True, fold=False).rstrip('/')
+        folded = paths.fold('/'.join([top] + raw)).split('/')
+        parts = [x.translate(DOS_WILDCARDS) for x in folded[len(folded) - len(raw):]] if raw else []
+    else:
+        parts = [x.split(':', 1)[0].lower().translate(DOS_WILDCARDS) for x in re.split(r'[\\/]', rest)
+                 if x and x != '.']
     wide = any('**' in x or x == '..' for x in parts)
     for kind, real in ledger_guarded(ctx):
         if kind == 'rulebook' and b == real:
@@ -1983,7 +1991,7 @@ def gate_result(event, ctx, target, role, what):
         for k in range(1, len(parts)):
             if parts[k].lower() != GATE_RESULT:
                 continue
-            gitdir = '\\'.join(parts[:k])
+            gitdir = ('/' if paths.posix() else '\\').join(parts[:k])
             if parts[k - 1].lower() == '.git' or (os.path.isfile(os.path.join(gitdir, 'HEAD')) and
                                                   os.path.isdir(os.path.join(gitdir, 'objects'))):
                 return refuse('gate-result', role, '%s: %s is in the gate result folder %s, which only the '
@@ -2579,11 +2587,12 @@ def pipe_stand_in_word(cmd, w):
 class NetWrite(object):
     """One path a .NET file call writes (net_writes): `word` its argument, dyn when the line
     computes it (a variable, an expression, a string with $ or a backtick), with its span in the
-    source; `end` the offset just past the call's closing parenthesis."""
-    __slots__ = ('word', 'end')
+    source; `end` the offset just past the call's closing parenthesis; `paths` every path argument
+    of the call, written or read (Copy's source too), `word` among them (net_retarget)."""
+    __slots__ = ('word', 'end', 'paths')
 
-    def __init__(self, word, end):
-        self.word, self.end = word, end
+    def __init__(self, word, end, paths=None):
+        self.word, self.end, self.paths = word, end, paths if paths is not None else [word]
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
@@ -2863,11 +2872,15 @@ def net_writes(cmd):
         args, end = _net_args(src, k + 1)
         written, found = _net_written(method, len(args))
         unread = unread or not found or _net_lost(src[k + 1:end])
-        for i in written:
+        words = {}
+        for i in sorted(set(written) | ({0} if method.startswith('copy') and args else set())):
             text, s, e = args[i]
             if text is None and src[s:e].lower() == '$null':
                 continue
-            out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+            words[i] = sh.Word(src[s:e] if text is None else text, text is None, s, e)
+        for i in written:
+            if i in words:
+                out.append(NetWrite(words[i], end, [words[j] for j in sorted(words)]))
     for x in out:
         m = None if x.word.dyn else NET_DEVICE_RE.match(x.word.text)
         if m:                                   # \\?\<drive>:\x is <drive>:\x; the span stays the argument's
@@ -2885,22 +2898,50 @@ def net_placed(w):
 def net_relative(w):
     """True when the .NET argument Word `w` is a literal relative path (no drive, no leading slash,
     no ~): write_targets judges it where the PowerShell location puts it, as a bash one is, though
-    .NET reads it against the process's directory (NET_UNPLACED), which the guard does not judge
-    (docs/guard-v2.md B17)."""
+    .NET reads it against the process's directory (NET_PROCESS_DIR), which the guard cannot see;
+    so an agent session's is refused as well (net_process_dir)."""
     return not w.dyn and bool(w.text) and w.text[0] not in '\\/~' and ':' not in w.text
 
 
+# where .NET reads a path that is not absolute
+NET_PROCESS_DIR = ('.NET reads a relative or driveless path against the process\'s working directory '
+                   '([Environment]::CurrentDirectory), not the PowerShell location')
 # why a .NET write the guard cannot place is counted as a write to the directory the line runs in
 NET_UNPLACED = ('a .NET call whose path the guard does not read or cannot place: a driveless path, a share or '
-                'device path, or one the line computes. .NET reads a relative or driveless path against the '
-                'process\'s working directory ([Environment]::CurrentDirectory), not the PowerShell location')
+                'device path, or one the line computes. ' + NET_PROCESS_DIR)
 
 
-def net_retarget(cmd, x, path):
+def net_process_dir(event, ctx, role, what, relative, target, rewrite):
+    """An agent session's .NET write whose call names a literal relative path (net_relative, the
+    texts `relative`: the path written, or Copy's source), already judged where the PowerShell
+    location puts it (`target`): refused all the same, under write-jail, since .NET reads it
+    against the process's directory, which Set-Location does not move and the guard cannot see (a
+    docs-writer's [IO.File]::WriteAllText('docs/ROSTER.md', ...) from its worktree wrote the main
+    checkout). The alternative is the same call with every relative path the absolute one the
+    location gives (net_retarget), which .NET reads the same from any directory."""
+    if not agent_session(event, ctx):
+        return None
+    return refuse('write-jail', role, '%s; the call names the relative path %s: .NET reads it against the process\'s '
+                  'working directory ([Environment]::CurrentDirectory), which cd and Set-Location do not move, so '
+                  'the guard cannot tell what it names. An agent session gives .NET absolute paths. The same call '
+                  'with the paths the PowerShell location gives:' % (what, ', '.join(relative)), rewrite(fwd(target)))
+
+
+def net_retarget(cmd, x, path, place=None):
     """The command `cmd` through the end of its .NET call, with the NetWrite `x`'s argument
-    replaced by `path`."""
+    replaced by `path` and, with `place` (Word -> path or None), each other literal relative path
+    argument of the call (net_relative: Copy's source, Move's other path) by the path it gives, so
+    the alternative names no path .NET would read from the process's directory."""
     start = cmd.words[0].start if cmd.words else cmd.start
-    return (cmd.source[start:x.word.start] + literal_word(path) + cmd.source[x.word.end:x.end]).strip()
+    out, k = [], start
+    for o in sorted(x.paths, key=lambda o: o.start):
+        own = (o.start, o.end) == (x.word.start, x.word.end)     # net_writes may have re-read x.word (a device path)
+        new = path if own else place(o) if place is not None and net_relative(o) else None
+        if new is None:
+            continue
+        out.append(cmd.source[k:o.start] + literal_word(new))
+        k = o.end
+    return (''.join(out) + cmd.source[k:x.end]).strip()
 
 
 def _cluster_values(args, value_shorts, value_longs, k):
@@ -3211,7 +3252,10 @@ def _curl(args, cmd_word):
     for o, v in opts:
         if o in ('-o', '--output') and v is not None:
             if v.text != '-':
-                out.append(_under(folder, v))
+                placed = _under(folder, v)
+                out.append(placed)
+                if folder is not None and placed is v:
+                    out.append(Under(folder, v))    # curl joins --output-dir to an absolute name too
         elif o in ('-D', '--dump-header', '-c', '--cookie-jar') and v is not None:
             if v.text != '-':
                 out.append(v)
@@ -3226,14 +3270,15 @@ class Under(sh.Word):
     __slots__ = ('folder', 'name')
 
     def __init__(self, folder, name):
-        sh.Word.__init__(self, folder.text.rstrip('/\\') + '/' + name.text, folder.dyn or name.dyn,
+        cut = '/' if paths.posix() else '/\\'          # on Linux `\` is a name's character
+        sh.Word.__init__(self, folder.text.rstrip(cut) + '/' + name.text, folder.dyn or name.dyn,
                          name.start, name.end)
         self.folder, self.name = folder, name
 
 
 def _under(folder, w):
-    """`w` placed in `folder` (curl --output-dir), unless it is absolute."""
-    if folder is None or re.match(r'^(?:[A-Za-z]:)?[\\/]', w.text):
+    """`w` placed in `folder` (curl --output-dir), unless it is absolute (on Linux: starts with `/`)."""
+    if folder is None or (w.text.startswith('/') if paths.posix() else re.match(r'^(?:[A-Za-z]:)?[\\/]', w.text)):
         return w
     return Under(folder, w)
 
@@ -3310,9 +3355,13 @@ class _TarDirs:
         not `sure`: it may not be a -C, so the folders in force stay possible too."""
         new = []
         for b in self.bases:
-            rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+            if paths.posix():                   # Linux: `\` is a name's character, no drives
+                rooted, join = folder.text.startswith(('/', '~')), posixpath.join
+            else:
+                rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+                join = ntpath.join
             new.append(folder if b is None or rooted else
-                       sh.Word(ntpath.join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
+                       sh.Word(join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
         self.bases = new if sure else self.bases + new
         self.seen += new
         self.unsure = self.unsure or not sure
@@ -3700,10 +3749,12 @@ def write_targets(cmd, inv):
         out.append(t)
     if net_mentioned(cmd):
         net, unread = net_writes(cmd)
-        # a literal path is judged where it points, a relative one where the location puts it; for
-        # any other the directory the command runs in stands in, as a path it cannot place (NET_UNPLACED)
-        out.extend(x.word for x in net if net_placed(x.word) or net_relative(x.word))
-        if unread or any(not (net_placed(x.word) or net_relative(x.word)) for x in net):
+        # a literal path is judged where it points, a relative one where the location puts it (and,
+        # for an agent session, refused: net_process_dir), a computed one as a cmdlet's computed
+        # target is; for any other the directory the command runs in stands in, as a path it
+        # cannot place (NET_UNPLACED)
+        out.extend(x.word for x in net if net_placed(x.word) or net_relative(x.word) or x.word.dyn)
+        if unread or any(not (net_placed(x.word) or net_relative(x.word) or x.word.dyn) for x in net):
             out.append(here(cmd.words[0] if cmd.words else None))
     if inv is None:
         return out
@@ -3952,7 +4003,12 @@ def into_folder(target, w, into, cwd, home=None):
         return [target]
     out = []
     for s in srcs:
-        base = re.split(r'[\\/]', s.text.rstrip('\\/'))[-1] if not s.dyn else ''
+        if s.dyn:
+            base = ''
+        elif paths.posix():
+            base = s.text.rstrip('/').split('/')[-1]    # Linux: `\` is a name's character
+        else:
+            base = re.split(r'[\\/]', s.text.rstrip('\\/'))[-1]
         if not base or base in ('.', '..') or GLOB_CHARS & set(base):
             return [target]
         if files_only:
@@ -4145,6 +4201,8 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     asked = Asked()                             # find's ask waits for this target's own refusal
     piped = pipe_stand_in_word(cmd, w)
     target, why = (None, PIPE_UNPLACED) if piped else write_place(ctx, cmd, w, base)
+    if target is None and w.dyn and (w.start, w.end) in net:
+        why = '%s; %s' % (why, NET_PROCESS_DIR)
     unread = py_unread(cmd, inv, w) or (NET_UNPLACED if net_stand_in(cmd, w) else None)
     # a kit tool acts on the checkout its -C names: that folder, not the one it runs in
     checked = kit_tool_dir(event, ctx, cmd, inv, cwd) if base is OUTER and unread == PY_PS_WHY else None
@@ -4173,8 +4231,9 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     # a value its option's word also spells (of=, --output=, -tDIR) keeps that option before it
     rewrite = None if stand_in else word_rewrite(cmd, w)
     attached = attached_lead(cmd, w) if rewrite is not None and not isinstance(w, Under) else None
-    if (w.start, w.end) in net and not w.dyn:
-        rewrite, attached = (lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)), None
+    if (w.start, w.end) in net:
+        rewrite, attached = (lambda path, x=net[(w.start, w.end)]: net_retarget(
+            cmd, x, path, lambda o: write_place(ctx, cmd, o, base)[0])), None
     if checked is not None:
         x = checked[0]
         # -C'dir' spelt other than its text: the value's span is the whole word, so the rewrite spells -C again
@@ -4204,6 +4263,15 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         d = asked.firm(d)
         if d:
             return d, searched
+    # the relative path this write names, or a relative one the call only reads (Copy's source);
+    # another relative path it writes is judged as its own target first (Move's into the main checkout)
+    others = net[(w.start, w.end)].paths if (w.start, w.end) in net else []
+    relative = [o.text for o in others if net_relative(o)]
+    if target is not None and base is OUTER and others and \
+            (net_relative(w) or any(net_relative(o) and (o.start, o.end) not in net for o in others)):
+        d = asked.firm(net_process_dir(event, ctx, role, what, relative, target, rewrite))
+        if d:
+            return d, searched
     # A computed PowerShell target, or a path read from a directory the guard cannot tell (after a
     # `cd $x`): for a role main_checkout lets through, the jail cannot judge it either.
     if computed or (target is None and runs_in is None):
@@ -4228,7 +4296,7 @@ def write_place(ctx, cmd, w, base=OUTER):
         target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
     elif w.dyn:
         target, why = None, 'a target that is not literal: %s' % w.text
-    elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
+    elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text) and not paths.posix():
         target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
     else:
         target = sh.resolve_path(w.text, here_dir, cmd.shell, getattr(ctx, 'home', None))
@@ -4522,6 +4590,8 @@ def is_root(text, cwd, ctx=None, shell=None):
         return False
     if ctx is not None and getattr(ctx, 'home', None) and same_dir(p, ctx.home):
         return True
+    if paths.posix():
+        return p in ('/', '//')                 # Linux: no drives; `/` (and `//`) is the root
     drive, rest = os.path.splitdrive(p)
     return bool(drive) and rest in ('', '\\', '/')
 
@@ -6290,10 +6360,10 @@ def scratch_ref(name):
     return ref_name_ok(name) and name != 'HEAD' and (name.startswith('refs/tmp/') or per_worktree_ref(name))
 
 
-# the main sessions that may delete a stray ref in their own repository (the coordinator and its
-# old mark: AGENT_MARKS's first two), and the refs that are no stray ref, compared without case:
-# NTFS reads refs/HEADS/main as the loose file of refs/heads/main
-REF_CLEANUP_MARKS = AGENT_MARKS[:2]
+# the main sessions that may delete a stray ref in their own repository (the coordinator only),
+# and the refs that are no stray ref, compared without case: NTFS reads refs/HEADS/main as the
+# loose file of refs/heads/main
+REF_CLEANUP_MARKS = ('coordinator',)
 NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash', 'refs/backlog')
 
 
@@ -6341,8 +6411,11 @@ def shared_ref_held(event, ctx):
 
 
 def _in_temp(ctx, path):
-    real = jail.real(path)
-    return any(jail.inside(real, jail.real(r)) for r in jail.temp_roots(ctx))
+    """True when `path` lies in a temp root (jail.temp_roots). It lifts checks, so it compares with
+    the jail's strict fold (jail.real strict: on Linux a mount in doubt does not fold)."""
+    strict = paths.posix()
+    real = jail.real(path, strict)
+    return any(jail.inside(real, jail.real(r, strict)) for r in jail.temp_roots(ctx))
 
 
 def _scratch_repo(ctx, place):
@@ -8482,10 +8555,14 @@ def _without(cmd, first, last):
 
 
 def _under_temp(ctx, d):
+    """True when the folder `d` is the temp folder or below it. It lifts the core.hooksPath checks,
+    so on Linux it compares with the strict fold (a mount in doubt does not fold) and a `\\` is a
+    name's character."""
     if not d:
         return False
-    top = paths.norm(ctx.tempdir, absolute=True).rstrip('\\/')
-    here_ = paths.norm(d, absolute=True)
+    strict = paths.posix()
+    top = paths.norm(ctx.tempdir, absolute=True, strict=strict).rstrip('/' if strict else '\\/')
+    here_ = paths.norm(d, absolute=True, strict=strict)
     return here_ == top or here_.startswith(top + os.sep)
 
 

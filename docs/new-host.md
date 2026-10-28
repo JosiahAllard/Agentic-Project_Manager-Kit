@@ -24,7 +24,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 |---|---|
 | `adapter` | The adapter's dotted module name, `hosts.<name>.adapter`. kitlib never imports it. `tools/_host.py` does. |
 | `shell` | `hosts/<name>/shell`, the folder with the host's manifests and rendered files |
-| `platforms` | The operating systems it runs on. Use `["windows"]` until the OS work (plan section 6). This field picks the hook interpreter (`kitlib.host.hookmain.manifest_command`). |
+| `platforms` | The operating systems it runs on, such as `["windows", "linux"]`. The renderer writes one hook manifest for each (`hooks.json` for Windows, `hooks.<platform>.json` beside it for the others), each command line from `kitlib.host.hookmain.manifest_command` for that platform's interpreter (docs/content.md "Manifests"). |
 | `default` | Leave it out. Exactly one host is the default, and it is `claude`. |
 | `tiers` | `light`, `standard`, `strong` and `deep`, each mapped to the host's model id (docs/ROSTER.md) |
 
@@ -63,6 +63,8 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | `agent_name_format` | How it names a bundled agent: `{plugin}` once at most, then `{name}` last |
 | `session_process` | The process image of a session it launches |
 | `env_prefixes` | The environment variable prefixes its sessions own (`CLAUDE_`). A child launched on another host never inherits them (`kitlib.sessionmark.child_environment`). |
+| `cli_program` | The name its CLI runs as on Linux (`claude`). |
+| `cli_package` | Its npm package's scoped name, `@scope/name` (`@anthropic-ai/claude-code`). With `cli_program` it tells a Linux `node` process that runs the CLI from any other: its script lies in the package directly under a `node_modules` folder (`kitlib.pmstart.runs_cli`). |
 
 ## 2. The adapter: `hosts/<name>/adapter/`
 
@@ -185,8 +187,9 @@ One list covers what is left to fix: `LEAK_ALLOWED`. It can only shrink.
 For agent-to-agent messaging, add `optional/bridge/hosts/<name>/` (the name with `-` as `_`),
 which exports `HOST`, an `optional.bridge.port.BridgeHost`, and has a `bridge-profile.json`
 (its settings, and as `channel_env` any variable the host's app nominates a tool pipe in). It is
-served only once the host's `hosts.json` entry exists
-(optional/bridge/README.md "The port", "Adding a host half"). The core never imports it. With the
+served only once the bridge's own list, `optional/bridge/peers.json`, names it; its `hosts.json`
+entry does not serve it. Every pair with the other peers is allowed unless `refused` there lists
+it (optional/bridge/README.md "The port", "Host pairs", "Adding a host half"). The core never imports it. With the
 bridge not installed, no host shell mentions it. Once the half exists, the conformance class runs the
 bridge part of the suite by itself: subclass `bridge_conformance.mixin(HOST)` beside
 `conformance.HostConformance` (`tests/host/bridge_conformance.py`), and supply `bridge_delivery()`

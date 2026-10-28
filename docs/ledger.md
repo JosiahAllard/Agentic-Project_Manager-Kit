@@ -1,8 +1,7 @@
 # The rulings ledger
 
-The commit/push options take `--host NAME`: the agent host for the Co-Authored-By trailer, a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude); `--provider` is its old name, accepted for one release. The trailer comes from `kitlib.attribution` (docs/commit.md); a Codex trailer needs the actual explicit --model id. The host and model are checked before anything is written; the provenance, branch, path and owner checks keep their rules.
+Append-only files hold the owner's rulings for every repository on the machine: one file per repository in the folder the machine config's `ledger_dir` names, or the one file `ledger_path` names ("Files"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `files` which file holds what, `write` the writes, `vcs` the git, `standing` the standing digest, `rulebook` the rulebooks, `precommit` the opt-in hook).
 
-Append-only files hold the owner's rulings for every repository on the machine: one file per repository in the folder the machine config's `ledger_dir` names, or the one file `ledger_path` names ("Files"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `files` which file holds what, `write` the writes, `vcs` the git, `standing` the standing digest, `rulebook` the rulebooks, `precommit` the opt-in hook); tests `tests/ledger`.
 ## Format
 
 Logic: `kitlib/ledger/fmt.py`.
@@ -26,11 +25,11 @@ Supersedes: <id> | -
 
 ## Files
 
-Logic: `kitlib/ledger/files.py` (`of_config`, `path_of`, `readable`, `others`); tests `tests/ledger/test_split.py` and `tests/ledger/test_cli_split.py`.
+Logic: `kitlib/ledger/files.py` (`of_config`, `path_of`, `readable`, `others`).
 
 - **`ledger_dir` set:** the ledger is split. Each name in `ledger_repos` has its own file, `<ledger_dir>/<repo>.md`, numbered `H-<repo>-nnnn`. A ruling for every repository goes in `pm`'s file; `--repo all` is a usage error that says so. Each file has its own write lock ("Write lock"), so writers for two repositories never wait on each other.
-- **The frozen ledger:** with `ledger_dir` set, the `ledger_path` file, if any, holds the `R-nnnn` entries written before the split. `show`, `grep`, `list` and `check` read it; `add` and `retire` never write it, and `retire R-nnnn` is refused. It is kept for one release.
-- **`ledger_dir` unset:** `ledger_path` is the one ledger, read and written as before the split, `all` included.
+- **The frozen ledger:** with `ledger_dir` set, the `ledger_path` file, if any, holds the `R-nnnn` entries written before the split. `show`, `grep`, `list` and `check` read it; `add` and `retire` never write it, and `retire R-nnnn` is refused.
+- **`ledger_dir` unset:** `ledger_path` is the one ledger, `all` included.
 - **Routing:** an `H-<repo>-nnnn` id is in `<repo>`'s file and an `R-nnnn` id in the `ledger_path` file (`path_of`). Reading every file means the frozen ledger first, then each repository's file in `ledger_repos` order (`readable`). A repository's file that does not exist yet holds no entries.
 - **Coordinator start:** with `ledger_dir` set, the coordinator's session start names its repository's file as the reference for how that repository works (`kitlib.coordinatorstart.ledger_lines`; a host adapter's start, such as `hosts/codex/adapter/start.py`, through `kitlib.hoststart.shared_checks`). The repository's name is matched against `ledger_repos` lower-cased with every `_` as `-` (`ledger_name`); a name not there gets the folder and the names instead. A machine config that cannot be read, or one with no `ledger_dir`, adds no ledger-file line (nor does it need the sessions entry). The file is named, never opened. A `rulebooks` line always follows (`kitlib.pmstart.rulebook_lines`, which `ledger_lines` calls): the rules folder, each rulebook present with its rule count, and `tools/ledger.py rules --repo <folder>`; with no ledger configured, or no rulebook file, it says none, and with a machine config that cannot be read it says unknown (the machine config line has the cause). The PM's start checklist carries the same line with `rules --all` (docs/pm-start.md).
 
@@ -39,8 +38,8 @@ Logic: `kitlib/ledger/files.py` (`of_config`, `path_of`, `readable`, `others`); 
 ```
 python tools/ledger.py add --repo REPO --prov PROV --q Q --a A --decides D --source S
                            [--supersedes ID] [--when 'YYYY-MM-DD HH:MMZ']
-                           [--commit | --push] [--title T] [--branch-ok] [--model NAME]
-                           [--rule KEY --topic T [--rule-text TEXT] --checked HASH]
+                           [--commit | --push] [--title T] [--branch-ok] [--model NAME] [--host NAME]
+                           [--rule KEY --topic T [--rule-text TEXT] [--book NAME] --checked HASH]
 python tools/ledger.py conflicts --repo REPO --topic T --key KEY --text TEXT
 python tools/ledger.py rule-drop KEY --repo REPO --prov PROV --why WHY --source S [--q Q] [--a A]
 python tools/ledger.py rule-set --repo REPO (--repos A,B | --budget N | --book-title T)
@@ -53,7 +52,11 @@ python tools/ledger.py list --prov PROV --since YYYY-MM-DD [--repo REPO]
 python tools/ledger.py standing [WORD] [--repo REPO]
 python tools/ledger.py rules (--repo FOLDER | --all) [--sources] [--topic WORD]
 python tools/ledger.py split-move [--apply]
+python tools/ledger.py migrate-report [--out FILE] [--digest PATH]
+python tools/ledger.py rule-apply REPORT [--write --prov PROV --source S] [--when WHEN]
 ```
+
+The commit and push options (`add`, `rule-drop`, `rule-set`, `rule-apply --write`) also take `--host NAME` (`--provider` is the old name): the agent host for the Co-Authored-By trailer, a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host. The trailer comes from `kitlib.attribution` (docs/commit.md); a Codex trailer needs the explicit `--model` id. Host and model are checked before anything is written.
 
 - **`add`** appends one entry to REPO's file and prints its id. It validates the file before and after writing, and writes it atomically with LF line ends. A Decides over 400 characters (`fmt.DECIDES_NUDGE`) draws a warning on stderr; the entry is still written. `--when` backfills a time. `--rule` and the rule verbs `conflicts`, `rule-drop` and `rule-set` change a rulebook with the entry ("Rulebooks").
 - **`retire`** turns an entry into its tombstone in place, in its own file, and prints its id. It is refused while a live entry's Decides or Items, in any ledger file, still names the entry. `--by` may name any file's entry. `--ruling` names the live entry whose Decides orders this retirement, and that entry's mention does not count.
@@ -62,7 +65,7 @@ python tools/ledger.py split-move [--apply]
 - **`check`** validates every ledger file and compares each with itself at `--base`: every older entry must be unchanged, or have become its own tombstone. A repository's file that the base lacks is new and is compared with nothing. The default base is `<repo.remote>/<main branch>` of the file's repository (`origin` unless its `.kit.json` sets `repo.remote`). A base that cannot be read prints `append-only NOT CHECKED` for that file and validates only. It also fails on each standing-digest line that cites a retired or missing entry ("Standing digest"), and checks the rulebooks ("Rulebooks"). With `ledger_dir` set, each finding names its file, and the summary counts entries and files.
 - **`list`** is the read-only digest feed (docs/engineering-rulings.md "Kit pieces").
 - **`standing`** prints the standing digest's rule lines for a topic word, under their headings; `--repo` keeps only the digest's `## REPO` section, and with no word prints all of it. It needs a word, `--repo`, or both. Exits 1 on no match or no digest.
-- **`split-move`** moves STANDING.md and the `rules` folder from beside the frozen `ledger_path` file into `ledger_dir` ("A new ledger"), each whole by one rename, contents untouched (`kitlib/ledger/move.py`). Without `--apply` it is a dry run: one line per item, `move <src> -> <dst>` (the folder with its file count), `done <dst> (already in ledger_dir)` or `none <src> (absent)`. It is refused, moving nothing, when `ledger_dir` or `ledger_path` is unset, when a destination exists while its source is still there (the owner keeps one), when `ledger_dir` lies inside the old `rules` folder, when a path check fails, or when an item is of the wrong kind. `ledger_dir` the frozen file's folder has nothing to move. A rename that fails part-way says what moved, and a rerun resumes, since a moved item reads as `done`; the owner moves one on another volume by hand, since the guard refuses an agent's. `--apply` holds the write lock of each rulebook and of both digest paths, old and new, where they are in a git checkout, then prints `moved` lines and the `git -C <work tree> add -A -- <paths>` step to stage the move (an old path only while git's index lists it); a rerun with every item `done` prints that step again; the commit is the caller's. Tests: `tests/ledger/test_move.py`.
+- **`split-move`** moves STANDING.md and the `rules` folder from beside the frozen `ledger_path` file into `ledger_dir` ("A new ledger"), each whole by one rename, contents untouched (`kitlib/ledger/move.py`). Without `--apply` it is a dry run: one line per item, `move <src> -> <dst>` (the folder with its file count), `done <dst> (already in ledger_dir)` or `none <src> (absent)`. It is refused, moving nothing, when `ledger_dir` or `ledger_path` is unset, when a destination exists while its source is still there (the owner keeps one), when `ledger_dir` lies inside the old `rules` folder, when a path check fails, or when an item is of the wrong kind. `ledger_dir` the frozen file's folder has nothing to move. A rename that fails part-way says what moved, and a rerun resumes, since a moved item reads as `done`; the owner moves one on another volume by hand, since the guard refuses an agent's. `--apply` holds the write lock of each rulebook and of both digest paths, old and new, where they are in a git checkout, then prints `moved` lines and the `git -C <work tree> add -A -- <paths>` step to stage the move (an old path only while git's index lists it); a rerun with every item `done` prints that step again; the commit is the caller's.
 - **Exit codes:** 0 ok; 1 no ledger configured, a ledger file that cannot be read, a refused write (a `REFUSED: <msg>` line on stderr), a failed check, nothing found, or a commit or push that failed after the entry was written; 2 usage.
 
 ## One reader
@@ -89,8 +92,6 @@ Cases that lock a ledger out, and the fix for each:
 - Mount points and folders relocated through a junction are reparse points: point `ledger_dir` or `ledger_path` at the real target. OneDrive placeholders are too: move the ledger off OneDrive.
 - A hard-linked ledger: remove the other names (`fsutil hardlink list <path>`), or copy the file to a new one.
 
-Tests: `tests/ledger/test_safepath.py`.
-
 ## Configuration
 
 The keys are in the machine config (docs/kit-json.md "Machine config keys"):
@@ -103,7 +104,7 @@ The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
 Set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file); the first `add` for a repository creates its file from `templates/common/LEDGER.md`.
 
-**Moving from one file.** First retire, or supersede in the one file, each R-nnnn entry the owner means to end: after the split `retire R-nnnn` is refused, and `--supersedes` names only an earlier entry of the same file. Then the owner edits the machine config: add `ledger_dir` and `ledger_repos` (including `pm`, since `--repo all` is refused once `ledger_dir` is set), and keep `ledger_path`, which is then the frozen file ("Files"). Older kit copies reject `ledger_dir`, so set it only after every folder runs a kit that knows it. No entry is copied. The standing digest and the rulebooks, beside the `ledger_path` file without `ledger_dir`, are read from `ledger_dir` with it (the digest with one `## <repo>` section per repository), and the guard's ledger rule refuses an agent's move of them, so `tools/ledger.py split-move` moves them, right after the config edit (until then the two read as absent): run it once for the dry run, then with `--apply`, then stage and commit the paths it prints, each a separate call. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable in the frozen file for one release. The guard's ledger rule holds the `ledger_path` file, the digest and the rulebooks; the per-repository files under `ledger_dir` are not guarded yet.
+**Moving from one file.** First retire, or supersede in the one file, each R-nnnn entry the owner means to end: after the split `retire R-nnnn` is refused, and `--supersedes` names only an earlier entry of the same file. Then the owner edits the machine config: add `ledger_dir` and `ledger_repos` (including `pm`, since `--repo all` is refused once `ledger_dir` is set), and keep `ledger_path`, which is then the frozen file ("Files"). No entry is copied. The standing digest and the rulebooks, beside the `ledger_path` file without `ledger_dir`, are read from `ledger_dir` with it (the digest with one `## <repo>` section per repository), and the guard's ledger rule refuses an agent's move of them, so `tools/ledger.py split-move` moves them, right after the config edit (until then the two read as absent): run it once for the dry run, then with `--apply`, then stage and commit the paths it prints, each a separate call. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable in the frozen file. The guard's ledger rule holds the `ledger_path` file, the digest and the rulebooks; the per-repository files under `ledger_dir` are not guarded yet.
 
 To commit the ledger, put its folder inside a git work tree whose `.kit.json` names the main branch.
 
@@ -127,7 +128,7 @@ Before writing, `add --commit` refuses in any of these cases:
 
 ## Write lock
 
-Logic: `kitlib/ledger/write.py` (`locked`, `held`, `lock_path`); tests `tests/ledger/test_writer.py` `WriteLockTest` and `tests/ledger/test_vcs.py`.
+Logic: `kitlib/ledger/write.py` (`locked`, `held`, `lock_path`).
 
 One writer per ledger file at a time. `add` and `retire` hold the file's write lock from their read to their write, so two writers at once never take the same next id and neither atomic replace drops the other's entry. `add --commit` holds it over the checks, the add and the commit, so no other writer's entry lands in its commit; `--push` runs after it is given up. `vcs.finish` commits under it too.
 
@@ -158,7 +159,7 @@ Logic: `kitlib/ledger/standing.py`.
 
 ## Rulebooks
 
-Logic: `kitlib/ledger/rulebook.py` (`parse`, `render`, `load`, `check`, `for_repo`, `view`, `lines`; the write side `target`, `conflicts`, `digest`, `set_rule`, `drop_rule`, `set_header`, `applied`); the paired write in `kitlib/ledger/write.py` (`add` with a `RuleChange`); the migration from the digest `kitlib/ledger/migrate.py`; the folder from `kitlib/ledger/files.py` `of_config` (`Files.rules`); tests `tests/ledger/test_rulebook.py` and `tests/ledger/test_rulebook_write.py` and `tests/ledger/test_migrate.py`.
+Logic: `kitlib/ledger/rulebook.py` (`parse`, `render`, `load`, `check`, `for_repo`, `view`, `lines`; the write side `target`, `conflicts`, `digest`, `set_rule`, `drop_rule`, `set_header`, `applied`); the paired write in `kitlib/ledger/write.py` (`add` with a `RuleChange`); the migration from the digest `kitlib/ledger/migrate.py`; the folder from `kitlib/ledger/files.py` `of_config` (`Files.rules`).
 
 The standing rules of the machine live in rulebooks beside the log, in a `rules` folder: `<ledger_dir>/rules/` with `ledger_dir` set, else `rules/` in the folder of the `ledger_path` file. No config key names it. The books are the lower-case `<name>.md` files there: one per repository, named by a short name, and `all.md`, the shared one (printed as "shared"). No file is no rulebook and no error. The verbs below write them, each change paired with a log entry. The owner can also make an answer on the Action Hub a standing rule (docs/action-hub.md "A standing rule"): the hub then asks the PM to log it, and only logging the question (`hub questions log <id> --if-version N`) ends that ask.
 
@@ -183,11 +184,11 @@ Budget: 40
 - **`rule-drop KEY --repo REPO --prov PROV --why WHY --source S`** removes rule KEY with a log entry whose Decides is `dropped KEY: WHY`; a key not in the book is refused. **`rule-set --repo REPO (--repos A,B | --budget N | --book-title T) ...`** sets the target book's header with a log entry, making the book when it is absent (it then needs `--repos`). Both take `--q` and `--a` (made from the change and `--why` when not given) and `--when`.
 - **Locks, log first:** `write.add` holds the log's write lock (see "Write lock"), then the target rulebook's own (the same kind of lock, on the rulebook's path: with `ledger_dir` set two log files can route to one rulebook), over reading the log and the rulebooks, the hash check, both validations and both writes: the log entry, then the rulebook. With `--commit` the tool holds both over the commit too. The entry's Decides ends with the change's tag, `[rule <name>.md KEY set]`, `[rule <name>.md KEY dropped]` or `[rulebook <name>.md header <digest>]`, which `applied` reads. A change that would leave the rulebooks with an error they did not have is refused.
 - **`--commit` and `--push`** work on all three verbs as on `add`. With a rule change the commit carries the log file and the rulebook it wrote together (`vcs.prepare(..., extra=)`), so the pre-commit check never sees one changed without the other; `prepare` refuses when either has uncommitted changes.
-- **`migrate-report [--out FILE] [--digest PATH]` and `rule-apply REPORT`** move the standing digest into the rulebooks. `migrate-report` is read-only: it prints (or writes to `--out`, never a ledger file, the digest or the rules folder) one line per digest rule, `? KEEP | repo | key | topic | text | from: ids  # reason`, tagged KEEP, CUT or MERGE gN (near-duplicates in one topic; the first line of a group, the shortest, carries the rule). The tag is a proposal from fixed signals (dated, one-off, names a record or priority, spec detail, a stale or kit-enforced term, no behaviour word, every cited entry retired). The `?` means unreviewed: the PM edits tags, keys and text and deletes each `?`, and `rule-apply` refuses a report with any left. `Basis:` hashes the digest and the retired ids, so a report made from a changed digest is refused as stale. `rule-apply` is a dry run that lists each `would set`; `--write` (with `--prov` and `--source`, plus the `add` commit flags) writes one log entry and one rule per KEEP line or MERGE group through the `--rule` path, citing the new entry; the original digest ids go in the entry's Q. A rule already set with the same text is skipped, so a half-applied report can be run again; the same key with other text is refused. CUT lines write nothing. `rule-apply` refuses shared rules in the split layout until the --book writer lands.
+- **`migrate-report [--out FILE] [--digest PATH]` and `rule-apply REPORT`** move the standing digest into the rulebooks. `migrate-report` is read-only: it prints (or writes to `--out`, never a ledger file, the digest or the rules folder) one line per digest rule, `? KEEP | repo | key | topic | text | from: ids  # reason`, tagged KEEP, CUT or MERGE gN (near-duplicates in one topic; the first line of a group, the shortest, carries the rule). The tag is a proposal from fixed signals (dated, one-off, names a record or priority, spec detail, a stale or kit-enforced term, no behaviour word, every cited entry retired). The `?` means unreviewed: the PM edits tags, keys and text and deletes each `?`, and `rule-apply` refuses a report with any left. `Basis:` hashes the digest and the retired ids, so a report made from a changed digest is refused as stale. `rule-apply` is a dry run that lists each `would set`; `--write` (with `--prov` and `--source`, plus the `add` commit flags) writes one log entry and one rule per KEEP line or MERGE group through the `--rule` path, citing the new entry; the original digest ids go in the entry's Q. A rule already set with the same text is skipped, so a half-applied report can be run again; the same key with other text is refused. CUT lines write nothing. In the split layout `rule-apply` refuses a shared rule (it does not use `add --book all`).
 
 ## Pre-commit check
 
-Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py` and `tests/githooks/test_precommit.py`.
+Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`.
 
 Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes a ledger file or the standing digest (`precommit.targets`: every repository's file, the `ledger_path` file, the digest and each rulebook file present): it runs `tools/ledger.py check --base HEAD` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of all of them, so such a commit is refused before it runs when any of them has unstaged changes, whichever of them is staged.
 
@@ -208,8 +209,3 @@ Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` 
 | No python on PATH | pass with a note (the front end cannot tell what the commit holds) |
 
 - **Cost when not opted in:** `githooks/pre-commit` is a `sh` front end using builtins only. With no `.kit.json`, or one whose text never names `pre_commit_check`, it exits 0 and starts no other process, except in a kit checkout (`content/roles/` and `tools/render_content.py`), where one `git diff --cached` tells whether a render source is staged. Otherwise it runs `githooks/pre-commit.py`. With no python on PATH and a render source staged it refuses the commit with the render command.
-
-## Not ported
-
-- **The PM writer's default co-author environment variable:** replaced by `--model`, else `CLAUDE_AGENT_MODEL`, the variable `tools/commit.py` reads.
-- **The PM writer's fixed list of repository names:** replaced by `ledger_repos`.

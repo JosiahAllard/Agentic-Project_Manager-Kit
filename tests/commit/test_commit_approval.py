@@ -183,6 +183,24 @@ class TheApprovedChange(ApprovalCase):
         self.assertFalse(os.path.exists(os.path.join(self.wt, 'CLAUDE.md')))
         self.assertEqual(self.hub.docs['A-001']['commit'], self.head())
 
+    def test_on_a_head_that_moved_on_with_other_work_it_is_committed_and_consumed(self):
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        self.put('a.py', 'x\n')
+        self.git('add', '--', 'a.py')
+        self.git('commit', '-q', '-m', 'later')
+        moved = self.head()
+        code, out = self.approved_commit('CLAUDE.md')
+        self.assertEqual(code, 0, out)
+        head = self.head()
+        self.assertEqual(self.git('rev-parse', 'HEAD~1'), moved)
+        self.assertEqual(self.git('show', '--name-only', '--format=', 'HEAD'), 'CLAUDE.md')
+        self.assertEqual(self.hub.docs['A-001']['commit'], head)
+        self.assertIn('approval  hub:A-001 consumed by %s' % head[:12], out)
+        rules = ownermod.Rules(owner_email=OWNER, agent_emails=[AGENT])    # and it would land
+        seam = oc.HubApprovals(client=self.hub, repo=REPO)
+        self.assertEqual(oc.violations(self.wt, rules, 'HEAD', [moved], approvals=seam),
+                         ([], None))
+
     def test_an_ordinary_path_in_the_approval_is_committed_the_same_way(self):
         self.approve({'CLAUDE.md': 'new rules\n', 'notes.md': 'why\n'})
         code, out = self.approved_commit('notes.md', 'CLAUDE.md')
@@ -265,14 +283,31 @@ class WhatIsRefusedBeforeAnythingIsWritten(ApprovalCase):
         self.assert_refused('AGENTS.md is not the approved base', 'AGENTS.md')
         self.assertEqual(self.read('AGENTS.md'), 'mine\n')
 
-    def test_another_head(self):
+    def test_a_head_where_an_approved_path_changed_after_the_base(self):
         self.approve({'CLAUDE.md': 'new rules\n'})
-        self.put('a.py', 'x\n')
-        self.git('add', '--', 'a.py')
-        self.git('commit', '-q', '-m', 'later')
-        out = self.assert_refused('the approval is for base %s' % self.base[:12], 'CLAUDE.md')
-        self.assertIn('HEAD is %s' % self.head()[:12], out)
-        self.assertEqual(self.read('CLAUDE.md'), 'rules\n')
+        self.put('CLAUDE.md', 'the owner changed it\n')
+        self.git('add', '--', 'CLAUDE.md')
+        self.git('commit', '-q', '-m', 'the owner again')
+        head = self.head()
+        out = self.assert_refused('the approval is for base %s, and HEAD is %s: CLAUDE.md at %s '
+                                  'is not as the approved base %s has it'
+                                  % (self.base[:12], head[:12], head[:12], self.base[:12]),
+                                  'CLAUDE.md')
+        self.assertIn('new_worktree.py -C %s <area>/<slug> --approval hub:A-001' % self.wt, out)
+        self.assertEqual(self.read('CLAUDE.md'), 'the owner changed it\n')
+        self.assert_not_consumed()
+
+    def test_a_head_that_does_not_descend_from_the_base(self):
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        self.git('checkout', '-q', '-b', 'side', self.base + '~1')
+        self.put('CLAUDE.md', 'rules\n')
+        self.git('add', '--', 'CLAUDE.md')
+        self.git('commit', '-q', '-m', 'the same rules on another line')
+        self.assertEqual(self.blob('CLAUDE.md', 'HEAD'), self.blob('CLAUDE.md'))
+        out = self.assert_refused('the approved base %s is not an ancestor of %s'
+                                  % (self.base[:12], self.head()[:12]), 'CLAUDE.md')
+        self.assertIn('--approval hub:A-001', out)
+        self.assert_not_consumed()
 
     def test_a_named_path_the_approval_does_not_hold(self):
         self.approve({'CLAUDE.md': 'new rules\n'})
@@ -392,7 +427,8 @@ class WhatThePathCheckRefuses(ApprovalCase):
         self.assert_not_consumed()
 
 
-@real_git('a git attribute changes the blob staged: the fake reads no .gitattributes')
+@real_git('* text=auto with no eol changes the blob staged: the fake refuses text with no eol '
+          '(core.eol would decide)')
 class WhatIsRefusedAfterTheWrite(ApprovalCase):
     """Refused once the approved content is in the work tree: the work tree is put back as it
     was and what this call staged is unstaged."""
@@ -492,6 +528,43 @@ class TheConsume(ApprovalCase):
         self.assertEqual(out.code, 0, out.lines)
         self.assertIn('approval  hub:A-001 consumed by %s' % head[:12], out.lines)
         self.assertEqual(self.hub.docs['A-001']['commit'], head)
+
+    def test_a_failed_consume_on_a_moved_head_is_retried_the_same_way(self):
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        self.put('a.py', 'x\n')
+        self.git('add', '--', 'a.py')
+        self.git('commit', '-q', '-m', 'later')
+        self.hub.consume_fails = serve.NotRunning(1)
+        code, out = self.approved_commit('CLAUDE.md')
+        self.assertEqual(code, 1, out)
+        head = self.head()
+        self.assertNotIn('commit', self.hub.docs['A-001'])
+        self.hub.consume_fails = None
+        out = C.commit(C.request(self.wt, None, [], owner_approval='hub:A-001', consume=head,
+                                 hub=self.hub, cwd=self.wt))
+        self.assertEqual(out.code, 0, out.lines)
+        self.assertEqual(self.hub.docs['A-001']['commit'], head)
+
+    def test_a_consume_of_a_commit_whose_parent_changed_an_approved_path_is_refused(self):
+        # Made by hand, past commit.py's own checks: the owner changed CLAUDE.md after the base,
+        # and the approved content was committed on top. The hub would verify the blobs for the
+        # base; the consume refuses because the parent does not hold CLAUDE.md as the base does.
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        self.put('CLAUDE.md', 'the owner changed it\n')
+        self.git('add', '--', 'CLAUDE.md')
+        self.git('commit', '-q', '-m', 'the owner again')
+        parent = self.head()
+        self.put('CLAUDE.md', 'new rules\n')
+        self.git('add', '--', 'CLAUDE.md')
+        self.git('commit', '-q', '-m', 'by hand\n\nOwner-Approval: hub:A-001')
+        sha = self.head()
+        out = C.commit(C.request(self.wt, None, [], owner_approval='hub:A-001', consume=sha,
+                                 hub=self.hub, cwd=self.wt))
+        self.assertEqual(out.code, 1, out.lines)
+        self.assertIn('refused: hub:A-001 refused: %s: CLAUDE.md at %s is not as the approved '
+                      'base %s has it. hub:A-001 was not consumed.'
+                      % (ap.WHY_HEAD, parent[:12], self.base[:12]), out.lines)
+        self.assert_not_consumed()
 
     def test_a_consume_the_hub_then_does_not_verify_says_it_was_consumed(self):
         self.approve({'CLAUDE.md': 'new rules\n'})
@@ -661,3 +734,21 @@ class TheCommandLine(ApprovalCase):
         code, out = self.cli('--consume', self.base)
         self.assertEqual(code, 2, out)
         self.assertIn('--consume needs --owner-approval', out)
+
+
+class TheStagedCheck(unittest.TestCase):
+    """approval.staged_error holds the commit to the HEAD the steps before the write judged."""
+
+    def doc(self):
+        return {'head': 'a' * 40, 'files': [{'path': 'CLAUDE.md', 'blob': 'f' * 40}]}
+
+    def test_the_head_judged_is_the_head_committed(self):
+        from kitlib.commit import approval
+        staged, snap = {'CLAUDE.md': 'M'}, {'CLAUDE.md': ('100644', 'f' * 40)}
+        self.assertIsNone(approval.staged_error(self.doc(), 'b' * 40, staged, snap, 'b' * 40))
+        self.assertEqual(approval.staged_error(self.doc(), 'c' * 40, staged, snap, 'b' * 40),
+                         'HEAD is %s, not %s, the commit the approval was checked on'
+                         % ('c' * 12, 'b' * 12))
+        self.assertEqual(approval.staged_error(self.doc(), 'a' * 40, staged, snap, 'b' * 40),
+                         'HEAD is %s, not %s, the commit the approval was checked on'
+                         % ('a' * 12, 'b' * 12))

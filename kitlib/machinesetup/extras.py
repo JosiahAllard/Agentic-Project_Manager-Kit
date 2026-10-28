@@ -4,6 +4,10 @@ folder with its AGENT_TEMP variable, sweep config key and sweep task (kitlib.mac
 that folder's permissions, the automatic tasks' tick task (AUTO_TASK), and the comfy entry point's
 lock tool (not in fresh mode: the plugin's lock tool is used). Each is read first and planned only when it differs; Host is the Windows side (also the
 `claude` runner that kitlib.machinesetup.plugin migrates each account with), and tests pass a fake.
+On Linux the tasks are pm-kit jobs (kitlib.machinesetup.linuxjobs): Host reads them back and
+writes them, and survey adds linger's note. The user environment is ENV_FILE under the profile
+(systemd's environment.d, read by the user manager and the sessions it starts), the folder's
+permissions are mode 0700 (chmod), and the shortcut is the desktop entry DESKTOP_FILE.
 """
 import json
 import os
@@ -16,10 +20,12 @@ try:
 except ImportError:                                                  # not Windows
     winreg = None
 
+from kitlib import platform
 from kitlib.launcher import pythonw as pythonw_mod
+from kitlib.platform.linux import schedule
 from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
-from . import agenttemp, procwatch
+from . import agenttemp, linuxjobs, procwatch
 from .common import Report, kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
@@ -30,6 +36,66 @@ _NOWIN = 0x08000000 if sys.platform == 'win32' else 0                # CREATE_NO
 AUTO_TASK = 'kit-automatic-tasks'
 AUTO_EVERY_MINUTES = 15
 AUTO_TOOL = os.path.join('tools', 'auto_tasks.py')
+ENV_FILE = ('.config', 'environment.d', 'pm-kit.conf')             # Linux, under the profile
+DESKTOP_FILE = ('.local', 'share', 'applications', 'pm-kit-machine-schedule.desktop')
+PRIVATE = 0o700
+
+
+def env_file():
+    """Linux: the user environment file, ENV_FILE under the profile (password database)."""
+    from kitlib.platform.linux import paths
+    return os.path.join(paths.profile(), *ENV_FILE)
+
+
+def env_file_get(path, name):
+    """`name`'s value in the environment.d file `path`, or None."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return None
+    for l in lines:
+        k, eq, v = l.partition('=')
+        if eq and k.strip() == name:
+            return v.strip() or None
+    return None
+
+
+def env_file_set(path, name, value):
+    """Set `name` to `value` in the environment.d file `path` (its line replaced, or appended),
+    every other line kept; written through a temp file and os.replace, its folder made."""
+    if '\n' in value or '\r' in value:
+        raise ValueError('a value with a line break cannot go in %s' % path)
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    out, done = [], False
+    for l in lines:
+        k, eq, _ = l.partition('=')
+        if eq and k.strip() == name:
+            if not done:
+                out.append('%s=%s' % (name, value))
+                done = True
+            continue
+        out.append(l)
+    if not done:
+        out.append('%s=%s' % (name, value))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+        f.write('\n'.join(out) + '\n')
+    os.replace(tmp, path)
+
+
+def env_undo(name, have):
+    """The by-hand restore of the user environment variable `name`, `have` its old value."""
+    if platform.NAME == 'linux':
+        where = '~/' + '/'.join(ENV_FILE)
+        return ('set %s=%s in %s' % (name, have, where)) if have else 'delete the %s line in %s' % (name, where)
+    return ('[Environment]::SetEnvironmentVariable("%s", "%s", "User")' % (name, have)) if have \
+        else '[Environment]::SetEnvironmentVariable("%s", $null, "User")' % name
 
 
 def _ps_quote(s):
@@ -74,6 +140,8 @@ class Host(object):
         return '%s\\%s' % (os.environ.get('USERDOMAIN', ''), os.environ.get('USERNAME', ''))
 
     def env_get(self, name):
+        if platform.NAME == 'linux':
+            return env_file_get(env_file(), name)
         if winreg is None:
             return None
         try:
@@ -83,6 +151,8 @@ class Host(object):
             return None
 
     def env_set(self, name, value):
+        if platform.NAME == 'linux':
+            return env_file_set(env_file(), name, value)
         self._ps('[Environment]::SetEnvironmentVariable(%s, %s, "User")' % (_ps_quote(name), _ps_quote(value)))
 
     def user_path(self):
@@ -127,6 +197,27 @@ class Host(object):
         """Run the PowerShell line that registers a scheduled task (agenttemp.task_line)."""
         self._ps(line)
 
+    def job_backend(self, job):
+        """Linux: the backend the pm-kit job `job` goes to (schedule.choose: ScheduleError when
+        there is none)."""
+        return schedule.choose(job)
+
+    def job_describe(self, job, kind):
+        """Linux: the lines saying what job_install(job) writes (schedule.describe)."""
+        return schedule.describe(job, kind)
+
+    def job_install(self, job):
+        """Linux: write and enable the pm-kit job `job` (schedule.install); its lines."""
+        return Report(schedule.install(job))
+
+    def systemd(self):
+        """Linux: whether the user's systemd manager answers."""
+        return schedule.has_systemd()
+
+    def linger(self):
+        """Linux: whether linger is on for this user (True, False, None: unknown)."""
+        return schedule.linger()
+
     def sweep_dry_run(self, kit, home=None):
         """The sweep's report lines from one run without --apply (agenttemp.sweep_dry_run), under
         this interpreter, reading the machine config of `home`."""
@@ -134,7 +225,8 @@ class Host(object):
 
     def task_list(self):
         """Every scheduled task with its actions (kitlib.pmstart.consoletasks.read_tasks):
-        RuntimeError, OSError or ET.ParseError when schtasks cannot be read."""
+        RuntimeError, OSError or ET.ParseError when schtasks cannot be read. On Linux every
+        pm-kit job read back."""
         from kitlib.pmstart import consoletasks
         return consoletasks.read_tasks(timeout=agenttemp.TASK_TIMEOUT)
 
@@ -171,7 +263,10 @@ class Host(object):
         return get() if get is not None else None
 
     def is_admin(self):
-        """Whether this process runs elevated, so it may write under Program Files."""
+        """Whether this process runs elevated, so it may write under Program Files (on Linux:
+        as root)."""
+        if platform.NAME == 'linux':
+            return os.geteuid() == 0
         try:
             import ctypes
             return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -206,7 +301,7 @@ def run_tree(cmd, timeout=None, **kw):
     their end: a claude installed through npm is a .cmd shim, so that child is cmd.exe and node is
     its child, which holds the pipe open and keeps run waiting for it. Returns CompletedProcess."""
     from kitlib.proc import job as kjob
-    j = kjob.Job(kill_on_close=False)
+    j = kjob.Job(kill_on_close=False, short=True)
     try:
         p = j.start(cmd, **kw)
         try:
@@ -232,7 +327,10 @@ def pythonw():
 
 def survey(plan, ctx):
     if getattr(ctx, 'shortcut', True):
-        _shortcut(plan, ctx)
+        if platform.NAME == 'linux':
+            desktop_entry(plan, ctx)
+        else:
+            _shortcut(plan, ctx)
     else:
         plan.note('extras', 'machine schedule shortcut: not made in the default mode (--shortcut '
                             'makes it)')
@@ -241,6 +339,8 @@ def survey(plan, ctx):
         acl_step(plan, ctx, folder, made)
     procwatch.task_step(plan, ctx, folder)
     auto_task_step(plan, ctx)
+    if platform.NAME == 'linux':
+        linuxjobs.linger_note(plan, ctx)
     if ctx.fresh:
         plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
     else:
@@ -291,6 +391,15 @@ def auto_task_same(task, pythonw, argument):
     return False
 
 
+def auto_job(root, python=None):
+    """The Linux job of AUTO_TASK: `python <root>/AUTO_TOOL tick` in `root`, every
+    AUTO_EVERY_MINUTES minutes, ended after 10."""
+    root = os.path.normpath(root)
+    return schedule.Job(AUTO_TASK, [python or schedule.python(), os.path.join(root, AUTO_TOOL), 'tick'],
+                        root, ('every', AUTO_EVERY_MINUTES),
+                        'kit automatic tasks: starts what the Action Hub schedules', 10)
+
+
 def auto_task_step(plan, ctx):
     """Plan AUTO_TASK, the tick of the hub's automatic tasks, for the kit's live main checkout
     (worktreesweep.tool_root, as the worktree sweep tasks take it): registered when missing,
@@ -311,14 +420,21 @@ def auto_task_step(plan, ctx):
         plan.note('extras', '%s task: the kit at %s is not a main checkout (%s), so the task would run an '
                             'unreviewed copy; not planned' % (AUTO_TASK, root, place.detail or place.kind))
         return
-    pythonw = pythonw_mod.base_pythonw()
-    argument = auto_argument(root)
+    linux = platform.NAME == 'linux'
+    if not linux:
+        pythonw = pythonw_mod.base_pythonw()
+        argument = auto_argument(root)
     try:
         tasks = ctx.host.task_list()
     except (OSError, RuntimeError, ValueError, SyntaxError) as e:   # ET.ParseError is a SyntaxError
         plan.note('extras', '%s task: could not read the scheduled tasks (%s); not planned' % (AUTO_TASK, e))
         return
     have = worktreesweep.find(tasks, AUTO_TASK)
+    if linux:
+        job = auto_job(root)
+        if not schedule.same(have, job):
+            linuxjobs.plan_job(plan, ctx, job, 'update' if have else 'write')
+        return
     if have and auto_task_same(have, pythonw, argument):
         return
     line = auto_task_line(root, pythonw)
@@ -376,6 +492,9 @@ def _acl(plan, ctx, folder, made=False):
     if not made and not os.path.isdir(folder):
         plan.refuse('the agent temp folder %s does not exist' % folder)
         return
+    if platform.NAME == 'linux':
+        _chmod(plan, folder, made)
+        return
     host = ctx.host
     me = host.user()
     dom, _, name = me.partition('\\')
@@ -405,6 +524,56 @@ def _acl(plan, ctx, folder, made=False):
     plan.add('extras', text + ': ' + ' then '.join('icacls ' + ' '.join('"%s"' % a for a in c) for c in cmds),
              lambda: [host.icacls(c) for c in cmds], undo='icacls "%s" /reset' % folder,
              detail=['now: ' + l for l in acl_lines(now, folder)])
+
+
+def _chmod(plan, folder, made):
+    """Linux: the agent temp folder private to this user (mode PRIVATE), planned when it is not."""
+    mode = None
+    if not made:
+        try:
+            mode = os.stat(folder).st_mode & 0o777
+        except OSError as e:
+            plan.refuse('cannot read the permissions of %s: %s' % (folder, e))
+            return
+        if mode == PRIVATE:
+            return
+    plan.add('extras', '%s%s: mode %o, yours only: chmod %o "%s"'
+             % (folder, ' (made by this run)' if made else '', PRIVATE, PRIVATE, folder),
+             lambda: os.chmod(folder, PRIVATE),
+             undo=None if made else 'chmod %o "%s"' % (mode, folder))
+
+
+def desktop_text(kit, python):
+    """The machine schedule's desktop entry: `python` running reserve_ui.pyw in the kit."""
+    return '\n'.join(['[Desktop Entry]', 'Type=Application', 'Name=Machine schedule',
+                      'Comment=The machine schedule: reserve or release the machine',
+                      'Exec="%s" "%s"' % (python, os.path.join(kit, 'reserve_ui.pyw')),
+                      'Path=%s' % kit, 'Terminal=false', ''])
+
+
+def desktop_entry(plan, ctx):
+    """Linux's shortcut: DESKTOP_FILE under the home folder, written when it differs."""
+    path = os.path.join(ctx.home, *DESKTOP_FILE)
+    want = desktop_text(ctx.kit, sys.executable)
+    try:
+        with open(path, encoding='utf-8') as f:
+            have = f.read()
+    except FileNotFoundError:
+        have = None
+    except (OSError, ValueError) as e:
+        plan.refuse('cannot read %s: %s' % (path, e))
+        return
+    if have == want:
+        return
+
+    def write():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(want)
+
+    plan.add('extras', '%s the desktop entry %s: %s reserve_ui.pyw (in %s)'
+             % ('write' if have is None else 'rewrite', path, sys.executable, ctx.kit), write,
+             undo=('delete "%s"' % path) if have is None else 'its old text was: %r' % have)
 
 
 def acl_lines(out, folder):
@@ -465,8 +634,6 @@ def _comfy(plan, ctx):
         return
     plan.add('extras', 'user environment %s = %s (comfy_gen finds the lock tool through it; was %s)'
              % (LOCK_ENV, want, have if have else 'unset'),
-             lambda: host.env_set(LOCK_ENV, want),
-             undo=('[Environment]::SetEnvironmentVariable("%s", "%s", "User")' % (LOCK_ENV, have)) if have
-             else '[Environment]::SetEnvironmentVariable("%s", $null, "User")' % LOCK_ENV)
+             lambda: host.env_set(LOCK_ENV, want), undo=env_undo(LOCK_ENV, have))
     if have and under(have, ctx.old_kit):
         plan.note('extras', '%s pointed into the old kit' % LOCK_ENV)

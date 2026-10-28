@@ -1349,7 +1349,7 @@ class PlainCommit(unittest.TestCase):
         return decide(shell(text, self.w.wt, sub), self.w.ctx(environ=environ or {}))
 
     def test_every_marked_session_is_held(self):
-        for mark in ('coordinator', 'pm', 'deep-worker', 'conductor', 'consultant'):
+        for mark in ('coordinator', 'pm', 'deep-worker', 'consultant'):
             with self.subTest(mark):
                 d = self.decide('git commit -m x -- a.py', {context.ROLE_ENV: mark})
                 self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
@@ -1539,7 +1539,7 @@ class InterpreterGit(unittest.TestCase):
 
     def test_every_marked_session_is_held_and_the_owner_is_not(self):
         text = 'python -c "import subprocess; subprocess.run([\'git\', \'status\'])"'
-        for mark in ('coordinator', 'deep-worker', 'consultant', 'conductor', 'pm'):
+        for mark in ('coordinator', 'deep-worker', 'consultant', 'pm'):
             with self.subTest(mark):
                 self.assert_refused(self.decide(text, environ={context.ROLE_ENV: mark}, sub=False), text)
         self.assertIsNone(self.decide(text, sub=False))

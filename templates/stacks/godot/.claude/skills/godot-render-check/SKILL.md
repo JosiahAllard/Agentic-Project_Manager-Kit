@@ -5,7 +5,7 @@ description: Use in a Godot repo when you must render a frame to look at it (a p
 
 # Godot render check and e2e tiers
 
-Repo values change: look them up in the repo, do not trust this text over them. The topics are `python "{kit_root}/tools/doc_index.py" -C <worktree> --find render` (preview scenes), `--find e2e`, `--find ports`, `--find orphan`; the pass and fail strings come from the repo's rules file's "Build" section (AGENTS.md; CLAUDE.md in an older repo) and `.kit.json` gate step (`tools/gate.json`). The values below in angle brackets are the repo's.
+Repo values change: look them up in the repo, do not trust this text over them. The topics are `python "{kit_root}/tools/doc_index.py" -C <worktree> --find render` (preview scenes), `--find e2e`, `--find ports`, `--find orphan`; the pass and fail strings come from the repo's rules file's "Build" section (AGENTS.md) and `.kit.json` gate step (`tools/gate.json`). The values below in angle brackets are the repo's.
 
 ## Render a frame (light run, no lock)
 
@@ -23,6 +23,6 @@ Repo values change: look them up in the repo, do not trust this text over them. 
 2. Run the repo's e2e entry point (the one `--find e2e` names). If it takes the machine lock itself, never wrap it in another lock call; otherwise `python "{kit_root}/tools/machine_lock.py" run --repo <repo> --slug <you> --kind engine-run -- <e2e command>`. Lock exits and reservations: skill machine-lock-run.
 3. Ports: pick your block from the repo's ports doc (`--find ports`); never another session's block. The e2e entry exits non-zero if a port is bound or an orphan holds one.
 4. Sweep before and after: the repo's orphan check (`--find orphan`). Stop only a process tree you started, by pid. A leftover engine gives "Couldn't create an ENet host".
-5. Results are strings, not exit codes (godot.cmd's exit status lies). Read the pass strings the repo's rules file (AGENTS.md or CLAUDE.md) names (for a stock template: the test scene's `ENGINE_TEST_PASS_STRING`, `UNIT TESTS OK`).
-6. Fail anywhere: `SCRIPT ERROR`, `Unhandled exception`, `System.*Exception`, `FATAL`, `Fatal error`, `Method not found`. Warn, identify first: `Node not found`, `Invalid packet received`, `Failed to get cached node`, `Leaked unsafe reference`. Noise: `Parameter m is null`, `Unable to start the timer`, `mesh_get_surface`. Check stderr too: an unexplained `ERROR:` is a failure. (Source of truth: the repo's rules file, AGENTS.md or CLAUDE.md.)
+5. Results are strings, not exit codes (godot.cmd's exit status lies). Read the pass strings the repo's rules file (AGENTS.md) names (for a stock template: `UNIT TESTS OK` from the gate's godot-tests step, `ENGINE TESTS OK` from the engine test command).
+6. Fail anywhere: `SCRIPT ERROR`, `Unhandled exception`, `System.*Exception`, `FATAL`, `Fatal error`, `Method not found`. Warn, identify first: `Node not found`, `Invalid packet received`, `Failed to get cached node`, `Leaked unsafe reference`. Noise: `Parameter m is null`, `Unable to start the timer`, `mesh_get_surface`. Check stderr too: an unexplained `ERROR:` is a failure. (Source of truth: the repo's rules file, AGENTS.md.)
 7. Name the string that would be absent without your change and find it in the log before reporting. Never truncate the output.

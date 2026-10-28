@@ -1,6 +1,7 @@
 """kitlib.lockui.window and reserve_ui.pyw: import smoke tests, and the window's refresh and
 write paths with a fake client (skipped where tkinter has no display). The new files also pass the
 shipped-text scrub (tests/shipped.py)."""
+import datetime as dt
 import importlib.util
 import os
 import threading
@@ -325,6 +326,111 @@ class Window(unittest.TestCase):
         self.assertEqual(c.reads, reads)
         self.assertEqual(app.snap["revision"], 2)
         self.assertTrue(app.game_on.get())
+
+
+def busy_view(now):
+    """A snapshot and history lines around `now` (aware): a held run, an owner whole hold, a half
+    hold, an agent hold, and ten runs that ended in the last hours (the strip's history items)."""
+    def at(minutes):
+        return (now + dt.timedelta(minutes=minutes)).astimezone(dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+    snap = dict(GOOD, revision=3,
+                hardware={"memory_mb": {"total": 65536, "free": 16384}},
+                layout={"cpu_slots": 4, "gpu_slots": 1, "agent_cap": 2},
+                slots={"cpu": [{"slot": i, "holder": "r-A" if i < 2 else None, "hold": None,
+                                "hold_owner": None} for i in range(4)],
+                       "gpu": [{"slot": 0, "holder": None, "hold": None, "hold_owner": None}]},
+                runs=[{"id": "r-A", "state": "held", "repo": "kit", "slug": "suite",
+                       "kind": "engine-test", "since": at(-30), "held_since": at(-20), "expect_s": 600,
+                       "cores": [0, 1], "gpus": [], "expected_end": at(-10), "usage": {}}],
+                holds=[{"id": "h-whole", "owner": "owner", "scope": "whole", "start": at(60),
+                        "end": at(180), "note": "gaming", "covers": {"cpu": [0, 1, 2, 3], "gpu": [0]},
+                        "slots_fixed": True, "live": False},
+                       {"id": "h-half", "owner": "owner", "scope": "half", "start": at(-60),
+                        "end": at(30), "note": None, "covers": {"cpu": [2], "gpu": []},
+                        "slots_fixed": False, "live": True},
+                       {"id": "h-agent", "owner": "agent", "scope": "slots", "start": at(-10),
+                        "end": at(90), "repo": "svc", "slug": "train", "kind": "local-ai",
+                        "state": "open", "slots": {"cpu": [3], "gpu": [0]},
+                        "covers": {"cpu": [3], "gpu": []}, "slots_fixed": True, "live": True}])
+    hist = [{"id": "r-h%d" % k, "repo": "kit", "slug": "gate", "kind": "engine-test",
+             "since": at(-60 - 30 * k), "held_since": at(-55 - 30 * k), "ended": at(-35 - 30 * k),
+             "expect_s": 600, "cores": [0, 1], "gpus": [], "code": 0} for k in range(10)]
+    return snap, hist
+
+
+@unittest.skipUnless(HAVE_TK, "no tkinter display")
+class CanvasItems(unittest.TestCase):
+    """Tk keeps memory for every canvas item made and deleted, so a redraw reuses the items the
+    last one made (window.Items): the window held 2.6 GB after days of redraws when each one
+    deleted and made them all again."""
+
+    def setUp(self):
+        from kitlib.lockui import window
+        self.window = window
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        local = dt.datetime.now().astimezone()
+        self.now = local.replace(hour=15, minute=10, second=0, microsecond=0)
+        fixed = self.now.replace(tzinfo=None)
+
+        class Fixed(dt.datetime):          # the window's clock, so two draws match
+            @classmethod
+            def now(cls, tz=None):
+                return fixed
+        patch = mock.patch.object(window, "dt", mock.Mock(datetime=Fixed, timedelta=dt.timedelta))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.busy = busy_view(self.now)
+
+    def app(self, parent=None):
+        return self.window.App(parent or self.root, FakeClient(), auto_refresh=False, threaded=False)
+
+    def show(self, app, k):
+        """Variant k of the window's state: busy or empty, today or a day back, a dragged window,
+        a picked hold."""
+        app.load(*(self.busy if k % 2 == 0 else (GOOD, [])))
+        app.offset = -1 if k % 3 == 1 else 0
+        app.sel = (k % 7, 34, 36) if k % 4 == 0 else None
+        app.picked = "h-whole" if k % 5 == 0 and k % 2 == 0 else None
+        app.draw()
+
+    @staticmethod
+    def picture(cv):
+        """The visible items, bottom to top: (type, coords, options)."""
+        keys = {"rectangle": ("fill", "outline", "width", "stipple"),
+                "text": ("text", "font", "fill", "anchor"), "line": ("fill", "width")}
+        return [(cv.type(i), [round(c, 1) for c in cv.coords(i)],
+                 [cv.itemcget(i, o) for o in keys[cv.type(i)]])
+                for i in cv.find_all() if cv.itemcget(i, "state") != "hidden"]
+
+    def test_redraws_make_no_new_canvas_items(self):
+        app = self.app()
+        for k in range(12):                     # every variant once: the items the most needs
+            self.show(app, k)
+        top = (max(app.cv.find_all()), max(app.cm.find_all()))
+        for k in range(50):
+            self.show(app, k % 12)
+        self.assertEqual((max(app.cv.find_all()), max(app.cm.find_all())), top)
+
+    def test_a_redraw_shows_what_a_first_draw_shows(self):
+        app = self.app()
+        for k in range(12):
+            self.show(app, k)
+        for k in (0, 1, 4, 10):                 # busy today, empty a day back, dragged, picked
+            self.show(app, k)
+            fresh = self.app(tk.Toplevel(self.root))
+            self.show(fresh, k)
+            self.assertGreater(len(self.picture(fresh.cv)), 50)
+            self.assertEqual(self.picture(app.cv), self.picture(fresh.cv), k)
+            self.assertEqual(self.picture(app.cm), self.picture(fresh.cm), k)
+
+    def test_an_option_outside_the_full_set_is_refused(self):
+        items = self.window.Items(tk.Canvas(self.root))
+        items.begin()
+        with self.assertRaises(TypeError):
+            items.add("rectangle", 1, 1, 5, 5, dash=(2, 2))
 
 
 if __name__ == "__main__":

@@ -62,6 +62,49 @@ def dark_theme(root):
     st.configure("Dim.TLabel", foreground=DARK["grid_hour"])
 
 
+class Items:
+    """A canvas's items, kept from one draw to the next. Tk (9.0.4 at least) keeps about 80
+    bytes for every canvas item created and deleted, so a window that redrew with delete("all")
+    and create_* grew by gigabytes over days. A draw instead reuses the items the last draw made:
+    begin(), then add() each item in drawing order (it moves a kept item of that kind, sets its
+    full option set and raises it to the top, or makes one when none is left), then end() hides
+    the ones this draw did not use."""
+
+    OPTS = {"rectangle": {"fill": "", "outline": "black", "width": 1, "stipple": ""},
+            "text": {"text": "", "font": "TkDefaultFont", "fill": "black", "anchor": "center"},
+            "line": {"fill": "black", "width": 1}}
+
+    def __init__(self, cv):
+        self.cv = cv
+        self.kept = {k: [] for k in self.OPTS}
+        self.used = dict.fromkeys(self.OPTS, 0)
+
+    def begin(self):
+        self.used = dict.fromkeys(self.OPTS, 0)
+
+    def add(self, kind, *coords, **opts):
+        unknown = set(opts) - set(self.OPTS[kind])
+        if unknown:
+            raise TypeError("%s option(s) %s are not in Items.OPTS" % (kind, sorted(unknown)))
+        opts = dict(self.OPTS[kind], **opts)
+        kept, i = self.kept[kind], self.used[kind]
+        self.used[kind] = i + 1
+        if i < len(kept):
+            item = kept[i]
+            self.cv.coords(item, *coords)
+            self.cv.itemconfigure(item, state="normal", **opts)
+            self.cv.tag_raise(item)
+            return item
+        item = getattr(self.cv, "create_" + kind)(*coords, **opts)
+        kept.append(item)
+        return item
+
+    def end(self):
+        for kind, kept in self.kept.items():
+            for item in kept[self.used[kind]:]:
+                self.cv.itemconfigure(item, state="hidden")
+
+
 class App:
     """threaded False reads on the Tk thread (tests, the screenshot demo)."""
 
@@ -128,6 +171,7 @@ class App:
         self.cv = tk.Canvas(left, width=LEFT + DAYS * COL_W + 1, height=TOP + ROWS * ROW_H + 1,
                             bg=DARK["bg"], highlightthickness=0)
         self.cv.pack(padx=6, pady=6)
+        self.cv_items = Items(self.cv)
         self.cv.bind("<ButtonPress-1>", self.press)
         self.cv.bind("<B1-Motion>", self.motion)
         self.cv.bind("<ButtonRelease-1>", self.up)
@@ -143,6 +187,7 @@ class App:
         self.cm = tk.Canvas(side, width=SIDE_W, height=2 * CORE_H + MEM_H, bg=DARK["bg"],
                             highlightthickness=0)
         self.cm.pack(anchor="w", pady=(2, 6))
+        self.cm_items = Items(self.cm)
         self.details = self.panel(side, "Running now", 10)
         self.queue = self.panel(side, "Queue", 7)
         self.booked = self.panel(side, "Agent holds", 3)
@@ -262,8 +307,8 @@ class App:
 
     # ---------------------------------------------------------------- slot map
     def draw_cores(self):
-        cv, cores = self.cm, self.view["cores"]
-        cv.delete("all")
+        cv, cores, items = self.cm, self.view["cores"], self.cm_items
+        items.begin()
         self.core_head.set(cores["head"])
         n = len(cores["cpu"])
         cols = max(1, min(8, (n + 1) // 2))
@@ -277,12 +322,12 @@ class App:
                 outline = COLOURS["booked"] if b["outline"] == "agent" else COLOURS.get(
                     b["outline"], COLOURS["whole"])
                 width = 3
-            cv.create_rectangle(x + 2, y + 2, x + bw - 2, y + CORE_H - 2, fill=fill,
-                                outline=outline, width=width)
+            items.add("rectangle", x + 2, y + 2, x + bw - 2, y + CORE_H - 2, fill=fill,
+                      outline=outline, width=width)
             ink = DARK["ink"] if rid else DARK["fg"]
-            cv.create_text(x + 6, y + 5, anchor="nw", text=b["title"], font=("Segoe UI", 8), fill=ink)
-            cv.create_text(x + 6, y + CORE_H - 5, anchor="sw", text=b["label"][:max(4, bw // 7)],
-                           font=("Segoe UI", 8, "bold" if rid else "normal"), fill=ink)
+            items.add("text", x + 6, y + 5, anchor="nw", text=b["title"], font=("Segoe UI", 8), fill=ink)
+            items.add("text", x + 6, y + CORE_H - 5, anchor="sw", text=b["label"][:max(4, bw // 7)],
+                      font=("Segoe UI", 8, "bold" if rid else "normal"), fill=ink)
 
         for i, b in enumerate(cores["cpu"]):
             box((i % cols) * bw, (i // cols) * CORE_H, b)
@@ -293,16 +338,17 @@ class App:
         mem = self.view["memory"]
         if mem and mem.get("free_mb") is not None:
             used = 1 - mem["free_mb"] / mem["total_mb"]
-            cv.create_rectangle(2, y + 4, SIDE_W - 2, y + 14, fill=DARK["field"], outline=DARK["grid"])
-            cv.create_rectangle(2, y + 4, 2 + (SIDE_W - 4) * used, y + 14,
-                                fill=COLOURS["late"] if used > 0.9 else COLOURS["agent"], outline="")
-            cv.create_text(2, y + 16, anchor="nw", font=("Segoe UI", 8), fill=DARK["fg"],
-                           text="memory: %s MB free of %s MB (%d%% in use)" % (
-                               format(mem["free_mb"], ","), format(mem["total_mb"], ","), used * 100))
+            items.add("rectangle", 2, y + 4, SIDE_W - 2, y + 14, fill=DARK["field"], outline=DARK["grid"])
+            items.add("rectangle", 2, y + 4, 2 + (SIDE_W - 4) * used, y + 14,
+                      fill=COLOURS["late"] if used > 0.9 else COLOURS["agent"], outline="")
+            items.add("text", 2, y + 16, anchor="nw", font=("Segoe UI", 8), fill=DARK["fg"],
+                      text="memory: %s MB free of %s MB (%d%% in use)" % (
+                          format(mem["free_mb"], ","), format(mem["total_mb"], ","), used * 100))
         else:
-            cv.create_text(2, y + 4, anchor="nw", font=("Segoe UI", 8), fill=DARK["fg"],
-                           text="memory: %s" % ("%s MB, free not reported" % format(mem["total_mb"], ",")
-                                                if mem else "not reported"))
+            items.add("text", 2, y + 4, anchor="nw", font=("Segoe UI", 8), fill=DARK["fg"],
+                      text="memory: %s" % ("%s MB, free not reported" % format(mem["total_mb"], ",")
+                                           if mem else "not reported"))
+        items.end()
         cv.config(height=y + MEM_H + 2)
 
     # ---------------------------------------------------------------- drawing
@@ -316,31 +362,33 @@ class App:
         self.draw()
 
     def draw(self):
-        cv, now = self.cv, dt.datetime.now().astimezone()
+        items, now = self.cv_items, dt.datetime.now().astimezone()
         today = m.day_start(now)
         self.day0 = m.day_start(now, self.offset)
-        cv.delete("all")
+        items.begin()
         for d in range(DAYS):
             x = LEFT + d * COL_W
             day = self.day0 + dt.timedelta(days=d)
-            cv.create_text(x + COL_W / 2, TOP / 2, text=("Today " if day.date() == now.date() else "")
-                           + day.strftime("%a %d %b"), font=("Segoe UI", 9, "bold"), fill=DARK["fg"])
-            cv.create_line(x, TOP, x, TOP + ROWS * ROW_H, fill=DARK["grid_hour"])
+            items.add("text", x + COL_W / 2, TOP / 2, text=("Today " if day.date() == now.date() else "")
+                      + day.strftime("%a %d %b"), font=("Segoe UI", 9, "bold"), fill=DARK["fg"])
+            items.add("line", x, TOP, x, TOP + ROWS * ROW_H, fill=DARK["grid_hour"])
         for r in range(ROWS + 1):
             y = TOP + r * ROW_H
-            cv.create_line(LEFT, y, LEFT + DAYS * COL_W, y, fill=DARK["grid"] if r % 2 else DARK["grid_hour"])
+            items.add("line", LEFT, y, LEFT + DAYS * COL_W, y,
+                      fill=DARK["grid"] if r % 2 else DARK["grid_hour"])
             if r % 2 == 0 and r < ROWS:
-                cv.create_text(LEFT - 4, y, text="%02d:00" % (r // 2), anchor="e",
-                               font=("Segoe UI", 8), fill=DARK["fg"])
+                items.add("text", LEFT - 4, y, text="%02d:00" % (r // 2), anchor="e",
+                          font=("Segoe UI", 8), fill=DARK["fg"])
         for d in range(DAYS):                       # the past is greyed
             for r in range(ROWS):
                 if self.cell_time(d, r + 1) <= now:
                     x, y = LEFT + d * COL_W, TOP + r * ROW_H
-                    cv.create_rectangle(x + 1, y + 1, x + COL_W, y + ROW_H, fill=DARK["past"], outline="")
+                    items.add("rectangle", x + 1, y + 1, x + COL_W, y + ROW_H, fill=DARK["past"],
+                              outline="")
         if self.sel:
             d, a, b = self.sel
             x, y0, y1 = LEFT + d * COL_W, TOP + a * ROW_H, TOP + (b + 1) * ROW_H
-            cv.create_rectangle(x + 2, y0 + 1, x + COL_W - 2, y1, fill=COLOURS["sel"], outline="")
+            items.add("rectangle", x + 2, y0 + 1, x + COL_W - 2, y1, fill=COLOURS["sel"], outline="")
         self.boxes = []
         lanes = self.view["lanes"]
         lw = STRIP_W / lanes
@@ -351,33 +399,35 @@ class App:
                     "hist": COLOURS["late"] if it.get("late") else COLOURS["ran"]}[it["type"]]
             for x, y0, y1 in self.segments(it["_s"], it["_e"]):
                 x0 = x + COL_W - STRIP_X + lane * lw
-                cv.create_rectangle(x0, y0 + 1, x0 + lw - (1 if lanes > 1 else 0), max(y1 - 1, y0 + 2),
-                                    fill=fill, outline="",
-                                    stipple="gray50" if it["open"] or it["type"] == "wait" else "")
+                items.add("rectangle", x0, y0 + 1, x0 + lw - (1 if lanes > 1 else 0), max(y1 - 1, y0 + 2),
+                          fill=fill, outline="",
+                          stipple="gray50" if it["open"] or it["type"] == "wait" else "")
             if it.get("_x"):
                 for x, y0, y1 in self.segments(it["_s"], it["_x"]):
                     x0 = x + COL_W - STRIP_X + lane * lw
-                    cv.create_rectangle(x0, y0 + 1, x0 + lw - 1, max(y1 - 1, y0 + 2),
-                                        outline=COLOURS["expect"], width=1)
+                    items.add("rectangle", x0, y0 + 1, x0 + lw - 1, max(y1 - 1, y0 + 2),
+                              outline=COLOURS["expect"], width=1)
         for h in self.view["holds"]:
             key = "game" if h.get("owner") == "game" else h.get("scope")
             for x, y0, y1 in self.segments(h["_s"], h["_e"]):
                 picked = h["id"] == self.picked
-                cv.create_rectangle(x + 4, y0 + 1, x + COL_W - 26, y1 - 1,
-                                    fill=COLOURS.get(key, COLOURS["whole"]),
-                                    outline=DARK["pick"] if picked else "", width=3 if picked else 1)
+                items.add("rectangle", x + 4, y0 + 1, x + COL_W - 26, y1 - 1,
+                          fill=COLOURS.get(key, COLOURS["whole"]),
+                          outline=DARK["pick"] if picked else "", width=3 if picked else 1)
                 if y1 - y0 >= ROW_H:
-                    cv.create_text(x + (COL_W - 22) / 2, y0 + 7, text="%s %s-%s" % (
+                    items.add("text", x + (COL_W - 22) / 2, y0 + 7, text="%s %s-%s" % (
                         key, h["_s"].strftime("%H:%M"), h["_e"].strftime("%H:%M")),
                         font=("Segoe UI", 8), fill="white")
                 if key != "whole" and y1 - y0 >= 2 * ROW_H:
-                    cv.create_text(x + (COL_W - 22) / 2, y0 + 7 + ROW_H, text=m.slots_text(h, short=True),
-                                   font=("Segoe UI", 8), fill="white")
+                    items.add("text", x + (COL_W - 22) / 2, y0 + 7 + ROW_H,
+                              text=m.slots_text(h, short=True), font=("Segoe UI", 8), fill="white")
                 self.boxes.append((x, y0, x + COL_W - 26, y1, h["id"]))
         d = (today - self.day0).days                # now line, in today's column when shown
         if 0 <= d < DAYS:
             y = TOP + (now - today).total_seconds() / 1800 * ROW_H
-            cv.create_line(LEFT + d * COL_W, y, LEFT + (d + 1) * COL_W, y, fill=COLOURS["now"], width=2)
+            items.add("line", LEFT + d * COL_W, y, LEFT + (d + 1) * COL_W, y, fill=COLOURS["now"],
+                      width=2)
+        items.end()
         self.draw_cores()
 
     def segments(self, s, e):

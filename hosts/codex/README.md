@@ -1,10 +1,10 @@
 # Codex host
 
-Codex's slot in the multi-host kit (docs/multi-host-plan.md step 9; docs/new-host.md). It carries the
-Codex companion plugin's behaviour onto the host contract. **Nothing here is installed or activated
-on any machine, and live parity with the default host is not verified.** The package passes the
-conformance suite on payloads in the branch's recorded shapes; no installed Codex client has run it.
-Every rendered agent file says so in its header comment.
+Codex's slot in the multi-host kit (docs/multi-host-plan.md step 9; docs/new-host.md): the Codex
+companion plugin's behaviour on the host contract. **Nothing here is installed or activated on any
+machine, and live parity with the default host is not verified.** The package passes the conformance
+suite on payloads in the branch's recorded shapes; no installed Codex client has run it. Every
+rendered agent file says so in its header comment.
 
 ## What is here
 
@@ -23,10 +23,10 @@ Every rendered agent file says so in its header comment.
 | Native checks | `shell/scripts/runtime_probe.py`, `command_canary.py`, `permissions_canary.py`, `workflow_canary.py` | run by hand against an installed `codex.exe`; none runs in the gate |
 
 The plugin root is `shell/`, so its hooks cannot name the kit's `boot/hook.py`: a plugin cache holds
-the plugin folder alone. That is why the plugin ships its own copy of the kit's boot folder and of its
-`hosts.json` entry (plan step 14 kept them for this reason). In a kit checkout its entries boot that
-kit; copied out of it (a plugin cache), they bind `PM_KIT_ROOT` and a pinned release
-`PM_KIT_RELEASE_ID`, verified by the plugin's own boot check (docs/kitboot.md).
+the plugin folder alone, so the plugin ships its own copy of the kit's boot folder and of its
+`hosts.json` entry. In a kit checkout its entries boot that kit; copied out of it (a plugin cache),
+they bind `PM_KIT_ROOT` and a pinned release `PM_KIT_RELEASE_ID`, verified by the plugin's own boot
+check (docs/kitboot.md).
 
 ## How a session is held
 
@@ -72,8 +72,7 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   docs/multi-host-plan.md section 7) until a live install shows that a Codex plugin can name a
   skills folder outside its plugin root (here `../../../content/skills/`) and that a plugin cache
   copied out of the kit still carries it. The check: install the plugin with `plugin.json` naming
-  that folder, start a session, and list its skills; then do the same from a plugin cache. Until
-  both pass, `adapter/content.py` copies the skills and owns `shell/skills/`.
+  that folder, start a session, and list its skills; then do the same from a plugin cache.
 - **Runtime.** The branch's canaries passed on that binary against fixtures; the native local Git
   preparation stayed refused (`workflow_canary` reports `complete=false`). Rerun them for any new
   binary. Live controller, store and lock contention, and landing are not accepted. A read or lander
@@ -87,7 +86,7 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   are refused in every marked session, and the launcher (`adapter/launcher.py`) plans a launch but
   runs nothing. The rendered roles name spawn_agent and send_message as not available to a Codex
   agent. On Codex the owner starts each agent session by hand.
-- Hook payloads carry no child identity (above), so a child is held as its parent's role.
+- The Codex plugin copy (the cache and the marketplace copy) is refreshed by `python <kit>/tools/plugin_refresh.py --apply` from the owner's session, with Codex closed: it mirrors the export's `shell/` skills, agents, hooks and `.codex-plugin` into the folders `config.toml` names (`adapter/plugin_copy.py`, the step `ADAPTER.plugin_copy` hands it; docs/plugin-source.md "Host plugin copies"). A changed `hooks.json` makes Codex ask the owner to trust the hook again. The session-start hook still warns when the copy's skills are behind the kit's (`adapter/start.py` `stale_line`).
 - A main checkout with no `.kit.json` lets a force push to main through, as the shared guard does
   on every host today (baseline behaviour, not this host's). The runtime broker refuses every call
   while a `.kit.json` exists but does not load (`host-runtime-error`).

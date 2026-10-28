@@ -3,6 +3,7 @@ it: the base install's, never a WindowsApps alias. Nothing is registered here: P
 import os
 import sys
 import unittest
+from unittest import mock
 
 from kitlib.launcher import autostart
 from kitlib.launcher import pythonw as P
@@ -39,6 +40,7 @@ class Helper(unittest.TestCase):
         self.assertIsNone(P.refusal(os.path.join(BASE, 'pythonw.exe'), isfile=lambda p: True))
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Install(unittest.TestCase):
 
     def test_with_no_python_named_the_task_runs_the_base_install_pythonw(self):

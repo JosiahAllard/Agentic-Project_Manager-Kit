@@ -419,10 +419,16 @@ class Outbox:
                     except Exception:reason='native-before-write'
                     db.execute("UPDATE messages SET state='failed',last_confirmed='failed',reason=? WHERE id=?",(reason,operation))
                     self._event(db,operation,'failed')
-                except Exception:
+                except Exception as uncertain:
                     db.execute('ROLLBACK TO native_receipt')
                     self._release_reservation(db,operation)
-                    db.execute("UPDATE messages SET state='unknown',reason='native-outcome-uncertain' WHERE id=?",(operation,))
+                    # The generic reason, with the adapter's own code appended when it is an
+                    # identifier. The code names the adapter's outcome class (for Codex always
+                    # codex-native-result-unconfirmed), not which check after the write failed.
+                    reason='native-outcome-uncertain'
+                    try:reason=identifier(reason+':'+uncertain.code)
+                    except Exception:pass
+                    db.execute("UPDATE messages SET state='unknown',reason=? WHERE id=?",(reason,operation))
                     self._event(db,operation,'unknown')
                 db.execute('RELEASE native_receipt')
                 self._release_reservation(db,operation)

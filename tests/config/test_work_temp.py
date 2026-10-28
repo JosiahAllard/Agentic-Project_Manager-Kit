@@ -91,7 +91,9 @@ class WorkTemp(unittest.TestCase):
     def test_elsewhere_it_is_the_shared_temp(self):
         with mock.patch('tempfile.gettempdir', return_value='/tmp/x'):
             self.assertEqual(user.work_temp('/srv/repo', home=self.home, environ={},
-                                            platform='linux'), '/tmp/x')
+                                            platform='linux'), '/tmp')
+            self.assertEqual(user.work_temp('/srv/repo', home=self.home, environ={},
+                                            platform='darwin'), '/tmp/x')
 
 
 class MakeTemp(unittest.TestCase):

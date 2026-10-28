@@ -1040,8 +1040,9 @@ def render_sources(root, paths):
     return got
 
 
-# The approval an --owner-approval commit carries: the hub client, its id (A-<n>), its document.
-_Hub = collections.namedtuple('_Hub', 'client did doc')
+# The approval an --owner-approval commit carries: the hub client, its id (A-<n>), its document,
+# and the HEAD the steps before the write judged it on (None until _approval_before_write).
+_Hub = collections.namedtuple('_Hub', 'client did doc head', defaults=(None,))
 
 
 def _approval_first(req, root, paths):
@@ -1069,8 +1070,9 @@ def _approval_first(req, root, paths):
 
 
 def _approval_before_write(root, hub, paths, status_before):
-    """`hub` once the approved change may be written: none of its paths staged already, the paths
-    and base its own (approval.prewrite_error), and the hub verifying it for HEAD; else _Stop."""
+    """`hub`, with the HEAD it was judged on, once the approved change may be written: none of its
+    paths staged already, the paths its own and HEAD on its base's content
+    (approval.prewrite_error), and the hub verifying it for HEAD; else _Stop."""
     staged = sorted(set(status_before) & set(approval.approved_paths(hub.doc)))
     why = None
     if staged:
@@ -1081,7 +1083,7 @@ def _approval_before_write(root, hub, paths, status_before):
     why = why or approval.preverify_error(root, hub.client, hub.did, hub.doc, head)
     if why:
         raise _Stop(REFUSED, 'refused: %s. Nothing was written or committed.' % why)
-    return hub
+    return hub._replace(head=head)
 
 
 def _stage(req, root, paths, rendered, named, merged, status_before, msg_warnings, body, trailers,
@@ -1112,7 +1114,7 @@ def _stage(req, root, paths, rendered, named, merged, status_before, msg_warning
     # after the machine-path check, so the blobs checked are the blobs committed.
     head = head_commit(root)
     snap = index_snapshot(root, status_after)
-    why = hub and approval.staged_error(hub.doc, head, status_after, snap)
+    why = hub and approval.staged_error(hub.doc, head, status_after, snap, hub.head)
     if why:
         raise _Stop(REFUSED, 'refused: %s. Nothing was committed.' % why)
     refusal, warnings = staged_machine_path_error(root, status_after, status_before)

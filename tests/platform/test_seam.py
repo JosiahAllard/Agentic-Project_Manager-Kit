@@ -41,16 +41,23 @@ class Backends(unittest.TestCase):
     def test_the_linux_hardware_primitives_are_the_readers(self):
         linux = importlib.import_module('kitlib.platform.linux')
         hardware = importlib.import_module('kitlib.platform.linux.hardware')
-        self.assertEqual(sorted(linux.BUILT), ['hardware'])
+        self.assertEqual(sorted(linux.BUILT), ['affinity', 'hardware', 'process'])
         for name in api.HARDWARE:
             with self.subTest(name=name):
                 self.assertIs(getattr(linux, name), getattr(hardware, name))
+
+    def test_the_linux_affinity_primitives_are_linux_cpus(self):
+        linux = importlib.import_module('kitlib.platform.linux')
+        lcpu = importlib.import_module('kitlib.platform.linux.cpu')
+        for name in api.AFFINITY:
+            with self.subTest(name=name):
+                self.assertIs(getattr(linux, name), getattr(lcpu, name))
 
     def test_every_other_linux_primitive_is_a_stub_naming_itself_and_its_slice(self):
         linux = importlib.import_module('kitlib.platform.linux')
         self.assertEqual(sorted(linux.__all__), sorted(api.NAMES))
         for area, (names, slice_number) in api.AREAS.items():
-            if area == 'hardware':
+            if area in linux.BUILT:
                 continue
             for name in names:
                 with self.subTest(name=name):

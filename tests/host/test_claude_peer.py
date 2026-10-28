@@ -169,6 +169,18 @@ class Resolve(unittest.TestCase):
         self.assertTrue(hub.is_pm('pm-session'))
         self.assertFalse(hub.is_pm('kit'))
 
+    def test_coordinators_json_pm_name_is_a_pm_sender_but_never_a_fallback_target(self):
+        self.m.session(23, 'pm-session', sid='pm-sid-old')         # stood down by pm-relaunch, still running
+        self.m.session(24, 'pm-b', sid='pm-sid-fork')
+        self.m.put(self.m.state, 'coordinators.json', {'pm_session_id': 'pm-sid-fork', 'pm_name': 'pm-b'})
+        hub = self.m.hub()
+        self.assertTrue(hub.is_pm('pm-b'))
+        self.assertEqual(hub.resolve(push.PM_KEY).record['pid'], 24, 'a healthy fork: by its session id')
+        self.m.put(self.m.state, 'coordinators.json', {'pm_session_id': 'pm-sid-gone', 'pm_name': 'pm-b'})
+        self.assertEqual(hub.resolve(push.PM_KEY).record['pid'], 23, 'a stale pm_name is no target')
+        self.m.put(self.m.state, 'coordinators.json', {'pm_session_id': 'pm-sid-gone', 'pm_name': '<name>'})
+        self.assertFalse(hub.is_pm('<name>'))
+
     def test_two_live_sessions_of_one_name_take_pipes_json_else_the_newest_flagged(self):
         self.m.session(31, 'x-a1', start=9000)
         self.m.session(32, 'x-a1', start=8000)

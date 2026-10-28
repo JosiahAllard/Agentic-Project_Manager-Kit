@@ -5,6 +5,7 @@ and its refusals. Fake identities only (example.invalid). The wrapper's own part
 passing, the PowerShell location, the console encoding) is tests/stubs/test_new_repo.py, Windows."""
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -12,11 +13,11 @@ import sys
 import unittest
 from unittest import mock
 
-from kitlib import config, stubs
+from kitlib import config, kitcmd
 from kitlib.machinesetup import repo as R
 from tests import gitfixture
 
-KIT = stubs.KIT_ROOT
+KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_setup.py')
 OWNER = 'owner@example.invalid'
 AGENT = 'agent@example.invalid'
@@ -57,27 +58,15 @@ class Base(unittest.TestCase):
 class DryRunAndApply(Base):
     def test_the_dry_run_writes_nothing(self):
         before = sorted(os.listdir(self.root))
-        code, out = self.run_it(stubs=True)
+        code, out = self.run_it()
         self.assertEqual(code, R.EXIT_OK, out)
         self.assertIn('DRY RUN', out)
         self.assertIn('"email": "%s"' % OWNER, out)
-        self.assertIn('would write  %s' % os.path.join(self.root, 'tools', 'landed.py'), out)
+        self.assertNotIn('kit_stubs', out)
         self.assertEqual(sorted(os.listdir(self.root)), before)
 
-    def test_no_stubs_without_the_switch(self):
-        """Decision 21 (docs/multi-host-plan.md section 7): a repository holds no stubs unless asked."""
-        code, out = self.run_it()
-        self.assertEqual(code, R.EXIT_OK, out)
-        self.assertIn('none (skills and roles run', out)
-        self.assertNotIn('would write  %s' % os.path.join(self.root, 'tools', 'landed.py'), out)
-        code, out = self.run_it(apply=True)
-        self.assertEqual(code, R.EXIT_OK, out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')), out)
-        self.assertIn('new-repo: wrote .kit.json and the starter files', out)
-        self.assertNotIn('kit_stubs', out)
-
-    def test_apply_writes_the_config_and_the_stubs(self):
-        code, out = self.run_it(apply=True, stubs=True, main_branch='master')
+    def test_apply_writes_the_config_and_no_stubs(self):
+        code, out = self.run_it(apply=True, main_branch='master')
         self.assertEqual(code, R.EXIT_OK, out)
         with open(os.path.join(self.root, '.kit.json'), encoding='utf-8') as fh:
             data = json.load(fh)
@@ -85,10 +74,8 @@ class DryRunAndApply(Base):
         self.assertEqual(data, {'repo': {'main_branch': 'master', 'name': 'repo'},
                                 'backlog': {'store': 'ref'},
                                 'owner': {'email': OWNER, 'agent_emails': [AGENT]}})
-        got = stubs.run(self.root, 'check')
-        self.assertEqual(got.code, stubs.OK, got.lines)
-        for name in ('land', 'ledger', 'gate', 'preflight', 'new_worktree'):
-            self.assertTrue(os.path.isfile(os.path.join(self.root, 'tools', name + '.py')), name)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')), out)
+        self.assertNotIn('kit_stubs', out)
         code, out = self.run_it(apply=True)
         self.assertEqual(code, R.EXIT_REFUSED, out)
         self.assertIn('.kit.json exists already', out)
@@ -168,15 +155,13 @@ class DryRunAndApply(Base):
 
 class Stacks(Base):
     def test_stack_writes_the_gate_section_the_lists_and_loads(self):
-        code, out = self.run_it(apply=True, stubs=True, stack='python')
+        code, out = self.run_it(apply=True, stack='python')
         self.assertEqual(code, R.EXIT_OK, out)
         cfg = config.load(self.root)
         self.assertEqual(cfg.section_file('gate'), 'tools/gate.json')
         self.assertEqual([st['name'] for st in cfg.section('gate')['steps']], ['unit-tests'])
         self.assertIn('__pycache__/', self.read('.gitignore').splitlines())
         self.assertIn('*.pyc        binary', self.read('.gitattributes').splitlines())
-        got = stubs.run(self.root, 'check')
-        self.assertEqual(got.code, stubs.OK, got.lines)
         self.assertIn("'Ran N tests'", out)
 
     def test_append_keeps_crlf_and_stack_comments_are_not_missing_lines(self):
@@ -255,23 +240,6 @@ class Stacks(Base):
             self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
             self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
 
-    def test_a_stack_tools_file_named_like_a_stub_refuses_at_plan_time(self):
-        kit = self.kit_copy()
-        stack = os.path.join(kit, 'templates', 'stacks', 'clash')
-        os.makedirs(os.path.join(stack, 'tools'))
-        shutil.copy(os.path.join(kit, 'templates', 'stacks', 'python', 'stack.json'), stack)
-        shutil.copy(os.path.join(kit, 'templates', 'stacks', 'python', 'tools', 'gate.json'),
-                    os.path.join(stack, 'tools'))
-        with open(os.path.join(stack, 'tools', 'Landed.py'), 'w', encoding='utf-8') as fh:
-            fh.write("print('not a stub')\n")
-        before = sorted(os.listdir(self.root))
-        for apply in (False, True):
-            code, out = self.run_it(apply=apply, stubs=True, stack='clash')
-            self.assertEqual(code, R.EXIT_REFUSED, out)
-            self.assertIn("REFUSED - the clash stack's tools file Landed.py has the name of a kit tool stub", out)
-            self.assertEqual(sorted(os.listdir(self.root)), before)
-
-
 class Refusals(Base):
     def test_identities(self):
         code, out = self.run_it(owner=OWNER, agent=OWNER.upper())
@@ -314,13 +282,6 @@ class Refusals(Base):
         self.assertIn('give --repo-name', out)
         self.assertFalse(os.path.exists(os.path.join(odd, '.kit.json')))
         self.assertEqual(sorted(os.listdir(self.root)), before)
-
-    def test_a_file_where_a_stub_goes_refuses_before_anything_is_written(self):
-        self.fx.write('tools/landed.py', "print('own copy')\n")
-        code, out = self.run_it(apply=True, stubs=True)
-        self.assertEqual(code, R.EXIT_REFUSED, out)
-        self.assertIn('not a stub (kept', out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
 
     def test_an_unreadable_template_refuses_before_any_write(self):
         for template, kw in ((('stacks', 'python', 'tools', 'gate.json'), {'stack': 'python'}),
@@ -385,12 +346,11 @@ class FailedWrites(Base):
 
     def test_a_failed_write_names_what_was_written_and_the_target_that_failed(self):
         path = self.readonly('.gitignore', 'build/\n')
-        code, out = self.run_it(apply=True, stubs=True)
+        code, out = self.run_it(apply=True, )
         self.assertEqual(code, R.EXIT_REFUSED, out)
         undo = [ln for ln in out.splitlines() if 'already written' in ln]
         self.assertEqual(len(undo), 1, out)
         self.assertIn(os.path.join(self.root, '.kit.json'), undo[0])
-        self.assertIn('(and the stubs listed above)', undo[0])
         self.assertNotIn(path, undo[0])
         self.assertIn('%s may be partly written' % path, out)
 
@@ -405,32 +365,6 @@ class FailedWrites(Base):
         self.assertEqual(len(undo), 1, out)
         self.assertNotIn(gitignore, undo[0])
         self.assertIn("appended to %s : remove the '# Added by the kit installer' block to undo" % gitignore, out)
-
-
-class Stubs(Base):
-    def test_a_stub_write_failure_names_the_skill_files_in_the_undo_list(self):
-        real = stubs.run
-
-        def run(root, verb, dry_run=False, **kw):
-            if dry_run:
-                return real(root, verb, dry_run=True, **kw)
-            return stubs.Outcome(stubs.PROBLEMS, ['a folder (kept)  %s' % os.path.join(root, 'tools', 'x.py')])
-        with mock.patch.object(stubs, 'run', run):
-            code, out = self.run_it(apply=True, stubs=True, stack='godot')
-        self.assertEqual(code, R.EXIT_REFUSED, out)
-        skill = os.path.join(self.root, '.claude', 'skills', 'godot-render-check', 'SKILL.md')
-        undo = [l for l in out.splitlines() if 'To undo: delete' in l]
-        self.assertEqual(len(undo), 1, out)
-        self.assertIn(skill, undo[0])
-        self.assertIn(skill, [l for l in out.splitlines() if 'STOPPED' in l][0])
-        self.assertFalse(os.path.exists(os.path.join(self.root, 'docs', 'INDEX.md')))
-
-    def test_a_refused_stub_plan_refuses_after_printing_it(self):
-        with mock.patch.object(stubs, 'run', lambda *a, **k: stubs.Outcome(stubs.CONFIG, ['kit_stubs: refused: x'])):
-            code, out = self.run_it(stubs=True)
-        self.assertEqual(code, R.EXIT_REFUSED, out)
-        self.assertIn('  kit_stubs: refused: x', out)
-        self.assertIn('REFUSED - kitlib.stubs refused the stubs above (exit 2); nothing was written', out)
 
 
 class Memory(Base):
@@ -541,6 +475,46 @@ class Helpers(unittest.TestCase):
     def test_ps_quote(self):
         self.assertEqual(R.ps_quote('C:\\a\\b.py'), 'C:\\a\\b.py')
         self.assertEqual(R.ps_quote("pm data's"), "'pm data''s'")
+
+
+class NoToolStubs(Base):
+    """A fresh install writes no per-repository kit tool stub: the `kit` command runs every kit
+    tool. Fails if `machine_setup.py --repo`, or installer/new-repo.ps1 through it, writes one."""
+
+    def test_no_install_writes_a_kit_tool_file(self):
+        names = set(kitcmd.commands(KIT))
+        stacks = sorted(os.listdir(os.path.join(KIT, 'templates', 'stacks')))
+        for stack in [''] + stacks:
+            with self.subTest(stack=stack):
+                fx = gitfixture.TempRepo()
+                self.addCleanup(fx.cleanup)
+                root = os.path.realpath(fx.root)
+                code, out = self.run_it(apply=True, target=root, stack=stack)
+                self.assertEqual(code, R.EXIT_OK, out)
+                for top, dirs, files in os.walk(root):
+                    dirs[:] = [d for d in dirs if d != '.git']
+                    for name in files:
+                        path = os.path.join(top, name)
+                        rel = os.path.relpath(path, root)
+                        stem, ext = os.path.splitext(name)
+                        self.assertFalse(ext == '.py' and stem in names, rel)
+                        with open(path, 'rb') as fh:
+                            self.assertNotIn(b'Stub generated by', fh.read(), rel)
+
+    def test_the_stubs_switch_is_gone(self):
+        r = subprocess.run([sys.executable, TOOL, '--repo', self.root, '--owner-email', OWNER,
+                            '--agent-email', AGENT, '--stubs'], capture_output=True, text=True)
+        self.assertEqual(r.returncode, R.EXIT_USAGE, r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
+
+    def test_every_option_new_repo_passes_is_one_the_tool_takes(self):
+        with open(os.path.join(KIT, 'installer', 'new-repo.ps1'), encoding='utf-8') as fh:
+            passed = set(re.findall(r"'(--[a-z][a-z-]*)'", fh.read()))
+        self.assertIn('--repo', passed)
+        r = subprocess.run([sys.executable, TOOL, '--help'], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for flag in sorted(passed):
+            self.assertRegex(r.stdout, r'(?<![\w-])%s(?![\w-])' % re.escape(flag), flag)
 
 
 class Cli(Base):

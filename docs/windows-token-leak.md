@@ -7,8 +7,7 @@ feels this leak first. The PM session-start checklist warns while the live value
 ## Symptom
 
 Every process launch gets slower the longer the machine stays up, and only a full Restart brings
-it back. Measured on one Windows 11 machine over 5 hours: about 281,000 leaked tokens, and kernel
-CPU per process launch up from 1.3 ms to 6.2 ms.
+it back. Leaked tokens pile up in the kernel, and kernel CPU per process launch rises with them.
 
 ## Cause
 
@@ -36,9 +35,8 @@ $t = Add-Type -Name FltCheck -Namespace W -PassThru -MemberDefinition '[DllImpor
 ## Fix
 
 After each logon, call `SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001, 0, (PVOID)0, 0)`
-and confirm with `SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000`. With the fix live, 300 launches made
-144,412 token allocations and left 15 outstanding: near zero. The cost: any
-application may take focus at any time (the write-up above).
+and confirm with `SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000`. With the fix live, launches leave
+almost no tokens outstanding. The cost: any application may take focus at any time (the write-up above).
 
 The set has a restriction the get does not. The Microsoft SystemParametersInfo documentation says
 for `SPI_SETFOREGROUNDLOCKTIMEOUT`: "The calling thread must be able to change the foreground
@@ -57,21 +55,13 @@ Not covered: a second, smaller leak from the console default-terminal handoff an
 
 ## Keep it after every logon
 
-### Why the first task failed
-
-The first version ran a hidden PowerShell from a scheduled task. It ended with LastTaskResult
-0xC000013A (STATUS_CONTROL_C_EXIT, the exit status of a console process that received CTRL_C or
-CTRL_CLOSE) and never wrote a log line. No PowerShell host start event (PowerShell/Operational
-40961) exists for it, so `powershell.exe` died before its host initialised. The default terminal
-was "Let Windows decide", so the task's console was handed to Windows Terminal while the logon was
-still initialising, and that window closed (strongest hypothesis, inference). `-WindowStyle Hidden`
-hides the window only after PowerShell has started, which is too late.
-
 ### Design
 
 Both carriers run the script under `conhost.exe --headless`: no window, no default-terminal
-handoff, nothing for anyone to close. `--headless` is not documented by Microsoft; it was observed
-working on Windows 11 build 26300.
+handoff, nothing for anyone to close. A hidden PowerShell window is not enough: `-WindowStyle
+Hidden` hides it only after PowerShell has started, and a console handed to Windows Terminal
+during logon can be closed before the script runs (inference). `--headless` is not documented by
+Microsoft; it was observed working on Windows 11.
 
 - One script file, `%LOCALAPPDATA%\foreground-lock-fix\fix.ps1`, so it can be read and run by hand.
   It writes only the live value (fWinIni 0) and never the registry. It uses `return`, never
@@ -212,8 +202,8 @@ Get-Content -LiteralPath $log -Tail 12
 ```
 
 - No `start` line for `probe-plain`: the headless carrier does not run. Stop.
-- `probe-plain` `set to 0 on try 1 (plain)`: a task may set the value; the old failure was the
-  window handoff alone.
+- `probe-plain` `set to 0 on try 1 (plain)`: a task may set the value despite the
+  foreground restriction.
 - `probe-plain` `refused ... error N`: the foreground restriction applies to a task. Then
   `probe-nudge` `(after input nudge)` means the task carrier is viable; `FAILED` means the task
   cannot set the value, and the Run key and the step-3 registry value are the remaining carriers.

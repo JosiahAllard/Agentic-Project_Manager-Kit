@@ -1,6 +1,7 @@
 """hosts.codex.adapter.events: Codex's hook payloads parsed into kitlib.host.Action."""
 import os
 import unittest
+from unittest import mock
 
 from hosts.codex.adapter.events import CodexAction, parse, patch_targets
 from kitlib.host import Action
@@ -54,6 +55,26 @@ class Shell(unittest.TestCase):
         self.assertEqual(parse('PreToolUse', bash('pwd', 'C:\\Program Files\\Git\\bin\\sh.exe')).shell, 'bash')
         self.assertEqual(parse('PreToolUse', bash('Get-Location', 'pwsh')).shell, 'powershell')
         self.assertEqual(parse('PreToolUse', event('PowerShell', {'command': 'Get-Location'})).shell, 'powershell')
+
+    def test_the_default_dialect_follows_the_platform(self):
+        ev = event('shell_command', {'command': 'pwd'})
+        for name, want, named in (('windows', 'powershell', 'PowerShell or Git Bash'),
+                                  ('linux', 'bash', 'explicit bash shell')):
+            with self.subTest(platform=name), mock.patch('kitlib.platform.NAME', name):
+                a = parse('PreToolUse', ev)
+                self.assertEqual(a.shell, want)
+                self.assertIn(named, a.refusal)
+                self.assertEqual('PowerShell' in a.refusal, name == 'windows')
+
+    def test_an_unreadable_interpreters_refusal_follows_the_platform(self):
+        """As the no-shell refusal does: PowerShell or Git Bash on Windows, bash on Linux."""
+        for name, use in (('windows', '; use PowerShell or Git Bash'), ('linux', '; use bash')):
+            with self.subTest(platform=name), mock.patch('kitlib.platform.NAME', name):
+                a = parse('PreToolUse', bash('pwd', 'fish'))
+                self.assertEqual((a.kind, a.shell), ('shell', None))
+                self.assertTrue(a.refusal.endswith(use), a.refusal)
+                self.assertIn("'fish'", a.refusal)
+                self.assertEqual('PowerShell' in a.refusal, name == 'windows')
 
     def test_a_missing_or_unknown_interpreter_carries_a_refusal(self):
         for ev, shell in ((event('Bash', {'command': 'pwd'}), 'powershell'), (bash('dir', 'cmd.exe'), 'powershell'),

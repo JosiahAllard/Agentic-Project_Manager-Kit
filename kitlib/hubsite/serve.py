@@ -144,7 +144,7 @@ and none raised. Three things about step 4:
 A process that is killed closes nothing: the system drops the store lock with it, and the next
 start takes it over.
 
-Views (SiteViews). backlog, completed, repos and agents exist only where their source does, so
+Views (SiteViews). backlog, completed, repos, agents and skills exist only where their source does, so
 the Api answers a missing one `unavailable` by itself. What a view says never holds a path,
 git's words or an exception's text: the backlog views carry kitlib.hubsite.backlog's fixed
 phrases, and the reasons of the derived views are replaced by fixed phrases here.
@@ -159,7 +159,7 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
       both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
       (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
-  notices() repos() usage() agents() findings()
+  notices() repos() usage() agents() skills() skill(name) skill_source(name) findings()
                                           kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
@@ -231,6 +231,7 @@ from kitlib.proc import process
 from . import api as _api
 from . import push as _push
 from . import access, auth, backlog, codestale, derived, gitsync, httpd, recordwrite, tunnel
+from . import skilledits
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -262,6 +263,7 @@ TUNNEL_ON_NOTE = ('the tunnel listener is on %s: every request there needs a Clo
 NO_USAGE_SOURCE = 'no launcher usage source configured'     # derived.usage's own phrase
 USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
+SKILLS_FAILED = 'the skill sources could not be read'
 ROUND_FAILED = ('the backlog view could not be read after a round of the backlog timer, so '
                 'health does not follow the timer: %s: %s')
 STOP_ASKED = 'closing: the owner asked the server to stop (hub.py stop)'
@@ -358,6 +360,7 @@ class Sources(object):
                    check accepts without a repos/ document; None: none
       usage        callable() -> the lines kitlib.launcher.usage prints
       agents       the folder of agent definitions
+      skills       the folder of skill sources (content/skills: <name>/SKILL.md each)
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
                    stop, days, clock, timer_error; a callable `wait`, when it has one, is
                    wrapped by build(), and its get() is then also called with `stop=`, the
@@ -386,7 +389,7 @@ class Sources(object):
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
                  access_now=None, known_repos=None, push=None, push_dir=None, lock=None,
-                 findings=None):
+                 findings=None, skills=None):
         self.findings = findings
         self.lock = lock
         self.push = push
@@ -399,6 +402,7 @@ class Sources(object):
         self.repos = repos
         self.usage = usage
         self.agents = agents
+        self.skills = skills
         self.backlog = backlog
         self.sync = sync
         self.access_keys = access_keys
@@ -455,6 +459,11 @@ def agents_dir(environ=None):
     except registry.RegistryError:
         return None
     return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
+
+
+def skills_dir():
+    """The kit's skill sources, <kit>/content/skills: never a host's rendered copy."""
+    return os.path.join(pmstart.KIT_ROOT, 'content', 'skills')
 
 
 def _configured_repos(cfg, toplevel=None):
@@ -520,7 +529,7 @@ def machine_sources(home=None, sync=True):
         raise ConfigError(str(e))
     src = Sources(tokens=auth.folder(home), pm_data=pm,
                   notices=pmwatch.configured_notice_dir(path),
-                  agents=agents_dir(),
+                  agents=agents_dir(), skills=skills_dir(),
                   sync=gitsync.GitSync if sync else None)
     if pm and pm.get('path'):
         from kitlib.maintlint import result as lint_result
@@ -571,7 +580,7 @@ class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
     exists: `backlog_views` for backlog, completed, record, record_template and the record
     writes (record_add, record_edit, record_delete, record_unblock, and record_answer, the
-    filing of a bound question's answer), sources.repos and .agents
+    filing of a bound question's answer), sources.repos, .agents and .skills
     for theirs. notices, findings, lint_runs, usage and health are always there
     (kitlib.hubsite.derived answers a missing notice or findings folder with none and a missing
     usage source with its own phrase). `sync` is the git
@@ -606,6 +615,10 @@ class SiteViews(object):
             self.repos = self._repos
         if sources.agents:
             self.agents = self._agents
+        if sources.skills:
+            self.skills = self._skills
+            self.skill = self._skill
+            self.skill_source = self._skill_source
 
     def _held(self):
         """The backlog source's held answer (backlog.Views.held) while its timer runs, or None
@@ -742,6 +755,24 @@ class SiteViews(object):
         out = derived.agents(self._sources.agents)
         if not out.get('available'):
             out['reason'] = AGENTS_FAILED
+        return out
+
+    def _skills(self):
+        out = derived.skills(self._sources.skills)
+        if not out.get('available'):
+            out['reason'] = SKILLS_FAILED
+        return out
+
+    def _skill(self, name):
+        out = derived.skill(self._sources.skills, name)
+        if out is None:
+            raise HubError('not_found', 'there is no skill %s' % name, 'name')
+        return out
+
+    def _skill_source(self, name):
+        out = derived.skill_source(self._sources.skills, name)
+        if out is None:
+            raise HubError('not_found', 'there is no skill %s' % name, 'name')
         return out
 
     def _git(self):
@@ -951,6 +982,64 @@ def _checkout(backlog_views):
     return checkout
 
 
+def kit_checkout(kit_root=None):
+    """The kit's main checkout: kit_root (default pmstart.KIT_ROOT) when it is a checkout, else
+    the checkout its plugin export marker names (kitlib.pluginsource.default_kit); None when there
+    is none."""
+    from kitlib import pluginsource
+    return pluginsource.default_kit(kit_root or pmstart.KIT_ROOT)[0]
+
+
+def _kit_key(repo_name, remote_ids, kit_root=None):
+    """Api's kit_key() (kitlib.hubsite.api, "Skill edits"): the name repo_name gives the kit
+    checkout's origin remote (`remote_ids`, a _RemoteIds), the session key of the kit's
+    coordinator; '' when there is no checkout, no remote or no configured name, so a submitted
+    skill edit is the PM's."""
+    def kit_key():
+        checkout = kit_checkout(kit_root)
+        repo_id = remote_ids(checkout)[0] if checkout else None
+        name = repo_name(repo_id) if repo_id else None
+        return name if isinstance(name, str) else ''
+    return kit_key
+
+
+def _kit_blob(kit_root=None, run=None):
+    """Api's kit_blob(branch, path) (kitlib.hubsite.api, "Skill edits"): the blob id of `path`
+    on `branch` in the kit checkout, read with `git rev-parse --verify` (`run`, default
+    kitlib.git.cmd.run_text; a read: the hub never writes a repository), or None when there is no
+    checkout or git cannot read it."""
+    def kit_blob(branch, path):
+        from kitlib.git import cmd
+        checkout = kit_checkout(kit_root)
+        if not checkout:
+            return None
+        out, _why = (run or cmd.run_text)(['rev-parse', '--verify', '--quiet',
+                                           '%s:%s' % (branch, path)], checkout)
+        return out if skilledits.is_blob(out) else None
+    return kit_blob
+
+
+def _kit_text(kit_root=None, run=None):
+    """Api's kit_text(blob) (kitlib.hubsite.api, "Skill edits"): the text of git blob `blob` in
+    the kit checkout, read with `git cat-file blob` (`run`, default kitlib.git.cmd.run, giving
+    bytes; a read: the hub never writes a repository), CRLF read as LF; None when there is no
+    checkout, `blob` is not a blob id, git cannot read it, the bytes are not that blob or are not
+    UTF-8."""
+    def kit_text(blob):
+        from kitlib.git import cmd
+        checkout = kit_checkout(kit_root)
+        if not checkout or not skilledits.is_blob(blob):
+            return None
+        out, _why = (run or cmd.run)(['cat-file', 'blob', blob], checkout)
+        if not isinstance(out, bytes) or skilledits.git_blob(out) != blob:
+            return None
+        try:
+            return skilledits.normal(out.decode('utf-8'))
+        except UnicodeDecodeError:
+            return None
+    return kit_text
+
+
 REMOTE_TTL_S = 60.0     # the longest a remembered origin remote answers (_RemoteIds)
 REMOTE_MISS_TTL_S = 5.0     # the longest a remembered failure to read one answers
 
@@ -1090,10 +1179,13 @@ def build(settings, sources, log=None):
         views = SiteViews(store, sources, views_b, sync, sync_off, log=log)
         if views_b is not None:
             _follow_rounds(views_b, views)
+        remote_ids = _RemoteIds()
+        repo_name = _repo_name(views_b, _api.launcher_keys, remote_ids)
         api = _api.Api(store, views,
                        approval_key=functools.partial(auth.read_approval_key, sources.tokens),
-                       checkout=_checkout(views_b), lock=sources.lock,
-                       repo_name=_repo_name(views_b, _api.launcher_keys, _RemoteIds()))
+                       checkout=_checkout(views_b), lock=sources.lock, repo_name=repo_name,
+                       kit_key=_kit_key(repo_name, remote_ids), kit_blob=_kit_blob(),
+                       kit_text=_kit_text())
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

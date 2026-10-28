@@ -12,6 +12,8 @@ beside it; nothing here opens it.
                             can stay behind, so a record alone is never proof)
   find(dirs, name, after_ms, ctime)   the newest live record of that name started at or after
                             after_ms, or None
+  await_record(...)         poll for a just-started session's record (one a test accepts)
+  write_entry(...)          write a record's pipes.json entry
   record(...)               poll for a just-started session's record and write its pipes.json
                             entry; the line to say when it is not found in time
   remove(settings, name)    drop a stopped session's entry
@@ -121,28 +123,48 @@ def entry(rec, now):
             'entrypoint': rec.get('entrypoint'), 'recorded_at': now.isoformat(timespec='seconds')}
 
 
+def await_record(settings, name, after_ms, ctime, sleep, tries=TRIES, poll_s=POLL_S, accept=None):
+    """Poll the registry up to `tries` times, poll_s apart, for the live record of the session
+    `name` started at or after after_ms (find) that accept(record) passes (any, when accept is
+    None): the record, or None when none came in time."""
+    for i in range(max(1, tries)):
+        rec = find(registry_dirs(settings), name, after_ms, ctime)
+        if rec is not None and (accept is None or accept(rec)):
+            return rec
+        if i < tries - 1:
+            sleep(poll_s)
+    return None
+
+
+def write_entry(settings, name, rec, now):
+    """Write the pipes.json entry of `name` from its registry record: None when written (or when
+    launcher.state_dir is unset), else the one line to say."""
+    try:
+        p = state.path(settings, PIPES)
+    except LaunchError:
+        return None
+    try:
+        data = state.read_json(p) or {}
+        data[name] = entry(rec, now())
+        state.write_json(p, data)
+    except (OSError, LaunchError) as e:
+        return 'pipe not recorded (%s): the hub resolves it at send time' % e
+    return None
+
+
 def record(settings, name, after_ms, ctime, sleep, now, tries=TRIES, poll_s=POLL_S):
     """Poll the registry for the session `name` started at or after after_ms (epoch ms) and
     write its pipes.json entry: None when written (or when launcher.state_dir is unset: there is
     nowhere to write), else the one line to say. ctime(pid) is the process creation time, sleep(s)
     waits, now() is the aware time recorded."""
     try:
-        p = state.path(settings, PIPES)
+        state.path(settings, PIPES)
     except LaunchError:
         return None
-    for i in range(max(1, tries)):
-        rec = find(registry_dirs(settings), name, after_ms, ctime)
-        if rec is not None:
-            try:
-                data = state.read_json(p) or {}
-                data[name] = entry(rec, now())
-                state.write_json(p, data)
-            except (OSError, LaunchError) as e:
-                return 'pipe not recorded (%s): the hub resolves it at send time' % e
-            return None
-        if i < tries - 1:
-            sleep(poll_s)
-    return NOT_YET
+    rec = await_record(settings, name, after_ms, ctime, sleep, tries, poll_s)
+    if rec is None:
+        return NOT_YET
+    return write_entry(settings, name, rec, now)
 
 
 def remove(settings, name):

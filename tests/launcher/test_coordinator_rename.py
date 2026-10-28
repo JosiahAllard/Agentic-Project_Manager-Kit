@@ -1,14 +1,16 @@
-"""The conductor-to-coordinator rename, part 1: coordinators.json with a refusal for the old name,
-handoff --stem, the one-release guard against an old-stem session, and the autostart task rename."""
+"""Renaming a coordinator's stem: handoff --stem, coordinators.json, and the autostart task's one
+name. The old coordinator name's one-release guards (the old state file name, the old stem, the old
+task name) are gone; nothing here reads or refuses them."""
 import io
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 
-from kitlib.launcher import autostart, handoff, lookup, reboot, start, state, stop
+from kitlib.launcher import autostart, handoff, lookup, reboot, start, state
 from kitlib.launcher.settings import LaunchError
 from tests.home import machine_config
 from tests.launcher.fakes import FakeHost, Home, role_of, session
@@ -17,32 +19,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), 'tools'))
 import launch                                                       # noqa: E402
 
-OLD = 'conductors.json'
-ALPHA = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-conductor', 'state': 's.md', 'account': 1,
-         'name': 'alpha-conductor-a1'}
-PM = {'pm_session_id': 'pm-sid-1', 'pm_account': 2}
+ALPHA = {'repo': 'alpha', 'agent': True, 'stem': 'alpha-lead', 'state': 's.md', 'account': 1,
+         'name': 'alpha-lead-a1'}
 
 
 class StateFile(unittest.TestCase):
     def setUp(self):
         self.h = Home(self)
 
-    def test_the_new_name_is_read(self):
+    def test_the_file_is_read(self):
         self.h.write_state('coordinators.json', {'alpha': 2})
         self.assertEqual(state.read_coordinators(self.h.settings), {'alpha': 2})
 
-    def test_neither_file_is_none(self):
+    def test_no_file_is_none(self):
         self.assertIsNone(state.read_coordinators(self.h.settings))
 
-    def test_the_old_name_alone_is_refused_and_never_read(self):
-        self.h.write_state(OLD, {'alpha': 2})
-        with self.assertRaisesRegex(state.RenameNeeded, 'rename .*conductors.json to coordinators.json'):
-            state.read_coordinators(self.h.settings)
-
-    def test_both_files_read_the_new_one(self):
-        self.h.write_state(OLD, {'alpha': 1})
-        self.h.write_state('coordinators.json', {'alpha': 2})
-        self.assertEqual(state.read_coordinators(self.h.settings), {'alpha': 2})
+    def test_no_rename_refusal_is_left(self):
+        self.assertFalse(hasattr(state, 'RenameNeeded'))
+        self.assertFalse(hasattr(state, 'OLD_COORDINATORS'))
+        self.assertFalse(hasattr(lookup, 'legacy_stems'))
+        self.assertFalse(hasattr(autostart, 'OLD_TASK_NAME'))
 
 
 class HandoffStem(unittest.TestCase):
@@ -50,12 +46,12 @@ class HandoffStem(unittest.TestCase):
         self.h = Home(self, accounts=('1', '2'))
         self.h.write_state('sessions.json', {'alpha': dict(ALPHA)})
         self.h.write_state('coordinators.json', {'alpha': 1})
-        self.old_run = session(10, 'alpha-conductor-a1', agent='conductor')
+        self.old_run = session(10, 'alpha-lead-a1', agent='coordinator')
         self.host = FakeHost(self.h.root, [self.old_run])
 
     def test_a_new_stem_names_the_successor_and_is_written_after_the_start(self):
         out = handoff.handoff(self.h.settings, self.host, 'alpha', '2', stem='alpha-coordinator')
-        self.assertIn('== alpha : alpha-conductor-a1 (account 1) -> alpha-coordinator-a2 (account 2)', out)
+        self.assertIn('== alpha : alpha-lead-a1 (account 1) -> alpha-coordinator-a2 (account 2)', out)
         text, = self.host.opened
         self.assertIn("-n 'alpha-coordinator-a2'", text)
         self.assertEqual(role_of(text), 'coordinator')
@@ -67,8 +63,8 @@ class HandoffStem(unittest.TestCase):
     def test_a_recycle_under_a_new_stem_has_no_generation_and_prints_the_stop_line(self):
         out = handoff.handoff(self.h.settings, self.host, 'alpha', recycle=True, stem='alpha-coordinator')
         self.assertEqual(self.h.read_state('sessions.json')['alpha']['name'], 'alpha-coordinator-a1')
-        self.assertIn("stop --name 'alpha-conductor-a1' --successor 'alpha-coordinator-a1'", out[-1])
-        self.assertEqual(handoff.successor_name(ALPHA, '1', True, 'alpha-conductor'), 'alpha-conductor-a1-r2')
+        self.assertIn("stop --name 'alpha-lead-a1' --successor 'alpha-coordinator-a1'", out[-1])
+        self.assertEqual(handoff.successor_name(ALPHA, '1', True, 'alpha-lead'), 'alpha-lead-a1-r2')
 
     def test_a_failed_start_writes_nothing(self):
         before = (self.h.read_state('sessions.json'), self.h.read_state('coordinators.json'))
@@ -94,100 +90,56 @@ class HandoffStem(unittest.TestCase):
         for bad in ('', 'has space', '-lead', 'a/b', 'x' * 65):
             with self.assertRaisesRegex(LaunchError, '--stem'):
                 handoff.handoff(self.h.settings, self.host, 'alpha', '2', stem=bad)
-        os.remove(os.path.join(self.h.state, 'coordinators.json'))
-        self.h.write_state(OLD, {'alpha': 1})
-        with self.assertRaisesRegex(state.RenameNeeded, 'coordinators.json'):
-            handoff.handoff(self.h.settings, self.host, 'alpha', '2', stem='alpha-coordinator')
         self.assertEqual(self.host.opened, [])
         self.assertEqual(self.h.read_state('sessions.json'), before)
-        self.assertEqual(self.h.read_state(OLD), {'alpha': 1})
+
+    def test_handoff_starts_beside_the_old_session(self):
+        handoff.handoff(self.h.settings, self.host, 'alpha', '2', stem='alpha-coordinator')
+        self.assertEqual(len(self.host.opened), 1)
 
 
-class LegacyGuard(unittest.TestCase):
-    """One-release guard: a session under the old conductor stem blocks start --session and
-    after-reboot of the renamed entry (removed after the switch, W2b)."""
+class RenamedStem(unittest.TestCase):
+    """After handoff --stem, only the entry's own stem holds start --session and after-reboot: a
+    session under a different stem is another session."""
 
     def setUp(self):
         self.h = Home(self)
         self.renamed = dict(ALPHA, stem='alpha-coordinator', name='alpha-coordinator-a1')
         self.h.write_state('sessions.json', {'alpha': self.renamed})
 
-    def test_legacy_stems(self):
-        self.assertEqual(lookup.legacy_stems('alpha', self.renamed), ['alpha-conductor'])
-        self.assertEqual(lookup.legacy_stems('alpha', ALPHA), [])          # its own stem: running_stem covers it
-        lane = {'repo': 'alpha', 'agent': True, 'stem': 'lane-coordinator'}
-        self.assertEqual(lookup.legacy_stems('lane', lane), ['lane-conductor'])
-        self.assertEqual(lookup.legacy_stems('Kit', {'repo': 'Kit', 'agent': True, 'stem': 'kit-lead'}),
-                         ['kit-conductor'])
-        self.assertEqual(lookup.legacy_stems('help', {'repo': 'alpha', 'agent': False, 'stem': 'alpha-help'}), [])
-
-    def test_start_session_refuses_while_the_old_stem_runs(self):
-        host = FakeHost(self.h.root, [session(10, 'alpha-conductor-a2-r3', agent='conductor')])
-        with self.assertRaisesRegex(LaunchError, 'old stem alpha-conductor .*one-release guard'):
+    def test_start_session_refuses_while_its_own_stem_runs(self):
+        host = FakeHost(self.h.root, [session(10, 'alpha-coordinator-a2-r3', agent='coordinator')])
+        with self.assertRaisesRegex(LaunchError, 'already running'):
             start.start_entry(self.h.settings, host, 'alpha')
         self.assertEqual(host.opened, [])
 
-    def test_start_session_goes_ahead_without_it(self):
-        host = FakeHost(self.h.root, [session(10, 'beta-conductor-a1', agent='conductor')])
+    def test_start_session_goes_ahead_beside_another_stem(self):
+        host = FakeHost(self.h.root, [session(10, 'alpha-lead-a1', agent='coordinator')])
         start.start_entry(self.h.settings, host, 'alpha')
         text, = host.opened
         self.assertIn("-n 'alpha-coordinator-a1'", text)
 
-    def test_after_reboot_skips_the_entry_while_the_old_stem_runs(self):
-        host = FakeHost(self.h.root, [session(10, 'alpha-conductor-a1', agent='conductor')])
+    def test_after_reboot_starts_beside_another_stem(self):
+        host = FakeHost(self.h.root, [session(10, 'alpha-lead-a1', agent='coordinator')])
         out = reboot.run(self.h.settings, host)
-        self.assertIn('alpha already running under the old stem alpha-conductor, skipped', out)
-        self.assertEqual(host.opened, [])
-
-    def test_handoff_starts_beside_the_old_session(self):
-        self.h.write_state('sessions.json', {'alpha': dict(ALPHA)})
-        host = FakeHost(self.h.root, [session(10, 'alpha-conductor-a1', agent='conductor')])
-        handoff.handoff(self.h.settings, host, 'alpha', '2', stem='alpha-coordinator')
-        self.assertEqual(len(host.opened), 1)
+        self.assertIn('started alpha-coordinator-a1 (alpha) on account 1', out)
+        self.assertFalse(any(line.startswith('alpha ') for line in out), out)
+        self.assertEqual([role_of(t) for t in host.opened], ['coordinator'])
 
 
-class OldStateFileElsewhere(unittest.TestCase):
-    def setUp(self):
-        self.h = Home(self)
-        self.h.write_state(OLD, dict(PM, pm_folder=self.h.root))
-
-    def test_after_reboot_logs_the_rename_and_still_starts_the_sessions(self):
-        self.h.write_state('sessions.json', {'alpha': dict(ALPHA)})
-        host = FakeHost(self.h.root)
-        out = reboot.run(self.h.settings, host)
-        self.assertTrue(any(line.startswith('FAILED to read coordinators.json : rename ') for line in out), out)
-        self.assertEqual([role_of(t) for t in host.opened], ['coordinator'])   # no PM resume
-
-    def test_stop_refuses_rather_than_lose_the_pm_session_id(self):
-        host = FakeHost(self.h.root, [session(10, 'x-a1')])
-        with self.assertRaisesRegex(stop.Refused, 'rename .*conductors.json to coordinators.json'):
-            stop.stop(self.h.settings, host, 'x-a1')
-        self.assertEqual(host.killed, [])
-
-    def test_stop_cli_says_refused_and_exits_2(self):
-        machine_config(self.h.root, {'launcher': self.h.obj}, case=self)
-        host = FakeHost(self.h.root, [session(10, 'x-a1')])
-        out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
-            code = launch.main(['stop', '--name', 'x-a1'], host)
-        self.assertEqual(code, 2, err.getvalue())
-        self.assertRegex(out.getvalue(), r'REFUSED: rename .*conductors.json to coordinators.json')
-        self.assertEqual(host.killed, [])
-
-
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Autostart(unittest.TestCase):
-    def test_install_registers_the_new_name_then_unregisters_the_old(self):
+    def test_install_registers_the_one_name_and_unregisters_nothing(self):
         d = tempfile.mkdtemp(prefix='kit-autostart-')           # a pythonw.exe that is there
         self.addCleanup(shutil.rmtree, d, True)
         open(os.path.join(d, 'pythonw.exe'), 'w').close()
         out = autostart.install('/kit/tools/launch.py', python=os.path.join(d, 'python.exe'), whatif=True)
         script = out[1]
         self.assertEqual(autostart.TASK_NAME, 'Claude coordinators after reboot')
-        reg = script.index("Register-ScheduledTask -TaskName 'Claude coordinators after reboot'")
-        unreg = script.index("Unregister-ScheduledTask -TaskName 'Claude conductors after reboot' -Confirm:$false")
-        self.assertLess(reg, unreg)                   # a failed register leaves the old task in place
+        self.assertIn("Register-ScheduledTask -TaskName 'Claude coordinators after reboot'", script)
+        self.assertNotIn('Unregister-ScheduledTask', script)
 
-    def test_the_install_line_names_both(self):
+    def test_the_install_line_names_the_task(self):
         calls = []
 
         class R(object):
@@ -199,8 +151,7 @@ class Autostart(unittest.TestCase):
         out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run,
                                 isfile=lambda p: True)       # /py is not there: say pythonw is
         self.assertEqual(len(calls), 1)
-        self.assertIn("Installed 'Claude coordinators after reboot' and unregistered 'Claude conductors after reboot'",
-                      out[0])
+        self.assertTrue(out[0].startswith("Installed 'Claude coordinators after reboot'. Test it"), out[0])
 
 
 class Cli(unittest.TestCase):

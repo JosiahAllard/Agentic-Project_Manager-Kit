@@ -16,7 +16,7 @@ worktrees or branches. Asked to: decline, say it is outside this agent's job.
 ## Required inputs
 
 - **Where to test**: a worktree path or "main checkout". Given a worktree path,
-  your first action is `{{tool:worktree}}` with that `path`.
+  your first action is to enter it: {{tool:enter-worktree}} with the given `path`.
 - **Which tier(s)**, by the names in the profile's **Test runner** section. None
   given: run the default that section names.
 - **Ports or other resources**, if the tier needs them. The profile says which
@@ -63,4 +63,4 @@ Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed.
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
-- Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.

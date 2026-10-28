@@ -64,12 +64,12 @@ def _owner_blocked(rec):
 
 
 def _price_rows(values, rec):
-    """The rows a `set` of priority to each of `values` takes on `rec` (None: not read)."""
+    """The rows a `set` of priority to each of `values` takes on `rec` (None: not read, so the
+    strictest: set-price-owner). A retired `-1` sorts as any low price, so the plan's refusal
+    (pointing at `block --on owner`) is what the caller reads, not a role refusal."""
     out = set()
     for value in values:
-        if value == roles.HOLD or rec is None or rec.get('priority') == roles.HOLD:
-            out.add('set-hold')                 # a hold set, a hold released, or a record not read
-        elif value in roles.PRICE_TOP or _owner_priced(rec) or _owner_blocked(rec):
+        if value in roles.PRICE_TOP or _owner_priced(rec) or _owner_blocked(rec):
             out.add('set-price-owner')
         else:
             out.add('set-price')
@@ -315,7 +315,7 @@ def _set_options():
 OPTIONS = {
     'next': None, 'show': None, 'list': None, 'check': None, 'stale': None, 'landable': None,
     'add': {'--summary': True, '--scope': True, '--effort': True, '--ref': True, '--reopen': False,
-            '--found-on': True, '--why-not-folded': True},
+            '--found-on': True, '--why-not-folded': True, '--body-file': True},
     'set': None,                                # _set_options(), read when asked
     'block': {'--on': True, '--reason': True, '--owner-ask': True},
     'unblock': {'--on': True, '--reason': True},

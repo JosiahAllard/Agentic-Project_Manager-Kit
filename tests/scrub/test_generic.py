@@ -32,13 +32,8 @@ from tests.scrub.test_scrub import ROOT, read_text, tracked_files
 
 DRIVE = re.compile(r'(?<![A-Za-z0-9_?%$])[A-Za-z]:(?:\\|/)')
 EXCLUDED = ('tests/',)
-_ROOT_SEARCH = 'Get-ChildItem C:\\ -Recurse'
 # (file glob, text the line contains, why it may name a drive)
 DRIVE_ALLOWED = (
-    ('hosts/claude/shell/agents/*.md', _ROOT_SEARCH, 'the root-search rule names the searches it forbids'),
-    ('content/roles/*.md', _ROOT_SEARCH, 'the roles the agent files above are rendered from'),
-    ('hosts/codex/shell/agents/*.toml', _ROOT_SEARCH.replace('\\', '\\\\'),
-     'the same roles rendered for Codex, the backslash escaped as TOML writes it'),
     ('docs/guard.md', '| `root-search` |', 'the root-search rule names the searches it denies'),
     ('kitlib/guard/commands.py', 'C:\\\\x\\\\Godot_v4.exe', 'a docstring example of a program path'),
     ('kitlib/guard/shell.py', 'unquoted Windows path (C:\\\\tmp', 'a docstring on bash quoting'),

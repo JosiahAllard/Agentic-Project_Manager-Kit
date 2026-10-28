@@ -14,10 +14,10 @@ before shipping if a model is updated.
 | `upscale` | Real-ESRGAN x4plus | BSD-3-Clause | ~10 s for 1024² to 4096² | Enlarging a good 1 MP image | 4x only. A 4096² PNG is ~14 MB, so downscale to what you need |
 | `to3d --engine trellis2` | TRELLIS.2 4B (Microsoft) | MIT | ~130 s | **Default image-to-3D, shippable:** textured GLB, kept the forked blade | Emissive glow is baked into plain colour. The template bakes 4096² textures by default; the tool uses 2048 |
 | `to3d --engine pixal3d` | Pixal3D (TencentARC) | MIT (bundled components keep their own licences) | ~150 s | Second opinion, textured | Merged the two prongs into one slab and added a stray fin |
-| `to3d --engine hunyuan3d` | Hunyuan3D 2.1 (Tencent) | Tencent Hunyuan 3D 2.1 Community License: **not valid in the EU, UK or South Korea**; over 1M monthly users needs a Tencent licence; outputs may not train other models | ~85 s | **Reference only (owner decision).** Clean untextured shape (33k tris), good silhouette | **Needs a cut-out, cropped input.** Given a full image it rebuilt the background as a flat plate. `comfy_gen.py` now prepares the input itself |
+| `to3d --engine hunyuan3d` | Hunyuan3D 2.1 (Tencent) | Tencent Hunyuan 3D 2.1 Community License: **not valid in the EU, UK or South Korea**; over 1M monthly users needs a Tencent licence; outputs may not train other models | ~85 s | **Reference only (owner decision).** Clean untextured shape (33k tris), good silhouette | **Needs a cut-out, cropped input.** Given a full image it rebuilt the background as a flat plate. `comfy_gen.py` prepares the input itself |
 | `music` | ACE-Step 1.5 XL Turbo | MIT (model card: trained on licensed, royalty-free and synthetic data; outputs may be used commercially) | ~47 s for 30 s of audio | Music beds, menu and match themes | Fills most of a mid-range card's memory even with offloading, so run it alone. Vocals are unreliable: use `[Instrumental]` |
 
-## Licence caveats not yet checked
+## Licence caveats (unchecked)
 
 - The **Lightning 4-step LoRA** used by `edit` is listed under Qwen-Image-Edit's Apache-2.0,
   but its own licence page has not been read.
@@ -26,11 +26,12 @@ before shipping if a model is updated.
   conditions on the output mesh has not been checked.
 - **Pixal3D**'s bundled components keep their own licences (its NOTICE file), which have not
   been read.
+## Reference-only models (owner decision)
+
 - **Krea 2** (revenue limit) and **Hunyuan3D 2.1** (region exclusions): **the owner decided
   that their outputs are REFERENCE ONLY**: fine for look-dev, blockouts and
   contact sheets, never shipped as game assets. Shippable images use **Z-Image**, and
-  shippable 3D uses **TRELLIS.2** (subject to the two caveats above). This holds until the
-  owner reads those licences and says otherwise.
+  shippable 3D uses **TRELLIS.2** (subject to the unchecked caveats above).
 
 ## Installed but not approved
 

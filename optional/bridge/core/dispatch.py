@@ -7,19 +7,37 @@ identity/owner verification, service installation or a live MCP endpoint.
 import hashlib
 
 from .contracts import AdapterDescription, Capability, CONTRACT_VERSION
+from .hostpairs import HostPairs, REFUSED as HOST_PAIR_REFUSED
 from .messages import DeliveryError, MessageIntent, OutboundMessage, SenderAuthority, text_bytes, REPLY_OPERATION_PREFIX
 from .outbox import Outbox
 from .pairing import PairingError, PairingStore
 
 
+def _reply_refusal(error):
+    """A disabled reverse route and a chat no longer observed live are different refusals."""
+    if error.code == 'chat-route-not-selected':
+        return 'reply-route-not-selected'
+    if error.code in ('chat-not-observed', 'chat-live-binding-unverified'):
+        return 'reply-chat-not-observed'
+    return 'reply-route-not-selected'
+
+
 class CoreBroker:
-    def __init__(self, pairings, outbox, adapters, *, authorize=None, dispatch_check=None):
+    def __init__(self, pairings, outbox, adapters, *, authorize=None, dispatch_check=None, host_pairs=None):
+        """`host_pairs`: the HostPairs rule checked at admission and again before every native
+        send (default: none, every pair allowed)."""
         if type(pairings) is not PairingStore or type(outbox) is not Outbox or type(adapters) is not dict:
             raise DeliveryError('invalid-broker-components')
         if any(port is not None and not callable(port) for port in (authorize, dispatch_check)):
             raise DeliveryError('invalid-broker-ports')
+        if host_pairs is not None and type(host_pairs) is not HostPairs:
+            raise DeliveryError('invalid-broker-ports')
         self.pairings, self.outbox, self.adapters = pairings, outbox, dict(adapters)
         self._authorize, self._dispatch_check = authorize, dispatch_check
+        self.host_pairs = host_pairs
+
+    def _host_pair_allowed(self, message):
+        return self.host_pairs is None or self.host_pairs.allowed(message.sender, message.recipient)
 
     def _authority(self, intent, proof):
         if type(proof) is not bytes or not 0 < len(proof) <= 4096:
@@ -38,6 +56,8 @@ class CoreBroker:
         intent = MessageIntent(operation, recipient, hashlib.sha256(text_bytes(text)).hexdigest(), expires_at)
         authority = self._authority(intent, proof)
         message = OutboundMessage(operation, authority.task_root, authority.sender, recipient, text, expires_at)
+        if not self._host_pair_allowed(message):
+            raise DeliveryError(HOST_PAIR_REFUSED)
         with self.pairings.selected_guard(message.sender, message.recipient):
             return self.outbox.admit(message)
 
@@ -66,6 +86,9 @@ class CoreBroker:
         receipt = self.outbox.receipt(operation)
         if receipt.state != 'queued':
             return receipt  # Including unknown and held: no automatic retry.
+        if not self._host_pair_allowed(message):
+            # Queued before the rule held (or by a broker without it): never reaches an adapter.
+            return self.outbox.reject_queued(operation, HOST_PAIR_REFUSED)
         try:
             with self.pairings.selected_guard(message.sender, message.recipient):
                 # Check the original full bindings first. A remembered logical
@@ -97,8 +120,8 @@ class CoreBroker:
         message = self._read(operation, proof)
         try:
             self.pairings.require_selected(message.recipient, message.sender)
-        except PairingError:
-            raise DeliveryError('reply-route-not-selected') from None
+        except PairingError as error:
+            raise DeliveryError(_reply_refusal(error)) from None
         return self.outbox.reply(operation)
 
     def reply_to(self, operation, text, proof):
@@ -113,8 +136,8 @@ class CoreBroker:
         try:
             with self.pairings.selected_guard(message.recipient, message.sender):
                 return self.outbox.recipient_reply(operation, text,reverse_reply=True)
-        except PairingError:
-            raise DeliveryError('reply-route-not-selected') from None
+        except PairingError as error:
+            raise DeliveryError(_reply_refusal(error)) from None
 
     def events(self, operation, proof, *, after=0, limit=32):
         self._read(operation, proof)

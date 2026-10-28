@@ -57,7 +57,9 @@ class CompletedCodexReplyTests(DirectRuntimeDeliveryTests):
         self.controller.adapter(adapter)
         self.complete_source()
         self.assertTrue(self.controller._live(self.sender))
-        self.assertEqual(self.controller.core.dispatch_once(child).state,'failed')
+        # A Codex-to-Codex reply is refused by the host-pair rule before any adapter runs.
+        receipt=self.controller.core.dispatch_once(child)
+        self.assertEqual((receipt.state,receipt.reason),('refused','host-pair-refused'))
         self.assertEqual(self.rpc.requests,[])
         self.assertEqual(self.controller.outbox.reply(parent.operation_id),'exact returned body')
         self.assertEqual(self.controller.outbox.receipt(parent.operation_id).state,'reply-received')

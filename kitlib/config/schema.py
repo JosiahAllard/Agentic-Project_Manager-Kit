@@ -142,7 +142,7 @@ SECTIONS = {
         'worktrees_by_host': Field(MapOf(RelPath(), what='host'), {},
                                    'per-host worktree folders, keyed by hosts.json host name '
                                    '(docs/new-worktree.md "Hosts")'),
-        'tools_dir': Field(RelPath(), 'tools', 'where repo tools, the opt-in kit tool stubs and the hook module live'),
+        'tools_dir': Field(RelPath(), 'tools', 'where repo tools and the hook module live'),
         'push_block': Field(Bool(), False, 'pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says'),
     },
     'owner': {
@@ -166,6 +166,7 @@ SECTIONS = {
         'phases': Field(Strs, [], 'phase names in order'),
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
         'code_main': Field(Str(), None, 'the branch code lands on, which `add --found-on` measures a branch\'s diff from; default repo.main_branch'),
+        'cap': Field(Int(1, None), 5, 'most records `backlog.py next` offers and `pull` takes in order (`next --cap` overrides it for one call); every worktree reads the main checkout\'s value'),
     },
     'board': {
         'state_file': Field(RelPath(), None, 'the board state file, under the git dir (default <git common dir>/kit/board-state.md)'),
@@ -284,9 +285,6 @@ SECTIONS = {
     'review_pack': {
         'coauthor': Field(Bool(), False, 'list the branch\'s commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks'),
     },
-    'stubs': {
-        'tools': Field(Strs, None, 'kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in'),
-    },
     'testlist': {
         'junit': Field(Strs, ['**/build/test-results/**/*.xml'], 'JUnit result globs'),
         'trx': Field(Strs, ['**/*.trx'], '.NET result globs'),
@@ -341,7 +339,7 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo'), 'landing': ('lanes', 'lock_file')}
 # Whole sections no tool reads any more. A config that still carries one loads: the section is
 # dropped unchecked, whatever it holds. Any other unknown section still refuses.
-RETIRED_SECTIONS = ('ruling_cites',)
+RETIRED_SECTIONS = ('ruling_cites', 'stubs')
 
 
 def section_type(name):

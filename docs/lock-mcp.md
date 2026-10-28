@@ -4,7 +4,7 @@
 
 - **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout. It is written on the standard library, because the `mcp` SDK is not installed and the kit uses no packages (CLAUDE.md). It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
 - **Plugin:** `.claude-plugin/plugin.json` names it `machine-lock`. That manifest holds this server, the skills (`content/skills/`), the agents (`hosts/claude/shell/agents/`) and the hooks of ARCHITECTURE.md "Packaging".
-- **Live through the plugin:** a Claude session with the `pm-kit` plugin enabled starts it from that manifest; no settings entry or `.mcp.json` names it. Observed 2026-10-14: a session's tools include `mcp__plugin_pm-kit_machine-lock__lock_snapshot` and the other tools below.
+- **Live through the plugin:** a Claude session with the `pm-kit` plugin enabled starts it from that manifest; no settings entry or `.mcp.json` names it. A session's tools are named `mcp__plugin_pm-kit_machine-lock__<tool>` (the prefix is inferred from Claude Code's plugin naming: `kitlib.lockmcp.tool_prefix`). The entry point boots the kit (`boot/kitboot.py`) before it imports kitlib, and exits when that check fails.
 
 ## Results
 
@@ -26,8 +26,7 @@
 
 ## No write tools
 
-The server has no write tool, on any host. Asked "Drop the lock MCP's owner-only write tools so the lock never trusts a session mark, keeping the read tools?", the owner answered "yes i want that", and decided that the lock MCP ships read-only. The owner changes the lock outside any agent session: `reserve_ui.pyw`, or the lock CLI run by hand in a terminal no agent host started. The PM no longer places or releases owner holds through MCP; that decision replaces the earlier one that let it. Owner writes confirmed through the hub (O3) are a later follow-up.
-
+The server has no write tool, on any host. Asked "Drop the lock MCP's owner-only write tools so the lock never trusts a session mark, keeping the read tools?", the owner answered "yes i want that", and decided that the lock MCP ships read-only. The owner changes the lock outside any agent session: `reserve_ui.pyw`, or the lock CLI run by hand in a terminal no agent host started. The PM places and releases no owner hold through MCP, since there is no write tool.
 - Because no tool writes, the server never asks who is calling: it reads no session mark, and `mcp/lock_server.py` installs no owner check, so `kitlib.lock.api` keeps its default one.
 - Seven write tools were retired: `lock_hold_create`, `lock_hold_edit`, `lock_hold_end`, `lock_set_game_mode`, `lock_set_games`, `lock_set_division` and `lock_end_run`. Their names are pinned in `kitlib.lockmcp.OWNER_ONLY`. `tools/list` never lists one. `tools/call` answers one as an unknown tool (-32602), and a direct in-process `Server.call` refuses it with the error code `unknown_tool`. At import the server checks that it serves none of them (`check_read_only`, which raises RuntimeError: a real check, not an `assert`, so `python -O` keeps it). `tests/lockmcp/test_server.py` pins this.
 - The guard still denies those names (docs/guard.md "Lock MCP"). It matches the host's MCP prefix plus the name; on Claude the prefix is `mcp__plugin_pm-kit_machine-lock__`. This is a second layer: a server process started from an older release keeps serving its old tools until it restarts (docs/lock-release.md).

@@ -4,9 +4,11 @@ area's module (BUILT); every other primitive is a stub that raises PlatformUnsup
 itself and the slice that builds it. Never a primitive that silently does less (section 2.1,
 rule 5)."""
 from kitlib.platform import PlatformUnsupported, api
-from kitlib.platform.linux import hardware
+from kitlib.platform.linux import cpu, hardware, process
 
-BUILT = {'hardware': hardware}      # area -> the module that provides its primitives (slice 6)
+# area -> the module that provides its primitives (process: slice 4, hardware: slice 6,
+# affinity: slice 5)
+BUILT = {'process': process, 'hardware': hardware, 'affinity': cpu}
 
 
 def _stub(name, area, slice_number):

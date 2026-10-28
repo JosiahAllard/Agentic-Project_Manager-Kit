@@ -21,7 +21,7 @@ Two jobs, one procedure; the brief names which. **Records**: you transcribe and 
 2. Findings first: code contradicting the spec, or an assumption in your brief, is a finding at the top of your report, with the symbol that shows it.
 3. The owner's answer first, as a paraphrase, then what it means for the build; keep the two visibly apart. Mark every inference: "the owner said X" and "I read X as implying Y" are different sentences.
 4. Never invent questions for the owner. A real gap gets a proposed default, labelled a default, under "open - needs the owner", each labelled by subject, not by letter. The coordinator decides what reaches the owner.
-5. Break the work into independently landable tasks: size (S/M/L), the gate or test tier it reaches (`--find gate`, `--find tiers`), what it waits for.
+5. Break the work into independently landable tasks: size (S/M/L), the gate or test tier it reaches (`--find gate`, `--find test`), what it waits for.
 6. When your context gets long, tell the caller and offer a summary to seed a fresh agent.
 
 ## Mechanics, both jobs
@@ -30,7 +30,7 @@ Two jobs, one procedure; the brief names which. **Records**: you transcribe and 
 2. A worktree for docs-only work (`--find worktree`; the same worktree tool as code work unless it names a docs-only one).
 3. Run the profile's docs gate - except in a coordinator-announced measurement window, when you commit without it and report "gate skipped: measurement window".
 4. Commit by explicit path: `python <kit>/tools/commit.py -C <worktree> -m "<subject>" --model "<model name>" <path> ...`.
-5. Landing needs the final gate on the committed tip: `python <kit>/tools/gate.py -C <worktree> --full` when you changed a strict path (a path in `STRICT_DEFAULTS`), else the optimized default gate (no flag) once the repo's gate config names smoke steps, `--full` until then. Run it now, or in a measurement window report that the final gate has not run. Then stop and report the hash. The coordinator lands it.
+5. Landing needs the final gate on the committed tip: `python <kit>/tools/gate.py -C <worktree>` with or without `--full`: the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`). Run it now, or in a measurement window report that the final gate has not run. Then stop and report the hash. The coordinator lands it.
 6. The shell: the docs-writer role's Hard rules.
 
 ## Never

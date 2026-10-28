@@ -53,10 +53,12 @@ import fnmatch
 import os
 import time
 
+import kitlib.platform
 from kitlib import kitroot
 from kitlib.records import gate_ok
 
 from kitlib.git import refs
+from kitlib.platform.linux import paths as linux_paths
 
 from . import holders, marks, remove, scratch, sweep
 from .holders import WALK_MAX, canon, extended, plain, prune
@@ -101,7 +103,18 @@ HEADINGS = {
 def process_cwds():
     """`((holders, unreadable, total), None)`: every process's (pid, image, current directory) this
     scan could read, how many it could not open and how many it saw; or `(None, why)` when there is
-    no process list to read (the scan is Windows only; an empty list is no answer)."""
+    no process list to read (the scan is Windows's and Linux's; an empty list is no answer). On
+    Linux it reads /proc (kitlib.platform.linux.paths.process_paths): this user's processes, and
+    `unreadable` counts those of this user it could not read."""
+    if kitlib.platform.NAME == 'linux':
+        try:
+            scan = linux_paths.process_paths(('cwd',))
+        except OSError as e:
+            return None, 'the process list cannot be read: %s' % e
+        if not scan.total:
+            return None, 'the process list came back empty'
+        return ([(pid, name, where) for pid, name, _kind, where in scan.entries],
+                scan.unreadable, scan.total), None
     if not holders.WINDOWS:
         return None, 'the process scan is Windows only'
     seen = holders.processes()
@@ -284,7 +297,9 @@ def live_reason(ctx, entry, run_wide, landing, machine, cwds, now, dead_after_s)
         held = holders.held_folder(path)
         if held is not None:
             where, err = held
-            what = ('was not probed: the open for delete is made on Windows only'
+            what = ('was not probed: Linux has no open that shows which folders a process holds'
+                    if err == holders.NOT_SEARCHED and kitlib.platform.NAME == 'linux' else
+                    'was not probed: the open for delete is made on Windows only'
                     if err == holders.NOT_SEARCHED and not holders.WINDOWS else
                     'has more than %d entries, so not every folder in it was opened' % WALK_MAX
                     if err == holders.NOT_SEARCHED else

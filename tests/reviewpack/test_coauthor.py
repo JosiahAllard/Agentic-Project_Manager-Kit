@@ -72,7 +72,7 @@ class CoAuthorSection(CoAuthorCase):
         # The section is read at the base; the branch's .kit.json edit is an owner-only change too.
         self.write('.kit.json', json.dumps({'owner': {'email': EMAIL},
                                             'review_pack': {'coauthor': False}}))
-        self.commit_all('switch the check off')
+        self.commit_all('switch the check off', author=AGENT)
         code, out = self.pack()
         self.assertEqual(code, 1, out)
         self.assertIn('co-author  1 commit(s) | 1 without a Co-Authored-By trailer | 1 failing', out)

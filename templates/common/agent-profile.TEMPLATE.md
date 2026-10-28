@@ -38,9 +38,9 @@ High-risk paths (a change there gets a stronger worker and a fresh reviewer) and
 How to move or rename without changing behaviour.
 
 ## Records
-Where the backlog and decisions live, which agent writes which records, and what tracked files
+Where the backlog lives, which agent writes which records, and what tracked files
 must never contain.
-- Conventions digest (the consultant reads it on start): `docs/conventions-digest.md`.
+- Conventions digest (the consultant reads it on start), where the repo has one: `docs/conventions-digest.md`.
 
 ## Art
 What visual work exists, how a change is shown to the owner, or "Not applicable." (which drops the
@@ -52,7 +52,7 @@ deletes it:
   changing how the game looks or sounds is the owner's decision.
 - Never change gameplay, physics or netcode to make something look or sound better: report the
   conflict.
-- Generation sessions are recorded as keyword lines in `docs/ops/assets.md`, failures included.
+- Generation sessions are recorded as keyword lines in the repo's `docs/ops/assets.md` (create it on the first session), failures included.
 - Asset policy: <where the repository keeps it>; anything it does not yet allow is the owner's decision.
 
 ## Audio
@@ -63,7 +63,7 @@ below). Which generator makes which sound. Each line is a default kept unless th
 - Never wire a new sound into the game, or replace an existing one, unless the brief says to:
   changing how the game sounds is the owner's decision.
 - Never change gameplay, physics or netcode to make something sound better: report the conflict.
-- Generation sessions are recorded as keyword lines in `docs/ops/assets.md`, failures included.
+- Generation sessions are recorded as keyword lines in the repo's `docs/ops/assets.md` (create it on the first session), failures included.
 - Asset policy: <where the repository keeps it>; anything it does not yet allow is the owner's decision.
 - Text to speech: announcer lines only.
 - Local music generation: music only (menu, match and victory themes, stingers over a few seconds),

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 from kitlib import pluginsource, pmstart
@@ -26,7 +27,7 @@ KIT = r"Q:\kit"
 PYW = r"C:\Py\pythonw.exe"
 CARRIED = '"Q:\\kit\\tools\\no_window.py" python "Q:\\kit\\tools\\daily_full.py" -C "Q:\\repo"'
 FAKES = dict(pm_data=lambda: None, handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
-             liveness={"read": lambda p: "{}"}, stubs={"repos": {}},
+             liveness={"read": lambda p: "{}"}, repos={},
              watcher={"beat": lambda: None, "now": 0}, foreground_lock={"read": lambda: 0})
 
 
@@ -104,7 +105,7 @@ class Judge(unittest.TestCase):
         from kitlib.launcher import autostart
         from kitlib.machinesetup import agenttemp
         from kitlib.worktree import task as wtask
-        for name in (autostart.TASK_NAME, autostart.OLD_TASK_NAME, agenttemp.TASK, wtask.task_name("r")):
+        for name in (autostart.TASK_NAME, agenttemp.TASK, wtask.task_name("r")):
             with self.subTest(name=name):
                 self.assertTrue(ct.is_kit(task("\\" + name, "python.exe"), roots=set()))
 
@@ -198,6 +199,7 @@ class FakeRun:
         return subprocess.CompletedProcess(args, self.code, self.stdout, self.stderr)
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')   # the Windows form, on any machine
 class Read(unittest.TestCase):
     def test_parse_names_and_exec_actions(self):
         self.assertEqual(ct.parse(XML), [
@@ -299,6 +301,30 @@ class InTheChecklist(unittest.TestCase):
 
     def test_the_tests_keep_the_check_off_this_machine(self):
         self.assertEqual(ct.check({}), [])
+
+
+class Linux(unittest.TestCase):
+    """On Linux (docs/linux-support-plan.md slice 10) a job opens no console: check says nothing
+    and never reads; read_tasks is the pm-kit jobs read back, never schtasks."""
+
+    def setUp(self):
+        from unittest import mock
+        patch = mock.patch("kitlib.platform.NAME", "linux")
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.mock = mock
+
+    def test_check_is_empty_without_reading(self):
+        def read():
+            raise AssertionError("read on Linux")
+        self.assertEqual(ct.check({}, read=read), [])
+
+    def test_read_tasks_is_the_jobs_read_back(self):
+        from kitlib.platform.linux import schedule
+        jobs = [{"path": "\\pm-kit-x", "name": "x", "actions": []}]
+        with self.mock.patch.object(schedule, "read_back", return_value=jobs) as got:
+            self.assertEqual(REAL_READ(run="RUN"), jobs)
+        got.assert_called_once_with(run="RUN")
 
 
 if __name__ == "__main__":

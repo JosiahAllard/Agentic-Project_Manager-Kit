@@ -14,6 +14,10 @@ another folder (another repository's tools\\gate.py) is not the kit's. Its progr
 file name only: a console program in `CONSOLE` is flagged; pythonw.exe and anything else is not.
 `read_tasks` reads every task's actions from `schtasks /Query /XML ONE` (`xml_input` says how its
 bytes are read); `judge` is pure and is what the tests drive.
+
+On Linux a job opens no console window, so `check` says nothing; `read_tasks` gives every pm-kit
+job read back (kitlib.platform.linux.schedule.read_back) in the same form, for the readers that
+look tasks up by name.
 """
 import codecs
 import os
@@ -21,6 +25,7 @@ import re
 import subprocess
 import xml.etree.ElementTree as ET
 
+from kitlib import platform
 from kitlib.launcher import autostart
 from kitlib.machinesetup import agenttemp
 from kitlib.proc import spawn
@@ -39,9 +44,9 @@ OPTION = re.compile(r'^--?[A-Za-z][\w-]*[:=]')     # `-opt:` / `--opt=` before a
 
 
 def kit_names():
-    """The task names the kit registers itself: the launcher's sign-in task (and its old name) and
-    the agent temp sweep. `NAME_SUFFIXES` covers the per-repository ones."""
-    return {autostart.TASK_NAME, autostart.OLD_TASK_NAME, agenttemp.TASK}
+    """The task names the kit registers itself: the launcher's sign-in task and the agent
+    temp sweep. `NAME_SUFFIXES` covers the per-repository ones."""
+    return {autostart.TASK_NAME, agenttemp.TASK}
 
 
 def _norm(path):
@@ -174,7 +179,11 @@ def parse(data):
 def read_tasks(run=None, timeout=TIMEOUT_S):
     """Every registered task's Exec actions (`parse` of `xml_input`), from `schtasks /Query /XML
     ONE`. Raises RuntimeError when schtasks fails or times out, OSError when it cannot be run,
-    ET.ParseError on output that is not the XML. run: the tests' stand-in for spawn.run."""
+    ET.ParseError on output that is not the XML. run: the tests' stand-in for spawn.run. On Linux:
+    schedule.read_back (ScheduleError, a RuntimeError, when the crontab cannot be read)."""
+    if platform.NAME == 'linux':
+        from kitlib.platform.linux import schedule
+        return schedule.read_back(run=run)
     try:
         r = (run or spawn.run)(['schtasks', '/Query', '/XML', 'ONE'], capture_output=True,
                                timeout=timeout)
@@ -188,5 +197,7 @@ def read_tasks(run=None, timeout=TIMEOUT_S):
 
 def check(cfg, read=None):
     """Warning lines for kit tasks that start a console program (`judge`); [] when there are none.
-    Always on: no config key. `cfg` is unused, kept for the checks pattern."""
+    Always on: no config key. `cfg` is unused, kept for the checks pattern. On Linux: []."""
+    if platform.NAME == 'linux':
+        return []
     return judge((read or read_tasks)())

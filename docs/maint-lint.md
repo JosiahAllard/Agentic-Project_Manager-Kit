@@ -61,8 +61,7 @@ class.
 
 `kitlib/maintlint/holds.py` and `kitlib/maintlint/backlog.py`:
 - `keyword-hold`: an offerable record whose summary, requires or expect names the owner's go or a
-  live client, but which no hold keeps out of the offer. The patterns are carried over from
-  the retired `backlog_lint` tool, and the body is not read. The fix is a `block --on owner|live-client`
+  live client, but which no hold keeps out of the offer. The body is not read. The fix is a `block --on owner|live-client`
   whose reason the PM writes, because an owner hold must cite what it waits on.
 - `unpriced`: the records `backlog.py needs-priority` lists.
 - `dead-pull`: a pull with no branch by its `pulled_by` (`offer.in_flight_split`). A failed git
@@ -140,9 +139,7 @@ repository's, or not fetched), counted.
 - `overrides`: repo rules whose key is also a shared rule's.
 
 The counts are read through `rulebook.load` and `rulebook.conflicts`, not parsed again; a rulebook
-that does not parse is a note, and no rulebook folder gives zeros. The superseded-live count is
-gone: a rule is changed in its rulebook, not left live beside a newer entry.
-
+that does not parse is a note, and no rulebook folder gives zeros.
 Each of `stale_cites`, `over_budget` and `conflict_pairs` above 0 is also a finding for the PM,
 whose ledger it is: `ledger-stale-cites` (fix: `ledger.py check`, which names each citation, then
 re-point or drop the digest line), `ledger-over-budget` (fix: `ledger.py rules --all`, then
@@ -159,7 +156,7 @@ findings and nothing else.
 steps of the repository's gate-OK records (`kitlib/records/gate_ok.py`,
 `<dev_drive>\pm-kit\kit-gate-ok\<repo key>\<commit>.json`, and the .git copies in
 `<git common dir>/kit-gate-ok/` of commits that folder has no record of, until
-the legacy read is retired) of full gates only (`mode_of` "full": `gate.py
+the legacy read lasts) of full gates only (`mode_of` "full": `gate.py
 --full` and full landings); a selected or docs-only gate times only part of a step. A sample is
 a step whose result is pass or warn with seconds above 0. Per step, the newest 10 samples
 (`WINDOW`) that ended in the last 14 days (`DAYS`) are taken; with 5 or more (`MIN_SAMPLES`),
@@ -185,10 +182,9 @@ an error. `--dry-run` files nothing.
   them; a record closed before that may be filed again on the next run.
 - Step names that make the same id text (`kit_suite` and `kit-suite`) share one record: a live
   record of either holds back the other.
-
 - An A tree is reported only when it has non-empty claims. An empty A tree whose tip is on the
   base's first-parent chain is skipped by the nightly sweep as fresh
-  (`kitlib/worktree/sweep.py` 260-262), so neither tool reports it.
+  (`kitlib.worktree.sweep`: a fresh worktree is never swept), so neither tool reports it.
 - At 10 rows per check, `page.render` can still go over `pagecheck.MAX_BYTES`.
 - `closed-unlanded` reads only a close whose subject is `closes <ID>: landed <sha>`. A close by
   hand with another reason names no commit to check, so it is not checked; a `<sha>` the checkout

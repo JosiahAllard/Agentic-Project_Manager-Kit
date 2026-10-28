@@ -33,7 +33,7 @@ WHEN = datetime.datetime(2026, 10, 20, 13, 5, 6, tzinfo=datetime.timezone.utc)
 
 class Pieces(unittest.TestCase):
     def test_the_audited_rows(self):
-        for rows in (['close'], ['set-hold'], ['set-other'], ['set-text', 'set-other'],
+        for rows in (['close'], ['set-price-owner'], ['set-other'], ['set-text', 'set-other'],
                      ['pull-collision'], ['retarget']):
             with self.subTest(rows):
                 self.assertTrue(audit.audited(rows))

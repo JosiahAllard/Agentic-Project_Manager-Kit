@@ -28,6 +28,8 @@ import signal
 import subprocess
 import sys
 
+import kitlib.platform
+
 from . import bash, cpu, win32
 from .console import CONSOLE_CHOICE, has_console  # noqa: F401  (job.has_console stays a name)
 from .process import process_working_set
@@ -40,8 +42,10 @@ def no_window_flags(flags, console=None):
     """Popen creationflags for a child of this process: `flags` plus CREATE_NO_WINDOW when this
     process has no console (`console` False; None asks has_console()) and `flags` makes no console
     choice of its own (CREATE_NEW_CONSOLE, DETACHED_PROCESS or CREATE_NO_WINDOW). Otherwise
-    `flags` unchanged, so a child of a console parent shares that console as before."""
-    if flags & CONSOLE_CHOICE:
+    `flags` unchanged, so a child of a console parent shares that console as before. Off Windows
+    `flags` unchanged whatever `console` says: there is no console window to choose, and POSIX
+    refuses any creationflags but 0."""
+    if kitlib.platform.NAME != 'windows' or flags & CONSOLE_CHOICE:
         return flags
     if console is None:
         console = has_console()
@@ -206,9 +210,13 @@ class Job:
     `pin` is "pinned" (mask set), None (no pin), or "overridden": the first command's affinity,
     read back once it is in the job, is not the mask, because an outer job's limit wins (as
     process.set_affinity says). Then `effective` is the mask it really runs on and `note` says so.
-    Read back only for a group-0 mask; a multi-group pin is not checked."""
+    Read back only for a group-0 mask; a multi-group pin is not checked.
 
-    def __init__(self, mask=None, kill_on_close=True):
+    `short` says the caller's command is brief (a git call): on Linux it shares one carrier scope
+    per process (kitlib.platform.linux.contain). A job object costs nothing like a scope, so here
+    it changes nothing."""
+
+    def __init__(self, mask=None, kill_on_close=True, short=False):
         self.h, self.note, self.p = K32.CreateJobObjectW(None, None), None, None
         if not self.h:
             raise JobError("CreateJobObjectW: windows error %d" % ctypes.get_last_error())
@@ -451,3 +459,10 @@ def cores_text(mask):
     if mask is None:
         return "all cores"
     return "cores " + cpu.mask_text(mask) if mask else "no cores"
+
+
+# On Linux the Job is containment's (kitlib.platform.linux.contain): the same methods and
+# meanings on a cgroup scope, or on the weak tier it reports. Windows keeps the Job above.
+if kitlib.platform.NAME == "linux":
+    from kitlib.platform.linux import contain as _contain
+    Job = _contain.Job      # noqa: F811

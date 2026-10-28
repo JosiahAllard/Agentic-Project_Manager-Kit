@@ -4,6 +4,7 @@ Controller discovery and native liveness checks are supplied by service assembly
 This UI changes only bridge connections, never native permissions or chat state.
 It owns no agent-facing server and exposes no owner write through MCP.
 """
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -41,12 +42,18 @@ class Window:
         writers=ttk.Frame(frame)
         writers.pack(fill='x',pady=(0,12))
         # A writer lease: the first chat (a Codex app chat with an active turn) carries
-        # delivery to the second for a chat of another app. It lasts one hour.
-        self.lend=ttk.Button(writers,text='Let first chat deliver to second for other apps (1 hour)',
+        # delivery to the second for a chat of another app. It lasts until Stop, a PM revoke, a
+        # service restart, or either chat coming back as a different chat binding (a permission change).
+        self.lend=ttk.Button(writers,text='Let first chat deliver to second for other apps',
             command=lambda:self._lease(True))
         self.lend.pack(side='left')
         self.unlend=ttk.Button(writers,text='Stop',command=lambda:self._lease(False))
         self.unlend.pack(side='left',padx=8)
+        # Stops the lease selected in the list below by its references; it works for a
+        # lease whose chat is no longer listed (closed, between turns or not yet rediscovered).
+        self.stop_row=ttk.Button(writers,text='Stop selected lease',command=self._stop_selected,
+            state='disabled' if preview else 'normal')
+        self.stop_row.pack(side='left')
         self.selected=tk.StringVar(value='Select two chats to choose a connection.')
         ttk.Label(frame,textvariable=self.selected).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Current connections',font=('Segoe UI',11,'bold')).pack(anchor='w')
@@ -55,6 +62,7 @@ class Window:
         self.status=tk.StringVar(value='Preview only. Connections are not changed.' if preview else 'No chat is connected just because it is listed.')
         ttk.Label(frame,textvariable=self.status,wraplength=920).pack(anchor='w',pady=(8,0))
         self._order=[]
+        self._lease_rows={}
         self.refresh()
 
     def _selection(self,event=None):
@@ -78,15 +86,35 @@ class Window:
                 self.table.insert('',tk.END,iid=choice.reference,values=(choice.title,choice.runtime,choice.workspace))
             self.table.selection_set([ref for ref in old if ref in self.choices])
             self.routes.delete(0,tk.END)
+            self._lease_rows={}  # reset before any row, so a failed refresh leaves no stale index map
             for source,target in self.owner.connections():
                 self.routes.insert(tk.END,self.choices[source].title+' → '+self.choices[target].title)
-            for writer,target in self.owner.writers():
-                self.routes.insert(tk.END,self.choices[writer].title+' delivers to '+self.choices[target].title+' for other apps')
+            for writer,target,granted,listed in self.owner.writer_grants():
+                self._lease_rows[self.routes.size()]=(writer,target)
+                self.routes.insert(tk.END,self._title(writer)+' delivers to '+self._title(target)
+                    +' for other apps, since '+_when(granted)+('' if listed else ' (a chat is not listed now; it cannot deliver)'))
             if not self.preview and not choices: self.status.set('No available chats yet. Open a supported chat with the bridge plugin enabled.')
             self._selection()
         except Exception:
             self.status.set('Chat discovery is unavailable. Existing connections are not changed by this refresh.')
             for button in (self.connect,self.disconnect,self.lend,self.unlend): button.configure(state='disabled')
+
+    def _title(self,reference):
+        choice=self.choices.get(reference)
+        return choice.title if choice is not None else 'chat '+reference[:8]+' (not listed)'
+
+    def _stop_selected(self):
+        if self.preview: return
+        rows=[self._lease_rows[index] for index in self.routes.curselection() if index in self._lease_rows]
+        if len(rows)!=1:
+            self.status.set('Select one lease in the list to stop it.')
+            return
+        try:
+            if self.owner.lease(*rows[0],enabled=False): self.status.set('That lease is stopped.')
+            else: self.status.set('That lease was already gone or replaced. Nothing was stopped.')
+        except Exception:
+            self.status.set('The lease could not be stopped. Refresh and try again.')
+        self.refresh()
 
     def _change(self,enabled):
         if self.preview or len(self._order)!=2: return
@@ -100,9 +128,14 @@ class Window:
     def _lease(self,enabled):
         if self.preview or len(self._order)!=2: return
         try:
-            self.owner.lease(*self._order,enabled=enabled)
-            self.status.set('The first chat now delivers to the second for other apps for one hour. '
-                'It must stay in an active turn.' if enabled else 'The first chat no longer delivers to the second.')
+            granted=self.owner.lease(*self._order,enabled=enabled)
+            self.status.set('Since '+_when(granted)+' the first chat may deliver to the second for other apps, '
+                'until you click Stop. It delivers only while it is in an active turn.'
+                if enabled else 'The first chat no longer delivers to the second.')
         except Exception:
             self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
         self.refresh()
+
+
+def _when(granted):
+    return time.strftime('%Y-%m-%d %H:%M',time.localtime(granted))

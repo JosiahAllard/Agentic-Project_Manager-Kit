@@ -2,11 +2,9 @@
 
   gate.py [-C DIR] [--base REV] [--full | --only STEP ...] [--plan] [--slug S] [--log-dir D]
       gate the checkout under the machine lock; on a pass of a clean tree, the gate-OK record.
-      Through a stub run from outside its checkout, refused (4) when the caller is in another
-      checkout, unless an absolute -C names the tree; with no stub and no -C or a relative one,
-      refused (4) when this gate.py is in another checkout of the gated tree's repository; a
-      relative --log-dir
-      outside the gated checkout is USAGE (2) (kitlib.gate.caller). From another directory:
+      With no -C or a relative one, refused (4) when this gate.py is in another checkout of the
+      gated tree's repository; a relative --log-dir outside the gated checkout is USAGE (2)
+      (kitlib.gate.caller). From another directory:
       python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout").
       Refused (4), with --plan and as `land` too, while the repository's stash stack holds an
       entry, whichever checkout made it (kitlib.gate.stash; docs/gate.md "The stash guard").
@@ -99,11 +97,9 @@ class Parser(argparse.ArgumentParser):
 
 def gate_parser():
     p = Parser(prog='gate.py', description='Gate this checkout under the machine lock.')
-    p.add_argument('-C', dest='root', help='the checkout (default: here; through a stub run from '
-                   'outside its checkout, refused when the caller is in another checkout unless '
-                   '-C is an absolute path; with no stub, refused when a relative or absent -C names '
-                   'another checkout of this gate.py\'s repository). From another directory: python '
-                   '<worktree>/tools/gate.py -C <worktree>')
+    p.add_argument('-C', dest='root', help='the checkout (default: here; refused when a relative '
+                   'or absent -C names another checkout of this gate.py\'s repository). From '
+                   'another directory: python <worktree>/tools/gate.py -C <worktree>')
     p.add_argument('--base', help='compare against this rev (default <remote>/<main>)')
     sel = p.add_mutually_exclusive_group()
     sel.add_argument('--full', action='store_true', help='every step that is not manual; nothing '
@@ -330,7 +326,6 @@ def do_measure(a):
 def main(argv):
     safe_stdio()
     book_kw = None
-    here, why = caller.take()       # every subcommand: no child inherits the stub's variable
     try:
         if argv[:1] == ['wait-result']:
             return do_wait(argv[1:])
@@ -350,19 +345,10 @@ def main(argv):
         if a.rerun and (a.plan or a.base):
             print('USAGE: --rerun takes only -C, --slug and --log-dir', file=sys.stderr)
             return G.USAGE
-        if why:
-            print('REFUSED: %s; nothing ran' % why)
-            return G.REFUSED
         root = os.path.abspath(a.root or '.')
-        # Only an absolute -C names the tree: through a stub that moved the caller, a relative
-        # one resolves against the stub's checkout, not where the caller typed it.
-        if here is not None and not (a.root and os.path.isabs(a.root)):
-            refused = caller.refusal(root, here)
-            if refused is not None:
-                return emit(refused)
-        # No stub, and no -C or a relative one: this gate.py on another checkout of its own
-        # repository. An absolute -C names the tree on purpose.
-        if here is None and not (a.root and os.path.isabs(a.root)):
+        # No -C or a relative one: this gate.py on another checkout of its own repository. An
+        # absolute -C names the tree on purpose.
+        if not (a.root and os.path.isabs(a.root)):
             refused = caller.own_copy_refusal(root, pluginsource.live_root(KIT), rel=a.root)
             if refused is not None:
                 return emit(refused)

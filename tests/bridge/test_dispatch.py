@@ -286,6 +286,19 @@ box.run_dispatch('op',send)
             receipt = self.core.dispatch_once(operation)
             self.assertEqual((receipt.state, receipt.reason), ('failed', 'native-before-write'))
 
+    def test_unknown_outcome_keeps_the_adapters_code_after_the_generic_reason(self):
+        cases = (('op', DeliveryError('test-native-result-unconfirmed'), 'native-outcome-uncertain:test-native-result-unconfirmed'),
+                 ('op2', DeliveryError('private detail, not an id'), 'native-outcome-uncertain'),
+                 ('op3', DeliveryError('x' * 200), 'native-outcome-uncertain'),
+                 ('op4', TimeoutError('private transport detail'), 'native-outcome-uncertain'))
+        for operation, error, reason in cases:
+            with self.subTest(operation):
+                self.admit(operation)
+                self.adapter.fail = error
+                receipt = self.core.dispatch_once(operation)
+                self.assertEqual((receipt.state, receipt.reason), ('unknown', reason))
+                self.assertEqual(self.store.receipt(operation).reason, reason)
+
     def test_clock_regression_and_invalid_expiry_fail_closed(self):
         self.admit()
         self.now = 999

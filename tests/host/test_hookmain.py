@@ -124,18 +124,18 @@ class Run(unittest.TestCase):
 
 class Unready(unittest.TestCase):
     """On a platform kitlib.guard does not declare ready (READY_PLATFORMS), every guarded call is
-    the guard-error deny and decide never runs (docs/linux-support-plan.md section 3): Linux until
-    slice 8 proves the guard there."""
+    the guard-error deny and decide never runs (docs/linux-support-plan.md section 3). Linux is
+    ready since slice 8 (tests/guard/test_linux_paths.py), so a platform with no backend stands in."""
 
     def on(self, name):
         patch = mock.patch('kitlib.platform.NAME', name)
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_on_linux_every_guarded_call_is_denied_before_decide(self):
+    def test_on_an_unready_platform_every_guarded_call_is_denied_before_decide(self):
         from kitlib import guard
-        self.assertNotIn('linux', guard.READY_PLATFORMS)
-        self.on('linux')
+        self.assertNotIn('unsupported', guard.READY_PLATFORMS)
+        self.on('unsupported')
         called = []
 
         def decide(*x, **k):
@@ -145,13 +145,13 @@ class Unready(unittest.TestCase):
             a = FakeAdapter()
             self.assertEqual(run(a, payload, decide), (3, 'deny guard-error\n'))
             self.assertIn('PlatformUnsupported', a.last.reason)
-            self.assertIn('not declared ready on this platform (linux; ready: windows)', a.last.reason)
+            self.assertIn('not declared ready on this platform (unsupported; ready: windows, linux)', a.last.reason)
             self.assertTrue(a.last.reason.endswith('role=%s]' % role))
         self.assertEqual(called, [])
 
-    def test_a_platform_the_kit_has_no_backend_for_is_denied_too(self):
-        self.on('unsupported')
-        self.assertEqual(run(FakeAdapter(), {}, lambda *x, **k: Decision('allow')), (3, 'deny guard-error\n'))
+    def test_on_linux_the_guard_decides(self):
+        self.on('linux')
+        self.assertEqual(run(FakeAdapter(), {}, lambda *x, **k: Decision('allow')), (0, ''))
 
     def test_on_windows_the_guard_decides_as_before(self):
         self.on('windows')
@@ -410,6 +410,35 @@ class CommandLine(unittest.TestCase):
             self.assertEqual(hookmain.windowless(os.path.join(d, 'python3.14.exe')), want)
             gone = os.path.join(d, 'python9.exe')      # no such file: used as given
             self.assertEqual(hookmain.windowless(gone), gone)
+
+    def test_a_manifest_command_on_windows_is_pythonw_in_exec_form(self):
+        line = hookmain.manifest_command('${ROOT}/boot/hook.py', 'windows', 'h', 'PreToolUse')
+        self.assertEqual(line, {'command': 'pythonw', 'args': ['${ROOT}/boot/hook.py', 'h', 'PreToolUse']})
+        self.assertEqual(hookmain.manifest_command('a.py', 'windows', blocking=True),
+                         {'command': 'pythonw', 'args': ['a.py']})
+
+    def test_a_manifest_command_on_linux_runs_python3_under_sh_and_fails_closed(self):
+        tool = hookmain.manifest_command('${ROOT}/boot/hook.py', 'linux', 'h', 'PreToolUse', blocking=True)
+        self.assertEqual(tool, {'command': '/bin/sh', 'args': [
+            '-c', 'python3 "$@" || exit 2', 'kit-hook', '${ROOT}/boot/hook.py', 'h', 'PreToolUse']})
+        start = hookmain.manifest_command('${ROOT}/boot/hook.py', 'linux', 'h', 'SessionStart')
+        self.assertEqual(start['command'], '/bin/sh')
+        self.assertEqual(start['args'][0], '-c')
+        self.assertTrue(start['args'][1].startswith('python3 "$@" || echo "PM kit: the kit did not load: '),
+                        start['args'][1])
+        self.assertNotIn('exit 2', start['args'][1])
+        self.assertEqual(start['args'][2:], ['kit-hook', '${ROOT}/boot/hook.py', 'h', 'SessionStart'])
+
+    def test_a_manifest_command_for_a_platform_with_no_interpreter_is_refused(self):
+        with self.assertRaises(ValueError):
+            hookmain.manifest_command('a.py', 'macos')
+
+    def test_the_mcp_interpreter_is_python3_on_linux_and_refused_for_an_unknown_platform(self):
+        """Stock Ubuntu has no `python`, only python3; Windows keeps the `python` its manifests name."""
+        self.assertEqual(hookmain.mcp_interpreter('windows'), 'python')
+        self.assertEqual(hookmain.mcp_interpreter('linux'), 'python3')
+        with self.assertRaises(ValueError):
+            hookmain.mcp_interpreter('macos')
 
     def test_the_settings_entry_wraps_it(self):
         entry = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')

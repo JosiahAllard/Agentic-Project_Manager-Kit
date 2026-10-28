@@ -11,7 +11,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `CLAUDE.md` | Claude's pointer: imports AGENTS.md | always | kw: rules, claude
 - `AGENTS.md` | kit repo rules for every agent host (canonical) | always | kw: rules, agents
 - `README.md` | what the kit is | first look | kw: readme, overview
-- `ARCHITECTURE.md` | kit tool architecture (the contract; owner approves changes) | before changing a tool | kw: architecture, contract
+- `ARCHITECTURE.md` | kit tool architecture (the contract) | before changing a tool | kw: architecture, contract
 - `docs/agent-profile.md` | this repo's profile for worker agents | starting a task | kw: profile, branches, build, test
 - `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
@@ -29,7 +29,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/delegations.md` | the owner's delegation list: location, schema 1, the hard exclusions E1 to E5, running one, known limits | reading or changing what the PM may run for the owner, or running it | kw: delegations, owner-delegations, exclusions, delegated, runner
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
-- `docs/flaky-tests.md` | flaky tests: the time fence design (first step built: kitlib.clock, agentstart's budget), survey of nondeterminism in tests/ | a test fails under load, adding a time budget | kw: flaky, flake, time-fence, clock, budget
+- `docs/flaky-tests.md` | flaky tests: the time fence (kitlib.clock; agentstart's budget), the reviewer rules for a time budget | a test fails under load, adding a time budget | kw: flaky, flake, time-fence, clock, budget
 - `docs/gate.md` | gate.py | running the gate | kw: gate, test, stash
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal, hub secrets
@@ -128,7 +128,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/agent_view.py` | everything one role is given and held to on one host (`docs/content.md` "Agent view") | kw: agent_view, role, view, instructions, mode, capabilities
 - `tools/checkout_guard.py` | is a path in the main checkout; strays in it (`docs/preflight.md`) | kw: checkout_guard, stray
 - `tools/stray_restore.py` | discard main-checkout strays a branch tip holds (`docs/stray-restore.md`) | kw: stray_restore, stray
-- `tools/kit_stubs.py` | write or check a repo's stubs for the kit tools (`docs/install.md`) | kw: kit_stubs, stubs
+- `tools/kit_stubs.py` | add a repo's agent memory folder key (`docs/install.md`) | kw: kit_stubs, memory
 - `tools/kit_tests.py` | run the kit test suite, whole or selected (`docs/test-tools.md`) | kw: kit_tests, tests
 - `tools/ci_ratchet.py` | the suite's failing tests held to a platform baseline (`docs/test-tools.md`) | kw: ci_ratchet, ratchet, baseline
 - `tools/machine_paths.py` | refuse a hard-coded machine path (`docs/commit.md`) | kw: machine_paths

@@ -24,6 +24,10 @@
       gate.py wait-result command that waits for its result record>, and exits 0
   land.py --queue [-C DIR]
       read-only: the landing lock's holder and the landings in the machine lock's queue
+  land.py BRANCH [BRANCH ...] --check-strict [-C DIR]
+      read-only, before a reviewer is picked: per branch, `STRICT <branch>: <paths>: ...` (its
+      reviewer must be strong-tier, and it lands alone) or `NOT STRICT <branch>: ...`, by the
+      matcher a landing refuses by, against <remote>/<main> as last fetched; no lock, no verdict
   land.py --sweep-landed [--apply] [-C DIR]
       the same cleanup for every branch main already contains (docs/gate.md "Branch cleanup");
       a dry run names what would go, --apply cleans up
@@ -104,6 +108,8 @@ def parser():
                    help='wait this long for the turn and the lock (default "landing".wait_s)')
     p.add_argument('--log-dir', help='where the merged gate\'s logs go')
     p.add_argument('--queue', action='store_true', help='print the landing lock and queue; land nothing')
+    p.add_argument('--check-strict', action='store_true',
+                   help='say whether each BRANCH changes a strict path; land nothing')
     p.add_argument('--keep-branch', action='store_true',
                    help='after landing, keep the remote branch, the worktree and the local branch')
     p.add_argument('--sweep-landed', action='store_true',
@@ -174,13 +180,20 @@ def main(argv):
     if a.sweep_landed:
         if (a.branches or a.expect_main or a.expect_tip or a.queue or a.keep_branch or a.full
                 or a.fresh or a.summary or a.wait is not None or a.log_dir
-                or a.submit or a.submitted):
+                or a.submit or a.submitted or a.check_strict):
             p.error('--sweep-landed takes only --apply and -C')
         try:
             return emit(cleanup.sweep(root, apply=a.apply))
         except KeyboardInterrupt:
             print('Ctrl+C: the sweep stopped; run it again to finish')
             return 130
+    if a.check_strict:
+        if (a.expect_main or a.expect_tip or a.queue or a.keep_branch or a.full or a.fresh
+                or a.summary or a.wait is not None or a.log_dir or a.submit or a.submitted):
+            p.error('--check-strict takes only BRANCH ... and -C')
+        if not a.branches:
+            p.error('name the branch to check (or several)')
+        return emit(landmod.check_strict(root, a.branches))
     if a.queue:
         if a.branches or a.expect_main or a.expect_tip or a.submit or a.submitted:
             p.error('--queue takes only -C')

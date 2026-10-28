@@ -7,6 +7,7 @@ fake registry object.
 import contextlib
 import io
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -198,12 +199,31 @@ class Check(Repo):
 
 class Commands(unittest.TestCase):
 
+    @mock.patch('kitlib.platform.NAME', 'windows')
     def test_the_reg_commands(self):
         self.assertEqual(pointer.command('Z:\\work\\pm-data'),
                          'reg add "HKLM\\SOFTWARE\\pm-kit" /v pm_repo /t REG_SZ '
                          '/d "Z:\\work\\pm-data" /f /reg:64')
         self.assertEqual(pointer.delete_command(),
                          'reg delete "HKLM\\SOFTWARE\\pm-kit" /v pm_repo /f /reg:64')
+
+    @mock.patch('kitlib.platform.NAME', 'linux')
+    def test_the_linux_commands_write_the_pointer_file(self):
+        path = os.path.join(tempfile.gettempdir(), 'pm data').replace('\\', '/')
+        self.assertEqual(pointer.command(path),
+                         "sudo mkdir -p /etc/pm-kit && printf '%%s\\n' '%s' | sudo tee "
+                         "/etc/pm-kit/pointer >/dev/null" % path)
+        self.assertEqual(pointer.delete_command(), 'sudo rm -f /etc/pm-kit/pointer')
+        self.assertNotIn('reg ', pointer.command(path) + pointer.delete_command())
+
+    @mock.patch('kitlib.platform.NAME', 'linux')
+    def test_where_names_the_linux_files(self):
+        self.assertEqual(pointer.where(),
+                         'pointer file /etc/pm-kit/pointer, else <profile>/.config/pm-kit/pointer')
+
+    @mock.patch('kitlib.platform.NAME', 'windows')
+    def test_where_names_the_registry_value_on_windows(self):
+        self.assertEqual(pointer.where(), 'HKLM\\SOFTWARE\\pm-kit pm_repo')
 
     def test_a_trailing_backslash_does_not_escape_the_quote(self):
         self.assertIn('/d "Z:\\\\" /f', pointer.command('Z:\\'))
@@ -228,6 +248,7 @@ class Registry(object):
         self.written.append(value)
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')
 class Setup(Repo):
     """--pm-repo through machinesetup.run_pointer, on a fake host and registry."""
 
@@ -373,12 +394,14 @@ class PreflightLine(Fixture):
         config = [i for i, l in enumerate(out) if l.startswith('config ')]
         self.assertEqual(out[config[0] + 1], 'pointer   %s' % self.root.replace('\\', '/'))
 
+    @mock.patch('kitlib.platform.NAME', 'windows')
     def test_with_no_pointer_the_line_says_none_and_how_to_set_it(self):
         line = self.line(self.run_with(None)[1], 'pointer ')
         self.assertTrue(line.startswith('pointer   none - no PM-repo pointer (HKLM\\SOFTWARE\\pm-kit '
                                         'pm_repo)'), line)
         self.assertIn('machine_setup.py --pm-repo', line)
 
+    @mock.patch('kitlib.platform.NAME', 'windows')
     def test_a_bad_pointer_is_broken(self):
         line = self.line(self.run_with(os.path.join(self.repo.base, 'gone'))[1], 'pointer ')
         self.assertTrue(line.startswith('pointer   BROKEN HKLM\\SOFTWARE\\pm-kit pm_repo: no folder at'),
@@ -388,6 +411,34 @@ class PreflightLine(Fixture):
         with mock.patch.object(configline, 'pointer_line', return_value='pointer   marker'):
             out = self.run_preflight()[1]
         self.assertIn('pointer   marker', out.splitlines())
+
+
+class PointerLineWording(unittest.TestCase):
+    """configline.pointer_line names the registry value on Windows and the pointer files on Linux."""
+
+    def line(self, name, state, error=None):
+        with mock.patch('kitlib.platform.NAME', name), \
+                mock.patch.object(pointer, 'read', return_value=pointer.Pointer(state, None, error)):
+            return configline.pointer_line()
+
+    def test_none_on_windows_names_the_registry_value(self):
+        self.assertIn('no PM-repo pointer (HKLM\\SOFTWARE\\pm-kit pm_repo);',
+                      self.line('windows', pointer.NONE))
+
+    def test_none_on_linux_names_the_pointer_files(self):
+        line = self.line('linux', pointer.NONE)
+        self.assertIn('no PM-repo pointer (pointer file /etc/pm-kit/pointer, else '
+                      '<profile>/.config/pm-kit/pointer);', line)
+        self.assertNotIn('HKLM', line)
+
+    def test_broken_on_windows_names_the_registry_value(self):
+        self.assertEqual(self.line('windows', pointer.BAD, 'why'),
+                         'pointer   BROKEN HKLM\\SOFTWARE\\pm-kit pm_repo: why')
+
+    def test_broken_on_linux_names_the_pointer_files(self):
+        self.assertEqual(self.line('linux', pointer.BAD, 'why'),
+                         'pointer   BROKEN pointer file /etc/pm-kit/pointer, else '
+                         '<profile>/.config/pm-kit/pointer: why')
 
 
 if __name__ == '__main__':

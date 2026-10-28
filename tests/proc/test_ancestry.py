@@ -7,8 +7,11 @@ from unittest import mock
 from kitlib.proc import process
 
 from tests.proc.fakeproc import FakeProc, patched
+from tests.platforms import windows_only
 
 ME, SHELL, HOST, TOP = 900001, 900002, 900003, 900004
+WALK = ('the fakes answer the calls the Windows walk makes (handles, the listing); on Linux the '
+        'walk reads /proc (tests/proc/test_linux_process.py)')
 
 
 def table():
@@ -31,6 +34,7 @@ def walk(t, through_exited, parents=None, limit=64, listing=None):
             return process.ancestry(ME, t[ME].ctime, parents, limit, through_exited=through_exited)
 
 
+@windows_only(WALK)
 class Ancestry(unittest.TestCase):
     def test_by_default_the_walk_ends_at_an_exited_ancestor_and_says_so(self):
         t = table()

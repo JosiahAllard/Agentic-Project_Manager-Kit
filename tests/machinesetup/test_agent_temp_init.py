@@ -116,6 +116,7 @@ class SweepDryRun(unittest.TestCase):
         self.assertIn('took over 5 s', str(cm.exception))
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')
 class TaskRegistered(unittest.TestCase):
     """agenttemp.task_registered against a fake subprocess.run: schtasks is never run."""
 

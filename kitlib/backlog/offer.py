@@ -17,11 +17,9 @@ PARKED = 'parked'
 IN_FLIGHT = 'in flight'
 UNPRIORITISED_OPEN = 'unprioritised+open'
 REVIEW = 'to review'
-OWNER_PRIORITISED = 'owner to prioritise'
 UNCLASSIFIED = 'unclassifiable'
 NOT_READ = 'unreadable'
-BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, REVIEW, OWNER_PRIORITISED,
-           UNCLASSIFIED, NOT_READ)
+BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, REVIEW, UNCLASSIFIED, NOT_READ)
 EFFORT_ORDER = {'s': 0, 'm': 1, 'l': 2, '-': 3}
 PROBE_TIMEOUT = 60
 DEFAULT_CAP = 5
@@ -52,8 +50,6 @@ def classify(rec):
     priority = rec.get('priority')
     if priority is None or rmod._priority(priority) is not None:
         return UNCLASSIFIED, 'no readable `priority`'
-    if priority == rmod.OWNER_PRIORITY:
-        return OWNER_PRIORITISED, None
     if priority == '-':
         return UNPRIORITISED_OPEN, None
     if rmod.is_band(priority):
@@ -109,15 +105,9 @@ class Banner(object):
                  '%d unprioritised+open' % self.count(UNPRIORITISED_OPEN)]
         if self.count(REVIEW):
             parts.append('%d %s' % (self.count(REVIEW), REVIEW))
-        for bucket in (PARKED, IN_FLIGHT, OWNER_PRIORITISED, NOT_READ, UNCLASSIFIED):
+        for bucket in (PARKED, IN_FLIGHT, NOT_READ, UNCLASSIFIED):
             if self.count(bucket):
                 parts.append('%d %s' % (self.count(bucket), bucket))
-        minus_one = sum(1 for r in self.snap.readable if r.get('priority') == rmod.OWNER_PRIORITY)
-        # An open `-1` record marked for review sits in REVIEW, not OWNER_PRIORITISED: still open.
-        open_minus_one = self.count(OWNER_PRIORITISED) + sum(
-            1 for r in self.buckets[REVIEW] if r.get('priority') == rmod.OWNER_PRIORITY)
-        if minus_one != open_minus_one:
-            parts.append('%d at priority -1 (%d of them open)' % (minus_one, open_minus_one))
         out = [' | '.join(parts)]
         groups, multi = self.held_groups()
         if self.count(HELD):
@@ -372,8 +362,6 @@ def not_offered_why(rec, passed, session=None):
                 % (rec.get('review'), rec.id))
     if bucket == UNPRIORITISED_OPEN:
         return 'it is unprioritised, so it has no rank and is never offered'
-    if bucket == OWNER_PRIORITISED:
-        return 'it is `priority: -1`, the owner\'s to price, so it has no rank'
     if bucket == UNCLASSIFIED:
         return 'it cannot be classified: %s' % why
     if rec.get('session') != session:

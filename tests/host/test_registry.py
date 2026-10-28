@@ -51,7 +51,7 @@ class KitRegistry(unittest.TestCase):
         claude = hosts['claude']
         self.assertEqual(claude.adapter, 'hosts.claude.adapter')
         self.assertEqual(claude.shell, 'hosts/claude/shell')
-        self.assertEqual(claude.platforms, ('windows',))
+        self.assertEqual(claude.platforms, ('windows', 'linux'))
         self.assertIsInstance(claude.capabilities, HostCapabilities)
         self.assertIsInstance(claude.profile, HostProfile)
         self.assertEqual(claude.profile.worktrees_directory, '.claude/worktrees')
@@ -173,6 +173,21 @@ class Validation(Case):
                 lambda e: e['profile'].update(env_prefixes=[]),
                 lambda e: e['profile'].update(env_prefixes=['claude_']),
                 lambda e: e['profile'].update(env_prefixes=['CLAUDE']),
+                lambda e: e['profile'].pop('cli_program'),
+                lambda e: e['profile'].update(cli_program=''),
+                lambda e: e['profile'].update(cli_program='bin/claude'),
+                lambda e: e['profile'].pop('cli_package'),
+                lambda e: e['profile'].update(cli_program='.'),
+                lambda e: e['profile'].update(cli_program='..'),
+                lambda e: e['profile'].update(cli_package=' '),
+                lambda e: e['profile'].update(cli_package='a/b'),
+                lambda e: e['profile'].update(cli_package='claude-code'),
+                lambda e: e['profile'].update(cli_package='@a'),
+                lambda e: e['profile'].update(cli_package='@a/b/c'),
+                lambda e: e['profile'].update(cli_package='@./x'),
+                lambda e: e['profile'].update(cli_package='@../x'),
+                lambda e: e['profile'].update(cli_package='@a/..'),
+                lambda e: e['profile'].update(cli_package='@A/b'),
                 lambda e: e.pop('hook'),
                 lambda e: e['hook'].update(extra=1),
                 lambda e: e['hook'].update(tool_event='Nope'),
@@ -209,6 +224,7 @@ class Validation(Case):
 class Profiles(Case):
     def test_profiles_and_union_cover_every_host_in_file_order(self):
         data = second(kit_hosts())
+        data['other']['platforms'] = ['windows']
         data['other']['profile']['process_names'] = {'windows': ['other.exe', 'node.exe']}
         data['other']['profile']['session_env'] = 'OTHER_SESSION'
         path = self.put(data)
@@ -247,6 +263,10 @@ class Profiles(Case):
         self.assertEqual(registry.host_folders(), ('.claude', '.codex'))
         self.assertEqual(registry.default_profile().worktrees_directory, '.claude/worktrees')
 
+    def test_each_host_names_its_cli_program_and_package_folder(self):
+        self.assertEqual([(p.cli_program, p.cli_package) for p in registry.profiles()],
+                         [('claude', '@anthropic-ai/claude-code'), ('codex', '@openai/codex')])
+
     def test_the_kit_state_folder_is_the_default_hosts(self):
         data = second(kit_hosts())
         data['other']['profile']['state_directory'] = '.other'
@@ -275,6 +295,7 @@ class ProcessNames(Case):
     def test_a_platform_no_host_lists_gives_no_names(self):
         self.assertEqual(self.union('unsupported'), ())
         data = kit_hosts()
+        data['claude']['platforms'] = ['windows']
         data['claude']['profile']['process_names'] = {'windows': ['claude.exe']}
         self.assertEqual(self.union('linux', self.put(data)), ())
 
@@ -294,7 +315,7 @@ class ProcessNames(Case):
 
     def test_a_platform_the_host_does_not_declare_may_be_listed_ahead(self):
         data = kit_hosts()
-        self.assertEqual(data['claude']['platforms'], ['windows'])
+        data['claude']['platforms'] = ['windows']
         data['claude']['profile']['process_names'] = {'windows': ['a.exe'], 'macos': ['a']}
         path = self.put(data)
         self.assertEqual(self.union('windows', path), ('a.exe',))

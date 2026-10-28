@@ -153,19 +153,11 @@ class Move(unittest.TestCase):
 
     # --- dropped keys
 
-    def test_conductor_start_is_carried_over_when_coordinator_start_is_absent(self):
+    def test_the_removed_old_coordinator_start_key_is_refused_as_unknown(self):
         self.config({'conductor_start': {'max_items': 3}})
         code, out = self.run_move(apply_it=True)
-        self.assertEqual(code, move.OK, out)
-        self.assertEqual(json.loads(self.read('config.json')), {'coordinator_start': {'max_items': 3}})
-        self.assertIn('drop    conductor_start (carried over as coordinator_start)', out)
-
-    def test_conductor_start_is_dropped_when_coordinator_start_is_set(self):
-        self.config({'conductor_start': {'max_items': 3}, 'coordinator_start': {'max_items': 5}})
-        code, out = self.run_move(apply_it=True)
-        self.assertEqual(code, move.OK, out)
-        self.assertEqual(json.loads(self.read('config.json')), {'coordinator_start': {'max_items': 5}})
-        self.assertIn('drop    conductor_start (coordinator_start is set, so this key was never read)', out)
+        self.assertNotEqual(code, move.OK, out)
+        self.assertIn('REFUSE  the machine config fails its schema in key(s) conductor_start', out)
 
     def test_ledger_refs_is_dropped(self):
         self.config({'ledger_refs': ['x']})

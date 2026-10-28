@@ -35,6 +35,7 @@ from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import pagecheck
 from kitlib.hubsite import serve as hubserve
 from kitlib.hubsite import settings as hubsettings
+from kitlib.hubsite import todosteps
 
 SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")    # newest first
@@ -180,7 +181,11 @@ TOOLS = {
                                        "each one of {edit: <absolute file>, old, new} (an exact "
                                        "replace of the one place old is; prints ok or MISS), "
                                        "{open: <absolute file>, line} (Notepad++) or {run: "
-                                       "<PowerShell command>}."},
+                                       "<command>} (the same on every OS) or {run: {windows: "
+                                       "<PowerShell command>, linux: <bash command>}} (the form "
+                                       "os names)."},
+              "os": _one_of(todosteps.OSES, "The OS a per-OS run is rendered for (windows "
+                                            "when absent)."),
               "repo": _REPO, "refs": _REFS, "urgent": _URGENT, "from": _FROM}, ["title"]),
         "POST", "/todos", AGENT),
     "hub_todo_ack": (

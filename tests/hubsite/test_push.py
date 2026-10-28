@@ -884,17 +884,62 @@ class FiledRecipientsTest(FiledPushCase):
         self.assertIn('its worker reads it', self.push.to(push.PM_KEY)[0])
         self.assertIn('no ack needed', self.push.to(push.PM_KEY)[0])
 
-    def test_an_answer_that_leaves_its_record_waiting_pushes_to_nobody(self):
-        self.bind('blocked')
-        qid = self.ask_bound()
+    def test_a_held_answer_goes_to_its_live_asker_saying_the_record_stays_as_it_was(self):
+        # red proof: before this change a held filing pushed to nobody
+        self.bind('blocked', live={'zeta'})
+        qid = self.ask_bound(asker='zeta')
+        self.answer(qid)
+        self.worker.poll()
+        self.assertEqual(self.store.get('questions', qid)['filed_as'], 'held')
+        self.assertEqual([r for r, _t in self.push.calls], ['zeta'],
+                         'one push, to the asker: no separate answered push besides it')
+        text = self.push.to('zeta')[0]
+        self.assertIn('[hub push] question %s filed' % qid, text)
+        self.assertIn('does not free record kit:EX-1', text)
+        self.assertIn('stays as it was', text)
+        self.assertIn('hub pending --for zeta', text)
+        self.later(130)
+        self.assertEqual(self.attempts('zeta'), [1, 2], 'the asker is told until it picks it up')
+        self.pick_up('zeta')
+        self.later(400)
+        self.assertEqual(self.attempts('zeta'), [1, 2])
+        self.assertEqual(self.push.to(push.PM_KEY), [])
+
+    def test_a_held_answer_whose_asker_is_gone_goes_to_the_records_coordinator_once(self):
+        self.bind('blocked', live={'kit'})
+        qid = self.ask_bound(asker='zeta')
         self.answer(qid)
         self.worker.poll()
         self.later(130)
+        self.later(400)
         self.assertEqual(self.store.get('questions', qid)['filed_as'], 'held')
-        self.assertEqual(self.push.calls, [])
-        self.assertEqual([p['id'] for p in self.ok('GET', '/pending', AGENT,
-                                                    query={'for': 'kit'})['items']], [qid],
-                         'its asker still reads it in its pending list')
+        self.assertEqual([r for r, _t in self.push.calls], ['kit'])
+        text = self.push.to('kit')[0]
+        self.assertIn('does not free record kit:EX-1', text)
+        self.assertIn('asked by zeta', text)
+        self.assertIn('hub view %s' % qid, text)
+
+    def test_a_held_answer_with_nobody_live_stays_owed_to_its_asker(self):
+        for push_obj in ('no resolve', 'none live'):
+            with self.subTest(push=push_obj):
+                self.bind('blocked', live=None if push_obj == 'no resolve' else ())
+                qid = self.ask_bound()
+                self.answer(qid)
+                self.worker.poll()
+                self.assertEqual(self.store.get('questions', qid)['filed_as'], 'held')
+                self.assertEqual([r for r, _t in self.push.calls], ['kit'],
+                                 'tried at its asker, which reads it at its next start anyway')
+                self.assertIn(qid, [p['id'] for p in self.ok('GET', '/pending', AGENT,
+                                                              query={'for': 'kit'})['items']])
+
+    def test_a_held_answer_the_pm_asked_tells_the_pm_once(self):
+        self.bind('blocked', live=())
+        qid = self.ask_bound(asker='pm')
+        self.answer(qid)
+        self.worker.poll()
+        self.later(130)
+        self.assertEqual(self.attempts(push.PM_KEY), [1])
+        self.assertIn('does not free record kit:EX-1', self.push.to(push.PM_KEY)[0])
 
     def test_a_freed_record_with_no_live_coordinator_pings_the_pm_once(self):
         self.bind('parked', 'open', live=())
@@ -910,15 +955,46 @@ class FiledRecipientsTest(FiledPushCase):
         self.assertIn('no ack needed', text)
         self.assertEqual(self.push.resolved, ['kit'], 'the asker and the repo are one key here')
 
-    def test_a_freed_record_whose_coordinator_is_live_pushes_to_nobody(self):
-        for live in ({'kit'}, {'zeta'}):        # the record's repository, or the asker
+    def test_a_freed_answer_goes_to_its_live_asker(self):
+        # red proof: before this change a freed filing with a live session pushed to nobody
+        for live in ({'zeta'}, {'zeta', 'kit'}):    # the asker is preferred to the coordinator
             with self.subTest(live=live):
                 self.bind('blocked', 'open', live=live)
                 qid = self.ask_bound(asker='zeta')
                 self.answer(qid)
                 self.worker.poll()
                 self.assertEqual(self.store.get('questions', qid)['filed_as'], 'freed')
-                self.assertEqual(self.push.calls, [])
+                self.assertEqual([r for r, _t in self.push.calls], ['zeta'])
+                text = self.push.to('zeta')[0]
+                self.assertIn('frees record kit:EX-1', text)
+                self.assertIn('hub pending --for zeta', text)
+                self.later(130)
+                self.assertEqual(self.attempts('zeta'), [1, 2], 'until it picks it up')
+                self.pick_up('zeta')
+                self.later(400)
+                self.assertEqual(self.attempts('zeta'), [1, 2])
+                self.assertEqual(self.push.to(push.PM_KEY), [])
+
+    def test_a_freed_answer_whose_asker_is_gone_goes_to_the_records_coordinator_once(self):
+        self.bind('blocked', 'open', live={'kit'})
+        qid = self.ask_bound(asker='zeta')
+        self.answer(qid)
+        self.worker.poll()
+        self.later(130)
+        self.later(400)
+        self.assertEqual([r for r, _t in self.push.calls], ['kit'])
+        text = self.push.to('kit')[0]
+        self.assertIn('frees record kit:EX-1', text)
+        self.assertIn('asked by zeta', text)
+        self.assertEqual(self.push.to(push.PM_KEY), [])
+
+    def test_the_records_coordinator_is_found_through_the_repo_key_map(self):
+        self.bind('blocked', 'open', live={'kitcoord'})
+        self.api.repo_name = lambda repo: 'kitcoord' if repo == 'kit' else None
+        qid = self.ask_bound(asker='zeta')
+        self.answer(qid)
+        self.worker.poll()
+        self.assertEqual([r for r, _t in self.push.calls], ['kitcoord'])
 
     def test_a_freed_record_without_resolve_pings_the_pm(self):
         self.bind('blocked', 'open')
@@ -972,7 +1048,8 @@ class StandingPushTest(FiledPushCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER,
                 {'choice': 0, 'note': NOTE, 'standing': True})
         self.worker.poll()
-        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY])
+        self.assertEqual(sorted(r for r, _t in self.push.calls), sorted(['kit', push.PM_KEY]),
+                         'held: its asker hears it, and the PM logs the standing rule')
         self.assertIn('a standing rule', self.push.to(push.PM_KEY)[0])
         self.assertIn('hub questions log %s' % qid, self.push.to(push.PM_KEY)[0])
         self.pick_up('pm')
@@ -998,15 +1075,18 @@ class StandingPushTest(FiledPushCase):
         self.assertEqual(self.attempts('kit'), [1, 2])
         self.assertEqual(self.attempts(push.PM_KEY), [1, 2], 'the PM until it logs it')
 
-    def test_a_promote_of_an_answer_pushed_to_nobody_goes_to_the_pm_alone(self):
+    def test_a_promote_of_an_answer_no_longer_owed_goes_to_the_pm_alone(self):
         self.bind('blocked')
         qid = self.ask_bound()
         self.answer(qid)
         self.worker.poll()
-        self.assertEqual(self.push.calls, [])
+        self.assertEqual([r for r, _t in self.push.calls], ['kit'])
+        self.pick_up('kit')
+        self.later(130)
+        self.assertEqual(self.attempts('kit'), [1], 'picked up: nothing more owed')
         self.promote(qid)
         self.worker.poll()
-        self.assertEqual([r for r, _t in self.push.calls], [push.PM_KEY])
+        self.assertEqual([r for r, _t in self.push.calls], ['kit', push.PM_KEY])
         self.assertIn('standing rule', self.push.to(push.PM_KEY)[0])
 
 

@@ -12,12 +12,15 @@ from tests.reviewpack.repo import cli
 
 OWNER = 'owner@example.invalid'
 AGENT = 'agent@example.invalid'
+NOT_OWNER = 'authored by %s, not the owner' % AGENT
+BY_OWNER = None                 # not_owner for a commit the owner authored
 
 
 def rows(*commits):
-    """owner_approval_rows over (sha, paths, values[, not_owner]) records, default rules."""
+    """owner_approval_rows over (sha, paths, values[, not_owner]) records, default rules; the
+    commit is an agent's unless not_owner is given."""
     return reviewpack.owner_approval_rows(
-        [c if len(c) == 4 else c + (None,) for c in commits], Rules())
+        [c if len(c) == 4 else c + (NOT_OWNER,) for c in commits], Rules())
 
 
 def statuses(sha, paths, values):
@@ -43,29 +46,52 @@ class TrailerNamesADifferentPath(unittest.TestCase):
 class HubApprovalRows(unittest.TestCase):
     def test_a_merge_with_a_hub_trailer_is_missing_and_lists_it(self):
         [row] = reviewpack.owner_approval_rows(
-            [('a', ['CLAUDE.md'], [], None, ['hub:A-001'], True)], Rules())
+            [('a', ['CLAUDE.md'], [], NOT_OWNER, ['hub:A-001'], True)], Rules())
         self.assertEqual(row[1], 'MISSING')
         self.assertIn('Owner-Approval hub:A-001', row[3])
         self.assertNotIn('none', row[3])
 
     def test_the_same_trailer_on_a_plain_commit_is_ok(self):
         [row] = reviewpack.owner_approval_rows(
-            [('a', ['CLAUDE.md'], [], None, ['hub:A-001'], False)], Rules())
+            [('a', ['CLAUDE.md'], [], NOT_OWNER, ['hub:A-001'], False)], Rules())
         self.assertEqual(row[1], 'ok')
+
+
+class TheOwnersCommitIsJudgedAsTheLandingJudgesIt(unittest.TestCase):
+    """kitlib.guard.ownercommits never counts a commit the owner authored, trailer or none; the
+    table must not print MISSING for one (seen on owner commits that landed)."""
+
+    def test_the_owners_commit_with_no_trailer_is_ok(self):
+        [row] = rows(('a', ['CLAUDE.md'], [], BY_OWNER))
+        self.assertEqual(row[1], 'ok', row)
+        self.assertIn('authored by the owner', row[3])
+
+    def test_an_agents_commit_with_no_trailer_is_missing(self):
+        [row] = rows(('a', ['CLAUDE.md'], []))
+        self.assertEqual(row[1], 'MISSING', row)
+        self.assertIn(NOT_OWNER, row[3])
+
+    def test_the_owners_trailer_is_still_shown(self):
+        self.assertEqual(rows(('a', ['CLAUDE.md', '.claude/agent-profile.md'], ['CLAUDE.md'],
+                               BY_OWNER)),
+                         [('a', 'ok', 'CLAUDE.md', 'Owner-Approved CLAUDE.md'),
+                          ('a', 'ok', '.claude/agent-profile.md',
+                           'authored by the owner (the landing judges by author email)')])
 
 
 class ApprovalIsPerCommit(unittest.TestCase):
     def test_a_sibling_commits_trailer_does_not_approve_this_one(self):
-        got = rows(('a1b2c3d', ['CLAUDE.md'], ['CLAUDE.md']), ('e4f5a6b', ['CLAUDE.md'], []))
+        got = rows(('a1b2c3d', ['CLAUDE.md'], ['CLAUDE.md'], BY_OWNER),
+                   ('e4f5a6b', ['CLAUDE.md'], []))
         self.assertEqual([(sha, status) for sha, status, _, _ in got],
                          [('a1b2c3d', 'ok'), ('e4f5a6b', 'MISSING')])
         self.assertIn('none', got[1][3])
 
-    def test_each_locked_path_needs_its_own_cover(self):
-        self.assertEqual(statuses('a', ['CLAUDE.md', '.claude/agent-profile.md'], ['CLAUDE.md']),
-                         [('ok', 'CLAUDE.md'), ('MISSING', '.claude/agent-profile.md')])
-        self.assertEqual(statuses('a', ['.claude/a.md', '.claude/agents/w.md'], ['.claude/']),
-                         [('ok', '.claude/a.md'), ('ok', '.claude/agents/w.md')])
+    def test_a_blanket_trailer_shows_on_every_path_it_covers(self):
+        got = rows(('a', ['.claude/a.md', '.claude/agents/w.md'], ['.claude/'], BY_OWNER))
+        self.assertEqual([(r[1], r[2], r[3]) for r in got],
+                         [('ok', '.claude/a.md', 'Owner-Approved .claude/'),
+                          ('ok', '.claude/agents/w.md', 'Owner-Approved .claude/')])
 
     def test_a_trailer_on_a_commit_not_provably_the_owners_approves_nothing(self):
         [row] = rows(('a', ['CLAUDE.md'], ['CLAUDE.md'], 'authored by x, not the owner'))

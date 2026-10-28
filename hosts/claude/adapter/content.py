@@ -17,11 +17,17 @@ manifests(kit, content) writes the files that carry the kit's one version (kit.j
 - `.claude-plugin/plugin.json`: kit.json's name and version, every agent file, SKILLS_REL (the
   kit's own `content/skills/`), HOOKS_REL and the MCP servers (MCP_SERVERS: the machine lock's and the hub's). It stays at the kit
   root: the plugin root is the whole kit, since its hooks and MCP server run kitlib and tools beside them (${CLAUDE_PLUGIN_ROOT}).
+  That is the Windows file; each other platform hosts.json gives Claude gets the same manifest with
+  that platform's MCP interpreter (mcp_servers) in manifest_rel(platform),
+  `.claude-plugin/plugin.<platform>.json`, which the plugin export writes in its place.
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), its version as `metadata.version`.
 - HOOKS_REL: the plugin's hooks (HOOKS), each command line from kitlib.host.hookmain.manifest_command
-  for the platforms hosts.json gives Claude: the kit's one hook entry, ${CLAUDE_PLUGIN_ROOT}/ENTRY,
-  with `claude`, the event and, for the coordinator rules, its part (boot/hook.py).
+  for Windows: the kit's one hook entry, ${CLAUDE_PLUGIN_ROOT}/ENTRY, with `claude`, the event and,
+  for the coordinator rules, its part (boot/hook.py). Each other platform hosts.json gives Claude
+  gets the same hooks with that platform's command line in hooks_rel(platform),
+  `hooks/hooks.<platform>.json`; plugin.json names HOOKS_REL alone, and the plugin export
+  (kitlib.pluginsource) writes the platform's file in its place.
 JSON holds no comment, and these keep to the keys Claude Code documents, so they carry no
 generated-file line; plugin.json's description says it is rendered.
 """
@@ -55,9 +61,15 @@ HOOKS = (
 )
 MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/lock_server.py']},
                'hub': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/hub_server.py']}}
+
+
+def mcp_servers(platform='windows'):
+    """MCP_SERVERS, each command `platform`'s MCP interpreter (hookmain.mcp_interpreter)."""
+    command = hookmain.mcp_interpreter(platform)
+    return {name: dict(server, command=command) for name, server in MCP_SERVERS.items()}
 TOOLS = {
     'read': 'Read', 'edit': 'Edit', 'write': 'Write', 'search': 'Grep', 'find': 'Glob',
-    'bash': 'Bash', 'powershell': 'PowerShell', 'worktree': 'EnterWorktree', 'artifact': 'Artifact',
+    'bash': 'Bash', 'powershell': 'PowerShell', 'worktree': 'EnterWorktree', 'enter-worktree': 'EnterWorktree', 'artifact': 'Artifact',
     'dispatch': 'Agent', 'message': 'SendMessage', 'list-agents': 'ListAgents', 'stop-task': 'TaskStop',
     'monitor': 'Monitor', 'tool-search': 'ToolSearch', 'skill': 'Skill', 'ask-owner': 'AskUserQuestion',
     'cron-create': 'CronCreate', 'cron-list': 'CronList', 'cron-delete': 'CronDelete',
@@ -168,13 +180,13 @@ class ClaudeContent:
             out[self.role_path(role.name)] = self.agent_file(role, names, values, tiers)
         return out
 
-    def hooks(self, registry_path=None):
-        platforms = registry.host(HOST, registry_path).platforms
+    def hooks(self, registry_path=None, platform='windows'):
+        tool_event = registry.host(HOST, registry_path).hook.tool_event
         events = {}
         for event, matcher, part in HOOKS:
             hook = {'type': 'command'}
-            hook.update(hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), platforms, HOST, event,
-                                                  *([part] if part else [])))
+            hook.update(hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), platform, HOST, event,
+                                                  *([part] if part else []), blocking=event == tool_event))
             group = {'matcher': matcher} if matcher else {}
             group['hooks'] = [hook]
             events.setdefault(event, []).append(group)
@@ -182,11 +194,12 @@ class ClaudeContent:
 
     def manifests(self, kit, content, registry_path=None):
         """{path: bytes} of the plugin manifest, the marketplace and the hooks file, for `kit`
-        ({"name", "version"}, kitlib.content.load_kit) and `content`."""
+        ({"name", "version"}, kitlib.content.load_kit) and `content`, the manifest and the hooks
+        file once for each platform hosts.json gives Claude."""
         plugin = {
             'name': kit['name'], 'version': kit['version'], 'description': DESCRIPTION,
             'agents': ['./%s/%s.md' % (AGENTS_REL, n) for n in sorted(content.role_names())],
-            'skills': ['./%s/' % SKILLS_REL], 'hooks': './' + HOOKS_REL, 'mcpServers': MCP_SERVERS,
+            'skills': ['./%s/' % SKILLS_REL], 'hooks': './' + HOOKS_REL,
         }
         market = {
             'name': kit['name'],
@@ -197,8 +210,24 @@ class ClaudeContent:
                          'description': 'The PM kit: agents, skills and the machine lock and hub MCP servers.'}],
         }
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
-        return {MANIFEST_REL: dump(plugin), MARKETPLACE_REL: dump(market),
-                HOOKS_REL: dump(self.hooks(registry_path))}
+        out = {MARKETPLACE_REL: dump(market)}
+        for platform in registry.host(HOST, registry_path).platforms:
+            out[manifest_rel(platform)] = dump(dict(plugin, mcpServers=mcp_servers(platform)))
+            out[hooks_rel(platform)] = dump(self.hooks(registry_path, platform))
+        return out
+
+
+def manifest_rel(platform):
+    """The plugin manifest for `platform`: MANIFEST_REL on Windows, the one Claude Code reads;
+    beside it `plugin.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its
+    place."""
+    return MANIFEST_REL if platform == 'windows' else MANIFEST_REL[:-len('.json')] + '.%s.json' % platform
+
+
+def hooks_rel(platform):
+    """The hooks file for `platform`: HOOKS_REL on Windows, the one plugin.json names; beside it
+    `hooks.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its place."""
+    return HOOKS_REL if platform == 'windows' else HOOKS_REL[:-len('.json')] + '.%s.json' % platform
 
 
 def renderer():

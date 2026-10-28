@@ -20,11 +20,18 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
   extensions.com.openai (the portable plugin format the Codex branch used).
 - `hosts/codex/shell/mcp.json`: the machine-lock MCP server, read-only on Codex
   (hosts/codex/shell/mcp/lock_server.py, hosts.codex.adapter.lock), and the hub MCP server
-  (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md).
+  (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md). That is the Windows file; each other
+  platform hosts.json gives Codex gets the same servers with that platform's MCP interpreter
+  (mcp_servers) in mcp_rel(platform), `mcp.<platform>.json`, which the plugin export writes in its
+  place.
 - `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the kit's one
   hook entry, boot/hook.py, as the plugin's copy ${PLUGIN_ROOT}/boot/hook.py with `codex` and the
   event's name. Codex reads a hook's command as one string, so it is
-  kitlib.host.hookmain.manifest_command's command line joined, the script quoted.
+  kitlib.host.hookmain.manifest_command's command line joined, the script quoted (command_text).
+  Each other platform hosts.json gives Codex gets the same hooks with that platform's command
+  line, as a POSIX shell line, in hooks_rel(platform), `hooks/hooks.<platform>.json`; plugin.json
+  names hooks.json alone, and the plugin export (kitlib.pluginsource) writes the platform's file
+  in its place.
 vendored(root) copies the kit's boot folder, boot/kitboot.py and boot/hook.py, to
 `hosts/codex/shell/boot/` byte for byte, and writes `hosts/codex/shell/hosts.json` holding hosts.json's
 Codex entry alone (HOSTS_REL): the plugin root is hosts/codex/shell (${PLUGIN_ROOT}), and a plugin
@@ -37,6 +44,7 @@ a copy must stay the bytes of its source.
 """
 import json
 import os
+import re
 
 from kitlib import agentname
 from kitlib.host import hookmain, registry
@@ -76,6 +84,13 @@ MCP_SERVERS = {SERVER_NAME: {'type': 'stdio', 'command': 'python',
                HUB_NAME: {'type': 'stdio', 'command': 'python',
                           'args': [PLUGIN_ROOT + '/mcp/hub_server.py'],
                           'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']}}
+
+
+def mcp_servers(platform='windows'):
+    """MCP_SERVERS, each command `platform`'s MCP interpreter (hookmain.mcp_interpreter)."""
+    command = hookmain.mcp_interpreter(platform)
+    return {name: dict(server, command=command) for name, server in MCP_SERVERS.items()}
+
 # hosts.json's Codex tiers are all ACCOUNT_DEFAULT: every role runs on the account's configured
 # Codex model and differs by reasoning effort, as the Codex branch's roles.json had it. The owner
 # names models per tier in hosts.json (docs/ROSTER.md) when Codex models are chosen.
@@ -106,7 +121,9 @@ NOT_AVAILABLE = ' (not available to a Codex agent: ask the PM)'
 TOOLS = {
     'read': 'read_file', 'search': 'Grep', 'find': 'Glob', 'edit': 'apply_patch', 'write': 'apply_patch',
     'bash': 'the shell tool', 'powershell': 'the shell tool',
-    'worktree': 'python <kit>/tools/new_worktree.py -C <repo>', 'artifact': 'no Codex artifact tool',
+    'worktree': 'python <kit>/tools/new_worktree.py -C <repo>',
+    'enter-worktree': 'run every command in that existing worktree (never create one; pass `-C <worktree>` to kit tools)',
+    'artifact': 'no Codex artifact tool',
     'dispatch': 'spawn_agent%s' % NOT_AVAILABLE, 'message': 'send_message%s' % NOT_AVAILABLE,
     'list-agents': 'the session list%s' % NOT_AVAILABLE, 'stop-task': 'task stop%s' % NOT_AVAILABLE,
     'monitor': 'a background shell poll', 'tool-search': 'tool search%s' % NOT_AVAILABLE,
@@ -260,21 +277,27 @@ class CodexContent:
         return out
 
     @staticmethod
-    def command_text(command):
-        """A hookmain.manifest_command as one command string: each argument holding a space or a
-        `$` quoted."""
-        quote = lambda a: '"%s"' % a if any(c in a for c in ' $"') else a      # noqa: E731
+    def command_text(command, platform='windows'):
+        """A hookmain.manifest_command as one command string. Windows: each argument holding a
+        space or a `$` in double quotes. Elsewhere a POSIX shell line: an argument naming a
+        variable (`${`) in double quotes, so the shell or Codex fills it; any other argument
+        that is not plain in single quotes, so `$@` and `$?` reach the /bin/sh it starts."""
+        if platform == 'windows':
+            quote = lambda a: '"%s"' % a if any(c in a for c in ' $"') else a      # noqa: E731
+        else:
+            quote = posix_quote
         return ' '.join([command['command']] + [quote(a) for a in command['args']])
 
-    def hooks(self, registry_path=None):
+    def hooks(self, registry_path=None, platform='windows'):
         entry = registry.host(HOST, registry_path)
         declared = set(entry.capabilities.hook_events)
         if declared != {e for e, _, _ in HOOKS}:
             raise ContentError('%s: HOOKS must cover exactly the hook events hosts.json declares' % HOOKS_REL)
         events = {}
         for event, matcher, status in HOOKS:
-            command = hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), entry.platforms, HOST, event)
-            hook = {'type': 'command', 'command': self.command_text(command), 'timeout': HOOK_TIMEOUT}
+            command = hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), platform, HOST, event,
+                                                blocking=event == entry.hook.tool_event)
+            hook = {'type': 'command', 'command': self.command_text(command, platform), 'timeout': HOOK_TIMEOUT}
             if status:
                 hook['statusMessage'] = status
             events[event] = [{'matcher': matcher, 'hooks': [hook]}]
@@ -293,12 +316,45 @@ class CodexContent:
         return out
 
     def manifests(self, kit, content, registry_path=None):
-        """{path: bytes} of plugin.json, mcp.json and hooks.json for `kit` ({"name", "version"})."""
+        """{path: bytes} of plugin.json, and mcp.json and hooks.json once for each platform
+        hosts.json gives Codex, for `kit` ({"name", "version"})."""
         plugin = {'$schema': PLUGIN_SCHEMA, 'name': kit['name'], 'version': kit['version'],
                   'description': DESCRIPTION, 'extensions': {'com.openai': {'hooks': './hooks/hooks.json'}}}
-        mcp = {'$schema': MCP_SCHEMA, 'mcpServers': MCP_SERVERS}
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
-        return {MANIFEST_REL: dump(plugin), MCP_REL: dump(mcp), HOOKS_REL: dump(self.hooks(registry_path))}
+        out = {MANIFEST_REL: dump(plugin)}
+        for platform in registry.host(HOST, registry_path).platforms:
+            out[mcp_rel(platform)] = dump({'$schema': MCP_SCHEMA, 'mcpServers': mcp_servers(platform)})
+            out[hooks_rel(platform)] = dump(self.hooks(registry_path, platform))
+        return out
+
+
+def mcp_rel(platform):
+    """The MCP servers file for `platform`: MCP_REL on Windows, the one the plugin reads; beside it
+    `mcp.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its place."""
+    return MCP_REL if platform == 'windows' else MCP_REL[:-len('.json')] + '.%s.json' % platform
+
+
+def hooks_rel(platform):
+    """The hooks file for `platform`: HOOKS_REL on Windows, the one plugin.json names; beside it
+    `hooks.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its place."""
+    return HOOKS_REL if platform == 'windows' else HOOKS_REL[:-len('.json')] + '.%s.json' % platform
+
+
+PLAIN = re.compile(r'[A-Za-z0-9_./:=@%+,-]+\Z')
+
+
+def posix_quote(arg):
+    """`arg` as one POSIX shell word: plain as is, a `${NAME}` reference in double quotes, any
+    other in single quotes. ContentError for a form that quoting would change."""
+    if PLAIN.match(arg):
+        return arg
+    if '${' in arg:
+        if any(c in arg for c in '"\\`'):
+            raise ContentError('%s: cannot double-quote the hook argument %r' % (HOOKS_REL, arg))
+        return '"%s"' % arg
+    if "'" in arg:
+        raise ContentError('%s: cannot single-quote the hook argument %r' % (HOOKS_REL, arg))
+    return "'%s'" % arg
 
 
 def renderer():

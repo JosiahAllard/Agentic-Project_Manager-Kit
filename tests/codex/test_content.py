@@ -66,6 +66,12 @@ class Agents(unittest.TestCase):
                 self.assertNotIn('model', got, 'every tier is the account default')
                 self.assertNotIn('{{', got['developer_instructions'])
 
+    def test_the_test_runner_works_in_its_given_worktree_and_never_creates_one(self):
+        c = kcontent.load(ROOT)
+        text = cc.renderer().render(c)['hosts/codex/shell/agents/kit-test-runner.toml'].decode('utf-8')
+        self.assertNotIn('new_worktree.py', text)
+        self.assertIn('run every command in that existing worktree (never create one', text)
+
     def test_no_rendered_role_names_the_other_hosts_values(self):
         from hosts.claude.adapter import content as claude
         c = kcontent.load(ROOT)
@@ -160,6 +166,46 @@ class Manifests(unittest.TestCase):
         self.assertEqual(sorted(hooks), sorted(registry.host('codex').capabilities.hook_events))
         for event, groups in hooks.items():
             self.assertEqual(groups[0]['hooks'][0]['command'], 'pythonw "${PLUGIN_ROOT}/boot/hook.py" codex ' + event)
+
+    def test_the_linux_hooks_are_one_posix_shell_line_each(self):
+        """hooks.linux.json: the same events, matchers, timeout and status as hooks.json, each command
+        /bin/sh running python3 on the plugin's hook entry; the guard's exits 2 when python3 fails
+        (the guard-error deny), a start event's prints the did-not-load line."""
+        files = cc.renderer().manifests(kcontent.load_kit(ROOT), kcontent.load(ROOT))
+        self.assertEqual(cc.hooks_rel('linux'), 'hosts/codex/shell/hooks/hooks.linux.json')
+        windows = json.loads(files[cc.HOOKS_REL])['hooks']
+        linux = json.loads(files[cc.hooks_rel('linux')])['hooks']
+        self.assertEqual(sorted(linux), sorted(windows))
+        script = ' kit-hook "${PLUGIN_ROOT}/boot/hook.py" codex '
+        start = ("/bin/sh -c 'python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not "
+                 "on PATH (exit $?)\"'")
+        for event, groups in windows.items():
+            (w,), (l,) = groups[0]['hooks'], linux[event][0]['hooks']
+            self.assertEqual(linux[event][0]['matcher'], groups[0]['matcher'])
+            self.assertEqual(dict(l, command=None), dict(w, command=None))
+            head = "/bin/sh -c 'python3 \"$@\" || exit 2'" if event == 'PreToolUse' else start
+            self.assertEqual(l['command'], head + script + event)
+
+    def test_the_linux_mcp_servers_run_python3(self):
+        """mcp.linux.json: mcp.json's servers, each run by python3 (stock Ubuntu has no `python`);
+        mcp.json, the Windows file, keeps `python`. Nothing else differs."""
+        files = cc.renderer().manifests(kcontent.load_kit(ROOT), kcontent.load(ROOT))
+        windows = json.loads(files[cc.MCP_REL])
+        linux = json.loads(files['hosts/codex/shell/mcp.linux.json'])
+        self.assertEqual(sorted(linux['mcpServers']), ['hub', 'machine-lock'])
+        for name, server in windows['mcpServers'].items():
+            self.assertEqual(server['command'], 'python')
+            self.assertEqual(linux['mcpServers'][name], dict(server, command='python3'))
+        self.assertEqual(dict(linux, mcpServers=None), dict(windows, mcpServers=None))
+
+    def test_a_linux_argument_quoting_cannot_hold_is_refused(self):
+        self.assertEqual(cc.posix_quote('codex'), 'codex')
+        self.assertEqual(cc.posix_quote('${PLUGIN_ROOT}/a b.py'), '"${PLUGIN_ROOT}/a b.py"')
+        self.assertEqual(cc.posix_quote('a "$@" b'), "'a \"$@\" b'")
+        for bad in ("it's", '${A}"', '${A}' + chr(92), '${A}' + chr(96)):
+            with self.subTest(bad):
+                with self.assertRaises(hc.ContentError):
+                    cc.posix_quote(bad)
 
     def test_claude_and_codex_list_the_same_mcp_servers(self):
         files = cc.renderer().manifests(kcontent.load_kit(ROOT), kcontent.load(ROOT))

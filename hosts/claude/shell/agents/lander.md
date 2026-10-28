@@ -40,7 +40,7 @@ Missing any: say what you need, do nothing.
 1. Work from the main checkout on the main branch, never inside the worktree you are about to
    remove. Confirm its `git status` is clean.
 2. The branch need not contain main: the landing tool merges the main it finds at its turn
-   and gates the merged tree. A conflict is a `CONFLICT` verdict, nothing changed.
+   and gates the merged tree. A conflict is a `fail` result with a `CONFLICT` line, nothing changed.
 3. **Size check** any doc both sides touched: an auto-merge can silently restore
    text main deleted. The merged file's line count must equal main's count plus
    the branch's net lines for that file
@@ -60,8 +60,7 @@ Missing any: say what you need, do nothing.
    report either, never widen scope at landing; scope is widened at fold-in, `python <kit>/tools/backlog.py -C <worktree> set <ID> --scope <path>`, and widening a pulled record into a
    live pull needs the PM's ruling, `<kit>/docs/backlog.md` "Owner gates"). Then submit the landing from the
    main checkout, as one bare call:
-   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`
-   (the repo's stub; `<kit>/tools/land.py` where the repo has none).
+   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`.
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
    pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints a `REVIEW` line for
@@ -72,7 +71,8 @@ Missing any: say what you need, do nothing.
    (<kit>/docs/gate.md "Waiting on a gate: who arms what"). `python <kit>/tools/land.py -C <main checkout> --queue`
    shows who holds and who waits. Never pass anything to jump the queue, and never
    break a landing lock: STUCK -> stop and report its lines. Do not truncate native output
-   through a pipe - in PowerShell, `Select-Object -First` fakes a non-zero exit code.
+   through a first-N reader (`head`, or its PowerShell cmdlet): in bash without pipefail,
+   `cmd | head` returns head's 0 and hides a failure.
 6. The wait prints `RESULT <verdict> land <branch> at <tip>: <line> (<log>)`; act on the verdict:
    - `pass`, `LANDED ...`: landed.
    - `fail` with `CONFLICT <branch> with main <sha>: the author merges main`: nothing left behind; report it,
@@ -113,7 +113,7 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, or a recursive listing of a drive root): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Force-push, or push anything but the main branch through the landing command.
 - `git add -A`, `git commit -a`, or staging anything you did not change.
 - Remove a worktree other than the one you were told to land, or an untracked file the brief did not name.

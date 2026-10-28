@@ -192,9 +192,15 @@ class OwnerApprovalTest(pc.PrePushCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def approved_commit(self, content):
+    def approved_commit(self, content, before=None):
         """An agent commit of CLAUDE.md `content` on main, carrying hub:A-001, which the owner
-        approved as 'approved' and the hub consumed for it: its id."""
+        approved as 'approved' on with_kit and the hub consumed for it: its id. `before` ({path:
+        text}): first an owner commit of those files, so the approved commit is on a moved base."""
+        if before:
+            for rel, text in before.items():
+                self.repo.write(rel, text)
+            self.repo.git('add', '--', *before)
+            self.repo.git('commit', '-q', '-m', 'main moves on')
         doc = ap.new_doc(toc.REPO, 'owner-only edit', self.with_kit, [
             {'path': 'CLAUDE.md', 'base_blob': None, 'content': 'approved\n'}], toc.NOW)
         doc.update(ap.decide_fields(toc.KEY, 'A-001', doc, ap.APPROVE, toc.NOW))
@@ -223,6 +229,22 @@ class OwnerApprovalTest(pc.PrePushCase):
         self.assertIn('pre-push: refused, owner-only paths changed by a commit not authored by '
                       'the owner: %s by %s changes CLAUDE.md (owner approval hub:A-001 refused: %s)'
                       % (tip[:10], AGENT, ap.WHY_FILES), msg)
+
+    def test_an_approved_commit_on_a_base_moved_by_other_paths_is_pushed(self):
+        tip = self.approved_commit('approved\n', before={'a.txt': 'a\n'})
+        hub = ownercommits.HubApprovals(client=toc.VerifyRoute(self.hub), repo=toc.REPO)
+        with mock.patch.object(ownercommits, 'default_approvals', lambda: hub):
+            self.assertEqual(self.check(tip), (True, None))
+        self.assertEqual(self.hub.asked[-1][1], self.with_kit)
+
+    def test_an_approved_commit_on_a_base_where_the_owner_changed_its_path_is_refused(self):
+        tip = self.approved_commit('approved\n', before={'CLAUDE.md': 'owner\n'})
+        hub = ownercommits.HubApprovals(client=toc.VerifyRoute(self.hub), repo=toc.REPO)
+        with mock.patch.object(ownercommits, 'default_approvals', lambda: hub):
+            ok, msg = self.check(tip)
+        self.assertFalse(ok)
+        self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-001 refused: %s: '
+                      'CLAUDE.md at ' % (tip[:10], AGENT, ap.WHY_HEAD), msg)
 
 
 class CheckTest(pc.PrePushCase):

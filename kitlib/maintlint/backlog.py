@@ -18,7 +18,6 @@ import re
 from kitlib import kitroot
 from kitlib.backlog import audit_check
 from kitlib.backlog import offer as omod
-from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.config.types import ConfigError
 
@@ -47,21 +46,17 @@ def age_of(rec):
 def needs_priority(rec):
     """`backlog.py needs-priority`'s filter (tools/backlog.py do_list)."""
     bucket = omod.classify(rec)[0]
-    return (bucket in (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED)
-            or (bucket == omod.REVIEW and rec.get('priority') in ('-', rmod.OWNER_PRIORITY)))
+    return (bucket == omod.UNPRIORITISED_OPEN
+            or (bucket == omod.REVIEW and rec.get('priority') == '-'))
 
 
 def unpriced(snap, cmd):
     out = []
     for rec in snap.readable:
         if needs_priority(rec):
-            owner = rec.get('priority') == rmod.OWNER_PRIORITY
             out.append(Finding(
-                'unpriced', rec.stem,
-                '%s is open and %s' % (rec.stem, 'waits on the owner\'s price' if owner
-                                       else 'has no price'),
-                '%s set %s --priority <band> --priority-by <who>' % (cmd, rec.stem)
-                if not owner else 'the PM asks the owner for the price of %s' % rec.stem,
+                'unpriced', rec.stem, '%s is open and has no price' % rec.stem,
+                '%s set %s --priority <band> --priority-by <who>' % (cmd, rec.stem),
                 age_of(rec)))
     return out, []
 

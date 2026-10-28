@@ -6,13 +6,12 @@ is left alone, so a second run never starts duplicates.
 An entry's brief is passed whenever it has one, agent or plain (after-reboot.ps1 did so); a
 failed start, of any kind, is logged FAILED and the run goes on to the next entry. The task runs
 hidden, so the failures around the entries (no signed-in account, sessions.json or coordinators.json
-missing or bad, coordinators.json still under its old name, the PM account not signed in) are
+missing or bad, the PM account not signed in) are
 logged FAILED too, never raised.
 
 Skipped: a "_" key, an entry without a stem, "autostart": false, and an entry whose stem is
-already running under any account or recycle, or whose old `conductor` stem is
-(lookup.legacy_stems; a one-release guard). The PM resume is skipped when pm-session or the PM
-session id is running, when the Claude desktop app is running (resuming there too would fork the
+already running under any account or recycle. The PM resume is skipped when pm-session, the PM
+session id or coordinators.json's pm_name (pm-relaunch's fork) is running, when the Claude desktop app is running (resuming there too would fork the
 conversation) unless launcher.pm_resume_beside_desktop is true, and, more than 15 minutes after
 boot, when the PM transcript was written in the last 15 minutes. --test starts only a throwaway
 "autostart-test" session.
@@ -20,6 +19,7 @@ boot, when the PM transcript was written in the last 15 minutes. --test starts o
 import glob
 import os
 
+from kitlib import platform
 from kitlib.launcher import accounts as A
 from kitlib.launcher import lookup, state, window
 from kitlib.launcher import start as S
@@ -108,9 +108,12 @@ def run(settings, host, test=False, dry_run=False, say=None):
         if dry_run:
             tell('would start %s in %s' % (TEST_NAME, folder))
             return out
-        host.open_window(text)
-        log('started %s: its window opens minimized and unfocused (window.open_window), so look for it '
-            'on the taskbar' % TEST_NAME)
+        host.open_window(text, **window.open_args(TEST_NAME, settings))
+        if platform.NAME == 'linux':
+            log('started %s in %s' % (TEST_NAME, window.opened_in(TEST_NAME, settings.terminal)))
+        else:
+            log('started %s: its window opens minimized and unfocused (window.open_window), so look '
+                'for it on the taskbar' % TEST_NAME)
         return out
     try:
         cfg = state.read_coordinators(settings) or {}
@@ -132,10 +135,6 @@ def run(settings, host, test=False, dry_run=False, say=None):
             continue
         if lookup.running_stem(procs, entry['stem']):
             log('%s already running, skipped' % key)
-            continue
-        legacy = lookup.legacy_running(procs, key, entry)
-        if legacy:                                   # one-release guard, removed after the switch (W2b)
-            log('%s already running under the old stem %s, skipped' % (key, legacy))
             continue
         args = S.entry_start_args(settings, key, entry, acct, PROMPT % (entry.get('state'), S.PM_REF),
                                   any_brief=True)
@@ -167,7 +166,9 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         log('coordinators.json names no PM session (pm_session_id, pm_folder, pm_account), pm-session skipped')
         return []
     procs = host.processes()
-    if running(procs, 'pm-session') or running(procs, sid):
+    pm_name = cfg.get('pm_name')                     # pm-relaunch's fork: its command line carries the old id
+    named = isinstance(pm_name, str) and pm_name and lookup.find_exact(lookup.launched(procs), pm_name)
+    if running(procs, 'pm-session') or running(procs, sid) or named:
         log('pm-session already running, skipped')
         return []
     if desktop_app_running(procs):
@@ -187,9 +188,24 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         if dry_run:
             log('would resume pm-session (session %s, account %s) in %s' % (sid, pm_account, folder))
             return []
-        host.open_window(text)
+        host.open_window(text, **window.open_args('pm-session', settings))
     except Exception as e:                           # the PM account not signed in, or the window failed
         log('FAILED to resume pm-session : %s' % why(e))
         return []
     log('started pm-session')
+    if cfg.get('pm_name') is not None:
+        clear_pm_name(settings, log)
     return []
+
+
+def clear_pm_name(settings, log):
+    """Drop coordinators.json's pm_name: the PM runs as pm-session again, so a name pm-relaunch
+    gave it no longer names it. Read again so only that key changes; a fault is logged."""
+    try:
+        p = state.path(settings, state.COORDINATORS)
+        cfg = state.read_json(p) or {}
+        if cfg.pop('pm_name', None) is not None:
+            state.write_json(p, cfg)
+            log('cleared pm_name in coordinators.json (the PM runs as pm-session)')
+    except (LaunchError, OSError, ValueError) as e:
+        log('FAILED to clear pm_name in coordinators.json : %s' % why(e))

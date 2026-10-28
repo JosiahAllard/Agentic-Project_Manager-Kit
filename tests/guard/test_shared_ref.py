@@ -12,6 +12,7 @@ import os
 import unittest
 
 from kitlib.git import repo
+from kitlib.guard import rules
 
 from . import test_jail as tj
 from . import world as W
@@ -249,7 +250,6 @@ class StrayRefCleanup(SharedRefBase):
             with self.subTest(text):
                 self.allowed(self.coordinator(text))
         self.allowed(self.coordinator('git update-ref -d refs/scratch/a', cwd=self.w.wt))
-        self.allowed(self.coordinator('git update-ref -d refs/scratch/a', env=tj.OLD_MARK))
         self.allowed(self.coordinator('git update-ref -d refs/scratch/a', tool='PowerShell'))
         put(os.path.join(self.common, 'refs', 'scratch', 'a'), '0123456789012345678901234567890123456789\n')
         self.allowed(self.coordinator('git update-ref -d refs/scratch/a'))
@@ -318,8 +318,15 @@ class StrayRefCleanup(SharedRefBase):
         self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})     # a held plain mark
         self.assertIn('your coordinator deletes it', self.refused(self.session(text, tj.PLAIN)).reason)
 
+    def test_only_the_coordinator_mark_cleans_up_not_the_next_agent_mark(self):
+        # REF_CLEANUP_MARKS once was AGENT_MARKS[:2] (coordinator and its old mark); with the old
+        # mark gone a slice would hand stray-ref deletes to deep-worker
+        self.assertEqual(rules.REF_CLEANUP_MARKS, ('coordinator',))
+        d = self.refused(self.session('git update-ref -d refs/scratch/a', tj.DEEP, self.w.main))
+        self.assertIn('your coordinator deletes it', d.reason)
+
     def test_the_pm_the_owner_and_an_unheld_mark_are_unchanged(self):
-        for env in (tj.PM, {}, tj.PLAIN):
+        for env in (tj.PM, {}, tj.PLAIN, tj.OLD_MARK):
             with self.subTest(env=env):
                 self.allowed(self.session('git update-ref -d refs/scratch/a', env, self.w.main))
                 self.allowed(self.session('git update-ref -d refs/tags/v1', env, self.w.main))
@@ -460,7 +467,7 @@ class SharedRefSessions(SharedRefBase):
     """Which sessions the rule holds."""
 
     def test_coordinator_and_other_jailed_marks_are_held(self):
-        for env in (tj.COORDINATOR, tj.OLD_MARK, tj.DEEP, tj.CONSULTANT):
+        for env in (tj.COORDINATOR, tj.DEEP, tj.CONSULTANT):
             for cwd in (self.w.main, self.w.wt):
                 with self.subTest(env=env, cwd=cwd):
                     self.refused(self.session('git update-ref refs/heads/main HEAD~1', env, cwd))

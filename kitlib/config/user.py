@@ -23,8 +23,10 @@ still reads the home folder's file, for the move (kitlib.config.move) alone.
 import collections
 import os
 import stat
-import sys
 import tempfile
+
+import kitlib.platform
+from kitlib.platform.linux import paths as linux_paths
 
 from .migration import OLD_DIR_NAME
 from .types import ConfigError, Email, Enum, Field, ListOf, MapOf, Obj, Regex, Str, T, is_note, parse_json
@@ -158,14 +160,13 @@ SCHEMA = {
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
     'guard_mcp_tools': Field(ListOf(Str()), None, 'more full tool names the guard treats as the lock MCP\'s owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")'),
-    'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json, write-jail and git-stash-shared rules; it replaces the default list, so it names every mark it holds; unset: coordinator, conductor (removed after the switch), deep-worker, consultant and pm (docs/guard.md "Session mark")'),
+    'guard_agent_marks': Field(ListOf(Str()), None, 'the session marks the guard treats as agent sessions for the kill-by-name, lock-state, kit-json, write-jail and git-stash-shared rules; it replaces the default list, so it names every mark it holds; unset: coordinator, deep-worker, consultant and pm (docs/guard.md "Session mark")'),
     'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")'),
     'guard_rules': Field(MapOf(Enum('deny', 'warn', 'off'), what='rule'), None, 'the guard\'s rule modes, {rule: deny|warn|off}, over the kit defaults (kitlib.guard.modes.DEFAULTS); set here only, never in .kit.json (docs/guard.md "Rule modes"); older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
     'hub': Field(Owned('kitlib.hubsite.settings'), None, 'the Action Hub site settings: port, tunnel_port, store, commit_every_s, push (unset: on only when store is unset and pm_data is set), backlog_refresh_s, access: {team, aud, emails}; unset: every default, and the site still runs; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config")'),
     'coordinator_start': Field(Owned('kitlib.coordinatorstart'), None, 'the coordinator session-start settings'),
-    'conductor_start': Field(Owned('kitlib.coordinatorstart'), None, 'the old name of coordinator_start, read when coordinator_start is absent; removed after the switch'),
     'pm_watch': Field(Owned('kitlib.pmwatch'), None, 'the PM watcher settings'),
     'launcher': Field(Owned('kitlib.launcher'), None, 'the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")'),
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
@@ -187,8 +188,7 @@ POLICY_KEYS = ('ledger_path', 'ledger_dir', 'ledger_repos', 'pending_path',
 LOCAL_KEYS = ('owner_email', 'scrub_patterns', 'launcher', 'hub', 'dev_drive')
 # Never in the PM repository's files: a ConfigError there, except a RETIRED key, which is ignored
 # (`pm_data` is derived: locate).
-DROPPED_KEYS = ('ledger_refs', 'conductor_start', 'pm_data', 'standing_delegation',
-                'daily_red_ruling', 'backlog_lint')
+DROPPED_KEYS = ('ledger_refs', 'pm_data', 'standing_delegation', 'daily_red_ruling', 'backlog_lint')
 # POLICY_KEYS paths that may be written relative to the PM repository (resolved).
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
@@ -204,7 +204,7 @@ class HomeFenced(BaseException):
 FENCE_MESSAGE = ('home lookup refused under the kit\'s tests: it resolved the real home folder; '
                  'give it an explicit home or folders (a temp folder), or patch USERPROFILE/HOME '
                  'to one (docs/test-tools.md "Home fence")')
-UNPROVEN_MESSAGE = ('home lookup refused under the kit\'s tests: Windows did not name the profile '
+UNPROVEN_MESSAGE = ('home lookup refused under the kit\'s tests: the system did not name the profile '
                     'folder (%s), so no home can be shown to be a temp folder (docs/test-tools.md '
                     '"Home fence")')
 # The fence's marker: the home folder the kit's test run started with, in the environment of the
@@ -214,7 +214,7 @@ UNPROVEN_MESSAGE = ('home lookup refused under the kit\'s tests: Windows did not
 FENCE_ENV = 'KIT_HOME_FENCE'
 # The real home folder (_home_key) recorded by fence_home(); None: fence_home() was not called.
 _FENCED_HOME = None
-# (real_profile()'s folder, its _real_key) once Windows was asked; None before.
+# (real_profile()'s folder, its _real_key) once the system was asked; None before.
 _PROFILE = None
 
 
@@ -267,19 +267,37 @@ def _windows_profile():
         free(path)
 
 
+def _system_profile():
+    """The user's profile folder as the system reports it: Windows's (_windows_profile), or on
+    Linux the password database's (kitlib.platform.linux.paths.profile). OSError when it does
+    not answer."""
+    if kitlib.platform.NAME == 'linux':
+        return linux_paths.profile()
+    return _windows_profile()
+
+
 def _profile():
     global _PROFILE
     if _PROFILE is None:
-        path = _windows_profile()
+        path = _system_profile()
         _PROFILE = (path, _real_key(path))
     return _PROFILE
 
 
 def real_profile():
-    """The user's profile folder from Windows, never from the environment: no USERPROFILE or HOME
-    moves it. Asked once per process. It names the folder and reads nothing in it; the fence
-    compares against it, so it is not itself fenced. OSError when Windows does not answer."""
+    """The user's profile folder from the system (Windows, or Linux's password database), never
+    from the environment: no USERPROFILE or HOME moves it. Asked once per process. It names the
+    folder and reads nothing in it; the fence compares against it, so it is not itself fenced.
+    OSError when the system does not answer."""
     return _profile()[0]
+
+
+def _plat(platform):
+    """`platform` as sys.platform spells it: the one given, else the running one's (from
+    kitlib.platform.NAME, read now)."""
+    if platform is not None:
+        return platform
+    return 'win32' if kitlib.platform.NAME == 'windows' else kitlib.platform.NAME
 
 
 def fence_env(env):
@@ -315,8 +333,8 @@ def fenced():
 
 def _refused(h, marker):
     """Whether the home `h` is a real one: the folder fence_home() recorded, the one `marker`
-    names, or the profile folder Windows reports, each compared as spelled and as the folder it
-    really is (_real_key). HomeFenced when Windows does not answer: without its profile folder no
+    names, or the profile folder the system reports, each compared as spelled and as the folder it
+    really is (_real_key). HomeFenced when the system does not answer: without its profile folder no
     home is shown to be a temp one."""
     try:
         profile, profile_real = _profile()
@@ -347,10 +365,14 @@ def home_dir():
 def system_temp(environ=None, platform=None):
     """The system's own per-user temp folder, whatever TEMP/TMP this process inherited.
     Windows: %LOCALAPPDATA%/Temp, and a RuntimeError when LOCALAPPDATA is
-    unset or empty: falling back to TEMP would split logs between processes. Elsewhere there is
-    one TEMP, so tempfile.gettempdir() is kept. No machine config is read."""
+    unset or empty: falling back to TEMP would split logs between processes. Linux: /tmp
+    (kitlib.platform.linux.paths.temp), whatever TMPDIR says, for the same reason. Any other
+    platform keeps tempfile.gettempdir(). No machine config is read."""
     env = os.environ if environ is None else environ
-    if (sys.platform if platform is None else platform) != 'win32':
+    plat = _plat(platform)
+    if plat.startswith('linux'):
+        return linux_paths.temp()
+    if plat != 'win32':
         return tempfile.gettempdir()
     lad = env.get('LOCALAPPDATA')
     if not lad:
@@ -530,7 +552,7 @@ def work_temp(near, home=None, environ=None, platform=None, reg=None):
     RuntimeError: no LOCALAPPDATA and no usable drive root; ConfigError: a bad machine config."""
     cfg = user_config(home)
     configured = cfg['temp_dir']
-    plat = sys.platform if platform is None else platform
+    plat = _plat(platform)
     if plat != 'win32':
         return configured or system_temp(environ, plat)
     candidates = ([configured] if configured else []) + _default_candidates(near, environ, plat)
@@ -544,7 +566,7 @@ def default_work_temp(near, environ=None, platform=None, reg=None, sessions=()):
     caller whose work_temp cannot be used or read (make_temp, tests/gitfixture.py). It keeps out
     of session_temps(reg=reg) (no config: under the fence that is nothing) and of the extra
     folders `sessions`. Elsewhere than Windows: system_temp(). RuntimeError as work_temp."""
-    plat = sys.platform if platform is None else platform
+    plat = _plat(platform)
     if plat != 'win32':
         return system_temp(environ, plat)
     candidates = _default_candidates(near, environ, plat)

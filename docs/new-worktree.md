@@ -1,8 +1,7 @@
 # new_worktree
 
-Held for the joint review: no repository runs it yet.
-
 `tools/new_worktree.py` makes a workstream's worktree in one call. Logic: `kitlib/worktree/new.py`; tests: `tests/worktree/test_new_worktree.py`.
+
 ## Hosts
 
 `--host NAME` picks the agent host whose worktree folder is used: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). A name `hosts.json` lacks is refused (exit 2) before any fetch. The folder (`kitlib/worktree/hostdirs.py`; tests `tests/worktree/test_host.py`):
@@ -99,6 +98,6 @@ These source tests were dropped with the mechanisms they tested:
 
 - `TheCallerStandsInTheRepository`, and `-C`'s "another repository is a usage error": `_repo_guard.check_same_repo` is retired.
 - `-C`'s "a named worktree's copy never runs" and "a worktree's copy hands off": the `-C` hand-off is retired (one kit copy).
-- `StubMode`: the PM kit's stub runtime is retired. Stubs are `kitlib.stubs` now ([install.md](install.md)).
+- `StubMode`: the PM kit's stub runtime is retired; the kit writes no tool stubs.
 - `NoLockConfigured`: the kit always has a landing lock. `TheDefaultLock` tests the default `kit-landing.lock` instead.
 - The special message for `landing_stale_minutes`: it is now the generic unknown-key refusal of `kitlib.config`.

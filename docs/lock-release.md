@@ -1,8 +1,6 @@
 # lock release pre-check
 
-Held for the joint review: nothing runs it yet.
-
-`tools/lock_release_check.py` says whether the kit's release checkout may take a commit now. It refuses while the release would change the lock tool and any run in the machine's lock store is live. Logic: `kitlib/lock/release.py`; tests: `tests/lock/test_release.py`. It is the kitlib/lock counterpart of the PM kit's `owner/machine_lock_install.py` pre-check, which reads the queue as `machine_lock.py` `queue_live()` does.
+`tools/lock_release_check.py` says whether the kit's release checkout may take a commit now. It refuses while the release would change the lock tool and any run in the machine's lock store is live. Logic: `kitlib/lock/release.py`; tests: `tests/lock/test_release.py`. No kit tool calls it: the release step must run it before it moves the checkout (docs/go-live.md).
 
 ```
 python tools/lock_release_check.py [-C KIT] <commit>
@@ -25,7 +23,7 @@ python tools/lock_release_check.py [-C KIT] <commit>
 - A live run: a record in the store's `active/` or an entry in `queue.json` whose process (pid and creation time) is not surely gone. A record that cannot be read, or that names no process, counts as live. So do an unlistable `active/` and an unreadable `queue.json`. Runs that are gone are listed as ignored.
 - The caller's own run counts as live. Swapping the lock code under it is the same hazard. When a live run's process is the caller's own process or one of its ancestors, the `STOP` says so: `this check runs inside a lock run (your own process or one of its ancestors)`.
 - A missing store folder is a `STOP`, not "no run is live". The check cannot tell whether a run is live.
-- Live means the owning process is alive (`store.wrapper_state`): its pid names a running process created at the record's creation time. A run whose wrapper is alive counts as live even when its mutex is gone; this is stricter than `Store.run_dead` and errs on the safe side (review finding 4, left as is). When the pid and creation time cannot be checked (the process cannot be opened, as a SYSTEM process a reused pid names cannot, or the record has no creation time), the run's mutex decides, as in `Store.run_live`: a mutex that does not exist (`ERROR_FILE_NOT_FOUND`), is abandoned or is unowned means gone; one held, or one that cannot be opened for any other reason (access denied, say), means live; so does an entry with no valid run id (a missing or malformed one, `store.ID_RE`). A pid alone is never proof of life (`tests/lock/test_reused_pid.py`).
+- Live means the owning process is alive (`store.wrapper_state`): its pid names a running process created at the record's creation time. A run whose wrapper is alive counts as live even when its mutex is gone; this is stricter than `Store.run_dead` and errs on the safe side. When the pid and creation time cannot be checked (the process cannot be opened, as a SYSTEM process a reused pid names cannot, or the record has no creation time), the run's mutex decides, as in `Store.run_live`: a mutex that does not exist (`ERROR_FILE_NOT_FOUND`), is abandoned or is unowned means gone; one held, or one that cannot be opened for any other reason (access denied, say), means live; so does an entry with no valid run id (a missing or malformed one, `store.ID_RE`). A pid alone is never proof of life (`tests/lock/test_reused_pid.py`).
 - Git cannot say what changes: `STOP`.
 
 ## What it does not do

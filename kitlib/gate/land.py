@@ -99,7 +99,10 @@
                  forced. Someone pushed <remote>/<main> to a commit without the merge while the
                  gate ran: the push is refused, NOT LANDED (FAILED, `nothing landed`), the lock
                  released; so is a push git refuses (exit 1 with git's own `! [rejected]` or
-                 `! [remote rejected]` line, PUSH_REFUSED) while <remote>/<main> is the base
+                 `! [remote rejected]` line, PUSH_REFUSED) while <remote>/<main> is the base,
+                 and a push that never connected (push_never_connected: exit 128, only
+                 `fatal: unable to access '<url>': ` with a curl connect error,
+                 PUSH_NEVER_CONNECTED) unless <remote>/<main> shows the merge
   10 verify      `git ls-remote` must show the merge on <remote>/<main>; then the tracking ref
                  is fetched, the main checkout's main brought to the merge (sync_main: a
                  fast-forward when HEAD is on main, main has nothing of its own and no local
@@ -133,7 +136,7 @@ OK` line appears only in a landing that LANDED (a green merged gate that is not 
 reworded).
 
 STUCK is only a push that may have landed and cannot be told: interrupted, timed out, died (exit
-128), ended with exit 1 without git's refusal line (no message: a git ended from outside,
+128, except a push that never connected, push_never_connected: NOT LANDED), ended with exit 1 without git's refusal line (no message: a git ended from outside,
 refs.KILLED_SHAPE; or only a stray warning) or reported done while <remote>/<main> is still the
 base, or with <remote>/<main> unreadable. A push git refused (exit 1 with git's own `! [rejected]`
 or `! [remote rejected]` line, PUSH_REFUSED) while <remote>/<main> is still the base published
@@ -147,6 +150,9 @@ repository hold at a time, every checkout of it sharing the key; the others wait
 lock's queue, landings ahead of ordinary waiting runs. `land.py --queue` (queue()) lists the
 entries of priority "land". The lock file (step 4) stays: the stuck record, a gone holder's break,
 and a landing of a tool outside the machine lock.
+
+`land.py --check-strict BRANCH` (check_strict()) is the strict check's dry run: read-only, no lock
+and no verdict, it says whether each branch changes a strict path (Lander.strict_paths).
 
 A batch (several branches, one --expect-tip each, merged in the order given): every branch passes
 the locked checks, and no tip may contain another; the branches are merged one after another with
@@ -192,6 +198,23 @@ PUSH_TIMEOUT = 600      # seconds
 # `! [remote rejected]` the remote's answer (a hook declined). `failed to push some refs` alone is
 # not one: git prints it for any failed push, a status report lost after the upload included
 PUSH_REFUSED = ('! [rejected] ', '! [remote rejected] ')
+# git's line for a push over HTTP(S) that never connected (exit 128, nothing else on stderr):
+# `fatal: unable to access '<url>': <curl's error>`, which git dies with only when its first
+# request, the ref discovery (remote-curl.c discover_refs), fails, before any pack is sent; with
+# curl's error one that only a connection never made gives: `Could not resolve host: <host>` (or
+# `proxy`), `Failed to connect to <host>:<port>` or `<host> port <port>` (curl 8 adds `after <n>
+# ms`; the reason after `: ` is the OS's or curl's, as `Connection refused`, `Timed out`, `Could
+# not connect to server`), `Connection timed out after <n> milliseconds` and `Resolving timed out
+# after <n> milliseconds` (curl's connect timeout in those states, before any request is sent).
+# git 2.55.0.windows.5 with libcurl 8.21.0 printed the first two forms, `<host>:<port> after <n>
+# ms: Could not connect to server` for both a refused port and a timed-out connect. Every other
+# curl error (a reset, a TLS failure, `Operation timed out`) came after the connection: STUCK
+PUSH_NEVER_CONNECTED = re.compile(
+    r"fatal: unable to access '[^']*': (?:"
+    r"Could not resolve (?:host|proxy): \S+"
+    r"|Failed to connect to \S+(?::\d+| port \d+)(?: after \d+ ms)?: [^:]+"
+    r"|(?:Connection|Resolving) timed out after \d+ milliseconds"
+    r")\Z")
 FETCH_TIMEOUT = 300
 MERGE_TIMEOUT = 300
 POLL_S = 5.0
@@ -220,6 +243,14 @@ STRICT_SHOWN = 5        # strict paths a refusal names; more are counted
 
 class _Stuck(Exception):
     pass
+
+
+def push_never_connected(rc, err):
+    """Whether a push that ended with exit `rc` and stderr `err` never connected to the remote,
+    so no byte of it can have reached it: git died (exit 128) and every line it printed is
+    PUSH_NEVER_CONNECTED. Any other line, a later-phase one included, or any other exit: False."""
+    lines = [l.strip() for l in (err or '').splitlines() if l.strip()]
+    return rc == 128 and bool(lines) and all(PUSH_NEVER_CONNECTED.match(l) for l in lines)
 
 
 def _paths(entries):
@@ -939,6 +970,27 @@ class Lander(object):
         except ValueError as e:
             return None, '%s: %s' % (STRICT_FILE, e)
 
+    def strict_paths(self):
+        """`(hits, None)`: branch -> the strict paths it changes (merge base with the base to its
+        tip, matched against strict_globs()), for each branch with any; or `(None, why)` when the
+        list or a branch's paths cannot be read. Reads only: strict_check and check_strict (the
+        dry check) both decide by it."""
+        globs, why = self.strict_globs()
+        if globs is None:
+            return None, 'cannot read the strict paths from %s at %s: %s' % (
+                self.cfg.main_branch, self.expect_main[:10], why)
+        hits = {}
+        for b, t in self.pairs:
+            mb, why = refs.merge_base(self.expect_main, t, self.root)
+            changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
+            if changed is None:
+                return None, 'git cannot list the paths of %s to check strict paths: %s' % (
+                    b, why2 or why or 'no common commit with %s' % self.expect_main[:10])
+            found = [p for p in changed if S._match(p, globs)]
+            if found:
+                hits[b] = found
+        return hits, None
+
     def strict_check(self):
         """A locked check (docs/gate.md "Strict paths"): the paths each branch changes (merge base
         with the base to its tip) against strict_globs(). A branch with a hit lands only alone,
@@ -948,19 +1000,10 @@ class Lander(object):
         --full --fresh. None, or why not (REFUSED, nothing merged). Every read that fails
         refuses."""
         self.strict_hits, self.strict_review, self.strict_carry = {}, None, None
-        globs, why = self.strict_globs()
-        if globs is None:
-            return 'cannot read the strict paths from %s at %s: %s' % (
-                self.cfg.main_branch, self.expect_main[:10], why)
-        for b, t in self.pairs:
-            mb, why = refs.merge_base(self.expect_main, t, self.root)
-            changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
-            if changed is None:
-                return 'git cannot list the paths of %s to check strict paths: %s' % (
-                    b, why2 or why or 'no common commit with %s' % self.expect_main[:10])
-            hits = [p for p in changed if S._match(p, globs)]
-            if hits:
-                self.strict_hits[b] = hits
+        hits, why = self.strict_paths()
+        if why:
+            return why
+        self.strict_hits = hits
         if not self.strict_hits:
             return None
         if len(self.pairs) > 1:
@@ -1645,7 +1688,9 @@ class Lander(object):
         else why nothing landed (NOT LANDED: the record could not be written, the remote's main
         moved on while the gate ran, so the push was refused, or git refused the push, exit 1
         with git's own ref status line `! [rejected] ...` or `! [remote rejected] ...`
-        (PUSH_REFUSED), with the remote's main still the base). _Stuck when the push may have
+        (PUSH_REFUSED), with the remote's main still the base; or the push never connected,
+        push_never_connected, with the remote's main anything but the merge or a commit holding
+        it, unreadable included). _Stuck when the push may have
         landed and git cannot tell (ls-remote unreadable, or a remote main this checkout cannot
         place), or when any other push did not land on a remote main still at the base or absent:
         exit 0, no exit (timed out), exit 1 without that line (no message: a git ended from
@@ -1666,7 +1711,20 @@ class Lander(object):
                      timeout=PUSH_TIMEOUT)
         pushed, why = refs.ls_remote(remote, 'refs/heads/%s' % main_b, self.root)
         how = 'exited 0' if r.rc == 0 else 'failed (%s)' % (r.err or 'exit %s' % r.rc)
+        lines = [l.strip() for l in (r.err or '').splitlines() if l.strip()]
+        said = ' | '.join(lines)
+        unconnected = push_never_connected(r.rc, r.err)
+
+        def never_connected(state):
+            # git died before connecting (PUSH_NEVER_CONNECTED): no byte reached the remote, so
+            # the merge, made only here, is not on it whatever ls-remote read (in an outage it
+            # fails the same way). A remote main that is or holds the merge still counts as landed
+            return ('the push of the merge %s never connected to %s (%s), and %s/%s %s; nothing '
+                    'landed, and the merge of %s was undone: land again once %s can be reached'
+                    % (self.merge[:10], remote, said, remote, main_b, state, self.branch, remote))
         if pushed is None:
+            if unconnected:
+                return never_connected('is unreadable (%s)' % why)
             raise _Stuck('the push %s, and %s/%s is unreadable (%s), not known to be the merge %s'
                          % (how, remote, main_b, why, self.merge[:10]))
         if pushed != self.merge:
@@ -1675,12 +1733,17 @@ class Lander(object):
                 self.fetch()
                 on = self.on_remote(pushed)
             if on is None:
+                if unconnected:
+                    return never_connected('is %s, which this checkout cannot place' % (
+                        pushed[:10] or 'absent'))
                 raise _Stuck('the push %s, and %s/%s is %s, which this checkout cannot place '
                              'against the merge %s' % (how, remote, main_b, pushed[:10] or 'absent',
                                                        self.merge[:10]))
             if not on:
-                lines = [l.strip() for l in (r.err or '').splitlines() if l.strip()]
-                said = ' | '.join(lines)
+                if unconnected:
+                    return never_connected('is still the base %s' % self.expect_main[:10]
+                                           if pushed == self.expect_main else
+                                           'is %s' % (pushed[:10] or 'absent'))
                 refused = any(l.startswith(PUSH_REFUSED) for l in lines)
                 if r.rc == 1 and refused and pushed == self.expect_main:
                     # git ran to the end and printed the ref's refusal (PUSH_REFUSED): nothing was
@@ -2363,6 +2426,47 @@ def land(root, branch, expect_main, expect_tip, **kw):
     Outcome (OK, FAILED, USAGE, STUCK, REFUSED, BUSY, or a machine lock code when the booking was
     refused; LANDED_UNGATED is retired, never returned)."""
     return Lander(root, branch, expect_main, expect_tip, **kw).run()
+
+
+def check_strict(root, branches):
+    """Read-only, the dry strict check a coordinator runs before it picks a reviewer (docs/gate.md
+    "Strict paths"): for each of `branches`, its local tip against `<remote>/<main>` as last
+    fetched (runner.default_base; no fetch), decided by Lander.strict_paths, the matcher
+    strict_check refuses by. An OK Outcome, one line per branch: `STRICT <branch>: <paths>: ...`
+    or `NOT STRICT <branch>: ...`. Takes no lock, needs no verdict and writes nothing. REFUSED
+    when the config, the base, a branch or the strict paths cannot be read."""
+    try:
+        cfg = kconfig.load(root)
+    except ConfigError as e:
+        return G.Outcome(G.REFUSED, ['REFUSED: the config of %s: %s' % (root, e)])
+    ref, why = runner.default_base(cfg, root)
+    base = refs.resolve(ref, root)[0] if ref else None
+    if not base:
+        return G.Outcome(G.REFUSED, ['REFUSED: no base to check against: %s' % (
+            why or '%s does not resolve' % ref)])
+    tips = []
+    for b in branches:
+        tip = None if refs.bad_rev(b) else refs.resolve('refs/heads/%s' % b, root)[0]
+        if not tip:
+            return G.Outcome(G.REFUSED, ['REFUSED: no branch %s in this repository' % b])
+        tips.append(tip)
+    lander = Lander(root, list(branches), None, tips)
+    lander.cfg, lander.expect_main = cfg, base
+    hits, why = lander.strict_paths()
+    if why:
+        return G.Outcome(G.REFUSED, ['REFUSED: %s' % why])
+    lines = []
+    for b, t in zip(branches, tips):
+        on = 'tip %s, base %s %s' % (t[:10], ref, base[:10])
+        found = hits.get(b)
+        if not found:
+            lines.append('NOT STRICT %s: no strict path changed (%s)' % (b, on))
+            continue
+        more = len(found) - STRICT_SHOWN
+        lines.append('STRICT %s: %s%s (%s): its reviewer must run on a strong-tier model, and it '
+                     'lands alone' % (b, ', '.join(found[:STRICT_SHOWN]),
+                                      ' and %d more' % more if more > 0 else '', on))
+    return G.Outcome(G.OK, lines)
 
 
 def queue(root, store=None):

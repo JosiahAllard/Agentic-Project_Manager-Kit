@@ -6,12 +6,15 @@ noted, never overwritten. The task is registered by default: the change first ru
 without --apply (sweep_dry_run) and prints what it would remove, then registers (task_step, after
 the folder's ACL step). With
 `sweep_task` false (--no-sweep-task) a note carries the PowerShell line that registers it instead.
-A task already registered is left as is. Nothing here prints or exits.
+A task already registered is left as is. On Linux the task is the pm-kit job TASK
+(linux_job; kitlib.platform.linux.schedule: a systemd user timer, else a crontab line) and
+task_registered reads it back. Nothing here prints or exits.
 """
 import json
 import os
 import subprocess
 
+from kitlib import platform
 from kitlib.config import ConfigError
 from kitlib.config import user as kuser
 from kitlib.launcher.pythonw import base_pythonw
@@ -61,6 +64,15 @@ def task_line(kit, pythonw=None):
                quoted('daily sweep of the agents\' temp folder')))
 
 
+def linux_job(kit, python=None):
+    """The Linux job of TASK: `python <kit>/SWEEP --apply` in the kit, daily at AT (python:
+    default schedule.python())."""
+    from kitlib.platform.linux import schedule
+    kit = os.path.normpath(kit)
+    return schedule.Job(TASK, [python or schedule.python(), os.path.join(kit, SWEEP), '--apply'], kit,
+                        ('daily', AT), 'daily sweep of the agents\' temp folder')
+
+
 TASK_TIMEOUT = 30
 
 
@@ -78,7 +90,12 @@ def task_registered(name, timeout=TASK_TIMEOUT, run=None):
     """Whether the scheduled task `name` is registered (`schtasks /Query /TN name`): True on exit 0,
     False only when schtasks says the task does not exist (its output holds Windows' text for error
     2, file not found). Any other failure (access denied, a timeout after `timeout` seconds) raises
-    RuntimeError, never False; OSError when schtasks cannot be run. run: the tests' subprocess.run."""
+    RuntimeError, never False; OSError when schtasks cannot be run. run: the tests' subprocess.run.
+    On Linux: whether the pm-kit job `name` is written (schedule.exists; ScheduleError, a
+    RuntimeError, when the crontab cannot be read)."""
+    if platform.NAME == 'linux':
+        from kitlib.platform.linux import schedule
+        return schedule.exists(name, run=run)
     run = run or subprocess.run
     try:
         r = run(['schtasks', '/Query', '/TN', name], capture_output=True, text=True, timeout=timeout,
@@ -192,8 +209,12 @@ def survey(plan, ctx):
     the folder gets the config key and an ACL with inheritance removed."""
     folder, source = choose(ctx)
     if not folder:
-        plan.note('extras', 'agent temp init skipped: the kit %s is on no drive letter; pass '
-                            '--agent-temp' % ctx.kit)
+        if platform.NAME == 'linux':
+            plan.note('extras', 'agent temp init skipped: on Linux there is no default folder (it must be '
+                                'outside your home folder and every checkout); pass --agent-temp')
+        else:
+            plan.note('extras', 'agent temp init skipped: the kit %s is on no drive letter; pass '
+                                '--agent-temp' % ctx.kit)
         return None, False
     if not os.path.isabs(folder):
         plan.refuse('the agent temp folder %s (from %s) is not an absolute path' % (folder, source))
@@ -233,9 +254,12 @@ def _env(plan, ctx, folder, source):
         return
     plan.add('extras', 'user environment %s = %s (agents put their temp files there; was %s)'
              % (ENV, folder, have if have else 'unset'),
-             lambda: host.env_set(ENV, folder),
-             undo=('[Environment]::SetEnvironmentVariable("%s", "%s", "User")' % (ENV, have)) if have
-             else '[Environment]::SetEnvironmentVariable("%s", $null, "User")' % ENV)
+             lambda: host.env_set(ENV, folder), undo=_env_undo(ENV, have))
+
+
+def _env_undo(name, have):
+    from .extras import env_undo                      # extras imports this module
+    return env_undo(name, have)
 
 
 def _key(plan, ctx, folder):
@@ -304,7 +328,9 @@ def sweep_dry_run(kit, python, timeout=DRY_RUN_TIMEOUT, run=None, home=None):
 
 def task_step(plan, ctx):
     """Plan the sweep task: the dry run, then the registration. Called after survey and the
-    folder's ACL step (extras.survey, extras.acl_step), never before."""
+    folder's ACL step (extras.survey, extras.acl_step), never before. On Linux: _linux_task_step."""
+    if platform.NAME == 'linux':
+        return _linux_task_step(plan, ctx)
     host = ctx.host
     line = task_line(ctx.kit)
     try:
@@ -333,3 +359,36 @@ def task_step(plan, ctx):
     plan.add('extras', 'register the scheduled task %s (daily %s, as you, not elevated): %s'
              % (TASK, AT, line), lambda: host.task_register(line),
              undo='Unregister-ScheduledTask -TaskName %s -Confirm:$false' % TASK)
+
+
+def _linux_task_step(plan, ctx):
+    """task_step on Linux: the same dry run, then the pm-kit job (linuxjobs.plan_job); a job
+    already written is left as is, and --no-sweep-task is a note."""
+    from kitlib.platform.linux import schedule
+    from . import linuxjobs
+    host = ctx.host
+    try:
+        there = host.task_exists(TASK)
+    except (OSError, RuntimeError) as e:
+        plan.note('extras', 'could not tell whether the pm-kit job %s is written (%s)' % (TASK, e))
+        return
+    if there:
+        if not getattr(ctx, 'sweep_task', True):
+            plan.note('extras', 'pm-kit job %s is written; --no-sweep-task leaves it' % TASK)
+        return
+    job = linux_job(ctx.kit)
+    if not getattr(ctx, 'sweep_task', True):
+        plan.note('extras', 'pm-kit job %s is not written (--no-sweep-task); a run without '
+                            '--no-sweep-task writes it (%s: %s)'
+                            % (TASK, schedule.when_text(job.when), ' '.join(job.argv)))
+        return
+
+    def dry_run():
+        said = host.sweep_dry_run(ctx.kit, ctx.home)
+        return Report('sweep dry run (nothing removed): ' + l for l in said)
+
+    plan.add('extras', 'run the sweep once without --apply: %s'
+             % ' '.join(sweep_dry_run_argv(ctx.kit, 'python')[1:]), dry_run,
+             detail=['prints what the job\'s first run would remove, before the job is written; '
+                     'stops the run, writing nothing, when the sweep refuses'])
+    linuxjobs.plan_job(plan, ctx, job, 'write')

@@ -6,7 +6,7 @@
           list [--blocked [--on M]] [--needs-priority] [--status S] [--area A]
           stale [--days N]
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
-              [--effort s|m|l] [--ref R] [--reopen]
+              [--effort s|m|l] [--ref R] [--reopen] [--body-file F]   (S: at most 120 characters)
           set ID [--<field> V]... [--unset K]... [--body-file F]
           block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
@@ -117,6 +117,7 @@ def build_parser():
                    help='the branch the finding was made on, or none')
     v.add_argument('--why-not-folded', dest='why_not_folded', required=True,
                    help='why the finding is not fixed on that branch')
+    v.add_argument('--body-file', default=None, help='the body: what the summary leaves out')
     v = sub.add_parser('set')
     v.add_argument('id')
     for key in FIELD_FLAGS:
@@ -189,7 +190,10 @@ def row(rec, ranks):
 def do_next(args, ctx, snap):
     if args.all and args.cap is not None:
         raise Usage('`--all` lists every startable item; it takes no `--cap`')
-    cap = None if args.all else (args.cap if args.cap is not None else omod.DEFAULT_CAP)
+    if args.cap is not None and args.cap < 1:
+        raise Usage('`--cap %d`: the cap is a whole number >= 1' % args.cap)
+    # The repository's cap (`.kit.json` backlog.cap, plan.Context.cap): the one `pull` checks.
+    cap = None if args.all else (args.cap if args.cap is not None else ctx.cap)
     b = banner(snap)
     warn = b.queue_warning()
     if warn:
@@ -246,11 +250,9 @@ def do_list(args, ctx, snap):
     if args.area:
         recs = [r for r in recs if r.get('area') == args.area]
     if args.needs_priority:
-        # A record marked for review at `-` or `-1` still wants its price (the pricing pass).
-        recs = sorted((r for r in recs if omod.classify(r)[0] in
-                       (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED) or
-                       omod.classify(r)[0] == omod.REVIEW and
-                       r.get('priority') in ('-', rmod.OWNER_PRIORITY)),
+        # A record marked for review at `-` still wants its price (the pricing pass).
+        recs = sorted((r for r in recs if omod.classify(r)[0] == omod.UNPRIORITISED_OPEN or
+                       omod.classify(r)[0] == omod.REVIEW and r.get('priority') == '-'),
                       key=lambda r: r.id)
     elif args.blocked:
         recs = [r for r in recs if omod.classify(r)[0] == omod.HELD]

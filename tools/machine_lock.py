@@ -32,7 +32,8 @@ from kitlib.lock import holds as hl                                # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
 from kitlib.lock import status as st                               # noqa: E402
 from kitlib.lock.background import run_background                  # noqa: E402
-from kitlib.lock.run import ORIGIN_ENV, check_resource, run_command  # noqa: E402
+from kitlib.lock.run import (ORIGIN_ENV, ScriptArgError, check_resource,  # noqa: E402
+                             run_command, script_command)
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
 from kitlib.proc import bash, process                              # noqa: E402
@@ -310,7 +311,8 @@ def cmd_run(a, cmd, store, argv):
         return EXIT_USAGE
     try:                            # before a detach, whose log is the only place it would show
         bash.resolve(cmd)
-    except bash.BareBashError as e:
+        script_command(cmd)         # run and background both start a .bat through its line
+    except (bash.BareBashError, ScriptArgError) as e:
         say("could not start the command: %s" % e)
         return 1
     if a.detach and not a.detached_id:

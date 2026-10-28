@@ -3,7 +3,7 @@
     "default": true,
     "adapter": "hosts.claude.adapter",
     "shell": "hosts/claude/shell",
-    "platforms": ["windows"],
+    "platforms": ["windows", "linux"],
     "capabilities": {
       "hook_events": ["PreToolUse", "SessionStart", "SubagentStart"],
       "supports_ask": true,
@@ -33,7 +33,9 @@
       },
       "agent_name_format": "{plugin}:{name}",
       "session_process": "claude.exe",
-      "env_prefixes": ["CLAUDE_", "ANTHROPIC_"]
+      "env_prefixes": ["CLAUDE_", "ANTHROPIC_"],
+      "cli_program": "claude",
+      "cli_package": "@anthropic-ai/claude-code"
     },
     "hook": {
       "tool_event": "PreToolUse",
@@ -46,7 +48,7 @@
   "codex": {
     "adapter": "hosts.codex.adapter",
     "shell": "hosts/codex/shell",
-    "platforms": ["windows"],
+    "platforms": ["windows", "linux"],
     "capabilities": {
       "hook_events": ["PreToolUse", "SessionStart", "PostCompact", "SubagentStart"],
       "supports_ask": false,
@@ -72,7 +74,9 @@
       },
       "agent_name_format": "kit-{name}",
       "session_process": "codex.exe",
-      "env_prefixes": ["CODEX_", "OPENAI_"]
+      "env_prefixes": ["CODEX_", "OPENAI_"],
+      "cli_program": "codex",
+      "cli_package": "@openai/codex"
     },
     "hook": {
       "tool_event": "PreToolUse",
