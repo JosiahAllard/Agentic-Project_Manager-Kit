@@ -506,6 +506,16 @@ class RealHost(unittest.TestCase):
         self.assertEqual(ClaudeAdapter().managed_settings_path({'ProgramFiles': 'X:\\PF32'}),
                          'X:\\PF32\\ClaudeCode\\managed-settings.json')
 
+    def test_on_linux_the_managed_file_is_under_etc_claude_code(self):
+        """Claude Code's Linux system directory (code.claude.com/docs/en/managed-settings), whatever
+        the environment holds."""
+        from hosts.claude.adapter.host import ClaudeAdapter
+        with mock.patch('kitlib.platform.NAME', 'linux'):
+            for env in ({}, {'ProgramFiles': 'X:\\PF'}):
+                with self.subTest(env=env):
+                    self.assertEqual(ClaudeAdapter().managed_settings_path(env),
+                                     '/etc/claude-code/managed-settings.json')
+
     def test_no_program_files_is_no_managed_file(self):
         with mock.patch.dict(os.environ):
             os.environ.pop('ProgramFiles', None)
