@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 from kitlib.git.fake import objects, refs, retry
+from tests import platforms
 
 GENERIC_READ = 0x80000000
 OPEN_EXISTING = 3
@@ -42,7 +43,7 @@ class _Holder:
         self.release()
 
 
-@unittest.skipUnless(os.name == 'nt', 'Windows sharing denial')
+@platforms.windows_only('a sharing denial of an open file is a Windows behaviour')
 class RetryDeadlineTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
