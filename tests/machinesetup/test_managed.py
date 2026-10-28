@@ -422,8 +422,8 @@ class LinuxRender(ManagedBase):
         self.host.guard_entry = lambda kit: hookmain.settings_entry(
             'PreToolUse', 'Bash|PowerShell', os.path.join(kit, 'boot', 'hook.py'), self.PY,
             args=('claude', 'PreToolUse'), platform='linux')
-        linux = mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME='linux'))   # render's only:
-        linux.start()                                                # the fake paths are Windows ones
+        linux = mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME='linux'), create=True)
+        linux.start()                           # render's platform only: the fake paths are Windows ones
         self.addCleanup(linux.stop)
 
     def guard(self, data):
@@ -484,7 +484,7 @@ class WindowsRender(ManagedBase):
                 return dict((k, fill(x)) for k, x in v.items())
             return v
         want = fill(json.loads(raw.decode('utf-8-sig')))
-        with mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME='windows')):
+        with mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME='windows'), create=True):
             got = managed.render(self.ctx())
         self.assertEqual(got, want)
         self.assertEqual(settings.write(dict(settings.NEW_LAYOUT), got), settings.write(dict(settings.NEW_LAYOUT), want))
