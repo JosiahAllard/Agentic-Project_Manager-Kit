@@ -2,14 +2,22 @@
 file tools/render_content.py writes; the refusal names the source to edit and the render command.
 The renderer itself runs as a process and is never refused. kitlib.guard.generated maps a rendered
 path to its source."""
+import importlib
+import json
 import os
+import shutil
+import tempfile
 import unittest
 
+from kitlib import content as kcontent
 from kitlib.guard import context, generated, rules
+from kitlib.host import hookmain, registry
 
 from . import world as W
 from .claudehost import decide
 from .world import bash, event, ps
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def touch(path, text='x'):
@@ -42,6 +50,8 @@ class Source(unittest.TestCase):
                 ('hosts/codex/shell/plugin.json', manifest % 'codex'),
                 ('hosts/codex/shell/mcp.json', manifest % 'codex'),
                 ('hosts/claude/shell/hooks/hooks.json', manifest % 'claude'),
+                ('hosts/claude/shell/hooks/hooks.linux.json', manifest % 'claude'),
+                ('hosts/codex/shell/hooks/hooks.linux.json', manifest % 'codex'),
                 ('.claude-plugin/plugin.json', manifest % 'claude'),
                 ('.claude-plugin/marketplace.json', manifest % 'claude'),
                 ('hosts/claude/shell/agents', 'content/roles/'),                  # the folders themselves
@@ -63,6 +73,44 @@ class Source(unittest.TestCase):
     def test_a_checkout_without_the_kit_layout_has_none(self):
         self.assertIsNone(generated.source(self.w.main, 'hosts/claude/shell/agents/worker.md'))
         self.assertIsNone(generated.source(None, 'hosts/claude/shell/agents/worker.md'))
+
+
+class EveryRenderedManifest(unittest.TestCase):
+    """generated.MANIFESTS names each hooks file by hand. This ties it to hosts.json: each host's
+    renderer, given every platform the hook interpreter knows (hookmain.INTERPRETERS, a superset of
+    the hosts' own platforms), writes no manifest the rule leaves unguarded, so a new platform's
+    `hooks/hooks.<platform>.json` fails here before it can be rendered unguarded."""
+
+    def registry_with_every_platform(self):
+        with open(os.path.join(ROOT, 'hosts.json'), encoding='utf-8') as f:
+            raw = json.load(f)
+        known = [p for p in registry.PLATFORMS if p in hookmain.INTERPRETERS]
+        for name in registry.names():
+            entry = raw[name]
+            self.assertLessEqual(set(entry['platforms']), set(known), name)
+            entry['platforms'] = known
+            names = entry['profile']['process_names']
+            for p in known:
+                names.setdefault(p, names[next(iter(names))])
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        path = os.path.join(folder, 'hosts.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(raw, f)
+        return path, known
+
+    def test_each_hosts_manifests_for_each_platform_are_generated_files(self):
+        path, known = self.registry_with_every_platform()
+        self.assertIn('linux', known)
+        kit, content = kcontent.load_kit(ROOT), kcontent.load(ROOT)
+        for name in registry.names():
+            r = importlib.import_module(registry.host(name).adapter).ADAPTER.content().renderer()
+            files = r.manifests(kit, content, registry_path=path)
+            hooks = [rel for rel in files if os.path.basename(rel).startswith('hooks.')]
+            self.assertEqual(len(hooks), len(known), (name, sorted(files)))
+            for rel in files:
+                with self.subTest(host=name, path=rel):
+                    self.assertIsNotNone(generated.source(ROOT, rel))
 
 
 class Rule(unittest.TestCase):
@@ -97,7 +145,8 @@ class Rule(unittest.TestCase):
     def test_skills_copies_and_manifests_are_refused(self):
         for rel in (('hosts', 'codex', 'shell', 'skills', 'land-branch', 'SKILL.md'),
                     ('hosts', 'claude', 'shell', 'skills', 'new', 'SKILL.md'),            # a retired folder too
-                    ('.claude-plugin', 'plugin.json'), ('hosts', 'codex', 'shell', 'hooks', 'hooks.json')):
+                    ('.claude-plugin', 'plugin.json'), ('hosts', 'codex', 'shell', 'hooks', 'hooks.json'),
+                    ('hosts', 'claude', 'shell', 'hooks', 'hooks.linux.json')):
             with self.subTest(rel):
                 self.refused(self.write(os.path.join(self.w.wt, *rel)))
 
