@@ -5,7 +5,8 @@ docs/backlog.md).
   open_repo(root)   -> (top, cfg, rules); Failure when `root` is no repository or its `.kit.json`
                        cannot be read
   open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store, its
-                       `liveness` probe the worktree classifier's (liveness)
+                       `liveness` probe the worktree classifier's (liveness), its `cap` repo_cap's
+  repo_cap(top, cfg) -> the `.kit.json` backlog.cap `next` and `pull` share; Refusal when bad
   planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, `retarget` or
                        `uncite`); Usage for any other verb, raised before a plan exists
   retarget_dry(args, ctx) -> the Change `retarget` would write, checked as a write would be;
@@ -24,7 +25,7 @@ from . import pull_branch as pullmod
 from . import record as rmod
 from . import retarget as retmod
 from . import store as smod
-from .errors import Failure, Usage
+from .errors import Failure, Refusal, Usage
 
 # `set --<field>` for every field; plan_set refuses the ones a verb writes (plan.WRITTEN_BY).
 FIELD_FLAGS = list(rmod.FIELDS)
@@ -58,8 +59,26 @@ def open_store(root, fetch=True, session=None, branch=None):
         code_main, code_remote = code_main or code.main_branch, code.remote
     ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
                        branch=branch, code_main=code_main or cfg.main_branch,
-                       code_remote=code_remote, liveness=lambda name: liveness(top, name))
+                       code_remote=code_remote, liveness=lambda name: liveness(top, name),
+                       cap=repo_cap(top, cfg))
     return ctx
+
+
+def repo_cap(top, cfg):
+    """The cap `next` offers up to and `pull` checks against (plan.Context.cap): `.kit.json`
+    "backlog".cap of the repository the records belong to. That is `cfg` (the checkout's own),
+    except in the PM data worktree, whose records belong to the code repository: there it is the
+    main checkout's value, never the data branch's (pull_branch.code_config_strict; an unreadable
+    one is a Refusal, not a silent default). The schema refuses a value that is not a whole number
+    >= 1 when the file loads (kitlib/config/schema.py); a value that reaches here otherwise is a
+    Refusal too."""
+    code = pullmod.code_config_strict(top)
+    src = code if code is not None else cfg
+    cap = src.section('backlog')['cap']
+    if type(cap) is not int or cap < 1:
+        raise Refusal('.kit.json "backlog".cap of %s is %r: it must be a whole number >= 1'
+                      % (src.root, cap))
+    return cap
 
 
 def liveness(top, branch):
