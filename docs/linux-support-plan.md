@@ -36,7 +36,9 @@ needs it says so.
   proc/win32, proc/winwatch); whether it imports on Linux is unknown (section 9).
 - The committed Claude hook manifest (hosts/claude/shell/hooks/hooks.json) runs `pythonw`, and
   kitlib/host/hookmain.py keeps `INTERPRETERS = {'windows': 'pythonw'}`; hosts.json lists
-  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified).
+  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified). Since slice 12:
+  INTERPRETERS adds `'linux': 'python3'`, both hosts list windows and linux, and each renders
+  hooks.linux.json beside its unchanged hooks.json.
 
 ### 1.2 The surface, counted
 
@@ -320,7 +322,7 @@ The ladder, chosen by probing the machine at run time, not by distribution name:
 |---|---|---|
 | S1 | a writable cgroup2 subtree with cpuset, memory and pids and `cgroup.kill` (kernel 5.14+), from a `Delegate=yes` user scope or a root-delegated pm-kit directory | strong: CPU pinned, memory capped, guaranteed kill |
 | S2 | the same without cpuset (systemd's default delegation) | memory and kill strong, CPU cooperative |
-| W1 | a PID namespace | strong kill, no caps |
+| W1 | a user and PID namespace whose pid 1 is the kit's reaper | partial: guaranteed kill, CPU cooperative, no memory cap |
 | W2 | subreaper + pidfd + process group + affinity, with a sampled RSS watchdog and no RLIMIT_AS | weak |
 
 `containment: weak` (proposed wording) means: heavy runs go ahead; the kit kills every descendant
@@ -329,6 +331,27 @@ servers outside its tree; cleanup is lost if the holder is SIGKILLed; CPU pinnin
 the memory cap is a sampled watchdog. The lock's status, the heavy-run start line and the run
 record name the tier and what it lacks. Proposed: S2 shows `containment: partial (cpus not
 pinned)` and is not counted weak.
+
+W1, as built (contain.py NsJob): a python starter (Ubuntu's AppArmor user-namespace rule can be
+met for the interpreter alone) reads its uid and gid, unshares a user and a PID namespace and maps
+them onto themselves (read after the unshare they are the overflow id, and the map is refused),
+then forks pid 1, the reaper, which mounts a fresh /proc in a mount namespace of its own and forks
+the stub. Every process in the namespace dies with pid 1, so the kill is a pidfd SIGKILL to it,
+and kill_on_close is pid 1 reading the owner's watch pipe. It is shown as `partial` with what it
+lacks (CPU cooperative, no memory cap), not as strong. A pid is a number in one namespace: a lock
+run record names its wrapper's (`pidns`), and a checker in another one asks the run lock instead
+(store.record_state); a run nested in a W1 job of its run is found by the job's namespace on the
+run's record (`jobns`, nest_check); a probe inside a W1 job runs no scope trial (the user systemd
+would take its pids for its own namespace's) and is W2, never a nested W1, so a run nested at any
+depth stays in the namespace on record.
+
+Not yet namespace-aware (each safe today, a later record):
+
+- queue entries and background runs carry no `pidns` and no `jobns` (on Linux the run lock
+  decides a queue entry; bg_ancestor fails closed);
+- resource.py, giveback.py and the lock status (api.py: tree, GPU memory) read a record's pid
+  as this namespace's;
+- the holders search does not look inside a W1 job.
 
 The S1 contract:
 
@@ -622,8 +645,9 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    Linux) and cpu.py (the seam's affinity primitives); pool.py holds a worker's processes by
    pidfd; tests/proc/test_linux_contain.py and test_linux_cpu.py, and the pool tests on Linux.
    The watchdog runs inside the job's cgroup (J/w), so it never outlives the job, and every
-   cgroup.kill is checked to target the job's own cgroup. Deviations: W1 is probed and reported,
-   not built (no unprivileged user namespaces on the VM; a later record); W2 has no subreaper (an
+   cgroup.kill is checked to target the job's own cgroup. W1 was built later (section 2.3): a
+   user and PID namespace whose pid 1 is the reaper, proved on the VM under its AppArmor
+   user-namespace rule. Deviations: W2 has no subreaper (an
    environment token finds orphans, contain.py says why); leftovers() moves stragglers to a scope
    of their own through systemd; processes() is None; a Linux job runs one command; the pid
    shield is Windows only, so each Linux unit and worker carries the "could not shield" note.
@@ -716,6 +740,13 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
     seam: how the plugin ships the right manifest on each platform. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
     runs the hook on both; a missing interpreter blocks rather than passes; the rendered Windows
     hooks.json of each host is byte-identical to the base's.
+    Built on kit/linux-hook-manifests: hookmain.manifest_command per platform (INTERPRETERS
+    linux: python3, run by /bin/sh; a tool event's line exits 2 when python3 fails or is missing,
+    a start event's says the kit did not load), each host's hooks.linux.json beside its
+    unchanged hooks.json, hosts.json platforms windows and linux for both hosts, and the seam:
+    the plugin export writes the running platform's file as hooks.json
+    (kitlib.pluginsource.platform_hooks). The posix-only run of the lines (tests/host/
+    test_hook_linux.py) waits on a Linux machine.
 13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
     hub to-do step forms, Codex dialect. Risk Low. Proof: content render check; hub renders each
     form. Windows stays byte-identical: every rendered Windows file differs from the base's only
