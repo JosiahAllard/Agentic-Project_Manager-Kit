@@ -86,12 +86,14 @@ ip_to_int() (
     echo $(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 ))
 )
 
-# An IPv4 address, or address/N with N 8..32.
+# An IPv4 address, or network/N with N 8..31 and no host bits set. ufw stores /32 as the bare
+# address and masks host bits, so those forms would never match what ufw reports back.
 valid_src() {
     case $1 in
         */*) valid_ipv4 "${1%/*}" || return 1
              case ${1#*/} in ''|*[!0-9]*|0*) return 1 ;; esac
-             [ "${1#*/}" -ge 8 ] && [ "${1#*/}" -le 32 ] ;;
+             [ "${1#*/}" -ge 8 ] && [ "${1#*/}" -le 31 ] || return 1
+             [ $(( $(ip_to_int "${1%/*}") & (0xFFFFFFFF >> ${1#*/}) )) -eq 0 ] ;;
         *) valid_ipv4 "$1" ;;
     esac
 }
@@ -201,7 +203,7 @@ parse_args() {
                 shift ;;
             --admin-src)
                 [ $# -ge 2 ] || refuse "--admin-src needs an IPv4 address or address/N"
-                valid_src "$2" || refuse "--admin-src $2 is not an IPv4 address or address/N (N 8..32)"
+                valid_src "$2" || refuse "--admin-src $2 is not an IPv4 address or network/N (N 8..31, network address with no host bits; use the bare address for one host)"
                 case " $ADMIN_SRCS " in *" $2 "*) ;; *) ADMIN_SRCS="${ADMIN_SRCS:+$ADMIN_SRCS }$2" ;; esac
                 shift ;;
             --kit-src)
@@ -545,9 +547,10 @@ step_ufw() {
     for s in $ADMIN_SRCS; do want="$want $s|$UFW_ADMIN"; done
     have=$(ufw_ours | tr '\n' ' ')
     did=
-    # Add first, so port 22 from main is never shut while the firewall is on. ufw's rule identity
-    # leaves out the comment: an address that moves between main and admin is deleted, then
-    # added back under its new comment.
+    # New rules are added before any stale one is deleted, so port 22 from main is not shut by a
+    # plain change. The one exception is a retag: ufw's rule identity leaves out the comment, so
+    # an address that moves between main and admin cannot be added again until its old rule is
+    # deleted (ufw would skip it as existing), and that rule is deleted just before it is re-added.
     for r in $want; do
         case " $have " in *" $r "*) continue ;; esac
         case " $have " in

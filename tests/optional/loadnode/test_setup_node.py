@@ -47,7 +47,7 @@ class SetupNodeSh(unittest.TestCase):
         self.assertEqual(len(BLOB), 68)
         self.assertTrue(self.ok('valid_key_line', KEY))
         self.assertTrue(self.ok('valid_key_line', 'ssh-ed25519 ' + BLOB))
-        self.assertTrue(self.ok('valid_key_line', 'ssh-ed25519 ' + BLOB + ' josh@main pc'))
+        self.assertTrue(self.ok('valid_key_line', 'ssh-ed25519 ' + BLOB + ' user@main pc'))
 
     def test_key_line_refusals(self):
         for bad in ('',
@@ -79,10 +79,12 @@ class SetupNodeSh(unittest.TestCase):
             self.assertFalse(self.ok('main_ip_ok', bad), bad)
 
     def test_admin_sources(self):
-        for good in ('192.168.1.7', '192.168.1.0/24', '10.0.0.0/8', '10.1.2.3/32'):
+        for good in ('192.168.1.7', '192.168.1.0/24', '10.0.0.0/8', '10.1.2.0/31'):
             self.assertTrue(self.ok('valid_src', good), good)
         for bad in ('192.168.1.0/7', '192.168.1.0/33', '192.168.1.0/024', '192.168.1.0/', '0.0.0.0/0',
-                    '192.168.1.0/x', 'host'):
+                    '192.168.1.0/x', 'host',
+                    # ufw stores /32 as the bare address and masks host bits: refuse both
+                    '10.1.2.3/32', '192.168.1.7/24', '10.1.2.3/31', '10.0.0.1/8'):
             self.assertFalse(self.ok('valid_src', bad), bad)
         self.assertTrue(self.ok('ip_in_src', '192.168.1.77', '192.168.1.0/24'))
         self.assertTrue(self.ok('ip_in_src', '192.168.1.77', '192.168.1.77'))
@@ -202,7 +204,7 @@ class SetupNodeSh(unittest.TestCase):
         # Here (Windows, or a test box) the first box check stops it: no step runs.
         code, out = self.run_script('--dry-run', '--allow-user', 'owner', IP, KEY)
         self.assertEqual(code, 2, out)
-        self.assertRegex(out, r'REFUSED - (no /etc/os-release|this is .*, not Ubuntu 24\.04|systemd)')
+        self.assertRegex(out, r'REFUSED - (no /etc/os-release|this is .*, not Ubuntu 24\.04|systemd|run it as root with sudo)')
         self.assertNotIn('[b]', out)
 
 
