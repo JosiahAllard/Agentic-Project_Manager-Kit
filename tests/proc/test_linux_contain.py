@@ -196,15 +196,6 @@ class Tiers(unittest.TestCase):
                     mock.patch.object(c, 'trial', return_value=('S2', [c.S2_LACK], None)):
                 self.assertEqual(c._probe().name, 'S2', mark)
 
-    def test_the_w1_starter_reads_its_ids_before_the_unshare(self):
-        # after it they are the overflow id, the map is refused and W1 is never used: the live
-        # classes would only skip (they skip when w1_trial() fails)
-        src = contain().NSTART
-        ids = src.find('uid, gid = os.getuid(), os.getgid()')
-        self.assertGreater(ids, 0)
-        self.assertLess(ids, src.find('os.unshare(os.CLONE_NEWUSER'))
-        self.assertEqual(src.count('os.getuid()'), 1)
-
     def test_the_w1_starter_marks_its_job_with_the_env_name(self):
         c = contain()
         self.assertIn("os.environ['%s'] = str(os.stat('/proc/self/ns/pid').st_ino)" % c.W1_ENV,
@@ -218,7 +209,8 @@ class Tiers(unittest.TestCase):
 
     def test_the_w1_starter_reads_its_ids_before_it_unshares(self):
         # after the unshare they read as the overflow id until the maps are written, and a map of
-        # the overflow id is refused (EPERM): only the writer's own id may be mapped
+        # the overflow id is refused (EPERM): only the writer's own id may be mapped. W1 would
+        # then never be used and the live classes would only skip, so this is the guard
         text = contain().NSTART
         compile(text, 'NSTART', 'exec')
         unshare = text.index('os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWPID)')
