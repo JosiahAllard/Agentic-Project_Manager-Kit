@@ -111,7 +111,7 @@ class LocateTests(unittest.TestCase):
         for name in ('Desktop_Executable', 'Bad Key!', 'x' * 80):
             with self.subTest(name=name):
                 with self.assertRaises(DeliveryError) as raised:
-                    locate([self.current_cli], {name: self.stale_cli, 'desktop_executable': self.stale_app})
+                    locate([], {name: self.stale_cli, 'desktop_executable': self.stale_app})
                 self.assertRegex(raised.exception.code, r'\A[a-z][a-z0-9-]{0,63}\Z')
                 self.assertTrue(raised.exception.code.startswith('codex-cli-image-unmatched-'))
 
