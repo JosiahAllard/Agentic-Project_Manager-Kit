@@ -289,8 +289,8 @@ the old layout; each is cleared once, after step 1:
   reads neither copy: a leftover home config is refused with the move's command
   (`kitlib/config/user.py` `UNMOVED`), the Action Hub's tools included (`kitlib/hubsite/auth.py`
   `folder`).
-- **Links under `~/.claude`** (junctions an earlier setup made): each is reported, with the line that removes it, by machine setup
-  (docs/machine-setup.md "Links").
+- **Links under `~/.claude`** (junctions an earlier setup made): each is reported, with the line
+  that removes it, by machine setup (docs/machine-setup.md "Links").
 
 ## Agent memory folder: tools/kit_stubs.py memory
 
