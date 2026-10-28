@@ -46,6 +46,11 @@ class Views(object):
     def skill(self, name):
         return {}
 
+    def skill_source(self, name):
+        # skill `builder` as tests.hubsite.test_api_roles serves it, so its rows pass here too
+        from tests.hubsite import test_api_roles as roles
+        return roles.Views().skill_source(name)
+
     def health(self):
         return {'git': None, 'backlog': None}
 

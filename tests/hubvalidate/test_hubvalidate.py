@@ -120,6 +120,13 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(f[0].level, V.ERROR)
         self.assertEqual(f[1].level, V.WARN)
 
+    def test_a_skill_edits_status_is_judged_and_its_e_id_is_a_counter_prefix(self):
+        f = V.validate({'skill_edits': {'E-001': {'status': 'committed'}, 'E-002': {'status': 'merged'}}})
+        self.assertEqual(codes(f), [('skill_edits/E-002', 'status-unknown')])
+        self.assertEqual(V.REF_COLLECTIONS['E'], 'skill_edits')
+        # an E- id is the hub's own counter, not a ref the refs check follows
+        self.assertIsNone(V._REF.search('see E-001'))
+
     def test_options_and_recommended(self):
         bad = [question(options='x'), question(options=[{'description': 'no label'}]),
                question(recommended=5), question(recommended=True), question(recommended='0')]
