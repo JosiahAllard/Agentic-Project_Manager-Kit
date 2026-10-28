@@ -353,6 +353,22 @@ class Box(object):
         if not os.path.lexists(self.job_dir(job)):
             self.git(['--git-dir', m, 'update-ref', '-d', 'refs/node/' + job], self.base)
 
+    def drop_refused(self, d):
+        """After check_spec refused the start params `d` (a dict): drop the ref main pushed for
+        them, when their job id and repo name are sound, the mirror is there and the job has no
+        folder. An OSError on the way is ignored: the refusal is the reply."""
+        job, repo = d.get('job'), d.get('repo')
+        if not (isinstance(job, str) and JOB_RE.fullmatch(job) and registry.repo_ok(repo)):
+            return
+        m = self.mirror(repo)
+        if not os.path.isdir(m):
+            return
+        try:
+            with _flock(os.path.join(self.base, 'jobs.lock')):
+                self._drop_ref(job, m)
+        except OSError:
+            pass
+
     def _result(self, job, code, how, sha, why=None):
         _write_json(self._p(job, 'result.json'), {'exit': code, 'how': how, 'sha': sha,
                                                   'why': why, 'ended': _iso()})
@@ -594,7 +610,11 @@ def serve(cmd, stdin, write, box, exec_fn=None):
     try:
         p = read_params(stdin)
         if cmd == 'start':
-            p = check_spec(p)
+            try:
+                p = check_spec(p)
+            except SpecError:
+                box.drop_refused(p)          # main pushed refs/node/<job> before this start
+                raise
         else:
             p = {'job': _job(p.get('job')), 'offset': p.get('offset', 0)}
             if type(p['offset']) is not int or p['offset'] < 0:

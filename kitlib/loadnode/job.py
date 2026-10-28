@@ -108,8 +108,10 @@ def artifact_path_ok(p):
     """True for a manifest path main may write under the checkout's top: relative, '/' between
     parts, no '.', '..' or '.git' part (any case), no drive, backslash or control character, and
     no part Windows would read as something else (a device name, a trailing dot or space, or a
-    '~' and a digit, the shape of an 8.3 short name that may be another file's)."""
-    if not isinstance(p, str) or not p or len(p) > 1024:
+    '~' and a digit, the shape of an 8.3 short name that may be another file's), and ASCII only:
+    git's icase match folds ASCII case alone while NTFS folds every letter, so a non-ASCII name
+    could be a tracked file in another case that the tracked check misses."""
+    if not isinstance(p, str) or not p or len(p) > 1024 or any(ord(c) > 127 for c in p):
         return False
     if p.startswith('/') or '\\' in p or ':' in p or any(ord(c) < 32 or ord(c) == 127 for c in p):
         return False
@@ -466,7 +468,12 @@ class NodeJob(object):
 
     def run(self):
         """Push, start, follow, fetch and clean: the exit code (the module docstring). JobError
-        for a failure before the job started, and for a busy result (fallback True)."""
+        for a failure before the job started, and for a busy result (fallback True). The node's
+        own spec check runs here first, so a start it would refuse never pushes."""
+        try:
+            box.check_spec(self.spec())
+        except box.SpecError as e:
+            raise JobError(EXIT_USAGE, 'the node would refuse this job: %s' % e)
         self.push()
         self.start()
         self.started = True

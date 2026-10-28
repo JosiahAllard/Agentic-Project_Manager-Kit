@@ -168,6 +168,17 @@ class Run(Base):
         self.notices = None
         self.assertEqual(self.node_job().run(), 0)
 
+    def test_a_job_the_node_would_refuse_is_never_pushed(self):
+        # the node checks the spec only at start, after the push: main checks it first
+        for over in ({'note': 'n' * (box.NOTE_CAP + 1)}, {'wait_s': box.MAX_WAIT_S + 1}):
+            with self.subTest(over=list(over)):
+                nj = self.node_job(**over)
+                with self.assertRaises(job.JobError) as cm:
+                    nj.run()
+                self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_USAGE, False))
+                self.assertIn(list(over)[0], cm.exception.message)
+                self.assertEqual((self.pushes, self.link.calls, nj.started), ([], [], False))
+
     def test_a_push_that_fails_falls_back_and_starts_nothing(self):
         self.push_fails = 'fatal: the remote end hung up'
         with self.assertRaises(job.JobError) as cm:
@@ -341,6 +352,26 @@ class Artifacts(Base):
         self.assertTrue(os.path.isfile(os.path.join(nj.staging, 'b.txt')))
         shutil.rmtree(nj.staging, True)
 
+    def test_an_untracked_file_that_cannot_be_moved_aside_copies_nothing(self):
+        self.files = {'a.txt': b'new a', 'b.txt': b'new b'}
+        with open(os.path.join(self.top, 'b.txt'), 'wb') as f:
+            f.write(b'untracked b')
+        real_replace = os.replace
+
+        def replace(src, dst):
+            if dst.endswith('.old'):
+                raise PermissionError(13, 'The process cannot access the file', src)
+            return real_replace(src, dst)
+        nj = self.node_job(artifacts=['*.txt'])
+        with mock.patch.object(job.os, 'replace', replace):
+            self.assertEqual(nj.run(), job.EXIT_ARTIFACTS)
+        with open(os.path.join(self.top, 'b.txt'), 'rb') as f:
+            self.assertEqual(f.read(), b'untracked b')
+        self.assertEqual(sorted(os.listdir(self.top)), ['b.txt'])
+        self.assertEqual(self.leftovers(), [])
+        self.assertIn('b.txt could not be copied into the checkout', ' '.join(self.said))
+        shutil.rmtree(nj.staging, True)
+
     def test_a_file_where_a_folder_must_be_copies_nothing(self):
         self.files = {'a.txt': b'new a', 'out/b.txt': b'new b'}
         with open(os.path.join(self.top, 'out'), 'wb') as f:
@@ -413,7 +444,8 @@ class Paths(unittest.TestCase):
             self.assertTrue(job.artifact_path_ok(p), p)
         for p in ('', '/a', 'a/../b', './a', 'a//b', '.git/x', '.GIT/config', 'a\\b', 'C:x', 'a:b',
                   'NUL', 'con.txt', 'a/COM1', 'a.', 'a ', 'a*b', 'a\x01', None, 'x' * 1025,
-                  'build/CONFIG~1.H', 'PROGRA~1/x', 'a/b~12'):
+                  'build/CONFIG~1.H', 'PROGRA~1/x', 'a/b~12', 'docs/ünits.md',
+                  'İ/a.txt', 'a b'):
             self.assertFalse(job.artifact_path_ok(p), p)
 
 
@@ -480,6 +512,20 @@ class PlaceOnRealGit(unittest.TestCase):
             f.write('new\n')
         self.assertIn('build/config.h is tracked', nj._place(['BUILD/CONFIG.H']))
         with open(os.path.join(repo.root, 'build', 'config.h')) as f:
+            self.assertEqual(f.read(), 'tracked\n')
+
+    def test_a_tracked_file_named_in_another_unicode_case_is_never_overwritten(self):
+        # git's :(literal,icase) folds ASCII only (git 2.55: it misses docs/Ünits.md for
+        # docs/ünits.md) while NTFS opens one as the other: a non-ASCII path is refused
+        repo = gitfixture.TempRepo(branch='main')
+        self.addCleanup(repo.cleanup)
+        repo.write('docs/Ünits.md', 'tracked\n')
+        repo.commit('add', 'docs/Ünits.md')
+        nj = job.NodeJob(NODE, None, repo.root, SHA, 'my-repo', 's', 'k', ['x'], ['docs/*'])
+        with self.assertRaises(ValueError):
+            nj._manifest(json.dumps({'files': [{'path': 'docs/ünits.md', 'size': 4,
+                                                'sha256': 'e' * 64}], 'error': None}).encode())
+        with open(os.path.join(repo.root, 'docs', 'Ünits.md')) as f:
             self.assertEqual(f.read(), 'tracked\n')
 
 

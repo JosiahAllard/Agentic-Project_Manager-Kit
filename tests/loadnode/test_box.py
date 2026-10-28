@@ -133,7 +133,7 @@ class Serve(Base):
                        'true'], self.git.calls)
         for cmd in ("git-receive-pack 'pmkit-node/mirrors/../x.git'",
                     "git-receive-pack 'pmkit-node/mirrors/a..b.git'",
-                    "git-receive-pack '/home/x/pmkit-node/mirrors/r.git'",
+                    "git-receive-pack '/srv/x/pmkit-node/mirrors/r.git'",
                     "git-upload-pack 'pmkit-node/mirrors/my-repo.git'",
                     "git-receive-pack 'pmkit-node/mirrors/my-repo.git' x",
                     "git-receive-pack pmkit-node/mirrors/my-repo.git",
@@ -150,6 +150,26 @@ class Serve(Base):
         code, out = self.serve('follow', b'{"job": "../../etc"}')
         self.assertEqual(code, 2)
         self.assertEqual(frames.Decoder().feed(out)[0][0], frames.ERROR)
+        self.assertEqual((self.git.calls, self.started), ([], []))
+
+    def test_a_start_the_spec_check_refuses_drops_the_pushed_ref(self):
+        # main pushes before start: a note over 200 characters or a wait over 7 days is refused
+        # here after the push, and nothing else would ever remove refs/node/<job>
+        drop = ['--git-dir', self.box.mirror('my-repo'), 'update-ref', '-d', 'refs/node/' + JOB]
+        self.mirror()
+        for over in ({'note': 'n' * 201}, {'wait_s': box.MAX_WAIT_S + 1}):
+            with self.subTest(over=list(over)):
+                self.git.calls[:] = []
+                code, out = self.serve('start', json.dumps(spec(**over)).encode())
+                self.assertEqual(code, 2)
+                self.assertFalse(json.loads(out)['ok'])
+                self.assertEqual(self.git.calls, [drop])
+        self.git.calls[:] = []
+        self.made_job(JOB, result={'exit': 0})
+        self.assertEqual(self.serve('start', json.dumps(spec(note='n' * 201)).encode())[0], 2)
+        self.assertEqual(self.git.calls, [])
+        for bad in (spec(job='../x', note='n' * 201), spec(repo='..', note='n' * 201)):
+            self.assertEqual(self.serve('start', json.dumps(bad).encode())[0], 2)
         self.assertEqual((self.git.calls, self.started), ([], []))
 
     def test_start_then_status_counts_it(self):

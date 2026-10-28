@@ -58,8 +58,10 @@ node.py run --kind K --repo R --slug S [--node auto|NAME] [--artifact GLOB]...
 
 The job is the checkout's HEAD:
 
-1. Main pushes HEAD to `refs/node/<job>` on the node's mirror of the repository, through the
-   pinned ssh. No remote is added to the checkout.
+1. Main checks the job as the node will (a `--note` of at most 200 characters, waits of at most
+   7 days) and then pushes HEAD to `refs/node/<job>` on the node's mirror of the repository,
+   through the pinned ssh. No remote is added to the checkout. A start the node refuses drops
+   that ref again.
 2. The node checks the ref, makes a worktree at that commit, and starts the command under its own
    machine lock, detached from the ssh call.
 3. The output streams back as it comes.
@@ -72,7 +74,8 @@ the node must list the repository in `repos`.
 
 Artifacts land only when every one came whole. Each is checked for size and sha256 and fetched
 once more on a failure. None may be a tracked file in any case (NTFS opens `CONFIG.H` as a tracked
-`config.h`), none may have a part shaped like an 8.3 short name (`~` and a digit), and none may
+`config.h`), none may have a part shaped like an 8.3 short name (`~` and a digit), every path is
+ASCII (git's case-blind match folds ASCII letters only, NTFS folds all of them), and none may
 land outside the checkout. Main copies all of them or none: each goes first to a new file beside
 its place, then all are moved in, and a copy or move that fails (a locked file, a file where a
 folder must be) puts the checkout back as it was. When they do not all land, the staging folder
