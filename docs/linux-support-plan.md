@@ -722,7 +722,7 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    other than the first (its ns/pid link is not pid:[4026531836]: a container or a WSL2 distro) or
    whose ns/pid link cannot be read;
    each is a refusal. A process is this user's by any of its four status Uid users or its
-   folder's owner (a not-dumpable one's folder is root's); each thread's cwd and root are read,
+   folder's owner (its effective user; on Linux 7.0 it stays so for a not-dumpable one); each thread's cwd and root are read,
    and a zombie leader's running threads give every kind. cwd_holders, describe and classify.process_cwds read /proc too. The
    Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record, as
    they changed Windows too; they landed on Linux only (kitlib/config/policy.py
@@ -735,10 +735,14 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    answers UNREAD. (d) explains it: UNREAD came back for 50 of 50 removals of a free tree with no
    agent running, and the same with ssh-agent, with gpg-agent too, and after both ended. The
    user's own systemd manager (`systemd --user`), its `(sd-pam)` and the ssh login's
-   `sshd-session` are processes of this user whose `ns/mnt` cannot be read (inferred: not dumpable), and
-   they last as long as the login, so on a stock Ubuntu box every removal falls to the owner;
-   ssh-agent and gpg-agent add nothing to that. It needs its own record (a fix or a ruling) before
-   slice 14. (c) is open: the end-to-end landing tests skip on Linux ("the lock is
+   `sshd-session` are processes of this user whose `ns/mnt` cannot be read (the manager holds
+   CAP_WAKE_ALARM; the other two are not dumpable), and
+   they last as long as the login, so on a stock Ubuntu box every removal fell to the owner.
+   KIT-LINUX-HOLDERS-UNREAD-SYSTEMD settles that part: those three are this login's own and no
+   longer make a tree unread (docs/worktree-remove.md "Classify": a process in the user manager's
+   `init.scope`, and a never-exec'd fork whose parent, not PID 1, is another user's), so (b) passes
+   on the VM. Still open: ssh-agent, gpg-agent and a desktop's gcr agent stay unread processes,
+   so a removal while one runs still falls to the owner (`describe` names it). (c) is open: the end-to-end landing tests skip on Linux ("the lock is
    Windows only"; in tests/gate/test_land*.py only a few unit tests run) and tools/kit.py refuses Linux, so a landing cannot run end to end
    there before slice 14.
    Known limits:

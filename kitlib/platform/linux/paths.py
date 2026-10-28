@@ -13,7 +13,7 @@ section 8, slice 9), with the meanings the Windows lookups give them.
   temp()           the system temp folder, /tmp, whatever TMPDIR this process inherited
                    (kitlib.config.user.system_temp on Linux): every process agrees.
   process_paths()  every path this user's processes use, from /proc (kitlib.worktree.holders and
-                   classify on Linux): Scan(entries, unreadable, total, mounts).
+                   classify on Linux): Scan(entries, unreadable, total, mounts, unread).
   aliased()        whether a tree can be reached by another path too (a bind mount), from the
                    mount table the scan read (kitlib.worktree.holders on Linux).
   read_mountinfo() a mount table's text, this process's (<PROC>/self/mountinfo) by default, and
@@ -23,11 +23,20 @@ section 8, slice 9), with the meanings the Windows lookups give them.
 The process scan reads, for each process of this user, its current folder (cwd), root, program
 (exe), every open file (fd/*) and every mapped file (maps). A process is this user's when any of
 the four users of its status `Uid:` line (real, effective, saved, file system), or the owner of its
-/proc/<pid> folder, is this user: the kernel gives the folder of a process it marks not dumpable to
-root, so the owner alone would miss one. A
+/proc/<pid> folder, is this user: the folder's owner is the effective user only (on Linux 7.0 it
+stays so for a process the kernel marks not dumpable; only the entries inside go to root), so the
+owner alone would miss a setuid program this user ran. A
 process whose user cannot be told (no status, and a folder of this user's or root's that cannot be
 read) counts as unreadable, as does a process of this user that cannot be read in full, so a caller
-can refuse rather than call a tree free. A process that ends while it is read (its folder gone) is
+can refuse rather than call a tree free. Two kinds of process of this user whose links the kernel
+refuses to this user (EACCES or EPERM on its ns/mnt) are this login's own and are counted in
+`total` only, as another user's are (_login_process): one in this user's manager's own scope (its
+cgroup v2 path ends /user@<uid>.service/init.scope: systemd --user and its (sd-pam)), and one that
+has not exec'd since its fork (PF_FORKNOEXEC in its stat flags) whose parent, not PID 1, is another
+user's (a root daemon's child that dropped to this user, still running the daemon's code:
+sshd-session). Every other process of this user that cannot be read stays unreadable: ssh-agent,
+gpg-agent, or an agent host that marks itself not dumpable. `unread` names them, as (pid, name).
+A process that ends while it is read (its folder gone) is
 skipped. A live leader's other threads (/proc/<pid>/task) give their cwd and root as well, since
 one that called unshare(CLONE_FS) has its own, and one in another mount namespace (or whose
 namespace cannot be read) leaves the process not read in full; a zombie leader whose other threads
@@ -60,10 +69,14 @@ DELETED = ' (deleted)'                              # /proc's suffix on a remove
 GONE = (errno.ENOENT, errno.ESRCH)
 EXITED = ('Z', 'X')                                  # stat states of an ended process
 
+PF_FORKNOEXEC = 0x40                                 # stat flags: forked and not exec'd since
+REFUSED = (errno.EACCES, errno.EPERM)                # the kernel will not show this user a link
+
 # entries: (pid, name, kind, path) for each path a process of this user uses, kind one of KINDS;
 # unreadable: how many processes of this user could not be read in full; total: every process
-# /proc listed; mounts: this process's mount table, the mountinfo text (for aliased).
-Scan = collections.namedtuple('Scan', 'entries unreadable total mounts')
+# /proc listed; mounts: this process's mount table, the mountinfo text (for aliased); unread:
+# those processes, as (pid, name).
+Scan = collections.namedtuple('Scan', 'entries unreadable total mounts unread')
 # One line of a mountinfo table: device (major:minor), root (the mount's folder inside its file
 # system: not / for a bind mount of a folder), point (where it is mounted), fstype (None when the
 # line gives none after ` - `).
@@ -147,8 +160,9 @@ def _pid():
 
 
 def _owner(folder):
-    """The owner of /proc/<pid> `folder`: the process's effective user, or root for one the kernel
-    marks not dumpable (ssh-agent, a setgid or capability program), so never the answer alone."""
+    """The owner of /proc/<pid> `folder`: the process's effective user (on Linux 7.0 also for one
+    the kernel marks not dumpable, such as ssh-agent: only the entries inside go to root), so
+    never the answer alone: a setuid program this user ran has another effective user."""
     return os.stat(folder).st_uid
 
 
@@ -174,7 +188,7 @@ def _whose(folder, me):
     """MINE, OTHERS, UNKNOWN, or None when the process ended. Any of its four users (status: real,
     effective, saved, file system) or the folder's owner being `me` makes it this user's. Status
     naming other users only decides OTHERS; with no status, a folder owned by another user but root
-    does (a process the kernel marks not dumpable shows root); anything else is UNKNOWN."""
+    does (a root folder may be a setuid program's this user ran); anything else is UNKNOWN."""
     uids = owner = None
     try:
         uids = _status_uid(folder)
@@ -433,13 +447,30 @@ def _check_proc(me_folder):
                       PROC) from None
 
 
+class _Denied(object):
+    """_same_mounts' answer for a live process whose ns/mnt the kernel refuses to this user: false,
+    as any namespace not known to be this one is, but told apart for _login_process."""
+    __slots__ = ()
+
+    def __bool__(self):
+        return False
+
+    def __repr__(self):
+        return 'DENIED'
+
+
+DENIED = _Denied()
+
+
 def _same_mounts(folder, mine):
     """True when the process of `folder` shares this process's mount namespace `mine`; False when
-    it is another (its paths name another tree) or cannot be read; None when it ended. A zombie
-    leader has none of its own: its other threads' decide, and with none it has ended."""
+    it is another (its paths name another tree) or cannot be read; DENIED (false too) when it is
+    live and the kernel refuses its namespace to this user (EACCES, EPERM); None when it ended. A
+    zombie leader has none of its own: its other threads' decide, and with none it has ended."""
     try:
         return _link(os.path.join(folder, 'ns', 'mnt')) == mine
-    except OSError:
+    except OSError as e:
+        refused = e.errno in REFUSED
         try:
             state = _state(folder)
         except OSError:
@@ -447,7 +478,7 @@ def _same_mounts(folder, mine):
     if state is None:
         return None
     if state not in EXITED:
-        return False
+        return DENIED if refused else False
     try:
         tids = [t for t in os.listdir(os.path.join(folder, 'task'))
                 if t.isdigit() and t != os.path.basename(folder)]
@@ -466,6 +497,56 @@ def _same_mounts(folder, mine):
     return True if seen else None
 
 
+def _ppid(folder):
+    """The parent's pid from the status `PPid:` line of `folder`; None when it cannot be read."""
+    try:
+        with open(os.path.join(folder, 'status'), 'rb') as f:
+            for line in f:
+                if line.startswith(b'PPid:'):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _flags(folder):
+    """The kernel's flags for the process of `folder` (the ninth stat field); None when they cannot
+    be read."""
+    try:
+        with open(os.path.join(folder, 'stat'), 'rb') as f:
+            return int(f.read().rsplit(b')', 1)[-1].split()[6])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _cgroup(folder):
+    """The cgroup v2 path of the process of `folder` (its `0::` line); None when there is none or
+    it cannot be read."""
+    try:
+        with open(os.path.join(folder, 'cgroup'), 'rb') as f:
+            for line in f:
+                if line.startswith(b'0::'):
+                    return os.fsdecode(line[3:].rstrip(b'\n'))
+    except OSError:
+        pass
+    return None
+
+
+def _login_process(folder, me):
+    """True when the process of `folder` (this user's, its ns/mnt refused: DENIED) is this login's
+    own and so holds no tree: in this user's manager's own scope (cgroup v2 path ending
+    /user@<me>.service/init.scope: systemd --user, (sd-pam)), or not exec'd since its fork
+    (PF_FORKNOEXEC) with a parent, not PID 1, of another user (a root daemon's child that dropped
+    to this user, running the daemon's code: sshd-session). False when any of it cannot be read."""
+    group = _cgroup(folder)
+    if group is not None and group.endswith('/user@%d.service/init.scope' % me):
+        return True
+    flags, parent = _flags(folder), _ppid(folder)
+    if flags is None or not flags & PF_FORKNOEXEC or parent is None or parent <= 1:
+        return False
+    return _whose(os.path.join(os.path.dirname(folder), str(parent)), me) == OTHERS
+
+
 def process_paths(kinds=KINDS):
     """Scan of every process /proc lists (see the module's text). OSError when PROC cannot be
     listed, lists no process, does not list this one (not this system's process list), is
@@ -479,20 +560,22 @@ def process_paths(kinds=KINDS):
         raise OSError(errno.ENOENT, 'does not list this process (%d), so it is not this '
                       "system's process list" % _pid(), PROC)
     mine, mounts = _check_proc(os.path.join(PROC, str(_pid())))
-    entries, unreadable = [], 0
+    entries, unread = [], []
     for n in pids:
         folder = os.path.join(PROC, n)
         whose = _whose(folder, me)
         if whose is None or whose == OTHERS:
             continue
         if whose == UNKNOWN:                     # not known to be another user's
-            unreadable += 1
+            unread.append((int(n), _name(folder)))
             continue
         same = _same_mounts(folder, mine)
         if same is None:
             continue
+        if same is DENIED and _login_process(folder, me):
+            continue                             # this login's own: counted in total only
         if not same:                             # its paths are another mount table's
-            unreadable += 1
+            unread.append((int(n), _name(folder)))
             continue
         got = _process(folder, int(n), kinds, mine)
         if got is None:
@@ -500,5 +583,5 @@ def process_paths(kinds=KINDS):
         found, whole = got
         entries += found
         if not whole:
-            unreadable += 1
-    return Scan(entries, unreadable, len(pids), mounts)
+            unread.append((int(n), _name(folder)))
+    return Scan(entries, len(unread), len(pids), mounts, unread)

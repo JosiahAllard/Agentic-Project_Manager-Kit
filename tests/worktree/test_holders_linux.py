@@ -125,13 +125,15 @@ class FakeProc(object):
                 f.write('7f0000000000-7f0000001000 r--p 00000000 08:01 123      %s\n' % path)
 
     def add(self, pid, cwd='/', uid=ME, comm='python3', state='S', root='/', exe='/usr/bin/python3',
-            fds=(), maps=(), owner=None, status=True, tasks=None, mnt=MNT):
+            fds=(), maps=(), owner=None, status=True, tasks=None, mnt=MNT, ppid=1, flags=0,
+            cgroup=None):
         """Process `pid` of real user `uid` (its status; a tuple gives the real, effective, saved
-        and file system users), whose /proc folder `owner` owns (the effective user when None;
-        root for one the kernel marks not dumpable). status=False writes no Uid line.
+        and file system users), whose /proc folder `owner` owns (the effective user when None, as
+        Linux 7.0 shows even a not-dumpable one's). status=False writes no Uid line.
         A link value of None leaves that link out (it reads ENOENT); an exception is raised when it
-        is read. `mnt` is its mount namespace link. `tasks` {tid: {'cwd':, 'root':, 'exe':, 'fds':,
-        'maps':}} are its other threads."""
+        is read. `mnt` is its mount namespace link. `ppid` and `flags` go into its stat (and
+        status); `cgroup`, a cgroup file's text, None for none. `tasks` {tid: {'cwd':, 'root':,
+        'exe':, 'fds':, 'maps':}} are its other threads."""
         folder = os.path.join(self.root, str(pid))
         uids = (uid,) * 4 if isinstance(uid, int) else uid
         self._links(folder, cwd, root, exe, fds, maps)
@@ -140,11 +142,14 @@ class FakeProc(object):
         with open(os.path.join(folder, 'comm'), 'w') as f:
             f.write(comm + '\n')
         with open(os.path.join(folder, 'stat'), 'w') as f:
-            f.write('%d (%s) %s 1 1 1 0 -1' % (pid, comm, state))
+            f.write('%d (%s) %s %d 1 1 0 -1 %d 0 0' % (pid, comm, state, ppid, flags))
         with open(os.path.join(folder, 'status'), 'w', newline='\n') as f:
-            f.write('Name:\t%s\nState:\t%s\n' % (comm, state))
+            f.write('Name:\t%s\nState:\t%s\nPPid:\t%d\n' % (comm, state, ppid))
             if status:
                 f.write('Uid:\t%d\t%d\t%d\t%d\n' % uids)
+        if cgroup is not None:
+            with open(os.path.join(folder, 'cgroup'), 'w', newline='\n') as f:
+                f.write(cgroup)
         self.owners[folder] = uids[1] if owner is None else owner
         os.makedirs(os.path.join(folder, 'task', str(pid)))
         for tid, links in (tasks or {}).items():
@@ -402,8 +407,9 @@ class Blockers(Base):
                 self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.NOT_SEARCHED)])
 
     def test_a_process_of_this_user_the_kernel_marks_not_dumpable_is_unread_not_free(self):
-        # as a real kernel shows ssh-agent: its /proc folder is root's and its links are denied;
-        # status still names this user as its real user
+        # as a real kernel shows ssh-agent: its links are denied and status names this user; its
+        # /proc folder is this user's on Linux 7.0 (only the entries inside are root's), so a root
+        # owner here also shows the owner decides nothing
         denied = PermissionError(errno.EACCES, 'Permission denied')
         self.proc.add(10, cwd=denied, root=denied, exe=denied, mnt=denied, owner=ROOT,
                       comm='ssh-agent')
@@ -460,6 +466,77 @@ class Blockers(Base):
             os.makedirs(path)
 
 
+DENIED = PermissionError(errno.EACCES, 'Permission denied')
+FORKNOEXEC = 0x40               # stat flags: forked and not exec'd since (PF_FORKNOEXEC)
+
+
+def manager(uid):
+    """The cgroup file of user `uid`'s systemd manager and its (sd-pam): the manager's own scope."""
+    return '0::/user.slice/user-%d.slice/user@%d.service/init.scope\n' % (uid, uid)
+
+
+SESSION = '0::/user.slice/user-%d.slice/session-3.scope\n' % ME     # an ssh login's processes
+
+
+class LoginProcesses(Base):
+    """This login's own processes the kernel will not show this user (as on stock Ubuntu 26.04:
+    systemd --user holds CAP_WAKE_ALARM; (sd-pam) and sshd-session dropped from root without an
+    exec, so are not dumpable) are counted in total only; every other one stays UNREAD."""
+
+    def refused(self, pid, **kw):
+        """Process `pid` of this user whose links and namespace the kernel refuses."""
+        return self.proc.add(pid, cwd=DENIED, root=DENIED, exe=DENIED, mnt=DENIED, **kw)
+
+    def sshd(self):
+        """A root sshd-session (30) and its child that dropped to this user (31)."""
+        self.proc.add(30, uid=ROOT, comm='sshd-session', cwd=DENIED, mnt=DENIED, cgroup=SESSION)
+        self.refused(31, comm='sshd-session', ppid=30, flags=FORKNOEXEC, cgroup=SESSION)
+
+    def test_the_user_manager_and_its_pam_keeper_are_not_holders(self):
+        self.refused(20, comm='systemd', cgroup=manager(ME))
+        self.refused(21, comm='(sd-pam)', ppid=20, flags=FORKNOEXEC, cgroup=manager(ME))
+        self.assertEqual(holders.blockers(self.tree), [])
+        self.assertEqual(holders.cwd_holders(self.tree), ([], 0, 3))
+
+    def test_a_root_daemon_s_child_that_dropped_to_this_user_is_not_a_holder(self):
+        self.sshd()
+        self.assertEqual(holders.blockers(self.tree), [])
+
+    def test_a_login_process_hides_no_holder_beside_it(self):
+        self.refused(20, comm='systemd', cgroup=manager(ME))
+        self.sshd()
+        self.proc.add(32, comm='bash', cwd=self.sub, ppid=31, cgroup=SESSION)
+        self.assertEqual(holders.blockers(self.tree), [(self.sub, holders.HELD)])
+
+    def test_every_other_refused_process_of_this_user_stays_unread(self):
+        cases = {
+            "another user's manager scope": lambda: self.refused(10, cgroup=manager(OTHER)),
+            'a unit under the manager': lambda: self.refused(
+                10, cgroup='0::/user.slice/user-%d.slice/user@%d.service/app.slice/a.service\n'
+                % (ME, ME)),
+            'the manager scope as a cgroup v1 line': lambda: self.refused(
+                10, cgroup='1:name=systemd:/user.slice/user-%d.slice/user@%d.service/init.scope\n'
+                % (ME, ME)),
+            'no cgroup, not forked': lambda: self.refused(10),
+            'exec\'d under a root parent': lambda: (self.proc.add(30, uid=ROOT),
+                                                   self.refused(10, ppid=30, cgroup=SESSION)),
+            'forked under a parent of this user': lambda: (self.proc.add(30),
+                                                           self.refused(10, ppid=30, flags=FORKNOEXEC)),
+            'forked under PID 1 (an orphan)': lambda: (self.proc.add(1, uid=ROOT),
+                                                       self.refused(10, ppid=1, flags=FORKNOEXEC)),
+            'forked under a parent that is gone': lambda: self.refused(10, ppid=99, flags=FORKNOEXEC),
+            'in the manager scope, but another namespace it shows': lambda: self.proc.add(
+                10, cwd='/workspaces/x', mnt=OTHER_MNT, cgroup=manager(ME)),
+            'in the manager scope, its namespace missing while alive': lambda: self.proc.add(
+                10, cwd=DENIED, mnt=None, cgroup=manager(ME)),
+        }
+        for name, make in cases.items():
+            with self.subTest(name):
+                self.proc.reset()
+                make()
+                self.assertEqual(holders.blockers(self.tree), [(self.whole, holders.UNREAD)])
+
+
 class MountOptions(unittest.TestCase):
     def test_every_proc_mount_at_the_point_is_read_and_unescaped(self):
         text = ('21 1 8:1 / / rw - ext4 /dev/sda1 rw\n'
@@ -494,6 +571,19 @@ class Describe(Base):
         self.assertIn('holder   pid 10  godot  cwd %s' % self.sub, text)
         text = '\n'.join(holders.describe(self.tree, [(self.whole, holders.NOT_SEARCHED)], cwd='/'))
         self.assertIn('not searched: the process list (%s) cannot be read' % paths.PROC, text)
+
+    def test_each_unread_process_is_named(self):
+        self.proc.add(10, cwd=DENIED, mnt=DENIED, comm='ssh-agent')
+        self.proc.add(11, mnt=OTHER_MNT, comm='podman')
+        self.proc.add(12, cwd=DENIED, mnt=DENIED, comm='systemd', cgroup=manager(ME))
+        why = holders.blockers(self.tree)
+        self.assertEqual(why, [(self.whole, holders.UNREAD)])
+        text = '\n'.join(holders.describe(self.tree, why, cwd='/'))
+        self.assertIn('unread   pid 10  ssh-agent  a process of this user this scan could not read'
+                      ' in full, so it may hold the tree', text)
+        self.assertIn('unread   pid 11  podman  ', text)
+        self.assertNotIn('pid 12', text)
+        self.assertIn('scanned  4 process(es), 2 of this user unreadable', text)
 
 
 class ProcessCwds(Base):
@@ -551,7 +641,47 @@ class Live(unittest.TestCase):
         self.assertIn((os.path.realpath(path), holders.HELD), holders.blockers(self.tree))
 
     def test_a_tree_nothing_uses_is_free(self):
+        # on stock systemd this login's manager, its (sd-pam) and sshd-session are refused to
+        # this user; they are not holders (paths._login_process)
         self.assertEqual(holders.blockers(self.tree), [])
+
+    def test_a_not_dumpable_process_standing_in_the_tree_is_unread(self):
+        # as an agent host that marks itself not dumpable shows: none of its links can be read
+        p = self.child(NOT_DUMPABLE + 'print("ready", flush=True); input()', cwd=self.tree)
+        why = holders.blockers(self.tree)
+        self.assertIn((os.path.abspath(self.tree), holders.UNREAD), why)
+        self.assertIn('unread   pid %d  python' % p.pid, '\n'.join(holders.describe(self.tree, why)))
+
+    def test_an_orphaned_fork_of_a_not_dumpable_process_is_unread(self):
+        # forked and never exec'd, its parent gone: PID 1 (or a subreaper) adopts it, which is
+        # not a root daemon's dropped child
+        p = self.child(NOT_DUMPABLE + ORPHAN, cwd=self.tree)
+        orphan = int(p.stdout.readline())
+        self.addCleanup(_kill, orphan)
+        p.wait(30)
+        self.assertNotEqual(paths._ppid(os.path.join(paths.PROC, str(orphan))), p.pid)
+        self.assertIn((os.path.abspath(self.tree), holders.UNREAD), holders.blockers(self.tree))
+
+
+# a child's first lines: mark itself not dumpable (prctl PR_SET_DUMPABLE 0), as Linux allows
+NOT_DUMPABLE = 'import ctypes; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n'
+# then fork a child that never execs and waits on stdin, print its pid, and exit
+ORPHAN = ('import os, sys\n'
+          'pid = os.fork()\n'
+          'if pid == 0:\n'
+          '    sys.stdin.readline()\n'
+          '    os._exit(0)\n'
+          'print("ready", flush=True)\n'
+          'print(pid, flush=True)\n'
+          'os._exit(0)\n')
+
+
+def _kill(pid):
+    import signal
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 if __name__ == '__main__':
