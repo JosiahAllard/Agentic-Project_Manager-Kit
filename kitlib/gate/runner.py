@@ -809,6 +809,12 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
                                         ', '.join(s.name for s in chosen) or 'no step'))
     plan = None if empty else reuse.branch_plan(top, cfg, chosen, mb, changed, full=full,
                                                 only=only, head=head, branch=branch)
+    keys_kit = None     # the kit before the run: a record's input keys (kitlib.gate.reuse)
+    if not (only or partial or empty or docs or entries):
+        try:
+            keys_kit = reuse.kit_identity()
+        except Exception as e:      # noqa: BLE001 - a key never fails the gate
+            say(reuse.PREFIX + 'no input keys in the record: %s: %s' % (type(e).__name__, e))
     reused = _say_plan(plan, chosen, logs, say)
     run = _to_run(chosen, reused)
     results, watched = [], {}
@@ -857,11 +863,14 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
         facts['no_record'] = no
         lines.append('no gate-OK record: %s' % no)
         return G.Outcome(G.OK, lines, **facts)
+    input_keys, why = reuse.record_keys(top, cfg, chosen, head, mb, results, keys_kit)
+    if why:
+        say(reuse.PREFIX + 'no input keys in the record: %s' % why)
     try:
         path, _rec = gate_ok.record_pass(top, head, gate_config(cfg), kit_identity(), name, started,
                                          record_steps(results), base=mb, config_rev=head,
                                          source=eff.source, full=bool(full),
-                                         mode='docs' if docs else None)
+                                         mode='docs' if docs else None, input_keys=input_keys)
     except gate_ok.NoRecordFolder as e:
         # Until the .git copies are retired: the .git copy is written, as before the record folder.
         path = gate_ok.legacy_path(top, head)

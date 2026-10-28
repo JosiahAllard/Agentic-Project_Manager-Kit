@@ -66,6 +66,20 @@ class WriteTest(GateOkCase):
         self.assertNotIn('source', rec)
         self.assertEqual(gate_ok.source_of(rec), 'gate.json')
 
+    def test_input_keys_are_written_as_given_and_a_malformed_set_is_refused(self):
+        self.assertIsNone(self.passed()[1]['input_keys'])
+        keys = {'schema': 1, 'steps': {'unit': {'argv': 'a' * 64, 'kit': '0' * 64}}}
+        path, rec = self.passed(input_keys=keys)
+        self.assertEqual(rec['input_keys'], keys)
+        self.assertIsNone(gate_ok.verify(self.repo.root, self.head, GATE)[1])
+        for bad in ({'schema': 1}, {'schema': True, 'steps': {}}, {'schema': '1', 'steps': {}},
+                    {'schema': 1, 'steps': {}, 'more': 1}, {'schema': 1, 'steps': {'unit': {}}},
+                    {'schema': 1, 'steps': {'unit': {'argv': 'A' * 64}}},
+                    {'schema': 1, 'steps': {'unit': {'argv': 'a' * 63}}},
+                    {'schema': 1, 'steps': {'': {'argv': 'a' * 64}}}, ['schema']):
+            with self.assertRaises(gate_ok.RecordError, msg=bad):
+                self.passed(input_keys=bad)
+
     def test_the_record_is_in_the_drive_folder_with_a_git_copy_whichever_checkout_writes_it(self):
         wt = self.repo.worktree('a')
         path, rec = self.passed(root=wt)

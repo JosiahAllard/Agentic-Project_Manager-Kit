@@ -51,6 +51,41 @@ depends on such a file must not set reuse. The result taken is the one of the st
 (full_cmd where it has one), not of the landing's cmd. Such a step gets no key and is never
 stored, so the relaxation never reaches the cache. Anything that raises means every step runs.
 
+The input tree (input_tree). When main moved since the tip's gate, the merge's tree is not the
+tip's, and a step whose command names {base} (as a repository's test tiers may) is never cached. In a
+one-branch landing that landing_why lets reuse, and that same_tree does not serve, the gate-OK
+record the tip check accepted (kitlib.gate.land, Lander.tip_records: a --full record, or a
+default-mode one select_refusal took; never a docs-only one, and none for a tip that lands only on a
+FLAKE rerun) serves a step the cache does not when its `input_keys` (record_keys, written by the
+branch gate) hold, for that step, the very digests the landing computes (input_parts), each part a
+sha256 of its own so a miss names the parts that differ (INPUT_PARTS):
+  - argv: the step's argv and cwd, the checkout's root written `<root>`, the kit's `<kit>` and the
+    full base commit `<base>`; the argv the record's gate ran (full_cmd in a --full gate), so a
+    step whose full_cmd differs from its cmd misses on argv;
+  - tools: tools_of (its program and every argv element that names a file);
+  - head_inputs, base_inputs: (path, mode, blob) of every entry `git ls-tree -r` shows at the head
+    (the tip; the merge) and at the base (the record's base; --expect-main) that matches the
+    step's globs or its content.globs, `exclude` NOT subtracted. A link (mode 120000) or a gitlink
+    among them gives the step no key; so does a head with no input;
+  - changed: the paths base..head changes (runner.changed_between, git on both sides);
+  - kit: kit_identity (the kit's files and interpreter: two kit versions never share a key).
+The record must also be of the tip, its input keys of INPUT_SCHEMA, the merge's parents exactly
+(base, tip), its gate config hash the landing's, and it must have ended within
+"landing".reuse_max_age_h hours; the INPUT TREE line says which failed. A step is taken from it
+when it asks for reuse, is no check step, runs a command, declares inputs (a step without globs
+is never served: there is nothing to compare), has no merged_args, and the record says it passed
+(not warned, nor was reused). Only on this path, and only because base_inputs and changed are
+equal, a step whose command names {base} or the base commit is not barred: what it reads of the
+base is the same. A step that reads history beyond the changed list and the base side of its
+inputs (commit messages, the log, ancestry, its own merge-base) must not set reuse; neither must
+one whose result depends on the environment or a toolchain, which no part holds. The inputs come
+from git trees, while tools_of reads the work tree: this is sound only because the branch gate
+writes a record only for a clean tree at HEAD, and a landing reuses only in a clean landing tree
+(landing_why). Tracked content only: the landing tree lacks the author worktree's ignored and
+generated files, and no step is checked for them, so a step whose result depends on such a file
+must not set reuse. A step served from the record gets no key and is never stored, so the
+relaxation never reaches the cache. Anything that raises means every step runs.
+
 Entries live in `<git common dir>/kit-gate-cache/<key>/<YYYYmmddTHHMMSSZ>-<pid>-<hex8>.<pass|fail>.json`,
 written to a temp file (TMP_RE) and renamed. Entries older than PRUNE_H hours are pruned, and so
 is a temp file last written that long ago (a crash between the write and the rename left it; a
@@ -103,6 +138,12 @@ class NoInputs(NotCacheable):
 
 
 SameTree = collections.namedtuple('SameTree', 'record tip tree')
+# the record the tip check accepted, its tip and mode, and {commit: tree_entries} filled as steps
+# ask (module docstring "The input tree")
+InputTree = collections.namedtuple('InputTree', 'record tip mode trees')
+INPUT_SCHEMA = 1
+INPUT_PARTS = ('argv', 'tools', 'head_inputs', 'base_inputs', 'changed', 'kit')
+INPUT_MODES = ('full', 'select')
 
 
 # ---------------------------------------------------------------- the gate-wide checks
@@ -326,10 +367,12 @@ def kit_identity():
             'version': sys.version}
 
 
-def undeclared(spec, step, base, same_tree=False):
+def undeclared(spec, step, base, same_tree=False, input_tree=False):
     """Why the step `step` (its config object `spec`) is never cached, or None. `same_tree`: why
     it is never taken from the tip's record in a same-tree landing (module docstring), where
-    {base}, the base commit and declared inputs do not bar it."""
+    {base}, the base commit and declared inputs do not bar it. `input_tree`: why it never gets an
+    input key (module docstring "The input tree"), where {base} and the base commit do not bar it
+    (the key compares the base side) and declared inputs still do."""
     if spec is None:
         return 'not a configured step'
     if step.check or spec.get('check'):
@@ -338,11 +381,12 @@ def undeclared(spec, step, base, same_tree=False):
         return 'it runs no command'
     if same_tree:
         return None
-    for k in ('cmd', 'full_cmd', 'daily_cmd', 'merged_args'):
-        if any('{base}' in str(a) for a in spec.get(k) or []):
-            return 'its command names {base}: it reads git history'
-    if base and any(base.lower() in str(a).lower() for a in step.cmd):
-        return 'its command names the base commit %s' % base[:10]
+    if not input_tree:
+        for k in ('cmd', 'full_cmd', 'daily_cmd', 'merged_args'):
+            if any('{base}' in str(a) for a in spec.get(k) or []):
+                return 'its command names {base}: it reads git history'
+        if base and any(base.lower() in str(a).lower() for a in step.cmd):
+            return 'its command names the base commit %s' % base[:10]
     if not (spec.get('globs') or (spec.get('content') or {}).get('globs')):
         return 'no declared inputs (no "globs" and no "content".globs)'
     return None
@@ -444,6 +488,177 @@ def step_key(root, cfg, spec, step, files, kit, changed=()):
     }
     key = hashlib.sha256(gate_ok.canonical_json(material).encode('utf-8')).hexdigest()
     return key, ins
+
+
+# ---------------------------------------------------------------- the input tree
+
+def _digest(obj):
+    return hashlib.sha256(gate_ok.canonical_json(obj).encode('utf-8')).hexdigest()
+
+
+def tree_entries(root, commit):
+    """[(path, mode, type, object)] of every entry `git ls-tree -r` shows at `commit` (blobs and
+    gitlinks; paths from the top). Raises when git cannot say."""
+    out, why = cmd.run(['ls-tree', '-r', '-z', '--full-tree', commit], root)
+    if out is None:
+        raise RuntimeError('git cannot list the tree of %s: %s' % (commit[:10], why))
+    entries = []
+    for item in cmd.text(out).split('\0'):
+        if not item:
+            continue
+        meta, tab, path = item.partition('\t')
+        parts = meta.split()
+        if not tab or len(parts) != 3:
+            raise RuntimeError('git ls-tree printed %r' % item[:80])
+        entries.append((path, parts[0], parts[1], parts[2]))
+    return entries
+
+
+def tree_inputs(entries, spec):
+    """[[path, mode, blob]] of `entries` (tree_entries) that match the step's globs or its
+    content.globs, `exclude` NOT subtracted. NotCacheable for a link, a gitlink or a path git
+    could not spell."""
+    globs = list(spec.get('globs') or []) + list((spec.get('content') or {}).get('globs') or [])
+    out = []
+    for path, mode, kind, obj in entries:
+        if not S._match(path, globs):
+            continue
+        if '�' in path or kind != 'blob' or mode == '120000':
+            raise NotCacheable('input %s is not a plain file (mode %s)' % (path, mode))
+        out.append([path, mode, obj])
+    return out
+
+
+def input_bar(spec, step):
+    """Why `step` never gets an input key (module docstring "The input tree"), or None."""
+    why = undeclared(spec, step, None, input_tree=True)
+    if why:
+        return why
+    if spec.get('merged_args'):
+        return 'it has merged_args: its landing argv never ran in a branch gate'
+    return None
+
+
+def input_parts(root, spec, step, base, head, trees, changed, kit):
+    """{part: sha256} of `step` gated at `head` against `base` in the checkout `root` (INPUT_PARTS;
+    `trees`: {commit: tree_entries}, filled here; `changed`: base..head; `kit`: kit_identity).
+    NoInputs when no entry at `head` is an input; NotCacheable when one is not a plain file, or
+    when the step's program or a file its command names cannot be read."""
+    for rev in (head, base):
+        if rev not in trees:
+            trees[rev] = tree_entries(root, rev)
+    head_in = tree_inputs(trees[head], spec)
+    if not head_in:
+        raise NoInputs('its "globs" and "content".globs match no file at %s' % head[:10])
+    subs = _subs(root) + [(base, '<base>')]
+    cwd = os.path.relpath(os.path.abspath(step.cwd), os.path.abspath(root)).replace('\\', '/')
+    return {
+        'argv': _digest({'argv': [_norm(a, subs) for a in step.cmd], 'cwd': cwd}),
+        'tools': _digest(tools_of(step, subs)),
+        'head_inputs': _digest(head_in),
+        'base_inputs': _digest(tree_inputs(trees[base], spec)),
+        'changed': _digest(changed_list(changed)),
+        'kit': _digest(kit),
+    }
+
+
+def record_keys(root, cfg, chosen, head, base, results, kit):
+    """`(input_keys or None, why or None)` for the gate-OK record of a branch gate of `head`
+    against its merge base `base` in the clean checkout `root`: {'schema': INPUT_SCHEMA, 'steps':
+    {name: input_parts}} for each of `chosen` that asks for reuse, has no input_bar and PASSed in
+    `results`. `kit`: kit_identity read before the run (None: no keys); a kit that changed since
+    gives none. None when no step has a key. Never raises: why names what went wrong, and the
+    record holds no keys."""
+    if kit is None:
+        return None, None
+    try:
+        passed = {r.get('name') for r in results if r.get('status') == 'PASS'}
+        specs, asking = _asking(cfg, chosen)
+        asking = [s for s in asking if s.name in passed and not input_bar(specs[s.name], s)]
+        if not asking:
+            return None, None
+        if kit_identity() != kit:
+            return None, 'the kit changed while the gate ran'
+        changed, why = runner.changed_between(root, base, head)
+        if changed is None:
+            raise RuntimeError('git cannot list the changed paths: %s' % why)
+        trees, steps = {}, {}
+        for s in asking:
+            try:
+                steps[s.name] = input_parts(root, specs[s.name], s, base, head, trees, changed, kit)
+            except NotCacheable:
+                continue
+        return ({'schema': INPUT_SCHEMA, 'steps': steps} if steps else None), None
+    except Exception as e:      # noqa: BLE001 - a key never fails the gate: the record holds none
+        return None, '%s: %s' % (type(e).__name__, e)
+
+
+def _input_tree_why(rec, cfg, base, tip, merge, root, now):
+    """Why the record `rec` of `tip`, which holds input keys, serves no step, or None."""
+    keys = rec['input_keys']
+    if keys.get('schema') != INPUT_SCHEMA or not isinstance(keys.get('steps'), dict):
+        return 'its input keys are schema %r, not %d' % (keys.get('schema'), INPUT_SCHEMA)
+    mode = gate_ok.mode_of(rec)
+    if mode not in INPUT_MODES:
+        return 'only a --full or default-mode record serves (mode %s)' % mode
+    parents, why = cmd.run_text(['rev-list', '--parents', '-n', '1', merge], root)
+    if parents is None:
+        raise RuntimeError('git cannot read the parents of %s: %s' % (merge[:10], why))
+    if parents.split()[1:] != [base, tip]:
+        return 'parents: the merge %s is not the merge of %s onto %s' % (
+            merge[:10], tip[:10], base[:10])
+    if rec.get('gate_config') != gate_ok.config_hash(runner.gate_config(cfg)):
+        return 'config: the record was made with another gate config'
+    max_h = cfg.section('landing')['reuse_max_age_h']
+    ended = datetime.datetime.strptime(rec['ended_utc'], '%Y-%m-%dT%H:%M:%SZ').replace(
+        tzinfo=datetime.timezone.utc)
+    skew = datetime.timedelta(seconds=SKEW_S)
+    if not now - datetime.timedelta(hours=max_h) <= ended <= now + skew:
+        return 'age: the record ended %s, not within "landing".reuse_max_age_h (%s)' % (
+            rec['ended_utc'], max_h)
+    return None
+
+
+def input_tree(root, cfg, branch, tip, rec, base, merge, now=None):
+    """`(InputTree or None, the line to say or None)` for a one-branch landing of `tip` onto
+    `base` as `merge`, `rec` the gate-OK record the tip check accepted (module docstring "The
+    input tree"). Nothing to say when there is no record, it is another commit's, or it holds no
+    input keys (an older kit's). Raises when git cannot tell (every step runs)."""
+    if not isinstance(rec, dict) or rec.get('commit') != tip \
+            or not isinstance(rec.get('input_keys'), dict):
+        return None, None
+    mode = gate_ok.mode_of(rec)
+    why = _input_tree_why(rec, cfg, base, tip, merge, root, now or _now())
+    if why:
+        return None, 'INPUT TREE: the %s record of %s at %s is not used: %s' % (
+            mode, branch, tip[:10], why)
+    return InputTree(rec, tip, mode, {}), (
+        'INPUT TREE: the %s record of %s at %s (base %s, ended %s) serves a step whose key parts '
+        'all match' % (mode, branch, tip[:10], str(rec.get('base'))[:10], rec['ended_utc']))
+
+
+def _from_input_tree(itree, root, spec, step, base, merge, changed, kit):
+    """`(the REUSED reason, None)` when the input tree `itree` serves `step` in the landing tree
+    `root` (the merge `merge` onto `base`), else `(None, why)`. Raises when git cannot tell."""
+    why = input_bar(spec, step)
+    if why:
+        return None, why
+    results = [s.get('result') for s in itree.record.get('steps') or []
+               if s.get('name') == step.name]
+    if results != ['pass']:
+        return None, 'the record says %s' % ', '.join(str(r) for r in results or ['nothing of it'])
+    held = itree.record['input_keys']['steps'].get(step.name)
+    if not isinstance(held, dict):
+        return None, 'the record holds no input key for it'
+    try:
+        mine = input_parts(root, spec, step, base, merge, itree.trees, changed, kit)
+    except NotCacheable as e:
+        return None, str(e)
+    differ = [p for p in INPUT_PARTS if held.get(p) != mine[p]]
+    if differ:
+        return None, '%s %s' % (', '.join(differ), 'differs' if len(differ) == 1 else 'differ')
+    return 'passed in the %s gate of %s on the same inputs, base side and change (ended %s)' % (
+        itree.mode, itree.tip[:10], itree.record['ended_utc']), None
 
 
 # ---------------------------------------------------------------- the store
@@ -609,10 +824,12 @@ def _none(names, why):
     return Plan({}, [PREFIX + 'NONE %s: %s' % (n, why) for n in names])
 
 
-def plan_steps(root, cfg, chosen, base, changed, now=None, facts=None, same=None):
+def plan_steps(root, cfg, chosen, base, changed, now=None, facts=None, same=None, itree=None,
+               merge=None):
     """The Plan for `chosen` in the work tree at `root`, the gate-wide checks passed (`changed`:
     the paths the gate selects by, part of each key). `same`: a same-tree landing's SameTree,
-    whose record serves a step the cache does not (_from_record)."""
+    whose record serves a step the cache does not (_from_record). `itree`: a landing's InputTree
+    (of the merge `merge`), whose record serves a step neither does (_from_input_tree)."""
     specs, asking = _asking(cfg, chosen)
     if not asking:
         return NOTHING
@@ -629,6 +846,16 @@ def plan_steps(root, cfg, chosen, base, changed, now=None, facts=None, same=None
             taken[s.name] = why
             said[s.name] = 'HIT %s: the --full record of %s (same tree %s, ended %s)' % (
                 s.name, same.tip[:10], same.tree[:10], same.record['ended_utc'])
+            return
+        if itree is None:
+            return
+        why, miss = _from_input_tree(itree, root, specs[s.name], s, base, merge, changed, kit)
+        if why:
+            taken[s.name] = why
+            said[s.name] = 'HIT %s: the input tree of the %s record of %s (ended %s)' % (
+                s.name, itree.mode, itree.tip[:10], itree.record['ended_utc'])
+        elif not said[s.name].endswith(': ' + miss):
+            said[s.name] += '; input tree: %s' % miss
 
     for s in asking:
         why = undeclared(specs[s.name], s, base)
@@ -717,13 +944,14 @@ def _guarded(cfg, chosen, make):
 
 
 def planner(root, cfg, branch, tip, base, merge, prior, fresh=False, full=False, batch=1,
-            now=None):
+            now=None, record=None):
     """`reuse(chosen) -> Plan` for kitlib.gate.runner.merged_gate: a landing of `merge` (onto
     `base`, --expect-main) in the landing tree `root` (kitlib.gate.land, step 5b; the main
     checkout is never merged into). `branch`, `tip`: the first of the
     landing's; `batch` is the number of branches (a batch reuses per step like one branch; only
-    a one-branch landing reads the tip's record, same_tree). Anything that raises means every
-    step runs (the reason is said)."""
+    a one-branch landing reads the tip's record, same_tree, and `record`, the gate-OK record the
+    tip check accepted, input_tree). Anything that raises means every step runs (the reason is
+    said)."""
     def reuse(chosen):
         def make():
             _, asking = _asking(cfg, chosen)
@@ -738,8 +966,12 @@ def planner(root, cfg, branch, tip, base, merge, prior, fresh=False, full=False,
             facts = {'head': merge, 'branch': branch, 'batch': batch}
             same, line = same_tree(root, cfg, branch, tip, base, merge, now=now) if batch == 1 \
                 else (None, None)
-            plan = plan_steps(root, cfg, chosen, base, changed, now=now, facts=facts, same=same)
-            return plan._replace(lines=[PREFIX + line] + plan.lines) if line else plan
+            itree, iline = input_tree(root, cfg, branch, tip, record, base, merge, now=now) \
+                if batch == 1 and same is None else (None, None)
+            plan = plan_steps(root, cfg, chosen, base, changed, now=now, facts=facts, same=same,
+                              itree=itree, merge=merge)
+            said = [PREFIX + x for x in (line, iline) if x]
+            return plan._replace(lines=said + plan.lines) if said else plan
         return _guarded(cfg, chosen, make)
     return reuse
 
