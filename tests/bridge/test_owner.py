@@ -71,6 +71,25 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual(owner.connections(),())
         self.assertEqual({choice.reference for choice in choices},{self.a.reference,self.b.reference})
 
+    def test_owner_cannot_select_or_list_codex_to_codex_route(self):
+        from optional.bridge.core.hostpairs import HostPairs
+        rule=HostPairs(('claude','codex'),[('codex','codex')])
+        x,y,c=chat('x',adapter='codex-desktop'),chat('y',adapter='codex-desktop'),chat('c',adapter='claude-peer')
+        self.live.update({'x':x,'y':y,'c':c})
+        for peer in (x,y,c): self.pairs.observe(peer)
+        # A row written before the rule held (here, by controls without it) is never listed.
+        OwnerControls(self.pairs,self.decisions).change(x.reference,y.reference,enabled=True,bidirectional=False)
+        owner=OwnerControls(self.pairs,self.decisions,host_pairs=rule)
+        self.assertEqual(owner.connections(),())
+        for bidirectional in (True,False):
+            with self.assertRaisesRegex(PairingError,'host-pair-refused'):
+                owner.change(y.reference,x.reference,enabled=True,bidirectional=bidirectional)
+        with self.assertRaises(PairingError): self.pairs.require_selected(y,x)
+        # Every other pair still connects and is listed; a disconnect of a refused pair goes through.
+        owner.change(c.reference,x.reference,enabled=True)
+        self.assertEqual(set(owner.connections()),{(c.reference,x.reference),(x.reference,c.reference)})
+        owner.change(x.reference,y.reference,enabled=False,bidirectional=False)
+        with self.assertRaises(PairingError): self.pairs.require_selected(x,y)
 
     def test_pm_routes_must_share_the_owner_store_and_controls_without_them_list_none(self):
         from optional.bridge.core.pmroutes import PmRoutes

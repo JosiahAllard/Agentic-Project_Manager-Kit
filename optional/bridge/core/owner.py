@@ -11,6 +11,7 @@ import threading
 import time
 
 from kitlib.ident import digest
+from .hostpairs import REFUSED as HOST_PAIR_REFUSED,HostPairs
 from .pairing import ChatBinding,ChatSelection,PairingError,PairingStore
 from .pmroutes import PmRoutes,append_log,stamp
 
@@ -172,12 +173,16 @@ class ChatChoice:
 
 
 class OwnerControls:
-    def __init__(self,pairings,decisions, *, describe=None,leases=None,pm=None):
+    def __init__(self,pairings,decisions, *, describe=None,leases=None,pm=None,host_pairs=None):
+        """`host_pairs`: the bridge's host-pair rule (core/hostpairs.py). With it, a direction the
+        rule refuses is never listed or connected here (README "Host pairs")."""
         if (type(pairings) is not PairingStore or type(decisions) is not OwnerDecisions
                 or leases is not None and type(leases) is not WriterLeases
-                or pm is not None and (type(pm) is not PmRoutes or pm.pairings is not pairings)):
+                or pm is not None and (type(pm) is not PmRoutes or pm.pairings is not pairings)
+                or host_pairs is not None and type(host_pairs) is not HostPairs):
             raise PairingError('invalid-owner-components')
         self.pairings,self.decisions,self.describe,self.leases,self.pm=pairings,decisions,describe,leases,pm
+        self.host_pairs=host_pairs
         if leases is not None: pairings.on_observe(self._chat_observed)
 
     def chats(self):
@@ -191,15 +196,25 @@ class OwnerControls:
                 display(detail.get('workspace'),binding.identity.workspace.workspace_id)))
         return tuple(result)
 
+    def _allowed(self,sender,recipient):
+        return self.host_pairs is None or self.host_pairs.allowed(sender,recipient)
+
     def connections(self):
-        observed={peer.reference for peer in self.pairings.registered()}
-        return tuple(route for route in self.pairings.owner_routes() if all(ref in observed for ref in route))
+        """Owner routes between listed chats; a direction the host-pair rule refuses is left out."""
+        observed={peer.reference:peer for peer in self.pairings.registered()}
+        return tuple(route for route in self.pairings.owner_routes()
+            if all(ref in observed for ref in route) and self._allowed(observed[route[0]],observed[route[1]]))
 
     def change(self,sender_ref,recipient_ref, *, enabled,bidirectional=True):
         for reference in (sender_ref,recipient_ref): digest(reference)
         by_ref={binding.reference:binding for binding in self.pairings.registered()}
         sender,recipient=by_ref.get(sender_ref),by_ref.get(recipient_ref)
         if sender is None or recipient is None: raise PairingError('visible-chat-changed')
+        # A connect the host-pair rule refuses in either asked direction writes nothing. A
+        # disconnect still goes through: removing a direction grants nothing.
+        if enabled is not False and (not self._allowed(sender,recipient)
+                or bidirectional and not self._allowed(recipient,sender)):
+            raise PairingError(HOST_PAIR_REFUSED)
         selection=self.pairings.propose(sender.identity.session_id,recipient.identity.session_id,
             enabled=enabled,bidirectional=bidirectional)
         if (selection.sender_ref,selection.recipient_ref)!=(sender_ref,recipient_ref):

@@ -16,6 +16,7 @@ import uuid
 from optional.bridge.hosts.codex.runtime import CodexSources
 from optional.bridge.core.contracts import Capability
 from optional.bridge.core.messages import BeforeWriteError,DeliveryError,OutboundMessage,reply_operation_id
+from optional.bridge.core.owner import OwnerControls
 from kitlib.proc.pipe import (INVALID,SecurityAttributes,connect_pipe,create_file,create_pipe,
     disconnect_pipe,from_sddl,local_free,peek,process_sids,read,write,close)
 from optional.bridge.win.channel import NativeChannel
@@ -137,7 +138,13 @@ class DirectRuntimeDeliveryTests(unittest.TestCase):
         self.recipient=self.direct_source.observe(self.target_meta).sender
         with self.target_path.open('ab') as stream:
             stream.write(line('event_msg',{'type':'task_completed','turn_id':target_turn}))
-        self.controller.owner.change(self.sender.reference,self.recipient.reference,enabled=True)
+        # The owner window refuses this Codex-to-Codex connect now (README "Host pairs"), so the
+        # row is one written before that rule held: controls without it. The checks below the
+        # window are what these tests drive.
+        with self.assertRaisesRegex(Exception,'host-pair-refused'):
+            self.controller.owner.change(self.sender.reference,self.recipient.reference,enabled=True)
+        OwnerControls(self.controller.pairs,self.controller.decisions).change(
+            self.sender.reference,self.recipient.reference,enabled=True)
         self.message=OutboundMessage('direct-fixture-op',self.thread,self.sender,self.recipient,'owned fixture body')
         return self.factory.delivery_adapter()
 
