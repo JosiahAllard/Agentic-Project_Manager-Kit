@@ -209,8 +209,12 @@ def survey(plan, ctx):
     the folder gets the config key and an ACL with inheritance removed."""
     folder, source = choose(ctx)
     if not folder:
-        plan.note('extras', 'agent temp init skipped: the kit %s is on no drive letter; pass '
-                            '--agent-temp' % ctx.kit)
+        if platform.NAME == 'linux':
+            plan.note('extras', 'agent temp init skipped: on Linux there is no default folder (it must be '
+                                'outside your home folder and every checkout); pass --agent-temp')
+        else:
+            plan.note('extras', 'agent temp init skipped: the kit %s is on no drive letter; pass '
+                                '--agent-temp' % ctx.kit)
         return None, False
     if not os.path.isabs(folder):
         plan.refuse('the agent temp folder %s (from %s) is not an absolute path' % (folder, source))
@@ -250,9 +254,12 @@ def _env(plan, ctx, folder, source):
         return
     plan.add('extras', 'user environment %s = %s (agents put their temp files there; was %s)'
              % (ENV, folder, have if have else 'unset'),
-             lambda: host.env_set(ENV, folder),
-             undo=('[Environment]::SetEnvironmentVariable("%s", "%s", "User")' % (ENV, have)) if have
-             else '[Environment]::SetEnvironmentVariable("%s", $null, "User")' % ENV)
+             lambda: host.env_set(ENV, folder), undo=_env_undo(ENV, have))
+
+
+def _env_undo(name, have):
+    from .extras import env_undo                      # extras imports this module
+    return env_undo(name, have)
 
 
 def _key(plan, ctx, folder):

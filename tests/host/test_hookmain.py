@@ -411,6 +411,35 @@ class CommandLine(unittest.TestCase):
             gone = os.path.join(d, 'python9.exe')      # no such file: used as given
             self.assertEqual(hookmain.windowless(gone), gone)
 
+    def test_a_manifest_command_on_windows_is_pythonw_in_exec_form(self):
+        line = hookmain.manifest_command('${ROOT}/boot/hook.py', 'windows', 'h', 'PreToolUse')
+        self.assertEqual(line, {'command': 'pythonw', 'args': ['${ROOT}/boot/hook.py', 'h', 'PreToolUse']})
+        self.assertEqual(hookmain.manifest_command('a.py', 'windows', blocking=True),
+                         {'command': 'pythonw', 'args': ['a.py']})
+
+    def test_a_manifest_command_on_linux_runs_python3_under_sh_and_fails_closed(self):
+        tool = hookmain.manifest_command('${ROOT}/boot/hook.py', 'linux', 'h', 'PreToolUse', blocking=True)
+        self.assertEqual(tool, {'command': '/bin/sh', 'args': [
+            '-c', 'python3 "$@" || exit 2', 'kit-hook', '${ROOT}/boot/hook.py', 'h', 'PreToolUse']})
+        start = hookmain.manifest_command('${ROOT}/boot/hook.py', 'linux', 'h', 'SessionStart')
+        self.assertEqual(start['command'], '/bin/sh')
+        self.assertEqual(start['args'][0], '-c')
+        self.assertTrue(start['args'][1].startswith('python3 "$@" || echo "PM kit: the kit did not load: '),
+                        start['args'][1])
+        self.assertNotIn('exit 2', start['args'][1])
+        self.assertEqual(start['args'][2:], ['kit-hook', '${ROOT}/boot/hook.py', 'h', 'SessionStart'])
+
+    def test_a_manifest_command_for_a_platform_with_no_interpreter_is_refused(self):
+        with self.assertRaises(ValueError):
+            hookmain.manifest_command('a.py', 'macos')
+
+    def test_the_mcp_interpreter_is_python3_on_linux_and_refused_for_an_unknown_platform(self):
+        """Stock Ubuntu has no `python`, only python3; Windows keeps the `python` its manifests name."""
+        self.assertEqual(hookmain.mcp_interpreter('windows'), 'python')
+        self.assertEqual(hookmain.mcp_interpreter('linux'), 'python3')
+        with self.assertRaises(ValueError):
+            hookmain.mcp_interpreter('macos')
+
     def test_the_settings_entry_wraps_it(self):
         entry = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')
         self.assertEqual(entry, {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
@@ -421,6 +450,18 @@ class CommandLine(unittest.TestCase):
         named = hookmain.settings_entry('PreToolUse', 'Bash', 'k/boot/hook.py', executable='py',
                                         args=('h', 'PreToolUse'))
         self.assertEqual(named['PreToolUse'][0]['hooks'][0]['args'], ['k/boot/hook.py', 'h', 'PreToolUse'])
+
+    def test_a_linux_settings_entry_blocks_when_the_hook_cannot_run(self):
+        """A Linux entry whose interpreter is gone must block, not let the call through unguarded:
+        onFailure "block" (Claude Code's hooks docs). Windows keeps its entry as it was."""
+        with mock.patch('kitlib.platform.NAME', 'linux'):          # the running platform's, by default
+            hook = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')['PreToolUse'][0]['hooks'][0]
+        self.assertEqual(hook.get('onFailure'), 'block')
+        linux = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py', platform='linux')
+        self.assertEqual(linux, {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+            {'type': 'command', 'command': 'py', 'args': ['h.py'], 'onFailure': 'block'}]}]})
+        windows = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py', platform='windows')
+        self.assertEqual(list(windows['PreToolUse'][0]['hooks'][0]), ['type', 'command', 'args'])
 
 
 class Dispatch(unittest.TestCase):

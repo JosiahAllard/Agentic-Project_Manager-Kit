@@ -40,15 +40,23 @@ elevated terminal.
 
 The committed repo setup is kitlib.machinesetup.repo (`--repo PATH`, run_repo), a mode of its own.
 run_agent_temp() does the agents' temp folder steps alone (tools/agent_temp_init.py).
+On Linux (docs/linux-support-plan.md slice 14) the default mode first runs the box checks
+(kitlib.machinesetup.linuxbox: WSL, root, a second kit user, a container, git and tmux, the
+containment tier with the delegation step offered below S1) in a `box` section of its own. The
+delegation step is `--delegation` (run_delegation; kitlib.machinesetup.delegation), a mode of its
+own run with sudo.
+
 Nothing here prints or exits; run() gives the exit code and the lines.
 """
 import datetime
 import os
 
+from kitlib import platform
 from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
-from . import agenttemp, extras, kitcommand, links, managed, owner, plugin, settings, worktreesweep
+from . import (agenttemp, extras, kitcommand, linuxbox, links, managed, owner, plugin, settings,
+               worktreesweep)
 from .common import Change, Plan, Report, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
@@ -61,12 +69,13 @@ class Context(object):
     `old_kit`); `pm_settings` goes with the default mode only. `owner_email` is --owner-email.
     `shortcut` None: the machine schedule shortcut in the old kit switch only. `procwatch`: also
     register the procwatch task (kitlib.machinesetup.procwatch); `procwatch_kill` makes it kill.
-    `worktree_sweep` false: each repository's worktree sweep task is a note, not a change."""
+    `worktree_sweep` false: each repository's worktree sweep task is a note, not a change. `box`:
+    the Linux box checks' reads (linuxbox.Box; tests pass a fake)."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
                  host=None, today=None, fresh=False, pm_settings=None, sweep_task=True,
                  owner_email=None, shortcut=None, procwatch=False, procwatch_kill=False,
-                 worktree_sweep=True):
+                 worktree_sweep=True, box=None):
         if fresh and old_kit:
             raise ValueError('give old_kit or fresh, not both')
         fresh = not old_kit
@@ -92,6 +101,7 @@ class Context(object):
         self.procwatch_kill = bool(procwatch_kill)
         self.desktop = desktop
         self.host = host or extras.Host()
+        self.box = box
         self.today = today or datetime.date.today().strftime('%Y%m%d')
         self.managed_file = None                                     # managed.survey_live sets both
         self.managed_data = None
@@ -134,10 +144,16 @@ def dedupe(dirs):
 
 
 def survey(ctx):
-    plan = Plan(Plan.FRESH_SECTIONS if ctx.fresh else None)
+    linux = platform.NAME == 'linux'
+    sections = Plan.FRESH_SECTIONS if ctx.fresh else Plan.SECTIONS
+    plan = Plan(((linuxbox.SECTION,) if linux else ()) + sections)
     if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
         plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
         return plan
+    if linux:
+        linuxbox.survey(plan, ctx)
+        if plan.refusals:
+            return plan
     if not ctx.fresh and os.path.normcase(ctx.kit) == os.path.normcase(ctx.old_kit):
         plan.refuse('the old kit and the kit are the same folder: %s' % ctx.kit)
         return plan
@@ -281,6 +297,23 @@ def run_pointer(ctx, apply=False, out=None):
     return _carry_out('pm-repo', pointer.survey(ctx, apply=apply), apply, emit, lines)
 
 
+def run_delegation(ctx, apply=False, out=None):
+    """(exit code, lines) of the --delegation mode (kitlib.machinesetup.delegation.survey; ctx a
+    delegation.DelegationContext): the systemd drop-in and the kit-user marker, as run()."""
+    from . import delegation
+    lines = []
+
+    def emit(*ls):
+        for l in ls:
+            lines.append(l)
+            if out:
+                out(l)
+
+    emit('delegation: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
+         '  kit:            %s' % ctx.kit)
+    return _carry_out('delegation', delegation.survey(ctx, apply=apply), apply, emit, lines)
+
+
 class AgentTempContext(object):
     """What the agent temp init alone (tools/agent_temp_init.py) reads: the subset of Context that
     kitlib.machinesetup.agenttemp and the folder's ACL step use."""
@@ -324,5 +357,5 @@ def run_agent_temp(ctx, apply=False, out=None):
 
 
 __all__ = ['AgentTempContext', 'Change', 'Context', 'ManagedContext', 'Plan', 'account_dirs', 'dedupe',
-           'default_config_dirs', 'run', 'run_agent_temp', 'run_managed', 'run_pointer', 'run_repo',
-           'survey', 'survey_agent_temp']
+           'default_config_dirs', 'run', 'run_agent_temp', 'run_delegation', 'run_managed', 'run_pointer',
+           'run_repo', 'survey', 'survey_agent_temp']

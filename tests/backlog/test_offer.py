@@ -28,18 +28,17 @@ class Partition(unittest.TestCase):
 
     def test_every_record_lands_in_exactly_one_bucket(self):
         s = snap(priced('AAA'), rec('BBB'), rec('CCC', state='blocked', blocked_on='live-client'),
-                 rec('DDD', state='parked'), priced('EEE', priority='-1', priority_by='owner',
-                                                    owner_ask='which one?'),
+                 rec('DDD', state='parked'),
                  priced('FFF', state='pulled', pulled_at='2026-10-01', pulled_by='b'),
                  rec('GGG', state='weird'), {'HHH': 'not a record\n'})
         b = omod.Banner(s)
         got = {k: [r.stem for r in v] for k, v in b.buckets.items() if v}
         self.assertEqual(got, {omod.PULLABLE: ['AAA'], omod.UNPRIORITISED_OPEN: ['BBB'],
                                omod.HELD: ['CCC'], omod.PARKED: ['DDD'],
-                               omod.OWNER_PRIORITISED: ['EEE'], omod.IN_FLIGHT: ['FFF'],
+                               omod.IN_FLIGHT: ['FFF'],
                                omod.UNCLASSIFIED: ['GGG'], omod.NOT_READ: ['HHH']})
         line = b.lines()[0]
-        self.assertIn('8 records', line)
+        self.assertIn('7 records', line)
         self.assertIn('1 pullable', line)
         self.assertIn('1 parked', line)
 

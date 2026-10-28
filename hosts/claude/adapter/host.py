@@ -50,7 +50,9 @@ kitlib.host.hookmain.dispatch.
   managed_settings_path()   Claude Code's machine-wide managed settings file,
                        %ProgramW6432% (else %ProgramFiles%)\\ClaudeCode\\managed-settings.json, which every
                        account on the machine loads (docs/machine-setup.md "Managed settings");
-                       None when both are unset. Optional: kitlib.machinesetup.extras.Host.managed_path
+                       None when both are unset. On Linux LINUX_MANAGED_SETTINGS, Claude Code's
+                       system directory there (code.claude.com/docs/en/managed-settings, "Linux and
+                       WSL"). Optional: kitlib.machinesetup.extras.Host.managed_path
                        asks for it with getattr, so a host without it has no managed file
 
 MATCHER is the PreToolUse matcher: exactly the tools a guard rule can refuse (events.FILE_TOOLS,
@@ -64,6 +66,7 @@ from hosts.claude.adapter import events
 MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|mcp__.*'
 CONTEXT_EVENTS = ('SessionStart', 'SubagentStart')
 PARTS = ('coordinator', 'pm')
+LINUX_MANAGED_SETTINGS = '/etc/claude-code/managed-settings.json'      # managed_settings_path on Linux
 # A warned allow's reason as PreToolUse additionalContext (render). False: a warned allow renders
 # as nothing, as any allow did before rule modes (docs/guard.md "Rule modes").
 WARN_CONTEXT = True
@@ -190,6 +193,9 @@ class ClaudeAdapter(object):
 
     def managed_settings_path(self, environ=None):
         import os
+        from kitlib import platform
+        if platform.NAME == 'linux':
+            return LINUX_MANAGED_SETTINGS
         env = os.environ if environ is None else environ
         root = env.get('ProgramW6432') or env.get('ProgramFiles')      # the 64-bit folder, even from 32-bit Python
         return os.path.join(root, 'ClaudeCode', 'managed-settings.json') if root else None

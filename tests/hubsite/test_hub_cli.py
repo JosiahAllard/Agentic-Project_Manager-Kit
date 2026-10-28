@@ -104,7 +104,7 @@ class UsageCase(CliCase):
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
                       'questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
-                      'pending, wait or validate\n', err)
+                      'skill-edit, pending, wait or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
@@ -1682,6 +1682,70 @@ class WriteCase(VerbCase):
         self.assertTrue(self.warned[0].endswith('[repo-alias]'), self.warned)
 
 
+class SkillEditCase(VerbCase):
+    """`skill-edit`: an agent shows the owner's text, commits it and says done or fail; the blob
+    it sends is read from its own checkout, and the hub reads the branch again itself."""
+    OLD = '---\nname: builder\n---\nold\n'
+    NEW = '---\nname: builder\n---\nnew\n'
+
+    def setUp(self):
+        VerbCase.setUp(self)
+        from kitlib.hubsite import skilledits
+        from tests.gitfixture import TempRepo
+        self.repo = TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        src = 'content/skills/builder/SKILL.md'
+        self.repo.write(src, self.OLD)
+        self.repo.commit('old', src)
+        self.repo.git('checkout', '-q', '-b', 'kit/edit')
+        self.repo.write(src, self.NEW)
+        self.repo.commit('new', src)
+        self.repo.git('checkout', '-q', 'main')
+        self.blob = lambda t: skilledits.git_blob(t.encode('utf-8'))
+        self.hub.api.kit_blob = lambda branch, path: self.repo.git(
+            'rev-parse', '--verify', '--quiet', '%s:%s' % (branch, path), check=False) or None
+        self.assertEqual(self.hub.store.add('skill_edits', {
+            'status': 'submitted', 'skill': 'builder', 'text': self.NEW,
+            'base_blob': self.blob(self.OLD)}).id, 'E-001')
+
+    def item(self):
+        return self.direct('/skill_edits/E-001')['item']
+
+    def test_show_lists_and_writes_the_owners_text_byte_for_byte(self):
+        self.assertEqual(self.ok('skill-edit'), ['E-001 v1 submitted skill builder'])
+        self.assertEqual(self.ok('skill-edit', 'show', 'E-001'),
+                         ['E-001 v1 submitted skill builder base ' + self.blob(self.OLD)])
+        out = os.path.join(self.home, 'edit.md')
+        self.assertEqual(self.ok('skill-edit', 'show', 'E-001', '--out', out), ['WROTE ' + out])
+        with open(out, 'rb') as f:
+            self.assertEqual(f.read(), self.NEW.encode('utf-8'))
+
+    def test_done_sends_the_branchs_blob_and_the_hub_takes_it(self):
+        self.assertEqual(self.ok('skill-edit', 'done', 'E-001', '--branch', 'kit/edit',
+                                 '--checkout', self.repo.root, '--if-version', '1'),
+                         ['COMMITTED E-001'])
+        d = self.item()
+        self.assertEqual((d['status'], d['branch'], d['blob']),
+                         ('committed', 'kit/edit', self.blob(self.NEW)))
+
+    def test_done_on_a_branch_without_the_text_is_refused_and_nothing_changes(self):
+        err = self.refused('skill-edit', 'done', 'E-001', '--branch', 'main', '--checkout',
+                           self.repo.root, '--if-version', '1')
+        self.assertIn('blob', err)
+        self.assertEqual(self.item()['status'], 'submitted')
+
+    def test_fail_at_a_main_that_moved_on_supersedes_the_edit(self):
+        src = 'content/skills/builder/SKILL.md'
+        self.repo.write(src, self.OLD + 'later\n')
+        self.repo.commit('later', src)
+        self.assertEqual(self.ok('skill-edit', 'fail', 'E-001', '--why', 'the skill changed on main',
+                                 '--at', 'main', '--checkout', self.repo.root, '--if-version', '1'),
+                         ['SUPERSEDED E-001'])
+        d = self.item()
+        self.assertEqual((d['status'], d['source_blob']),
+                         ('superseded', self.blob(self.OLD + 'later\n')))
+
+
 class ForeignCase(CliCase):
     def test_tokens_that_are_not_the_servers_are_refused_by_the_server(self):
         other = self.server(tokens=os.path.join(self.home, 'other-tokens'))
@@ -1921,7 +1985,9 @@ class ArgumentCase(CliCase):
              ('to-pm', 'send'), ('to-pm', 'reply', 'P-001', 'text'), ('inbox',),
              ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pages',),
              ('pages', 'show', 'plan'), ('approvals',),
-             ('approvals', 'show', 'A-001'), ('pending',), ('wait', '--timeout', '0'))
+             ('approvals', 'show', 'A-001'), ('skill-edit',), ('skill-edit', 'show', 'E-001'),
+             ('skill-edit', 'fail', 'E-001', '--why', 'w', '--if-version', '1'),
+             ('pending',), ('wait', '--timeout', '0'))
 
     def test_every_verb_that_asks_is_exit_3_with_the_start_command_when_no_server_runs(self):
         self.assertEqual(self.run_cli('setup')[0], 0)

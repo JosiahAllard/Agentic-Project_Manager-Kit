@@ -9,6 +9,7 @@ from unittest import mock
 
 from kitlib.hubsite import api
 from kitlib.hubsite import approvals as ap
+from kitlib.hubsite import skilledits
 from kitlib.hubsite.api import AGENT, ANY, APPROVER, BASE, LOCK_WRITE, OWNER
 from kitlib.hubsite.store import Store
 from tests.gitfixture import TempRepo
@@ -21,6 +22,9 @@ R7 = 'R-' + '0007'
 KEY = 'k' * 64
 URL = 'https://github.com/Owner/Repo.git'
 GIT = []        # the TempRepo the approvals routes read their bases from (setUpModule)
+# the source of skill `builder` the skill_source view serves, and an owner's edit of it
+SKILL_SOURCE = '---\nname: builder\n---\nold\n'
+SKILL_EDIT = '---\nname: builder\n---\nnew\n'
 
 
 def setUpModule():
@@ -51,6 +55,16 @@ class Views(object):
 
     def agents(self):
         return []
+
+    def skills(self):
+        return []
+
+    def skill(self, name):
+        return {}
+
+    def skill_source(self, name):
+        return {'name': name, 'text': SKILL_SOURCE,
+                'blob': skilledits.git_blob(SKILL_SOURCE.encode('utf-8'))}
 
     def health(self):
         return {'git': 'ok', 'backlog': 'ok'}
@@ -181,6 +195,12 @@ def seed_mark(store):
     return FINDING['fingerprint']
 
 
+def seed_skill_edit(store, status='draft'):
+    return store.add('skill_edits', {
+        'status': status, 'skill': 'builder', 'text': SKILL_EDIT,
+        'base_blob': skilledits.git_blob(SKILL_SOURCE.encode('utf-8'))}).id
+
+
 MARK_BODY = {'fingerprint': FINDING['fingerprint'], 'status': 'dismissed'}
 ACT_BODY = {'kind': 'act', 'finding': FINDING['fingerprint']}
 SCHEDULE_BODY = {'task': 'maint-lint', 'repo': 'r', 'cadence': 'daily', 'at': '04:00'}
@@ -259,6 +279,21 @@ ROWS = {
     ('GET', '/repos'): (None, None, None),
     ('GET', '/usage'): (None, None, None),
     ('GET', '/agents'): (None, None, None),
+    ('GET', '/skills'): (None, None, None),
+    ('GET', '/skills/{name}'): (None, None, None),
+    ('GET', '/skills/{name}/source'): (None, None, None),
+    ('GET', '/skill_edits'): (None, None, None),
+    ('POST', '/skill_edits'): (None, {'skill': 'builder', 'text': SKILL_EDIT}, None),
+    ('GET', '/skill_edits/{id}'): (seed_skill_edit, None, None),
+    ('POST', '/skill_edits/{id}/edit'): (seed_skill_edit, {'text': SKILL_EDIT, 'if_version': 1},
+                                         None),
+    ('POST', '/skill_edits/{id}/withdraw'): (seed_skill_edit, None, None),
+    ('POST', '/skill_edits/{id}/done'): (
+        lambda s: seed_skill_edit(s, 'submitted'),
+        {'branch': 'kit/x', 'blob': skilledits.git_blob(SKILL_EDIT.encode('utf-8')),
+         'if_version': 1}, None),
+    ('POST', '/skill_edits/{id}/fail'): (lambda s: seed_skill_edit(s, 'submitted'),
+                                         {'why': 'w', 'if_version': 1}, None),
     ('GET', '/pending'): (None, None, None),
     ('GET', '/wait'): (None, None, {'timeout': '0'}),
     ('GET', '/snapshot'): (None, None, None),
@@ -305,7 +340,7 @@ def allowed(route, role, via='', strong=False):
 
 def path(route, doc_id):
     """route.pattern with its `{id}` and `{repo}` segments filled in."""
-    return route.pattern.replace('{id}', doc_id).replace('{repo}', REPO)
+    return route.pattern.replace('{id}', doc_id).replace('{repo}', REPO).replace('{name}', 'builder')
 
 
 class RolesCase(unittest.TestCase):
@@ -318,7 +353,9 @@ class RolesCase(unittest.TestCase):
         return store, api.Api(store, views=Views(), clock=CLOCK, approval_key=lambda: KEY,
                               checkout=lambda repo: GIT[0].root, lock=LockDoor(),
                               schedule_repos=lambda: [('r', root, 'r')],
-                              tick_seen=lambda: None, tick_state=lambda: {}), doc_id
+                              tick_seen=lambda: None, tick_state=lambda: {},
+                              kit_blob=lambda branch, path: skilledits.git_blob(
+                                  SKILL_EDIT.encode('utf-8'))), doc_id
 
     def test_every_route_has_a_role_and_a_row(self):
         self.assertTrue(api.ROUTES)
@@ -370,6 +407,11 @@ class RolesCase(unittest.TestCase):
                 # the maintenance lint's findings: anyone reads them; only the owner marks one
                 ('GET', '/findings'): ANY, ('GET', '/finding_marks'): ANY,
                 ('POST', '/finding_marks'): OWNER, ('POST', '/finding_marks/{id}/delete'): OWNER,
+                # a skill edit's text is the owner's alone; an agent only commits it and says so
+                ('POST', '/skill_edits'): OWNER, ('POST', '/skill_edits/{id}/edit'): OWNER,
+                ('POST', '/skill_edits/{id}/withdraw'): OWNER,
+                ('POST', '/skill_edits/{id}/done'): AGENT,
+                ('POST', '/skill_edits/{id}/fail'): AGENT,
                 ('POST', '/approvals'): AGENT, ('POST', '/approvals/{id}/decide'): APPROVER,
                 ('POST', '/approvals/{id}/consume'): AGENT,
                 ('POST', '/approvals/{id}/delete'): AGENT,

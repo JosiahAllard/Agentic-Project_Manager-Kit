@@ -79,15 +79,6 @@ class UnblockOne(StoreCase):
         self.assertEqual((r.get('state'), r.all('blocked_on'), r.get('owner_ask'), r.get('hold_ruling')),
                          ('blocked', ['live-client'], None, None))
 
-    def test_removing_owner_from_several_at_priority_minus_one_keeps_owner_ask(self):
-        self.seed(rec('FOO', state='blocked', blocked_on=['owner', 'live-client'],
-                      priority='-1', owner_ask='which one?'))
-        change = self.verb('unblock', 'FOO', on='owner', reason=REASON, role_checked=True)
-        r = self.get('FOO')
-        self.assertEqual((r.all('blocked_on'), r.get('owner_ask'), r.get('hold_ruling')),
-                         (['live-client'], 'which one?', None))
-        self.assertFalse([l for l in change.lines if 'owner_ask dropped' in l], change.lines)
-
     def test_a_reason_with_no_real_blocker_gives_a_subject_without_from(self):
         for stem, over in (('FOO', dict(blocked_on='-')), ('BAR', dict(drop=('blocked_on',)))):
             self.seed(rec(stem, state='blocked', **over))

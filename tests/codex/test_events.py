@@ -66,6 +66,16 @@ class Shell(unittest.TestCase):
                 self.assertIn(named, a.refusal)
                 self.assertEqual('PowerShell' in a.refusal, name == 'windows')
 
+    def test_an_unreadable_interpreters_refusal_follows_the_platform(self):
+        """As the no-shell refusal does: PowerShell or Git Bash on Windows, bash on Linux."""
+        for name, use in (('windows', '; use PowerShell or Git Bash'), ('linux', '; use bash')):
+            with self.subTest(platform=name), mock.patch('kitlib.platform.NAME', name):
+                a = parse('PreToolUse', bash('pwd', 'fish'))
+                self.assertEqual((a.kind, a.shell), ('shell', None))
+                self.assertTrue(a.refusal.endswith(use), a.refusal)
+                self.assertIn("'fish'", a.refusal)
+                self.assertEqual('PowerShell' in a.refusal, name == 'windows')
+
     def test_a_missing_or_unknown_interpreter_carries_a_refusal(self):
         for ev, shell in ((event('Bash', {'command': 'pwd'}), 'powershell'), (bash('dir', 'cmd.exe'), 'powershell'),
                           (bash('x', 3), None), (event('shell_command', {'command': 'Get-Location'}), 'powershell')):

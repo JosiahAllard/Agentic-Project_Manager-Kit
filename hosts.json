@@ -3,7 +3,7 @@
     "default": true,
     "adapter": "hosts.claude.adapter",
     "shell": "hosts/claude/shell",
-    "platforms": ["windows"],
+    "platforms": ["windows", "linux"],
     "capabilities": {
       "hook_events": ["PreToolUse", "SessionStart", "SubagentStart"],
       "supports_ask": true,
@@ -48,7 +48,7 @@
   "codex": {
     "adapter": "hosts.codex.adapter",
     "shell": "hosts/codex/shell",
-    "platforms": ["windows"],
+    "platforms": ["windows", "linux"],
     "capabilities": {
       "hook_events": ["PreToolUse", "SessionStart", "PostCompact", "SubagentStart"],
       "supports_ask": false,

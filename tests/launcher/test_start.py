@@ -393,6 +393,18 @@ class Start(Base):
                           "''pm-session'' when the launcher resumed it", out)
         self.assertEqual((start.PM_DESKTOP_NAME, start.PM_NAME), ('Project Manager', 'pm-session'))
 
+    def test_a_relaunched_pm_is_named_first_by_coordinators_json_pm_name(self):
+        relaunched = "ListAgents shows its session as ''pm-b'', the name launch.py pm-relaunch gave it"
+        self.h.write_state('coordinators.json', {'alpha': 1, 'pm_session_id': 's', 'pm_name': 'pm-b'})
+        for out in (self.go(), self.go(brief='b.md')):
+            self.assertIn(relaunched, out)
+            self.assertIn("else ''Project Manager'' or ''pm-session''", out)
+        for unset in ({'alpha': 1}, {'alpha': 1, 'pm_name': '<the PM name>'}):
+            self.h.write_state('coordinators.json', unset)
+            out = self.go()
+            self.assertNotIn('pm-relaunch gave it', out)
+            self.assertIn(window.q(start.DEFAULT_PROMPT), out)
+
     def test_the_predecessor_text_serialises_no_landing(self):
         text = start.predecessor_text('x')
         for old in (r'leave .*landing slot', 'hands them over', r'(?<!never )wait'):

@@ -3,7 +3,9 @@ installs from (docs/plugin-source.md).
 
   remote_main(kit, remote)         the sha the remote's main points at; refuses one not fetched
   export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha but tests/, plugin.json
-                                   stamped, the marker naming the kit's main checkout
+                                   stamped, each per-platform manifest the running platform's
+                                   (platform_manifests),
+                                   the marker naming the kit's main checkout
   export_checkout(folder)          that main checkout, while it still is one, or None
   write_marketplace(root, folder)  <root>/.claude-plugin/marketplace.json names that folder
   read_in_use(root)                what running processes, scheduled tasks and pin leases name
@@ -42,6 +44,7 @@ import sys
 import time
 
 from kitlib import kitroot
+from kitlib import platform as kitplatform
 from kitlib.git import batch, cmd, refs, repo
 
 NAME = 'pm-kit'                      # the marketplace's and the plugin's name
@@ -59,6 +62,10 @@ CLAIM = '.pruning-'                  # a folder prune is removing: <name>.prunin
 LIST_TIMEOUT = 30                    # seconds for the process list and the task list
 LOCK_GRACE_S = 10                    # an empty or unreadable refresh.pid younger than this is live
 MANIFEST = '.claude-plugin/plugin.json'
+HOOKS_FILE = 'hooks/hooks.json'
+# The manifests a renderer writes once per platform, `<name>.<platform>.json` beside each
+# (platform_manifests): the hooks, Codex's MCP servers and Claude's plugin manifest.
+PLATFORM_FILES = (HOOKS_FILE, 'mcp.json', MANIFEST)
 MARKETPLACE = '.claude-plugin/marketplace.json'
 CONFIG_KEY = 'plugin'
 LEFT_OUT = 'tests'                   # the top-level folder export leaves out (kitrelease does too)
@@ -340,11 +347,29 @@ def folder_name(sha):
     return sha[:12]
 
 
-def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py'):
+def platform_manifests(paths, platform):
+    """{manifest path: the path whose bytes the export writes there} for `platform`: each
+    PLATFORM_FILES manifest among `paths` (`<dir>/hooks/hooks.json`, `<dir>/mcp.json`,
+    MANIFEST) with its `<name>.<platform>.json` beside it (the host renderers write one per
+    platform; docs/content.md "Manifests"). Windows: none, the files the plugin names are its own."""
+    if platform == 'windows':
+        return {}
+    have = set(paths)
+    swap = {}
+    for path in have:
+        if any(path == name or path.endswith('/' + name) for name in PLATFORM_FILES):
+            other = path[:-len('.json')] + '.%s.json' % platform
+            if other in have:
+                swap[path] = other
+    return swap
+
+
+def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py', platform=None):
     """<root>/<sha12>: the tracked files at `sha` but the top-level tests/ (LEFT_OUT: no tool reads
-    the kit's tests from an export, and they were half its size), plugin.json's version stamped, and the marker
-    (`made_by`: the tool that wrote it; `checkout`: the main checkout of `kit`'s repository, left
-    out when git cannot place it). Written into <sha12>.tmp and renamed, so a folder by the
+    the kit's tests from an export, and they were half its size), plugin.json's version stamped,
+    each per-platform manifest holding the running `platform`'s file (platform_manifests; a
+    swapped plugin.json is stamped too), and the marker (`made_by`: the tool that wrote it;
+    `checkout`: the main checkout of `kit`'s repository, left out when git cannot place it). Written into <sha12>.tmp and renamed, so a folder by the
     final name is always whole. An existing folder whose marker names `sha` is kept as it is.
     Returns (folder, version)."""
     name = folder_name(sha)
@@ -366,11 +391,14 @@ def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py'):
     if not manifest:
         raise RefreshError('%s has no %s' % (sha[:12], MANIFEST))
     version = stamped_version(kit_version(manifest[1]), _count(kit, sha))
+    oids = {e[3]: e[2] for e in blobs}
+    swap = platform_manifests(oids, kitplatform.NAME if platform is None else platform)
     tmp = dest + '.tmp'
     if os.path.lexists(tmp):
         _rmtree(tmp)
     os.makedirs(tmp)
     for mode, _typ, oid, path in blobs:
+        oid = oids[swap[path]] if path in swap else oid
         got = data.get(oid)
         if got is None:
             raise RefreshError('git has no blob %s for %s' % (oid[:12], path))

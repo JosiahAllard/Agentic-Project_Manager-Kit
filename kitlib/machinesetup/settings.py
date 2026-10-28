@@ -61,7 +61,8 @@ REPOINT = {
     'write-usage-status.ps1': 'optional/usage/write-usage-status.ps1',
 }
 GUARD = ENTRY
-PYTHONS = ('python', 'python.exe', 'pythonw', 'pythonw.exe')
+PYTHON = re.compile(r'(?i)pythonw?(?:3(?:\.\d+)?)?(?:\.exe)?')    # an interpreter's file name (fullmatch):
+#                                                   python(w)(.exe) on Windows, python3 and python3.N on Linux
 PLUGIN_MANIFEST = '.claude-plugin/plugin.json'
 PLUGIN_ROOT = re.compile(r'\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT\b')
 TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|[^\s"\']+')
@@ -122,6 +123,7 @@ def survey(plan, d, ctx):
     if isinstance(sl, dict) and isinstance(sl.get('command'), str):
         sl['command'] = ed.rewrite(sl['command'], 'statusLine.command', removable=False)[0]
     _note_plugin_twins(plan, path, data, ctx)
+    _guard_on_failure(data, ctx, ed.did)
     if _wants_guard(plan, path, data, ctx):
         try:
             entry = ed.guard_entry()
@@ -151,6 +153,21 @@ def _wants_guard(plan, path, data, ctx):
         plan.note('settings', '%s: the guard\'s entry is also in the managed settings file %s, so it '
                               'runs twice; remove it from this file by hand' % (path, ctx.managed_file))
     return not here and not where
+
+
+def on_failure():
+    """The onFailure the guard's entry carries on the running platform (kitlib.host.hookmain
+    ON_FAILURE, which settings_entry reads), or None."""
+    from kitlib import platform
+    from kitlib.host import hookmain
+    return hookmain.ON_FAILURE.get(platform.NAME)
+
+
+def _guard_on_failure(data, ctx, did):
+    """A guard entry this kit wrote before it carried onFailure (a Linux account set up before
+    the entry gained it) gets it on a rerun (add_on_failure); _wants_guard matches by path alone."""
+    if add_on_failure(data, ctx.kit, ctx.home, on_failure):
+        did.append('give the guard\'s PreToolUse entry onFailure "%s"' % on_failure())
 
 
 def _note_plugin_twins(plan, path, data, ctx, skip=()):
@@ -195,7 +212,8 @@ def _plan_write(plan, ctx, path, raw, layout, data, did):
 
 
 # Fresh mode (--fresh): append only. No entry is removed, re-pointed or reshaped, except a hook path
-# the hosts/ move changed (repoint_moved); a missing file is created in NEW_LAYOUT; the PM
+# the hosts/ move changed (repoint_moved) and the guard's entry missing the onFailure the running
+# platform gives it (_guard_on_failure); a missing file is created in NEW_LAYOUT; the PM
 # SessionStart hook goes to --pm-settings alone. The kit SessionStart entries the kit plugin also
 # runs are the plugin step's (plugin.py, plugin_edit), not this one's: in a folder that step owns
 # they get no twin note here.
@@ -217,6 +235,7 @@ def _survey_fresh(plan, path, ctx):
     from . import plugin                                             # it reads this module
     owned = plugin.owns_settings(os.path.dirname(path), path, ctx)
     _note_plugin_twins(plan, path, data, ctx, skip=(REPLACED_EVENT,) if owned else ())
+    _guard_on_failure(data, ctx, did)
     if _wants_guard(plan, path, data, ctx):
         try:
             entry = ctx.host.guard_entry(ctx.kit)
@@ -621,7 +640,7 @@ class _Editor(object):
         if len(toks) < 2:
             return
         interp, script, *words = [t[1:-1] if len(t) > 1 and t[0] in '"\'' and t[-1] == t[0] else t for t in toks]
-        if os.path.basename(interp.replace('\\', '/')).lower() not in PYTHONS:
+        if not PYTHON.fullmatch(os.path.basename(interp.replace('\\', '/'))):
             return
         if len(words) > 3 or not all(WORD.fullmatch(w) for w in words):
             return                              # a redirect or a pipe is the shell's: leave it in shell form
@@ -712,12 +731,14 @@ SCRIPT = re.compile(r'(?i)\.(?:py|pyw|ps1|psm1|sh|bat|cmd|js|vbs|exe)$')
 
 def expand(tok, home):
     """`tok` as an absolute path (~, %USERPROFILE%, $env:USERPROFILE, $HOME, ${HOME},
-    %HOMEDRIVE%%HOMEPATH% and %HOMEPATH% read as `home`), or '' when it is not one."""
+    %HOMEDRIVE%%HOMEPATH% and %HOMEPATH% read as `home`), or '' when it is not one. On Linux a path
+    from / is one too (/usr/bin/python3, the kit's boot/hook.py); on Windows it is not (cmd /c)."""
+    from kitlib import platform
     t = tok
     if t.startswith('~/') or t.startswith('~\\') or t == '~':
         t = home + t[1:]
     t = HOME_VARS.sub(lambda m: home.replace('\\', '/'), t)
-    if not re.match(r'^[A-Za-z]:[\\/]|^\\\\|^//', t):
+    if not re.match(r'^[A-Za-z]:[\\/]|^\\\\|^//', t) and not (platform.NAME == 'linux' and t.startswith('/')):
         return ''
     return os.path.normpath(t)
 
@@ -738,7 +759,7 @@ def _signature(h, home):
     toks = _tokens(h)
     for i, t in enumerate(toks):
         p = expand(t, home)
-        if p and os.path.basename(p).lower() not in PYTHONS:
+        if p and not PYTHON.fullmatch(os.path.basename(p)):
             return norm(p), tuple(toks[i + 1:])
     return None
 
@@ -756,19 +777,38 @@ def _signatures(data, event, home):
 
 
 def _hook_paths(data, event, home):
-    hooks = data.get('hooks')
-    groups = hooks.get(event) if isinstance(hooks, dict) else None
-    for g in groups if isinstance(groups, list) else []:
-        for h in (g.get('hooks') or []) if isinstance(g, dict) else []:
-            if not isinstance(h, dict):
-                continue
-            items = [m.group().strip('"\'') for m in TOKEN.finditer(h.get('command') or '')] \
-                if isinstance(h.get('command'), str) else []
-            items += [a for a in h.get('args') or [] if isinstance(a, str)]
-            for it in items:
-                p = expand(it, home)
-                if p:
-                    yield p
+    for h in _hooks(data, event):
+        for p in _paths(h, home):
+            yield p
+
+
+def _paths(h, home):
+    """The absolute paths (expand) in the hook `h`'s command and args."""
+    items = [m.group().strip('"\'') for m in TOKEN.finditer(h.get('command') or '')] \
+        if isinstance(h.get('command'), str) else []
+    items += [a for a in h.get('args') or [] if isinstance(a, str)]
+    for it in items:
+        p = expand(it, home)
+        if p:
+            yield p
+
+
+def add_on_failure(data, kit, home, value):
+    """Give each PreToolUse hook in `data` that runs `kit`'s guard (GUARD) and has no onFailure the
+    onFailure `value()` returns (the guard entry's: kitlib.host.hookmain.ON_FAILURE); `value` is
+    called only for such a hook, and None from it changes nothing. A hook that has one keeps it.
+    True when a hook changed."""
+    guard = norm(kit_file(kit, GUARD))
+    changed = False
+    for h in _hooks(data, 'PreToolUse'):
+        if 'onFailure' in h or not any(norm(p) == guard for p in _paths(h, home)):
+            continue
+        got = value()
+        if got is None:
+            return changed
+        h['onFailure'] = got
+        changed = True
+    return changed
 
 
 def _plugin_data(kit):

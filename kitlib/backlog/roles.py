@@ -63,14 +63,13 @@ VIA_LAND = 'via-land'      # the close is the landing tool's, not a backlog.py c
 FACTS = (OWN_PULL, VIA_LAND)
 OWN_GRANTS = tuple((role, OWN_PULL) for role in BUILDERS)
 
-# Sorting a `set`: TEXT_FIELDS set-text, other fields but priority set-other. Priority: HOLD
-# set-hold (a held record makes pull-held and close-held), PRICE_TOP set-price-owner, PRICE_LOW
+# Sorting a `set`: TEXT_FIELDS set-text, other fields but priority set-other. Priority: PRICE_TOP
+# set-price-owner; PRICE_LOW, or any other value (the retired -1, which the plan refuses),
 # set-price on an unpriced or agent-priced record; on a PRICED_BY_OWNER record, or one blocked on
 # the owner, set-price-owner. `priority_by` set to a PRICED_BY_OWNER value, or changed on a
 # PRICED_BY_OWNER record, set-price-owner. `blocked_on` changed on a record blocked on the owner,
-# unblock-owner.
+# unblock-owner. A record blocked on the owner (owner-held) makes pull-held and close-held.
 TEXT_FIELDS = ('summary', 'scope', 'effort', 'body')
-HOLD = '-1'
 PRICE_LOW = ('2', '3', '4', '5')
 PRICE_TOP = ('1',)
 PRICED_BY_OWNER = ('owner', 'pm')
@@ -83,7 +82,6 @@ ACTIONS = collections.OrderedDict([
     ('set-text', Row(('set',), LOW, LEADS, OWN_GRANTS, ())),
     ('set-price', Row(('set',), LOW, LEADS, (), ())),
     ('set-price-owner', Row(('set',), MEDIUM, TOP, (), ('set-price',))),
-    ('set-hold', Row(('set',), HIGH, TOP, (), ('set-price', 'set-price-owner'))),
     ('set-other', Row(('set',), MEDIUM, LEADS, (), ())),
     # A pulled record's scope widened into another branch's live pull (or a path its branch
     # changed): computed by the plan (kitlib/backlog/plan.py plan_set), not read from a flag.

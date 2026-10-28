@@ -21,6 +21,7 @@ from unittest import mock
 from kitlib import kitcmd, pluginsource
 from kitlib.config import ConfigError
 from kitlib.config.user import HomeFenced
+from kitlib.machinesetup import linuxbox
 from tests.platforms import windows_only
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -266,11 +267,12 @@ class Cli(unittest.TestCase):
         self.kit = cli()
 
     def main(self, argv, platform='win32', resolve=('K:\\kit', None), have=('gate', 'land'),
-             code=0):
+             code=0, osrelease='6.8.0-45-generic'):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(kitcmd, 'resolve', return_value=resolve) as res, \
                 mock.patch.object(kitcmd, 'commands', return_value=list(have)), \
                 mock.patch.object(kitcmd, 'run', return_value=code) as run, \
+                mock.patch.object(linuxbox.Box, 'osrelease', return_value=osrelease), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             got = self.kit.main(argv, platform=platform)
         return got, out.getvalue(), err.getvalue(), res, run
@@ -291,7 +293,8 @@ class Cli(unittest.TestCase):
 
     def test_refusals_exit_2_with_one_kit_line(self):
         cases = {
-            'not windows': dict(argv=['gate'], platform='linux'),
+            'not windows or linux': dict(argv=['gate'], platform='darwin'),
+            'wsl': dict(argv=['gate'], platform='linux', osrelease='5.15.153.1-microsoft-standard-WSL2'),
             'an option first': dict(argv=['-C', 'x', 'gate']),
             'unknown tool': dict(argv=['nope']),
             'kit itself': dict(argv=['kit']),
@@ -306,9 +309,18 @@ class Cli(unittest.TestCase):
                 self.assertTrue(err.startswith('kit: ') and err.count('\n') == 1, err)
                 run.assert_not_called()
 
-    def test_not_windows_reads_no_config(self):
-        _got, _out, _err, res, _run = self.main(['gate'], platform='linux')
-        res.assert_not_called()
+    def test_not_windows_or_linux_reads_no_config(self):
+        for kw in (dict(platform='darwin'), dict(platform='linux', osrelease='4.4.0-19041-Microsoft')):
+            with self.subTest(**kw):
+                _got, _out, err, res, _run = self.main(['gate'], **kw)
+                res.assert_not_called()
+                self.assertIn('WSL' if 'osrelease' in kw else 'Windows and Linux only', err)
+
+    def test_native_linux_runs_the_tool(self):
+        got, _out, err, _res, run = self.main(['gate', '--full'], platform='linux', code=3,
+                                              osrelease='6.8.0-45-generic')
+        self.assertEqual((got, err), (3, ''))
+        run.assert_called_once_with('K:\\kit', 'gate', ['--full'])
 
     def test_a_tool_that_cannot_be_started_is_refused(self):
         with mock.patch.object(kitcmd, 'resolve', return_value=('K:\\kit', None)), \

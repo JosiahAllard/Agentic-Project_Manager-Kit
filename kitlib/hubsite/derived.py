@@ -9,6 +9,9 @@ each request (and may cache usage and agents for about a minute, which is the ca
   repos(cfg, stored, ...)       -> [{"name", "aliases"}]
   usage(report, clock)          -> {"available", "accounts"|"reason", "as_of"}
   agents(agents_dir)            -> {"available", "agents"|"reason"}
+  skills(skills_dir)            -> {"available", "skills"|"reason"}   (name, description)
+  skill(skills_dir, name)       -> {"name", "description", "body"}|None
+  skill_source(skills_dir, name)-> {"name", "text", "blob"}|None   the whole SKILL.md and its blob
   findings(lint_dir)            -> [row]    the maintenance lint's last findings, every repo
   lint_runs(lint_dir)           -> [run]    each repo's last lint run: started, ledger, skip
 """
@@ -16,6 +19,7 @@ import os
 import re
 
 from kitlib import pmstart, pmwatch, roster
+from kitlib.hubsite import skilledits
 from kitlib.maintlint import result as lint_result
 
 _FINGERPRINT = re.compile(r'^[0-9a-f]{16}$')
@@ -117,6 +121,75 @@ def agents(agents_dir):
         out.append({"name": name, "description": fm.get("description", ""),
                     "model": fm.get("model", ""), "effort": fm.get("effort", roster.NONE)})
     return {"available": True, "agents": out}
+
+
+def _skill_file(skills_dir, name):
+    """(description, body) of <skills_dir>/<name>/SKILL.md, or None when it cannot be read."""
+    try:
+        with open(os.path.join(skills_dir, name, "SKILL.md"), "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    m = _FM.match(data)
+    try:
+        fm = _frontmatter(data) or {}
+    except UnicodeDecodeError:
+        fm = {}
+    text = data[m.end():] if m else data
+    return fm.get("description", ""), text.decode("utf-8", "replace").strip("\r\n")
+
+
+def skills(skills_dir):
+    """The kit's skills in skills_dir (content/skills, the source: <name>/SKILL.md for each
+    <name> folder): {"available": True, "skills": [{"name", "description"}]} sorted by name,
+    with no body (skill() gives it). `name` is the folder's name, `description` the
+    frontmatter's, empty for a file with none. A folder with no SKILL.md is left out. A missing
+    folder gives {"available": False, "reason"}."""
+    try:
+        names = sorted(os.listdir(skills_dir))
+    except (OSError, TypeError) as e:
+        return {"available": False, "reason": "cannot read %s: %s" % (skills_dir, e)}
+    out = []
+    for name in names:
+        got = _skill_file(skills_dir, name)
+        if got is not None:
+            out.append({"name": name, "description": got[0]})
+    return {"available": True, "skills": out}
+
+
+def skill(skills_dir, name):
+    """One skill, {"name", "description", "body"} (the text after the frontmatter), or None when
+    `name` is not one of the folders skills() lists. The name is compared with the folder
+    listing and never joined into a path unless it is one of its entries."""
+    try:
+        listed = os.listdir(skills_dir)
+    except (OSError, TypeError):
+        return None
+    if not isinstance(name, str) or name not in listed:
+        return None
+    got = _skill_file(skills_dir, name)
+    return None if got is None else {"name": name, "description": got[0], "body": got[1]}
+
+
+def skill_source(skills_dir, name):
+    """One skill's whole source, {"name", "text", "blob"}: the SKILL.md text, front matter and all
+    (UTF-8, CRLF read as LF), and the git blob id of that text (a skill edit's base_blob: the
+    text as served, as git stores a text file, so a CRLF checkout has its blob on main), or None when `name` is not one of the listed folders or the file cannot be read as UTF-8. The
+    name is compared with the folder listing as skill() does."""
+    try:
+        listed = os.listdir(skills_dir)
+    except (OSError, TypeError):
+        return None
+    if not isinstance(name, str) or name not in listed:
+        return None
+    try:
+        with open(os.path.join(skills_dir, name, "SKILL.md"), "rb") as f:
+            data = f.read()
+        text = data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    text = skilledits.normal(text)
+    return {"name": name, "text": text, "blob": skilledits.git_blob(text.encode("utf-8"))}
 
 
 def _str(v):

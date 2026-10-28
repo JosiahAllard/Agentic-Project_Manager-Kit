@@ -13,6 +13,8 @@ account cannot be identified the line says `--account auto` (pick-account's choi
 reply (skill session-handoff) is listed too; the PM starts it only when its repo gets startable
 work, an owner answer or an approval, adding a `--prompt` that names the reply's note.
 
+A PM that still runs but has lost its Remote Control link (an outage; the web app no longer lists it) is relaunched with `launch.py pm-relaunch --name <new>`: a fork of its conversation under the new name, the old session told to stand down, its window closed by the owner (docs/launcher.md "PM relaunch"). After a relaunch the PM runs under that new name, which coordinators.json's `pm_name` holds: every session the launcher starts afterwards is told that name first in its first message (`start.pm_ref`), and the roles message the PM session their start context names, else `Project Manager` or `pm-session`. A session started before the relaunch keeps the old names: the owner tells a long-running coordinator the new name, or recycles it. The hub's PM delivery finds the fork by its session id.
+
 Hub (`kitlib.pmstart` `hub_site`; docs/action-hub.md): the
 lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)
 when there is no `hub` key. The check only asks the loopback server on `hub.port`, through

@@ -10,6 +10,7 @@
   launch.py pick-account [--limit 95] [--explain]
   launch.py usage
   launch.py after-reboot [--test] [--dry-run]
+  launch.py pm-relaunch --name NEW [--wait SECONDS]
   launch.py install-autostart [--what-if]
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.launcher, prints and exits.
@@ -25,7 +26,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.config.types import ConfigError                       # noqa: E402
-from kitlib.launcher import accounts, autostart, handoff, reboot, settings as S, start, stop, usage  # noqa: E402
+from kitlib.launcher import accounts, autostart, handoff, reboot, relaunch, settings as S, start, stop, usage  # noqa: E402
 from kitlib.launcher.host import Host                               # noqa: E402
 
 USAGE = 2
@@ -144,6 +145,11 @@ def parser():
     r.add_argument('--test', action='store_true', help="start only an 'autostart-test' session")
     r.add_argument('--dry-run', action='store_true')
 
+    f = sub.add_parser('pm-relaunch', help='fork the running PM into a new window with a new Remote Control name')
+    f.add_argument('--name', required=True, help='the new session and Remote Control name')
+    f.add_argument('--wait', type=int, default=relaunch.WAIT_S,
+                   help="seconds to wait for the fork's own session id (default %(default)s)")
+
     i = sub.add_parser('install-autostart', help='register the after-reboot scheduled task')
     i.add_argument('--what-if', action='store_true')
     return p
@@ -159,6 +165,18 @@ def session_conflicts(a):
     """The `start` flags given beside --session, which takes them from its entry instead."""
     return [flag for attr, flag in SESSION_EXCLUSIVE
             if getattr(a, attr) is not None and getattr(a, attr) is not False]    # --autocompact 0 counts
+
+
+def push_delivery(settings):
+    """The host adapter's hub push delivery over the launcher's settings (tools/hub.py
+    _push_delivery), or None when the host has none (no adapter, or an adapter without push):
+    pm-relaunch then says the stand-down is the owner's to send. Any other fault surfaces."""
+    try:
+        import _host
+        make = getattr(_host.adapter_module().ADAPTER, 'push', None)
+    except (ImportError, AttributeError):
+        return None
+    return make(settings) if make is not None else None
 
 
 def run(a, settings, host):
@@ -198,6 +216,10 @@ def run(a, settings, host):
         return usage.report(settings, host.now())
     if a.cmd == 'after-reboot':
         return reboot.run(settings, host, a.test, a.dry_run, say=lambda l: print(l, flush=True))
+    if a.cmd == 'pm-relaunch':
+        if a.wait < 1:
+            raise S.LaunchError('--wait must be at least 1 second.')
+        return relaunch.relaunch(settings, host, a.name, push_delivery(settings), a.wait)
     if a.cmd == 'install-autostart':
         return autostart.install(os.path.abspath(__file__), whatif=a.what_if)
     raise AssertionError(a.cmd)

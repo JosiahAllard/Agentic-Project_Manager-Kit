@@ -6,8 +6,9 @@ The file's path is the default host's (its adapter's optional managed_settings_p
 extras.Host.managed_path; a host without it has no managed file, and every step here is skipped).
 
 survey() is the --managed-settings mode: it renders the kit's template, source(), and plans the one
-write that makes the managed file hold it. The file is under Program Files, so --apply is refused
-unless the process is elevated; nothing elevates itself. The default mode never writes it:
+write that makes the managed file hold it. The file is under Program Files (on Linux,
+/etc/claude-code/managed-settings.json), so --apply is refused unless the process is elevated
+(an administrator terminal; on Linux root or sudo); nothing elevates itself. The default mode never writes it:
 note_sync() notes whether it is in sync and names the command.
 
 Rendering: the template is a JSON object. The kit is stable_kit(ctx.kit): a plugin export, which
@@ -19,7 +20,12 @@ plugin export root (kitlib.pluginsource). Then the overlay, OVERLAY in the machi
 anything else replaced. The overlay holds what the committed template must not: the agents' git
 identity (env GIT_*), and the auto-mode lines that name the owner, accounts or home paths. Last, a
 hook or statusLine path through `<config>/tools/<link>` is re-pointed to the kit's own file
-(settings.repoint_links), as in the account settings.
+(settings.repoint_links), as in the account settings. Off Windows the WINDOWS_ONLY keys are dropped
+from the template before all that, and a hook running this kit's guard with no onFailure gets the
+guard entry's (kitlib.host.hookmain.ON_FAILURE, through boot/hook.py --settings-entry;
+settings.add_on_failure): on Linux the managed guard blocks the call when its interpreter is gone,
+as the account entry it replaces would. On Linux {pythonw} is the interpreter that ran machine
+setup, by its full path (hookmain.command_line).
 
 The written file keeps the layout the managed file has (BOM, line ends, indent); a new one is
 written in settings.NEW_LAYOUT. An existing file is replaced whole, so the run is refused when it
@@ -40,6 +46,7 @@ import json
 import os
 import re
 
+from kitlib import platform
 from kitlib.config import user
 
 from .common import Plan, free_name, is_link, kit_file, norm
@@ -47,6 +54,9 @@ from . import settings
 
 SOURCE = 'hosts/%s/managed-settings.json'                         # the default host's (source())
 OVERLAY = 'managed-settings.json'
+# Template keys rendered on Windows only: the status line runs powershell and a .ps1. The overlay,
+# merged after, may still give another platform its own.
+WINDOWS_ONLY = ('statusLine',)
 SECTION = 'managed'
 PLACEHOLDER = re.compile(r'\{(kit|pythonw|plugin_export)\}')
 COMMAND = 'tools/machine_setup.py'
@@ -138,12 +148,14 @@ def _same_kit(root):
         return root
 
 
-def _pythonw(ctx):
+def _guard_hook(ctx):
+    """The guard entry's hook (extras.Host.guard_entry): its command is {pythonw}, and its
+    onFailure, when it has one, the managed guard hook's too (render)."""
     entry = ctx.host.guard_entry(ctx.kit)
     for g in entry.get('PreToolUse') or []:
         for h in g.get('hooks') or []:
             if isinstance(h, dict) and isinstance(h.get('command'), str):
-                return h['command']
+                return h
     raise ValueError('boot/hook.py --settings-entry names no interpreter')
 
 
@@ -174,6 +186,9 @@ def render(ctx):
     if not os.path.lexists(path):
         return None
     data = _read_object(path, 'the template')
+    if platform.NAME != 'windows':
+        for k in WINDOWS_ONLY:
+            data.pop(k, None)
     got = {}
 
     def values(name):
@@ -182,13 +197,15 @@ def render(ctx):
                 if name == 'kit':
                     got[name] = kit.replace('\\', '/')
                 elif name == 'pythonw':
-                    got[name] = _pythonw(ctx)
+                    got[name] = values('hook')['command']
+                elif name == 'hook':
+                    got[name] = _guard_hook(ctx)
                 else:
                     got[name] = _plugin_export(ctx)
             except ManagedError:
                 raise
             except Exception as e:                                   # a config, CLI or plugin error
-                raise ManagedError('cannot fill {%s}: %s' % (name, e))
+                raise ManagedError('cannot fill {%s}: %s' % ('pythonw' if name == 'hook' else name, e))
         return got[name]
     data = merge(_substitute(data, values), overlay(ctx.home))
     here = ctx
@@ -199,6 +216,7 @@ def render(ctx):
         settings.repoint_links(data, here)
     except ValueError as e:
         raise ManagedError(str(e))
+    settings.add_on_failure(data, kit, ctx.home, lambda: values('hook').get('onFailure'))
     return data
 
 
@@ -331,10 +349,14 @@ def survey(ctx, apply=False):
                            'settings.json keeps its own' % kit_file(kit, settings.GUARD))
     if not ctx.host.is_admin():
         if apply:
-            plan.refuse('not elevated: %s is under Program Files; run %s from an administrator '
-                        'terminal' % (path, command(kit)))
+            if platform.NAME == 'windows':
+                plan.refuse('not elevated: %s is under Program Files; run %s from an administrator '
+                            'terminal' % (path, command(kit)))
+            else:
+                plan.refuse('not elevated: %s is writable only by root; run %s as root or with sudo'
+                            % (path, command(kit)))
             return plan
-        plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
+        plan.note(SECTION, 'not elevated: --apply is refused here; run it %s' % _elevated_where())
     got = _target(plan, path, data)
     if got is None:
         return plan
@@ -358,6 +380,10 @@ def survey(ctx, apply=False):
              lambda: settings._write(path, raw, new, bak), undo='copy "%s" over "%s"' % (bak, path),
              detail=diff)
     return plan
+
+
+def _elevated_where():
+    return 'from an administrator terminal' if platform.NAME == 'windows' else 'as root or with sudo'
 
 
 def _create(path, new):
@@ -391,10 +417,9 @@ def note_sync(plan, ctx, section='settings'):
     if same:
         plan.note(section, 'managed settings: %s is in sync with the kit template' % path)
     else:
-        plan.note(section, 'managed settings: %s %s the kit template; from an administrator '
-                           'terminal: %s (a dry run first without --apply)'
+        plan.note(section, 'managed settings: %s %s the kit template; %s: %s (a dry run first without --apply)'
                   % (path, 'differs from' if raw is not None else 'is missing; it is made from',
-                     command(_same_kit(ctx.kit))))
+                     _elevated_where(), command(_same_kit(ctx.kit))))
 
 
 def survey_live(plan, ctx):

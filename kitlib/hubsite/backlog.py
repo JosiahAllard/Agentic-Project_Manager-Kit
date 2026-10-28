@@ -610,7 +610,7 @@ def record_template(name, root):
             "blocked_on": {"plain": list(brecord.BLOCKED_ON_PLAIN),
                            "prefixes": list(brecord.BLOCKED_ON_PREFIXES)},
             "efforts": ["s", "m", "l", "-"],
-            "priorities": ["1", "2", "3", "4", "5", brecord.OWNER_PRIORITY, "-"],
+            "priorities": ["1", "2", "3", "4", "5", "-"],
             "priority_by": ["owner", "pm", "agent", "-"]}
 
 

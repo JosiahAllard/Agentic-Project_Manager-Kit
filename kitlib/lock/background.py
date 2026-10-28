@@ -30,8 +30,9 @@ from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
 from kitlib.lock import game
 from kitlib.lock.run import (BG_ENV, NEST_ENV, ORIGIN_ENV, PICK, POOLS, XLA_DEFAULT_FRACTION,
-                             XLA_FRACTION_ENV, Run, child_code, claim_id, docker_cpu_env,
-                             end_sparing, export_threads, move_leftovers, pin_fields, settle)
+                             XLA_FRACTION_ENV, Run, ScriptArgError, child_code, claim_id,
+                             docker_cpu_env, end_sparing, export_threads, move_leftovers,
+                             pin_fields, script_command, settle)
 from kitlib.lock.store import EXIT_REQUIRE, EXIT_USAGE, LockError, Store, iso, write_json
 from kitlib.proc.job import Job, cores_text
 
@@ -103,8 +104,11 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                    detached=False, log=None):
     """Runs cmd as a background run until it exits other than PAUSE_EXIT, stop ends it, or it
     yields late. Returns its exit code (1 for yield-late or a failed start, 130 on Ctrl+C).
-    Raises LockError (exit 2 with no gpu here or a rid not shaped as a run id, 10 when its id is
-    taken (run.claim_id) or the store or queue cannot be had before it joined)."""
+    A .bat or .cmd, named or found for a name with no extension (./gradlew), starts through the
+    cmd.exe line a foreground run starts it with (kitlib.lock.run script_command); an argument it
+    cannot take is refused before the run's id is claimed: 1, no record. The record keeps cmd as
+    given. Raises LockError (exit 2 with no gpu here or a rid not shaped as a run id, 10 when its
+    id is taken (run.claim_id) or the store or queue cannot be had before it joined)."""
     store = store or Store()
     s, say = store.settings, store.say
     L = lay.in_force(store)["layout"]
@@ -112,6 +116,11 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
         raise LockError(EXIT_USAGE, "usage: a background run is gpu training, and this machine "
                                     "has no gpu the lock knows of")
     env = dict(os.environ if env is None else env)
+    try:
+        start = script_command(cmd, env)
+    except ScriptArgError as e:
+        say("could not start the command: %s" % e)
+        return 1
     # The id first, its run mutex held: a refusal here (an id taken, exit 10; one not shaped as a
     # run id, exit 2) writes nothing, so another run's record and control.json are never touched.
     rid, mutex = claim_id(store, rid)
@@ -259,7 +268,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                         export_threads(env, job)
                         env["MACHINE_LOCK_GPUS"] = ",".join(
                             str(c) for c in lay.gpu_cards_of(L, got["gpu"]))
-                        p = job.start(docker_cpu_env(cmd, bool(got["gpu"])),
+                        p = job.start(docker_cpu_env(start, bool(got["gpu"])),
                                       **run.popen_kw(env))
                     except OSError as err:
                         say("could not start the command: %s" % err)

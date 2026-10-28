@@ -159,15 +159,6 @@ class Unblock(RestoreCase):
         self.unblock()
         self.assert_open('FOO', 'its stopped tip abcdef1234 is gone')
 
-    def test_a_held_record_is_not_restored(self):
-        self.pulled()
-        self.block()
-        self.seed({'FOO': self.get('FOO').text.replace('priority: 2', 'priority: -1')})
-        self.unblock()
-        r = self.get('FOO')
-        self.assertEqual((r.get('state'), r.get('pulled_by')), ('open', None))
-        self.assertIn('not restored: the record is held', r.body)
-
     def test_only_the_last_unblock_restores(self):
         self.pulled()
         self.block(on=('owner', 'live-client'))

@@ -15,17 +15,6 @@ The kit is live and the go-live holds are released: three repositories, this kit
 - Backlog store per repo: the switch-over branch (docs/backlog-store.md "Migration"). The PM repo is switched (store `kit/backlog`, in use); two other repos are still `store: ref` (the same two whose `.kit.json` `backlog.py` refuses, below). Until a repo's remote has a store, the landing close writes nothing and the ancestry check passes; the check still asks the remote (`ls-remote`) and refuses the landing when it cannot. `backlog.py` refuses those two repos' current `.kit.json`: they still use the older kit's spellings, refused on purpose (tests/config/test_load.py `test_the_old_hook_and_owner_spellings_refuse`). The new spellings are in docs/kit-json.md and docs/doc-tools.md; each repo makes the key move on its switch-over branch.
 - PM data branch (docs/pm-data-branch.md): in daily use since 2026-10-11 (moved with `tools/pm_data.py init --adopt`, "Making the branch"): committed on `pmdata` and pushed to a private remote that is not the public one, and `kit-pm-data.json` exists. Still open: no live test yet that the guard rule `git-push-pmdata` and the pre-push leak stage refuse a push to the public remote ("Pre-push guard"); the data worktree's `.kit.json` must set the data branch, private remote and a non-`ref` backlog store ("Layout").
 
-## Coordinator rename
-
-The kit no longer reads the old name anywhere (the fallbacks are removed). The record of the switch, kept because a scrub test allows these lines, then what is left outside the kit:
-
-- Launcher (done): the old `start-conductor.ps1` is retired; the kit's `launch.py` runs `launcher.coordinator_agent` (default `coordinator`, started as `pm-kit:coordinator`) and always marks it `coordinator`.
-- Launcher state and task (done): `<state_dir>\conductors.json` was renamed `coordinators.json`, `install-autostart` was run from the main kit checkout under the new task name, and each coordinator moved to a `coordinator` stem with `launch.py handoff --session <key> --stem <repo>-coordinator` (docs/launcher.md "Hand-off").
-- `~/.claude/settings.json` (done): the SessionStart command called the old-path stub `hooks/conductor_session_start.py`; it now names `hosts/claude/shell/hooks/coordinator_session_start.py`.
-- The machine config (done): key `conductor_start` became `coordinator_start`; the old key is now an unknown key, refused like any other.
-- Each repo: `.claude/conductor-profile.md` becomes `.claude/coordinator-profile.md` (also in each repo's doc-budget `capped` list), `docs/ops/conductor-runbook.md` becomes `coordinator-runbook.md`, and the owner-only CLAUDE.md and `.claude` files lose the word.
-- Installed copies: `~/.claude/agents/conductor.md` (replaced by the plugin's coordinator.md), `~/.claude/tools/usage/conductor_profile.py` and its test, the `conductor-dispatch` skill, `~/.claude/conductor-profile.TEMPLATE.md`.
-
 ## Machine config keys
 
 Keys in the machine config are in docs/kit-json.md "Machine config keys" (`scrub_patterns`, `coordinator_start.repos_root`, `guard_mcp_prefix`, the ledger keys). Optional keys that file does not list, off until set:

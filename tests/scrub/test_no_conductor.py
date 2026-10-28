@@ -3,8 +3,7 @@
 - No `hosts/claude/shell/agents/conductor.md`, and `.claude-plugin/plugin.json` lists no conductor.
 - No tracked file under hosts/, claude/, boot/, kitlib/, tools/, templates/, optional/ or docs/, nor AGENTS.md,
   has a line matching `(?i)conductor`, unless ALLOWED pairs that file with a substring of the line.
-- Each ALLOWED entry carries its reason, HISTORY (the go-live migration record and the launcher's port map,
-  which stay): the old-name fallbacks are removed, so no other reason is left.
+- Each ALLOWED entry carries its reason, HISTORY (the launcher's port map, which stays): the old-name fallbacks are removed, so no other reason is left.
 - An ALLOWED entry that matches no line fails too, so a removed fallback takes its entry with it.
 """
 import json
@@ -21,13 +20,6 @@ FILES = ('AGENTS.md',)
 HISTORY = 'history: stays'
 
 ALLOWED = (
-    # The go-live migration record of the rename.
-    ('docs/go-live.md', '- Launcher (done): the old `start-conductor.ps1` is retired', HISTORY),
-    ('docs/go-live.md', r'(done): `<state_dir>\conductors.json` was renamed', HISTORY),
-    ('docs/go-live.md', 'the old-path stub `hooks/conductor_session_start.py`', HISTORY),
-    ('docs/go-live.md', '- The machine config (done): key `conductor_start` became', HISTORY),
-    ('docs/go-live.md', '- Each repo: `.claude/conductor-profile.md`', HISTORY),
-    ('docs/go-live.md', '- Installed copies: `~/.claude/agents/conductor.md`', HISTORY),
     # The launcher's port map names the PM repo's old scripts and example file.
     ('docs/launcher.md', '| `start-conductor.ps1` |', HISTORY),
     ('docs/launcher.md', '| `sessions.example.json`, `conductors.example.json` |', HISTORY),

@@ -6,6 +6,7 @@ its template and the home are all in a temp folder (FakeHost.managed); nothing h
 the real managed settings file, and one test proves a run leaves it as it was.
 """
 import contextlib
+import copy
 import io
 import json
 import os
@@ -34,6 +35,13 @@ TEMPLATE = {
     'extraKnownMarketplaces': {'pm-kit': {'source': {'source': 'directory', 'path': '{plugin_export}'}}},
     'autoMode': {'allow': ['$defaults', 'a rule']},
 }
+
+
+def committed_template():
+    """The bytes of the kit's own committed template (managed.source())."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    with open(os.path.join(root, *managed.source().split('/')), 'rb') as f:
+        return f.read()
 
 
 def dump(path, data, bom=False, crlf=False):
@@ -399,6 +407,124 @@ class ManagedMode(ManagedBase):
         self.assertFalse(os.path.lexists(self.target))
 
 
+class LinuxRender(ManagedBase):
+    """On Linux the managed file is what carries the guard (its entry there means no account
+    settings.json gains one), so its guard hook blocks a call when its interpreter is gone, as the
+    account entry would (hookmain.ON_FAILURE through the guard entry), and the PowerShell status
+    line is not installed."""
+
+    PY = '/usr/bin/python3'
+
+    def setUp(self):
+        super(LinuxRender, self).setUp()
+        from kitlib.host import hookmain
+        self.hookmain = hookmain
+        self.host.guard_entry = lambda kit: hookmain.settings_entry(
+            'PreToolUse', 'Bash|PowerShell', os.path.join(kit, 'boot', 'hook.py'), self.PY,
+            args=('claude', 'PreToolUse'), platform='linux')
+        linux = mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME='linux'), create=True)
+        linux.start()                           # render's platform only: the fake paths are Windows ones
+        self.addCleanup(linux.stop)
+
+    def guard(self, data):
+        return data['hooks']['PreToolUse'][0]['hooks'][0]
+
+    def test_the_managed_guard_hook_carries_the_guard_entrys_on_failure(self):
+        hook = self.guard(managed.render(self.ctx()))
+        self.assertEqual(hook['onFailure'], self.hookmain.ON_FAILURE['linux'])
+        self.assertEqual(hook['command'], self.PY)                   # {pythonw}: the full interpreter path
+        self.assertEqual(hook['args'], [T.fwd(self.kit) + '/boot/hook.py', 'claude', 'PreToolUse'])
+
+    def test_the_committed_template_gives_its_guard_hook_on_failure(self):
+        with open(self.source, 'wb') as f:
+            f.write(committed_template())
+        data = managed.render(self.ctx())
+        self.assertEqual(self.guard(data)['onFailure'], self.hookmain.ON_FAILURE['linux'])
+        self.assertNotIn('statusLine', data)
+
+    def test_an_installed_file_carries_it(self):
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.guard(load(self.target))['onFailure'], 'block')
+
+    def test_no_powershell_status_line_on_linux(self):
+        self.assertNotIn('statusLine', managed.render(self.ctx()))
+
+    def test_the_overlay_may_give_linux_a_status_line(self):
+        self.overlay({'statusLine': {'type': 'command', 'command': 'sh /opt/status.sh'}})
+        self.assertEqual(managed.render(self.ctx())['statusLine'], {'type': 'command', 'command': 'sh /opt/status.sh'})
+
+    def test_an_on_failure_the_overlay_sets_is_kept(self):
+        groups = copy.deepcopy(TEMPLATE['hooks']['PreToolUse'])
+        groups[0]['hooks'][0].update(command=self.PY, args=[T.fwd(self.kit) + '/boot/hook.py', 'claude', 'PreToolUse'],
+                                     onFailure='allow')
+        self.overlay({'hooks': {'PreToolUse': groups}})
+        self.assertEqual(self.guard(managed.render(self.ctx()))['onFailure'], 'allow')
+
+
+class ElevationWording(ManagedBase):
+    """The not-elevated messages name the platform's way: an administrator terminal on Windows,
+    root or sudo on Linux (no Program Files there)."""
+
+    def messages(self, name):
+        self.host.admin = False
+        if name == 'linux':                                      # the Linux file's own folder, as the real host gives
+            self.host.managed = self.target = os.path.join(self.root, 'etc', 'claude-code', 'managed-settings.json')
+        os.makedirs(os.path.dirname(self.target))
+        with open(self.target, 'wb') as f:
+            f.write(b'{}')                                       # differs from the template
+        with mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME=name), create=True):
+            _, dry = self.run_it()
+            _, applied = self.run_it(apply=True)
+            plan = M.common.Plan(('settings',))
+            managed.note_sync(plan, self.ctx())
+        return dry, applied, '\n'.join(plan.lines())
+
+    def test_linux_says_root_or_sudo_not_administrator_or_program_files(self):
+        for text in self.messages('linux'):
+            self.assertIn('as root or with sudo', text)
+            self.assertNotIn('administrator', text)
+            self.assertNotIn('Program Files', text)
+
+    def test_windows_wording_is_unchanged(self):
+        dry, applied, sync = self.messages('windows')
+        self.assertIn('not elevated: --apply is refused here; run it from an administrator terminal', dry)
+        self.assertIn('is under Program Files; run', applied)
+        self.assertIn('from an administrator terminal', applied)
+        self.assertIn('differs from the kit template; from an administrator terminal: ', sync)
+        self.assertNotIn('sudo', dry + applied + sync)
+
+
+class WindowsRender(ManagedBase):
+    """The committed template renders on Windows exactly as before the Linux managed path: every
+    placeholder filled, nothing added (no onFailure on the guard hook) and nothing dropped (the
+    status line stays)."""
+
+    def test_the_committed_template_renders_unchanged(self):
+        raw = committed_template()
+        with open(self.source, 'wb') as f:
+            f.write(raw)
+        values = {'{kit}': T.fwd(self.kit), '{pythonw}': T.PYW, '{plugin_export}': os.path.normpath(self.export)}
+
+        def fill(v):
+            if isinstance(v, str):
+                for k, x in values.items():
+                    v = v.replace(k, x)
+                return v
+            if isinstance(v, list):
+                return [fill(x) for x in v]
+            if isinstance(v, dict):
+                return dict((k, fill(x)) for k, x in v.items())
+            return v
+        want = fill(json.loads(raw.decode('utf-8-sig')))
+        with mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME='windows'), create=True):
+            got = managed.render(self.ctx())
+        self.assertEqual(got, want)
+        self.assertEqual(settings.write(dict(settings.NEW_LAYOUT), got), settings.write(dict(settings.NEW_LAYOUT), want))
+        self.assertNotIn('onFailure', got['hooks']['PreToolUse'][0]['hooks'][0])
+        self.assertIn('statusLine', got)
+
+
 class FromExport(ManagedBase):
     """A run from a plugin export (Z:/pm-kit/plugin/<sha12>, replaced at every plugin refresh)
     renders the main checkout its marker records, never the export folder (stable_kit)."""
@@ -505,6 +631,16 @@ class RealHost(unittest.TestCase):
         self.assertEqual(ClaudeAdapter().managed_settings_path(env), 'X:\\PF64\\ClaudeCode\\managed-settings.json')
         self.assertEqual(ClaudeAdapter().managed_settings_path({'ProgramFiles': 'X:\\PF32'}),
                          'X:\\PF32\\ClaudeCode\\managed-settings.json')
+
+    def test_on_linux_the_managed_file_is_under_etc_claude_code(self):
+        """Claude Code's Linux system directory (code.claude.com/docs/en/managed-settings), whatever
+        the environment holds."""
+        from hosts.claude.adapter.host import ClaudeAdapter
+        with mock.patch('kitlib.platform.NAME', 'linux'):
+            for env in ({}, {'ProgramFiles': 'X:\\PF'}):
+                with self.subTest(env=env):
+                    self.assertEqual(ClaudeAdapter().managed_settings_path(env),
+                                     '/etc/claude-code/managed-settings.json')
 
     def test_no_program_files_is_no_managed_file(self):
         with mock.patch.dict(os.environ):
@@ -617,6 +753,31 @@ class FreshGuard(F.FreshBase):
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('%s: the guard\'s entry is also in the managed settings file' % self.s2, out)
         self.assertIn('runs twice', out)
+
+    def test_a_rerun_gives_an_older_guard_entry_the_platforms_on_failure(self):
+        """Where the running platform gives the guard entry an onFailure (hookmain.ON_FAILURE: Linux),
+        an account entry written before it gets it on a rerun, once, and no second entry."""
+        from kitlib import platform
+        from kitlib.host import hookmain
+        doc = dict(self.doc2)
+        doc['hooks'] = dict(doc['hooks'], PreToolUse=doc['hooks']['PreToolUse'] + self.guard_groups())
+        dump(self.s2, doc)
+        fake = self.host.guard_entry
+
+        def entry(kit):                         # what boot/hook.py --settings-entry prints there
+            got = fake(kit)
+            got['PreToolUse'][0]['hooks'][0]['onFailure'] = 'block'
+            return got
+        self.host.guard_entry = entry
+        with mock.patch.dict(hookmain.ON_FAILURE, {platform.NAME: 'block'}):
+            code, out = self.run_it(apply=True)
+            self.assertEqual(code, M.EXIT_OK, out)
+            self.assertIn('give the guard\'s PreToolUse entry onFailure "block"', out)
+            guards = [h for g in load(self.s2)['hooks']['PreToolUse'] for h in g['hooks']
+                      if T.fwd(os.path.join(self.kit, 'boot', 'hook.py')) in h.get('args', [])]
+            self.assertEqual([h.get('onFailure') for h in guards], ['block'])
+            code, out = self.run_it()
+            self.assertNotIn('onFailure', out)
 
     def test_another_kits_guard_in_the_managed_file_is_noted_and_none_added(self):
         dump(self.host.managed, guard_doc(os.path.join(self.root, 'other-kit')))

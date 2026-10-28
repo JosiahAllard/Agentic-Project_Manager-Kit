@@ -26,6 +26,7 @@ preflight's `pointer` line reports it.
 """
 import collections
 import os
+import shlex
 
 import kitlib.platform
 from kitlib import pmdata
@@ -149,11 +150,28 @@ def quoted(path):
     return '"%s"' % (path + '\\' if path.endswith('\\') else path)
 
 
+def where():
+    """Where the pointer is kept, in words: the registry key and value on Windows, the pointer
+    files on Linux."""
+    if kitlib.platform.NAME == 'linux':
+        return 'pointer file %s, else <profile>/%s' % (
+            linux_paths.MACHINE_POINTER, '/'.join(linux_paths.USER_POINTER))
+    return '%s %s' % (KEY_NAME, VALUE)
+
+
 def command(path):
-    """The elevated `reg add` that sets the pointer to `path`."""
+    """The elevated command that sets the pointer to `path`: `reg add`, on Linux a sudo write of
+    the machine pointer file."""
+    if kitlib.platform.NAME == 'linux':
+        folder = os.path.dirname(linux_paths.MACHINE_POINTER)
+        return "sudo mkdir -p %s && printf '%%s\\n' %s | sudo tee %s >/dev/null" % (
+            shlex.quote(folder), shlex.quote(path), shlex.quote(linux_paths.MACHINE_POINTER))
     return 'reg add "%s" /v %s /t REG_SZ /d %s /f /reg:64' % (KEY_NAME, VALUE, quoted(path))
 
 
 def delete_command():
-    """The elevated `reg delete` that removes the pointer."""
+    """The elevated command that removes the pointer: `reg delete`, on Linux removing the machine
+    pointer file."""
+    if kitlib.platform.NAME == 'linux':
+        return 'sudo rm -f %s' % shlex.quote(linux_paths.MACHINE_POINTER)
     return 'reg delete "%s" /v %s /f /reg:64' % (KEY_NAME, VALUE)

@@ -95,7 +95,7 @@ def pointer_line():
     if p.state == pointer.OK:
         return POINTER_PREFIX + p.path.replace('\\', '/')
     if p.state == pointer.NONE:
-        return POINTER_PREFIX + ('none - no PM-repo pointer (%s %s); an administrator sets it with '
+        return POINTER_PREFIX + ('none - no PM-repo pointer (%s); an administrator sets it with '
                                  'machine_setup.py --pm-repo (docs/machine-setup.md "PM repo pointer")'
-                                 % (pointer.KEY_NAME, pointer.VALUE))
-    return POINTER_PREFIX + 'BROKEN %s %s: %s' % (pointer.KEY_NAME, pointer.VALUE, p.error)
+                                 % pointer.where())
+    return POINTER_PREFIX + 'BROKEN %s: %s' % (pointer.where(), p.error)
