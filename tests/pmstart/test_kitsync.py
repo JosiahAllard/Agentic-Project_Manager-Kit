@@ -208,6 +208,14 @@ class KitSyncTest(Base):
 
 @real_git('fetch and merge --ff-only against a real bare remote: which refs and files really change')
 class RealKitSyncTest(Base):
+    def setUp(self):
+        super().setUp()
+        # the production 3 s fetch limit (asserted in KitSyncTest) is for a session start; a real
+        # fetch on a fully booked machine can exceed it, so this test gives the fetch room
+        patcher = mock.patch.object(pmstart, 'FETCH_TIMEOUT', 60)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_fast_forward_moves_only_the_tracking_ref_and_main(self):
         sha = self.remote_ahead()
         # a tag on the remote that a default fetch would follow into refs/tags
