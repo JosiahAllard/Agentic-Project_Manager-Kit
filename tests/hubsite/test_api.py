@@ -667,7 +667,7 @@ class InboxTest(ApiCase):
 
 class ViewsTest(ApiCase):
     def test_no_views_is_a_clear_not_available(self):
-        for path in ('/backlog', '/completed', '/notices', '/repos', '/usage', '/agents'):
+        for path in ('/backlog', '/completed', '/notices', '/repos', '/usage', '/agents', '/skills'):
             with self.subTest(path=path):
                 obj = self.refused('unavailable', 'views', 'GET', path, AGENT)
                 self.assertIn('not available', obj['error']['message'])
@@ -732,7 +732,7 @@ class ReadTest(ApiCase):
         obj = self.ok('GET', '/snapshot', OWNER)
         self.assertEqual(obj['views']['notices'], [{'text': 'n'}])
         self.assertEqual(obj['views']['backlog'], [{'repo': 'r', 'items': []}])
-        self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
+        self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents', 'skills'),
                                                            'unavailable'))
 
     def test_snapshot_carries_the_cards_but_not_the_bodies(self):
@@ -1138,7 +1138,7 @@ class FixTest(ApiCase):
         obj = self.ok('GET', '/snapshot', AGENT)
         self.assertEqual(obj['unavailable'], {'backlog': 'store', 'notices': 'OSError',
                                               'repos': 'ZeroDivisionError',
-                                              'agents': 'unavailable'})
+                                              'agents': 'unavailable', 'skills': 'unavailable'})
         self.assertEqual((obj['views']['backlog'], obj['views']['notices'], obj['views']['repos'],
                           obj['views']['usage']), (None, None, None, [{'n': 1}]))
         self.assertEqual(obj['collections']['questions'][qid]['title'], 't')
@@ -1458,9 +1458,12 @@ class SecondFixTest(ApiCase):
 
             def agents(self):
                 raise HubError('invalid', 'a-folder-on-this-machine is no agent list', 'agents')
+
+            def skills(self):
+                raise OSError('cannot read a-folder-on-this-machine')
         self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
         want = {'backlog': 'store', 'completed': 'unavailable', 'notices': 'OSError',
-                'repos': 'ZeroDivisionError', 'usage': 'KeyError', 'agents': 'invalid'}
+                'repos': 'ZeroDivisionError', 'usage': 'KeyError', 'agents': 'invalid', 'skills': 'OSError'}
         self.assertEqual(sorted(want), sorted(api.VIEWS))
         for name, why in sorted(want.items()):
             for role in (OWNER, AGENT):

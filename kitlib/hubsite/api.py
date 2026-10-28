@@ -170,6 +170,7 @@ is null and `unavailable` maps its name to that same reason:
   backlog(repo='', state='', fresh=False)   [{repo, fetched_at, items}]
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
+  skills()                                  {available, skills|reason}: the kit's skill sources
   findings()                                the lint's rows (GET findings; not in GET snapshot)
   lint_runs()                               [{repo, started, ledger, skip}]: each repo's last
                                             result's started and ledger, and its skip marker
@@ -364,7 +365,7 @@ TUNNEL_VIA = 'tunnel'               # the tunnel listener's via (kitlib.hubsite.
 ACK_WINDOW_S = 30 * 60              # a creator's time to handle an item handed to it ("Routes")
 REACH_GRACE_S = WAIT_MAX_S + 30     # a key is reachable this long after its last wait ("Routes")
 ROUTE_SLACK_S = 0.01                # a PM wait looks again this long after a route's turn is due
-VIEWS = ('backlog', 'completed', 'notices', 'repos', 'usage', 'agents')
+VIEWS = ('backlog', 'completed', 'notices', 'repos', 'usage', 'agents', 'skills')
 OWNER_FROM = 'you'                  # a to-do's or a story's `from` when the owner wrote it
 AGENT_FROM = 'pm'                   # a to-do's `from` when an agent gives none
 AGENT_STORY_STATUSES = ('review', 'questions', 'added', 'declined')
@@ -2922,6 +2923,7 @@ ROUTES = (
     _r('GET', '/repos', ANY, _listing('repos')),
     _r('GET', '/usage', ANY, _listing('usage')),
     _r('GET', '/agents', ANY, _listing('agents')),
+    _r('GET', '/skills', ANY, _listing('skills')),
     _r('GET', '/pending', ANY, pending),
     _r('GET', '/wait', ANY, wait),
     _r('GET', '/snapshot', ANY, snapshot),

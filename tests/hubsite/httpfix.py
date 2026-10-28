@@ -40,6 +40,9 @@ class Views(object):
     def agents(self):
         return []
 
+    def skills(self):
+        return []
+
     def health(self):
         return {'git': None, 'backlog': None}
 

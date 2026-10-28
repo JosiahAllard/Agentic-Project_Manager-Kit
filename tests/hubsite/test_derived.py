@@ -160,6 +160,38 @@ class AgentsTests(Tmp):
         self.assertIsNone(serve.agents_dir({registry.ENV: 'no-such-host'}))
 
 
+class SkillsTests(Tmp):
+    def test_skills_are_the_sources_with_their_header_and_body(self):
+        self.put('s/builder/SKILL.md', '---\nname: builder\ndescription: Builds.\n---\n\n# Builder\n\nStep one.\n')
+        self.put('s/bare/SKILL.md', 'no frontmatter\n')
+        self.put('s/builder/extra.md', 'not a skill file')
+        self.put('s/stray.txt', 'a file, not a skill folder')
+        os.makedirs(os.path.join(self.d, 's', 'empty'))
+        got = derived.skills(os.path.join(self.d, 's'))
+        self.assertTrue(got['available'])
+        for s in got['skills']:
+            s['body'] = s['body'].replace('\r\n', '\n')       # put() writes the platform's line ends
+        self.assertEqual(got['skills'], [
+            {'name': 'bare', 'description': '', 'body': 'no frontmatter'},
+            {'name': 'builder', 'description': 'Builds.', 'body': '# Builder\n\nStep one.'}])
+
+    def test_missing_folder_is_not_available(self):
+        got = derived.skills(os.path.join(self.d, 'nope'))
+        self.assertFalse(got['available'])
+        self.assertIn('reason', got)
+
+    def test_the_server_reads_the_kits_content_skills_never_a_rendered_copy(self):
+        from kitlib.hubsite import serve
+        got = derived.skills(serve.skills_dir())
+        self.assertTrue(got['available'], got)
+        self.assertEqual(serve.skills_dir(), os.path.join(serve.pmstart.KIT_ROOT, 'content', 'skills'))
+        by = {s['name']: s for s in got['skills']}
+        self.assertIn('builder', by)
+        self.assertTrue(by['builder']['description'])
+        self.assertTrue(by['builder']['body'].startswith('# Builder'))
+        self.assertNotIn('name: builder', by['builder']['body'])
+
+
 class LintRunsTests(Tmp):
     """derived.lint_runs: each repository's last maintenance lint run and its skip marker, from
     <lint_dir>/<repo>/ (KIT-HUB-FINDINGS-LINT-RUNS); what is on disk never makes it raise."""

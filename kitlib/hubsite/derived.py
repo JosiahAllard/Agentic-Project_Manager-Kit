@@ -9,6 +9,7 @@ each request (and may cache usage and agents for about a minute, which is the ca
   repos(cfg, stored, ...)       -> [{"name", "aliases"}]
   usage(report, clock)          -> {"available", "accounts"|"reason", "as_of"}
   agents(agents_dir)            -> {"available", "agents"|"reason"}
+  skills(skills_dir)            -> {"available", "skills"|"reason"}
   findings(lint_dir)            -> [row]    the maintenance lint's last findings, every repo
   lint_runs(lint_dir)           -> [run]    each repo's last lint run: started, ledger, skip
 """
@@ -117,6 +118,35 @@ def agents(agents_dir):
         out.append({"name": name, "description": fm.get("description", ""),
                     "model": fm.get("model", ""), "effort": fm.get("effort", roster.NONE)})
     return {"available": True, "agents": out}
+
+
+def skills(skills_dir):
+    """The kit's skills in skills_dir (content/skills, the source: <name>/SKILL.md for each
+    <name> folder): {"available": True, "skills": [{"name", "description", "body"}]} sorted by
+    name. `name` is the folder's name; `description` is the frontmatter's, and `body` the text
+    after the frontmatter. A folder with no SKILL.md is left out; a file with no frontmatter is
+    listed with an empty description and the whole text as its body. A missing folder gives
+    {"available": False, "reason"}."""
+    try:
+        names = sorted(os.listdir(skills_dir))
+    except (OSError, TypeError) as e:
+        return {"available": False, "reason": "cannot read %s: %s" % (skills_dir, e)}
+    out = []
+    for name in names:
+        try:
+            with open(os.path.join(skills_dir, name, "SKILL.md"), "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        m = _FM.match(data)
+        try:
+            fm = _frontmatter(data) or {}
+        except UnicodeDecodeError:
+            fm = {}
+        text = data[m.end():] if m else data
+        out.append({"name": name, "description": fm.get("description", ""),
+                    "body": text.decode("utf-8", "replace").strip("\r\n")})
+    return {"available": True, "skills": out}
 
 
 def _str(v):

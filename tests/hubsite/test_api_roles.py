@@ -52,6 +52,9 @@ class Views(object):
     def agents(self):
         return []
 
+    def skills(self):
+        return []
+
     def health(self):
         return {'git': 'ok', 'backlog': 'ok'}
 
@@ -259,6 +262,7 @@ ROWS = {
     ('GET', '/repos'): (None, None, None),
     ('GET', '/usage'): (None, None, None),
     ('GET', '/agents'): (None, None, None),
+    ('GET', '/skills'): (None, None, None),
     ('GET', '/pending'): (None, None, None),
     ('GET', '/wait'): (None, None, {'timeout': '0'}),
     ('GET', '/snapshot'): (None, None, None),

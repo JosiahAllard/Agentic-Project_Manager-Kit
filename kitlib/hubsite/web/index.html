@@ -288,6 +288,7 @@ ul.hist .sch-line{display:block}
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">Message the PM <span class="n" id="n-pm">0</span></button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Usage</button>
     <button class="sec" role="tab" data-s="agents" aria-selected="false" id="sec-agents">Agents <span class="n" id="n-a">0</span></button>
+    <button class="sec" role="tab" data-s="skills" aria-selected="false" id="sec-skills">Skills <span class="n" id="n-sk">0</span></button>
     <div class="sechead" id="sh-upkeep">Upkeep</div>
     <button class="sec" role="tab" data-s="findings" aria-selected="false" id="sec-findings">Lint findings <span class="n" id="n-f">–</span></button>
     <button class="sec" role="tab" data-s="autotasks" aria-selected="false" id="sec-autotasks">Automatic tasks</button>
@@ -393,7 +394,7 @@ ul.hist .sch-line{display:block}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null,
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], skills: [], notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null,
     // The Schedule view: its tab, the History filters, the Week grid's pick and shift, the reserve note and the run asked once.
     sch: { tab: "now", repo: "", kind: "", result: "", histOpen: false, shift: 0, pick: null, note: "", confirm: null, stats: null, days: 7, statsRev: null, statsWhy: "", status: "", bad: false, busy: false,
       // The open forms, each holding what is typed so a redraw never loses it: New hold, a hold's Edit (by its id), the games list, the division.
@@ -403,7 +404,7 @@ ul.hist .sch-line{display:block}
   // know leaves the page where it is.
   const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"}, "#approvals": {section:"approvals"}, "#more": {section:"more"}, "#schedule": {section:"schedule"},
     "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
-    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"agents"}, "#notices": {section:"info", infotab:"notices"} };
+    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"agents"}, "#skills": {section:"skills"}, "#notices": {section:"info", infotab:"notices"} };
   const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "notices") state.infotab = it; } catch(e){}
   Object.assign(state, route(location.hash));
@@ -468,7 +469,7 @@ ul.hist .sch-line{display:block}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks", "#findings", "#approvals", "#more", "#schedule"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#skills", "#parked", "#topm", "#docs", "#autotasks", "#findings", "#approvals", "#more", "#schedule"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -590,13 +591,14 @@ ul.hist .sch-line{display:block}
     const top = usagePeak(ua), peak = top.pct;
     $("#n-u").textContent = usageChip(top); $("#n-u").classList.toggle("hot", peak >= 90);
     $("#n-a").textContent = state.agents.length;
+    $("#n-sk").textContent = state.skills.length;
     const runs = openRuns(state.notices).length; $("#n-n").textContent = runs; $("#n-n").classList.toggle("hot", runs > 0);
     $("#n-i").textContent = ui.length; $("#n-i").classList.toggle("hot", ui.length > 0);
     // Parked lives under Backlog: its count is on its tab, and on the Backlog section itself while something is parked.
     $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
-    $("#repo").hidden = sc === "home" || sc === "info" || sc === "agents" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings" || sc === "approvals" || sc === "more" || sc === "schedule";
+    $("#repo").hidden = sc === "home" || sc === "info" || sc === "agents" || sc === "skills" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings" || sc === "approvals" || sc === "more" || sc === "schedule";
     $("#n-d").textContent = state.pages.length;
     schCounts();
     // The phone's tab bar shows the sidebar's counts: each copies the one it names.
@@ -606,7 +608,7 @@ ul.hist .sch-line{display:block}
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
-    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "approvals" ? renderApprovals() : sc === "more" ? renderMore() : sc === "schedule" ? renderSchedule() : sc === "info" ? renderInfo() : sc === "agents" ? renderAgents() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
+    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "approvals" ? renderApprovals() : sc === "more" ? renderMore() : sc === "schedule" ? renderSchedule() : sc === "info" ? renderInfo() : sc === "agents" ? renderAgents() : sc === "skills" ? renderSkills() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
     place($("#pane-detail"), detailKids); $("#pane-detail").hidden = !detailKids.length;
   }
 
@@ -685,6 +687,22 @@ ul.hist .sch-line{display:block}
     return el("article", {class:"q", id: "a-" + a.id},
       el("div", {class:"meta"}, el("span", {class:"id", text: a.id})),
       el("h2", {text: a.role || "(no description)"}), kv("Model", a.model || "inherit"), kv("Effort", a.effort || "default"));
+  }
+
+  // Skills: the kit's skill sources (content/skills/<name>/SKILL.md), read only. A row is a skill's name and
+  // description; its card has the header (name, description) and the body as the text it is.
+  function renderSkills(){
+    const rows = state.skills.slice().sort((a,b) => String(a.id).localeCompare(String(b.id)));
+    if (!rows.length) { show(["skills"], state.gone.skills ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "No skills found" : "Skills needs the hub server"}), "Each skill is read from its source file, content/skills/<name>/SKILL.md.")); return; }
+    const at = settle(rows.map(s => ["skill", s]));
+    const skillRow = s => rowCard("skill", { ...s, title: s.description || "(no description)" }, [], "");
+    show(["skills"], el("p", {class:"unote", text: "Read only: the skill sources in the kit's content/skills folder."}), rows.map(s => drawn(skillRow, s)));
+    pickDetail(at);
+  }
+  function skillCard(s){
+    return el("article", {class:"q", id: "sk-" + s.id},
+      el("div", {class:"meta"}, el("span", {class:"id", text: s.id})),
+      el("h2", {text: s.description || "(no description)"}), el("p", {class:"ctx", text: String(s.body ?? "")}));
   }
 
   // Parked: the backlog items whose state is parked, as the server's backlog view gives them. Nothing stores
@@ -886,18 +904,20 @@ ul.hist .sch-line{display:block}
     const base = (d, i) => ({ id: d.repo + ":" + i.id, repo: d.repo, item: i.id, title: i.t, posted_at: d.fetched_at });
     const backlog = rows("backlog", (d, i) => ({ ...base(d, i), priority: i.p, status: i.s, q: i.q ?? null, parked_at: i.parked_at ?? null, parked_at_from: i.parked_at_from ?? null, branch: i.branch ?? null, session: i.session ?? null }));
     const completed = rows("completed", (d, i) => ({ ...base(d, i), done_at: i.d, days: d.days }));
-    const u = obj(views.usage), a = obj(views.agents);
+    const u = obj(views.usage), a = obj(views.agents), sk = obj(views.skills);
     if (u.available === false && !gone.usage) gone.usage = String(u.reason || "no reason given");
     if (a.available === false && !gone.agents) gone.agents = String(a.reason || "no reason given");
     const pct = v => v && typeof v === "object" ? v.pct ?? v.used ?? null : v;
+    if (sk.available === false && !gone.skills) gone.skills = String(sk.reason || "no reason given");
     const usage = Object.entries(obj(u.accounts)).map(([account, v]) => ({ id: account, account, five_hour: pct(obj(v).five), seven_day: pct(obj(v).week), measured_at: u.as_of }));
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
+    const skills = list(sk.skills).map(x => ({ id: String(x.name || ""), description: x.description, body: x.body }));
     const pages = pageRows(col);
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
       push: s.push && typeof s.push === "object" ? s.push : null, code: s.code && typeof s.code === "object" ? s.code : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
-      repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, notices: noticeRows(views.notices),
+      repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, skills, notices: noticeRows(views.notices),
       approvals: col("approvals").filter(d => d.status === "pending").sort((x, y) => String(x.created_at || "").localeCompare(String(y.created_at || ""))),
       decided: col("approvals").filter(d => DECIDED.includes(d.status)).sort((x, y) => String(y.decided_at || "").localeCompare(String(x.decided_at || ""))), strong: s.strong === true };
   }
@@ -1586,7 +1606,7 @@ ul.hist .sch-line{display:block}
   }
 
   // ---- More (the phone's last tab): the sections the tab bar has no room for, each with its count.
-  const MORE_ROWS = [["todo", "To-dos", "n-t"], ["backlog", "Backlog", "n-s"], ["docs", "Docs", "n-d"], ["topm", "Message the PM", "n-pm"], ["info", "Usage", "n-u"], ["agents", "Agents", "n-a"], ["findings", "Lint findings", "n-f"], ["autotasks", "Automatic tasks", ""]];
+  const MORE_ROWS = [["todo", "To-dos", "n-t"], ["backlog", "Backlog", "n-s"], ["docs", "Docs", "n-d"], ["topm", "Message the PM", "n-pm"], ["info", "Usage", "n-u"], ["agents", "Agents", "n-a"], ["skills", "Skills", "n-sk"], ["findings", "Lint findings", "n-f"], ["autotasks", "Automatic tasks", ""]];
   function renderMore(){
     place($("#list"), MORE_ROWS.map(([sec, label, of]) => {
       const o = of ? document.getElementById(of) : null;
@@ -1652,7 +1672,7 @@ ul.hist .sch-line{display:block}
     if (!at) return;
     const [kind, d, extra] = at;
     openId = d.id;
-    const make = { approval: approvalCard, todo: todoCard, schedule: scheduleCard, finding: findingCard, item: b => itemCard(b, false), parked: b => itemCard(b, true), done: doneCard, doc: docCard, pm: pmCard, usage: usageCard, agent: agentCard }[kind] || card;
+    const make = { approval: approvalCard, todo: todoCard, schedule: scheduleCard, finding: findingCard, item: b => itemCard(b, false), parked: b => itemCard(b, true), done: doneCard, doc: docCard, pm: pmCard, usage: usageCard, agent: agentCard, skill: skillCard }[kind] || card;
     const c = drawn(make, d, extra);
     c.tabIndex = -1;
     place(dview, [dlinks, ...(notes || []), c]);
@@ -3059,7 +3079,7 @@ ul.hist .sch-line{display:block}
     // read is brought up to date, without the whole-snapshot comparison and the redraw. The lists of the store's own
     // documents are what a revision covers, so they are left out of this cheaper key.
     const untimedRows = rows => rows.map(r => ({ ...r, posted_at: null }));
-    const cheap = JSON.stringify([next.revision, next.gone, next.partial, next.stale, next.strong, next.repos, untimedRows(next.backlog), untimedRows(next.completed), next.usage.map(u => ({ ...u, measured_at: null })), next.agents, next.notices]);
+    const cheap = JSON.stringify([next.revision, next.gone, next.partial, next.stale, next.strong, next.repos, untimedRows(next.backlog), untimedRows(next.completed), next.usage.map(u => ({ ...u, measured_at: null })), next.agents, next.skills, next.notices]);
     if (ready && next.revision === rev && cheap === lastCheap) {
       for (const k of ["seen", "push"]) state[k] = next[k];
       lastRead = Date.now(); seenLine();
@@ -3068,7 +3088,7 @@ ul.hist .sch-line{display:block}
     lastCheap = cheap;
     rev = next.revision;
     const first = !ready; ready = true; lastRead = Date.now();
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "skills", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);
