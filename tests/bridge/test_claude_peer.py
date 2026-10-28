@@ -252,9 +252,42 @@ class ClaudePeerTests(unittest.TestCase):
         self.endpoint.close()
         path=self.own_registry / ('%d.json' % os.getpid())
         path.write_text('{"existing":"preserve"}',encoding='utf-8')
-        with self.assertRaises(DeliveryError):
+        with self.assertRaises(DeliveryError) as raised:
             ClaudePeerEndpoint(self.own_registry,self.root,self.directory)
+        self.assertEqual(raised.exception.code,'peer-registration-already-exists')
         self.assertEqual(path.read_text(),'{"existing":"preserve"}')
+
+    def test_a_failed_start_names_its_step_and_leaves_no_files(self):
+        # Each start step's failure reaches the service's refusal line as its own code.
+        self.endpoint.close()
+        module='optional.bridge.hosts.claude.peer.'
+        real_publish=ClaudePeerEndpoint._publish
+        def publish_failing(index):
+            calls=[]
+            def publish(endpoint,path,value):
+                calls.append(path)
+                if len(calls)==index: raise OSError('injected')
+                return real_publish(endpoint,path,value)
+            return publish
+        cases=(
+            ('peer-process-identity-unavailable',mock.patch(module+'own_ctime',return_value=0)),
+            ('peer-endpoint-start-failed-own-ctime',mock.patch(module+'own_ctime',side_effect=OSError('x'))),
+            ('peer-endpoint-start-failed-listener',mock.patch(module+'PrivateListener',side_effect=OSError('x'))),
+            ('listener-own-code',mock.patch(module+'PrivateListener',side_effect=DeliveryError('listener-own-code'))),
+            ('peer-endpoint-start-failed-publish-key',
+                mock.patch.object(ClaudePeerEndpoint,'_publish',publish_failing(1))),
+            ('peer-endpoint-start-failed-publish-registry',
+                mock.patch.object(ClaudePeerEndpoint,'_publish',publish_failing(2))),
+            ('peer-endpoint-start-failed-thread',
+                mock.patch.object(threading.Thread,'start',side_effect=RuntimeError('x'))))
+        for code,patch in cases:
+            with self.subTest(code=code):
+                with patch, self.assertRaises(DeliveryError) as raised:
+                    ClaudePeerEndpoint(self.own_registry,self.root,self.directory)
+                self.assertEqual(raised.exception.code,code)
+                if code.startswith('peer-endpoint-start-failed-'):  # the step's own error stays chained
+                    self.assertNotIsInstance(raised.exception.__cause__,(DeliveryError,type(None)))
+                self.assertEqual(list(self.own_registry.iterdir()),[])
 
     def test_shared_core_records_one_native_write_unknown_hold_then_root_refusal(self):
         # Host authority ports are explicit test fixtures; native transport and

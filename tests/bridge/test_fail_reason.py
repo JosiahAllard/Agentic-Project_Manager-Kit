@@ -2,7 +2,9 @@
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -59,6 +61,17 @@ class FailReasonTests(unittest.TestCase):
         error=DeliveryError('runtime-kit-root-mismatch')
         with mock.patch.object(self.service,'load_config',side_effect=error):
             err=self.check(self.service,'Bridge service could not start',self.service_argv(),'runtime-kit-root-mismatch')
+
+    def test_service_names_a_missing_configured_path_by_its_setting_only(self):
+        gone=Path(self.temp.name)/'gone-app'/'ChatGPT.exe'
+        self.config.write_text(json.dumps({'protocol':1,'kit_root':str(KIT),'python':sys.executable,
+            'state_root':str(Path(self.temp.name)/'state'),'host_id':'test-host',
+            'native_hosts':{'codex':sys.executable},
+            'profiles':{'codex':{'profile_root':self.temp.name,'desktop_executable':str(gone)}}}),
+            encoding='utf-8')
+        err=self.check(self.service,'Bridge service could not start',self.service_argv(),
+            'runtime-path-missing-codex-desktop-executable')
+        self.assertNotIn('gone-app',err)
 
     def test_codeless_error_prints_type_name_only(self):
         with mock.patch.object(self.prepare,'prepare_file',side_effect=KeyError('hunter2')):

@@ -168,10 +168,15 @@ class Registry(unittest.TestCase):
         good = port.BridgeHost('x', lambda *a, **k: None)
         self.assertIs(port.check_host(good, 'x'), good)
         for bad in (None, good, port.BridgeHost('x', None), port.BridgeHost('x', len, delivery=1),
-                    port.BridgeHost('x', len, install='no')):
+                    port.BridgeHost('x', len, install='no'), port.BridgeHost('x', len, locate='no')):
             name = 'y' if bad is good else 'x'
             with self.subTest(bad=bad), self.assertRaisesRegex(DeliveryError, 'invalid-bridge-host'):
                 port.check_host(bad, name)
+
+    def test_only_codex_locates_its_configured_paths(self):
+        # Codex updates move its executables; Claude's half pins exact paths.
+        self.assertTrue(callable(registry.half('codex').locate))
+        self.assertIsNone(registry.half('claude').locate)
 
     def test_channel_env_names_are_distinct_variable_names(self):
         names = registry.channel_env()
