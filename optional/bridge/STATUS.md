@@ -57,6 +57,14 @@ Writer lease limits:
 - A correlated refusal still blocks the recipient's whole chat, which is its task root.
 - The owner window's lease buttons have no test.
 
+PM routes (README "PM routes"): the PM-marked chat may connect two kit-launched chats; built and
+tested on fixtures only, with no live run. Limits:
+- Only Claude terminal sessions the kit launched carry a mark today, so only they can be PM-routed.
+- A subagent of the PM shares the PM's frontend and its `pm` mark.
+- An exited marked frontend keeps its chat's mark until the next frame from any frontend reaches
+  the service.
+- A restart drops every PM route. The owner window's PM rows and its 5 s re-read have no test.
+
 ## Install and operation
 
 | Item | State |

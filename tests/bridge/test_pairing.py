@@ -50,6 +50,47 @@ class PairingTests(unittest.TestCase):
         self.approvals[proof] = proposal
         return self.store.owner_select(proposal, proof)
 
+    def test_a_route_extension_opens_only_directions_the_owner_never_chose(self):
+        asked = []
+        self.store.extend_routes(lambda sender, recipient: asked.append((sender, recipient)) or True)
+        self.store.require_selected(self.a, self.b)  # no owner row: the extension decides
+        with self.store.selected_guard(self.a, self.b): pass
+        self.select(enabled=False, bidirectional=False)  # the owner disconnects a -> b
+        asked.clear()
+        with self.assertRaisesRegex(PairingError, 'chat-route-not-selected'):
+            self.store.require_selected(self.a, self.b)
+        with self.assertRaisesRegex(PairingError, 'chat-route-not-selected'):
+            with self.store.selected_guard(self.a, self.b): pass
+        self.assertEqual(asked, [])  # an owner row decides alone
+        self.assertIs(self.store.owner_choice(self.a, self.b), False)
+        self.assertIsNone(self.store.owner_choice(self.b, self.a))
+        self.store.require_selected(self.b, self.a)
+        # The extension's chats must still be the observed, live bindings.
+        del self.live['c']
+        with self.assertRaisesRegex(PairingError, 'chat-live-binding-unverified'):
+            self.store.require_selected(self.a, self.c)
+
+    def test_a_route_extension_is_set_once_and_a_failing_one_opens_nothing(self):
+        def broken(sender, recipient): raise RuntimeError('broken')
+        self.store.extend_routes(broken)
+        with self.assertRaisesRegex(PairingError, 'route-extension-set'):
+            self.store.extend_routes(lambda sender, recipient: True)
+        with self.assertRaisesRegex(PairingError, 'chat-route-not-selected'):
+            self.store.require_selected(self.a, self.b)
+
+    def test_an_owner_block_needs_the_owner_proof_and_writes_only_a_disabled_row(self):
+        with self.assertRaisesRegex(PairingError, 'owner-control-unverified'):
+            self.store.owner_block(self.a, self.b, b'forged')
+        self.assertIsNone(self.store.owner_choice(self.a, self.b))
+        self.select()
+        self.store.withdraw('b')  # works for a chat that is not listed now
+        proof = b'test-only-block-proof'
+        from optional.bridge.core.pairing import ChatSelection
+        self.approvals[proof] = ChatSelection(self.a.reference, self.b.reference, False, False)
+        self.store.owner_block(self.a, self.b, proof)
+        self.assertIs(self.store.owner_choice(self.a, self.b), False)
+        self.assertIs(self.store.owner_choice(self.b, self.a), True)
+
     def test_discovery_does_not_connect_other_chats_even_in_same_project(self):
         self.assertEqual(len(self.store.registered()), 3)
         for target in (self.b, self.c):

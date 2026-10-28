@@ -20,6 +20,7 @@ from optional.bridge.core.mcp import Server
 from optional.bridge.core.outbox import Outbox,MAX_MESSAGES,MAX_PENDING
 from optional.bridge.core.owner import OwnerControls,OwnerDecisions,WriterLeases
 from optional.bridge.core.pairing import ChatBinding,PairingStore
+from optional.bridge.core.pmroutes import PmRoutes
 
 
 class Controller:
@@ -35,7 +36,7 @@ class Controller:
         self._launched={}
         self._closed=False
         self._pending_cursor=None
-        self.pairs=self.outbox=self.leases=None
+        self.pairs=self.outbox=self.leases=self.pm=None
         try:
             for name in ('pairings.sqlite','outbox.sqlite'):
                 path=self.root/name
@@ -54,7 +55,10 @@ class Controller:
                 host_pairs=registry.host_pairs())
             # Writer leases live only in this process: a restart drops every one.
             self.leases=WriterLeases(owner_check=self.decisions.authorize)
-            self.owner=OwnerControls(self.pairs,self.decisions,describe=self._describe,leases=self.leases)
+            # PM routes live only in this process too, and open a route only between chats
+            # this controller sees as kit-launched now (README "PM routes").
+            self.pm=PmRoutes(self.pairs,launched=self.launched,host_pairs=self.core.host_pairs)
+            self.owner=OwnerControls(self.pairs,self.decisions,describe=self._describe,leases=self.leases,pm=self.pm)
         except Exception:
             self.close()
             raise
@@ -109,7 +113,7 @@ class Controller:
             calls=CallProofs(observe=None if observe is None else
                 lambda metadata:self._marked(calls,observe(metadata),mark))
             self._sources.append(calls)
-        return Server(self.core,calls)
+        return Server(self.core,calls,pm=self.pm)
 
     def _marked(self,calls,authority,mark):
         """The attested authority with the frontend's mark; the latest attestation of a chat is
@@ -173,6 +177,7 @@ class Controller:
         if self._closed: return
         self._closed=True
         if self.leases is not None: self.leases.clear()
+        if self.pm is not None: self.pm.clear()
         for storage in (self.outbox,self.pairs):
             if storage is not None: storage.close()
         with self._lock:
