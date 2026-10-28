@@ -699,10 +699,28 @@ ul.hist .sch-line{display:block}
     show(["skills"], el("p", {class:"unote", text: "Read only: the skill sources in the kit's content/skills folder."}), rows.map(s => drawn(skillRow, s)));
     pickDetail(at);
   }
+  // A skill's body is not in the snapshot: it is read (GET /skills/<name>) when its card is drawn, kept for
+  // SKILL_KEEP_MS, and put into the card in place when it arrives.
+  const SKILL_KEEP_MS = 60000, skillBodies = new Map();
+  function skillBody(id, into){
+    const k = skillBodies.get(id), say = (t, bad) => { into.textContent = t; into.classList.toggle("gone", !!bad); };
+    if (k && k.text != null) say(k.text); else say(k && k.err ? "Not read: " + k.err + "." : "Reading the skill from the hub server…", !!(k && k.err));
+    if (k && (k.busy || Date.now() - k.at < SKILL_KEEP_MS)) return;
+    const mine = { ...(k || {}), busy: true, at: k ? k.at : 0 };
+    skillBodies.set(id, mine);
+    hub.call("GET", "/skills/" + seg(id)).then(r => ({ at: Date.now(), text: typeof r.body === "string" ? r.body : "" }),
+      err => ({ at: Date.now(), err: err.status === 404 ? "this skill is no longer on the hub server" : why(err) })).then(res => {
+      skillBodies.set(id, res);
+      const now = document.getElementById("sk-body-" + id);
+      if (now) { now.textContent = res.text != null ? res.text : "Not read: " + res.err + "."; now.classList.toggle("gone", res.text == null); }
+    });
+  }
   function skillCard(s){
+    const body = el("p", {class:"ctx", id: "sk-body-" + s.id});
+    skillBody(s.id, body);
     return el("article", {class:"q", id: "sk-" + s.id},
       el("div", {class:"meta"}, el("span", {class:"id", text: s.id})),
-      el("h2", {text: s.description || "(no description)"}), el("p", {class:"ctx", text: String(s.body ?? "")}));
+      el("h2", {text: s.description || "(no description)"}), body);
   }
 
   // Parked: the backlog items whose state is parked, as the server's backlog view gives them. Nothing stores
@@ -911,7 +929,7 @@ ul.hist .sch-line{display:block}
     if (sk.available === false && !gone.skills) gone.skills = String(sk.reason || "no reason given");
     const usage = Object.entries(obj(u.accounts)).map(([account, v]) => ({ id: account, account, five_hour: pct(obj(v).five), seven_day: pct(obj(v).week), measured_at: u.as_of }));
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
-    const skills = list(sk.skills).map(x => ({ id: String(x.name || ""), description: x.description, body: x.body }));
+    const skills = list(sk.skills).map(x => ({ id: String(x.name || ""), description: x.description }));
     const pages = pageRows(col);
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
       push: s.push && typeof s.push === "object" ? s.push : null, code: s.code && typeof s.code === "object" ? s.code : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,

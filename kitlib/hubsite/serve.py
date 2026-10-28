@@ -159,7 +159,7 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
       both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
       (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
-  notices() repos() usage() agents() skills() findings()
+  notices() repos() usage() agents() skills() skill(name) findings()
                                           kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
@@ -616,6 +616,7 @@ class SiteViews(object):
             self.agents = self._agents
         if sources.skills:
             self.skills = self._skills
+            self.skill = self._skill
 
     def _held(self):
         """The backlog source's held answer (backlog.Views.held) while its timer runs, or None
@@ -758,6 +759,12 @@ class SiteViews(object):
         out = derived.skills(self._sources.skills)
         if not out.get('available'):
             out['reason'] = SKILLS_FAILED
+        return out
+
+    def _skill(self, name):
+        out = derived.skill(self._sources.skills, name)
+        if out is None:
+            raise HubError('not_found', 'there is no skill %s' % name, 'name')
         return out
 
     def _git(self):

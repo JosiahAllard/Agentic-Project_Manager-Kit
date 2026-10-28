@@ -71,7 +71,7 @@ under the title.
 - **Agents** (`#agents`, its own entry in More). Each agent's model and effort; a row opens its detail.
 - **Skills** (`#skills`, its own entry in More). The kit's skills, read only: a row is a skill's name and
   description, and its detail is the header and the body of `content/skills/<name>/SKILL.md` as plain
-  text. The source only, never a host's rendered copy; the page edits nothing.
+  text, read from `GET /skills/<name>` when the card opens (the snapshot carries no body). The source only, never a host's rendered copy; the page edits nothing.
 - **Schedule** (`#schedule`, the sidebar's Projects group and the phone's Schedule tab), drawn from
   `GET /lock/view` ("Machine lock routes"), with four tabs:
   - Now: the runs now (each with a progress line against the time expected, and a Late chip past it),
@@ -1117,8 +1117,9 @@ Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite
 - agents: the rendered agent definitions of the host the server runs for (`<host shell>/agents`,
   `serve.agents_dir`).
 - skills: the kit's skill sources, `<kit>/content/skills/<name>/SKILL.md` (`serve.skills_dir`): each one's
-  name (the folder's), description (its front matter) and body. `GET /api/v1/skills` and the snapshot carry
-  it; never a host's rendered copy.
+  name (the folder's) and description (its front matter). `GET /api/v1/skills` and the snapshot carry
+  just those; `GET /api/v1/skills/<name>` gives one skill's body, the name checked against the listed folders
+  (an unknown or malformed name is a 404 or 400). Never a host's rendered copy.
 - findings: the maintenance lint's last result of each repo, never in the snapshot
   ("finding_marks/<fingerprint>").
 

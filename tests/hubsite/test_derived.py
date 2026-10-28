@@ -161,19 +161,31 @@ class AgentsTests(Tmp):
 
 
 class SkillsTests(Tmp):
-    def test_skills_are_the_sources_with_their_header_and_body(self):
+    def tree(self):
         self.put('s/builder/SKILL.md', '---\nname: builder\ndescription: Builds.\n---\n\n# Builder\n\nStep one.\n')
         self.put('s/bare/SKILL.md', 'no frontmatter\n')
         self.put('s/builder/extra.md', 'not a skill file')
         self.put('s/stray.txt', 'a file, not a skill folder')
         os.makedirs(os.path.join(self.d, 's', 'empty'))
-        got = derived.skills(os.path.join(self.d, 's'))
+        return os.path.join(self.d, 's')
+
+    def test_the_list_is_the_sources_names_and_descriptions_with_no_body(self):
+        got = derived.skills(self.tree())
         self.assertTrue(got['available'])
-        for s in got['skills']:
-            s['body'] = s['body'].replace('\r\n', '\n')       # put() writes the platform's line ends
-        self.assertEqual(got['skills'], [
-            {'name': 'bare', 'description': '', 'body': 'no frontmatter'},
-            {'name': 'builder', 'description': 'Builds.', 'body': '# Builder\n\nStep one.'}])
+        self.assertEqual(got['skills'], [{'name': 'bare', 'description': ''},
+                                         {'name': 'builder', 'description': 'Builds.'}])
+
+    def test_one_skill_has_its_body_and_only_a_listed_name_is_read(self):
+        root = self.tree()
+        got = derived.skill(root, 'builder')
+        self.assertEqual((got['name'], got['description']), ('builder', 'Builds.'))
+        self.assertEqual(got['body'].replace('\r\n', '\n'), '# Builder\n\nStep one.')
+        self.assertEqual(derived.skill(root, 'bare')['body'], 'no frontmatter')
+        self.put('secret/SKILL.md', 'outside')
+        for bad in ('empty', 'nope', '..', '../secret', '..' + os.sep + 'secret', 's', 'stray.txt', '', None, 7):
+            with self.subTest(name=bad):
+                self.assertIsNone(derived.skill(root, bad))
+        self.assertIsNone(derived.skill(os.path.join(self.d, 'nope'), 'builder'))
 
     def test_missing_folder_is_not_available(self):
         got = derived.skills(os.path.join(self.d, 'nope'))
@@ -187,9 +199,11 @@ class SkillsTests(Tmp):
         self.assertEqual(serve.skills_dir(), os.path.join(serve.pmstart.KIT_ROOT, 'content', 'skills'))
         by = {s['name']: s for s in got['skills']}
         self.assertIn('builder', by)
+        self.assertEqual(sorted(by['builder']), ['description', 'name'])
         self.assertTrue(by['builder']['description'])
-        self.assertTrue(by['builder']['body'].startswith('# Builder'))
-        self.assertNotIn('name: builder', by['builder']['body'])
+        one = derived.skill(serve.skills_dir(), 'builder')
+        self.assertTrue(one['body'].startswith('# Builder'))
+        self.assertNotIn('name: builder', one['body'])
 
 
 class LintRunsTests(Tmp):

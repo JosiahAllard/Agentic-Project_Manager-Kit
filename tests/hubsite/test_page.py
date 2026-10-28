@@ -4941,7 +4941,7 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/skills", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|writeQuick|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
                                  "/finding_marks"})
@@ -5240,28 +5240,48 @@ class TriageViewsTest(unittest.TestCase):
         self.assertIn("Edit", got["buttons"])
         self.assertIn("Delete", got["buttons"])
 
-    def test_skills_are_rows_and_the_header_and_body_are_in_the_detail(self):
+    def test_skills_are_rows_and_the_body_is_read_when_the_card_opens_not_carried_in_the_snapshot(self):
         views = {"skills": {"available": True, "skills": [
-            {"name": "worker-notes", "description": "Notes for workers.", "body": "# Notes\n\n1. Read <b>this</b> first.\n2. Then go."},
-            {"name": "builder", "description": "Builds on a branch.", "body": "# Builder\n\nStart here."}]}}
+            {"name": "worker-notes", "description": "Notes for workers."},
+            {"name": "builder", "description": "Builds on a branch."}]}}
         got = dom("""
+            const bodies = { "worker-notes": "# Notes@@n@@n1. Read <b>this</b> first.", builder: "# Builder@@n@@nStart here." };
+            server.route = c => { const m = /^[/]skills[/]([^/]+)$/.exec(c.path);
+              return m && c.method === "GET" ? (bodies[m[1]] ? { status: 200, body: { ok: true, name: m[1], body: bodies[m[1]] } }
+                : { status: 404, body: { ok: false, error: { code: "not_found", message: "no", field: "name" } } }) : undefined; };
             await start();
             const list = () => ({ rows: $$("#list .row").map(a => [a.id, text(a)]), detail: $$("#pane-detail article").map(a => [a.id, text(a)]) });
             const first = list();
             await click($("#row-worker-notes"));
-            return { first, second: list(), count: text($("#n-sk")), body: $("#pane-detail .ctx").textContent, bold: $$("#pane-detail b").length,
+            const reads = calls.filter(c => c.path.startsWith("/skills/")).map(c => c.method + " " + c.path);
+            return { first, second: list(), reads, count: text($("#n-sk")), body: $("#pane-detail .ctx").textContent, bold: $$("#pane-detail b").length,
                      inputs: $$("#pane-detail input, #pane-detail textarea, #pane-detail button").map(b => b.id) };
-        """, snapshot(views=views), hash="#skills")
+        """.replace("@@n", "\\n"), snapshot(views=views), hash="#skills")
         self.assertEqual([r[0] for r in got["first"]["rows"]], ["row-builder", "row-worker-notes"])      # by name
         self.assertIn("Builds on a branch.", got["first"]["rows"][0][1])
         self.assertEqual(got["first"]["detail"][0][0], "sk-builder")
         self.assertIn("builder", got["first"]["detail"][0][1])
-        self.assertIn("Start here.", got["first"]["detail"][0][1])
+        self.assertIn("Start here.", got["first"]["detail"][0][1])      # read on open
         self.assertEqual(got["second"]["detail"][0][0], "sk-worker-notes")
+        self.assertEqual(got["reads"], ["GET /skills/builder", "GET /skills/worker-notes"])
         self.assertEqual(got["count"], "2")
         self.assertIn("<b>this</b> first.", got["body"])         # the body is text, never markup
         self.assertEqual(got["bold"], 0)
         self.assertEqual(got["inputs"], ["detail-close"])        # read only: nothing to type in or press but Back
+
+    def test_a_skill_body_that_cannot_be_read_or_is_gone_says_so_in_the_card(self):
+        views = {"skills": {"available": True, "skills": [{"name": "builder", "description": "Builds."},
+                                                          {"name": "gone", "description": "Went."}]}}
+        got = dom("""
+            server.route = c => c.path === "/skills/builder" ? { status: 500, body: { ok: false, error: { code: "unavailable", message: "disk gone", field: "views" } } }
+              : c.path === "/skills/gone" ? { status: 404, body: { ok: false, error: { code: "not_found", message: "no", field: "name" } } } : undefined;
+            await start();
+            const one = text($("#pane-detail .ctx"));
+            await click($("#row-gone"));
+            return { one, two: text($("#pane-detail .ctx")) };
+        """, snapshot(views=views), hash="#skills")
+        self.assertIn("Not read", got["one"])
+        self.assertIn("no longer on the hub server", got["two"])
 
     def test_an_unavailable_skills_view_says_why_and_a_stored_skills_section_reopens(self):
         got = dom("""

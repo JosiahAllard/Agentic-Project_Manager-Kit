@@ -9,7 +9,8 @@ each request (and may cache usage and agents for about a minute, which is the ca
   repos(cfg, stored, ...)       -> [{"name", "aliases"}]
   usage(report, clock)          -> {"available", "accounts"|"reason", "as_of"}
   agents(agents_dir)            -> {"available", "agents"|"reason"}
-  skills(skills_dir)            -> {"available", "skills"|"reason"}
+  skills(skills_dir)            -> {"available", "skills"|"reason"}   (name, description)
+  skill(skills_dir, name)       -> {"name", "description", "body"}|None
   findings(lint_dir)            -> [row]    the maintenance lint's last findings, every repo
   lint_runs(lint_dir)           -> [run]    each repo's last lint run: started, ledger, skip
 """
@@ -120,33 +121,52 @@ def agents(agents_dir):
     return {"available": True, "agents": out}
 
 
+def _skill_file(skills_dir, name):
+    """(description, body) of <skills_dir>/<name>/SKILL.md, or None when it cannot be read."""
+    try:
+        with open(os.path.join(skills_dir, name, "SKILL.md"), "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    m = _FM.match(data)
+    try:
+        fm = _frontmatter(data) or {}
+    except UnicodeDecodeError:
+        fm = {}
+    text = data[m.end():] if m else data
+    return fm.get("description", ""), text.decode("utf-8", "replace").strip("\r\n")
+
+
 def skills(skills_dir):
     """The kit's skills in skills_dir (content/skills, the source: <name>/SKILL.md for each
-    <name> folder): {"available": True, "skills": [{"name", "description", "body"}]} sorted by
-    name. `name` is the folder's name; `description` is the frontmatter's, and `body` the text
-    after the frontmatter. A folder with no SKILL.md is left out; a file with no frontmatter is
-    listed with an empty description and the whole text as its body. A missing folder gives
-    {"available": False, "reason"}."""
+    <name> folder): {"available": True, "skills": [{"name", "description"}]} sorted by name,
+    with no body (skill() gives it). `name` is the folder's name, `description` the
+    frontmatter's, empty for a file with none. A folder with no SKILL.md is left out. A missing
+    folder gives {"available": False, "reason"}."""
     try:
         names = sorted(os.listdir(skills_dir))
     except (OSError, TypeError) as e:
         return {"available": False, "reason": "cannot read %s: %s" % (skills_dir, e)}
     out = []
     for name in names:
-        try:
-            with open(os.path.join(skills_dir, name, "SKILL.md"), "rb") as f:
-                data = f.read()
-        except OSError:
-            continue
-        m = _FM.match(data)
-        try:
-            fm = _frontmatter(data) or {}
-        except UnicodeDecodeError:
-            fm = {}
-        text = data[m.end():] if m else data
-        out.append({"name": name, "description": fm.get("description", ""),
-                    "body": text.decode("utf-8", "replace").strip("\r\n")})
+        got = _skill_file(skills_dir, name)
+        if got is not None:
+            out.append({"name": name, "description": got[0]})
     return {"available": True, "skills": out}
+
+
+def skill(skills_dir, name):
+    """One skill, {"name", "description", "body"} (the text after the frontmatter), or None when
+    `name` is not one of the folders skills() lists. The name is compared with the folder
+    listing and never joined into a path unless it is one of its entries."""
+    try:
+        listed = os.listdir(skills_dir)
+    except (OSError, TypeError):
+        return None
+    if not isinstance(name, str) or name not in listed:
+        return None
+    got = _skill_file(skills_dir, name)
+    return None if got is None else {"name": name, "description": got[0], "body": got[1]}
 
 
 def _str(v):

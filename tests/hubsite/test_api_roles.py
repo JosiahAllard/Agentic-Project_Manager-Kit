@@ -55,6 +55,9 @@ class Views(object):
     def skills(self):
         return []
 
+    def skill(self, name):
+        return {}
+
     def health(self):
         return {'git': 'ok', 'backlog': 'ok'}
 
@@ -263,6 +266,7 @@ ROWS = {
     ('GET', '/usage'): (None, None, None),
     ('GET', '/agents'): (None, None, None),
     ('GET', '/skills'): (None, None, None),
+    ('GET', '/skills/{name}'): (None, None, None),
     ('GET', '/pending'): (None, None, None),
     ('GET', '/wait'): (None, None, {'timeout': '0'}),
     ('GET', '/snapshot'): (None, None, None),
@@ -309,7 +313,7 @@ def allowed(route, role, via='', strong=False):
 
 def path(route, doc_id):
     """route.pattern with its `{id}` and `{repo}` segments filled in."""
-    return route.pattern.replace('{id}', doc_id).replace('{repo}', REPO)
+    return route.pattern.replace('{id}', doc_id).replace('{repo}', REPO).replace('{name}', 'builder')
 
 
 class RolesCase(unittest.TestCase):

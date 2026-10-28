@@ -170,7 +170,8 @@ is null and `unavailable` maps its name to that same reason:
   backlog(repo='', state='', fresh=False)   [{repo, fetched_at, items}]
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
-  skills()                                  {available, skills|reason}: the kit's skill sources
+  skills()                                  {available, skills|reason}: each skill's name and description
+  skill(name)                               one skill with its body (GET skills/{name}); not_found
   findings()                                the lint's rows (GET findings; not in GET snapshot)
   lint_runs()                               [{repo, started, ledger, skip}]: each repo's last
                                             result's started and ledger, and its skip marker
@@ -2026,7 +2027,7 @@ def completed(api, req):
 # record id may be (kitlib.hubsite.backlog checks each again, more narrowly). The refusal is a
 # fixed phrase: it never repeats the segment.
 _SEGMENT = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
-SEGMENT_SAYS = {'repo': 'not a repository name', 'id': 'not a record id'}
+SEGMENT_SAYS = {'repo': 'not a repository name', 'id': 'not a record id', 'name': 'not a skill name'}
 
 
 def _segment(req, name):
@@ -2047,6 +2048,10 @@ def _record_view(api, name, *args):
         raise
     except Exception as e:      # noqa: BLE001 - a view is another module's code
         raise HubError('unavailable', 'the %s view failed: %s' % (name, _reason(e)), 'views')
+
+
+def skill_get(api, req):
+    return _record_view(api, 'skill', _segment(req, 'name'))
 
 
 def record(api, req):
@@ -2924,6 +2929,7 @@ ROUTES = (
     _r('GET', '/usage', ANY, _listing('usage')),
     _r('GET', '/agents', ANY, _listing('agents')),
     _r('GET', '/skills', ANY, _listing('skills')),
+    _r('GET', '/skills/{name}', ANY, skill_get),
     _r('GET', '/pending', ANY, pending),
     _r('GET', '/wait', ANY, wait),
     _r('GET', '/snapshot', ANY, snapshot),

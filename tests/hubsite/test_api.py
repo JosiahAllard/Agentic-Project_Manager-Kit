@@ -2170,6 +2170,53 @@ class RecordViews(object):
         return {'repo': repo, 'fields': []}
 
 
+class SkillViews(object):
+    def __init__(self):
+        self.calls = []
+
+    def skills(self):
+        return {'available': True, 'skills': [{'name': 'builder', 'description': 'Builds.'}]}
+
+    def skill(self, name):
+        self.calls.append(name)
+        if name != 'builder':
+            raise HubError('not_found', 'there is no skill %s' % name, 'name')
+        return {'name': 'builder', 'description': 'Builds.', 'body': '# Builder'}
+
+
+class SkillRouteTest(ApiCase):
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = SkillViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def test_a_skill_with_its_body_and_the_snapshot_without_one(self):
+        for role in (OWNER, AGENT):
+            with self.subTest(role=role):
+                self.assertEqual(self.ok('GET', '/skills/builder', role)['body'], '# Builder')
+                self.assertEqual(self.ok('GET', '/skills', role)['items']['skills'],
+                                 [{'name': 'builder', 'description': 'Builds.'}])
+        snap = self.ok('GET', '/snapshot', OWNER)['views']['skills']
+        self.assertEqual(snap['skills'], [{'name': 'builder', 'description': 'Builds.'}])
+
+    def test_an_unknown_skill_is_a_404_and_a_name_that_is_no_name_never_reaches_the_view(self):
+        self.refused('not_found', 'name', 'GET', '/skills/nope', OWNER)
+        self.assertEqual(self.views.calls, ['nope'])
+        del self.views.calls[:]
+        for path in ('/skills/..', '/skills/%2e%2e', '/skills/a\b', '/skills/.git', '/skills/A..B',
+                     '/skills/%2e%2e%2fbuilder', '/skills/C:', '/skills/' + 'a' * 129):
+            for role in (OWNER, AGENT):
+                with self.subTest(path=path, role=role):
+                    obj = self.refused('invalid', 'name', 'GET', path, role)
+                    self.assertEqual(obj['error']['message'], api.SEGMENT_SAYS['name'])
+        self.refused('not_found', 'path', 'GET', '/skills/builder/x', OWNER)     # no slash makes a second segment a name
+        self.assertEqual(self.views.calls, [])
+
+    def test_no_skill_view_is_not_available(self):
+        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+        self.refused('unavailable', 'views', 'GET', '/skills/builder', AGENT)
+
+
 class RecordRouteTest(ApiCase):
     def setUp(self):
         ApiCase.setUp(self)

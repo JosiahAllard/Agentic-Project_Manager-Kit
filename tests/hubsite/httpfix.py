@@ -43,6 +43,9 @@ class Views(object):
     def skills(self):
         return []
 
+    def skill(self, name):
+        return {}
+
     def health(self):
         return {'git': None, 'backlog': None}
 
