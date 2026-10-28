@@ -42,15 +42,15 @@ class KitCommand(Temp):
     def plan(self, path, environ):
         plan = Plan()
         with LINUX:
-            kitcommand.linux_steps(plan, '/home/kit/pm kit', path, environ=environ)
+            kitcommand.linux_steps(plan, '/home/<user>/pm kit', path, environ=environ)
         return plan
 
     def test_launcher_text(self):
-        self.assertEqual(kitcommand.launcher_sh('/home/kit/pm kit').splitlines(), [
+        self.assertEqual(kitcommand.launcher_sh('/home/<user>/pm kit').splitlines(), [
             '#!/bin/sh',
             '# pm-kit: the kit command (kit TOOL [ARGUMENTS...]); written by tools/machine_setup.py '
             '--apply, which rewrites it',
-            "exec python3 '/home/kit/pm kit/tools/kit.py' \"$@\""])
+            "exec python3 '/home/<user>/pm kit/tools/kit.py' \"$@\""])
 
     def test_written_executable_then_nothing_to_do(self):
         path = os.path.join(self.dir, '.local', 'bin', 'kit')
@@ -63,7 +63,7 @@ class KitCommand(Temp):
             plan.changes[0].do()
         chmod.assert_called_once_with(path + '.tmp', 0o755)
         with open(path, newline='') as f:
-            self.assertEqual(f.read(), kitcommand.launcher_sh('/home/kit/pm kit'))
+            self.assertEqual(f.read(), kitcommand.launcher_sh('/home/<user>/pm kit'))
         self.assertEqual(self.plan(path, bin_on_path).changes, [])
 
     def test_a_file_not_written_by_setup_is_left(self):
@@ -96,8 +96,8 @@ class Links(unittest.TestCase):
 
     def test_remove_cmd_is_rm_on_linux(self):
         with LINUX:
-            self.assertEqual(links.remove_cmd("/home/kit/.claude/skills/it's"),
-                             "rm -- '/home/kit/.claude/skills/it'\"'\"'s'")
+            self.assertEqual(links.remove_cmd("/home/<user>/.claude/skills/it's"),
+                             "rm -- '/home/<user>/.claude/skills/it'\"'\"'s'")
 
 
 class SettingsHooks(unittest.TestCase):
@@ -105,7 +105,7 @@ class SettingsHooks(unittest.TestCase):
     that already has the guard's entry gets no second one, and the PM SessionStart hook it wrote is
     its own on the next run (not a foreign checklist to refuse)."""
 
-    KIT, HOME = '/opt/pm kit', '/home/kit'
+    KIT, HOME = '/opt/pm kit', '/home/<user>'
     SCRIPT = '/opt/pm kit/boot/hook.py'
 
     def hook(self, *words, interp='/usr/bin/python3'):
@@ -201,7 +201,7 @@ class AgentTemp(Temp):
 
     def test_no_default_folder_on_linux_is_a_note(self):
         plan = Plan()
-        ctx = SimpleNamespace(kit='/home/kit/pm-kit', home=self.dir, agent_temp=None)
+        ctx = SimpleNamespace(kit='/home/<user>/pm-kit', home=self.dir, agent_temp=None)
         with LINUX, mock.patch.object(agenttemp, 'choose', return_value=(None, None)):
             self.assertEqual(agenttemp.survey(plan, ctx), (None, False))
         self.assertIn('on Linux there is no default folder', notes(plan)[0])
@@ -234,7 +234,7 @@ class AgentTemp(Temp):
 class DesktopEntry(Temp):
 
     def test_written_then_nothing_to_do(self):
-        ctx = SimpleNamespace(home=self.dir, kit='/home/kit/pm-kit', shortcut=True)
+        ctx = SimpleNamespace(home=self.dir, kit='/home/<user>/pm-kit', shortcut=True)
         plan = Plan()
         with LINUX:
             extras.desktop_entry(plan, ctx)
