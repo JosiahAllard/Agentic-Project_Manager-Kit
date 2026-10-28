@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import threading
 
+import kitlib.platform
 from kitlib.config import user
 from kitlib.loadnode import reply as rp
 from kitlib.proc import spawn
@@ -52,10 +53,11 @@ _KEY_FAILS = ('Host key verification failed', 'REMOTE HOST IDENTIFICATION HAS CH
 
 def ssh_exe():
     """Windows' own OpenSSH client when it is there, else the first ssh on PATH, else None."""
-    root = os.environ.get('SystemRoot') or r'C:\Windows'
-    own = os.path.join(root, 'System32', 'OpenSSH', 'ssh.exe')
-    if os.name == 'nt' and os.path.isfile(own):
-        return own
+    root = os.environ.get('SystemRoot')
+    if kitlib.platform.NAME == 'windows' and root:
+        own = os.path.join(root, 'System32', 'OpenSSH', 'ssh.exe')
+        if os.path.isfile(own):
+            return own
     return shutil.which('ssh')
 
 

@@ -15,7 +15,8 @@ Classes (CLASSES, each `(name, regex, in_tests)`):
 - `provenance`: a note that a file came over from the kit this one replaced, or which of its
   files it copies, which a reader of the public kit cannot follow. The kit's own name alone passes.
 - `pinned-hash`: a commit hash, 7 to 40 hex digits with a digit and a letter, outside tests/
-  (test fixtures need invented hashes); NOT_HASHES (git's empty tree, the hex alphabet) pass.
+  (test fixtures need invented hashes); NOT_HASHES (git's empty tree, the hex alphabet, the ssh
+  key type) pass.
 - `hardware`: one machine's parts (a GPU model, a CPU family or its chiplet, a total core or
   thread count of ten or more).
 - `drive`: a drive path whose first folder is one of MACHINE_FOLDERS (a user profile), the
@@ -70,8 +71,10 @@ PROVENANCE = re.compile(
     r'|\b' + _PM_KIT + r'\s+\S+\.p[y]\b', re.I)
 PINNED_HASH = re.compile(r'(?<![0-9A-Za-z_])(?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}'
                          r'(?![0-9A-Za-z_])')
-# Hex strings that are not a commit: git's empty tree, and the hex digit alphabet.
-NOT_HASHES = frozenset(('4b825dc642cb6eb9a060e54bf8d69288fbee4904', '0123456789abcdef'))
+# Hex strings that are not a commit: git's empty tree, the hex digit alphabet, and the ssh key
+# type (`ssh-ed25519`).
+NOT_HASHES = frozenset(('4b825dc642cb6eb9a060e54bf8d69288fbee4904', '0123456789abcdef',
+                        'ed25519'))
 # A GPU model, a CPU family or its chiplet, and a machine's total core or thread count (ten or
 # more: the lock's own slot arithmetic speaks of 2 or 4).
 HARDWARE = re.compile(
