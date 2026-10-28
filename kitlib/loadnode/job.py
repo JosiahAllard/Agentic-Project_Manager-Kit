@@ -164,7 +164,7 @@ class NodeJob(object):
         rc, _out, err = self.git(args, self.top, env, PUSH_TIMEOUT_S)
         if rc != 0:
             raise JobError(EXIT_NODE, 'the push to %s failed: %s'
-                           % (self.node.name, _last(err) or 'git exit %s' % rc), fallback=True)
+                           % (self.node.name, _push_why(err) or 'git exit %s' % rc), fallback=True)
 
     def _call(self, verb, payload, fallback=False):
         """The node's one JSON line reply to `verb`. JobError(EXIT_NODE) for no reply."""
@@ -478,6 +478,23 @@ def _json(payload):
         return json.loads(payload.decode('utf-8'))
     except (UnicodeDecodeError, ValueError):
         return None
+
+
+# The lines git prints after any failed connection to a remote: never the cause.
+_GIT_TAIL = ('fatal: Could not read from remote repository.',
+             'Please make sure you have the correct access rights', 'and the repository exists.')
+
+
+def _push_why(err):
+    """The cause in a failed push's stderr: the host key, else its last line that is not git's
+    closing boilerplate, else that boilerplate's first line; never git's "fatal: "."""
+    text = err or ''
+    if any(k in text for k in remote._KEY_FAILS):
+        return "the node's host key is not the one in the registry"
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    own = [x for x in lines if x not in _GIT_TAIL]
+    why = own[-1] if own else lines[0] if lines else ''
+    return (why[len('fatal: '):] if why.startswith('fatal: ') else why)[:remote.ERR_CAP]
 
 
 def _last(text):

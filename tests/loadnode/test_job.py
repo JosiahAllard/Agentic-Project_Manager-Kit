@@ -102,14 +102,14 @@ class Base(unittest.TestCase):
         if 'push' in args:
             self.pushes.append((args, cwd, env))
             os.makedirs(self.box.mirror('my-repo'), exist_ok=True)
-            return (1, b'', 'fatal: the remote end hung up') if self.push_fails else (0, b'', '')
+            return (1, b'', self.push_fails) if self.push_fails else (0, b'', '')
         if args[0] == 'ls-files':
             hit = [a[len(':(literal)'):] for a in args if a.startswith(':(literal)')
                    and a[len(':(literal)'):] in self.tracked]
             return 0, ''.join(h + '\0' for h in hit).encode(), ''
         raise AssertionError('unexpected git %s' % args)
 
-    push_fails = False
+    push_fails = ''          # git's stderr for a push that fails
 
     def sleep(self, s):
         self.sleeps.append(s)
@@ -167,13 +167,27 @@ class Run(Base):
         self.assertEqual(self.node_job().run(), 0)
 
     def test_a_push_that_fails_falls_back_and_starts_nothing(self):
-        self.push_fails = True
+        self.push_fails = 'fatal: the remote end hung up'
         with self.assertRaises(job.JobError) as cm:
             self.node_job().run()
         self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_NODE, True))
         self.assertIn('hung up', cm.exception.message)
         self.assertEqual(self.verbs(), [])
         self.assertIsNone(self.notice('start'))
+
+    def test_a_failed_push_names_its_cause_not_gits_closing_lines(self):
+        tail = ('fatal: Could not read from remote repository.' + chr(10) + chr(10)
+                + 'Please make sure you have the correct access rights' + chr(10)
+                + 'and the repository exists.' + chr(10))
+        for err, want in (('Connection timed out during banner exchange' + chr(10) + tail,
+                           'Connection timed out during banner exchange'),
+                          ('Host key verification failed.' + chr(10) + tail,
+                           "the node's host key is not the one in the registry"),
+                          (tail, 'Could not read from remote repository.')):
+            self.push_fails = err
+            with self.assertRaises(job.JobError) as cm:
+                self.node_job().run()
+            self.assertEqual(cm.exception.message, 'the push to box1 failed: ' + want)
 
     def test_a_node_at_its_most_jobs_is_busy_and_falls_back(self):
         for j in ('j-20261028T110000Z-000001', 'j-20261028T110000Z-000002'):

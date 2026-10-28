@@ -548,8 +548,10 @@ class Box(object):
 
 def runner_env(env, job=None):
     """`env` without the machine lock's own variables (the job is no nested or detached run of
-    anything on the node), with PMKIT_NODE_JOB set when `job` is given."""
-    out = {k: v for k, v in env.items() if not k.startswith('MACHINE_LOCK_')}
+    anything on the node) and without sshd's SSH_ORIGINAL_COMMAND (loadnode.py is the job runner
+    only when that is not set), with PMKIT_NODE_JOB set when `job` is given."""
+    out = {k: v for k, v in env.items()
+           if not k.startswith('MACHINE_LOCK_') and k != 'SSH_ORIGINAL_COMMAND'}
     if job:
         out['PMKIT_NODE_JOB'] = job
     return out

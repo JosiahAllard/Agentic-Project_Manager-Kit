@@ -175,6 +175,15 @@ class Start(Base):
         self.assertEqual((cwd, env), (wt, {'PATH': '/bin'}))
         self.assertEqual(box._read_json(os.path.join(self.box.job_dir(JOB), 'pid.json'))['pid'], 4242)
 
+    def test_the_runner_gets_no_ssh_original_command(self):
+        # loadnode.py runs as the job runner only when sshd's SSH_ORIGINAL_COMMAND is not set; the
+        # runner inherits the env of the `start` call, which has it.
+        self.mirror()
+        got = self.box.start(box.check_spec(spec()), env={'PATH': '/bin',
+                                                          'SSH_ORIGINAL_COMMAND': 'start'})
+        self.assertTrue(got['ok'], got)
+        self.assertEqual(self.started[0][2], {'PATH': '/bin'})
+
     def test_a_ref_that_is_not_the_sha_is_refused(self):
         self.mirror()
         self.git.head = 'b' * 40
