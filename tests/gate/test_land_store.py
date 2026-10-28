@@ -325,15 +325,6 @@ class CloseEdges(StoreLandCase):
     def warnings(self, out):
         return [l for l in out.lines if l.startswith('WARNING')]
 
-    def test_an_owner_held_records_command_names_a_worktree_not_the_main_checkout(self):
-        self.seed(pulled('FOO', priority='-1', priority_by='-', owner_ask='may this ship?'))
-        out = self.land()
-        warn = self.warnings(out)
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
-                                      % (at_landing.WORKTREE, out.merge)), warn[0])
-        self.assertNotIn(self.repo.root, warn[0])
-
     def test_the_close_command_runs_the_repositorys_own_backlog_tool_when_it_has_one(self):
         self.assertEqual(at_landing.close_command(self.repo.root, 'close', 'FOO'),
                          'python "%s" -C "%s" close FOO'

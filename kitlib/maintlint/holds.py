@@ -28,7 +28,7 @@ KEYWORDS = {
               r"\bowner[- ]present\b"],
 }
 TEXT_FIELDS = ("summary", "requires", "expect")
-OFFERABLE = (omod.PULLABLE, omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED, omod.REVIEW)
+OFFERABLE = (omod.PULLABLE, omod.UNPRIORITISED_OPEN, omod.REVIEW)
 
 _COMPILED = {m: [re.compile(rx, re.I) for rx in rxs] for m, rxs in KEYWORDS.items()}
 

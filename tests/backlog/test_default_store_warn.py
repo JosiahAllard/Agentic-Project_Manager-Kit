@@ -155,7 +155,8 @@ class DefaultStoreWarn(unittest.TestCase):
         self.assertEqual(self.tips(), before)
 
     def test_an_owner_held_default_ref_record_names_the_plain_close_command(self):
-        before = self.seed_default(pulled('FOO', by='kit/other', priority='-1', priority_by='-',
+        # the owner's hold is `blocked_on: owner` (`priority: -1` is retired): never pulled
+        before = self.seed_default(priced('FOO', state='blocked', blocked_on='owner',
                                           owner_ask='may this ship?'))
         lines = self.land('Closes: FOO')
         warn = self.warnings(lines)

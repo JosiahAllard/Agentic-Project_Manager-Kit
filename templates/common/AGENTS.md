@@ -106,14 +106,13 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 
 - The store is read and written only through `backlog.py`, never by hand (skill backlog-ops).
   With no store named, the default `ref` store is read-only; `"backlog": {"store": "ref"}` opts in to writing it.
-- Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest), `-1` =
-  held, the owner's question: never pulled, and its priority changes only with `--priority-by owner|pm`
-  or a release to `-`. An agent prices (`--priority-by agent`, 2-5, never 1) at start the unpriced open
+- Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest). A record
+  that waits on the owner is `blocked_on: owner` (`block ID --on owner --owner-ask "<the question>"`),
+  never pulled until the owner or the PM unblocks it; `priority: -1` is retired. An agent prices (`--priority-by agent`, 2-5, never 1) at start the unpriced open
   records that are not follow-ups, after checking each for duplicates, size and fit; a follow-up stays
   unpriced until promoted into a work set, then is priced. The owner overrides later. An agent that
   cannot price a record asks the owner one question only the owner can answer - if the answer is
   in the tree, it isn't the owner's.
-- `blocked_on: owner` (the work waits on the owner) is not `priority: -1` (the price is the owner's).
 - Coordinators never wait for the owner for what is next: `python <kit>/tools/backlog.py -C <worktree> next` does.
 - The backlog store is the only progress tracker: no `STATUS.md` or `ROADMAP.md` that a story
   ticks or edits, no rename-log or changelog-per-story doc (git history already holds that). A

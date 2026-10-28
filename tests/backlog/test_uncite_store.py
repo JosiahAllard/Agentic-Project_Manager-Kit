@@ -210,7 +210,7 @@ class Store(StoreCase):
     def seed_three(self):
         self.seed(rec('AAA', priority='2', priority_by='owner', priority_ruling='R-9001',
                       body=BODY_A),
-                  rec('BBB', priority='-1', priority_by='-', owner_ask='which one?',
+                  rec('BBB', priority='-', priority_by='-',
                       hold_ruling='R-9002', q='Q-301', parked_at='2026-10-01', state='parked',
                       resume='R-9003', ref='R-9004 notes', body=BODY_B),
                   rec('CCC', body='Nothing cited here; T-1234 is a task.'))

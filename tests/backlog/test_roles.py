@@ -30,7 +30,7 @@ DESIGN = {
     'set-text': ('low', CPO, OWN),
     'set-price': ('low', CPO, {}),
     'set-price-owner': ('medium', TOP, {}),
-    'set-hold': ('high', TOP, {}),
+    'set-hold': ('high', TOP, {}),           # dormant: nothing sorts into it (-1 is retired)
     'set-other': ('medium', CPO, {}),       # the set fields no design row names
     'set-widen-collision': ('medium', CPO, {}),
     'pull': ('low', CPO + ('deep-worker',) + BUILDERS, {}),
@@ -201,7 +201,7 @@ class RolesTest(unittest.TestCase):
             self.assertEqual(R.allows(action, None), row.risk == R.NONE, action)
 
     def test_the_set_data_matches_the_record_schema(self):
-        self.assertEqual(R.HOLD, record.OWNER_PRIORITY)
+        self.assertEqual(R.HOLD, record.RETIRED_PRIORITY)
         self.assertEqual(sorted(R.PRICE_LOW + R.PRICE_TOP), ['1', '2', '3', '4', '5'])
         for band in R.PRICE_LOW + R.PRICE_TOP:
             self.assertTrue(record.is_band(band), band)
@@ -225,7 +225,7 @@ OWNER_BLOCKED = dict(state='blocked', blocked_on='owner', owner_ask='which one?'
 
 class CoordinatorPrice(unittest.TestCase):
     """The owner's rule (KIT-COORD-FOLLOWUP-PRICE-MISMATCH): a coordinator, like the PM, sets a
-    first price of 2-5 with `priority_by: agent` on an unpriced record; a price of 1 or -1, a
+    first price of 2-5 with `priority_by: agent` on an unpriced record; a price of 1, a
     reprice of an owner's or the PM's price, a `priority_by` of owner or pm, and a price on a
     record blocked on the owner stay the owner's and the PM's. The rows are sorted as
     tools/backlog.py's check sorts them (policy.sort over the record it reads) and judged by
@@ -244,13 +244,6 @@ class CoordinatorPrice(unittest.TestCase):
     def test_a_coordinator_may_not_set_a_price_of_1(self):
         text = self.refusal('coordinator', _price('1', 'agent'), _rec(**UNPRICED))
         self.assertIn('`set-price-owner` (risk medium) is for owner, pm', text)
-
-    def test_a_coordinator_may_not_set_or_release_a_hold(self):
-        text = self.refusal('coordinator', _price('-1', 'agent'), _rec(**UNPRICED))
-        self.assertIn('`set-hold` (risk high) is for owner, pm', text)
-        held = _rec(priority='-1', priority_by='owner')
-        text = self.refusal('coordinator', _price('-'), held)
-        self.assertIn('`set-hold` (risk high) is for owner, pm', text)
 
     def test_a_coordinator_may_not_reprice_an_owner_or_pm_price(self):
         """The three logged refusals (docs/refusals.md in the PM repo, 2026-10-24 and -25) were
@@ -279,21 +272,20 @@ class CoordinatorPrice(unittest.TestCase):
     def test_a_coordinator_reprices_an_agent_price(self):
         """An agent price is set-price, the leads' row, whoever set it: `priority_by: agent`
         does not say which session priced, so a coordinator may move it within 2-5 (with or
-        without `--priority-by agent`) or clear it, but never to 1 or -1."""
+        without `--priority-by agent`) or clear it, but never to 1."""
         rec = _rec(priority='3', priority_by='agent')
         for given in (_price('4', 'agent'), _price('5'), _price('-')):
             self.assertIsNone(self.refusal('coordinator', given, rec), given)
         self.assertIn('`set-price-owner`', self.refusal('coordinator', _price('1', 'agent'), rec))
-        self.assertIn('`set-hold`', self.refusal('coordinator', _price('-1', 'agent'), rec))
 
     def test_the_pm_and_the_owner_keep_every_price_and_builders_take_none(self):
         recs = (_rec(**UNPRICED), _rec(priority='3', priority_by='agent'),
                 _rec(priority='3', priority_by='pm'), _rec(priority='3', priority_by='owner'),
-                _rec(priority='-1', priority_by='owner'), _rec(**dict(UNPRICED, **OWNER_BLOCKED)))
+                _rec(**dict(UNPRICED, **OWNER_BLOCKED)))
         for rec in recs:
             # a bare `--priority 4` on an agent price is set-price alone, no set-other beside it
             for given in (_price('1', 'pm'), _price('3', 'owner'), _price('3', 'agent'),
-                          _price('-1', 'owner'), _price('4'), _price('-')):
+                          _price('4'), _price('-')):
                 for role in R.TOP:
                     self.assertIsNone(self.refusal(role, given, rec), (role, given))
                 for role in R.BUILDERS + R.DOCS + R.READ_ONLY + R.LANDERS:

@@ -111,9 +111,11 @@ def set_changes(args):
 def planner(args, ctx):
     v = args.verb
     if v == 'add':
+        body = pmod.read_body_file(args.body_file) if args.body_file else None
         return lambda s: pmod.plan_add(s, ctx, args.id, args.summary, args.scope, args.effort,
                                        args.ref, args.reopen, session=ctx.session,
-                                       found_on=args.found_on, why_not_folded=args.why_not_folded)
+                                       found_on=args.found_on, why_not_folded=args.why_not_folded,
+                                       body=body, summary_max=pmod.SUMMARY_MAX)
     if v == 'set':
         body = pmod.read_body_file(args.body_file) if args.body_file else None
         changes = set_changes(args)

@@ -62,7 +62,7 @@ class Add(Case):
         self.assertEqual(self.field('FOO', 'effort'), ['s'])
         self.assertEqual(len(self.field('FOO', 'review')), 1)
         self.assertRegex(self.field('FOO', 'review')[0], r'^owner-hub \d{4}-\d{2}-\d{2}$')
-        self.assertTrue(self.field('FOO', 'summary')[0].startswith(SUMMARY + ' (found on'))
+        self.assertEqual(self.field('FOO', 'summary'), [SUMMARY])     # the finding is in the body
         log = self.repo.git('log', '-1', '--format=%B', smod.STORE_REF)
         self.assertIn('Session: owner-hub', log)
 

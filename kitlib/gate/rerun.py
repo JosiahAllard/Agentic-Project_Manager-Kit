@@ -608,16 +608,19 @@ def scope_of(top, cls):
 
 def add_line(top, branch, head, classes):
     """The `backlog.py add` line a FLAKE prints: the builder reports it; the coordinator decides
-    on filing it (skill builder, step 10)."""
+    on filing it (skill builder, step 10). The summary is a short title, within plan.SUMMARY_MAX
+    (the class, cut to 60 characters, and the tip); the failing test ids go into the
+    not-folded reason, which the record keeps in its body's `## Found` section."""
     ids = [t for c in classes for t in c['ids']]
-    name = re.sub(r'[^A-Za-z0-9]+', '-', classes[0]['cls'].split('.')[-1]).strip('-').upper()
+    cls = classes[0]['cls'].split('.')[-1]
+    name = re.sub(r'[^A-Za-z0-9]+', '-', cls).strip('-').upper()
     scopes = sorted({scope_of(top, c['cls']) for c in classes})
-    return ('%s add FLAKE-%s --summary "flaky: %s failed in gate.py --full at %s and passed its '
-            'targeted rerun" --scope %s --found-on %s --why-not-folded "a flake outside this '
-            'branch\'s story"' % (kitroot.command('backlog', top), name[:40] or 'TEST',
-                                  ', '.join(ids[:3]) + (' and %d more' % (len(ids) - 3)
-                                                        if len(ids) > 3 else ''),
-                                  head[:10], ','.join(scopes), branch or 'none'))
+    more = ' and %d more' % (len(classes) - 1) if len(classes) > 1 else ''
+    return ('%s add FLAKE-%s --summary "flaky: %s%s in gate.py --full at %s" --scope %s '
+            '--found-on %s --why-not-folded "a flake outside this branch\'s story; it failed in '
+            'gate.py --full and passed its targeted rerun: %s"'
+            % (kitroot.command('backlog', top), name[:40] or 'TEST', cls[:60], more, head[:10],
+               ','.join(scopes), branch or 'none', ', '.join(ids)))
 
 
 def rerun_gate(root, slug=None, log_dir=None, say=None, book_kw=None):
