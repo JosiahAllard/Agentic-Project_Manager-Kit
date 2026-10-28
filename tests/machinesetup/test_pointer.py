@@ -78,6 +78,19 @@ class SurveyWording(unittest.TestCase):
         self.assertNotIn('HKLM', linux)
         self.assertIn('not elevated: HKLM\\SOFTWARE\\pm-kit is under HKLM; run python ', windows)
 
+    def test_elevation_wording_per_platform(self):
+        def all_text(name, apply):
+            plan = self.survey(name, admin=False, apply=apply)
+            return self.flat(plan) + ' | ' + ' | '.join(d for c in plan.changes for d in c.detail)
+        for apply in (True, False):
+            linux = all_text('linux', apply)
+            self.assertIn('as root or with sudo', linux)
+            self.assertNotIn('administrator', linux)
+        self.assertIn('run it from an administrator terminal', all_text('windows', False))
+        self.assertIn('from an administrator terminal, or by hand there:', all_text('windows', True))
+        self.assertIn('by hand, from an administrator terminal: ', all_text('windows', False))
+        self.assertNotIn('sudo', all_text('windows', True) + all_text('windows', False))
+
 
 if __name__ == '__main__':
     unittest.main()
