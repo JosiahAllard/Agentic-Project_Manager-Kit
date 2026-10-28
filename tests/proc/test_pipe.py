@@ -23,6 +23,12 @@ if os.name == 'nt':
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def set_file_security(path, flags, security):
+    function = ctypes.WinDLL('advapi32', use_last_error=True).SetFileSecurityW
+    function.argtypes, function.restype = [w.LPCWSTR, w.DWORD, w.LPVOID], w.BOOL
+    return function(path, flags, security)
+
+
 def pipe_name():
     return '\\\\.\\pipe\\LOCAL\\kit-pipe-test-' + uuid.uuid4().hex
 
@@ -139,6 +145,45 @@ class PrivatePipes(unittest.TestCase):
             path.write_bytes(b'fixture')
             protect_file(path)
             self.assertEqual(path.read_bytes(), b'fixture')
+
+    def test_a_folder_that_grants_this_user_no_write_owner_still_gets_a_private_file(self):
+        # The owner's sessions folder: inherited Administrators/SYSTEM full, Authenticated Users
+        # Modify, Users read, and no entry for the user, so a filtered token holds no WRITE_OWNER
+        # on a new file there; only the owner's implicit WRITE_DAC.
+        from kitlib.proc import pipe
+        user = pipe.process_sids(os.getpid())[0]
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / 'sessions'
+            folder.mkdir()
+            security = w.LPVOID()
+            self.assertTrue(pipe.from_sddl('D:PAI(A;OICI;FA;;;BA)(A;;FA;;;SY)(A;OICIIO;GA;;;SY)'
+                                           '(A;;0x1301bf;;;AU)(A;OICIIO;SDGXGWGR;;;AU)'
+                                           '(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)',
+                                           1, ctypes.byref(security), None))
+            try:
+                self.assertTrue(set_file_security(str(folder), 0x80000004, security))
+            finally:
+                pipe.local_free(security)
+            path = folder / 'fixture.key'
+            with path.open('xb') as output:
+                protect_file(path)
+                output.write(b'fixture')
+            handle = pipe.create_file(str(path), 0x20000, 7, None, 3, 0, None)
+            self.assertNotEqual(handle, pipe.INVALID)
+            try:
+                owner, sddl = pipe.descriptor(handle, 1)
+            finally:
+                pipe.close(handle)
+            self.assertEqual((owner, sddl.split('D:', 1)[1]), (user, 'P(A;;FA;;;%s)' % user))
+            self.assertEqual(path.read_bytes(), b'fixture')
+
+    def test_a_refused_acl_set_carries_its_win32_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ProcError, 'private-file-acl-set-failed') as caught:
+                protect_file(Path(directory) / 'missing.key')
+            self.assertEqual(caught.exception.code, 'private-file-acl-set-failed')
+            self.assertEqual(caught.exception.winerror, 2)  # ERROR_FILE_NOT_FOUND
+            self.assertIn('Win32 error 2', str(caught.exception))
 
 
 CONNECTED = ('import json,sys,ctypes; from ctypes import wintypes as w; '
