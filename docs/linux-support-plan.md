@@ -683,11 +683,13 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    each is a refusal. A process is this user's by any of its four status Uid users or its
    folder's owner (a not-dumpable one's folder is root's); each thread's cwd and root are read,
    and a zombie leader's running threads give every kind. cwd_holders, describe and classify.process_cwds read /proc too. The
-   Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record: they
-   change Windows too. Slice 9's VM proofs moved to their own backlog record (with slice 7's
-   live proofs) when slice 9 landed: (a) test_store_linux RealMachineStore, (b)
-   test_holders_linux Live, (c) a landing end to end on a throwaway repository on the VM, and (d)
-   how often an unreadable process of this user (ssh-agent, gpg-agent) leaves removals UNREAD.
+   Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record, as
+   they changed Windows too; they landed on Linux only (kitlib/config/policy.py
+   LINUX_HEAVY_DEFAULTS), so no Windows result changes. Slice 9's VM proofs moved to their own
+   backlog record (with slice 7's live proofs) when slice 9 landed: (a) test_store_linux
+   RealMachineStore, (b) test_holders_linux Live, (c) a landing end to end on a throwaway
+   repository on the VM, and (d) how often an unreadable process of this user (ssh-agent,
+   gpg-agent) leaves removals UNREAD.
    Known limits:
    a bind mount over a tree's file system leaves its removals UNREAD; in a WSL2 distro (a PID
    namespace of its own) every removal is NOT_SEARCHED; /proc is listed once, so a process that

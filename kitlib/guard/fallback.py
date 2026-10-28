@@ -375,7 +375,8 @@ def check(event, ctx, text, cwd, role, parsed):
     cfg = ctx.config(cwd) if cwd else None
     for entry, pat in heavy_patterns(cfg):
         m = pat.search(text)
-        if not m or (entry.get('when_args') and not any(a in text for a in entry['when_args'])):
+        if not m or (entry.get('when_args') and not any(a in text for a in entry['when_args'])) or any(
+                not any(a in text for a in wanted) for wanted in entry.get('also_args', ())):
             continue
         if held is None:
             held = ctx.lock_held()[0]
