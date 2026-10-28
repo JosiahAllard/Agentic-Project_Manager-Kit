@@ -42,6 +42,8 @@ class Source(unittest.TestCase):
                 ('hosts/codex/shell/plugin.json', manifest % 'codex'),
                 ('hosts/codex/shell/mcp.json', manifest % 'codex'),
                 ('hosts/claude/shell/hooks/hooks.json', manifest % 'claude'),
+                ('hosts/claude/shell/hooks/hooks.linux.json', manifest % 'claude'),
+                ('hosts/codex/shell/hooks/hooks.linux.json', manifest % 'codex'),
                 ('.claude-plugin/plugin.json', manifest % 'claude'),
                 ('.claude-plugin/marketplace.json', manifest % 'claude'),
                 ('hosts/claude/shell/agents', 'content/roles/'),                  # the folders themselves
@@ -97,7 +99,8 @@ class Rule(unittest.TestCase):
     def test_skills_copies_and_manifests_are_refused(self):
         for rel in (('hosts', 'codex', 'shell', 'skills', 'land-branch', 'SKILL.md'),
                     ('hosts', 'claude', 'shell', 'skills', 'new', 'SKILL.md'),            # a retired folder too
-                    ('.claude-plugin', 'plugin.json'), ('hosts', 'codex', 'shell', 'hooks', 'hooks.json')):
+                    ('.claude-plugin', 'plugin.json'), ('hosts', 'codex', 'shell', 'hooks', 'hooks.json'),
+                    ('hosts', 'claude', 'shell', 'hooks', 'hooks.linux.json')):
             with self.subTest(rel):
                 self.refused(self.write(os.path.join(self.w.wt, *rel)))
 

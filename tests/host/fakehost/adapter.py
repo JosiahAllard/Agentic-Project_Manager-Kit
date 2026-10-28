@@ -90,7 +90,7 @@ class FakeContent(object):
 
     def manifests(self, kit, content, registry_path=None):
         entry = registry.host(NAME, registry_path)
-        hooks = {e: hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), entry.platforms, NAME, e)
+        hooks = {e: hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), entry.platforms[0], NAME, e)
                  for e in entry.capabilities.hook_events}
         return {MANIFEST_REL: _dump({'name': kit['name'], 'version': kit['version'], 'hooks': hooks,
                                      'agents': sorted(content.role_names())})}
