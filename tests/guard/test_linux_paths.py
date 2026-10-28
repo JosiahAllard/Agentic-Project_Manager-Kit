@@ -717,6 +717,21 @@ class MountInfo(unittest.TestCase):
         self.assertEqual(paths._unescape('/a\\040b\\011c\\134d'), '/a b\tc\\d')
 
 
+class MountInfoEscapes(unittest.TestCase):
+    """paths._read_mounts through kitlib.platform.linux.paths' reader: a backslash, a tab and a
+    space in a mount point are decoded; a backslash before digits that are not octal stays (no
+    error); a bind mount (root not /) is its file system's fstype at its own point."""
+    read = MountInfo.read
+
+    def test_escapes_and_a_bind_mount(self):
+        table = ('22 1 8:1 / / rw - ext4 /dev/sda1 rw\n'
+                 '30 22 8:17 / /media/a\\134b\\011c rw - vfat /dev/sdb1 rw\n'
+                 '31 22 8:18 / /media/v\\089 rw - exfat /dev/sdc1 rw\n'
+                 '41 22 8:17 /sub\\040dir /mnt/bind rw - vfat /dev/sdb1 rw\n')
+        self.assertEqual(self.read(table), [('/', 'ext4'), ('/media/a\\b\tc', 'vfat'),
+                                            ('/media/v\\089', 'exfat'), ('/mnt/bind', 'vfat')])
+
+
 class Ready(unittest.TestCase):
     def test_the_guard_declares_linux_ready(self):
         self.assertEqual(guard.READY_PLATFORMS, ('windows', 'linux'))

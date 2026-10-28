@@ -521,7 +521,7 @@ class DomTest(unittest.TestCase):
             const see = async sel => { await click($(sel)); shown += "\\n" + text(body); };
             await see("#qtabs [data-qt=inbox]");
             for (const s of ["topm", "todo", "docs", "info"]) await see("#sections [data-s=" + s + "]");
-            await see("#ftabs [data-nf=agents]");
+            await see("#sections [data-s=agents]");
             await see("#sections [data-s=backlog]");
             for (const f of ["current", "parked", "done"]) await see("#stabs [data-sf=" + f + "]");
             server.route = c => c.path === "/records/alpha/B-1" ? { status: 200, body: REC } : undefined;
@@ -1363,7 +1363,7 @@ class DomTest(unittest.TestCase):
             return out;
         """, snapshot(views=views))
         # The sidebar's order is its groups'.
-        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", "schedule", "docs", "topm", "info", "findings", "autotasks"])
+        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", "schedule", "docs", "topm", "info", "agents", "findings", "autotasks"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -1707,6 +1707,18 @@ class DomTest(unittest.TestCase):
         # a tab chosen since, on the page as it is now, is the later word
         self.assertEqual(reload({"oq.section": "parked", "oq.sfilter": "done"})["tab"], ["done"])
 
+    def test_a_stored_agents_section_reopens_agents_and_a_stored_agents_infotab_falls_back_to_usage(self):
+        def reload(keys):
+            return dom("""
+                for (const [k, v] of Object.entries(KEYS)) localStorage.setItem(k, v);
+                await start();
+                return { section: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s),
+                         tabs: $$("#ftabs .tab").filter(t => t.getAttribute("aria-selected") === "true").map(t => t.dataset.nf) };
+            """.replace("KEYS", json.dumps(keys)), snapshot(views={}))
+        self.assertEqual(reload({"oq.section": "agents"})["section"], ["agents"])
+        got = reload({"oq.section": "info", "oq.infotab": "agents"})      # Agents was a Usage tab in an older page
+        self.assertEqual((got["section"], got["tabs"]), (["info"], ["usage"]))
+
     def test_a_usage_tie_goes_to_the_weekly_window_whichever_account_has_it(self):
         def chip(accounts):
             return dom("""
@@ -1795,7 +1807,7 @@ class DomTest(unittest.TestCase):
             const out = { parked: cards() };
             await click($("#sections [data-s=info]")); await click($("#ftabs [data-nf=usage]"));
             out.usage = cards(); out.note = text($("#list .unote"));
-            await click($("#ftabs [data-nf=agents]"));
+            await click($("#sections [data-s=agents]"));
             out.err = text($("#loaderr")); out.sleeps = sleeps();
             return out;
         """, snapshot(views=views), hash="#parked")
@@ -2513,7 +2525,7 @@ class ShellTest(unittest.TestCase):
                  "#docs": ("docs", None, None, None, "#docs"),
                  "#info": ("info", None, None, "usage", "#info"),
                  "#usage": ("info", None, None, "usage", "#usage"),
-                 "#agents": ("info", None, None, "agents", "#agents"),
+                 "#agents": ("agents", None, None, None, "#agents"),
                  "#nowhere": ("questions", "questions", None, None, "#questions")}
         for hash_, (sec, qt, sf, nf, shown) in cases.items():
             got = dom(SHELL_NOW + "await start(); return now();", snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash=hash_)
@@ -2543,10 +2555,9 @@ class ShellTest(unittest.TestCase):
         self.assertEqual([(s["sec"], s["hash"], s["len"]) for s in got], [
             (["questions"], "#questions", 1), (["todo"], "#todo", 2), (["todo"], "#todo", 2), (["backlog"], "#backlog", 3),
             (["backlog"], "#parked", 4), (["backlog"], "#backlog", 4), (["todo"], "#todo", 4), (["questions"], "#questions", 4),
-            (["info"], "#agents", 2), (["questions"], "#questions", 2)])
+            (["agents"], "#agents", 2), (["questions"], "#questions", 2)])
         self.assertEqual(got[4]["sf"], ["parked"])
         self.assertEqual(got[5]["sf"], ["current"])                    # Back from Parked is the Backlog's current list
-        self.assertEqual(got[8]["nf"], ["agents"])
         self.assertTrue(all(s["tb"] == [bar_tab(s["sec"][0])] for s in got))
 
     def test_the_approvals_tab_has_a_route_and_its_filter_is_not_an_address(self):
@@ -2573,7 +2584,7 @@ class ShellTest(unittest.TestCase):
             return { first, rows, after: now(), tabs: $$("#tabbar .tb").map(b => b.id) };
         """, snapshot(collections=LISTS), hash="#more")
         self.assertEqual((got["first"]["sec"], got["first"]["tb"], got["first"]["hash"], got["first"]["len"]), ([], ["more"], "#more", 1))
-        self.assertEqual([r[0] for r in got["rows"]], ["more-todo", "more-backlog", "more-docs", "more-topm", "more-info", "more-findings", "more-autotasks"])
+        self.assertEqual([r[0] for r in got["rows"]], ["more-todo", "more-backlog", "more-docs", "more-topm", "more-info", "more-agents", "more-findings", "more-autotasks"])
         self.assertEqual([r[1] for r in got["rows"]][:2], ["To-dos2", "Backlog0"])
         self.assertEqual((got["after"]["sec"], got["after"]["tb"], got["after"]["hash"]), (["backlog"], ["more"], "#backlog"))
         self.assertEqual(got["tabs"], ["tb-home", "tb-questions", "tb-approvals", "tb-schedule", "tb-more"])
@@ -2660,7 +2671,7 @@ class ShellTest(unittest.TestCase):
             return [under, now()];
         """, snapshot(collections=LISTS))
         self.assertEqual(got[0]["sec"], ["questions"])
-        self.assertEqual((got[1]["sec"], got[1]["nf"]), (["info"], ["agents"]))      # followed once the reader is shut
+        self.assertEqual(got[1]["sec"], ["agents"])      # followed once the reader is shut
 
 
 APPROVAL = {"status": "pending", "repo": "github.com/team/alpha", "title": "Raise the cap", "head": "a" * 40, "version": 2,
@@ -4973,11 +4984,12 @@ class TriageShellTest(unittest.TestCase):
         side = re.search(r'<div class="sections".*?</div>\s*<div class="sidefoot"', self.markup, re.S).group(0)
         order = re.findall(r'class="(sechead|sec)"[^>]*?(?:id="([\w-]+)")', side)
         self.assertEqual([i for _, i in order], ["sec-home", "sh-work", "sec-questions", "sec-todo", "sec-approvals", "sh-projects",
-                                                 "sec-backlog", "sec-schedule", "sec-docs", "sh-more", "sec-topm", "sec-info",
+                                                 "sec-backlog", "sec-schedule", "sec-docs", "sh-more", "sec-topm", "sec-info", "sec-agents",
                                                  "sh-upkeep", "sec-findings", "sec-autotasks"])
+        self.assertNotIn("data-nf=\"agents\"", self.markup)      # Agents is its own entry under More, not a Usage tab
         heads = re.findall(r'<div class="sechead" id="[\w-]+">([^<]+)</div>', side)
         self.assertEqual(heads, ["Your work", "Projects", "More", "Upkeep"])
-        for label in ("Message the PM", "Usage and agents", "Lint findings", "Automatic tasks", "Schedule", "Approvals"):
+        for label in ("Message the PM", "Usage", "Agents", "Lint findings", "Automatic tasks", "Schedule", "Approvals"):
             self.assertIn(label, side)
         self.assertRegex(side, r'<button class="sec" role="tab" data-s="schedule"[^>]*id="sec-schedule">Schedule <span class="n" id="n-sch">0</span></button>')
         self.assertRegex(self.markup, r'id="tb-schedule">Schedule <span class="n" data-of="n-sch">0</span></button>')   # the owner's word, not "Machine schedule"
@@ -5089,7 +5101,7 @@ class TriageShellTest(unittest.TestCase):
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class TriageViewsTest(unittest.TestCase):
-    """Backlog, Docs, Message the PM and Usage and agents as rows in the list pane and one card in the detail pane."""
+    """Backlog, Docs, Message the PM, Usage and Agents as rows in the list pane and one card in the detail pane."""
 
     ITEMS = [{"id": "B-1", "t": "one", "p": 1, "s": "open"}, {"id": "B-2", "t": "two", "p": 2, "s": "blocked"},
              {"id": "B-3", "t": "three", "p": 1, "s": "open"}, {"id": "B-4", "t": "waits", "p": 1, "s": "parked", "parked_at": NOW}]
@@ -5236,7 +5248,7 @@ class TriageViewsTest(unittest.TestCase):
                             meters: $$("#pane-detail [role=meter]").length, note: text($(".unote")) };
             await click($("#row-2"));
             usage.second = $$("#pane-detail article").map(a => a.id);
-            await click($("#ftabs [data-nf=agents]"));
+            await click($("#sections [data-s=agents]"));
             const agents = { rows: $$("#list .row").map(a => a.id), detail: $$("#pane-detail article").map(a => [a.id, text(a)]) };
             return { usage, agents };
         """, snapshot(views=views), hash="#info")

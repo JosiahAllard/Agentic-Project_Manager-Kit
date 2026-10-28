@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import config, lockmcp
 from kitlib.config import policy
@@ -67,6 +68,7 @@ class HeavyTest(TreeCase):
     def test_an_unlisted_program_is_not_heavy(self):
         self.assertIsNone(policy.heavy_match('python.exe', ['-m', 'unittest'], policy.heavy_programs()))
 
+    @mock.patch('kitlib.platform.NAME', 'windows')
     def test_repo_entries_follow_the_defaults_and_cannot_remove_them(self):
         cfg = self.load({'heavy': {'programs': [
             {'program': 'test.bat', 'kind': 'engine-test', 'why': 'runs Godot tests'},
@@ -94,6 +96,88 @@ class HeavyTest(TreeCase):
                    {'program': 'a*', 'kind': 'two'}]
         self.assertEqual(policy.heavy_match('ab', ['-x'], entries)['kind'], 'one')
         self.assertEqual(policy.heavy_match('ab', [], entries)['kind'], 'two')
+
+
+WINDOWS_DEFAULTS = ['godot', 'godot.*', 'godot_*', 'blender*', 'dotnet', 'dotnet.exe', 'gradle',
+                    'gradle.*', 'gradlew', 'gradlew.*']
+
+
+class LinuxHeavyTest(unittest.TestCase):
+    """Godot and Blender as Linux names them (docs/linux-support-plan.md section 3, finding 8)."""
+
+    def setUp(self):
+        patcher = mock.patch('kitlib.platform.NAME', 'linux')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.entries = policy.heavy_programs()
+
+    def kind(self, prog, args):
+        entry = policy.heavy_match(prog, args, self.entries)
+        return entry and entry['kind']
+
+    def test_linux_godot_names_are_heavy(self):
+        for prog, args in (('godot', []), ('godot4', []), ('/usr/bin/godot3', ['--path', 'game']),
+                           ('Godot_v4.3-stable_linux.x86_64', ['--headless']),
+                           ('Godot4.AppImage', []), ('Godot.AppImage', ['--headless']),
+                           ('flatpak', ['run', 'org.godotengine.Godot', '--headless']),
+                           ('flatpak', ['--user', 'run', 'org.godotengine.Godot']),
+                           ('/usr/bin/flatpak', ['run', '--branch=stable', 'org.godotengine.GodotSharp']),
+                           ('/var/lib/flatpak/exports/bin/org.godotengine.Godot', ['-e'])):
+            self.assertEqual(self.kind(prog, args), 'engine-run', (prog, args))
+
+    def test_flatpak_management_and_other_apps_are_not_heavy(self):
+        for prog, args in (('flatpak', ['run', 'org.gnome.Calculator']), ('flatpak', ['list']),
+                           ('flatpak', ['install', 'flathub', 'org.godotengine.Godot']),
+                           ('flatpak', ['update', 'org.godotengine.Godot']),
+                           ('flatpak', ['info', 'org.godotengine.GodotSharp']),
+                           ('flatpak', ['uninstall', 'org.blender.Blender', '-y']),
+                           ('flatpak', ['remote-info', 'flathub', 'org.godotengine.Godot']),
+                           ('flatpak', ['remote-info', 'flathub', 'org.blender.Blender', '-b']),
+                           ('flatpak', ['mask', 'org.godotengine.GodotSharp']),
+                           ('godotenv', []), ('godot-tools', []), ('godots', [])):
+            self.assertIsNone(self.kind(prog, args), (prog, args))
+
+    def test_blender_is_heavy_only_in_the_background(self):
+        for prog, args in (('blender', ['-b', 'x.blend']), ('/usr/bin/blender', ['--background']),
+                           ('flatpak', ['run', 'org.blender.Blender', '-b', 'x.blend']),
+                           ('flatpak', ['run', '--branch=stable', 'org.blender.Blender', '--background']),
+                           ('/var/lib/flatpak/exports/bin/org.blender.Blender', ['-b', 'x.blend'])):
+            self.assertEqual(self.kind(prog, args), 'render', (prog, args))
+        for prog, args in (('blender', ['x.blend']), ('flatpak', ['run', 'org.blender.Blender']),
+                           ('flatpak', ['run', 'org.blender.Blender', 'x.blend']),
+                           ('flatpak', ['run', 'org.gimp.GIMP', '-b', '(gimp-quit 0)']),
+                           ('flatpak', ['install', 'flathub', 'org.blender.Blender']),
+                           ('/var/lib/flatpak/exports/bin/org.blender.Blender', ['x.blend'])):
+            self.assertIsNone(self.kind(prog, args), (prog, args))
+
+
+class WindowsHeavyUnchangedTest(unittest.TestCase):
+    """The Linux names are added on Linux only: on Windows the list and every result stay as they
+    were (godot[0-9]* would make godot4.exe heavy there)."""
+
+    def setUp(self):
+        patcher = mock.patch('kitlib.platform.NAME', 'windows')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.entries = policy.heavy_programs()
+
+    def test_the_windows_defaults_are_the_same_list(self):
+        self.assertEqual([e['program'] for e in self.entries], WINDOWS_DEFAULTS)
+        self.assertEqual(self.entries, list(policy.HEAVY_DEFAULTS))
+
+    def test_windows_results_do_not_change(self):
+        for prog, args, kind in (
+                ('godot.exe', [], 'engine-run'), ('C:\\Tools\\Godot_v4.4-stable_mono_win64.exe', [], 'engine-run'),
+                ('Godot_v4.3-stable_win64_console.exe', ['--headless'], 'engine-run'),
+                ('godot_mono', [], 'engine-run'), ('Godot.AppImage', [], 'engine-run'),
+                ('blender.exe', ['-b', 'x.blend'], 'render'), ('blender', ['--background'], 'render'),
+                ('godot4.exe', [], None), ('godot4', [], None), ('Godot4.exe', ['--path', 'game'], None),
+                ('godot3.exe', [], None), ('godotenv.exe', [], None), ('blender.exe', ['x.blend'], None),
+                ('org.godotengine.Godot', [], None), ('flatpak', ['run', 'org.godotengine.Godot'], None),
+                ('flatpak', ['run', 'org.blender.Blender', '-b'], None),
+                ('org.blender.Blender', ['-b', 'x.blend'], None)):
+            entry = policy.heavy_match(prog, args, self.entries)
+            self.assertEqual(entry and entry['kind'], kind, (prog, args))
 
 
 class RolesTest(TreeCase):
