@@ -407,9 +407,9 @@ store's git push (the `push` setting).
 - Who hears: the item's `from`, unless that is the PM's own (`pm`, the owner, empty), and the PM, once;
   for an approval, the coordinator key its `repo` names ("Who handles a pending item") and the PM; for
   a skill edit, the kit's coordinator (`Api.kit_session_key`) and the PM. A
-  launcher key is resolved through sessions.json; `pm` through coordinators.json's `pm_session_id`, then
-  coordinators.json's `pm_name` (the name `launch.py pm-relaunch` gave the PM), then the names
-  `Project Manager` and `pm-session`.
+  launcher key is resolved through sessions.json; `pm` through coordinators.json's `pm_session_id` (a
+  `launch.py pm-relaunch` fork's own id), then the names `Project Manager` and `pm-session`; its `pm_name`
+  counts as a PM sender, never as a fallback target.
 - **Filed answers** (`filed`): who hears depends on what the filing did to the record, the question's
   `filed_as` ("Filing the answer"):
   - `pulled` (someone is working on the record): its asker alone, until it picks it up; when the PM

@@ -30,6 +30,21 @@ PM_NAME = stop.PM_RC_NAME
 PM_DESKTOP_NAME = 'Project Manager'
 PM_REF = ("the PM (ListAgents shows its session as '%s' in the desktop app, or '%s' when the launcher resumed it)"
           % (PM_DESKTOP_NAME, PM_NAME))
+PM_REF_RELAUNCHED = ("the PM (ListAgents shows its session as '%s', the name launch.py pm-relaunch gave it; else '%s' "
+                     "or '%s')")
+
+
+def pm_ref(settings):
+    """How a first message names the PM: PM_REF, or, when coordinators.json's pm_name is set (not a
+    placeholder), that name first (pm-relaunch's fork). An unreadable coordinators.json is PM_REF."""
+    try:
+        cfg = state.read_coordinators(settings) or {}
+    except (LaunchError, OSError):
+        return PM_REF
+    name = cfg.get('pm_name') if isinstance(cfg, dict) else None
+    if not isinstance(name, str) or not name or name.startswith('<'):
+        return PM_REF
+    return PM_REF_RELAUNCHED % (name, PM_DESKTOP_NAME, PM_NAME)
 DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with %s, '
                   'then continue the queue in the state note.' % PM_REF)
 HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
@@ -167,6 +182,8 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
                   'with %s, and begin.' % (brief, PM_REF)) if brief else default_prompt
     elif brief:
         prompt = 'Read your standing brief %s first. ' % brief + prompt
+    if PM_REF in prompt:                       # every first message names the PM as PM_REF: the live name here
+        prompt = prompt.replace(PM_REF, pm_ref(settings))
     if predecessor:
         prompt = predecessor_text(predecessor, role == window.COORDINATOR) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))

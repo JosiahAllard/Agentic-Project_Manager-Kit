@@ -24,8 +24,8 @@ The wire format and the write are here once: optional/bridge/hosts/claude (peer.
 imports canonical_pipe, sender_address, message_frames and write_once from this module.
 
 Resolution: a launcher key is its sessions.json name; `pm` is coordinators.json's pm_session_id
-matched against the record's sessionId, then the names coordinators.json's pm_name (the name
-launch.py pm-relaunch gave the PM), PM_NAME and pm-session; anything else is
+matched against the record's sessionId (a relaunched PM's fork matches by its id), then the names
+PM_NAME and pm-session; anything else is
 taken as a session name. Only a live record counts (its pid runs with the record's creation time:
 launch.py stop leaves records behind). Several live records of one name: the one pipes.json names
 when its pid and creation time match, else the newest creation time, flagged ambiguous.
@@ -330,7 +330,8 @@ class HubPush(object):
         return self._coordinators_value('pm_session_id')
 
     def _pm_names(self):
-        """coordinators.json's pm_name (pm-relaunch's), then PM_NAMES."""
+        """coordinators.json's pm_name (pm-relaunch's), then PM_NAMES: who counts as the PM sender.
+        resolve's fallback uses PM_NAMES only, so a stale pm_name is never a delivery target."""
         name = self._coordinators_value('pm_name')
         return ((name,) if name else ()) + PM_NAMES
 
@@ -361,7 +362,7 @@ class HubPush(object):
             hits = [h for h in live if sid is not None and h[1].get('sessionId') == sid]
             if hits:
                 return self._pick(hits, hits[0][1].get('name') or PM_NAMES[0])
-            for name in self._pm_names():
+            for name in PM_NAMES:
                 hits = [h for h in live if h[1].get('name') == name]
                 if hits:
                     return self._pick(hits, name)
