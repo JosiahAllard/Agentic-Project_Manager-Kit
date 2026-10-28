@@ -1027,6 +1027,27 @@ def questions_list(api, req):
 RECORD_SHAPE = 'record is {"repo": <a configured repository>, "id": <one of its record ids>}'
 
 
+def _holders(api, repo, rid):
+    """The other configured repo names whose backlog has the record `rid` (a kit record is keyed
+    on the PM repo's folder name, not the kit repo's own), for the not_found refusal. Best
+    effort: a view that is missing or fails names none."""
+    try:
+        names = [r.get('name') for r in api._view('repos')() if isinstance(r, dict)]
+    except Exception:       # noqa: BLE001 - a view is another module's code
+        return []
+    held = []
+    for name in names:
+        if not isinstance(name, str) or name.lower() == repo.lower():
+            continue
+        try:
+            got = api._view('record')(name, rid)
+        except Exception:   # noqa: BLE001
+            continue
+        if isinstance(got, dict) and got.get('where') == 'open':
+            held.append(name)
+    return held
+
+
 def _bound(api, value):
     """The `record` a question is bound to, {repo, id}, after the configured repository's
     backlog was read now through the `record` view (docs/action-hub.md "questions/Q-NNN"): repo
@@ -1052,8 +1073,10 @@ def _bound(api, value):
             raise HubError('not_found', 'record names repo %s, which is not a repository the '
                            'hub has configured' % ascii(repo), 'record')
         if e.code == 'not_found':
-            raise HubError('not_found', "record %s: repo %s's backlog has no record %s"
-                           % (named, repo, rid), 'record')
+            held = _holders(api, repo, rid)
+            raise HubError('not_found', "record %s: repo %s's backlog has no record %s%s"
+                           % (named, repo, rid, '; the repo key that holds it is %s' % ', '.join(held)
+                              if held else ''), 'record')
         raise HubError('unavailable', 'record %s could not be checked: %s; ask again, or ask '
                        'without a record' % (named, e.message), 'record')
     except Exception as e:          # noqa: BLE001 - a view is another module's code

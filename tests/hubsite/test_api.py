@@ -2312,6 +2312,9 @@ class BindViews(object):
             got['writable'] = False
         return got
 
+    def repos(self):
+        return [{'name': 'kit', 'aliases': []}, {'name': 'KitOwn', 'aliases': []}]
+
 
 class QuestionRecordTest(ApiCase):
     """A question bound to a backlog record: `record` {repo, id}, checked against the configured
@@ -2356,6 +2359,21 @@ class QuestionRecordTest(ApiCase):
                                    {'title': 't', 'record': record})
                 self.assertIn(says, obj['error']['message'])
         self.assertEqual(self.store.docs('questions'), {})
+
+    def test_a_missing_record_names_the_other_repo_key_that_holds_it(self):
+        # kit records key on the PM repo's folder name: asking under the kit repo's own name names it
+        class Two(BindViews):
+            def record(self, repo, id):
+                if repo == 'KitOwn':
+                    raise HubError('not_found', 'no such record', 'id')
+                return BindViews.record(self, repo, id)
+        self.api = api.Api(self.store, views=Two(), clock=CLOCK)
+        obj = self.refused('not_found', 'record', 'POST', '/questions', AGENT,
+                           {'title': 't', 'record': {'repo': 'KitOwn', 'id': 'EX-1'}})
+        self.assertIn("the repo key that holds it is kit", obj['error']['message'])
+        obj = self.refused('not_found', 'record', 'POST', '/questions', AGENT,
+                           {'title': 't', 'record': {'repo': 'kit', 'id': 'EX-404'}})
+        self.assertNotIn('holds it', obj['error']['message'])
 
     def test_a_record_in_a_store_the_hub_cannot_write_is_refused_on_ask_and_edit(self):
         # its answer could never be filed (recordwrite answer: no_store), so it is never bound
