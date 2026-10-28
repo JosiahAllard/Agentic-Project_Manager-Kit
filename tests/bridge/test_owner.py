@@ -72,6 +72,33 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual({choice.reference for choice in choices},{self.a.reference,self.b.reference})
 
 
+    def test_pm_routes_must_share_the_owner_store_and_controls_without_them_list_none(self):
+        from optional.bridge.core.pmroutes import PmRoutes
+        with PairingStore(Path(self.temp.name)/'other.sqlite') as other:
+            with self.assertRaisesRegex(PairingError,'invalid-owner-components'):
+                OwnerControls(self.pairs,self.decisions,pm=PmRoutes(other,launched=lambda binding:'pm'))
+        self.assertEqual(self.owner.pm_routes(),())
+        with self.assertRaisesRegex(PairingError,'pm-routes-unavailable'):
+            self.owner.stop_pm(self.a.reference,self.b.reference)
+
+    def test_a_pm_route_the_owner_connected_since_is_not_listed_and_stop_never_disconnects_the_owner(self):
+        from optional.bridge.core.messages import SenderAuthority
+        from optional.bridge.core.pmroutes import PmRoutes
+        p=chat('p')
+        self.live['p']=p
+        self.pairs.observe(p)
+        pm=PmRoutes(self.pairs,launched=lambda binding:'pm' if binding in self.live.values() else None,
+            clock=lambda:self.now)
+        owner=OwnerControls(self.pairs,self.decisions,pm=pm)
+        pm.connect(SenderAuthority(p,'root-p',launched='pm'),self.a.reference,self.b.reference,bidirectional=False)
+        self.assertEqual(owner.pm_routes(),((self.a.reference,self.b.reference,100.0,True),))
+        owner.change(self.a.reference,self.b.reference,enabled=True,bidirectional=False)
+        self.assertEqual(owner.pm_routes(),())  # the owner's own row decides it now
+        self.assertTrue(owner.stop_pm(self.a.reference,self.b.reference))
+        self.assertIs(self.pairs.owner_choice(self.a,self.b),True)
+        self.pairs.require_selected(self.a,self.b)
+
+
 class WriterLeaseTests(unittest.TestCase):
     """A writer lease is an owner click, one use, exact chats, until revoked, logged, and in memory."""
     def setUp(self):

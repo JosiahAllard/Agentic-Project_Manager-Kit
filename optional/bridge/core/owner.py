@@ -6,15 +6,13 @@ boundary; it does not claim to defeat full-access code manipulating native UI or
 calling Python internals outside that API.
 """
 from dataclasses import dataclass
-import json
-import os
 import secrets
-import stat
 import threading
 import time
 
 from kitlib.ident import digest
 from .pairing import ChatBinding,ChatSelection,PairingError,PairingStore
+from .pmroutes import PmRoutes,append_log,stamp
 
 MAX_LEASES=32
 LEASE_LOG='writer-leases.log'  # beside the pairings store, in the bridge state folder
@@ -166,12 +164,12 @@ class ChatChoice:
 
 
 class OwnerControls:
-    def __init__(self,pairings,decisions, *, describe=None,leases=None):
+    def __init__(self,pairings,decisions, *, describe=None,leases=None,pm=None):
         if (type(pairings) is not PairingStore or type(decisions) is not OwnerDecisions
-                or leases is not None and type(leases) is not WriterLeases):
+                or leases is not None and type(leases) is not WriterLeases
+                or pm is not None and (type(pm) is not PmRoutes or pm.pairings is not pairings)):
             raise PairingError('invalid-owner-components')
-        self.pairings,self.decisions,self.describe,self.leases=pairings,decisions,describe,leases
-        self._log_lock=threading.Lock()
+        self.pairings,self.decisions,self.describe,self.leases,self.pm=pairings,decisions,describe,leases,pm
         if leases is not None: pairings.on_observe(self._chat_observed)
 
     def chats(self):
@@ -198,7 +196,47 @@ class OwnerControls:
             enabled=enabled,bidirectional=bidirectional)
         if (selection.sender_ref,selection.recipient_ref)!=(sender_ref,recipient_ref):
             raise PairingError('visible-chat-changed')
-        return self.pairings.owner_select(selection,self.decisions.mint(selection))
+        revision=self.pairings.owner_select(selection,self.decisions.mint(selection))
+        if enabled is False and self.pm is not None:
+            # The owner's disconnect also ends any PM route on these directions; the disabled
+            # rows just written keep the PM from making it again.
+            for left,right in [(sender_ref,recipient_ref)]+([(recipient_ref,sender_ref)] if bidirectional else []):
+                self.pm.stop(left,right,by='owner')
+        return revision
+
+    def pm_routes(self, *, check=True):
+        """Every PM route the owner's own row does not decide, as (sender, recipient, time made,
+        deliverable). Deliverable: both chats are listed and, with check, both are still
+        kit-launched (live checks run). An undeliverable route is still returned so the owner can
+        see and Stop it."""
+        if self.pm is None: return ()
+        observed=set(self.pairings.registered())
+        result=[]
+        for sender_ref,recipient_ref,made in self.pm.current():
+            route=self.pm.route(sender_ref,recipient_ref)
+            if route is None: continue
+            try:
+                if self.pairings.owner_choice(route.sender,route.recipient) is not None: continue
+            except PairingError: continue
+            deliverable=route.sender in observed and route.recipient in observed
+            if deliverable and check: deliverable=self.pm.allows(route.sender,route.recipient)
+            result.append((sender_ref,recipient_ref,made,deliverable))
+        return tuple(result)
+
+    def stop_pm(self,sender_ref,recipient_ref):
+        """Owner button: stop the PM route in this one direction and keep the PM from making it
+        again: a disabled owner row for it, which only the owner's Connect undoes. Works whether
+        or not either chat is still listed. Returns whether a PM route was removed."""
+        if self.pm is None: raise PairingError('pm-routes-unavailable')
+        for reference in (sender_ref,recipient_ref): digest(reference)
+        with self.pairings.held():  # no PM connect can land between the stop and the block
+            route=self.pm.route(sender_ref,recipient_ref)
+            if route is None: return False
+            removed=self.pm.stop(sender_ref,recipient_ref,by='owner')
+            if self.pairings.owner_choice(route.sender,route.recipient) is None:
+                block=ChatSelection(route.sender.reference,route.recipient.reference,False,False)
+                self.pairings.owner_block(route.sender,route.recipient,self.decisions.mint(block))
+            return removed
 
     def writers(self):
         """Current writer leases between visible chats, as (writer, recipient) references."""
@@ -271,19 +309,5 @@ class OwnerControls:
 
     def _log(self,event,by,writer_ref,recipient_ref,when):
         """Append one JSON line to the grant/revoke log beside the pairings store."""
-        line=json.dumps({'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(when)),'event':event,'by':by,
-            'writer':writer_ref,'recipient':recipient_ref},sort_keys=True,separators=(',',':'))+'\n'
-        path=self.pairings.path.parent/LEASE_LOG
-        with self._log_lock:
-            try:
-                with path.open('xb'):
-                    if self.pairings.prepare_new_file is not None: self.pairings.prepare_new_file(path)
-            except FileExistsError: pass
-            info=path.lstat()
-            if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
-                    or getattr(info,'st_file_attributes',0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
-                raise PairingError('nonregular-lease-log')
-            with path.open('ab') as handle:
-                handle.write(line.encode('ascii'))
-                handle.flush()
-                os.fsync(handle.fileno())
+        append_log(self.pairings,LEASE_LOG,[{'at':stamp(when),'event':event,'by':by,
+            'writer':writer_ref,'recipient':recipient_ref}])
