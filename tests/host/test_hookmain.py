@@ -451,6 +451,18 @@ class CommandLine(unittest.TestCase):
                                         args=('h', 'PreToolUse'))
         self.assertEqual(named['PreToolUse'][0]['hooks'][0]['args'], ['k/boot/hook.py', 'h', 'PreToolUse'])
 
+    def test_a_linux_settings_entry_blocks_when_the_hook_cannot_run(self):
+        """A Linux entry whose interpreter is gone must block, not let the call through unguarded:
+        onFailure "block" (Claude Code's hooks docs). Windows keeps its entry as it was."""
+        linux = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py', platform='linux')
+        self.assertEqual(linux, {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+            {'type': 'command', 'command': 'py', 'args': ['h.py'], 'onFailure': 'block'}]}]})
+        windows = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py', platform='windows')
+        self.assertEqual(list(windows['PreToolUse'][0]['hooks'][0]), ['type', 'command', 'args'])
+        with mock.patch('kitlib.platform.NAME', 'linux'):
+            hook = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')['PreToolUse'][0]['hooks'][0]
+        self.assertEqual(hook.get('onFailure'), 'block')
+
 
 class Dispatch(unittest.TestCase):
     """dispatch: boot/hook.py's work once the kit has booted."""
