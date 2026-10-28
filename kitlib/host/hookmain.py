@@ -52,6 +52,9 @@ lives here once:
         python3 still answers as boot/hook.py does: a tool event (`blocking`) exits 2, the
         guard-error deny; a start event prints "PM kit: the kit did not load: ..." and exits 0.
         A platform with no interpreter raises ValueError.
+  mcp_interpreter(platform)
+        the interpreter, by name, that a plugin manifest's MCP servers run on `platform`
+        (MCP_INTERPRETERS): python on Windows, python3 on Linux. ValueError for any other.
   settings_entry(event_name, matcher, script, executable, timeout, args)
         {event_name: [{"matcher", "hooks": [{"type": "command", "command", "args"[, "timeout"]}]}]}:
         a settings.json hooks entry in exec form (no shell), `script` then `args`. boot/hook.py
@@ -339,6 +342,18 @@ SHELL = '/bin/sh'
 SHELL_NAME = 'kit-hook'
 TOOL_BODY = '%s "$@" || exit 2'
 START_BODY = '%s "$@" || echo "PM kit: the kit did not load: %s failed or is not on PATH (exit $?)"'
+
+
+# The MCP servers' Python interpreter, by name, per hosts.json platform (mcp_interpreter): python
+# on Windows, python3 on Linux, where stock Ubuntu has no `python`.
+MCP_INTERPRETERS = {'windows': 'python', 'linux': 'python3'}
+
+
+def mcp_interpreter(platform):
+    name = MCP_INTERPRETERS.get(platform)
+    if not name:
+        raise ValueError('no MCP server interpreter for the platform %r' % (platform,))
+    return name
 
 
 def manifest_command(script, platform, *args, blocking=False):

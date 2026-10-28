@@ -103,7 +103,8 @@ CMD = {'cmd', 'cmd.exe'}
 def shell_kind(tool, data):
     """(dialect or None, refusal): the call's explicit interpreter's dialect; with none named, the
     PowerShell tool's own, else default_dialect() and a refusal; cmd.exe (_shell judges its text in
-    cmd.exe's dialect, cmd_c) and one the guard cannot read, with a refusal."""
+    cmd.exe's dialect, cmd_c) and one the guard cannot read, with a refusal. Each refusal names
+    default_dialect()'s shells: PowerShell or Git Bash on Windows, bash elsewhere."""
     value = data.get('shell')
     if value is None:
         if tool == 'PowerShell':
@@ -113,7 +114,10 @@ def shell_kind(tool, data):
                       % ('PowerShell or Git Bash' if kind == 'powershell' else 'bash'))
     kind = dialect(value)
     if kind is None:
-        why = 'the guard reads the shell %r only through PowerShell; use PowerShell or Git Bash' % (value,)
+        if default_dialect() == 'powershell':
+            why = 'the guard reads the shell %r only through PowerShell; use PowerShell or Git Bash' % (value,)
+        else:
+            why = 'the guard cannot read the shell %r; use bash' % (value,)
         return ('powershell' if is_cmd(value) else None), why
     return kind, ''
 

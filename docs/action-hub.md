@@ -575,7 +575,7 @@ refused `not_found`. Each of these is refused, field `record`, and nothing is wr
   no repository or record id, a record that is completed (closed, retired or taken out of the store), or
   one in a repository whose `.kit.json` names no `"backlog".store` (the record view's `writable` false):
   its answer could never be filed (`no_store`), so it is asked unbound;
-- `not_found`: a repo the hub has not configured, or an id that repo's backlog does not have;
+- `not_found`: a repo the hub has not configured, or an id that repo's backlog does not have (the refusal names another repo key whose backlog holds the id, e.g. a kit record is keyed on the PM repo's folder name);
 - `unavailable`: a record the hub cannot check (a server with no backlog views, no checkout of the repo
   on this machine, a store that cannot be read). It fails closed: a binding nobody checked is never
   stored. Ask again, or ask unbound.
@@ -994,6 +994,7 @@ the hub page) and given the body through `srcdoc` behind a meta policy, `default
 `data:`, CSS files, fonts, scripts, frames and form posts. A diagram therefore shows only as an inline
 `<svg>` or a `data:` image. Links are not blocked: a link clicked inside the reader moves the frame itself
 to that address, where the policy no longer applies (the sandbox still blocks scripts and forms there).
+The reader rewrites a bare `href="#x"` to `href="about:srcdoc#x"` (`docFragments`), so an in-page anchor scrolls and sets `:target` (a srcdoc frame's base URL is the hub page's, so the bare form left the frame); inferred from the HTML spec, the owner checks it in a real browser.
 Some browsers may also look up the host names of links in advance (DNS prefetch). The page check refuses
 such a link, `<link>` and every `<meta>` but the ones above at publish, so a body published through the
 check has none; a body placed in the store by hand is not checked. A whole document goes in unchanged,

@@ -2389,6 +2389,31 @@ class DocsTest(unittest.TestCase):
         """, docs_snap(), hash="#docs")
         self.assertEqual(got, [False, True, False, True, False])
 
+    def test_an_in_page_fragment_link_is_the_frames_own_address_and_nothing_else_changes(self):
+        """A srcdoc frame's base URL is the hub page's, so a bare href="#x" navigated the frame to the hub
+        page instead of scrolling. The reader spells it about:srcdoc#x; other links, the sandbox and the policy
+        stay as they were (that a browser then scrolls and sets :target is the owner's real-browser check)."""
+        body = ('<nav><a href="#sec">go</a> <a class="x" href=' + "'#two'" + '>two</a> <a href="https://x.test/#a">out</a>'
+                '</nav><p>write href="#lit" as text</p><h2 id="sec">S</h2>'
+                '<svg><use href="#sym"></use><use xlink:href="#sym2"></use></svg><b data-href="#d">d</b>'
+                "<A HREF='#up'>up</A><area href=\"#ar\">")
+        got = dom("""
+            server.route = c => (c.method === "GET" && c.path === "/pages/plan-1")
+              ? { status: 200, body: { ok: true, id: "plan-1", html: %s, version: 1 } } : undefined;
+            await start();
+            await click($("#row-plan-1"));
+            await click($("#dr-plan-1"));
+            const f = all().filter(e => e.tag === "iframe")[0];
+            return { attrs: f.attrs, srcdoc: f.srcdoc };
+        """ % json.dumps(body), docs_snap(), hash="#docs")
+        self.assertEqual(got["attrs"]["sandbox"], "")
+        want = (body.replace('href="#sec"', 'href="about:srcdoc#sec"').replace("href='#two'", "href='about:srcdoc#two'")
+                .replace("HREF='#up'", "HREF='about:srcdoc#up'").replace('href="#ar"', 'href="about:srcdoc#ar"'))
+        self.assertIn('<use href="#sym">', want)                             # svg sprite references stay as they are
+        self.assertEqual(got["srcdoc"], DOC_CSP + want)
+        self.assertIn('href="#lit"', got["srcdoc"])                         # text, not a link
+        self.assertIn('href="https://x.test/#a"', got["srcdoc"])
+
     def test_a_whole_document_is_framed_with_the_policy_still_first(self):
         """A body that is a whole document (its own doctype, head, metas and title, which the page check
         accepts) is framed like any other: the policy meta comes before its doctype and its <head>. That a
@@ -4886,8 +4911,8 @@ class PageTextTest(unittest.TestCase):
             self.assertNotIn(sink, self.p, sink)
         self.assertIn('if (k === "class") n.className = v; else if (k === "text") n.textContent = v;', self.script)
         # The one place server html goes: the reader's frame, behind the policy (test_the_reader_is_one_locked_frame).
-        self.assertEqual(self.p.count("srcdoc"), 1)
-        self.assertIn("frame.srcdoc = DOC_CSP + r.html;", self.script)
+        self.assertEqual(self.p.count(".srcdoc"), 1)
+        self.assertIn("frame.srcdoc = DOC_CSP + docFragments(r.html);", self.script)
         self.assertIn('r = await hub.call("GET", "/pages/" + seg(id));', self.script)   # r is the server's body read
 
     def test_the_reader_is_one_locked_frame(self):
