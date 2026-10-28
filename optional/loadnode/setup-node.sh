@@ -261,8 +261,7 @@ preflight() {
         fi
     fi
 
-    if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ]; then
-        install -d -m 0755 /run/sshd 2>/dev/null || true
+    if [ -x /usr/sbin/sshd ] && [ -d /run/sshd ]; then     # sshd -T needs /run/sshd
         ports=$(/usr/sbin/sshd -T 2>/dev/null | sed -n 's/^port //p' | tr '\n' ' ')
         case $ports in ''|'22 ') ;; *) refuse "sshd listens on port(s) $ports, not only 22: this script opens only 22 in the firewall" ;; esac
     fi
@@ -283,7 +282,7 @@ CHANGED=
 TMP=
 
 mark() {   # $1 step letter, $2 what changed (or would)
-    CHANGED="${CHANGED:+$CHANGED }$1"
+    case " $CHANGED " in *" $1 "*) ;; *) CHANGED="${CHANGED:+$CHANGED }$1" ;; esac
     if [ "$DRY" -eq 1 ]; then say "  [$1] would change: $2"; else say "  [$1] changed: $2"; fi
 }
 
@@ -487,6 +486,7 @@ step_sshd() {
             && [ "$(owner_mode "$SSHD_CONF")" = "root:root 644" ]; then
         same f "$SSHD_CONF (AllowUsers $allow)"
         if [ "$DRY" -eq 0 ]; then
+            install -d -m 0755 /run/sshd
             /usr/sbin/sshd -t || fail "sshd -t fails with the current config: fix it before re-running"
             sshd_effective_ok || fail "the effective sshd config does not match $SSHD_CONF"
         fi
@@ -529,15 +529,23 @@ step_ufw() {
     for s in $ADMIN_SRCS; do want="$want $s|$UFW_ADMIN"; done
     have=$(ufw_ours | tr '\n' ' ')
     did=
-    # Add first, so port 22 from main is never shut while the firewall is on.
+    # Add first, so port 22 from main is never shut while the firewall is on. ufw's rule identity
+    # leaves out the comment: an address that moves between main and admin is deleted, then
+    # added back under its new comment.
     for r in $want; do
         case " $have " in *" $r "*) continue ;; esac
-        did="$did allow:${r%|*}"
+        case " $have " in
+            *" ${r%|*}|"*)
+                did="$did retag:${r%|*}"
+                run ufw delete allow from "${r%|*}" to any port 22 proto tcp >/dev/null \
+                    || fail "ufw delete of the rule from ${r%|*} failed" ;;
+            *) did="$did allow:${r%|*}" ;;
+        esac
         run ufw allow from "${r%|*}" to any port 22 proto tcp comment "${r#*|}" >/dev/null \
             || fail "ufw allow from ${r%|*} failed"
     done
     for r in $have; do
-        case " $want " in *" $r "*) continue ;; esac
+        case " $want " in *" ${r%|*}|"*) continue ;; esac
         did="$did delete:${r%|*}"
         run ufw delete allow from "${r%|*}" to any port 22 proto tcp >/dev/null \
             || fail "ufw delete of the old rule from ${r%|*} failed"
