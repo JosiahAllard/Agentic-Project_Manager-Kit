@@ -73,7 +73,8 @@ Missing any: say what you need, do nothing.
    (<kit>/docs/gate.md "Waiting on a gate: who arms what"). `python <kit>/tools/land.py -C <main checkout> --queue`
    shows who holds and who waits. Never pass anything to jump the queue, and never
    break a landing lock: STUCK -> stop and report its lines. Do not truncate native output
-   through a pipe - a first-N reader (`head`, or its PowerShell cmdlet) fakes a non-zero exit code.
+   through a first-N reader (`head`, or its PowerShell cmdlet): in bash without pipefail,
+   `cmd | head` returns head's 0 and hides a failure.
 6. The wait prints `RESULT <verdict> land <branch> at <tip>: <line> (<log>)`; act on the verdict:
    - `pass`, `LANDED ...`: landed.
    - `fail` with `CONFLICT <branch> with main <sha>: the author merges main`: nothing left behind; report it,
