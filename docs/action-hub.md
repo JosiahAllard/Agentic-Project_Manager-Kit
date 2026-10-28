@@ -917,12 +917,12 @@ The routes ("Skill edits" in the `kitlib/hubsite/api.py` docstring):
 Worker steps (skill hub-ops "Skill edits"):
 1. `hub.py skill-edit show E-<n> --out <F>` writes the owner's text byte for byte; note its version.
 2. In a worktree from main, read `git rev-parse main:content/skills/<name>/SKILL.md`. When it is not the
-   edit's base blob, stop: `hub.py skill-edit fail E-<n> --why "the skill changed on main" --at main -C
-   <worktree> --if-version V` marks it superseded for the owner.
+   edit's base blob, stop: `hub.py skill-edit fail E-<n> --why "the skill changed on main" --at main
+   --checkout <worktree> --if-version V` marks it superseded for the owner.
 3. Copy F over the source and commit with `tools/commit.py -m "Skill <name>: owner
    edit" -b "Text by the owner, hub edit E-<n>"`, which renders the copies.
-4. `hub.py skill-edit done E-<n> --branch <branch> -C <worktree> --if-version V`. The branch lands as
-   any other.
+4. `hub.py skill-edit done E-<n> --branch <branch> --checkout <worktree> --if-version V`. The branch
+   lands as any other.
 
 Tests: tests/hubsite/test_skill_edits.py.
 

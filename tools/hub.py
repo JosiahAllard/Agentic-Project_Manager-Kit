@@ -201,11 +201,11 @@ the server alone decides what a role may do.
                                                      docs/action-hub.md "skill_edits/E-NNN")
   hub.py skill-edit show E-1 [--out F]              its status, skill and base blob; --out F
                                                      writes the owner's text to F byte for byte
-  hub.py skill-edit done E-1 --branch B [-C DIR] --if-version V    `COMMITTED E-1`
+  hub.py skill-edit done E-1 --branch B [--checkout DIR] --if-version V    `COMMITTED E-1`
                                                      posts B and the blob of the skill's SKILL.md
                                                      on B in DIR; the hub refuses a blob that is
                                                      not the owner's text
-  hub.py skill-edit fail E-1 --why W [--at REV] [-C DIR] --if-version V    `FAILED E-1`, or
+  hub.py skill-edit fail E-1 --why W [--at REV] [--checkout DIR] --if-version V    `FAILED E-1`, or
                                                      `SUPERSEDED E-1` when the blob at REV is not
                                                      the one the owner edited
   hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
@@ -612,7 +612,7 @@ def _client_verbs(sub):
               "skill's SKILL.md on --branch against the owner's text")
     x.add_argument('id')
     x.add_argument('--branch', required=True, help='the branch the commit is on')
-    x.add_argument('-C', dest='checkout', default='.', metavar='DIR',
+    x.add_argument('--checkout', default='.', metavar='DIR',
                    help='the checkout to read the branch in (default: .)')
     _pins(x, required=True)
     x = _leaf(e, 'fail', 'mark a submitted edit failed; with --at, superseded when the skill '
@@ -622,7 +622,7 @@ def _client_verbs(sub):
     x.add_argument('--at', metavar='REV',
                    help="send the blob of the skill's SKILL.md at this revision (main): the "
                         'hub marks the edit superseded when it is not the one the owner edited')
-    x.add_argument('-C', dest='checkout', default='.', metavar='DIR',
+    x.add_argument('--checkout', default='.', metavar='DIR',
                    help='the checkout to read --at in (default: .)')
     _pins(x, required=True)
 

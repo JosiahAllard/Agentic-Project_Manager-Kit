@@ -357,9 +357,9 @@ class KitCheckoutTest(unittest.TestCase):
 
     def test_kit_key_is_the_configured_name_of_the_kit_checkouts_remote(self):
         with mock.patch.object(serve, 'kit_checkout', lambda kit_root=None: 'C:/kit'):
-            key = serve._kit_key(lambda rid: {'rid-1': 'Agentic-Project_Manager-Kit'}.get(rid),
+            key = serve._kit_key(lambda rid: {'rid-1': 'the-kit'}.get(rid),
                                  lambda root: ('rid-1',))
-            self.assertEqual(key(), 'Agentic-Project_Manager-Kit')
+            self.assertEqual(key(), 'the-kit')
             self.assertEqual(serve._kit_key(lambda rid: None, lambda root: ('rid-1',))(), '')
             self.assertEqual(serve._kit_key(lambda rid: 'x', lambda root: (None,))(), '')
 

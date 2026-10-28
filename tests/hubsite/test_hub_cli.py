@@ -1722,14 +1722,14 @@ class SkillEditCase(VerbCase):
 
     def test_done_sends_the_branchs_blob_and_the_hub_takes_it(self):
         self.assertEqual(self.ok('skill-edit', 'done', 'E-001', '--branch', 'kit/edit',
-                                 '-C', self.repo.root, '--if-version', '1'),
+                                 '--checkout', self.repo.root, '--if-version', '1'),
                          ['COMMITTED E-001'])
         d = self.item()
         self.assertEqual((d['status'], d['branch'], d['blob']),
                          ('committed', 'kit/edit', self.blob(self.NEW)))
 
     def test_done_on_a_branch_without_the_text_is_refused_and_nothing_changes(self):
-        err = self.refused('skill-edit', 'done', 'E-001', '--branch', 'main', '-C',
+        err = self.refused('skill-edit', 'done', 'E-001', '--branch', 'main', '--checkout',
                            self.repo.root, '--if-version', '1')
         self.assertIn('blob', err)
         self.assertEqual(self.item()['status'], 'submitted')
@@ -1739,7 +1739,7 @@ class SkillEditCase(VerbCase):
         self.repo.write(src, self.OLD + 'later\n')
         self.repo.commit('later', src)
         self.assertEqual(self.ok('skill-edit', 'fail', 'E-001', '--why', 'the skill changed on main',
-                                 '--at', 'main', '-C', self.repo.root, '--if-version', '1'),
+                                 '--at', 'main', '--checkout', self.repo.root, '--if-version', '1'),
                          ['SUPERSEDED E-001'])
         d = self.item()
         self.assertEqual((d['status'], d['source_blob']),
