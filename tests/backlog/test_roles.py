@@ -30,7 +30,6 @@ DESIGN = {
     'set-text': ('low', CPO, OWN),
     'set-price': ('low', CPO, {}),
     'set-price-owner': ('medium', TOP, {}),
-    'set-hold': ('high', TOP, {}),           # dormant: nothing sorts into it (-1 is retired)
     'set-other': ('medium', CPO, {}),       # the set fields no design row names
     'set-widen-collision': ('medium', CPO, {}),
     'pull': ('low', CPO + ('deep-worker',) + BUILDERS, {}),
@@ -201,7 +200,9 @@ class RolesTest(unittest.TestCase):
             self.assertEqual(R.allows(action, None), row.risk == R.NONE, action)
 
     def test_the_set_data_matches_the_record_schema(self):
-        self.assertEqual(R.HOLD, record.RETIRED_PRIORITY)
+        # the -1 hold is retired: no HOLD value or set-hold row, and -1 is no price band
+        self.assertFalse(hasattr(R, 'HOLD'))
+        self.assertNotIn(record.RETIRED_PRIORITY, R.PRICE_LOW + R.PRICE_TOP)
         self.assertEqual(sorted(R.PRICE_LOW + R.PRICE_TOP), ['1', '2', '3', '4', '5'])
         for band in R.PRICE_LOW + R.PRICE_TOP:
             self.assertTrue(record.is_band(band), band)

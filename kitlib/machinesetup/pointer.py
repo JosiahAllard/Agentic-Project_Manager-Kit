@@ -98,6 +98,7 @@ def survey(ctx, apply=False):
         return plan
     old, why = ctx.registry.read()
     linux = kitlib.platform.NAME == 'linux'
+    where = 'as root or with sudo' if linux else 'from an administrator terminal'
     if why:
         plan.note(SECTION, 'the value there now cannot be read (%s): it is replaced, and this tool '
                            'cannot restore it; note it first%s'
@@ -111,13 +112,13 @@ def survey(ctx, apply=False):
             plan.note(SECTION, 'declining sudo: with no %s the user\'s own pointer file is read; write it '
                                'by hand: %s' % (linux_paths.MACHINE_POINTER, user_command(value)))
         if apply:
-            plan.refuse('not elevated: %s is %s; run %s from an administrator terminal, or '
+            plan.refuse('not elevated: %s is %s; run %s %s, or '
                         'by hand there: %s' % (
                             cpointer.where() if linux else cpointer.KEY_NAME,
                             'root-owned' if linux else 'under HKLM',
-                            command(ctx.kit, value), cpointer.command(value)))
+                            command(ctx.kit, value), where, cpointer.command(value)))
             return plan
-        plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
+        plan.note(SECTION, 'not elevated: --apply is refused here; run it %s' % where)
     if old is None:
         text = '%s: set it to %s' % (cpointer.where(), value)
         # A value that exists but cannot be read is not absent: `reg delete` is no restore.
@@ -128,5 +129,5 @@ def survey(ctx, apply=False):
             ' (the same folder, spelled differently)' if repo.same_path(old, value) else '')
         undo = cpointer.command(old)
     plan.add(SECTION, text, lambda: ctx.registry.write(value), undo=undo,
-             detail=['by hand, from an administrator terminal: %s' % cpointer.command(value)])
+             detail=['by hand, %s: %s' % (where, cpointer.command(value))])
     return plan

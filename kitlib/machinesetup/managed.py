@@ -6,8 +6,9 @@ The file's path is the default host's (its adapter's optional managed_settings_p
 extras.Host.managed_path; a host without it has no managed file, and every step here is skipped).
 
 survey() is the --managed-settings mode: it renders the kit's template, source(), and plans the one
-write that makes the managed file hold it. The file is under Program Files, so --apply is refused
-unless the process is elevated; nothing elevates itself. The default mode never writes it:
+write that makes the managed file hold it. The file is under Program Files (on Linux,
+/etc/claude-code/managed-settings.json), so --apply is refused unless the process is elevated
+(an administrator terminal; on Linux root or sudo); nothing elevates itself. The default mode never writes it:
 note_sync() notes whether it is in sync and names the command.
 
 Rendering: the template is a JSON object. The kit is stable_kit(ctx.kit): a plugin export, which
@@ -348,10 +349,14 @@ def survey(ctx, apply=False):
                            'settings.json keeps its own' % kit_file(kit, settings.GUARD))
     if not ctx.host.is_admin():
         if apply:
-            plan.refuse('not elevated: %s is under Program Files; run %s from an administrator '
-                        'terminal' % (path, command(kit)))
+            if platform.NAME == 'windows':
+                plan.refuse('not elevated: %s is under Program Files; run %s from an administrator '
+                            'terminal' % (path, command(kit)))
+            else:
+                plan.refuse('not elevated: %s is writable only by root; run %s as root or with sudo'
+                            % (path, command(kit)))
             return plan
-        plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
+        plan.note(SECTION, 'not elevated: --apply is refused here; run it %s' % _elevated_where())
     got = _target(plan, path, data)
     if got is None:
         return plan
@@ -375,6 +380,10 @@ def survey(ctx, apply=False):
              lambda: settings._write(path, raw, new, bak), undo='copy "%s" over "%s"' % (bak, path),
              detail=diff)
     return plan
+
+
+def _elevated_where():
+    return 'from an administrator terminal' if platform.NAME == 'windows' else 'as root or with sudo'
 
 
 def _create(path, new):
@@ -408,10 +417,9 @@ def note_sync(plan, ctx, section='settings'):
     if same:
         plan.note(section, 'managed settings: %s is in sync with the kit template' % path)
     else:
-        plan.note(section, 'managed settings: %s %s the kit template; from an administrator '
-                           'terminal: %s (a dry run first without --apply)'
+        plan.note(section, 'managed settings: %s %s the kit template; %s: %s (a dry run first without --apply)'
                   % (path, 'differs from' if raw is not None else 'is missing; it is made from',
-                     command(_same_kit(ctx.kit))))
+                     _elevated_where(), command(_same_kit(ctx.kit))))
 
 
 def survey_live(plan, ctx):
