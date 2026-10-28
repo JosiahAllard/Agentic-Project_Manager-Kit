@@ -8,6 +8,7 @@ pointer is never set to a value the reader would call BAD.
 """
 import os
 
+import kitlib.platform
 from kitlib.config import pointer as cpointer
 from kitlib.config import user
 from kitlib.git import repo
@@ -33,8 +34,8 @@ class Registry(object):
 
     def write(self, value):
         if user.fenced():
-            raise RuntimeError('the kit\'s tests never write the registry (%s %s)'
-                               % (cpointer.KEY_NAME, cpointer.VALUE))
+            raise RuntimeError('the kit\'s tests never write the registry (%s)'
+                               % cpointer.where())
         import winreg
         with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, cpointer.KEY_PATH, 0,
                                 winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY) as k:
@@ -71,27 +72,30 @@ def survey(ctx, apply=False):
         plan.refuse('--pm-repo: %s' % bad)
         return plan
     old, why = ctx.registry.read()
+    linux = kitlib.platform.NAME == 'linux'
     if why:
         plan.note(SECTION, 'the value there now cannot be read (%s): it is replaced, and this tool '
-                           'cannot restore it; note it first, e.g. with `reg query "%s" /v %s`'
-                           % (why, cpointer.KEY_NAME, cpointer.VALUE))
+                           'cannot restore it; note it first%s'
+                           % (why, '' if linux else ', e.g. with `reg query "%s" /v %s`'
+                              % (cpointer.KEY_NAME, cpointer.VALUE)))
     if old is not None and old == value:
-        plan.note(SECTION, '%s %s already names %s' % (cpointer.KEY_NAME, cpointer.VALUE, value))
+        plan.note(SECTION, '%s already names %s' % (cpointer.where(), value))
         return plan
     if not ctx.host.is_admin():
         if apply:
-            plan.refuse('not elevated: %s is under HKLM; run %s from an administrator terminal, or '
-                        'by hand there: %s' % (cpointer.KEY_NAME, command(ctx.kit, value),
-                                               cpointer.command(value)))
+            plan.refuse('not elevated: %s is %s; run %s from an administrator terminal, or '
+                        'by hand there: %s' % (cpointer.where(),
+                                               'root-owned' if linux else 'under HKLM',
+                                               command(ctx.kit, value), cpointer.command(value)))
             return plan
         plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
     if old is None:
-        text = '%s %s: set it to %s' % (cpointer.KEY_NAME, cpointer.VALUE, value)
+        text = '%s: set it to %s' % (cpointer.where(), value)
         # A value that exists but cannot be read is not absent: `reg delete` is no restore.
         undo = None if why else cpointer.delete_command()
     else:
-        text = '%s %s: replace %s with %s%s' % (
-            cpointer.KEY_NAME, cpointer.VALUE, old, value,
+        text = '%s: replace %s with %s%s' % (
+            cpointer.where(), old, value,
             ' (the same folder, spelled differently)' if repo.same_path(old, value) else '')
         undo = cpointer.command(old)
     plan.add(SECTION, text, lambda: ctx.registry.write(value), undo=undo,

@@ -248,6 +248,7 @@ class Registry(object):
         self.written.append(value)
 
 
+@mock.patch('kitlib.platform.NAME', 'windows')
 class Setup(Repo):
     """--pm-repo through machinesetup.run_pointer, on a fake host and registry."""
 
@@ -393,12 +394,14 @@ class PreflightLine(Fixture):
         config = [i for i, l in enumerate(out) if l.startswith('config ')]
         self.assertEqual(out[config[0] + 1], 'pointer   %s' % self.root.replace('\\', '/'))
 
+    @mock.patch('kitlib.platform.NAME', 'windows')
     def test_with_no_pointer_the_line_says_none_and_how_to_set_it(self):
         line = self.line(self.run_with(None)[1], 'pointer ')
         self.assertTrue(line.startswith('pointer   none - no PM-repo pointer (HKLM\\SOFTWARE\\pm-kit '
                                         'pm_repo)'), line)
         self.assertIn('machine_setup.py --pm-repo', line)
 
+    @mock.patch('kitlib.platform.NAME', 'windows')
     def test_a_bad_pointer_is_broken(self):
         line = self.line(self.run_with(os.path.join(self.repo.base, 'gone'))[1], 'pointer ')
         self.assertTrue(line.startswith('pointer   BROKEN HKLM\\SOFTWARE\\pm-kit pm_repo: no folder at'),
