@@ -332,7 +332,8 @@ def command_line(script, executable=None):
     return {'command': windowless(executable).replace(os.sep, '/'), 'args': [script.replace(os.sep, '/')]}
 
 
-# The windowless Python interpreter, by name, per hosts.json platform (plan section 6, rule 4).
+# The hook's Python interpreter, by name, per hosts.json platform: windowless pythonw on Windows
+# (plan section 6, rule 4), python3 on Linux (run by SHELL, manifest_command).
 INTERPRETERS = {'windows': 'pythonw', 'linux': 'python3'}
 SHELL = '/bin/sh'
 SHELL_NAME = 'kit-hook'

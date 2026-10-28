@@ -36,7 +36,9 @@ needs it says so.
   proc/win32, proc/winwatch); whether it imports on Linux is unknown (section 9).
 - The committed Claude hook manifest (hosts/claude/shell/hooks/hooks.json) runs `pythonw`, and
   kitlib/host/hookmain.py keeps `INTERPRETERS = {'windows': 'pythonw'}`; hosts.json lists
-  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified).
+  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified). Since slice 12:
+  INTERPRETERS adds `'linux': 'python3'`, both hosts list windows and linux, and each renders
+  hooks.linux.json beside its unchanged hooks.json.
 
 ### 1.2 The surface, counted
 
