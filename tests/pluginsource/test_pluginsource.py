@@ -71,6 +71,30 @@ class ExportTest(Base):
         self.assertTrue(os.path.isfile(os.path.join(folder, 'tools', 'x.py')))
         self.assertNotIn('tests/', json.dumps(P.read_marker(folder).get('skipped') or []))
 
+    def test_each_hooks_json_holds_the_running_platforms_hooks_file(self):
+        """The renderers write hooks/hooks.json (Windows) and hooks/hooks.linux.json beside it; the
+        plugin names hooks.json, so a Linux export writes the Linux file's bytes there."""
+        r = self.k.repo
+        files = {'hosts/a/shell/hooks/hooks.json': 'windows', 'hosts/a/shell/hooks/hooks.linux.json': 'linux',
+                 'hosts/b/shell/hooks/hooks.json': 'only windows'}
+        for rel, text in files.items():
+            r.write(rel, text)
+        r.commit('hooks', *files)
+        r.git('push', '-q', 'origin', 'main')
+        sha = P.remote_main(self.k.kit, 'origin')
+
+        def read(folder, rel):
+            with open(os.path.join(folder, *rel.split('/')), encoding='utf-8') as fh:
+                return fh.read()
+        for platform, want in (('windows', 'windows'), ('linux', 'linux')):
+            with self.subTest(platform):
+                root = os.path.join(self.k.root, platform)
+                folder, _v = P.export(self.k.kit, sha, root, NOW, platform=platform)
+                self.assertEqual(read(folder, 'hosts/a/shell/hooks/hooks.json'), want)
+                self.assertEqual(read(folder, 'hosts/a/shell/hooks/hooks.linux.json'), 'linux')
+                self.assertEqual(read(folder, 'hosts/b/shell/hooks/hooks.json'), 'only windows')
+        self.assertEqual(P.platform_hooks(list(files), 'macos'), {})
+
     def test_a_main_the_kit_has_not_fetched_is_refused(self):
         sha = self.k.push_from_clone()
         with self.assertRaises(P.RefreshError) as cm:

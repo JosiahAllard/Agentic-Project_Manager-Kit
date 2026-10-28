@@ -203,7 +203,8 @@ class Retired(unittest.TestCase):
     def test_no_hook_script_is_left_at_an_old_path(self):
         self.assertFalse(os.path.exists(os.path.join(T.KIT, common.MOVED_FROM)))
         hooks = os.path.join(T.KIT, *settings.HOOKS.split('/'))
-        self.assertEqual(sorted(n for n in os.listdir(hooks) if n != '__pycache__'), ['hooks.json'])
+        self.assertEqual(sorted(n for n in os.listdir(hooks) if n != '__pycache__'),
+                         ['hooks.json', 'hooks.linux.json'])           # the plugin's manifests, one per platform
         self.assertTrue(os.path.isfile(os.path.join(T.KIT, *settings.ENTRY.split('/'))))
         self.assertEqual(sorted(settings.RETIRED), sorted(HOOKS))
         self.assertEqual(settings.entry_words('guard.py'), WORDS['guard.py'])

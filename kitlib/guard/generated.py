@@ -12,7 +12,8 @@ What is rendered, by path (case folded, as Windows reads it):
   hosts/<host>/shell/skills/**     a skill's copy: the same file under content/skills/
   hosts/<host>/shell/boot/**       the plugin's copy of a boot file: the same file under boot/
   hosts/<host>/shell/hosts.json    the plugin's copy of hosts.json's entry: hosts.json
-  hosts/<host>/shell/plugin.json, mcp.json, hooks/hooks.json, and .<host>-plugin/plugin.json and
+  hosts/<host>/shell/plugin.json, mcp.json, hooks/hooks.json, hooks/hooks.linux.json, and
+  .<host>-plugin/plugin.json and
   marketplace.json at the root     a plugin manifest: kit.json, hosts.json and the host's renderer
 A path matched here is refused even when the renderer no longer writes it (a retired folder): the
 render removes it. So is the agents, skills or boot folder itself (a shell `rm -r` of it), whose
@@ -26,7 +27,7 @@ from kitlib.content import oncommit
 
 ROLES = 'content/roles/'
 SKILLS = 'content/skills/'
-MANIFESTS = {('plugin.json',), ('mcp.json',), ('hooks', 'hooks.json')}
+MANIFESTS = {('plugin.json',), ('mcp.json',), ('hooks', 'hooks.json'), ('hooks', 'hooks.linux.json')}
 ROOT_MANIFESTS = ('plugin.json', 'marketplace.json')    # in a host's .<host>-plugin folder at the root
 
 
