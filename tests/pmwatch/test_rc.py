@@ -12,6 +12,7 @@ from hosts.claude.adapter import claude_host as H
 NOW = 2_000_000_000.0
 OLD_MS = (NOW - 3600) * 1000           # started an hour ago
 YOUNG_MS = (NOW - 60) * 1000           # started a minute ago: inside the grace period
+PM_KEY = "pm-session 11 900"           # rc_lost's entry for rec(): name, pid, creation time
 
 
 def rec(name="pm-session", pid=11, linked=False, started=OLD_MS, proc_start="900"):
@@ -41,14 +42,14 @@ class RcEvents(unittest.TestCase):
         ev, lost = self.events([rec()])
         self.assertEqual(ev, ["REMOTE pm-session link lost: the session runs, its Remote Control "
                               "link is down (pid 11)"])
-        self.assertEqual(lost, ["pm-session"])
-        self.assertEqual(self.events([rec()], lost=lost), ([], ["pm-session"]))
+        self.assertEqual(lost, [PM_KEY])
+        self.assertEqual(self.events([rec()], lost=lost), ([], [PM_KEY]))
 
     def test_link_back_is_reported_once_and_rearms(self):
-        self.assertEqual(self.events([rec(linked=True)], lost=["pm-session"]),
+        self.assertEqual(self.events([rec(linked=True)], lost=[PM_KEY]),
                          (["REMOTE pm-session link back"], []))
         self.assertEqual(self.events([rec(linked=True)]), ([], []))
-        self.assertEqual(self.events([rec()])[1], ["pm-session"])
+        self.assertEqual(self.events([rec()])[1], [PM_KEY])
 
     def test_linked_session_reads_no_process_list(self):
         self.assertEqual(self.events([rec(linked=True)]), ([], []))
@@ -56,8 +57,8 @@ class RcEvents(unittest.TestCase):
 
     def test_young_session_is_inside_the_grace_period(self):
         self.assertEqual(self.events([rec(started=YOUNG_MS)]), ([], []))
-        self.assertEqual(self.events([rec(started=YOUNG_MS)], lost=["pm-session"]),
-                         ([], ["pm-session"]))
+        self.assertEqual(self.events([rec(started=YOUNG_MS)], lost=[PM_KEY]),
+                         ([], [PM_KEY]))
 
     def test_record_without_the_link_field_says_nothing(self):
         self.assertEqual(self.events([rec(linked=None)]), ([], []))
@@ -78,8 +79,22 @@ class RcEvents(unittest.TestCase):
         current = rec(pid=11, linked=True, started=OLD_MS)
         self.assertEqual(self.events([stale, old_unlinked, current]), ([], []))
 
-    def test_session_gone_keeps_its_reported_state(self):
-        self.assertEqual(self.events([], lost=["pm-session"]), ([], ["pm-session"]))
+    def test_session_gone_drops_out(self):
+        self.assertEqual(self.events([], lost=[PM_KEY]), ([], []))
+
+    def test_relaunch_under_the_same_name_starts_clean(self):
+        relaunched_linked = rec(pid=12, proc_start="901", linked=True)
+        self.assertEqual(self.events([relaunched_linked], lost=[PM_KEY]), ([], []))
+        relaunched_unlinked = rec(pid=12, proc_start="901")
+        ev, lost = self.events([relaunched_unlinked], lost=[PM_KEY], pids=((12, "pm-session"),))
+        self.assertEqual(ev, ["REMOTE pm-session link lost: the session runs, its Remote Control "
+                              "link is down (pid 12)"])
+        self.assertEqual(lost, ["pm-session 12 901"])
+
+    def test_record_whose_name_is_not_text_is_skipped(self):
+        for bad in (["pm-session"], {"n": 1}, 7, None):
+            with self.subTest(name=bad):
+                self.assertEqual(self.events([rec(name=bad), rec()])[1], [PM_KEY])
 
 
 class ClaudeReader(unittest.TestCase):
@@ -115,10 +130,21 @@ class InWatcher(unittest.TestCase):
             ev = w.poll(NOW)
             self.assertEqual([e.split(":")[0] for e in ev],
                              ["REMOTE kit-a1 link lost", "REMOTE pm-session link lost"])
-            self.assertEqual(w.s["rc_lost"], ["kit-a1", "pm-session"])
+            self.assertEqual(w.s["rc_lost"], ["kit-a1 12 5", "pm-session 11 5"])
             recs[0]["linked"] = True
             self.assertEqual(w.poll(NOW + 60), [])               # not due yet
             self.assertEqual(w.poll(NOW + 300), ["REMOTE pm-session link back"])
+
+    def test_creation_time_other_than_the_records_is_no_session(self):
+        def raises(pid):
+            raise OSError("access denied")
+        recs = [{"name": "pm-session", "pid": 11, "proc_start": "5", "started_ms": 1000, "linked": False}]
+        for label, ctime in (("differs", lambda pid: 6), ("unknown", lambda pid: None),
+                             ("raises", raises)):
+            with self.subTest(ctime=label), tempfile.TemporaryDirectory() as d:
+                w = self.watcher(d, lambda: recs, ctime=ctime)
+                self.assertEqual([e for e in w.poll(NOW) if e.startswith("REMOTE")], [])
+                self.assertEqual(w.s["rc_lost"], [])
 
     def test_third_failure_in_a_row_is_an_error_line(self):
         def boom():

@@ -28,11 +28,11 @@ Events:
                                 (docs/plugin-source.md "Behind warnings")
   REMOTE <name> link lost: ...  a running session in sessions.json (or the PM's) started with
                                 --remote-control reads unlinked in the session registry; once
-                                per episode, and REMOTE <name> link back when it reads linked again
-                                (docs/pm-watch.md "Remote Control link")
+                                per episode, and REMOTE <name> link back when it reads linked again;
+                                reported on the first run too (docs/pm-watch.md "Remote Control link")
   ERROR <what>                  a check failed 3 times running
 State lives in the state file, so a relaunch never repeats an event it already reported. The first
-run only records a baseline.
+run only records a baseline, except for PLUGIN and REMOTE, which report what they find then.
   python tools/pm_watch.py [--branch <repo-dir>=<ref> ...]
                            [--branch-poll 300] [--usage-poll 600] [--alerts-dir <dir>]
                            [--idle-minutes 20] [--idle-poll 300] [--sessions <json>]

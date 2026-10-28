@@ -409,42 +409,53 @@ def hub_check(load=None, make_client=None):
 RC_GRACE_S = 180     # a session this young may not have connected its Remote Control link yet
 
 
+def rc_key(r):
+    """The rc_lost entry of a session record: name, pid and creation time, so a session stopped and
+    started again under the same name is a new one."""
+    return "%s %s %s" % (r["name"], r.get("pid"), r.get("proc_start"))
+
+
 def rc_events(names, records, alive, rc_pids, lost, now):
     """(events, lost now) of the Remote Control link check (docs/pm-watch.md "Remote Control link").
 
     records: the host's session records, dicts {name, pid, proc_start, started_ms, linked}, linked
     None when the host's record says nothing about the link. alive(rec): its pid runs now with that
     creation time. rc_pids(): {pid: --remote-control name} of the running sessions, read only when
-    some session looks unlinked. lost: the names already reported. A watched name whose newest live
-    record says unlinked, started more than RC_GRACE_S ago, and whose process was started with
-    --remote-control under that name gives REMOTE ... lost once; the same name read linked again
-    gives REMOTE ... back once. A session that is gone, too young, or silent on the link keeps its
-    earlier state, so neither line repeats."""
+    some session looks unlinked. lost: the rc_key of each session already reported. A watched name
+    whose newest live record says unlinked, started more than RC_GRACE_S ago, and whose process was
+    started with --remote-control under that name gives REMOTE ... lost once; the same process read
+    linked again gives REMOTE ... back once. One too young or silent on the link keeps its earlier
+    state, so neither line repeats; a session that is gone, or runs as another process now (a stop
+    and a relaunch), drops out, so the new one starts clean. A record whose name is not text is
+    skipped."""
     newest = {}
     for r in records:
         n, started = r.get("name"), r.get("started_ms")
-        if n not in names or isinstance(started, bool) or not isinstance(started, (int, float)):
+        if not isinstance(n, str) or n not in names or isinstance(started, bool)                 or not isinstance(started, (int, float)):
             continue
         if (n not in newest or started > newest[n]["started_ms"]) and alive(r):
             newest[n] = r
     ev, cur, unlinked = [], [], []
     for n in sorted(names):
         r = newest.get(n)
-        if r is None or r.get("linked") is None or now - r["started_ms"] / 1000.0 < RC_GRACE_S:
-            if n in lost:
-                cur.append(n)
+        if r is None:
+            continue
+        key = rc_key(r)
+        if r.get("linked") is None or now - r["started_ms"] / 1000.0 < RC_GRACE_S:
+            if key in lost:
+                cur.append(key)
         elif r["linked"]:
-            if n in lost:
+            if key in lost:
                 ev.append("REMOTE %s link back" % n)
         else:
             unlinked.append(r)
     pids = rc_pids() if unlinked else {}
     for r in unlinked:
-        n = r["name"]
+        n, key = r["name"], rc_key(r)
         if pids.get(r["pid"]) != n:                 # started without --remote-control: no link to lose
             continue
-        cur.append(n)
-        if n not in lost:
+        cur.append(key)
+        if key not in lost:
             ev.append("REMOTE %s link lost: the session runs, its Remote Control link is down "
                       "(pid %s)" % (n, r["pid"]))
     return ev, sorted(cur)
