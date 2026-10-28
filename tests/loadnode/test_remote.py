@@ -144,6 +144,88 @@ class Query(unittest.TestCase):
         self.assertEqual(remote.query_all([], runner=run), [])
 
 
+class Child(object):
+    """Link's popen stand-in: records ssh's argv and runs the Python `code` instead."""
+
+    def __init__(self, code):
+        self.code, self.argv = code, None
+
+    def __call__(self, argv, **kw):
+        self.argv = argv
+        return subprocess.Popen([sys.executable, '-c', self.code], **kw)
+
+
+ECHO = 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()); sys.stderr.write("e")'
+
+
+class LinkTests(unittest.TestCase):
+    """remote.Link: the pinned ssh of one `node.py run` job. No test starts ssh."""
+
+    def test_the_pin_is_written_on_entry_and_removed_on_exit(self):
+        with remote.Link(NODE, ssh=SSH, home=HOME, popen=Child('')) as link:
+            with open(link.known_hosts, encoding='ascii') as f:
+                self.assertEqual(f.read(), remote.known_hosts_line(NODE))
+            path = link.known_hosts
+            argv = link.argv('start')
+            streamed = link.argv('follow', keepalive=True)
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(argv, remote.ssh_argv(NODE, SSH, path, home=HOME)[:-1] + ['start'])
+        self.assertNotIn('ServerAliveInterval=10', ' '.join(argv))
+        self.assertIn('ServerAliveInterval=10', streamed)
+        self.assertEqual(streamed[-3:], ['--', '192.168.1.50', 'follow'])
+
+    def test_no_ssh_is_an_os_error(self):
+        with mock.patch.object(remote, 'ssh_exe', return_value=None), self.assertRaises(OSError):
+            with remote.Link(NODE, popen=Child('')):
+                pass
+
+    def test_git_runs_the_same_pinned_ssh_and_no_other(self):
+        import shlex
+        base = {'PATH': 'p', 'GIT_SSH': 'plink', 'SSH_ASKPASS': 'x', 'GIT_ASKPASS': 'y'}
+        with remote.Link(NODE, ssh=SSH, home=HOME) as link:
+            env = link.git_env(base)
+            want = [SSH] + remote.ssh_options(NODE, link.known_hosts, home=HOME)
+        self.assertEqual(shlex.split(env['GIT_SSH_COMMAND']), want)
+        self.assertEqual((env['GIT_SSH_VARIANT'], env['PATH']), ('ssh', 'p'))
+        for k in ('GIT_SSH', 'SSH_ASKPASS', 'GIT_ASKPASS'):
+            self.assertNotIn(k, env)
+        self.assertEqual(remote.sh_quote("a'b c"), "'a'\\''b c'")
+
+    def test_the_push_url_is_the_mirror_and_an_ipv6_address_is_bracketed(self):
+        self.assertEqual(remote.push_url(NODE, 'my-repo'), '192.168.1.50:pmkit-node/mirrors/my-repo.git')
+        v6 = NODE._replace(address='fd00::5')
+        self.assertEqual(remote.push_url(v6, 'r'), '[fd00::5]:pmkit-node/mirrors/r.git')
+
+    def test_call_sends_the_parameters_as_one_json_line(self):
+        child = Child(ECHO)
+        with remote.Link(NODE, ssh=SSH, home=HOME, popen=child) as link:
+            rc, out, err = link.call('stop', {'job': 'j'}, timeout_s=60)
+        self.assertEqual((rc, out, err), (0, b'{"job":"j"}\n', b'e'))
+        self.assertEqual(child.argv[-1], 'stop')
+
+    def test_call_past_its_time_ends_ssh(self):
+        with remote.Link(NODE, ssh=SSH, home=HOME, popen=Child('import time; time.sleep(60)')) as link:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                link.call('stop', {}, timeout_s=1)
+
+    def test_stream_hands_on_each_piece_and_can_end_early(self):
+        got = []
+        with remote.Link(NODE, ssh=SSH, home=HOME, popen=Child(ECHO)) as link:
+            rc, err, idle = link.stream('follow', {'job': 'j', 'offset': 3}, got.append)
+        self.assertEqual((rc, err, idle), (0, b'e', False))
+        self.assertEqual(b''.join(got), b'{"job":"j","offset":3}\n')
+        loop = 'import sys, time\nwhile True:\n    sys.stdout.write("x"); sys.stdout.flush(); time.sleep(0.05)'
+        with remote.Link(NODE, ssh=SSH, home=HOME, popen=Child(loop)) as link:
+            _rc, _err, idle = link.stream('follow', {}, lambda data: False)
+        self.assertFalse(idle)
+
+    def test_a_silent_node_is_ended_as_idle(self):
+        with remote.Link(NODE, ssh=SSH, home=HOME, popen=Child('import time; time.sleep(60)')) as link:
+            rc, _err, idle = link.stream('follow', {}, lambda data: None, idle_s=0.2)
+        self.assertTrue(idle)
+        self.assertNotEqual(rc, 0)
+
+
 class DefaultRunner(unittest.TestCase):
     """default_runner starts a real child (Python, never ssh)."""
 

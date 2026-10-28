@@ -86,7 +86,7 @@ class ServeRefuses(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(text.count('\n'), 1)
         self.assertEqual(json.loads(text), {'protocol': 1, 'ok': False,
-                                            'error': 'refused: only status is served'})
+                                            'error': loadnode.REFUSED})
         self.assertNotIn(MARK, text)
         return text
 
@@ -144,6 +144,88 @@ class ServeAnswers(unittest.TestCase):
         self.assertEqual((code, reply['kit_version']), (0, want))
 
 
+class FakeBox(object):
+    """The Box's stand-in: records what reached it."""
+
+    def __init__(self, live=0):
+        self.calls, self.live = [], live
+
+    def live_count(self):
+        return self.live
+
+    def mirror_for_push(self, repo):
+        self.calls.append(('mirror', repo))
+        return '/m/' + repo + '.git'
+
+    def clean(self, job):
+        self.calls.append(('clean', job))
+        return {'ok': True, 'gone': True}
+
+
+class RunWords(unittest.TestCase):
+    """The run words go to kitlib.loadnode.box; `job` is the detached runner and never served."""
+
+    JOB = 'j-20261028T120000Z-abcdef'
+
+    def main(self, argv, cmd, stdin=b'', box=None, exec_fn=None):
+        out, binout = io.StringIO(), io.BytesIO()
+        env = {} if cmd is None else {'SSH_ORIGINAL_COMMAND': cmd}
+        with mock.patch.object(loadnode, '_lock_snapshot', return_value=snapshot()):
+            code = loadnode.main(argv, env, out, io.BytesIO(stdin), box or FakeBox(), exec_fn,
+                                 binout)
+        return code, out.getvalue(), binout.getvalue()
+
+    def test_a_run_word_reaches_the_box(self):
+        box = FakeBox()
+        code, text, data = self.main(['serve'], 'clean', json.dumps({'job': self.JOB}).encode(), box)
+        self.assertEqual((code, text, json.loads(data)), (0, '', {'ok': True, 'gone': True}))
+        self.assertEqual(box.calls, [('clean', self.JOB)])
+
+    def test_the_push_form_execs_git_receive_pack_on_the_mirror_only(self):
+        box, ran = FakeBox(), []
+        code, _t, _d = self.main(['serve'], "git-receive-pack 'pmkit-node/mirrors/r1.git'", box=box,
+                                 exec_fn=ran.append)
+        self.assertEqual((code, ran), (0, [['git', 'receive-pack', '/m/r1.git']]))
+        for cmd in ("git-upload-pack 'pmkit-node/mirrors/r1.git'", 'start x', 'git-receive-pack',
+                    "git-receive-pack 'pmkit-node/mirrors/../r1.git'", 'job ' + self.JOB):
+            with self.subTest(cmd=cmd):
+                code, text, data = self.main(['serve'], cmd, box=box, exec_fn=ran.append)
+                self.assertEqual((code, data), (2, b''))
+                self.assertEqual(json.loads(text)['error'], loadnode.REFUSED)
+        self.assertEqual(len(ran), 1)
+
+    def test_status_names_the_words_it_serves_and_its_live_jobs(self):
+        code, text, _d = self.main(['serve'], 'status', box=FakeBox(live=2))
+        got = json.loads(text)
+        self.assertEqual(code, 0)
+        self.assertEqual(got['jobs'], 2)
+        self.assertEqual(sorted(got['verbs']),
+                         sorted(['status', 'start', 'follow', 'fetch', 'clean', 'stop']))
+
+    def test_job_is_never_served_over_ssh(self):
+        with mock.patch('kitlib.loadnode.box.job_main', side_effect=AssertionError('ran')):
+            code, text, _d = self.main(['job', self.JOB], 'status')
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(text)['error'], loadnode.REFUSED)
+
+    def test_job_without_ssh_runs_the_runner(self):
+        with mock.patch('kitlib.loadnode.box.job_main', return_value=5) as jm:
+            code, _t, _d = self.main(['job', self.JOB, '--base', os.path.abspath(os.sep + 'b')], None)
+        self.assertEqual(code, 5)
+        self.assertEqual(jm.call_args[0][:2], (self.JOB, os.path.abspath(os.sep + 'b')))
+
+    def test_base_must_be_one_absolute_folder(self):
+        self.assertEqual(loadnode.split_base(['serve']), (['serve'], None))
+        self.assertEqual(loadnode.split_base(['serve', '--base', os.path.abspath('x')]),
+                         (['serve'], os.path.abspath('x')))
+        for argv in (['serve', '--base'], ['serve', '--base', 'rel'],
+                     ['serve', '--base', os.path.abspath('x'), '--base', os.path.abspath('y')]):
+            with self.subTest(argv=argv):
+                self.assertEqual(loadnode.split_base(argv), (None, None))
+        code, text, _d = self.main(['serve', '--base', 'rel'], 'clean', b'{}')
+        self.assertEqual((code, json.loads(text)['error']), (2, loadnode.REFUSED))
+
+
 class RunsIsolated(unittest.TestCase):
     """Run as sshd runs it (python -I -B <path> serve): it finds the kit with no help."""
 
@@ -155,7 +237,7 @@ class RunsIsolated(unittest.TestCase):
                            cwd=HERE)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertEqual(json.loads(r.stdout.decode()), {'protocol': 1, 'ok': False,
-                                                         'error': 'refused: only status is served'})
+                                                         'error': loadnode.REFUSED})
         self.assertNotIn(MARK.encode(), r.stdout + r.stderr)
 
 
