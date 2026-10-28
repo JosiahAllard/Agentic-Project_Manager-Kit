@@ -11,6 +11,7 @@ each request (and may cache usage and agents for about a minute, which is the ca
   agents(agents_dir)            -> {"available", "agents"|"reason"}
   skills(skills_dir)            -> {"available", "skills"|"reason"}   (name, description)
   skill(skills_dir, name)       -> {"name", "description", "body"}|None
+  skill_source(skills_dir, name)-> {"name", "text", "blob"}|None   the whole SKILL.md and its blob
   findings(lint_dir)            -> [row]    the maintenance lint's last findings, every repo
   lint_runs(lint_dir)           -> [run]    each repo's last lint run: started, ledger, skip
 """
@@ -18,6 +19,7 @@ import os
 import re
 
 from kitlib import pmstart, pmwatch, roster
+from kitlib.hubsite import skilledits
 from kitlib.maintlint import result as lint_result
 
 _FINGERPRINT = re.compile(r'^[0-9a-f]{16}$')
@@ -167,6 +169,26 @@ def skill(skills_dir, name):
         return None
     got = _skill_file(skills_dir, name)
     return None if got is None else {"name": name, "description": got[0], "body": got[1]}
+
+
+def skill_source(skills_dir, name):
+    """One skill's whole source, {"name", "text", "blob"}: the SKILL.md text, front matter and all
+    (UTF-8, CRLF read as LF), and the git blob id of the file's bytes (a skill edit's base_blob),
+    or None when `name` is not one of the listed folders or the file cannot be read as UTF-8. The
+    name is compared with the folder listing as skill() does."""
+    try:
+        listed = os.listdir(skills_dir)
+    except (OSError, TypeError):
+        return None
+    if not isinstance(name, str) or name not in listed:
+        return None
+    try:
+        with open(os.path.join(skills_dir, name, "SKILL.md"), "rb") as f:
+            data = f.read()
+        text = data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return {"name": name, "text": skilledits.normal(text), "blob": skilledits.git_blob(data)}
 
 
 def _str(v):

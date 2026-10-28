@@ -126,6 +126,8 @@ label.opt input{margin-top:4px;accent-color:var(--accent)}
 .od{grid-column:2;color:var(--muted);font-size:.88rem;overflow-wrap:anywhere}
 textarea{width:100%;box-sizing:border-box;min-height:64px;font:inherit;padding:8px 10px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--bg);color:var(--fg);resize:vertical}
 .act{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+textarea.ske{min-height:24em;font-family:var(--f-mono);font-size:.85rem}
+.ske-row{border-top:1px solid var(--line);padding:6px 0}
 .keys{margin-left:auto;font-size:.78rem;color:var(--muted)}
 .keys kbd{font:600 .72rem var(--f-mono);border:1px solid var(--line);border-radius:4px;padding:1px 5px;background:var(--surface)}
 @media (max-width:760px){.keys{display:none}}
@@ -394,7 +396,7 @@ ul.hist .sch-line{display:block}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], skills: [], notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null,
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], skills: [], skilledits: [], skEdit: new Map(), notices: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", afilter: "waiting", lintOpen: null, topm: [], approvals: [], decided: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set(), sel: null,
     // The Schedule view: its tab, the History filters, the Week grid's pick and shift, the reserve note and the run asked once.
     sch: { tab: "now", repo: "", kind: "", result: "", histOpen: false, shift: 0, pick: null, note: "", confirm: null, stats: null, days: 7, statsRev: null, statsWhy: "", status: "", bad: false, busy: false,
       // The open forms, each holding what is typed so a redraw never loses it: New hold, a hold's Edit (by its id), the games list, the division.
@@ -689,14 +691,15 @@ ul.hist .sch-line{display:block}
       el("h2", {text: a.role || "(no description)"}), kv("Model", a.model || "inherit"), kv("Effort", a.effort || "default"));
   }
 
-  // Skills: the kit's skill sources (content/skills/<name>/SKILL.md), read only. A row is a skill's name and
-  // description; its card has the header (name, description) and the body as the text it is.
+  // Skills: the kit's skill sources (content/skills/<name>/SKILL.md). A row is a skill's name and description; its
+  // card has the header (name, description), the skill's edits (skillEditRow), an Edit button and the body as the
+  // text it is. The owner edits a skill's text here and an agent commits it (skillEditor).
   function renderSkills(){
     const rows = state.skills.slice().sort((a,b) => String(a.id).localeCompare(String(b.id)));
     if (!rows.length) { show(["skills"], state.gone.skills ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "No skills found" : "Skills needs the hub server"}), "Each skill is read from its source file, content/skills/<name>/SKILL.md.")); return; }
     const at = settle(rows.map(s => ["skill", s]));
     const skillRow = s => rowCard("skill", { ...s, title: s.description || "(no description)" }, [], "");
-    show(["skills"], el("p", {class:"unote", text: "Read only: the skill sources in the kit's content/skills folder."}), rows.map(s => drawn(skillRow, s)));
+    show(["skills"], el("p", {class:"unote", text: "The skill sources in the kit's content/skills folder. Edit writes a skill's new text; an agent commits it."}), rows.map(s => drawn(skillRow, s)));
     pickDetail(at);
   }
   // A skill's body is not in the snapshot: it is read (GET /skills/<name>) when its card is drawn, kept for
@@ -715,12 +718,80 @@ ul.hist .sch-line{display:block}
       if (now) { now.textContent = res.text != null ? res.text : "Not read: " + res.err + "."; now.classList.toggle("gone", res.text == null); }
     });
   }
+  // Skill edits (docs/action-hub.md "skill_edits/E-NNN"): the owner's new text for a skill's source, which an agent
+  // commits; the page writes only the edit, never a file. An open editor is state.skEdit's {id, version, text, status,
+  // node}, keyed by the skill: id is null for a new edit, text null until the source is read, and the card is built once
+  // so a redraw never loses what is typed.
+  const SKILL_EDIT_SAID = { draft: "Draft, not sent", submitted: "Submitted: waiting on an agent to commit it", committed: "Committed",
+    superseded: "Superseded: the skill changed since this edit was written", failed: "Not committed", withdrawn: "Withdrawn" };
+  const SKILL_EDIT_OPEN = ["draft", "submitted", "superseded", "failed"], SKILL_EDIT_CHANGE = ["draft", "superseded", "failed"];
+  const SKILL_LAG = "The hub's copy of a skill can lag the kit's main: the agent checks main before it commits, and an edit written on an older copy comes back superseded.";
+  const skillEdits = name => state.skilledits.filter(x => x.skill === name).sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  function skillEditor(s, ed){
+    const ta = el("textarea", {class:"ske", id: "ske-" + s.id, spellcheck: "false", "aria-label": "The new text of skill " + s.id});
+    const st = el("span", {class:"status", role:"status"});
+    const save = el("button", {class:"link", type:"button", id: "ske-save-" + s.id, text:"Save draft"});
+    const submit = el("button", {class:"primary", type:"button", id: "ske-submit-" + s.id, text:"Submit"});
+    const cancel = el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.skEdit.delete(s.id); render(); }});
+    const busy = on => { save.disabled = submit.disabled = on; };
+    if (ed.text != null) ta.value = ed.text;
+    else {
+      ta.disabled = true; busy(true); st.textContent = "Reading the skill from the hub server…";
+      hub.call("GET", "/skills/" + seg(s.id) + "/source").then(r => { ta.value = typeof r.text === "string" ? r.text : ""; ta.disabled = false; busy(false); st.textContent = ""; },
+        err => { st.className = "status err"; st.textContent = "Not read: " + why(err) + "."; });
+    }
+    const send = async sub => {
+      if (!ta.value.trim()) { st.className = "status err"; st.textContent = "The text cannot be empty."; return; }
+      busy(true); st.className = "status"; st.textContent = sub ? "Submitting…" : "Saving…";
+      try {
+        if (ed.id) await hub.post("/skill_edits/" + seg(ed.id) + "/edit", { text: ta.value, submit: sub, ...pinAt(ed.version) });
+        else await hub.post("/skill_edits", { skill: s.id, text: ta.value, submit: sub });
+        state.skEdit.delete(s.id); await refresh().catch(() => {}); render();
+      } catch (err) {
+        busy(false); st.className = "status err";
+        st.textContent = (sub ? "Not submitted: " : "Not saved: ") + why(err) + ". Your text is kept.";
+        if (err.status === 409 && ed.id) {
+          await refresh().catch(() => {});
+          const cur = state.skilledits.find(x => x.id === ed.id);
+          if (cur && Number.isInteger(cur.version)) { ed.version = cur.version; st.textContent += " It changed on the hub server meanwhile (it is now " + (SKILL_EDIT_SAID[cur.status] || cur.status) + "); press again to put your text in its place."; }
+        }
+      }
+    };
+    save.addEventListener("click", () => send(false)); submit.addEventListener("click", () => send(true));
+    const again = ed.status === "superseded" || ed.status === "failed";
+    const now = again ? el("p", {class:"ctx", id: "sk-body-" + s.id}) : null;
+    if (now) skillBody(s.id, now);
+    return el("article", {class:"q", id: "sk-" + s.id},
+      el("div", {class:"meta"}, el("span", {class:"id", text: s.id}), ed.id ? el("span", {class:"chip need", text: "Editing " + ed.id}) : el("span", {class:"chip need", text:"New edit"})),
+      el("h2", {text: s.description || "(no description)"}),
+      el("p", {class:"unote", text: "Your text replaces the whole of content/skills/" + s.id + "/SKILL.md once an agent commits it; Submit sends it to the kit's coordinator. " + SKILL_LAG}),
+      again ? el("p", {class:"unote", text: "Re-apply on the new text: the skill as the hub serves it now is below your text. Bring your change onto it; Save or Submit puts your edit on that text."}) : null,
+      ta, el("div", {class:"act"}, save, submit, cancel, st), now);
+  }
+  function skillEditRow(x){
+    const st = el("span", {class:"status", role:"status"}), acts = [];
+    if (SKILL_EDIT_CHANGE.includes(x.status)) acts.push(el("button", {class:"link", type:"button", id: "ske-open-" + x.id, text: x.status === "draft" ? "Edit" : "Re-apply on the new text",
+      onclick: () => { state.skEdit.set(x.skill, { id: x.id, version: x.version, text: typeof x.text === "string" ? x.text : "", status: x.status }); render(); }}));
+    if (SKILL_EDIT_OPEN.includes(x.status)) acts.push(delButton("/skill_edits/" + seg(x.id) + "/withdraw", st, x.version, "Withdraw", "withdrawn"));
+    const say = x.status === "failed" && x.why ? "Not committed: " + x.why : x.status === "committed" && x.branch ? "Committed on branch " + x.branch + "; it lands as any branch does" : SKILL_EDIT_SAID[x.status] || String(x.status);
+    return el("div", {class:"ske-row", id: "ske-row-" + x.id},
+      el("div", {class:"meta"}, el("span", {class:"id", text: x.id}), el("span", {class: "chip" + (x.status === "committed" ? " ok" : x.status === "superseded" || x.status === "failed" ? " need" : ""), text: say}),
+        x.created_at ? el("span", {text: "written " + when(x.created_at)}) : null),
+      acts.length ? el("div", {class:"act"}, ...acts, st) : null);
+  }
   function skillCard(s){
+    const ed = state.skEdit.get(s.id);
+    if (ed) return ed.node || (ed.node = skillEditor(s, ed));
     const body = el("p", {class:"ctx", id: "sk-body-" + s.id});
     skillBody(s.id, body);
+    // its open edits, and the last three that are closed
+    const edits = skillEdits(s.id), open = edits.filter(x => SKILL_EDIT_OPEN.includes(x.status));
+    const rows = [...open, ...edits.filter(x => !SKILL_EDIT_OPEN.includes(x.status)).slice(0, 3)].map(x => drawn(skillEditRow, x));
+    const start = open.length ? null : el("div", {class:"act"}, el("button", {class:"link", type:"button", id: "ske-new-" + s.id, text:"Edit",
+      onclick: () => { state.skEdit.set(s.id, { id: null, version: null, text: null, status: null }); render(); }}));
     return el("article", {class:"q", id: "sk-" + s.id},
       el("div", {class:"meta"}, el("span", {class:"id", text: s.id})),
-      el("h2", {text: s.description || "(no description)"}), body);
+      el("h2", {text: s.description || "(no description)"}), ...rows, start, body);
   }
 
   // Parked: the backlog items whose state is parked, as the server's backlog view gives them. Nothing stores
@@ -934,7 +1005,7 @@ ul.hist .sch-line{display:block}
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
       push: s.push && typeof s.push === "object" ? s.push : null, code: s.code && typeof s.code === "object" ? s.code : null, watcher: s.watcher && typeof s.watcher === "object" ? s.watcher : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
-      stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
+      stories: col("stories").map(d => ({ status: "submitted", ...d })), skilledits: col("skill_edits"), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents, skills, notices: noticeRows(views.notices),
       approvals: col("approvals").filter(d => d.status === "pending").sort((x, y) => String(x.created_at || "").localeCompare(String(y.created_at || ""))),
       decided: col("approvals").filter(d => DECIDED.includes(d.status)).sort((x, y) => String(y.decided_at || "").localeCompare(String(x.decided_at || ""))), strong: s.strong === true };
@@ -1670,7 +1741,7 @@ ul.hist .sch-line{display:block}
   // With nothing picked (a section just shown), a to-do the owner is editing opens before the first row, so the edit
   // itself is in sight and not only its row's Editing chip.
   const editingRow = ([k, d]) => {
-    const ed = k === "todo" && d.from === "you" ? state.todoEdit.get(d.id) : k === "pm" ? state.pmEdit.get(d.id) : null;
+    const ed = k === "todo" && d.from === "you" ? state.todoEdit.get(d.id) : k === "pm" ? state.pmEdit.get(d.id) : k === "skill" ? state.skEdit.get(d.id) : null;
     return !!ed && !ed.gone;
   };
   function settle(offered){
@@ -3106,7 +3177,7 @@ ul.hist .sch-line{display:block}
     lastCheap = cheap;
     rev = next.revision;
     const first = !ready; ready = true; lastRead = Date.now();
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "skills", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "skills", "skilledits", "notices", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "decided", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);

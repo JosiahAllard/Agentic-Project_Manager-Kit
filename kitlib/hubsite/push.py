@@ -14,9 +14,9 @@ item itself is read through the hub. Nothing here imports a host: the delivery o
 
 What fires (a fingerprint per item: a question's phase (question_phase), answer.at, a digest of
 its answer and, once it is a standing rule, standing.at, a to-do's status and done_at, an
-approval's status, decided_at and phase, a story's status and submitted_at, a note to the PM's
-status and sent_at; only a changed fingerprint fires, so a pm_ack, which leaves them alone, never
-does):
+approval's status, decided_at and phase, a story's and a skill edit's status and submitted_at,
+a note to the PM's status and sent_at; only a changed fingerprint fires, so a pm_ack, which leaves
+them alone, never does):
   answered    a question answered or answered again: not bound to a record, its filing failed,
               or filed with no `filed_as` (read as before that field)
   filed       a question's answer filed into its record, with `filed_as` (Filed answers below);
@@ -29,7 +29,8 @@ does):
   expiring    an approval still approved and not consumed EXPIRING_S after its decision: the
               one reminder before it expires (APPROVED_TTL_S), so a missed first push cannot
               lose it
-  submitted   a story the owner submitted (or submitted again): to the PM only
+  submitted   a story the owner submitted (or submitted again): to the PM only; a skill edit
+              the owner submitted: to the kit's coordinator (Api.kit_session_key) and the PM
   sent        a note the owner sent the PM (to_pm): to the PM only
 Recipients: the item's `from` (a launcher key, or a to-do's free name; for an approval, which has
 no `from`, Api.repo_key of its repo) unless it is the PM's (AGENT_FROM, OWNER_FROM, empty, or
@@ -67,6 +68,8 @@ Each recipient is sent each item until it is acknowledged:
                            `freed` ping: its first written try
   PM, to-do                pm_ack, or no longer done (an owner-added one: pm_ack)
   PM, story or note        its status changed (hub stories set, hub to-pm reply)
+  either, skill edit       its status changed (hub skill-edit done or fail; the owner's
+                           withdraw)
   either                   the item is withdrawn, or a newer fingerprint replaces the push
 A recipient that already held the item when a first answer or done mark fired picked that one
 up before the worker saw it, and is not sent it. One that held it when a re-answer or a re-done
@@ -153,7 +156,7 @@ LOG_MAX = 1 << 20                           # push-undelivered.jsonl rotates pas
 OUTBOX = 'push-outbox.json'
 UNDELIVERED = 'push-undelivered.jsonl'
 COLLECTIONS = {'questions': 'question', 'todos': 'todo', 'approvals': 'approval',
-               'stories': 'story', 'to_pm': 'to_pm'}
+               'stories': 'story', 'to_pm': 'to_pm', 'skill_edits': 'skill_edit'}
 ANSWERED = ('answered', 'filed')          # a question's statuses that hold an unread answer
 FILED_AS = ('pulled', 'freed', 'held')    # what a filed answer did to its record (api._filed_as)
 EVENTS = ('answered', 'filed', 'standing', 'done', 'reopened', 'added', 'decided', 'expiring',
@@ -231,7 +234,7 @@ def fingerprint(kind, doc, now=None):
         if isinstance(standing, dict):
             out.append(standing.get('at'))
         return out
-    if kind == 'story':
+    if kind in ('story', 'skill_edit'):
         return [doc.get('status'), doc.get('submitted_at')]
     if kind == 'to_pm':
         return [doc.get('status'), doc.get('sent_at')]
@@ -252,7 +255,7 @@ def trigger(kind, doc, old, now=None):
                 and list(old[:3]) == fingerprint(kind, doc)[:3]):
             return 'standing'           # the same answer, made a standing rule since
         return phase
-    if kind == 'story':
+    if kind in ('story', 'skill_edit'):
         return 'submitted' if status == 'submitted' else None
     if kind == 'to_pm':
         return 'sent' if status == 'sent' else None
@@ -320,6 +323,10 @@ def _question_guidance(doc_id, event, recipient, entry):
 def guidance(kind, doc_id, event, recipient, entry=None):
     if kind == 'question' and entry is not None:
         return _question_guidance(doc_id, event, recipient, entry)
+    if kind == 'skill_edit':
+        return ('The owner submitted an edit of a kit skill: hub skill-edit show %s --out FILE, '
+                'then follow skill hub-ops "Skill edits" (its done or fail acknowledges this '
+                'push).' % doc_id)
     if event == 'decided':
         return ('Decided by the owner: hub pending --for %s (or hub approvals show %s).'
                 % (recipient, doc_id))
@@ -603,6 +610,8 @@ class PushWorker(object):
             sender = self._repo_key(doc.get('repo'))    # no `from`: its repository's coordinator
         elif kind in ('story', 'to_pm'):
             sender = ''                 # the owner's own, for the PM
+        elif kind == 'skill_edit':
+            sender = self._kit_key()    # the kit's coordinator commits it
         else:
             sender = doc.get('from') if isinstance(doc.get('from'), str) else ''
         keys = [PM_KEY]
@@ -767,6 +776,16 @@ class PushWorker(object):
             got = ''
         return got if isinstance(got, str) else ''
 
+    def _kit_key(self):
+        """The kit coordinator's key (Api.kit_session_key), '' when none."""
+        fn = getattr(self.api, 'kit_session_key', None)
+        try:
+            got = fn() if fn is not None else ''
+        except Exception as e:          # noqa: BLE001 - a host fault: the PM alone hears it
+            self.log('push: kit_session_key failed: %s' % type(e).__name__)
+            got = ''
+        return got if isinstance(got, str) else ''
+
     def _pushed(self, key):
         """Tell the Api a try to `key` was written (Api.pushed: its route)."""
         fn = getattr(self.api, 'pushed', None)
@@ -791,7 +810,7 @@ class PushWorker(object):
         if entry['event'] == 'reopened' or entry['kind'] == 'approval':
             return False                # only a written try acknowledges it
         kind = entry['kind']
-        if kind in ('story', 'to_pm'):
+        if kind in ('story', 'to_pm', 'skill_edit'):
             return False                # only its status changing (the fingerprint) does
         # a recipient that held the item when it fired (`once`) is acknowledged by a written try,
         # never by handed_to: that hand-over may be the old one (todos_done forgets it only after
@@ -941,7 +960,7 @@ class PushWorker(object):
 
 def _coll(kind):
     return {'question': 'questions', 'approval': 'approvals', 'story': 'stories',
-            'to_pm': 'to_pm'}.get(kind, 'todos')
+            'to_pm': 'to_pm', 'skill_edit': 'skill_edits'}.get(kind, 'todos')
 
 
 def _entry_ok(key, e):

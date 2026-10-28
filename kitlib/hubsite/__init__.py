@@ -9,6 +9,7 @@
   api      the site's JSON API: routes, roles, and the writes behind them
   lockdoor the api's door to the machine lock, in-process: revision, view, stats, owner writes
   pagecheck what a published page's HTML may hold: one check, refused whole, never stripped
+  skilledits the checks of an owner's skill edit: its text, its blob, the branch it names
   derived  views read from files other tools write (notices, repos, usage, agents, skills), never stored
   backlog  the backlog views the site shows
   recordwrite the owner's add, edit and delete from the record page, through the backlog store

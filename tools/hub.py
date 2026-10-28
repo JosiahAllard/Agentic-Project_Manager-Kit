@@ -195,6 +195,19 @@ the server alone decides what a role may do.
                                                      the requester takes back a request still
                                                      pending (KEY is pm: approvals store no from);
                                                      a decided or expired one is refused
+  hub.py skill-edit [--status S]                    `E-1 v2 submitted skill NAME` for each of the
+                                                     owner's edits of a kit skill (the owner
+                                                     writes them on the hub page only;
+                                                     docs/action-hub.md "skill_edits/E-NNN")
+  hub.py skill-edit show E-1 [--out F]              its status, skill and base blob; --out F
+                                                     writes the owner's text to F byte for byte
+  hub.py skill-edit done E-1 --branch B [-C DIR] --if-version V    `COMMITTED E-1`
+                                                     posts B and the blob of the skill's SKILL.md
+                                                     on B in DIR; the hub refuses a blob that is
+                                                     not the owner's text
+  hub.py skill-edit fail E-1 --why W [--at REV] [-C DIR] --if-version V    `FAILED E-1`, or
+                                                     `SUPERSEDED E-1` when the blob at REV is not
+                                                     the one the owner edited
   hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
                                                      each item of owner input not yet handled: R
                                                      is the session key to handle it now (pm
@@ -253,6 +266,7 @@ from kitlib.hubsite import approvals                               # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import control                                 # noqa: E402
 from kitlib.hubsite import pagecheck                               # noqa: E402
+from kitlib.hubsite import skilledits                              # noqa: E402
 from kitlib.hubsite import storecheck                              # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
@@ -261,7 +275,7 @@ HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
 VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart',
               'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pages', 'approvals',
-              'pending', 'wait', 'validate')
+              'skill-edit', 'pending', 'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -587,6 +601,30 @@ def _client_verbs(sub):
     x = _leaf(g, 'show', "a page's HTML")
     x.add_argument('id')
     x.add_argument('--out', metavar='F', help='write the HTML to this file instead')
+
+    e = _listed(sub, 'skill-edit', "list the owner's edits of kit skills; show; done: the "
+                "text is committed on a branch; fail: it could not be", S['skill_edits'],
+                repo=False)
+    x = _leaf(e, 'show', "one edit; --out writes the owner's text to a file, byte for byte")
+    x.add_argument('id')
+    x.add_argument('--out', metavar='F', help="write the owner's text to this file")
+    x = _leaf(e, 'done', 'mark a submitted edit committed: the hub checks the blob of the '
+              "skill's SKILL.md on --branch against the owner's text")
+    x.add_argument('id')
+    x.add_argument('--branch', required=True, help='the branch the commit is on')
+    x.add_argument('-C', dest='checkout', default='.', metavar='DIR',
+                   help='the checkout to read the branch in (default: .)')
+    _pins(x, required=True)
+    x = _leaf(e, 'fail', 'mark a submitted edit failed; with --at, superseded when the skill '
+              'changed since the owner wrote it')
+    x.add_argument('id')
+    x.add_argument('--why', required=True, help='what stopped the commit')
+    x.add_argument('--at', metavar='REV',
+                   help="send the blob of the skill's SKILL.md at this revision (main): the "
+                        'hub marks the edit superseded when it is not the one the owner edited')
+    x.add_argument('-C', dest='checkout', default='.', metavar='DIR',
+                   help='the checkout to read --at in (default: .)')
+    _pins(x, required=True)
 
     x = _listed(sub, 'approvals', "list the requests for the owner's approval; show; add: ask "
                 "for one; withdraw: take back a pending one", S['approvals'])
@@ -1286,6 +1324,54 @@ def _pages(a, stop):
     return _list(a, 'pages', version=True)
 
 
+def _blob_at(checkout, rev, skill):
+    """The blob id of the skill's source at `rev` in `checkout` (git rev-parse, a read)."""
+    from kitlib.git import cmd
+    path = skilledits.source_path(skill)
+    out, why = cmd.run_text(['rev-parse', '--verify', '--quiet', '%s:%s' % (rev, path)],
+                            checkout)
+    if not skilledits.is_blob(out):
+        raise serve.ServeError('cannot read %s at %s in %s: %s'
+                               % (path, rev, checkout, why or 'not found'))
+    return out
+
+
+def _skill_edit(a, stop):
+    """The owner's edits are the owner's (the hub page): an agent shows, commits and reports."""
+    hub = _hub(a)
+    if a.sub in ('done', 'fail'):
+        d = hub.get(_one('skill_edits', a)).get('item') or {}
+        if a.sub == 'done':
+            body = {'branch': a.branch, 'if_version': a.if_version,
+                    'blob': _blob_at(a.checkout, a.branch, d.get('skill'))}
+        else:
+            body = _body(why=a.why, if_version=a.if_version)
+            if a.at:
+                body['current_blob'] = _blob_at(a.checkout, a.at, d.get('skill'))
+        got = hub.post(_one('skill_edits', a) + '/' + a.sub, client.AGENT, body)
+        return _wrote(a, got, '%s %s' % ('COMMITTED' if a.sub == 'done' else
+                                         str(got.get('status') or 'failed').upper(), got.get('id')))
+    if a.sub == 'show':
+        got = hub.get(_one('skill_edits', a))
+        d = got.get('item') or {}
+        text = d.get('text') if isinstance(d.get('text'), str) else ''
+        if a.out:
+            try:
+                with open(a.out, 'w', encoding='utf-8', newline='') as f:
+                    f.write(text)
+            except OSError as e:
+                raise serve.ServeError('cannot write %s: %s' % (a.out, type(e).__name__))
+            return _show(a, {'ok': True, 'id': d.get('id'), 'version': d.get('version'),
+                             'out': a.out}, ['WROTE %s' % a.out])
+        return _show(a, got, ['%s v%s %s skill %s base %s' % (
+            d.get('id'), d.get('version'), d.get('status'), d.get('skill'), d.get('base_blob'))]
+            + ['%s: %s' % (k, d[k]) for k in ('branch', 'blob', 'source_blob', 'why') if d.get(k)])
+    got = hub.get('/skill_edits', query={'status': getattr(a, 'status', None)})
+    return _show(a, got, ['%s v%s %s skill %s' % (d.get('id'), d.get('version'), d.get('status'),
+                                                   d.get('skill'))
+                          for d in got.get('items') or []])
+
+
 def _approvals(a, stop):
     """The requests from GET /snapshot (the api has no route that lists approvals), each with
     its status read now: approvals.status_at applies the expiry, `malformed` for a bad document.
@@ -1374,7 +1460,7 @@ VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
          'unpair': _unpair, 'stop': _stop, 'restart': _restart,
          'questions': _questions, 'answer': _answer, 'todos': _todos,
          'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pages': _pages,
-         'approvals': _approvals,
+         'approvals': _approvals, 'skill-edit': _skill_edit,
          'pending': _pending,
          'wait': _wait, 'validate': _validate}
 
