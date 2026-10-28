@@ -121,6 +121,13 @@ class APlantedHitFails(PlantedTree):
         self.assertEqual(rc, 1, out)
         self.assertIn('tools/thing.py:1:', out)
 
+    def test_a_posix_home_in_a_tracked_file_is_a_hit(self):
+        H = '/' + 'home' + '/'
+        self.write('tools/thing.py', 'PLACE = %r\n' % (H + 'someone/x'))
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('tools/thing.py:1: hard-coded machine path ' + H + 'someone', out)
+
     def test_placeholders_and_variables_are_not_paths(self):
         self.write('notes.md', '%s%sUsers%s<name>%sAppData and %%USERPROFILE%%%sDocuments and '
                    '%%BETA_DATA%%%slive\n' % (DRIVE, BS, BS, BS, BS, BS))
@@ -559,8 +566,29 @@ class FindNeedsNoConfig(unittest.TestCase):
 
     def test_variables_are_not_caught(self):
         for s in ('%GAMMA_REPO%\\.claude', '$env:LOCALAPPDATA', '%PM_ROOT%\\reviews',
-                  '/home/someone/Gamma', 'c--GitHub-Gamma', DRIVE + '\\Users\\<USER>\\x'):
+                  'c--GitHub-Gamma', DRIVE + '\\Users\\<USER>\\x'):
             self.assertEqual(M.find(s, ('GitHub',)), [], s)
+
+    def test_a_posix_home_is_caught(self):
+        H = '/' + 'home' + '/'
+        for s in (H + 'someone/x', 'cd ' + H + 'someone', '`' + H + 'a1_b-c/.config`',
+                  '"' + H + 'someone"'):
+            self.assertTrue(M.find(s), s)
+        self.assertEqual(M.find(H + 'someone/x'), [H + 'someone'])
+        self.assertTrue(M.find(H + 'someone/x', ('GitHub',)))
+
+    def test_posix_home_placeholders_are_not_paths(self):
+        H = '/' + 'home' + '/'
+        for s in (H + '<user>/x', H + '<name>', H + '$USER/x', H + '%USER%/x', H + '{user}/x',
+                  '~/x', '$HOME/x', '%USERPROFILE%/x'):
+            self.assertEqual(M.find(s), [], s)
+
+    def test_prose_that_only_looks_like_a_home_is_not_a_path(self):
+        H = '/' + 'home'
+        for s in (H, H + '/', H + ' directory', H + 'page/x', H + 'work/x', H + '/.config',
+                  'src' + H + '/x', '..' + H + '/x', '$HOME' + H + '/x', 'a/b' + H + '/x',
+                  'C:' + BS + 'home' + BS + 'x'):
+            self.assertEqual(M.find(s), [], s)
 
     def test_import_and_find_read_no_configuration(self):
         outside = tempfile.mkdtemp(prefix='machine-paths-noconf-')

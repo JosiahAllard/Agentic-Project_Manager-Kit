@@ -12,6 +12,11 @@ searched for
     names folders() gives - the machine config's `machine_path_folders` (kitlib.config.user).
     The kit codes no folder name (DEFAULT_FOLDERS is empty): unset, no drive-rooted folder is
     searched and check() prints a NOTE saying so;
+  - a posix home: `/home/` + a name, not preceded by a path character (so `src/home/x`,
+    `../home/x` and `$HOME/home/x` are not one). The same placeholders pass: a name in angle
+    brackets, `$USER`, a `%VAR%`, a `~`; a dot-name (`/home/.config`) is not a user. `/home` alone and `/homepage` are not a home. It
+    carries no folder list, and `/root` is not searched: the Windows form treats an admin
+    profile as any other name, with no special case;
   - a drive-rooted user profile: `<drive>:` + separator + `Users` + separator + a name, which
     covers every `AppData`, `Documents` and `.claude` path under one. A placeholder name in angle
     brackets or a `%VAR%` is not a name and never matches.
@@ -80,6 +85,11 @@ def pattern(folders):
 
 
 MACHINE_PATH = pattern(DEFAULT_FOLDERS)
+# A posix home directory: /home/<name>. The lookbehind refuses a path that merely contains
+# `home` (src/home/x, ../home/x, $HOME/home/x); the name class refuses the placeholders the
+# docs write (<user>, $USER, %USER%, {user}) as the Windows form does; a name starts with a
+# letter, digit or underscore, so `/home/.config` (a file under a home) is not a user.
+POSIX_HOME = re.compile(r'(?<![A-Za-z0-9_.~:/\$%-])/home/[A-Za-z0-9_][^\/\s\'"`<>%$*{}]*')
 MAX_BYTES = 4 * 1024 * 1024
 SECTION = 'machine_paths'
 GIT_TIMEOUT = 60
@@ -208,7 +218,7 @@ def find(text, folders=None):
     """Every machine path in `text`, as matched strings, for the drive-rooted folder names
     `folders` (default none: user-profile paths only). Reads no configuration."""
     rx = MACHINE_PATH if folders is None else pattern(folders)
-    return [m.group(0) for m in rx.finditer(text or '')]
+    return [m.group(0) for r in (rx, POSIX_HOME) for m in r.finditer(text or '')]
 
 
 def searched(cfg, rel):
@@ -226,7 +236,7 @@ def check_data(cfg, rel, data, hits, used, read, skipped):
     read.append(rel)
     rx = MACHINE_PATH if cfg.folders is None else pattern(cfg.folders)
     for n, line in enumerate(data.decode('utf-8', 'replace').splitlines(), 1):
-        for m in rx.finditer(line):
+        for m in [*rx.finditer(line), *POSIX_HOME.finditer(line)]:
             if cfg.fallback is not None and cfg.fallback.search(line):
                 continue
             i = allowed(cfg.allow, rel, line, m.group(0))

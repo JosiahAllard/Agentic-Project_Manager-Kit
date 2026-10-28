@@ -31,7 +31,7 @@ REFUSED_COMMANDS = (
 )
 
 
-def snapshot(store='/home/pmnode/.pm-kit/machine-lock', repo='secret-repo'):
+def snapshot(store='/home/<user>/.pm-kit/machine-lock', repo='secret-repo'):
     return {
         'schema_version': 1, 'store': store,
         'hardware': {'threads': 8, 'cores': [{'threads': 2}] * 4,
@@ -125,12 +125,12 @@ class ServeAnswers(unittest.TestCase):
                                            'memory_mb': {'total': 15900, 'free': 9100},
                                            'gpus': [{'name': 'Radeon 780M', 'vram_mb': 4096}],
                                            'problems': 1})
-        for secret in ('pm-kit', 'secret-repo', 'a note', 'pmnode'):
+        for secret in ('pm-kit', 'secret-repo', 'a note', '<user>'):
             self.assertNotIn(secret, text)
 
     def test_a_lock_that_cannot_be_read_is_exit_1_with_its_kind_only(self):
         def broken():
-            raise OSError('cannot open /home/pmnode/secret-path')
+            raise OSError('cannot open /home/<user>/secret-path')
         code, reply = loadnode.serve(['serve'], {'SSH_ORIGINAL_COMMAND': 'status'}, broken, '1')
         self.assertEqual(code, 1)
         self.assertFalse(reply['ok'])
