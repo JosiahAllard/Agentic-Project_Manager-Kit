@@ -27,9 +27,9 @@ read by kitlib.guard.shell and commands, and a URL by kitlib.guard.prepush; thos
 grammar, not the filesystem's.
 """
 import os
-import re
 
 import kitlib.platform
+from kitlib.platform.linux import paths as linux_paths
 
 # fstypes whose names compare without case (as Linux mounts them by default)
 FOLDING_FS = frozenset(('vfat', 'msdos', 'exfat', 'cifs', 'smb3', 'smbfs', 'hfs', 'hfsplus'))
@@ -134,28 +134,21 @@ _TABLE = []
 def _mounts():
     """[(mount point, fstype)] from /proc/self/mountinfo, a later line over an earlier one at the
     same point, read once per process (a hook is one process per call); None when it cannot be
-    read. Deviation from the plan's seam (section 2.1): this reader belongs in
-    kitlib/platform/linux/paths.py, which slice 9 builds; it moves there then."""
+    read."""
     if not _TABLE:
         _TABLE.append(_read_mounts())
     return _TABLE[0]
 
 
 def _read_mounts():
+    """_mounts' table from MOUNTINFO, read and parsed by kitlib.platform.linux.paths
+    (read_mountinfo, parse_mountinfo): a line that names no fstype is left out."""
     try:
-        with open(MOUNTINFO, encoding='utf-8', errors='surrogateescape') as f:
-            text = f.read()
-    except OSError:
+        text = linux_paths.read_mountinfo(MOUNTINFO)
+    except (OSError, ValueError):
         return None
-    table = {}
-    for line in text.splitlines():
-        head, sep, tail = line.partition(' - ')
-        fields, rest = head.split(), tail.split()
-        if not sep or len(fields) < 5 or not rest:
-            continue
-        table[_unescape(fields[4])] = rest[0]
+    table = {m.point: m.fstype for m in linux_paths.parse_mountinfo(text) if m.fstype}
     return sorted(table.items()) or None
 
 
-def _unescape(text):
-    return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), text)
+_unescape = linux_paths._unescape       # a mount point's octal escapes (\040 a space) undone

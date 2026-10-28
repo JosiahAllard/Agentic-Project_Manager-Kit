@@ -2,7 +2,8 @@
 slice 8): on_linux() holds kitlib.platform.NAME at 'linux' and gives each guard module an `os`
 whose path is posixpath, so on Windows the guard reads paths as it does on Linux (where os.path
 is posixpath already and the stand-in changes nothing). The mount table is a stand-in too
-(paths._mounts), and PosixWorld is a fake machine spelt in POSIX paths: a fake git answers
+(paths._mounts), as is the password database (kitlib.platform.linux.paths._pw_dir: no entry, so
+no user pointer file, unless a test gives one; that module's `os` is the stand-in too), and PosixWorld is a fake machine spelt in POSIX paths: a fake git answers
 classify from its table, and no folder of it exists. Nothing here touches the real filesystem.
 
   on_linux(mounts=...)   context manager; `mounts` is [(mount point, fstype)] or None (no table)
@@ -16,6 +17,7 @@ from unittest import mock
 
 import kitlib.platform
 from kitlib.git import repo
+from kitlib.platform.linux import paths as linux_paths
 from kitlib.guard import (backlogrole, context, delegfile, fallback, generated, hub, jail, paths,
                           place, prepush, refusal_log, rolepolicy, rules, shell)
 
@@ -37,15 +39,20 @@ class PosixOs(object):
         return getattr(os, name)
 
 
+def _no_entry():
+    raise KeyError('the stand-in password database has no entry')
+
+
 @contextlib.contextmanager
 def on_linux(mounts=EXT4):
     with contextlib.ExitStack() as stack:
         stack.enter_context(mock.patch.object(kitlib.platform, 'NAME', 'linux'))
         if os.name != 'posix':
             proxy = PosixOs()
-            for m in GUARD_MODULES:
+            for m in GUARD_MODULES + (linux_paths,):
                 stack.enter_context(mock.patch.object(m, 'os', proxy))
         stack.enter_context(mock.patch.object(paths, '_mounts', lambda: mounts, create=True))
+        stack.enter_context(mock.patch.object(linux_paths, '_pw_dir', _no_entry))
         yield
 
 
