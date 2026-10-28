@@ -1212,6 +1212,11 @@ def plan_pull(snap, ctx, rid, reason=None, may_collide=False, blocker=None):
         raise Refusal('`%s` is marked for review (review: %s); a coordinator clears it with '
                       '`clear-review %s --reason T` before anyone pulls it'
                       % (rid, rec.get('review'), rid))
+    if rec.get('priority') == rmod.RETIRED_PRIORITY:
+        # a leftover owner hold: pricing it would lift the hold, so name the hold, not a price
+        raise Refusal('`%s` is `priority: -1`, a retired owner hold, never pulled or priced away: '
+                      'the owner or the PM moves it to `block %s --on owner --owner-ask "<the '
+                      'question>"`' % (rid, rid))
     if not rmod.is_band(rec.get('priority')):
         raise Refusal('`%s` is `priority: %s`, and `pull` takes a priced record (`1`-`5`). Price it '
                       'first: `set %s --priority N --priority-by agent`'

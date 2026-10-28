@@ -12,14 +12,14 @@ import unittest
 
 from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
-from kitlib.backlog.errors import Usage
+from kitlib.backlog.errors import Refusal, Usage
 from tests.backlog import test_cli
 from tests.backlog.helpers import ADD_FLAGS, ADD_NONE, ADD_WHY, StoreCase, priced, rec
 
 
 def body_file(test, text):
     fd, path = tempfile.mkstemp(suffix='.md')
-    with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='') as fh:     # the bytes as given
         fh.write(text)
     test.addCleanup(os.remove, path)
     return path
@@ -60,6 +60,28 @@ class AddBody(StoreCase):
         self.assertEqual(self.get('HUB').get('summary'), long)
 
 
+class BodyFile(unittest.TestCase):
+    """plan.read_body_file, which `add --body-file` reads through."""
+
+    def test_an_empty_body_file_is_usage(self):
+        for text in ('', '  \r\n\n', '﻿\n'):
+            path = body_file(self, text)
+            with self.assertRaises(Usage) as cm:
+                pmod.read_body_file(path)
+            self.assertIn('is empty', str(cm.exception))
+
+    def test_a_missing_body_file_is_usage(self):
+        path = os.path.join(tempfile.mkdtemp(), 'nope.md')
+        self.addCleanup(os.rmdir, os.path.dirname(path))
+        with self.assertRaises(Usage) as cm:
+            pmod.read_body_file(path)
+        self.assertIn('cannot read `--body-file', str(cm.exception))
+
+    def test_a_body_file_drops_its_bom_and_crlf(self):
+        self.assertEqual(pmod.read_body_file(body_file(self, '﻿one\r\ntwo\r\n')),
+                         'one\ntwo\n')
+
+
 class RetiredPriority(StoreCase):
     remote = False
 
@@ -78,6 +100,19 @@ class RetiredPriority(StoreCase):
                       role_checked=True)
         self.assertIn('block FOO --on owner', str(cm.exception))
         self.assertEqual(self.get('FOO').get('priority'), '3')
+
+    def test_a_leftover_minus_one_is_refused_as_a_retired_hold_not_an_unpriced_record(self):
+        # pricing it would lift the owner's hold by mistake, so the refusal names the block
+        self.seed(rec('MIN', priority='-1', priority_by='-'))
+        for kw in ({}, {'reason': 'the owner said go', 'may_collide': True}):
+            with self.assertRaises(Refusal) as cm:
+                self.verb('pull', 'MIN', **kw)
+            msg = str(cm.exception)
+            self.assertIn('retired owner hold', msg)
+            self.assertIn('block MIN --on owner', msg)
+            self.assertNotIn('Price it', msg)
+            self.assertEqual((self.get('MIN').get('state'), self.get('MIN').get('priority')),
+                             ('open', '-1'))
 
     def test_the_owner_hold_is_blocked_on_owner(self):
         self.seed(rec('FOO', state='blocked', blocked_on='owner', owner_ask='which one?'))
