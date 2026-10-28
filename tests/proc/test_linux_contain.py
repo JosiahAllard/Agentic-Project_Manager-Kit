@@ -175,6 +175,29 @@ class Tiers(unittest.TestCase):
             self.assertTrue(tier.text.endswith('; W1 unavailable (user namespaces denied))'),
                             tier.text)
 
+    def test_a_probe_inside_a_w1_job_runs_no_scope_trial(self):
+        c = contain()
+        with mock.patch.dict(os.environ, {c.W1_ENV: '77'}), \
+                mock.patch.object(c.lproc, 'pidns', return_value=77), \
+                mock.patch.object(c, 'parent_job', side_effect=AssertionError('it looked')), \
+                mock.patch.object(c, 'trial', side_effect=AssertionError('a scope trial ran')), \
+                mock.patch.object(c, 'w1_trial', return_value=None):
+            tier = c._probe()
+            self.assertEqual(tier.name, 'W1')
+            self.assertEqual(tier.why, 'it runs in a W1 job, whose pids the user systemd '
+                                       'cannot name')
+        for mark in ('78', ''):
+            with mock.patch.dict(os.environ, {c.W1_ENV: mark}), \
+                    mock.patch.object(c.lproc, 'pidns', return_value=77), \
+                    mock.patch.object(c, 'parent_job', return_value=None), \
+                    mock.patch.object(c, 'trial', return_value=('S2', [c.S2_LACK], None)):
+                self.assertEqual(c._probe().name, 'S2', mark)
+
+    def test_the_w1_starter_marks_its_job_with_the_env_name(self):
+        c = contain()
+        self.assertIn("os.environ['%s'] = str(os.stat('/proc/self/ns/pid').st_ino)" % c.W1_ENV,
+                      c.NSTART)
+
     def test_a_w1_tier_makes_an_ns_job(self):
         c = contain()
         self.assertIs(type(c.Job.__new__(c.Job, tier=c.Tier('W1'))), c.NsJob)
@@ -1341,6 +1364,17 @@ class Ns(Case):
         self.assertFalse(gone(reaper))                  # pid 1 stays while they run
         kill_own(daemon)
         wait_until(lambda: gone(reaper), 'pid 1 ended after its last spared process')
+
+    def test_a_probe_inside_the_job_knows_it_and_runs_no_scope_trial(self):
+        job = self.job()
+        self.addCleanup(job.close)
+        p = job.start([sys.executable, '-c', 'import os; from kitlib.platform.linux import '
+                       'contain as c; print(os.environ[c.W1_ENV], c._in_w1(), c.probe().name)'],
+                      cwd=os.getcwd(), env=self.owner_env(), stdout=subprocess.PIPE)
+        out = p.communicate(timeout=60)[0].decode().split()
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(out[:2], [str(job.ns), 'True'])
+        self.assertIn(out[2], ('W1', 'W2'))
 
     def test_peak_memory_is_the_command_s_own(self):
         job = self.job()

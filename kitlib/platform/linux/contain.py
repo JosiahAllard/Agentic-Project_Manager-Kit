@@ -88,7 +88,9 @@ the command ends (p.kill(), SIGTERM) ends the job. The owner reads the outer /pr
 are pid 1's descendants, every process in the namespace and in those nested in it (the starter
 and the reaper are not members); terminate kills pid 1 through a pidfd opened at start; and
 leftovers() spares pids: the job's kill then goes member by member, as W2's, and pid 1 stays
-while they run. A pid the command prints is its pid in the namespace, not the owner's.
+while they run. A pid the command prints is its pid in the namespace, not the owner's. The command
+gets W1_ENV, its namespace: a probe inside the job (_in_w1) skips the scope trial, since the user
+systemd would take the pids it names for its own namespace's, and goes to W1 (nested) or W2.
 
 This module imports on any platform; its calls need Linux."""
 import errno
@@ -117,6 +119,7 @@ BUSCTL = 'busctl'
 PREFIX_ENV = 'KIT_SCOPE_PREFIX'
 PREFIX = 'pmkit'
 MARK_ENV = 'PMKIT_JOB'
+W1_ENV = 'PMKIT_W1_NS'            # NSTART sets it to its job's pid namespace (_in_w1)
 READY_SECONDS = 30.0              # a stub has this long to say it is in its cgroup
 GONE_SECONDS = 5.0                # a killed job has this long to empty
 TIDY_SECONDS = 0.5                # a released nested job has this long to empty before close
@@ -296,6 +299,7 @@ def reaper(st, up):
     except (ImportError, AttributeError, OSError) as e:
         say('x no fresh /proc in the job: %s' % e)
         os._exit(125)
+    os.environ['PMKIT_W1_NS'] = str(os.stat('/proc/self/ns/pid').st_ino)
     wr, ww = os.pipe()
     os.set_blocking(wr, False)
     os.set_blocking(ww, False)
@@ -803,7 +807,16 @@ def probe(fresh=False):
         return _probed
 
 
+def _in_w1():
+    """True when this process runs in a W1 job: W1_ENV names its own pid namespace. Its pids
+    are not the user systemd's there, and a scope trial would name another process to it."""
+    ns = os.environ.get(W1_ENV)
+    return bool(ns) and ns == str(lproc.pidns())
+
+
 def _probe():
+    if _in_w1():
+        return _unscoped('it runs in a W1 job, whose pids the user systemd cannot name')
     parent = parent_job()
     if parent is not None:
         tier = nested_tier(parent)
