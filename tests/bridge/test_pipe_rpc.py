@@ -70,10 +70,14 @@ class PipeRpcTests(unittest.TestCase):
             request(PipeTarget(self.target.name,os.getpid(),own_ctime()+1),{'id':'private'},timeout=3)
 
     def test_blocked_response_is_uncertain_without_controller_hang(self):
-        self.serve(lambda peer,message:(time.sleep(1.2) or {'ok':True}))
+        # request() leaves half its timeout for starting the helper before the pipe is
+        # reached; at timeout=.5 a helper start over 250 ms on a fully loaded machine made
+        # this a not-written refusal that never reached the blocked handler. timeout=2
+        # gives the start 1 s; the handler still blocks well past the request's deadline.
+        self.serve(lambda peer,message:(time.sleep(3.5) or {'ok':True}))
         start=time.monotonic()
         with self.assertRaises(DeliveryError) as caught:
-            request(self.target,{'id':'timeout'},timeout=.5)
+            request(self.target,{'id':'timeout'},timeout=2)
         self.assertNotIsInstance(caught.exception,BeforeWriteError)
         self.assertLess(time.monotonic()-start,4)
 
