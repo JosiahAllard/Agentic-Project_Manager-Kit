@@ -11,7 +11,7 @@ from tests.platforms import windows_only
 
 from .helpers import StoreCase, clean_env
 from .test_run import store_files
-from .test_run_resolve import make_scripts
+from .test_run_resolve import in_cwd, make_scripts
 
 if os.name == "nt":
     from kitlib.lock import background as bg
@@ -61,6 +61,25 @@ class BackgroundScript(StoreCase):
                 self.assertFalse(os.path.exists(inj), "the & ran as cmd syntax")
                 self.assertEqual(code, 3, self.said)
                 self.assertEqual(self.lines()[0], '"%s"' % arg)
+
+    def test_a_bare_bat_in_the_current_folder_takes_its_arguments_literally(self):
+        """Red before: CreateProcess found gradlew.bat in the current folder and its own cmd.exe
+        start ran the & and expanded the %."""
+        in_cwd(self, self.dir)
+        arg = "a&echo:INJ>" + self.inj
+        code = self.run_bg(["gradlew.bat", arg])
+        self.assertFalse(os.path.exists(self.inj), "the & ran as cmd syntax")
+        self.assertEqual(code, 3, self.said)
+        self.assertEqual(self.lines()[0], '"%s"' % arg)
+        os.remove(self.out)
+        before = store_files(self.root)
+        del self.said[:]
+        self.assertEqual(self.run_bg(["gradlew.bat", "%OS%"]), 1, self.said)
+        self.assertEqual(self.said, ["could not start the command: argument 1 of gradlew.bat holds "
+                                     "`%`; cmd.exe would expand or split a `%`, `\"` or line "
+                                     "break, so a .bat or .cmd cannot take it literally"])
+        self.assertFalse(os.path.exists(self.out), "the .bat ran")
+        self.assertEqual(store_files(self.root), before)
 
     def test_an_argument_cmd_would_expand_or_split_is_refused_before_anything_is_written(self):
         """Red before: the .bat ran with the argument (exit 3), its run booked and ended."""

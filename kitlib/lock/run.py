@@ -1699,19 +1699,22 @@ def _create_process_dirs():
 
 
 def _bare_script(name, path):
-    """The .bat or .cmd a bare name (no folder part) runs, or None (cmd as given). Never one in
-    the current folder, and never in place of what CreateProcess starts today: an extensionless
-    name it finds as name.exe or name.com (its folders, this process's PATH or `path`) stays as
-    given, so a python.bat shim ahead of python.exe on PATH leaves `python` alone; so does a
-    name.bat it finds outside PATH, and any other extension (CreateProcess runs the name itself).
-    Otherwise `path`'s folders in order, each over PATHEXT's order (name itself when it ends .bat
-    or .cmd); the first file there decides."""
+    """The .bat or .cmd a bare name (no folder part) runs, or None (cmd as given). A name that
+    ends .bat or .cmd is the file CreateProcess would start, in its order: its folders (the
+    current one among them unless NoDefaultCurrentDirectoryInExePath), then this process's PATH;
+    else the first in `path`'s folders. An extensionless name is never looked for in the current
+    folder, and never in place of what CreateProcess starts today: one it finds as name.exe or
+    name.com (its folders, this process's PATH or `path`) stays as given, so a python.bat shim
+    ahead of python.exe on PATH leaves `python` alone; so does any other extension
+    (CreateProcess runs the name itself). Otherwise `path`'s folders in order, each over
+    PATHEXT's order; the first file there decides."""
     ext = os.path.splitext(name)[1].lower()
     if ext and ext not in SCRIPT_EXTS:
         return None
     if ext:
-        if any(os.path.isfile(os.path.join(d, name)) for d in _create_process_dirs()):
-            return None
+        for d in _create_process_dirs() + _path_dirs(os.environ.get("PATH")):
+            if os.path.isfile(os.path.join(d, name)):
+                return os.path.join(d, name)
         cands = [name]
     else:
         progs = (name + ".exe", name + ".com")
@@ -1744,10 +1747,12 @@ def _cmd_word(text, what):
 
 def script_command(cmd, env=None):
     """What run_command starts for cmd (an argument list) on Windows: cmd as given, unless its
-    first item names a .bat or .cmd. A name with a folder part (./gradlew) is looked up only
-    beside itself, as shutil.which does: itself when it ends in a PATHEXT extension, else
+    first item names a .bat or .cmd. A trailing dot or space after .bat or .cmd is dropped, as
+    Windows drops it (x.bat. starts x.bat). A name with a folder part (./gradlew) is looked up
+    only beside itself, as shutil.which does: itself when it ends in a PATHEXT extension, else
     name+each PATHEXT extension (CreateProcess tries the name itself, WinError 193 for a shell
-    script, and appends only .exe). A bare name: _bare_script, on env's PATH. A .bat or .cmd, so
+    script, and appends only .exe). A bare name: _bare_script (x.bat where CreateProcess would
+    find it, the current folder included; else on env's PATH). A .bat or .cmd, so
     found or named, starts as `"<SystemRoot>\\System32\\cmd.exe" /d /v:off /s /c ""<its full
     path>" <args>"` (comspec), a string the caller starts with shell=False: cmd.exe is the
     process the run's job takes, and the batch's children inherit the job. /v:off: delayed
@@ -1759,6 +1764,9 @@ def script_command(cmd, env=None):
     if kitlib.platform.NAME != "windows" or not isinstance(cmd, (list, tuple)) or not cmd:
         return cmd
     name = str(cmd[0])
+    trimmed = name.rstrip(" .")        # Windows drops them: CreateProcess starts x.bat for x.bat.
+    if os.path.splitext(trimmed)[1].lower() in SCRIPT_EXTS:
+        name = trimmed
     path = (os.environ if env is None else env).get("PATH")
     if os.path.dirname(name):
         found = shutil.which(name, path=path)       # a folder part: beside itself only
