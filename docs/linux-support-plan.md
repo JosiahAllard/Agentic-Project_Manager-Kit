@@ -741,7 +741,7 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    KIT-LINUX-HOLDERS-UNREAD-SYSTEMD settles that part: those three are this login's own and no
    longer make a tree unread (docs/worktree-remove.md "Classify": a process in the user manager's
    `init.scope`, and a never-exec'd fork whose parent, not PID 1, is another user's), so (b) passes
-   on the VM. Still open: ssh-agent, gpg-agent and a desktop's gcr agent stay unread processes,
+   on the VM, and 50 of 50 runs of the free-tree test there came back free. Still open: ssh-agent, gpg-agent and a desktop's gcr agent stay unread processes,
    so a removal while one runs still falls to the owner (`describe` names it). (c) is open: the end-to-end landing tests skip on Linux ("the lock is
    Windows only"; in tests/gate/test_land*.py only a few unit tests run) and tools/kit.py refuses Linux, so a landing cannot run end to end
    there before slice 14.
