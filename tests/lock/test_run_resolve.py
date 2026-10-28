@@ -163,8 +163,8 @@ class RunScript(StoreCase):
 
 @windows_only("a .bat or .cmd and PATHEXT are Windows'")
 class CliRefusal(StoreCase):
-    """machine_lock.py run refuses such an argument before it detaches, as it does a bare bash
-    (test_cli): a detached run's log would be the only place the refusal showed."""
+    """machine_lock.py run and background refuse such an argument before they detach, as they do
+    a bare bash (test_cli): a detached run's log would be the only place the refusal showed."""
     flags, call = test_cli.Cli.flags, test_cli.Cli.call
 
     @classmethod
@@ -192,6 +192,17 @@ class CliRefusal(StoreCase):
         det.assert_not_called()
         self.assertFalse(os.path.isdir(self.store.path("ended"))
                          and os.listdir(self.store.path("ended")), "a refused run was booked")
+
+    def test_a_background_run_is_refused_before_it_detaches(self):
+        """Red before: only run was checked here, so background --detach detached, and the
+        refusal showed only in the detached run's log."""
+        make_scripts(self.tmp, ["@exit /b 0"])
+        with mock.patch.object(self.tool, "detach", return_value=0) as det:
+            code, _, err = self.call("background", "--repo", "kit", "--slug", "t", "--detach",
+                                     cmd=[os.path.join(self.tmp, "gradlew"), "a%b"])
+        self.assertEqual(code, 1, err)
+        self.assertIn("could not start the command: argument 1 of gradlew.bat holds `%`", err)
+        det.assert_not_called()
 
 
 if __name__ == "__main__":
