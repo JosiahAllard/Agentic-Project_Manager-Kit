@@ -123,8 +123,9 @@ class Lines(unittest.TestCase):
 
 
 class FakeCall(object):
+    """kitlib.git.cmd.call's stand-in, with its types: out is bytes, err is text."""
 
-    def __init__(self, rc, err=b''):
+    def __init__(self, rc, err=''):
         self.rc, self.err, self.calls = rc, err, []
 
     def __call__(self, args, cwd):
@@ -159,9 +160,13 @@ class Load(unittest.TestCase):
 
     def test_git_failing_refuses(self):
         self.write(text(node()))
-        with self.assertRaises(registry.RegistryError) as cm:
-            registry.load(self.file, FakeCall(128, b'fatal: not a git repository'))
-        self.assertIn('not a git repository', str(cm.exception))
+        for rc, err in ((128, 'fatal: not a git repository'),
+                        (None, 'git check-ignore timed out after 30 seconds'),
+                        (None, 'could not run git in x: [WinError 2] not found')):
+            with self.subTest(rc=rc):
+                with self.assertRaises(registry.RegistryError) as cm:
+                    registry.load(self.file, FakeCall(rc, err))
+                self.assertIn(err, str(cm.exception))
 
     def test_a_missing_registry_and_no_pm_repository_are_refused(self):
         with self.assertRaises(registry.RegistryError) as cm:
@@ -185,6 +190,12 @@ class IgnoredOnRealGit(unittest.TestCase):
         with open(os.path.join(self.repo.root, '.pm-kit', '.gitignore'), 'w', encoding='utf-8') as f:
             f.write('local.json\nload-nodes.json\n')
         self.assertIsNone(registry.ignored(self.repo.root))
+
+    def test_a_tracked_registry_is_refused_even_when_gitignore_lists_it(self):
+        self.repo.write('.pm-kit/load-nodes.json', text())
+        self.repo.commit('track the registry', '.pm-kit/load-nodes.json')
+        self.repo.write('.pm-kit/.gitignore', 'load-nodes.json\n')
+        self.assertIn('not ignored', registry.ignored(self.repo.root))
 
 
 if __name__ == '__main__':

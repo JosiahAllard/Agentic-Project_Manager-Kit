@@ -188,7 +188,9 @@ def ignored(pm_repo, call=gitcmd.call):
     if r.rc == 1:
         return ('%s is not ignored by git in %s: add the line "%s" to %s/.pm-kit/.gitignore '
                 'first, so the list of your machines is never committed' % (REL, pm_repo, FILE_NAME, pm_repo))
-    return 'cannot ask git whether %s is ignored in %s: %s' % (REL, pm_repo, gitcmd.text(r.err).strip())
+    # call() gives err as text already (decoded, or its own words on a timeout or a git that
+    # cannot start), so it is used as it is.
+    return 'cannot ask git whether %s is ignored in %s: %s' % (REL, pm_repo, (r.err or '').strip())
 
 
 def load(file_path, call=gitcmd.call):
