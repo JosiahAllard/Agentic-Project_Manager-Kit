@@ -491,7 +491,10 @@ class ApiCase(httpfix.ListenerCase):
                                     approval_key=lambda: roles.KEY, checkout=lambda r: git.root,
                                     lock=roles.LockDoor(),
                                     schedule_repos=lambda: [('r', git.root, 'r')],
-                                    tick_seen=lambda: None, tick_state=lambda: {}))
+                                    tick_seen=lambda: None, tick_state=lambda: {},
+                                    # the branch a skill edit's done names holds its text
+                                    kit_blob=lambda branch, path: roles.skilledits.git_blob(
+                                        roles.SKILL_EDIT.encode('utf-8'))))
         for route in api.ROUTES:
             for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
                 seed, body, query = roles.row(route, role)
