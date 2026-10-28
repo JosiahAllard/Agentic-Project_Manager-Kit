@@ -36,7 +36,9 @@ needs it says so.
   proc/win32, proc/winwatch); whether it imports on Linux is unknown (section 9).
 - The committed Claude hook manifest (hosts/claude/shell/hooks/hooks.json) runs `pythonw`, and
   kitlib/host/hookmain.py keeps `INTERPRETERS = {'windows': 'pythonw'}`; hosts.json lists
-  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified).
+  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified). Since slice 12:
+  INTERPRETERS adds `'linux': 'python3'`, both hosts list windows and linux, and each renders
+  hooks.linux.json beside its unchanged hooks.json.
 
 ### 1.2 The surface, counted
 
@@ -716,6 +718,13 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
     seam: how the plugin ships the right manifest on each platform. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
     runs the hook on both; a missing interpreter blocks rather than passes; the rendered Windows
     hooks.json of each host is byte-identical to the base's.
+    Built on kit/linux-hook-manifests: hookmain.manifest_command per platform (INTERPRETERS
+    linux: python3, run by /bin/sh; a tool event's line exits 2 when python3 fails or is missing,
+    a start event's says the kit did not load), each host's hooks.linux.json beside its
+    unchanged hooks.json, hosts.json platforms windows and linux for both hosts, and the seam:
+    the plugin export writes the running platform's file as hooks.json
+    (kitlib.pluginsource.platform_hooks). The posix-only run of the lines (tests/host/
+    test_hook_linux.py) waits on a Linux machine.
 13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
     hub to-do step forms, Codex dialect. Risk Low. Proof: content render check; hub renders each
     form. Windows stays byte-identical: every rendered Windows file differs from the base's only

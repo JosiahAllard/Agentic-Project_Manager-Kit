@@ -43,11 +43,15 @@ lives here once:
         {"command", "args"} that starts `script` with no console window: the one place a hook
         command line is rendered (plan section 6, rule 4). Today: pythonw.exe beside `executable`
         (default this interpreter) when there is one, else `executable` itself.
-  manifest_command(script, platforms, *args)
-        {"command", "args"} for a hook manifest another machine runs (a plugin's hooks.json): the
-        windowless interpreter by name for the host's hosts.json `platforms` (INTERPRETERS), found
-        on that machine's PATH, then `script` and `args` as given. The same on every machine that
-        renders it, so a committed manifest has no drift.
+  manifest_command(script, platform, *args, blocking=False)
+        {"command", "args"} for a hook manifest another machine runs (a plugin's hooks.json, one
+        per platform): the interpreter by name for `platform` (INTERPRETERS), found on that
+        machine's PATH, then `script` and `args` as given. The same on every machine that renders
+        it, so a committed manifest has no drift. Windows: pythonw in exec form. Linux: /bin/sh -c
+        runs python3 with the script and args as its own arguments, so a missing or failing
+        python3 still answers as boot/hook.py does: a tool event (`blocking`) exits 2, the
+        guard-error deny; a start event prints "PM kit: the kit did not load: ..." and exits 0.
+        A platform with no interpreter raises ValueError.
   settings_entry(event_name, matcher, script, executable, timeout, args)
         {event_name: [{"matcher", "hooks": [{"type": "command", "command", "args"[, "timeout"]}]}]}:
         a settings.json hooks entry in exec form (no shell), `script` then `args`. boot/hook.py
@@ -328,15 +332,24 @@ def command_line(script, executable=None):
     return {'command': windowless(executable).replace(os.sep, '/'), 'args': [script.replace(os.sep, '/')]}
 
 
-# The windowless Python interpreter, by name, per hosts.json platform (plan section 6, rule 4).
-INTERPRETERS = {'windows': 'pythonw'}
+# The hook's Python interpreter, by name, per hosts.json platform: windowless pythonw on Windows
+# (plan section 6, rule 4), python3 on Linux (run by SHELL, manifest_command).
+INTERPRETERS = {'windows': 'pythonw', 'linux': 'python3'}
+SHELL = '/bin/sh'
+SHELL_NAME = 'kit-hook'
+TOOL_BODY = '%s "$@" || exit 2'
+START_BODY = '%s "$@" || echo "PM kit: the kit did not load: %s failed or is not on PATH (exit $?)"'
 
 
-def manifest_command(script, platforms, *args):
-    names = sorted(set(INTERPRETERS.get(p, '') for p in platforms))
-    if len(names) != 1 or not names[0]:
-        raise ValueError('no one windowless interpreter for the platforms %s' % ', '.join(platforms))
-    return {'command': names[0], 'args': [script.replace(os.sep, '/')] + list(args)}
+def manifest_command(script, platform, *args, blocking=False):
+    name = INTERPRETERS.get(platform)
+    if not name:
+        raise ValueError('no hook interpreter for the platform %r' % (platform,))
+    argv = [script.replace(os.sep, '/')] + list(args)
+    if platform == 'windows':
+        return {'command': name, 'args': argv}
+    body = TOOL_BODY % name if blocking else START_BODY % (name, name)
+    return {'command': SHELL, 'args': ['-c', body, SHELL_NAME] + argv}
 
 
 def settings_entry(event_name, matcher, script, executable=None, timeout=None, args=()):

@@ -147,14 +147,30 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual([p['source'] for p in market['plugins']], ['./'])
 
     def test_the_hook_commands_come_from_the_one_helper(self):
-        from kitlib.host import hookmain, registry
-        want = hookmain.manifest_command('x', registry.host('claude').platforms)['command']
+        from kitlib.host import hookmain
+        want = hookmain.manifest_command('x', 'windows')['command']
         hooks = self.load('hosts', 'claude', 'shell', 'hooks', 'hooks.json')['hooks']
         self.assertEqual(sorted(hooks), ['SessionStart', 'SubagentStart'])
         for event, groups in hooks.items():
             for h in (h for g in groups for h in g['hooks']):
                 self.assertEqual(h['command'], want)
                 self.assertEqual(h['args'][:3], ['${CLAUDE_PLUGIN_ROOT}/boot/hook.py', 'claude', event])
+
+    def test_each_platform_gets_the_same_hooks_with_its_own_command_line(self):
+        """hooks.linux.json: every event, matcher and hook argument hooks.json has, each run by the
+        Linux command line (a start event: python3 under /bin/sh, printing the did-not-load line
+        when it fails), so the two files differ in the command alone."""
+        from kitlib.host import hookmain, registry
+        self.assertEqual(registry.host('claude').platforms, ('windows', 'linux'))
+        windows = self.load('hosts', 'claude', 'shell', 'hooks', 'hooks.json')['hooks']
+        linux = self.load('hosts', 'claude', 'shell', 'hooks', 'hooks.linux.json')['hooks']
+        self.assertEqual(sorted(linux), sorted(windows))
+        for event in windows:
+            self.assertEqual([g.get('matcher') for g in linux[event]], [g.get('matcher') for g in windows[event]])
+            for w, l in zip((h for g in windows[event] for h in g['hooks']), (h for g in linux[event] for h in g['hooks'])):
+                self.assertEqual(l, dict(w, **hookmain.manifest_command(w['args'][0], 'linux', *w['args'][1:])))
+                self.assertEqual(l['args'][:3], ['-c', l['args'][1], 'kit-hook'])
+                self.assertIn('the kit did not load', l['args'][1])
 
     def test_load_kit_refusals(self):
         root = tempfile.mkdtemp()
@@ -384,6 +400,7 @@ class TempTreeTest(unittest.TestCase):
             shutil.copytree(os.path.join(KIT_ROOT, rel), os.path.join(self.root, rel))
         # hosts.json: a plugin ships its host's entry
         for rel in ('kit.json', 'hosts.json', os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.json'),
+                    os.path.join('hosts', 'claude', 'shell', 'hooks', 'hooks.linux.json'),
                     os.path.join('docs', 'ROSTER.md')):
             write(self.path(rel), read(os.path.join(KIT_ROOT, rel)))
         self.rs = [claude_content.renderer()]

@@ -24,7 +24,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 |---|---|
 | `adapter` | The adapter's dotted module name, `hosts.<name>.adapter`. kitlib never imports it. `tools/_host.py` does. |
 | `shell` | `hosts/<name>/shell`, the folder with the host's manifests and rendered files |
-| `platforms` | The operating systems it runs on. Use `["windows"]` until the OS work (plan section 6). This field picks the hook interpreter (`kitlib.host.hookmain.manifest_command`). |
+| `platforms` | The operating systems it runs on, such as `["windows", "linux"]`. The renderer writes one hook manifest for each (`hooks.json` for Windows, `hooks.<platform>.json` beside it for the others), each command line from `kitlib.host.hookmain.manifest_command` for that platform's interpreter (docs/content.md "Manifests"). |
 | `default` | Leave it out. Exactly one host is the default, and it is `claude`. |
 | `tiers` | `light`, `standard`, `strong` and `deep`, each mapped to the host's model id (docs/ROSTER.md) |
 

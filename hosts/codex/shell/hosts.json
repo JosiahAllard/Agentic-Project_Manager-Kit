@@ -3,7 +3,8 @@
     "adapter": "hosts.codex.adapter",
     "shell": "hosts/codex/shell",
     "platforms": [
-      "windows"
+      "windows",
+      "linux"
     ],
     "capabilities": {
       "hook_events": [

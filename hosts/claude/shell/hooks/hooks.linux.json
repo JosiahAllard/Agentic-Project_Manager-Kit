@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "-c",
+              "python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"",
+              "kit-hook",
+              "${CLAUDE_PLUGIN_ROOT}/boot/hook.py",
+              "claude",
+              "SessionStart"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "-c",
+              "python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"",
+              "kit-hook",
+              "${CLAUDE_PLUGIN_ROOT}/boot/hook.py",
+              "claude",
+              "SessionStart",
+              "coordinator"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "-c",
+              "python3 \"$@\" || echo \"PM kit: the kit did not load: python3 failed or is not on PATH (exit $?)\"",
+              "kit-hook",
+              "${CLAUDE_PLUGIN_ROOT}/boot/hook.py",
+              "claude",
+              "SubagentStart"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
