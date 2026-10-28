@@ -275,6 +275,22 @@ class Queue(QueueCase):
         self.assertEqual([(e['tip'], e['risk']) for e in got], [(second, 'Medium')])
         self.assertEqual(self.folder_names(), ['kit%2Fa.json'])
 
+    def test_entries_are_oldest_first_and_the_branch_name_settles_a_tie(self):
+        folder = V.queue_dir(self.common)
+        os.makedirs(folder)
+        queued = [('kit/c', '2026-01-01T00:00:03Z'), ('kit/b', '2026-01-01T00:00:01Z'),
+                  ('kit/d', '2026-01-01T00:00:02Z'), ('kit/a', '2026-01-01T00:00:01Z')]
+        for branch, when in queued:
+            with open(os.path.join(folder, V.file_name(branch)), 'w', encoding='utf-8') as f:
+                json.dump(dict(given(branch, 'a' * 40), queued_utc=when, state=V.QUEUED,
+                               last_result=None), f)
+        want = ['kit/a', 'kit/b', 'kit/d', 'kit/c']          # a and b tie in time: name first
+        self.assertEqual([e['branch'] for e in V.entries(self.common)], want)
+        good, bad = V.scan(self.common)
+        self.assertEqual(([e['branch'] for e in good], bad), (want, []))
+        # the folder lists names in order, so the tie is shown again from reversed input
+        self.assertEqual([e['branch'] for e in V.order(list(reversed(good)))], want)
+
     def test_a_malformed_entry_is_refused_and_nothing_written(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
         bad = [given('kit/a', tip, reviewer_id=''),
