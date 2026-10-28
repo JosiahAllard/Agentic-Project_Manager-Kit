@@ -2973,7 +2973,7 @@ ul.hist .sch-line{display:block}
   // A srcdoc document's base URL is the hub page's, so a bare href="#x" is a link to the hub page plus #x: the
   // frame navigated away instead of scrolling (and :target never matched). Spelled about:srcdoc#x it is the
   // frame's own address, so the browser scrolls and sets :target. The sandbox and the policy are untouched.
-  const docFragments = html => html.replace(/(<[a-z][^>]*?\bhref\s*=\s*["'])#/gi, "$1about:srcdoc#");
+  const docFragments = html => html.replace(/(<(?:a|area)\b[^<>]*?\shref\s*=\s*["'])#/gi, "$1about:srcdoc#");
   // A card's refs, kept as keptRefs keeps them: a ref that is a listed document's id is a button that opens it
   // in the reader, and any other ref is text. lead goes before them and sep between them.
   function refsLine(refs, lead, sep){
