@@ -696,8 +696,9 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    database entry has no profile folder, so the machine lock's store cannot be opened (and with no
    machine pointer file the pointer is BAD). Deviations: environment.d moves to slice 14 (machine setup writes it);
    another user's processes cannot be seen, so holders answers for this user's only; the user
-   pointer file is the user's to write, so an agent can write it too: guarding it is its own
-   record.
+   pointer file is the user's to write, so an agent could write it too: the guard now holds it
+   (docs/guard.md "Write jail", tests/guard/test_linux_pointer.py), and the guard's mount table is
+   read by linux/paths.py's mountinfo reader (read_mountinfo, parse_mountinfo).
 10. **Scheduled jobs.** linux/schedule.py with systemd user timers and cron (first-class);
     autostart (coordinators after reboot), hubsite autostart (the hub's start at logon: XDG
     autostart, shell-profile fallback), worktree and temp sweeps, automatic tasks, consoletasks
