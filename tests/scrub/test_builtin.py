@@ -33,6 +33,8 @@ ID_SHAPE_FOLDERS = (
 
 ALLOWED = tuple(('%s' % glob, 'record-id', '', why) for glob, why in ID_SHAPE_FOLDERS) + (
     ('kitlib/git/fake/wtcmds.py', 'pinned-hash', 'abc1234', 'an invented hash in the fake git'),
+    ('optional/loadnode/setup-node.sh', 'pinned-hash', 'ed25519',
+     'the ssh key type name, seven hex digits by shape, not a commit hash'),
     ('tests/launcher/test_current_account.py', 'record-id', "HOME + '\\\\.",
      'an invented config folder upper-cased to prove Windows case folding'),
     ('tests/guard/test_config_move.py', 'record-id', "os.path.dirname(self.w.ledger), '",

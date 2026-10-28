@@ -432,7 +432,7 @@ step_kit() {
                 mkdir -p /opt
                 mv "$stage" /opt/.pm-kit.new || fail "could not stage the kit in /opt"
                 chmod 0755 /opt/.pm-kit.new
-                if [ -d "$KIT_DIR" ]; then mv "$KIT_DIR" /opt/.pm-kit.old || fail "could not move the old kit aside"; fi
+                if [ -d "$KIT_DIR" ]; then mv "$KIT_DIR" /opt/.pm-kit.old || fail "could not move the previous install aside"; fi
                 mv /opt/.pm-kit.new "$KIT_DIR" || fail "could not put the kit in place"
                 rm -rf /opt/.pm-kit.old
             fi
