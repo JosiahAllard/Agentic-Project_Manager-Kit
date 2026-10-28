@@ -9,8 +9,8 @@ except in for-each-ref and `rev-parse --verify`, which warn "ignoring broken ref
 import os
 import re
 import threading
-import time
 
+from . import retry
 from .errors import GitExit, Unsupported
 
 _PACKED_CACHE = {}
@@ -72,18 +72,18 @@ def check_refname(name, allow_onelevel=False):
 def _read_file(path):
     """A ref file's text, None when there is none. Windows denies an open while another thread's
     _replace lands on the file, so that is retried as _replace retries its side."""
-    for attempt in range(51):
+    began = retry.start()
+    while True:
         try:
             with open(path, 'rb') as f:
                 return f.read().decode('utf-8', 'replace')
         except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
             return None
-        except PermissionError:
+        except PermissionError as e:
             if os.path.isdir(path):
                 return None
-            if attempt == 50:
-                raise
-            time.sleep(0.01)
+            if not retry.pause(began):
+                raise retry.gave_up(e, began) from e
 
 
 def packed(repo):
@@ -245,18 +245,18 @@ class RefLock:
                           % (self.name, self.lock.replace('\\', '/')))
         # Windows denies creating a lock file another thread has just renamed or removed (it is
         # still being deleted); that window is retried, as _read_file retries its open.
-        for attempt in range(51):
+        began = retry.start()
+        while True:
             try:
                 self.fd = os.open(self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o666)
                 return
             except FileExistsError:
                 raise lock_error(self.name, self.path)
-            except PermissionError:
+            except PermissionError as e:
                 if os.path.isdir(self.lock) or os.path.exists(self.lock):
                     raise lock_error(self.name, self.path)
-                if attempt == 50:
-                    raise
-                time.sleep(0.01)
+                if not retry.pause(began):
+                    raise retry.gave_up(e, began) from e
 
     def commit(self, data):
         """Write `data` and move the lock onto the ref. On any failure the lock file is removed,
@@ -292,13 +292,14 @@ class RefLock:
 
 
 def _replace(src, dst):
-    for _ in range(50):
+    began = retry.start()
+    while True:
         try:
             os.replace(src, dst)
             return
-        except PermissionError:
-            time.sleep(0.01)
-    os.replace(src, dst)
+        except PermissionError as e:
+            if not retry.pause(began):
+                raise retry.gave_up(e, began) from e
 
 
 def _df_conflict(repo, name, deleting=()):

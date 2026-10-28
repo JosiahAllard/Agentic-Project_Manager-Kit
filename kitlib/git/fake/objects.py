@@ -4,9 +4,9 @@ import hashlib
 import os
 import struct
 import threading
-import time
 import zlib
 
+from . import retry
 from .errors import Unsupported
 
 TYPES = ('commit', 'tree', 'blob', 'tag')
@@ -298,16 +298,16 @@ def _read_loose(path):
     (PermissionError) while another holder of the file excludes readers or the file is being
     replaced; that window is retried as refs._read_file retries a ref, and a denial that outlasts
     it is raised: an object that exists but cannot be read is never taken for a missing one."""
-    for attempt in range(51):
+    began = retry.start()
+    while True:
         try:
             with open(path, 'rb') as f:
                 return f.read()
-        except PermissionError:
+        except PermissionError as e:
             if os.path.isdir(path):
                 return None
-            if attempt == 50:
-                raise
-            time.sleep(0.01)
+            if not retry.pause(began):
+                raise retry.gave_up(e, began) from e
         except OSError:
             return None
 
