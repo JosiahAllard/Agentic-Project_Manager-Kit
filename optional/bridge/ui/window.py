@@ -135,9 +135,12 @@ class Window:
         try:
             if kind=='pm':
                 # Also keeps the PM from making it again; only Connect chats undoes that.
-                if self.owner.stop_pm(first,second):
+                stopped=self.owner.stop_pm(first,second)
+                if not stopped.removed: self.status.set('That PM connection was already gone. Nothing was stopped.')
+                elif stopped.unblocked is None:
                     self.status.set('That PM connection is stopped. The PM cannot make it again; Connect chats can.')
-                else: self.status.set('That PM connection was already gone. Nothing was stopped.')
+                else: self.status.set('That PM connection is stopped, but the PM could make it again: '
+                    'the block was not saved ('+stopped.unblocked+').')
             elif self.owner.lease(first,second,enabled=False): self.status.set('That lease is stopped.')
             else: self.status.set('That lease was already gone or replaced. Nothing was stopped.')
         except Exception:

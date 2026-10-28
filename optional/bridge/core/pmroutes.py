@@ -188,21 +188,24 @@ class PmRoutes:
             self._refused('disconnect', authority, (sender_ref, recipient_ref), error)
             raise
 
-    def stop(self, sender_ref, recipient_ref, *, by):
-        """Owner port: stop the PM route in this one direction. Returns whether one was removed."""
+    def stop(self, sender_ref, recipient_ref, *, by, unblocked=None):
+        """Owner port: stop the PM route in this one direction. Returns whether one was removed.
+        unblocked: why the owner's block for it could not be written; logged with the stop."""
         if by not in ('owner', 'bridge'): raise PairingError('invalid-owner-selection')
+        if unblocked is not None and type(unblocked) is not str: raise PairingError('invalid-owner-selection')
         key = (_reference(sender_ref), _reference(recipient_ref))
-        with self.pairings.held(): return bool(self._remove([key], 'stop', by))
+        extra = {} if unblocked is None else {'unblocked': unblocked}
+        with self.pairings.held(): return bool(self._remove([key], 'stop', by, **extra))
 
     def route(self, sender_ref, recipient_ref):
         with self._lock: return self._routes.get((sender_ref, recipient_ref))
 
-    def _remove(self, keys, event, by):
+    def _remove(self, keys, event, by, **extra):
         """Remove these directions; removing grants nothing, so a failed log write never blocks it."""
         with self._lock: gone = [self._routes.pop(key) for key in keys if key in self._routes]
         if gone:
             now = self.clock()
-            try: append_log(self.pairings, PM_LOG, [self._record(event, by, route, now) for route in gone])
+            try: append_log(self.pairings, PM_LOG, [self._record(event, by, route, now, **extra) for route in gone])
             except Exception: pass
         return [(route.sender.reference, route.recipient.reference) for route in gone]
 

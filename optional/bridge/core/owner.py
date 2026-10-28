@@ -156,6 +156,14 @@ def display(value,fallback):
 
 
 @dataclass(frozen=True)
+class PmStop:
+    """OwnerControls.stop_pm's result: removed, whether a PM route was removed; unblocked, None
+    when the PM cannot make the direction again, else why the owner's block was not written."""
+    removed:bool
+    unblocked:str|None
+
+
+@dataclass(frozen=True)
 class ChatChoice:
     reference:str
     title:str
@@ -226,17 +234,25 @@ class OwnerControls:
     def stop_pm(self,sender_ref,recipient_ref):
         """Owner button: stop the PM route in this one direction and keep the PM from making it
         again: a disabled owner row for it, which only the owner's Connect undoes. Works whether
-        or not either chat is still listed. Returns whether a PM route was removed."""
+        or not either chat is still listed.
+
+        The block is written first. If it cannot be written the route is still removed, the stop's
+        log line carries `unblocked` (the reason) and so does the result: stopped, but the PM may
+        make it again. A direction with an owner row needs no block and gets none."""
         if self.pm is None: raise PairingError('pm-routes-unavailable')
         for reference in (sender_ref,recipient_ref): digest(reference)
-        with self.pairings.held():  # no PM connect can land between the stop and the block
+        with self.pairings.held():  # no PM connect can land between the block and the stop
             route=self.pm.route(sender_ref,recipient_ref)
-            if route is None: return False
-            removed=self.pm.stop(sender_ref,recipient_ref,by='owner')
-            if self.pairings.owner_choice(route.sender,route.recipient) is None:
-                block=ChatSelection(route.sender.reference,route.recipient.reference,False,False)
-                self.pairings.owner_block(route.sender,route.recipient,self.decisions.mint(block))
-            return removed
+            if route is None: return PmStop(False,None)
+            unblocked=None
+            try:
+                if self.pairings.owner_choice(route.sender,route.recipient) is None:
+                    block=ChatSelection(route.sender.reference,route.recipient.reference,False,False)
+                    self.pairings.owner_block(route.sender,route.recipient,self.decisions.mint(block))
+            except Exception as error:
+                unblocked=getattr(error,'code',None) or 'owner-block-failed'
+            removed=self.pm.stop(sender_ref,recipient_ref,by='owner',unblocked=unblocked)
+            return PmStop(removed,unblocked)
 
     def writers(self):
         """Current writer leases between visible chats, as (writer, recipient) references."""

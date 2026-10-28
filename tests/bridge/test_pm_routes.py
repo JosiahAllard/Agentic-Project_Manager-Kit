@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import uuid
 
 from optional.bridge.core.messages import SenderAuthority
@@ -67,6 +68,11 @@ class PmRouteTests(unittest.TestCase):
 
     def code(self, result):
         return result.get('error', {}).get('code')
+
+    def stop(self, sender, recipient):
+        """The owner's Stop on one PM direction, as (removed, why a reconnect is not blocked)."""
+        stopped = self.controller.owner.stop_pm(sender.reference, recipient.reference)
+        return stopped.removed, stopped.unblocked
 
     def log(self):
         path = self.root / PM_LOG
@@ -185,19 +191,34 @@ class PmRouteTests(unittest.TestCase):
         self.connect(self.a, self.b)
         self.assertEqual({row[:2] + row[3:] for row in self.controller.owner.pm_routes()},
                          {(self.a.reference, self.b.reference, True), (self.b.reference, self.a.reference, True)})
-        self.assertTrue(self.controller.owner.stop_pm(self.a.reference, self.b.reference))
+        self.assertEqual(self.stop(self.a, self.b), (True, None))
         self.assertIs(self.controller.pairs.owner_choice(self.a, self.b), False)
         self.assertIsNone(self.controller.pairs.owner_choice(self.b, self.a))  # one direction stopped
         self.assertEqual(self.code(self.send(self.servers['a'], self.b)), 'chat-route-not-selected')
         self.assertEqual(self.code(self.connect(self.a, self.b, bidirectional=False)), 'owner-disconnected')
         # A chat that is not listed now: its route can still be stopped.
         self.controller.pairs.withdraw('b')
-        self.assertTrue(self.controller.owner.stop_pm(self.b.reference, self.a.reference))
+        self.assertEqual(self.stop(self.b, self.a), (True, None))
         self.assertEqual(self.controller.pm.current(), ())
+        self.assertEqual(self.stop(self.b, self.a), (False, None))
         self.assertIs(self.controller.pairs.owner_choice(self.b, self.a), False)
         self.assertEqual([(entry['event'], entry['by'], entry.get('code')) for entry in self.log()],
                          [('connect', 'pm', None)] * 2 + [('stop', 'owner', None), ('refused', 'pm', 'owner-disconnected'),
                           ('stop', 'owner', None)])
+
+    def test_an_owner_stop_whose_block_cannot_be_written_still_stops_and_says_a_reconnect_is_open(self):
+        self.connect(self.a, self.b, bidirectional=False)
+        # The routes table is full: the block row is refused and rolled back.
+        with patch('optional.bridge.core.pairing.MAX_ROUTES', 0):
+            stopped = self.stop(self.a, self.b)
+        self.assertEqual(stopped, (True, 'route-capacity'))
+        self.assertEqual(self.controller.pm.current(), ())
+        self.assertIsNone(self.controller.pairs.owner_choice(self.a, self.b))
+        self.assertEqual(self.code(self.send(self.servers['a'], self.b)), 'chat-route-not-selected')
+        self.assertEqual([(entry['event'], entry['by'], entry.get('unblocked')) for entry in self.log()],
+                         [('connect', 'pm', None), ('stop', 'owner', 'route-capacity')])
+        # Not blocked: the PM may make it again, as the owner was told.
+        self.assertEqual(self.connect(self.a, self.b, bidirectional=False)['routes'][0]['by'], 'pm')
 
     def test_an_owner_disconnect_ends_a_pm_route_and_only_connect_undoes_it(self):
         self.connect(self.a, self.b)

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from optional.bridge.core.owner import MAX_LEASES,OwnerControls,OwnerDecisions,WriterGrant,WriterLeases
+from optional.bridge.core.owner import MAX_LEASES,OwnerControls,OwnerDecisions,PmStop,WriterGrant,WriterLeases
 from optional.bridge.core.pairing import PairingError,PairingStore
 from tests.bridge.test_pairing import chat
 
@@ -94,7 +94,7 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual(owner.pm_routes(),((self.a.reference,self.b.reference,100.0,True),))
         owner.change(self.a.reference,self.b.reference,enabled=True,bidirectional=False)
         self.assertEqual(owner.pm_routes(),())  # the owner's own row decides it now
-        self.assertTrue(owner.stop_pm(self.a.reference,self.b.reference))
+        self.assertEqual(owner.stop_pm(self.a.reference,self.b.reference),PmStop(True,None))
         self.assertIs(self.pairs.owner_choice(self.a,self.b),True)
         self.pairs.require_selected(self.a,self.b)
 

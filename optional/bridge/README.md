@@ -214,13 +214,16 @@ nominates no channel, and the other halves keep working.
   - The PM removes only routes it made (`route-not-made-by-pm` for any other).
   - Logged: every connect, disconnect, owner stop, replacement and refused connect or disconnect
     appends one JSON line (`at`, `event`, `by`, `caller`, `sender`, `recipient`, and `sender_mark`
-    and `recipient_mark` on a connect, `action` and `code` on a refusal; chat references only) to
-    `pm-routes.log` beside `pairings.sqlite`. A connect that cannot be logged is refused.
+    and `recipient_mark` on a connect, `action`, `code` and `caller_mark` on a refusal, `unblocked`
+    on an owner stop whose block was not written; chat references only) to `pm-routes.log` beside
+    `pairings.sqlite`. A connect that cannot be logged is refused.
   - The owner window lists every PM route the owner's row does not decide ("A → B, connected by
     the PM since …", with "(cannot deliver now)" when a chat is not listed or no longer
     kit-launched) and re-reads the list every 5 s without discovery. "Stop selected" stops one
     direction and writes the owner's disconnect for it, even when a chat is not listed. The
-    window's PM rows have no test.
+    disconnect is written first; if it cannot be (for example `route-capacity`), the route is still
+    stopped and the window says the PM could make it again, with the reason. The window's PM rows
+    have no test.
   - The PM agent and its subagents share one frontend, so a subagent the PM starts carries the
     `pm` mark and may call the PM tools too.
   - The service detaches a frontend whose process has ended only when the next frame from any
