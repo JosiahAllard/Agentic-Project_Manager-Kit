@@ -38,7 +38,7 @@ High-risk paths (a change there gets a stronger worker and a fresh reviewer) and
 How to move or rename without changing behaviour.
 
 ## Records
-Where the backlog and decisions live, which agent writes which records, and what tracked files
+Where the backlog lives, which agent writes which records, and what tracked files
 must never contain.
 - Conventions digest (the consultant reads it on start), where the repo has one: `docs/conventions-digest.md`.
 
