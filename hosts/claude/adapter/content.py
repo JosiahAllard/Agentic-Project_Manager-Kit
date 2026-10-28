@@ -20,8 +20,11 @@ manifests(kit, content) writes the files that carry the kit's one version (kit.j
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), its version as `metadata.version`.
 - HOOKS_REL: the plugin's hooks (HOOKS), each command line from kitlib.host.hookmain.manifest_command
-  for the platforms hosts.json gives Claude: the kit's one hook entry, ${CLAUDE_PLUGIN_ROOT}/ENTRY,
-  with `claude`, the event and, for the coordinator rules, its part (boot/hook.py).
+  for Windows: the kit's one hook entry, ${CLAUDE_PLUGIN_ROOT}/ENTRY, with `claude`, the event and,
+  for the coordinator rules, its part (boot/hook.py). Each other platform hosts.json gives Claude
+  gets the same hooks with that platform's command line in hooks_rel(platform),
+  `hooks/hooks.<platform>.json`; plugin.json names HOOKS_REL alone, and the plugin export
+  (kitlib.pluginsource) writes the platform's file in its place.
 JSON holds no comment, and these keep to the keys Claude Code documents, so they carry no
 generated-file line; plugin.json's description says it is rendered.
 """
@@ -168,13 +171,13 @@ class ClaudeContent:
             out[self.role_path(role.name)] = self.agent_file(role, names, values, tiers)
         return out
 
-    def hooks(self, registry_path=None):
-        platforms = registry.host(HOST, registry_path).platforms
+    def hooks(self, registry_path=None, platform='windows'):
+        tool_event = registry.host(HOST, registry_path).hook.tool_event
         events = {}
         for event, matcher, part in HOOKS:
             hook = {'type': 'command'}
-            hook.update(hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), platforms, HOST, event,
-                                                  *([part] if part else [])))
+            hook.update(hookmain.manifest_command('%s/%s' % (PLUGIN_ROOT, ENTRY), platform, HOST, event,
+                                                  *([part] if part else []), blocking=event == tool_event))
             group = {'matcher': matcher} if matcher else {}
             group['hooks'] = [hook]
             events.setdefault(event, []).append(group)
@@ -197,8 +200,16 @@ class ClaudeContent:
                          'description': 'The PM kit: agents, skills and the machine lock and hub MCP servers.'}],
         }
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
-        return {MANIFEST_REL: dump(plugin), MARKETPLACE_REL: dump(market),
-                HOOKS_REL: dump(self.hooks(registry_path))}
+        out = {MANIFEST_REL: dump(plugin), MARKETPLACE_REL: dump(market)}
+        for platform in registry.host(HOST, registry_path).platforms:
+            out[hooks_rel(platform)] = dump(self.hooks(registry_path, platform))
+        return out
+
+
+def hooks_rel(platform):
+    """The hooks file for `platform`: HOOKS_REL on Windows, the one plugin.json names; beside it
+    `hooks.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its place."""
+    return HOOKS_REL if platform == 'windows' else HOOKS_REL[:-len('.json')] + '.%s.json' % platform
 
 
 def renderer():

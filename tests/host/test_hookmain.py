@@ -411,6 +411,28 @@ class CommandLine(unittest.TestCase):
             gone = os.path.join(d, 'python9.exe')      # no such file: used as given
             self.assertEqual(hookmain.windowless(gone), gone)
 
+    def test_a_manifest_command_on_windows_is_pythonw_in_exec_form(self):
+        line = hookmain.manifest_command('${ROOT}/boot/hook.py', 'windows', 'h', 'PreToolUse')
+        self.assertEqual(line, {'command': 'pythonw', 'args': ['${ROOT}/boot/hook.py', 'h', 'PreToolUse']})
+        self.assertEqual(hookmain.manifest_command('a.py', 'windows', blocking=True),
+                         {'command': 'pythonw', 'args': ['a.py']})
+
+    def test_a_manifest_command_on_linux_runs_python3_under_sh_and_fails_closed(self):
+        tool = hookmain.manifest_command('${ROOT}/boot/hook.py', 'linux', 'h', 'PreToolUse', blocking=True)
+        self.assertEqual(tool, {'command': '/bin/sh', 'args': [
+            '-c', 'python3 "$@" || exit 2', 'kit-hook', '${ROOT}/boot/hook.py', 'h', 'PreToolUse']})
+        start = hookmain.manifest_command('${ROOT}/boot/hook.py', 'linux', 'h', 'SessionStart')
+        self.assertEqual(start['command'], '/bin/sh')
+        self.assertEqual(start['args'][0], '-c')
+        self.assertTrue(start['args'][1].startswith('python3 "$@" || echo "PM kit: the kit did not load: '),
+                        start['args'][1])
+        self.assertNotIn('exit 2', start['args'][1])
+        self.assertEqual(start['args'][2:], ['kit-hook', '${ROOT}/boot/hook.py', 'h', 'SessionStart'])
+
+    def test_a_manifest_command_for_a_platform_with_no_interpreter_is_refused(self):
+        with self.assertRaises(ValueError):
+            hookmain.manifest_command('a.py', 'macos')
+
     def test_the_settings_entry_wraps_it(self):
         entry = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')
         self.assertEqual(entry, {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
