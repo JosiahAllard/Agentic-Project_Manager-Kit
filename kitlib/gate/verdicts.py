@@ -71,7 +71,6 @@ Residual race (inference, not tested): two callers that find the same stale lock
 both remove it, the second removing the lock the first just made; that needs a holder to have
 died first. A wall-clock jump of more than LOCK_STALE_S can make a held lock look stale.
 """
-import collections
 import contextlib
 import datetime
 import json
@@ -112,16 +111,6 @@ LOCK_WAIT_S = 10.0          # how long add, drop and mark_failed wait for the qu
 LOCK_STALE_S = 60.0         # a lock file older than this was left by a crash
 LOCK_POLL_S = 0.05
 BY_HAND = 'remove it by hand'
-
-# Why ready() leaves an entry out of the batch (Skip.reason).
-SKIP_FAILED = 'failed'      # a landing marked it failed; a re-add queues it again
-SKIP_STALE = 'stale'        # the branch's head is not the queued tip (or the branch is gone)
-SKIP_HIGH = 'high'          # High risk lands alone
-SKIP_STRICT = 'strict'      # its diff touches a strict path (or that cannot be told): lands alone
-SKIP_LATER = 'later'        # ready, but the batch is full (batch_max)
-SKIP_INVALID = 'invalid'    # not a well-formed entry
-
-Skip = collections.namedtuple('Skip', 'branch reason why entry')
 
 
 class VerdictError(Exception):
@@ -713,51 +702,3 @@ def expire(common_dir, items, main):
         except VerdictError:
             continue
     return gone
-
-
-def ready(items, tip_of, strict_hits, batch_max):
-    """`(batch, skipped)` from queue entries `items`: the batch is the entries that may land
-    together, oldest first, at most `batch_max`; skipped is a Skip(branch, reason, why, entry) for
-    every other entry, oldest first.
-
-    Checked in this order, the first that holds naming the reason: not well-formed (invalid);
-    state failed (failed); tip_of(branch) is not the queued tip (stale: the branch moved, or
-    tip_of gave None because it is gone or git could not say); risk High (high); strict_hits(entry)
-    is a non-empty list of paths (strict), or not a list at all (None, False, '' ...), which means
-    it cannot be told (strict too); the batch already holds batch_max (later). Only an empty list
-    lets an entry in. Nothing here calls git: the caller's tip_of and strict_hits do."""
-    if isinstance(batch_max, bool) or not isinstance(batch_max, int) or batch_max < 1:
-        raise ValueError('batch_max is a whole number of at least 1, not %r' % (batch_max,))
-    batch, skipped = [], []
-    for e in order(items):
-        why = check(e)
-        branch = e.get('branch') if isinstance(e, dict) else None
-        if why:
-            skipped.append(Skip(branch, SKIP_INVALID, why, e))
-            continue
-        if e['state'] == FAILED:
-            skipped.append(Skip(branch, SKIP_FAILED, 'a landing failed: %s' % e['last_result'], e))
-            continue
-        now = tip_of(branch)
-        if now != e['tip']:
-            skipped.append(Skip(branch, SKIP_STALE,
-                                'queued at %s, but the branch is %s' % (
-                                    e['tip'][:10], now[:10] if now else 'gone or unknown'), e))
-            continue
-        if e['risk'] == 'High':
-            skipped.append(Skip(branch, SKIP_HIGH, 'High risk lands alone', e))
-            continue
-        hits = strict_hits(e)
-        if not isinstance(hits, list):
-            skipped.append(Skip(branch, SKIP_STRICT,
-                                'cannot tell whether it touches a strict path: lands alone', e))
-            continue
-        if hits:
-            skipped.append(Skip(branch, SKIP_STRICT, 'touches strict path %s: lands alone'
-                                % ', '.join(sorted(hits)), e))
-            continue
-        if len(batch) >= batch_max:
-            skipped.append(Skip(branch, SKIP_LATER, 'the batch is full (%d)' % batch_max, e))
-            continue
-        batch.append(e)
-    return batch, skipped
