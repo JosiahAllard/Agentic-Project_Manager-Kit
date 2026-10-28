@@ -10,8 +10,8 @@ missing or bad, the PM account not signed in) are
 logged FAILED too, never raised.
 
 Skipped: a "_" key, an entry without a stem, "autostart": false, and an entry whose stem is
-already running under any account or recycle. The PM resume is skipped when pm-session or the PM
-session id is running, when the Claude desktop app is running (resuming there too would fork the
+already running under any account or recycle. The PM resume is skipped when pm-session, the PM
+session id or coordinators.json's pm_name (pm-relaunch's fork) is running, when the Claude desktop app is running (resuming there too would fork the
 conversation) unless launcher.pm_resume_beside_desktop is true, and, more than 15 minutes after
 boot, when the PM transcript was written in the last 15 minutes. --test starts only a throwaway
 "autostart-test" session.
@@ -166,7 +166,9 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         log('coordinators.json names no PM session (pm_session_id, pm_folder, pm_account), pm-session skipped')
         return []
     procs = host.processes()
-    if running(procs, 'pm-session') or running(procs, sid):
+    pm_name = cfg.get('pm_name')                     # pm-relaunch's fork: its command line carries the old id
+    named = isinstance(pm_name, str) and pm_name and lookup.find_exact(lookup.launched(procs), pm_name)
+    if running(procs, 'pm-session') or running(procs, sid) or named:
         log('pm-session already running, skipped')
         return []
     if desktop_app_running(procs):
@@ -191,4 +193,19 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         log('FAILED to resume pm-session : %s' % why(e))
         return []
     log('started pm-session')
+    if cfg.get('pm_name') is not None:
+        clear_pm_name(settings, log)
     return []
+
+
+def clear_pm_name(settings, log):
+    """Drop coordinators.json's pm_name: the PM runs as pm-session again, so a name pm-relaunch
+    gave it no longer names it. Read again so only that key changes; a fault is logged."""
+    try:
+        p = state.path(settings, state.COORDINATORS)
+        cfg = state.read_json(p) or {}
+        if cfg.pop('pm_name', None) is not None:
+            state.write_json(p, cfg)
+            log('cleared pm_name in coordinators.json (the PM runs as pm-session)')
+    except (LaunchError, OSError, ValueError) as e:
+        log('FAILED to clear pm_name in coordinators.json : %s' % why(e))
