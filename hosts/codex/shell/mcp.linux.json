@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "machine-lock": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${PLUGIN_ROOT}/mcp/lock_server.py"
+      ],
+      "env_vars": [
+        "PM_KIT_ROOT",
+        "PM_KIT_RELEASE_ID"
+      ]
+    },
+    "hub": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${PLUGIN_ROOT}/mcp/hub_server.py"
+      ],
+      "env_vars": [
+        "PM_KIT_ROOT",
+        "PM_KIT_RELEASE_ID"
+      ]
+    }
+  }
+}
