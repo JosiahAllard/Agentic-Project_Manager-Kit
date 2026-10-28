@@ -454,14 +454,14 @@ class CommandLine(unittest.TestCase):
     def test_a_linux_settings_entry_blocks_when_the_hook_cannot_run(self):
         """A Linux entry whose interpreter is gone must block, not let the call through unguarded:
         onFailure "block" (Claude Code's hooks docs). Windows keeps its entry as it was."""
+        with mock.patch('kitlib.platform.NAME', 'linux'):          # the running platform's, by default
+            hook = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')['PreToolUse'][0]['hooks'][0]
+        self.assertEqual(hook.get('onFailure'), 'block')
         linux = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py', platform='linux')
         self.assertEqual(linux, {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
             {'type': 'command', 'command': 'py', 'args': ['h.py'], 'onFailure': 'block'}]}]})
         windows = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py', platform='windows')
         self.assertEqual(list(windows['PreToolUse'][0]['hooks'][0]), ['type', 'command', 'args'])
-        with mock.patch('kitlib.platform.NAME', 'linux'):
-            hook = hookmain.settings_entry('PreToolUse', 'Bash', 'h.py', executable='py')['PreToolUse'][0]['hooks'][0]
-        self.assertEqual(hook.get('onFailure'), 'block')
 
 
 class Dispatch(unittest.TestCase):
