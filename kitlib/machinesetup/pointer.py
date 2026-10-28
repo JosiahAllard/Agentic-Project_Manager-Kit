@@ -2,18 +2,23 @@
 `HKLM\\SOFTWARE\\pm-kit` value `pm_repo` (kitlib.config.pointer), to the PM repository's work tree.
 
 The value is under HKLM, so --apply is refused unless the process is elevated; nothing elevates
-itself. A dry run prints the plan and the `reg add` that makes the same change by hand. The path
+itself. On Linux it is the root-owned file /etc/pm-kit/pointer (kitlib.platform.linux.paths
+MACHINE_POINTER), written as root (sudo) through a temp file, mode 0644; declining sudo, a note
+gives the line that writes the user's own pointer file. A dry run prints the plan and the `reg add`
+(on Linux the sudo write) that makes the same change by hand. The path
 is checked as the pointer's reader checks it (kitlib.config.pointer.check) before any write, so the
 pointer is never set to a value the reader would call BAD.
 """
 import os
+import shlex
 
 import kitlib.platform
 from kitlib.config import pointer as cpointer
 from kitlib.config import user
 from kitlib.git import repo
+from kitlib.platform.linux import paths as linux_paths
 
-from .common import Plan, kit_file
+from .common import Plan, kit_file, make_folder
 from . import settings
 
 SECTION = 'pointer'
@@ -36,10 +41,30 @@ class Registry(object):
         if user.fenced():
             raise RuntimeError('the kit\'s tests never write the registry (%s)'
                                % cpointer.where())
+        if kitlib.platform.NAME == 'linux':
+            return write_file(linux_paths.MACHINE_POINTER, value)
         import winreg
         with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, cpointer.KEY_PATH, 0,
                                 winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY) as k:
             winreg.SetValueEx(k, cpointer.VALUE, 0, winreg.REG_SZ, value)
+
+
+def user_command(path):
+    """Linux: the shell line that writes the user's pointer file (USER_POINTER) to `path`."""
+    rel = '~/' + '/'.join(linux_paths.USER_POINTER)
+    return "mkdir -p %s && printf '%%s\\n' %s > %s" % (
+        '~/' + '/'.join(linux_paths.USER_POINTER[:-1]), shlex.quote(path), rel)
+
+
+def write_file(path, value):
+    """Linux: `value` as the one line of the pointer file `path` (mode 0644), through a temp file
+    and os.replace, its folder made (mode 0755, whatever root's umask)."""
+    make_folder(os.path.dirname(path))
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(value + '\n')
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
 
 
 class PointerContext(object):
@@ -82,6 +107,9 @@ def survey(ctx, apply=False):
         plan.note(SECTION, '%s already names %s' % (cpointer.where(), value))
         return plan
     if not ctx.host.is_admin():
+        if linux:
+            plan.note(SECTION, 'declining sudo: with no %s the user\'s own pointer file is read; write it '
+                               'by hand: %s' % (linux_paths.MACHINE_POINTER, user_command(value)))
         if apply:
             plan.refuse('not elevated: %s is %s; run %s from an administrator terminal, or '
                         'by hand there: %s' % (

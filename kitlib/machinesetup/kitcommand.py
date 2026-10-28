@@ -16,6 +16,12 @@ Two changes, each planned only when it differs:
   then WM_SETTINGCHANGE broadcast. A dry run only reads the Path. A process started before
   --apply (an open terminal or session) keeps its old PATH.
 
+On Linux (docs/linux-support-plan.md section 6, step 11) the launcher is LINUX_FILE,
+`~/.local/bin/kit` under the home folder: a sh script (MARK_SH its second line, mode 0755) whose
+last line is `exec python3 '<live main checkout>/tools/kit.py' "$@"`. No PATH is changed: most
+distributions put ~/.local/bin on a login shell's PATH when it exists, and a note says so when
+this process's PATH lacks it. plugin.export_dir is not read there.
+
 Nothing is planned, and a note says why, when the kit has no live main checkout, that checkout is
 not a main checkout (a branch worktree is an unreviewed copy) or has no tools/kit.py, or
 plugin.export_dir cannot be read.
@@ -28,8 +34,9 @@ Windows PowerShell 5.1 and Git Bash). An exit code of 0xC000013A makes cmd ask "
 job (Y/N)?".
 """
 import os
+import shlex
 
-from kitlib import pluginsource
+from kitlib import platform, pluginsource
 from kitlib.config import ConfigError
 from kitlib.git import repo as gitrepo
 
@@ -41,6 +48,18 @@ TOOL = os.path.join('tools', 'kit.py')
 MARK = 'rem pm-kit: the kit command'
 REG_SZ, REG_EXPAND_SZ = 1, 2                        # winreg's value types
 PATH_KEY = 'HKCU\\Environment Path'
+LINUX_FILE = ('.local', 'bin', 'kit')                 # under the home folder
+MARK_SH = '# pm-kit: the kit command'
+EXECUTABLE = 0o755
+
+
+def launcher_sh(root):
+    """The Linux launcher's text for the kit checkout `root`, LF line ends, the path quoted for sh."""
+    tool = os.path.join(root, TOOL).replace('\\', '/')
+    return '\n'.join(['#!/bin/sh',
+                      '%s (kit TOOL [ARGUMENTS...]); written by tools/machine_setup.py --apply, which '
+                      'rewrites it' % MARK_SH,
+                      'exec python3 %s "$@"' % shlex.quote(tool), ''])
 
 
 def launcher_text(root):
@@ -79,12 +98,15 @@ def _read(path):
         return None
 
 
-def write_launcher(path, text):
-    """Write `text` to `path` (ASCII) through a temp file and os.replace, its folder made first."""
+def write_launcher(path, text, mode=None):
+    """Write `text` to `path` (ASCII) through a temp file and os.replace, its folder made first;
+    `mode`, when given, set on the file before it is moved into place."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp'
     with open(tmp, 'wb') as f:
         f.write(text.encode('ascii'))
+    if mode is not None:
+        os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
@@ -102,12 +124,40 @@ def survey(plan, ctx):
         plan.note('extras', 'kit command: the kit at %s is not a main checkout (%s), so `kit` would run an '
                             'unreviewed copy; not planned' % (root, place.detail or place.kind))
         return
+    if platform.NAME == 'linux':
+        linux_steps(plan, root, os.path.join(ctx.home, *LINUX_FILE))
+        return
     try:
         export = pluginsource.load(ctx.home, kit=ctx.kit).export_dir
     except (ConfigError, pluginsource.RefreshError, OSError, ValueError) as e:
         plan.note('extras', 'kit command: plugin.export_dir could not be read (%s); not planned' % e)
         return
     plan_steps(plan, ctx.host, root, os.path.join(export, FOLDER))
+
+
+def linux_steps(plan, root, path, environ=None):
+    """Plan the Linux launcher at `path` for the checkout `root`; a note when its folder is not on
+    PATH (`environ`'s, default this process's)."""
+    try:
+        text = launcher_sh(root)
+        text.encode('ascii')
+    except UnicodeEncodeError:
+        plan.note('extras', 'kit command: the path %s is not plain ASCII; not planned' % root)
+        return
+    have = _read(path)
+    if have is not None and MARK_SH not in have:
+        plan.note('extras', 'kit command: %s was not written by machine setup; left as is' % path)
+        return
+    if have != text:
+        plan.add('extras', '%s the kit command %s (mode 755): exec python3 %s "$@"'
+                 % ('write' if have is None else 'rewrite', path, os.path.join(root, TOOL)),
+                 lambda: write_launcher(path, text, EXECUTABLE),
+                 undo=('delete "%s"' % path) if have is None else 'its old text was: %r' % have)
+    folder = os.path.dirname(path)
+    entries = (os.environ if environ is None else environ).get('PATH', '').split(os.pathsep)
+    if not any(e.rstrip('/') == folder.rstrip('/') for e in entries if e):
+        plan.note('extras', 'kit command: %s is not on this PATH; most login shells add it when it exists, '
+                            'so open a new terminal, or add it to your shell profile' % folder)
 
 
 def plan_steps(plan, host, root, folder):
