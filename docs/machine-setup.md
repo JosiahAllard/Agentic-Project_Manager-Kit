@@ -41,6 +41,8 @@ Each leftover is one note, with the command that removes the link only, never it
 leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
 ```
 
+Remove the `hooks` link only once `settings.json` no longer calls a guard through `~/.claude/hooks`. Skill links left after the plugin install make each skill appear twice.
+
 That is the command for a junction or a directory symlink. A file symlink (one without the directory attribute) gets `cmd /c del "<path>"` instead, since `rmdir` fails on it; `del` removes the link and leaves its target. A relative symlink target is read against the link's own folder, not the current directory (`common.link_target`).
 
 In each config folder it checks `tools`, `knowledge` and `skills`. A link counts when its target is in this kit or, with `--old-kit`, in the older kit clone:
