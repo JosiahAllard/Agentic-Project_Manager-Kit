@@ -105,6 +105,44 @@ class BootstrapTests(unittest.TestCase):
                 self.document['native_hosts']['codex']=images
                 with self.assertRaises(DeliveryError): self.load()
 
+    def test_a_missing_configured_path_is_refused_naming_its_setting(self):
+        gone=str(self.root/'gone.exe')
+        cases=((('native_hosts','codex'),gone,'runtime-path-missing-codex-native-image-0'),
+            (('profiles','codex','desktop_executable'),gone,'runtime-path-missing-codex-desktop-executable'),
+            (('profiles','codex','profile_root'),str(self.root/'gone'),'runtime-path-missing-codex-profile-root'),
+            (('profiles','codex','desktop_executable'),str(self.root),'runtime-path-invalid-codex-desktop-executable'))
+        for keys,value,code in cases:
+            with self.subTest(code=code):
+                candidate=json.loads(json.dumps(self.document))
+                target=candidate
+                for key in keys[:-1]: target=target[key]
+                target[keys[-1]]=value
+                with self.assertRaises(DeliveryError) as raised: bootstrap.parse_config(candidate)
+                self.assertEqual(raised.exception.code,code)
+                self.assertNotIn(str(self.root),raised.exception.code)
+
+    def test_a_codex_update_moves_both_configured_executables_to_the_current_install(self):
+        # A fake package tree; Windows' own package lookup is the one stand-in.
+        from optional.bridge.hosts.codex import locate as codex_locate
+        apps=self.root/'WindowsApps'
+        publisher='2p2nqsd0c76g0'
+        current=apps/('OpenAI.Codex_26.1023.6123.0_x64__'+publisher)
+        (current/'app'/'resources').mkdir(parents=True)
+        (current/'app'/'ChatGPT.exe').write_bytes(b'app')
+        (current/'app'/'resources'/'codex.exe').write_bytes(b'cli')
+        copy=self.root/'Local'/'OpenAI'/'Codex'/'bin'/'08d187884f2330d1'/'codex.exe'
+        copy.parent.mkdir(parents=True)
+        copy.write_bytes(b'cli')
+        self.document['native_hosts']['codex']=[str(copy.parent.parent/'593bad775a30e636'/'codex.exe')]
+        self.document['profiles']['codex']['desktop_executable']=str(
+            apps/('OpenAI.Codex_26.1021.2667.0_x64__'+publisher)/'app'/'ChatGPT.exe')
+        with mock.patch.object(codex_locate,'package_path',return_value=current) as lookup:
+            config=self.load()
+        lookup.assert_called_once_with('OpenAI.Codex_'+publisher)
+        self.assertEqual(config.native_hosts['codex'],(copy.resolve(),))
+        self.assertEqual(config.profiles['codex']['desktop_executable'],
+            str((current/'app'/'ChatGPT.exe').resolve()))
+
     def test_factories_receive_real_controller_and_run_before_marker_publication(self):
         config=self.load()
         constructed=[]

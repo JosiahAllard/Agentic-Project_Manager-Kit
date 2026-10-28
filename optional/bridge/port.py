@@ -12,6 +12,10 @@ A half exports HOST, a BridgeHost:
     delivery(provider, runtime) -> DeliveryAdapter, or None when the half cannot deliver
     install(profile, *, python, marker, kit_root) -> InstallFragment
         What the half registers in its host when the bridge is installed (install.py)
+    locate(native_images, profile) -> (native_images, profile), optional
+        The configured values with any path its host's own updates move replaced by the current
+        one, before the configuration check (win/runtime.parse_config, at preparation and at
+        every start). It refuses with an identifier naming the setting, never a path.
 
 Its bridge-profile.json (data, read without importing the half; registry.py) lists the provider's
 settings and, as channel_env, the variables its app may nominate a tool pipe in.
@@ -105,6 +109,7 @@ class BridgeHost:
     provider: Callable
     delivery: Optional[Callable] = None
     install: Optional[Callable] = None
+    locate: Optional[Callable] = None
 
 
 class OwnedDelivery:
@@ -154,6 +159,7 @@ def check_host(value, name):
     """`value` as the BridgeHost a half named `name` exports; DeliveryError otherwise."""
     if (type(value) is not BridgeHost or value.name != name or not callable(value.provider)
             or value.delivery is not None and not callable(value.delivery)
-            or value.install is not None and not callable(value.install)):
+            or value.install is not None and not callable(value.install)
+            or value.locate is not None and not callable(value.locate)):
         raise DeliveryError('invalid-bridge-host')
     return value

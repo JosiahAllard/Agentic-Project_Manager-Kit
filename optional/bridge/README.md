@@ -259,6 +259,22 @@ the required and optional settings, which are directories and which are names. A
 absolute and regular. A name is limited to `[A-Za-z0-9_-]` with no `__`. The configuration cannot
 name a module, a caller, an owner approval or an adapter.
 
+A path that fails its check is refused naming the setting, never the path:
+`runtime-path-missing-<setting>` when it does not exist, `runtime-path-invalid-<setting>` when it is a
+link or the wrong kind. The setting is written with `-` for `.` and `_`, as
+`runtime-path-missing-codex-native-image-0` or `runtime-path-missing-codex-desktop-executable`.
+
+A half may move paths its host's own updates move (port.py `locate`). Before the check, at
+preparation and at every start, the Codex half (`hosts/codex/locate.py`) does this:
+- A path inside a Codex app package folder (`...\WindowsApps\OpenAI.Codex_<version>_<arch>__<publisher id>\`)
+  moves to the same place in the current install of that package family, as Windows reports it.
+- A `...\OpenAI\Codex\bin\<16 hex>\codex.exe` path becomes the one copy there whose bytes are the
+  current package's `app\resources\codex.exe`. Without a package path in the configuration it is
+  left as written.
+
+Its refusals are `codex-package-unavailable`, `codex-package-ambiguous` (two package families) and
+`codex-cli-image-unmatched-<setting>` or `codex-cli-image-ambiguous-<setting>`.
+
 ## Install
 
 Installing the bridge adds nothing to the kit's host shells. With the bridge not installed, no

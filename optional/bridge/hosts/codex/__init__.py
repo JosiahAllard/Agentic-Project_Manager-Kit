@@ -4,6 +4,8 @@
     delivery     the direct desktop adapter (runtime._DirectDesktopAdapter), between two selected
                  Codex desktop chats in the same app only
     install      the 'agent-bridge' MCP server entry; Codex has no bridge hook
+    locate       the configured app and CLI paths moved to the current install after a Codex
+                 update (locate.py)
 
 bridge-profile.json's channel_env names the variable Codex Desktop names its app tools pipe in.
 
@@ -29,4 +31,9 @@ def _install(profile, *, python, marker, kit_root):
     return InstallFragment(server={'name': SERVER_NAME})
 
 
-HOST = BridgeHost(NAME, _provider, delivery=_delivery, install=_install)
+def _locate(native_images, profile):
+    from .locate import locate
+    return locate(native_images, profile)
+
+
+HOST = BridgeHost(NAME, _provider, delivery=_delivery, install=_install, locate=_locate)

@@ -15,7 +15,7 @@ from optional.bridge.core.messages import DeliveryError
 from optional.bridge.core.pairing import ChatBinding
 from optional.bridge import paths, registry
 from .evidence import document,regular,stable_bytes
-from .hosts import native_hosts
+from .hosts import native_hosts,path_refusal
 
 
 @dataclass(frozen=True)
@@ -28,12 +28,27 @@ class Config:
     profiles:dict=field(repr=False)
 
 
-def _absolute(value, *, exists=True):
+def _absolute(value, *, exists=True, role=None):
     if type(value) is not str or not Path(value).is_absolute():
         raise DeliveryError('invalid-runtime-path')
     path=Path(value)
-    if exists: regular(path,directory=path.is_dir())
+    if exists:
+        try: regular(path,directory=path.is_dir())
+        except Exception as error:
+            if role is None: raise
+            raise path_refusal(role,error) from None
     return path.resolve(strict=exists)
+
+
+def _located(data,kit):
+    """`data` with each served half's locate() applied to its images and profile: a host whose
+    own updates move its executables names their current paths before the check (port.py)."""
+    hosts,profiles=dict(data['native_hosts']),dict(data['profiles'])
+    for kind in hosts:
+        if kind not in registry.names(kit=kit): continue  # refused below, its half never imported
+        locate=registry.half(kind).locate
+        if locate is not None: hosts[kind],profiles[kind]=locate(hosts[kind],profiles[kind])
+    return {**data,'native_hosts':hosts,'profiles':profiles}
 
 
 def _profiles(values,kit):
@@ -56,8 +71,9 @@ def _profiles(values,kit):
                     raise DeliveryError('invalid-native-server-name')
                 settings[name]=value
             else:
-                path=_absolute(value)
-                regular(path,directory=name in directories)
+                path=_absolute(value,role=kind+'.'+name)
+                try: regular(path,directory=name in directories)
+                except Exception as error: raise path_refusal(kind+'.'+name,error) from None
                 settings[name]=str(path)
         result[kind]=settings
     return result
@@ -75,12 +91,13 @@ def parse_config(data):
                 or type(data['profiles']) is not dict or set(data['profiles'])!=set(data['native_hosts'])
                 or any(type(value) is not dict for value in data['profiles'].values())):
             raise DeliveryError('invalid-runtime-config')
-        kinds=native_hosts(data['native_hosts'])
-        kit=_absolute(data['kit_root'])
+        kit=_absolute(data['kit_root'],role='kit_root')
         regular(kit,directory=True)
         if kit!=paths.KIT:
             raise DeliveryError('runtime-kit-root-mismatch')
-        python=_absolute(data['python'])
+        data=_located(data,kit)
+        kinds=native_hosts(data['native_hosts'],named=True)
+        python=_absolute(data['python'],role='python')
         regular(python)
         if python!=Path(sys.executable).resolve(strict=True):
             raise DeliveryError('runtime-python-mismatch')

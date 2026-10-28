@@ -89,6 +89,7 @@ that carries `permission_mode`.
 | Registering the MCP servers and hook in a host | **Manual** (README "Install"). It was never activated by the source. |
 | Startup task | Rendered and validated, never registered |
 | Service (`bridge_service.py`) | Idle start tested from a relocated copy, with the source's paths: marker, leadership, no chats, no SEND, clean shutdown. Needs re-running on this layout. |
+| Codex updates | An update moves both pinned Codex executables: the app package folder holding `ChatGPT.exe` and the `bin\<16 hex>\codex.exe` copy. Preparation and every service start move them to the current install (`hosts/codex/locate.py`; README "Configuration"); tests on fake package trees, and the Windows package lookup checked against the installed app (26.1023.6123). An update while the service runs is not followed: frontends of the new `codex.exe` are refused (`frontend-host-unverified`) until the service restarts. |
 | Migrating from the older bridge the owner runs | Not done. Its in-memory sends must be reconciled before any cutover. |
 | Linux and macOS | None. Named pipes, ACLs, tokens and job objects (plan section 6). |
 
