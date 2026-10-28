@@ -286,7 +286,8 @@ ul.hist .sch-line{display:block}
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
     <div class="sechead" id="sh-more">More</div>
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">Message the PM <span class="n" id="n-pm">0</span></button>
-    <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Usage and agents</button>
+    <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Usage</button>
+    <button class="sec" role="tab" data-s="agents" aria-selected="false" id="sec-agents">Agents <span class="n" id="n-a">0</span></button>
     <div class="sechead" id="sh-upkeep">Upkeep</div>
     <button class="sec" role="tab" data-s="findings" aria-selected="false" id="sec-findings">Lint findings <span class="n" id="n-f">–</span></button>
     <button class="sec" role="tab" data-s="autotasks" aria-selected="false" id="sec-autotasks">Automatic tasks</button>
@@ -341,7 +342,6 @@ ul.hist .sch-line{display:block}
     </div>
     <div class="tabs" role="tablist" id="ftabs" data-for="info" hidden>
       <button class="tab" role="tab" data-nf="usage" aria-selected="true" id="ftab-usage">Usage <span class="n" id="n-u">–</span></button>
-      <button class="tab" role="tab" data-nf="agents" aria-selected="false" id="ftab-agents">Agents <span class="n" id="n-a">0</span></button>
       <button class="tab" role="tab" data-nf="notices" aria-selected="false" id="ftab-notices">Lock notices <span class="n" id="n-n">0</span></button>
     </div>
     <div class="pmbar" id="pmtabs" hidden>
@@ -403,9 +403,9 @@ ul.hist .sch-line{display:block}
   // know leaves the page where it is.
   const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"}, "#approvals": {section:"approvals"}, "#more": {section:"more"}, "#schedule": {section:"schedule"},
     "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
-    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"}, "#notices": {section:"info", infotab:"notices"} };
+    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"agents"}, "#notices": {section:"info", infotab:"notices"} };
   const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
-  try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents" || it === "notices") state.infotab = it; } catch(e){}
+  try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "notices") state.infotab = it; } catch(e){}
   Object.assign(state, route(location.hash));
   // ready: the server has answered once, so the lists are real and the owner's controls are shown.
   let ready = false, lastRead = 0;
@@ -468,7 +468,7 @@ ul.hist .sch-line{display:block}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks", "#findings", "#approvals", "#more", "#schedule"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks", "#findings", "#approvals", "#more", "#schedule"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -596,7 +596,7 @@ ul.hist .sch-line{display:block}
     $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
-    $("#repo").hidden = sc === "home" || sc === "info" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings" || sc === "approvals" || sc === "more" || sc === "schedule";
+    $("#repo").hidden = sc === "home" || sc === "info" || sc === "agents" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings" || sc === "approvals" || sc === "more" || sc === "schedule";
     $("#n-d").textContent = state.pages.length;
     schCounts();
     // The phone's tab bar shows the sidebar's counts: each copies the one it names.
@@ -606,7 +606,7 @@ ul.hist .sch-line{display:block}
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
-    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "approvals" ? renderApprovals() : sc === "more" ? renderMore() : sc === "schedule" ? renderSchedule() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
+    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "approvals" ? renderApprovals() : sc === "more" ? renderMore() : sc === "schedule" ? renderSchedule() : sc === "info" ? renderInfo() : sc === "agents" ? renderAgents() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
     place($("#pane-detail"), detailKids); $("#pane-detail").hidden = !detailKids.length;
   }
 
@@ -650,10 +650,10 @@ ul.hist .sch-line{display:block}
       el("div", {class: "foot" + (stale ? " stale" : ""), text: u.measured_at ? "Measured " + when(u.measured_at) + (age != null && age > 120 ? " (" + (age >= 1440 ? Math.round(age / 1440) + " d" : Math.round(age / 60) + " h") + " old)" : "") : "Measurement time unknown"}));
   }
 
-  // Info: reference material; agent defaults first, more blocks later.
+  // Info: usage and the lock notices (Agents is its own section under More).
   function renderInfo(){
     document.querySelectorAll("#ftabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.nf === state.infotab)));
-    state.infotab === "agents" ? renderAgents() : state.infotab === "notices" ? renderNotices() : renderUsage();
+    state.infotab === "notices" ? renderNotices() : renderUsage();
   }
   // Lock notices: the machine lock's start and end notice of each heavy run, newest first, the latest NOTICES_SHOWN.
   const NOTICES_SHOWN = 100;
@@ -1586,7 +1586,7 @@ ul.hist .sch-line{display:block}
   }
 
   // ---- More (the phone's last tab): the sections the tab bar has no room for, each with its count.
-  const MORE_ROWS = [["todo", "To-dos", "n-t"], ["backlog", "Backlog", "n-s"], ["docs", "Docs", "n-d"], ["topm", "Message the PM", "n-pm"], ["info", "Usage and agents", "n-u"], ["findings", "Lint findings", "n-f"], ["autotasks", "Automatic tasks", ""]];
+  const MORE_ROWS = [["todo", "To-dos", "n-t"], ["backlog", "Backlog", "n-s"], ["docs", "Docs", "n-d"], ["topm", "Message the PM", "n-pm"], ["info", "Usage", "n-u"], ["agents", "Agents", "n-a"], ["findings", "Lint findings", "n-f"], ["autotasks", "Automatic tasks", ""]];
   function renderMore(){
     place($("#list"), MORE_ROWS.map(([sec, label, of]) => {
       const o = of ? document.getElementById(of) : null;
