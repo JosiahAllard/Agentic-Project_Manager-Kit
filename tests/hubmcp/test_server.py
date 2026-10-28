@@ -313,6 +313,25 @@ class TodoSteps(Case):
         self.rpc(self.server(), "hub_todo_add", {"title": "t", "commands": ["x"]})
         self.assertEqual(self.ask.calls[-1]["body"], {"title": "t", "commands": ["x"]})
 
+    def test_os_names_the_target_of_a_per_os_run_and_posts_as_given(self):
+        os_ = srv.TOOLS["hub_todo_add"][1]["properties"]["os"]
+        self.assertEqual(os_["enum"], list(todosteps.OSES))
+        steps = [{"run": {"windows": "Get-Date", "linux": "date"}}]
+        args = {"title": "t", "steps": steps, "os": "linux"}
+        payload, is_error = self.rpc(self.server(), "hub_todo_add", args)
+        self.assertFalse(is_error, payload)
+        self.assertEqual(self.ask.calls[-1]["body"], args)
+        payload, is_error = self.rpc(self.server(), "hub_todo_add", dict(args, os="mac"))
+        self.assertTrue(is_error)
+        self.assertEqual((payload["error"]["code"], payload["error"]["field"]), ("invalid", "os"))
+        self.assertEqual(len(self.ask.calls), 1)
+
+    def test_the_steps_description_names_the_per_os_run(self):
+        says = srv.TOOLS["hub_todo_add"][1]["properties"]["steps"]["description"]
+        self.assertNotIn("{run: <PowerShell command>}", says)
+        for word in ("windows", "linux", "os"):
+            self.assertIn(word, says)
+
 
 class Pages(Case):
     """hub_page_publish reads its body from an absolute file and checks it as the hub does
@@ -824,6 +843,17 @@ class Live(httpfix.ListenerCase):
         self.assertEqual(doc["commands"], ["first"] + todosteps.render(steps))
         self.assertEqual(doc["detail"], "open C:\\w\\a.txt at line 3 in Notepad++")
         self.assertNotIn("steps", doc)
+        self.assertEqual(self.errors(), [])
+
+    def test_a_to_do_for_linux_gets_the_linux_form_of_a_per_os_run(self):
+        steps = [{"run": {"windows": "Get-Date", "linux": "date"}}]
+        payload, is_error = self.mcp.call("hub_todo_add", {"title": "t", "steps": steps,
+                                                           "os": "linux"})
+        self.assertFalse(is_error, payload)
+        doc = self.store.docs("todos")[payload["id"]]
+        self.assertEqual(doc["commands"], todosteps.render(steps, "linux"))
+        self.assertNotEqual(doc["commands"], todosteps.render(steps))
+        self.assertNotIn("os", doc)
         self.assertEqual(self.errors(), [])
 
     def test_the_creator_edits_and_withdraws_through_the_listener(self):

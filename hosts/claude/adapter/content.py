@@ -17,6 +17,9 @@ manifests(kit, content) writes the files that carry the kit's one version (kit.j
 - `.claude-plugin/plugin.json`: kit.json's name and version, every agent file, SKILLS_REL (the
   kit's own `content/skills/`), HOOKS_REL and the MCP servers (MCP_SERVERS: the machine lock's and the hub's). It stays at the kit
   root: the plugin root is the whole kit, since its hooks and MCP server run kitlib and tools beside them (${CLAUDE_PLUGIN_ROOT}).
+  That is the Windows file; each other platform hosts.json gives Claude gets the same manifest with
+  that platform's MCP interpreter (mcp_servers) in manifest_rel(platform),
+  `.claude-plugin/plugin.<platform>.json`, which the plugin export writes in its place.
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), its version as `metadata.version`.
 - HOOKS_REL: the plugin's hooks (HOOKS), each command line from kitlib.host.hookmain.manifest_command
@@ -58,6 +61,12 @@ HOOKS = (
 )
 MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/lock_server.py']},
                'hub': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/hub_server.py']}}
+
+
+def mcp_servers(platform='windows'):
+    """MCP_SERVERS, each command `platform`'s MCP interpreter (hookmain.mcp_interpreter)."""
+    command = hookmain.mcp_interpreter(platform)
+    return {name: dict(server, command=command) for name, server in MCP_SERVERS.items()}
 TOOLS = {
     'read': 'Read', 'edit': 'Edit', 'write': 'Write', 'search': 'Grep', 'find': 'Glob',
     'bash': 'Bash', 'powershell': 'PowerShell', 'worktree': 'EnterWorktree', 'enter-worktree': 'EnterWorktree', 'artifact': 'Artifact',
@@ -185,11 +194,12 @@ class ClaudeContent:
 
     def manifests(self, kit, content, registry_path=None):
         """{path: bytes} of the plugin manifest, the marketplace and the hooks file, for `kit`
-        ({"name", "version"}, kitlib.content.load_kit) and `content`."""
+        ({"name", "version"}, kitlib.content.load_kit) and `content`, the manifest and the hooks
+        file once for each platform hosts.json gives Claude."""
         plugin = {
             'name': kit['name'], 'version': kit['version'], 'description': DESCRIPTION,
             'agents': ['./%s/%s.md' % (AGENTS_REL, n) for n in sorted(content.role_names())],
-            'skills': ['./%s/' % SKILLS_REL], 'hooks': './' + HOOKS_REL, 'mcpServers': MCP_SERVERS,
+            'skills': ['./%s/' % SKILLS_REL], 'hooks': './' + HOOKS_REL,
         }
         market = {
             'name': kit['name'],
@@ -200,10 +210,18 @@ class ClaudeContent:
                          'description': 'The PM kit: agents, skills and the machine lock and hub MCP servers.'}],
         }
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
-        out = {MANIFEST_REL: dump(plugin), MARKETPLACE_REL: dump(market)}
+        out = {MARKETPLACE_REL: dump(market)}
         for platform in registry.host(HOST, registry_path).platforms:
+            out[manifest_rel(platform)] = dump(dict(plugin, mcpServers=mcp_servers(platform)))
             out[hooks_rel(platform)] = dump(self.hooks(registry_path, platform))
         return out
+
+
+def manifest_rel(platform):
+    """The plugin manifest for `platform`: MANIFEST_REL on Windows, the one Claude Code reads;
+    beside it `plugin.<platform>.json` elsewhere, which kitlib.pluginsource.export writes in its
+    place."""
+    return MANIFEST_REL if platform == 'windows' else MANIFEST_REL[:-len('.json')] + '.%s.json' % platform
 
 
 def hooks_rel(platform):

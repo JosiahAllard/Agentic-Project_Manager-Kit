@@ -167,7 +167,11 @@ version, nothing else). Claude's are each JSON with indent 2 and a final newline
   (`python ${CLAUDE_PLUGIN_ROOT}/mcp/lock_server.py`) and `hub` (`mcp/hub_server.py`, docs/hub-mcp.md).
   It stays at the kit root because the plugin root is the whole kit: the hooks and the MCP servers
   run kitlib and tools beside them, and an installed plugin reaches only files under its root.
-  The export (docs/plugin-source.md) stamps its version as `<version>-main.<count>`.
+  The export (docs/plugin-source.md) stamps its version as `<version>-main.<count>`. That is the
+  Windows file; `.claude-plugin/plugin.<platform>.json` beside it, one for each other platform
+  hosts.json gives the host, is the same manifest with each MCP server run by that platform's
+  interpreter (`kitlib.host.hookmain.mcp_interpreter`: `python3` on Linux, where stock Ubuntu has no
+  `python`). Codex's `mcp.json` gets an `mcp.<platform>.json` the same way.
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), the version as `metadata.version`.
 - `hosts/claude/shell/hooks/hooks.json`: the plugin's hooks (`HOOKS` in the renderer), each running
@@ -182,8 +186,8 @@ version, nothing else). Claude's are each JSON with indent 2 and a final newline
   fails or is missing blocks the call as boot/hook.py does (the guard-error deny); a start event's
   adds `|| echo "PM kit: the kit did not load: ..."`, which the host shows and exits 0. Every file
   is rendered on every machine, so a committed manifest has no drift; plugin.json names hooks.json
-  alone, and the plugin export writes the running platform's file in its place
-  (docs/plugin-source.md "Layout").
+  alone, and the plugin export writes the running platform's file in its place, as it does for
+  plugin.json and Codex's mcp.json (docs/plugin-source.md "Layout").
 
 A version bump is one edit to `kit.json`, then `--write`. tests/content `ManifestTest`.
 
