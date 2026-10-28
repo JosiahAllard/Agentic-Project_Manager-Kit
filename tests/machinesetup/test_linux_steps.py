@@ -15,7 +15,7 @@ from unittest import mock
 
 from kitlib import machinesetup
 from kitlib.config import pointer as cpointer
-from kitlib.machinesetup import agenttemp, extras, kitcommand, links
+from kitlib.machinesetup import agenttemp, common, extras, kitcommand, links, settings
 from kitlib.machinesetup import pointer as mpointer
 from kitlib.machinesetup.common import Plan
 
@@ -98,6 +98,38 @@ class Links(unittest.TestCase):
         with LINUX:
             self.assertEqual(links.remove_cmd("/home/kit/.claude/skills/it's"),
                              "rm -- '/home/kit/.claude/skills/it'\"'\"'s'")
+
+
+class SettingsHooks(unittest.TestCase):
+    """The settings step reads a Linux hook's absolute paths and python3: an account settings file
+    that already has the guard's entry gets no second one, and the PM SessionStart hook it wrote is
+    its own on the next run (not a foreign checklist to refuse)."""
+
+    KIT, HOME = '/opt/pm kit', '/home/kit'
+    SCRIPT = '/opt/pm kit/boot/hook.py'
+
+    def hook(self, *words, interp='/usr/bin/python3'):
+        return {'type': 'command', 'command': interp, 'args': [self.SCRIPT, 'claude'] + list(words)}
+
+    def test_a_settings_file_with_the_guard_gets_no_second_one(self):
+        data = {'hooks': {'PreToolUse': [{'matcher': 'Bash', 'hooks': [self.hook('PreToolUse')]}]}}
+        ctx = SimpleNamespace(kit=self.KIT, home=self.HOME, managed_data=None)
+        with LINUX:
+            self.assertFalse(settings._wants_guard(Plan(), self.HOME + '/.claude/settings.json', data, ctx))
+
+    def test_the_pm_hook_reads_as_the_kit_entry_and_its_words(self):
+        want = (common.norm(self.SCRIPT), ('claude', 'SessionStart', 'pm'))
+        with LINUX:
+            for interp in ('/usr/bin/python3', 'python3', '/usr/bin/python3.12', '/usr/bin/python'):
+                with self.subTest(interp=interp):
+                    self.assertEqual(settings._signature(self.hook('SessionStart', 'pm', interp=interp), self.HOME),
+                                     want)
+            self.assertEqual(settings.expand('~/.claude/x.py', self.HOME),
+                             os.path.normpath(self.HOME + '/.claude/x.py'))
+
+    def test_a_posix_path_is_no_path_on_windows(self):
+        with mock.patch('kitlib.platform.NAME', 'windows'):
+            self.assertEqual(settings.expand(self.SCRIPT, self.HOME), '')
 
 
 class Environment(Temp):

@@ -61,7 +61,8 @@ REPOINT = {
     'write-usage-status.ps1': 'optional/usage/write-usage-status.ps1',
 }
 GUARD = ENTRY
-PYTHONS = ('python', 'python.exe', 'pythonw', 'pythonw.exe')
+PYTHON = re.compile(r'(?i)pythonw?(?:3(?:\.\d+)?)?(?:\.exe)?')    # an interpreter's file name (fullmatch):
+#                                                   python(w)(.exe) on Windows, python3 and python3.N on Linux
 PLUGIN_MANIFEST = '.claude-plugin/plugin.json'
 PLUGIN_ROOT = re.compile(r'\$\{CLAUDE_PLUGIN_ROOT\}|\$CLAUDE_PLUGIN_ROOT\b')
 TOKEN = re.compile(r'"[^"]*"|\'[^\']*\'|[^\s"\']+')
@@ -621,7 +622,7 @@ class _Editor(object):
         if len(toks) < 2:
             return
         interp, script, *words = [t[1:-1] if len(t) > 1 and t[0] in '"\'' and t[-1] == t[0] else t for t in toks]
-        if os.path.basename(interp.replace('\\', '/')).lower() not in PYTHONS:
+        if not PYTHON.fullmatch(os.path.basename(interp.replace('\\', '/'))):
             return
         if len(words) > 3 or not all(WORD.fullmatch(w) for w in words):
             return                              # a redirect or a pipe is the shell's: leave it in shell form
@@ -712,12 +713,14 @@ SCRIPT = re.compile(r'(?i)\.(?:py|pyw|ps1|psm1|sh|bat|cmd|js|vbs|exe)$')
 
 def expand(tok, home):
     """`tok` as an absolute path (~, %USERPROFILE%, $env:USERPROFILE, $HOME, ${HOME},
-    %HOMEDRIVE%%HOMEPATH% and %HOMEPATH% read as `home`), or '' when it is not one."""
+    %HOMEDRIVE%%HOMEPATH% and %HOMEPATH% read as `home`), or '' when it is not one. On Linux a path
+    from / is one too (/usr/bin/python3, the kit's boot/hook.py); on Windows it is not (cmd /c)."""
+    from kitlib import platform
     t = tok
     if t.startswith('~/') or t.startswith('~\\') or t == '~':
         t = home + t[1:]
     t = HOME_VARS.sub(lambda m: home.replace('\\', '/'), t)
-    if not re.match(r'^[A-Za-z]:[\\/]|^\\\\|^//', t):
+    if not re.match(r'^[A-Za-z]:[\\/]|^\\\\|^//', t) and not (platform.NAME == 'linux' and t.startswith('/')):
         return ''
     return os.path.normpath(t)
 
@@ -738,7 +741,7 @@ def _signature(h, home):
     toks = _tokens(h)
     for i, t in enumerate(toks):
         p = expand(t, home)
-        if p and os.path.basename(p).lower() not in PYTHONS:
+        if p and not PYTHON.fullmatch(os.path.basename(p)):
             return norm(p), tuple(toks[i + 1:])
     return None
 
