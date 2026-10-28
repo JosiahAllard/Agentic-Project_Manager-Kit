@@ -66,6 +66,12 @@ class Agents(unittest.TestCase):
                 self.assertNotIn('model', got, 'every tier is the account default')
                 self.assertNotIn('{{', got['developer_instructions'])
 
+    def test_the_test_runner_works_in_its_given_worktree_and_never_creates_one(self):
+        c = kcontent.load(ROOT)
+        text = cc.renderer().render(c)['hosts/codex/shell/agents/kit-test-runner.toml'].decode('utf-8')
+        self.assertNotIn('new_worktree.py', text)
+        self.assertIn('run every command in that existing worktree (never create one', text)
+
     def test_no_rendered_role_names_the_other_hosts_values(self):
         from hosts.claude.adapter import content as claude
         c = kcontent.load(ROOT)

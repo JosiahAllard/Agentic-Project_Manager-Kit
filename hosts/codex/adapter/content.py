@@ -106,7 +106,9 @@ NOT_AVAILABLE = ' (not available to a Codex agent: ask the PM)'
 TOOLS = {
     'read': 'read_file', 'search': 'Grep', 'find': 'Glob', 'edit': 'apply_patch', 'write': 'apply_patch',
     'bash': 'the shell tool', 'powershell': 'the shell tool',
-    'worktree': 'python <kit>/tools/new_worktree.py -C <repo>', 'artifact': 'no Codex artifact tool',
+    'worktree': 'python <kit>/tools/new_worktree.py -C <repo>',
+    'enter-worktree': 'run every command in that existing worktree (never create one; pass `-C <worktree>` to kit tools)',
+    'artifact': 'no Codex artifact tool',
     'dispatch': 'spawn_agent%s' % NOT_AVAILABLE, 'message': 'send_message%s' % NOT_AVAILABLE,
     'list-agents': 'the session list%s' % NOT_AVAILABLE, 'stop-task': 'task stop%s' % NOT_AVAILABLE,
     'monitor': 'a background shell poll', 'tool-search': 'tool search%s' % NOT_AVAILABLE,

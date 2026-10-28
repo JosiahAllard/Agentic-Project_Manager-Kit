@@ -57,7 +57,7 @@ MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mc
                'hub': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/hub_server.py']}}
 TOOLS = {
     'read': 'Read', 'edit': 'Edit', 'write': 'Write', 'search': 'Grep', 'find': 'Glob',
-    'bash': 'Bash', 'powershell': 'PowerShell', 'worktree': 'EnterWorktree', 'artifact': 'Artifact',
+    'bash': 'Bash', 'powershell': 'PowerShell', 'worktree': 'EnterWorktree', 'enter-worktree': 'EnterWorktree', 'artifact': 'Artifact',
     'dispatch': 'Agent', 'message': 'SendMessage', 'list-agents': 'ListAgents', 'stop-task': 'TaskStop',
     'monitor': 'Monitor', 'tool-search': 'ToolSearch', 'skill': 'Skill', 'ask-owner': 'AskUserQuestion',
     'cron-create': 'CronCreate', 'cron-list': 'CronList', 'cron-delete': 'CronDelete',

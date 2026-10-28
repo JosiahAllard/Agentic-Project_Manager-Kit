@@ -37,7 +37,7 @@ renderer).
 | `tier` | `light`, `standard`, `strong` or `deep`; each host maps a tier to a model (docs/ROSTER.md) |
 | `effort` | optional: `low`, `medium`, `high`, `xhigh`, `max` |
 | `sandbox` | `read-only` or `workspace-write` |
-| `capabilities` | `all` (no tool list), or the tools in order: `[read, edit, write, search, find, bash, powershell, worktree, artifact, dispatch, message, list-agents, stop-task, monitor, tool-search, skill, ask-owner, cron-create, cron-list, cron-delete, web-search, web-fetch]` (`kitlib.host.content.CAPABILITIES`) |
+| `capabilities` | `all` (no tool list), or the tools in order: `[read, edit, write, search, find, bash, powershell, worktree, enter-worktree, artifact, dispatch, message, list-agents, stop-task, monitor, tool-search, skill, ask-owner, cron-create, cron-list, cron-delete, web-search, web-fetch]` (`kitlib.host.content.CAPABILITIES`) |
 | `cache` | optional: `long`, the host's long prompt cache |
 | `compact` | optional: the role's auto-compact window in tokens, a whole number 100000..1000000 (`kitlib.host.content.COMPACT`). The light subagent roles (analyst, docs-writer, helper, lander, test-runner, weak-worker) set 170000, so they compact before a 200k parent would. Claude renders it; Codex does not ("Codex") |
 | `model.<host>` | optional: that host runs the role on this model instead of the tier's. None is in use. |
@@ -96,6 +96,7 @@ profile there, never written a second time in the renderer (Claude: `PROFILE_TOK
 | `{{agent:<role>}}` | the name the host dispatches a role by | `pm-kit:<role>` | `kit-<role>` |
 | `{{model:<tier>}}` | the host's model for a tier | hosts.json `tiers`: `{{model:strong}}` is `opus` | `<tier>-tier` (`strong-tier`) while hosts.json maps the tier to `account-default`, else the model |
 | `{{tool:<capability>}}` | the host's tool for a capability (the front matter's names) | the renderer's `TOOLS`: `{{tool:message}}` is `SendMessage`, `{{tool:dispatch}}` `Agent` | the renderer's `TOOLS` (inferred names): `send_message`, `spawn_agent`, `apply_patch`; a capability with no Codex tool says so |
+| `{{tool:enter-worktree}}` | work in an existing worktree a caller named (never create one); a capability like the rest | `EnterWorktree` | run every command in that existing worktree (never create one; `-C <worktree>` on kit tools) |
 | `{{profile_path}}` | a repository's agent profile | `.claude/agent-profile.md` | `.codex/agent-profile.md` |
 | `{{coordinator_profile_path}}` | a repository's coordinator profile | `.claude/coordinator-profile.md` | `.codex/coordinator-profile.md` |
 | `{{instructions_file}}` | the repository instructions file the host reads | `CLAUDE.md` | `AGENTS.md` |
