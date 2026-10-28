@@ -51,6 +51,7 @@ import stat
 import sys
 import time
 
+import kitlib.platform
 from kitlib.loadnode import frames
 from kitlib.loadnode import registry
 
@@ -180,7 +181,7 @@ def _git_default(args, cwd=None):
 def _alive_default(pid, job):
     """True while `pid` is the runner of `job`: it exists and (where /proc says) its command
     line names the job, so a reused pid is not taken for it. Never signals on Windows."""
-    if os.name != 'posix':
+    if kitlib.platform.NAME != 'linux':
         return False
     try:
         os.kill(pid, 0)

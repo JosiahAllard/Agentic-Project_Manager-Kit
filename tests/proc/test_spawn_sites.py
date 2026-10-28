@@ -127,6 +127,10 @@ HAZARD_EXEMPT = {
     ('kitlib/guard/rules.py', 'shell_writes', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'write_place', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'bare_wrapper', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/loadnode/box.py', 'serve', 'os.execvp'): (
+        1, 'a load node\'s forced command (optional/loadnode/loadnode.py serve, run by sshd on a '
+           'Linux node, never on Windows) replaces itself with receive-pack for a push, so the '
+           'receiving side reads and writes the ssh channel itself; there is no console to open'),
     ('kitlib/pluginsource/__init__.py', '<module>', 'DETACHED_PROCESS'): (
         1, '_DETACHED (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) is used by one start only, '
            'Popen([pythonw(), plugin_refresh.py, ...]): pythonw is a GUI program that never gets '
