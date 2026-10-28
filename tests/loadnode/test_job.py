@@ -9,6 +9,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.loadnode import box, job, registry
 from tests import gitfixture
@@ -19,6 +20,7 @@ from tests.realgit import real_git
 NODE = registry.Node('box1', '192.168.1.50', 'pmnode', KEY, 2, 4096, 22, None, ('my-repo',))
 SHA = 'c' * 40
 JOB = 'j-20261028T120000Z-abcdef'
+LS = ':(literal,icase)'
 
 
 class FakeLink(object):
@@ -103,9 +105,9 @@ class Base(unittest.TestCase):
             self.pushes.append((args, cwd, env))
             os.makedirs(self.box.mirror('my-repo'), exist_ok=True)
             return (1, b'', self.push_fails) if self.push_fails else (0, b'', '')
-        if args[0] == 'ls-files':
-            hit = [a[len(':(literal)'):] for a in args if a.startswith(':(literal)')
-                   and a[len(':(literal)'):] in self.tracked]
+        if args[0] == 'ls-files':                   # as git does for :(literal,icase)
+            asked = {a[len(LS):].lower() for a in args if a.startswith(LS)}
+            hit = sorted(t for t in self.tracked if t.lower() in asked)
             return 0, ''.join(h + '\0' for h in hit).encode(), ''
         raise AssertionError('unexpected git %s' % args)
 
@@ -300,6 +302,66 @@ class Artifacts(Base):
         self.assertIn(nj.staging, ' '.join(self.said))
         shutil.rmtree(nj.staging, True)
 
+    def test_a_tracked_file_in_another_case_is_never_overwritten(self):
+        self.files = {'build/CONFIG.H': b'new'}
+        self.tracked = {'build/config.h'}
+        nj = self.node_job(artifacts=['build/*'])
+        self.assertEqual(nj.run(), job.EXIT_ARTIFACTS)
+        self.assertIn('build/config.h is tracked', ' '.join(self.said))
+        self.assertEqual(os.listdir(self.top), [])
+        shutil.rmtree(nj.staging, True)
+
+    def leftovers(self):
+        return [os.path.join(d, n) for d, _ds, ns in os.walk(self.top) for n in ns
+                if n.startswith('.pmkit-node-')]
+
+    def test_a_copy_that_fails_part_way_puts_the_checkout_back_and_is_exit_13(self):
+        # an OSError while placing (here the move of the second file, as for a locked file) once
+        # escaped run() and node.py took it for "the node could not be used"
+        self.files = {'a.txt': b'new a', 'b.txt': b'new b', 'sub/c.txt': b'new c'}
+        with open(os.path.join(self.top, 'a.txt'), 'wb') as f:
+            f.write(b'untracked a')
+        real_replace = os.replace
+
+        def replace(src, dst):
+            if os.path.basename(dst) == 'b.txt':
+                raise PermissionError(13, 'The process cannot access the file', dst)
+            return real_replace(src, dst)
+        nj = self.node_job(artifacts=['*.txt', 'sub/*.txt'])
+        with mock.patch.object(job.os, 'replace', replace):
+            self.assertEqual(nj.run(), job.EXIT_ARTIFACTS)
+        with open(os.path.join(self.top, 'a.txt'), 'rb') as f:
+            self.assertEqual(f.read(), b'untracked a')
+        self.assertEqual(sorted(os.listdir(self.top)), ['a.txt'])
+        self.assertEqual(self.leftovers(), [])
+        text = ' '.join(self.said)
+        self.assertIn('b.txt could not be copied into the checkout', text)
+        self.assertIn('no artifact was copied', text)
+        self.assertNotIn('clean', self.verbs())
+        self.assertTrue(os.path.isfile(os.path.join(nj.staging, 'b.txt')))
+        shutil.rmtree(nj.staging, True)
+
+    def test_a_file_where_a_folder_must_be_copies_nothing(self):
+        self.files = {'a.txt': b'new a', 'out/b.txt': b'new b'}
+        with open(os.path.join(self.top, 'out'), 'wb') as f:
+            f.write(b'untracked file named out')
+        nj = self.node_job(artifacts=['*.txt', 'out/*.txt'])
+        self.assertEqual(nj.run(), job.EXIT_ARTIFACTS)
+        self.assertEqual(sorted(os.listdir(self.top)), ['out'])
+        with open(os.path.join(self.top, 'out'), 'rb') as f:
+            self.assertEqual(f.read(), b'untracked file named out')
+        self.assertIn('out/b.txt could not be copied', ' '.join(self.said))
+        shutil.rmtree(nj.staging, True)
+
+    def test_an_untracked_file_is_replaced_and_no_copy_is_left_beside_it(self):
+        self.files = {'a.txt': b'new a', 'deep/er/b.txt': b'new b'}
+        with open(os.path.join(self.top, 'a.txt'), 'wb') as f:
+            f.write(b'old a')
+        self.assertEqual(self.node_job(artifacts=['*.txt', '**/b.txt']).run(), 0)
+        with open(os.path.join(self.top, 'a.txt'), 'rb') as f:
+            self.assertEqual(f.read(), b'new a')
+        self.assertEqual(self.leftovers(), [])
+
     def test_a_failed_job_keeps_its_own_exit_when_artifacts_fail(self):
         self.result = {'exit': 3, 'how': 'ended'}
         self.files = {'a.txt': b'x'}
@@ -347,10 +409,11 @@ class Paths(unittest.TestCase):
                 self.assertEqual(job.glob_match(g, p), want)
 
     def test_a_path_main_will_not_write(self):
-        for p in ('a.txt', 'out/deep/b.bin', 'x.y.z'):
+        for p in ('a.txt', 'out/deep/b.bin', 'x.y.z', 'a~b.txt', 'notes~.txt'):
             self.assertTrue(job.artifact_path_ok(p), p)
         for p in ('', '/a', 'a/../b', './a', 'a//b', '.git/x', '.GIT/config', 'a\\b', 'C:x', 'a:b',
-                  'NUL', 'con.txt', 'a/COM1', 'a.', 'a ', 'a*b', 'a\x01', None, 'x' * 1025):
+                  'NUL', 'con.txt', 'a/COM1', 'a.', 'a ', 'a*b', 'a\x01', None, 'x' * 1025,
+                  'build/CONFIG~1.H', 'PROGRA~1/x', 'a/b~12'):
             self.assertFalse(job.artifact_path_ok(p), p)
 
 
@@ -402,6 +465,22 @@ class PlaceOnRealGit(unittest.TestCase):
         self.assertIsNone(nj._place(['out/b.txt']))
         with open(os.path.join(repo.root, 'out', 'b.txt')) as f:
             self.assertEqual(f.read(), 'new\n')
+
+    def test_a_tracked_file_named_in_another_case_is_found(self):
+        # NTFS opens build/CONFIG.H as the tracked build/config.h
+        repo = gitfixture.TempRepo(branch='main')
+        self.addCleanup(repo.cleanup)
+        repo.write('build/config.h', 'tracked\n')
+        repo.commit('add', 'build/config.h')
+        nj = job.NodeJob(NODE, None, repo.root, SHA, 'my-repo', 's', 'k', ['x'], ['build/*'])
+        nj.staging = tempfile.mkdtemp(prefix='kit-job-stage-')
+        self.addCleanup(shutil.rmtree, nj.staging, True)
+        os.makedirs(os.path.join(nj.staging, 'BUILD'))
+        with open(os.path.join(nj.staging, 'BUILD', 'CONFIG.H'), 'w') as f:
+            f.write('new\n')
+        self.assertIn('build/config.h is tracked', nj._place(['BUILD/CONFIG.H']))
+        with open(os.path.join(repo.root, 'build', 'config.h')) as f:
+            self.assertEqual(f.read(), 'tracked\n')
 
 
 if __name__ == '__main__':

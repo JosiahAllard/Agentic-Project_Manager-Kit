@@ -26,7 +26,10 @@ running on the main machine instead): the job's own exit code when it ended; EXI
 was busy (at its most jobs, or its lock refused to wait); EXIT_NODE the node could not be used
 (unreachable, its host key, the push, a start it refused, a kit too old to serve the run verbs) or
 its runner vanished; EXIT_LOST the connection did not come back; EXIT_ARTIFACTS the job succeeded
-but its artifacts did not all come. Nothing here prints: `say(text)` gets every line for the user
+but its artifacts did not all come or could not all be copied into the checkout (none was). Once
+the node has started the job (`started`), only its lock refusing it as busy (the command never
+ran) is one `--node auto` answers on main; no other failure is, or the job would run twice.
+Nothing here prints: `say(text)` gets every line for the user
 and `out(bytes)` the job's own output.
 """
 import collections
@@ -34,6 +37,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -103,7 +107,8 @@ def glob_match(pattern, path):
 def artifact_path_ok(p):
     """True for a manifest path main may write under the checkout's top: relative, '/' between
     parts, no '.', '..' or '.git' part (any case), no drive, backslash or control character, and
-    no part Windows would read as something else (a device name, a trailing dot or space)."""
+    no part Windows would read as something else (a device name, a trailing dot or space, or a
+    '~' and a digit, the shape of an 8.3 short name that may be another file's)."""
     if not isinstance(p, str) or not p or len(p) > 1024:
         return False
     if p.startswith('/') or '\\' in p or ':' in p or any(ord(c) < 32 or ord(c) == 127 for c in p):
@@ -113,7 +118,7 @@ def artifact_path_ok(p):
             return False
         if part[-1] in '. ' or part.split('.')[0].upper() in WIN_RESERVED:
             return False
-        if any(c in part for c in '<>"|?*'):
+        if any(c in part for c in '<>"|?*') or re.search(r'~\d', part):
             return False
     return True
 
@@ -146,6 +151,7 @@ class NodeJob(object):
         self.offset = 0
         self.noticed = False
         self.staging = None
+        self.started = False             # the node took the job: it is never run again on main
 
     # -- the steps --------------------------------------------------------------------------
     def spec(self):
@@ -249,7 +255,11 @@ class NodeJob(object):
         for attempt in (1, 2):
             if self.staging:
                 shutil.rmtree(self.staging, ignore_errors=True)
-            self.staging = tempfile.mkdtemp(prefix='pmkit-node-%s-' % self.job)
+            try:
+                self.staging = tempfile.mkdtemp(prefix='pmkit-node-%s-' % self.job)
+            except OSError as e:
+                self.staging = None
+                return False, 'no staging folder could be made (%s)' % e
             files, why = self._fetch_into(self.staging)
             if files is not None:
                 break
@@ -356,11 +366,14 @@ class NodeJob(object):
         return files
 
     def _place(self, paths):
-        """Copy the staged files into the checkout: None, or why none was copied."""
+        """Copy the staged files into the checkout, all of them or none: None, or why none was
+        copied. The tracked check ignores case (NTFS does). Each file is first copied to a new
+        name beside its destination, then every one is moved into place; an OSError on the way
+        (a locked file, a file where a folder must be) undoes what was done."""
         if not paths:
             return None
         top = os.path.realpath(self.top)
-        rc, out, err = self.git(['ls-files', '-z', '--'] + [':(literal)' + p for p in paths],
+        rc, out, err = self.git(['ls-files', '-z', '--'] + [':(literal,icase)' + p for p in paths],
                                 self.top, None, None)
         if rc != 0:
             return 'git ls-files failed: %s' % _last(err)
@@ -374,10 +387,34 @@ class NodeJob(object):
             real = os.path.realpath(dest)
             if not real.startswith(top + os.sep) or os.path.isdir(dest) or os.path.islink(dest):
                 return '%s would not be a file inside the checkout; no artifact was copied' % p
-            dests.append((os.path.join(self.staging, *p.split('/')), dest))
-        for src, dest in dests:
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.copyfile(src, dest)
+            dests.append((p, os.path.join(self.staging, *p.split('/')), dest))
+        made, new, done, p = [], [], [], None
+        try:
+            for p, src, dest in dests:
+                _make_dirs(os.path.dirname(dest), made)
+                new.append(_beside(dest, '.new'))
+                shutil.copyfile(src, new[-1])
+            for (p, _src, dest), tmp in zip(dests, new):
+                old = None
+                if os.path.lexists(dest):               # an untracked file: kept until the end
+                    old = _beside(dest, '.old')
+                    try:
+                        os.replace(dest, old)
+                    except OSError:
+                        _remove(old)
+                        raise
+                done.append([dest, old, False])
+                os.replace(tmp, dest)
+                done[-1][2] = True
+        except OSError as e:
+            left = _undo(new, done, made)
+            why = '%s could not be copied into the checkout (%s)' % (p, e)
+            if left:
+                return '%s, and the checkout could not be put back: %s' % (why, '; '.join(left[:5]))
+            return why + '; no artifact was copied'
+        for _dest, old, _placed in done:
+            if old:
+                _remove(old)
         return None
 
     def clean(self):
@@ -432,6 +469,7 @@ class NodeJob(object):
         for a failure before the job started, and for a busy result (fallback True)."""
         self.push()
         self.start()
+        self.started = True
         self.say('job %s started on %s at %s' % (self.job, self.node.name, self.sha[:12]))
         self._notice('start', 'Job %s of %s runs on load node %s under its machine lock. Heavy '
                               'work there until its end notice.' % (self.job, self.repo, self.node.name))
@@ -495,6 +533,54 @@ def _push_why(err):
     own = [x for x in lines if x not in _GIT_TAIL]
     why = own[-1] if own else lines[0] if lines else ''
     return (why[len('fatal: '):] if why.startswith('fatal: ') else why)[:remote.ERR_CAP]
+
+
+def _make_dirs(d, made):
+    """Make the folder `d` and the missing ones above it, each added to `made` as it is made."""
+    missing = []
+    while not os.path.isdir(d) and os.path.dirname(d) != d:
+        missing.append(d)
+        d = os.path.dirname(d)
+    for x in reversed(missing):
+        os.mkdir(x)
+        made.append(x)
+
+
+def _beside(dest, suffix):
+    """A new empty file with a name of its own in `dest`'s folder."""
+    fd, path = tempfile.mkstemp(prefix='.pmkit-node-', suffix=suffix, dir=os.path.dirname(dest))
+    os.close(fd)
+    return path
+
+
+def _remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _undo(new, done, made):
+    """Put the checkout back as _place found it: each file moved into place out, each untracked
+    file it replaced back, the new copies and the folders made removed. What could not be put
+    back, for the user."""
+    left = []
+    for dest, old, placed in reversed(done):
+        try:
+            if old:
+                os.replace(old, dest)
+            elif placed:
+                os.remove(dest)
+        except OSError as e:
+            left.append('%s (%s)' % (dest, 'its old copy is %s' % old if old else e))
+    for tmp in new:
+        _remove(tmp)
+    for d in reversed(made):
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
+    return left
 
 
 def _last(text):

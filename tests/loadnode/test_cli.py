@@ -252,6 +252,26 @@ class Run(unittest.TestCase):
         code, _, _ = self.run_()
         self.assertEqual((code, self.mains), (job.EXIT_NODE, []))
 
+    def test_an_os_error_after_the_node_took_the_job_never_runs_it_on_main(self):
+        def ran_then_failed(nj):
+            self.node_runs.append(nj.node.name)
+            nj.started = True
+            raise PermissionError(13, 'The process cannot access the file', 'out/a.txt')
+        for extra in ((), ('--node', 'box1')):
+            with self.subTest(extra=extra):
+                self.mains = []
+                with mock.patch.object(job.NodeJob, 'run', ran_then_failed):
+                    code, _, err = self.run_(*extra)
+                self.assertEqual((code, self.mains), (job.EXIT_NODE, []))
+                self.assertIn('it is not run again on main', err)
+                self.assertNotIn('running on main instead', err)
+
+    def test_an_os_error_before_the_node_took_the_job_falls_back(self):
+        self.node_result = OSError('ssh would not start')
+        code, _, err = self.run_()
+        self.assertEqual((code, len(self.mains)), (7, 1))
+        self.assertIn('box1 could not be used', err)
+
     def test_auto_runs_on_main_for_each_reason_a_node_cannot_be_asked(self):
         def no_lock():
             raise OSError('x')
