@@ -12,6 +12,7 @@ and connecting states (lib/multi.c). The push is replaced by a fake git result; 
 follows reads the scratch remote unless faked. Scratch repositories with a bare remote in temp and
 the scratch lock store only."""
 import unittest
+from unittest import mock
 
 from kitlib import gate as G
 from kitlib.gate import land
@@ -128,6 +129,43 @@ class PushNeverConnected(PushCase):
 
     def test_resolving_timed_out_is_not_landed(self):
         self.land_fails(RESOLVE_TIMEOUT, ls=(None, 'network down'))
+
+    def test_a_remote_main_moved_on_without_the_merge_is_not_landed(self):
+        # the remote's main is a commit this checkout places, and it does not hold the merge
+        _, other = self.branch('other', {'b.py': 'y = 1\n'})
+        out, _ = self.land_fails(REFUSED_8, ls=(other, None))
+        self.assertIn('main is %s;' % other[:10], out.lines[-1])
+
+    def test_a_remote_main_holding_the_merge_is_landed_whatever_the_push_said(self):
+        # git's stderr says it never connected, yet the remote's main holds the merge: what the
+        # remote shows wins, so the landing is LANDED, never NOT LANDED with the merge published
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        real = land.Lander.git
+        on_remote = []
+
+        def git(lander, *args, **kw):
+            if args[:1] != ('push',) or on_remote:
+                return real(lander, *args, **kw)
+            r = real(lander, *args, **kw)               # the merge really reaches the remote
+            self.assertEqual(r.rc, 0, r)
+            merge = args[-1].split(':', 1)[0]
+            later = self.repo.git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                                  '--git-dir', self.repo.remote, 'commit-tree', '-p', merge,
+                                  '-m', 'later on the remote', merge + '^{tree}',
+                                  cwd=self.repo.base).strip()
+            self.repo.git('--git-dir', self.repo.remote, 'update-ref', 'refs/heads/main', later,
+                          cwd=self.repo.base)
+            on_remote.append(later)
+            return cmd.Result(128, b'', RESOLVE)
+        with mock.patch.object(land.Lander, 'git', git):
+            out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(len(on_remote), 1, out.lines)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertTrue(any(l.startswith('LANDED ') for l in out.lines), out.lines)
+        self.assertFalse([l for l in out.lines if l.startswith(('NOT LANDED', 'STUCK'))],
+                         out.lines)
+        self.assertEqual(self.remote_main(), on_remote[0])
+        self.assertIsNone(self.lock().read())
 
     def test_a_remote_main_this_checkout_cannot_place_is_not_landed(self):
         # the push never connected, so the merge cannot be in whatever the remote's main is
