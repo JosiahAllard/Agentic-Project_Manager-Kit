@@ -20,7 +20,7 @@ class ClaudeConformance(conformance.HostConformance, bridge_conformance.mixin('c
     # tools/: the pm_watch seam, the launcher's account folders and the plugin refresh, each until
     # its step-6 wave moves it behind the adapter.
     LEAK_ALLOWED = dict(ALLOWED, **CONTENT_ALLOWED, **{
-        'tools/pm_watch.py': 7,          # 7: claude_host.rc_records, the REMOTE check's reader
+        'tools/pm_watch.py': 6,
         'tools/launch.py': 1,
         'tools/plugin_refresh.py': 3,
     })

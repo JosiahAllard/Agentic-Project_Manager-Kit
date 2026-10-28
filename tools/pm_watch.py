@@ -101,15 +101,16 @@ def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None, 
         print("pm_watch: machine config: %s" % e, file=sys.stderr)
         return 2
     a = parse(argv, cfg, launcher_set)
+    host = claude_host                  # the watcher's host seam: transcripts, registry, preloads
     w = W.Watcher(W.load_state(a.state) or {}, [tuple(b.split("=", 1)) for b in a.branch],
                   W.usage, a.alerts_dir, a.sessions,
-                  claude_host.newest_finder(), idle_minutes=a.idle_minutes,
+                  host.newest_finder(), idle_minutes=a.idle_minutes,
                   branch_poll=a.branch_poll, usage_poll=a.usage_poll, idle_poll=a.idle_poll,
                   notice_dir=a.notice_dir,
                   plugin=W.plugin_check() if plugin is None else (plugin or None),
                   hub=W.hub_check() if hub is None else (hub or None),
-                  rc=W.rc_check(a.sessions, claude_host.rc_records) if rc is None else (rc or None),
-                  preload_modules=claude_host.PRELOAD)
+                  rc=W.rc_check(a.sessions, host.rc_records) if rc is None else (rc or None),
+                  preload_modules=host.PRELOAD)
     beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
                  lambda text: print(text, flush=True),
