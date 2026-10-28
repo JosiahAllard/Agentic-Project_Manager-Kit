@@ -38,12 +38,11 @@ HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, 
 # the roles --home-worktree may start in a home: a session in a linked worktree may write only that
 # worktree and temp (docs/guard.md "Write jail"). A consultant's notes file is in agent temp
 # (consultant_notes_path); a coordinator's state note is in agent temp too (COORDINATOR_FOLDER), so the
-# note is not the reason: the refusal stands because work happens in a worktree and the main checkout
-# is kept clean for landings (docs/launcher.md "The home worktree")
+# note is not a reason to refuse one; only these two roles are given a home (docs/launcher.md "The home worktree")
 HOME_ROLES = (window.DEEP_WORKER, window.CONSULTANT)
-HOME_REFUSED = ('--home-worktree is for deep-worker and consultant sessions only: a %s session may not start in '
-                'the main checkout or a home of it: work happens in a worktree, and the main checkout is kept '
-                "clean for landings; a coordinator's state note is in agent temp; nothing was started.")
+HOME_REFUSED = ('--home-worktree is for deep-worker and consultant sessions only: a %s session may not be given a '
+                "home worktree; a coordinator's state note is in agent temp, not in the main checkout; nothing "
+                'was started.')
 AUTOCOMPACT = (100000, 1000000)  # the CLI's range for --autocompact
 SLUG = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}\Z')
 DEFAULT_AUTOCOMPACT = 200000   # a coordinator, another agent or a plain session; deep and consultant set their own
