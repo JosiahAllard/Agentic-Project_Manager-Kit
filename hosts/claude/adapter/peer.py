@@ -24,7 +24,8 @@ The wire format and the write are here once: optional/bridge/hosts/claude (peer.
 imports canonical_pipe, sender_address, message_frames and write_once from this module.
 
 Resolution: a launcher key is its sessions.json name; `pm` is coordinators.json's pm_session_id
-matched against the record's sessionId, then the names PM_NAME and pm-session; anything else is
+matched against the record's sessionId, then the names coordinators.json's pm_name (the name
+launch.py pm-relaunch gave the PM), PM_NAME and pm-session; anything else is
 taken as a session name. Only a live record counts (its pid runs with the record's creation time:
 launch.py stop leaves records behind). Several live records of one name: the one pipes.json names
 when its pid and creation time match, else the newest creation time, flagged ambiguous.
@@ -315,18 +316,26 @@ class HubPush(object):
             return entry['name']
         return recipient
 
-    def _pm_session_id(self):
+    def _coordinators_value(self, key):
         try:
             data = state.read_coordinators(self.settings)
         except LaunchError:
             return None
-        sid = (data or {}).get('pm_session_id') if isinstance(data, dict) else None
-        if not isinstance(sid, str) or not sid or sid.startswith('<'):
+        value = (data or {}).get(key) if isinstance(data, dict) else None
+        if not isinstance(value, str) or not value or value.startswith('<'):
             return None                     # unset, or the example file's placeholder
-        return sid
+        return value
+
+    def _pm_session_id(self):
+        return self._coordinators_value('pm_session_id')
+
+    def _pm_names(self):
+        """coordinators.json's pm_name (pm-relaunch's), then PM_NAMES."""
+        name = self._coordinators_value('pm_name')
+        return ((name,) if name else ()) + PM_NAMES
 
     def is_pm(self, recipient):
-        return recipient == push.PM_KEY or self._name(recipient) in PM_NAMES
+        return recipient == push.PM_KEY or self._name(recipient) in self._pm_names()
 
     def _live(self):
         return [(d, r) for d, r in pipes.records(pipes.registry_dirs(self.settings))
@@ -352,7 +361,7 @@ class HubPush(object):
             hits = [h for h in live if sid is not None and h[1].get('sessionId') == sid]
             if hits:
                 return self._pick(hits, hits[0][1].get('name') or PM_NAMES[0])
-            for name in PM_NAMES:
+            for name in self._pm_names():
                 hits = [h for h in live if h[1].get('name') == name]
                 if hits:
                     return self._pick(hits, name)

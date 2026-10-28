@@ -7,29 +7,43 @@ pm_folder and pm_account, the `pm` session mark), running
 
   claude --resume '<pm_session_id>' --fork-session --agent pm-kit:pm --remote-control '<new>' -n '<new>' '<prompt>'
 
-The fork's session id is learned as every start learns a new session's: the peer registry record
-of that name, written to pipes.json (pipes.record through Host.record_pipe). Once it is known and
-differs from the old id, the old PM is told to stand down (the hub's push delivery to the PM, which
-coordinators.json still resolves to the old session), then coordinators.json's pm_session_id
-becomes the fork's and pm_name its name (stop refuses that name, as it refuses pm-session). The old
-session is never stopped: closing its window is the owner's step.
+The fork's session id is learned from the peer registry record of that name (pipes.await_record),
+polled for up to `wait_s` seconds (WAIT_S by default: a long transcript resumes slowly) until its
+sessionId differs from the old id, and written to pipes.json. Once it is known, the old PM is told
+to stand down (the hub's push delivery to the PM, which coordinators.json still resolves to the old
+session), then coordinators.json's pm_session_id becomes the fork's and pm_name its name (stop
+refuses that name, as it refuses pm-session; the hub's peer resolution counts it a PM name). That
+write is retried; when it still fails, the lines so far are kept and the manual step is said. The
+old session is never stopped: closing its window is the owner's step.
+
+The fork's first message (fork_prompt) has it act as the PM only once coordinators.json names its
+own session id, so an unconfirmed fork waits or asks the owner instead of being a second PM.
 
 Refused (LaunchError, nothing started or written): no PM recorded in coordinators.json, the recorded
-PM not running, a --name that is empty or names a running session or a sessions.json entry.
+PM not running, a --name that is empty, a PM name (stop's test), or names a running session or a
+sessions.json entry.
 """
+import json
 import os
 
+from kitlib.fs import replace as fsreplace
 from kitlib.hubsite import push
 from kitlib.launcher import accounts as A
-from kitlib.launcher import lookup, pipes, state, window
+from kitlib.launcher import lookup, pipes, state, stop, window
 from kitlib.launcher import start as S
 from kitlib.launcher.settings import LaunchError
 
 PM_AGENT = 'pm'
+WAIT_S = 120                    # seconds pm-relaunch waits for the fork's own session id
+WRITE_TRIES = 3                 # tries of the coordinators.json write
+WRITE_WAIT = fsreplace.WAIT     # seconds each try's replace waits out a reader holding the file
 FORK_PROMPT = ("You are a fork of the PM conversation, started by launch.py pm-relaunch as '%s' (Remote Control name "
-               "'%s') because the old PM session could no longer be reached. You are the PM now: the launcher records "
-               "your session id in coordinators.json and tells the old session to stand down; the owner closes its "
-               "window by hand, so never send it work. Run your start-up routine, re-arm the usage watch and any "
+               "'%s') because the old PM session could no longer be reached. Act as the PM only once %s has "
+               "pm_session_id equal to your own session id (the launcher writes it, with pm_name '%s', once it sees "
+               "your id, and then tells the old session to stand down). Until then send nothing, dispatch nothing "
+               "and write nothing: check that file again every minute, and if it still names another session after "
+               "10 minutes, ask the owner whether you are the PM. Once it names you: the owner closes the old "
+               "window by hand, so never send it work; run your start-up routine, re-arm the usage watch and any "
                "dead-man checks, then tell the owner briefly that you are the PM under Remote Control name '%s'.")
 STAND_DOWN = ("Stand down: launch.py pm-relaunch started '%s' (session %s), a fork of this conversation with Remote "
               "Control name '%s', and coordinators.json now names it the PM. From now on do nothing: no sends, "
@@ -72,6 +86,9 @@ def check_name(settings, procs, records, name):
     running launched session, of a live registry record, or of a sessions.json entry."""
     if not name or name.strip() != name or '\n' in name or '\r' in name:
         raise LaunchError('--name must be a session name on one line, no surrounding spaces; nothing was started.')
+    if stop._pm_named(name):
+        raise LaunchError("--name '%s' is a PM name (it holds 'pm-session' or 'project manager'): coordinators "
+                          'would take it for the old PM; nothing was started.' % name)
     window.check_name(name)
     live = lookup.find_exact(lookup.launched(procs), name)
     if live:
@@ -89,15 +106,69 @@ def check_name(settings, procs, records, name):
                               'started.' % (name, key))
 
 
-def fork_command(sid, name):
+def fork_prompt(name, coordinators_path):
+    """The fork's first message: it acts as the PM only once coordinators.json names its session."""
+    return FORK_PROMPT % (name, name, coordinators_path, name, name)
+
+
+def fork_command(sid, name, coordinators_path):
     """The fork's claude command line."""
-    return window.session_command(name, FORK_PROMPT % (name, name, name), S.run_as(PM_AGENT), resume=sid, fork=True)
+    return window.session_command(name, fork_prompt(name, coordinators_path), S.run_as(PM_AGENT), resume=sid,
+                                  fork=True)
 
 
-def relaunch(settings, host, name, delivery=None):
+def await_fork(settings, host, name, after_ms, old_sid, wait_s):
+    """(record, line): the fork's live registry record once its sessionId differs from old_sid,
+    its pipes.json entry written, and None; or (None, why) when none came in wait_s seconds."""
+    tries = max(1, int(round(wait_s / pipes.POLL_S)))
+    rec = pipes.await_record(settings, name, after_ms, host.ctime, host.sleep, tries, pipes.POLL_S,
+                             accept=lambda r: isinstance(r.get('sessionId'), str) and r['sessionId']
+                             and r['sessionId'] != old_sid)
+    if rec is None:
+        seen = pipes.find(pipes.registry_dirs(settings), name, after_ms, host.ctime)
+        why = ('the fork kept the old session id for %s s' % wait_s if seen is not None
+               else 'no session of that name came up in %s s' % wait_s)
+        return None, why
+    return rec, pipes.write_entry(settings, name, rec, host.now)
+
+
+def _write_coordinators(p, cfg):
+    tmp = p + '.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(json.dumps(cfg, indent=4, ensure_ascii=False) + '\n')
+        fsreplace.replace(tmp, p, wait=WRITE_WAIT)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def record_pm(settings, host, new_sid, name):
+    """Set coordinators.json's pm_session_id and pm_name, read again so only the two keys change;
+    retried WRITE_TRIES times. None when written, else the error's text."""
+    err = None
+    for i in range(WRITE_TRIES):
+        try:
+            p = state.path(settings, state.COORDINATORS)
+            cfg = state.read_coordinators(settings) or {}
+            cfg['pm_session_id'], cfg['pm_name'] = new_sid, name
+            _write_coordinators(p, cfg)
+            return None
+        except (LaunchError, ValueError, OSError) as e:
+            err = '%s: %s' % (type(e).__name__, e)
+        if i < WRITE_TRIES - 1:
+            host.sleep(1)
+    return err
+
+
+def relaunch(settings, host, name, delivery=None, wait_s=WAIT_S):
     """Fork the running PM into a new window named `name`; the lines it says. `delivery` is the
     host's hub push delivery (an object with deliver(recipient, text) -> push.Sent), or None when
-    the host has none: the stand-down is then the owner's to send."""
+    the host has none: the stand-down is then the owner's to send. wait_s: how long to wait for
+    the fork's own session id."""
     sid, folder, acct = recorded_pm(settings)
     if not os.path.isdir(folder):
         raise LaunchError('pm_folder %s in coordinators.json is not a folder; nothing was started.' % folder)
@@ -108,28 +179,33 @@ def relaunch(settings, host, name, delivery=None):
     check_name(settings, procs, records, name)
     d = A.launch_dir(settings, str(acct))
     config_dir = None if settings.is_default(d) else d
-    text = window.script(name, window.PM, folder, fork_command(sid, name), config_dir, host.env('AGENT_TEMP'))
+    coords = state.path(settings, state.COORDINATORS)
+    text = window.script(name, window.PM, folder, fork_command(sid, name, coords), config_dir,
+                         host.env('AGENT_TEMP'))
     after_ms = pipes.launch_ms(host.now())
     kw = window.open_args(name, settings)
     host.open_window(text, **kw)
     out = ['Started %s (account %s), a fork of the PM session %s, in %s. Remote Control name: %s'
            % (name, acct, sid, window.opened_in(name, kw.get('terminal')), name)]
     try:            # the window is open: a fault here must not read as a failed launch
-        said = host.record_pipe(settings, name, after_ms)
+        rec, said = await_fork(settings, host, name, after_ms, sid, wait_s)
     except (OSError, ValueError, LaunchError) as e:
-        said = 'pipe not recorded (%s)' % e
-    entry = pipes.read(settings).get(name) if said is None else None
-    new_sid = entry.get('session_id') if isinstance(entry, dict) else None
-    if not isinstance(new_sid, str) or not new_sid or new_sid == sid:
-        why = said or ('the fork kept the old session id' if new_sid == sid else 'no session id was recorded')
+        rec, said = None, 'the registry could not be read (%s)' % e
+    if rec is None:
         return out + ['The fork was not confirmed (%s): coordinators.json still names %s and the old PM was not '
-                      "told to stand down. Check the '%s' window; if it runs, tell the old PM to stand down and set "
-                      'pm_session_id by hand.' % (why, sid, name), OWNER_STEP % name]
+                      "told to stand down; the fork waits until coordinators.json names it. Check the '%s' window; "
+                      'if it runs as its own session, tell the old PM to stand down and set pm_session_id to the '
+                      "fork's session id and pm_name to %s in %s." % (said, sid, name, name, coords), OWNER_STEP % name]
+    new_sid = rec['sessionId']
+    if said:
+        out.append(said)
     out.append(stand_down(delivery, name, new_sid, sid))
-    cfg = state.read_coordinators(settings) or {}          # read again: write only the two PM keys
-    cfg['pm_session_id'], cfg['pm_name'] = new_sid, name
-    state.write_json(state.path(settings, state.COORDINATORS), cfg)
-    out.append('coordinators.json: pm_session_id %s -> %s, pm_name %s' % (sid, new_sid, name))
+    err = record_pm(settings, host, new_sid, name)
+    if err:
+        out.append('coordinators.json was NOT updated (%s). Manual step: set pm_session_id to %s and pm_name to %s '
+                   'in %s.' % (err, new_sid, name, coords))
+    else:
+        out.append('coordinators.json: pm_session_id %s -> %s, pm_name %s' % (sid, new_sid, name))
     return out + [OWNER_STEP % name]
 
 

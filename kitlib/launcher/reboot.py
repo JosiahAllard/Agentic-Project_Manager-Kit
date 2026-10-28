@@ -193,4 +193,19 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         log('FAILED to resume pm-session : %s' % why(e))
         return []
     log('started pm-session')
+    if cfg.get('pm_name') is not None:
+        clear_pm_name(settings, log)
     return []
+
+
+def clear_pm_name(settings, log):
+    """Drop coordinators.json's pm_name: the PM runs as pm-session again, so a name pm-relaunch
+    gave it no longer names it. Read again so only that key changes; a fault is logged."""
+    try:
+        p = state.path(settings, state.COORDINATORS)
+        cfg = state.read_json(p) or {}
+        if cfg.pop('pm_name', None) is not None:
+            state.write_json(p, cfg)
+            log('cleared pm_name in coordinators.json (the PM runs as pm-session)')
+    except (LaunchError, OSError, ValueError) as e:
+        log('FAILED to clear pm_name in coordinators.json : %s' % why(e))

@@ -16,26 +16,38 @@ FORK = 'fork-sid-2'
 
 
 class ForkHost(FakeHost):
-    """record_pipe writes the pipes.json entry the registry poll would (session_id `sid`), or says
-    `said` and writes nothing."""
+    """Opening the window makes the fork's live registry record (pid 4242, the window's session
+    name) with session id sids[0]; each sleep moves it to the next id in sids (a long transcript
+    resumes slowly, so the fork's own id comes late). said: no record is ever made (a fork that
+    never starts)."""
 
-    def __init__(self, home, sid=FORK, said=None, **kw):
+    PID = 4242
+
+    def __init__(self, home, sid=FORK, said=None, sids=None, **kw):
         FakeHost.__init__(self, home, **kw)
-        self.sid, self.said = sid, said
+        self.sids, self.said, self.at, self.name = list(sids or [sid]), said, 0, None
+        self.reg = os.path.join(home, '.claude', pipes.REGISTRY)
+
+    def open_window(self, text, **kw):
+        FakeHost.open_window(self, text, **kw)
+        if not self.said:
+            self.name = NEW
+            self._write()
+
+    def _write(self):
+        with open(os.path.join(self.reg, '%d.json' % self.PID), 'w', encoding='utf-8') as f:
+            json.dump({'pid': self.PID, 'sessionId': self.sids[self.at], 'procStart': str(1000 + self.PID),
+                       'startedAt': pipes.launch_ms(self.now()) + 5, 'name': self.name,
+                       'messagingSocketPath': '\\\\.\\pipe\\cc-msg-%d' % self.PID}, f)
+
+    def sleep(self, seconds):
+        FakeHost.sleep(self, seconds)
+        if self.name and self.at < len(self.sids) - 1:
+            self.at += 1
+            self._write()
 
     def record_pipe(self, settings, name, after_ms):
-        FakeHost.record_pipe(self, settings, name, after_ms)
-        if self.said:
-            return self.said
-        p = os.path.join(settings.state_dir(), pipes.PIPES)
-        data = {}
-        if os.path.exists(p):
-            with open(p, encoding='utf-8') as f:
-                data = json.load(f)
-        data[name] = {'pid': 4242, 'session_id': self.sid, 'pipe': r'\\.\pipe\cc-msg-4242', 'proc_start': '5242'}
-        with open(p, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-        return None
+        raise AssertionError('pm-relaunch polls the registry itself (pipes.await_record)')
 
 
 class Delivery(object):
@@ -68,6 +80,9 @@ class Base(unittest.TestCase):
             json.dump({'pid': pid, 'sessionId': sid, 'startedAt': 1, 'procStart': str(1000 + pid),
                        'name': name, 'messagingSocketPath': r'\\.\pipe\cc-msg-%d' % pid}, f)
 
+    def coords_path(self):
+        return os.path.join(self.h.state, 'coordinators.json')
+
     def pm_process(self):
         return {'Name': 'claude.exe', 'ProcessId': 70, 'ParentProcessId': 1, 'ExecutablePath': r'C:\bin\claude.exe',
                 'CommandLine': "claude --resume '%s' --agent pm-kit:pm --remote-control 'pm-session' -n "
@@ -75,17 +90,52 @@ class Base(unittest.TestCase):
 
 
 class Relaunch(Base):
-    def run_it(self, host=None, delivery=None):
+    def run_it(self, host=None, delivery=None, **kw):
         self.host = host or ForkHost(self.h.root, procs=[self.pm_process()], env={'AGENT_TEMP': r'C:\agent-temp'})
         self.delivery = delivery if delivery is not None else Delivery()
-        return relaunch.relaunch(self.h.settings, self.host, NEW, self.delivery)
+        return relaunch.relaunch(self.h.settings, self.host, NEW, self.delivery, **kw)
+
+    def test_the_fork_acts_as_pm_only_once_coordinators_json_names_its_own_session(self):
+        prompt = relaunch.fork_prompt(NEW, self.coords_path())
+        self.assertNotIn('You are the PM now', prompt)
+        self.assertIn('only once %s has pm_session_id equal to your own session id' % self.coords_path(), prompt)
+        self.assertIn('ask the owner', prompt)
+
+    def test_a_fork_whose_id_changes_slowly_is_waited_for(self):
+        host = ForkHost(self.h.root, sids=[OLD, OLD, OLD, FORK], procs=[self.pm_process()])
+        out = self.run_it(host=host)
+        self.assertEqual(self.h.read_state('coordinators.json')['pm_session_id'], FORK, out)
+        self.assertEqual(len(host.slept), 3)
+        self.assertEqual(self.h.read_state('pipes.json')[NEW]['session_id'], FORK)
+
+    def test_the_wait_for_the_forks_id_is_about_two_minutes_and_can_be_set(self):
+        self.assertGreaterEqual(relaunch.WAIT_S, 120)
+        host = ForkHost(self.h.root, sid=OLD, procs=[self.pm_process()])
+        self.run_it(host=host, wait_s=7)
+        self.assertEqual(sum(host.slept), 7 - pipes.POLL_S)
+        os.remove(os.path.join(self.reg, '%d.json' % ForkHost.PID))
+        host = ForkHost(self.h.root, said=pipes.NOT_YET, procs=[self.pm_process()])
+        self.run_it(host=host)
+        self.assertEqual(sum(host.slept), relaunch.WAIT_S - pipes.POLL_S)
+
+    def test_a_failing_coordinators_write_keeps_every_line_and_says_the_manual_step(self):
+        from unittest import mock
+        with mock.patch.object(relaunch, 'WRITE_WAIT', 0, create=True), \
+                mock.patch('os.replace', side_effect=PermissionError(13, 'in use')):
+            out = self.run_it()
+        self.assertEqual(self.h.read_state('coordinators.json'), self.coords)
+        self.assertTrue(out[0].startswith('Started %s' % NEW), out)
+        self.assertIn('Told the old PM (pm-session, session %s) to stand down.' % OLD, out)
+        self.assertTrue(any(('set pm_session_id to %s and pm_name to %s in %s' % (FORK, NEW, self.coords_path()))
+                            in l for l in out), out)
+        self.assertEqual(out[-1], relaunch.OWNER_STEP % NEW)
 
     def test_the_window_runs_the_fork_with_the_pm_environment_on_the_pms_account(self):
         out = self.run_it()
         self.assertEqual(len(self.host.opened), 1, out)
         text = self.host.opened[0]
         cmd = ("claude --resume '%s' --fork-session --agent pm-kit:pm --remote-control '%s' -n '%s' %s"
-               % (OLD, NEW, NEW, window.q(relaunch.FORK_PROMPT % (NEW, NEW, NEW))))
+               % (OLD, NEW, NEW, window.q(relaunch.fork_prompt(NEW, self.coords_path()))))
         self.assertTrue(text.endswith('; ' + cmd), text)
         self.assertEqual(role_of(text), 'pm')
         self.assertIn("$env:PM_KIT_SESSION_NAME = '%s'" % NEW, text)
@@ -93,7 +143,7 @@ class Relaunch(Base):
         self.assertIn("$env:AGENT_TEMP = 'C:\\agent-temp'", text)
         self.assertIn("Set-Location '%s'" % self.folder, text)
         self.assertIn("$Host.UI.RawUI.WindowTitle = '%s'" % NEW, text)
-        self.assertEqual([n for n, _ in self.host.piped], [NEW])           # the fork's id: the registry poll
+        self.assertEqual(self.h.read_state('pipes.json')[NEW]['session_id'], FORK)   # the registry poll's entry
 
     def test_coordinators_json_names_the_fork_and_keeps_every_other_key(self):
         out = self.run_it()
@@ -136,7 +186,8 @@ class Relaunch(Base):
         self.assertEqual(len(host.opened), 1)
         self.assertEqual(self.delivery.calls, [])
         self.assertEqual(self.h.read_state('coordinators.json'), self.coords)
-        self.assertTrue(any('The fork was not confirmed (%s)' % pipes.NOT_YET in l for l in out), out)
+        self.assertTrue(any('The fork was not confirmed (no session of that name came up in %s s)' % relaunch.WAIT_S
+                            in l for l in out), out)
 
     def test_a_fork_that_kept_the_old_id_changes_nothing(self):
         out = self.run_it(host=ForkHost(self.h.root, sid=OLD, procs=[self.pm_process()]))
@@ -189,7 +240,11 @@ class Refusals(Base):
         self.refused("sessions.json entry 'alpha' has that name", name='alpha-coord-a1')
 
     def test_the_old_pm_name_itself(self):
-        self.refused("--name 'pm-session' is already taken", name='pm-session')
+        self.refused("--name 'pm-session' is a PM name", name='pm-session')
+
+    def test_any_pm_name(self):
+        for bad in ('pm-session-2', 'my-project manager', 'Project Manager'):
+            self.refused("--name '%s' is a PM name" % bad, name=bad)
 
     def test_an_empty_or_spaced_name(self):
         for bad in ('', ' pm-b', 'pm-b '):
@@ -218,12 +273,39 @@ class AfterTheRelaunch(Base):
         self.assertEqual(host.opened, [])
         self.assertEqual(said, ['pm-session already running, skipped'])
 
+    def test_after_reboot_resuming_pm_session_clears_pm_name(self):
+        host = FakeHost(self.h.root, procs=[])
+        said = []
+        reboot.resume_pm(self.h.settings, host, self.h.read_state('coordinators.json'), said.append)
+        self.assertEqual(len(host.opened), 1, said)
+        got = self.h.read_state('coordinators.json')
+        self.assertNotIn('pm_name', got)
+        self.assertEqual(got['pm_session_id'], FORK)
+
 
 class Cli(unittest.TestCase):
     def test_the_parser_takes_pm_relaunch_name(self):
         from tools import launch
         a = launch.parser().parse_args(['pm-relaunch', '--name', NEW])
-        self.assertEqual((a.cmd, a.name), ('pm-relaunch', NEW))
+        self.assertEqual((a.cmd, a.name, a.wait), ('pm-relaunch', NEW, relaunch.WAIT_S))
+        self.assertEqual(launch.parser().parse_args(['pm-relaunch', '--name', NEW, '--wait', '30']).wait, 30)
+
+    def test_push_delivery_is_none_only_when_the_host_has_none(self):
+        import sys
+        import types
+        from unittest import mock
+        from tools import launch
+
+        def fake(err):
+            def adapter_module():
+                raise err
+            return types.SimpleNamespace(adapter_module=adapter_module)
+
+        with mock.patch.dict(sys.modules, {'_host': fake(ImportError('no adapter'))}):
+            self.assertIsNone(launch.push_delivery(None))
+        with mock.patch.dict(sys.modules, {'_host': fake(RuntimeError('broken'))}):
+            with self.assertRaises(RuntimeError):
+                launch.push_delivery(None)
 
 
 if __name__ == '__main__':
