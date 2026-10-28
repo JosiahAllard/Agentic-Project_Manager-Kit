@@ -16,7 +16,9 @@ WALK_MAX entries and never descends a link or junction (`prune`). Nothing here d
 On Linux (docs/linux-support-plan.md slice 9) nothing denies a delete, so `blockers` and
 `cwd_holders` read /proc instead (kitlib.platform.linux.paths.process_paths): every path inside
 `root` that a process of this user uses (its current folder, root, program, an open file or a
-mapped file) is HELD. A process of this user that cannot be read in full makes the root UNREAD, as
+mapped file) is HELD. A process of this user that cannot be read in full makes the root UNREAD
+(but for this login's own: the user manager, its (sd-pam) and sshd-session, paths._login_process;
+describe names each unread process), as
 does a tree the scan's mount table shows at another path too: its device mounted again where the
 roots overlap (a bind mount), a mount inside it or at or above the one holding it, or no mount
 holding it (paths.aliased), since a process there uses the tree under a path not under `root`.
@@ -315,6 +317,19 @@ def cwd_holders(root):
     return found, unreadable, len(seen)
 
 
+def _linux_cwds(root):
+    """(holders, unread, total) on Linux from one full /proc scan: holders as cwd_holders gives
+    them, unread the processes of this user it could not read in full, as (pid, name);
+    ([], [], 0) when /proc cannot be read."""
+    try:
+        scan = linux_paths.process_paths()
+    except OSError:
+        return [], [], 0
+    target = canon(root)
+    return ([(pid, name, where) for pid, name, kind, where in scan.entries
+             if kind == 'cwd' and _under(where, target)], list(scan.unread), scan.total)
+
+
 def inside(path, root):
     """True when `path` is `root` or under it (canon forms); False when either cannot be read."""
     try:
@@ -352,11 +367,19 @@ def describe(root, why, cwd=None):
                 'not probed in full: more than %d entries, so not known to be free' % WALK_MAX
                 if err == NOT_SEARCHED else 'error %d' % err)
         out.append('  blocked  %s  %s' % (path, note))
-    holders, unreadable, total = cwd_holders(root)
+    if linux:
+        holders, unread, total = _linux_cwds(root)
+        unreadable = len(unread)
+    else:
+        holders, unreadable, total = cwd_holders(root)
+        unread = []
     mine = os.getpid()
     for pid, name, where in holders:
         out.append('  holder   pid %d  %s  cwd %s%s'
                    % (pid, name, where, '   <- THIS process' if pid == mine else ''))
+    for pid, name in unread:
+        out.append('  unread   pid %d  %s  a process of this user this scan could not read in full,'
+                   ' so it may hold the tree' % (pid, name))
     if not holders:
         out += ['  holder   no process has its current directory in here, so the block is an open',
                 '           file handle (an ordinary read handle is enough), or a process this scan',
