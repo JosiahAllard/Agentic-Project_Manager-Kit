@@ -340,7 +340,16 @@ lacks (CPU cooperative, no memory cap), not as strong. A pid is a number in one 
 run record names its wrapper's (`pidns`), and a checker in another one asks the run lock instead
 (store.record_state); a run nested in a W1 job of its run is found by the job's namespace on the
 run's record (`jobns`, nest_check); a probe inside a W1 job runs no scope trial (the user systemd
-would take its pids for its own namespace's).
+would take its pids for its own namespace's) and is W2, never a nested W1, so a run nested at any
+depth stays in the namespace on record.
+
+Not yet namespace-aware (each safe today, a later record):
+
+- queue entries and background runs carry no `pidns` and no `jobns` (on Linux the run lock
+  decides a queue entry; bg_ancestor fails closed);
+- resource.py, giveback.py and the lock status (api.py: tree, GPU memory) read a record's pid
+  as this namespace's;
+- the holders search does not look inside a W1 job.
 
 The S1 contract:
 
