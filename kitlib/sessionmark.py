@@ -4,8 +4,9 @@ The launcher that starts an agent session (a PM, a coordinator, a deep worker) s
 its kind; a subagent is marked by the hook payload's agent_id instead. A session nothing marks is
 the owner's own, and counts as the owner for the guard's owner-only actions.
 
-The mark is read only where the session cannot change it after it starts: the guard hook and the
-hub MCP server, which the client starts with the session's environment. The lock MCP server reads
+The mark is read only where the session cannot change it after it starts: the guard hook, the
+hub MCP server and the bridge's MCP frontend (optional/bridge/README.md "Launch mark"), which the
+client starts with the session's environment. The lock MCP server reads
 none: it has no write tools (docs/lock-mcp.md "No write tools"). The lock CLI does not
 read it: an agent sets the environment of every command it runs, so `PM_KIT_ROLE= python ...`
 would unmark it. A subagent shares its session's environment, so only the guard (agent_id) tells

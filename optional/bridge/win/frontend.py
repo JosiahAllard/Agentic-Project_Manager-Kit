@@ -5,7 +5,7 @@ from dataclasses import dataclass,field
 import os
 from pathlib import Path
 
-from optional.bridge.core.messages import DeliveryError
+from optional.bridge.core.messages import DeliveryError,launch_mark
 from kitlib.proc.pipe import bind,local_free,process_image,process_sids
 from kitlib.proc.process import (PROCESS_QUERY_LIMITED_INFORMATION,SYNCHRONIZE,WAIT_TIMEOUT,
     close,command_line,handle_ctime,open_process,proc_ctime,process_parents)
@@ -58,6 +58,7 @@ class NativeFrontend:
     kind:str
     host_executable:Path=field(repr=False)
     channel:NativeChannel|None=field(default=None,repr=False)
+    mark:str|None=None  # The frontend's own launch mark (README "Launch mark"); grants nothing here.
 
 
 class FrontendInspector:
@@ -83,7 +84,8 @@ class FrontendInspector:
                 or tuple(_path(item) for item in argv[4:])!=tail):
             raise DeliveryError('frontend-command-unverified')
 
-    def inspect(self,peer,channel=None):
+    def inspect(self,peer,channel=None,mark=None):
+        mark=launch_mark(mark)
         self.verify_helper(peer)
         parents=process_parents()
         pid=parents.get(peer.pid)
@@ -110,7 +112,7 @@ class FrontendInspector:
         self._process(host,host_creation,image)
         self._process(pid,creation,self.python)
         self._process(peer.pid,peer.creation,self.python)
-        return NativeFrontend(pid,creation,host,host_creation,kinds[0],image,verified)
+        return NativeFrontend(pid,creation,host,host_creation,kinds[0],image,verified,mark)
 
     def verify_helper(self,peer):
         """Kernel RPC helper proof only; each private producer checks its own parent."""
@@ -142,9 +144,10 @@ def _generation(marker):
     return target,version(after)
 
 
-def _forward(target,message,channel):
+def _forward(target,message,channel,mark=None):
     frame={'protocol':1,'request':message}
     if channel is not None:frame['channel']=channel.to_wire()
+    if mark is not None:frame['mark']=mark
     result=request(target,frame)
     if (type(result) is not dict or set(result)!={'protocol','response'}
             or type(result['protocol']) is not int or result['protocol']!=1):
@@ -168,14 +171,18 @@ def _initialized_result(response):
         raise DeliveryError('invalid-service-initialize-result')
 
 
-def serve_frontend(input_stream,output_stream,marker):
+def serve_frontend(input_stream,output_stream,marker,mark=None):
     """Recover only actual initialization state; actual tool frames forward once.
 
     A new verified marker generation triggers a handshake on the next incoming
     request. The cache contains only successful native initialize parameters and
     the actual initialized notification. Failed/uncertain requests are never
     stored or resent, and their caller metadata is never synthesized from cache.
+    `mark` is the launch mark read once at process start; every frame, replays
+    included, carries it unchanged. One that is not a plain mark is not sent.
     """
+    try:mark=launch_mark(mark)
+    except DeliveryError:mark=None
     unavailable=False
     try:channel=capture_inherited_channel()
     except Exception:channel=None;unavailable=True
@@ -196,7 +203,7 @@ def serve_frontend(input_stream,output_stream,marker):
                         or message.get('jsonrpc')!='2.0' or type(message.get('params')) is not dict
                         or len(encode(message))>MAX_INITIALIZE_BYTES):
                     raise DeliveryError('invalid-native-initialize')
-                response=_forward(current[0],message,channel)
+                response=_forward(current[0],message,channel,mark)
                 if _generation(marker)!=current:raise DeliveryError('service-marker-changed')
                 _initialized_result(response)
                 # Canonical private copy retains actual params; no tool payload.
@@ -214,11 +221,11 @@ def serve_frontend(input_stream,output_stream,marker):
                 # its acknowledgement fails. Repeating it cannot execute a tool.
                 initialized=decode(encode(message))
                 if initializing!=current:
-                    replay=_forward(current[0],initialize,channel)
+                    replay=_forward(current[0],initialize,channel,mark)
                     _initialized_result(replay)
                     if _generation(marker)!=current:raise DeliveryError('service-marker-changed')
                     initializing=current
-                response=_forward(current[0],message,channel)
+                response=_forward(current[0],message,channel,mark)
                 if _generation(marker)!=current:raise DeliveryError('service-marker-changed')
                 bound=current
             else:
@@ -228,16 +235,16 @@ def serve_frontend(input_stream,output_stream,marker):
                     # Never include a prior call or prior _meta here. Both frames
                     # are the actual cached handshake, verified by the new broker.
                     if initializing!=current:
-                        replay=_forward(current[0],initialize,channel)
+                        replay=_forward(current[0],initialize,channel,mark)
                         _initialized_result(replay)
                         if _generation(marker)!=current:raise DeliveryError('service-marker-changed')
                         # Only a correlated successful reply establishes this
                         # phase. Lost initialize acknowledgements stay unknown.
                         initializing=current
-                    _forward(current[0],initialized,channel)
+                    _forward(current[0],initialized,channel,mark)
                     if _generation(marker)!=current:raise DeliveryError('service-marker-changed')
                     bound=current
-                response=_forward(current[0],message,channel)
+                response=_forward(current[0],message,channel,mark)
                 if _generation(marker)!=current:raise DeliveryError('service-marker-changed')
         except Exception:
             identity=message.get('id') if type(message) is dict else None

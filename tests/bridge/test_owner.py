@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from optional.bridge.core.owner import MAX_LEASES,OwnerControls,OwnerDecisions,WriterGrant,WriterLeases
+from optional.bridge.core.owner import MAX_LEASES,OwnerControls,OwnerDecisions,PmStop,WriterGrant,WriterLeases
 from optional.bridge.core.pairing import PairingError,PairingStore
 from tests.bridge.test_pairing import chat
 
@@ -70,6 +70,52 @@ class OwnerTests(unittest.TestCase):
         self.assertNotIn('\n',choices[0].title)
         self.assertEqual(owner.connections(),())
         self.assertEqual({choice.reference for choice in choices},{self.a.reference,self.b.reference})
+
+    def test_owner_cannot_select_or_list_codex_to_codex_route(self):
+        from optional.bridge.core.hostpairs import HostPairs
+        rule=HostPairs(('claude','codex'),[('codex','codex')])
+        x,y,c=chat('x',adapter='codex-desktop'),chat('y',adapter='codex-desktop'),chat('c',adapter='claude-peer')
+        self.live.update({'x':x,'y':y,'c':c})
+        for peer in (x,y,c): self.pairs.observe(peer)
+        # A row written before the rule held (here, by controls without it) is never listed.
+        OwnerControls(self.pairs,self.decisions).change(x.reference,y.reference,enabled=True,bidirectional=False)
+        owner=OwnerControls(self.pairs,self.decisions,host_pairs=rule)
+        self.assertEqual(owner.connections(),())
+        for bidirectional in (True,False):
+            with self.assertRaisesRegex(PairingError,'host-pair-refused'):
+                owner.change(y.reference,x.reference,enabled=True,bidirectional=bidirectional)
+        with self.assertRaises(PairingError): self.pairs.require_selected(y,x)
+        # Every other pair still connects and is listed; a disconnect of a refused pair goes through.
+        owner.change(c.reference,x.reference,enabled=True)
+        self.assertEqual(set(owner.connections()),{(c.reference,x.reference),(x.reference,c.reference)})
+        owner.change(x.reference,y.reference,enabled=False,bidirectional=False)
+        with self.assertRaises(PairingError): self.pairs.require_selected(x,y)
+
+    def test_pm_routes_must_share_the_owner_store_and_controls_without_them_list_none(self):
+        from optional.bridge.core.pmroutes import PmRoutes
+        with PairingStore(Path(self.temp.name)/'other.sqlite') as other:
+            with self.assertRaisesRegex(PairingError,'invalid-owner-components'):
+                OwnerControls(self.pairs,self.decisions,pm=PmRoutes(other,launched=lambda binding:'pm'))
+        self.assertEqual(self.owner.pm_routes(),())
+        with self.assertRaisesRegex(PairingError,'pm-routes-unavailable'):
+            self.owner.stop_pm(self.a.reference,self.b.reference)
+
+    def test_a_pm_route_the_owner_connected_since_is_not_listed_and_stop_never_disconnects_the_owner(self):
+        from optional.bridge.core.messages import SenderAuthority
+        from optional.bridge.core.pmroutes import PmRoutes
+        p=chat('p')
+        self.live['p']=p
+        self.pairs.observe(p)
+        pm=PmRoutes(self.pairs,launched=lambda binding:'pm' if binding in self.live.values() else None,
+            clock=lambda:self.now)
+        owner=OwnerControls(self.pairs,self.decisions,pm=pm)
+        pm.connect(SenderAuthority(p,'root-p',launched='pm'),self.a.reference,self.b.reference,bidirectional=False)
+        self.assertEqual(owner.pm_routes(),((self.a.reference,self.b.reference,100.0,True),))
+        owner.change(self.a.reference,self.b.reference,enabled=True,bidirectional=False)
+        self.assertEqual(owner.pm_routes(),())  # the owner's own row decides it now
+        self.assertEqual(owner.stop_pm(self.a.reference,self.b.reference),PmStop(True,None))
+        self.assertIs(self.pairs.owner_choice(self.a,self.b),True)
+        self.pairs.require_selected(self.a,self.b)
 
 
 class WriterLeaseTests(unittest.TestCase):

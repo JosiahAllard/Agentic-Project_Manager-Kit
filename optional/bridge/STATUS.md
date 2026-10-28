@@ -57,6 +57,30 @@ Writer lease limits:
 - A correlated refusal still blocks the recipient's whole chat, which is its task root.
 - The owner window's lease buttons have no test.
 
+PM routes (README "PM routes"): the PM-marked chat may connect two kit-launched chats; built and
+tested on fixtures only, with no live run. Limits:
+- Only Claude terminal sessions the kit launched carry a mark today, so only they can be PM-routed.
+- A subagent of the PM shares the PM's frontend and its `pm` mark.
+- An exited marked frontend keeps its chat's mark until the next frame from any frontend reaches
+  the service.
+- A restart drops every PM route. The owner window's PM rows and its 5 s re-read have no test.
+- The owner window lists and connects no Codex-to-Codex route (README "Host pairs").
+
+Idle roster at frontend start: **pending a read-only probe with the owner present.** A chat is
+listed today only after its first bridge tool call, except Claude desktop chats, which are listed
+when their frontend starts. When a frontend starts, neither half receives a chat identity it can
+verify: a Codex binding needs the thread, turn and auto-review flags from a tool call's
+`x-codex-turn-metadata`, and a Claude terminal binding needs `permission_mode` from a PreToolUse
+hook. Listing Codex chats from rollout files is rejected: those files are tied to no frontend and
+the auto-review flags would have to be invented. The probe must capture:
+- the Codex desktop frontend's `initialize` params and their `_meta`
+- the environment variable names that frontend receives
+- whether Codex starts one frontend per thread or one per app
+
+The idle chats the PM could route are kit-launched Claude terminals (Codex chats carry no launch
+mark). Listing them before their first bridge call needs a SessionStart or UserPromptSubmit hook
+that carries `permission_mode`.
+
 ## Install and operation
 
 | Item | State |
