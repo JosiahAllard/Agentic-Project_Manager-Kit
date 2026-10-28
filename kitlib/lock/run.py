@@ -150,7 +150,9 @@ def nest_check(store, value):
             return None, "the record names another wrapper"
         if not ancestor:
             jobns = d.get("jobns")
-            if not isinstance(jobns, list) or ns not in jobns:
+            if not isinstance(jobns, list):
+                return None, "the named wrapper is not an ancestor of this run"
+            if ns not in jobns:
                 return None, ("the named wrapper is not an ancestor of this run, nor is this run "
                               "in a job it started")
             if store.run_mutex_held(rid) is not True:

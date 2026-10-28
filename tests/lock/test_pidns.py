@@ -139,12 +139,13 @@ class Nest(Scratch):
 
     def test_a_job_the_run_did_not_start_is_not_its_run(self):
         self.as_linux()
-        for fields in ({'jobns': [OTHER]}, {}, {'jobns': OWN}):
+        for fields, why in (({'jobns': [OTHER]}, 'the named wrapper is not an ancestor of this '
+                             'run, nor is this run in a job it started'),
+                            ({}, 'the named wrapper is not an ancestor of this run'),
+                            ({'jobns': OWN}, 'the named wrapper is not an ancestor of this run')):
             with self.subTest(fields=fields):
                 self.record(**fields)
-                parent, why = self.check()
-                self.assertIsNone(parent)
-                self.assertIn('nor is this run in a job it started', why)
+                self.assertEqual(self.check(), (None, why))
 
     def test_a_run_whose_lock_is_not_held_is_dead(self):
         self.as_linux()
@@ -260,7 +261,7 @@ class Live(Scratch):
     def test_without_the_job_s_namespace_on_record_it_takes_its_own_lock(self):
         _job, seen = self.nested(False)
         self.assertIsNone(seen['parent'])
-        self.assertIn('nor is this run in a job it started', seen['why'])
+        self.assertEqual(seen['why'], 'the named wrapper is not an ancestor of this run')
         self.assertTrue(seen['live'])
 
     def test_a_held_run_s_w1_command_runs_nested_runs_in_its_run(self):
