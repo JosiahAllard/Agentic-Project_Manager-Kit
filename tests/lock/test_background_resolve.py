@@ -53,12 +53,13 @@ class BackgroundScript(StoreCase):
         """Red before: CreateProcess's own start of a .bat left `a&echo:INJ>f` unquoted, so the
         implicit cmd.exe ran the echo and made the file."""
         shutil.copy(os.path.join(self.dir, "gradlew.bat"), os.path.join(self.dir, "gradlew.cmd"))
-        arg = "a&echo:INJ>" + self.inj
         for name in ("gradlew.bat", "gradlew.cmd"):
             with self.subTest(name=name):
+                inj = self.inj + "." + name
+                arg = "a&echo:INJ>" + inj
                 code = self.run_bg([os.path.join(self.dir, name), arg])
+                self.assertFalse(os.path.exists(inj), "the & ran as cmd syntax")
                 self.assertEqual(code, 3, self.said)
-                self.assertFalse(os.path.exists(self.inj), "the & ran as cmd syntax")
                 self.assertEqual(self.lines()[0], '"%s"' % arg)
 
     def test_an_argument_cmd_would_expand_or_split_is_refused_before_anything_is_written(self):
