@@ -78,11 +78,12 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 
 ## Owner decisions
 
-- Recorded in `docs/DECISIONS.md` (line format in its header) by a `pm-kit:docs-writer` agent as
-  `<one-line summary, the agent's paraphrase>`; the owner's words stay with the PM, never
-  quoted here (quoting relayed words into an authority file is what the safety check refuses as
-  instruction injection). Words the owner types in this repo's own session are passed on as a paraphrase, no ruling id. Never
-  invent one; silence is not agreement; a decision the PM has not relayed binds nothing until the owner confirms. For anything
+- Kept by the PM in the PM's ledger, never in a file of this repo; `<kit>/docs/ledger.md` names
+  the ledger. A decision reaches you as the PM's paraphrase, relayed in your brief, with no ruling
+  id. The owner's words are never quoted into a repo file (quoting relayed words into an authority
+  file is what the safety check refuses as instruction injection). Words the owner types in this
+  repo's own session are passed on as a paraphrase too. Never invent one; silence is not agreement;
+  a decision the PM has not relayed binds nothing until the owner confirms. For anything
   attributed to the owner, ask for the utterance, not for confirmation that it happened.
 - Owner-locked: `AGENTS.md`, `CLAUDE.md`, tracked `.claude/` files (not `.claude/worktrees/`),
   `docs/agent-profile.md`, `.github/workflows/`, `.kit.json`, `tools/gate.json` (the list is
@@ -130,7 +131,7 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 - Secrets never enter the repo, a URL or a transcript. Deleting data is the owner's action:
   report the exact path and hash.
 - Citations name `path` plus `Type.member`, heading or quoted title, and you have read it. Never
-  a line number in anything durable (docs, records, DECISIONS lines, owner asks, profiles): line
+  a line number in anything durable (docs, records, owner asks, profiles): line
   pins go stale within hours; `:line` only in transient output (reports, test output).
 - Docs land with the code they describe, on the same branch. An over-budget `.md` may not grow
   (`python <kit>/tools/doc_budget.py -C <worktree>`).
@@ -142,7 +143,5 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 - Shell: Windows PowerShell 5.1 (no `&&`) or Git Bash; pass absolute paths (`Set-Location` does
   not move child processes). Bash heredocs collapse `\\` to `\`: write scripts with the Write
   tool (skill shell-and-worktree-traps).
-- `READY TO CLEAR`, alone on the last line of a debrief, only when the whole workstream is landed
-  or complete and no step of yours remains. The owner clears the session on it.
 - <PROJECT_RULES: product scope and what is out of scope, dependency pinning, naming rules,
   read-only sibling checkouts, code layout; one line each>
