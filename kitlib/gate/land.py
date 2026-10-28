@@ -151,6 +151,9 @@ lock's queue, landings ahead of ordinary waiting runs. `land.py --queue` (queue(
 entries of priority "land". The lock file (step 4) stays: the stuck record, a gone holder's break,
 and a landing of a tool outside the machine lock.
 
+`land.py --check-strict BRANCH` (check_strict()) is the strict check's dry run: read-only, no lock
+and no verdict, it says whether each branch changes a strict path (Lander.strict_paths).
+
 A batch (several branches, one --expect-tip each, merged in the order given): every branch passes
 the locked checks, and no tip may contain another; the branches are merged one after another with
 --no-ff in the landing tree, the merged tree is gated once against the base, and the last merge
@@ -967,6 +970,27 @@ class Lander(object):
         except ValueError as e:
             return None, '%s: %s' % (STRICT_FILE, e)
 
+    def strict_paths(self):
+        """`(hits, None)`: branch -> the strict paths it changes (merge base with the base to its
+        tip, matched against strict_globs()), for each branch with any; or `(None, why)` when the
+        list or a branch's paths cannot be read. Reads only: strict_check and check_strict (the
+        dry check) both decide by it."""
+        globs, why = self.strict_globs()
+        if globs is None:
+            return None, 'cannot read the strict paths from %s at %s: %s' % (
+                self.cfg.main_branch, self.expect_main[:10], why)
+        hits = {}
+        for b, t in self.pairs:
+            mb, why = refs.merge_base(self.expect_main, t, self.root)
+            changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
+            if changed is None:
+                return None, 'git cannot list the paths of %s to check strict paths: %s' % (
+                    b, why2 or why or 'no common commit with %s' % self.expect_main[:10])
+            found = [p for p in changed if S._match(p, globs)]
+            if found:
+                hits[b] = found
+        return hits, None
+
     def strict_check(self):
         """A locked check (docs/gate.md "Strict paths"): the paths each branch changes (merge base
         with the base to its tip) against strict_globs(). A branch with a hit lands only alone,
@@ -976,19 +1000,10 @@ class Lander(object):
         --full --fresh. None, or why not (REFUSED, nothing merged). Every read that fails
         refuses."""
         self.strict_hits, self.strict_review, self.strict_carry = {}, None, None
-        globs, why = self.strict_globs()
-        if globs is None:
-            return 'cannot read the strict paths from %s at %s: %s' % (
-                self.cfg.main_branch, self.expect_main[:10], why)
-        for b, t in self.pairs:
-            mb, why = refs.merge_base(self.expect_main, t, self.root)
-            changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
-            if changed is None:
-                return 'git cannot list the paths of %s to check strict paths: %s' % (
-                    b, why2 or why or 'no common commit with %s' % self.expect_main[:10])
-            hits = [p for p in changed if S._match(p, globs)]
-            if hits:
-                self.strict_hits[b] = hits
+        hits, why = self.strict_paths()
+        if why:
+            return why
+        self.strict_hits = hits
         if not self.strict_hits:
             return None
         if len(self.pairs) > 1:
@@ -2411,6 +2426,47 @@ def land(root, branch, expect_main, expect_tip, **kw):
     Outcome (OK, FAILED, USAGE, STUCK, REFUSED, BUSY, or a machine lock code when the booking was
     refused; LANDED_UNGATED is retired, never returned)."""
     return Lander(root, branch, expect_main, expect_tip, **kw).run()
+
+
+def check_strict(root, branches):
+    """Read-only, the dry strict check a coordinator runs before it picks a reviewer (docs/gate.md
+    "Strict paths"): for each of `branches`, its local tip against `<remote>/<main>` as last
+    fetched (runner.default_base; no fetch), decided by Lander.strict_paths, the matcher
+    strict_check refuses by. An OK Outcome, one line per branch: `STRICT <branch>: <paths>: ...`
+    or `NOT STRICT <branch>: ...`. Takes no lock, needs no verdict and writes nothing. REFUSED
+    when the config, the base, a branch or the strict paths cannot be read."""
+    try:
+        cfg = kconfig.load(root)
+    except ConfigError as e:
+        return G.Outcome(G.REFUSED, ['REFUSED: the config of %s: %s' % (root, e)])
+    ref, why = runner.default_base(cfg, root)
+    base = refs.resolve(ref, root)[0] if ref else None
+    if not base:
+        return G.Outcome(G.REFUSED, ['REFUSED: no base to check against: %s' % (
+            why or '%s does not resolve' % ref)])
+    tips = []
+    for b in branches:
+        tip = None if refs.bad_rev(b) else refs.resolve('refs/heads/%s' % b, root)[0]
+        if not tip:
+            return G.Outcome(G.REFUSED, ['REFUSED: no branch %s in this repository' % b])
+        tips.append(tip)
+    lander = Lander(root, list(branches), None, tips)
+    lander.cfg, lander.expect_main = cfg, base
+    hits, why = lander.strict_paths()
+    if why:
+        return G.Outcome(G.REFUSED, ['REFUSED: %s' % why])
+    lines = []
+    for b, t in zip(branches, tips):
+        on = 'tip %s, base %s %s' % (t[:10], ref, base[:10])
+        found = hits.get(b)
+        if not found:
+            lines.append('NOT STRICT %s: no strict path changed (%s)' % (b, on))
+            continue
+        more = len(found) - STRICT_SHOWN
+        lines.append('STRICT %s: %s%s (%s): its reviewer must run on a strong-tier model, and it '
+                     'lands alone' % (b, ', '.join(found[:STRICT_SHOWN]),
+                                      ' and %d more' % more if more > 0 else '', on))
+    return G.Outcome(G.OK, lines)
 
 
 def queue(root, store=None):
