@@ -24,5 +24,18 @@
         "pass": ["kit_tests: OK"]
       }
     ]
+  },
+  "machine_paths": {
+    "fixtures": [
+      {"glob": "tests/config/test_linux_paths.py", "hits": ["/home/u"], "why": " (an invented posix home)"},
+      {"glob": "tests/guard/linux.py", "hits": ["/home/u,?"], "why": " (an invented posix home)"},
+      {"glob": "tests/guard/test_linux_paths.py", "hits": ["/home/u"], "why": " (an invented posix home)"},
+      {"glob": "tests/launcher/test_handoff_cli.py", "hits": ["/home/u"], "why": " (an invented posix home)"},
+      {"glob": "tests/launcher/test_stop_linux.py", "hits": ["/home/u"], "why": " (an invented posix home)"},
+      {"glob": "tests/launcher/test_window_linux.py", "hits": ["/home/u"], "why": " (an invented posix home)"},
+      {"glob": "tests/lock/test_store_linux.py", "hits": ["/home/u"], "why": " (an invented posix home)"},
+      {"glob": "tests/worktree/test_holders_linux.py", "hits": ["/home/u"], "why": " (an invented posix home)"},
+      {"glob": ".kit.json", "hits": ["/home/u", "/home/u,.*"], "why": " (this entry list names the invented homes above)"}
+    ]
   }
 }
