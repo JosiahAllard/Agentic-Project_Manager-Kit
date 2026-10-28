@@ -22,7 +22,7 @@ ends them all too. A browser that is not paired is told on the page to run `pyth
 open` in the kit folder. The server's health is `GET /api/v1/health`.
 
 The sidebar lists the sections in groups: Home on its own; Your work (Questions, To-dos, Approvals);
-Projects (Backlog, Schedule, Docs); More (Message the PM, Usage and agents); Upkeep (Lint findings,
+Projects (Backlog, Schedule, Docs); More (Message the PM, Usage, Agents); Upkeep (Lint findings,
 Automatic tasks). A count sits at the right edge of an entry and is highlighted for what waits on
 you: any pending approval, urgent question or to-do. Lint findings shows a dash until the page has
 read `GET /api/v1/findings` once (at the start and after each wait wake). On a phone the sidebar
@@ -66,8 +66,9 @@ under the title.
   Close or Esc (focus outside the document) shuts it. A ref on any card that names a listed document
   opens it the same way. Delete (pressed twice) removes a document; agents publish them, the page
   writes none.
-- **Usage and agents** (`#info`). Usage (each account's 5-hour and weekly percentages), Agents (each
-  agent's model and effort) and Lock notices. A usage or agent row opens its detail in the pane.
+- **Usage** (`#info`). Usage (each account's 5-hour and weekly percentages) and Lock notices. A usage
+  row opens its detail in the pane.
+- **Agents** (`#agents`, its own entry in More). Each agent's model and effort; a row opens its detail.
 - **Schedule** (`#schedule`, the sidebar's Projects group and the phone's Schedule tab), drawn from
   `GET /lock/view` ("Machine lock routes"), with four tabs:
   - Now: the runs now (each with a progress line against the time expected, and a Late chip past it),
@@ -108,7 +109,7 @@ top.
 
 Links ending `#home`, `#questions`, `#inbox`, `#approvals`, `#more`, `#todo`, `#topm`, `#backlog` (or
 `#stories`), `#parked`, `#docs`, `#schedule`, `#autotasks`, `#findings` or `#info` open that section;
-`#usage`, `#agents` and `#notices` open that Info tab. The Questions, Answers, To do and Docs lists
+`#agents` opens Agents; `#usage` and `#notices` open that Info tab. The Questions, Answers, To do and Docs lists
 filter by repository; Questions, To do and Docs also by id or title. Automatic tasks lists the
 schedules ("schedules/") under "Schedules", and the two PC-set sweeps (`worktree-sweep`,
 `agent-temp-sweep`, which machine setup registers with Windows) under "Set on the PC": read-only, with
