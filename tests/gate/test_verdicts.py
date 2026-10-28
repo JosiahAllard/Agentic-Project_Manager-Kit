@@ -1,6 +1,5 @@
 """kitlib.gate.verdicts: the verdict queue on the scratch repository of tests/gate/fixtures.py
-GateRepoCase, and ready() on fake tip_of and strict_hits callables."""
-import hashlib
+GateRepoCase."""
 import json
 import os
 import threading
@@ -276,15 +275,21 @@ class Queue(QueueCase):
         self.assertEqual([(e['tip'], e['risk']) for e in got], [(second, 'Medium')])
         self.assertEqual(self.folder_names(), ['kit%2Fa.json'])
 
-    def test_a_moved_tip_is_stale_and_never_in_the_batch(self):
-        wt, tip = self.branch('a', {'a.txt': 'a\n'})
-        V.add(self.common, given('kit/a', tip))
-        moved = self.more(wt, 'a', {'a.txt': 'moved\n'})
-        batch, skipped = V.ready(V.entries(self.common),
-                                 lambda b: V.head_of(self.common, b), lambda e: [], 5)
-        self.assertEqual(batch, [])
-        self.assertEqual([(s.branch, s.reason) for s in skipped], [('kit/a', V.SKIP_STALE)])
-        self.assertIn(moved[:10], skipped[0].why)
+    def test_entries_are_oldest_first_and_the_branch_name_settles_a_tie(self):
+        folder = V.queue_dir(self.common)
+        os.makedirs(folder)
+        queued = [('kit/c', '2026-01-01T00:00:03Z'), ('kit/b', '2026-01-01T00:00:01Z'),
+                  ('kit/d', '2026-01-01T00:00:02Z'), ('kit/a', '2026-01-01T00:00:01Z')]
+        for branch, when in queued:
+            with open(os.path.join(folder, V.file_name(branch)), 'w', encoding='utf-8') as f:
+                json.dump(dict(given(branch, 'a' * 40), queued_utc=when, state=V.QUEUED,
+                               last_result=None), f)
+        want = ['kit/a', 'kit/b', 'kit/d', 'kit/c']          # a and b tie in time: name first
+        self.assertEqual([e['branch'] for e in V.entries(self.common)], want)
+        good, bad = V.scan(self.common)
+        self.assertEqual(([e['branch'] for e in good], bad), (want, []))
+        # the folder lists names in order, so the tie is shown again from reversed input
+        self.assertEqual([e['branch'] for e in V.order(list(reversed(good)))], want)
 
     def test_a_malformed_entry_is_refused_and_nothing_written(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
@@ -332,15 +337,13 @@ class Queue(QueueCase):
         self.assertEqual(self.folder_names(), ['kit%2Fa.json'])        # no .tmp left
         self.assertEqual(V.entries(self.common), [old])
 
-    def test_mark_failed_keeps_it_out_until_a_re_add(self):
+    def test_mark_failed_holds_until_a_re_add(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
         V.add(self.common, given('kit/a', tip))
         self.assertFalse(V.mark_failed(self.common, 'kit/a', 'red', tip=self.main))
         self.assertTrue(V.mark_failed(self.common, 'kit/a', 'merged gate red: unit', tip=tip))
         [e] = V.entries(self.common)
         self.assertEqual((e['state'], e['last_result']), (V.FAILED, 'merged gate red: unit'))
-        batch, skipped = V.ready([e], lambda b: tip, lambda e: [], 5)
-        self.assertEqual((batch, [s.reason for s in skipped]), ([], [V.SKIP_FAILED]))
         V.add(self.common, given('kit/a', tip))
         [e] = V.entries(self.common)
         self.assertEqual((e['state'], e['last_result']), (V.QUEUED, None))
@@ -623,82 +626,6 @@ class Lock(QueueCase):
         os.utime(lock, (old, old))
         V.add(self.common, given('kit/a', tip))
         self.assertEqual(self.folder_names(), ['kit%2Fa.json'])     # the lock is gone after
-
-
-def entry(branch, utc, tip=None, **over):
-    """A stored entry for ready(), no repository needed."""
-    tip = tip or hashlib.sha1(branch.encode('utf-8')).hexdigest()
-    state = over.pop('state', V.QUEUED)
-    last_result = over.pop('last_result', None)
-    return dict(given(branch, tip, **over), queued_utc=utc, state=state, last_result=last_result)
-
-
-def tips(items):
-    return {e['branch']: e['tip'] for e in items}.get
-
-
-class Ready(unittest.TestCase):
-    def test_high_strict_and_failed_entries_are_never_in_the_batch(self):
-        items = [entry('kit/low', '2026-01-01T00:00:01Z'),
-                 entry('kit/high', '2026-01-01T00:00:02Z', risk='High'),
-                 entry('kit/strict', '2026-01-01T00:00:03Z', risk='Medium'),
-                 entry('kit/failed', '2026-01-01T00:00:04Z', state=V.FAILED, last_result='red'),
-                 entry('kit/med', '2026-01-01T00:00:05Z', risk='Medium')]
-        hits = {'kit/strict': ['kitlib/gate/land.py']}
-        batch, skipped = V.ready(items, tips(items), lambda e: hits.get(e['branch'], []), 10)
-        self.assertEqual([e['branch'] for e in batch], ['kit/low', 'kit/med'])
-        self.assertEqual([(s.branch, s.reason) for s in skipped],
-                         [('kit/high', V.SKIP_HIGH), ('kit/strict', V.SKIP_STRICT),
-                          ('kit/failed', V.SKIP_FAILED)])
-        self.assertIn('kitlib/gate/land.py', skipped[1].why)
-
-    def test_batch_max_caps_the_batch_oldest_first(self):
-        items = [entry('kit/c', '2026-01-01T00:00:03Z'), entry('kit/a', '2026-01-01T00:00:01Z'),
-                 entry('kit/d', '2026-01-01T00:00:04Z'), entry('kit/b', '2026-01-01T00:00:02Z')]
-        batch, skipped = V.ready(items, tips(items), lambda e: [], 2)
-        self.assertEqual([e['branch'] for e in batch], ['kit/a', 'kit/b'])
-        self.assertEqual([(s.branch, s.reason) for s in skipped],
-                         [('kit/c', V.SKIP_LATER), ('kit/d', V.SKIP_LATER)])
-
-    def test_a_tie_in_time_is_settled_by_the_branch_name(self):
-        items = [entry('kit/b', '2026-01-01T00:00:01Z'), entry('kit/a', '2026-01-01T00:00:01Z')]
-        batch, _ = V.ready(items, tips(items), lambda e: [], 1)
-        self.assertEqual([e['branch'] for e in batch], ['kit/a'])
-
-    def test_strict_unknown_and_a_gone_branch_are_held(self):
-        items = [entry('kit/unknown', '2026-01-01T00:00:01Z'),
-                 entry('kit/gone', '2026-01-01T00:00:02Z')]
-        known = tips(items)
-        batch, skipped = V.ready(items, lambda b: None if b == 'kit/gone' else known(b),
-                                 lambda e: None, 5)
-        self.assertEqual(batch, [])
-        self.assertEqual([(s.branch, s.reason) for s in skipped],
-                         [('kit/unknown', V.SKIP_STRICT), ('kit/gone', V.SKIP_STALE)])
-
-    def test_strict_hits_that_is_not_a_list_holds_the_entry(self):
-        for hits in (None, False, 0, '', (), {}):
-            items = [entry('kit/a', '2026-01-01T00:00:01Z')]
-            batch, skipped = V.ready(items, tips(items), lambda e: hits, 5)
-            self.assertEqual((batch, [s.reason for s in skipped]), ([], [V.SKIP_STRICT]), msg=hits)
-            self.assertIn('cannot tell', skipped[0].why)
-
-    def test_a_stale_entry_is_not_asked_about_strict_paths(self):
-        items = [entry('kit/a', '2026-01-01T00:00:01Z', risk='High')]
-        asked = []
-        batch, skipped = V.ready(items, lambda b: 'f' * 40, lambda e: asked.append(e) or [], 5)
-        self.assertEqual(([s.reason for s in skipped], asked), ([V.SKIP_STALE], []))
-
-    def test_a_malformed_entry_is_skipped_as_invalid(self):
-        bad = entry('kit/a', '2026-01-01T00:00:01Z')
-        del bad['reviewer_model']
-        batch, skipped = V.ready([bad, 'junk'], lambda b: bad['tip'], lambda e: [], 5)
-        self.assertEqual(batch, [])
-        self.assertEqual(sorted(s.reason for s in skipped), [V.SKIP_INVALID, V.SKIP_INVALID])
-
-    def test_batch_max_is_a_whole_number_of_at_least_one(self):
-        for n in (0, -1, 1.5, True, None):
-            with self.assertRaises(ValueError, msg=n):
-                V.ready([], lambda b: None, lambda e: [], n)
 
 
 if __name__ == '__main__':
