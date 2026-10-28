@@ -512,7 +512,7 @@ Limits:
 
 - An entry made and dropped again wholly within a run leaves nothing to read.
 - A `refs/stash` set by hand with no log refuses, although `git stash list` prints nothing for it.
-- The daily full run (kitlib/dailyfull, which calls `runner.gated` itself), `wait-result`, `--measure`, `land.py --queue` and `land.py --sweep-landed` do not ask.
+- The daily full run (kitlib/dailyfull, which calls `runner.gated` itself), `wait-result`, `--measure`, `land.py --queue`, `land.py --check-strict` and `land.py --sweep-landed` do not ask.
 - guard.py refuses a stash before it runs in a main checkout (`git-stash`, every session) and, for an agent session, in a linked worktree when it adds an untagged entry or takes one it does not name (`git-stash-shared`; docs/guard.md "Rules"). A tagged `git stash push -m <tag>` from an agent, and any stash from the owner's own session or a `plain` one in a linked worktree, still pass, so for those this guard is what answers, after the fact.
 
 ## Known limits
