@@ -36,25 +36,27 @@ tool="$kit/tools/machine_setup.py"
 [ -f "$tool" ] || { echo "machine-setup: REFUSED - the kit at $kit has no tools/machine_setup.py"; exit 2; }
 
 python='' mode='' pm_repo='' apply='' other=''
-set -- "$@" --end-of-arguments--
-while [ "$1" != --end-of-arguments-- ]; do
-    arg=$1; shift
+# The arguments are read off the front by count (n left unread) and the kept ones put back at the
+# end, so no marker word can collide with a value the user gave.
+n=$#
+while [ "$n" -gt 0 ]; do
+    arg=$1; shift; n=$((n - 1))
     case $arg in
         --owner-email|--pm-settings|--config-dir|--agent-temp|--home)
-            [ "$1" != --end-of-arguments-- ] || usage "$arg needs a value"
+            [ "$n" -gt 0 ] || usage "$arg needs a value"
             other="$other $arg"
-            set -- "$@" "$arg" "$1"; shift ;;
+            set -- "$@" "$arg" "$1"; shift; n=$((n - 1)) ;;
         --no-sweep-task|--shortcut)
             other="$other $arg"
             set -- "$@" "$arg" ;;
         --python)
-            [ "$1" != --end-of-arguments-- ] || usage '--python needs a value'
-            python=$1; shift ;;
+            [ "$n" -gt 0 ] || usage '--python needs a value'
+            python=$1; shift; n=$((n - 1)) ;;
         --pm-repo)
-            [ "$1" != --end-of-arguments-- ] || usage '--pm-repo needs the PM repository folder'
+            [ "$n" -gt 0 ] || usage '--pm-repo needs the PM repository folder'
             [ -n "$(printf '%s' "$1" | tr -d ' \t')" ] || usage '--pm-repo needs the PM repository folder, not an empty value'
             [ -z "$mode" ] || usage "give --pm-repo or --delegation, not both"
-            mode=--pm-repo pm_repo=$1; shift ;;
+            mode=--pm-repo pm_repo=$1; shift; n=$((n - 1)) ;;
         --delegation)
             [ -z "$mode" ] || usage "give --pm-repo or --delegation, not both"
             mode=--delegation ;;
@@ -63,8 +65,7 @@ while [ "$1" != --end-of-arguments-- ]; do
         *)
             usage "unknown option $arg" ;;
     esac
-done
-shift                                   # the end marker; the default mode's options remain
+done                                    # the default mode's options remain
 if [ -n "$mode" ] && [ -n "$other" ]; then
     usage "$mode is a mode of its own: it takes only --python and --apply (not$other)"
 fi

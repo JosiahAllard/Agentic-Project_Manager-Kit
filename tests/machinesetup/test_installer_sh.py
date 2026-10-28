@@ -59,6 +59,11 @@ class InstallerSh(unittest.TestCase):
                          '[--agent-temp][/srv/agent temp][--config-dir][/a][--config-dir][/b][--shortcut]'
                          '[--apply]')
 
+    def test_any_value_is_taken_as_given(self):
+        # No marker word: a value that looks like one still passes through.
+        self.assertEqual(self.passed('--agent-temp', '--end-of-arguments--', '--home', ''),
+                         '[--agent-temp][--end-of-arguments--][--home][]')
+
     def test_root_modes(self):
         self.assertEqual(self.passed('--pm-repo', '/srv/pm', '--apply'), '[--pm-repo][/srv/pm][--apply]')
         self.assertEqual(self.passed('--apply', '--delegation'), '[--delegation][--apply]')

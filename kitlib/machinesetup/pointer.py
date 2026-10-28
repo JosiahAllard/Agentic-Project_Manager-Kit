@@ -18,7 +18,7 @@ from kitlib.config import user
 from kitlib.git import repo
 from kitlib.platform.linux import paths as linux_paths
 
-from .common import Plan, kit_file
+from .common import Plan, kit_file, make_folder
 from . import settings
 
 SECTION = 'pointer'
@@ -58,8 +58,8 @@ def user_command(path):
 
 def write_file(path, value):
     """Linux: `value` as the one line of the pointer file `path` (mode 0644), through a temp file
-    and os.replace, its folder made."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    and os.replace, its folder made (mode 0755, whatever root's umask)."""
+    make_folder(os.path.dirname(path))
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         f.write(value + '\n')

@@ -21,7 +21,7 @@ from kitlib import platform
 from kitlib.proc import spawn
 
 from . import linuxbox
-from .common import Plan
+from .common import Plan, make_folder
 
 SECTION = 'delegation'
 DROPIN = '/etc/systemd/system/user@.service.d/pm-kit-delegate.conf'
@@ -36,8 +36,9 @@ class Host(object):
     """The root side, live: the file writes and the daemon reload. Tests pass their own."""
 
     def write(self, path, text):
-        """Write `text` to `path` (mode 0644) through a temp file and os.replace, its folder made."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        """Write `text` to `path` (mode 0644) through a temp file and os.replace, its folder made
+        (mode 0755, whatever root's umask)."""
+        make_folder(os.path.dirname(path))
         tmp = path + '.tmp'
         with open(tmp, 'w', newline='\n') as f:
             f.write(text)

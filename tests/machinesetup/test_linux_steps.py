@@ -196,6 +196,19 @@ class PointerFile(Temp):
         with open(path, newline='') as f:
             self.assertEqual(f.read(), '/srv/pm\n')
 
+    def test_made_folders_are_0755_whatever_the_umask(self):
+        # Root's umask (027, 077) would leave /etc/pm-kit unreadable to the kit user.
+        path = os.path.join(self.dir, 'etc', 'pm-kit', 'pointer')
+        real = os.chmod
+        with mock.patch.object(mpointer.os, 'chmod', side_effect=real) as chmod:
+            mpointer.write_file(path, '/srv/pm')
+        folders = [c[0] for c in chmod.call_args_list if c[0][0] != path + '.tmp']
+        self.assertEqual(folders, [(os.path.join(self.dir, 'etc', 'pm-kit'), 0o755),
+                                   (os.path.join(self.dir, 'etc'), 0o755)])
+        with mock.patch.object(mpointer.os, 'chmod', side_effect=real) as chmod:
+            mpointer.write_file(path, '/srv/pm2')
+        self.assertEqual([c[0] for c in chmod.call_args_list], [(path + '.tmp', 0o644)])
+
     def test_the_registry_writer_writes_the_file_on_linux(self):
         with LINUX, mock.patch.object(mpointer.user, 'fenced', return_value=False), \
                 mock.patch.object(mpointer, 'write_file') as write:

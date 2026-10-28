@@ -62,6 +62,16 @@ class Delegation(unittest.TestCase):
         self.assertEqual(self.host.reloads, 1)
         self.assertIn('sign out and in again', out)
 
+    def test_the_folders_it_makes_are_0755_whatever_the_umask(self):
+        real = os.chmod
+        with mock.patch.object(delegation.os, 'chmod', side_effect=real) as chmod:
+            self.run_mode(self.ctx(), apply=True)
+        folders = {c[0][0] for c in chmod.call_args_list if c[0][1] == 0o755}
+        here = lambda *p: os.path.join(self.root, *p)                     # noqa: E731
+        self.assertEqual(folders, {here('etc'), here('etc', 'pm-kit'), here('etc', 'systemd'),
+                                   here('etc', 'systemd', 'system'),
+                                   here('etc', 'systemd', 'system', 'user@.service.d')})
+
     def test_a_second_run_has_nothing_to_do(self):
         self.run_mode(self.ctx(), apply=True)
         code, out = self.run_mode(self.ctx(), apply=True)
