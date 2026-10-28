@@ -685,11 +685,13 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    each is a refusal. A process is this user's by any of its four status Uid users or its
    folder's owner (a not-dumpable one's folder is root's); each thread's cwd and root are read,
    and a zombie leader's running threads give every kind. cwd_holders, describe and classify.process_cwds read /proc too. The
-   Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record: they
-   change Windows too. Slice 9's VM proofs moved to their own backlog record (with slice 7's
-   live proofs) when slice 9 landed: (a) test_store_linux RealMachineStore, (b)
-   test_holders_linux Live, (c) a landing end to end on a throwaway repository on the VM, and (d)
-   how often an unreadable process of this user (ssh-agent, gpg-agent) leaves removals UNREAD.
+   Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record, as
+   they changed Windows too; they landed on Linux only (kitlib/config/policy.py
+   LINUX_HEAVY_DEFAULTS), so no Windows result changes. Slice 9's VM proofs moved to their own
+   backlog record (with slice 7's live proofs) when slice 9 landed: (a) test_store_linux
+   RealMachineStore, (b) test_holders_linux Live, (c) a landing end to end on a throwaway
+   repository on the VM, and (d) how often an unreadable process of this user (ssh-agent,
+   gpg-agent) leaves removals UNREAD.
    Known limits:
    a bind mount over a tree's file system leaves its removals UNREAD; in a WSL2 distro (a PID
    namespace of its own) every removal is NOT_SEARCHED; /proc is listed once, so a process that
@@ -698,8 +700,9 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    database entry has no profile folder, so the machine lock's store cannot be opened (and with no
    machine pointer file the pointer is BAD). Deviations: environment.d moves to slice 14 (machine setup writes it);
    another user's processes cannot be seen, so holders answers for this user's only; the user
-   pointer file is the user's to write, so an agent can write it too: guarding it is its own
-   record.
+   pointer file is the user's to write, so an agent could write it too: the guard now holds it
+   (docs/guard.md "Write jail", tests/guard/test_linux_pointer.py), and the guard's mount table is
+   read by linux/paths.py's mountinfo reader (read_mountinfo, parse_mountinfo).
 10. **Scheduled jobs.** linux/schedule.py with systemd user timers and cron (first-class);
     autostart (coordinators after reboot), hubsite autostart (the hub's start at logon: XDG
     autostart, shell-profile fallback), worktree and temp sweeps, automatic tasks, consoletasks

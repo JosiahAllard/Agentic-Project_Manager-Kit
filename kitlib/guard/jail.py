@@ -22,8 +22,8 @@ An agent session writes only inside its roots:
   mark roots       the machine config's guard_mark_roots for a main session's launcher mark
                    ({mark: [{path, mode, why}]}, `~/` read as the home folder); a subagent gets
                    none
-A root of any kind on, over or inside either home machine config folder, or on or inside the PM
-repository's <pointer>/.pm-kit, is dropped unless it is read-only (roots, touches_config): a data
+A root of any kind on, over or inside either home machine config folder or (Linux) the user's PM-repo
+pointer file (user_pointer_file), or on or inside the PM repository's <pointer>/.pm-kit, is dropped unless it is read-only (roots, touches_config): a data
 root, TMP or AGENT_TEMP at the home folder would otherwise open the machine config. A root that
 only holds <pointer>/.pm-kit (the PM repository's own checkout) is kept; rules.machine_config
 refuses the writes inside that folder. A root's mode holds wherever it nests: a target inside a read-only data root is denied though
@@ -40,6 +40,7 @@ from kitlib.config import user as kuser
 from kitlib.config.migration import OLD_DIR_NAME
 from kitlib.git import repo
 from kitlib.guard import paths
+from kitlib.platform.linux import paths as linux_paths
 
 OPEN, ADD_ONLY, READ_ONLY = 'open', 'add-only', 'read-only'
 MODES = (ADD_ONLY, READ_ONLY, OPEN)
@@ -124,12 +125,15 @@ def sibling(ctx, target, cwd):
 
 
 def touches_config(ctx, path):
-    """True when `path` is, holds or lies inside either home machine config folder, or is or lies
-    inside the PM repository's (pointer_config_dir). Holding the PM repository's folder does not
-    count: that is the PM repository's own checkout, a root its sessions write in, and
-    rules.machine_config refuses the writes inside the folder."""
+    """True when `path` is, holds or lies inside either home machine config folder or the user's
+    PM-repo pointer file (user_pointer_file), or is or lies inside the PM repository's
+    (pointer_config_dir). Holding the PM repository's folder does not count: that is the PM
+    repository's own checkout, a root its sessions write in, and rules.machine_config refuses the
+    writes inside the folder."""
     p = real(path)
-    if any(inside(p, c) or inside(c, p) for c in (real(d) for d in home_config_dirs(ctx))):
+    pointer = user_pointer_file()
+    held = home_config_dirs(ctx) + ([pointer] if pointer else [])
+    if any(inside(p, c) or inside(c, p) for c in (real(d) for d in held)):
         return True
     d = pointer_config_dir(ctx)
     return d is not None and inside(p, real(d))
@@ -178,6 +182,22 @@ def home_config_dirs(ctx):
     new folder while only the old one has a config would let the session write the file locate
     then reads instead."""
     return [os.path.join(ctx.home, kuser.DIR_NAME), os.path.join(ctx.home, OLD_DIR_NAME)]
+
+
+def user_pointer_file():
+    """Linux: the user's PM-repo pointer file, <profile>/.config/pm-kit/pointer from the password
+    database (kitlib.platform.linux.paths.pointer_files, the file kitlib.config.pointer reads when
+    there is no machine one). The user can write it, so a session that could would point the kit
+    at another PM repository and its machine config. None elsewhere (Windows keeps the pointer in
+    HKLM, which only an administrator writes) and when the password database gives no profile
+    folder (the kit then reads no user pointer file either). The machine file /etc/pm-kit/pointer
+    is an administrator's to write, as HKLM is."""
+    if not paths.posix():
+        return None
+    try:
+        return linux_paths.pointer_files()[1]
+    except OSError:
+        return None
 
 
 def pointer_config_dir(ctx):
