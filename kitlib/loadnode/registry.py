@@ -3,9 +3,12 @@
     {"version": 1,
      "nodes": [{"name": "box1", "address": "192.168.1.50", "user": "pmnode",
                 "host_key": "ssh-ed25519 AAAA...", "slots": 1, "memory_mb": 12288,
-                "port": 22, "identity_file": "~/.ssh/pmkit_node_ed25519"}]}
+                "port": 22, "identity_file": "~/.ssh/pmkit_node_ed25519",
+                "repos": ["my-repo"]}]}
 
-`port` and `identity_file` may be left out (22; ssh's own default key). Unknown keys are refused;
+`port`, `identity_file` and `repos` may be left out (22; ssh's own default key; no repository).
+`repos` is the opt-in: the repositories (their machine lock repo names) whose runs may go to the
+node, by `node.py run` named or chosen (docs/load-nodes.md). Unknown keys are refused;
 notes (`_x`, `comment`) are allowed. Every value that reaches ssh's command line is checked here
 against a narrow pattern, so none can be read by ssh as an option or a token.
 
@@ -32,10 +35,12 @@ KEY_TYPE = 'ssh-ed25519'
 
 NAME_RE = r'[a-z0-9][a-z0-9-]{0,31}'
 USER_RE = r'[a-z_][a-z0-9_-]{0,31}'
+REPO_RE = r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}'     # no '/'; never '..' (repo_ok)
 _LABEL = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
 _IDENT_BAD = re.compile(r'[\x00-\x1f\x7f"%]')
 
-Node = collections.namedtuple('Node', 'name address user host_key slots memory_mb port identity_file')
+Node = collections.namedtuple('Node', 'name address user host_key slots memory_mb port identity_file '
+                                      'repos', defaults=((),))
 
 
 class RegistryError(Exception):
@@ -53,6 +58,18 @@ class Address(T.T):
 
     def describe(self):
         return 'IP address or host name'
+
+
+class RepoName(T.T):
+    """A machine lock repo name that may name a folder: letters, digits, '_', '.', '-', never
+    '..' and never a leading '.' or '-'."""
+
+    def check(self, v, where, errs):
+        if not isinstance(v, str) or not repo_ok(v):
+            errs.append('%s must be a repo name of letters, digits, _ . and - (no ..)' % where)
+
+    def describe(self):
+        return 'repo name'
 
 
 class HostKey(T.T):
@@ -92,12 +109,18 @@ NODE = T.Obj({
     'memory_mb': T.Field(T.Int(lo=256), None, 'memory jobs may use, in MB'),
     'port': T.Field(T.Int(lo=1, hi=65535), 22, 'ssh port'),
     'identity_file': T.Field(IdentityFile(), None, 'the main machine\'s private key for it'),
+    'repos': T.Field(T.ListOf(RepoName()), [], 'the repositories whose runs it may take'),
 }, required=('name', 'address', 'user', 'host_key', 'slots', 'memory_mb'))
 
 SCHEMA = T.Obj({
     'version': T.Field(T.Int(lo=VERSION, hi=VERSION), None, 'always 1'),
     'nodes': T.Field(T.ListOf(NODE), None, 'the nodes'),
 }, required=('version', 'nodes'))
+
+
+def repo_ok(v):
+    """True for a repo name a node may use as a folder name (REPO_RE, no '..')."""
+    return isinstance(v, str) and bool(re.fullmatch(REPO_RE, v)) and '..' not in v
 
 
 def address_ok(v):
@@ -146,9 +169,9 @@ def list_lines(nodes, identity_exists=os.path.isfile, resolve=None):
         if n.identity_file:
             real = resolve(n) if resolve else n.identity_file
             ident = '%s (%s)' % (n.identity_file, 'present' if identity_exists(real) else 'MISSING')
-        out.append('%s  %s@%s:%d  %d slot%s, %d MB  %s  key %s' % (
+        out.append('%s  %s@%s:%d  %d slot%s, %d MB  %s  key %s  repos: %s' % (
             n.name, n.user, n.address, n.port, n.slots, '' if n.slots == 1 else 's', n.memory_mb,
-            fingerprint(n.host_key), ident))
+            fingerprint(n.host_key), ident, ', '.join(n.repos) or 'none'))
     return out
 
 
@@ -176,7 +199,8 @@ def parse(text, where=FILE_NAME):
     if errs:
         raise RegistryError('; '.join(errs))
     return [Node(n['name'], n['address'], n['user'], n['host_key'], n['slots'], n['memory_mb'],
-                 n.get('port', 22), n.get('identity_file')) for n in data['nodes']]
+                 n.get('port', 22), n.get('identity_file'), tuple(n.get('repos') or ()))
+            for n in data['nodes']]
 
 
 def ignored(pm_repo, call=gitcmd.call):

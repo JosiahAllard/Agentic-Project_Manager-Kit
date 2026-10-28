@@ -84,6 +84,21 @@ class Parse(unittest.TestCase):
             with self.subTest(text=text[:30]):
                 self.assertNotIn('SECRET', self.bad(text))
 
+    def test_verbs_and_jobs_read_and_an_old_node_has_neither(self):
+        old = reply.parse(good())
+        self.assertEqual((old['verbs'], old['jobs']), ([], None))
+        got = reply.parse(good(verbs=['status', 'start', 'follow', 'start'], jobs=2))
+        self.assertEqual((got['verbs'], got['jobs']), (['follow', 'start', 'status'], 2))
+        built = reply.build(snapshot(), '1', verbs=('status', 'start'), jobs=0)
+        self.assertEqual(reply.parse(reply.dumps(built))['verbs'], ['start', 'status'])
+
+    def test_bad_verbs_and_jobs_are_refused_without_quoting_the_reply(self):
+        for over in ({'verbs': 'SECRET'}, {'verbs': ['SECRET']}, {'verbs': ['a\x1b']},
+                     {'verbs': [7]}, {'verbs': ['stat'] * 17}, {'jobs': -1}, {'jobs': 'SECRET'},
+                     {'jobs': True}):
+            with self.subTest(over=over):
+                self.assertNotIn('SECRET', self.bad(good(**over)))
+
     def test_a_refusal_reads_with_its_error_cleaned(self):
         got = reply.parse(json.dumps({'protocol': 1, 'ok': False, 'error': 'no\x07pe' + 'e' * 300}))
         self.assertEqual((got['ok'], got['error'][:4], len(got['error'])), (False, 'nope', 200))

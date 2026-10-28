@@ -104,6 +104,17 @@ class Parse(unittest.TestCase):
         self.assertIn('.slots', why)
         self.assertIn('.port', why)
 
+    def test_repos_is_the_opt_in_and_none_by_default(self):
+        got = registry.parse(text(node(repos=['my-repo', 'Other_Repo.2']), node(name='b2')))
+        self.assertEqual(got[0].repos, ('my-repo', 'Other_Repo.2'))
+        self.assertEqual(got[1].repos, ())
+
+    def test_a_repo_name_that_could_name_another_folder_is_refused(self):
+        for r in ('..', 'a..b', '../x', 'a/b', 'a\\b', '.git', '-x', '', 'a b', 'x' * 101, 7):
+            with self.subTest(repo=r):
+                self.assertIn('.repos[0]', self.bad(node(repos=[r])))
+        self.assertIn('.repos', self.bad(node(repos='my-repo')))
+
 
 class Fingerprint(unittest.TestCase):
 
@@ -120,6 +131,12 @@ class Lines(unittest.TestCase):
         self.assertIn(KEY_FP, lines[0])
         self.assertIn('~/.ssh/k (MISSING)', lines[0])
         self.assertIn('ssh default key', lines[1])
+
+    def test_a_line_names_the_repos_it_takes(self):
+        nodes = registry.parse(text(node(repos=['r1', 'r2']), node(name='b2')))
+        lines = registry.list_lines(nodes)
+        self.assertTrue(lines[0].endswith('repos: r1, r2'), lines[0])
+        self.assertTrue(lines[1].endswith('repos: none'), lines[1])
 
 
 class FakeCall(object):

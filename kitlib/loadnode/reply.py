@@ -6,11 +6,15 @@ The node prints one JSON line:
      "lock": {"cpu_slots": 4, "cpu_free": 3, "gpu_slots": 0, "gpu_free": 0,
               "running": 1, "waiting": 0, "holds": 0, "pending": false, "unreadable": []},
      "hardware": {"threads": 8, "cores": 4, "memory_mb": {"total": 15900, "free": 9100},
-                  "gpus": [{"name": "...", "vram_mb": 8192}], "problems": 0}}
+                  "gpus": [{"name": "...", "vram_mb": 8192}], "problems": 0},
+     "verbs": ["status", "start", "follow", "fetch", "clean", "stop"], "jobs": 0}
 
 or `{"protocol": 1, "ok": false, "error": "<why>"}`. build() makes it from the node's machine
 lock snapshot (kitlib.lock.api.snapshot) as a projection: counts and hardware only, so no store
-path, repository, slug or run note leaves the node.
+path, repository, slug or run note leaves the node. `verbs` (what the node serves) and `jobs` (the
+`node.py run` jobs live on it) came with the run verbs: a node whose reply has no `verbs` serves
+`status` only, so main can tell a node kit too old to take a run. Both are optional; the
+protocol stays 1.
 
 On the main machine the reply is untrusted (the node could be anyone's): parse() keeps only the
 keys it knows, checks every type and range, and strips control and format characters from every
@@ -18,6 +22,7 @@ string and cuts it short before anything is shown. Nothing here prints or starts
 """
 import json
 import os
+import re
 import unicodedata
 
 PROTOCOL = 1
@@ -25,6 +30,8 @@ MAX_INT = 10 ** 9
 MAX_GPUS = 16
 UNREADABLE = ('queue', 'holds', 'kinds')     # lock parts the node could not read
 COUNTS = ('cpu_slots', 'cpu_free', 'gpu_slots', 'gpu_free', 'running', 'waiting', 'holds')
+MAX_VERBS = 16
+VERB_RE = re.compile(r'[a-z][a-z-]{0,23}')
 
 
 class ReplyError(Exception):
@@ -58,8 +65,9 @@ def _num(v):
     return v if type(v) is int and 0 <= v <= MAX_INT else None
 
 
-def build(snapshot, kit_version):
-    """The ok reply for the lock snapshot `snapshot` (kitlib.lock.api.snapshot's dict)."""
+def build(snapshot, kit_version, verbs=None, jobs=None):
+    """The ok reply for the lock snapshot `snapshot` (kitlib.lock.api.snapshot's dict); `verbs`
+    and `jobs` (the node's served words and its live jobs) are added when given."""
     hw = snapshot.get('hardware') or {}
     layout = snapshot.get('layout') or {}
     slots = snapshot.get('slots') or {}
@@ -69,7 +77,7 @@ def build(snapshot, kit_version):
     unreadable = [k for k, err in (('queue', (snapshot.get('queue') or {}).get('error')),
                                    ('holds', snapshot.get('holds_error')),
                                    ('kinds', snapshot.get('kinds_error'))) if err]
-    return {
+    out = {
         'protocol': PROTOCOL, 'ok': True, 'kit_version': str(kit_version),
         'lock': {'cpu_slots': len(cpu), 'cpu_free': _free(cpu),
                  'gpu_slots': len(gpu), 'gpu_free': _free(gpu),
@@ -84,6 +92,11 @@ def build(snapshot, kit_version):
                               for g in (hw.get('gpus') or [])[:MAX_GPUS]],
                      'problems': len(hw.get('problems') or [])},
     }
+    if verbs is not None:
+        out['verbs'] = list(verbs)
+    if jobs is not None:
+        out['jobs'] = int(jobs)
+    return out
 
 
 def refusal(why):
@@ -154,6 +167,10 @@ def parse(text):
             raise ReplyError('lock.%s_free is more than lock.%s_slots' % (pool, pool))
     out_lock.update(pending=_bool(lock.get('pending'), 'lock.pending'),
                     unreadable=sorted(set(unreadable)))
+    verbs = data.get('verbs', [])
+    if (not isinstance(verbs, list) or len(verbs) > MAX_VERBS
+            or not all(isinstance(v, str) and VERB_RE.fullmatch(v) for v in verbs)):
+        raise ReplyError('verbs is not a list of at most %d words' % MAX_VERBS)
     return {
         'ok': True,
         'kit_version': _str(data.get('kit_version'), 'kit_version', 40),
@@ -167,6 +184,8 @@ def parse(text):
                       'vram_mb': _int(g.get('vram_mb'), 'a gpu\'s vram_mb', True)} for g in gpus],
             'problems': _int(hw.get('problems'), 'hardware.problems'),
         },
+        'verbs': sorted(set(verbs)),
+        'jobs': _int(data.get('jobs'), 'jobs', True),
     }
 
 

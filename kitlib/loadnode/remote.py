@@ -1,4 +1,4 @@
-"""Asking a load node for its status over ssh.
+"""Talking to a load node over ssh: its status, and the run verbs of `node.py run`.
 
 One ssh start per node, an argument list (never a shell), through kitlib.proc.spawn:
 
@@ -14,14 +14,22 @@ learns nothing into ~/.ssh. The command word is fixed (`status`); on the node th
 command (optional/loadnode/loadnode.py) runs whatever it is sent as nothing but that word.
 
 A reply is untrusted: kitlib.loadnode.reply.parse checks it. Nothing here prints.
+
+Link holds one node's pinned known_hosts file for the length of a `node.py run` job and makes
+the same argument list for each run verb (`start`, `follow`, `fetch`, `clean`, `stop`): the verb is
+the one word sent, its parameters one JSON line on ssh's stdin. A streamed verb (`follow`,
+`fetch`) adds ssh's keep-alive, so a node that drops off is noticed. git's push to the node's
+mirror uses the same options through GIT_SSH_COMMAND (git_env), never the user's ssh config.
 """
 import collections
 import concurrent.futures
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 
 import kitlib.platform
 from kitlib.config import user
@@ -34,6 +42,9 @@ TIMEOUT_S = 20                           # the whole call
 CONNECT_S = 8                            # ssh's ConnectTimeout
 OUT_CAP = 64 * 1024                      # a reply longer than this is not a status reply
 ERR_CAP = 200                            # characters of ssh's last error line kept
+ALIVE_S = 10                             # a streamed verb's ServerAliveInterval
+ALIVE_COUNT = 3                          # ... and ServerAliveCountMax
+MIRROR = 'pmkit-node/mirrors/%s.git'     # the mirror's path in a push URL (the node maps it)
 
 OK = 'ok'
 TIMED_OUT = 'timed out'
@@ -76,13 +87,14 @@ def identity_path(node, home=None):
     return f
 
 
-def ssh_argv(node, ssh, known_hosts, connect_s=CONNECT_S, home=None):
-    """The ssh argument list for one status call (the module docstring). `known_hosts` is the
-    temp file's path; ssh reads an -o value as words, so it is quoted, and a path holding '"'
-    or '%' (a token to ssh) is refused with ValueError."""
+def ssh_options(node, known_hosts, connect_s=CONNECT_S, home=None, keepalive=False):
+    """ssh's options for `node`, from -T to -p: everything but the program, the address and the
+    command word (the module docstring). `known_hosts` is the temp file's path; ssh reads an -o
+    value as words, so it is quoted, and a path holding '"' or '%' (a token to ssh) is refused
+    with ValueError. keepalive: ServerAliveInterval and CountMax for a streamed verb."""
     if '"' in known_hosts or '%' in known_hosts:
         raise ValueError('the temp known_hosts path cannot be given to ssh: %s' % known_hosts)
-    argv = [ssh, '-T', '-F', 'none',
+    argv = ['-T', '-F', 'none',
             '-o', 'BatchMode=yes',
             '-o', 'StrictHostKeyChecking=yes',
             '-o', 'HostKeyAlias=' + ALIAS % node.name,
@@ -91,10 +103,19 @@ def ssh_argv(node, ssh, known_hosts, connect_s=CONNECT_S, home=None):
             '-o', 'CheckHostIP=no',
             '-o', 'UpdateHostKeys=no',
             '-o', 'ConnectTimeout=%d' % connect_s]
+    if keepalive:
+        argv += ['-o', 'ServerAliveInterval=%d' % ALIVE_S, '-o', 'ServerAliveCountMax=%d' % ALIVE_COUNT]
     ident = identity_path(node, home)
     if ident:
         argv += ['-i', ident, '-o', 'IdentitiesOnly=yes']
-    return argv + ['-l', node.user, '-p', str(node.port), '--', node.address, COMMAND]
+    return argv + ['-l', node.user, '-p', str(node.port)]
+
+
+def ssh_argv(node, ssh, known_hosts, connect_s=CONNECT_S, home=None, command=COMMAND,
+             keepalive=False):
+    """The ssh argument list for one call of the word `command` (default `status`)."""
+    return ([ssh] + ssh_options(node, known_hosts, connect_s, home, keepalive)
+            + ['--', node.address, command])
 
 
 def _drain(stream, cap, into):
@@ -196,3 +217,134 @@ def query_all(nodes, runner=default_runner, ssh=None, timeout_s=TIMEOUT_S, home=
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(nodes))) as pool:
         futs = [pool.submit(query, n, runner, ssh, timeout_s, home) for n in nodes]
         return [f.result() for f in futs]
+
+
+# -- the run verbs -------------------------------------------------------------------------------
+
+def sh_quote(word):
+    """`word` as one sh word (git runs GIT_SSH_COMMAND through sh)."""
+    return "'" + word.replace("'", "'\\''") + "'"
+
+
+def push_url(node, repo):
+    """git's scp-style URL of the node's mirror of `repo` (the user and port are in git_env's
+    command): `<address>:pmkit-node/mirrors/<repo>.git`, an IPv6 address in brackets."""
+    addr = '[%s]' % node.address if ':' in node.address else node.address
+    return '%s:%s' % (addr, MIRROR % repo)
+
+
+class Link(object):
+    """One node's pinned ssh for a `node.py run` job: a context that writes the temp known_hosts
+    file on entry and removes it on exit. `popen` is spawn.popen (a test's stand-in)."""
+
+    def __init__(self, node, ssh=None, home=None, popen=None):
+        self.node, self.home = node, home
+        self.ssh = ssh or ssh_exe()
+        self.popen = popen or spawn.popen
+        self.known_hosts = None
+
+    def __enter__(self):
+        if not self.ssh:
+            raise OSError('no ssh client: install Windows\' OpenSSH client')
+        fd, self.known_hosts = tempfile.mkstemp(prefix='pmkit-known-hosts-', suffix='.txt')
+        with os.fdopen(fd, 'w', encoding='ascii', newline='\n') as f:
+            f.write(known_hosts_line(self.node))
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            os.remove(self.known_hosts)
+        except (OSError, TypeError):
+            pass
+        self.known_hosts = None
+
+    def argv(self, verb, keepalive=False):
+        return ssh_argv(self.node, self.ssh, self.known_hosts, home=self.home, command=verb,
+                        keepalive=keepalive)
+
+    def git_env(self, base=None):
+        """The environment for `git push` to push_url: git's ssh is this ssh with these options."""
+        env = dict(os.environ if base is None else base)
+        opts = [self.ssh] + ssh_options(self.node, self.known_hosts, home=self.home)
+        env['GIT_SSH_COMMAND'] = ' '.join(sh_quote(w) for w in opts)
+        env['GIT_SSH_VARIANT'] = 'ssh'
+        for k in ('GIT_SSH', 'SSH_ASKPASS', 'GIT_ASKPASS'):
+            env.pop(k, None)
+        return env
+
+    def _start(self, verb, payload, keepalive):
+        p = self.popen(self.argv(verb, keepalive), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+        try:
+            p.stdin.write(json.dumps(payload, separators=(',', ':')).encode('utf-8') + b'\n')
+            p.stdin.close()
+        except OSError:                      # ssh ended already; its exit says why
+            pass
+        return p
+
+    def call(self, verb, payload, timeout_s=TIMEOUT_S):
+        """(rc, stdout bytes, stderr bytes) of one verb whose reply is one JSON line; raises
+        subprocess.TimeoutExpired past `timeout_s` (ssh killed)."""
+        p = self._start(verb, payload, False)
+        out, err = bytearray(), bytearray()
+        readers = [threading.Thread(target=_drain, args=(p.stdout, OUT_CAP, out), daemon=True),
+                   threading.Thread(target=_drain, args=(p.stderr, OUT_CAP, err), daemon=True)]
+        for t in readers:
+            t.start()
+        try:
+            p.wait(timeout_s)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            raise
+        finally:
+            for t in readers:
+                t.join(5)
+            _close(p)
+        return p.returncode, bytes(out), bytes(err)
+
+    def stream(self, verb, payload, on_data, idle_s=ALIVE_S * (ALIVE_COUNT + 3),
+               clock=time.monotonic):
+        """(rc, stderr bytes, idle) of one streamed verb: on_data(bytes) for each piece of its
+        stdout as it comes. ssh is killed when nothing at all came for `idle_s` seconds (the node
+        sends a keep-alive frame well inside that), and idle is then True. on_data returning
+        False ends the call early (ssh killed, idle False)."""
+        p = self._start(verb, payload, True)
+        err = bytearray()
+        et = threading.Thread(target=_drain, args=(p.stderr, OUT_CAP, err), daemon=True)
+        et.start()
+        last = [clock()]
+        idle = [False]
+        done = threading.Event()
+
+        def watch():
+            while not done.wait(1.0):
+                if clock() - last[0] > idle_s:
+                    idle[0] = True
+                    p.kill()
+                    return
+        wt = threading.Thread(target=watch, daemon=True)
+        wt.start()
+        try:
+            while True:
+                chunk = p.stdout.read1(65536)
+                if not chunk:
+                    break
+                last[0] = clock()
+                if on_data(chunk) is False:
+                    p.kill()
+                    break
+        finally:
+            done.set()
+            p.wait()
+            et.join(5)
+            _close(p)
+        return p.returncode, bytes(err), idle[0]
+
+
+def _close(p):
+    for f in (p.stdout, p.stderr):
+        try:
+            f.close()
+        except (OSError, AttributeError):
+            pass
