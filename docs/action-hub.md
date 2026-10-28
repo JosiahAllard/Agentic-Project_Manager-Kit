@@ -575,7 +575,7 @@ refused `not_found`. Each of these is refused, field `record`, and nothing is wr
   no repository or record id, a record that is completed (closed, retired or taken out of the store), or
   one in a repository whose `.kit.json` names no `"backlog".store` (the record view's `writable` false):
   its answer could never be filed (`no_store`), so it is asked unbound;
-- `not_found`: a repo the hub has not configured, or an id that repo's backlog does not have;
+- `not_found`: a repo the hub has not configured, or an id that repo's backlog does not have (the refusal names another repo key whose backlog holds the id, e.g. a kit record is keyed on the PM repo's folder name);
 - `unavailable`: a record the hub cannot check (a server with no backlog views, no checkout of the repo
   on this machine, a store that cannot be read). It fails closed: a binding nobody checked is never
   stored. Ask again, or ask unbound.
