@@ -189,7 +189,10 @@ def row(rec, ranks):
 def do_next(args, ctx, snap):
     if args.all and args.cap is not None:
         raise Usage('`--all` lists every startable item; it takes no `--cap`')
-    cap = None if args.all else (args.cap if args.cap is not None else omod.DEFAULT_CAP)
+    if args.cap is not None and args.cap < 1:
+        raise Usage('`--cap %d`: the cap is a whole number >= 1' % args.cap)
+    # The repository's cap (`.kit.json` backlog.cap, plan.Context.cap): the one `pull` checks.
+    cap = None if args.all else (args.cap if args.cap is not None else ctx.cap)
     b = banner(snap)
     warn = b.queue_warning()
     if warn:
