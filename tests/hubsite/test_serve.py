@@ -886,7 +886,7 @@ class ViewsCase(ServeCase):
     def test_a_view_with_no_source_is_unavailable_and_the_rest_answer(self):
         hub = self.build()
         hub.start()
-        for name in ('backlog', 'completed', 'repos', 'agents'):
+        for name in ('backlog', 'completed', 'repos', 'agents', 'skills'):
             r = get(hub.port, '%s/%s' % (BASE, name), self.owner)
             self.assertEqual((r.status, r.code()), (503, 'unavailable'), name)
             self.assertEqual(r.json()['error']['field'], 'views')
@@ -896,7 +896,7 @@ class ViewsCase(ServeCase):
         r = get(hub.port, BASE + '/snapshot', self.owner)
         self.assertEqual(r.status, 200)
         self.assertEqual(sorted(r.json()['unavailable']), ['agents', 'backlog', 'completed',
-                                                           'repos'])
+                                                           'repos', 'skills'])
         h = get(hub.port, HEALTH, self.owner).json()
         self.assertEqual((h['backlog'], h['unavailable']), (None, {}))
         self.assertEqual(self.errors(), [])
@@ -912,7 +912,7 @@ class ViewsCase(ServeCase):
             return [{'name': 'alpha', 'aliases': []}]
 
         missing = os.path.join(self.root, 'no-agents-here')
-        hub = self.build(usage=usage, repos=repos, agents=missing,
+        hub = self.build(usage=usage, repos=repos, agents=missing, skills=os.path.join(self.root, 'no-skills-here'),
                          notices=os.path.join(self.root, 'no-notices-here'))
         hub.start()
         r = get(hub.port, BASE + '/usage', self.owner)
@@ -923,6 +923,10 @@ class ViewsCase(ServeCase):
         self.assertEqual((r.json()['items']['available'], r.json()['items']['reason']),
                          (False, serve.AGENTS_FAILED))
         self.assertNotIn('no-agents-here', r.body.decode('utf-8'))
+        r = get(hub.port, BASE + '/skills', self.owner)
+        self.assertEqual((r.json()['items']['available'], r.json()['items']['reason']),
+                         (False, serve.SKILLS_FAILED))
+        self.assertNotIn('no-skills-here', r.body.decode('utf-8'))
         r = get(hub.port, BASE + '/repos', self.owner)
         self.assertEqual(r.json()['items'], [{'name': 'alpha', 'aliases': []}])
         self.assertEqual(seen, [[]])
@@ -1864,6 +1868,7 @@ class MachineCase(unittest.TestCase):
         self.assertEqual(src.static_dir, serve.STATIC_DIR)
         self.assertEqual(os.path.basename(serve.STATIC_DIR), 'web')
         self.assertEqual(os.path.split(src.agents)[1], 'agents')
+        self.assertEqual(src.skills, os.path.join(serve.pmstart.KIT_ROOT, 'content', 'skills'))
         self.assertIsNone(serve.machine_sources(self.home, sync=False).sync)
         # the machine lock's door, made now and opened on its first read (none here)
         from kitlib.hubsite import lockdoor

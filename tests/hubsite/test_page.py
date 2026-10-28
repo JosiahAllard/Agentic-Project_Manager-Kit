@@ -130,7 +130,7 @@ class ServedTest(httpfix.ListenerCase):
         self.assertEqual(got["revision"], snap.json()["revision"])
         self.assertEqual([(t["title"], t["from"]) for t in got["todos"]], [(title, "you")])
         self.assertEqual(got["todos"][0]["id"], made.json()["id"])
-        for k in ("docs", "inbox", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages"):
+        for k in ("docs", "inbox", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "skills", "pages"):
             self.assertEqual(got[k], [], k)
         self.assertNotIn("pageHtml", got)
         self.assertEqual(got["gone"], snap.json()["unavailable"])
@@ -297,9 +297,10 @@ class StateTest(unittest.TestCase):
         snap = snapshot(unavailable={"backlog": "no clone yet"},
                         collections={"todos": {"T-001": {"status": "open", "title": "x", "from": "you"}}},
                         views={"backlog": None, "usage": {"available": False, "reason": "no reading"},
-                               "agents": {"available": False, "reason": "no agents folder"}})
+                               "agents": {"available": False, "reason": "no agents folder"},
+                               "skills": {"available": False, "reason": "no skills folder"}})
         got = js("hubState(items)", snap)
-        self.assertEqual(got["gone"], {"backlog": "no clone yet", "usage": "no reading", "agents": "no agents folder"})
+        self.assertEqual(got["gone"], {"backlog": "no clone yet", "usage": "no reading", "agents": "no agents folder", "skills": "no skills folder"})
         self.assertEqual((got["backlog"], got["parked"], got["usage"], got["agents"]), ([], [], [], []))
         self.assertEqual([t["id"] for t in got["todos"]], ["T-001"])
 
@@ -315,7 +316,7 @@ class StateTest(unittest.TestCase):
         for snap in ({}, None, snapshot(views={"usage": [], "agents": [], "backlog": "x"}, collections={"todos": []})):
             got = js("hubState(items)", snap)
             for k in ("docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents",
-                      "pages"):
+                      "skills", "pages"):
                 self.assertEqual(got[k], [], (k, snap))
         self.assertEqual(js("hubState(items).revision", {}), 0)
         odd = js("hubState(items)", snapshot(collections={"pages": ["x"], "page_html": "y"}))
@@ -1363,7 +1364,7 @@ class DomTest(unittest.TestCase):
             return out;
         """, snapshot(views=views))
         # The sidebar's order is its groups'.
-        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", "schedule", "docs", "topm", "info", "agents", "findings", "autotasks"])
+        self.assertEqual(got["sections"], ["home", "questions", "todo", "approvals", "backlog", "schedule", "docs", "topm", "info", "agents", "skills", "findings", "autotasks"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -2526,6 +2527,7 @@ class ShellTest(unittest.TestCase):
                  "#info": ("info", None, None, "usage", "#info"),
                  "#usage": ("info", None, None, "usage", "#usage"),
                  "#agents": ("agents", None, None, None, "#agents"),
+                 "#skills": ("skills", None, None, None, "#skills"),
                  "#nowhere": ("questions", "questions", None, None, "#questions")}
         for hash_, (sec, qt, sf, nf, shown) in cases.items():
             got = dom(SHELL_NOW + "await start(); return now();", snapshot(collections=LISTS, views={"backlog": BACKLOG}), hash=hash_)
@@ -2584,7 +2586,7 @@ class ShellTest(unittest.TestCase):
             return { first, rows, after: now(), tabs: $$("#tabbar .tb").map(b => b.id) };
         """, snapshot(collections=LISTS), hash="#more")
         self.assertEqual((got["first"]["sec"], got["first"]["tb"], got["first"]["hash"], got["first"]["len"]), ([], ["more"], "#more", 1))
-        self.assertEqual([r[0] for r in got["rows"]], ["more-todo", "more-backlog", "more-docs", "more-topm", "more-info", "more-agents", "more-findings", "more-autotasks"])
+        self.assertEqual([r[0] for r in got["rows"]], ["more-todo", "more-backlog", "more-docs", "more-topm", "more-info", "more-agents", "more-skills", "more-findings", "more-autotasks"])
         self.assertEqual([r[1] for r in got["rows"]][:2], ["To-dos2", "Backlog0"])
         self.assertEqual((got["after"]["sec"], got["after"]["tb"], got["after"]["hash"]), (["backlog"], ["more"], "#backlog"))
         self.assertEqual(got["tabs"], ["tb-home", "tb-questions", "tb-approvals", "tb-schedule", "tb-more"])
@@ -4939,7 +4941,7 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/skills", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|writeQuick|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
                                  "/finding_marks"})
@@ -4984,12 +4986,12 @@ class TriageShellTest(unittest.TestCase):
         side = re.search(r'<div class="sections".*?</div>\s*<div class="sidefoot"', self.markup, re.S).group(0)
         order = re.findall(r'class="(sechead|sec)"[^>]*?(?:id="([\w-]+)")', side)
         self.assertEqual([i for _, i in order], ["sec-home", "sh-work", "sec-questions", "sec-todo", "sec-approvals", "sh-projects",
-                                                 "sec-backlog", "sec-schedule", "sec-docs", "sh-more", "sec-topm", "sec-info", "sec-agents",
+                                                 "sec-backlog", "sec-schedule", "sec-docs", "sh-more", "sec-topm", "sec-info", "sec-agents", "sec-skills",
                                                  "sh-upkeep", "sec-findings", "sec-autotasks"])
         self.assertNotIn("data-nf=\"agents\"", self.markup)      # Agents is its own entry under More, not a Usage tab
         heads = re.findall(r'<div class="sechead" id="[\w-]+">([^<]+)</div>', side)
         self.assertEqual(heads, ["Your work", "Projects", "More", "Upkeep"])
-        for label in ("Message the PM", "Usage", "Agents", "Lint findings", "Automatic tasks", "Schedule", "Approvals"):
+        for label in ("Message the PM", "Usage", "Agents", "Skills", "Lint findings", "Automatic tasks", "Schedule", "Approvals"):
             self.assertIn(label, side)
         self.assertRegex(side, r'<button class="sec" role="tab" data-s="schedule"[^>]*id="sec-schedule">Schedule <span class="n" id="n-sch">0</span></button>')
         self.assertRegex(self.markup, r'id="tb-schedule">Schedule <span class="n" data-of="n-sch">0</span></button>')   # the owner's word, not "Machine schedule"
@@ -5237,6 +5239,58 @@ class TriageViewsTest(unittest.TestCase):
         self.assertIn("second line", got["second"][0][1])                                 # the detail has all of it
         self.assertIn("Edit", got["buttons"])
         self.assertIn("Delete", got["buttons"])
+
+    def test_skills_are_rows_and_the_body_is_read_when_the_card_opens_not_carried_in_the_snapshot(self):
+        views = {"skills": {"available": True, "skills": [
+            {"name": "worker-notes", "description": "Notes for workers."},
+            {"name": "builder", "description": "Builds on a branch."}]}}
+        got = dom("""
+            const bodies = { "worker-notes": "# Notes@@n@@n1. Read <b>this</b> first.", builder: "# Builder@@n@@nStart here." };
+            server.route = c => { const m = /^[/]skills[/]([^/]+)$/.exec(c.path);
+              return m && c.method === "GET" ? (bodies[m[1]] ? { status: 200, body: { ok: true, name: m[1], body: bodies[m[1]] } }
+                : { status: 404, body: { ok: false, error: { code: "not_found", message: "no", field: "name" } } }) : undefined; };
+            await start();
+            const list = () => ({ rows: $$("#list .row").map(a => [a.id, text(a)]), detail: $$("#pane-detail article").map(a => [a.id, text(a)]) });
+            const first = list();
+            await click($("#row-worker-notes"));
+            const reads = calls.filter(c => c.path.startsWith("/skills/")).map(c => c.method + " " + c.path);
+            return { first, second: list(), reads, count: text($("#n-sk")), body: $("#pane-detail .ctx").textContent, bold: $$("#pane-detail b").length,
+                     inputs: $$("#pane-detail input, #pane-detail textarea, #pane-detail button").map(b => b.id) };
+        """.replace("@@n", "\\n"), snapshot(views=views), hash="#skills")
+        self.assertEqual([r[0] for r in got["first"]["rows"]], ["row-builder", "row-worker-notes"])      # by name
+        self.assertIn("Builds on a branch.", got["first"]["rows"][0][1])
+        self.assertEqual(got["first"]["detail"][0][0], "sk-builder")
+        self.assertIn("builder", got["first"]["detail"][0][1])
+        self.assertIn("Start here.", got["first"]["detail"][0][1])      # read on open
+        self.assertEqual(got["second"]["detail"][0][0], "sk-worker-notes")
+        self.assertEqual(got["reads"], ["GET /skills/builder", "GET /skills/worker-notes"])
+        self.assertEqual(got["count"], "2")
+        self.assertIn("<b>this</b> first.", got["body"])         # the body is text, never markup
+        self.assertEqual(got["bold"], 0)
+        self.assertEqual(got["inputs"], ["detail-close"])        # read only: nothing to type in or press but Back
+
+    def test_a_skill_body_that_cannot_be_read_or_is_gone_says_so_in_the_card(self):
+        views = {"skills": {"available": True, "skills": [{"name": "builder", "description": "Builds."},
+                                                          {"name": "gone", "description": "Went."}]}}
+        got = dom("""
+            server.route = c => c.path === "/skills/builder" ? { status: 500, body: { ok: false, error: { code: "unavailable", message: "disk gone", field: "views" } } }
+              : c.path === "/skills/gone" ? { status: 404, body: { ok: false, error: { code: "not_found", message: "no", field: "name" } } } : undefined;
+            await start();
+            const one = text($("#pane-detail .ctx"));
+            await click($("#row-gone"));
+            return { one, two: text($("#pane-detail .ctx")) };
+        """, snapshot(views=views), hash="#skills")
+        self.assertIn("Not read", got["one"])
+        self.assertIn("no longer on the hub server", got["two"])
+
+    def test_an_unavailable_skills_view_says_why_and_a_stored_skills_section_reopens(self):
+        got = dom("""
+            localStorage.setItem("oq.section", "skills");
+            await start();
+            return { sec: $$("#sections .sec").filter(b => b.getAttribute("aria-selected") === "true").map(b => b.dataset.s), note: text($("#list .gone")) };
+        """, snapshot(views={"skills": {"available": False, "reason": "no skills folder"}}))
+        self.assertEqual(got["sec"], ["skills"])
+        self.assertIn("no skills folder", got["note"])
 
     def test_usage_and_agents_are_rows_with_the_meters_and_the_definition_in_the_detail(self):
         views = {"usage": {"available": True, "as_of": NOW, "accounts": {"1": {"five": 12, "week": 95}, "2": {"five": 50, "week": 10}}},

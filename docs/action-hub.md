@@ -22,7 +22,7 @@ ends them all too. A browser that is not paired is told on the page to run `pyth
 open` in the kit folder. The server's health is `GET /api/v1/health`.
 
 The sidebar lists the sections in groups: Home on its own; Your work (Questions, To-dos, Approvals);
-Projects (Backlog, Schedule, Docs); More (Message the PM, Usage, Agents); Upkeep (Lint findings,
+Projects (Backlog, Schedule, Docs); More (Message the PM, Usage, Agents, Skills); Upkeep (Lint findings,
 Automatic tasks). A count sits at the right edge of an entry and is highlighted for what waits on
 you: any pending approval, urgent question or to-do. Lint findings shows a dash until the page has
 read `GET /api/v1/findings` once (at the start and after each wait wake). On a phone the sidebar
@@ -69,6 +69,9 @@ under the title.
 - **Usage** (`#info`). Usage (each account's 5-hour and weekly percentages) and Lock notices. A usage
   row opens its detail in the pane.
 - **Agents** (`#agents`, its own entry in More). Each agent's model and effort; a row opens its detail.
+- **Skills** (`#skills`, its own entry in More). The kit's skills, read only: a row is a skill's name and
+  description, and its detail is the header and the body of `content/skills/<name>/SKILL.md` as plain
+  text, read from `GET /skills/<name>` when the card opens (the snapshot carries no body). The source only, never a host's rendered copy; the page edits nothing.
 - **Schedule** (`#schedule`, the sidebar's Projects group and the phone's Schedule tab), drawn from
   `GET /lock/view` ("Machine lock routes"), with four tabs:
   - Now: the runs now (each with a progress line against the time expected, and a Late chip past it),
@@ -109,7 +112,7 @@ top.
 
 Links ending `#home`, `#questions`, `#inbox`, `#approvals`, `#more`, `#todo`, `#topm`, `#backlog` (or
 `#stories`), `#parked`, `#docs`, `#schedule`, `#autotasks`, `#findings` or `#info` open that section;
-`#agents` opens Agents; `#usage` and `#notices` open that Info tab. The Questions, Answers, To do and Docs lists
+`#agents` opens Agents, `#skills` Skills; `#usage` and `#notices` open that Info tab. The Questions, Answers, To do and Docs lists
 filter by repository; Questions, To do and Docs also by id or title. Automatic tasks lists the
 schedules ("schedules/") under "Schedules", and the two PC-set sweeps (`worktree-sweep`,
 `agent-temp-sweep`, which machine setup registers with Windows) under "Set on the PC": read-only, with
@@ -1113,6 +1116,10 @@ Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite
 - usage: `launch.py usage` (docs/launcher.md "Usage").
 - agents: the rendered agent definitions of the host the server runs for (`<host shell>/agents`,
   `serve.agents_dir`).
+- skills: the kit's skill sources, `<kit>/content/skills/<name>/SKILL.md` (`serve.skills_dir`): each one's
+  name (the folder's) and description (its front matter). `GET /api/v1/skills` and the snapshot carry
+  just those; `GET /api/v1/skills/<name>` gives one skill's body, the name checked against the listed folders
+  (an unknown or malformed name is a 404 or 400). Never a host's rendered copy.
 - findings: the maintenance lint's last result of each repo, never in the snapshot
   ("finding_marks/<fingerprint>").
 
