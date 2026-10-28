@@ -204,6 +204,26 @@ class Start(Base):
         self.assertEqual(self.started, [])
         self.assertTrue(self.box.start(box.check_spec(spec(max_jobs=2)))['ok'])
 
+    def test_a_start_refused_before_its_folder_drops_the_pushed_ref(self):
+        # sweep() walks job folders only: a ref left by a refused start would stay forever
+        drop = ['--git-dir', self.box.mirror('my-repo'), 'update-ref', '-d', 'refs/node/' + JOB]
+        self.mirror()
+        self.made_job(JOB2, live=True)
+        self.assertTrue(self.box.start(box.check_spec(spec(max_jobs=1))).get('busy'))
+        self.assertIn(drop, self.git.calls)
+        self.git.calls[:] = []
+        self.git.head = 'b' * 40
+        self.assertIn('not the commit', self.box.start(box.check_spec(spec(max_jobs=2)))['error'])
+        self.assertIn(drop, self.git.calls)
+
+    def test_a_refused_start_of_a_job_that_exists_keeps_its_ref(self):
+        self.mirror()
+        self.made_job(JOB, result={'exit': 0})
+        self.assertIn('exists already', self.box.start(box.check_spec(spec()))['error'])
+        self.git.head = 'b' * 40
+        self.box.start(box.check_spec(spec()))
+        self.assertNotIn('update-ref', [c[2] for c in self.git.calls if c[0] == '--git-dir'])
+
     def test_an_ended_job_does_not_count(self):
         self.mirror()
         self.made_job(JOB2, live=True, result={'exit': 0})

@@ -23,7 +23,8 @@ at most SPEC_CAP bytes, checked here before anything is done):
     start  {spec}                count the live jobs under jobs.lock (refused, busy, at the spec's
                                  max_jobs), check the ref is the sha, make the worktree, and start
                                  the job runner detached (kitlib.lock.detach); old ended jobs are
-                                 swept first
+                                 swept first; refused before the job's folder is made, it deletes
+                                 the pushed ref
     follow {job, offset}         frames (kitlib.loadnode.frames): L log bytes from offset, K while
                                  nothing is new, then R the result and E
     fetch  {job}                 M the manifest of the spec's artifact globs (regular files inside
@@ -314,11 +315,14 @@ class Box(object):
         rc, out, _err = self.git(['--git-dir', m, 'rev-parse', '--verify', '--quiet',
                                   'refs/node/%s^{commit}' % job], self.base)
         if rc or out.decode('ascii', 'replace').strip() != spec['sha']:
+            with _flock(os.path.join(self.base, 'jobs.lock')):
+                self._drop_ref(job, m)
             return {'ok': False, 'error': 'refs/node/%s is not the commit asked for' % job}
         with _flock(os.path.join(self.base, 'jobs.lock')):
             self.sweep()
             live = self.live_count()
             if live >= spec['max_jobs']:
+                self._drop_ref(job, m)
                 return {'ok': False, 'busy': True, 'jobs': live,
                         'error': 'the node runs %d job%s already, its most' % (live, '' if live == 1 else 's')}
             d = self.job_dir(job)
@@ -341,6 +345,13 @@ class Box(object):
                 return {'ok': False, 'error': 'the job could not start: %s' % why}
             _write_json(self._p(job, 'pid.json'), {'pid': pid, 'at': _iso()})
         return {'ok': True, 'job': job, 'pid': pid}
+
+    def _drop_ref(self, job, m):
+        """Delete refs/node/<job> pushed for a start refused before the job's folder was made:
+        sweep() and clean() go by folders, so nothing else would. The caller holds jobs.lock; a
+        job whose folder exists keeps its ref (clean removes it)."""
+        if not os.path.lexists(self.job_dir(job)):
+            self.git(['--git-dir', m, 'update-ref', '-d', 'refs/node/' + job], self.base)
 
     def _result(self, job, code, how, sha, why=None):
         _write_json(self._p(job, 'result.json'), {'exit': code, 'how': how, 'sha': sha,
