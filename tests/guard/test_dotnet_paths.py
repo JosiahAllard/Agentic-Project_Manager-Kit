@@ -1,8 +1,9 @@
 """PowerShell .NET file calls ([IO.File]::WriteAllText, [IO.Directory]::CreateDirectory and the
 like; rules.net_writes, rules.write_targets): a literal absolute path is judged where it points,
-a relative one where the PowerShell location puts it, and any other path (driveless, a share, one
-the line computes, one the guard does not read) is not placed, so it is refused outside a worktree
-(docs/guard-v2.md B17: the directory the process started in is not judged); reads are left alone."""
+a relative one where the PowerShell location puts it and, for an agent session, refused as well
+(rules.net_process_dir; tests/guard/test_dotnet_relative_write.py), a computed one as a cmdlet's
+computed target is, and any other path (driveless, a share, one the guard does not read) is not
+placed, so it is refused outside a worktree; reads are left alone."""
 import unittest
 
 from kitlib.guard import context
@@ -32,27 +33,34 @@ class Base(unittest.TestCase):
 
 
 class Relative(Base):
-    """A relative path is judged where the PowerShell location puts it, as a bash one is: .NET reads
-    it against the process's directory, which the guard does not judge (B17). Refused from a
-    worktree before."""
+    """A relative path is judged where the PowerShell location puts it, as a bash one is; .NET reads
+    it against the process's directory, which the guard cannot see, so an agent session's is
+    refused from a worktree too (rules.net_process_dir), with the absolute path as the alternative."""
 
-    def test_net_relative_path_from_a_worktree_passes(self):
+    def test_net_relative_path_from_a_worktree_is_refused(self):
         for text in ("[IO.File]::WriteAllText('x.txt', 'y')", "Set-Location sub; [IO.File]::AppendAllText('x.txt', 'y')",
                      "[IO.Directory]::CreateDirectory('d')", "[void][System.IO.File]::WriteAllBytes('x.bin', $b)",
                      "$r = [System.IO.Directory]::Delete('d', $true)"):
             with self.subTest(text=text):
-                self.allowed(self.run_ps(text))
+                d = self.denied(self.run_ps(text), 'write-jail')
+                self.assertIn(W.fwd(self.w.wt) + '/', d.instead)
+                self.allowed(self.run_ps(d.instead))
 
     def test_net_relative_path_refused_outside_worktree(self):
         d = self.denied(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')", cwd=self.w.main), 'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
         self.assertIn('WriteAllText(', d.instead)
 
-    def test_driveless_or_computed_from_a_worktree_passes(self):
-        for text in (r"[IO.File]::WriteAllText('\x.txt', 'y')", "$p = 'x.txt'; [IO.File]::WriteAllText($p, 'y')",
+    def test_driveless_from_a_worktree_passes(self):
+        self.allowed(self.run_ps(r"[IO.File]::WriteAllText('\x.txt', 'y')"))
+
+    def test_computed_from_a_worktree_is_unplaced(self):
+        # as a cmdlet's computed target is, from every location
+        for text in ("$p = 'x.txt'; [IO.File]::WriteAllText($p, 'y')",
                      r"[IO.File]::WriteAllText([IO.Path]::Combine('a', 'x.txt'), 'y')"):
             with self.subTest(text=text):
-                self.allowed(self.run_ps(text))
+                self.denied(self.run_ps(text), 'unplaced')
+                self.allowed(self.run_ps(text, sub=False))
 
     def test_driveless_or_computed_outside_a_worktree_is_unplaced(self):
         for text in (r"[IO.File]::WriteAllText('\x.txt', 'y')", "$p = 'x.txt'; [IO.File]::WriteAllText($p, 'y')",
@@ -62,7 +70,8 @@ class Relative(Base):
                 self.assertIn('[Environment]::CurrentDirectory', d.reason)
 
     def test_a_jailed_main_session_in_its_worktree(self):
-        self.allowed(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')", env=COORDINATOR, sub=False))
+        self.denied(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')", env=COORDINATOR, sub=False), 'write-jail')
+        self.allowed(self.run_ps(r"[IO.File]::WriteAllText('{wt}\x.txt', 'y')", env=COORDINATOR, sub=False))
 
     def test_the_owners_own_session_is_not_judged(self):
         self.allowed(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')", sub=False))
@@ -91,7 +100,11 @@ class Absolute(Base):
     def test_copy_writes_its_destination_only(self):
         self.allowed(self.run_ps(r"[IO.File]::Copy('{main}\a.txt', '{wt}\b.txt', $true)"))
         self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', '{main}\b.txt')"), 'main-checkout')
-        self.allowed(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', 'b.txt')"))
+        # a relative source is read from the process's directory: refused, both paths made absolute
+        d = self.denied(self.run_ps(r"[IO.File]::Copy('a.txt', '{wt}\b.txt')"), 'write-jail')
+        self.assertEqual(d.instead, '[IO.File]::Copy("{0}/a.txt", "{0}/b.txt")'.format(W.fwd(self.w.wt)))
+        self.allowed(self.run_ps(d.instead))
+        self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', 'b.txt')"), 'write-jail')
         self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', 'b.txt')", cwd=self.w.main), 'main-checkout')
 
     def test_move_writes_both(self):
@@ -149,7 +162,7 @@ class Unread(Base):
 
 class MoreWriters(Base):
     """OpenWrite, Open and a relative Move destination are writes, judged where the location puts
-    them."""
+    them (and, relative, refused for an agent session: rules.net_process_dir)."""
 
     TEXTS = ("[IO.File]::OpenWrite('x.txt')", "[IO.File]::Open('x.txt', 'Create')",
              r"[IO.File]::Move('{wt}\a.txt', 'b.txt')")
@@ -157,7 +170,9 @@ class MoreWriters(Base):
     def test_from_a_worktree(self):
         for text in self.TEXTS:
             with self.subTest(text=text):
-                self.allowed(self.run_ps(text))
+                self.denied(self.run_ps(text), 'write-jail')
+                self.allowed(self.run_ps(text, sub=False))
+                self.allowed(self.run_ps(text.replace("'x.txt'", r"'{wt}\x.txt'").replace("'b.txt'", r"'{wt}\b.txt'")))
 
     def test_from_the_main_checkout(self):
         for text in self.TEXTS:
@@ -313,11 +328,12 @@ class Constructors(Base):
         self.allowed(self.run_ps(r"$s = New-Object IO.StreamWriter('{wt}\x.txt', $true)", cwd=self.w.main))
 
     def test_a_relative_or_computed_path(self):
-        for text, rule in (("$s = [IO.StreamWriter]::new('x.txt')", 'main-checkout'),
-                           ('$s = New-Object IO.StreamWriter x.txt', 'main-checkout'),
-                           ("$f = [IO.FileStream]::new($p, 'Open')", 'unplaced')):
+        for text, rule, here in (("$s = [IO.StreamWriter]::new('x.txt')", 'main-checkout', 'write-jail'),
+                                 ('$s = New-Object IO.StreamWriter x.txt', 'main-checkout', 'write-jail'),
+                                 ("$f = [IO.FileStream]::new($p, 'Open')", 'unplaced', 'unplaced')):
             with self.subTest(text=text):
-                self.allowed(self.run_ps(text))
+                self.denied(self.run_ps(text), here)
+                self.allowed(self.run_ps(text, sub=False))
                 self.denied(self.run_ps(text, cwd=self.w.main), rule)
 
     def test_a_cast_or_the_type_as_a_value(self):
@@ -351,13 +367,19 @@ class Constructors(Base):
     def test_a_stream_or_a_read(self):
         for text in ('$s = [IO.StreamWriter]::new($fs)', '$s = New-Object IO.StreamWriter($fs)',
                      '$s = [IO.StreamWriter]::new($ms, [Text.Encoding]::UTF8)', '$s = [IO.StreamWriter]::Null',
-                     "$f = [IO.FileStream]::new($p, 'Open', 'Read', 'ReadWrite')",
-                     "$f = [IO.FileStream]::new($p, 'Open', 'Read', 'ReadWrite', 4096)",
-                     '$f = New-Object IO.FileStream($p, [IO.FileMode]::Open, [IO.FileAccess]::Read)',
                      r"$s = New-Object IO.StreamReader('{main}\x.txt')",
                      r"$s = [IO.StreamReader]::new('{main}\x.txt')"):
             with self.subTest(text=text):
                 self.allowed(self.run_ps(text))
+
+    def test_a_read_only_filestream_on_a_computed_path(self):
+        # a FileStream counts as a write; a computed path is judged as a cmdlet's computed target is
+        for text in ("$f = [IO.FileStream]::new($p, 'Open', 'Read', 'ReadWrite')",
+                     "$f = [IO.FileStream]::new($p, 'Open', 'Read', 'ReadWrite', 4096)",
+                     '$f = New-Object IO.FileStream($p, [IO.FileMode]::Open, [IO.FileAccess]::Read)'):
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text), 'unplaced')
+                self.allowed(self.run_ps(text, sub=False))
 
 
 class LockedMain(Base):

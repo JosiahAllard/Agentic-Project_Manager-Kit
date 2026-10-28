@@ -5,7 +5,7 @@ description: Use when a load-sensitive or timing-dependent test fails intermitte
 
 # Flaky test triage
 
-1. Read the actual failing lines and the repo's known-flakes list: `python <kit>/tools/doc_index.py -C <worktree> --find flakes`.
+1. Read the actual failing lines and the repo's known-flakes list: `python <kit>/tools/doc_index.py -C <worktree> --find flaky`, and the profile's "Known flakes".
 2. Read the failing case's own duration (the JUnit XML `time=`, or the runner's timing) before deciding what you are fixing.
 3. Expiry AT the budget means the event never came; satisfied late means the work was slow. Compare the duration to the work's nominal cost: a ~34x margin (20 s budget, 0.58 s work) is a dropped event; ~1.3x (400 ms deadline, ~100 ms of polls after Windows' 15.6 ms timer granularity) is genuine slowness.
 4. Before changing a timeout, compare deadline, nominal work cost, polling cadence and machine load.
