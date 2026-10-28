@@ -183,7 +183,8 @@ class OnlyDeepWorkersAndConsultants(HomeBase):
         self.assertEqual(start.HOME_ROLES, (window.DEEP_WORKER, window.CONSULTANT))
 
     def test_the_refusal_says_where_the_state_note_is(self):
-        self.assertNotIn('state note is still there', start.HOME_REFUSED)
+        self.assertNotIn('but its other work is', start.HOME_REFUSED)
+        self.assertIn('kept clean for landings', start.HOME_REFUSED)
         self.assertIn('state note is in agent temp', start.HOME_REFUSED)
 
     def test_a_handoff_is_refused_before_any_successor_starts(self):
