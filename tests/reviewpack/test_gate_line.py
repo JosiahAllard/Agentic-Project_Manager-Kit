@@ -2,7 +2,7 @@
 OK record for exactly that commit, the record a landing requires (docs/gate.md "Landing"). It is
 printed only: the exit status is what the rest of the pack makes it."""
 from kitlib.records import gate_ok
-from tests.reviewpack.repo import PackCase
+from tests.reviewpack.repo import AGENT, PackCase
 
 
 class GateLine(PackCase):
@@ -51,7 +51,7 @@ class GateLine(PackCase):
     def test_a_pack_that_fails_still_fails_with_a_full_record(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.write('CLAUDE.md', 'v1')
-        self.commit_all('edit claude, no trailer')
+        self.commit_all('agent edits claude, no trailer', author=AGENT)
         tip = self.git('rev-parse', 'feature')
         self.record(tip, full=True)
         code, out = self.run_pack('feature', '--base', 'main')
