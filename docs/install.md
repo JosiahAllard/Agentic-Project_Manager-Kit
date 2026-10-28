@@ -261,7 +261,7 @@ The plugin root is the whole kit (export), and `.claude-plugin/plugin.json` stay
 hooks and the MCP servers run kitlib and tools beside them. plugin.json, marketplace.json and the
 hooks file `hosts/claude/shell/hooks/hooks.json` (named by `"hooks"` in plugin.json) are rendered
 from `kit.json` and content/ (docs/content.md "Manifests"). The plugin's hooks file carries three
-entries, each run as `pythonw` with the kit's one hook entry,
+entries, each run as `pythonw` on Windows (`/bin/sh` + `python3` on Linux) with the kit's one hook entry,
 `${CLAUDE_PLUGIN_ROOT}/boot/hook.py claude <event>`: the kit header on SessionStart (matcher
 `startup|resume|clear|compact`) and on SubagentStart, and the coordinator SessionStart hook
 (`boot/hook.py claude SessionStart coordinator`, matcher `startup|resume|compact`). The guard
