@@ -56,7 +56,7 @@ class Context(object):
     or (None, tip)`: whether the worktree on a pulled branch is dead, so a pull its holder left
     may be blocked or released by anybody (stop_pull; opener.open_store passes
     kitlib.worktree.classify.branch_liveness, so this module imports nothing from worktree).
-    `cap` (None: offer.DEFAULT_CAP) is the most records `next` offers and `pull` takes in order
+    `cap` (None: offer.DEFAULT_CAP; a callable: read on first use) is the most records `next` offers and `pull` takes in order
     (`.kit.json` backlog.cap, opener.repo_cap); `next --cap` overrides it for that call."""
 
     def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None,
@@ -70,7 +70,15 @@ class Context(object):
         self.branch = branch
         self.today = today
         self.liveness = liveness
-        self.cap = omod.DEFAULT_CAP if cap is None else cap
+        self._cap = cap
+
+    @property
+    def cap(self):
+        """The cap, a callable given for it called on first read (opener.open_store: so only an
+        offer reads `.kit.json`, and a verb that makes none never fails on it)."""
+        if callable(self._cap):
+            self._cap = self._cap()
+        return omod.DEFAULT_CAP if self._cap is None else self._cap
 
     @property
     def session(self):

@@ -100,23 +100,6 @@ def code_config(root):
         return None
 
 
-def code_config_strict(root):
-    """code_config, but a main checkout this PM data worktree belongs to whose configuration
-    cannot be read, or worktrees git cannot list, is a Refusal naming why, not None: a reader that
-    must not fall back to the data branch's own `.kit.json` (opener.repo_cap)."""
-    path = _main_checkout(root)
-    if path == '':
-        return None
-    if path is None:
-        raise Refusal('cannot find the main checkout of the PM data worktree %s: git cannot list '
-                      'its worktrees, so its repository\'s .kit.json cannot be read' % root)
-    try:
-        return kconfig.load(path)
-    except (kconfig.ConfigError, OSError) as exc:
-        raise Refusal('the .kit.json of %s, the repository the PM data worktree %s holds records '
-                      'for, cannot be read: %s' % (path, root, exc))
-
-
 def _same_path(a, b):
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 

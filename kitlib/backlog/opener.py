@@ -6,7 +6,7 @@ docs/backlog.md).
                        cannot be read
   open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store, its
                        `liveness` probe the worktree classifier's (liveness), its `cap` repo_cap's
-  repo_cap(top, cfg) -> the `.kit.json` backlog.cap `next` and `pull` share; Refusal when bad
+  repo_cap(top)     -> the main checkout's `.kit.json` backlog.cap `next` and `pull` share
   planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, `retarget` or
                        `uncite`); Usage for any other verb, raised before a plan exists
   retarget_dry(args, ctx) -> the Change `retarget` would write, checked as a write would be;
@@ -16,6 +16,7 @@ docs/backlog.md).
 `planner` and `retarget_dry` take an object with tools/backlog.py's argument names (`verb`, `id`,
 `f_<field>`, `old`, `new`...).
 """
+import kitlib.config as kconfig
 from kitlib.config import ConfigError, load as load_config
 from kitlib.git import repo as gitrepo
 
@@ -60,24 +61,37 @@ def open_store(root, fetch=True, session=None, branch=None):
     ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
                        branch=branch, code_main=code_main or cfg.main_branch,
                        code_remote=code_remote, liveness=lambda name: liveness(top, name),
-                       cap=repo_cap(top, cfg))
+                       cap=lambda: repo_cap(top))
     return ctx
 
 
-def repo_cap(top, cfg):
-    """The cap `next` offers up to and `pull` checks against (plan.Context.cap): `.kit.json`
-    "backlog".cap of the repository the records belong to. That is `cfg` (the checkout's own),
-    except in the PM data worktree, whose records belong to the code repository: there it is the
-    main checkout's value, never the data branch's (pull_branch.code_config_strict; an unreadable
-    one is a Refusal, not a silent default). The schema refuses a value that is not a whole number
-    >= 1 when the file loads (kitlib/config/schema.py); a value that reaches here otherwise is a
-    Refusal too."""
-    code = pullmod.code_config_strict(top)
-    src = code if code is not None else cfg
-    cap = src.section('backlog')['cap']
+def repo_cap(top):
+    """The cap `next` offers up to and `pull` checks against (plan.Context.cap, read lazily, so
+    only an offer reads it): `.kit.json` "backlog".cap of the repository's main checkout, its
+    first worktree (as pull_branch._main_checkout finds it), whatever checkout `top` is. A worker
+    worktree cut before the owner set the cap, or the PM data worktree's data branch, would
+    otherwise read a value the main checkout's `next` does not. A bare first worktree: `top`'s
+    own. Main checkout config that cannot be read, or worktrees git cannot list, is a Failure
+    (ERROR), never a silent default; the schema refuses a value that is not a whole number >= 1
+    when the file loads (kitlib/config/schema.py), and checked_cap refuses one that reaches here
+    otherwise."""
+    wts, why = gitrepo.worktrees(top)
+    if not wts:
+        raise Failure('cannot read the backlog cap: git cannot list the worktrees of %s, so its '
+                      'main checkout\'s .kit.json is unknown (%s)' % (top, why))
+    main = top if wts[0].bare else wts[0].path
+    try:
+        cfg = kconfig.load(main)
+    except (kconfig.ConfigError, OSError) as exc:
+        raise Failure('cannot read the backlog cap from the main checkout %s: %s' % (main, exc))
+    return checked_cap(cfg.section('backlog')['cap'], main)
+
+
+def checked_cap(cap, where):
+    """`cap` when it is a whole number >= 1, else a Refusal naming `where`."""
     if type(cap) is not int or cap < 1:
         raise Refusal('.kit.json "backlog".cap of %s is %r: it must be a whole number >= 1'
-                      % (src.root, cap))
+                      % (where, cap))
     return cap
 
 
