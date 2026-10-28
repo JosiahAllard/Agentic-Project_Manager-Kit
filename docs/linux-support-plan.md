@@ -685,9 +685,12 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    and a zombie leader's running threads give every kind. cwd_holders, describe and classify.process_cwds read /proc too. The
    Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record, as
    they changed Windows too; they landed on Linux only (kitlib/config/policy.py
-   LINUX_HEAVY_DEFAULTS), so no Windows result changes. The live proofs (test_store_linux RealMachineStore, test_holders_linux
-   Live) and the landing on the VM wait for the VM; the VM proof also measures how often an
-   unreadable process of this user (ssh-agent, gpg-agent) leaves removals UNREAD. Known limits:
+   LINUX_HEAVY_DEFAULTS), so no Windows result changes. Slice 9's VM proofs moved to their own
+   backlog record (with slice 7's live proofs) when slice 9 landed: (a) test_store_linux
+   RealMachineStore, (b) test_holders_linux Live, (c) a landing end to end on a throwaway
+   repository on the VM, and (d) how often an unreadable process of this user (ssh-agent,
+   gpg-agent) leaves removals UNREAD.
+   Known limits:
    a bind mount over a tree's file system leaves its removals UNREAD; in a WSL2 distro (a PID
    namespace of its own) every removal is NOT_SEARCHED; /proc is listed once, so a process that
    forks and exits during the scan can leave a child started after the listing that inherits its
