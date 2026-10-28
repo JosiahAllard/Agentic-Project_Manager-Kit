@@ -406,6 +406,93 @@ def hub_check(load=None, make_client=None):
     return check
 
 
+RC_GRACE_S = 180     # a session this young may not have connected its Remote Control link yet
+
+
+def rc_key(r):
+    """The rc_lost entry of a session record: name, pid and creation time, so a session stopped and
+    started again under the same name is a new one."""
+    return "%s %s %s" % (r["name"], r.get("pid"), r.get("proc_start"))
+
+
+def rc_events(names, records, alive, rc_pids, lost, now):
+    """(events, lost now) of the Remote Control link check (docs/pm-watch.md "Remote Control link").
+
+    records: the host's session records, dicts {name, pid, proc_start, started_ms, linked}, linked
+    None when the host's record says nothing about the link. alive(rec): its pid runs now with that
+    creation time. rc_pids(): {pid: --remote-control name} of the running sessions, read only when
+    some session looks unlinked. lost: the rc_key of each session already reported. A watched name
+    whose newest live record says unlinked, started more than RC_GRACE_S ago, and whose process was
+    started with --remote-control under that name gives REMOTE ... lost once; the same process read
+    linked again gives REMOTE ... back once. One too young or silent on the link keeps its earlier
+    state, so neither line repeats; a session that is gone, or runs as another process now (a stop
+    and a relaunch), drops out, so the new one starts clean. A record whose name is not text is
+    skipped."""
+    newest = {}
+    for r in records:
+        n, started = r.get("name"), r.get("started_ms")
+        if not isinstance(n, str) or n not in names or isinstance(started, bool)                 or not isinstance(started, (int, float)):
+            continue
+        if (n not in newest or started > newest[n]["started_ms"]) and alive(r):
+            newest[n] = r
+    ev, cur, unlinked = [], [], []
+    for n in sorted(names):
+        r = newest.get(n)
+        if r is None:
+            continue
+        key = rc_key(r)
+        if r.get("linked") is None or now - r["started_ms"] / 1000.0 < RC_GRACE_S:
+            if key in lost:
+                cur.append(key)
+        elif r["linked"]:
+            if key in lost:
+                ev.append("REMOTE %s link back" % n)
+        else:
+            unlinked.append(r)
+    pids = rc_pids() if unlinked else {}
+    for r in unlinked:
+        n, key = r["name"], rc_key(r)
+        if pids.get(r["pid"]) != n:                 # started without --remote-control: no link to lose
+            continue
+        cur.append(key)
+        if key not in lost:
+            ev.append("REMOTE %s link lost: the session runs, its Remote Control link is down "
+                      "(pid %s)" % (n, r["pid"]))
+    return ev, sorted(cur)
+
+
+def rc_check(sessions, reader, dirs=None, ctime=None, rc_pids=None):
+    """The REMOTE check for Watcher: check(lost) -> (lines, lost), over rc_events for the names in
+    sessions.json (watched_sessions) and the PM's (kitlib.launcher.stop.PM_RC_NAME: the PM has
+    no sessions.json entry). reader(dirs) gives the host's session records
+    (on Claude, hosts.claude.adapter.claude_host.rc_records); dirs() the registry folders (default:
+    every configured account's, kitlib.launcher.pipes.registry_dirs, read again on each call);
+    ctime(pid) the process creation time; rc_pids() the running sessions' --remote-control names.
+    The imports happen here, when the watcher is built, so a landing cannot mix modules later."""
+    from kitlib import pmstart
+    from kitlib.launcher import pipes, settings as launcher_settings, stop
+    from kitlib.proc import process
+    if dirs is None:
+        dirs = lambda: pipes.registry_dirs(launcher_settings.load())
+    ctime = ctime or process.proc_ctime
+    if rc_pids is None:
+        # every process: only the pids of live registry records are looked up, so no image filter
+        rc_pids = lambda: {p.get("ProcessId"): pmstart.rc_name(p.get("CommandLine"))
+                           for p in pmstart.list_processes()}
+
+    def alive(r):
+        try:
+            now = ctime(r.get("pid"))
+        except (OSError, ValueError, TypeError):
+            return False
+        return now is not None and r.get("proc_start") is not None and str(now) == str(r["proc_start"])
+
+    def check(lost):
+        names = set(watched_sessions(sessions)) | {stop.PM_RC_NAME}
+        return rc_events(names, reader(dirs()), alive, rc_pids, list(lost or []), time.time())
+    return check
+
+
 def preload(modules=()):
     """Load, at start, every kit module a check imports on its first pass, so a landing that writes
     this checkout later cannot give the running watcher a mix of old and new modules
@@ -421,6 +508,9 @@ def preload(modules=()):
     import kitlib.hubsite.serve
     import kitlib.pluginsource
     import kitlib.pmstart.consoletasks      # kitlib.pluginsource's in-use reads (_processes, _tasks)
+    import kitlib.launcher.pipes            # the REMOTE check (rc_check)
+    import kitlib.launcher.stop
+    import kitlib.proc.process
     for name in modules:
         importlib.import_module(name)
 
@@ -435,13 +525,14 @@ class Watcher:
     plugin: check(last) -> (lines, last) (plugin_check), or None for no PLUGIN check. Unlike the
     others it has no baseline: a plugin export already behind at the first run is reported then.
     hub: check(last) -> (lines, last) (hub_check), or None for no HUB check.
+    rc: check(lost) -> (lines, lost) (rc_check), or None for no REMOTE check; on the idle cadence.
     preload_modules: the host's own modules its checks import late (preload).
     stopped: stopped(name, mtime) -> time or None (stop_log_reader over stop.log beside `sessions`).
     """
 
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
-                 notice_dir=None, plugin=None, preload_modules=(), stopped=None, hub=None):
+                 notice_dir=None, plugin=None, preload_modules=(), stopped=None, hub=None, rc=None):
         preload(preload_modules)
         self.stopped = stop_log_reader(sessions) if stopped is None else stopped
         self.s = state
@@ -456,9 +547,10 @@ class Watcher:
         self.notice_dir = notice_dir
         self.plugin = plugin
         self.hub = hub
+        self.rc = rc
         self.fails = {"branch": 0, "usage": 0, "alerts": 0, "idle": 0, "notices": 0, "plugin": 0,
-                      "hub": 0}
-        self.next_b = self.next_u = self.next_i = self.next_p = self.next_h = 0.0
+                      "hub": 0, "rc": 0}
+        self.next_b = self.next_u = self.next_i = self.next_p = self.next_h = self.next_r = 0.0
 
     def start(self, now):
         s = self.s
@@ -545,4 +637,12 @@ class Watcher:
                 self.fails["hub"] = 0
             except Exception as e:
                 self._failed("hub", e, events)
+        if self.rc and now >= self.next_r:          # on the idle cadence: a folder of small files
+            self.next_r = now + self.idle_poll
+            try:
+                events_rc, s["rc_lost"] = self.rc(s.get("rc_lost", []))
+                events += events_rc
+                self.fails["rc"] = 0
+            except Exception as e:
+                self._failed("rc", e, events)
         return events
