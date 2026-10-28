@@ -760,12 +760,15 @@ ul.hist .sch-line{display:block}
     save.addEventListener("click", () => send(false)); submit.addEventListener("click", () => send(true));
     const again = ed.status === "superseded" || ed.status === "failed";
     const now = again ? el("p", {class:"ctx", id: "sk-body-" + s.id}) : null;
-    if (now) skillBody(s.id, now);
+    // the source to re-apply onto: the text at the edit's source_blob (often main's) when the hub reads it, else the copy it serves
+    if (now) { now.textContent = "Reading the skill from the hub server…";
+      hub.call("GET", "/skill_edits/" + seg(ed.id)).then(r => { if (r.source && typeof r.source.text === "string") now.textContent = r.source.text; else skillBody(s.id, now); },
+        () => skillBody(s.id, now)); }
     return el("article", {class:"q", id: "sk-" + s.id},
       el("div", {class:"meta"}, el("span", {class:"id", text: s.id}), ed.id ? el("span", {class:"chip need", text: "Editing " + ed.id}) : el("span", {class:"chip need", text:"New edit"})),
       el("h2", {text: s.description || "(no description)"}),
       el("p", {class:"unote", text: "Your text replaces the whole of content/skills/" + s.id + "/SKILL.md once an agent commits it; Submit sends it to the kit's coordinator. " + SKILL_LAG}),
-      again ? el("p", {class:"unote", text: "Re-apply on the new text: the skill as the hub serves it now is below your text. Bring your change onto it; Save or Submit puts your edit on that text."}) : null,
+      again ? el("p", {class:"unote", text: "Re-apply on the new text: the skill as it is now is below your text. Bring your change onto it; Save or Submit puts your edit on that text."}) : null,
       ta, el("div", {class:"act"}, save, submit, cancel, st), now);
   }
   function skillEditRow(x){

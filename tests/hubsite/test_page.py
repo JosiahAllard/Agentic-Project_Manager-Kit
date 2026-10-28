@@ -4941,7 +4941,7 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/skills", "/skills", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/skill_edits", "/skills", "/skills", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|writeQuick|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
                                  "/finding_marks", "/skill_edits"})
@@ -5316,6 +5316,20 @@ class TriageViewsTest(unittest.TestCase):
         self.assertEqual(got["was"], "---\nname: builder\n---\nmine\n")
         self.assertIn("now", got["editor"])                # the source as served now, to bring the change onto
         self.assertEqual(got["sent"], [["/skill_edits/E-1/edit", {"text": "---\nname: builder\n---\nmine\nmore\n", "submit": False, "if_version": 4}]])
+
+    def test_a_failed_skill_edit_is_reapplied_on_the_text_at_its_source_blob(self):
+        edits = {"skill_edits": {"E-1": {"status": "superseded", "skill": "builder", "text": "---\nname: builder\n---\nmine\n",
+                                         "version": 3, "base_blob": "b" * 40, "source_blob": "c" * 40, "created_at": NOW}}}
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path === "/skill_edits/E-1"
+              ? { status: 200, body: { ok: true, item: {}, source: { text: "on main", blob: "c".repeat(40) } } } : undefined;
+            await start();
+            const n = calls.length;
+            await click($("#ske-open-E-1"));
+            return { body: text($("#sk-body-builder")), read: calls.slice(n).filter(c => c.method === "GET" && c.path.startsWith("/skill")).map(c => c.path) };
+        """, snapshot(views=self.SKILLS, collections=edits), hash="#skills")
+        self.assertEqual(got["body"], "on main")
+        self.assertEqual(got["read"], ["/skill_edits/E-1"])        # not the served copy, which can lag main
 
     def test_a_skill_edit_is_withdrawn_on_the_second_press_pinned_to_its_version(self):
         edits = {"skill_edits": {"E-3": {"status": "submitted", "skill": "builder", "text": "t", "version": 2,

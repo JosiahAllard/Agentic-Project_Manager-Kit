@@ -877,7 +877,8 @@ commits: the hub writes no repository. Only the source is edited; the rendered c
 | why, closed_at | agent, owner | why it failed; when it failed or was withdrawn |
 
 base_blob is the blob of the copy of the skills this hub serves (`GET /api/v1/skills/<name>/source`),
-taken when the edit is written or re-applied. That copy can lag the kit's main (a plugin export not yet
+taken when the edit is written: the git blob of the text as served (CRLF read as LF, as git stores a
+text file), not of the file's bytes, so a copy checked out with CRLF has its blob on main. That copy can lag the kit's main (a plugin export not yet
 refreshed, a main checkout behind its remote), so the worker's own check against main is the one that
 counts, and the page says so beside the editor.
 
@@ -892,7 +893,7 @@ The routes ("Skill edits" in the `kitlib/hubsite/api.py` docstring):
 | `POST /api/v1/skill_edits/<id>/done` | agent | {branch, blob, if_version}: a submitted edit is committed |
 | `POST /api/v1/skill_edits/<id>/fail` | agent | {why, current_blob?, if_version}: a submitted edit could not be committed |
 | `GET /api/v1/skill_edits` | anyone | the edits, filtered by `status` |
-| `GET /api/v1/skill_edits/<id>` | anyone | {item}: one edit |
+| `GET /api/v1/skill_edits/<id>` | anyone | {item, source}: one edit, and for a superseded or failed one the source text at its `source_blob` (null when the server cannot read it) |
 
 - Who writes: the text is the owner's alone. The three owner writes are OWNER routes, as `POST stories`,
   `stories/<id>/withdraw`, `to_pm` and `finding_marks` are, so an agent's key gets `forbidden` (field
@@ -904,7 +905,13 @@ The routes ("Skill edits" in the `kitlib/hubsite/api.py` docstring):
 - Superseded: submitting when the served source's blob is no longer base_blob makes the edit
   `superseded` with `source_blob`, and so does a fail whose `current_blob` (the blob on main the worker
   read) is not base_blob. The owner re-applies it: an edit of a superseded or failed edit is put on the
-  source as it is now (base_blob becomes its blob) and goes back to draft, or to submitted.
+  source at its `source_blob` when the server can read that blob's text in the kit checkout (`git
+  cat-file`, a read; `kitlib.hubsite.serve._kit_text`) and the page shows that text, else on the source
+  as the server serves it now; base_blob becomes that blob and the edit goes back to draft, or to
+  submitted. So a re-apply onto the blob on main is not superseded again while the served copy lags:
+  submitting is superseded only when base_blob is neither the served blob nor the blob of the source on
+  main in the kit checkout (`_kit_blob`), and its `source_blob` is then main's blob (the served blob when
+  the server cannot read main).
 - Done: the blob must be the git blob of the edit's text as UTF-8, else `invalid` (field `blob`). The
   server also reads the blob of the source on `branch` in this machine's kit checkout with `git
   rev-parse` (a read; `kitlib.hubsite.serve._kit_blob`) and refuses a branch it cannot read or whose
@@ -919,8 +926,9 @@ Worker steps (skill hub-ops "Skill edits"):
 2. In a worktree from main, read `git rev-parse main:content/skills/<name>/SKILL.md`. When it is not the
    edit's base blob, stop: `hub.py skill-edit fail E-<n> --why "the skill changed on main" --at main
    --checkout <worktree> --if-version V` marks it superseded for the owner.
-3. Copy F over the source and commit with `tools/commit.py -m "Skill <name>: owner
-   edit" -b "Text by the owner, hub edit E-<n>"`, which renders the copies.
+3. Copy F over the source and commit it with `tools/commit.py -C <worktree> -m "Skill <name>: owner
+   edit" -b "Text by the owner, hub edit E-<n>" --model "<model name>" content/skills/<name>/SKILL.md`,
+   which renders the copies.
 4. `hub.py skill-edit done E-<n> --branch <branch> --checkout <worktree> --if-version V`. The branch
    lands as any other.
 

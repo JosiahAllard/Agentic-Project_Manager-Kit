@@ -173,8 +173,8 @@ def skill(skills_dir, name):
 
 def skill_source(skills_dir, name):
     """One skill's whole source, {"name", "text", "blob"}: the SKILL.md text, front matter and all
-    (UTF-8, CRLF read as LF), and the git blob id of the file's bytes (a skill edit's base_blob),
-    or None when `name` is not one of the listed folders or the file cannot be read as UTF-8. The
+    (UTF-8, CRLF read as LF), and the git blob id of that text (a skill edit's base_blob: the
+    text as served, as git stores a text file, so a CRLF checkout has its blob on main), or None when `name` is not one of the listed folders or the file cannot be read as UTF-8. The
     name is compared with the folder listing as skill() does."""
     try:
         listed = os.listdir(skills_dir)
@@ -188,7 +188,8 @@ def skill_source(skills_dir, name):
         text = data.decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return None
-    return {"name": name, "text": skilledits.normal(text), "blob": skilledits.git_blob(data)}
+    text = skilledits.normal(text)
+    return {"name": name, "text": text, "blob": skilledits.git_blob(text.encode("utf-8"))}
 
 
 def _str(v):

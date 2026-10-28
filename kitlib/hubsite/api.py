@@ -122,7 +122,7 @@ Skill edits (docs/action-hub.md "skill_edits/E-NNN"). The owner writes a new tex
 skill's source, content/skills/<name>/SKILL.md, and an agent commits it; the hub writes no
 repository. GET skills/{name}/source (ANY) gives {name, text, blob}: the whole SKILL.md of a
 listed skill as this hub serves it (the skill_source view; CRLF read as LF) and the git blob id
-of its bytes. Only the owner writes an edit, as only the owner writes a story (POST stories,
+of that text. Only the owner writes an edit, as only the owner writes a story (POST stories,
 stories/{id}/withdraw, to_pm and finding_marks are OWNER routes too): POST skill_edits {skill,
 text, submit?}, POST skill_edits/{id}/edit {text?, submit?, if_version} and POST
 skill_edits/{id}/withdraw {if_version?} are OWNER, so an agent's key is refused `forbidden`, field
@@ -131,8 +131,10 @@ role, before the body is read, and nothing is written. An edit is draft, or subm
 the kit's main. The text is checked by kitlib.hubsite.skilledits.why_not: at most MAX_BYTES of
 UTF-8, no NUL, and front matter whose `name:` is the source's (an edit never renames a skill).
 Only a draft, superseded or failed edit changes; a superseded or failed one is put on the source
-as it is now (its base_blob is the current blob). Submitting when the served source's blob is not
-base_blob makes it superseded, with source_blob the current blob, for the owner to re-apply.
+at its source_blob when kit_text reads that blob (the text GET skill_edits/{id} shows the owner),
+else on the served source as it is now; its base_blob is that blob. Submitting when base_blob is
+neither the served source's blob nor the blob on main (kit_blob) makes it superseded, with
+source_blob the blob on main (the served blob when kit_blob reads none), for the owner to re-apply.
 POST skill_edits/{id}/done {branch, blob, if_version} and POST skill_edits/{id}/fail {why,
 current_blob?, if_version} are AGENT, and only for a submitted edit: done refuses a blob that is
 not git_blob of the edit's text as UTF-8, and it reads the blob of the source on `branch` in
@@ -140,7 +142,9 @@ the kit checkout itself (the Api's kit_blob) and refuses one it cannot read or t
 blob (field branch), so an agent cannot mark committed a text it never wrote; with no kit_blob it
 reads nothing, so done is refused. fail with a current_blob
 that is not base_blob (the worker's check against main) makes the edit superseded, else failed.
-GET skill_edits (ANY, status) lists the edits, GET skill_edits/{id} (ANY) gives {item}. A
+GET skill_edits (ANY, status) lists the edits, GET skill_edits/{id} (ANY) gives {item, source}:
+source is {text, blob} at a superseded or failed edit's source_blob when kit_text reads it, else
+null. A
 submitted edit is a pending item of kind `skill_edit` ("Routes").
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
@@ -634,13 +638,15 @@ class Api(object):
     of the kit repository's coordinator, '' when none is known (default), so a submitted skill
     edit is the PM's; `kit_blob(branch, path)` gives the blob id of `path` on `branch` in this
     machine's kit checkout, or None when git cannot read it; with none given (default) every
-    read is None, so the done route is refused ("Skill edits")."""
+    read is None, so the done route is refused; `kit_text(blob)` gives the text of that blob in
+    the kit checkout (CRLF read as LF), or None (default: always None) ("Skill edits")."""
 
     def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
                  approval_key=None, checkout=None, lock=None, repo_name=None,
                  schedule_repos=None, tick_seen=None, tick_state=None, kit_key=None,
-                 kit_blob=None):
+                 kit_blob=None, kit_text=None):
         self.store = store
+        self.kit_text = kit_text or (lambda blob: None)
         self.kit_key = kit_key or (lambda: '')
         self.kit_blob = kit_blob or (lambda branch, path: None)
         self.tick_state = tick_state or tick_run_state
@@ -2768,11 +2774,33 @@ def skill_edits_list(api, req):
     return {'items': api.items('skill_edits', req)}
 
 
+def _source_at(api, d):
+    """{text, blob}: the source text at a superseded or failed edit's source_blob, read with
+    kit_text, or None (another status, no source_blob, or kit_text cannot read it)."""
+    blob = d.get('source_blob')
+    if d.get('status') not in ('superseded', 'failed') or not skilledits.is_blob(blob):
+        return None
+    try:
+        text = api.kit_text(blob)
+    except Exception:               # noqa: BLE001 - git could not be asked: not read
+        text = None
+    return {'text': text, 'blob': blob} if isinstance(text, str) else None
+
+
+def _main_blob(api, name):
+    """The blob of skill `name`'s source on main in the kit checkout (kit_blob), or None."""
+    try:
+        got = api.kit_blob('main', skilledits.source_path(name))
+    except Exception:               # noqa: BLE001 - git could not be asked: not read
+        return None
+    return got if skilledits.is_blob(got) else None
+
+
 def skill_edits_get(api, req):
     doc_id = req.params['id']
     d = api.doc('skill_edits', doc_id)
     d['id'] = doc_id
-    return {'item': d}
+    return {'item': d, 'source': _source_at(api, d)}
 
 
 def skill_edits_add(api, req):
@@ -2804,13 +2832,20 @@ def skill_edits_edit(api, req):
         b['text'] = d.get('text')
     text = _skill_text(b, name, src)
     # a draft keeps the source it was written on; a superseded or failed edit is put on the
-    # source as it is now (the owner re-applied it)
-    base = d.get('base_blob') if status == 'draft' else src['blob']
+    # source the owner was shown to re-apply onto: its source_blob's text when the hub reads it,
+    # else the source as served now
+    if status == 'draft':
+        base = d.get('base_blob')
+    else:
+        at = _source_at(api, d)
+        base = at['blob'] if at else src['blob']
     changes = {'text': text, 'base_blob': base, 'status': 'draft', 'source_blob': None,
                'why': None}
     if _flag(b, 'submit', False):
-        if src['blob'] != base:
-            changes.update(status='superseded', source_blob=src['blob'])
+        main = _main_blob(api, name) if base != src['blob'] else None
+        if base != src['blob'] and base != main:
+            # the newest source known: main's when the hub reads it, else the served copy
+            changes.update(status='superseded', source_blob=main or src['blob'])
         else:
             changes.update(status='submitted', submitted_at=api.clock())
     return api.change('skill_edits', doc_id, d, changes, req, {'status': changes['status']})

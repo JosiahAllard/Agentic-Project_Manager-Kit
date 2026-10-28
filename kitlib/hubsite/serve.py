@@ -1019,6 +1019,27 @@ def _kit_blob(kit_root=None, run=None):
     return kit_blob
 
 
+def _kit_text(kit_root=None, run=None):
+    """Api's kit_text(blob) (kitlib.hubsite.api, "Skill edits"): the text of git blob `blob` in
+    the kit checkout, read with `git cat-file blob` (`run`, default kitlib.git.cmd.run, giving
+    bytes; a read: the hub never writes a repository), CRLF read as LF; None when there is no
+    checkout, `blob` is not a blob id, git cannot read it, the bytes are not that blob or are not
+    UTF-8."""
+    def kit_text(blob):
+        from kitlib.git import cmd
+        checkout = kit_checkout(kit_root)
+        if not checkout or not skilledits.is_blob(blob):
+            return None
+        out, _why = (run or cmd.run)(['cat-file', 'blob', blob], checkout)
+        if not isinstance(out, bytes) or skilledits.git_blob(out) != blob:
+            return None
+        try:
+            return skilledits.normal(out.decode('utf-8'))
+        except UnicodeDecodeError:
+            return None
+    return kit_text
+
+
 REMOTE_TTL_S = 60.0     # the longest a remembered origin remote answers (_RemoteIds)
 REMOTE_MISS_TTL_S = 5.0     # the longest a remembered failure to read one answers
 
@@ -1163,7 +1184,8 @@ def build(settings, sources, log=None):
         api = _api.Api(store, views,
                        approval_key=functools.partial(auth.read_approval_key, sources.tokens),
                        checkout=_checkout(views_b), lock=sources.lock, repo_name=repo_name,
-                       kit_key=_kit_key(repo_name, remote_ids), kit_blob=_kit_blob())
+                       kit_key=_kit_key(repo_name, remote_ids), kit_blob=_kit_blob(),
+                       kit_text=_kit_text())
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

@@ -47,8 +47,10 @@ class EditsCase(unittest.TestCase):
         self.views = Views()
         self.branches = {}          # branch -> blob of the skill source on it (kit_blob)
         self.reads = []
+        self.texts = {}             # blob -> its text in the kit checkout (kit_text)
         self.api = api.Api(self.store, views=self.views, clock=CLOCK,
-                           kit_key=lambda: 'kit', kit_blob=self.kit_blob)
+                           kit_key=lambda: 'kit', kit_blob=self.kit_blob,
+                           kit_text=self.texts.get)
 
     def kit_blob(self, branch, path):
         self.reads.append((branch, path))
@@ -188,6 +190,55 @@ class SupersededTest(EditsCase):
         a, b = self.item(one), self.item(two)
         self.assertEqual((a['status'], a['source_blob']), ('superseded', blob(LATER)))
         self.assertEqual((b['status'], b['why']), ('failed', 'commit refused'))
+
+
+class ReapplyOnMainTest(EditsCase):
+    """A fail at a main the served copy lags behind: the owner is shown main's text and the
+    re-apply is put on main's blob, so it is not superseded again while the copy lags."""
+
+    def setUp(self):
+        super().setUp()
+        self.eid = self.add(submit=True)
+        self.ok('POST', '/skill_edits/%s/fail' % self.eid, AGENT,
+                {'why': 'the skill changed on main', 'current_blob': blob(LATER), 'if_version': 1})
+        self.branches['main'] = blob(LATER)       # the served copy still holds OLD
+
+    def reapply(self):
+        return self.ok('POST', '/skill_edits/%s/edit' % self.eid, OWNER,
+                       {'text': LATER + 'mine\n', 'submit': True, 'if_version': 2})
+
+    def test_the_edit_shows_the_text_at_its_source_blob(self):
+        self.texts[blob(LATER)] = LATER
+        got = self.ok('GET', '/skill_edits/%s' % self.eid, AGENT)
+        self.assertEqual(got['source'], {'text': LATER, 'blob': blob(LATER)})
+        self.texts.clear()
+        self.assertIsNone(self.ok('GET', '/skill_edits/%s' % self.eid, AGENT)['source'])
+
+    def test_a_reapply_onto_mains_text_is_submitted_on_mains_blob(self):
+        self.texts[blob(LATER)] = LATER
+        self.reapply()
+        d = self.item(self.eid)
+        self.assertEqual((d['status'], d['base_blob'], d.get('source_blob')),
+                         ('submitted', blob(LATER), None))
+
+    def test_a_source_blob_the_hub_cannot_read_is_reapplied_on_the_served_copy(self):
+        self.reapply()
+        d = self.item(self.eid)
+        self.assertEqual((d['status'], d['base_blob']), ('submitted', blob(OLD)))
+
+    def test_a_reapply_onto_a_main_that_moved_again_is_superseded(self):
+        self.texts[blob(LATER)] = LATER
+        self.branches['main'] = blob(LATER + 'again\n')
+        self.reapply()
+        d = self.item(self.eid)
+        self.assertEqual((d['status'], d['base_blob'], d['source_blob']),
+                         ('superseded', blob(LATER), blob(LATER + 'again\n')))
+
+    def test_a_draft_keeps_its_base_and_is_superseded_on_neither_blob(self):
+        eid = self.add()
+        self.views.sources['builder'] = LATER + 'served\n'
+        self.ok('POST', '/skill_edits/%s/edit' % eid, OWNER, {'submit': True, 'if_version': 1})
+        self.assertEqual(self.item(eid)['status'], 'superseded')
 
 
 class DoneTest(EditsCase):
@@ -335,6 +386,33 @@ class PushTest(unittest.TestCase):
 
 
 class KitCheckoutTest(unittest.TestCase):
+    def test_kit_text_reads_the_blob_with_cat_file_and_checks_its_bytes(self):
+        calls, data = [], b'---\r\nname: builder\r\n---\r\nx\r\n'
+        want = skilledits.git_blob(data)
+
+        def run(args, cwd):
+            calls.append((args, cwd))
+            return (data, None) if args[-1] == want else (b'other', None)
+        with mock.patch.object(serve, 'kit_checkout', lambda kit_root=None: 'C:/kit'):
+            kt = serve._kit_text(run=run)
+            self.assertEqual(kt(want), '---\nname: builder\n---\nx\n')
+            self.assertIsNone(kt('b' * 40))             # bytes that are not that blob
+            self.assertIsNone(kt('not a blob'))         # git is not asked
+        self.assertEqual(calls, [(['cat-file', 'blob', want], 'C:/kit'),
+                                 (['cat-file', 'blob', 'b' * 40], 'C:/kit')])
+        with mock.patch.object(serve, 'kit_checkout', lambda kit_root=None: None):
+            self.assertIsNone(serve._kit_text(run=run)(want))
+
+    def test_the_served_blob_is_the_text_as_git_stores_it_not_a_crlf_files_bytes(self):
+        from kitlib.hubsite import derived
+        root = tempfile.mkdtemp(prefix='kit-skillsrc-')
+        self.addCleanup(shutil.rmtree, root, True)
+        os.makedirs(os.path.join(root, 'builder'))
+        with open(os.path.join(root, 'builder', 'SKILL.md'), 'wb') as f:
+            f.write(OLD.replace('\n', '\r\n').encode('utf-8'))
+        self.assertEqual(derived.skill_source(root, 'builder'),
+                         {'name': 'builder', 'text': OLD, 'blob': blob(OLD)})
+
     def test_kit_blob_reads_the_branch_with_rev_parse_and_nothing_else(self):
         calls = []
 
