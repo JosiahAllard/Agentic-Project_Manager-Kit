@@ -71,14 +71,24 @@ With `--node NAME`, the checkout must have no uncommitted tracked changes (the n
 the node must list the repository in `repos`.
 
 Artifacts land only when every one came whole. Each is checked for size and sha256 and fetched
-once more on a failure. None may be a tracked file, and none may land outside the checkout. Main
-copies all of them or none. When they do not all come, the staging folder is kept and named, and
-the job stays on the node until a later start sweeps it (7 days after it ended).
+once more on a failure. None may be a tracked file in any case (NTFS opens `CONFIG.H` as a tracked
+`config.h`), none may have a part shaped like an 8.3 short name (`~` and a digit), and none may
+land outside the checkout. Main copies all of them or none: each goes first to a new file beside
+its place, then all are moved in, and a copy or move that fails (a locked file, a file where a
+folder must be) puts the checkout back as it was. When they do not all land, the staging folder
+is kept and named, and the job stays on the node until a later start sweeps it (7 days after it
+ended); `node.py follow` with the same globs fetches them again.
 
 When the machine config turns lock-window notices on for the kind, a start notice and an end
 notice bracket the job's window on the node, as for a run on main.
 
 ### Choosing a machine
+
+Until the next slice (S2b) fixes the node's side of `status`, `--node auto` picks no node: on a
+Linux node `status` refuses with "the machine lock cannot be read here (PlatformUnsupported)"
+(`kitlib/lock/api.py` `_hardware` reads memory through `kitlib.proc.process.memory_mb`, which is
+Windows only), so no node qualifies and every auto run goes to main. `--node NAME` does not ask
+`status` and runs on the node named.
 
 `--node auto` (the default) runs the job where the kind's slots are free now. A machine qualifies
 when its machine lock has the slots free and nobody waits there. A node also qualifies only when:
@@ -101,7 +111,9 @@ Auto runs on main, and says why, for any of these:
 - main's lock cannot be read;
 - the kind cannot be sized.
 
-A node that fails before its job starts, or is busy, gives way to main.
+A node that fails before its job starts, or is busy, gives way to main. Once the node has started
+the job, only the node's own lock refusing it as busy (the command never ran) still does; no
+other failure sends it to main, where it would run twice.
 
 ### A dropped connection
 
@@ -128,4 +140,4 @@ cleans the job and its artifacts with it.
 | 6 | the node was busy (with `--node NAME`) | |
 | 9 | LOST: the connection did not come back; the job runs on | |
 | 10 | the node could not be used: unreachable, host key, push, start refused, a kit too old for the run verbs, or its runner vanished | |
-| 13 | the job succeeded but its artifacts did not all come | |
+| 13 | the job succeeded but its artifacts did not all come, or could not all be copied into the checkout (none was) | |
