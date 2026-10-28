@@ -272,8 +272,10 @@ preparation and at every start, the Codex half (`hosts/codex/locate.py`) does th
   current package's `app\resources\codex.exe`. Without a package path in the configuration it is
   left as written.
 
-Its refusals are `codex-package-unavailable`, `codex-package-ambiguous` (two package families) and
-`codex-cli-image-unmatched-<setting>` or `codex-cli-image-ambiguous-<setting>`.
+Its refusals are `codex-package-unavailable`, `codex-package-ambiguous` (two package families),
+`codex-package-location-refused` (the current install is not directly in a WindowsApps folder, or a
+configured path leaves the package) and `codex-cli-image-unmatched-<setting>` or
+`codex-cli-image-ambiguous-<setting>`. Profile setting names are checked against the schema first.
 
 ## Install
 

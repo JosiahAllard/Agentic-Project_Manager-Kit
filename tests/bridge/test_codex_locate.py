@@ -89,6 +89,32 @@ class LocateTests(unittest.TestCase):
             locate([self.stale_app], {'desktop_executable': other})
         self.assertEqual(raised.exception.code, 'codex-package-ambiguous')
 
+    def test_a_current_install_outside_a_windowsapps_folder_is_refused(self):
+        # A package registered loose (Add-AppxPackage -Register) from a folder the user can write.
+        loose = Path(self.temp.name) / 'Users' / ('OpenAI.Codex_26.1023.6123.0_x64__' + PUBLISHER)
+        self.lookups.side_effect = None
+        self.lookups.return_value = loose
+        with self.assertRaises(DeliveryError) as raised:
+            locate([self.stale_cli], {'desktop_executable': self.stale_app})
+        self.assertEqual(raised.exception.code, 'codex-package-location-refused')
+
+    def test_a_place_that_leaves_the_package_is_refused(self):
+        for rest in (('..', 'other', 'tool.exe'), ('app', '..', '..', 'tool.exe')):
+            with self.subTest(rest=rest):
+                value = str(self.old.joinpath(*rest))
+                with self.assertRaises(DeliveryError) as raised:
+                    locate([self.stale_cli], {'desktop_executable': value})
+                self.assertEqual(raised.exception.code, 'codex-package-location-refused')
+
+    def test_a_setting_name_becomes_a_code_the_service_prints(self):
+        Path(self.current_cli).write_bytes(b'tampered cli')
+        for name in ('Desktop_Executable', 'Bad Key!', 'x' * 80):
+            with self.subTest(name=name):
+                with self.assertRaises(DeliveryError) as raised:
+                    locate([self.current_cli], {name: self.stale_cli, 'desktop_executable': self.stale_app})
+                self.assertRegex(raised.exception.code, r'\A[a-z][a-z0-9-]{0,63}\Z')
+                self.assertTrue(raised.exception.code.startswith('codex-cli-image-unmatched-'))
+
     def test_without_a_package_path_nothing_is_looked_up_or_moved(self):
         terminal = str(Path(self.temp.name) / 'npm' / 'codex.exe')
         values = ([self.stale_cli, terminal], {'profile_root': self.temp.name})

@@ -40,12 +40,28 @@ def _absolute(value, *, exists=True, role=None):
     return path.resolve(strict=exists)
 
 
+def _schema(kind,kit,profile):
+    """`kind`'s installed profile schema, once `profile` names exactly its settings."""
+    # Schemas are installed native-provider data, never a configuration URL
+    # or an executable/import named by a model or profile.
+    # Only a peer peers.json lists, with a half: an unlisted half is never read.
+    if kind not in registry.names(kit=kit):raise DeliveryError('native-provider-unavailable')
+    regular(registry.half_dir(kind,kit),directory=True)
+    required,optional,directories,names=registry.profile_schema(
+        document(stable_bytes(registry.profile_path(kind,kit),4096)))
+    if not required<=set(profile) or set(profile)-required-optional:
+        raise DeliveryError('invalid-native-provider-config')
+    return directories,names
+
+
 def _located(data,kit):
     """`data` with each served half's locate() applied to its images and profile: a host whose
-    own updates move its executables names their current paths before the check (port.py)."""
+    own updates move its executables names their current paths before the check (port.py).
+    A profile reaches locate() only once its setting names are the schema's."""
     hosts,profiles=dict(data['native_hosts']),dict(data['profiles'])
     for kind in hosts:
         if kind not in registry.names(kit=kit): continue  # refused below, its half never imported
+        _schema(kind,kit,profiles[kind])
         locate=registry.half(kind).locate
         if locate is not None: hosts[kind],profiles[kind]=locate(hosts[kind],profiles[kind])
     return {**data,'native_hosts':hosts,'profiles':profiles}
@@ -54,15 +70,7 @@ def _located(data,kit):
 def _profiles(values,kit):
     result={}
     for kind,profile in values.items():
-        # Schemas are installed native-provider data, never a configuration URL
-        # or an executable/import named by a model or profile.
-        # Only a peer peers.json lists, with a half: an unlisted half is never read.
-        if kind not in registry.names(kit=kit):raise DeliveryError('native-provider-unavailable')
-        regular(registry.half_dir(kind,kit),directory=True)
-        required,optional,directories,names=registry.profile_schema(
-            document(stable_bytes(registry.profile_path(kind,kit),4096)))
-        if not required<=set(profile) or set(profile)-required-optional:
-            raise DeliveryError('invalid-native-provider-config')
+        directories,names=_schema(kind,kit,profile)
         settings={}
         for name,value in profile.items():
             if name in names:

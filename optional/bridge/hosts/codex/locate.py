@@ -14,6 +14,10 @@ of those two shapes to its current counterpart; every other value is returned un
   package by its bytes, never by its folder name. No package path in the configuration means no
   reference: the bin path is left as configured, and the configuration check names it if it is gone.
 
+The current install must sit directly in a WindowsApps folder, as every pin the owner reviewed
+did, and the place inside the package must stay inside it (no '..', no drive or root): a package
+registered from a folder the user can write to is refused (codex-package-location-refused).
+
 Refusals are identifiers that name the setting, never a path (tools/bridge_service.py "_reason").
 It runs at preparation and at every service start (win/runtime.parse_config); an update while the
 service runs still needs a restart (STATUS.md).
@@ -34,6 +38,8 @@ REFERENCE = ('app', 'resources', 'codex.exe')
 CLI_NAME = 'codex.exe'
 ERROR_INSUFFICIENT_BUFFER = 122
 CHUNK = 1 << 20
+CODE_MAX = 64
+ROLE_CHARACTERS = frozenset('abcdefghijklmnopqrstuvwxyz0123456789-')
 
 _by_family = bind(K, 'GetPackagesByPackageFamily',
     [w.LPCWSTR, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(w.LPWSTR),
@@ -69,6 +75,19 @@ def _package_place(value):
         if match and parts[index-1].casefold() == 'windowsapps' and index+1 < len(parts):
             return PACKAGE_NAME + '_' + match.group(1).lower(), parts[index+1:]
     return None
+
+
+def _role(name):
+    """A setting name as a code part: lowercase, '_' as '-', any other character '-', capped so
+    the longest code built on it fits _reason's [a-z][a-z0-9-]{0,63}."""
+    role = ''.join(c if c in ROLE_CHARACTERS else '-' for c in name.lower().replace('_', '-'))
+    return role[:CODE_MAX - len('codex-cli-image-ambiguous-')] or 'setting'
+
+
+def _inside(place):
+    """True when a place inside the package cannot leave it."""
+    return bool(place) and all(part not in ('', '.', '..') and ':' not in part
+        and '/' not in part and '\\' not in part for part in place)
 
 
 def _bin_folder(value):
@@ -112,28 +131,34 @@ def locate(images, profile):
     single = isinstance(images, str)
     listed = [images] if single else list(images) if isinstance(images, (list, tuple)) else None
     settings = dict(profile) if isinstance(profile, dict) else profile
-    values = [('native-image-%d' % index, value) for index, value in enumerate(listed or ())]
+    # (where the value sits, the setting named in a refusal, the value)
+    values = [(('image', index), 'native-image-%d' % index, value) for index, value in enumerate(listed or ())]
     if isinstance(settings, dict):
-        values += [(name.replace('_', '-'), value) for name, value in settings.items()]
-    values = [(role, value) for role, value in values if isinstance(value, str)]
-    families = {place[0] for place in map(_package_place, (value for _, value in values)) if place}
+        values += [(('profile', name), _role(name), value) for name, value in settings.items()
+            if isinstance(name, str)]
+    values = [entry for entry in values if isinstance(entry[2], str)]
+    families = {place[0] for place in (_package_place(value) for _, _, value in values) if place}
     if not families:
         return images, profile
     if len(families) > 1:
         raise DeliveryError('codex-package-ambiguous')
     current = package_path(families.pop())
+    if not current.is_absolute() or current.parent.name.casefold() != 'windowsapps':
+        raise DeliveryError('codex-package-location-refused')
     moved = {}
-    for role, value in values:
+    for where, role, value in values:
         place = _package_place(value)
         if place:
-            moved[role] = str(current.joinpath(*place[1]))
+            if not _inside(place[1]):
+                raise DeliveryError('codex-package-location-refused')
+            moved[where] = str(current.joinpath(*place[1]))
             continue
         folder = _bin_folder(value)
         if folder is not None:
-            moved[role] = _cli_copy(folder, current.joinpath(*REFERENCE), role)
+            moved[where] = _cli_copy(folder, current.joinpath(*REFERENCE), role)
     if isinstance(settings, dict):
-        settings = {name: moved.get(name.replace('_', '-'), value) for name, value in settings.items()}
+        settings = {name: moved.get(('profile', name), value) for name, value in settings.items()}
     if listed is None:
         return images, settings
-    listed = [moved.get('native-image-%d' % index, value) for index, value in enumerate(listed)]
+    listed = [moved.get(('image', index), value) for index, value in enumerate(listed)]
     return (listed[0] if single else listed), settings

@@ -143,6 +143,22 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(config.profiles['codex']['desktop_executable'],
             str((current/'app'/'ChatGPT.exe').resolve()))
 
+    def test_a_setting_the_schema_lacks_is_refused_before_codex_locates_anything(self):
+        # A key outside the schema with an unmatchable bin path: the schema check refuses it
+        # first, so no bare locate code (and no package lookup) comes out.
+        from optional.bridge.hosts.codex import locate as codex_locate
+        stale=str(self.root/'Local'/'OpenAI'/'Codex'/'bin'/'aaaaaaaaaaaaaaaa'/'codex.exe')
+        app=str(self.root/'WindowsApps'/'OpenAI.Codex_1.0.0.0_x64__2p2nqsd0c76g0'/'app'/'ChatGPT.exe')
+        for key in ('Bad Key!','extra_executable'):
+            with self.subTest(key=key):
+                candidate=json.loads(json.dumps(self.document))
+                candidate['profiles']['codex'][key]=stale
+                candidate['profiles']['codex']['desktop_executable']=app
+                with mock.patch.object(codex_locate,'package_path') as lookup,                         self.assertRaises(DeliveryError) as raised:
+                    bootstrap.parse_config(candidate)
+                self.assertEqual(raised.exception.code,'invalid-native-provider-config')
+                lookup.assert_not_called()
+
     def test_factories_receive_real_controller_and_run_before_marker_publication(self):
         config=self.load()
         constructed=[]
