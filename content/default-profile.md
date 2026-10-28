@@ -28,9 +28,9 @@ worktree (a linked worktree of the repository), write nothing there: your task w
 The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>`. Before review and landing, on
 the exact tip, run `--full` (every step) for a branch that changes a strict path (`STRICT_DEFAULTS`
 in `<kit>/kitlib/gate/strict_defaults.py`: it lands alone after a strong-tier review by someone other
-than its author, and its merged gate runs `--full --fresh`). Any other branch runs `--full` or the optimized
-default gate (no flag: diff selection and the smoke steps, plus reuse for a step whose config asks
-for it) as `<kit>/docs/gate.md` "Landing" says (strict and shared paths, smoke steps). `--only <step>` is for interim runs. The gate reads the repository's `"gate"` section
+than its author, and its merged gate runs `--full --fresh`). Any other branch runs the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`); the optimized
+default gate is the no-flag run (diff selection and the smoke steps, plus reuse for a step whose config asks
+for it). `--only <step>` is for interim runs. The gate reads the repository's `"gate"` section
 in `.kit.json` when there is one, else detects the stack from the files (Python, Node, Rust, Go,
 .NET) and runs its usual test and lint steps; its verdict line then says "auto-detected"
 (`<kit>/docs/gate.md` "Auto-detected gate"). Read that line: an auto-detected gate may run the wrong

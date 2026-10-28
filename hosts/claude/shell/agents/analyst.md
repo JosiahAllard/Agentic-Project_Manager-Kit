@@ -19,9 +19,8 @@ reviewer-model rule, or to sonnet by the research rule, in its dispatch roster. 
 ## Required inputs
 
 - **A review**: the **brief**, as the author received it; the **diff range** (merge base and
-  branch tip) and the worktree path; the **author's gate report** (the final one on that tip:
-  `gate.py --full` or the default gate as `<kit>/docs/gate.md` "Landing" says: strict and shared
-  paths, smoke steps) and the paths of its test logs; anything the caller already knows is risky. Missing
+  branch tip) and the worktree path; the **author's gate report** (the final one on that tip, as
+  the final gate `<kit>/docs/gate.md` "The final gate" names; when unsure, `--full`) and the paths of its test logs; anything the caller already knows is risky. Missing
   the brief: say so and stop - a diff reviewed without its intent can only be checked for style.
 - **Research**: **the question**, narrow enough to answer; **the constraints already settled** (the
   owner's decisions, the parts not up for discussion); **the code and docs to read**. Missing the
