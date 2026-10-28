@@ -50,12 +50,16 @@ def runs_cli(cmd):
     return pmstart.runs_cli(cmd, ((prof.cli_program, prof.cli_package),))
 
 
-def claude_sessions(procs):
+def launched(procs):
+    """The running session processes of the default host (launched or not by the launcher)."""
     images = _session_images()
     linux = platform.NAME == 'linux'
     return [p for p in procs
             if p.get('Name') in images and p.get('CommandLine') and (not linux or runs_cli(p['CommandLine']))
             and pmstart.STORE_DIR not in (p.get('ExecutablePath') or '')]
+
+
+claude_sessions = launched       # the older name, kept for its callers
 
 
 def find_exact(sessions, name):

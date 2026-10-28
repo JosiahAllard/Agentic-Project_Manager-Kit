@@ -60,7 +60,7 @@ def pm_running(procs, records, sid):
     pm-session (reboot.running's test)."""
     if any(r.get('sessionId') == sid for r in records):
         return True
-    for p in lookup.claude_sessions(procs):
+    for p in lookup.launched(procs):
         cmd = p.get('CommandLine') or ''
         if sid in cmd or lookup.rc_name(cmd) == S.PM_NAME:
             return True
@@ -73,7 +73,7 @@ def check_name(settings, procs, records, name):
     if not name or name.strip() != name or '\n' in name or '\r' in name:
         raise LaunchError('--name must be a session name on one line, no surrounding spaces; nothing was started.')
     window.check_name(name)
-    live = lookup.find_exact(lookup.claude_sessions(procs), name)
+    live = lookup.find_exact(lookup.launched(procs), name)
     if live:
         raise LaunchError("--name '%s' is already taken: a session of that name is running (PID %s); nothing was "
                           'started.' % (name, lookup.pids(live)))
@@ -91,7 +91,7 @@ def check_name(settings, procs, records, name):
 
 def fork_command(sid, name):
     """The fork's claude command line."""
-    return window.claude_command(name, FORK_PROMPT % (name, name, name), S.run_as(PM_AGENT), resume=sid, fork=True)
+    return window.session_command(name, FORK_PROMPT % (name, name, name), S.run_as(PM_AGENT), resume=sid, fork=True)
 
 
 def relaunch(settings, host, name, delivery=None):

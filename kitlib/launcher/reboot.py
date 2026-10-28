@@ -167,7 +167,7 @@ def resume_pm(settings, host, cfg, log, dry_run=False):
         return []
     procs = host.processes()
     pm_name = cfg.get('pm_name')                     # pm-relaunch's fork: its command line carries the old id
-    named = isinstance(pm_name, str) and pm_name and lookup.find_exact(lookup.claude_sessions(procs), pm_name)
+    named = isinstance(pm_name, str) and pm_name and lookup.find_exact(lookup.launched(procs), pm_name)
     if running(procs, 'pm-session') or running(procs, sid) or named:
         log('pm-session already running, skipped')
         return []

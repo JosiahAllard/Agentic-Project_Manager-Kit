@@ -81,8 +81,8 @@ def q(text):
     return "'" + str(text).replace("'", "''") + "'"
 
 
-def claude_command(name, prompt, agent=None, model=None, effort=None, autocompact=None, resume=None,
-                   add_dir=None, remote_control=True, fork=False):
+def session_command(name, prompt, agent=None, model=None, effort=None, autocompact=None, resume=None,
+                    add_dir=None, remote_control=True, fork=False):
     """`add_dir`: a folder the session's file tools may also use (`--add-dir`; a home worktree's
     main checkout, docs/launcher.md "The home worktree"). `remote_control` False drops only the
     `--remote-control <name>` pair (a measurement; lookup finds the session by `-n`). `fork` with
@@ -105,6 +105,8 @@ def claude_command(name, prompt, agent=None, model=None, effort=None, autocompac
     parts += ['--remote-control', q(name)] if remote_control else []
     parts += ['-n', q(name), q(prompt)]
     return ' '.join(parts)
+
+claude_command = session_command     # the older name, kept for its callers
 
 
 def script(name, role, folder, command, config_dir=None, agent_temp=None):
