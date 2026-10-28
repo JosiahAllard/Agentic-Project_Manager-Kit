@@ -76,7 +76,7 @@ class SurveyWording(unittest.TestCase):
         windows = self.flat(self.survey('windows', admin=False, apply=True))
         self.assertIn('not elevated: %s is root-owned;' % LINUX, linux)
         self.assertNotIn('HKLM', linux)
-        self.assertIn('not elevated: %s is under HKLM;' % WINDOWS, windows)
+        self.assertIn('not elevated: HKLM\\SOFTWARE\\pm-kit is under HKLM; run python ', windows)
 
 
 if __name__ == '__main__':

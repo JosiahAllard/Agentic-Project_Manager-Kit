@@ -84,9 +84,10 @@ def survey(ctx, apply=False):
     if not ctx.host.is_admin():
         if apply:
             plan.refuse('not elevated: %s is %s; run %s from an administrator terminal, or '
-                        'by hand there: %s' % (cpointer.where(),
-                                               'root-owned' if linux else 'under HKLM',
-                                               command(ctx.kit, value), cpointer.command(value)))
+                        'by hand there: %s' % (
+                            cpointer.where() if linux else cpointer.KEY_NAME,
+                            'root-owned' if linux else 'under HKLM',
+                            command(ctx.kit, value), cpointer.command(value)))
             return plan
         plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
     if old is None:

@@ -417,7 +417,8 @@ class PointerLineWording(unittest.TestCase):
     """configline.pointer_line names the registry value on Windows and the pointer files on Linux."""
 
     def line(self, name, state, error=None):
-        with mock.patch('kitlib.platform.NAME', name),                 mock.patch.object(pointer, 'read', return_value=pointer.Pointer(state, None, error)):
+        with mock.patch('kitlib.platform.NAME', name), \
+                mock.patch.object(pointer, 'read', return_value=pointer.Pointer(state, None, error)):
             return configline.pointer_line()
 
     def test_none_on_windows_names_the_registry_value(self):
