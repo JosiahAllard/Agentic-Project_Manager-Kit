@@ -21,10 +21,13 @@ Owner-only rows read OK (approved), MISSING or UNMATCHED (both block), or REVERT
 edit the branch itself takes back, printed so a reviewer sees the round-trip but not counted as a
 problem, because the path is byte-identical to the merge base. The rules are the base's `owner`
 section merged with the branch's (kitlib.config.owner.merge): a branch cannot unlock a path, and
-the owner's email comes from the base alone. A trailer approves only on a commit whose AUTHOR
-email is the owner's; `Owner-Approval: hub:A-<n>` (the hub form) on a non-merge commit reads ok by its
-form only, and landing verifies it; with "owner".email unset every Owner-Approved trailer is
-unverified and every owner-only change blocks.
+the owner's email comes from the base alone. As the landing guard judges (docs/guard.md "Owner-only
+commits"), a commit whose AUTHOR email is the owner's (read by ownercommits.commits, judged by
+rules.is_owner) is ok, with or without a trailer; its row shows an Owner-Approved trailer that
+covers the path. On anyone else's commit an Owner-Approved trailer approves nothing;
+`Owner-Approval: hub:A-<n>` (the hub form) on a non-merge commit reads ok by its form only, and
+landing verifies it; with "owner".email unset no commit is the owner's and every owner-only change
+blocks.
 
 `.kit.json` "review_pack" as the BASE holds it (a branch cannot switch its own check off):
 "coauthor" (default false) lists the branch's commits with no Co-Authored-By trailer, each with
@@ -291,10 +294,14 @@ def owner_approval_rows(commits, rules):
     """[(sha, changed paths, Owner-Approved values, not_owner[, hub values])] ->
     [(sha, status, subject, detail)].
 
-    MISSING: a locked path this commit changes that no trailer OF ITS OWN covers (approval is per
-    commit), or that a trailer covers on a commit `not_owner` says is not provably the owner's.
-    UNMATCHED: a trailer naming a path this commit does not change. Each locked path needs its own
-    cover. The hub form (`Owner-Approval: hub:A-<n>`, the 5th field, read as ownercommits reads it;
+    A commit `not_owner` is None for (the owner authored it, by the landing guard's own test:
+    owner_only_section) is ok on every locked path, as the landing judges it
+    (kitlib.guard.ownercommits: an owner's commit is never a violation); its row shows the
+    Owner-Approved trailer that covers the path, if one does.
+    MISSING, on anyone else's commit: a locked path no hub approval of its own covers (approval is
+    per commit; an Owner-Approved trailer there is an unproven claim and covers nothing).
+    UNMATCHED: a trailer naming a path this commit does not change. The hub form
+    (`Owner-Approval: hub:A-<n>`, the 5th field, read as ownercommits reads it;
     the 6th says the commit is a merge, which cannot carry one)
     covers every locked path of a commit when it is the one valid value; the hub verifies it at land
     time (kitlib.guard.ownercommits), which this read-only pack cannot, so the row says so."""
@@ -308,7 +315,10 @@ def owner_approval_rows(commits, rules):
             if not rules.is_locked(path):
                 continue
             got = rules.approved_by(path, values)
-            if not got and hub_ok:
+            if not not_owner:
+                rows.append((sha, 'ok', path, '%s %s' % (key, got) if got else
+                             'authored by the owner (the landing judges by author email)'))
+            elif not got and hub_ok:
                 rows.append((sha, 'ok', path, '%s %s (the hub verifies it at land time, not this pack)'
                              % (ownercommits.TRAILER, hub[0])))
             elif not got and hub and merge:
@@ -318,14 +328,13 @@ def owner_approval_rows(commits, rules):
             elif not got and hub:
                 rows.append((sha, 'MISSING', path, 'do not land - its %s %s is not one hub:A-<n> (as %s)'
                              % (ownercommits.TRAILER, ', '.join(hub), ownercommits.EXAMPLE)))
-            elif got and not_owner:
+            elif got:
                 rows.append((sha, 'MISSING', path, 'do not land - %s %s is on a commit %s'
                              % (key, got, not_owner)))
-            elif got:
-                rows.append((sha, 'ok', path, '%s %s' % (key, got)))
             else:
-                rows.append((sha, 'MISSING', path, 'do not land - trailers on this commit: %s'
-                             % (', '.join('%s %s' % (key, t) for t in values) or 'none')))
+                rows.append((sha, 'MISSING', path, 'do not land - a commit %s; trailers on this '
+                             'commit: %s' % (not_owner, ', '.join('%s %s' % (key, t) for t in values)
+                                             or 'none')))
         for value in values:
             if not rules.trailer_matches(value, paths):
                 rows.append((sha, 'UNMATCHED', '%s %s' % (key, value),
@@ -385,6 +394,12 @@ def owner_only_section(root, base, branch, mb, rules):
     rules.is_locked() on every path, never a git pathspec (those match case-sensitively)."""
     rng = '%s..%s' % (base, branch)
     identity = rules.identity_problem()
+    # Who authored each commit, read as the landing guard reads it (no mailmap, no replace refs)
+    # and judged by its test, rules.is_owner, so this table and the landing cannot disagree.
+    found, why = ownercommits.commits(root, branch, [base])
+    if found is None:
+        raise Stop('%s: %s' % (TOOL, why))
+    authors = {sha: email for sha, _, email, _ in found}
     simple, merges = [], []
     for sha, merge, author, body, names in range_commits(root, rng):
         values = trailers_of(body, rules.trailer)
@@ -392,6 +407,7 @@ def owner_only_section(root, base, branch, mb, rules):
         paths = commit_paths(root, sha) if merge else names
         if not values and not any(rules.is_locked(p) for p in paths):
             continue
+        author = authors.get(sha, '')
         not_owner = None if rules.is_owner(author) else (
             'whose author cannot be verified: %s' % identity if identity
             else 'authored by %s, not the owner' % (author or '?'))

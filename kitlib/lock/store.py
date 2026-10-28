@@ -427,6 +427,18 @@ def public(d):
 
 
 # ------------------------------------------------------------------ the run mutex
+def record_state(d):
+    """wrapper_state of record or entry d's pid and ctime, but None (cannot tell) on Linux when d
+    names a pid namespace (`pidns`, Run's record) other than this process's: a pid is a number
+    in one namespace, and a wrapper inside a job's namespace (contain's W1) or a checker inside
+    one sees the other's pids as other processes'."""
+    if kitlib.platform.NAME == "linux":
+        ns = d.get("pidns")
+        if ns is not None and ns != procfs.pidns():
+            return None
+    return wrapper_state(d.get("pid", 0), d.get("ctime"))
+
+
 def wrapper_state(pid, ctime):
     """Is the wrapper (pid, ctime) of a run record live? True when pid names a running process
     created at ctime. False when it surely names none: no such pid, one that has exited, or one
@@ -586,11 +598,11 @@ class Store:
         no live process, or its run mutex is gone, abandoned or unowned. A mutex this process may
         not open leaves it to the pid and creation time. On Linux the run lock (run_mutex_held)
         must be free, and the pid and creation time must not show the wrapper live
-        (wrapper_state): a pid that names no process is never enough on its own, since a checker
+        (record_state): a pid that names no process is never enough on its own, since a checker
         in its own pid namespace sees no wrapper's pid, but any namespace sees its flock. Exactly
         what run_live does not take as live."""
         if kitlib.platform.NAME == "linux":
-            return (wrapper_state(e.get("pid", 0), e.get("ctime")) is not True
+            return (record_state(e) is not True
                     and self.run_mutex_held(str(e["id"])) is False)
         try:
             if not process.alive(int(e.get("pid") or 0), e.get("ctime")):
@@ -623,7 +635,7 @@ class Store:
 
     def run_live(self, d):
         """Is record or entry d's wrapper live? Its pid and creation time decide when they can be
-        checked (wrapper_state). When they cannot (a process this user may not open, which a
+        checked (record_state: never across pid namespaces). When they cannot (a process this user may not open, which a
         reused pid can name, or a record with no creation time), its run mutex decides: a wrapper
         holds it from before its record is written until after the record leaves active/
         (run.claim_id, run.settle), so one gone, abandoned or unowned means the wrapper is gone.
@@ -631,7 +643,7 @@ class Store:
         pid and creation time that name no process are not enough either: the run lock decides
         then too, and only a free one is gone (run_dead: a checker in its own pid namespace sees
         no wrapper's pid); with no run id to ask it by, the pid's answer stands."""
-        state = wrapper_state(d.get("pid", 0), d.get("ctime"))
+        state = record_state(d)
         rid = d.get("id")
         if state is False and kitlib.platform.NAME == "linux":
             return (isinstance(rid, str) and bool(ID_RE.match(rid))
@@ -714,7 +726,7 @@ class Store:
             elif prune:
                 ended = self.path("ended", n)
                 if not os.path.exists(ended):
-                    gone = wrapper_state(d.get("pid", 0), d.get("ctime")) is False
+                    gone = record_state(d) is False
                     try:
                         write_json(ended, dict(public(d), state="ended", code=None, how="reaped",
                                                ended=iso(), reaped="its wrapper process is gone"

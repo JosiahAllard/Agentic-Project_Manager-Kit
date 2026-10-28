@@ -146,7 +146,9 @@ copy stays until a live Codex install shows it loads skills from outside its plu
 manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
 `hosts/codex/shell/mcp.json` (the read-only lock server and the hub server) and `hosts/codex/shell/hooks/hooks.json`
 (every declared hook event running `boot/hook.py codex <event>`, the plugin's copy, as one
-command string). Its `vendored(root)` ships byte copies of `boot/kitboot.py` and `boot/hook.py` in
+command string), with `hooks.linux.json` beside it as for Claude ("Manifests"): the Linux command
+line joined as a POSIX shell line, `${PLUGIN_ROOT}/boot/hook.py` in double quotes and the body in
+single quotes (`posix_quote`). Its `vendored(root)` ships byte copies of `boot/kitboot.py` and `boot/hook.py` in
 `hosts/codex/shell/boot/`, and `hosts/codex/shell/hosts.json`, hosts.json's Codex entry alone: the
 Codex plugin root is `hosts/codex/shell`, so a copied plugin carries the hook entry, the hook data it
 reads before the kit boots and the check that verifies the kit it binds; `--check` fails when a copy
@@ -170,8 +172,18 @@ version, nothing else). Claude's are each JSON with indent 2 and a final newline
   (`"source": "./"`), the version as `metadata.version`.
 - `hosts/claude/shell/hooks/hooks.json`: the plugin's hooks (`HOOKS` in the renderer), each running
   the kit's one hook entry, `${CLAUDE_PLUGIN_ROOT}/boot/hook.py claude <event> [<part>]`. Each command
-  line comes from `kitlib.host.hookmain.manifest_command`, the interpreter by name for the platforms
-  hosts.json gives the host (`pythonw` on Windows), so no manifest spells it by hand.
+  line comes from `kitlib.host.hookmain.manifest_command`, the interpreter by name for one platform
+  (`INTERPRETERS`), so no manifest spells it by hand. hooks.json is the Windows file: `pythonw` in
+  exec form.
+- `hosts/claude/shell/hooks/hooks.linux.json`, one `hooks.<platform>.json` beside hooks.json for each
+  other platform hosts.json gives the host: the same hooks, events, matchers and arguments, with that
+  platform's command line. On Linux that is `/bin/sh -c <body> kit-hook <script> <args>`, the body
+  running `python3 "$@"` by name from PATH: a tool event's body adds `|| exit 2`, so a python3 that
+  fails or is missing blocks the call as boot/hook.py does (the guard-error deny); a start event's
+  adds `|| echo "PM kit: the kit did not load: ..."`, which the host shows and exits 0. Every file
+  is rendered on every machine, so a committed manifest has no drift; plugin.json names hooks.json
+  alone, and the plugin export writes the running platform's file in its place
+  (docs/plugin-source.md "Layout").
 
 A version bump is one edit to `kit.json`, then `--write`. tests/content `ManifestTest`.
 

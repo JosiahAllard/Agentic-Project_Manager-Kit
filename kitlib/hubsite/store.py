@@ -8,7 +8,7 @@ Layout under the store folder `root` (the caller resolves it; nothing here reads
                                     holds, so that folder opens as a store with no conversion),
                                     plus the store's own `version` (int) and `updated_at`; a
                                     document with no `version` (an old-hub file) is at version 0
-    <root>/_meta.json               {revision, counters: {Q, M, T, P, S, A}}
+    <root>/_meta.json               {revision, counters: {Q, M, T, P, S, A, E}}
     <root>/_store.lock              the single-writer lock (below); never a document
 
 Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
@@ -518,10 +518,11 @@ def pending_items(docs, now=None):
     """[Pending] of owner input not yet handled in docs ({collection: {id: document}}), oldest
     first: questions answered or filed and not yet logged or done (a filed one's `note` is
     'filed': its asker still reads the answer), stories submitted, to_pm items sent, to-dos done
-    or added by the owner (`from: you`) with no pm_ack, and approvals decided and not consumed
-    (approval_decided at `now`, an aware datetime; the current time when None). Inbox reads are
-    not pending. A question's and a to-do's `sender` is its stored `from`; a story's, a note's
-    and an approval's is '' (the api routes an approval by its repo)."""
+    or added by the owner (`from: you`) with no pm_ack, approvals decided and not consumed
+    (approval_decided at `now`, an aware datetime; the current time when None), and skill edits
+    submitted. Inbox reads are not pending. A question's and a to-do's `sender` is its stored
+    `from`; a story's, a note's, an approval's and a skill edit's is '' (the api routes an
+    approval by its repo and a skill edit to the kit's coordinator)."""
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
     out = []
@@ -550,4 +551,8 @@ def pending_items(docs, now=None):
         if approval_decided(d, now):
             out.append(Pending('approval', doc_id, _s(d.get('title')), _s(d.get('repo')),
                                _s(d.get('decided_at'))))
+    for doc_id, d in docs.get('skill_edits', {}).items():
+        if d.get('status') == 'submitted':
+            out.append(Pending('skill_edit', doc_id, "Skill %s: the owner's edit"
+                               % _s(d.get('skill')), '', _s(d.get('submitted_at'))))
     return sorted(out, key=lambda p: (p.at, p.kind, p.id))

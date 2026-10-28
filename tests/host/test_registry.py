@@ -51,7 +51,7 @@ class KitRegistry(unittest.TestCase):
         claude = hosts['claude']
         self.assertEqual(claude.adapter, 'hosts.claude.adapter')
         self.assertEqual(claude.shell, 'hosts/claude/shell')
-        self.assertEqual(claude.platforms, ('windows',))
+        self.assertEqual(claude.platforms, ('windows', 'linux'))
         self.assertIsInstance(claude.capabilities, HostCapabilities)
         self.assertIsInstance(claude.profile, HostProfile)
         self.assertEqual(claude.profile.worktrees_directory, '.claude/worktrees')
@@ -224,6 +224,7 @@ class Validation(Case):
 class Profiles(Case):
     def test_profiles_and_union_cover_every_host_in_file_order(self):
         data = second(kit_hosts())
+        data['other']['platforms'] = ['windows']
         data['other']['profile']['process_names'] = {'windows': ['other.exe', 'node.exe']}
         data['other']['profile']['session_env'] = 'OTHER_SESSION'
         path = self.put(data)
@@ -294,6 +295,7 @@ class ProcessNames(Case):
     def test_a_platform_no_host_lists_gives_no_names(self):
         self.assertEqual(self.union('unsupported'), ())
         data = kit_hosts()
+        data['claude']['platforms'] = ['windows']
         data['claude']['profile']['process_names'] = {'windows': ['claude.exe']}
         self.assertEqual(self.union('linux', self.put(data)), ())
 
@@ -313,7 +315,7 @@ class ProcessNames(Case):
 
     def test_a_platform_the_host_does_not_declare_may_be_listed_ahead(self):
         data = kit_hosts()
-        self.assertEqual(data['claude']['platforms'], ['windows'])
+        data['claude']['platforms'] = ['windows']
         data['claude']['profile']['process_names'] = {'windows': ['a.exe'], 'macos': ['a']}
         path = self.put(data)
         self.assertEqual(self.union('windows', path), ('a.exe',))

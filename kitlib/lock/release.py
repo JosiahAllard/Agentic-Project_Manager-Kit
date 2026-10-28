@@ -29,8 +29,10 @@ import json
 import os
 import time
 
+import kitlib.platform
 from kitlib.git import cmd, refs
 from kitlib.lock.store import ID_RE, Store, read_json, wrapper_state
+from kitlib.platform.linux import process as procfs
 from kitlib.proc import process
 
 OK, REFUSED, USAGE, ERROR = 0, 1, 2, 3
@@ -84,11 +86,20 @@ def error_outcome(err):
                            "release." % (type(err).__name__, err)], None)
 
 
+def _other_ns(d):
+    """Does d name a pid namespace (`pidns`, Linux) other than this process's? Its pid is then
+    not one this process can check (store.record_state)."""
+    ns = d.get("pidns")
+    return ns is not None and ns != procfs.pidns()
+
+
 def _owner_live(d, alive, mutex_gone=None):
     """Is the run d (a record or a queue entry) live? False only when its process is surely
     gone: alive(pid, ctime) says False; or alive cannot tell (None, or True for a record with no
     creation time: a pid alone is not proof of life) and mutex_gone(id) says its run mutex is
-    surely gone (store.run_mutex_held False)."""
+    surely gone (store.run_mutex_held False). On Linux alive's False is not enough (a checker in
+    its own pid namespace sees no wrapper's pid, as store.run_dead), and neither is any answer
+    for a d of another pid namespace: the run lock decides."""
     if not isinstance(d, dict):
         return True
     pid, ctime = d.get("pid"), d.get("ctime")
@@ -96,6 +107,8 @@ def _owner_live(d, alive, mutex_gone=None):
         return True
     try:
         state = alive(pid, ctime)
+        if kitlib.platform.NAME == "linux" and (state is False or _other_ns(d)):
+            state = None
     except (OSError, ValueError, TypeError, OverflowError):
         return True
     if state is not None and (ctime is not None or not state):
@@ -110,8 +123,11 @@ def _owner_live(d, alive, mutex_gone=None):
 
 
 def _is_mine(d, mine):
-    """Does the run d belong to one of the processes in mine ({(pid, ctime)})?"""
+    """Does the run d belong to one of the processes in mine ({(pid, ctime)})? Never one of
+    another pid namespace (Linux): its pid names another process here."""
     if not isinstance(d, dict):
+        return False
+    if kitlib.platform.NAME == "linux" and _other_ns(d):
         return False
     pid, ctime = d.get("pid"), d.get("ctime")
     return any(pid == p and (ctime is None or ctime == c) for p, c in mine)

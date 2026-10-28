@@ -4941,10 +4941,12 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/skills", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/findings", "/lock", "/lock", "/pages", "/records", "/records", "/schedules", "/skill_edits", "/skills", "/skills", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|writeQuick|hub\.post|delButton)\("(/[a-z_]+)', self.script))
         self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
-                                 "/finding_marks"})
+                                 "/finding_marks", "/skill_edits"})
+        # A skill edit is written and withdrawn by the owner; done and fail are the committing agent's, never the page's.
+        self.assertEqual(sorted(re.findall(r'"/skill_edits/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script)), ["/edit", "/withdraw"])
         self.assertEqual(re.findall(r'"/approvals/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/decide"])
         # A page is read (GET /pages/<id>) and deleted, never written: publishing is the agents'.
         self.assertEqual(re.findall(r'"/pages/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/delete"])
@@ -5267,7 +5269,80 @@ class TriageViewsTest(unittest.TestCase):
         self.assertEqual(got["count"], "2")
         self.assertIn("<b>this</b> first.", got["body"])         # the body is text, never markup
         self.assertEqual(got["bold"], 0)
-        self.assertEqual(got["inputs"], ["detail-close"])        # read only: nothing to type in or press but Back
+        self.assertEqual(got["inputs"], ["detail-close", "ske-new-worker-notes"])   # Back, and Edit (the owner's skill edit)
+
+    SKILLS = {"skills": {"available": True, "skills": [{"name": "builder", "description": "Builds."}]}}
+    SOURCE = "---\nname: builder\n---\nold\n"
+
+    def test_a_skill_is_edited_from_its_source_and_submitted_as_the_owners_text(self):
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path === "/skills/builder/source"
+              ? { status: 200, body: { ok: true, name: "builder", text: SOURCE, blob: "a".repeat(40) } } : undefined;
+            await start();
+            await click($("#ske-new-builder"));
+            const ta = $("#ske-builder"), first = ta.value, read = calls.filter(c => c.path.endsWith("/source")).map(c => c.method + " " + c.path);
+            const note = text($("#sk-builder"));
+            await type(ta, first.replace("old", "new"));
+            await click($("#ske-submit-builder"));
+            return { first, read, note, sent: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]), open: !!$("#ske-builder") };
+        """.replace("SOURCE", json.dumps(self.SOURCE)), snapshot(views=self.SKILLS), hash="#skills")
+        self.assertEqual(got["first"], self.SOURCE)                                   # the editor starts from the source
+        self.assertEqual(got["read"], ["GET /skills/builder/source"])
+        self.assertIn("can lag the kit's main", got["note"])
+        self.assertEqual(got["sent"], [["/skill_edits", {"skill": "builder", "text": "---\nname: builder\n---\nnew\n", "submit": True}]])
+        self.assertFalse(got["open"])                                                 # sent: the editor closes
+
+    def test_a_superseded_skill_edit_is_reapplied_with_its_version_and_a_committed_one_names_its_branch(self):
+        edits = {"skill_edits": {
+            "E-1": {"status": "superseded", "skill": "builder", "text": "---\nname: builder\n---\nmine\n", "version": 4,
+                    "base_blob": "b" * 40, "source_blob": "c" * 40, "created_at": NOW},
+            "E-2": {"status": "committed", "skill": "builder", "text": "x", "version": 2, "base_blob": "b" * 40,
+                    "branch": "kit/skill-edit-e-2", "created_at": "2026-10-01T00:00:00+00:00"}}}
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path === "/skills/builder" ? { status: 200, body: { ok: true, name: "builder", body: "now" } } : undefined;
+            await start();
+            const card = text($("#sk-builder")), fresh = !!$("#ske-new-builder");
+            const doneOrFail = $$("#sk-builder button").map(text).filter(t => /done|fail|commit/i.test(t));
+            await click($("#ske-open-E-1"));
+            const ta = $("#ske-builder"), was = ta.value, editor = text($("#sk-builder"));
+            await type(ta, was + "more\\n");
+            await click($("#ske-save-builder"));
+            return { card, fresh, doneOrFail, was, editor, sent: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]) };
+        """, snapshot(views=self.SKILLS, collections=edits), hash="#skills")
+        self.assertIn("Re-apply on the new text", got["card"])
+        self.assertIn("Committed on branch kit/skill-edit-e-2", got["card"])
+        self.assertFalse(got["fresh"])                     # an open edit is edited, not a second one started
+        self.assertEqual(got["doneOrFail"], [])            # committing is the agent's: no such button
+        self.assertEqual(got["was"], "---\nname: builder\n---\nmine\n")
+        self.assertIn("now", got["editor"])                # the source as served now, to bring the change onto
+        self.assertEqual(got["sent"], [["/skill_edits/E-1/edit", {"text": "---\nname: builder\n---\nmine\nmore\n", "submit": False, "if_version": 4}]])
+
+    def test_a_failed_skill_edit_is_reapplied_on_the_text_at_its_source_blob(self):
+        edits = {"skill_edits": {"E-1": {"status": "superseded", "skill": "builder", "text": "---\nname: builder\n---\nmine\n",
+                                         "version": 3, "base_blob": "b" * 40, "source_blob": "c" * 40, "created_at": NOW}}}
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path === "/skill_edits/E-1"
+              ? { status: 200, body: { ok: true, item: {}, source: { text: "on main", blob: "c".repeat(40) } } } : undefined;
+            await start();
+            const n = calls.length;
+            await click($("#ske-open-E-1"));
+            return { body: text($("#sk-body-builder")), read: calls.slice(n).filter(c => c.method === "GET" && c.path.startsWith("/skill")).map(c => c.path) };
+        """, snapshot(views=self.SKILLS, collections=edits), hash="#skills")
+        self.assertEqual(got["body"], "on main")
+        self.assertEqual(got["read"], ["/skill_edits/E-1"])        # not the served copy, which can lag main
+
+    def test_a_skill_edit_is_withdrawn_on_the_second_press_pinned_to_its_version(self):
+        edits = {"skill_edits": {"E-3": {"status": "submitted", "skill": "builder", "text": "t", "version": 2,
+                                         "base_blob": "b" * 40, "created_at": NOW}}}
+        got = dom("""
+            await start();
+            const card = text($("#sk-builder"));
+            const w = button($("#sk-builder"), "Withdraw"); await click(w); await click(w);
+            return { card, edit: !!$("#ske-open-E-3"), sent: calls.filter(c => c.method === "POST").map(c => [c.path, c.body]) };
+        """, snapshot(views=self.SKILLS, collections=edits), hash="#skills")
+        self.assertIn("waiting on an agent to commit it", got["card"])
+        self.assertFalse(got["edit"])                      # a submitted edit is the agent's to commit: no Edit
+        self.assertEqual(got["sent"], [["/skill_edits/E-3/withdraw", {"if_version": 2}]])
 
     def test_a_skill_body_that_cannot_be_read_or_is_gone_says_so_in_the_card(self):
         views = {"skills": {"available": True, "skills": [{"name": "builder", "description": "Builds."},
