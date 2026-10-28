@@ -70,27 +70,37 @@ class ClaudePeerEndpoint:
         self._owned, self._pending, self._results = {}, {}, {}
         self._lock, self._stop = threading.RLock(), threading.Event()
         self._listener, self._thread, self._fault, self._closed = None, None, False, False
+        # The failed step names the refusal (peer-endpoint-start-failed-<step>); the
+        # endpoint's own two refusals keep their codes.
+        code = 'peer-endpoint-start-failed-registration'
         try:
             if self.registry_path.exists():
-                raise DeliveryError('peer-registration-already-exists')
+                code = 'peer-registration-already-exists'
+                raise DeliveryError(code)
+            code = 'peer-endpoint-start-failed-own-ctime'
             creation = str(own_ctime())
             if creation == '0':
-                raise DeliveryError('peer-process-identity-unavailable')
+                code = 'peer-process-identity-unavailable'
+                raise DeliveryError(code)
+            code = 'peer-endpoint-start-failed-listener'
             self._listener = PrivateListener(self.pipe)
             # Publish the key first. Restrict newly created files before writing
             # their data; advertise the registry only after the listener exists.
+            code = 'peer-endpoint-start-failed-publish-key'
             self._publish(self.key_path, {'peerToken': self._token,
                 'procStart':creation, 'procStartFt':creation})
+            code = 'peer-endpoint-start-failed-publish-registry'
             self._publish(self.registry_path, {'pid':os.getpid(), 'sessionId':str(uuid.uuid4()),
                 'cwd':str(self.workspace), 'startedAt':int(time.time()*1000),
                 'procStart':creation, 'procStartFt':creation, 'peerProtocol':1,
                 'kind':'interactive', 'entrypoint':'kit-agent-bridge',
                 'messagingSocketPath':self.pipe, 'name':'PM kit bridge', 'nameSource':'derived'})
+            code = 'peer-endpoint-start-failed-thread'
             self._thread = threading.Thread(target=self._receive, name='bridge-claude-peer', daemon=True)
             self._thread.start()
         except Exception:
             self.close()
-            raise DeliveryError('peer-endpoint-start-failed') from None
+            raise DeliveryError(code) from None
 
     def _publish(self, path, value):
         data = json.dumps(value,separators=(',',':')).encode('utf-8')
