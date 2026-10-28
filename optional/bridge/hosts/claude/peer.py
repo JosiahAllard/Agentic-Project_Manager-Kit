@@ -70,8 +70,8 @@ class ClaudePeerEndpoint:
         self._owned, self._pending, self._results = {}, {}, {}
         self._lock, self._stop = threading.RLock(), threading.Event()
         self._listener, self._thread, self._fault, self._closed = None, None, False, False
-        # The failed step names the refusal (peer-endpoint-start-failed-<step>); the
-        # endpoint's own two refusals keep their codes.
+        # The failed step names the refusal (peer-endpoint-start-failed-<step>); a refusal
+        # that already has its own code (the endpoint's two, a listener's) keeps it.
         code = 'peer-endpoint-start-failed-registration'
         try:
             if self.registry_path.exists():
@@ -98,9 +98,10 @@ class ClaudePeerEndpoint:
             code = 'peer-endpoint-start-failed-thread'
             self._thread = threading.Thread(target=self._receive, name='bridge-claude-peer', daemon=True)
             self._thread.start()
-        except Exception:
+        except Exception as error:
             self.close()
-            raise DeliveryError(code) from None
+            if isinstance(error, DeliveryError): raise
+            raise DeliveryError(code) from error
 
     def _publish(self, path, value):
         data = json.dumps(value,separators=(',',':')).encode('utf-8')

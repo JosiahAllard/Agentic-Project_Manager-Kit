@@ -273,6 +273,7 @@ class ClaudePeerTests(unittest.TestCase):
             ('peer-process-identity-unavailable',mock.patch(module+'own_ctime',return_value=0)),
             ('peer-endpoint-start-failed-own-ctime',mock.patch(module+'own_ctime',side_effect=OSError('x'))),
             ('peer-endpoint-start-failed-listener',mock.patch(module+'PrivateListener',side_effect=OSError('x'))),
+            ('listener-own-code',mock.patch(module+'PrivateListener',side_effect=DeliveryError('listener-own-code'))),
             ('peer-endpoint-start-failed-publish-key',
                 mock.patch.object(ClaudePeerEndpoint,'_publish',publish_failing(1))),
             ('peer-endpoint-start-failed-publish-registry',
@@ -284,6 +285,8 @@ class ClaudePeerTests(unittest.TestCase):
                 with patch, self.assertRaises(DeliveryError) as raised:
                     ClaudePeerEndpoint(self.own_registry,self.root,self.directory)
                 self.assertEqual(raised.exception.code,code)
+                if code.startswith('peer-endpoint-start-failed-'):  # the step's own error stays chained
+                    self.assertNotIsInstance(raised.exception.__cause__,(DeliveryError,type(None)))
                 self.assertEqual(list(self.own_registry.iterdir()),[])
 
     def test_shared_core_records_one_native_write_unknown_hold_then_root_refusal(self):
