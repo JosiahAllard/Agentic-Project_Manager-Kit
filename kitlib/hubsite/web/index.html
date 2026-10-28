@@ -2970,6 +2970,10 @@ ul.hist .sch-line{display:block}
   // images only). A clicked link still navigates the frame itself, outside this policy (the sandbox still holds
   // there); docs/action-hub.md says what that leaves open.
   const DOC_CSP = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'\">";
+  // A srcdoc document's base URL is the hub page's, so a bare href="#x" is a link to the hub page plus #x: the
+  // frame navigated away instead of scrolling (and :target never matched). Spelled about:srcdoc#x it is the
+  // frame's own address, so the browser scrolls and sets :target. The sandbox and the policy are untouched.
+  const docFragments = html => html.replace(/(<[a-z][^>]*?\bhref\s*=\s*["'])#/gi, "$1about:srcdoc#");
   // A card's refs, kept as keptRefs keeps them: a ref that is a listed document's id is a button that opens it
   // in the reader, and any other ref is text. lead goes before them and sep between them.
   function refsLine(refs, lead, sep){
@@ -3044,7 +3048,7 @@ ul.hist .sch-line{display:block}
     if (ask !== docAsk) return;
     if (typeof r.html !== "string") { readerSays("This document has no body on the hub server.", true); return; }
     const frame = el("iframe", {class:"docframe", sandbox: "", title: "Document: " + title});
-    frame.srcdoc = DOC_CSP + r.html;
+    frame.srcdoc = DOC_CSP + docFragments(r.html);
     $("#reader-body").replaceChildren(frame);
   }
   function closeDoc(){

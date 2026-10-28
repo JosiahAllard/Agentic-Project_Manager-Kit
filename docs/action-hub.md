@@ -994,6 +994,7 @@ the hub page) and given the body through `srcdoc` behind a meta policy, `default
 `data:`, CSS files, fonts, scripts, frames and form posts. A diagram therefore shows only as an inline
 `<svg>` or a `data:` image. Links are not blocked: a link clicked inside the reader moves the frame itself
 to that address, where the policy no longer applies (the sandbox still blocks scripts and forms there).
+The reader rewrites a bare `href="#x"` to `href="about:srcdoc#x"` (`docFragments`), so an in-page anchor scrolls and sets `:target` (a srcdoc frame's base URL is the hub page's, so the bare form left the frame); inferred from the HTML spec, the owner checks it in a real browser.
 Some browsers may also look up the host names of links in advance (DNS prefetch). The page check refuses
 such a link, `<link>` and every `<meta>` but the ones above at publish, so a body published through the
 check has none; a body placed in the store by hand is not checked. A whole document goes in unchanged,
