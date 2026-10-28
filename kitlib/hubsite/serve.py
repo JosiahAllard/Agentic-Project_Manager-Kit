@@ -159,7 +159,7 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
       both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
       (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
-  notices() repos() usage() agents() skills() skill(name) findings()
+  notices() repos() usage() agents() skills() skill(name) skill_source(name) findings()
                                           kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
@@ -231,6 +231,7 @@ from kitlib.proc import process
 from . import api as _api
 from . import push as _push
 from . import access, auth, backlog, codestale, derived, gitsync, httpd, recordwrite, tunnel
+from . import skilledits
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -617,6 +618,7 @@ class SiteViews(object):
         if sources.skills:
             self.skills = self._skills
             self.skill = self._skill
+            self.skill_source = self._skill_source
 
     def _held(self):
         """The backlog source's held answer (backlog.Views.held) while its timer runs, or None
@@ -763,6 +765,12 @@ class SiteViews(object):
 
     def _skill(self, name):
         out = derived.skill(self._sources.skills, name)
+        if out is None:
+            raise HubError('not_found', 'there is no skill %s' % name, 'name')
+        return out
+
+    def _skill_source(self, name):
+        out = derived.skill_source(self._sources.skills, name)
         if out is None:
             raise HubError('not_found', 'there is no skill %s' % name, 'name')
         return out
@@ -974,6 +982,64 @@ def _checkout(backlog_views):
     return checkout
 
 
+def kit_checkout(kit_root=None):
+    """The kit's main checkout: kit_root (default pmstart.KIT_ROOT) when it is a checkout, else
+    the checkout its plugin export marker names (kitlib.pluginsource.default_kit); None when there
+    is none."""
+    from kitlib import pluginsource
+    return pluginsource.default_kit(kit_root or pmstart.KIT_ROOT)[0]
+
+
+def _kit_key(repo_name, remote_ids, kit_root=None):
+    """Api's kit_key() (kitlib.hubsite.api, "Skill edits"): the name repo_name gives the kit
+    checkout's origin remote (`remote_ids`, a _RemoteIds), the session key of the kit's
+    coordinator; '' when there is no checkout, no remote or no configured name, so a submitted
+    skill edit is the PM's."""
+    def kit_key():
+        checkout = kit_checkout(kit_root)
+        repo_id = remote_ids(checkout)[0] if checkout else None
+        name = repo_name(repo_id) if repo_id else None
+        return name if isinstance(name, str) else ''
+    return kit_key
+
+
+def _kit_blob(kit_root=None, run=None):
+    """Api's kit_blob(branch, path) (kitlib.hubsite.api, "Skill edits"): the blob id of `path`
+    on `branch` in the kit checkout, read with `git rev-parse --verify` (`run`, default
+    kitlib.git.cmd.run_text; a read: the hub never writes a repository), or None when there is no
+    checkout or git cannot read it."""
+    def kit_blob(branch, path):
+        from kitlib.git import cmd
+        checkout = kit_checkout(kit_root)
+        if not checkout:
+            return None
+        out, _why = (run or cmd.run_text)(['rev-parse', '--verify', '--quiet',
+                                           '%s:%s' % (branch, path)], checkout)
+        return out if skilledits.is_blob(out) else None
+    return kit_blob
+
+
+def _kit_text(kit_root=None, run=None):
+    """Api's kit_text(blob) (kitlib.hubsite.api, "Skill edits"): the text of git blob `blob` in
+    the kit checkout, read with `git cat-file blob` (`run`, default kitlib.git.cmd.run, giving
+    bytes; a read: the hub never writes a repository), CRLF read as LF; None when there is no
+    checkout, `blob` is not a blob id, git cannot read it, the bytes are not that blob or are not
+    UTF-8."""
+    def kit_text(blob):
+        from kitlib.git import cmd
+        checkout = kit_checkout(kit_root)
+        if not checkout or not skilledits.is_blob(blob):
+            return None
+        out, _why = (run or cmd.run)(['cat-file', 'blob', blob], checkout)
+        if not isinstance(out, bytes) or skilledits.git_blob(out) != blob:
+            return None
+        try:
+            return skilledits.normal(out.decode('utf-8'))
+        except UnicodeDecodeError:
+            return None
+    return kit_text
+
+
 REMOTE_TTL_S = 60.0     # the longest a remembered origin remote answers (_RemoteIds)
 REMOTE_MISS_TTL_S = 5.0     # the longest a remembered failure to read one answers
 
@@ -1113,10 +1179,13 @@ def build(settings, sources, log=None):
         views = SiteViews(store, sources, views_b, sync, sync_off, log=log)
         if views_b is not None:
             _follow_rounds(views_b, views)
+        remote_ids = _RemoteIds()
+        repo_name = _repo_name(views_b, _api.launcher_keys, remote_ids)
         api = _api.Api(store, views,
                        approval_key=functools.partial(auth.read_approval_key, sources.tokens),
-                       checkout=_checkout(views_b), lock=sources.lock,
-                       repo_name=_repo_name(views_b, _api.launcher_keys, _RemoteIds()))
+                       checkout=_checkout(views_b), lock=sources.lock, repo_name=repo_name,
+                       kit_key=_kit_key(repo_name, remote_ids), kit_blob=_kit_blob(),
+                       kit_text=_kit_text())
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

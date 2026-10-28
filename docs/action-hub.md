@@ -374,6 +374,8 @@ otherwise, so the PM is the fallback for a creator that is gone (`route`, "Route
   someone. A PM wait is also woken when an item turns to the PM with no write.
 - A decided approval is for its repository's coordinator and listed for the PM too. It stops being
   pending with no write: once consumed, at its expiry, or 24 hours after a denial.
+- A submitted skill edit is for the kit's coordinator ("skill_edits/E-NNN") on the same terms as any
+  other key, else the PM's; it stops being pending when it is committed, failed, superseded or withdrawn.
 - This state lives in the server's memory only: after a restart every item is the PM's until its
   creator waits again. To-dos whose `from` is a free-text name are the PM's.
 
@@ -393,17 +395,18 @@ store's git push (the `push` setting).
   failed, or filed with no `filed_as`), a bound question's answer filed into its record (`filed`, nothing
   while the filing is under way), an answer already given made a standing rule (`standing`, to the PM:
   "A standing rule"), a to-do done (or done again), a done to-do reopened, a to-do the owner added (to the
-  PM only), a story the owner submitted (`submitted`, PM only), a note to the PM the owner sent (`sent`,
-  PM only), an approval the owner approved or denied (`decided`), and an approval still approved and not
+  PM only), a story the owner submitted (`submitted`, PM only), a skill edit the owner submitted
+  (`submitted`), a note to the PM the owner sent (`sent`, PM only), an approval the owner approved or denied (`decided`), and an approval still approved and not
   consumed 20 hours after the decision (`expiring`, `push.EXPIRING_S`), the one reminder before it
   expires at 24 hours. Each item has a fingerprint (a question's phase, `answer.at`, a digest of the
   answer and, once a standing rule, `standing.at`; a to-do's status and `done_at`; a story's status and
-  `submitted_at`; a note's status and `sent_at`; an approval's status, `decided_at` and phase, `decided`
+  `submitted_at`, and a skill edit's too; a note's status and `sent_at`; an approval's status, `decided_at` and phase, `decided`
   then `expiring`, read at the worker's clock each round), and only a changed fingerprint fires, so
   `pm_ack` alone never does. An approval's phase ending (consumed, expired, a denial's 24 hours past)
   drops what was still owed and sends nothing.
 - Who hears: the item's `from`, unless that is the PM's own (`pm`, the owner, empty), and the PM, once;
-  for an approval, the coordinator key its `repo` names ("Who handles a pending item") and the PM. A
+  for an approval, the coordinator key its `repo` names ("Who handles a pending item") and the PM; for
+  a skill edit, the kit's coordinator (`Api.kit_session_key`) and the PM. A
   launcher key is resolved through sessions.json; `pm` through coordinators.json's `pm_session_id`, then
   the names `Project Manager` and `pm-session`.
 - **Filed answers** (`filed`): who hears depends on what the filing did to the record, the question's
@@ -445,7 +448,8 @@ store's git push (the `push` setting).
   question the hub filed into its record (status `filed`) asked by another session, by the filing itself,
   since its asker reads it; for a filed answer's note to the PM that asked it, its `freed` ping and its
   push to a record's coordinator, by the first written try; for a standing rule, only by logging it (a standing rule is never
-  marked done); for a story, any change of its status (`stories set`), and for a note to the PM, its
+  marked done); for a story, any change of its status (`stories set`), for a skill edit, any change
+  of its status (`skill-edit done` or `fail`, the owner's withdraw), and for a note to the PM, its
   reply (`to-pm reply`). An approval's push is sent once to each: the first written try acknowledges it.
   An item withdrawn, reopened or answered again replaces or ends its push. A session that picked up a
   first answer or done mark before the worker saw it is not sent it. A question's phase is
@@ -854,14 +858,91 @@ finding; an edit never changes a kind to or from `act`. Only the local owner see
 any other caller, the tunnel included, gets each absolute path cut to `.../<its last part>`, and no act
 note's refs carry one. An agent is refused `forbidden` on each write (`kitlib.hubsite.api` "Findings").
 
+## skill_edits/E-NNN
+The owner's new text for one kit skill's source, `content/skills/<name>/SKILL.md`, which an agent
+commits: the hub writes no repository. Only the source is edited; the rendered copies come from
+`tools/commit.py` on the commit (docs/content.md). `E` is the store's id prefix for it
+(`kitlib.hubvalidate.REF_COLLECTIONS`); an `E-` id is not a ref, and a page id holding one is refused
+("pages/<id> and page_html/<id>").
+
+| Field | Written by | Meaning |
+|---|---|---|
+| status | owner, agent | `draft` or `submitted` (owner); `committed` or `failed` (agent); `superseded` (the hub, on a source that moved on); `withdrawn` (owner) |
+| skill | owner | the skill's folder name, one the hub lists (`GET /api/v1/skills`) |
+| text | owner | the whole new SKILL.md, CRLF stored as LF |
+| base_blob | server | the git blob id of the source the owner edited |
+| created_at, submitted_at | server | when it was written and submitted |
+| source_blob | server | for a superseded edit, the blob of the source it no longer fits |
+| branch, blob, done_at | agent | the branch the commit is on and the blob of the committed text |
+| why, closed_at | agent, owner | why it failed; when it failed or was withdrawn |
+
+base_blob is the blob of the copy of the skills this hub serves (`GET /api/v1/skills/<name>/source`),
+taken when the edit is written: the git blob of the text as served (CRLF read as LF, as git stores a
+text file), not of the file's bytes, so a copy checked out with CRLF has its blob on main. That copy can lag the kit's main (a plugin export not yet
+refreshed, a main checkout behind its remote), so the worker's own check against main is the one that
+counts, and the page says so beside the editor.
+
+The routes ("Skill edits" in the `kitlib/hubsite/api.py` docstring):
+
+| Route | Who | What |
+|---|---|---|
+| `GET /api/v1/skills/<name>/source` | anyone | {name, text, blob}: the whole SKILL.md the hub serves and its blob |
+| `POST /api/v1/skill_edits` | owner | {skill, text, submit?}: a draft, or submitted with `submit` |
+| `POST /api/v1/skill_edits/<id>/edit` | owner | {text?, submit?, if_version}: a draft, superseded or failed edit only |
+| `POST /api/v1/skill_edits/<id>/withdraw` | owner | {if_version?}: any edit not committed |
+| `POST /api/v1/skill_edits/<id>/done` | agent | {branch, blob, if_version}: a submitted edit is committed |
+| `POST /api/v1/skill_edits/<id>/fail` | agent | {why, current_blob?, if_version}: a submitted edit could not be committed |
+| `GET /api/v1/skill_edits` | anyone | the edits, filtered by `status` |
+| `GET /api/v1/skill_edits/<id>` | anyone | {item, source}: one edit, and for a superseded or failed one the source text at its `source_blob` (null when the server cannot read it) |
+
+- Who writes: the text is the owner's alone. The three owner writes are OWNER routes, as `POST stories`,
+  `stories/<id>/withdraw`, `to_pm` and `finding_marks` are, so an agent's key gets `forbidden` (field
+  `role`) before the body is read, and nothing is written. An agent only reports: done and fail are
+  AGENT routes.
+- The text: at most 65536 bytes of UTF-8 (`kitlib.hubsite.skilledits.MAX_BYTES`), no NUL, and front
+  matter whose `name:` is the skill's own: an edit never renames a skill. Anything else is `invalid`
+  (field `text`) with nothing written.
+- Superseded: submitting when the served source's blob is no longer base_blob makes the edit
+  `superseded` with `source_blob`, and so does a fail whose `current_blob` (the blob on main the worker
+  read) is not base_blob. The owner re-applies it: an edit of a superseded or failed edit is put on the
+  source at its `source_blob` when the server can read that blob's text in the kit checkout (`git
+  cat-file`, a read; `kitlib.hubsite.serve._kit_text`) and the page shows that text, else on the source
+  as the server serves it now; base_blob becomes that blob and the edit goes back to draft, or to
+  submitted. So a re-apply onto the blob on main is not superseded again while the served copy lags:
+  submitting is superseded only when base_blob is neither the served blob nor the blob of the source on
+  main in the kit checkout (`_kit_blob`), and its `source_blob` is then main's blob (the served blob when
+  the server cannot read main).
+- Done: the blob must be the git blob of the edit's text as UTF-8, else `invalid` (field `blob`). The
+  server also reads the blob of the source on `branch` in this machine's kit checkout with `git
+  rev-parse` (a read; `kitlib.hubsite.serve._kit_blob`) and refuses a branch it cannot read or whose
+  blob differs (field `branch`), so an agent cannot mark committed a text it never wrote.
+- Pending and push: a submitted edit is a pending item of kind `skill_edit` with no `from`: it is for the
+  kit's coordinator (the configured name of the kit checkout's origin remote, `Api.kit_session_key`)
+  while that session can be reached, else the PM's. Its push (`submitted`) goes to that key and the PM;
+  done, fail or withdraw acknowledges it.
+
+Worker steps (skill hub-ops "Skill edits"):
+1. `hub.py skill-edit show E-<n> --out <F>` writes the owner's text byte for byte; note its version.
+2. In a worktree from main, read `git rev-parse main:content/skills/<name>/SKILL.md`. When it is not the
+   edit's base blob, stop: `hub.py skill-edit fail E-<n> --why "the skill changed on main" --at main
+   --checkout <worktree> --if-version V` marks it superseded for the owner.
+3. Copy F over the source and commit it with `tools/commit.py -C <worktree> -m "Skill <name>: owner
+   edit" -b "Text by the owner, hub edit E-<n>" --model "<model name>" content/skills/<name>/SKILL.md`,
+   which renders the copies.
+4. `hub.py skill-edit done E-<n> --branch <branch> --checkout <worktree> --if-version V`. The branch
+   lands as any other.
+
+Tests: tests/hubsite/test_skill_edits.py.
+
 ## pages/<id> and page_html/<id>
 An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
 `kitlib/hubsite/schema.py` requires only `title` (a string); the page also reads `repo`, `from`,
 `summary`, `refs` (a list of ids), `at` and the store's own `updated_at`, each as text, and orders the
 list by `updated_at`, else `at`, newest first. The ids have no prefix: the store assigns none (`Store.add`
 refuses `pages`); the publisher names one, and an id that holds a hub item's or a ruling's id anywhere, as
-`kitlib.hubvalidate`'s ref pattern finds one (`Q-12`, `R-3`, `plan-Q-1`, `Q-1.v2`), is refused
-(`_REF_SHAPED`), so a ref that names a page is never read as an item.
+`kitlib.hubvalidate`'s ref pattern finds one (`Q-12`, `R-3`, `plan-Q-1`, `Q-1.v2`), or an approval's
+or a skill edit's id (`A-2`, `E-4`), is refused (`_REF_SHAPED`), so a ref that names a page is never
+read as an item.
 
 The routes ("Pages" in the `kitlib/hubsite/api.py` docstring):
 
