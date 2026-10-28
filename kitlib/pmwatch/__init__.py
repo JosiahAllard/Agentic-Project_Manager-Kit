@@ -459,14 +459,15 @@ def rc_check(sessions, reader, dirs=None, ctime=None, rc_pids=None):
     ctime(pid) the process creation time; rc_pids() the running sessions' --remote-control names.
     The imports happen here, when the watcher is built, so a landing cannot mix modules later."""
     from kitlib import pmstart
-    from kitlib.launcher import lookup, pipes, settings as launcher_settings, stop
+    from kitlib.launcher import pipes, settings as launcher_settings, stop
     from kitlib.proc import process
     if dirs is None:
         dirs = lambda: pipes.registry_dirs(launcher_settings.load())
     ctime = ctime or process.proc_ctime
     if rc_pids is None:
+        # every process: only the pids of live registry records are looked up, so no image filter
         rc_pids = lambda: {p.get("ProcessId"): pmstart.rc_name(p.get("CommandLine"))
-                           for p in lookup.claude_sessions(pmstart.list_processes())}
+                           for p in pmstart.list_processes()}
 
     def alive(r):
         try:
@@ -496,8 +497,7 @@ def preload(modules=()):
     import kitlib.hubsite.serve
     import kitlib.pluginsource
     import kitlib.pmstart.consoletasks      # kitlib.pluginsource's in-use reads (_processes, _tasks)
-    import kitlib.launcher.lookup           # the REMOTE check (rc_check)
-    import kitlib.launcher.pipes
+    import kitlib.launcher.pipes            # the REMOTE check (rc_check)
     import kitlib.launcher.stop
     import kitlib.proc.process
     for name in modules:

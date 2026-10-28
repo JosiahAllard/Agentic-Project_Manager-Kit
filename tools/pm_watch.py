@@ -27,7 +27,7 @@ Events:
                                 plugin.auto_refresh on it also starts the refresh
                                 (docs/plugin-source.md "Behind warnings")
   REMOTE <name> link lost: ...  a running session in sessions.json (or the PM's) started with
-                                --remote-control reads unlinked in Claude's session registry; once
+                                --remote-control reads unlinked in the session registry; once
                                 per episode, and REMOTE <name> link back when it reads linked again
                                 (docs/pm-watch.md "Remote Control link")
   ERROR <what>                  a check failed 3 times running
@@ -94,7 +94,7 @@ def parse(argv, cfg, launcher_set=None):
 def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None, rc=None):
     """`plugin`: the PLUGIN check (None: W.plugin_check() over the machine config; False: none).
     `hub`: the HUB check (None: W.hub_check() over the hub server on this machine; False: none).
-    `rc`: the REMOTE check (None: W.rc_check() over Claude's session registry; False: none)."""
+    `rc`: the REMOTE check (None: W.rc_check() over the session registry; False: none)."""
     try:
         cfg = W.load_config()
     except kuser.ConfigError as e:
