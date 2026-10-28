@@ -6,13 +6,17 @@ meanings, on the strongest tier the machine gives, probed at run time (probe()):
       the cpuset controller: the cpus pinned by the cgroup, the tree killed as one (cgroup.kill)
   S2  the same scope without cpuset (systemd's default delegation): kill and memory as S1, the
       cpus pinned by affinity only, which a child can set back
-  W1  a PID namespace: probed and reported, not built (it needs unprivileged user namespaces)
+  W1  no scope, a user and PID namespace of the job's own (it needs unprivileged user
+      namespaces): the tree killed as one by its pid 1's kill, the cpus by affinity, peak
+      memory sampled
   W2  no scope: kill by tree walk and an environment marker, the cpus by affinity, peak memory
       sampled; what it lacks is in its report
 
 probe() never trusts an exit code: S1 and S2 come from a trial job, the real start path on
 `sleep`, read back (its cgroup, cpuset.cpus.effective, its affinity, memory.peak) and killed
 through cgroup.kill, and only a trial that is seen to die and whose scope is seen to go counts.
+W1 comes from the same kind of trial (w1_trial): an NsJob on `sleep`, seen in a namespace of its
+own, killed through its pid 1 and seen gone.
 A process that itself runs in a kit job's leaf (a pool worker, a unit, a slot's command) reads the
 tier from that job's cgroup instead, with no trial, and makes its jobs inside it (nesting, below).
 Tier.text names the tier and what it lacks, the line the lock and its runs show (slice 7).
@@ -35,9 +39,9 @@ its go pipe while the owner calls AttachProcessesToUnit and reads the stub's cgr
 same call serves a caller anywhere, so there is one path. When that call fails the carrier takes
 no more jobs; when it fails or the stub is not seen in place, the stub is ended before go and the
 job gets a scope of its own: the command runs once either way. In a kit job's leaf short is moot
-(the job nests there); on W2 there is no scope to share. Blast radius: stopping the carrier (or
-systemd-oomd choosing it) ends every short job of this process at once. A forked child makes its
-own carrier.
+(the job nests there); on W1 and W2 there is no scope to share. Blast radius: stopping the
+carrier (or systemd-oomd choosing it) ends every short job of this process at once. A forked
+child makes its own carrier.
 
 Start, Windows' CREATE_SUSPENDED: the command runs through a sh stub that joins J/main (`echo 0`
 to its cgroup.procs, so the stub moves itself), checks /proc/self/cgroup, forks the watchdog, says
@@ -69,6 +73,27 @@ would be made the subreaper of its own orphans and gather their zombies; the tok
 instead. A process that empties its environment and leaves the tree is missed (the report says
 so). processes() is None on every tier: a cgroup has no count of the processes ever started in it.
 
+W1 (NsJob): the starter, a python (the AppArmor user-namespace rule of Ubuntu 23.10 and later can
+be met for the interpreter alone), reads its ids, unshares a user and a PID namespace, maps its own
+uid and gid onto themselves (setgroups denied), and forks the job's pid 1, the reaper. The reaper
+makes a mount namespace of its own, mounts a fresh /proc (the command sees the job's processes
+only, by their pids in the namespace), forks the stub (W2's: the ready and go pipes, then exec),
+closes its standard streams and then reaps every orphan in the job. It reads the watch pipe as
+W2's watchdog does: end of file while armed ends it, and the kernel kills every process in the
+namespace with it (pid_namespaces(7): nothing in it outlives its pid 1); released (or disarmed at
+end of file) it stays until its last child has ended. The starter, the Popen the caller holds,
+ignores the terminal's SIGINT, SIGQUIT and SIGHUP (the command gets its own), exits with the
+command's status (a signal raised on itself), and is the job's lifeline: a starter killed before
+the command ends (p.kill(), SIGTERM) ends the job. The owner reads the outer /proc: the members
+are pid 1's descendants, every process in the namespace and in those nested in it (the starter
+and the reaper are not members); terminate kills pid 1 through a pidfd opened at start; and
+leftovers() spares pids: the job's kill then goes member by member, as W2's, and pid 1 stays
+while they run. A pid the command prints is its pid in the namespace, not the owner's. The command
+gets W1_ENV, its namespace: a probe inside the job (_in_w1) skips the scope trial, since the user
+systemd would take the pids it names for its own namespace's, and is W2, never a nested W1: its
+jobs stay in this namespace, which the lock's run record lists (jobns), so a run nested at any
+depth is in that run, and the job's kill ends them all.
+
 This module imports on any platform; its calls need Linux."""
 import errno
 import itertools
@@ -96,6 +121,7 @@ BUSCTL = 'busctl'
 PREFIX_ENV = 'KIT_SCOPE_PREFIX'
 PREFIX = 'pmkit'
 MARK_ENV = 'PMKIT_JOB'
+W1_ENV = 'PMKIT_W1_NS'            # NSTART sets it to its job's pid namespace (_in_w1)
 READY_SECONDS = 30.0              # a stub has this long to say it is in its cgroup
 GONE_SECONDS = 5.0                # a killed job has this long to empty
 TIDY_SECONDS = 0.5                # a released nested job has this long to empty before close
@@ -114,7 +140,8 @@ PEAK_LACK = 'peak memory (sampled)'
 W2_LACKS = ('a guaranteed kill (a tree walk and an environment marker: a process that empties '
             'its environment and leaves the tree is missed)',
             'cleanup when its watchdog is killed', 'cpu pinning (affinity only)', PEAK_LACK)
-WHAT = {'S1': 'strong', 'S2': 'partial', 'W2': 'weak'}
+W1_LACKS = (S2_LACK, PEAK_LACK)
+WHAT = {'S1': 'strong', 'S2': 'partial', 'W1': 'partial', 'W2': 'weak'}
 
 # $1 job cgroup name, $2 the job cgroup to join ('' : the scope systemd put it in), $3 ready fd,
 # $4 go fd, $5 watch fd, $6 armed (1/0), $7 variables to unset, $8 1: systemd puts it in $2/main
@@ -216,18 +243,202 @@ for _ in range(passes):
     time.sleep(0.05)
 '''
 
-# The W1 trial (python -I -S -c): a user and PID namespace, and a child that is pid 1 in it.
-W1_CODE = r'''import os, sys
+# W1's starter (python -I -S -c; the module docstring): its ready, go and watch pipes at 3, 4 and
+# 5 (FDS), argv armed (1/0), the stub's shell, the stub (WSTUB), then the command. It says
+# `r <pid 1's pid>`, the reaper `x <why>` when it fails, the stub `s <its pid in the namespace>`.
+# The uid and gid are read before the unshare: after it they read as the overflow id until the
+# maps are written, and only the writer's own id may be mapped.
+NSTART = r'''import os, select, signal, sys, time
+R, G, K = 3, 4, 5
+arm, sh, stub, cmd = sys.argv[1] == '1', sys.argv[2], sys.argv[3], sys.argv[4:]
+def say(text):
+    try:
+        os.write(R, (text + '\n').encode('utf-8', 'replace'))
+    except OSError:
+        pass
+def live(n):
+    try:
+        with open('/proc/%s/stat' % n, 'rb') as f:
+            data = f.read()
+        return data[data.rindex(b')') + 2:][:1] not in (b'Z', b'X')
+    except (OSError, ValueError):
+        return False
+def kill_all(spared):
+    for _ in range(8):
+        fds = []
+        for n in os.listdir('/proc'):
+            if n.isdigit() and int(n) != 1 and int(n) not in spared:
+                try:
+                    fd = os.pidfd_open(int(n))
+                except OSError:
+                    continue
+                if live(n):
+                    fds.append(fd)
+                else:
+                    os.close(fd)
+        if not fds:
+            return
+        for sig in (signal.SIGSTOP, signal.SIGKILL):
+            for fd in fds:
+                try:
+                    signal.pidfd_send_signal(fd, sig)
+                except OSError:
+                    pass
+        for fd in fds:
+            os.close(fd)
+        time.sleep(0.05)
+def reaper(st, up):
+    global arm
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        os.unshare(os.CLONE_NEWNS)
+        for src, dst, kind, flags in ((b'none', b'/', None, 16384 | 262144),
+                                      (b'proc', b'/proc', b'proc', 2 | 4 | 8)):
+            if libc.mount(src, dst, kind, flags, None) != 0:
+                e = ctypes.get_errno()
+                raise OSError(e, 'mount %s: %s' % (dst.decode(), os.strerror(e)))
+    except (ImportError, AttributeError, OSError) as e:
+        say('x no fresh /proc in the job: %s' % e)
+        os._exit(125)
+    os.environ['PMKIT_W1_NS'] = str(os.stat('/proc/self/ns/pid').st_ino)
+    wr, ww = os.pipe()
+    os.set_blocking(wr, False)
+    os.set_blocking(ww, False)
+    signal.signal(signal.SIGCHLD, lambda *a: None)
+    signal.set_wakeup_fd(ww)
+    child = os.fork()
+    if child == 0:
+        try:
+            os.close(K)
+            signal.set_wakeup_fd(-1)
+            for s in TERMINAL + (signal.SIGCHLD, signal.SIGPIPE, signal.SIGXFSZ):
+                signal.signal(s, signal.SIG_DFL)
+            os.execv(sh, [sh, '-c', stub, 'pmkit-job', str(R), str(G)] + cmd)
+        except BaseException as e:
+            say('x the stub could not start: %s' % e)
+        os._exit(127)
+    os.close(R)
+    os.close(G)
+    null = os.open('/dev/null', os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(null, fd)
+    os.close(null)
+    poll = select.poll()
+    for fd in (K, up, wr):
+        poll.register(fd, select.POLLIN)
+    status, told, released, closed, spared, buf = None, False, False, False, set(), b''
+    while True:
+        kids = True
+        while True:
+            try:
+                pid, s = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                kids = False
+                break
+            if pid == 0:
+                break
+            if pid == child:
+                status = s
+        if status is not None and not told:
+            told = True
+            try:
+                os.write(st, b'%d\n' % status)
+            except OSError:
+                pass
+        if not kids and (released or closed):
+            os._exit(0)
+        try:
+            ready = poll.poll()
+        except InterruptedError:
+            continue
+        for fd, _ in ready:
+            if fd == wr:
+                try:
+                    os.read(wr, 512)
+                except OSError:
+                    pass
+                continue
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                data = b''
+            if fd == up:
+                if not data:
+                    poll.unregister(up)
+                    if not told:
+                        os._exit(0)
+                continue
+            if not data:
+                poll.unregister(K)
+                closed = True
+                if arm and not released:
+                    if not spared:
+                        os._exit(0)
+                    kill_all(spared)
+                continue
+            buf += data
+            while b'\n' in buf:
+                line, buf = buf.split(b'\n', 1)
+                words = line.split()
+                if words == [b'arm']:
+                    arm = True
+                elif words == [b'disarm']:
+                    arm = False
+                elif words == [b'release']:
+                    released = True
+                elif words[:1] == [b'spare']:
+                    spared.update(int(x) for x in words[1:] if x.isdigit())
+TERMINAL = (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP)
+for s in TERMINAL:
+    signal.signal(s, signal.SIG_IGN)
+uid, gid = os.getuid(), os.getgid()
 try:
     os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWPID)
+    for name, text in (('setgroups', 'deny'), ('uid_map', '%d %d 1' % (uid, uid)),
+                       ('gid_map', '%d %d 1' % (gid, gid))):
+        with open('/proc/self/' + name, 'w') as f:
+            f.write(text)
 except (AttributeError, OSError) as e:
-    print('user namespaces denied: %s' % e)
-    sys.exit(0)
+    say('x no user and PID namespace: %s' % e)
+    sys.exit(125)
+st_r, st_w = os.pipe()
+up_r, up_w = os.pipe()
 pid = os.fork()
 if pid == 0:
-    os._exit(0 if os.getpid() == 1 else 3)
-_, st = os.waitpid(pid, 0)
-print('ok' if os.waitstatus_to_exitcode(st) == 0 else 'the child was not pid 1')
+    os.close(st_r)
+    os.close(up_w)
+    try:
+        reaper(st_w, up_r)
+    finally:
+        os._exit(1)
+os.close(st_w)
+os.close(up_r)
+say('r %d' % pid)
+for fd in (R, G, K):
+    os.close(fd)
+null = os.open('/dev/null', os.O_RDWR)
+for fd in (0, 1, 2):
+    os.dup2(null, fd)
+data = b''
+while b'\n' not in data:
+    chunk = os.read(st_r, 64)
+    if not chunk:
+        break
+    data += chunk
+try:
+    status = int(data.split(b'\n')[0])
+except ValueError:
+    status = None
+if status is not None and os.WIFEXITED(status):
+    os._exit(os.WEXITSTATUS(status))
+sig = os.WTERMSIG(status) if status is not None and os.WIFSIGNALED(status) else signal.SIGKILL
+try:
+    signal.signal(sig, signal.SIG_DFL)
+except (OSError, ValueError):
+    pass
+os.kill(os.getpid(), sig)
+os._exit(128 + sig)
 '''
 
 
@@ -539,11 +750,28 @@ def _marks(pid, want):
     return any(v.startswith(key) and want in v[len(key):].split() for v in env)
 
 
+def _pidns(pid):
+    """The inode of pid's PID namespace ('self': this process's), None when it cannot be read."""
+    return lproc.pidns(pid)
+
+
+def _nspid(pid):
+    """pid's pids in each PID namespace this /proc sees it in, outermost first (its status NSpid
+    line), [] when it cannot be read: the last is its pid in its own namespace."""
+    try:
+        for line in _read('%s/%s/status' % (PROC, pid)).splitlines():
+            if line.startswith('NSpid:'):
+                return [int(x) for x in line.split()[1:]]
+    except (OSError, ValueError):
+        pass
+    return []
+
+
 # ------------------------------------------------------------------ the tier
 class Tier:
-    """What probe() found: `name` S1, S2 or W2, `lacks` what it does not give, `why` the reason
-    there is no scope (W2), `w1` the W1 trial's result (W2), `parent` the job cgroup a nested
-    owner runs in. `text` is the line a status shows."""
+    """What probe() found: `name` S1, S2, W1 or W2, `lacks` what it does not give, `why` the
+    reason there is no scope (W1, W2), `w1` why W1 is not used (W2), `parent` the job cgroup a
+    nested owner runs in. `text` is the line a status shows."""
 
     def __init__(self, name, lacks=(), why=None, w1=None, parent=None):
         self.name, self.lacks, self.why, self.w1 = name, tuple(lacks), why, w1
@@ -581,19 +809,42 @@ def probe(fresh=False):
         return _probed
 
 
+IN_W1 = 'it runs in a W1 job, whose pids the user systemd cannot name'
+W1_NESTED = 'W1 not nested: its jobs stay in the namespace of the W1 job it runs in'
+
+
+def _in_w1():
+    """True when this process runs in a W1 job: W1_ENV names its own pid namespace. Its pids
+    are not the user systemd's there, and a scope trial would name another process to it."""
+    ns = os.environ.get(W1_ENV)
+    return bool(ns) and ns == str(lproc.pidns())
+
+
 def _probe():
+    if _in_w1():
+        # W2, never a nested W1: every level stays in the job's namespace, which the run's
+        # record lists (jobns), so a run nested at any depth is in that run (lock nest_check);
+        # the W1 job's kill ends them all
+        return Tier('W2', W2_LACKS, why=IN_W1, w1=W1_NESTED)
     parent = parent_job()
     if parent is not None:
         tier = nested_tier(parent)
         if tier is not None:
             return tier
         # a scope of its own would take its jobs out of the job it runs in
-        return Tier('W2', W2_LACKS, why='it runs in kit job %s, which cannot hold a job' % parent,
-                    w1=w1_status())
+        return _unscoped('it runs in kit job %s, which cannot hold a job' % parent)
     name, lacks, why = trial()
     if name:
         return Tier(name, lacks)
-    return Tier('W2', W2_LACKS, why=why, w1=w1_status())
+    return _unscoped(why)
+
+
+def _unscoped(why):
+    """W1 when its trial works here, else W2 with why W1 is not used."""
+    no = w1_trial()
+    if no is None:
+        return Tier('W1', W1_LACKS, why=why)
+    return Tier('W2', W2_LACKS, why=why, w1='W1 unavailable (%s)' % no)
 
 
 def nested_tier(parent):
@@ -682,19 +933,50 @@ def _wait_gone(d, seconds):
     return True
 
 
-def w1_status():
-    """'W1 available, not built', or 'W1 unavailable (<why>)', from a trial in a fresh python
-    (read from what it prints, not its exit code)."""
+def w1_trial():
+    """None when W1 works here, else why not: a trial job, NsJob's own start on `sleep`, whose
+    command is seen in a PID namespace of its own and which is killed through its pid 1, the
+    command seen killed and pid 1 seen gone. No exit code decides alone."""
+    if not hasattr(os, 'unshare') or not hasattr(os, 'pidfd_open'):
+        return 'this python has no os.unshare or os.pidfd_open'
+    job = NsJob(None, True, tier=Tier('W1', W1_LACKS))
+    p = None
     try:
-        r = subprocess.run([sys.executable, '-I', '-S', '-c', W1_CODE], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
-                           creationflags=0)
-    except (OSError, subprocess.SubprocessError) as e:
-        return 'W1 not known (its trial could not run: %s)' % e
-    out = r.stdout.decode('utf-8', 'replace').strip()
-    if out == 'ok':
-        return 'W1 available, not built'
-    return 'W1 unavailable (%s)' % (out or 'its trial said nothing')
+        try:
+            p = job.start(['sleep', '30'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL)
+        except (OSError, ValueError) as e:
+            return 'a trial job could not start (%s)' % e
+        seen = job.contains(job.command) == 'in' and job.ns != _pidns('self')
+        wrote = job.terminate()
+        try:
+            p.wait(GONE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+        died = p.returncode == -signal.SIGKILL
+        gone = _wait_ended(job.reaper, GONE_SECONDS)
+        if not (seen and wrote and died and gone):
+            return ("the trial job was not ended by its pid 1's kill (in its namespace %s, "
+                    'killed %s, the command %s, pid 1 %s)'
+                    % (seen, wrote, 'killed' if died else 'exit %r' % p.returncode,
+                       'gone' if gone else 'still there'))
+    finally:
+        job.close()
+        if p is not None and p.poll() is None:
+            p.kill()
+            p.wait()
+    return None
+
+
+def _wait_ended(pid, seconds):
+    end = time.monotonic() + seconds
+    while True:
+        st = pstat(pid)
+        if st is None or st[2]:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.01)
 
 
 # ------------------------------------------------------------------ the carrier
@@ -790,15 +1072,16 @@ _mixed = {}
 
 
 class Job:
-    """kitlib.proc.job.Job on Linux: Job(mask=None, kill_on_close=True) is a ScopeJob (S1, S2) or
-    a WeakJob (W2) as probe() finds (`tier` instead: a test's or the trial's). One command per
-    job: start a second time and it raises JobError. `pin`, `effective` and `note` mean what
-    they mean on Windows. short=True: a short command (a git call), carried in this process's
-    carrier scope instead of a scope of its own when it can be (the module docstring)."""
+    """kitlib.proc.job.Job on Linux: Job(mask=None, kill_on_close=True) is a ScopeJob (S1, S2), an
+    NsJob (W1) or a WeakJob (W2) as probe() finds (`tier` instead: a test's or the trial's). One
+    command per job: start a second time and it raises JobError. `pin`, `effective` and `note`
+    mean what they mean on Windows. short=True: a short command (a git call), carried in this
+    process's carrier scope instead of a scope of its own when it can be (the module docstring)."""
 
     def __new__(cls, mask=None, kill_on_close=True, tier=None, short=False):
         if not issubclass(cls, (ScopeJob, WeakJob)):
-            impl = ScopeJob if (tier or probe()).scoped else WeakJob
+            tier = tier or probe()
+            impl = ScopeJob if tier.scoped else NsJob if tier.name == 'W1' else WeakJob
             if cls is not Job:              # a subclass of Job (a test's): mixed with the tier's
                 key = (cls, impl)
                 if key not in _mixed:
@@ -863,14 +1146,14 @@ class Job:
             held.close()
         return p
 
-    def _ready(self, p, fd):
-        """{kind: words} of the stub's ready lines up to its `s` line; JobError when it ends or
-        says `x` first, or is silent READY_SECONDS."""
+    def _ready(self, p, fd, want=('s',)):
+        """{kind: words} of the stub's ready lines up to its `s` line (each kind in `want`);
+        JobError when it ends or says `x` first, or is silent READY_SECONDS."""
         buf, lines = b'', {}
         end = time.monotonic() + READY_SECONDS
         poller = select.poll()
         poller.register(fd, select.POLLIN)
-        while 's' not in lines:
+        while not all(k in lines for k in want):
             left = end - time.monotonic()
             if left <= 0:
                 raise _error('the command was not in its job %ds after its start' % READY_SECONDS)
@@ -927,7 +1210,8 @@ class Job:
 
     def assign(self, proc):
         """Puts a live process (a Popen, or a pid) in the job; raises JobError when it cannot."""
-        raise _error('a job on Linux holds only the command it started (W2 has no way to add one)')
+        raise _error('a job on Linux holds only the command it started '
+                     '(W1 and W2 have no way to add one)')
 
     def assign_self(self):
         self.assign(os.getpid())
@@ -1600,3 +1884,145 @@ class WeakJob(Job):
         _close(self._g)
         self._g = None
         self._reap_watchdog()
+
+
+class NsJob(WeakJob):
+    """W1: no cgroup; the job is a user and PID namespace of its own whose pid 1 is the reaper
+    (the module docstring). `p` is the starter; `command` is the command's pid, `reaper` pid 1's
+    and `ns` the namespace's inode, all as this process sees them. The members are pid 1's
+    descendants. kill: pid 1's, unless leftovers() spared some (then W2's passes over the
+    members)."""
+
+    def __init__(self, mask=None, kill_on_close=True, tier=None, short=False):
+        WeakJob.__init__(self, mask, kill_on_close, tier, short)
+        self.ns = self.reaper = self.command = None
+        self._rfd = self._rct = None
+
+    def _begin(self, cmd, env, kw):
+        r_r, r_w = os.pipe()
+        g_r, g_w = os.pipe()
+        k_r, k_w = os.pipe()
+        self._g, self._k = g_w, k_w
+        try:
+            p = _popen([sys.executable, '-I', '-S', '-c', NSTART,
+                        '1' if self.kill_on_close else '0', SH, WSTUB] + cmd, kw, env,
+                       (r_w, g_r, k_r))
+        except BaseException:
+            for fd in (r_r, r_w, g_r, g_w, k_r, k_w):
+                _close(fd)
+            self._g = self._k = None
+            raise
+        for fd in (r_w, g_r, k_r):
+            _close(fd)
+        try:
+            try:
+                lines = self._ready(p, r_r, want=('r', 's'))
+            finally:
+                _close(r_r)
+            self._place(p, lines)
+            self._child = p
+        except BaseException:
+            self._abort(p)
+            raise
+        p.pidns = self.ns
+        return p
+
+    def _place(self, p, lines):
+        """Checks the ready lines name the starter's child as pid 1 of a namespace of its own and
+        the stub as a process in it; keeps a pidfd on pid 1."""
+        try:
+            reaper, inner = int(lines['r'][0]), int(lines['s'][0])
+        except (IndexError, ValueError):
+            raise _error('a ready line is not a pid: %r' % lines)
+        boot = _boot()
+        st = pstat(reaper, boot)
+        if st is None or st[1] != p.pid or st[2] or _nspid(reaper)[-1:] != [1]:
+            raise _error("the ready line named pid %d, not the starter's pid 1" % reaper)
+        try:
+            fd = os.pidfd_open(reaper)
+        except OSError as e:
+            raise _error("no pidfd on the job's pid 1 (%s)" % e)
+        # the pidfd pins one process: pid 1, or a reuse of its pid, which is let go unsignalled
+        if not _same(reaper, st[0], boot):
+            _close(fd)
+            raise _error("the job's pid 1 ended before its pidfd was opened")
+        self._rfd = fd
+        self.reaper, self._rct, self.wd = reaper, st[0], reaper
+        ns = _pidns(reaper)
+        if ns is None or ns == _pidns('self'):
+            raise _error("the job's pid 1 is in no PID namespace of its own")
+        self.ns = ns
+        for pid in _pids():
+            c = pstat(pid, boot)
+            if (c is not None and c[1] == reaper and _nspid(pid)[-1:] == [inner]
+                    and _pidns(pid) == ns):
+                self.command, self._ctime = pid, c[0]
+                return
+        raise _error("the ready line named pid %d, not a process in the job's namespace"
+                     % inner)
+
+    def _pin_start(self, p):
+        if self.mask is not None and not self._pin_affinity(
+                [p.pid, self.reaper, self.command], self.mask):
+            self.note = 'the core pin could not be set (affinity refused)'
+            self.mask = self.pin = self.effective = None
+
+    def _reap_watchdog(self):
+        _close(self._rfd)
+        self._rfd = None
+
+    def members(self):
+        """{pid: ctime} of the job's processes now, but pid 1 and the spared: pid 1's
+        descendants, which are every process in its namespace and in the namespaces nested in it
+        (an orphan in a PID namespace goes to a reaper in it, at worst its pid 1)."""
+        boot = _boot()
+        if self.reaper is None or boot is None:
+            return {}
+        found = tree(self.reaper, self._rct, boot)
+        for pid, ct in list(found.items()):
+            st = pstat(pid, boot)
+            if pid in self.spared or st is None or st[0] != ct or st[2]:
+                del found[pid]
+        return found
+
+    def usage(self):
+        """As WeakJob's, the peak resident set the command's own (VmHWM)."""
+        if self.closed or self.command is None:
+            return None
+        pids = self.pids()
+        ticks = sum(cpu_ticks(pid) for pid in pids)
+        ws = sum(rss(pid) for pid in pids)
+        self._peak = max(self._peak, ws)
+        return (ticks / float(os.sysconf('SC_CLK_TCK')), self._peak,
+                max(vm_hwm(self.command), ws))
+
+    def _kill_all(self):
+        """pid 1 killed through its pidfd (the kernel kills the rest), True once no member is
+        left; with spared pids, W2's passes over the members instead, pid 1 left running."""
+        if self._rfd is None:
+            return False
+        if self.spared:
+            return WeakJob._kill_all(self)
+        try:
+            signal.pidfd_send_signal(self._rfd, signal.SIGKILL)
+        except OSError:
+            pass                                        # ended already
+        end = time.monotonic() + GONE_SECONDS
+        while self.members():
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.01)
+        return True
+
+    def leftovers(self, pids=None):
+        """Takes pids (default: every member) out of the job's kill, and pid 1's. pid 1 knows
+        a member by its pid in the job's namespace, at pid 1's depth of the member's NSpid (a
+        member in a namespace nested in the job's has more pids after it)."""
+        now = self.members()
+        pids = [p for p in (sorted(now) if pids is None else pids) if p in now]
+        self.spared.update(pids)
+        depth = len(_nspid(self.reaper))
+        inner = [n[depth - 1] for n in (_nspid(p) for p in pids) if depth and len(n) >= depth]
+        if inner:
+            self._watch('spare ' + ' '.join(str(n) for n in inner))
+        return pids

@@ -1,10 +1,12 @@
 """Containment on Linux (kitlib.platform.linux.contain; docs/linux-support-plan.md section 2.3,
-slice 5): kitlib.proc.job.Job on a cgroup scope (S1, S2) or on the weak tier (W2).
+slice 5): kitlib.proc.job.Job on a cgroup scope (S1, S2), a user and PID namespace (W1) or on the
+weak tier (W2).
 
 On every platform: which cgroups a job may kill (only one it made, checked before any write), the
-tier's report line, the scope prefix, a nested owner's tier, the W1 trial read from what it
-prints, never its exit code, systemd-run's --expand-environment asked of its --help, and the weak
-tier's walk and kill on a faked /proc where a pid is reused between reads (never signalled).
+tier's report line, the scope prefix, a nested owner's tier, the probe's order (a scope, else W1
+when its trial works, else W2 with why not), systemd-run's --expand-environment asked of its
+--help, the weak tier's walk and kill on a faked /proc where a pid is reused between reads (never
+signalled), and W1's members, kill and ready-line checks on a faked /proc.
 
 On Linux, on real processes: a setsid grandchild ends with its job; memory.peak is read; the pin
 is the cgroup's; an owner killed by SIGKILL takes its job's tree and its watchdog with it; a job
@@ -12,8 +14,10 @@ that ended cleanly leaves no watchdog; a released job's daemon runs on and lefto
 of the job; a job made inside a job is nested in it; a systemd-run that runs the command outside
 any scope is caught; an owner SIGKILLed before go, a start aborted before go and a forged ready
 line each run no command and leave no stub, watchdog or unit; the forced weak tier kills a setsid
-tree. Every scope a test makes is named `pmkit-containment-...-<this pid>-...` and is checked
-gone after each test."""
+tree; a W1 job runs its command in a namespace of its own with a fresh /proc and its own ids,
+kills a setsid tree through its pid 1, ends with its owner or its starter, spares leftovers, and
+refuses a forged ready line. Every scope a test makes is named
+`pmkit-containment-...-<this pid>-...` and is checked gone after each test."""
 import ast
 import importlib
 import os
@@ -126,32 +130,93 @@ class Tiers(unittest.TestCase):
             with self.subTest(value=value), mock.patch.dict(os.environ, {c.PREFIX_ENV: value}):
                 self.assertEqual(c.prefix(), want)
 
+    def test_the_w1_line_names_it_why_there_is_no_scope_and_what_it_lacks(self):
+        c = contain()
+        w1 = c.Tier('W1', c.W1_LACKS, why='no systemd-run').text
+        self.assertTrue(w1.startswith('containment: partial (W1; no cgroup scope: no systemd-run; '
+                                      'lacks cpu pinning by the cgroup'), w1)
+        self.assertIn(c.PEAK_LACK, w1)
+        self.assertFalse(c.Tier('W1').scoped)
+
     def test_a_process_in_a_kit_job_reads_its_tier_from_that_job_and_runs_no_trial(self):
         c = contain()
         with mock.patch.object(c, 'parent_job', return_value=TOP), \
                 mock.patch.object(c, 'trial', side_effect=AssertionError('a trial ran')), \
-                mock.patch.object(c, 'w1_status', return_value='W1 unavailable (x)'), \
+                mock.patch.object(c, 'w1_trial', side_effect=AssertionError('a W1 trial ran')), \
                 mock.patch.object(c, 'nested_tier', return_value=c.Tier('S1', parent=TOP)):
             self.assertEqual((c._probe().name, c._probe().parent), ('S1', TOP))
-        with mock.patch.object(c, 'parent_job', return_value=TOP), \
-                mock.patch.object(c, 'trial', side_effect=AssertionError('a trial ran')), \
-                mock.patch.object(c, 'w1_status', return_value='W1 unavailable (x)'), \
-                mock.patch.object(c, 'nested_tier', return_value=None):
-            tier = c._probe()
-        # never a scope of its own, which would take its jobs out of the job it runs in
-        self.assertEqual(tier.name, 'W2')
-        self.assertIn('it runs in kit job %s' % TOP, tier.text)
+        for no, want in (('x', 'W2'), (None, 'W1')):
+            with self.subTest(w1=no), mock.patch.object(c, 'parent_job', return_value=TOP), \
+                    mock.patch.object(c, 'trial', side_effect=AssertionError('a trial ran')), \
+                    mock.patch.object(c, 'w1_trial', return_value=no), \
+                    mock.patch.object(c, 'nested_tier', return_value=None):
+                tier = c._probe()
+            # never a scope of its own, which would take its jobs out of the job it runs in
+            self.assertEqual(tier.name, want)
+            self.assertIn('it runs in kit job %s' % TOP, tier.text)
 
-    def test_the_w1_trial_is_read_from_what_it_prints_never_its_exit_code(self):
+    def test_the_probe_takes_a_scope_then_w1_then_w2(self):
         c = contain()
-        for out, rc, want in ((b'ok\n', 1, 'W1 available, not built'),
-                              (b'user namespaces denied: [Errno 1] x\n', 0,
-                               'W1 unavailable (user namespaces denied: [Errno 1] x)'),
-                              (b'', 0, 'W1 unavailable (its trial said nothing)')):
-            with self.subTest(out=out, rc=rc), mock.patch.object(
-                    c.subprocess, 'run',
-                    return_value=subprocess.CompletedProcess([], rc, out, b'')):
-                self.assertEqual(c.w1_status(), want)
+        with mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'trial', return_value=('S2', [c.S2_LACK], None)), \
+                mock.patch.object(c, 'w1_trial', side_effect=AssertionError('a W1 trial ran')):
+            self.assertEqual(c._probe().name, 'S2')
+        with mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'trial', return_value=(None, (), 'no systemd-run')), \
+                mock.patch.object(c, 'w1_trial', return_value=None):
+            tier = c._probe()
+            self.assertEqual((tier.name, tier.lacks, tier.why),
+                             ('W1', c.W1_LACKS, 'no systemd-run'))
+        with mock.patch.object(c, 'parent_job', return_value=None), \
+                mock.patch.object(c, 'trial', return_value=(None, (), 'no systemd-run')), \
+                mock.patch.object(c, 'w1_trial', return_value='user namespaces denied'):
+            tier = c._probe()
+            self.assertEqual(tier.name, 'W2')
+            self.assertTrue(tier.text.endswith('; W1 unavailable (user namespaces denied))'),
+                            tier.text)
+
+    def test_a_probe_inside_a_w1_job_is_w2_with_no_scope_trial_and_no_nested_w1(self):
+        c = contain()
+        with mock.patch.dict(os.environ, {c.W1_ENV: '77'}), \
+                mock.patch.object(c.lproc, 'pidns', return_value=77), \
+                mock.patch.object(c, 'parent_job', side_effect=AssertionError('it looked')), \
+                mock.patch.object(c, 'trial', side_effect=AssertionError('a scope trial ran')), \
+                mock.patch.object(c, 'w1_trial', side_effect=AssertionError('a nested W1')):
+            tier = c._probe()
+            self.assertEqual((tier.name, tier.lacks), ('W2', c.W2_LACKS))
+            self.assertEqual(tier.why, 'it runs in a W1 job, whose pids the user systemd '
+                                       'cannot name')
+            self.assertEqual(tier.w1, 'W1 not nested: its jobs stay in the namespace of the W1 '
+                                      'job it runs in')
+            self.assertIs(type(c.Job.__new__(c.Job, tier=tier)), c.WeakJob)
+        for mark in ('78', ''):
+            with mock.patch.dict(os.environ, {c.W1_ENV: mark}), \
+                    mock.patch.object(c.lproc, 'pidns', return_value=77), \
+                    mock.patch.object(c, 'parent_job', return_value=None), \
+                    mock.patch.object(c, 'trial', return_value=('S2', [c.S2_LACK], None)):
+                self.assertEqual(c._probe().name, 'S2', mark)
+
+    def test_the_w1_starter_marks_its_job_with_the_env_name(self):
+        c = contain()
+        self.assertIn("os.environ['%s'] = str(os.stat('/proc/self/ns/pid').st_ino)" % c.W1_ENV,
+                      c.NSTART)
+
+    def test_a_w1_tier_makes_an_ns_job(self):
+        c = contain()
+        self.assertIs(type(c.Job.__new__(c.Job, tier=c.Tier('W1'))), c.NsJob)
+        self.assertIs(type(c.Job.__new__(c.Job, tier=c.Tier('W2'))), c.WeakJob)
+        self.assertIs(type(c.Job.__new__(c.Job, tier=c.Tier('S2'))), c.ScopeJob)
+
+    def test_the_w1_starter_reads_its_ids_before_it_unshares(self):
+        # after the unshare they read as the overflow id until the maps are written, and a map of
+        # the overflow id is refused (EPERM): only the writer's own id may be mapped. W1 would
+        # then never be used and the live classes would only skip, so this is the guard
+        text = contain().NSTART
+        compile(text, 'NSTART', 'exec')
+        unshare = text.index('os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWPID)')
+        self.assertLess(text.index('uid, gid = os.getuid(), os.getgid()'), unshare)
+        self.assertEqual(text.count('os.getuid()'), 1)
+        self.assertEqual(text.count('os.getgid()'), 1)
 
 
 class Expand(unittest.TestCase):
@@ -284,6 +349,130 @@ class Walk(unittest.TestCase):
         self.assertNotIn(self.R, self.job().members())
         f.procs[self.R] = (1, 77, 'S')
         self.assertEqual(self.job().members(), {})
+
+
+class NsWalk(unittest.TestCase):
+    """W1's members, kill and ready-line checks on a faked /proc: the starter S, pid 1 R, the
+    command C (pid 2 in the namespace) and its child G; namespace inodes and NSpid lines faked."""
+    S, R, C, G, OWN, NS = 90, 100, 200, 300, 7, 4026531999
+
+    def setUp(self):
+        self.c = contain()
+        self.f = FakeProc({self.S: (1, 40, 'S'), self.R: (self.S, 50, 'S'),
+                           self.C: (self.R, 60, 'S'), self.G: (self.C, 70, 'S')})
+        self.f.patch(self, self.c)
+        self.ns = {'self': self.OWN, self.S: self.OWN, self.R: self.NS, self.C: self.NS,
+                   self.G: self.NS}
+        self.nspid = {self.S: [self.S], self.R: [self.R, 1], self.C: [self.C, 2],
+                      self.G: [self.G, 3]}
+        for name, table in (('_pidns', self.ns), ('_nspid', self.nspid)):
+            patch = mock.patch.object(self.c, name, side_effect=lambda pid, t=table: t.get(pid))
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def job(self, **attrs):
+        attrs = dict(dict(reaper=self.R, _rct=self.f.ct(50), ns=self.NS, spared=set(),
+                          _rfd=55, _child=types.SimpleNamespace(pid=self.S)), **attrs)
+        return bare(self.c.NsJob, **attrs)
+
+    def test_the_members_are_pid_1_s_descendants_not_pid_1_or_the_starter(self):
+        f = self.f
+        self.assertEqual(self.job().members(), {self.C: f.ct(60), self.G: f.ct(70)})
+        self.assertEqual(self.job(spared={self.G}).members(), {self.C: f.ct(60)})
+        f.procs[self.G] = (self.C, 70, 'Z')
+        self.assertEqual(self.job().members(), {self.C: f.ct(60)})        # an ended one is not
+
+    def test_a_pid_1_that_ended_or_was_reused_has_no_members(self):
+        self.f.procs[self.R] = (self.S, 51, 'S')            # the pid now another process's
+        self.assertEqual(self.job().members(), {})
+        self.assertEqual(self.job(reaper=None).members(), {})
+
+    def kill(self, job):
+        sent = []
+        sig = types.SimpleNamespace(SIGSTOP=19, SIGKILL=9,
+                                    pidfd_send_signal=lambda fd, s: sent.append((fd, s)))
+        with mock.patch.object(self.c, 'signal', sig), \
+                mock.patch.object(self.c.os, 'pidfd_open', side_effect=lambda pid: pid + 10000,
+                                  create=True), \
+                mock.patch.object(self.c, '_close'), \
+                mock.patch.object(self.c, 'GONE_SECONDS', 0.05), \
+                mock.patch.object(self.c.time, 'sleep'):
+            done = job._kill_all()
+        return done, sent
+
+    def test_the_kill_is_pid_1_s_through_its_pidfd(self):
+        def die(fd, s):
+            for pid in (self.R, self.C, self.G):
+                self.f.procs.pop(pid)
+        job = self.job()
+        sig = types.SimpleNamespace(SIGSTOP=19, SIGKILL=9, pidfd_send_signal=mock.Mock(
+            side_effect=die))
+        with mock.patch.object(self.c, 'signal', sig):
+            self.assertTrue(job._kill_all())
+        sig.pidfd_send_signal.assert_called_once_with(55, 9)
+
+    def test_a_kill_that_leaves_members_is_not_done(self):
+        done, sent = self.kill(self.job())
+        self.assertFalse(done)
+        self.assertEqual(sent[0], (55, 9))
+
+    def test_with_spared_pids_the_kill_goes_member_by_member_and_spares_pid_1(self):
+        done, sent = self.kill(self.job(spared={self.G}))
+        self.assertEqual(sorted({fd - 10000 for fd, _ in sent}), [self.C])
+        self.assertNotIn((55, 9), sent)
+
+    def test_with_no_pidfd_on_pid_1_the_kill_reaches_nothing(self):
+        done, sent = self.kill(self.job(_rfd=None))
+        self.assertEqual((done, sent), (False, []))
+
+    def test_leftovers_name_the_spared_by_their_pids_in_the_namespace(self):
+        job = self.job()
+        with mock.patch.object(job, '_watch') as watch:
+            self.assertEqual(job.leftovers([self.G, 4242]), [self.G])
+        watch.assert_called_once_with('spare 3')
+        self.assertEqual(job.spared, {self.G})
+
+    def test_a_member_in_a_namespace_nested_in_the_job_s_is_named_by_its_pid_in_the_job_s(self):
+        self.nspid[self.G] = [self.G, 3, 1]         # pid 1 of a namespace its command made
+        job = self.job()
+        with mock.patch.object(job, '_watch') as watch:
+            self.assertEqual(job.leftovers([self.G]), [self.G])
+        watch.assert_called_once_with('spare 3')
+
+    def place(self, lines, own=None):
+        job = self.job(reaper=None, _rct=None, ns=None, _rfd=None, command=None, _ctime=None)
+        if own is not None:
+            self.ns['self'] = own
+        with mock.patch.object(self.c.os, 'pidfd_open', return_value=55, create=True), \
+                mock.patch.object(self.c, '_close') as close:
+            try:
+                job._place(types.SimpleNamespace(pid=self.S), lines)
+            finally:
+                self.closed = [a[0][0] for a in close.call_args_list]
+        return job
+
+    def test_the_ready_lines_name_pid_1_and_the_command_in_its_namespace(self):
+        job = self.place({'r': [str(self.R)], 's': ['2']})
+        self.assertEqual((job.reaper, job.command, job.ns, job._rfd, job.wd),
+                         (self.R, self.C, self.NS, 55, self.R))
+
+    def test_a_forged_ready_line_is_refused(self):
+        err = jobmod().JobError
+        for lines, want in (({'r': [str(self.C)], 's': ['2']}, "not the starter's pid 1"),
+                            ({'r': [str(self.S)], 's': ['2']}, "not the starter's pid 1"),
+                            ({'r': [str(self.R)], 's': ['3']}, 'not a process in the job'),
+                            ({'r': [str(self.R)], 's': ['1']}, 'not a process in the job'),
+                            ({'r': ['x'], 's': ['2']}, 'not a pid')):
+            with self.subTest(lines=lines), self.assertRaisesRegex(err, want):
+                self.place(lines)
+        with self.assertRaisesRegex(err, 'no PID namespace of its own'):
+            self.place({'r': [str(self.R)], 's': ['2']}, own=self.NS)
+
+    def test_a_pid_1_reused_before_its_pidfd_opens_is_let_go(self):
+        self.f.then[(self.R, 1)] = lambda: self.f.procs.__setitem__(self.R, (self.S, 99, "S"))
+        with self.assertRaisesRegex(jobmod().JobError, 'ended before its pidfd'):
+            self.place({'r': [str(self.R)], 's': ['2']})
+        self.assertEqual(self.closed, [55])
 
 
 def unit_names(pid=None):
@@ -1016,6 +1205,201 @@ class Weak(Case):
         self.assertFalse(gone(daemon))
         kill_own(daemon)
 
+
+
+W1 = "contain.Tier('W1', contain.W1_LACKS)"
+
+
+@posix_only('user and PID namespaces are Linux')
+class Ns(Case):
+    """W1 on real processes, where its trial works (unprivileged user namespaces allowed)."""
+    _no = []
+
+    def setUp(self):
+        super().setUp()
+        if not Ns._no:
+            Ns._no.append(self.c.w1_trial())
+        if Ns._no[0] is not None:
+            self.skipTest('no W1 here: %s' % Ns._no[0])
+
+    def job(self, **kw):
+        return self.c.Job(tier=self.c.Tier('W1', self.c.W1_LACKS), **kw)
+
+    def outer(self, job, inner):
+        """The owner's pid of the job's process whose pid in the namespace is `inner`."""
+        found = []
+
+        def look():
+            found[:] = [p for p in job.pids() if self.c._nspid(p)[-1:] == [int(inner)]]
+            return found
+        wait_until(look, 'pid %s of the namespace is a member' % inner)
+        return found[0]
+
+    def test_w1_kills_a_setsid_tree_and_its_orphans_through_its_pid_1(self):
+        job = self.job()
+        self.assertIsInstance(job, self.c.NsJob)
+        self.addCleanup(job.close)
+        p = job.start(['sh', '-c', 'setsid sh -c "sleep 300 & echo \\$!; exec sleep 300" & '
+                       'wait'], stdout=subprocess.PIPE)
+        self.addCleanup(p.stdout.close)
+        orphan = self.outer(job, lines(p, 1)[0][0])
+        self.strays.append(orphan)
+        reaper = job.reaper
+        self.assertEqual(job.contains(orphan), 'in')
+        self.assertEqual(job.contains(job.command), 'in')
+        self.assertEqual(job.contains(os.getpid()), 'out')
+        self.assertNotIn(reaper, job.pids())
+        self.assertNotIn(p.pid, job.pids())
+        self.assertTrue(job.terminate())
+        self.assertEqual(p.wait(10), -signal.SIGKILL)
+        for pid, what in ((orphan, 'the setsid orphan'), (reaper, 'pid 1')):
+            wait_until(lambda: gone(pid), '%s ended' % what)
+        self.assertEqual(job.pids(), [])
+        self.assertIsNone(job.processes())
+
+    def test_the_command_sees_its_own_namespace_a_fresh_proc_and_its_own_ids(self):
+        job = self.job()
+        self.addCleanup(job.close)
+        p = job.start(['sh', '-c', 'echo $$; id -u; id -g; ls /proc | grep -c "^[0-9]"; '
+                       'readlink /proc/self/ns/pid'], stdout=subprocess.PIPE)
+        out = p.communicate(timeout=20)[0].decode().split()
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(out[0], '2')                   # pid 1 is the reaper, the stub execs
+        self.assertEqual(out[1:3], [str(os.getuid()), str(os.getgid())])
+        self.assertLessEqual(int(out[3]), 4, out)       # the reaper, sh, ls and grep at most
+        self.assertNotEqual(out[4], os.readlink('/proc/self/ns/pid'))
+        self.assertEqual(int(out[4].strip('pid:[]')), job.ns)
+        self.assertNotEqual(job.ns, self.c.lproc.pidns())
+        self.assertEqual(self.c.lproc.pidns(), self.c.lproc.pidns(os.getpid()))
+
+    def test_the_exit_code_the_signal_and_the_pipes_are_the_command_s(self):
+        job = self.job(kill_on_close=False)
+        p = job.start([sys.executable, '-c', 'import sys; sys.stdout.write(sys.stdin.read()); '
+                       'sys.exit(7)'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.assertEqual(p.communicate(b'through', timeout=20), (b'through', None))
+        self.assertEqual(p.returncode, 7)
+        job.close()
+        job = self.job()
+        p = job.start(['sh', '-c', 'kill -TERM $$'])
+        self.assertEqual(p.wait(20), -signal.SIGTERM)
+        job.close()
+
+    def test_w1_jobs_started_at_once_by_a_busy_owner_each_start_and_hold_no_stub_pipe(self):
+        busy_starts(self, self.job)
+
+    def test_a_w1_job_that_ended_cleanly_leaves_no_pid_1(self):
+        for kill_on_close in (True, False):
+            with self.subTest(kill_on_close=kill_on_close):
+                job = self.job(kill_on_close=kill_on_close)
+                job.start(['true']).wait(20)
+                reaper = job.reaper
+                self.assertNotIn(reaper, job.pids())
+                job.close()
+                wait_until(lambda: gone(reaper), 'pid 1 ended with its job')
+
+    def test_a_killed_starter_ends_its_job(self):
+        job = self.job(kill_on_close=False)
+        self.addCleanup(job.close)
+        p = job.start(['sh', '-c', 'setsid sleep 300 & echo $!; exec sleep 300'],
+                      stdout=subprocess.PIPE)
+        self.addCleanup(p.stdout.close)
+        orphan = self.outer(job, lines(p, 1)[0][0])
+        self.strays.append(orphan)
+        command, reaper = job.command, job.reaper
+        p.kill()
+        p.wait(10)
+        for pid, what in ((command, 'the command'), (orphan, 'its setsid child'),
+                          (reaper, 'pid 1')):
+            wait_until(lambda: gone(pid), '%s ended with the starter' % what)
+
+    def test_the_starter_and_pid_1_ignore_the_terminal_s_signals(self):
+        job = self.job()
+        self.addCleanup(job.close)
+        p = job.start(['sleep', '300'])
+        self.addCleanup(lambda: (job.close(), p.wait(10)))
+        for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP):
+            os.kill(p.pid, sig)
+        os.kill(job.reaper, signal.SIGINT)
+        os.kill(job.reaper, signal.SIGTERM)
+        time.sleep(0.3)
+        self.assertIsNone(p.poll())
+        self.assertEqual(job.contains(job.command), 'in')
+        self.assertFalse(gone(job.reaper))
+
+    def test_an_owner_killed_by_sigkill_takes_its_w1_job_s_tree_and_pid_1_with_it(self):
+        p = self.owner('''
+            from kitlib.platform.linux import contain
+            job = Job(tier=%s)
+            c = job.start(['sh', '-c', 'setsid sleep 300 & echo $!; exec sleep 300'],
+                          stdout=subprocess.PIPE)
+            g = int(c.stdout.readline())
+            while not [p for p in job.pids() if contain._nspid(p)[-1:] == [g]]:
+                time.sleep(0.01)
+            print(c.pid, job.reaper, *job.pids(), flush=True)
+            time.sleep(300)
+        ''' % W1)
+        pids = [int(x) for x in lines(p, 1)[0]]
+        self.assertGreaterEqual(len(pids), 4, pids)     # the starter, pid 1, sleep, setsid sleep
+        self.strays += pids
+        p.kill()
+        p.wait()
+        for pid in pids:
+            wait_until(lambda: gone(pid), 'pid %d of the job ended with its owner' % pid)
+
+    def make(self):
+        return self.job()
+
+    def test_an_owner_killed_before_go_runs_no_w1_command(self):
+        self.owner_dies_before_go('Job(kill_on_close=%%s, tier=%s)' % W1, 'job.reaper')
+
+    def test_a_w1_start_that_fails_before_go_ends_its_stub_and_runs_nothing(self):
+        seen = self.start_fails_before_go(self.job(), lambda j: j.reaper)
+        self.assertIsNotNone(seen['wd'])
+
+    def test_a_forged_w1_ready_line_is_refused(self):
+        self.forged('WSTUB', 'echo "s $$"', 'echo "s 1"', 'the ready line named pid')
+        self.forged('NSTART', "say('r %d' % pid)", "say('r %d' % os.getpid())",
+                    'the ready line named pid')
+
+    def test_leftovers_are_spared_by_the_w1_job_s_kill(self):
+        job = self.job()
+        self.addCleanup(job.close)
+        p = job.start(['sh', '-c', 'setsid sleep 300 >/dev/null 2>&1 & echo $!'],
+                      stdout=subprocess.PIPE)
+        daemon = self.outer(job, p.communicate(timeout=20)[0].decode().strip())
+        self.strays.append(daemon)
+        reaper = job.reaper
+        self.assertEqual(job.leftovers(), [daemon])
+        job.close()
+        time.sleep(0.3)
+        self.assertFalse(gone(daemon))
+        self.assertFalse(gone(reaper))                  # pid 1 stays while they run
+        kill_own(daemon)
+        wait_until(lambda: gone(reaper), 'pid 1 ended after its last spared process')
+
+    def test_a_probe_inside_the_job_knows_it_and_runs_no_scope_trial(self):
+        job = self.job()
+        self.addCleanup(job.close)
+        p = job.start([sys.executable, '-c', 'import os; from kitlib.platform.linux import '
+                       'contain as c; print(os.environ[c.W1_ENV], c._in_w1(), c.probe().name)'],
+                      cwd=os.getcwd(), env=self.owner_env(), stdout=subprocess.PIPE)
+        out = p.communicate(timeout=60)[0].decode().split()
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(out, [str(job.ns), 'True', 'W2'])
+
+    def test_peak_memory_is_the_command_s_own(self):
+        job = self.job()
+        self.addCleanup(job.close)
+        p = job.start([sys.executable, '-c', 'b = bytearray(64 << 20); print(len(b), flush=True);'
+                       ' import time; time.sleep(60)'], stdout=subprocess.PIPE)
+        self.addCleanup(p.stdout.close)
+        self.addCleanup(lambda: (job.close(), p.wait(10)))
+        lines(p, 1)
+        cpu_s, peak, now = job.usage()
+        self.assertGreater(now, 64 << 20)
+        self.assertGreater(peak, 32 << 20)
+        self.assertGreater(cpu_s, 0)
+        job.close()
 
 if __name__ == '__main__':
     unittest.main()

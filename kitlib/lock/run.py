@@ -112,9 +112,18 @@ def _ancestors():
         return set()
 
 
+def _own_pidns():
+    """This process's pid namespace (Linux), else None."""
+    return procfs.pidns() if kitlib.platform.NAME == "linux" else None
+
+
 def nest_check(store, value):
     """(parent, None) when MACHINE_LOCK_RUN's value names the run this process is inside (the
     named wrapper is one of its ancestors, alive, and its record says held), else (None, why).
+    On Linux a process in a job's own pid namespace (contain's W1) sees none of its ancestors past
+    that job's pid 1, so the wrapper is not one of them; there it is in the run when its record
+    lists this process's pid namespace in `jobns` (Slot.start records each job's before the
+    command runs) and the run's lock is held (store.run_mutex_held).
     parent = {id, pid, ctime, kind, shares, resource (None: it names none), has: {pool: slots it
     holds or inherited}, cores, gpus}.
     A record that is there but cannot be read (its wrapper's os.replace is swapping it) is read
@@ -125,7 +134,9 @@ def nest_check(store, value):
         if not m:
             return None, "malformed value"
         rid, pid, ct = m.group(1), int(m.group(2)), int(m.group(3))
-        if (pid, ct) not in _ancestors():
+        ancestor = (pid, ct) in _ancestors()
+        ns = None if ancestor else _own_pidns()
+        if not ancestor and ns is None:
             return None, "the named wrapper is not an ancestor of this run"
         path = store.path("active", rid + ".json")
         d, there = read_record(path, store.settings.queue_read_s)
@@ -137,7 +148,16 @@ def nest_check(store, value):
             return None, "the named run holds no lock"
         if (d.get("pid"), d.get("ctime")) != (pid, ct):
             return None, "the record names another wrapper"
-        if not process.alive(pid, ct):
+        if not ancestor:
+            jobns = d.get("jobns")
+            if not isinstance(jobns, list):
+                return None, "the named wrapper is not an ancestor of this run"
+            if ns not in jobns:
+                return None, ("the named wrapper is not an ancestor of this run, nor is this run "
+                              "in a job it started")
+            if store.run_mutex_held(rid) is not True:
+                return None, "the holder is dead"
+        elif not process.alive(pid, ct):
             return None, "the holder is dead"
         has = d.get("has") if isinstance(d.get("has"), dict) else {}
         return {"id": rid, "pid": pid, "ctime": ct, "kind": d.get("kind"),
@@ -168,10 +188,22 @@ def nest_need(parent, kind, need):
     return own, has, None
 
 
-def bg_ancestor(env):
-    """True when a background run's wrapper (MACHINE_LOCK_BG) is an ancestor of this process."""
+def bg_ancestor(env, store=None):
+    """True when a background run's wrapper (MACHINE_LOCK_BG) is an ancestor of this process.
+    On Linux, given the store, also when the wrapper's record names a pid namespace other than
+    this process's (a job's own, contain's W1): its ancestors cannot be seen from in there, so
+    it is taken as one (fail closed: the caller refuses a gpu lock)."""
     m = NEST_RE.match(env.get(BG_ENV) or "")
-    return bool(m) and (int(m.group(2)), int(m.group(3))) in _ancestors()
+    if not m:
+        return False
+    if (int(m.group(2)), int(m.group(3))) in _ancestors():
+        return True
+    ns = _own_pidns() if store is not None else None
+    if ns is None:
+        return False
+    d, _there = read_record(store.path("active", m.group(1) + ".json"))
+    theirs = d.get("pidns") if isinstance(d, dict) else None
+    return theirs is not None and theirs != ns
 
 
 def run_ancestors(detached, env):
@@ -311,6 +343,8 @@ class Run:
                     "ancestors": run_ancestors(detached, env), "role": run_role(detached, env),
                     "layout": lay.slot_key(L),
                     "log": getattr(log, "name", None) if log is not None else None}
+        if kitlib.platform.NAME == "linux":
+            self.rec["pidns"] = procfs.pidns()  # its pid is this namespace's (store.record_state)
         self.id = self.rec["id"]
         self.rel = "active/%s.json" % self.id
         self.log = log
@@ -926,6 +960,22 @@ class Launcher:
             self._slot.end_tree()
 
 
+def note_jobns(run, then=None):
+    """A before_resume for a run's job start (Linux): when the job gives its command a pid
+    namespace of its own (p.pidns, contain's W1), the run's record lists it in `jobns` before
+    the command runs, so a run nested in it is seen to be (nest_check). Then then(p), if given.
+    A record that cannot be written is left: the nested run then takes its own lock."""
+    def before(p):
+        ns = getattr(p, "pidns", None)
+        if ns is not None and ns not in run.rec.setdefault("jobns", []):
+            run.rec["jobns"].append(ns)
+            with contextlib.suppress(OSError):
+                run.save()
+        if then is not None:
+            then(p)
+    return before
+
+
 class Slot:
     """A held run (book()). start/wait/release, or the launcher; a context manager that
     releases (how "error" and the tree ended when the block raised, "interrupted" on Ctrl+C).
@@ -1015,6 +1065,8 @@ class Slot:
         if (WATCH_WINDOWS and kitlib.platform.NAME == "windows" and self.watch is None
                 and self.windows is None):
             self.watch_start()
+        if self.run is not None and kitlib.platform.NAME == "linux":
+            kw["before_resume"] = note_jobns(self.run, kw.get("before_resume"))
         pin = self.job.pin
         p = self.job.start(docker_cpu_env(cmd, bool(self.gpus)), **kw)
         self.started, self.tree_ended = True, False
@@ -1485,7 +1537,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     shares = hl.shares_for(k, gpu_share)
     if parent and not any(own.values()) and (resource is None or parent.get("resource") == resource):
         return Slot(store, None, L, own, parent, None, env, on_release_cmd, k, shares, log, gate)
-    if own["gpu"] and bg_ancestor(env):
+    if own["gpu"] and bg_ancestor(env, store):
         raise LockError(EXIT_USAGE, "usage: a gpu lock inside a background run would pause that "
                                     "run; refused")
     # The id first, its run mutex held: an id another run has, live or ended, is never written
