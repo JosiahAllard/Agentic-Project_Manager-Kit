@@ -16,6 +16,8 @@ from tests.loadnode.test_registry import node, text
 from tests.loadnode.test_remote import Runner, ok_reply
 from tools import node as node_cli
 
+REAL_RUN = job.NodeJob.run       # Run stands NodeJob.run in; a test that needs the real one asks
+
 
 class Cli(unittest.TestCase):
 
@@ -253,16 +255,16 @@ class Run(unittest.TestCase):
         self.assertEqual((code, self.mains), (job.EXIT_NODE, []))
 
     def test_an_os_error_after_the_node_took_the_job_never_runs_it_on_main(self):
-        def ran_then_failed(nj):
+        # the real NodeJob.run, so its started mark is what tells node.py the node took the job
+        def follow(nj):
             self.node_runs.append(nj.node.name)
-            nj.started = True
             raise PermissionError(13, 'The process cannot access the file', 'out/a.txt')
         for extra in ((), ('--node', 'box1')):
             with self.subTest(extra=extra):
-                self.mains = []
-                with mock.patch.object(job.NodeJob, 'run', ran_then_failed):
+                self.mains, self.node_runs = [], []
+                with mock.patch.object(job.NodeJob, 'run', REAL_RUN),                         mock.patch.object(job.NodeJob, 'push', lambda nj: None),                         mock.patch.object(job.NodeJob, 'start', lambda nj: {'ok': True}),                         mock.patch.object(job.NodeJob, 'follow', follow):
                     code, _, err = self.run_(*extra)
-                self.assertEqual((code, self.mains), (job.EXIT_NODE, []))
+                self.assertEqual((code, self.mains, self.node_runs), (job.EXIT_NODE, [], ['box1']))
                 self.assertIn('it is not run again on main', err)
                 self.assertNotIn('running on main instead', err)
 
