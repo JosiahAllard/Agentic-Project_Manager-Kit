@@ -120,6 +120,7 @@ class LinuxHeavyTest(unittest.TestCase):
                            ('Godot_v4.3-stable_linux.x86_64', ['--headless']),
                            ('Godot4.AppImage', []), ('Godot.AppImage', ['--headless']),
                            ('flatpak', ['run', 'org.godotengine.Godot', '--headless']),
+                           ('flatpak', ['--user', 'run', 'org.godotengine.Godot']),
                            ('/usr/bin/flatpak', ['run', '--branch=stable', 'org.godotengine.GodotSharp']),
                            ('/var/lib/flatpak/exports/bin/org.godotengine.Godot', ['-e'])):
             self.assertEqual(self.kind(prog, args), 'engine-run', (prog, args))
@@ -130,6 +131,9 @@ class LinuxHeavyTest(unittest.TestCase):
                            ('flatpak', ['update', 'org.godotengine.Godot']),
                            ('flatpak', ['info', 'org.godotengine.GodotSharp']),
                            ('flatpak', ['uninstall', 'org.blender.Blender', '-y']),
+                           ('flatpak', ['remote-info', 'flathub', 'org.godotengine.Godot']),
+                           ('flatpak', ['remote-info', 'flathub', 'org.blender.Blender', '-b']),
+                           ('flatpak', ['mask', 'org.godotengine.GodotSharp']),
                            ('godotenv', []), ('godot-tools', []), ('godots', [])):
             self.assertIsNone(self.kind(prog, args), (prog, args))
 

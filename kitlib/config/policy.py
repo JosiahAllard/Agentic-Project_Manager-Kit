@@ -4,8 +4,8 @@ Heavy programs (ARCHITECTURE.md "Kinds": a program is heavy because it is on the
   HEAVY_DEFAULTS are the kit's (on Linux LINUX_HEAVY_DEFAULTS too); `.kit.json` "heavy".programs
   adds a repo's own (it cannot remove a default). heavy_match(program, args, entries) is the first
   entry whose `program` glob matches the program's basename (case-insensitive), whose `when_args`
-  (if any) has one argument present, whose `also_args` (if any; kit defaults only) has one too,
-  and whose `unless_args` has none. An argument matches by itself or as `<arg>=<value>`. Finding
+  (if any) has one argument present, each set in whose `also_args` (kit defaults only) has one
+  too, and whose `unless_args` has none. An argument matches by itself or as `<arg>=<value>`. Finding
   the program in a command line (interpreters, shells, Start-Process) is the guard's job.
 
 Roles. role_name(action) is `main` for a kitlib.host.Action of the main session (no `agent`),
@@ -74,27 +74,25 @@ HEAVY_DEFAULTS = (
 # The same programs as Linux names them (docs/linux-support-plan.md section 3, finding 8), added
 # on Linux only: godot[0-9]* would make godot4.exe heavy on Windows too. godot4 and the like (an
 # AppImage, Godot4.AppImage, too), flatpak's exported launchers (exports/bin/org.godotengine.Godot,
-# exports/bin/org.blender.Blender), and `flatpak run <app id>`; flatpak's management commands on
-# an app id run nothing. A flatpak Blender is heavy only in the background: `also_args` (kit
-# defaults only, not a `.kit.json` key) needs one of its arguments present as well.
+# exports/bin/org.blender.Blender), and `flatpak run <app id>`: flatpak's other verbs on an app id
+# (install, info, remote-info) run nothing. `also_args` (kit defaults only, not a `.kit.json` key)
+# is a list of argument sets, each needing one of its arguments present as well: the run verb,
+# and for Blender the background flag.
 GODOT_FLATPAKS = ['org.godotengine.Godot', 'org.godotengine.GodotSharp']
 BLENDER_FLATPAKS = ['org.blender.Blender']
 BLENDER_BACKGROUND = ['-b', '--background']
-FLATPAK_NOT_RUN = ['install', 'update', 'upgrade', 'uninstall', 'remove', 'info', 'list', 'search',
-                   'kill', 'ps', 'override', 'permission-show', 'permission-reset', 'make-current',
-                   'history', 'repair']
 
 LINUX_HEAVY_DEFAULTS = (
     {'program': 'godot[0-9]*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
     {'program': 'org.godotengine.godot*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
      'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
-    {'program': 'flatpak', 'kind': 'engine-run', 'when_args': GODOT_FLATPAKS,
-     'unless_args': FLATPAK_NOT_RUN, 'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'flatpak', 'kind': 'engine-run', 'when_args': GODOT_FLATPAKS, 'also_args': [['run']],
+     'unless_args': [], 'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
     {'program': 'org.blender.blender*', 'kind': 'render', 'when_args': BLENDER_BACKGROUND,
      'unless_args': [], 'why': 'machine_lock classify.py render: a background Blender run'},
     {'program': 'flatpak', 'kind': 'render', 'when_args': BLENDER_FLATPAKS,
-     'also_args': BLENDER_BACKGROUND, 'unless_args': FLATPAK_NOT_RUN,
+     'also_args': [['run'], BLENDER_BACKGROUND], 'unless_args': [],
      'why': 'machine_lock classify.py render: a background Blender run'},
 )
 
@@ -134,7 +132,7 @@ def heavy_match(program, args, entries):
             continue
         if e.get('when_args') and not _has(args, e['when_args']):
             continue
-        if e.get('also_args') and not _has(args, e['also_args']):
+        if any(not _has(args, wanted) for wanted in e.get('also_args', ())):
             continue
         if e.get('unless_args') and _has(args, e['unless_args']):
             continue
