@@ -127,6 +127,37 @@ class SettingsHooks(unittest.TestCase):
             self.assertEqual(settings.expand('~/.claude/x.py', self.HOME),
                              os.path.normpath(self.HOME + '/.claude/x.py'))
 
+    def test_a_guard_entry_written_without_on_failure_gets_it(self):
+        """A Linux account whose guard entry predates onFailure (matched by path alone, so no second
+        entry is added) gets it on a rerun; another hook and an onFailure already set are kept."""
+        other = {'type': 'command', 'command': '/usr/bin/python3', 'args': ['/opt/other/x.py']}
+        kept = dict(self.hook('PreToolUse'), onFailure='allow')
+        data = {'hooks': {'PreToolUse': [{'matcher': 'Bash', 'hooks': [self.hook('PreToolUse'), other]},
+                                         {'matcher': 'Read', 'hooks': [kept]}]}}
+        ctx = SimpleNamespace(kit=self.KIT, home=self.HOME, managed_data=None)
+        did = []
+        with LINUX:
+            settings._guard_on_failure(data, ctx, did)
+        first, second = data['hooks']['PreToolUse']
+        self.assertEqual(first['hooks'][0]['onFailure'], 'block')
+        self.assertNotIn('onFailure', first['hooks'][1])
+        self.assertEqual(second['hooks'][0]['onFailure'], 'allow')
+        self.assertEqual(did, ['give the guard\'s PreToolUse entry onFailure "block"'])
+        did = []
+        with LINUX:
+            settings._guard_on_failure(data, ctx, did)
+        self.assertEqual(did, [])
+
+    def test_windows_gives_the_guard_entry_no_on_failure(self):
+        data = {'hooks': {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+            {'type': 'command', 'command': 'C:/Py/pythonw.exe', 'args': ['C:/kit/boot/hook.py', 'claude', 'PreToolUse']}]}]}}
+        ctx = SimpleNamespace(kit='C:\\kit', home='C:\\home\\kit', managed_data=None)
+        did = []
+        with mock.patch('kitlib.platform.NAME', 'windows'):
+            settings._guard_on_failure(data, ctx, did)
+        self.assertEqual(did, [])
+        self.assertNotIn('onFailure', data['hooks']['PreToolUse'][0]['hooks'][0])
+
     def test_a_posix_path_is_no_path_on_windows(self):
         with mock.patch('kitlib.platform.NAME', 'windows'):
             self.assertEqual(settings.expand(self.SCRIPT, self.HOME), '')

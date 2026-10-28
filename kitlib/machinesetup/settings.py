@@ -123,6 +123,7 @@ def survey(plan, d, ctx):
     if isinstance(sl, dict) and isinstance(sl.get('command'), str):
         sl['command'] = ed.rewrite(sl['command'], 'statusLine.command', removable=False)[0]
     _note_plugin_twins(plan, path, data, ctx)
+    _guard_on_failure(data, ctx, ed.did)
     if _wants_guard(plan, path, data, ctx):
         try:
             entry = ed.guard_entry()
@@ -152,6 +153,21 @@ def _wants_guard(plan, path, data, ctx):
         plan.note('settings', '%s: the guard\'s entry is also in the managed settings file %s, so it '
                               'runs twice; remove it from this file by hand' % (path, ctx.managed_file))
     return not here and not where
+
+
+def on_failure():
+    """The onFailure the guard's entry carries on the running platform (kitlib.host.hookmain
+    ON_FAILURE, which settings_entry reads), or None."""
+    from kitlib import platform
+    from kitlib.host import hookmain
+    return hookmain.ON_FAILURE.get(platform.NAME)
+
+
+def _guard_on_failure(data, ctx, did):
+    """A guard entry this kit wrote before it carried onFailure (a Linux account set up before
+    the entry gained it) gets it on a rerun (add_on_failure); _wants_guard matches by path alone."""
+    if add_on_failure(data, ctx.kit, ctx.home, on_failure):
+        did.append('give the guard\'s PreToolUse entry onFailure "%s"' % on_failure())
 
 
 def _note_plugin_twins(plan, path, data, ctx, skip=()):
@@ -196,7 +212,8 @@ def _plan_write(plan, ctx, path, raw, layout, data, did):
 
 
 # Fresh mode (--fresh): append only. No entry is removed, re-pointed or reshaped, except a hook path
-# the hosts/ move changed (repoint_moved); a missing file is created in NEW_LAYOUT; the PM
+# the hosts/ move changed (repoint_moved) and the guard's entry missing the onFailure the running
+# platform gives it (_guard_on_failure); a missing file is created in NEW_LAYOUT; the PM
 # SessionStart hook goes to --pm-settings alone. The kit SessionStart entries the kit plugin also
 # runs are the plugin step's (plugin.py, plugin_edit), not this one's: in a folder that step owns
 # they get no twin note here.
@@ -218,6 +235,7 @@ def _survey_fresh(plan, path, ctx):
     from . import plugin                                             # it reads this module
     owned = plugin.owns_settings(os.path.dirname(path), path, ctx)
     _note_plugin_twins(plan, path, data, ctx, skip=(REPLACED_EVENT,) if owned else ())
+    _guard_on_failure(data, ctx, did)
     if _wants_guard(plan, path, data, ctx):
         try:
             entry = ctx.host.guard_entry(ctx.kit)
@@ -759,19 +777,38 @@ def _signatures(data, event, home):
 
 
 def _hook_paths(data, event, home):
-    hooks = data.get('hooks')
-    groups = hooks.get(event) if isinstance(hooks, dict) else None
-    for g in groups if isinstance(groups, list) else []:
-        for h in (g.get('hooks') or []) if isinstance(g, dict) else []:
-            if not isinstance(h, dict):
-                continue
-            items = [m.group().strip('"\'') for m in TOKEN.finditer(h.get('command') or '')] \
-                if isinstance(h.get('command'), str) else []
-            items += [a for a in h.get('args') or [] if isinstance(a, str)]
-            for it in items:
-                p = expand(it, home)
-                if p:
-                    yield p
+    for h in _hooks(data, event):
+        for p in _paths(h, home):
+            yield p
+
+
+def _paths(h, home):
+    """The absolute paths (expand) in the hook `h`'s command and args."""
+    items = [m.group().strip('"\'') for m in TOKEN.finditer(h.get('command') or '')] \
+        if isinstance(h.get('command'), str) else []
+    items += [a for a in h.get('args') or [] if isinstance(a, str)]
+    for it in items:
+        p = expand(it, home)
+        if p:
+            yield p
+
+
+def add_on_failure(data, kit, home, value):
+    """Give each PreToolUse hook in `data` that runs `kit`'s guard (GUARD) and has no onFailure the
+    onFailure `value()` returns (the guard entry's: kitlib.host.hookmain.ON_FAILURE); `value` is
+    called only for such a hook, and None from it changes nothing. A hook that has one keeps it.
+    True when a hook changed."""
+    guard = norm(kit_file(kit, GUARD))
+    changed = False
+    for h in _hooks(data, 'PreToolUse'):
+        if 'onFailure' in h or not any(norm(p) == guard for p in _paths(h, home)):
+            continue
+        got = value()
+        if got is None:
+            return changed
+        h['onFailure'] = got
+        changed = True
+    return changed
 
 
 def _plugin_data(kit):
