@@ -462,6 +462,39 @@ class LinuxRender(ManagedBase):
         self.assertEqual(self.guard(managed.render(self.ctx()))['onFailure'], 'allow')
 
 
+class ElevationWording(ManagedBase):
+    """The not-elevated messages name the platform's way: an administrator terminal on Windows,
+    root or sudo on Linux (no Program Files there)."""
+
+    def messages(self, name):
+        self.host.admin = False
+        if name == 'linux':                                      # the Linux file's own folder, as the real host gives
+            self.host.managed = self.target = os.path.join(self.root, 'etc', 'claude-code', 'managed-settings.json')
+        os.makedirs(os.path.dirname(self.target))
+        with open(self.target, 'wb') as f:
+            f.write(b'{}')                                       # differs from the template
+        with mock.patch.object(managed, 'platform', types.SimpleNamespace(NAME=name), create=True):
+            _, dry = self.run_it()
+            _, applied = self.run_it(apply=True)
+            plan = M.common.Plan(('settings',))
+            managed.note_sync(plan, self.ctx())
+        return dry, applied, '\n'.join(plan.lines())
+
+    def test_linux_says_root_or_sudo_not_administrator_or_program_files(self):
+        for text in self.messages('linux'):
+            self.assertIn('as root or with sudo', text)
+            self.assertNotIn('administrator', text)
+            self.assertNotIn('Program Files', text)
+
+    def test_windows_wording_is_unchanged(self):
+        dry, applied, sync = self.messages('windows')
+        self.assertIn('not elevated: --apply is refused here; run it from an administrator terminal', dry)
+        self.assertIn('is under Program Files; run', applied)
+        self.assertIn('from an administrator terminal', applied)
+        self.assertIn('differs from the kit template; from an administrator terminal: ', sync)
+        self.assertNotIn('sudo', dry + applied + sync)
+
+
 class WindowsRender(ManagedBase):
     """The committed template renders on Windows exactly as before the Linux managed path: every
     placeholder filled, nothing added (no onFailure on the guard hook) and nothing dropped (the
