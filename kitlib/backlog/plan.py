@@ -55,10 +55,12 @@ class Context(object):
     opener.open_store). `liveness` (None: no probe) is `liveness(branch) -> (why it is live, None)
     or (None, tip)`: whether the worktree on a pulled branch is dead, so a pull its holder left
     may be blocked or released by anybody (stop_pull; opener.open_store passes
-    kitlib.worktree.classify.branch_liveness, so this module imports nothing from worktree)."""
+    kitlib.worktree.classify.branch_liveness, so this module imports nothing from worktree).
+    `cap` (None: offer.DEFAULT_CAP; a callable: read on first use) is the most records `next` offers and `pull` takes in order
+    (`.kit.json` backlog.cap, opener.repo_cap); `next --cap` overrides it for that call."""
 
     def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None,
-                 code_main=None, code_remote=None, liveness=None):
+                 code_main=None, code_remote=None, liveness=None, cap=None):
         self.store = store
         self.root = root
         self.remote = remote
@@ -68,6 +70,15 @@ class Context(object):
         self.branch = branch
         self.today = today
         self.liveness = liveness
+        self._cap = cap
+
+    @property
+    def cap(self):
+        """The cap, a callable given for it called on first read (opener.open_store: so only an
+        offer reads `.kit.json`, and a verb that makes none never fails on it)."""
+        if callable(self._cap):
+            self._cap = self._cap()
+        return omod.DEFAULT_CAP if self._cap is None else self._cap
 
     @property
     def session(self):
@@ -221,14 +232,15 @@ def current_offer(snap, ctx, branch=None):
     so a record `next` offered as the branch still pulls plainly and nothing else is let in;
     `notes` then holds one NOTE naming why, for the pull to print."""
     diffs = []
-    offers, passed, holding, own = _offer(snap, ctx, branch, omod.DEFAULT_CAP, (), None, diffs)
+    offers, passed, holding, own = _offer(snap, ctx, branch, ctx.cap, (), None, diffs)
     also, notes = [], []
     if own is not None and any(r.get('pulled_by') == own for r in holding):
         # The fold check `next` runs in the main checkout (no own branch, so the branch's own
         # diff counts too): `also` must be exactly that offer, or a record the main checkout
         # offers because a higher one folds into this branch would be refused here. The diffs
         # are read once for both offers (`diffs`).
-        result, refusals, _ranks = omod.next_offer(snap, holding, session=ctx.session,
+        result, refusals, _ranks = omod.next_offer(snap, holding, cap=ctx.cap,
+                                                   session=ctx.session,
                                                    unmet=ctx.unmet(snap),
                                                    folded=_offer_folds(ctx, holding, None, diffs))
         if refusals:
