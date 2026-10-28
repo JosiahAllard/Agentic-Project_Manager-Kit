@@ -96,7 +96,8 @@ nominates no channel, and the other halves keep working.
   and bound to the exact chat reference. A route is remembered for the same logical chat (session,
   native id, adapter, account, workspace) and restored when it reopens. A queued message keeps its
   original full binding and is refused rather than moved onto a reopened process. Display titles
-  grant nothing. No MCP tool writes owner policy.
+  grant nothing. No MCP tool writes owner policy. Beside the owner's routes the only other way a
+  route opens is a PM route (below), which writes no owner choice.
 - **Host pairs** (`core/hostpairs.py`, `peers.json`). Which host may send to which, checked in the
   core and named by no code: a chat belongs to the peer its adapter id names (the name, or the
   name and `-`; the longest listed name wins). Every ordered pair of listed peers is allowed,
@@ -117,7 +118,7 @@ nominates no channel, and the other halves keep working.
     by one discovery pass ends nothing: the write-time checks below refuse while the chat is away.
     A closed chat keeps its lease (it cannot deliver, and it still holds one of the 32 slots)
     until Stop, a revoke or a restart. The window lists every lease with its grant time, marks one
-    whose chat is not listed now, and its "Stop selected lease" stops it by reference
+    whose chat is not listed now, and its "Stop selected" stops it by reference
   - is logged: every grant, revoke and replacement appends one JSON line (`at`, `event`, `by`,
     `writer`, `recipient`; chat references only) to `writer-leases.log` beside `pairings.sqlite`.
     A grant that cannot be logged is refused, and a writer it would have replaced keeps its lease
@@ -180,7 +181,8 @@ nominates no channel, and the other halves keep working.
   served, so a frontend started before the mark existed keeps working until its host restarts. The
   reverse is refused: a service started before the mark refuses a new, marked frontend's frames as
   `invalid-private-request`, so restart the service after updating the kit. Unmarked sessions are
-  unaffected. The mark grants nothing yet.
+  unaffected. The mark's one use is PM routes (below): the `pm` mark lets a chat call the PM tools,
+  and any mark makes a chat one the PM may connect.
   - Claude passes its MCP servers the session's whole environment, so a kit-launched Claude
     session's frontend is marked. Codex passes only `env_vars`, and the installer forwards no
     `PM_KIT_ROLE`. No kit launch starts a Codex chat yet, so every Codex chat is unmarked and needs
@@ -191,6 +193,41 @@ nominates no channel, and the other halves keep working.
     as the same user can start a frontend with any `PM_KIT_ROLE`, or set another process's
     environment before it starts. The mark tells kit launches apart from the owner's own chats; it
     is no defence against code running as the owner.
+- **PM routes** (`core/pmroutes.py`, `Controller.pm`, `OwnerControls.pm_routes` and `stop_pm`). The
+  PM may connect two kit-launched chats without the owner's click; every other chat still needs it.
+  - Only a chat whose authority carries the `pm` launch mark (`PM_MARK`, the launcher's
+    `kitlib/launcher/window.py` `PM`) may call `bridge_pm_chats`, `bridge_pm_connect` or
+    `bridge_pm_disconnect`; any other caller gets `pm-launch-mark-required`. No tool argument
+    names a mark or a caller.
+  - Both chats must be listed, live and kit-launched now (`Controller.launched` gives a mark), or
+    the connect is refused (`sender-not-kit-launched`, `recipient-not-kit-launched`). The host-pair
+    rule still applies, so Codex to Codex stays refused (`host-pair-refused`).
+  - The owner's own row for a direction always wins. A direction the owner disconnected, by
+    Disconnect chats or by Stop on a PM route, is refused to the PM (`owner-disconnected`) until
+    the owner connects it. A direction the owner connected is reported as the owner's and the PM
+    makes nothing there.
+  - A PM route is held for the exact chat bindings, in the service's memory only: it writes no row
+    to `pairings.sqlite`, a restart drops it, and a different binding for either chat's session
+    ends it. At most 64 at a time.
+  - At every use (admission, dispatch, replies) the route opens only while both chats are still
+    kit-launched: a chat attested by an unmarked frontend, or whose frontend detached, refuses.
+  - The PM removes only routes it made (`route-not-made-by-pm` for any other).
+  - Logged: every connect, disconnect, owner stop, replacement and refused connect or disconnect
+    appends one JSON line (`at`, `event`, `by`, `caller`, `sender`, `recipient`, and `sender_mark`
+    and `recipient_mark` on a connect, `action` and `code` on a refusal; chat references only) to
+    `pm-routes.log` beside `pairings.sqlite`. A connect that cannot be logged is refused.
+  - The owner window lists every PM route the owner's row does not decide ("A → B, connected by
+    the PM since …", with "(cannot deliver now)" when a chat is not listed or no longer
+    kit-launched) and re-reads the list every 5 s without discovery. "Stop selected" stops one
+    direction and writes the owner's disconnect for it, even when a chat is not listed. The
+    window's PM rows have no test.
+  - The PM agent and its subagents share one frontend, so a subagent the PM starts carries the
+    `pm` mark and may call the PM tools too.
+  - The service detaches a frontend whose process has ended only when the next frame from any
+    frontend arrives (`win/service.py`). Until then an exited marked frontend's chat keeps its mark,
+    so a PM route to it still opens; the chat's live checks are then the only guard.
+  - The new tools change the Claude half's tool list, so prepare again (`bridge_prepare.py`) and
+    re-register `claude-hooks.json`. The Codex half does not offer the PM tools.
 - **MCP tools**:
   - `bridge_connections`
   - `bridge_send` (a queued receipt is not delivery)
@@ -199,6 +236,7 @@ nominates no channel, and the other halves keep working.
   - `bridge_reply`
   - `bridge_events`
   - `bridge_poll_native` (refreshes a receipt and never resends)
+  - `bridge_pm_chats`, `bridge_pm_connect`, `bridge_pm_disconnect` (PM only, above)
 
 ## Configuration
 
