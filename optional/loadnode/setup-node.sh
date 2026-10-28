@@ -20,7 +20,8 @@
 #
 # A re-run with the same arguments changes nothing and says "unchanged"; a new key, address or
 # user list replaces the old one. The box never gets GitHub access: the kit arrives only through
-# --kit-src. Python 3.14 comes from the deadsnakes PPA, beside the system Python 3.12.
+# --kit-src. Python 3.14 comes from the deadsnakes PPA, beside the system Python 3.12. A
+# user@.service drop-in delegates the cpu, cpuset, io and memory cgroup controllers to users.
 
 set -u
 umask 022
@@ -41,6 +42,12 @@ SSHD_CONF=/etc/ssh/sshd_config.d/00-pmkit-node.conf
 HOST_KEY=/etc/ssh/ssh_host_ed25519_key.pub
 UFW_MAIN=pmkit-main
 UFW_ADMIN=pmkit-admin
+# The controllers each user's systemd manager may run in its own cgroups: pmnode's jobs pin
+# their cpus (cpuset) and cap cpu, memory and io in scopes of its user manager. Ubuntu's
+# user@.service delegates only cpu, memory and pids.
+DELEGATE='cpu cpuset io memory pids'
+DELEGATE_DIR=/etc/systemd/system/user@.service.d
+DELEGATE_CONF=$DELEGATE_DIR/pmkit-delegate.conf
 ED25519_PREFIX=AAAAC3NzaC1lZDI1NTE5AAAAI
 
 say() { printf '%s\n' "$*"; }
@@ -156,10 +163,19 @@ Match User $NODE_USER
 EOF
 }
 
+# The user@.service drop-in that delegates $DELEGATE.
+delegate_conf_text() {
+    cat <<EOF
+# Written by pm-kit optional/loadnode/setup-node.sh; re-run that script to change it.
+[Service]
+Delegate=$DELEGATE
+EOF
+}
+
 # ---- arguments ------------------------------------------------------------------------------
 
 usage() {
-    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 
@@ -568,7 +584,37 @@ step_ufw() {
     [ -z "$other" ] || warn "other ufw allow rules remain (delete any that open port 22 wider than main): $other"
 }
 
-# ---- (h) what to paste on main --------------------------------------------------------------
+# ---- (h) cgroup delegation to pmnode's systemd user manager ---------------------------------
+
+# systemd's view of pmnode's user manager names every controller in $DELEGATE (read from the
+# loaded unit, so a drop-in written without a daemon-reload shows as missing).
+delegate_loaded() (
+    uid=$(id -u "$NODE_USER" 2>/dev/null) || return 1
+    have=$(systemctl show -p DelegateControllers --value "user@$uid.service" 2>/dev/null)
+    for c in $DELEGATE; do case " $have " in *" $c "*) ;; *) return 1 ;; esac; done
+)
+
+step_delegate() {
+    delegate_conf_text > "$TMP/delegate.conf"
+    if [ ! -d "$DELEGATE_DIR" ]; then
+        mark h "folder $DELEGATE_DIR (root, 0755)"
+        run install -d -m 0755 -o root -g root "$DELEGATE_DIR" || fail "could not make $DELEGATE_DIR"
+    fi
+    if put_file "$TMP/delegate.conf" "$DELEGATE_CONF" 644; then
+        mark h "$DELEGATE_CONF: Delegate=$DELEGATE for each user's systemd manager (applies from its next start)"
+    elif [ "$DRY" -eq 0 ] && ! delegate_loaded; then
+        mark h "systemd had not loaded $DELEGATE_CONF"
+    else
+        same h "$DELEGATE_CONF (Delegate=$DELEGATE)"
+        return
+    fi
+    run systemctl daemon-reload || fail "systemctl daemon-reload failed"
+    if [ "$DRY" -eq 0 ]; then
+        delegate_loaded || fail "after daemon-reload, user@$(id -u "$NODE_USER").service still does not delegate $DELEGATE: $(systemctl show -p DelegateControllers "user@$(id -u "$NODE_USER").service" 2>&1)"
+    fi
+}
+
+# ---- (i) what to paste on main --------------------------------------------------------------
 
 step_report() {
     say ""
@@ -601,6 +647,7 @@ main() {
     step_authkeys
     step_sshd
     step_ufw
+    step_delegate
     step_report
     say ""
     if [ -z "$CHANGED" ]; then

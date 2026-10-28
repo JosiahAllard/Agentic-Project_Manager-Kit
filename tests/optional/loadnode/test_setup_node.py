@@ -124,6 +124,55 @@ class SetupNodeSh(unittest.TestCase):
                                  '\tAuthenticationMethods publickey', '\tPermitTTY no',
                                  '\tDisableForwarding yes'])
 
+    def test_cgroup_delegation_drop_in(self):
+        code, out = self.lib('delegate_conf_text')
+        self.assertEqual(code, 0)
+        lines = [l for l in out.splitlines() if not l.startswith('#')]
+        self.assertEqual(lines, ['[Service]', 'Delegate=cpu cpuset io memory pids'])
+
+    def delegate_step(self, have=None):
+        """Run step_delegate on a dry run against a drop-in folder in a temp dir (holding `have`,
+        if given, as the drop-in, reported root:root 644): (exit code, stdout, files after)."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        tmp = os.path.join(d, 'tmp')
+        os.mkdir(tmp)
+        conf_dir = os.path.join(d, 'user@.service.d')
+        if have is not None:
+            os.mkdir(conf_dir)
+            with open(os.path.join(conf_dir, 'pmkit-delegate.conf'), 'w', newline='\n') as f:
+                f.write(have)
+        call = ('DRY=1; TMP="$1"; DELEGATE_DIR="$2"; DELEGATE_CONF="$2/pmkit-delegate.conf"; '
+                'owner_mode() { echo "root:root 644"; }; step_delegate; echo "CHANGED=$CHANGED"; :')
+        code, out = self.lib(call, tmp.replace('\\', '/'), conf_dir.replace('\\', '/'))
+        files = sorted(os.listdir(conf_dir)) if os.path.isdir(conf_dir) else None
+        return code, out, files
+
+    def test_delegation_step_on_a_dry_run_changes_nothing_and_says_what_it_would(self):
+        code, out, files = self.delegate_step()
+        self.assertEqual(code, 0, out)
+        self.assertIsNone(files)                     # the folder was not made
+        self.assertIn('[h] would change: folder ', out)
+        self.assertIn('/pmkit-delegate.conf: Delegate=cpu cpuset io memory pids', out)
+        self.assertIn('would run: systemctl daemon-reload', out)
+        self.assertIn('CHANGED=h\n', out)            # step h listed once
+
+    def test_delegation_step_leaves_a_matching_drop_in_alone(self):
+        _, text = self.lib('delegate_conf_text')
+        code, out, files = self.delegate_step(have=text)
+        self.assertEqual(code, 0, out)
+        self.assertIn('[h] unchanged: ', out)
+        self.assertNotIn('daemon-reload', out)
+        self.assertIn('CHANGED=\n', out)
+        self.assertEqual(files, ['pmkit-delegate.conf'])
+
+    def test_delegation_step_replaces_another_drop_in(self):
+        code, out, _ = self.delegate_step(have='[Service]\nDelegate=cpu memory pids\n')
+        self.assertEqual(code, 0, out)
+        self.assertIn('[h] would change: ', out)
+        self.assertNotIn('folder', out)
+        self.assertIn('would run: systemctl daemon-reload', out)
+
     def run_script(self, *args):
         r = subprocess.run([SHELL] + POSIX + [SCRIPT] + list(args), capture_output=True, text=True,
                            timeout=60)
