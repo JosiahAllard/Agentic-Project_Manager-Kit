@@ -144,7 +144,7 @@ and none raised. Three things about step 4:
 A process that is killed closes nothing: the system drops the store lock with it, and the next
 start takes it over.
 
-Views (SiteViews). backlog, completed, repos and agents exist only where their source does, so
+Views (SiteViews). backlog, completed, repos, agents and skills exist only where their source does, so
 the Api answers a missing one `unavailable` by itself. What a view says never holds a path,
 git's words or an exception's text: the backlog views carry kitlib.hubsite.backlog's fixed
 phrases, and the reasons of the derived views are replaced by fixed phrases here.
@@ -159,7 +159,7 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
       both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
       (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
-  notices() repos() usage() agents() findings()
+  notices() repos() usage() agents() skills() skill(name) findings()
                                           kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
@@ -262,6 +262,7 @@ TUNNEL_ON_NOTE = ('the tunnel listener is on %s: every request there needs a Clo
 NO_USAGE_SOURCE = 'no launcher usage source configured'     # derived.usage's own phrase
 USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
+SKILLS_FAILED = 'the skill sources could not be read'
 ROUND_FAILED = ('the backlog view could not be read after a round of the backlog timer, so '
                 'health does not follow the timer: %s: %s')
 STOP_ASKED = 'closing: the owner asked the server to stop (hub.py stop)'
@@ -358,6 +359,7 @@ class Sources(object):
                    check accepts without a repos/ document; None: none
       usage        callable() -> the lines kitlib.launcher.usage prints
       agents       the folder of agent definitions
+      skills       the folder of skill sources (content/skills: <name>/SKILL.md each)
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
                    stop, days, clock, timer_error; a callable `wait`, when it has one, is
                    wrapped by build(), and its get() is then also called with `stop=`, the
@@ -386,7 +388,7 @@ class Sources(object):
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
                  access_now=None, known_repos=None, push=None, push_dir=None, lock=None,
-                 findings=None):
+                 findings=None, skills=None):
         self.findings = findings
         self.lock = lock
         self.push = push
@@ -399,6 +401,7 @@ class Sources(object):
         self.repos = repos
         self.usage = usage
         self.agents = agents
+        self.skills = skills
         self.backlog = backlog
         self.sync = sync
         self.access_keys = access_keys
@@ -455,6 +458,11 @@ def agents_dir(environ=None):
     except registry.RegistryError:
         return None
     return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
+
+
+def skills_dir():
+    """The kit's skill sources, <kit>/content/skills: never a host's rendered copy."""
+    return os.path.join(pmstart.KIT_ROOT, 'content', 'skills')
 
 
 def _configured_repos(cfg, toplevel=None):
@@ -520,7 +528,7 @@ def machine_sources(home=None, sync=True):
         raise ConfigError(str(e))
     src = Sources(tokens=auth.folder(home), pm_data=pm,
                   notices=pmwatch.configured_notice_dir(path),
-                  agents=agents_dir(),
+                  agents=agents_dir(), skills=skills_dir(),
                   sync=gitsync.GitSync if sync else None)
     if pm and pm.get('path'):
         from kitlib.maintlint import result as lint_result
@@ -571,7 +579,7 @@ class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
     exists: `backlog_views` for backlog, completed, record, record_template and the record
     writes (record_add, record_edit, record_delete, record_unblock, and record_answer, the
-    filing of a bound question's answer), sources.repos and .agents
+    filing of a bound question's answer), sources.repos, .agents and .skills
     for theirs. notices, findings, lint_runs, usage and health are always there
     (kitlib.hubsite.derived answers a missing notice or findings folder with none and a missing
     usage source with its own phrase). `sync` is the git
@@ -606,6 +614,9 @@ class SiteViews(object):
             self.repos = self._repos
         if sources.agents:
             self.agents = self._agents
+        if sources.skills:
+            self.skills = self._skills
+            self.skill = self._skill
 
     def _held(self):
         """The backlog source's held answer (backlog.Views.held) while its timer runs, or None
@@ -742,6 +753,18 @@ class SiteViews(object):
         out = derived.agents(self._sources.agents)
         if not out.get('available'):
             out['reason'] = AGENTS_FAILED
+        return out
+
+    def _skills(self):
+        out = derived.skills(self._sources.skills)
+        if not out.get('available'):
+            out['reason'] = SKILLS_FAILED
+        return out
+
+    def _skill(self, name):
+        out = derived.skill(self._sources.skills, name)
+        if out is None:
+            raise HubError('not_found', 'there is no skill %s' % name, 'name')
         return out
 
     def _git(self):

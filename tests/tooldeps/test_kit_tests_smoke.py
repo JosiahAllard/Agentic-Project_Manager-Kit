@@ -103,7 +103,7 @@ class KitTable(unittest.TestCase):
             self.assertTrue(picked is ALL or 'launcher' in picked, path)
 
     def test_a_new_skill_runs_the_docs_tests(self):
-        # tests/docs/test_install_junctions.py lists the content/skills/* folders
+        # the selection row is kept although no docs test reads skills now; removing it is the owner's call
         picked = self.select('content/skills/new-skill/SKILL.md')
         self.assertIsNot(picked, ALL)
         self.assertIn('docs', picked)
