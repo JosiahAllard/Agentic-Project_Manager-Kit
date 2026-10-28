@@ -15,6 +15,7 @@ from .dispatch import CoreBroker
 from .jsonwire import _check_structure
 from .messages import DeliveryError, MessageIntent, text_bytes
 from .pairing import PairingError
+from .pmroutes import PmRoutes
 
 MAX_RPC_BYTES=1024*1024
 PROTOCOLS=('2025-06-18','2025-03-26','2024-11-05')
@@ -26,6 +27,7 @@ def _schema(properties,required=()):
 
 
 OP={'operation_id':'string'}
+PM_PAIR={'sender':'string','recipient':'string','bidirectional':'boolean'}
 TOOLS={
     'bridge_connections':('List only chats this caller may send to; stale native bindings revoke their connections.',_schema({}),False),
     'bridge_send':('Durably queue a message for an owner-selected chat. A queued receipt is not delivery.',
@@ -38,6 +40,12 @@ TOOLS={
     'bridge_events':('Read this caller\'s message events.',
         _schema({**OP,'after':'integer','limit':'integer'},OP),True),
     'bridge_poll_native':('Refresh and persist this caller\'s existing receipt without resending the message.',_schema(OP,OP),False),
+    # PM routes (README "PM routes"): only a chat carrying the PM launch mark may call these.
+    'bridge_pm_chats':('PM only: list kit-launched chats and the routes between them.',_schema({}),True),
+    'bridge_pm_connect':('PM only: connect two kit-launched chats. The owner sees and can stop it.',
+        _schema(PM_PAIR,('sender','recipient')),False),
+    'bridge_pm_disconnect':('PM only: remove a route the PM made; an owner route is never removed.',
+        _schema(PM_PAIR,('sender','recipient')),False),
 }
 
 
@@ -49,7 +57,7 @@ def _args(name,args):
     schema=TOOLS[name][1]
     if type(args) is not dict or set(args)-set(schema['properties']) or set(schema['required'])-set(args):
         raise DeliveryError('invalid-tool-arguments')
-    types={'string':(str,),'integer':(int,),'number':(int,float)}
+    types={'string':(str,),'integer':(int,),'number':(int,float),'boolean':(bool,)}
     for key,value in args.items():
         if type(value) not in types[schema['properties'][key]['type']]:
             raise DeliveryError('invalid-tool-arguments')
@@ -57,14 +65,22 @@ def _args(name,args):
 
 
 class Server:
-    def __init__(self,core,calls):
-        if type(core) is not CoreBroker or type(calls) is not CallProofs:
+    def __init__(self,core,calls, *, pm=None):
+        """`pm`: the PM-route port (core/pmroutes.py); it holds no owner decision or lease."""
+        if (type(core) is not CoreBroker or type(calls) is not CallProofs
+                or pm is not None and (type(pm) is not PmRoutes or pm.pairings is not core.pairings)):
             raise DeliveryError('invalid-mcp-components')
-        self.core,self.calls=core,calls
+        self.core,self.calls,self.pm=core,calls,pm
         self._initializing=self._initialized=False
 
     def _call(self,name,args,metadata):
         args=_args(name,args)
+        if name.startswith('bridge_pm_'):
+            authority=self.calls.observe(metadata)
+            if self.pm is None: raise DeliveryError('pm-routes-unavailable')
+            if name=='bridge_pm_chats': return self.pm.chats(authority)
+            act=self.pm.connect if name=='bridge_pm_connect' else self.pm.disconnect
+            return act(authority,args['sender'],args['recipient'],bidirectional=args.get('bidirectional',True))
         if name=='bridge_connections':
             authority=self.calls.observe(metadata)
             peers=[]
@@ -121,7 +137,7 @@ class Server:
             result={'protocolVersion':want if want in PROTOCOLS else PROTOCOLS[0],
                 'serverInfo':{'name':'pm-kit-agent-bridge','version':'0.1.0'},
                 'capabilities':{'tools':{'listChanged':False}},
-                'instructions':'Only owner-selected connections may communicate. A queued or unknown receipt is not confirmed delivery. Use bridge_reply for correlated replies.'}
+                'instructions':'Only owner-selected connections, or PM routes between kit-launched chats, may communicate. A queued or unknown receipt is not confirmed delivery. Use bridge_reply for correlated replies.'}
         elif method=='ping': result={}
         elif not self._initialized: return _error(identity,-32000,'not initialized')
         elif method=='tools/list':

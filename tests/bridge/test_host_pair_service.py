@@ -14,6 +14,8 @@ import uuid
 
 from optional.bridge import registry
 from optional.bridge.core.messages import DeliveryError, MessageIntent, SenderAuthority
+from optional.bridge.core.owner import OwnerControls
+from optional.bridge.core.pairing import PairingError
 from optional.bridge.win.controller import Controller
 from optional.bridge.win.leader import ServiceLeader
 from tests.bridge.test_dispatch import TestAdapter
@@ -48,7 +50,14 @@ class ServedPairs(unittest.TestCase):
     def deliver(self, sender, recipient):
         name = '%s-to-%s' % (sender, recipient)
         a, b = self.enroll(name + '-sender', sender), self.enroll(name + '-recipient', recipient)
-        self.controller.owner.change(a.reference, b.reference, enabled=True)
+        if (sender, recipient) in OWNER_REFUSED:
+            # The owner window refuses the pair; a row written before the rule held still meets
+            # the broker's own refusal at admission.
+            with self.assertRaisesRegex(PairingError, 'host-pair-refused'):
+                self.controller.owner.change(a.reference, b.reference, enabled=True)
+            OwnerControls(self.controller.pairs, self.controller.decisions).change(a.reference, b.reference, enabled=True)
+        else:
+            self.controller.owner.change(a.reference, b.reference, enabled=True)
         self.caller = SenderAuthority(a, 'root-' + name)
         operation = 'op-' + name
         proof = self.server.calls.issue(MessageIntent(operation, b, hashlib.sha256(b'text').hexdigest()), {})

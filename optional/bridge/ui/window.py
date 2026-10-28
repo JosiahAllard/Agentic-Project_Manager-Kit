@@ -8,7 +8,10 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+from optional.bridge.core.hostpairs import REFUSED as HOST_PAIR_REFUSED
 from optional.bridge.core.owner import OwnerControls
+
+REREAD_MS=5000
 
 
 class Window:
@@ -49,9 +52,9 @@ class Window:
         self.lend.pack(side='left')
         self.unlend=ttk.Button(writers,text='Stop',command=lambda:self._lease(False))
         self.unlend.pack(side='left',padx=8)
-        # Stops the lease selected in the list below by its references; it works for a
-        # lease whose chat is no longer listed (closed, between turns or not yet rediscovered).
-        self.stop_row=ttk.Button(writers,text='Stop selected lease',command=self._stop_selected,
+        # Stops the lease or PM route selected in the list below by its references; it works
+        # when a chat is no longer listed (closed, between turns or not yet rediscovered).
+        self.stop_row=ttk.Button(writers,text='Stop selected',command=self._stop_selected,
             state='disabled' if preview else 'normal')
         self.stop_row.pack(side='left')
         self.selected=tk.StringVar(value='Select two chats to choose a connection.')
@@ -62,8 +65,10 @@ class Window:
         self.status=tk.StringVar(value='Preview only. Connections are not changed.' if preview else 'No chat is connected just because it is listed.')
         ttk.Label(frame,textvariable=self.status,wraplength=920).pack(anchor='w',pady=(8,0))
         self._order=[]
-        self._lease_rows={}
+        self._rows={}  # list index -> ('lease'|'pm', first reference, second reference)
         self.refresh()
+        # The PM makes routes while this window is open: re-read the list, without discovery.
+        root.after(REREAD_MS,self._reread)
 
     def _selection(self,event=None):
         chosen=list(self.table.selection())
@@ -85,19 +90,37 @@ class Window:
             for choice in choices:
                 self.table.insert('',tk.END,iid=choice.reference,values=(choice.title,choice.runtime,choice.workspace))
             self.table.selection_set([ref for ref in old if ref in self.choices])
-            self.routes.delete(0,tk.END)
-            self._lease_rows={}  # reset before any row, so a failed refresh leaves no stale index map
-            for source,target in self.owner.connections():
-                self.routes.insert(tk.END,self.choices[source].title+' → '+self.choices[target].title)
-            for writer,target,granted,listed in self.owner.writer_grants():
-                self._lease_rows[self.routes.size()]=(writer,target)
-                self.routes.insert(tk.END,self._title(writer)+' delivers to '+self._title(target)
-                    +' for other apps, since '+_when(granted)+('' if listed else ' (a chat is not listed now; it cannot deliver)'))
+            self._fill(check=True)
             if not self.preview and not choices: self.status.set('No available chats yet. Open a supported chat with the bridge plugin enabled.')
             self._selection()
         except Exception:
             self.status.set('Chat discovery is unavailable. Existing connections are not changed by this refresh.')
             for button in (self.connect,self.disconnect,self.lend,self.unlend): button.configure(state='disabled')
+
+    def _fill(self, *, check):
+        """Redraw the connection list, keeping the selected row. check: run the PM routes'
+        live checks (a full refresh); the timed re-read only lists."""
+        selected=[self._rows.get(index) for index in self.routes.curselection()]
+        self.routes.delete(0,tk.END)
+        self._rows={}  # reset before any row, so a failed refresh leaves no stale index map
+        for source,target in self.owner.connections():
+            self.routes.insert(tk.END,self._title(source)+' → '+self._title(target))
+        for writer,target,granted,listed in self.owner.writer_grants():
+            self._rows[self.routes.size()]=('lease',writer,target)
+            self.routes.insert(tk.END,self._title(writer)+' delivers to '+self._title(target)
+                +' for other apps, since '+_when(granted)+('' if listed else ' (a chat is not listed now; it cannot deliver)'))
+        for source,target,made,deliverable in self.owner.pm_routes(check=check):
+            self._rows[self.routes.size()]=('pm',source,target)
+            self.routes.insert(tk.END,self._title(source)+' → '+self._title(target)+', connected by the PM since '
+                +_when(made)+('' if deliverable else ' (cannot deliver now)'))
+        for index,row in tuple(self._rows.items()):
+            if row in selected: self.routes.selection_set(index)
+
+    def _reread(self):
+        try: self._fill(check=False)
+        except Exception: pass
+        try: self.root.after(REREAD_MS,self._reread)
+        except Exception: pass  # the window is gone
 
     def _title(self,reference):
         choice=self.choices.get(reference)
@@ -105,15 +128,24 @@ class Window:
 
     def _stop_selected(self):
         if self.preview: return
-        rows=[self._lease_rows[index] for index in self.routes.curselection() if index in self._lease_rows]
+        rows=[self._rows[index] for index in self.routes.curselection() if index in self._rows]
         if len(rows)!=1:
-            self.status.set('Select one lease in the list to stop it.')
+            self.status.set('Select one lease or PM connection in the list to stop it.')
             return
+        kind,first,second=rows[0]
         try:
-            if self.owner.lease(*rows[0],enabled=False): self.status.set('That lease is stopped.')
+            if kind=='pm':
+                # Also keeps the PM from making it again; only Connect chats undoes that.
+                stopped=self.owner.stop_pm(first,second)
+                if not stopped.removed: self.status.set('That PM connection was already gone. Nothing was stopped.')
+                elif stopped.unblocked is None:
+                    self.status.set('That PM connection is stopped. The PM cannot make it again; Connect chats can.')
+                else: self.status.set('That PM connection is stopped, but the PM could make it again: '
+                    'the block was not saved ('+stopped.unblocked+').')
+            elif self.owner.lease(first,second,enabled=False): self.status.set('That lease is stopped.')
             else: self.status.set('That lease was already gone or replaced. Nothing was stopped.')
         except Exception:
-            self.status.set('The lease could not be stopped. Refresh and try again.')
+            self.status.set('It could not be stopped. Refresh and try again.')
         self.refresh()
 
     def _change(self,enabled):
@@ -121,8 +153,10 @@ class Window:
         try:
             self.owner.change(*self._order,enabled=enabled,bidirectional=self.direction.get()=='Both directions')
             self.status.set('Chats connected. Each keeps its current permissions.' if enabled else 'Chats disconnected. The chats remain open.')
-        except Exception:
-            self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
+        except Exception as error:
+            if getattr(error,'code',None)==HOST_PAIR_REFUSED:
+                self.status.set('The bridge does not connect these two kinds of chat. Nothing was changed.')
+            else: self.status.set('The selected chats changed or are unavailable. Refresh the list and choose them again.')
         self.refresh()
 
     def _lease(self,enabled):
