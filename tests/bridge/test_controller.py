@@ -102,6 +102,22 @@ class ControllerTests(unittest.TestCase):
         leases=getattr(self.controller,'leases',None)
         if leases is not None: self.assertEqual(leases.current(),())
 
+    def test_frontends_share_the_controllers_pm_routes_and_close_drops_them(self):
+        self.assertIs(self.server.pm,self.controller.pm)
+        self.assertIs(self.controller.owner.pm,self.controller.pm)
+        p=chat('p')
+        self.live['p']=p
+        self.controller.enroll(p,lambda binding:self.live.get(binding.identity.session_id)==binding)
+        pm=self.controller.frontend(lambda metadata:SenderAuthority(p,'native-pm-root'),mark='pm')
+        for binding in (self.a,self.b):
+            self.controller.frontend(lambda metadata,binding=binding:SenderAuthority(binding,'native-test-root'),
+                mark='worker').calls.observe({})
+        self.controller.pm.connect(pm.calls.observe({}),self.a.reference,self.b.reference)
+        self.assertEqual(len(self.controller.pm.current()),2)
+        routes=self.controller.pm
+        self.controller.close()
+        self.assertEqual(routes.current(),())
+
     def _admit(self,operation,recipient):
         intent=MessageIntent(operation,recipient,hashlib.sha256(b'text').hexdigest())
         proof=self.server.calls.issue(intent,{})

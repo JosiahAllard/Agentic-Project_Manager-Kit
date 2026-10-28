@@ -9,15 +9,17 @@ python tools/machine_setup.py [--old-kit DIR] [--owner-email EMAIL] [--pm-settin
 python tools/machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [...] [--apply]
 python tools/machine_setup.py --managed-settings [--kit DIR] [--home DIR] [--apply]
 python tools/machine_setup.py --pm-repo PATH [--kit DIR] [--apply]
+python tools/machine_setup.py --delegation [--kit DIR] [--apply]
 ```
 
-Five modes:
+Six modes:
 
 - **The default** ("Default mode" below): the guard's entry in each Claude account's `settings.json`, the kit plugin on each host machine setup installs, the owner's email in the machine config ("Owner email") and the agents' temp folder ("Extras"). `--fresh` (`-Fresh`) is its old name and is still accepted.
 - **`--old-kit DIR`** (`-OldKit`): switches a machine's Claude config folders from an older kit clone to this kit checkout: each account's `settings.json` (with every link the clone's setup left reported, "Links"), the owner's email and the machine extras (the schedule shortcut, the agents' temp folder with its sweep, and `KIT_MACHINE_LOCK`).
 - **`--repo PATH`**: the committed repo setup, for a repository that wants its kit settings committed: `.kit.json`, the ignore lines, a starter `docs/INDEX.md`, and with `--stack` its files ("Committed repo setup (--repo)" below; docs/install.md "Committed setup (--repo)"). `installer/new-repo.ps1` is its PowerShell front end.
 - **`--managed-settings`** (`-ManagedSettings`): writes Claude Code's machine-wide managed settings file from the kit's template, and nothing else ("Managed settings" below). `--apply` needs an elevated terminal.
 - **`--pm-repo PATH`**: sets the PM-repo pointer in the registry to the PM repository's work tree PATH, and nothing else ("PM repo pointer" below). `--apply` needs an elevated terminal. The PowerShell wrapper's switch is `-PmRepo PATH` (`installer/machine-setup.ps1`): a mode of its own that takes only `-Python` and `-Apply` (docs/install.md step 1).
+- **`--delegation`**: Linux only, the one root step that gives strong containment, and nothing else ("Linux" below). `--apply` runs as root, through sudo.
 
 Run it from the kit's main checkout, not a worktree: `--kit` defaults to the checkout the tool is in, and every hook path and shortcut names that folder. Run from a plugin export (`<export root>/<sha12>`, docs/plugin-source.md "Layout"), in every mode `--kit` defaults to the main checkout the export's `.pm-kit-export` marker records (`kitlib.pluginsource` `default_kit`), since every plugin refresh replaces the export folder; when that checkout has moved or gone, the tool prints `REFUSED: <export>: this is an export; pass --kit <kit checkout>` and exits 1.
 
@@ -27,7 +29,7 @@ Run it from the kit's main checkout, not a worktree: `--kit` defaults to the che
 - **Refusals.** Any refusal stops the run before anything changes: an old-kit path in a settings file that this step neither removes nor re-points, a hook path it cannot resolve, a settings file it cannot read or must not replace, a machine config it cannot read, a kit file a path would need, a missing config folder, or `--kit` equal to `--old-kit`. Each refusal names the file and path.
 - **Part-way failure.** If a change fails under `--apply`, whatever the error, it stops there. It prints the change, the error, how to restore that change by hand, and the changes already made. Every line is printed as it is produced.
 
-Exit codes: 0 done, dry run printed or nothing to do; 1 refused or stopped; 2 usage: both `--old-kit` and `--fresh`, `--pm-settings` with `--old-kit`, a `--repo` option without `--repo` or a machine option with it, `--managed-settings` with any option but `--kit`, `--home` and `--apply`, `--pm-repo` with any option but `--kit` and `--apply`, two modes at once (the wrapper also exits 2 for `-OldKit` with `-Fresh`, `-ManagedSettings` with `-OldKit` or `-Fresh`, `-PmSettings` with `-OldKit`, a `-Python` that is not a file, or, without `-Python`, with no `python` on PATH). `--repo` has its own codes (docs/install.md).
+Exit codes: 0 done, dry run printed or nothing to do; 1 refused or stopped; 2 usage: both `--old-kit` and `--fresh`, `--pm-settings` with `--old-kit`, a `--repo` option without `--repo` or a machine option with it, `--managed-settings` with any option but `--kit`, `--home` and `--apply`, `--pm-repo` or `--delegation` with any option but `--kit` and `--apply`, two modes at once (the wrapper also exits 2 for `-OldKit` with `-Fresh`, `-ManagedSettings` with `-OldKit` or `-Fresh`, `-PmSettings` with `-OldKit`, a `-Python` that is not a file, or, without `-Python`, with no `python` on PATH). `--repo` has its own codes (docs/install.md).
 
 The wrapper runs the tool under `-Python <python.exe>` when given, else under the `python` on PATH.
 
@@ -40,6 +42,8 @@ Each leftover is one note, with the command that removes the link only, never it
 ```
 leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
 ```
+
+Remove the `hooks` link only once `settings.json` no longer calls a guard through `~/.claude/hooks`. Skill links left after the plugin install make each skill appear twice.
 
 That is the command for a junction or a directory symlink. A file symlink (one without the directory attribute) gets `cmd /c del "<path>"` instead, since `rmdir` fails on it; `del` removes the link and leaves its target. A relative symlink target is read against the link's own folder, not the current directory (`common.link_target`).
 
@@ -168,6 +172,16 @@ The write keeps the machine config's other keys and its layout (`kitlib/machines
 - **Elevation.** The value is under HKLM, so `--apply` is refused unless the process is elevated (`Host.is_admin`); the refusal names the command and the `reg add` that does the same by hand. Nothing elevates itself. A dry run notes that `--apply` would be refused.
 - **The plan.** One change: set the value, or replace the one there (named). Its detail line is the `reg add` that does the same by hand; the restore line is `reg delete "HKLM\SOFTWARE\pm-kit" /v pm_repo /f /reg:64` for a new value, or the `reg add` of the old one. A value already equal to PATH is nothing to do. A value there that cannot be read (for example a REG_EXPAND_SZ) is noted and replaced, with no restore line: it is not absent, so `reg delete` would be wrong, and the note says to record it first (`reg query`).
 - **Under the kit's tests** the registry is never written: `Registry.write` raises when `kitlib.config.user.fenced()`.
+
+## Linux
+
+`installer/machine-setup.sh` is the Linux front end (it refuses on any other system), run with `sh`. It takes the default mode's `--owner-email`, `--pm-settings`, `--config-dir`, `--agent-temp`, `--no-sweep-task`, `--shortcut` and `--apply`, or one of two root modes, run with sudo, that take only `--python` and `--apply`; it runs the tool under `--python FILE`, else the `python3` on PATH. Ubuntu 24.04 is the reference box; git, python3 and tmux are needed (docs/linux-support-plan.md section 6).
+
+1. `sudo sh installer/machine-setup.sh --pm-repo PATH --apply`: the pointer is the root-owned file `/etc/pm-kit/pointer` ("PM repo pointer"). Declining sudo, the dry run prints the line that writes the user's own pointer file, `~/.config/pm-kit/pointer`, instead.
+2. `sudo sh installer/machine-setup.sh --delegation --apply` (`kitlib/machinesetup/delegation.py`): the one root step. It writes `/etc/systemd/system/user@.service.d/pm-kit-delegate.conf` (`Delegate=cpuset cpu io memory pids`), runs `systemctl daemon-reload`, and writes `/etc/pm-kit/kit-user`, the box's one kit user (`<uid> <name>`, the user who ran sudo). Sign out and in once: the user manager takes the delegation when it starts again. It may be declined: the box then runs at the lower tier it allows, shown as such. It is refused off systemd (no root step is offered there yet), in WSL, from root's own login (no `SUDO_UID`), and when the marker names another user.
+3. `sh installer/machine-setup.sh --agent-temp DIR --apply`, as the kit user (it refuses root): the default mode. Linux has no default agent temp folder (it must be outside the home folder and every checkout), so without `--agent-temp` that step is a note. The box checks come first, in the `box` section (`kitlib/machinesetup/linuxbox.py`): WSL is refused; a marker naming another user is refused, and without the marker another user's kit state is a warning; a container is a warning (never strong containment there); a missing git or tmux is a note; the containment tier is probed, and below S1 the delegation step is offered. The Windows-only steps have Linux forms: the user environment is `~/.config/environment.d/pm-kit.conf`, the agents' temp folder is made mode 0700, the shortcut is `~/.local/share/applications/pm-kit-machine-schedule.desktop`, the kit command is `~/.local/bin/kit` (mode 0755, `exec python3 '<kit>/tools/kit.py' "$@"`; a note when that folder is not on PATH), and a leftover link's removal command is `rm -- '<path>'`.
+
+`tools/kit.py` runs on Linux; it refuses WSL (the kernel release names Microsoft) and every other system, darwin among them.
 
 ## Committed repo setup (--repo)
 

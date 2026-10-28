@@ -261,7 +261,7 @@ The plugin root is the whole kit (export), and `.claude-plugin/plugin.json` stay
 hooks and the MCP servers run kitlib and tools beside them. plugin.json, marketplace.json and the
 hooks file `hosts/claude/shell/hooks/hooks.json` (named by `"hooks"` in plugin.json) are rendered
 from `kit.json` and content/ (docs/content.md "Manifests"). The plugin's hooks file carries three
-entries, each run as `pythonw` with the kit's one hook entry,
+entries, each run as `pythonw` on Windows (`/bin/sh` + `python3` on Linux) with the kit's one hook entry,
 `${CLAUDE_PLUGIN_ROOT}/boot/hook.py claude <event>`: the kit header on SessionStart (matcher
 `startup|resume|clear|compact`) and on SubagentStart, and the coordinator SessionStart hook
 (`boot/hook.py claude SessionStart coordinator`, matcher `startup|resume|compact`). The guard
@@ -276,36 +276,6 @@ whose plugin is not enabled from the export: it makes the export, then runs the 
 that folder through the same code (docs/machine-setup.md "Default mode"). The CLI also
 rewrites other keys of that `settings.json`, so the step backs the file up first.
 
-### After the plugin install: remove the per-item junctions
-
-Junctions an earlier setup made under `~/.claude` (`skills/*`, `agents`, `hooks`, `tools/*`,
-`knowledge/*`) load what the plugin now loads. Machine setup makes no link: it reports each
-leftover and re-points a `settings.json` path through `~/.claude/tools/<name>` to the kit's own
-file (docs/machine-setup.md "Links"). Run it with `--apply` first, then remove each link with the
-line its dry run prints, which removes the link only, never the target (never `/s`):
-
-```
-leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
-```
-
-A second dry run then reports no leftover link. The kit's `skills/*` links go at the plugin
-install, or each skill appears twice. Only the current kit skill names and the retired
-`subagent-dispatch`, `doc-claims-discipline`, `specialty-records` and `specialty-spec` are
-touched; any other link stays:
-
-```powershell
-$kit = 'backlog-ops','backlog-pricing','branch-review','branch-sync','builder','coordinator-dispatch','flaky-test-triage','hub-ops','ledger-ops','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','doc-claims-discipline','specialty-records','specialty-spec','specialty-3d-assets','specialty-rigging','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-docs'
-Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
-  Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
-  ForEach-Object { cmd /c rmdir "$($_.FullName)" }
-```
-
-Gated on the plugin shipping the kit's agents under the pm-kit: names; do not do this before.
-
-Remove ~/.claude/agents only after the plugin providing pm-kit agents is installed and the launcher uses pm-kit:coordinator.
-
-Remove the `hooks` link only when `settings.json` no longer calls a guard through `~/.claude/hooks`.
-
 ## Existing installs: a machine with the old home-folder layout
 
 A new machine skips this section. A machine an older machine setup ran on can hold leftovers of
@@ -319,8 +289,8 @@ the old layout; each is cleared once, after step 1:
   reads neither copy: a leftover home config is refused with the move's command
   (`kitlib/config/user.py` `UNMOVED`), the Action Hub's tools included (`kitlib/hubsite/auth.py`
   `folder`).
-- **Links under `~/.claude`** (junctions an earlier setup made): remove them as in "After the
-  plugin install" above.
+- **Links under `~/.claude`** (junctions an earlier setup made): each is reported, with the line
+  that removes it, by machine setup (docs/machine-setup.md "Links").
 
 ## Agent memory folder: tools/kit_stubs.py memory
 

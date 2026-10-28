@@ -7,9 +7,11 @@ a tip a test failed on when that test failed twice over the branch's commits, wh
 has. Every missing, unreadable or altered record refuses."""
 import json
 import os
+import re
 import unittest
 
 from kitlib import gate as G
+from kitlib.backlog import plan as pmod
 from kitlib.gate import rerun, runner
 from kitlib.records import gate_ok
 from tests.gate import fixtures, test_land
@@ -189,6 +191,20 @@ class JudgeClass(unittest.TestCase):
         self.assertFalse(rerun.judge_class(text, 0, ['m.D.setUpClass'])[0])
 
 
+class AddLine(unittest.TestCase):
+    def test_the_summary_stays_a_title_however_many_long_tests_failed(self):
+        long = 'tests.gate.test_' + 'x' * 70
+        classes = [{'cls': '%s.Case%d%s' % (long, n, 'Y' * 80),
+                    'ids': ['%s.Case%d.test_%s' % (long, n, 'z' * 50)]} for n in range(5)]
+        add = rerun.add_line(os.getcwd(), BRANCH, 'a' * 40, classes)
+        summary = re.search(r'--summary "([^"]*)"', add).group(1)
+        self.assertLessEqual(len(summary), pmod.SUMMARY_MAX, summary)
+        self.assertIn('and 4 more', summary)
+        why = re.search(r'--why-not-folded "([^"]*)"', add).group(1)
+        for c in classes:
+            self.assertIn(c['ids'][0], why)
+
+
 class RerunCase(test_land.LandCase):
     GATE = GATE
     GATE_TIPS = False       # every tip here is gated, or rerun, by the test itself
@@ -286,6 +302,10 @@ class Flake(RerunCase):
         self.assertIn(' add FLAKE-%s ' % ID.split('.')[-2].upper(), add)
         self.assertIn('--scope flaky_mod.py', add)
         self.assertIn('--found-on %s' % BRANCH, add)
+        # the summary is a title `backlog.py add` takes; the test id goes in the reason
+        summary = re.search(r'--summary "([^"]*)"', add).group(1)
+        self.assertLessEqual(len(summary), pmod.SUMMARY_MAX, summary)
+        self.assertIn(ID, re.search(r'--why-not-folded "([^"]*)"', add).group(1))
         self.assertIn('report this line to your coordinator', out.lines[-2])
         # one gate slot of the branch: it counts toward the branch gate budget
         calls = self.book_calls[n:]

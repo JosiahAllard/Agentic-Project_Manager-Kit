@@ -4,8 +4,9 @@
                    long-running session; handoff and reboot rewrite account and name. A key
                    starting with "_" is a note. agent true runs the coordinator agent, a string
                    that agent, false a plain session.
-  coordinators.json {repo: account, pm_session_id, pm_folder, pm_account}: the account each
-                   repo's main coordinator is on, and the PM session reboot resumes.
+  coordinators.json {repo: account, pm_session_id, pm_folder, pm_account, pm_name?}: the account
+                   each repo's main coordinator is on, and the PM session reboot resumes
+                   (pm_name: the name pm-relaunch gave it, kitlib.launcher.relaunch).
   pipes.json       {name: {pid, session_id, pipe, proc_start, entrypoint, recorded_at}}: the peer
                    pipe each launched session was seen on (kitlib.launcher.pipes); a hint, never
                    a token.

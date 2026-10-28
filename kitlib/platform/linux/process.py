@@ -16,6 +16,7 @@ only ctimes below the stamp).
   alive, proc_ctime, own_ctime, snapshot, process_parents, listed_ctimes, listed_ctime, _ancestor,
   ancestry, ancestors_of, own_ancestors, descendants, command_line, terminate_verified, kill_tree
                       as kitlib.proc.process documents them
+  pidns(pid)          the inode of pid's PID namespace, None when it cannot be read
   stamp_now()         the seam's stamp (kitlib.lock.run filetime_now on Linux)
   rows()              every process as kitlib.pmstart.list_processes's dicts (Name, CommandLine,
                       ExecutablePath, ProcessId, ParentProcessId, Created), from /proc
@@ -113,6 +114,17 @@ def proc_ctime(pid):
 
 def own_ctime():
     return proc_ctime(os.getpid())
+
+
+def pidns(pid='self'):
+    """The inode of pid's PID namespace (/proc/<pid>/ns/pid; 'self' this process's), or None when
+    it cannot be read (no such process, another user's). Two processes share a PID namespace
+    exactly when the inodes match: a pid read in one namespace names another process, or none,
+    in another (a W1 job's, kitlib.platform.linux.contain)."""
+    try:
+        return os.stat('%s/%s/ns/pid' % (PROC, pid)).st_ino
+    except (OSError, ValueError):
+        return None
 
 
 def alive(pid, ctime):

@@ -3,7 +3,8 @@
 The PM runs it only after a successor is running and has checked in; handoff --recycle prints the
 exact line. The name is matched against claude.exe's --remote-control argument exactly, as a whole
 token. Refused (REFUSED: ..., nothing stopped):
-  - a name or successor naming the PM session (pm-session, Project Manager);
+  - a name or successor naming the PM session (pm-session, Project Manager, or coordinators.json's
+    pm_name, which pm-relaunch writes);
   - a name with surrounding spaces, or a successor equal to the name;
   - a successor that is not running;
   - no match; several matches, unless --pid picks one; a --pid that is not one of them;
@@ -59,10 +60,12 @@ def _pm_named(n):
     return bool(low) and (PM_RC_NAME.lower() in low or 'project manager' in low)
 
 
-def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None):
-    """(target, window, conhost, successor rows, lines) for a stop, or Refused."""
+def plan(procs, name, successor=None, pid=0, own_pid=None, pm_session_id=None, pm_name=None):
+    """(target, window, conhost, successor rows, lines) for a stop, or Refused. pm_name:
+    coordinators.json's pm_name, the name pm-relaunch gave the PM (its command line carries the
+    old session id, not pm_session_id)."""
     for n in (name, successor):
-        if _pm_named(n):
+        if _pm_named(n) or (pm_name and n == pm_name):
             raise Refused("'%s' names the PM session; never stopped." % n)
     if not name or name.strip() != name:
         raise Refused('--name must be the exact session name, no surrounding spaces.')
@@ -147,8 +150,11 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None,
     pm_id = (coordinators or {}).get('pm_session_id') if isinstance(coordinators, dict) else None
     if not isinstance(pm_id, str) or pm_id.startswith('<'):
         pm_id = None                                # unset, not a string, or the example file's placeholder
+    pm_name = (coordinators or {}).get('pm_name') if isinstance(coordinators, dict) else None
+    if not isinstance(pm_name, str) or pm_name.startswith('<'):
+        pm_name = None
     rows = host.processes() if procs is None else procs
-    target, win, con, succ, (what, wtext) = plan(rows, name, successor, pid, host.own_pid(), pm_id)
+    target, win, con, succ, (what, wtext) = plan(rows, name, successor, pid, host.own_pid(), pm_id, pm_name)
     if dry_run:
         out = ['DryRun: would stop ' + what, 'DryRun: would stop ' + wtext]
         if successor:

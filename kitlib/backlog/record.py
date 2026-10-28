@@ -125,7 +125,11 @@ def blocker_kind(member):
 # --- the schema -----------------------------------------------------------------------------------
 
 ONE, AT_MOST_ONE, ONE_PLUS, ANY = '1', '0-1', '1+', '0+'
-OWNER_PRIORITY = '-1'
+# `priority: -1` once marked a record awaiting the owner; `blocked_on: owner` is the only owner
+# hold now, and -1 is refused with this pointer (docs/backlog.md "Fields").
+RETIRED_PRIORITY = '-1'
+RETIRED_PRIORITY_WHY = ('`priority: -1` is retired: a record awaiting the owner is `block ID --on '
+                        'owner --owner-ask "<the question>"`')
 RULING_RE = re.compile(r'^R-[0-9]{4,}$')
 DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 QUESTION_RE = re.compile(r'^Q-[0-9]{3,}$')
@@ -134,7 +138,7 @@ SESSION_RE = re.compile(r'^[a-z][a-z0-9-]*$')
 
 
 def is_band(v):
-    """True iff `v` is a band `1`-`5` (1 the top). `-` and `-1` are not bands and have no rank."""
+    """True iff `v` is a band `1`-`5` (1 the top). `-` is not a band and has no rank."""
     return v is not None and bool(re.match(r'^[1-5]$', v))
 
 
@@ -147,10 +151,12 @@ def _id(v, rules):
 
 
 def _priority(v, rules=None):
-    if v in ('-', OWNER_PRIORITY) or is_band(v):
+    if v == '-' or is_band(v):
         return None
-    return ('`%s` is not a priority - a band `1`-`5` (1 the top), `-1` where the judgement of '
-            'the owner is required, or `-` for not prioritised' % v)
+    if v == RETIRED_PRIORITY:
+        return RETIRED_PRIORITY_WHY
+    return ('`%s` is not a priority - a band `1`-`5` (1 the top), or `-` for not prioritised'
+            % v)
 
 
 def _priority_by(v, rules=None):
@@ -450,7 +456,7 @@ def _cross_field(rec):
     priority, by = rec.get('priority'), rec.get('priority_by')
     state, blockers, scopes = rec.get('state'), rec.all('blocked_on'), rec.all('scope')
     if priority is not None and by is not None:
-        if priority in ('-', OWNER_PRIORITY) and by != '-':
+        if priority == '-' and by != '-':
             add(Finding(SCHEMA, path, rec.line_of('priority_by'), '`priority: %s` is not a band, '
                         'so `priority_by` must be `-`, not `%s`' % (priority, by)))
         if is_band(priority) and by == '-':
@@ -473,9 +479,8 @@ def _cross_field(rec):
     if '-' in blockers and len(blockers) > 1:
         add(Finding(BLOCKED_ON, path, rec.line_of('blocked_on'), '`blocked_on: -` means not '
                     'blocked, so it cannot sit beside other members'))
-    awaits = 'owner' in blockers or priority == OWNER_PRIORITY
-    out.extend(_both_or_neither(rec, 'owner_ask', awaits, 'an item awaiting the owner - '
-                                '`blocked_on: owner` or `priority: -1`'))
+    out.extend(_both_or_neither(rec, 'owner_ask', 'owner' in blockers, 'an item awaiting the '
+                                'owner - `blocked_on: owner`'))
     for key in PULL_KEYS:
         out.extend(_both_or_neither(rec, key, state == 'pulled', 'an item with `state: pulled`'))
     out.extend(_both_or_neither(rec, 'files_at', rec.has('files'), 'a record with `files`'))
@@ -543,8 +548,8 @@ def values(pairs, key):
 
 
 def is_owner_held(rec):
-    """Awaiting the owner: `blocked_on: owner` or `priority: -1`."""
-    return rec.get('priority') == OWNER_PRIORITY or 'owner' in rec.all('blocked_on')
+    """Awaiting the owner: `blocked_on: owner`."""
+    return 'owner' in rec.all('blocked_on')
 
 
 def is_owner_prioritised(rec):
@@ -553,4 +558,4 @@ def is_owner_prioritised(rec):
 
 
 def owner_hold_label(rec):
-    return 'priority: -1' if rec.get('priority') == OWNER_PRIORITY else 'blocked_on: owner'
+    return 'blocked_on: owner'

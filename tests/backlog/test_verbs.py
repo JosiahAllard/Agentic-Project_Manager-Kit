@@ -209,19 +209,18 @@ class PullRelease(VerbCase):
 
     def test_pull_refusals(self):
         self.seed(rec('UNP'), priced('BLK', state='blocked', blocked_on='live-client'),
-                  rec('MIN', priority='-1', owner_ask='which?'),
+                  priced('MIN', state='blocked', blocked_on='owner', owner_ask='which?'),
                   priced('REQ', requires='item:UNP'))
         for rid in ('UNP', 'BLK', 'MIN', 'REQ'):
             with self.assertRaises(Refusal, msg=rid):
                 self.verb('pull', rid)
-        # pull-held refuses every role, so no role releases a -1 by pulling it
-        # (Owner gates): the owner or the PM releases the hold with `set` first
+        # no role releases the owner's hold by pulling it (Owner gates): the owner or the PM
+        # unblocks it first
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'MIN', reason='the owner said go', may_collide=True)
-        self.assertIn('set MIN --priority', str(cm.exception))
+        self.assertIn('Unblock it', str(cm.exception))
         r = self.get('MIN')
-        self.assertEqual((r.get('priority'), r.get('hold_ruling'), r.get('owner_ask')),
-                         ('-1', None, 'which?'))
+        self.assertEqual((r.get('blocked_on'), r.get('owner_ask')), ('owner', 'which?'))
         self.seed(priced('NOW'))
         self.verb('pull', 'NOW')
         with self.assertRaises(Refusal) as cm:

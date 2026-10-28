@@ -10,6 +10,22 @@ SHELL = 'hosts/claude/shell'
 MOVED_FROM = 'claude'
 
 
+def make_folder(folder, mode=0o755):
+    """Make `folder` and any missing parents, then set each folder this call made to `mode`, so a
+    root umask of 027 or 077 cannot leave a root-owned folder (/etc/pm-kit) unreadable to the kit
+    user. A folder that was already there keeps its mode."""
+    made, p = [], folder
+    while p and not os.path.isdir(p):
+        made.append(p)
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    os.makedirs(folder, exist_ok=True)
+    for d in made:
+        os.chmod(d, mode)
+
+
 def kit_file(kit, rel):
     """`rel` (posix, kit-relative) under the kit folder `kit`."""
     return os.path.join(kit, *rel.split('/'))

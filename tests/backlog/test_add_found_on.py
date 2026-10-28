@@ -65,8 +65,10 @@ class FoundOn(StoreCase):
     def test_none_skips_the_overlap_check_and_records_the_reason(self):
         change = self.add(['kitlib/x/**'], found_on='none')
         self.assertEqual(change.subject, 'backlog: add NEW, found on no branch (or on a branch since landed)')
-        self.assertTrue(self.get('NEW').get('summary').endswith(
-            '(found on no branch (or on a branch since landed); not folded: %s)' % WHY), self.get('NEW').get('summary'))
+        new = self.get('NEW')
+        self.assertEqual(new.get('summary'), 'a defect found while working')      # the title alone
+        self.assertIn('## Found\n\nFound on no branch (or on a branch since landed); not folded: %s\n' % WHY,
+                      new.body)
 
     def test_a_scope_the_branch_changed_is_refused(self):
         before = self.remote_tip()
@@ -82,9 +84,10 @@ class FoundOn(StoreCase):
     def test_a_disjoint_scope_is_added_with_where_it_was_found(self):
         change = self.add(['docs/y.md'])
         self.assertEqual(change.subject, 'backlog: add NEW, found on kit/foo')
-        summary = self.get('NEW').get('summary')
-        self.assertEqual(summary, 'a defect found while working (found on kit/foo; not folded: %s)'
-                         % WHY)
+        new = self.get('NEW')
+        self.assertEqual(new.get('summary'), 'a defect found while working')
+        self.assertIn('## Found\n\nFound on kit/foo; not folded: %s\n' % WHY, new.body)
+        self.assertIn('## Why this is here', new.body)
         self.assertTrue(any('found on kit/foo' in line for line in change.lines), change.lines)
 
     def test_a_scope_a_record_the_branch_holds_is_refused(self):

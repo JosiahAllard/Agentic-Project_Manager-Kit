@@ -667,7 +667,7 @@ class InboxTest(ApiCase):
 
 class ViewsTest(ApiCase):
     def test_no_views_is_a_clear_not_available(self):
-        for path in ('/backlog', '/completed', '/notices', '/repos', '/usage', '/agents'):
+        for path in ('/backlog', '/completed', '/notices', '/repos', '/usage', '/agents', '/skills'):
             with self.subTest(path=path):
                 obj = self.refused('unavailable', 'views', 'GET', path, AGENT)
                 self.assertIn('not available', obj['error']['message'])
@@ -732,7 +732,7 @@ class ReadTest(ApiCase):
         obj = self.ok('GET', '/snapshot', OWNER)
         self.assertEqual(obj['views']['notices'], [{'text': 'n'}])
         self.assertEqual(obj['views']['backlog'], [{'repo': 'r', 'items': []}])
-        self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
+        self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents', 'skills'),
                                                            'unavailable'))
 
     def test_snapshot_carries_the_cards_but_not_the_bodies(self):
@@ -1138,7 +1138,7 @@ class FixTest(ApiCase):
         obj = self.ok('GET', '/snapshot', AGENT)
         self.assertEqual(obj['unavailable'], {'backlog': 'store', 'notices': 'OSError',
                                               'repos': 'ZeroDivisionError',
-                                              'agents': 'unavailable'})
+                                              'agents': 'unavailable', 'skills': 'unavailable'})
         self.assertEqual((obj['views']['backlog'], obj['views']['notices'], obj['views']['repos'],
                           obj['views']['usage']), (None, None, None, [{'n': 1}]))
         self.assertEqual(obj['collections']['questions'][qid]['title'], 't')
@@ -1458,9 +1458,12 @@ class SecondFixTest(ApiCase):
 
             def agents(self):
                 raise HubError('invalid', 'a-folder-on-this-machine is no agent list', 'agents')
+
+            def skills(self):
+                raise OSError('cannot read a-folder-on-this-machine')
         self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
         want = {'backlog': 'store', 'completed': 'unavailable', 'notices': 'OSError',
-                'repos': 'ZeroDivisionError', 'usage': 'KeyError', 'agents': 'invalid'}
+                'repos': 'ZeroDivisionError', 'usage': 'KeyError', 'agents': 'invalid', 'skills': 'OSError'}
         self.assertEqual(sorted(want), sorted(api.VIEWS))
         for name, why in sorted(want.items()):
             for role in (OWNER, AGENT):
@@ -2167,6 +2170,53 @@ class RecordViews(object):
         return {'repo': repo, 'fields': []}
 
 
+class SkillViews(object):
+    def __init__(self):
+        self.calls = []
+
+    def skills(self):
+        return {'available': True, 'skills': [{'name': 'builder', 'description': 'Builds.'}]}
+
+    def skill(self, name):
+        self.calls.append(name)
+        if name != 'builder':
+            raise HubError('not_found', 'there is no skill %s' % name, 'name')
+        return {'name': 'builder', 'description': 'Builds.', 'body': '# Builder'}
+
+
+class SkillRouteTest(ApiCase):
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = SkillViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def test_a_skill_with_its_body_and_the_snapshot_without_one(self):
+        for role in (OWNER, AGENT):
+            with self.subTest(role=role):
+                self.assertEqual(self.ok('GET', '/skills/builder', role)['body'], '# Builder')
+                self.assertEqual(self.ok('GET', '/skills', role)['items']['skills'],
+                                 [{'name': 'builder', 'description': 'Builds.'}])
+        snap = self.ok('GET', '/snapshot', OWNER)['views']['skills']
+        self.assertEqual(snap['skills'], [{'name': 'builder', 'description': 'Builds.'}])
+
+    def test_an_unknown_skill_is_a_404_and_a_name_that_is_no_name_never_reaches_the_view(self):
+        self.refused('not_found', 'name', 'GET', '/skills/nope', OWNER)
+        self.assertEqual(self.views.calls, ['nope'])
+        del self.views.calls[:]
+        for path in ('/skills/..', '/skills/%2e%2e', '/skills/a\b', '/skills/.git', '/skills/A..B',
+                     '/skills/%2e%2e%2fbuilder', '/skills/C:', '/skills/' + 'a' * 129):
+            for role in (OWNER, AGENT):
+                with self.subTest(path=path, role=role):
+                    obj = self.refused('invalid', 'name', 'GET', path, role)
+                    self.assertEqual(obj['error']['message'], api.SEGMENT_SAYS['name'])
+        self.refused('not_found', 'path', 'GET', '/skills/builder/x', OWNER)     # no slash makes a second segment a name
+        self.assertEqual(self.views.calls, [])
+
+    def test_no_skill_view_is_not_available(self):
+        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+        self.refused('unavailable', 'views', 'GET', '/skills/builder', AGENT)
+
+
 class RecordRouteTest(ApiCase):
     def setUp(self):
         ApiCase.setUp(self)
@@ -2262,6 +2312,9 @@ class BindViews(object):
             got['writable'] = False
         return got
 
+    def repos(self):
+        return [{'name': 'kit', 'aliases': []}, {'name': 'KitOwn', 'aliases': []}]
+
 
 class QuestionRecordTest(ApiCase):
     """A question bound to a backlog record: `record` {repo, id}, checked against the configured
@@ -2306,6 +2359,21 @@ class QuestionRecordTest(ApiCase):
                                    {'title': 't', 'record': record})
                 self.assertIn(says, obj['error']['message'])
         self.assertEqual(self.store.docs('questions'), {})
+
+    def test_a_missing_record_names_the_other_repo_key_that_holds_it(self):
+        # kit records key on the PM repo's folder name: asking under the kit repo's own name names it
+        class Two(BindViews):
+            def record(self, repo, id):
+                if repo == 'KitOwn':
+                    raise HubError('not_found', 'no such record', 'id')
+                return BindViews.record(self, repo, id)
+        self.api = api.Api(self.store, views=Two(), clock=CLOCK)
+        obj = self.refused('not_found', 'record', 'POST', '/questions', AGENT,
+                           {'title': 't', 'record': {'repo': 'KitOwn', 'id': 'EX-1'}})
+        self.assertIn("the repo key that holds it is kit", obj['error']['message'])
+        obj = self.refused('not_found', 'record', 'POST', '/questions', AGENT,
+                           {'title': 't', 'record': {'repo': 'kit', 'id': 'EX-404'}})
+        self.assertNotIn('holds it', obj['error']['message'])
 
     def test_a_record_in_a_store_the_hub_cannot_write_is_refused_on_ask_and_edit(self):
         # its answer could never be filed (recordwrite answer: no_store), so it is never bound

@@ -16,6 +16,9 @@ section 8, slice 9), with the meanings the Windows lookups give them.
                    classify on Linux): Scan(entries, unreadable, total, mounts).
   aliased()        whether a tree can be reached by another path too (a bind mount), from the
                    mount table the scan read (kitlib.worktree.holders on Linux).
+  read_mountinfo() a mount table's text, this process's (<PROC>/self/mountinfo) by default, and
+  parse_mountinfo() its mounts as Mount(device, root, point, fstype), the kernel's octal escapes
+                   in root and point undone (kitlib.guard.paths reads each mount's fstype).
 
 The process scan reads, for each process of this user, its current folder (cwd), root, program
 (exe), every open file (fd/*) and every mapped file (maps). A process is this user's when any of
@@ -46,6 +49,7 @@ import collections
 import errno
 import os
 import posixpath
+import re
 
 PROC = '/proc'
 MACHINE_POINTER = '/etc/pm-kit/pointer'
@@ -60,6 +64,10 @@ EXITED = ('Z', 'X')                                  # stat states of an ended p
 # unreadable: how many processes of this user could not be read in full; total: every process
 # /proc listed; mounts: this process's mount table, the mountinfo text (for aliased).
 Scan = collections.namedtuple('Scan', 'entries unreadable total mounts')
+# One line of a mountinfo table: device (major:minor), root (the mount's folder inside its file
+# system: not / for a bind mount of a folder), point (where it is mounted), fstype (None when the
+# line gives none after ` - `).
+Mount = collections.namedtuple('Mount', 'device root point fstype')
 
 
 def _pw_dir():
@@ -305,17 +313,13 @@ HIDING = ('hidepid=2', 'hidepid=invisible', 'hidepid=4', 'hidepid=ptraceable', '
 INIT_PID = 'pid:[4026531836]'
 
 
+_OCTAL = re.compile(r'\\([0-7]{3})')
+
+
 def _unescape(field):
-    """A mountinfo path field with the kernel's octal escapes (\\040 for a space) undone."""
-    out, i = [], 0
-    while i < len(field):
-        if field[i] == '\\' and field[i + 1:i + 4].isdigit() and len(field[i + 1:i + 4]) == 3:
-            out.append(chr(int(field[i + 1:i + 4], 8)))
-            i += 4
-        else:
-            out.append(field[i])
-            i += 1
-    return ''.join(out)
+    """A mountinfo path field with the kernel's octal escapes (\\040 for a space, \\134 for a
+    backslash) undone. A backslash before anything but three octal digits (0-7) stays as it is."""
+    return _OCTAL.sub(lambda m: chr(int(m.group(1), 8)), field)
 
 
 def proc_options(text, point):
@@ -333,16 +337,30 @@ def proc_options(text, point):
     return got
 
 
+def read_mountinfo(path=None):
+    """The text of the mountinfo table at `path`, this process's (<PROC>/self/mountinfo) when None,
+    decoded as the file system names paths (os.fsdecode). OSError when it cannot be read."""
+    with open(path or os.path.join(PROC, 'self', 'mountinfo'), 'rb') as f:
+        return os.fsdecode(f.read())
+
+
+def parse_mountinfo(text):
+    """[Mount] of each line of mountinfo `text`, in table order (a later mount at a point hides an
+    earlier one there). A line with no ` - ` or fewer than six fields before it is skipped."""
+    out = []
+    for line in text.splitlines():
+        head, sep, tail = line.partition(' - ')
+        fields, rest = head.split(), tail.split()
+        if sep and len(fields) >= 6:
+            out.append(Mount(fields[2], _unescape(fields[3]), _unescape(fields[4]),
+                             rest[0] if rest else None))
+    return out
+
+
 def _mounts(text):
     """(device, root inside its file system, mount point) of each mount in mountinfo `text`, in
     table order."""
-    out = []
-    for line in text.splitlines():
-        head, sep, _tail = line.partition(' - ')
-        fields = head.split()
-        if sep and len(fields) >= 6:
-            out.append((fields[2], _unescape(fields[3]), _unescape(fields[4])))
-    return out
+    return [(m.device, m.root, m.point) for m in parse_mountinfo(text)]
 
 
 def _at_or_under(path, top, sep):
@@ -398,8 +416,7 @@ def _check_proc(me_folder):
         raise OSError(errno.EACCES, 'is the PID namespace %s\'s, not the first (%s): the processes '
                       'outside it are not listed' % (pid_ns, INIT_PID), PROC)
     try:
-        with open(os.path.join(me_folder, 'mountinfo'), 'rb') as f:
-            text = os.fsdecode(f.read())
+        text = read_mountinfo(os.path.join(me_folder, 'mountinfo'))
     except OSError as e:
         raise OSError(e.errno, 'cannot read its mount options: %s' % e.strerror, PROC) from None
     options = proc_options(text, PROC)

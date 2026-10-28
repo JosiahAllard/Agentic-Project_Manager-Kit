@@ -5,10 +5,11 @@
 
 The export is the folder <plugin.export_dir>/.claude-plugin/marketplace.json names, plugin.export_dir
 read from the machine config at each run, so a refreshed export is used at once. ARGUMENTS reach
-the tool unchanged (-C among them): kit takes no options of its own. Windows only.
+the tool unchanged (-C among them): kit takes no options of its own. Windows and Linux; WSL and
+every other platform (darwin among them) are refused (kitlib.machinesetup.linuxbox.front_door).
 
 A thin entry point (ARCHITECTURE.md, Layers): kitlib.kitcmd resolves, checks and runs. Exit codes:
-the tool's own; 2 a usage error or a refusal (not Windows, an unknown tool name, kit itself, a
+the tool's own; 2 a usage error or a refusal (not Windows or Linux, WSL, an unknown tool name, kit itself, a
 machine config that cannot be read, no current export, an export folder that is not the configured
 one), each one `kit: ...` line on stderr; 130 Ctrl+C.
 """
@@ -29,8 +30,12 @@ def refuse(why):
 
 def main(argv=None, platform=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    if (platform or sys.platform) != 'win32':
-        return refuse('the kit runs on Windows only')
+    platform = platform or sys.platform
+    if platform != 'win32':                 # the Linux checks load only off Windows
+        from kitlib.machinesetup import linuxbox
+        why = linuxbox.front_door(platform)
+        if why:
+            return refuse(why)
     if argv and argv[0].startswith('-') and argv[0] not in ('-h', '--help'):
         return refuse('kit takes no options of its own; the tool name comes first (%s)' % USAGE)
     kit, why = kitcmd.resolve()

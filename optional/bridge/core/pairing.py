@@ -111,6 +111,7 @@ class PairingStore:
         # Kept so a sibling state file (the writer-lease log) is created the same way.
         self.prepare_new_file = prepare_new_file
         self._lock, self._peers, self._db, self._observers = threading.RLock(), {}, None, []
+        self._extension = None
         if not self.path.is_absolute() or not self.path.parent.is_dir():
             raise PairingError('protected-absolute-state-path-required')
         try:
@@ -223,6 +224,67 @@ class PairingStore:
             raise PairingError('invalid-verifier-port')
         with self._lock:
             self._observers.append(callback)
+
+    def extend_routes(self, check):
+        """Private service port, set once: check(sender, recipient) is True opens a direction
+        that has no owner row (core/pmroutes.py, README "PM routes"). An owner row decides alone:
+        enabled passes, disabled refuses whatever check says. Runs under the store lock, so it
+        must not wait on anything that waits on this store."""
+        if not callable(check):
+            raise PairingError('invalid-verifier-port')
+        with self._lock:
+            if self._extension is not None:
+                raise PairingError('route-extension-set')
+            self._extension = check
+
+    @contextmanager
+    def held(self):
+        """Hold the store lock: a route extension's changes serialize with every route check
+        and every guarded send."""
+        with self._lock:
+            self._ready()
+            yield
+
+    def owner_choice(self, sender, recipient):
+        """The owner's row for this direction of these chats' logical identities: True
+        (connected), False (disconnected) or None (never chosen)."""
+        if type(sender) is not ChatBinding or type(recipient) is not ChatBinding:
+            raise PairingError('chat-not-observed')
+        with self._lock:
+            self._ready()
+            row = self._db.execute('SELECT enabled FROM routes WHERE sender=? AND recipient=?',
+                                   (sender.logical_reference, recipient.logical_reference)).fetchone()
+            return None if row is None else row[0] == 1
+
+    def _route_open(self, sender, recipient):
+        row = self._db.execute('SELECT enabled FROM routes WHERE sender=? AND recipient=?',
+                               (sender.logical_reference, recipient.logical_reference)).fetchone()
+        if row is not None:
+            return row[0] == 1
+        try:
+            return self._extension is not None and self._extension(sender, recipient) is True
+        except Exception:
+            return False
+
+    def owner_block(self, sender, recipient, proof):
+        """Owner-control port only: write a disabled row for this one direction, whether or not
+        the chats are observed now. It connects nothing, so no live check is needed."""
+        if type(sender) is not ChatBinding or type(recipient) is not ChatBinding or type(proof) is not bytes:
+            raise PairingError('invalid-owner-selection')
+        selection = ChatSelection(sender.reference, recipient.reference, False, False)
+        with self._lock:
+            self._ready()
+            try:
+                approved = self._owner_check is not None and self._owner_check(selection, proof) is True
+            except Exception:
+                approved = False
+            if not approved:
+                raise PairingError('owner-control-unverified')
+            with self._write() as db:
+                db.execute('INSERT INTO routes VALUES(?,?,0) ON CONFLICT(sender,recipient) '
+                    'DO UPDATE SET enabled=0', (sender.logical_reference, recipient.logical_reference))
+                if self._route_count() > MAX_ROUTES:
+                    raise PairingError('route-capacity')
 
     def _live(self, binding):
         try:
@@ -354,8 +416,8 @@ class PairingStore:
             # The route row first: a route that is off is refused as such, whatever the
             # chats' liveness. The live checks still run, since they drop a dead chat from
             # the observed list (the owner window's only prune for hosts with no withdraw).
-            if self._db.execute('SELECT 1 FROM routes WHERE sender=? AND recipient=? AND enabled=1',
-                                (sender.logical_reference, recipient.logical_reference)).fetchone() is None:
+            # With no owner row, a route extension (PM routes) may open it.
+            if not self._route_open(sender, recipient):
                 for binding in (sender, recipient):
                     try:
                         self._observed(binding)
@@ -376,8 +438,7 @@ class PairingStore:
             self.require_selected(sender, recipient)
             self._db.execute('BEGIN IMMEDIATE')
             try:
-                if self._db.execute('SELECT 1 FROM routes WHERE sender=? AND recipient=? AND enabled=1',
-                                    (sender.logical_reference, recipient.logical_reference)).fetchone() is None:
+                if not self._route_open(sender, recipient):
                     raise PairingError('chat-route-not-selected')
                 yield
                 self._db.execute('COMMIT')

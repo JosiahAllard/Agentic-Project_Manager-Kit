@@ -2,8 +2,9 @@
 runs from its own folder (the plugin root), so an account needs no `tools`, `knowledge` or `skills`
 entry that points into it. This step finds the ones an earlier setup left and says how to remove
 each: `cmd /c rmdir "<path>"` for a junction or directory link, `cmd /c del "<path>"` for a file
-symlink (remove_cmd), each of which removes the link only, never its target (never `/s`). It adds
-no change, so a second run still has nothing to do; it runs in both modes.
+symlink (remove_cmd), each of which removes the link only, never its target (never `/s`); on
+Linux `rm -- '<path>'` (REMOVE_LINUX: rm on a symlink, with no trailing slash, removes the link). It
+adds no change, so a second run still has nothing to do; it runs in both modes.
 
 What it reports, in each config folder:
 - `tools`, `knowledge` or `skills` that is itself a link into this kit or the older kit clone: one
@@ -27,6 +28,9 @@ TOOL_LINKS maps each name an earlier setup linked under `<config>/tools` to the 
 reached; settings.repoint_links re-points a settings path through one to the kit's own file.
 """
 import os
+import shlex
+
+from kitlib import platform
 
 from .common import MOVED_FROM, SHELL, is_link, link_target, under
 
@@ -41,6 +45,7 @@ MOVED_SKILLS_DIRS = (MOVED_FROM + '/skills', SHELL + '/skills')
 CONTAINERS = ('tools', 'knowledge', 'skills')
 REMOVE = 'cmd /c rmdir "%s"'                   # a junction or directory link: the link only; never /s
 REMOVE_FILE = 'cmd /c del "%s"'                # a file symlink: del removes the link, not its target
+REMOVE_LINUX = 'rm -- %s'                      # a symlink: the link only, never -r
 DIRECTORY = 0x10                               # FILE_ATTRIBUTE_DIRECTORY
 
 
@@ -65,7 +70,9 @@ def kit_skills(kit):
 def remove_cmd(path):
     """The command that removes the link at `path` only. Windows keeps the directory attribute on a
     junction and a directory symlink, dangling or not, and rmdir removes those; a file symlink has
-    none, rmdir fails on it, and del removes the link and leaves its target."""
+    none, rmdir fails on it, and del removes the link and leaves its target. On Linux: rm."""
+    if platform.NAME == 'linux':
+        return REMOVE_LINUX % shlex.quote(path)
     try:
         attrs = getattr(os.lstat(path), 'st_file_attributes', DIRECTORY)
     except OSError:

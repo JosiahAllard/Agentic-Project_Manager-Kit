@@ -20,7 +20,7 @@ class OwnerOnlySection(PackCase):
         self.write('CLAUDE.md', 'v1')
         self.commit_all('edit claude\n\nOwner-Approved: CLAUDE.md')
         self.write('CLAUDE.md', 'v2')
-        self.commit_all('edit claude again, no trailer this time')
+        self.commit_all('edit claude again, no trailer this time', author=AGENT)
 
     def test_a_later_unapproved_edit_is_not_covered_by_an_earlier_approval(self):
         self.two_edits()
@@ -46,7 +46,7 @@ class OwnerOnlySection(PackCase):
     def test_a_workflow_edit_needs_its_own_approval(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.write('.github/workflows/ci.yml', 'on: push')
-        self.commit_all('ci change, no trailer')
+        self.commit_all('ci change, no trailer', author=AGENT)
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 1, out)
         self.assertIn('.github/workflows/ci.yml', out)
@@ -54,7 +54,7 @@ class OwnerOnlySection(PackCase):
     def test_a_kit_config_edit_needs_its_own_approval(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.write('.kit.json', '{}')
-        self.commit_all('kit config change, no trailer')
+        self.commit_all('kit config change, no trailer', author=AGENT)
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 1, out)
         self.assertIn('MISSING   .kit.json', out)
@@ -72,7 +72,7 @@ class OwnerOnlyEvilMerge(PackCase):
         self.git('merge', '-q', '--no-commit', '--no-ff', 'other')
         self.write('CLAUDE.md', 'v-evil')
         self.git('add', 'CLAUDE.md')
-        self.git('commit', '-q', '-m', 'merge other into feature')
+        self.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m', 'merge other into feature')
         changed, rows = self.owner_only()
         self.assertIn('CLAUDE.md', changed)
         self.assertEqual([(r[1], r[2]) for r in rows], [('MISSING', 'CLAUDE.md')], rows)
@@ -99,6 +99,52 @@ class OwnerIdentity(PackCase):
         self.assertEqual(code, 0, out)
         self.assertIn('Owner-Approved CLAUDE.md', out)
         self.assertNotIn('do not land', out)
+
+    def test_the_owners_commit_with_no_trailer_is_ok_as_the_landing_judges_it(self):
+        # kitlib.guard.ownercommits accepts an owner-authored commit with no trailer at all; the
+        # table printed MISSING ("trailers on this commit: none") for it.
+        self.git('checkout', '-q', '-b', 'feature')
+        self.write('CLAUDE.md', 'v1')
+        self.write('.kit.json', json.dumps({'owner': {'email': EMAIL},
+                                            'review_pack': {'coauthor': False}}))
+        self.commit_all('owner edit\n\nOwner-Authored: yes')
+        code, out = self.run_pack('feature', '--base', 'main')
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('MISSING', out)
+        self.assertIn('OK        CLAUDE.md  authored by the owner', out)
+        self.assertIn('OK        .kit.json  authored by the owner', out)
+
+    def test_an_agents_commit_with_no_trailer_is_missing(self):
+        self.git('checkout', '-q', '-b', 'feature')
+        self.write('CLAUDE.md', 'v1')
+        self.commit_all('agent edit', author=AGENT)
+        code, out = self.run_pack('feature', '--base', 'main')
+        self.assertEqual(code, 1, out)
+        self.assertIn('MISSING   CLAUDE.md', out)
+        self.assertIn('authored by %s, not the owner' % AGENT, out)
+
+    def test_the_author_is_the_one_the_landing_guard_reads(self):
+        # The guard's own read decides who authored each commit: a commit it names the agent's
+        # is MISSING whatever review_pack's own log said, and a read it fails stops the pack.
+        self.git('checkout', '-q', '-b', 'feature')
+        self.write('CLAUDE.md', 'v1')
+        self.commit_all('owner edit')
+        real = reviewpack.ownercommits.commits
+        seen = []
+
+        def as_agent(root, tip, exclude=(), env=None):
+            seen.append((tip, list(exclude)))
+            found, why = real(root, tip, exclude, env)
+            return [(sha, parents, AGENT, values) for sha, parents, _, values in found], why
+        with mock.patch.object(reviewpack.ownercommits, 'commits', as_agent):
+            _changed, rows = self.owner_only()
+        self.assertEqual(seen, [('feature', ['main'])])
+        self.assertEqual([r[1] for r in rows], ['MISSING'], rows)
+        with mock.patch.object(reviewpack.ownercommits, 'commits',
+                               lambda *a, **k: (None, 'git log failed: injected')):
+            code, out = self.run_pack('feature', '--base', 'main')
+        self.assertEqual(code, 2, out)
+        self.assertIn('review_pack: git log failed: injected', out)
 
     def test_each_commit_is_judged_by_its_own_author(self):
         self.git('checkout', '-q', '-b', 'feature')
@@ -372,9 +418,9 @@ class AnEditTheBranchTakesBack(PackCase):
     def round_trip(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.write('CLAUDE.md', 'v1')
-        self.commit_all('edit claude, no trailer')
+        self.commit_all('edit claude, no trailer', author=AGENT)
         self.write('CLAUDE.md', 'v0')
-        self.commit_all('take it back')
+        self.commit_all('take it back', author=AGENT)
 
     def test_an_edit_that_is_reverted_is_reported_but_does_not_block(self):
         self.round_trip()
@@ -394,7 +440,7 @@ class AnEditTheBranchTakesBack(PackCase):
     def test_a_partial_revert_that_leaves_the_path_changed_still_blocks(self):
         self.round_trip()
         self.write('CLAUDE.md', 'v2')
-        self.commit_all('edit it again, still no trailer')
+        self.commit_all('edit it again, still no trailer', author=AGENT)
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 1, out)
         self.assertIn('MISSING', out)
@@ -403,7 +449,7 @@ class AnEditTheBranchTakesBack(PackCase):
     def test_moving_the_locked_file_away_is_not_a_revert(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.git('mv', 'CLAUDE.md', 'notes.md')
-        self.commit_all('move the owner-only file away, no trailer')
+        self.commit_all('move the owner-only file away, no trailer', author=AGENT)
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 1, out)
         self.assertIn('MISSING', out)
@@ -412,7 +458,7 @@ class AnEditTheBranchTakesBack(PackCase):
     def test_deleting_the_locked_file_still_blocks(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.git('rm', '-q', 'CLAUDE.md')
-        self.commit_all('delete the owner-only file, no trailer')
+        self.commit_all('delete the owner-only file, no trailer', author=AGENT)
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 1, out)
         self.assertIn('MISSING', out)
@@ -420,7 +466,7 @@ class AnEditTheBranchTakesBack(PackCase):
     def test_a_plain_unreverted_edit_still_blocks(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.write('CLAUDE.md', 'v1')
-        self.commit_all('edit claude, no trailer')
+        self.commit_all('edit claude, no trailer', author=AGENT)
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 1, out)
         self.assertIn('MISSING', out)
@@ -430,7 +476,7 @@ class AnEditTheBranchTakesBack(PackCase):
 class EvilMergeReEditingAnAccountedPath(PackCase):
     BASE = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n'
 
-    def build(self, merge_message='merge other into feature'):
+    def build(self, merge_message='merge other into feature', author=AGENT):
         self.git('checkout', '-q', '-b', 'other', 'main')
         self.write('g.txt', '1')
         self.commit_all('other branch work')
@@ -440,7 +486,7 @@ class EvilMergeReEditingAnAccountedPath(PackCase):
         self.git('merge', '-q', '--no-commit', '--no-ff', 'other')
         self.write('CLAUDE.md', 'v2-evil')
         self.git('add', 'CLAUDE.md')
-        self.git('commit', '-q', '-m', merge_message)
+        self.git('-c', 'user.email=%s' % author, 'commit', '-q', '-m', merge_message)
 
     def two_sides(self):
         self.write('CLAUDE.md', self.BASE)
@@ -469,7 +515,7 @@ class EvilMergeReEditingAnAccountedPath(PackCase):
         self.assertIn('MISSING', out)
 
     def test_an_approval_on_the_merge_commit_itself_covers_it(self):
-        self.build('merge other into feature\n\nOwner-Approved: CLAUDE.md')
+        self.build('merge other into feature\n\nOwner-Approved: CLAUDE.md', author=EMAIL)
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 0, out)
         self.assertNotIn('do not land', out)
@@ -513,20 +559,20 @@ class EvilMergeReEditingAnAccountedPath(PackCase):
         self.write('CLAUDE.md', self.BASE.replace('one\n', 'ONE-feature\n', 1)
                    .replace('ten', 'TEN-other').replace('three', 'SMUGGLED'))
         self.git('add', 'CLAUDE.md')
-        self.git('commit', '-q', '-m', 'merge other into feature')
+        self.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m', 'merge other into feature')
         code, out = self.run_pack('feature', '--base', 'main')
         self.assertEqual(code, 1, out)
         self.assertIn('the merge commit itself', out)
 
 
 class MixedCaseLockedPath(PackCase):
-    def add_mixed_case(self, message):
+    def add_mixed_case(self, message, author=None):
         self.git('checkout', '-q', '-b', 'feature')
         self.write('.CLAUDE/notes.md', 'x')
-        self.commit_all(message)
+        self.commit_all(message, author)
 
     def test_a_mixed_case_locked_path_with_no_trailer_is_caught(self):
-        self.add_mixed_case('mixed-case owner-only file, no trailer')
+        self.add_mixed_case('mixed-case owner-only file, no trailer', AGENT)
         changed, rows = self.owner_only()
         self.assertEqual(changed, ['.CLAUDE/notes.md'])
         self.assertIn(('MISSING', '.CLAUDE/notes.md'), [(r[1], r[2]) for r in rows])
@@ -557,16 +603,17 @@ class ProseIsNotATrailer(PackCase):
 class TheConfiguredTrailerKey(PackCase):
     CONFIG = {'owner': {'email': EMAIL, 'trailer': 'Owner-OK'}}
 
-    def test_only_the_configured_key_approves(self):
+    def test_only_the_configured_key_is_read_as_the_trailer(self):
         self.git('checkout', '-q', '-b', 'feature')
         self.write('CLAUDE.md', 'v1')
         self.commit_all('edit\n\nOwner-Approved: CLAUDE.md')
-        code, out = self.run_pack('feature', '--base', 'main')
-        self.assertEqual(code, 1, out)
         self.write('CLAUDE.md', 'v2')
         self.commit_all('edit\n\nOwner-OK: CLAUDE.md')
         _changed, rows = self.owner_only()
-        self.assertEqual(sorted(r[1] for r in rows), ['MISSING', 'ok'], rows)
+        # Both are the owner's, so both are ok; only the configured key shows as the trailer.
+        self.assertEqual([r[1] for r in rows], ['ok', 'ok'], rows)
+        self.assertEqual(rows[0][3], 'Owner-OK CLAUDE.md')
+        self.assertNotIn('Owner-Approved', rows[1][3])
 
 
 class TheDiffOption(PackCase):

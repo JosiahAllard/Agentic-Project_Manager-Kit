@@ -873,7 +873,9 @@ class OtherBackends(TempHomeCase):
                                                      **ADD_NONE))
         self.assertTrue(os.path.isfile(os.path.join(root, 'docs', 'backlog', 'FOO.md')))
         self.assertEqual(repo.git('rev-parse', 'HEAD', cwd=root), head)
-        self.assertTrue(store.load().get('FOO').get('summary').startswith('a summary (found on'))
+        foo = store.load().get('FOO')
+        self.assertEqual(foo.get('summary'), 'a summary')
+        self.assertIn('Found on no branch', foo.body)
 
     def test_the_main_backend_refuses_to_write_in_a_main_checkout(self):
         """It has no compare-and-swap, so it writes only where one agent works: a linked

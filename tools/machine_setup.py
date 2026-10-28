@@ -38,6 +38,12 @@ It writes nothing into any repository: a repository works with the kit with noth
                                                        PATH instead; --apply needs an elevated
                                                        terminal (docs/machine-setup.md "PM repo
                                                        pointer")
+  machine_setup.py --delegation [--kit DIR] [--apply]  Linux, the one root step (run with sudo): the
+                                                       systemd drop-in that delegates the cgroup
+                                                       controllers to every user's manager (strong
+                                                       containment, S1) and /etc/pm-kit/kit-user,
+                                                       the box's one kit user, instead
+                                                       (docs/machine-setup.md "Linux")
   machine-wide options: --config-dir DIR (repeatable; default: the plugin's account folders, ~/.claude,
                              every ~/.claude-* folder but the machine config's own and each folder
                              of the launcher's accounts and orgs; with --old-kit, the first two)
@@ -81,6 +87,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kitlib import machinesetup                                     # noqa: E402
 from kitlib import pluginsource                                     # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
+from kitlib.machinesetup import delegation as mdelegation           # noqa: E402
 from kitlib.machinesetup import owner as mowner                     # noqa: E402
 from kitlib.machinesetup import pointer as mpointer                 # noqa: E402
 from kitlib.machinesetup import repo as mrepo                       # noqa: E402
@@ -104,6 +111,9 @@ def parser():
                            "kit's template instead (--apply needs an elevated terminal)")
     mode.add_argument('--pm-repo', help="set the PM-repo pointer in the registry to this PM repository's "
                                         'work tree instead (--apply needs an elevated terminal)')
+    mode.add_argument('--delegation', action='store_true',
+                      help='Linux: the root step (cgroup delegation and the kit-user marker) instead; '
+                           '--apply runs with sudo')
     p.add_argument('--owner-email', default=None, help="the owner's email (the machine config; with "
                    '--repo, .kit.json "owner".email)')
     p.add_argument('--pm-settings', default=None,
@@ -166,6 +176,13 @@ def main(argv=None):
             return usage('--%s does not go with --pm-repo (it takes --kit and --apply)'
                          % given[0].replace('_', '-'))
         code, _ = machinesetup.run_pointer(mpointer.PointerContext(a.pm_repo, a.kit), apply=a.apply, out=out)
+        return code
+    if a.delegation:
+        given = [n for n in REPO_ONLY + MACHINE_ONLY + ('owner_email',) if getattr(a, n) not in (None, False)]
+        if given:
+            return usage('--%s does not go with --delegation (it takes --kit and --apply)'
+                         % given[0].replace('_', '-'))
+        code, _ = machinesetup.run_delegation(mdelegation.DelegationContext(a.kit), apply=a.apply, out=out)
         return code
     if a.repo is not None:
         given = [n for n in MACHINE_ONLY if getattr(a, n) not in (None, False)]

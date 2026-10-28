@@ -90,7 +90,7 @@ class HostRegistry(unittest.TestCase):
 
     def test_agent_images_follow_the_registry_lower_cased(self):
         self.on('windows')
-        path = self.registry(process_names={'windows': ['Other.EXE']})
+        path = self.registry(process_names={'windows': ['Other.EXE'], 'linux': ['other']})
         self.assertEqual(store.agent_hosts(path),
                          frozenset({'other.exe', 'codex.exe'}))     # the first host changed, Codex's kept
         chain = [(1, 11), (2, 22)]

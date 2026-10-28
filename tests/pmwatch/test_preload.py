@@ -9,7 +9,7 @@ import unittest
 from tests.lazyimports import child_loaded, late_kit_imports
 
 PRELOADED = ('kitlib.pluginsource', 'kitlib.pluginsource.claude', 'kitlib.machinesetup.extras',
-             'kitlib.launcher.settings', 'kitlib.launcher.usage')
+             'kitlib.launcher.settings', 'kitlib.launcher.usage', 'kitlib.launcher.pipes', 'kitlib.launcher.stop', 'kitlib.proc.process')
 WATCH_PATH = ('kitlib.pmwatch',) + PRELOADED + ('kitlib.launcher.accounts',)
 
 # As tools/pm_watch.py builds it: the host's entry point passes its own modules in.

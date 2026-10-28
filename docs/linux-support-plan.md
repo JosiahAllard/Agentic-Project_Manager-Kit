@@ -36,7 +36,9 @@ needs it says so.
   proc/win32, proc/winwatch); whether it imports on Linux is unknown (section 9).
 - The committed Claude hook manifest (hosts/claude/shell/hooks/hooks.json) runs `pythonw`, and
   kitlib/host/hookmain.py keeps `INTERPRETERS = {'windows': 'pythonw'}`; hosts.json lists
-  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified).
+  `"platforms": ["windows"]` for both hosts, with `.exe` process names (verified). Since slice 12:
+  INTERPRETERS adds `'linux': 'python3'`, both hosts list windows and linux, and each renders
+  hooks.linux.json beside its unchanged hooks.json.
 
 ### 1.2 The surface, counted
 
@@ -90,9 +92,23 @@ scheduled-task writers, with the bridge apart.
 - **Shields**: shield.py shield (a DACL against Claude Code's tree kill), PidHold (handles that
   stop pid reuse), console.py (hooks CreateProcess so no console window flashes), winwatch.py
   (user32 window watch), spawn.py no_window_flags and pythonw_beside. The console and window ones
-  have no Linux need (Linux opens no console windows). That the shield and PidHold have none
-  either is inference, not verified: it assumes Claude Code on Linux does not kill a tool call's
-  tree by pid, which section 9 lists as unknown; the tree-kill probe, a backlog record required before slice 14, settles it.
+  have no Linux need (Linux opens no console windows). The shield and PidHold have none either
+  (verified on the reference VM, section 8.1, with Claude Code 2.1.312 against a local stand-in
+  API: a probe tree of the call's shell, a child in its group, a grandchild in a session of its
+  own and one reparented away, each beating). A Bash call that finishes, or that passes its
+  timeout (moved to the background) or runs in the background, ends with no kill at all, so the
+  stale kill of a reused pid that the Windows shield answers never comes. Stopping a call
+  (Escape, TaskStop, or SIGTERM or SIGINT to claude) does kill its tree by pid: claude lists
+  every process (`ps -A -o pid= -o ppid=`), sends SIGTERM to the shell's process group and to
+  each descendant by pid (the one in a session of its own too), polls every 100 ms and lists
+  again about 1.35 s later. The kept capture ends there; that it then sends SIGKILL to the group
+  and each one still running is inferred (the probe's members ignore SIGTERM, yet all ended,
+  and the call returned exit code 137). Each kill seen comes at most about 200 ms after a fresh
+  listing, and pids are handed out in order up to pid_max (4194304 on the VM), so a reused pid is
+  out of reach. A process already reparented away from the call when claude lists (the kit's
+  detach: a setsid double fork) is not reached; one still mid double fork at that moment is a
+  descendant and is, and this holds only while claude is not a child subreaper. That kill is
+  aimed at the live tree, as a stop is meant to be.
 - **Machine lock store**: lock/store.py real_root is `~/.claude/machine-lock` under the profile
   from SHGetKnownFolderPath; lock() is a named mutex `Global\MachineLock.<name>` (queue, holds,
   resources, revision, games, run.<id>), WAIT_ABANDONED counting as acquired. RunMutex is the
@@ -230,7 +246,7 @@ Rules:
 | icacls | chmod 0700 / 0600 | |
 | Desktop `.lnk` | `.desktop` file in `~/.local/share/applications` | |
 | pythonw, CREATE_NO_WINDOW, console hook, winwatch | nothing: Linux spawns no console windows | the no-window carrier is a no-op |
-| pid shield, PidHold | inferred: nothing needed; pidfd where a hold is wanted | rests on Claude Code on Linux not killing a tool call's tree by pid (unknown, section 9; the tree-kill probe, a backlog record required before slice 14, settles it) |
+| pid shield, PidHold | nothing needed (verified); pidfd where a hold is wanted | Claude Code on Linux kills no finished call's tree; a stopped call's tree it kills by pid from a fresh `ps` listing (section 1.3) |
 | Git Bash lookup | /bin/bash | kitlib/proc/bash.py answers /bin/bash |
 | conhost + PowerShell session window | tmux session by default, a configured terminal command if set | question 6 |
 | Get-CimInstance Win32_Process | /proc scan | pmstart, launcher/stop |
@@ -320,7 +336,7 @@ The ladder, chosen by probing the machine at run time, not by distribution name:
 |---|---|---|
 | S1 | a writable cgroup2 subtree with cpuset, memory and pids and `cgroup.kill` (kernel 5.14+), from a `Delegate=yes` user scope or a root-delegated pm-kit directory | strong: CPU pinned, memory capped, guaranteed kill |
 | S2 | the same without cpuset (systemd's default delegation) | memory and kill strong, CPU cooperative |
-| W1 | a PID namespace | strong kill, no caps |
+| W1 | a user and PID namespace whose pid 1 is the kit's reaper | partial: guaranteed kill, CPU cooperative, no memory cap |
 | W2 | subreaper + pidfd + process group + affinity, with a sampled RSS watchdog and no RLIMIT_AS | weak |
 
 `containment: weak` (proposed wording) means: heavy runs go ahead; the kit kills every descendant
@@ -329,6 +345,27 @@ servers outside its tree; cleanup is lost if the holder is SIGKILLed; CPU pinnin
 the memory cap is a sampled watchdog. The lock's status, the heavy-run start line and the run
 record name the tier and what it lacks. Proposed: S2 shows `containment: partial (cpus not
 pinned)` and is not counted weak.
+
+W1, as built (contain.py NsJob): a python starter (Ubuntu's AppArmor user-namespace rule can be
+met for the interpreter alone) reads its uid and gid, unshares a user and a PID namespace and maps
+them onto themselves (read after the unshare they are the overflow id, and the map is refused),
+then forks pid 1, the reaper, which mounts a fresh /proc in a mount namespace of its own and forks
+the stub. Every process in the namespace dies with pid 1, so the kill is a pidfd SIGKILL to it,
+and kill_on_close is pid 1 reading the owner's watch pipe. It is shown as `partial` with what it
+lacks (CPU cooperative, no memory cap), not as strong. A pid is a number in one namespace: a lock
+run record names its wrapper's (`pidns`), and a checker in another one asks the run lock instead
+(store.record_state); a run nested in a W1 job of its run is found by the job's namespace on the
+run's record (`jobns`, nest_check); a probe inside a W1 job runs no scope trial (the user systemd
+would take its pids for its own namespace's) and is W2, never a nested W1, so a run nested at any
+depth stays in the namespace on record.
+
+Not yet namespace-aware (each safe today, a later record):
+
+- queue entries and background runs carry no `pidns` and no `jobns` (on Linux the run lock
+  decides a queue entry; bg_ancestor fails closed);
+- resource.py, giveback.py and the lock status (api.py: tree, GPU memory) read a record's pid
+  as this namespace's;
+- the holders search does not look inside a W1 job.
 
 The S1 contract:
 
@@ -622,8 +659,9 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    Linux) and cpu.py (the seam's affinity primitives); pool.py holds a worker's processes by
    pidfd; tests/proc/test_linux_contain.py and test_linux_cpu.py, and the pool tests on Linux.
    The watchdog runs inside the job's cgroup (J/w), so it never outlives the job, and every
-   cgroup.kill is checked to target the job's own cgroup. Deviations: W1 is probed and reported,
-   not built (no unprivileged user namespaces on the VM; a later record); W2 has no subreaper (an
+   cgroup.kill is checked to target the job's own cgroup. W1 was built later (section 2.3): a
+   user and PID namespace whose pid 1 is the reaper, proved on the VM under its AppArmor
+   user-namespace rule. Deviations: W2 has no subreaper (an
    environment token finds orphans, contain.py says why); leftovers() moves stragglers to a scope
    of their own through systemd; processes() is None; a Linux job runs one command; the pid
    shield is Windows only, so each Linux unit and worker carries the "could not shield" note.
@@ -649,8 +687,11 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    cpuset.cpus; a straggler of a released slot is moved to `leftovers`. The tree-kill probe (does
    ending a tool call kill its tree by pid) and slice 7's live proofs (test_slot_linux,
    test_detach_linux Live) moved to their own backlog record when slice 7
-   landed. It is required before Linux is switched on (slice 14), and a shield, if the probe
-   shows one is needed, lands with that record, before slice 14 (sections 1.3 and 9).
+   landed. Both ran there (section 8.1): the probe shows no shield is needed (section 1.3), and
+   at containment S1 test_slot_linux Live (the give-back narrows cpuset.cpus; a straggler goes
+   to a `leftovers` scope) and test_detach_linux Live (a detached run outlives its caller's
+   scope) pass. test_leftovers.py is Windows only (every class skips on Linux); the Linux
+   leftovers move is test_slot_linux Live's straggler test.
    Built on kit/linux-lock-runs. Deviation: Slot release unpins the job before the leftovers
    move (S2 and W2), so a straggler moved out gets every cpu back.
 8. **Guard path semantics.** The placer, the ten findings in section 3 as tests first, then the
@@ -683,11 +724,23 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    each is a refusal. A process is this user's by any of its four status Uid users or its
    folder's owner (a not-dumpable one's folder is root's); each thread's cwd and root are read,
    and a zombie leader's running threads give every kind. cwd_holders, describe and classify.process_cwds read /proc too. The
-   Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record: they
-   change Windows too. Slice 9's VM proofs moved to their own backlog record (with slice 7's
-   live proofs) when slice 9 landed: (a) test_store_linux RealMachineStore, (b)
-   test_holders_linux Live, (c) a landing end to end on a throwaway repository on the VM, and (d)
-   how often an unreadable process of this user (ssh-agent, gpg-agent) leaves removals UNREAD.
+   Linux Godot and Blender heavy defaults (section 3, finding 8) moved to their own record, as
+   they changed Windows too; they landed on Linux only (kitlib/config/policy.py
+   LINUX_HEAVY_DEFAULTS), so no Windows result changes. Slice 9's VM proofs moved to their own
+   backlog record (with slice 7's live proofs) when slice 9 landed: (a) test_store_linux
+   RealMachineStore, (b) test_holders_linux Live, (c) a landing end to end on a throwaway
+   repository on the VM, and (d) how often an unreadable process of this user (ssh-agent,
+   gpg-agent) leaves removals UNREAD. Run on the VM (section 8.1): (a) passes. (b) is open:
+   the two held-tree tests pass, but `test_a_tree_nothing_uses_is_free` fails, since a free tree
+   answers UNREAD. (d) explains it: UNREAD came back for 50 of 50 removals of a free tree with no
+   agent running, and the same with ssh-agent, with gpg-agent too, and after both ended. The
+   user's own systemd manager (`systemd --user`), its `(sd-pam)` and the ssh login's
+   `sshd-session` are processes of this user whose `ns/mnt` cannot be read (inferred: not dumpable), and
+   they last as long as the login, so on a stock Ubuntu box every removal falls to the owner;
+   ssh-agent and gpg-agent add nothing to that. It needs its own record (a fix or a ruling) before
+   slice 14. (c) is open: the end-to-end landing tests skip on Linux ("the lock is
+   Windows only"; in tests/gate/test_land*.py only a few unit tests run) and tools/kit.py refuses Linux, so a landing cannot run end to end
+   there before slice 14.
    Known limits:
    a bind mount over a tree's file system leaves its removals UNREAD; in a WSL2 distro (a PID
    namespace of its own) every removal is NOT_SEARCHED; /proc is listed once, so a process that
@@ -696,8 +749,9 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
    database entry has no profile folder, so the machine lock's store cannot be opened (and with no
    machine pointer file the pointer is BAD). Deviations: environment.d moves to slice 14 (machine setup writes it);
    another user's processes cannot be seen, so holders answers for this user's only; the user
-   pointer file is the user's to write, so an agent can write it too: guarding it is its own
-   record.
+   pointer file is the user's to write, so an agent could write it too: the guard now holds it
+   (docs/guard.md "Write jail", tests/guard/test_linux_pointer.py), and the guard's mount table is
+   read by linux/paths.py's mountinfo reader (read_mountinfo, parse_mountinfo).
 10. **Scheduled jobs.** linux/schedule.py with systemd user timers and cron (first-class);
     autostart (coordinators after reboot), hubsite autostart (the hub's start at logon: XDG
     autostart, shell-profile fallback), worktree and temp sweeps, automatic tasks, consoletasks
@@ -713,6 +767,16 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
     seam: how the plugin ships the right manifest on each platform. Needs slice 8. Risk High (hook entry). Proof: the rendered manifest
     runs the hook on both; a missing interpreter blocks rather than passes; the rendered Windows
     hooks.json of each host is byte-identical to the base's.
+    Built on kit/linux-hook-manifests: hookmain.manifest_command per platform (INTERPRETERS
+    linux: python3, run by /bin/sh; a tool event's line exits 2 when python3 fails or is missing,
+    a start event's says the kit did not load), each host's hooks.linux.json beside its
+    unchanged hooks.json, hosts.json platforms windows and linux for both hosts, and the seam:
+    the plugin export writes the running platform's file as hooks.json
+    (kitlib.pluginsource.platform_manifests). The posix-only run of the lines (tests/host/
+    test_hook_linux.py) waits on a Linux machine. The MCP servers follow the same seam:
+    hookmain.mcp_interpreter picks python3 on Linux, rendered into
+    `.claude-plugin/plugin.linux.json` and Codex's `mcp.linux.json`, which the export swaps in
+    (tests/content/test_render.py ManifestTest).
 13. **Shell text.** shell-and-worktree-traps sections, the 10 Windows-shell lines (section 1.4),
     hub to-do step forms, Codex dialect. Risk Low. Proof: content render check; hub renders each
     form. Windows stays byte-identical: every rendered Windows file differs from the base's only
@@ -724,7 +788,7 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
     exists; each missing piece named; the tmux check; the second-user rule, a per-user warning
     without the root step and a machine-wide refusal with it; the container warning; the WSL
     refusal), tools/kit.py stops refusing Linux (and keeps refusing darwin, and WSL until native
-    parity, question 11). Waits on the tree-kill probe record. Risk High (install). Proof: machine setup on a fresh Ubuntu 24.04 VM
+    parity, question 11). The tree-kill probe has run (no shield, section 1.3). Risk High (install). Proof: machine setup on a fresh Ubuntu 24.04 VM
     with the delegation drop-in ends with no problems and the lock status shows S1; separately,
     machine setup in a default Docker container probes to its lower tier and the lock status
     shows it as such (setup warns that it is in a container). No proof claims strong containment
@@ -742,6 +806,50 @@ Creating the VM is an owner hand step, drafted only when slice 1 is ready for it
 Slices 9 to 11 and 13 can run in parallel after slice 7 (slice 9 touches lock/store.py, so it
 does not overlap another lock slice); the others are in order.
 
+### 8.1 Running tests on the reference VM
+
+The reference VM is the Hyper-V guest `kit-linux-ref` on the owner's machine: Ubuntu, 4 vCPUs,
+user `kitvm`, reached by ssh with the key `~/.ssh/kit-linux-ref_ed25519` and its host key pinned
+under the alias `kit-linux-ref`. Starting or stopping it is the PM's call; a worker that finds it
+off, or ssh refusing the key, stops and reports. Its address changes at each boot, so read it from
+its adapter (PowerShell; ssh's BatchMode makes a missing key fail at once rather than prompt):
+
+```
+$m = (Get-VMNetworkAdapter -VMName kit-linux-ref).MacAddress -replace '(..)(?!$)', '$1-'
+$ip = (Get-NetNeighbor -LinkLayerAddress $m | ? AddressFamily -eq IPv4).IPAddress
+$o = @('-o','HostKeyAlias=kit-linux-ref','-o','StrictHostKeyChecking=yes','-o','BatchMode=yes',
+       '-i',"$env:USERPROFILE\.ssh\kit-linux-ref_ed25519")
+$vm = $o + "kitvm@$ip"
+```
+
+1. Sync a commit, never the working tree, to a folder of its own (`<name>`: your slug):
+   `git -C <worktree> archive --format=tar -o <scratch>\<name>.tar <rev>`;
+   `scp @o <scratch>\<name>.tar "kitvm@${ip}:kit-runs/"`;
+   `ssh @vm "cd ~/kit-runs && rm -rf <name> && mkdir <name> && tar -xf <name>.tar -C <name> && rm <name>.tar"`.
+2. Run named tests under the host's machine lock. The VM is outside the lock's view; its 4 vCPUs
+   are two of the host's cpu slots, so the run is `engine-test`, and the resource keeps two VM
+   runs from sharing the VM:
+   `python <kit>/tools/machine_lock.py run --repo <repo> --slug <slug> --kind engine-test --resource vm:kit-linux-ref -- ssh @vm "cd ~/kit-runs/<name> && python3 -m unittest -v <module>[.<Class>] ..." > <scratch>\<log> 2>&1`
+   (in PowerShell, `@vm` splats; write the ssh options out in Git Bash). The containment tier the
+   tests saw: `python3 -c "from kitlib.platform.linux import contain; print(contain.probe().text)"`
+   in the same folder.
+3. Collect: the host log is the run's whole output; read it when the run ends. Then
+   `ssh @vm "rm -rf ~/kit-runs/<name>; systemctl --user list-units --all --no-legend 'pmkit-*'; pgrep -u kitvm -af python3"`
+   removes the folder and shows any unit or process a test left behind (report one, never
+   leave it running).
+
+The tree-kill probe (section 1.3), to run again on a new Claude Code: its scripts are in
+`~/ccprobe` on the VM (`probe.sh <scenario>`, `all.sh` for every one), and a Linux claude in
+`~/ccinstall`. `mock.py` is a scripted stand-in for the Messages API on 127.0.0.1
+(`ANTHROPIC_BASE_URL`, a fake key, a fresh HOME), so claude runs one Bash call with no account.
+The call starts `tree.py`: P, the shell's child; A, a child of P in its group; B, a child of P in
+a session of its own; C, double forked away. P, A and B ignore SIGTERM, SIGINT and SIGHUP, and
+all four write beats and the signals they get. Scenarios: `finished`, `timeout` (moved to the
+background), `bgexit`, `esc` (Escape in tmux), `fgterm` and `fgint` (the signal to claude),
+`bgkill` and `timeoutkill` (TaskStop, found by ToolSearch). claude runs under
+`strace -f -tt -e trace=kill,tkill,tgkill,pidfd_send_signal,pidfd_open,setsid,setpgid,execve -e signal=none`;
+the report says which members kept beating after the call ended.
+
 ## 9. Risks and unknowns
 
 - Unknown: whether `from ctypes import wintypes` imports on Linux on the kit's Python (it raised
@@ -749,9 +857,10 @@ does not overlap another lock slice); the others are in order.
   modules of section 1.1 (rule 3).
 - Unknown: Claude Code's Linux messaging address, its hook interpreter lookup, its managed
   settings path and its session file fields; slice 15 and 12 probe first.
-- Unknown: whether Claude Code on Linux kills a tool call's process tree by pid when it ends the
-  call, as it does on Windows (the reason for the pid shield). Sections 1.3 and 2.2 infer it does
-  not; the tree-kill probe record settles it on a Linux box, required before slice 14.
+- Settled (the tree-kill probe, on the reference VM with Claude Code 2.1.312): Claude Code on
+  Linux kills no finished call's tree, and kills a stopped call's live tree by pid from a fresh
+  listing, so no pid shield is needed (section 1.3). A later Claude Code may change it; section
+  8.1 gives the probe's design to run again.
 - Unknown (CI phase): how the owner's self-hosted runner delegates cgroups to the runner user.
 - Unknown: the containment research of section 2.3 is read from documentation; slice 5 probes
   each tier on a real box (whether `AllowedCPUs` has an effect without cpuset delegation, whether

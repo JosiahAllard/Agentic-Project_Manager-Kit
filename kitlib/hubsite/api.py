@@ -5,7 +5,8 @@ hub site design, section 2 "HTTP API" and section 9).
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT, ANY, APPROVER or LOCK_WRITE: who may call it ("Roles", "Machine lock").
   Api(store, views=None, clock=None, session_keys=None, now=None, approval_key=None,
-      checkout=None, lock=None, repo_name=None, schedule_repos=None, tick_seen=None)
+      checkout=None, lock=None, repo_name=None, schedule_repos=None, tick_seen=None,
+      kit_key=None, kit_blob=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
                    agent_words=False, strong=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
@@ -53,7 +54,7 @@ shows Approve and Deny as usable; the decide route checks the role itself all th
 
 Pages. POST pages (AGENT) publishes a page: the card `pages/<id>` and its body `page_html/<id>`.
 The body is {id, title, html, repo?, from?, summary?, refs?, if_version?}. The id is the
-caller's (a document id that holds no hub item's or ruling's id, `[QMTPSAR]-<digits>` with no
+caller's (a document id that holds no hub item's or ruling's id, `[QMTPSARE]-<digits>` with no
 letter or digit either side, anywhere, so a ref that names a page is never read as an item);
 html is judged by kitlib.hubsite.pagecheck (at most PAGE_HTML_MAX bytes of UTF-8, no script, no
 outside link or load, no unrendered Mermaid), and a refusal is `invalid`, field html, with
@@ -117,6 +118,35 @@ the optional lint_runs view: ledger its three ledger counts (LEDGER_COUNTS) or n
 skip marker's {reason, at} only where its `at` is later than the run's `started` and both parse,
 else null (_lint_runs); no view, or one that fails, is an empty list.
 
+Skill edits (docs/action-hub.md "skill_edits/E-NNN"). The owner writes a new text for one kit
+skill's source, content/skills/<name>/SKILL.md, and an agent commits it; the hub writes no
+repository. GET skills/{name}/source (ANY) gives {name, text, blob}: the whole SKILL.md of a
+listed skill as this hub serves it (the skill_source view; CRLF read as LF) and the git blob id
+of that text. Only the owner writes an edit, as only the owner writes a story (POST stories,
+stories/{id}/withdraw, to_pm and finding_marks are OWNER routes too): POST skill_edits {skill,
+text, submit?}, POST skill_edits/{id}/edit {text?, submit?, if_version} and POST
+skill_edits/{id}/withdraw {if_version?} are OWNER, so an agent's key is refused `forbidden`, field
+role, before the body is read, and nothing is written. An edit is draft, or submitted with
+`submit`; base_blob is the blob of the source the hub served when it was written, so it can lag
+the kit's main. The text is checked by kitlib.hubsite.skilledits.why_not: at most MAX_BYTES of
+UTF-8, no NUL, and front matter whose `name:` is the source's (an edit never renames a skill).
+Only a draft, superseded or failed edit changes; a superseded or failed one is put on the source
+at its source_blob when kit_text reads that blob (the text GET skill_edits/{id} shows the owner),
+else on the served source as it is now; its base_blob is that blob. Submitting when base_blob is
+neither the served source's blob nor the blob on main (kit_blob) makes it superseded, with
+source_blob the blob on main (the served blob when kit_blob reads none), for the owner to re-apply.
+POST skill_edits/{id}/done {branch, blob, if_version} and POST skill_edits/{id}/fail {why,
+current_blob?, if_version} are AGENT, and only for a submitted edit: done refuses a blob that is
+not git_blob of the edit's text as UTF-8, and it reads the blob of the source on `branch` in
+the kit checkout itself (the Api's kit_blob) and refuses one it cannot read or that is not that
+blob (field branch), so an agent cannot mark committed a text it never wrote; with no kit_blob it
+reads nothing, so done is refused. fail with a current_blob
+that is not base_blob (the worker's check against main) makes the edit superseded, else failed.
+GET skill_edits (ANY, status) lists the edits, GET skill_edits/{id} (ANY) gives {item, source}:
+source is {text, blob} at a superseded or failed edit's source_blob when kit_text reads it, else
+null. A
+submitted edit is a pending item of kind `skill_edit` ("Routes").
+
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
 cannot post its answer). status, the time stamps and a to-do's `from: you` are set here from the
@@ -170,6 +200,8 @@ is null and `unavailable` maps its name to that same reason:
   backlog(repo='', state='', fresh=False)   [{repo, fetched_at, items}]
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
+  skills()                                  {available, skills|reason}: each skill's name and description
+  skill(name)                               one skill with its body (GET skills/{name}); not_found
   findings()                                the lint's rows (GET findings; not in GET snapshot)
   lint_runs()                               [{repo, started, ledger, skip}]: each repo's last
                                             result's started and ledger, and its skip marker
@@ -307,7 +339,9 @@ lists the items routed to `pm`, every answered question, whoever it is from (the
 ruling), and every decided approval; a filed question only when it is routed to `pm` (its asker
 reads it). An approval has no `from`: it is for the coordinator of its
 repository, the session key named as the configured repository whose origin remote is the
-approval's `repo` (Api's repo_name), while that key is in sessions.json, else for `pm`. A wait
+approval's `repo` (Api's repo_name), while that key is in sessions.json, else for `pm`. A
+skill edit has no `from` either: it is for the kit's coordinator, the key Api's kit_key gives
+(kit_session_key), on the same terms. A wait
 `for=pm` is also woken when an item's route turns to `pm` with no write. All of
 this lives in this Api object: a new Api (a server restart) routes every item to `pm` until its
 creator waits again. As for PM seen, no lock is taken: each note is one dict step, a dict is
@@ -332,6 +366,7 @@ from kitlib.launcher import settings as lsettings, state as lstate
 
 from . import pagecheck
 from . import schema
+from . import skilledits
 from . import todosteps
 from .store import PAGES_LOCK, HubError
 
@@ -364,7 +399,7 @@ TUNNEL_VIA = 'tunnel'               # the tunnel listener's via (kitlib.hubsite.
 ACK_WINDOW_S = 30 * 60              # a creator's time to handle an item handed to it ("Routes")
 REACH_GRACE_S = WAIT_MAX_S + 30     # a key is reachable this long after its last wait ("Routes")
 ROUTE_SLACK_S = 0.01                # a PM wait looks again this long after a route's turn is due
-VIEWS = ('backlog', 'completed', 'notices', 'repos', 'usage', 'agents')
+VIEWS = ('backlog', 'completed', 'notices', 'repos', 'usage', 'agents', 'skills')
 OWNER_FROM = 'you'                  # a to-do's or a story's `from` when the owner wrote it
 AGENT_FROM = 'pm'                   # a to-do's `from` when an agent gives none
 AGENT_STORY_STATUSES = ('review', 'questions', 'added', 'declined')
@@ -382,8 +417,8 @@ _ID_SPLIT = re.compile(r'([0-9]+)')
 _NAME = re.compile(r'[\x21-\x7e]+(?: [\x21-\x7e]+)*')
 _SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
 # A hub item's id or a ruling's anywhere in a page id ("Pages"): hubvalidate._REF's pattern, plus
-# A and R and the per-repo ledger id H-<repo>-nnnn, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
-_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])(?:[QMTPSAR]-\d+|H-[a-z0-9][a-z0-9-]*-\d+)(?![A-Za-z0-9])', re.I)
+# A, E and R and the per-repo ledger id H-<repo>-nnnn, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
+_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])(?:[QMTPSARE]-\d+|H-[a-z0-9][a-z0-9-]*-\d+)(?![A-Za-z0-9])', re.I)
 PAGE_HTML_MAX = pagecheck.MAX_BYTES
 
 
@@ -599,12 +634,21 @@ class Api(object):
     machine config's launcher.repos as [(label, main checkout, name)] (default:
     launcher_checkouts), `tick_seen()` the ISO time the automatic tasks' tick was last seen or
     None (default: tick_last_seen), `tick_state()` the tick's records by schedule key (default:
-    tick_run_state); all are read on each use ("Schedules")."""
+    tick_run_state); all are read on each use ("Schedules"). `kit_key()` gives the session key
+    of the kit repository's coordinator, '' when none is known (default), so a submitted skill
+    edit is the PM's; `kit_blob(branch, path)` gives the blob id of `path` on `branch` in this
+    machine's kit checkout, or None when git cannot read it; with none given (default) every
+    read is None, so the done route is refused; `kit_text(blob)` gives the text of that blob in
+    the kit checkout (CRLF read as LF), or None (default: always None) ("Skill edits")."""
 
     def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
                  approval_key=None, checkout=None, lock=None, repo_name=None,
-                 schedule_repos=None, tick_seen=None, tick_state=None):
+                 schedule_repos=None, tick_seen=None, tick_state=None, kit_key=None,
+                 kit_blob=None, kit_text=None):
         self.store = store
+        self.kit_text = kit_text or (lambda blob: None)
+        self.kit_key = kit_key or (lambda: '')
+        self.kit_blob = kit_blob or (lambda branch, path: None)
         self.tick_state = tick_state or tick_run_state
         self.schedule_repos = schedule_repos or launcher_checkouts
         self.tick_seen = tick_seen or tick_last_seen
@@ -782,6 +826,15 @@ class Api(object):
         except Exception as e:      # noqa: BLE001 - unreadable: only the PM's key is known
             return {AGENT_FROM}, _reason(e)
 
+    def kit_session_key(self):
+        """kit_key(): the kit coordinator's session key, '' when it fails or gives no string
+        ("Skill edits")."""
+        try:
+            key = self.kit_key()
+        except Exception:           # noqa: BLE001 - no kit coordinator known: the PM hears it
+            key = ''
+        return key if isinstance(key, str) else ''
+
     def repo_key(self, repo):
         """The session key of the coordinator of the repository whose remote is the repo_id
         `repo`: the configured repository's name (a repo's main coordinator is keyed by its name
@@ -823,6 +876,8 @@ class Api(object):
                 if repo not in repo_keys:
                     repo_keys[repo] = self.repo_key(repo)
                 sender = repo_keys[repo]
+            elif d['kind'] == 'skill_edit':
+                sender = self.kit_session_key()     # the kit's coordinator commits it
             mine = sender and sender not in (AGENT_FROM, OWNER_FROM)
             if mine and keys is None:
                 keys = self.session_keys()          # read once, and only when it can matter
@@ -972,6 +1027,27 @@ def questions_list(api, req):
 RECORD_SHAPE = 'record is {"repo": <a configured repository>, "id": <one of its record ids>}'
 
 
+def _holders(api, repo, rid):
+    """The other configured repo names whose backlog has the record `rid` (a kit record is keyed
+    on the PM repo's folder name, not the kit repo's own), for the not_found refusal. Best
+    effort: a view that is missing or fails names none."""
+    try:
+        names = [r.get('name') for r in api._view('repos')() if isinstance(r, dict)]
+    except Exception:       # noqa: BLE001 - a view is another module's code
+        return []
+    held = []
+    for name in names:
+        if not isinstance(name, str) or name.lower() == repo.lower():
+            continue
+        try:
+            got = api._view('record')(name, rid)
+        except Exception:   # noqa: BLE001
+            continue
+        if isinstance(got, dict) and got.get('where') == 'open':
+            held.append(name)
+    return held
+
+
 def _bound(api, value):
     """The `record` a question is bound to, {repo, id}, after the configured repository's
     backlog was read now through the `record` view (docs/action-hub.md "questions/Q-NNN"): repo
@@ -997,8 +1073,10 @@ def _bound(api, value):
             raise HubError('not_found', 'record names repo %s, which is not a repository the '
                            'hub has configured' % ascii(repo), 'record')
         if e.code == 'not_found':
-            raise HubError('not_found', "record %s: repo %s's backlog has no record %s"
-                           % (named, repo, rid), 'record')
+            held = _holders(api, repo, rid)
+            raise HubError('not_found', "record %s: repo %s's backlog has no record %s%s"
+                           % (named, repo, rid, '; the repo key that holds it is %s' % ', '.join(held)
+                              if held else ''), 'record')
         raise HubError('unavailable', 'record %s could not be checked: %s; ask again, or ask '
                        'without a record' % (named, e.message), 'record')
     except Exception as e:          # noqa: BLE001 - a view is another module's code
@@ -2025,7 +2103,7 @@ def completed(api, req):
 # record id may be (kitlib.hubsite.backlog checks each again, more narrowly). The refusal is a
 # fixed phrase: it never repeats the segment.
 _SEGMENT = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
-SEGMENT_SAYS = {'repo': 'not a repository name', 'id': 'not a record id'}
+SEGMENT_SAYS = {'repo': 'not a repository name', 'id': 'not a record id', 'name': 'not a skill name'}
 
 
 def _segment(req, name):
@@ -2046,6 +2124,15 @@ def _record_view(api, name, *args):
         raise
     except Exception as e:      # noqa: BLE001 - a view is another module's code
         raise HubError('unavailable', 'the %s view failed: %s' % (name, _reason(e)), 'views')
+
+
+def skill_get(api, req):
+    return _record_view(api, 'skill', _segment(req, 'name'))
+
+
+def skill_source_get(api, req):
+    """The skill's whole SKILL.md and its blob, what the owner edits ("Skill edits")."""
+    return _skill_source(api, _segment(req, 'name'))
 
 
 def record(api, req):
@@ -2667,6 +2754,191 @@ def _act_note(api, b, req):
                                                                       'fix'))
 
 
+# ---- skill edits (module docstring "Skill edits")
+SKILL_EDIT_CHANGE = ('draft', 'superseded', 'failed')     # the owner may change the text
+SKILL_EDIT_WITHDRAW = ('draft', 'submitted', 'superseded', 'failed')
+
+
+def _skill_name(b):
+    v = _text(b, 'skill')
+    if not isinstance(v, str) or not _SEGMENT.match(v) or '..' in v:
+        raise HubError('invalid', SEGMENT_SAYS['name'], 'skill')
+    return v
+
+
+def _skill_text(b, name, source):
+    """The body's text, CRLF read as LF, `invalid` (field text) where skilledits.why_not says
+    it cannot replace the skill source `source` (the skill_source view's answer)."""
+    text = _text(b, 'text')
+    text = skilledits.normal(text) if isinstance(text, str) else text
+    why = skilledits.why_not(text, source.get('text'), name)
+    if why is not None:
+        raise _invalid(why, 'text')
+    return text
+
+
+def _skill_source(api, name):
+    """The skill_source view's answer for the listed skill `name`; its not_found is the answer
+    (a skill that is not listed), anything else it raises is `unavailable`."""
+    src = _record_view(api, 'skill_source', name)
+    if not isinstance(src, dict) or not skilledits.is_blob(src.get('blob')):
+        raise HubError('unavailable', 'the skill_source view gave no blob', 'views')
+    return src
+
+
+def _blob_field(b, name):
+    v = _text(b, name)
+    if v is not None and not skilledits.is_blob(v):
+        raise _invalid('%s is a git blob id: 40 lowercase hex digits' % name, name)
+    return v
+
+
+def skill_edits_list(api, req):
+    return {'items': api.items('skill_edits', req)}
+
+
+def _source_at(api, d):
+    """{text, blob}: the source text at a superseded or failed edit's source_blob, read with
+    kit_text, or None (another status, no source_blob, or kit_text cannot read it)."""
+    blob = d.get('source_blob')
+    if d.get('status') not in ('superseded', 'failed') or not skilledits.is_blob(blob):
+        return None
+    try:
+        text = api.kit_text(blob)
+    except Exception:               # noqa: BLE001 - git could not be asked: not read
+        text = None
+    return {'text': text, 'blob': blob} if isinstance(text, str) else None
+
+
+def _main_blob(api, name):
+    """The blob of skill `name`'s source on main in the kit checkout (kit_blob), or None."""
+    try:
+        got = api.kit_blob('main', skilledits.source_path(name))
+    except Exception:               # noqa: BLE001 - git could not be asked: not read
+        return None
+    return got if skilledits.is_blob(got) else None
+
+
+def skill_edits_get(api, req):
+    doc_id = req.params['id']
+    d = api.doc('skill_edits', doc_id)
+    d['id'] = doc_id
+    return {'item': d, 'source': _source_at(api, d)}
+
+
+def skill_edits_add(api, req):
+    b = _fields(req, ('skill', 'text', 'submit'), required=('skill', 'text'), flags=('submit',))
+    name = _skill_name(b)
+    src = _skill_source(api, name)
+    text = _skill_text(b, name, src)
+    now = api.clock()
+    fields = {'status': 'draft', 'skill': name, 'text': text, 'base_blob': src['blob'],
+              'created_at': now}
+    if _flag(b, 'submit', False):
+        fields.update(status='submitted', submitted_at=now)
+    return api.add('skill_edits', fields, req, {'status': fields['status']})
+
+
+def skill_edits_edit(api, req):
+    b = _fields(req, ('text', 'submit', 'if_version'), required=('if_version',),
+                flags=('submit',))
+    _pin(b, required=True)
+    doc_id = req.params['id']
+    d = api.doc('skill_edits', doc_id, b)
+    status = d.get('status')
+    if status not in SKILL_EDIT_CHANGE:
+        raise _invalid('%s is %s: only a draft, superseded or failed edit can change'
+                       % (doc_id, status), 'status')
+    name = d.get('skill')
+    src = _skill_source(api, name)
+    if b.get('text') is None:
+        b['text'] = d.get('text')
+    text = _skill_text(b, name, src)
+    # a draft keeps the source it was written on; a superseded or failed edit is put on the
+    # source the owner was shown to re-apply onto: its source_blob's text when the hub reads it,
+    # else the source as served now
+    if status == 'draft':
+        base = d.get('base_blob')
+    else:
+        at = _source_at(api, d)
+        base = at['blob'] if at else src['blob']
+    changes = {'text': text, 'base_blob': base, 'status': 'draft', 'source_blob': None,
+               'why': None}
+    if _flag(b, 'submit', False):
+        main = _main_blob(api, name) if base != src['blob'] else None
+        if base != src['blob'] and base != main:
+            # the newest source known: main's when the hub reads it, else the served copy
+            changes.update(status='superseded', source_blob=main or src['blob'])
+        else:
+            changes.update(status='submitted', submitted_at=api.clock())
+    return api.change('skill_edits', doc_id, d, changes, req, {'status': changes['status']})
+
+
+def skill_edits_withdraw(api, req):
+    b = _fields(req, ('if_version',))
+    _pin(b)
+    doc_id = req.params['id']
+    d = api.doc('skill_edits', doc_id, b)
+    if d.get('status') not in SKILL_EDIT_WITHDRAW:
+        raise _invalid('%s is %s: a committed or withdrawn edit cannot be withdrawn'
+                       % (doc_id, d.get('status')), 'status')
+    return api.change('skill_edits', doc_id, d, {'status': 'withdrawn', 'closed_at': api.clock()},
+                      req, {'status': 'withdrawn'})
+
+
+def _submitted(api, b, req):
+    """(id, document) of the submitted skill edit the body's if_version pins; `invalid` (field
+    status) for any other status."""
+    _pin(b, required=True)
+    doc_id = req.params['id']
+    d = api.doc('skill_edits', doc_id, b)
+    if d.get('status') != 'submitted':
+        raise _invalid('%s is %s: only a submitted edit is committed or failed'
+                       % (doc_id, d.get('status')), 'status')
+    return doc_id, d
+
+
+def skill_edits_done(api, req):
+    b = _fields(req, ('branch', 'blob', 'if_version'), required=('branch', 'blob', 'if_version'))
+    branch = _text(b, 'branch')
+    if not skilledits.BRANCH.match(branch) or '..' in branch or branch.endswith(('/', '.lock')):
+        raise _invalid('branch is a branch name, not %r' % branch, 'branch')
+    blob = _blob_field(b, 'blob')
+    doc_id, d = _submitted(api, b, req)
+    text = d.get('text') if isinstance(d.get('text'), str) else ''
+    want = skilledits.git_blob(text.encode('utf-8'))
+    if blob != want:
+        raise _invalid("blob %s is not the owner's text (%s): commit the text `hub.py skill-edit "
+                       "show %s --out FILE` writes, byte for byte" % (blob, want, doc_id), 'blob')
+    path = skilledits.source_path(d.get('skill'))
+    try:
+        got = api.kit_blob(branch, path)
+    except Exception:               # noqa: BLE001 - git could not be asked: not verified
+        got = None
+    if got is None:
+        raise _invalid('the hub could not read %s on branch %s in the kit checkout'
+                       % (path, branch), 'branch')
+    if got != want:
+        raise _invalid("branch %s holds %s as blob %s, not the owner's text (%s)"
+                       % (branch, path, got, want), 'branch')
+    return api.change('skill_edits', doc_id, d, {'status': 'committed', 'branch': branch,
+                                                 'blob': blob, 'done_at': api.clock()},
+                      req, {'status': 'committed'})
+
+
+def skill_edits_fail(api, req):
+    b = _fields(req, ('why', 'current_blob', 'if_version'), required=('why', 'if_version'))
+    why = _text(b, 'why')
+    if not why.strip():
+        raise _invalid('why is required: what stopped the commit', 'why')
+    current = _blob_field(b, 'current_blob')
+    doc_id, d = _submitted(api, b, req)
+    changes = {'status': 'failed', 'why': why, 'closed_at': api.clock()}
+    if current is not None and current != d.get('base_blob'):
+        changes.update(status='superseded', source_blob=current)
+    return api.change('skill_edits', doc_id, d, changes, req, {'status': changes['status']})
+
+
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
     docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
@@ -2922,6 +3194,16 @@ ROUTES = (
     _r('GET', '/repos', ANY, _listing('repos')),
     _r('GET', '/usage', ANY, _listing('usage')),
     _r('GET', '/agents', ANY, _listing('agents')),
+    _r('GET', '/skills', ANY, _listing('skills')),
+    _r('GET', '/skills/{name}', ANY, skill_get),
+    _r('GET', '/skills/{name}/source', ANY, skill_source_get),
+    _r('GET', '/skill_edits', ANY, skill_edits_list),
+    _r('POST', '/skill_edits', OWNER, skill_edits_add),
+    _r('GET', '/skill_edits/{id}', ANY, skill_edits_get),
+    _r('POST', '/skill_edits/{id}/edit', OWNER, skill_edits_edit),
+    _r('POST', '/skill_edits/{id}/withdraw', OWNER, skill_edits_withdraw),
+    _r('POST', '/skill_edits/{id}/done', AGENT, skill_edits_done),
+    _r('POST', '/skill_edits/{id}/fail', AGENT, skill_edits_fail),
     _r('GET', '/pending', ANY, pending),
     _r('GET', '/wait', ANY, wait),
     _r('GET', '/snapshot', ANY, snapshot),

@@ -46,8 +46,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    **in your scratch folder** (from `<kit>/templates/common/coordinator-profile.TEMPLATE.md`
    and `<kit>/templates/common/agent-profile.TEMPLATE.md`); writing into `{{owner_folder}}` is
    owner-only. No work waits for a profile.
-3. Check in with the project manager at once: `{{tool:list-agents}}`, find the "Project Manager" session
-   (or pm-session, when the launcher resumed it; a local or Remote Control row; it may be on another account) and `{{tool:message}}` it: repo,
+3. Check in with the project manager at once: `{{tool:list-agents}}`, find the PM session your start context names
+   (else "Project Manager" or pm-session; a local or Remote Control row; it may be on another account) and `{{tool:message}}` it: repo,
    account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
    kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
 4. The start context's `rulebooks` line names the standing rules and the command that reads them.
@@ -101,7 +101,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   its own background gate is waiting, not in flight, and wakes when the gate exits (<kit>/docs/gate.md
   "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its `wait-result`
   command is yours to keep running (skill `land-branch`). A gate whose
-  process is gone with no report -> fresh agent re-gates the branch (`--full` for a strict path, else the default gate, `--full` until the base's gate config names smoke steps). Nothing
+  process is gone with no report -> fresh agent re-gates the branch (the final gate `<kit>/docs/gate.md` "The final gate" names (when unsure, `--full`)). Nothing
   re-wakes you later.
 - Nothing startable left in the set and 1 or 2 items being built -> wind down (skill
   session-handoff): review what you have, then write into the state note every LAND verdict

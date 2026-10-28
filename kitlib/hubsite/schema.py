@@ -24,7 +24,7 @@ import re
 from kitlib import hubvalidate
 
 COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'pages', 'page_html', 'repos',
-               'approvals', 'schedules', 'finding_marks')
+               'approvals', 'schedules', 'finding_marks', 'skill_edits')
 ID_PREFIX = {coll: prefix for prefix, coll in hubvalidate.REF_COLLECTIONS.items()}
 STORE_KEYS = ('version', 'updated_at')
 CODE = 'schema-field'
@@ -70,6 +70,12 @@ FIELDS = {
     'finding_marks': (('status',), {
         'status': _STR, 'repo': _STR, 'check': _STR, 'target': _STR, 'text': _STR, 'note': _STR,
         'marked_at': _STR}),
+    # kitlib.hubsite.api, "Skill edits": the owner's new text for one kit skill's SKILL.md, which an
+    # agent commits; base_blob is the git blob of the source the owner edited
+    'skill_edits': (('status', 'skill', 'text', 'base_blob'), {
+        'status': _STR, 'skill': _STR, 'text': _STR, 'base_blob': _STR, 'created_at': _STR,
+        'submitted_at': _STR, 'done_at': _STR, 'branch': _STR, 'blob': _STR,
+        'source_blob': _STR, 'why': _STR, 'closed_at': _STR}),
 }
 KINDS = {'to_pm': ('question', 'fyi', 'act')}
 # {collection: {kind: more required fields}}: a document of such a collection needs its kind's

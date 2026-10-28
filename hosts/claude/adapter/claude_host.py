@@ -2,7 +2,8 @@
 
 Everything here knows how Claude Code lays out its files: the ~/.claude* config folders, their
 projects/<folder>/<id>.jsonl transcripts with subagent transcripts under <id>/, the
-"custom-title" record that names a session, and the machine-lock alerts folder under ~/.claude.
+"custom-title" record that names a session, the session registry's bridgeSessionId field (the
+Remote Control link), and the machine-lock alerts folder under ~/.claude.
 Moved here from kitlib/pmwatch by the host split (step 1); step 2 puts it behind SessionHost.
 Nothing in kitlib.pmwatch reads these paths or formats.
 """
@@ -84,6 +85,18 @@ def newest_transcript(name, roots):
                         continue
                     newest = m if newest is None or m > newest else newest
     return newest
+
+
+def rc_records(dirs):
+    """Claude's session registry records (<config folder>/sessions/<pid>.json, read by
+    kitlib.launcher.pipes) in the form kitlib.pmwatch.rc_events reads: {name, pid, proc_start,
+    started_ms, linked}. linked is None when the record has no bridgeSessionId key, else whether
+    it holds a Remote Control bridge session id."""
+    from kitlib.launcher import pipes
+    return [{"name": rec.get("name"), "pid": rec.get("pid"), "proc_start": pipes.proc_start(rec),
+             "started_ms": rec.get("startedAt"),
+             "linked": bool(rec["bridgeSessionId"]) if "bridgeSessionId" in rec else None}
+            for _d, rec in pipes.records(dirs)]
 
 
 def newest_finder(roots=None):

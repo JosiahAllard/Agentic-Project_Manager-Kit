@@ -30,6 +30,21 @@ PM_NAME = stop.PM_RC_NAME
 PM_DESKTOP_NAME = 'Project Manager'
 PM_REF = ("the PM (ListAgents shows its session as '%s' in the desktop app, or '%s' when the launcher resumed it)"
           % (PM_DESKTOP_NAME, PM_NAME))
+PM_REF_RELAUNCHED = ("the PM (ListAgents shows its session as '%s', the name launch.py pm-relaunch gave it; else '%s' "
+                     "or '%s')")
+
+
+def pm_ref(settings):
+    """How a first message names the PM: PM_REF, or, when coordinators.json's pm_name is set (not a
+    placeholder), that name first (pm-relaunch's fork). An unreadable coordinators.json is PM_REF."""
+    try:
+        cfg = state.read_coordinators(settings) or {}
+    except (LaunchError, OSError):
+        return PM_REF
+    name = cfg.get('pm_name') if isinstance(cfg, dict) else None
+    if not isinstance(name, str) or not name or name.startswith('<'):
+        return PM_REF
+    return PM_REF_RELAUNCHED % (name, PM_DESKTOP_NAME, PM_NAME)
 DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with %s, '
                   'then continue the queue in the state note.' % PM_REF)
 HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
@@ -37,12 +52,12 @@ HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, 
              'absolute path, is read-only to you.')
 # the roles --home-worktree may start in a home: a session in a linked worktree may write only that
 # worktree and temp (docs/guard.md "Write jail"). A consultant's notes file is in agent temp
-# (consultant_notes_path); a coordinator's state note is still in the main checkout, so a coordinator
-# would be refused its writes (docs/launcher.md "The home worktree")
+# (consultant_notes_path); a coordinator's state note is in agent temp too (COORDINATOR_FOLDER), so the
+# note is not a reason to refuse one; only these two roles are given a home (docs/launcher.md "The home worktree")
 HOME_ROLES = (window.DEEP_WORKER, window.CONSULTANT)
-HOME_REFUSED = ('--home-worktree is for deep-worker and consultant sessions only: a %s session started in a home '
-                "worktree cannot write its files in the main checkout (the guard's write jail; a coordinator's "
-                'state note is still there); nothing was started.')
+HOME_REFUSED = ('--home-worktree is for deep-worker and consultant sessions only: a %s session may not be given a '
+                "home worktree; a coordinator's state note is in agent temp, not in the main checkout; nothing "
+                'was started.')
 AUTOCOMPACT = (100000, 1000000)  # the CLI's range for --autocompact
 SLUG = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}\Z')
 DEFAULT_AUTOCOMPACT = 200000   # a coordinator, another agent or a plain session; deep and consultant set their own
@@ -167,6 +182,8 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
                   'with %s, and begin.' % (brief, PM_REF)) if brief else default_prompt
     elif brief:
         prompt = 'Read your standing brief %s first. ' % brief + prompt
+    if PM_REF in prompt:                       # every first message names the PM as PM_REF: the live name here
+        prompt = prompt.replace(PM_REF, pm_ref(settings))
     if predecessor:
         prompt = predecessor_text(predecessor, role == window.COORDINATOR) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))

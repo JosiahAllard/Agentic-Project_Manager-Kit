@@ -373,7 +373,7 @@ class TheTemplate(RecordCase):
         self.assertEqual(got["blocked_on"], {"plain": list(brecord.BLOCKED_ON_PLAIN),
                                              "prefixes": list(brecord.BLOCKED_ON_PREFIXES)})
         self.assertEqual(got["efforts"], ["s", "m", "l", "-"])
-        self.assertIn(brecord.OWNER_PRIORITY, got["priorities"])
+        self.assertNotIn(brecord.RETIRED_PRIORITY, got["priorities"])
         self.assertEqual(got["priority_by"], ["owner", "pm", "agent", "-"])
 
     def test_the_template_follows_the_repositorys_id_grammar_and_phases(self):

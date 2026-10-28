@@ -592,7 +592,8 @@ OWNER_LOCK_WHY = ('owner-only lock tools are run by the owner, not agents; the l
 def tool_run(inv):
     """(name, Words) for the file the invocation `inv` runs, or None: its program's base name
     (commands.base_name) and arguments; python's script (its first operand) or -m module (as
-    <its last part>.py) and the words after it; PowerShell's .ps1 script; the file an opener
+    <its last part>.py) and the words after it; PowerShell's .ps1 script; a POSIX shell's script
+    (its first operand; -c text and -s standard input are None); the file an opener
     (Invoke-Item, explorer, Git Bash's start) opens. The kit command (`kit X`, tools/kit.py X,
     -m tools.kit X) is read as the tool X it runs (kit_run). python -c, standard input and a
     program or script the text does not show are None: the guard reads what a line runs, not
@@ -641,6 +642,25 @@ def _tool_run(inv):
             if a.text.lower().endswith('.ps1') and not a.dyn:
                 return cm.base_name(a.text), args[k + 1:]
         return None
+    if name in cm.BASH_SHELLS:                          # sh [opts] script.sh args (installer/machine-setup.sh)
+        k = 0
+        while k < len(args):
+            t = args[k].text
+            if t in cm.BASH_VALUE_OPTS:
+                k += 2
+                continue
+            if t in ('-', '--'):
+                k += 1
+                break
+            if t[:1] in '-+' and len(t) > 1:
+                if t[:1] == '-' and not t.startswith('--') and ('c' in t[1:] or 's' in t[1:]):
+                    return None                         # -c text (the nested parse reads it), -s stdin
+                k += 1
+                continue
+            break
+        if k >= len(args) or args[k].dyn:
+            return None
+        return cm.base_name(args[k].text), args[k + 1:]
     if not PY_RUN_RE.match(name):
         return name, args
     k = 0
@@ -712,8 +732,10 @@ def lock_owner_write(words):
 # Machine setup's --apply writes the machine config, the owner's email among them (plan decision 27),
 # and the owner's email is what proves a commit the owner's (owner-only paths, owner-identity). An agent
 # that ran it could make its own address the owner's, so only the owner runs it to act. Its dry run stays
-# open. The entry points: tools/machine_setup.py and its PowerShell front ends.
-SETUP_SCRIPTS = {'machine_setup.py': 'py', 'machine-setup.ps1': 'ps', 'new-repo.ps1': 'ps'}
+# open. The entry points: tools/machine_setup.py, its PowerShell front ends and its Linux front end
+# installer/machine-setup.sh (run as a program or as a shell's script, tool_run; it takes --apply exactly).
+SETUP_SCRIPTS = {'machine_setup.py': 'py', 'machine-setup.ps1': 'ps', 'new-repo.ps1': 'ps',
+                 'machine-setup.sh': 'py'}
 # argparse takes a unique prefix of --apply (--ap..); PowerShell a prefix of -Apply, -Apply:$true too
 SETUP_APPLY = {'py': re.compile(r'^--ap(?:p(?:l(?:y)?)?)?(?:=.*)?$'),
                'ps': re.compile(r'(?i)^-a(?:p(?:p(?:l(?:y)?)?)?)?(?::.*)?$')}

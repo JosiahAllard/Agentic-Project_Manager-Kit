@@ -87,19 +87,17 @@ class PullCollision(StoreCase):
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', 'needed before the others'))
 
-    def test_a_minus_one_record_that_also_collides_is_never_pulled(self):
-        # pull-held refuses every role: a role that may collide does not release the hold by
-        # pulling it; the owner or the PM releases it with `set` first (docs/backlog.md "Owner
-        # gates")
-        self.seed(hold(), rec('MIN', priority='-1', owner_ask='which?',
-                              scope='kitlib/backlog/scope.py'))
+    def test_an_owner_held_record_that_also_collides_is_never_pulled(self):
+        # the owner's hold is `blocked_on: owner`: a role that may collide does not release it
+        # by pulling; the owner or the PM unblocks it first (docs/backlog.md "Owner gates")
+        self.seed(hold(), priced('MIN', state='blocked', blocked_on='owner', owner_ask='which?',
+                                 scope='kitlib/backlog/scope.py'))
         for may in (False, True):
             with self.assertRaises(Refusal) as cm:
                 self.verb('pull', 'MIN', reason='the owner said go', may_collide=may)
-            self.assertIn('set MIN --priority', str(cm.exception))
+            self.assertIn('Unblock it', str(cm.exception))
             r = self.get('MIN')
-            self.assertEqual((r.get('state'), r.get('priority'), r.get('hold_ruling')),
-                             ('open', '-1', None))
+            self.assertEqual((r.get('state'), r.get('blocked_on')), ('blocked', 'owner'))
 
     def test_a_pull_that_overlaps_a_record_on_the_callers_own_branch_pulls_plainly(self):
         # Bundling overlapping records onto one branch is not a

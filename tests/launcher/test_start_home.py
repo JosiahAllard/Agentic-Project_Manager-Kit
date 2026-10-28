@@ -160,7 +160,7 @@ class StartInHome(HomeBase):
 
 
 class OnlyDeepWorkersAndConsultants(HomeBase):
-    """A coordinator's state note lives in the main checkout, which a session in a linked worktree
+    """A coordinator and other roles work in the main checkout, which a session in a linked worktree
     may not write (docs/guard.md "Write jail"): refused, nothing made."""
 
     def assert_refused(self, role, call):
@@ -181,6 +181,11 @@ class OnlyDeepWorkersAndConsultants(HomeBase):
     def test_the_refusal_names_the_roles_that_may(self):
         self.assertIn('for deep-worker and consultant sessions only', start.HOME_REFUSED)
         self.assertEqual(start.HOME_ROLES, (window.DEEP_WORKER, window.CONSULTANT))
+
+    def test_the_refusal_says_where_the_state_note_is(self):
+        self.assertIn('may not be given a home worktree', start.HOME_REFUSED)
+        self.assertIn("a coordinator's state note is in agent temp, not in the main checkout", start.HOME_REFUSED)
+        self.assertIn('state note is in agent temp', start.HOME_REFUSED)
 
     def test_a_handoff_is_refused_before_any_successor_starts(self):
         self.h.write_state('sessions.json', {

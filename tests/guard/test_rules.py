@@ -935,6 +935,35 @@ class OwnerSetup(unittest.TestCase):
                     self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
                         dry, rules.tag('owner-tool', 'subagent' if sub else 'main'))), d.reason)
 
+    # installer/machine-setup.sh, the Linux front end: run by a shell or as the program, sudo too
+    SH_BLOCKED = [
+        ('bash', 'sh installer/machine-setup.sh --owner-email a@example.invalid --apply'),
+        ('bash', 'sudo sh /k/installer/machine-setup.sh --delegation --apply'),
+        ('bash', 'sudo -u root bash -x -o pipefail installer/machine-setup.sh --pm-repo /p --apply'),
+        ('bash', 'bash -- installer/machine-setup.sh --apply'),
+        ('bash', './installer/machine-setup.sh --apply'),
+        ('bash', '/bin/sh installer/machine-setup.sh --apply'),
+    ]
+    SH_ALLOWED = [
+        ('bash', 'sh installer/machine-setup.sh --owner-email a@example.invalid'),
+        ('bash', 'sudo sh installer/machine-setup.sh --delegation'),
+        ('bash', 'sh -n installer/machine-setup.sh'),
+        ('bash', 'cat installer/machine-setup.sh'),
+        ('bash', 'bash tools/other.sh --apply'),
+    ]
+
+    def test_the_linux_installer_is_the_owners_to_apply(self):
+        for shell, text in self.SH_BLOCKED:
+            with self.subTest(text):
+                d = self.run_one(shell, text, True)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
+                self.assertIn('machine-setup.sh --apply', d.reason)
+        for shell, text in self.SH_ALLOWED:
+            with self.subTest(text):
+                d = self.run_one(shell, text, True)
+                self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
+
     def test_the_owner_session_may(self):
         for shell, text in self.BLOCKED:
             with self.subTest(text):

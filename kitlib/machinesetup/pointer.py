@@ -2,17 +2,23 @@
 `HKLM\\SOFTWARE\\pm-kit` value `pm_repo` (kitlib.config.pointer), to the PM repository's work tree.
 
 The value is under HKLM, so --apply is refused unless the process is elevated; nothing elevates
-itself. A dry run prints the plan and the `reg add` that makes the same change by hand. The path
+itself. On Linux it is the root-owned file /etc/pm-kit/pointer (kitlib.platform.linux.paths
+MACHINE_POINTER), written as root (sudo) through a temp file, mode 0644; declining sudo, a note
+gives the line that writes the user's own pointer file. A dry run prints the plan and the `reg add`
+(on Linux the sudo write) that makes the same change by hand. The path
 is checked as the pointer's reader checks it (kitlib.config.pointer.check) before any write, so the
 pointer is never set to a value the reader would call BAD.
 """
 import os
+import shlex
 
+import kitlib.platform
 from kitlib.config import pointer as cpointer
 from kitlib.config import user
 from kitlib.git import repo
+from kitlib.platform.linux import paths as linux_paths
 
-from .common import Plan, kit_file
+from .common import Plan, kit_file, make_folder
 from . import settings
 
 SECTION = 'pointer'
@@ -33,12 +39,32 @@ class Registry(object):
 
     def write(self, value):
         if user.fenced():
-            raise RuntimeError('the kit\'s tests never write the registry (%s %s)'
-                               % (cpointer.KEY_NAME, cpointer.VALUE))
+            raise RuntimeError('the kit\'s tests never write the registry (%s)'
+                               % cpointer.where())
+        if kitlib.platform.NAME == 'linux':
+            return write_file(linux_paths.MACHINE_POINTER, value)
         import winreg
         with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, cpointer.KEY_PATH, 0,
                                 winreg.KEY_WRITE | winreg.KEY_WOW64_64KEY) as k:
             winreg.SetValueEx(k, cpointer.VALUE, 0, winreg.REG_SZ, value)
+
+
+def user_command(path):
+    """Linux: the shell line that writes the user's pointer file (USER_POINTER) to `path`."""
+    rel = '~/' + '/'.join(linux_paths.USER_POINTER)
+    return "mkdir -p %s && printf '%%s\\n' %s > %s" % (
+        '~/' + '/'.join(linux_paths.USER_POINTER[:-1]), shlex.quote(path), rel)
+
+
+def write_file(path, value):
+    """Linux: `value` as the one line of the pointer file `path` (mode 0644), through a temp file
+    and os.replace, its folder made (mode 0755, whatever root's umask)."""
+    make_folder(os.path.dirname(path))
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(value + '\n')
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
 
 
 class PointerContext(object):
@@ -71,27 +97,34 @@ def survey(ctx, apply=False):
         plan.refuse('--pm-repo: %s' % bad)
         return plan
     old, why = ctx.registry.read()
+    linux = kitlib.platform.NAME == 'linux'
     if why:
         plan.note(SECTION, 'the value there now cannot be read (%s): it is replaced, and this tool '
-                           'cannot restore it; note it first, e.g. with `reg query "%s" /v %s`'
-                           % (why, cpointer.KEY_NAME, cpointer.VALUE))
+                           'cannot restore it; note it first%s'
+                           % (why, '' if linux else ', e.g. with `reg query "%s" /v %s`'
+                              % (cpointer.KEY_NAME, cpointer.VALUE)))
     if old is not None and old == value:
-        plan.note(SECTION, '%s %s already names %s' % (cpointer.KEY_NAME, cpointer.VALUE, value))
+        plan.note(SECTION, '%s already names %s' % (cpointer.where(), value))
         return plan
     if not ctx.host.is_admin():
+        if linux:
+            plan.note(SECTION, 'declining sudo: with no %s the user\'s own pointer file is read; write it '
+                               'by hand: %s' % (linux_paths.MACHINE_POINTER, user_command(value)))
         if apply:
-            plan.refuse('not elevated: %s is under HKLM; run %s from an administrator terminal, or '
-                        'by hand there: %s' % (cpointer.KEY_NAME, command(ctx.kit, value),
-                                               cpointer.command(value)))
+            plan.refuse('not elevated: %s is %s; run %s from an administrator terminal, or '
+                        'by hand there: %s' % (
+                            cpointer.where() if linux else cpointer.KEY_NAME,
+                            'root-owned' if linux else 'under HKLM',
+                            command(ctx.kit, value), cpointer.command(value)))
             return plan
         plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
     if old is None:
-        text = '%s %s: set it to %s' % (cpointer.KEY_NAME, cpointer.VALUE, value)
+        text = '%s: set it to %s' % (cpointer.where(), value)
         # A value that exists but cannot be read is not absent: `reg delete` is no restore.
         undo = None if why else cpointer.delete_command()
     else:
-        text = '%s %s: replace %s with %s%s' % (
-            cpointer.KEY_NAME, cpointer.VALUE, old, value,
+        text = '%s: replace %s with %s%s' % (
+            cpointer.where(), old, value,
             ' (the same folder, spelled differently)' if repo.same_path(old, value) else '')
         undo = cpointer.command(old)
     plan.add(SECTION, text, lambda: ctx.registry.write(value), undo=undo,
