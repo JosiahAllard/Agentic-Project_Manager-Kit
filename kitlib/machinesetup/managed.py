@@ -19,7 +19,12 @@ plugin export root (kitlib.pluginsource). Then the overlay, OVERLAY in the machi
 anything else replaced. The overlay holds what the committed template must not: the agents' git
 identity (env GIT_*), and the auto-mode lines that name the owner, accounts or home paths. Last, a
 hook or statusLine path through `<config>/tools/<link>` is re-pointed to the kit's own file
-(settings.repoint_links), as in the account settings.
+(settings.repoint_links), as in the account settings. Off Windows the WINDOWS_ONLY keys are dropped
+from the template before all that, and a hook running this kit's guard with no onFailure gets the
+guard entry's (kitlib.host.hookmain.ON_FAILURE, through boot/hook.py --settings-entry;
+settings.add_on_failure): on Linux the managed guard blocks the call when its interpreter is gone,
+as the account entry it replaces would. On Linux {pythonw} is the interpreter that ran machine
+setup, by its full path (hookmain.command_line).
 
 The written file keeps the layout the managed file has (BOM, line ends, indent); a new one is
 written in settings.NEW_LAYOUT. An existing file is replaced whole, so the run is refused when it
@@ -40,6 +45,7 @@ import json
 import os
 import re
 
+from kitlib import platform
 from kitlib.config import user
 
 from .common import Plan, free_name, is_link, kit_file, norm
@@ -47,6 +53,9 @@ from . import settings
 
 SOURCE = 'hosts/%s/managed-settings.json'                         # the default host's (source())
 OVERLAY = 'managed-settings.json'
+# Template keys rendered on Windows only: the status line runs powershell and a .ps1. The overlay,
+# merged after, may still give another platform its own.
+WINDOWS_ONLY = ('statusLine',)
 SECTION = 'managed'
 PLACEHOLDER = re.compile(r'\{(kit|pythonw|plugin_export)\}')
 COMMAND = 'tools/machine_setup.py'
@@ -138,12 +147,14 @@ def _same_kit(root):
         return root
 
 
-def _pythonw(ctx):
+def _guard_hook(ctx):
+    """The guard entry's hook (extras.Host.guard_entry): its command is {pythonw}, and its
+    onFailure, when it has one, the managed guard hook's too (render)."""
     entry = ctx.host.guard_entry(ctx.kit)
     for g in entry.get('PreToolUse') or []:
         for h in g.get('hooks') or []:
             if isinstance(h, dict) and isinstance(h.get('command'), str):
-                return h['command']
+                return h
     raise ValueError('boot/hook.py --settings-entry names no interpreter')
 
 
@@ -174,6 +185,9 @@ def render(ctx):
     if not os.path.lexists(path):
         return None
     data = _read_object(path, 'the template')
+    if platform.NAME != 'windows':
+        for k in WINDOWS_ONLY:
+            data.pop(k, None)
     got = {}
 
     def values(name):
@@ -182,13 +196,15 @@ def render(ctx):
                 if name == 'kit':
                     got[name] = kit.replace('\\', '/')
                 elif name == 'pythonw':
-                    got[name] = _pythonw(ctx)
+                    got[name] = values('hook')['command']
+                elif name == 'hook':
+                    got[name] = _guard_hook(ctx)
                 else:
                     got[name] = _plugin_export(ctx)
             except ManagedError:
                 raise
             except Exception as e:                                   # a config, CLI or plugin error
-                raise ManagedError('cannot fill {%s}: %s' % (name, e))
+                raise ManagedError('cannot fill {%s}: %s' % ('pythonw' if name == 'hook' else name, e))
         return got[name]
     data = merge(_substitute(data, values), overlay(ctx.home))
     here = ctx
@@ -199,6 +215,7 @@ def render(ctx):
         settings.repoint_links(data, here)
     except ValueError as e:
         raise ManagedError(str(e))
+    settings.add_on_failure(data, kit, ctx.home, lambda: values('hook').get('onFailure'))
     return data
 
 

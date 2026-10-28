@@ -55,9 +55,10 @@ lives here once:
   mcp_interpreter(platform)
         the interpreter, by name, that a plugin manifest's MCP servers run on `platform`
         (MCP_INTERPRETERS): python on Windows, python3 on Linux. ValueError for any other.
-  settings_entry(event_name, matcher, script, executable, timeout, args)
-        {event_name: [{"matcher", "hooks": [{"type": "command", "command", "args"[, "timeout"]}]}]}:
-        a settings.json hooks entry in exec form (no shell), `script` then `args`. boot/hook.py
+  settings_entry(event_name, matcher, script, executable, timeout, args, platform)
+        {event_name: [{"matcher", "hooks": [{"type": "command", "command", "args"[, "timeout"]
+        [, "onFailure"]}]}]}: a settings.json hooks entry in exec form (no shell), `script` then
+        `args`; "onFailure" per `platform` (default the running one, ON_FAILURE). boot/hook.py
         <host> --settings-entry prints the adapter's, and kitlib.machinesetup installs what that
         prints.
 
@@ -367,10 +368,22 @@ def manifest_command(script, platform, *args, blocking=False):
     return {'command': SHELL, 'args': ['-c', body, SHELL_NAME] + argv}
 
 
-def settings_entry(event_name, matcher, script, executable=None, timeout=None, args=()):
+# What Claude Code does with a settings hook that fails (cannot start, times out, exits neither 0 nor
+# 2), per running platform: on Linux it blocks the call (code.claude.com/docs/en/hooks, "Block the
+# action when a hook fails"; Claude Code 2.1.295 or later), so a gone interpreter is no unguarded
+# call. Windows: unset (the host's default, the call goes ahead), its entry unchanged.
+ON_FAILURE = {'linux': 'block'}
+
+
+def settings_entry(event_name, matcher, script, executable=None, timeout=None, args=(), platform=None):
     hook = {'type': 'command'}
     hook.update(command_line(script, executable))
     hook['args'] += list(args)
     if timeout is not None:
         hook['timeout'] = timeout
+    if platform is None:
+        from kitlib import platform as running
+        platform = running.NAME
+    if platform in ON_FAILURE:
+        hook['onFailure'] = ON_FAILURE[platform]
     return {event_name: [{'matcher': matcher, 'hooks': [hook]}]}
