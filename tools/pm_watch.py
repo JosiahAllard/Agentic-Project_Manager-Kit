@@ -26,6 +26,10 @@ Events:
                                 once per main sha, reported on the first run too; with
                                 plugin.auto_refresh on it also starts the refresh
                                 (docs/plugin-source.md "Behind warnings")
+  REMOTE <name> link lost: ...  a running session in sessions.json (or the PM's) started with
+                                --remote-control reads unlinked in Claude's session registry; once
+                                per episode, and REMOTE <name> link back when it reads linked again
+                                (docs/pm-watch.md "Remote Control link")
   ERROR <what>                  a check failed 3 times running
 State lives in the state file, so a relaunch never repeats an event it already reported. The first
 run only records a baseline.
@@ -87,9 +91,10 @@ def parse(argv, cfg, launcher_set=None):
     return a
 
 
-def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None):
+def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None, rc=None):
     """`plugin`: the PLUGIN check (None: W.plugin_check() over the machine config; False: none).
-    `hub`: the HUB check (None: W.hub_check() over the hub server on this machine; False: none)."""
+    `hub`: the HUB check (None: W.hub_check() over the hub server on this machine; False: none).
+    `rc`: the REMOTE check (None: W.rc_check() over Claude's session registry; False: none)."""
     try:
         cfg = W.load_config()
     except kuser.ConfigError as e:
@@ -103,6 +108,7 @@ def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None):
                   notice_dir=a.notice_dir,
                   plugin=W.plugin_check() if plugin is None else (plugin or None),
                   hub=W.hub_check() if hub is None else (hub or None),
+                  rc=W.rc_check(a.sessions, claude_host.rc_records) if rc is None else (rc or None),
                   preload_modules=claude_host.PRELOAD)
     beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
