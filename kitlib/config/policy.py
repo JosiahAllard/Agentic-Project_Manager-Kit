@@ -1,9 +1,10 @@
 """Kit policy read from config: heavy programs, roles, the kinds table, and the repo hook module.
 
 Heavy programs (ARCHITECTURE.md "Kinds": a program is heavy because it is on the heavy list).
-  HEAVY_DEFAULTS are the kit's; `.kit.json` "heavy".programs adds a repo's own (it cannot remove
-  a default). heavy_match(program, args, entries) is the first entry whose `program` glob matches
-  the program's basename (case-insensitive), whose `when_args` (if any) has one argument present,
+  HEAVY_DEFAULTS are the kit's (on Linux LINUX_HEAVY_DEFAULTS too); `.kit.json` "heavy".programs
+  adds a repo's own (it cannot remove a default). heavy_match(program, args, entries) is the first
+  entry whose `program` glob matches the program's basename (case-insensitive), whose `when_args`
+  (if any) has one argument present, whose `also_args` (if any; kit defaults only) has one too,
   and whose `unless_args` has none. An argument matches by itself or as `<arg>=<value>`. Finding
   the program in a command line (interpreters, shells, Start-Process) is the guard's job.
 
@@ -36,6 +37,7 @@ import os
 import re
 import sys
 
+import kitlib.platform
 from kitlib.content import names_of
 
 from . import schema
@@ -69,6 +71,33 @@ HEAVY_DEFAULTS = (
      'why': 'a Gradle run configures and builds the project'},
 )
 
+# The same programs as Linux names them (docs/linux-support-plan.md section 3, finding 8), added
+# on Linux only: godot[0-9]* would make godot4.exe heavy on Windows too. godot4 and the like (an
+# AppImage, Godot4.AppImage, too), flatpak's exported launchers (exports/bin/org.godotengine.Godot,
+# exports/bin/org.blender.Blender), and `flatpak run <app id>`; flatpak's management commands on
+# an app id run nothing. A flatpak Blender is heavy only in the background: `also_args` (kit
+# defaults only, not a `.kit.json` key) needs one of its arguments present as well.
+GODOT_FLATPAKS = ['org.godotengine.Godot', 'org.godotengine.GodotSharp']
+BLENDER_FLATPAKS = ['org.blender.Blender']
+BLENDER_BACKGROUND = ['-b', '--background']
+FLATPAK_NOT_RUN = ['install', 'update', 'upgrade', 'uninstall', 'remove', 'info', 'list', 'search',
+                   'kill', 'ps', 'override', 'permission-show', 'permission-reset', 'make-current',
+                   'history', 'repair']
+
+LINUX_HEAVY_DEFAULTS = (
+    {'program': 'godot[0-9]*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+     'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'org.godotengine.godot*', 'kind': 'engine-run', 'when_args': [], 'unless_args': [],
+     'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'flatpak', 'kind': 'engine-run', 'when_args': GODOT_FLATPAKS,
+     'unless_args': FLATPAK_NOT_RUN, 'why': 'ARCHITECTURE.md Kinds: Godot runs are heavy'},
+    {'program': 'org.blender.blender*', 'kind': 'render', 'when_args': BLENDER_BACKGROUND,
+     'unless_args': [], 'why': 'machine_lock classify.py render: a background Blender run'},
+    {'program': 'flatpak', 'kind': 'render', 'when_args': BLENDER_FLATPAKS,
+     'also_args': BLENDER_BACKGROUND, 'unless_args': FLATPAK_NOT_RUN,
+     'why': 'machine_lock classify.py render: a background Blender run'},
+)
+
 ROLE_DEFAULTS = {
     'main': {'edit_main_checkout': True, 'why': 'the session the owner or the PM launched'},
     'subagent': {'edit_main_checkout': False,
@@ -81,8 +110,10 @@ KINDS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 # ---------------------------------------------------------------- heavy programs
 
 def heavy_programs(cfg=None):
-    """The kit defaults followed by the repo's `heavy`.programs, each with every key present."""
-    out = [copy.deepcopy(e) for e in HEAVY_DEFAULTS]
+    """The kit defaults (and on Linux LINUX_HEAVY_DEFAULTS) followed by the repo's
+    `heavy`.programs, each with every key present."""
+    defaults = HEAVY_DEFAULTS + (LINUX_HEAVY_DEFAULTS if kitlib.platform.NAME == 'linux' else ())
+    out = [copy.deepcopy(e) for e in defaults]
     for e in (cfg.section('heavy')['programs'] if cfg is not None else []):
         entry = {'when_args': [], 'unless_args': []}
         entry.update({k: copy.deepcopy(v) for k, v in e.items() if not is_note(k)})
@@ -102,6 +133,8 @@ def heavy_match(program, args, entries):
         if not fnmatch.fnmatchcase(base, e['program'].lower()):
             continue
         if e.get('when_args') and not _has(args, e['when_args']):
+            continue
+        if e.get('also_args') and not _has(args, e['also_args']):
             continue
         if e.get('unless_args') and _has(args, e['unless_args']):
             continue
