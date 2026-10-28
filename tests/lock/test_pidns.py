@@ -36,7 +36,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 def linux(ns=OWN):
     """Patches standing in for a Linux process in pid namespace ns."""
     return [mock.patch.object(kitlib.platform, 'NAME', 'linux'),
-            mock.patch.object(procfs, 'pidns', lambda pid='self': ns)]
+            mock.patch.object(procfs, 'pidns', lambda pid='self': ns, create=True)]
 
 
 class Scratch(unittest.TestCase):
