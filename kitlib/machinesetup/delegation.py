@@ -16,9 +16,9 @@ user. --apply needs root, through sudo from the kit user's account (SUDO_UID nam
 root's own login is refused). Nothing here prints or exits.
 """
 import os
-import subprocess
 
 from kitlib import platform
+from kitlib.proc import spawn
 
 from . import linuxbox
 from .common import Plan
@@ -52,7 +52,7 @@ class Host(object):
             return None
 
     def reload(self):
-        r = subprocess.run(RELOAD, capture_output=True, text=True, timeout=120)
+        r = spawn.run(RELOAD, capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
             raise RuntimeError('%s exit %d: %s' % (' '.join(RELOAD), r.returncode,
                                                    (r.stderr or r.stdout).strip()))
