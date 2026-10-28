@@ -90,7 +90,9 @@ and the reaper are not members); terminate kills pid 1 through a pidfd opened at
 leftovers() spares pids: the job's kill then goes member by member, as W2's, and pid 1 stays
 while they run. A pid the command prints is its pid in the namespace, not the owner's. The command
 gets W1_ENV, its namespace: a probe inside the job (_in_w1) skips the scope trial, since the user
-systemd would take the pids it names for its own namespace's, and goes to W1 (nested) or W2.
+systemd would take the pids it names for its own namespace's, and is W2, never a nested W1: its
+jobs stay in this namespace, which the lock's run record lists (jobns), so a run nested at any
+depth is in that run, and the job's kill ends them all.
 
 This module imports on any platform; its calls need Linux."""
 import errno
@@ -807,6 +809,10 @@ def probe(fresh=False):
         return _probed
 
 
+IN_W1 = 'it runs in a W1 job, whose pids the user systemd cannot name'
+W1_NESTED = 'W1 not nested: its jobs stay in the namespace of the W1 job it runs in'
+
+
 def _in_w1():
     """True when this process runs in a W1 job: W1_ENV names its own pid namespace. Its pids
     are not the user systemd's there, and a scope trial would name another process to it."""
@@ -816,7 +822,10 @@ def _in_w1():
 
 def _probe():
     if _in_w1():
-        return _unscoped('it runs in a W1 job, whose pids the user systemd cannot name')
+        # W2, never a nested W1: every level stays in the job's namespace, which the run's
+        # record lists (jobns), so a run nested at any depth is in that run (lock nest_check);
+        # the W1 job's kill ends them all
+        return Tier('W2', W2_LACKS, why=IN_W1, w1=W1_NESTED)
     parent = parent_job()
     if parent is not None:
         tier = nested_tier(parent)
@@ -2006,11 +2015,14 @@ class NsJob(WeakJob):
         return True
 
     def leftovers(self, pids=None):
-        """Takes pids (default: every member) out of the job's kill, and pid 1's."""
+        """Takes pids (default: every member) out of the job's kill, and pid 1's. pid 1 knows
+        a member by its pid in the job's namespace, at pid 1's depth of the member's NSpid (a
+        member in a namespace nested in the job's has more pids after it)."""
         now = self.members()
         pids = [p for p in (sorted(now) if pids is None else pids) if p in now]
         self.spared.update(pids)
-        inner = [n[-1] for n in (_nspid(p) for p in pids) if n]
+        depth = len(_nspid(self.reaper))
+        inner = [n[depth - 1] for n in (_nspid(p) for p in pids) if depth and len(n) >= depth]
         if inner:
             self._watch('spare ' + ' '.join(str(n) for n in inner))
         return pids

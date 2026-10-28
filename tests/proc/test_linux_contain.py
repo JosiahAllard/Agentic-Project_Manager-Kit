@@ -175,23 +175,35 @@ class Tiers(unittest.TestCase):
             self.assertTrue(tier.text.endswith('; W1 unavailable (user namespaces denied))'),
                             tier.text)
 
-    def test_a_probe_inside_a_w1_job_runs_no_scope_trial(self):
+    def test_a_probe_inside_a_w1_job_is_w2_with_no_scope_trial_and_no_nested_w1(self):
         c = contain()
         with mock.patch.dict(os.environ, {c.W1_ENV: '77'}), \
                 mock.patch.object(c.lproc, 'pidns', return_value=77), \
                 mock.patch.object(c, 'parent_job', side_effect=AssertionError('it looked')), \
                 mock.patch.object(c, 'trial', side_effect=AssertionError('a scope trial ran')), \
-                mock.patch.object(c, 'w1_trial', return_value=None):
+                mock.patch.object(c, 'w1_trial', side_effect=AssertionError('a nested W1')):
             tier = c._probe()
-            self.assertEqual(tier.name, 'W1')
+            self.assertEqual((tier.name, tier.lacks), ('W2', c.W2_LACKS))
             self.assertEqual(tier.why, 'it runs in a W1 job, whose pids the user systemd '
                                        'cannot name')
+            self.assertEqual(tier.w1, 'W1 not nested: its jobs stay in the namespace of the W1 '
+                                      'job it runs in')
+            self.assertIs(type(c.Job.__new__(c.Job, tier=tier)), c.WeakJob)
         for mark in ('78', ''):
             with mock.patch.dict(os.environ, {c.W1_ENV: mark}), \
                     mock.patch.object(c.lproc, 'pidns', return_value=77), \
                     mock.patch.object(c, 'parent_job', return_value=None), \
                     mock.patch.object(c, 'trial', return_value=('S2', [c.S2_LACK], None)):
                 self.assertEqual(c._probe().name, 'S2', mark)
+
+    def test_the_w1_starter_reads_its_ids_before_the_unshare(self):
+        # after it they are the overflow id, the map is refused and W1 is never used: the live
+        # classes would only skip (they skip when w1_trial() fails)
+        src = contain().NSTART
+        ids = src.find('uid, gid = os.getuid(), os.getgid()')
+        self.assertGreater(ids, 0)
+        self.assertLess(ids, src.find('os.unshare(os.CLONE_NEWUSER'))
+        self.assertEqual(src.count('os.getuid()'), 1)
 
     def test_the_w1_starter_marks_its_job_with_the_env_name(self):
         c = contain()
@@ -427,6 +439,13 @@ class NsWalk(unittest.TestCase):
             self.assertEqual(job.leftovers([self.G, 4242]), [self.G])
         watch.assert_called_once_with('spare 3')
         self.assertEqual(job.spared, {self.G})
+
+    def test_a_member_in_a_namespace_nested_in_the_job_s_is_named_by_its_pid_in_the_job_s(self):
+        self.nspid[self.G] = [self.G, 3, 1]         # pid 1 of a namespace its command made
+        job = self.job()
+        with mock.patch.object(job, '_watch') as watch:
+            self.assertEqual(job.leftovers([self.G]), [self.G])
+        watch.assert_called_once_with('spare 3')
 
     def place(self, lines, own=None):
         job = self.job(reaper=None, _rct=None, ns=None, _rfd=None, command=None, _ctime=None)
@@ -1305,6 +1324,7 @@ class Ns(Case):
         job = self.job()
         self.addCleanup(job.close)
         p = job.start(['sleep', '300'])
+        self.addCleanup(lambda: (job.close(), p.wait(10)))
         for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP):
             os.kill(p.pid, sig)
         os.kill(job.reaper, signal.SIGINT)
@@ -1373,8 +1393,7 @@ class Ns(Case):
                       cwd=os.getcwd(), env=self.owner_env(), stdout=subprocess.PIPE)
         out = p.communicate(timeout=60)[0].decode().split()
         self.assertEqual(p.returncode, 0)
-        self.assertEqual(out[:2], [str(job.ns), 'True'])
-        self.assertIn(out[2], ('W1', 'W2'))
+        self.assertEqual(out, [str(job.ns), 'True', 'W2'])
 
     def test_peak_memory_is_the_command_s_own(self):
         job = self.job()
@@ -1382,6 +1401,7 @@ class Ns(Case):
         p = job.start([sys.executable, '-c', 'b = bytearray(64 << 20); print(len(b), flush=True);'
                        ' import time; time.sleep(60)'], stdout=subprocess.PIPE)
         self.addCleanup(p.stdout.close)
+        self.addCleanup(lambda: (job.close(), p.wait(10)))
         lines(p, 1)
         cpu_s, peak, now = job.usage()
         self.assertGreater(now, 64 << 20)

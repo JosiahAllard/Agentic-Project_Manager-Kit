@@ -137,6 +137,22 @@ class Nest(Scratch):
         self.assertIsNone(why)
         self.assertEqual((parent['id'], parent['pid'], parent['has']), (RID, 1234, {'cpu': 2}))
 
+    def test_a_run_nested_at_any_depth_in_a_w1_job_of_its_run_stays_in_it(self):
+        # a nested run's own jobs are never recorded (its Slot has no run): each level inside the
+        # job probes W2, whose job makes no namespace, so every level is in the one on record
+        from kitlib.platform.linux import contain as c
+        self.as_linux()
+        self.record(jobns=[OWN], has={'cpu': 2})
+        with mock.patch.dict(os.environ, {c.W1_ENV: str(OWN)}), \
+                mock.patch.object(c, 'w1_trial', side_effect=AssertionError('a nested W1')), \
+                mock.patch.object(c, 'trial', side_effect=AssertionError('a scope trial')):
+            for level in (2, 3, 4):
+                with self.subTest(level=level):
+                    tier = c._probe()
+                    self.assertIs(type(c.Job.__new__(c.Job, tier=tier)), c.WeakJob)
+                    parent, why = self.check()
+                    self.assertEqual((parent and parent['id'], why), (RID, None))
+
     def test_a_job_the_run_did_not_start_is_not_its_run(self):
         self.as_linux()
         for fields, why in (({'jobns': [OTHER]}, 'the named wrapper is not an ancestor of this '
@@ -223,6 +239,27 @@ print(json.dumps({'parent': parent and parent['id'], 'why': why, 'state': record
 '''
 
 
+KINDS = {'engine-test': {'cpu': 1, 'gpu': 0, 'warn_min': 30}}
+
+# a run nested in the W1 job of a held run: it books its own nested run (no slots of its own)
+# and runs NESTED, a third level, in that run's job
+LEVEL2 = '''
+import json, subprocess, sys
+from kitlib.lock import run
+from kitlib.lock.store import Store
+from kitlib.platform.linux import contain
+s = run.book('engine-test', 'kit', 't2', cores=1, store=Store(root=sys.argv[1]),
+             kinds_table=%r)
+try:
+    p = s.start([sys.executable, '-c', %r, sys.argv[1]], cwd=sys.argv[2], stdout=subprocess.PIPE)
+    out = p.communicate(timeout=60)[0]
+    print(json.dumps({'tier': contain.probe().name, 'parent': s.parent and s.parent['id'],
+                      'level3': json.loads(out)}))
+finally:
+    s.release()
+''' % (KINDS, NESTED)
+
+
 @posix_only('pid namespaces are Linux')
 class Live(Scratch):
     """A nested run's checks from inside a real W1 job of its run."""
@@ -281,6 +318,25 @@ class Live(Scratch):
         self.assertEqual(p.returncode, 0, out)
         self.assertEqual(json.loads(out), {'parent': s.id, 'why': None, 'state': None,
                                            'live': True, 'dead': False})
+        self.assertEqual(len(self.store.read('active/%s.json' % s.id)['jobns']), 1)
+
+    def test_a_run_nested_two_levels_down_in_its_run_s_w1_job_stays_in_its_run(self):
+        self.lock.release()
+        with open(self.store.path('machine.json'), 'w', encoding='utf-8') as f:
+            json.dump({'cpu_slot_threads': 1, 'agent_cap': 2}, f)
+        w1 = self.c.Tier('W1', self.c.W1_LACKS)
+        with mock.patch.object(self.c, 'probe', lambda fresh=False: w1):
+            s = run.book('engine-test', 'kit', 't', cores=1, store=self.store,
+                         kinds_table=KINDS)
+            self.addCleanup(s.release)
+            p = s.start([sys.executable, '-c', LEVEL2, self.root, ROOT], cwd=ROOT,
+                        stdout=subprocess.PIPE)
+            out = p.communicate(timeout=120)[0]
+        self.assertEqual(p.returncode, 0, out)
+        seen = json.loads(out)
+        self.assertEqual(seen['tier'], 'W2')            # its own job makes no namespace
+        self.assertEqual((seen['parent'], seen['level3']['parent'], seen['level3']['why']),
+                         (s.id, s.id, None))
         self.assertEqual(len(self.store.read('active/%s.json' % s.id)['jobns']), 1)
 
 
