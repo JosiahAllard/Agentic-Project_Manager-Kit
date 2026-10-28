@@ -53,6 +53,11 @@ unless the caller asks for what they carry):
                 "docs" (a docs-only change: only "gate".docs_only steps ran;
                 kitlib.gate.steps.docs_only). A record without it is "full" when full_of says so,
                 else unknown (mode_of: None), and a landing takes an unknown mode only as --full
+  input_keys    {"schema": 1, "steps": {name: {part: sha256}}}: for each step that asks for reuse
+                and passed, the digests a landing compares to serve it from this record when
+                main moved (kitlib.gate.reuse, "The input tree"; INPUT_PARTS), or null (no step
+                has one, or the gate wrote none: --only, a partial or docs-only gate, a work tree
+                not clean at its start)
 
 verify() re-derives everything git can answer: the record's file name, `commit`, `tree` and
 `author` must match the repository now, and `gate_config` must match the caller's config when it
@@ -74,7 +79,7 @@ SCHEMA = 1
 VERDICT = 'OK'
 KEYS = ('schema', 'verdict', 'commit', 'tree', 'base', 'gate_config', 'kit', 'author', 'repo',
         'started_utc', 'ended_utc', 'steps')
-ADDED_KEYS = ('config_rev', 'source', 'full', 'mode')
+ADDED_KEYS = ('config_rev', 'source', 'full', 'mode', 'input_keys')
 MODES = ('full', 'select', 'docs')
 RETRIES = 5
 RETRY_SLEEP = 0.2
@@ -228,13 +233,34 @@ def verify_full(root, commit):
     return None, 'the record for %s is from a gate run without --full' % rec['commit']
 
 
+def _input_keys(keys):
+    """`keys` when it is None or {"schema": int, "steps": {name: {part: 64-hex}}}, else
+    RecordError."""
+    if keys is None:
+        return None
+    bad = RecordError('input_keys is {"schema": int, "steps": {name: {part: sha256}}}')
+    if not isinstance(keys, dict) or set(keys) != {'schema', 'steps'} \
+            or isinstance(keys['schema'], bool) or not isinstance(keys['schema'], int) \
+            or not isinstance(keys['steps'], dict):
+        raise bad
+    for name, parts in keys['steps'].items():
+        if not isinstance(name, str) or not name or not isinstance(parts, dict) or not parts:
+            raise bad
+        for part, digest in parts.items():
+            if not isinstance(part, str) or not isinstance(digest, str) or len(digest) != 64 \
+                    or digest.strip('0123456789abcdef'):
+                raise bad
+    return {'schema': keys['schema'],
+            'steps': {n: dict(parts) for n, parts in keys['steps'].items()}}
+
+
 def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None, ended_utc=None,
-          config_rev=None, source=None, full=False, mode=None):
+          config_rev=None, source=None, full=False, mode=None, input_keys=None):
     """The record for `rev` (resolved here: commit, tree and author come from git, never the
     caller). `config_rev`: the commit the gate config was read from (resolved to a full hash).
     `source`: "gate.json" or "auto" (kitlib.gate.detect), or None. `full`: the gate ran --full.
     `mode`: one of MODES; None: "full" with `full`, else "select". "full" goes with `full` and
-    only with it (RecordError)."""
+    only with it (RecordError). `input_keys`: kitlib.gate.reuse.record_keys, or None."""
     full = full is True
     if mode is None:
         mode = 'full' if full else 'select'
@@ -254,12 +280,14 @@ def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
         config_rev = resolved
     if not isinstance(kit, dict) or not kit:
         raise RecordError('the kit identity is an object such as {"version": ..., "commit": ...}')
+    input_keys = _input_keys(input_keys)
     return {
         'schema': SCHEMA, 'verdict': VERDICT, 'commit': commit, 'tree': tree, 'base': base,
         'gate_config': config_hash(gate_config), 'kit': dict(kit), 'author': author,
         'repo': repo_name or '', 'started_utc': started_utc, 'ended_utc': ended_utc or utc(),
         'steps': [_step(s, i) for i, s in enumerate(steps or [])],
         'config_rev': config_rev, 'source': source, 'full': full, 'mode': mode,
+        'input_keys': input_keys,
     }
 
 
@@ -317,10 +345,11 @@ def _write_file(path, record):
 
 
 def record_pass(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
-                config_rev=None, source=None, full=False, mode=None):
+                config_rev=None, source=None, full=False, mode=None, input_keys=None):
     """build() then write(): `(path, record)`. Only a passing gate calls this."""
     rec = build(root, rev, gate_config, kit, repo_name, started_utc, steps, base,
-                config_rev=config_rev, source=source, full=full, mode=mode)
+                config_rev=config_rev, source=source, full=full, mode=mode,
+                input_keys=input_keys)
     return write(root, rec), rec
 
 

@@ -701,7 +701,7 @@ class InputTree(ReuseCase):
         return lander, lander.run()
 
     def tree_lines(self):
-        return [l for l in self.lines() if l.startswith(reuse.PREFIX + 'INPUT TREE ')]
+        return [l for l in self.lines() if l.startswith(reuse.PREFIX + 'INPUT TREE:')]
 
     def line_of(self, word, name):
         found = [l for l in self.lines(word) if l.startswith(reuse.PREFIX + '%s %s: ' % (word, name))]

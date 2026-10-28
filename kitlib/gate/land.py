@@ -505,6 +505,8 @@ class Lander(object):
         self.fresh = fresh          # True: the merged gate reuses no branch-gate step
         self.prior = None           # result records naming the tips, read before this landing
                                     # writes its own (_locked); None: reuse nothing
+        self.tip_records = {}       # tip -> the gate-OK record tip_refusal landed it on (none for
+                                    # a FLAKE rerun): the merged gate's input tree (reuse.planner)
         self.landed_at = None       # the remote's main once verified to hold the merge: the merge,
                                     # or a commit on top of it pushed right after
         self.scope_notes = []       # scope-check NOTE lines, said before the LANDED line
@@ -797,15 +799,19 @@ class Lander(object):
         """Why `tip`'s gate-OK record does not land it, or None: verify_full's reason, unless the
         record is a default-mode ("select") or docs-only ("docs") pass that select_refusal takes,
         or the tip's latest red --full run has a FLAKE targeted rerun (rerun.verify_flake; its
-        reason is added only when the tip has rerun records)."""
-        _, why = gate_ok.verify_full(self.root, tip)
+        reason is added only when the tip has rerun records). The record it lands on goes in
+        self.tip_records."""
+        self.tip_records.pop(tip, None)
+        rec, why = gate_ok.verify_full(self.root, tip)
         if why is None:
+            self.tip_records[tip] = rec
             return None
         rec, _ = gate_ok.verify(self.root, tip)
         mode = gate_ok.mode_of(rec) if rec is not None else None
         if mode in ('select', 'docs'):
             more = self.select_refusal(rec, tip, mode)
             if more is None:
+                self.tip_records[tip] = rec
                 return None
             why = '%s, and %s' % (why, more)
         flake = rerun.verify_flake(self.root, tip)
@@ -1657,7 +1663,8 @@ class Lander(object):
             return self.merged_gate_fn(self)
         plan = reuse.planner(self.tree, self.cfg, self.branches[0], self.tips[0], self.expect_main,
                              self.merge, self.prior, fresh=self.fresh, full=self.full,
-                             batch=len(self.branches))
+                             batch=len(self.branches),
+                             record=self.tip_records.get(self.tips[0]))
         out = runner.merged_gate(self.root, self.cfg, self.expect_main, full=self.full,
                                  slug='+'.join(self.branches), log_dir=self.log_dir, say=self.say,
                                  book_kw=self.book_kw, reuse=plan,
