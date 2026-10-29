@@ -17,11 +17,12 @@ class PluginEventTest(unittest.TestCase):
         self.spawned = []
         self.live = set()
 
-    def watcher(self, auto, state=None, folders=()):
+    def watcher(self, auto, state=None, folders=(), hub_job=lambda: False):
         s = P.Settings(self.k.root, auto, "origin")
         check = W.plugin_check(kit=self.k.kit, settings=s,
                                spawn=lambda kit, root: self.spawned.append((kit, root)),
-                               alive=lambda pid, ct: pid in self.live, folders=list(folders))
+                               alive=lambda pid, ct: pid in self.live, folders=list(folders),
+                               hub_job=hub_job)
         w = W.Watcher(state if state is not None else {}, [], lambda: {}, os.path.join(self.k.base, "alerts"),
                       os.path.join(self.k.base, "sessions.json"), lambda n: None, branch_poll=0,
                       plugin=check)
@@ -86,6 +87,35 @@ class PluginEventTest(unittest.TestCase):
         self.assertEqual(len(ev), 1)
         self.assertTrue(ev[0].endswith("(auto_refresh: a refresh is already running)"), ev[0])
         self.assertEqual(len(self.spawned), 1)
+
+    def test_the_hub_plugin_job_up_owns_the_refresh_and_hub_down_falls_back(self):
+        os.makedirs(self.k.root)
+        self.export_at(self.main())
+        new = self.advance()
+        w = self.watcher(auto=True, hub_job=lambda: True)
+        self.assertEqual(w.poll(1.0), ["PLUGIN pm-kit plugin behind kit main %s: %s"
+                                       % (new[:12], P.refresh_cmd())])
+        self.assertEqual(self.spawned, [])
+        w = self.watcher(auto=True, hub_job=lambda: False)
+        self.assertTrue(w.poll(1.0)[0].endswith("(auto_refresh: started)"))
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_hub_plugin_job_up_reads_health_jobs(self):
+        class Client:
+            def __init__(self, health):
+                self.health = health
+
+            def get(self, path, timeout=None):
+                if isinstance(self.health, Exception):
+                    raise self.health
+                return self.health
+
+        def up(health):
+            return W.hub_plugin_job_up(load=lambda: mock.Mock(port=1), make_client=lambda port: Client(health))
+        self.assertTrue(up({"jobs": {"plugin-refresh": {}}}))
+        self.assertFalse(up({"jobs": {}}))
+        self.assertFalse(up({}))
+        self.assertFalse(up(OSError("down")))
 
     def test_a_failing_check_is_an_error_on_the_third(self):
         def boom(last):
