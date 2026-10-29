@@ -72,9 +72,9 @@ import json
 import os
 import re
 import threading
-import time
 
 from kitlib import hubvalidate
+from kitlib.fs import replace as fsreplace
 from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError, describe
 
 from . import schema
@@ -132,40 +132,24 @@ def _now():
 
 def _replace(path, text):
     """Write text to a temp file beside path, then os.replace path with it, retrying for
-    REPLACE_S while a reader (an indexer, an antivirus scan) holds path open; the pattern of
-    kitlib.lock.store.write_json, whose indent differs from the store's text."""
+    REPLACE_S (kitlib.fs.replace) while a reader (an indexer, an antivirus scan) holds path open."""
     folder, name = os.path.split(path)
     os.makedirs(folder, exist_ok=True)
     tmp = os.path.join(folder, '.%s.%d%s' % (name, os.getpid(), TMP_SUFFIX))
     with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
         f.write(text)
-    end = time.monotonic() + REPLACE_S
-    while True:
+    try:
+        fsreplace.replace(tmp, path, wait=REPLACE_S)
+    except PermissionError:
         try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if time.monotonic() >= end:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                raise
-            time.sleep(0.05)
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _remove(path):
-    end = time.monotonic() + REPLACE_S
-    while True:
-        try:
-            os.remove(path)
-            return
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if time.monotonic() >= end:
-                raise
-            time.sleep(0.05)
+    fsreplace.remove(path, wait=REPLACE_S)
 
 
 def _read_json(path):
