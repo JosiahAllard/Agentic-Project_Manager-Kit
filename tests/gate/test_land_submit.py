@@ -404,7 +404,7 @@ class NamedReview(SubmitCase):
     def test_the_queued_reviewer_named_submits(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         self.queue(BRANCH, tip)
-        for given in ('AGENT-R1', ' agent-r1 '):        # case and spaces aside
+        for given in ('Agent-r1', ' agent-r1 '):        # case and spaces aside
             self.assertIsNone(submit.named_review(self.repo.root, [BRANCH], [tip], [given]))
         out, detach = self.named([BRANCH], [tip], ['agent-r1'])
         self.assertEqual(out.code, G.OK, out.lines)

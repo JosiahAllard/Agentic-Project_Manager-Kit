@@ -138,7 +138,7 @@ def land_parser():
     p.add_argument('--log-dir', help='where the merged gate\'s logs go')
     p.add_argument('--keep-branch', action='store_true',
                    help='after landing, keep the remote branch, the worktree and the local branch')
-    p.add_argument(submitmod.REVIEWED_BY, dest='reviewed_by', action='append', default=[],
+    p.add_argument('--reviewed-by', dest='reviewed_by', action='append', default=[],
                    metavar='REVIEWER_ID',
                    help='--submit: the reviewer id of the verdict queued at the tip (required)')
     p.add_argument('--submit', action='store_true',

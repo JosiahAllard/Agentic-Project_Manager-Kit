@@ -119,7 +119,7 @@ def parser():
     p.add_argument('--sweep-landed', action='store_true',
                    help='clean up every branch main already contains (a dry run without --apply)')
     p.add_argument('--apply', action='store_true', help='--sweep-landed: clean up, not a dry run')
-    p.add_argument(submitmod.REVIEWED_BY, dest='reviewed_by', action='append', default=[],
+    p.add_argument('--reviewed-by', dest='reviewed_by', action='append', default=[],
                    metavar='REVIEWER_ID',
                    help='--submit: the reviewer id of each BRANCH\'s verdict queued at its tip, '
                         'in the same order (required)')
