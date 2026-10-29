@@ -8,14 +8,14 @@ account's authorized keys as
 so whatever the main machine asks to run, sshd runs this instead, with the words it asked for in
 SSH_ORIGINAL_COMMAND. serve() answers `status`: the node's machine lock and hardware as one JSON
 line (kitlib.loadnode.reply), with the words it serves and its live jobs. The run words (`start`,
-`follow`, `fetch`, `clean`, `stop` and the one git push form) go to kitlib.loadnode.box, which
-checks their parameters before it does anything. Anything else, an argument other than `serve`
+`gate`, `follow`, `fetch`, `clean`, `stop` and the one git push form) go to kitlib.loadnode.box,
+which checks their parameters before it does anything. Anything else, an argument other than `serve`
 (and `--base <absolute folder>`, the jobs' folder for a test node), or no SSH_ORIGINAL_COMMAND at
 all, is refused with exit 2 and a fixed message that never repeats what was sent.
 
-`loadnode.py job <job> [--base <folder>]` is the job runner box's `start` starts detached; it is
-never reached over ssh (the forced command's arguments are fixed) and is refused when
-SSH_ORIGINAL_COMMAND is set.
+`loadnode.py job <job> [--base <folder>]` is the job runner box's `start` and `gate` start
+detached; it is never reached over ssh (the forced command's arguments are fixed) and is refused
+when SSH_ORIGINAL_COMMAND is set.
 
 Exit codes: 0 the reply; 1 the machine lock could not be read (an ok false reply), or a run word
 refused for a reason it names; 2 refused.
