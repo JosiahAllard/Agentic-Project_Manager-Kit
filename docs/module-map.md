@@ -81,6 +81,8 @@ A `gate.steps` entry that runs the check, as a warning until the map settles:
   reads; unset: the usual test folders and file names (`kitlib/modulemap/load.py`
   `DEFAULT_TEST_SOURCES`).
 - `root_markers`: file names that mean "the repository root" beyond the built-in ones.
+- `namespaces`: C# namespace prefix to module name, for the csharp-using detector; unset: each
+  module's csproj `RootNamespace`.
 
 Unknown keys, unknown module names and an edge from a module to itself are refused.
 
@@ -178,6 +180,14 @@ one build crossing, counted by that ratchet (never refused, never allowed by an 
 messaging module). A file counts once; a prefix ends at a whole name (`org.x.api` does not match
 `org.x.apix`). This is the count a Java layering test keeps.
 Misses: fully qualified names used without an import, Kotlin and Groovy imports.
+
+**csharp-using** reads every `.cs` file a module holds for `using X.Y;`, `using static X.Y.Z;`,
+`using A = X.Y;` and their `global` forms. A namespace of another module is a build crossing,
+refused unless an edge allows it. Namespaces map to modules by the map's `namespaces` when it
+has any, else by each module's csproj `RootNamespace` (the csproj file name when unset; one two
+modules claim is dropped). Longest prefix wins, on whole names; an unmapped namespace and the
+file's own module are ignored. Block comments are skipped.
+Misses: a using in a multi-line verbatim string, fully qualified names without a using.
 
 ## The architecture page
 
@@ -399,4 +409,4 @@ not list the tree (`module_map: NOT CHECKED: ...`).
 
 Not yet scoped; each needs files outside this tool's own:
 
-- a C# `using` detector; rollout to the first Java repository.
+- rollout to the first Java repository.

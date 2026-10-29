@@ -21,7 +21,7 @@ ROOT = '(root)'              # a path no module holds: the repository's own file
 NAME_RE = r'[A-Za-z0-9][A-Za-z0-9._-]*'
 KINDS = ('build', 'source', 'data', 'tree')
 EDGE_KINDS = ('build', 'data', 'tree')
-DETECTORS = ('csproj', 'paths', 'gradle', 'python', 'java-imports')
+DETECTORS = ('csproj', 'paths', 'gradle', 'python', 'java-imports', 'csharp-using')
 JAVA_IMPORTS = 'java-imports'      # the detector a ratchet drives itself (its files and imports)
 DEFAULT_TEST_SOURCES = ['*/src/test/*', '*Tests/*', '*.Tests/*', 'tests/*', '*/tests/*',
                         '*/test/*', 'test/*', '*/test_*.py', 'test_*.py', '*_test.py', '*Test.java',
@@ -94,6 +94,9 @@ MAP = Obj({
     'raises': Field(ListOf(RAISE), None, "ceilings the owner allows above the base's"),
     'test_sources': Field(ListOf(Str(), nonempty=True), None, 'files the paths detector reads'),
     'root_markers': Field(ListOf(Str(), nonempty=True), None, 'names a root climb looks for, added to the defaults'),
+    'namespaces': Field(MapOf(ModuleRef, 'namespace prefix'), None,
+                        'the csharp-using detector: C# namespace prefix -> its module; unset: '
+                        "each module's csproj RootNamespace"),
     'isolate': Field(ISOLATE, None,
                      'what every isolation tree holds beyond its modules and the top-level files'),
 }, required=('modules',), what='module map')
@@ -129,6 +132,8 @@ class ModuleMap(object):
         self.raises = list(data.get('raises') or [])
         self.test_sources = list(data.get('test_sources') or DEFAULT_TEST_SOURCES)
         self.root_markers = list(data.get('root_markers') or [])
+        self.namespaces = {k: v for k, v in (data.get('namespaces') or {}).items()
+                           if not is_note(k)}
         self.tests = {n: m['test'] for n, m in data['modules'].items()
                       if not is_note(n) and m.get('test')}
         self.isolate_include = [_norm(p) for p in
@@ -156,6 +161,9 @@ class ModuleMap(object):
                 if other != n:
                     errs.append('path %s is named by more than one module (%s, %s)'
                                 % (p, other, n))
+        for ns, n in self.namespaces.items():
+            if n not in known:
+                errs.append('namespaces[%r] names %s, which is not a module' % (ns, n))
         for n in self.messaging:
             if n not in self.modules:
                 errs.append('messaging names %s, which is not a module' % n)
