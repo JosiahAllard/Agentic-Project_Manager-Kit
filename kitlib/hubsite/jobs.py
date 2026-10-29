@@ -32,8 +32,8 @@ success (None before one), `error` the last failure's text while `failures` is n
 (else None).
 
 Nothing here knows any job: each is a module of kitlib.hubjobs that gives a Job, found by
-kitlib.hubjobs.makers in serve.machine_sources (Sources.jobs). The existing timers (the git sync, the backlog views, the
-push worker) are not jobs.
+kitlib.hubjobs.makers in serve.machine_sources (Sources.jobs). The existing timers (the git
+sync, the backlog views, the push worker) are not jobs.
 """
 import threading
 import time
