@@ -4,7 +4,7 @@
         "repo": "app",
         "agent": true,
         "stem": "app-coordinator",
-        "state": "<app repo>/docs/ops/state.local.md",
+        "state": "<agent temp>/<app repo slug>-coordinator/state-<session>.md",
         "account": 1,
         "name": "app-coordinator-a1"
     },
@@ -22,7 +22,7 @@
         "repo": "kit",
         "agent": true,
         "stem": "demo-coordinator",
-        "state": "<kit repo>/docs/ops/state.local.md",
+        "state": "<agent temp>/<kit repo slug>-coordinator/state-<session>.md",
         "account": 1,
         "name": "demo-coordinator-a1"
     },

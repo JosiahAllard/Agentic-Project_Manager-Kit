@@ -387,6 +387,12 @@ class Start(Base):
         self.assertIn("'You succeed old-a1, which has checkpointed", out)
         self.assertTrue(out.rstrip().endswith("go'\""), out[-40:])      # the what-if line closes its quote
 
+    def test_default_prompt_points_at_the_coordinator_state_note_in_agent_temp(self):
+        self.assertNotIn('state.local.md', start.DEFAULT_PROMPT)
+        self.assertIn('<repo slug>-coordinator', start.DEFAULT_PROMPT)
+        self.assertIn('AGENT_TEMP else TEMP', start.DEFAULT_PROMPT)
+        self.assertIn('state-<your session name>.md', start.DEFAULT_PROMPT)
+
     def test_every_prompt_names_the_pm_by_both_live_session_names(self):
         for out in (self.go(), self.go(brief='b.md')):
             self.assertIn("ListAgents shows its session as ''Project Manager'' in the desktop app, or "
