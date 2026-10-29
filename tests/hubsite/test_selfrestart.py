@@ -518,6 +518,8 @@ class SelfCheckCase(unittest.TestCase):
 
     def test_a_job_module_that_will_not_import_does_not_fail_the_check(self):
         import importlib
+        from kitlib import hubjobs
+        self.assertTrue(hubjobs.makers(), 'a job module to fail')
         real = importlib.import_module
         names = []
 
