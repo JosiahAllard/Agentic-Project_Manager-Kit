@@ -465,6 +465,10 @@ class LoadNodes(CliBase):
     def test_node_main_and_a_resource_run_it_here(self):
         def no_ssh(argv, timeout_s):
             raise AssertionError("ssh was asked")
+        # one core, so the run fits the one slot confine(1) leaves (--cores would keep it here
+        # by itself, hiding what --resource does)
+        with open(self.kinds_path, "w", encoding="utf-8") as f:
+            json.dump({"kinds": {"engine-test": {"cpu": 1, "gpu": 0, "warn_min": 30}}}, f)
         self.confine(1)
         for extra in (("--node", "main"), ("--node", "box1", "--node", "main"),
                       ("--resource", "vm:x")):
