@@ -648,7 +648,14 @@ class AfterBoot(JobBase):
         self.assertEqual(rec['kit']['account'], '2')
 
 
-WAKE = C.Wake('its repo has new startable records: KIT-B', ['KIT-B'])
+WAKE = None                                                 # set in setUpModule
+
+
+def setUpModule():
+    global WAKE
+    WAKE = C.Wake('its repo has new startable records: KIT-B', ['KIT-B'])
+
+
 STOPPED = {'seen_at': NOW - 900, 'account': '1'}            # with last_stop NOW - 600: deliberate
 
 
