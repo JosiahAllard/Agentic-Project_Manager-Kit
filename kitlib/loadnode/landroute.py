@@ -45,6 +45,14 @@ def _main(why, quiet=False, nodes=(), need=None):
     return Route(route.MAIN, None, why, quiet, list(nodes), need)
 
 
+def need_of(kind, store):
+    """The slots a run of the lock kind `kind` books here (route.need_of on `store`): what plan
+    sizes the merged gate's kind with, and what a landing sizes again when its base's config
+    names another kind (kitlib.gate.land Lander.route_need). KeyError for a kind the kinds
+    table does not name."""
+    return route.need_of(kind, store=store)
+
+
 def plan(root, repo, kind, store=None, merged_gate_fn=None, registry_file=None, runner=None,
          need=None, lock=None, is_kit=None):
     """A Route for the merged gate of a landing in the checkout `root` of the repository `repo`
@@ -77,7 +85,7 @@ def plan(root, repo, kind, store=None, merged_gate_fn=None, registry_file=None, 
     if not nodes:
         return _main('no node has opted in %s' % repo, quiet=True)
     try:
-        want = (need or (lambda k, s: route.need_of(k, store=s)))(kind, store)
+        want = (need or need_of)(kind, store)
     except KeyError:                    # an unknown kind: main's lock refuses it
         return _main('no kind %s' % kind, quiet=True)
     except Exception as e:
@@ -236,7 +244,7 @@ def _watch(holder, done, state, ceiling_s, poll_s, say):
 def run_on_node(node, root, merge, base, cfg, repo, slug, full=False, docs=False, tree=None,
                 kind=None, say=None, out=None, open_link=None, make_job=None, checker=None,
                 kit_hash=None, ceiling_s=CEILING_S, poll_s=POLL_S, notice_dir=None,
-                tool=dispatch.NODE_TOOL, job_kw=None):
+                tool=dispatch.NODE_TOOL, job_kw=None, store=None):
     """The merged gate of the landing's merge `merge` (a full hash, in `tree`, the landing tree,
     default `root`) on `base`, run on `node` as a land job: an OK gate Outcome (outcome_of) when
     it passed and main took its record, a FAILED one when it started and did not (the module
@@ -244,9 +252,13 @@ def run_on_node(node, root, merge, base, cfg, repo, slug, full=False, docs=False
     runner.repo_name; full, docs: the merged gate's own arguments. open_link(node) is a context
     giving a remote.Link (default remote.Link), make_job(link) the job.NodeJob, checker and
     kit_hash landgate's (default: read here), job_kw more NodeJob arguments: the tests'
-    stand-ins. Ctrl+C asks the node to stop a started job and says how to follow it; before the
+    stand-ins. notice_dir: the lock-window notice folder; None with `store` (the landing's
+    machine-lock store) not a test store: the one the machine config names for `kind`
+    (dispatch.notice_dir), as for a run on main. Ctrl+C asks the node to stop a started job and says how to follow it; before the
     start it says how to stop the job should it have started; either way it goes on up."""
     say = say or (lambda text: None)
+    if notice_dir is None and store is not None and not getattr(store, 'testing', False):
+        notice_dir = dispatch.notice_dir(kind, store)
     if kit_hash is None:
         try:
             kit_hash = landgate.kit_files()

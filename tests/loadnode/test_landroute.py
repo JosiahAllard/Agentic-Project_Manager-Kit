@@ -4,6 +4,7 @@ a fallback to main only while nothing ran on the node, NOT LANDED (a FAILED gate
 started, an OK Outcome land.py reads as runner.merged_gate's when it passed. The land job talks to
 a real kitlib.loadnode.box.Box through tests/loadnode/test_job.py's link stand-in."""
 import contextlib
+import os
 import subprocess
 import threading
 import types
@@ -126,6 +127,18 @@ class Plan(unittest.TestCase):
             raise OSError('gone')
         self.assert_loud(self.plan(runner=no_ssh, lock=lock), "this machine's lock cannot be read "
                                                               '(OSError)')
+
+
+class NeedOf(unittest.TestCase):
+    def test_it_sizes_the_kind_on_the_store_as_plan_does(self):
+        store, asked = object(), []
+
+        def need_of(kind, store=None):
+            asked.append((kind, store))
+            return NEED
+        with mock.patch.object(route, 'need_of', need_of):
+            self.assertEqual(landroute.need_of('cpu-eval', store), NEED)
+        self.assertEqual(asked, [('cpu-eval', store)])
 
 
 class Recheck(unittest.TestCase):
@@ -303,6 +316,25 @@ class LandRun(Base):
         self.assertEqual(out.record, REC)
         # land.py writes its record from these results: the node's steps, as they were
         self.assertEqual(runner.record_steps(out.results), STEPS)
+
+    def test_a_land_job_writes_lock_window_notices_from_the_landings_store(self):
+        notices, asked = os.path.join(self.base, 'land-notices'), []
+        store = types.SimpleNamespace(testing=False)
+
+        def notice_dir(kind, store=None):
+            asked.append((kind, store))
+            return notices
+        with mock.patch.object(landroute.dispatch, 'notice_dir', notice_dir):
+            out = self.run_on(store=store)
+        self.assertEqual(out.code, G.OK, self.said)
+        self.assertEqual(asked, [('gate', store)])
+        self.assertEqual(sorted(os.listdir(notices)), ['%s-end.json' % JOB, '%s-start.json' % JOB])
+
+    def test_a_test_store_writes_no_lock_window_notice(self):
+        with mock.patch.object(landroute.dispatch, 'notice_dir',
+                               side_effect=AssertionError('a test store read the notice config')):
+            out = self.run_on(store=types.SimpleNamespace(testing=True))
+        self.assertEqual(out.code, G.OK, self.said)
 
     def test_a_docs_gate_on_the_node_is_a_docs_outcome(self):
         rec = dict(REC, mode='docs', full=False, source='auto')

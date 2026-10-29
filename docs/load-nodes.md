@@ -185,7 +185,7 @@ usage, exit 2, and a node whose kit serves no `gate` verb is exit 10.
 
 A kit checkout (this repository) is gated only by its own `tools/gate.py`: a node's installed kit
 would gate it with other code than the checkout's. Auto keeps it on main and says so;
-`--node NAME` is usage, exit 2. No lock-window notices are written for a gate job.
+`--node NAME` is usage, exit 2. A gate job writes lock-window notices as a run job does.
 
 Known limits:
 
@@ -262,7 +262,8 @@ A kit checkout is never gated on a node, by a landing or by `node.py gate`.
     node qualifies where the planned one does not: that node takes it, said as
     `gating on load node <n2>: ...`.
   - Otherwise `run_on_node` runs the land job, with `docs` set as main's merged gate has it, the
-    landing tree, the kind, `full` and the slug.
+    landing tree, the kind, `full` and the slug. It writes lock-window notices as a run job does,
+    read from the landing's machine-lock store (none on a test store).
 - **When the job passes**, its Outcome is the merged gate's: the lines include `ran on load node
   <n> as job <j>`, and the gate-OK record main writes for the merge carries `ran_on` (node, host
   key fingerprint, job) and no `input_keys`. The result record is the same as for any landing.
@@ -304,7 +305,9 @@ A kit checkout is never gated on a node, by a landing or by `node.py gate`.
 - A plan that raises is said as `gating here: the load-node plan failed: <error>` and the
   landing gates on main.
 - The plan and the 1-slot booking use the config read before the landing's turn. A base whose
-  config names another `"gate".kind` is not booked again at that size.
+  config names another `"gate".kind` is asked of the nodes again at that kind's size, and main's
+  gate books that kind again (docs/gate.md "Landing", step 6), but a node's gate keeps the 1-slot
+  run booked at the old kind.
 - A 1-slot landing run's held time goes into the `land` mode of the kind's expected times
   (`history_expect`), beside the full runs.
 - Not yet proven on a live machine with a real node: the tests use a stand-in for

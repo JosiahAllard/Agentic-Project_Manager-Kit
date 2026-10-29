@@ -253,7 +253,7 @@ def _node_job(a, node, link, co, cmd=None, job_id=None, gate=None):
                        cmd or [], a.artifact, wait_s=getattr(a, 'wait_s', None),
                        expect_s=getattr(a, 'expect_s', None), no_wait=getattr(a, 'no_wait', False),
                        note=getattr(a, 'note', None), say=_say, out=_out,
-                       notice_dir=_notice_dir(a.kind) if cmd else None, reattach_s=a.reattach,
+                       notice_dir=_notice_dir(a.kind) if cmd or gate else None, reattach_s=a.reattach,
                        job=job_id, tool=TOOL, gate=gate, importer=_importer())
 
 
