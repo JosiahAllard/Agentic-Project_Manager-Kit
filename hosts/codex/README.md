@@ -15,7 +15,7 @@ rendered agent file says so in its header comment.
 | Hook policy | `adapter/policy.py` | a marked session: unknown tools, other MCP servers' tools, `apply_patch` through the shell, calls the guard cannot fully judge (no named shell, cmd.exe, a TTY, fed input) and a read, test or lander role's edits in its own checkout refused |
 | Boot folder | `shell/boot/kitboot.py`, `shell/boot/hook.py`, `shell/hosts.json` | byte copies of `boot/kitboot.py` and `boot/hook.py`, and `hosts.json`'s Codex entry alone, drift-checked; a copied plugin verifies the kit it binds with them, and reads its hook data before the kit boots |
 | Agents, skills | `shell/agents/kit-<role>.toml`, `shell/skills/` | every role and skill, rendered from `content/` (`python tools/render_content.py`), each agent file opening with the generated-file line; the skills a byte copy until the live check below; the guard refuses a hand edit of either (docs/guard.md "Generated files"); review templates, not installed |
-| Manifests | `shell/plugin.json`, `shell/mcp.json`, `shell/hooks/hooks.json` | rendered from `kit.json` |
+| Manifests | `shell/plugin.json`, `shell/mcp.json`, `shell/hooks/hooks.json` | rendered from `kit.json`; the plugin export places `shell/plugin.json` at `.codex-plugin/plugin.json`, stamped, and its paths (`./content/skills/`, the hooks file, `mcp.json`) are from the export folder's root (docs/plugin-source.md "Codex") |
 | Lock MCP | `shell/mcp/lock_server.py` | the lock's read tools, server `machine-lock`; the lock server has no write tools on any host (docs/lock-mcp.md "No write tools"), and `adapter/lock.py` lists and answers nothing else |
 | Hub MCP | `shell/mcp/hub_server.py` | the hub's tools (docs/hub-mcp.md), server `hub`; a marked session is refused them by `adapter/policy.py` |
 | Sessions | `adapter/sessions.py` | read-only app-server reads (`ADAPTER.sessions()`) |
@@ -65,14 +65,15 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   (`adapter/content.py` `TOOLS`) are inferred. Agent spawning and messaging are refused in a marked
   session; the rendered roles say so where they name them. `adapter/evidence.py` checks a captured
   payload against a binding.
-- **Plugin loading.** The tested binary (0.162.0-alpha.17.2) found portable skills but not portable
-  hooks or MCP. Hook trust, cached paths and client refresh are untested.
-- **Skills from outside the plugin folder.** The default host's plugin loads its skills from the kit's
-  `content/skills/` itself; Codex keeps its byte copy in `shell/skills/` (decision 29 in
-  docs/multi-host-plan.md section 7) until a live install shows that a Codex plugin can name a
-  skills folder outside its plugin root (here `../../../content/skills/`) and that a plugin cache
-  copied out of the kit still carries it. The check: install the plugin with `plugin.json` naming
-  that folder, start a session, and list its skills; then do the same from a plugin cache.
+- **Plugin loading.** Installed from the plugin export in a private `CODEX_HOME` on 0.165.0-alpha.1.2
+  (2026-10-29, docs/plugin-source.md "Codex"): the export's `.codex-plugin/plugin.json` gives the 20
+  skills from the export's `content/skills/`, the four hooks (untrusted, then trusted) and both MCP
+  servers, which start, all from the plugin cache. Each newly installed version, so every refresh
+  after a push to main, shows the four hooks as modified until the owner trusts them again. Not yet seen: a hook running in a model turn, and
+  the owner's desktop install loading the export.
+- **Skills from outside the plugin folder.** Settled by the export: the Codex plugin root is now the
+  export folder, so `./content/skills/` is inside it and a cache copy carries it. `shell/skills/` and
+  the `shell/boot/` copies stay until the old `pm-kit-local` copy is retired.
 - **Runtime.** The branch's canaries passed on that binary against fixtures; the native local Git
   preparation stayed refused (`workflow_canary` reports `complete=false`). Rerun them for any new
   binary. Live controller, store and lock contention, and landing are not accepted. A read or lander
@@ -86,7 +87,7 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
   are refused in every marked session, and the launcher (`adapter/launcher.py`) plans a launch but
   runs nothing. The rendered roles name spawn_agent and send_message as not available to a Codex
   agent. On Codex the owner starts each agent session by hand.
-- The Codex plugin copy (the cache and the marketplace copy) is refreshed by `python <kit>/tools/plugin_refresh.py --apply` from the owner's session, with Codex closed: it mirrors the export's `shell/` skills, agents, hooks and `.codex-plugin` into the folders `config.toml` names (`adapter/plugin_copy.py`, the step `ADAPTER.plugin_copy` hands it; docs/plugin-source.md "Host plugin copies"). A changed `hooks.json` makes Codex ask the owner to trust the hook again. The session-start hook still warns when the copy's skills are behind the kit's (`adapter/start.py` `stale_line`).
+- `python <kit>/tools/plugin_refresh.py --apply`, from the owner's session, installs the export into Codex with `codex plugin add pm-kit@pm-kit` once config.toml names the export's `pm-kit` marketplace; it prints the switch steps while it names only the old `pm-kit-local` copy. That old copy (the cache and the marketplace copy) is refreshed by the same run, with Codex closed: it mirrors the export's `shell/` skills, agents, hooks and `.codex-plugin` into the folders `config.toml` names (`adapter/plugin_copy.py`, the step `ADAPTER.plugin_copy` hands it; docs/plugin-source.md "Host plugin copies"). A changed `hooks.json` makes Codex ask the owner to trust the hook again. The session-start hook still warns when the copy's skills are behind the kit's (`adapter/start.py` `stale_line`).
 - A main checkout with no `.kit.json` lets a force push to main through, as the shared guard does
   on every host today (baseline behaviour, not this host's). The runtime broker refuses every call
   while a `.kit.json` exists but does not load (`host-runtime-error`).
@@ -104,8 +105,6 @@ From the branch's `codex/` tree. Each is open work before activation.
   cached skill, hook and MCP discovery, read-only MCP start.
 - `scripts/package.py` and `scripts/shared_release.py`: the command lines over those and over
   `kitlib.kitrelease.store`.
-- The native-compat export the tested binary needs: `.codex-plugin/plugin.json` and `.mcp.json`,
-  generated at export from `plugin.json` and `mcp.json` (the portable root must then be absent).
 
 ## Checks
 
