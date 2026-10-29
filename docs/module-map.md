@@ -174,7 +174,7 @@ imports inside strings or `exec`, packages installed from the repository.
 does not matter) with an `import [static]` line naming one of its `imports` package prefixes is
 one build crossing, counted by that ratchet (never refused, never allowed by an edge or a
 messaging module). A file counts once; a prefix ends at a whole name (`org.x.api` does not match
-`org.x.apix`). This is the count Retribution's ApiLayeringTest keeps.
+`org.x.apix`). This is the count a Java layering test keeps.
 Misses: fully qualified names used without an import, Kotlin and Groovy imports.
 
 ## Running
@@ -206,4 +206,4 @@ file (here or at the base), a base git cannot read, or git could not list the tr
 ## Later slices
 
 Scope reports for a branch and their weekly sum; a generated architecture page; isolation runs
-that build one module alone; a C# `using` detector (GriffBall); the Retribution rollout.
+that build one module alone; a C# `using` detector; rollout to the first Java repository.

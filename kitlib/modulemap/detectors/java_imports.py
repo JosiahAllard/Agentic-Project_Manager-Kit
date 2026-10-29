@@ -5,8 +5,8 @@ every `.java` file its `files` globs name (fnmatch, `*` crosses `/`, case does n
 has an import line naming one of its `imports` package prefixes is one build crossing, counted by
 that ratchet and never refused or allowed by an edge. A file counts once however many lines
 match. An import line is `import [static] <prefix>` where the prefix ends a name (the next
-character is not a letter, digit, `_` or `$`), so `org.x.api` does not match `org.x.apix` (the
-rule Retribution's ApiLayeringTest applies).
+character is not a letter, digit, `_` or `$`), so `org.x.api` does not match `org.x.apix`
+(the rule a Java layering test applies).
 
 Known misses: fully qualified names used without an import, and imports in Kotlin or Groovy.
 """
