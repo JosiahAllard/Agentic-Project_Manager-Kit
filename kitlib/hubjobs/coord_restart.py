@@ -69,6 +69,8 @@ EVERY_S = 300
 FIRST_S = 120                  # after the hub starts
 BOOT_S = 30 * 60               # no boot kept and up this long: keep the boot, do not run
 BOOT_SAME_S = 120              # two boot times this close are one boot (uptime and clock jitter)
+BOOT_DRIFT = 1e-3              # ... or within this share of the uptime: NTP slews the wall clock,
+                               # not the tick count, so now - uptime drifts ~10-100 ppm
 RUN, MARK = 'run', 'mark'      # boot_action: start after-reboot, or only keep the boot
 BOOT_KEY = '_after_reboot'     # coord-restart.json's record of the boot after-reboot ran for
 DOWN_RUNS = 2                  # runs in a row a coordinator must be seen down before a start
@@ -220,15 +222,22 @@ def stem_stop(stops, stem):
 def boot_action(record, uptime_s, now):
     """What the boot one-shot does on this run, once per boot. `record` is the kept {boot_at} (or
     None), `uptime_s` seconds since boot (inf when unknown). None when the uptime is unknown or the
-    kept boot is within BOOT_SAME_S of this one (now - uptime_s); RUN when a different boot is kept,
+    kept boot is within boot_slack(uptime_s) of this one (now - uptime_s); RUN when a different boot is kept,
     at any uptime, or none is and the machine has been up less than BOOT_S; MARK (keep this boot,
     do not run) when none is kept and it has been up longer. Reads nothing itself."""
     if not isinstance(uptime_s, (int, float)) or not math.isfinite(uptime_s):
         return None
     done = (record or {}).get('boot_at')
     if isinstance(done, (int, float)) and not isinstance(done, bool):
-        return None if abs(done - (now - uptime_s)) <= BOOT_SAME_S else RUN
+        return None if abs(done - (now - uptime_s)) <= boot_slack(uptime_s) else RUN
     return RUN if uptime_s < BOOT_S else MARK
+
+
+def boot_slack(uptime_s):
+    """How far two boot times may be apart and still be one boot: BOOT_SAME_S, or BOOT_DRIFT of
+    the uptime when that is more (a long uptime gathers clock drift). A real reboot differs by the
+    whole of the boot before it, far past either."""
+    return max(BOOT_SAME_S, uptime_s * BOOT_DRIFT)
 
 
 def uptime_s():

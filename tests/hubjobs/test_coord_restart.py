@@ -489,6 +489,15 @@ class BootAction(unittest.TestCase):
         self.assertEqual(C.boot_action({'boot_at': NOW - 86400}, 240, NOW), C.RUN)  # an earlier boot
         self.assertEqual(C.boot_action({'boot_at': NOW - 86400}, 7200, NOW), C.RUN)  # late sign-in
 
+    def test_clock_drift_over_a_long_uptime_is_still_this_boot(self):
+        up = 14 * 86400                                         # two weeks up, 250 s of drift
+        self.assertIsNone(C.boot_action({'boot_at': NOW - up - 250}, up, NOW))
+        self.assertIsNone(C.boot_action({'boot_at': NOW - up + 250}, up, NOW))
+
+    def test_a_reboot_after_a_long_boot_is_a_new_boot(self):
+        up = 14 * 86400                                         # the boot before lasted 16 days
+        self.assertEqual(C.boot_action({'boot_at': NOW - up - 16 * 86400}, up, NOW), C.RUN)
+
     def test_no_boot_kept_and_up_long_only_keeps_the_boot(self):
         self.assertEqual(C.boot_action(None, C.BOOT_S, NOW), C.MARK)
         self.assertEqual(C.boot_action({}, 3 * 3600, NOW), C.MARK)
