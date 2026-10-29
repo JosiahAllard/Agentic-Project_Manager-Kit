@@ -55,6 +55,13 @@ class CSharpUsingTest(unittest.TestCase):
         lines = [f[1] for f in self.found(t, mapped(namespaces={'Acme.Core': 'core'}))]
         self.assertEqual(lines, [1, 2, 3, 4, 6])
 
+    def test_a_generic_alias_is_a_crossing(self):
+        t = self.tree({'app/A.cs': 'using A = Other.Ns.Box<int>;\n'
+                                   'using B = Other.Ns.Box<int?>;\n'
+                                   'using C = Other.Ns.Thing?;\n'})
+        found = self.found(t, mapped(namespaces={'Other.Ns': 'core'}))
+        self.assertEqual([(f[1], f[3]) for f in found], [(1, 'core'), (2, 'core'), (3, 'core')])
+
     def test_comments_are_skipped(self):
         t = self.tree({'app/A.cs': '// using Acme.Core;\n/* using Acme.Core;\nusing Acme.Core;\n*/\n'
                                    'using Acme.Core; // real\n'})

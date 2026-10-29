@@ -186,8 +186,15 @@ Misses: fully qualified names used without an import, Kotlin and Groovy imports.
 refused unless an edge allows it. Namespaces map to modules by the map's `namespaces` when it
 has any, else by each module's csproj `RootNamespace` (the csproj file name when unset; one two
 modules claim is dropped). Longest prefix wins, on whole names; an unmapped namespace and the
-file's own module are ignored. Block comments are skipped.
-Misses: a using in a multi-line verbatim string, fully qualified names without a using.
+file's own module are ignored. Block comments are skipped. Without `namespaces`, a module's
+RootNamespace claims every namespace under it, including those of folders with no csproj; pin
+those with `namespaces`. A ratchet with no `detector` also counts csharp-using crossings, so the
+first check in a C# repo that has ratchets can raise their counts; set `detector` on the ratchet
+to keep its old count.
+Misses: a second using on the same line, a using after code on the same line
+(`namespace X { using A; }`), a `/*` inside a `//` comment or a string (it can blank later
+usings; a false negative only), a using in a multi-line verbatim string, fully qualified names
+without a using.
 
 ## The architecture page
 

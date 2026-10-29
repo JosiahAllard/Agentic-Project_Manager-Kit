@@ -9,9 +9,12 @@ namespace no prefix matches is ignored, and so is a using of the file's own modu
 two modules both claim is dropped (it names no one module).
 
 Block comments are skipped, and a `using` must start its line, so `//` lines and `using` inside a
-one-line string are not read. Known misses: a using inside a multi-line verbatim string, fully
-qualified names used without a using, and namespaces a csproj sets by other means (`$(...)`,
-Directory.Build.props).
+one-line string are not read. An alias may name a generic type (`using A = X.Y.Box<int>;`).
+Known misses: a second using on the same line, a using after code on the same line
+(`namespace X { using A; }`), a `/*` inside a `//` comment or a string (it can blank later
+usings), a using inside a multi-line verbatim string, fully qualified names used without a using,
+and namespaces a csproj sets by other means (`$(...)`, Directory.Build.props). A RootNamespace
+claims every namespace under it, including those of folders with no csproj.
 """
 import posixpath
 import re
@@ -20,7 +23,7 @@ from . import ROOT, Crossing, line_of
 
 NAME = 'csharp-using'
 USING = re.compile(r'^[ \t]*(?:global[ \t]+)?using[ \t]+(?:static[ \t]+)?'
-                   r'(?:[A-Za-z_]\w*[ \t]*=[ \t]*)?(?:global::)?([A-Za-z_][\w.]*)[ \t]*;[^\r\n]*', re.M)
+                   r'(?:[A-Za-z_]\w*[ \t]*=[ \t]*)?(?:global::)?([A-Za-z_][\w.]*)(?:<[^;\r\n]*>)?\??[ \t]*;[^\r\n]*', re.M)
 BLOCK = re.compile(r'/\*.*?\*/', re.S)
 ROOT_NS = re.compile(r'<RootNamespace>\s*([^<\s]+)\s*</RootNamespace>')
 
