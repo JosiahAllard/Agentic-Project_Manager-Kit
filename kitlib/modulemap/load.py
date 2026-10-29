@@ -5,13 +5,17 @@ reason for each, and the ratchets: the couplings that exist today, each with a f
 an owner path: `.kit.json` "modules".map names it, and `--check` refuses to run unless the owner
 rules lock it. The ceilings file holds each ratchet's current ceiling; it is a plain file, so an
 agent may lower a ceiling.
+
+A module may name its isolation test (`test`), and `isolate.include` the root-held paths every
+isolation tree holds; kitlib.modulemap.isolate runs them (docs/module-map.md "Isolation runs").
+The map's owner lock is what lets a test's command run.
 """
 import fnmatch
 import posixpath
 import re
 
-from kitlib.config.types import (ConfigError, Enum, Field, Int, ListOf, MapOf, Obj, Str, is_note,
-                                 parse_json)
+from kitlib.config.types import (ConfigError, Enum, Field, Int, ListOf, MapOf, Obj, RelPath, Str,
+                                 is_note, parse_json)
 
 ROOT = '(root)'              # a path no module holds: the repository's own files
 NAME_RE = r'[A-Za-z0-9][A-Za-z0-9._-]*'
@@ -23,14 +27,34 @@ DEFAULT_TEST_SOURCES = ['*/src/test/*', '*Tests/*', '*.Tests/*', 'tests/*', '*/t
                         '*/test/*', 'test/*', '*/test_*.py', 'test_*.py', '*_test.py', '*Test.java',
                         '*Tests.java', '*Test.kt', '*Tests.cs', '*.test.js', '*.test.ts']
 
+TEST_TIMEOUT = 1800         # seconds a module's isolation test may run, by default
+MAX_TEST_TIMEOUT = 14400    # and at most
+TEST_FIELDS = ('{python}', '{root}', '{module}')    # what a test's cmd may have filled in
+
 Name = Str(pattern=NAME_RE, what='a module name')
 ModuleRef = Str(pattern=r'%s|\(root\)' % NAME_RE, what='a module name or (root)')
+
+TEST = Obj({
+    'cmd': Field(ListOf(Str(), nonempty=True), None,
+                 "the argv that runs the module's tests; {python}, {root} and {module} are "
+                 'filled in'),
+    'cwd': Field(RelPath(), None, 'the folder it runs in, relative to the tree; unset: its root'),
+    'timeout': Field(Int(1, MAX_TEST_TIMEOUT), None,
+                     'seconds before it is ended; unset: %d' % TEST_TIMEOUT),
+}, required=('cmd',), what='{cmd, cwd, timeout}')
 
 MODULE = Obj({
     'paths': Field(ListOf(Str(), nonempty=True), None,
                    'repo-relative folders (or files) the module holds; fnmatch globs allowed'),
     'why': Field(Str(), None, 'what the module is'),
-}, required=('paths',), what='{paths, why}')
+    'test': Field(TEST, None, 'its isolation test (docs/module-map.md "Isolation runs"); unset: '
+                              'the module is not isolated'),
+}, required=('paths',), what='{paths, why, test}')
+
+ISOLATE = Obj({
+    'include': Field(ListOf(RelPath(), nonempty=True), None,
+                     'root-held folders or files every isolation tree also holds'),
+}, what='{include}')
 
 EDGE = Obj({
     'from': Field(ModuleRef, None, 'the module that uses'),
@@ -70,6 +94,8 @@ MAP = Obj({
     'raises': Field(ListOf(RAISE), None, "ceilings the owner allows above the base's"),
     'test_sources': Field(ListOf(Str(), nonempty=True), None, 'files the paths detector reads'),
     'root_markers': Field(ListOf(Str(), nonempty=True), None, 'names a root climb looks for, added to the defaults'),
+    'isolate': Field(ISOLATE, None,
+                     'what every isolation tree holds beyond its modules and the top-level files'),
 }, required=('modules',), what='module map')
 
 CEILINGS = MapOf(Int(0), 'ratchet id')
@@ -103,6 +129,10 @@ class ModuleMap(object):
         self.raises = list(data.get('raises') or [])
         self.test_sources = list(data.get('test_sources') or DEFAULT_TEST_SOURCES)
         self.root_markers = list(data.get('root_markers') or [])
+        self.tests = {n: m['test'] for n, m in data['modules'].items()
+                      if not is_note(n) and m.get('test')}
+        self.isolate_include = [_norm(p) for p in
+                                (data.get('isolate') or {}).get('include') or []]
         self._cache = {}
         self._validate(raw, errs)
         if errs:
@@ -153,6 +183,28 @@ class ModuleMap(object):
             elif x['ratchet'] in raised:
                 errs.append('ratchet %s is raised twice' % x['ratchet'])
             raised.add(x['ratchet'])
+        for n in sorted(self.tests):
+            for arg in self.tests[n]['cmd']:
+                bad = [f for f in re.findall(r'\{[^{}]*\}', arg) if f not in TEST_FIELDS]
+                if bad:
+                    errs.append('module %s: test.cmd fills in only %s, not %s'
+                                % (n, ', '.join(TEST_FIELDS), ', '.join(bad)))
+        if not errs:                # module_of needs a map whose paths are sound
+            self._validate_isolate(errs)
+
+    def _validate_isolate(self, errs):
+        for p in self.isolate_include:
+            if re.search(r'[*?\[]', p):
+                errs.append('isolate.include %r: name the path; a glob is not allowed' % p)
+                continue
+            try:
+                held = self.module_of(p)[0]
+            except MapError as e:
+                errs.append(str(e))
+                continue
+            if held != ROOT:
+                errs.append('isolate.include %s is held by module %s, not (root): an isolation '
+                            'tree takes in a module only through its edges' % (p, held))
 
     @staticmethod
     def _validate_detector(r, errs):
