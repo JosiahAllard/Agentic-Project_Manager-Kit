@@ -16,16 +16,21 @@ folder (decision 29 in docs/multi-host-plan.md section 7; README.md "Not verifie
 is a copy, so it carries no generated-file line.
 
 manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a final newline:
-- `hosts/codex/shell/plugin.json`: kit.json's name and version, the hooks file under
-  extensions.com.openai (the portable plugin format the Codex branch used).
+- `hosts/codex/shell/plugin.json`: Codex's plugin manifest, which the plugin export
+  (kitlib.pluginsource.export) writes, version stamped, at `.codex-plugin/plugin.json` of the
+  export folder: the plugin root is the whole export, as the default host's is. kit.json's name and version,
+  the skills (PLUGIN_SKILLS_REL, the kit's own `content/skills/`), the hooks file (HOOKS_REL) and the MCP
+  servers file (MCP_REL), each a path from that root (docs/plugin-source.md "Codex").
 - `hosts/codex/shell/mcp.json`: the machine-lock MCP server, read-only on Codex
   (hosts/codex/shell/mcp/lock_server.py, hosts.codex.adapter.lock), and the hub MCP server
-  (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md). That is the Windows file; each other
+  (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md), nested under mcpServers, each run with
+  `cwd` "." and its script a path from the plugin root: Codex starts a plugin's MCP server in
+  the plugin's folder in its cache and expands no ${PLUGIN_ROOT} in it. That is the Windows file; each other
   platform hosts.json gives Codex gets the same servers with that platform's MCP interpreter
   (mcp_servers) in mcp_rel(platform), `mcp.<platform>.json`, which the plugin export writes in its
   place.
 - `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the kit's one
-  hook entry, boot/hook.py, as the plugin's copy ${PLUGIN_ROOT}/boot/hook.py with `codex` and the
+  hook entry, boot/hook.py, as ${PLUGIN_ROOT}/boot/hook.py (the plugin root: the export) with `codex` and the
   event's name. Codex reads a hook's command as one string, so it is
   kitlib.host.hookmain.manifest_command's command line joined, the script quoted (command_text).
   Each other platform hosts.json gives Codex gets the same hooks with that platform's command
@@ -34,8 +39,10 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
   in its place.
 vendored(root) copies the kit's boot folder, boot/kitboot.py and boot/hook.py, to
 `hosts/codex/shell/boot/` byte for byte, and writes `hosts/codex/shell/hosts.json` holding hosts.json's
-Codex entry alone (HOSTS_REL): the plugin root is hosts/codex/shell (${PLUGIN_ROOT}), and a plugin
-copied out of the kit (a plugin cache) cannot reach the kit's boot/ or hosts.json. It must carry the
+Codex entry alone (HOSTS_REL), for the old plugin copy (hosts.codex.adapter.plugin_copy's mirror),
+whose plugin root is hosts/codex/shell (${PLUGIN_ROOT}): a plugin copied out of the kit that way
+cannot reach the kit's boot/ or hosts.json. An install from the export has the kit's own at its
+root, and these copies go with the mirror (docs/plugin-source.md "Codex"). It must carry the
 check that verifies the kit it binds through PM_KIT_ROOT, as the Codex branch's plugin carried
 release_binding.py, the hook entry, and the hook data that entry reads before the kit boots (never
 from the kit it is about to verify). render_content --check fails when a copy drifts.
@@ -65,8 +72,9 @@ VENDORED = {SHELL_REL + '/boot/kitboot.py': 'boot/kitboot.py', SHELL_REL + '/boo
 HOSTS_REL = SHELL_REL + '/hosts.json'
 ENTRY = 'boot/hook.py'
 PLUGIN_ROOT = '${PLUGIN_ROOT}'
-PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
-MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
+# The plugin's skills: the kit's content folder itself, as for the default host (Codex loads them from the
+# plugin root, the export; the skills copy under SHELL_REL is the old mirror's, docs/plugin-source.md).
+PLUGIN_SKILLS_REL = 'content/skills'
 DESCRIPTION = ('The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, '
                'skills, the read-only machine lock MCP server and the hub MCP server. Rendered from kit.json and content/ by '
                'tools/render_content.py; never edit it by hand.')
@@ -79,10 +87,10 @@ HOOKS = (
 )
 HOOK_TIMEOUT = 10
 MCP_SERVERS = {SERVER_NAME: {'type': 'stdio', 'command': 'python',
-                                'args': [PLUGIN_ROOT + '/mcp/lock_server.py'],
+                                'args': [SHELL_REL + '/mcp/lock_server.py'], 'cwd': '.',
                                 'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']},
                HUB_NAME: {'type': 'stdio', 'command': 'python',
-                          'args': [PLUGIN_ROOT + '/mcp/hub_server.py'],
+                          'args': [SHELL_REL + '/mcp/hub_server.py'], 'cwd': '.',
                           'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']}}
 
 
@@ -318,12 +326,12 @@ class CodexContent:
     def manifests(self, kit, content, registry_path=None):
         """{path: bytes} of plugin.json, and mcp.json and hooks.json once for each platform
         hosts.json gives Codex, for `kit` ({"name", "version"})."""
-        plugin = {'$schema': PLUGIN_SCHEMA, 'name': kit['name'], 'version': kit['version'],
-                  'description': DESCRIPTION, 'extensions': {'com.openai': {'hooks': './hooks/hooks.json'}}}
+        plugin = {'name': kit['name'], 'version': kit['version'], 'description': DESCRIPTION,
+                  'skills': './%s/' % PLUGIN_SKILLS_REL, 'hooks': './' + HOOKS_REL, 'mcpServers': './' + MCP_REL}
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
         out = {MANIFEST_REL: dump(plugin)}
         for platform in registry.host(HOST, registry_path).platforms:
-            out[mcp_rel(platform)] = dump({'$schema': MCP_SCHEMA, 'mcpServers': mcp_servers(platform)})
+            out[mcp_rel(platform)] = dump({'mcpServers': mcp_servers(platform)})
             out[hooks_rel(platform)] = dump(self.hooks(registry_path, platform))
         return out
 
