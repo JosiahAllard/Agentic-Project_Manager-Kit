@@ -2,6 +2,8 @@
 import os
 import stat
 
+from kitlib import platform
+
 # The Claude shell in a kit checkout (hosts.json "shell"), and the folder it was before the hosts/
 # move (docs/multi-host-plan.md step 7). Settings and skill links written before the move name
 # MOVED_FROM paths; the settings and links steps re-point them into SHELL (docs/machine-setup.md
@@ -24,6 +26,12 @@ def make_folder(folder, mode=0o755):
     os.makedirs(folder, exist_ok=True)
     for d in made:
         os.chmod(d, mode)
+
+
+def python_name():
+    """The interpreter a printed hint names: `python3` on Linux (stock Ubuntu has no `python`),
+    `python` elsewhere. NAME is read at call time."""
+    return 'python3' if platform.NAME == 'linux' else 'python'
 
 
 def kit_file(kit, rel):

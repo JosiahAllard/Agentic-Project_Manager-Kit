@@ -47,6 +47,8 @@ import sys
 from kitlib.git import cmd
 from kitlib.proc import spawn
 
+from .common import python_name
+
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 NAME = 'new-repo'
 EMAIL = re.compile(r'^[^@\s"\\<>$]+@[^@\s"\\<>$]+\.[^@\s"\\<>$]+$')
@@ -243,7 +245,7 @@ class Setup(object):
         self.pm_args = [tool, '-C', c.kit, 'init', '--path', path]
         if self.private_remote:
             self.pm_args += ['--url', self.private_remote]
-        self.pm_line = 'python ' + ' '.join(ps_quote(a) for a in self.pm_args)
+        self.pm_line = python_name() + ' ' +' '.join(ps_quote(a) for a in self.pm_args)
 
     def _plan_stack(self):
         c = self.ctx
@@ -566,8 +568,8 @@ class Setup(object):
             out.append('     %s (its %s, a machine path) is git-ignored: nothing to commit for it'
                        % (memory.local_rel(), memory.KEY))
         tools = os.path.join(c.kit, 'tools')
-        out.append('  2. agents run the kit\'s tools as python "%s" -C <checkout>; nothing to commit '
-                   'for them' % os.path.join(tools, '<x>.py'))
+        out.append('  2. agents run the kit\'s tools as %s "%s" -C <checkout>; nothing to commit '
+                   'for them' % (python_name(), os.path.join(tools, '<x>.py')))
         if c.stack:
             out += ['  3. tools/gate.json is the %s gate: edit its globs and test command to the project.' % c.stack,
                     '     %s' % PASS_NOTES.get(c.stack, 'its steps pass on their exit status and fail patterns '
