@@ -15,9 +15,10 @@ Codex copy too, except from a session PM_KIT_ROLE marks: docs/plugin-source.md "
 A run that does nothing returns jobs.Skip, which leaves the failure count alone: no tracking ref,
 no export yet, a folder not migrated, plugin.auto_refresh off, a live process holding refresh.pid
 (pm_watch's spawn, a refresh by hand), a child that found refresh.pid taken, or a retry not due.
-A child that exits non-zero, or runs past REFRESH_TIMEOUT_S, is a failure (jobs: its text in
-health, `failing` pushed at the third in a row); the same main is tried again RETRY_S after it
-failed, not sooner, and the runs between are skips (`waiting to retry`). The child's output is
+A child that exits non-zero, or runs past REFRESH_TIMEOUT_S (then it is ended with every
+process it started), is a failure (jobs: its text in health, `failing` pushed at the third in a
+row); the same main is tried again RETRY_S after it failed, not sooner, and the runs between are
+skips (`waiting to retry`). The child's output is
 appended to <export root>/refresh.log, the file pm_watch's spawn writes, under a header line.
 """
 import datetime
@@ -27,13 +28,15 @@ import sys
 import time
 
 from kitlib import pluginsource
-from kitlib.proc import process     # noqa: F401 - loaded now: refresh.pid reads it mid-run
+from kitlib.proc import process     # loaded now: refresh.pid reads it mid-run; kill_tree
+from kitlib.proc import spawn
 from kitlib.hubsite import jobs
 
 NAME = 'plugin-refresh'
 EVERY_S = 300
 RETRY_S = 1800
 REFRESH_TIMEOUT_S = 1800
+KILL_WAIT_S = 10                    # after a timeout's kill: the pipe's last bytes
 BUSY = 'a refresh is already running'
 _NOWIN = 0x08000000                 # CREATE_NO_WINDOW
 
@@ -69,22 +72,38 @@ def refresh_argv(kit, home=None):
     return argv
 
 
-def run_child(argv, cwd):
-    """(exit code, output lines) of one windowless child, waited for up to REFRESH_TIMEOUT_S
-    (past it the child is killed and RefreshFailed raised)."""
+def run_child(argv, cwd, start=None, kill_tree=None, ctime=None):
+    """(exit code, output lines) of one windowless child (PYTHONIOENCODING=utf-8, so a non-ASCII
+    path reads right in refresh.log), waited for up to REFRESH_TIMEOUT_S. Past it the child and
+    every process it started (the host's own programs that write the account folders) are ended,
+    as the gate's runner does, and RefreshFailed raised: a child killed alone would leave its
+    refresh.pid stale while its children still wrote. `start`, `kill_tree` and `ctime` are the
+    tests' seams (default kitlib.proc.spawn.popen, kitlib.proc.process kill_tree, proc_ctime)."""
+    start = start or spawn.popen
+    kill_tree = kill_tree or process.kill_tree
+    ctime = ctime or process.proc_ctime
+    env = dict(os.environ, PYTHONIOENCODING='utf-8')
+    p = start(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT, creationflags=_NOWIN)
+    born = ctime(p.pid)
     try:
-        done = subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, timeout=REFRESH_TIMEOUT_S,
-                              creationflags=_NOWIN)
+        out, _ = p.communicate(timeout=REFRESH_TIMEOUT_S)
     except subprocess.TimeoutExpired:
+        if born is not None:
+            kill_tree(p.pid, born)
+        p.kill()
+        try:
+            p.communicate(timeout=KILL_WAIT_S)
+        except subprocess.TimeoutExpired:
+            pass
         raise RefreshFailed('the refresh did not end in %d s and was stopped' % REFRESH_TIMEOUT_S)
-    return done.returncode, done.stdout.decode('utf-8', 'replace').splitlines()
+    return p.returncode, (out or b'').decode('utf-8', 'replace').splitlines()
 
 
 class PluginJob(object):
     """run(ctx) is the job. Every part a test replaces is an argument: `kit` (default the
     checkout this kit runs from, or the one its export's marker names), `load(kit)` the plugin
-    Settings, `folders()` the account folders (default kitlib.pluginsource.account_folders),
+    Settings, `folders()` the account folders (default kitlib.pluginsource.account_folders(home)),
     `child(argv, cwd)` -> (exit code, lines) (default run_child), `alive` refresh.pid's liveness
     test, `clock` epoch seconds. `home` is passed to the child as --home when given."""
 
@@ -93,7 +112,7 @@ class PluginJob(object):
         self.home = home
         self.kit = kit
         self.load = load or (lambda kit: pluginsource.load(home, kit=kit))
-        self.folders = folders or pluginsource.account_folders
+        self.folders = folders or (lambda: pluginsource.account_folders(home))
         self.child = child or run_child
         self.alive = alive
         self.clock = clock or time.time

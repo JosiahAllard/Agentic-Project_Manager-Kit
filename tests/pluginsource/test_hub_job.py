@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from kitlib import pluginsource as P
+from kitlib.pluginsource import claude as host
 from kitlib.hubsite import jobs, plugin_job
 from tests.pluginsource import Kit
 
@@ -44,6 +45,25 @@ class Child(object):
                 state['folders'].setdefault(f, {'migrated': True})['rc'] = 0
             P.write_state(self.case.k.root, state)
         return self.code, list(self.lines)
+
+
+class FakePopen(object):
+    """run_child's child: communicate(timeout) answers `out` or, hung, raises TimeoutExpired
+    until kill() is called."""
+    pid = 4242
+
+    def __init__(self, argv, kw, out=b'', code=0, hang=False):
+        self.argv, self.kw, self.out, self.returncode, self.hang = argv, kw, out, code, hang
+        self.waits, self.killed = [], False
+
+    def communicate(self, timeout=None):
+        self.waits.append(timeout)
+        if self.hang and not self.killed:
+            raise subprocess.TimeoutExpired(self.argv, timeout)
+        return self.out, None
+
+    def kill(self):
+        self.killed = True
 
 
 class JobCase(unittest.TestCase):
@@ -87,6 +107,14 @@ class PluginJobTest(JobCase):
         self.assertEqual(job(ctx()), 'current at %s' % self.main()[:12])
         self.assertEqual(len(self.child.calls), 1, 'current: no second refresh')
 
+    def test_the_default_folders_are_those_of_the_home_the_child_gets(self):
+        with mock.patch.object(plugin_job.pluginsource, 'account_folders',
+                               return_value=['F']) as af:
+            self.assertEqual(plugin_job.PluginJob(home='H').folders(), ['F'])
+        af.assert_called_once_with('H')
+        self.assertEqual(P.account_folders(self.k.home),
+                         host.account_folders(self.k.home))
+
     def test_a_home_is_passed_to_the_child(self):
         self.assertEqual(plugin_job.refresh_argv('K', 'H')[1:],
                          [os.path.join('K', 'tools', 'plugin_refresh.py'), '--apply', '--home', 'H'])
@@ -100,16 +128,32 @@ class PluginJobTest(JobCase):
         with open(os.path.join(self.k.root, P.LOGFILE), encoding='utf-8') as fh:
             self.assertIn('hub plugin job: exit 1', fh.read())
 
-    def test_the_default_child_waits_and_returns_the_exit_code_and_lines(self):
-        done = subprocess.CompletedProcess(['x'], 3, b'one\r\ntwo\n')
-        with mock.patch.object(plugin_job.subprocess, 'run', return_value=done) as run:
-            self.assertEqual(plugin_job.run_child(['a', 'b'], 'C'), (3, ['one', 'two']))
-        args, kw = run.call_args
-        self.assertEqual((args[0], kw['cwd'], kw['timeout']), (['a', 'b'], 'C', plugin_job.REFRESH_TIMEOUT_S))
-        with mock.patch.object(plugin_job.subprocess, 'run',
-                               side_effect=subprocess.TimeoutExpired('x', 1)):
-            with self.assertRaises(plugin_job.RefreshFailed):
-                plugin_job.run_child(['a'], 'C')
+    def test_the_default_child_is_windowless_utf8_and_returns_its_code_and_lines(self):
+        procs = []
+
+        def start(argv, **kw):
+            procs.append(FakePopen(argv, kw, out=b'one\r\ntwo\n', code=3))
+            return procs[0]
+        kills = []
+        got = plugin_job.run_child(['a', 'b'], 'C', start=start,
+                                   kill_tree=lambda *a: kills.append(a), ctime=lambda pid: 77)
+        self.assertEqual(got, (3, ['one', 'two']))
+        kw = procs[0].kw
+        self.assertEqual((procs[0].argv, kw['cwd'], kw['stdin'], kw['creationflags']),
+                         (['a', 'b'], 'C', subprocess.DEVNULL, 0x08000000))
+        self.assertEqual(kw['env']['PYTHONIOENCODING'], 'utf-8')
+        self.assertEqual(procs[0].waits[0], plugin_job.REFRESH_TIMEOUT_S)
+        self.assertEqual(kills, [])
+
+    def test_a_child_past_its_timeout_is_ended_with_every_process_it_started(self):
+        proc = FakePopen(['a'], {}, hang=True)
+        kills = []
+        with self.assertRaises(plugin_job.RefreshFailed) as got:
+            plugin_job.run_child(['a'], 'C', start=lambda argv, **kw: proc,
+                                 kill_tree=lambda *a: kills.append(a), ctime=lambda pid: 77)
+        self.assertEqual(kills, [(proc.pid, 77)], 'the whole tree, by pid and creation time')
+        self.assertTrue(proc.killed)
+        self.assertIn('did not end', str(got.exception))
 
     def test_a_child_that_cannot_start_is_a_failure(self):
         self.k.seed_migrated(self.folders)
