@@ -59,6 +59,11 @@ text is for the owner's console (it may name a folder):
   6. the push-notification worker (kitlib.hubsite.push.PushWorker), only when Sources.push and
      Sources.push_dir are both set, with a line in `Hub.notes`. It is made here and started by
      start(); one that fails to start is an 'error' line and the hub serves without it.
+  7. the timed jobs (kitlib.hubsite.jobs.Jobs), one per maker in Sources.jobs, with a line in
+     `Hub.notes` naming them; a maker that raises is a line there and the hub serves without
+     that job. Their events are pushed through the push worker when there is one, their
+     failures are 'error' lines of the log, and GET health's `jobs` reads them. Started by
+     start(), before the listeners.
 `Hub.listeners` is a list: the local listener first, then the tunnel's when there is one.
 start() and close() carry every listener in it, and a start-up that fails after one was bound
 closes its door. Each gets a health_route of its own: the local listener's answers as it did
@@ -94,7 +99,8 @@ owner's stop route):
      (up to access.FETCH_DEADLINE_S, longer than a step's `timeout`) is refused at once with
      the tunnel's one answer, so step 3 does not wait for it; a stop admits nobody. Then no
      new connection, and no write begins (httpd refuses it);
-  2. the backlog timer;
+  2. the backlog timer, then the timed jobs (no job begins a run after this; one in flight, a
+     plugin refresh say, may outlast `timeout`, and its thread, a daemon, ends with the process);
   3. the requests in flight, except the long waits: after this no write is in flight;
   4. the git sync, only when the server was started: a 'note' line says that the wait for git
      begins, the sync's thread is stopped, then one last pass (sync_once) runs while the store
@@ -229,6 +235,7 @@ from kitlib.config.types import ConfigError
 from kitlib.proc import process
 
 from . import api as _api
+from . import jobs as _jobs
 from . import push as _push
 from . import access, auth, backlog, codestale, derived, gitsync, httpd, recordwrite, tunnel
 from . import skilledits
@@ -384,12 +391,22 @@ class Sources(object):
       lock         the machine lock's door for the Api's lock routes (kitlib.hubsite.lockdoor
                    LockDoor, or its like: revision, view, stats); None: those routes answer
                    `unavailable`
+      jobs         the timed jobs (kitlib.hubsite.jobs): [make(sources) -> jobs.Job], one per job;
+                   machine_sources registers them, a scratch store gets none; [] or None: none
+      home         the home folder machine_sources read the machine config under (None: the
+                   user's), for a job that reads it again
+      plugin_copies  callable() -> [step], each host's plugin-copy step (tools/_host.py
+                   plugin_copies, given by the host's entry point, tools/hub.py) for the plugin
+                   refresh job (kitlib.hubsite.plugin_job); None: no host copy is refreshed
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
                  access_now=None, known_repos=None, push=None, push_dir=None, lock=None,
-                 findings=None, skills=None):
+                 findings=None, skills=None, jobs=None, home=None, plugin_copies=None):
+        self.jobs = list(jobs or [])
+        self.home = home
+        self.plugin_copies = plugin_copies
         self.findings = findings
         self.lock = lock
         self.push = push
@@ -530,7 +547,10 @@ def machine_sources(home=None, sync=True):
     src = Sources(tokens=auth.folder(home), pm_data=pm,
                   notices=pmwatch.configured_notice_dir(path),
                   agents=agents_dir(), skills=skills_dir(),
-                  sync=gitsync.GitSync if sync else None)
+                  sync=gitsync.GitSync if sync else None, home=home)
+    if sync:                        # the timed jobs: one registration line each (kitlib.hubsite.jobs)
+        from . import plugin_job
+        src.jobs.append(plugin_job.make)
     if pm and pm.get('path'):
         from kitlib.maintlint import result as lint_result
         src.findings = os.path.join(pm['path'], lint_result.FOLDER)
@@ -1137,6 +1157,34 @@ def _configured(backlog_views, repo_id, remote_id=None):
     return [(name, root) for name, root in pairs if root and remote_id(root)[0] == repo_id]
 
 
+def _job_line(log, text):
+    """The timed jobs' one-argument log, as an 'error' line of the hub's log (scrubbed)."""
+    if log is None:
+        return
+    try:
+        log('error', scrub(text))
+    except Exception:               # noqa: BLE001 - a log that fails must not stop a job
+        pass
+
+
+def _make_jobs(sources, pusher, notes, log):
+    """The timed jobs of `sources` (Sources.jobs) as one kitlib.hubsite.jobs.Jobs, their events
+    pushed through `pusher` when there is one; None with none. A job whose maker raises is left
+    out, with a line in `notes`: the hub serves without it."""
+    made = []
+    for make in sources.jobs:
+        try:
+            made.append(make(sources))
+        except Exception as e:      # noqa: BLE001 - the hub serves without that job
+            notes.append('a timed job was not made (%s): %s: %s'
+                         % (getattr(make, '__module__', '?'), type(e).__name__, e))
+    if not made:
+        return None
+    notes.append('timed jobs on: %s' % ', '.join(j.name for j in made))
+    return _jobs.Jobs(made, notify=pusher.job_event if pusher is not None else None,
+                      log=functools.partial(_job_line, log))
+
+
 def _push_line(log, text):
     """The push worker's one-argument log, as a 'note' line of the hub's log (scrubbed)."""
     if log is None:
@@ -1221,8 +1269,11 @@ def build(settings, sources, log=None):
                                      log=functools.partial(_push_line, log))
             notes.append('push notifications on: the asking session and the PM hear of an answer '
                          'or a done to-do')
+        timed = _make_jobs(sources, pusher, notes, log)
+        if timed is not None:
+            api.jobs_status = timed.status   # GET health `jobs` (Api.jobs_seen)
         hub = Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
-                  tunnel=said, stopping=stopping, push=pusher)
+                  tunnel=said, stopping=stopping, push=pusher, jobs=timed)
         api.code_status = hub.code_state     # GET health and GET snapshot `code` (Api.code_seen)
         return hub
     except BaseException:
@@ -1253,11 +1304,13 @@ class Hub(object):
     none it stays what it was). The `tunnel` given here is that text or a callable giving it.
     `stopping` is the event the local listener's stop route sets (httpd.stop_route); run()
     closes the hub once it is set. A Hub made without one gets an event nothing sets. `push` is
-    the push-notification worker (kitlib.hubsite.push.PushWorker: start, stop) or None."""
+    the push-notification worker (kitlib.hubsite.push.PushWorker: start, stop) or None; `jobs`
+    the timed jobs (kitlib.hubsite.jobs.Jobs: start, stop) or None."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
-                 log=None, tunnel='', stopping=None, push=None):
+                 log=None, tunnel='', stopping=None, push=None, jobs=None):
         self.push = push
+        self.jobs = jobs
         self.settings = settings
         self.store = store
         self.api = api
@@ -1349,8 +1402,8 @@ class Hub(object):
             self._say(STALE_CODE)
 
     def start(self):
-        """Start the git sync, the backlog timer, the push-notification worker and every
-        listener, the listeners last so the first request finds the rest running. A push worker
+        """Start the git sync, the backlog timer, the push-notification worker, the timed jobs
+        and every listener, the listeners last so the first request finds the rest running. A push worker
         that fails to start is an 'error' line and the hub serves without it. False, and nothing
         started, when it was started or closed already."""
         with self._life:
@@ -1367,6 +1420,8 @@ class Hub(object):
                 except Exception as e:      # noqa: BLE001 - the hub serves without pushes
                     self._say('push notifications did not start: %s: %s' % (type(e).__name__, e))
                     self.push = None
+            if self.jobs is not None:
+                self.jobs.start()
             for lis in self.listeners:
                 lis.start()
             if self.backlog is not None:
@@ -1490,6 +1545,8 @@ class Hub(object):
                 if self.backlog is not None:
                     clean.append(self._step('the backlog timer', timeout, self.backlog.stop,
                                             timeout))
+                if self.jobs is not None:
+                    clean.append(self._step('the timed jobs', timeout, self.jobs.stop, timeout))
                 drained = True
                 for lis in self.listeners:
                     done = self._step('the requests in flight', timeout, lis.drain, timeout)
