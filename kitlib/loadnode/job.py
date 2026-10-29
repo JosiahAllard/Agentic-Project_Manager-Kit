@@ -102,6 +102,18 @@ def _git_default(args, cwd, env=None, timeout=None):
     return r.rc, r.out, r.err
 
 
+def push_refs(node, link, repo, top, refspecs, git=None, timeout_s=PUSH_TIMEOUT_S):
+    """git push of `refspecs` from the checkout `top` to `node`'s mirror of `repo` through the open
+    remote.Link `link`'s pinned ssh, never forced: (rc, err text). git is _git_default's
+    signature (a test's stand-in). NodeJob's pushes and kitlib.loadnode.mirror's refresh."""
+    from kitlib.git import cmd as gitcmd
+    env = link.git_env(gitcmd.scrubbed_env())
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    args = ['-c', 'protocol.version=0', 'push', '--quiet', remote.push_url(node, repo)]
+    rc, _out, err = (git or _git_default)(args + list(refspecs), top, env, timeout_s)
+    return rc, err
+
+
 def checkout(cwd, git=None):
     """The Checkout at `cwd`: its top folder, HEAD's commit and whether a tracked file differs
     from it (untracked files do not count: they are not pushed). JobError(EXIT_USAGE) outside a
@@ -221,12 +233,7 @@ class NodeJob(object):
 
     def _push(self, refspecs):
         """git push of `refspecs` to the node's mirror through the pinned ssh: (rc, err)."""
-        from kitlib.git import cmd as gitcmd
-        env = self.link.git_env(gitcmd.scrubbed_env())
-        env['GIT_TERMINAL_PROMPT'] = '0'
-        args = ['-c', 'protocol.version=0', 'push', '--quiet', remote.push_url(self.node, self.repo)]
-        rc, _out, err = self.git(args + list(refspecs), self.top, env, PUSH_TIMEOUT_S)
-        return rc, err
+        return push_refs(self.node, self.link, self.repo, self.top, refspecs, self.git)
 
     def push(self):
         """Push HEAD to refs/node/<job> on the node's mirror (a gate job: its base to
@@ -730,13 +737,15 @@ _GIT_TAIL = ('fatal: Could not read from remote repository.',
 
 
 def _push_why(err):
-    """The cause in a failed push's stderr: the host key, else its last line that is not git's
-    closing boilerplate, else that boilerplate's first line; never git's "fatal: "."""
+    """The cause in a failed push's stderr: the host key, else git's last ref status line
+    (`! [rejected] ...`), else its last line that is neither git's closing boilerplate nor a
+    `hint:`, else that boilerplate's first line; never git's "fatal: "."""
     text = err or ''
     if any(k in text for k in remote._KEY_FAILS):
         return "the node's host key is not the one in the registry"
     lines = [x.strip() for x in text.splitlines() if x.strip()]
-    own = [x for x in lines if x not in _GIT_TAIL]
+    own = [x for x in lines if x not in _GIT_TAIL and not x.startswith('hint:')]
+    own = [x for x in own if x.startswith('! [')] or own
     why = own[-1] if own else lines[0] if lines else ''
     return (why[len('fatal: '):] if why.startswith('fatal: ') else why)[:remote.ERR_CAP]
 
