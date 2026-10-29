@@ -185,7 +185,7 @@ def backlog_wake(offered, baseline):
     return Wake('its repo has new startable records: %s' % shown_ids(new), new)
 
 
-# owner_wake: an owner answer or approval for the repo as a reason (hub Q-1595, open) is not
+# owner_wake: an owner answer or approval for the repo as a reason (an open hub question) is not
 # built. It would be one more predicate returning a Wake or None, passed to wake_of.
 
 
