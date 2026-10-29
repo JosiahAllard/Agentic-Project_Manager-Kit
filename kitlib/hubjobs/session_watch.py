@@ -46,16 +46,18 @@ EVERY_S = 60                        # pm_watch's POLL_SLEEP; the Watcher's own t
 LIVE_S = 300                        # a pm_watch heartbeat this fresh is live (push.WATCHER_STALE_S)
 RECENT_MAX = 20                     # pushed event lines kept in the note
 STATE_SUFFIX = '.hub.json'
-HOST_MODULE = 'claude_host'         # the watcher readers' module inside the host's adapter package
+HOST_MODULE = '%s_host'             # the watcher readers' module in the adapter package, by host name
 _SUBJECT_SKIP = ('account', 'run')
 
 
 def host_module():
-    """The default host's watcher readers (newest_finder, rc_records, default_alerts_dir, PRELOAD).
-    kitlib never imports a host statically: the module name comes from the registry, as
-    kitlib/machinesetup/extras.py managed_path imports the adapter."""
+    """The default host's watcher readers (newest_finder, rc_records, default_alerts_dir, PRELOAD):
+    <its adapter package>.<its name>_host, where tools/pm_watch.py imports them. A host without
+    one gives ImportError. kitlib never imports a host statically: the names come from the
+    registry, as kitlib/machinesetup/extras.py managed_path imports the adapter."""
     from kitlib.host import registry
-    return importlib.import_module(registry.host(registry.default()).adapter + '.' + HOST_MODULE)
+    name = registry.default()
+    return importlib.import_module(registry.host(name).adapter + '.' + HOST_MODULE % name)
 
 
 def make(sources):
