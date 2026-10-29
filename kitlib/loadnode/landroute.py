@@ -265,23 +265,29 @@ def run_on_node(node, root, merge, base, cfg, repo, slug, full=False, docs=False
                                checker=checker, say=say, out=out, notice_dir=notice_dir,
                                tool=tool, **(job_kw or {}))
     holder, done, state = [], threading.Event(), {'expired': False}
-    threading.Thread(target=_watch, args=(holder, done, state, ceiling_s, poll_s, say),
-                     daemon=True).start()
+    watcher = threading.Thread(target=_watch, args=(holder, done, state, ceiling_s, poll_s, say),
+                               daemon=True)
+    watcher.start()
     code = error = None
     try:
-        try:
-            with (open_link or remote.Link)(node) as link:
-                holder.append(make_job(link))
+        # every stop goes out while the link is open: its pinned known_hosts goes with it
+        with (open_link or remote.Link)(node) as link:
+            holder.append(make_job(link))
+            try:
                 code = holder[0].run()
-        except (job.JobError, OSError) as e:
-            error = e
-        except KeyboardInterrupt:
-            nj = holder[0] if holder else None
-            if nj is not None and nj.started:
-                _stop(nj, say)
-                for line in nj.follow_lines():
-                    say(line)
-            raise
+            except KeyboardInterrupt:
+                done.set()
+                watcher.join()
+                if holder[0].started:
+                    _stop(holder[0], say)
+                    for line in holder[0].follow_lines():
+                        say(line)
+                raise
+            finally:
+                done.set()
+                watcher.join()
+    except (job.JobError, OSError) as e:
+        error = e
     finally:
         done.set()
     nj = holder[0] if holder else None

@@ -434,8 +434,9 @@ class LandRun(Base):
 
     def test_the_ceiling_stops_a_started_job_and_it_is_not_landed(self):
         slow = SlowJob()
-        out = self.run_on(make_job=lambda link: slow, ceiling_s=0.05, poll_s=0.01)
+        out = self.run_on(open_link=OpenLink, make_job=slow.made, ceiling_s=0.05, poll_s=0.01)
         self.assertTrue(slow.stopped.is_set())
+        self.assertEqual(slow.link_open, True)          # its pinned known_hosts still there
         self.assert_not_landed(out, 'ran past the ceiling of 0 s and was stopped')
         self.assertIn('job %s on box1 asked to stop' % JOB, self.said)
 
@@ -456,8 +457,9 @@ class LandRun(Base):
     def test_ctrl_c_stops_a_started_job_and_goes_on_up(self):
         slow = SlowJob(interrupt=True)
         with self.assertRaises(KeyboardInterrupt):
-            self.run_on(make_job=lambda link: slow)
+            self.run_on(open_link=OpenLink, make_job=slow.made)
         self.assertTrue(slow.stopped.is_set())
+        self.assertEqual(slow.link_open, True)
         self.assertIn('  stop it:   node.py stop box1 %s' % JOB, self.said)
 
     def test_ctrl_c_before_the_start_stops_nothing(self):
@@ -465,6 +467,20 @@ class LandRun(Base):
         with self.assertRaises(KeyboardInterrupt):
             self.run_on(make_job=lambda link: slow)
         self.assertFalse(slow.stopped.is_set())
+
+
+class OpenLink(object):
+    """open_link's stand-in: says whether the link is still open."""
+
+    def __init__(self, node):
+        self.open = False
+
+    def __enter__(self):
+        self.open = True
+        return self
+
+    def __exit__(self, *exc):
+        self.open = False
 
 
 class SlowJob(object):
@@ -475,6 +491,11 @@ class SlowJob(object):
         self.node, self.job, self.started, self.land_record = NODE, JOB, False, None
         self.start_after, self.interrupt = start_after, interrupt
         self.stopped, self.stopped_after_start = threading.Event(), False
+        self.link = self.link_open = None
+
+    def made(self, link):
+        self.link = link
+        return self
 
     def run(self):
         if self.start_after is not None:
@@ -488,6 +509,7 @@ class SlowJob(object):
 
     def stop(self):
         self.stopped_after_start = self.started
+        self.link_open = getattr(self.link, 'open', None)
         self.stopped.set()
         return {'ok': True}
 
