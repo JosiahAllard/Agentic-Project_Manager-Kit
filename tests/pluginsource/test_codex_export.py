@@ -226,6 +226,12 @@ class InstallTest(InstallCase):
         self.assertIn('installed pm-kit 1.0.0-main.2', self.text())
         self.assertNotIn('hooks changed', self.text())
 
+    def test_a_first_install_asks_for_the_first_trust(self):
+        self.install()
+        self.assertIn('installed pm-kit 1.0.0-main.2 from %s (was none)' % self.export, self.text())
+        self.assertIn('codex: Codex asks the owner to trust the pm-kit hooks at its next start', self.text())
+        self.assertNotIn('hooks changed', self.text())
+
     def test_a_cache_at_the_exports_version_is_current(self):
         self.cache('1.0.0-main.2')
         self.install()

@@ -278,5 +278,7 @@ def install(export, home, config, out, apply=False, environ=None, run=None):
         out('codex: FAILED: codex plugin add exited 0 but the cache holds %s, not %s' % (', '.join(now) or 'none', version))
         return
     out('codex: installed pm-kit %s from %s (was %s); a running Codex loads it at its next start' % (version, export, was))
-    if _read(os.path.join(export, *HOOKS)) not in old_hooks:
+    if not have:
+        out('codex: Codex asks the owner to trust the pm-kit hooks at its next start')
+    elif _read(os.path.join(export, *HOOKS)) not in old_hooks:
         out('codex: the pm-kit hooks changed: Codex asks the owner to trust them again at its next start')
