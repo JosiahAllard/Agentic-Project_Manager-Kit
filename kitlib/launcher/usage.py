@@ -6,7 +6,8 @@
   account codex: five_hour=reset  seven_day=Z% (resets ...)  [updated M min ago]
 
 A file refreshes only while a session on that account runs, so "updated" says how fresh it is; a
-window whose resets_at has passed reads `reset`. Each account's newest file by updated_at is read.
+window whose resets_at has passed reads `reset`; a window the file does not give (null, no
+resets_at, no percentage) reads `?`, which kitlib.pmwatch keeps as unknown, never 0. Each account's newest file by updated_at is read.
 Codex's weekly limit is the last rate_limits event of its newest session log; it has no five-hour
 window.
 """
@@ -29,9 +30,9 @@ def _window(name, w, now):
     if reset < now:
         return '%s=reset' % name
     pct = w.get('used_percentage')
-    if isinstance(pct, float) and pct.is_integer():
-        pct = int(pct)
-    return '%s=%s%% (resets %s)' % (name, pct, A.short(reset))
+    if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+        return '%s=?' % name
+    return '%s=%d%% (resets %s)' % (name, A.whole(pct), A.short(reset))
 
 
 def account_lines(settings, now):

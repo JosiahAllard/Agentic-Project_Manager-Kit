@@ -84,6 +84,7 @@ input[type=search]{font:500 .8125rem var(--f-body);padding:5px 10px;border-radiu
 .meter.crit .fill{background:var(--warn)} .meter.crit .pct{color:var(--warn)}
 .acct .foot{font-size:.75rem;color:var(--muted)}
 .acct .foot.stale{color:var(--rec)}
+.meter.stale .fill{opacity:.45}
 .bfil{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
 .bfil .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .bfil .lbl{font:600 .7rem var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);min-width:4.5em}
@@ -616,19 +617,21 @@ ul.hist .sch-line{display:block}
   }
 
   // The usage chip is one figure, the highest of every account's two windows: it says whose and which. A tie goes to
-  // the weekly window (it lasts longer) whichever account it is on, then to the first account by name.
+  // the weekly window (it lasts longer) whichever account it is on, then to the first account by name. A stale reading
+  // still counts (its figure is the last known one) but the chip says so; an unknown one (?) has no figure to count.
   function usagePeak(rows){
-    let top = { pct: -1, win: "", account: "" };
+    let top = { pct: -1, win: "", account: "", stale: false };
     for (const u of rows.slice().sort((a,b) => String(a.account).localeCompare(String(b.account), [], {numeric:true})))
-      for (const [win, v] of [["wk", u.seven_day], ["5h", u.five_hour]]) { const n = pctOf(v); if (n > top.pct || (n === top.pct && n >= 0 && win === "wk" && top.win !== "wk")) top = { pct: n, win, account: String(u.account) }; }
+      for (const [win, v] of [["wk", u.seven_day], ["5h", u.five_hour]]) { const n = pctOf(v); if (n > top.pct || (n === top.pct && n >= 0 && win === "wk" && top.win !== "wk")) top = { pct: n, win, account: String(u.account), stale: !!u.stale }; }
     return top;
   }
-  const usageChip = t => t.pct < 0 ? "–" : t.pct + "% " + t.win + " · " + (/^\d+$/.test(t.account) ? "acct " + t.account : t.account);
+  const usageChip = t => t.pct < 0 ? "–" : t.pct + "% " + t.win + " · " + (/^\d+$/.test(t.account) ? "acct " + t.account : t.account) + (t.stale ? " · stale" : "");
   function pctOf(v){ const n = typeof v === "number" ? v : parseFloat(v); return isNaN(n) ? -1 : Math.round(n); }
-  function meter(label, v){
-    const n = pctOf(v), shown = n < 0 ? (v === "reset" ? "0%" : "?") : n + "%", w = n < 0 ? 0 : Math.min(100, n);
+  // An unknown reading is "?" with an empty bar, never 0%; a stale one keeps its figure, dimmed and marked.
+  function meter(label, v, stale){
+    const n = pctOf(v), shown = (n < 0 ? (v === "reset" ? "0%" : "?") : n + "%") + (stale && n >= 0 ? " (stale)" : ""), w = n < 0 ? 0 : Math.min(100, n);
     const fill = el("div", {class:"fill"}); fill.style.width = w + "%";      // set through the style object, so the page has no inline style attribute
-    return el("div", {class: "meter" + (n >= 95 ? " crit" : n >= 90 ? " high" : "")},
+    return el("div", {class: "meter" + (n >= 95 ? " crit" : n >= 90 ? " high" : "") + (stale ? " stale" : "")},
       el("div", {class:"lab"}, el("span", {text: label}), el("span", {class:"pct", text: shown})),
       el("div", {class:"track", role:"meter", "aria-label": label, "aria-valuemin":"0", "aria-valuemax":"100", "aria-valuenow": String(w)}, fill));
   }
@@ -640,19 +643,19 @@ ul.hist .sch-line{display:block}
     const usageRow = u => { const f = pctOf(u.five_hour), w = pctOf(u.seven_day);
       return rowCard("usage", { ...u, id: u.account, title: /^\d+$/.test(String(u.account)) ? "Account " + u.account : String(u.account) },
         [el("span", {class: "chip" + hi(f), text: "5h " + tx(f)}), el("span", {class: "chip" + hi(w), text: "wk " + tx(w)})],
-        u.measured_at ? "measured " + when(u.measured_at) : "time unknown"); };
-    show(["usage"], el("p", {class:"unote", text: "Read on this machine by the hub server; 90% is amber, 95% red."}), rows.map(u => drawn(usageRow, { ...u, id: u.account })));
+        u.missing ? "no usage file" : (u.measured_at ? "updated " + when(u.measured_at) : "time unknown") + (u.stale ? " · stale" : "")); };
+    show(["usage"], el("p", {class:"unote", text: "Read on this machine by the hub server; 90% is amber, 95% red. A reading refreshes only while a session on that account runs: stale means over an hour old, ? means unknown."}), rows.map(u => drawn(usageRow, { ...u, id: u.account })));
     pickDetail(at);
   }
   // The detail of an account: both windows as meters, and when they were measured.
   function usageCard(u){
     const age = u.measured_at ? Math.round((Date.now() - new Date(u.measured_at)) / 60000) : null;
-    const stale = age == null || age > 120;
+    const stale = u.stale || age == null || age > 60;      // 60: kitlib.pmwatch STALE_MINUTES
     return el("article", {class: "acct", id: "u-" + u.account},
       el("h3", {}, el("span", {text: /^\d+$/.test(String(u.account)) ? "Account " + u.account : String(u.account)})),
-      meter("Five-hour", u.five_hour),
-      meter("Weekly", u.seven_day),
-      el("div", {class: "foot" + (stale ? " stale" : ""), text: u.measured_at ? "Measured " + when(u.measured_at) + (age != null && age > 120 ? " (" + (age >= 1440 ? Math.round(age / 1440) + " d" : Math.round(age / 60) + " h") + " old)" : "") : "Measurement time unknown"}));
+      meter("Five-hour", u.five_hour, u.stale),
+      meter("Weekly", u.seven_day, u.stale),
+      el("div", {class: "foot" + (stale ? " stale" : ""), text: u.missing ? "No usage file: no session on this account has written one" : u.measured_at ? "Measured " + when(u.measured_at) + (age != null && age > 60 ? " (" + (age >= 1440 ? Math.round(age / 1440) + " d" : Math.round(age / 60) + " h") + " old, stale)" : "") : "Measurement time unknown"}));
   }
 
   // Info: usage and the lock notices (Agents is its own section under More).
@@ -1002,7 +1005,10 @@ ul.hist .sch-line{display:block}
     if (a.available === false && !gone.agents) gone.agents = String(a.reason || "no reason given");
     const pct = v => v && typeof v === "object" ? v.pct ?? v.used ?? null : v;
     if (sk.available === false && !gone.skills) gone.skills = String(sk.reason || "no reason given");
-    const usage = Object.entries(obj(u.accounts)).map(([account, v]) => ({ id: account, account, five_hour: pct(obj(v).five), seven_day: pct(obj(v).week), measured_at: u.as_of }));
+    // Each reading carries its own age (minutes before as_of): an old usage file is shown as old, not as read now. No
+    // age (unknown, or a server from before ages) leaves the time unknown, or as_of for an older server's payload.
+    const readAt = v => { if (!("age" in v)) return u.as_of; const t = Date.parse(u.as_of); return Number.isInteger(v.age) && !isNaN(t) ? new Date(t - v.age * 60000).toISOString() : null; };
+    const usage = Object.entries(obj(u.accounts)).map(([account, v]) => ({ id: account, account, five_hour: pct(obj(v).five), seven_day: pct(obj(v).week), measured_at: readAt(obj(v)), ...(obj(v).stale === true ? {stale: true} : {}), ...(obj(v).missing === true ? {missing: true} : {}) }));
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
     const skills = list(sk.skills).map(x => ({ id: String(x.name || ""), description: x.description }));
     const pages = pageRows(col);
