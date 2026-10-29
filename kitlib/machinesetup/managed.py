@@ -49,7 +49,7 @@ import re
 from kitlib import platform
 from kitlib.config import user
 
-from .common import Plan, free_name, is_link, kit_file, norm
+from .common import Plan, free_name, is_link, kit_file, norm, python_name
 from . import settings
 
 SOURCE = 'hosts/%s/managed-settings.json'                         # the default host's (source())
@@ -80,8 +80,8 @@ def source():
 
 
 def command(kit, apply=True):
-    return 'python %s --managed-settings%s' % (kit_file(kit, COMMAND).replace('\\', '/'),
-                                               ' --apply' if apply else '')
+    return '%s %s --managed-settings%s' % (python_name(), kit_file(kit, COMMAND).replace('\\', '/'),
+                                           ' --apply' if apply else '')
 
 
 def _read_object(path, what):

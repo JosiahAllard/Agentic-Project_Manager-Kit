@@ -18,7 +18,7 @@ from kitlib.config import user
 from kitlib.git import repo
 from kitlib.platform.linux import paths as linux_paths
 
-from .common import Plan, kit_file, make_folder
+from .common import Plan, kit_file, make_folder, python_name
 from . import settings
 
 SECTION = 'pointer'
@@ -26,8 +26,8 @@ COMMAND = 'tools/machine_setup.py'
 
 
 def command(kit, path, apply=True):
-    return 'python %s --pm-repo %s%s' % (kit_file(kit, COMMAND).replace('\\', '/'),
-                                       cpointer.quoted(path), ' --apply' if apply else '')
+    return '%s %s --pm-repo %s%s' % (python_name(), kit_file(kit, COMMAND).replace('\\', '/'),
+                                     cpointer.quoted(path), ' --apply' if apply else '')
 
 
 class Registry(object):
