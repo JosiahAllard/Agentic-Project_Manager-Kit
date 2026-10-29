@@ -465,6 +465,40 @@ class NamedReview(SubmitCase):
         self.assertIn('the verdict of kit/feature is marked failed (red gate)', out.lines[0])
         self.assert_nothing_written(out, detach, [BRANCH])
 
+    def test_an_entry_that_cannot_be_used_is_refused(self):
+        """A queue file holding another branch's entry (verdicts.OtherBranch) or no entry at all
+        (verdicts.VerdictError) is REFUSED by name, whatever the ids, with nothing written."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
+        common = self.common()
+        with open(verdicts.entry_path(common, BRANCH), encoding='utf-8') as f:
+            held = f.read()
+        with open(verdicts.entry_path(common, 'kit/other'), 'w', encoding='utf-8') as f:
+            f.write(held)
+        out = submit.named_review(self.repo.root, ['kit/other'], [tip], ['agent-r1'])
+        self.assertEqual((out.code, len(out.lines)), (G.REFUSED, 1), out.lines)
+        self.assertTrue(out.lines[0].startswith('REFUSED: the verdict entry of kit/other cannot '
+                                                'be used: '), out.lines)
+        self.assertIn('holds the entry of kit/feature, not kit/other', out.lines[0])
+        with open(verdicts.entry_path(common, BRANCH), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        for given in (['agent-r1'], []):
+            out, detach = self.named([BRANCH], [tip], given)
+            self.assertEqual((out.code, len(out.lines)), (G.REFUSED, 1), out.lines)
+            self.assertTrue(out.lines[0].startswith('REFUSED: the verdict entry of kit/feature '
+                                                    'cannot be used: '), out.lines)
+            self.assertIn('is not a verdict entry', out.lines[0])
+            self.assertTrue(out.lines[0].endswith('; nothing was changed'), out.lines)
+            self.assert_nothing_written(out, detach, [BRANCH])
+
+    def test_a_queue_that_cannot_be_found_is_refused(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
+        with mock.patch.object(submit.repo, 'common_dir', return_value=(None, 'git said no')):
+            out = submit.named_review(self.repo.root, [BRANCH], [tip], ['agent-r1'])
+        self.assertEqual((out.code, out.lines), (G.REFUSED, [
+            'REFUSED: the verdict queue cannot be found: git said no; nothing was changed']))
+
     def test_a_carried_verdict_is_named_at_the_head(self):
         wt, reviewed = self.branch('feature', {'a.py': 'a\n'})
         self.queue(BRANCH, reviewed)
@@ -507,6 +541,16 @@ class NamedReview(SubmitCase):
         lines = {'allow': rules.allow_lines('Z:/pm-kit/plugin/0123456789ab', root),
                  'deny': rules.deny_lines('Z:/pm-kit/plugin/0123456789ab', root)}
         self.assertEqual(rules.decide(lines, 'PowerShell', line), 'allow')
+        for extra, said in ((['--expect-main', tip, '--summary', 'one', '--wait', '5', '--full',
+                              '--fresh', '--keep-branch'], 'allow'),
+                            (['--summary', 'two words'], 'deny'),     # quoted: the normal prompt
+                            (['--log-dir', 'Y:/logs'], 'deny')):
+            line = submit.again_line('land.py', ['-C', root, BRANCH, '--expect-tip', tip] + extra,
+                                     ['aad31bc6c5e0a88a3'], kit=kit)
+            self.assertEqual(rules.decide(lines, 'PowerShell', line), said, line)
+        line = submit.again_line('gate.py', ['land', BRANCH, '-C', root, '--expect-tip', tip],
+                                 ['aad31bc6c5e0a88a3'], kit=kit)
+        self.assertIsNone(rules.decide(lines, 'PowerShell', line))    # no rule: the normal prompt
 
     def run_tool(self, *args):
         return subprocess.run([sys.executable] + list(args), capture_output=True, text=True,
@@ -535,6 +579,26 @@ class NamedReview(SubmitCase):
                     'agent-r1 --submit' % (kit, tool, head, tip)])
                 rec, why = result.read(self.repo.root, BRANCH, 'land')
                 self.assertIsNone(rec, (rec, why))
+
+    def test_the_command_keeps_the_submissions_other_arguments_in_order(self):
+        """--expect-main, --summary (double-quoted for its space) and --wait come back after
+        --expect-tip and before --reviewed-by, in each tool's own argument order."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
+        root = os.path.abspath(self.repo.root).replace('\\', '/')
+        kit = KIT_ROOT.replace('\\', '/')
+        rest = ['--expect-main', self.main, '--summary', 'two words', '--wait', '5']
+        for tool, argv, head in (
+                ('land.py', [LAND_PY, '-C', self.repo.root, BRANCH, '--expect-tip', tip],
+                 '-C %s %s --expect-tip %s' % (root, BRANCH, tip)),
+                ('gate.py', [GATE_PY, 'land', BRANCH, '-C', self.repo.root, '--expect-tip', tip],
+                 'land %s -C %s --expect-tip %s' % (BRANCH, root, tip))):
+            with self.subTest(tool=tool):
+                r = self.run_tool(*(argv + rest + ['--submit']))
+                self.assertEqual(r.returncode, G.USAGE, (r.stdout, r.stderr))
+                self.assertEqual(r.stdout.splitlines()[1:], [
+                    'Instead: python %s/tools/%s %s --expect-main %s --summary "two words" '
+                    '--wait 5 --reviewed-by agent-r1 --submit' % (kit, tool, head, self.main)])
 
     def test_the_tools_take_reviewed_by_only_with_submit(self):
         tip = 'b' * 40
