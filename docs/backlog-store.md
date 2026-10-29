@@ -59,3 +59,12 @@ A repo moves to a ref or branch store at go-live (docs/go-live.md): land or port
 ## Hub filing
 
 The Action Hub files a story at once, unpriced, through `add` with a `review:` mark, which a coordinator clears after reading (docs/backlog.md "Records"). Its backlog writes go through `kitlib/hubsite/recordwrite.py` with the role check passed (`role_checked`).
+
+## Hub store-commits job
+
+A `backlog.py` write in the PM data worktree commits its own record paths (docs/backlog.md "Stores", `MainBackend._commit`). What is left uncommitted there is a write whose commit failed (`errors.Uncommitted`) or a hand edit. The hub server's timed job `store-commits` (`kitlib/hubjobs/store_commits.py`, every 3600 s; docs/action-hub.md "Timed jobs") commits those once an hour, in place of the PM's hand commit:
+
+- It commits only the record paths `MainBackend.pending` lists, through `MainBackend.commit_paths`, which is the `catch-up --apply` path. That path holds the store's index lock (`_IndexLock`) from the file read to the index update, commits those literal paths by compare-and-swap, and stages nothing else. A held lock (`errors.Busy`) is a skip, and the job retries next hour.
+- It leaves out any record that may be half-written. A file changed in the last 60 s waits for a later pass. A file that does not parse as a record, or whose `id:` is not its file name, is left out, and the pass fails naming it. A file there that is not a record is never committed.
+- It never pushes. The hub's git sync (`kitlib/hubsite/gitsync.py`) pushes the PM data branch whenever it differs from the remote, these commits included, and a second pusher of that ref would race it.
+- Any other store error is a job failure, shown in hub health, and the third failure in a row pushes `failing` to the PM. A commit that fails with Overtaken, Uncommitted or IndexStale also stops the job at once, on that first failure: every later pass fails (`StoreStuck`) and commits nothing while one of that failure's paths is still uncommitted. A bare `Failure` (git did not answer) does not stop it; the next pass tries again.
