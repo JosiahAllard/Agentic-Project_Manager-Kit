@@ -11,6 +11,7 @@ import stat
 import sys
 
 _HAS_ONEXC = sys.version_info >= (3, 12)       # shutil.rmtree's onexc; before it, onerror
+_REPARSE = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
 
 
 def rmtree_force(path, ignore_errors=False):
@@ -32,3 +33,16 @@ def rmtree_force(path, ignore_errors=False):
         shutil.rmtree(path, onexc=clear)
     else:
         shutil.rmtree(path, onerror=clear)
+
+
+def plain_dir(path):
+    """os.lstat of `path` when it is a folder itself; None for a link, junction or other reparse
+    point, a file, or a path that cannot be read. A sweep removes only such a folder, so it never
+    follows a link out of the folder it cleans."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(st.st_mode) or getattr(st, 'st_file_attributes', 0) & _REPARSE:
+        return None
+    return st

@@ -17,7 +17,7 @@ from kitlib.modulemap import MapError, ModuleMap
 from kitlib.modulemap import isolate as I
 from kitlib.proc.job import Job
 
-from tests.gitfixture import TempRepo
+from tests.gitfixture import TempRepo, fixture_env
 from tests.realgit import real_git
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -294,7 +294,62 @@ class IsolationRun(unittest.TestCase):
         self.assertIn('module_map isolate: app TIMEOUT: it times out in a full clone too '
                       '(isolated: timed out after 2s, ended with its tree; full clone: timed out '
                       'after 2s, ended with its tree)', self.said)
-        self.assertEqual(self.slot.ended, 2)
+        # Each attempt: once at its timeout, once after its test; then once at the run's end.
+        self.assertEqual(self.slot.ended, 5)
+
+    def test_a_child_a_passing_test_leaves_running_is_ended_before_its_clone_goes(self):
+        child = ('import subprocess, sys; subprocess.Popen([sys.executable, "-c", '
+                 '"import time; time.sleep(120)"])')
+        mm = a_map(tests={'app': {'cmd': ['{python}', '-c', child]}})
+        seen = []
+        real = I.remove
+
+        def remove(path, what, say):
+            seen.append((what, self.slot.job.pids()))
+            real(path, what, say)
+        with mock.patch.object(I, 'remove', remove):
+            self.assertEqual(self.run_map(mm), 0, '\n'.join(self.said))
+        self.assertEqual(seen, [('app isolated clone', []), ('run folder', [])])
+
+    def test_a_stop_of_the_lock_ends_the_test_and_the_rest_are_not_run(self):
+        self.slot.stop_after = 2        # the run's check before app: no; app's first poll: yes
+        mm = a_map(tests={'app': {'cmd': ['{python}', 'app/check.py', '--sleep', '60']},
+                          'lib': {'cmd': ['{python}', 'app/check.py']}})
+        self.assertEqual(self.run_map(mm), 1)
+        self.assertIn('module_map isolate: app ERROR: isolated: ended with its tree: the machine '
+                      'lock asked the run to stop', self.said)
+        self.assertIn('module_map isolate: lib ERROR: not run: the machine lock asked the run to '
+                      'stop', self.said)
+        self.assertEqual(self.said[-1], 'module_map isolate: FAILED: 2 ERROR (app, lib)')
+        self.assertEqual(os.listdir(self.parent), [])
+
+    def test_a_tree_that_cannot_be_made_is_error(self):
+        with mock.patch.object(I, 'make_clone', lambda *a, **kw: 'git clone: boom'):
+            self.assertEqual(self.run_map(a_map(['conf.txt'])), 1)
+        self.assertIn('module_map isolate: app ERROR: isolated: the isolated tree could not be '
+                      'made: git clone: boom', self.said)
+
+    def test_a_full_clone_that_cannot_be_made_is_error(self):
+        real = I.make_clone
+
+        def make_clone(common, sha, dest, lines=None):
+            return 'git clone: no room' if lines is None else real(common, sha, dest, lines)
+        with mock.patch.object(I, 'make_clone', make_clone):
+            self.assertEqual(self.run_map(a_map(['lib/core.txt'])), 1)
+        line = [x for x in self.said if x.startswith('module_map isolate: app ERROR: ')]
+        self.assertEqual(len(line), 1, '\n'.join(self.said))
+        self.assertRegex(line[0], r'^module_map isolate: app ERROR: isolated: exit 3, \d+s; full '
+                                  r'clone: the full tree could not be made: git clone: no room$')
+
+    def test_a_clone_or_run_folder_that_stays_is_named(self):
+        with mock.patch.object(I, 'rmtree_force', lambda path, ignore_errors=False: None):
+            self.assertEqual(self.run_map(a_map(['conf.txt'])), 0, '\n'.join(self.said))
+        notes = [x for x in self.said if 'could not be removed' in x]
+        self.assertEqual(len(notes), 2, '\n'.join(self.said))
+        self.assertRegex(notes[0], r'^module_map isolate: note: the app isolated clone .+'
+                                   r'[\\/]iso[\\/]app could not be removed \(a process may still '
+                                   r'hold a file in it\); remove it by hand$')
+        self.assertRegex(notes[1], r'^module_map isolate: note: the run folder .+kit-iso-\d+-')
 
     def test_an_include_adds_a_root_folder_and_cwd_and_module_are_filled_in(self):
         mm = a_map(tests={'app': {'cmd': ['{python}', 'check.py', '../tools/helper.txt',
@@ -337,14 +392,91 @@ class Sweep(unittest.TestCase):
             os.makedirs(os.path.join(self.parent, n, 'repo'))
         live = {(444, 555)}
         gone = I.sweep(self.parent, alive=lambda pid, ctime: (pid, ctime) in live)
-        self.assertEqual(gone, 2)
+        self.assertEqual(gone, (2, []))
         self.assertEqual(sorted(os.listdir(self.parent)), ['kit-iso-444-555-cc', 'other-111-222'])
 
     def test_the_runs_own_folder_is_kept(self):
         own = os.path.join(self.parent, 'kit-iso-1-2-me')
         os.makedirs(own)
-        self.assertEqual(I.sweep(self.parent, keep=own, alive=lambda pid, ctime: False), 0)
+        self.assertEqual(I.sweep(self.parent, keep=own, alive=lambda pid, ctime: False), (0, []))
         self.assertTrue(os.path.isdir(own))
+
+    def test_a_junction_or_file_of_a_run_folders_name_is_skipped_never_followed(self):
+        import _winapi
+        target = os.path.join(self.parent, 'target')
+        os.makedirs(os.path.join(target, 'keep-me'))
+        link = os.path.join(self.parent, 'kit-iso-111-222-link')
+        _winapi.CreateJunction(target, link)
+        self.addCleanup(lambda: os.path.lexists(link) and os.rmdir(link))
+        with open(os.path.join(self.parent, 'kit-iso-111-222-file'), 'w') as fh:
+            fh.write('x')
+        self.assertEqual(I.sweep(self.parent, alive=lambda pid, ctime: False), (0, []))
+        self.assertTrue(os.path.isdir(os.path.join(target, 'keep-me')))
+        self.assertEqual(sorted(os.listdir(self.parent)),
+                         ['kit-iso-111-222-file', 'kit-iso-111-222-link', 'target'])
+
+    def test_a_folder_that_stays_is_reported(self):
+        old = os.path.join(self.parent, 'kit-iso-111-222-old')
+        os.makedirs(old)
+        with mock.patch.object(I, 'rmtree_force', lambda path, ignore_errors=False: None):
+            self.assertEqual(I.sweep(self.parent, alive=lambda pid, ctime: False), (0, [old]))
+
+    def test_a_new_run_folder_sweeps_the_ones_ended_runs_left_and_names_what_stays(self):
+        # 99999991 is odd: never a Windows process id, so its run is gone.
+        for n in ('kit-iso-99999991-1-gone', 'kit-iso-99999991-1-stuck'):
+            os.makedirs(os.path.join(self.parent, n, 'repo'))
+        real = I.rmtree_force
+
+        def rmtree(path, ignore_errors=False):
+            if not path.endswith('stuck'):
+                real(path, ignore_errors)
+        with mock.patch.object(I.kuser, 'make_temp', lambda near, prefix: (
+                tempfile.mkdtemp(prefix=prefix, dir=self.parent), None)), \
+                mock.patch.object(I, 'rmtree_force', rmtree):
+            folder, notes = I.make_folder('C:\\nowhere')
+        self.assertTrue(os.path.basename(folder).startswith('kit-iso-%d-' % os.getpid()))
+        self.assertEqual(sorted(os.listdir(self.parent)),
+                         sorted([os.path.basename(folder), 'kit-iso-99999991-1-stuck']))
+        stuck = os.path.join(self.parent, 'kit-iso-99999991-1-stuck')
+        self.assertEqual(notes, [
+            'removed 1 run folder(s) a run that ended without its cleanup left',
+            'could not remove %s, a folder an ended run left (a process may still hold a file '
+            'in it)' % stuck])
+
+
+class RunRefusals(unittest.TestCase):
+    """run() stops before any clone when it cannot read the commit or make its folder."""
+
+    def setUp(self):
+        self.said = []
+        for name, value in (('run_text', ('abc123', None)), ('common_dir', ('C:\\g', None))):
+            target = I.gitcmd if name == 'run_text' else I.gitrepo
+            p = mock.patch.object(target, name, mock.Mock(return_value=value))
+            setattr(self, name, p.start())
+            self.addCleanup(p.stop)
+
+    def run_it(self):
+        slot = JobSlot()
+        self.addCleanup(slot.close)
+        return I.run('C:\\nowhere', a_map(['conf.txt']), slot, self.said.append)
+
+    def test_an_unreadable_commit_or_git_dir_is_failed(self):
+        self.run_text.return_value = (None, 'fatal: no HEAD')
+        self.assertEqual(self.run_it(), 1)
+        self.assertEqual(self.said, ['module_map isolate: ERROR: the commit to isolate cannot be '
+                                     'read: fatal: no HEAD'])
+        self.run_text.return_value = ('abc123', None)
+        self.common_dir.return_value = (None, 'not a git repository')
+        self.said[:] = []
+        self.assertEqual(self.run_it(), 1)
+        self.assertEqual(self.said, ['module_map isolate: ERROR: the commit to isolate cannot be '
+                                     'read: not a git repository'])
+
+    def test_a_run_folder_that_cannot_be_made_is_failed(self):
+        with mock.patch.object(I, 'make_folder', side_effect=OSError('disk full')):
+            self.assertEqual(self.run_it(), 1)
+        self.assertEqual(self.said, ['module_map isolate: ERROR: no run folder could be made: '
+                                     'disk full'])
 
 
 class FakeCfg(object):
@@ -388,6 +520,95 @@ class Booking(unittest.TestCase):
                         book=lambda *a, **kw: self.fail('booked'))
         self.assertEqual((rc, said), (0, ['module_map isolate: no module in the map names a '
                                           'test; nothing to run']))
+
+    def test_the_run_goes_in_the_booked_slot_which_is_released_with_its_code(self):
+        events = []
+
+        class Slot(object):
+            def __enter__(self):
+                events.append('enter')
+                return self
+
+            def __exit__(self, *exc):
+                events.append('exit')
+
+            def held_text(self):
+                return 'daily-full holds cpu slot 0 for demo/module-isolation'
+
+            def release(self, code, how):
+                events.append(('release', code, how))
+        slot = Slot()
+
+        def run(top, mm, got, say, only=None, rerun=True, python=None):
+            events.append(('run', got is slot, only, rerun))
+            return 1
+        said = []
+        with mock.patch.object(I, 'run', run):
+            rc = I.run_tool('C:\\nowhere', FakeCfg(), a_map(['conf.txt']), said.append,
+                            only='app', rerun=False, book=lambda *a, **kw: slot)
+        self.assertEqual(rc, 1)
+        self.assertEqual(events, ['enter', ('run', True, 'app', False), ('release', 1, 'done'),
+                                  'exit'])
+        self.assertEqual(said, ['module_map isolate: lock: daily-full holds cpu slot 0 for '
+                                'demo/module-isolation'])
+
+
+class OwnerLockedCli(unittest.TestCase):
+    """--isolate starts the commands of the owner-locked map only."""
+
+    def setUp(self):
+        self.repo = TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        env = mock.patch.dict(os.environ, fixture_env(), clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        self.repo.write('docs/module-map.json', json.dumps({'modules': {
+            'app': {'paths': ['app'], 'test': {'cmd': ['{python}', 'a']}},
+            'lib': {'paths': ['lib'], 'test': {'cmd': ['{python}', 'b']}}}}))
+        book = mock.patch.object(I.lockrun, 'book',
+                                 side_effect=AssertionError('the machine lock was booked'))
+        book.start()
+        self.addCleanup(book.stop)
+
+    def config(self, owner_paths):
+        self.repo.write('.kit.json', json.dumps({'owner': {'paths': list(owner_paths)},
+                                                 'modules': {'map': 'docs/module-map.json'}}))
+
+    def cli(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(['-C', self.repo.root] + list(argv))
+        return code, out.getvalue()
+
+    def test_a_map_no_owner_path_locks_is_refused_and_nothing_runs(self):
+        self.config(['AGENTS.md'])
+        for argv in (['--isolate'], ['--isolate', '--plan']):
+            with self.subTest(argv=argv):
+                code, out = self.cli(*argv)
+                self.assertEqual(code, 2, out)
+                self.assertIn('module_map: NOT CHECKED: the module map docs/module-map.json is '
+                              'not an owner path', out)
+                self.assertNotIn('module_map isolate:', out)
+
+    def test_the_owner_locked_map_is_planned(self):
+        self.config(['docs/module-map.json'])
+        code, out = self.cli('--isolate', '--plan', '--module', 'lib')
+        self.assertEqual(code, 0, out)
+        self.assertIn('module_map isolate: lib: holds lib; runs {python} b in the tree root', out)
+        self.assertNotIn('module_map isolate: app:', out)
+
+    def test_module_and_no_rerun_reach_the_run(self):
+        self.config(['docs/module-map.json'])
+        seen = []
+
+        def run_tool(top, cfg, mm, say, **kw):
+            seen.append(kw)
+            return 0
+        with mock.patch.object(I, 'run_tool', run_tool):
+            self.assertEqual(self.cli('--isolate', '--module', 'app', '--no-rerun')[0], 0)
+            self.assertEqual(self.cli('--isolate')[0], 0)
+        self.assertEqual(seen, [{'plan_only': False, 'only': 'app', 'rerun': False},
+                                {'plan_only': False, 'only': None, 'rerun': True}])
 
 
 class Cli(unittest.TestCase):

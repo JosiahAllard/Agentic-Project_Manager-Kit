@@ -74,7 +74,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import threading
@@ -82,7 +81,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from kitlib.config import user as kuser
-from kitlib.fs.rmtree import rmtree_force
+from kitlib.fs.rmtree import plain_dir as _plain_dir, rmtree_force
 from kitlib.proc import spawn
 from kitlib.pytests import runner as unit_runner
 from kitlib.tooldeps import pool as worker_pool
@@ -225,7 +224,6 @@ def work_parent(root):
 RUN_PREFIX = 'kit-tests-'
 DIRECT_PREFIX = 'kit-direct-'
 STALE_AFTER = 24 * 3600
-_REPARSE = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
 
 
 def make_work(root):
@@ -234,17 +232,6 @@ def make_work(root):
     (kuser.make_temp)."""
     work, note = kuser.make_temp(root, RUN_PREFIX)
     return work, note and 'the run folder %s' % note
-
-
-def _plain_dir(path):
-    """Whether `path` is a folder itself: not a link, junction or other reparse point."""
-    try:
-        st = os.lstat(path)
-    except OSError:
-        return None
-    if not stat.S_ISDIR(st.st_mode) or getattr(st, 'st_file_attributes', 0) & _REPARSE:
-        return None
-    return st
 
 
 def prune_stale(parent, now=None, after=STALE_AFTER):

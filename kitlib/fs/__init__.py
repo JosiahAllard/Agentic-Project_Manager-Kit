@@ -6,7 +6,8 @@
   the pending-steps file).
 - replace: os.replace retried while Windows refuses it because a reader or a scanner has the
   target open.
-- rmtree: rmtree_force, shutil.rmtree that also removes read-only files (git's objects).
+- rmtree: rmtree_force, shutil.rmtree that also removes read-only files (git's objects), and
+  plain_dir, whether a path is a folder itself (not a link or junction) before a sweep removes it.
 
 Nothing here prints or exits, and nothing here imports a feature package.
 """

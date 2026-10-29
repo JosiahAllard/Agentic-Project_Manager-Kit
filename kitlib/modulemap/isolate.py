@@ -16,13 +16,15 @@ unless `rerun` is off: passing there makes it COUPLED (it needs something its ma
 allow), failing there too makes it RED (its tests fail anyway), timing out there too makes it
 TIMEOUT. A tree that cannot be made or a test that cannot start is ERROR. A test runs in the
 machine-lock slot the caller holds (slot.start, so a lock call inside it nests) and is ended with
-its tree (slot.end_tree) past its timeout or when the lock asks the run to stop.
+its tree (slot.end_tree) past its timeout, when the lock asks the run to stop, on Ctrl+C
+or an error, and after every test, pass or fail, before its clone is removed. end_tree spares a
+build daemon another job may use (kitlib.lock.run), so such a daemon can outlive the test.
 
 The clones live in one run folder in the kit's temp folder for the checkout
 (kitlib.config.user.make_temp, `kit-iso-<pid>-<ctime>-*`). Each clone is removed when its run
-ends, the run folder at the end, and a run folder whose process is gone is removed by the next
-run (sweep). The source repository's config and refs are never written: a shared clone only
-reads its objects.
+ends, the run folder at the end; a folder that stays is named in a note line. A run folder
+whose process is gone is removed by the next run (sweep), which skips links and junctions. The
+source repository's config and refs are never written: a shared clone only reads its objects.
 
 The tool's run (run_tool) books the machine lock for the daily_full kind, waiting up to its
 max_wait (`.kit.json` "daily_full"); run as a step of daily_full.py it nests in the daily run's
@@ -38,7 +40,7 @@ import sys
 import time
 
 from kitlib.config import user as kuser
-from kitlib.fs.rmtree import rmtree_force
+from kitlib.fs.rmtree import plain_dir, rmtree_force
 from kitlib.git import cmd as gitcmd
 from kitlib.git import repo as gitrepo
 from kitlib.lock import run as lockrun
@@ -160,23 +162,30 @@ def plan_lines(mm, entries):
 # --- the run folder ---------------------------------------------------------------------------
 
 def sweep(parent, keep=None, alive=process.alive):
-    """Remove each run folder in `parent` whose process (pid and creation time in its name) is
-    gone, but `keep`; the number removed."""
+    """`(removed, left)`: remove each run folder in `parent` whose process (pid and creation time
+    in its name) is gone, but `keep`. Only a plain folder is removed: a link, junction or file of
+    that name is skipped, never followed (kitlib.fs.rmtree.plain_dir). left: the paths of the
+    folders that stayed after their removal."""
     try:
         names = os.listdir(parent)
     except OSError:
-        return 0
-    gone = 0
+        return 0, []
+    removed, left = 0, []
     for name in names:
         m = FOLDER_RE.fullmatch(name)
         path = os.path.join(parent, name)
         if not m or (keep and os.path.normcase(path) == os.path.normcase(keep)):
             continue
+        if plain_dir(path) is None:
+            continue
         if alive(int(m.group(1)), None if m.group(2) == 'x' else int(m.group(2))):
             continue
         rmtree_force(path, ignore_errors=True)
-        gone += not os.path.lexists(path)
-    return gone
+        if os.path.lexists(path):
+            left.append(path)
+        else:
+            removed += 1
+    return removed, left
 
 
 def make_folder(top):
@@ -186,9 +195,12 @@ def make_folder(top):
     prefix = '%s%d-%s-' % (PREFIX, os.getpid(), 'x' if ctime is None else int(ctime))
     folder, note = kuser.make_temp(top, prefix)
     notes = [note] if note else []
-    gone = sweep(os.path.dirname(folder), keep=folder)
+    gone, left = sweep(os.path.dirname(folder), keep=folder)
     if gone:
         notes.append('removed %d run folder(s) a run that ended without its cleanup left' % gone)
+    for path in left:
+        notes.append('could not remove %s, a folder an ended run left (a process may still hold a '
+                     'file in it)' % path)
     return folder, notes
 
 
@@ -248,21 +260,26 @@ def run_test(slot, argv, cwd, env, log, timeout, clock=time.monotonic, poll=POLL
         except (OSError, LockError) as e:           # JobError is an OSError
             return Got(None, 'error', clock() - t0, 'could not start %s: %s' % (argv[0], e))
         deadline = t0 + timeout
-        while True:
-            try:
-                code = p.wait(poll)
-                return Got(code, 'done', clock() - t0, None)
-            except subprocess.TimeoutExpired:
-                pass
-            how = ('stopped' if slot.stop_asked() else
-                   'timeout' if clock() >= deadline else None)
-            if how:
-                slot.end_tree()
+        try:
+            while True:
                 try:
-                    p.wait(END_WAIT_S)
+                    code = p.wait(poll)
+                    return Got(code, 'done', clock() - t0, None)
                 except subprocess.TimeoutExpired:
                     pass
-                return Got(None, how, clock() - t0, None)
+                how = ('stopped' if slot.stop_asked() else
+                       'timeout' if clock() >= deadline else None)
+                if how:
+                    slot.end_tree()
+                    try:
+                        p.wait(END_WAIT_S)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    return Got(None, how, clock() - t0, None)
+        except BaseException:
+            # Ctrl+C or an error while it runs: end its tree before anyone removes its clone.
+            slot.end_tree()
+            raise
 
 
 def _got_text(got, timeout):
@@ -314,10 +331,18 @@ class Run(object):
             got = run_test(self.slot, argv_of(t['cmd'], self.python, dest, entry.module), cwd,
                            env, log, t['timeout'], clock=self.clock, poll=self.poll)
         finally:
-            rmtree_force(dest, ignore_errors=True)
+            self.end(dest, '%s %s clone' % (entry.module, label))
         if not (got.how == 'done' and got.code == 0) and os.path.isfile(log):
             echo(self.say, entry.module, label, log, self.tail)
         return got
+
+    def end(self, path, what):
+        """After a test, pass or fail: end what it left running in the slot's job, so no child
+        outlives its module or holds its clone, then remove `path`; a note when it stays."""
+        try:
+            self.slot.end_tree()
+        finally:
+            remove(path, what, self.say)
 
     def module(self, entry):
         """The Result of `entry`'s module."""
@@ -361,6 +386,14 @@ class Run(object):
         return out
 
 
+def remove(path, what, say):
+    """Remove the folder `path`; a note line naming it when it stays."""
+    rmtree_force(path, ignore_errors=True)
+    if os.path.lexists(path):
+        say('%s note: the %s %s could not be removed (a process may still hold a file in it); '
+            'remove it by hand' % (TAG, what, path))
+
+
 def summary(results):
     """`(code, line)`: OK when every module passed, else FAILED."""
     counts = collections.Counter(r.status for r in results)
@@ -398,7 +431,10 @@ def run(top, mm, slot, say, only=None, rerun=True, python=None, tail=TAIL_LINES,
         results = Run(common, sha, folder, slot, say, python=python, rerun=rerun, tail=tail,
                       clock=clock, poll=poll).all(entries)
     finally:
-        rmtree_force(folder, ignore_errors=True)
+        try:
+            slot.end_tree()
+        finally:
+            remove(folder, 'run folder', say)
     code, line = summary(results)
     say(line)
     return code
