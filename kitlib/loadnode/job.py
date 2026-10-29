@@ -23,8 +23,15 @@ refs/node/<job>-base, and asks the node's `gate` verb: the node runs its own kit
 own record folder only through the importer node.py hands in (kitlib.loadnode.gaterecord:
 kitlib.records.gate_ok.import_record, every check of verify() with main's gate config at the
 commit, a --full pass, the same repository), adding `ran_on` from its registry; then cleans the
-job. A record main does not take is EXIT_RECORD, the job kept. This module never imports the gate
-or record modules: the lock tool reaches it (machine_lock.py run, through kitlib.loadnode.dispatch)
+job. A record main does not take is EXIT_RECORD, the job kept. A land job (`land`, docs/load-nodes.md
+"A landing's merged gate on a node") is a gate job of a landing's merge on its base: the node runs
+the merged gate (kitlib.loadnode.landgate) and sends back the record it wrote, which main takes
+only through the checker its caller hands in (landgate.check_record: every field against main's
+own git, config and step selection); the checked record is `land_record`, for the landing to
+write its own with `ran_on`. Before a land job's push, main's base goes to the mirror's
+refs/pmkit/main/<main> (push_main: fast-forwards only, a WARNING when refused), so the mirror
+keeps main's objects and the next push is small; nothing depends on it. This module never
+imports the gate or record modules: the lock tool reaches it (machine_lock.py run, through kitlib.loadnode.dispatch)
 and every module it reaches is a lock path (kitlib.lock.release.LOCK_PATHS).
 
 When the machine config turns lock-window notices on (kitlib.lock.site.notice) for the kind, a
@@ -164,12 +171,15 @@ class NodeJob(object):
     node.py. gate: for a gate job, {base, remote, main} (the base commit and the names its
     refs take on the node); importer(top, rec, commit, ran_on, repo) -> (path, [warnings]),
     raising RecordRefused, takes a gate job's record in (node.py passes
-    kitlib.loadnode.gaterecord.import_gate_record); with none, no record is taken."""
+    kitlib.loadnode.gaterecord.import_gate_record); with none, no record is taken. land: for a
+    land job, gate's three keys and {full, docs, kit_files} (the merged gate's arguments and
+    main's kit files hash); checker(record) -> the record, raising RecordRefused, checks what the
+    node sent (kitlib.loadnode.landgate.check_record); with none, no record is taken."""
 
     def __init__(self, node, link, top, sha, repo, slug, kind, cmd, artifacts=(), wait_s=None,
                  expect_s=None, no_wait=False, note=None, say=None, out=None, git=None,
                  notice_dir=None, reattach_s=REATTACH_S, sleep=time.sleep, clock=time.monotonic,
-                 job=None, tool='node.py', gate=None, importer=None):
+                 job=None, tool='node.py', gate=None, importer=None, land=None, checker=None):
         self.node, self.link, self.top, self.sha = node, link, top, sha
         self.repo, self.slug, self.kind, self.cmd = repo, slug, kind, list(cmd)
         self.artifacts = list(artifacts)
@@ -185,35 +195,65 @@ class NodeJob(object):
         self.noticed = False
         self.staging = None
         self.started = False             # the node took the job: it is never run again on main
+        self.land = ({k: land.get(k) for k in ('full', 'docs', 'kit_files')} if land else None)
+        if land:
+            gate = {k: land.get(k) for k in ('base', 'remote', 'main')}
         self.gate = dict(gate) if gate else None
         self.gate_job = bool(gate)       # a gate job (a follow learns it from the result)
         self.importer = importer
+        self.checker = checker
+        self.land_record = None          # a land job's record, once checker took it
+        self.ran_on = None               # {node, host_key, job} once a record was taken
 
     # -- the steps --------------------------------------------------------------------------
     def spec(self):
         if self.gate:
-            return {'job': self.job, 'repo': self.repo, 'slug': self.slug, 'sha': self.sha,
-                    'base': self.gate.get('base'), 'remote': self.gate.get('remote'),
-                    'main': self.gate.get('main'), 'max_jobs': self.node.slots, 'note': self.note}
+            d = {'job': self.job, 'repo': self.repo, 'slug': self.slug, 'sha': self.sha,
+                 'base': self.gate.get('base'), 'remote': self.gate.get('remote'),
+                 'main': self.gate.get('main'), 'max_jobs': self.node.slots, 'note': self.note}
+            if self.land:
+                d.update(self.land)
+            return d
         return {'job': self.job, 'repo': self.repo, 'slug': self.slug, 'kind': self.kind,
                 'sha': self.sha, 'cmd': self.cmd, 'artifacts': self.artifacts,
                 'max_jobs': self.node.slots, 'wait_s': self.wait_s, 'expect_s': self.expect_s,
                 'no_wait': bool(self.no_wait), 'note': self.note}
 
-    def push(self):
-        """Push HEAD to refs/node/<job> on the node's mirror (a gate job: its base to
-        refs/node/<job>-base too). JobError(EXIT_NODE, fallback)."""
+    def _push(self, refspecs):
+        """git push of `refspecs` to the node's mirror through the pinned ssh: (rc, err)."""
         from kitlib.git import cmd as gitcmd
         env = self.link.git_env(gitcmd.scrubbed_env())
         env['GIT_TERMINAL_PROMPT'] = '0'
-        args = ['-c', 'protocol.version=0', 'push', '--quiet', remote.push_url(self.node, self.repo),
-                '%s:refs/node/%s' % (self.sha, self.job)]
+        args = ['-c', 'protocol.version=0', 'push', '--quiet', remote.push_url(self.node, self.repo)]
+        rc, _out, err = self.git(args + list(refspecs), self.top, env, PUSH_TIMEOUT_S)
+        return rc, err
+
+    def push(self):
+        """Push HEAD to refs/node/<job> on the node's mirror (a gate job: its base to
+        refs/node/<job>-base too). JobError(EXIT_NODE, fallback)."""
+        refspecs = ['%s:refs/node/%s' % (self.sha, self.job)]
         if self.gate:
-            args.append('%s:refs/node/%s%s' % (self.gate['base'], self.job, box.BASE_SUFFIX))
-        rc, _out, err = self.git(args, self.top, env, PUSH_TIMEOUT_S)
+            refspecs.append('%s:refs/node/%s%s' % (self.gate['base'], self.job, box.BASE_SUFFIX))
+        rc, err = self._push(refspecs)
         if rc != 0:
             raise JobError(EXIT_NODE, 'the push to %s failed: %s'
                            % (self.node.name, _push_why(err) or 'git exit %s' % rc), fallback=True)
+
+    def push_main(self):
+        """A land job only: push its base to the mirror's refs/pmkit/main/<main> (box.MAIN_REF),
+        never forced, so the mirror keeps main's objects once the job's refs are cleaned. Best
+        effort: a refusal (main was rewound: not a fast-forward) or failure is a WARNING and the
+        job goes on; the job checks its own refs, never this one. A run or gate job pushes none
+        (one ssh push less, and no second push timeout on a node that cannot be reached). True
+        when it went."""
+        if not self.land:
+            return False
+        rc, err = self._push(['%s:%s%s' % (self.gate['base'], box.MAIN_REF, self.gate['main'])])
+        if rc != 0:
+            self.say("WARNING: main's %s was not pushed to %s's mirror (%s); the job goes on"
+                     % (self.gate['main'], self.node.name, _push_why(err) or 'git exit %s' % rc))
+            return False
+        return True
 
     def _call(self, verb, payload, fallback=False, sent=None):
         """The node's one JSON line reply to `verb`. JobError(EXIT_NODE) for no reply; when
@@ -247,7 +287,7 @@ class NodeJob(object):
     def start(self):
         """The node's ok reply. JobError(fallback True) when it refused the job or was busy, or
         ssh did not start; StartUnknown when the request went out and no reply came back."""
-        verb = box.GATE_VERB if self.gate else 'start'
+        verb = box.LAND_VERB if self.land else box.GATE_VERB if self.gate else 'start'
         d = self._call(verb, self.spec(), fallback=True, sent=StartUnknown)
         if d.get('ok'):
             return d
@@ -255,7 +295,7 @@ class NodeJob(object):
         if d.get('busy'):
             raise JobError(EXIT_BUSY, '%s is busy: %s' % (self.node.name, err), fallback=True)
         if 'not a command this node serves' in err:
-            err = ('its kit serves no gate verb; update the kit on the node' if self.gate
+            err = ('its kit serves no %s verb; update the kit on the node' % verb if self.gate
                    else 'its kit serves no run verbs; update the kit on the node')
         raise JobError(EXIT_NODE, '%s refused the job: %s' % (self.node.name, err), fallback=True)
 
@@ -519,7 +559,7 @@ class NodeJob(object):
         fetch = ''
         if self.artifacts:
             fetch = ' -C "%s"%s' % (self.top, ''.join(' --artifact "%s"' % g for g in self.artifacts))
-        elif self.gate_job:                      # the record is taken into a checkout
+        elif self.gate_job and not self.land:    # the record is taken into a checkout
             fetch = ' -C "%s"' % (self.top or '<checkout>')
         return ['  follow it: %s follow %s %s%s' % (self.tool, self.node.name, self.job, fetch),
                 '  stop it:   %s stop %s %s' % (self.tool, self.node.name, self.job)]
@@ -533,10 +573,13 @@ class NodeJob(object):
         """Push, start, follow, fetch and clean: the exit code (the module docstring). JobError
         for a failure before the job started, and for a busy result (fallback True). The node's
         own spec check runs here first, so a start it would refuse never pushes."""
+        check = (box.check_land_spec if self.land else box.check_gate_spec if self.gate
+                 else box.check_spec)
         try:
-            (box.check_gate_spec if self.gate else box.check_spec)(self.spec())
+            check(self.spec())
         except box.SpecError as e:
             raise JobError(EXIT_USAGE, 'the node would refuse this job: %s' % e)
+        self.push_main()
         self.push()
         try:
             self.start()
@@ -576,6 +619,8 @@ class NodeJob(object):
             self.say('the job on %s did not end with an exit code (%s: %s)'
                      % (self.node.name, how, str(res.get('why'))[:300]))
             return EXIT_AFTER_START
+        if res.get('land') is True and how == 'ended' and code == 0:
+            return self.take_land(res)
         if res.get('gate') is True and how == 'ended' and code == 0:
             return self.take_record(res)
         if self.artifacts and how in ('ended', 'stopped', 'interrupted'):
@@ -606,8 +651,7 @@ class NodeJob(object):
         elif self.importer is None:
             why = 'this caller has no way to take a gate-OK record in'
         else:
-            ran_on = {'node': self.node.name, 'host_key': registry.fingerprint(self.node.host_key),
-                      'job': self.job}
+            ran_on = self._ran_on()
             try:
                 path, warnings = self.importer(self.top, res['record'], sha, ran_on, self.repo)
             except RecordRefused as e:
@@ -622,7 +666,52 @@ class NodeJob(object):
             return EXIT_RECORD
         for w in warnings:
             self.say('WARNING: ' + w)
+        self.ran_on = ran_on
         self.say('gate-OK record (from %s, job %s): %s' % (self.node.name, self.job, path))
+        self.clean()
+        self.say('job %s on %s: ended, exit 0' % (self.job, self.node.name))
+        return 0
+
+    def _ran_on(self):
+        """{node, host_key, job} from main's own registry, never from the node."""
+        return {'node': self.node.name, 'host_key': registry.fingerprint(self.node.host_key),
+                'job': self.job}
+
+    def take_land(self, res):
+        """After a land job's merged gate passed on the node: the record in `res`, checked by
+        self.checker (main's own git, config and selection), is self.land_record, with
+        self.ran_on; the job is cleaned, exit 0. EXIT_RECORD, nothing taken and the job kept,
+        when the record is missing or refused, or this caller is no landing (a follow)."""
+        self.gate_job, why = True, None
+        if not self.land:
+            why = ("it is a landing's merged gate: its record is taken only by the landing that "
+                   "started it")
+        elif not isinstance(res.get('record'), dict):
+            why = ("the node's merged gate wrote none it could read: %s"
+                   % str(res.get('record_why'))[:300])
+        elif res.get('sha') != self.sha:
+            why = 'the node gated %s, not the merge %s' % (str(res.get('sha'))[:12], self.sha[:12])
+        elif self.checker is None:
+            why = "this caller has no way to check a landing's gate-OK record"
+        else:
+            try:
+                self.land_record = self.checker(res['record'])
+            except RecordRefused as e:
+                why = str(e)[:400]
+            except (OSError, ValueError) as e:
+                why = '%s: %s' % (type(e).__name__, e)
+            if not why and not isinstance(self.land_record, dict):
+                why = 'the checker returned none'
+        if why:
+            self.land_record = None
+            self.say("the merged gate passed on %s, and its gate-OK record was not taken: %s; "
+                     "job %s stays there" % (self.node.name, why, self.job))
+            for line in self.follow_lines():
+                self.say(line)
+            return EXIT_RECORD
+        self.ran_on = self._ran_on()
+        self.say("the merged gate passed on %s (job %s) and main checked its record"
+                 % (self.node.name, self.job))
         self.clean()
         self.say('job %s on %s: ended, exit 0' % (self.job, self.node.name))
         return 0

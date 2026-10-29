@@ -59,13 +59,14 @@ unless the caller asks for what they carry):
                 has one, or the gate wrote none: --only, a partial or docs-only gate, a work tree
                 not clean at its start)
 
-One more key, only on a record a load node's gate wrote (import_record; docs/load-nodes.md
-"Gating a branch on a node"); a record without it ran on this machine. verify() neither requires
-nor checks it:
+One more key, only on a record of a gate that ran on a load node (import_record, a branch's
+gate: docs/load-nodes.md "Gating a branch on a node"; build with `ran_on`, a landing's merged gate
+main checked with kitlib.loadnode.landgate); a record without it ran on this machine. verify()
+neither requires nor checks it:
 
   ran_on        {"node": its registry name, "host_key": the SHA256 fingerprint of the host key
                 main pinned for it, "job": the node job id}, written by main from its own
-                registry, never taken from the node
+                registry, never taken from the node. Its record's input_keys is always null
 
 verify() re-derives everything git can answer: the record's file name, `commit`, `tree` and
 `author` must match the repository now, and `gate_config` must match the caller's config when it
@@ -263,13 +264,28 @@ def _input_keys(keys):
             'steps': {n: dict(parts) for n, parts in keys['steps'].items()}}
 
 
+def _ran_on(ran_on):
+    """`ran_on` as a new dict when it is {"node", "host_key", "job"}, each a non-empty string,
+    else RecordError."""
+    if not isinstance(ran_on, dict) or set(ran_on) != set(RAN_ON_KEYS) or not all(
+            isinstance(ran_on[k], str) and ran_on[k] for k in RAN_ON_KEYS):
+        raise RecordError('ran_on is {%s}, each a string' % ', '.join(RAN_ON_KEYS))
+    return dict(ran_on)
+
+
 def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None, ended_utc=None,
-          config_rev=None, source=None, full=False, mode=None, input_keys=None):
+          config_rev=None, source=None, full=False, mode=None, input_keys=None, ran_on=None):
     """The record for `rev` (resolved here: commit, tree and author come from git, never the
     caller). `config_rev`: the commit the gate config was read from (resolved to a full hash).
     `source`: "gate.json" or "auto" (kitlib.gate.detect), or None. `full`: the gate ran --full.
     `mode`: one of MODES; None: "full" with `full`, else "select". "full" goes with `full` and
-    only with it (RecordError). `input_keys`: kitlib.gate.reuse.record_keys, or None."""
+    only with it (RecordError). `input_keys`: kitlib.gate.reuse.record_keys, or None. `ran_on`:
+    the steps ran on a load node ({"node", "host_key", "job"}, from main's registry), so the
+    record gets that key and no input_keys (RecordError when both are given)."""
+    if ran_on is not None:
+        ran_on = _ran_on(ran_on)
+        if input_keys is not None:
+            raise RecordError('a record of a gate run on a load node has no input_keys')
     full = full is True
     if mode is None:
         mode = 'full' if full else 'select'
@@ -290,7 +306,7 @@ def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
     if not isinstance(kit, dict) or not kit:
         raise RecordError('the kit identity is an object such as {"version": ..., "commit": ...}')
     input_keys = _input_keys(input_keys)
-    return {
+    rec = {
         'schema': SCHEMA, 'verdict': VERDICT, 'commit': commit, 'tree': tree, 'base': base,
         'gate_config': config_hash(gate_config), 'kit': dict(kit), 'author': author,
         'repo': repo_name or '', 'started_utc': started_utc, 'ended_utc': ended_utc or utc(),
@@ -298,6 +314,9 @@ def build(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
         'config_rev': config_rev, 'source': source, 'full': full, 'mode': mode,
         'input_keys': input_keys,
     }
+    if ran_on is not None:
+        rec['ran_on'] = ran_on
+    return rec
 
 
 def _retry(fn, *args):
@@ -354,11 +373,12 @@ def _write_file(path, record):
 
 
 def record_pass(root, rev, gate_config, kit, repo_name, started_utc, steps, base=None,
-                config_rev=None, source=None, full=False, mode=None, input_keys=None):
+                config_rev=None, source=None, full=False, mode=None, input_keys=None,
+                ran_on=None):
     """build() then write(): `(path, record)`. Only a passing gate calls this."""
     rec = build(root, rev, gate_config, kit, repo_name, started_utc, steps, base,
                 config_rev=config_rev, source=source, full=full, mode=mode,
-                input_keys=input_keys)
+                input_keys=input_keys, ran_on=ran_on)
     return write(root, rec), rec
 
 
@@ -469,9 +489,7 @@ def import_record(root, rec, commit, ran_on, config_at, repo_name):
         raise RecordError('the node sent no gate-OK record')
     if not refs.is_sha(commit):
         raise RecordError('a gate-OK record is imported for a full commit hash, not %r' % (commit,))
-    if not isinstance(ran_on, dict) or set(ran_on) != set(RAN_ON_KEYS) or not all(
-            isinstance(ran_on[k], str) and ran_on[k] for k in RAN_ON_KEYS):
-        raise RecordError('ran_on is {%s}, each a string' % ', '.join(RAN_ON_KEYS))
+    ran_on = _ran_on(ran_on)
     if config_at is None:
         raise RecordError('an imported record is checked against the gate config at its config_rev')
     why = _check(root, commit, rec, config_at=config_at)
