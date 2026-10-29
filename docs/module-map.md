@@ -15,7 +15,8 @@ The `.kit.json` `modules` section names two files (docs/kit-json.md):
 ```json
 {
   "owner":   {"paths": ["AGENTS.md", "docs/module-map.json"]},
-  "modules": {"map": "docs/module-map.json", "ceilings": "docs/module-ceilings.json"}
+  "modules": {"map": "docs/module-map.json", "ceilings": "docs/module-ceilings.json",
+              "page": "docs/architecture.md"}
 }
 ```
 
@@ -23,6 +24,7 @@ The `.kit.json` `modules` section names two files (docs/kit-json.md):
   owner changes what is allowed. `.kit.local.json` and the machine config cannot repoint the
   section.
 - `ceilings`: the plain ceilings file (below). It is not an owner path: agents lower ceilings.
+- `page`: optional, the architecture page generated from the map ("The architecture page").
 
 A `gate.steps` entry that runs the check, as a warning until the map settles:
 
@@ -177,11 +179,43 @@ messaging module). A file counts once; a prefix ends at a whole name (`org.x.api
 `org.x.apix`). This is the count a Java layering test keeps.
 Misses: fully qualified names used without an import, Kotlin and Groovy imports.
 
+## The architecture page
+
+`--page` prints a Markdown page built from the map alone (`kitlib/modulemap/page.py`): the
+modules with their folders and `why`, the messaging modules, the allowed edges with their `why`,
+and the ratchets (from, to, what they count, goal and `goal_reason`, record). It holds no counts
+or ceilings, so it changes only when the map does. `--page --write` writes it to the file
+`modules.page` names, in a linked worktree only (`kitlib.git.checkout.write_text`); with no
+`page` key it is exit 2.
+
+With `page` set, `--check` fails a page that is missing or does not match the map (line endings
+aside) with `PAGE STALE  <page> does not exist|does not match the map: run module_map.py --page
+--write and commit it`, and prints `page <page> matches the map` otherwise. A map given with
+`--map` skips this check, and a note says so. Without `page`, no page is checked.
+
+## The scope report
+
+`--scope [--base REV]` prints what a change touches (`kitlib/modulemap/scope.py`). The change is
+the merge base of REV (default: the main branch, docs/gate.md "Default base") and HEAD against
+the work tree, plus untracked files git does not ignore. It prints one `  path -> module` line
+per changed path, then one `widen: M <- C  why` line per module M the change widens to:
+
+- `via edge KIND: WHY`: M has an allowed edge into the changed module C;
+- `via ratchet ID`: M has a ratchet into C;
+- `via messaging`: C is a messaging module, which widens to every module.
+
+The last line is `module_map scope: changed A, B; widened by N: M, ...`. A module that changed
+itself is not listed as widened. The report refuses nothing (exit 0) and needs no owner path; a
+base git cannot read is exit 2. A gate step may run it with `"warn": true` so every gate log
+shows the scope.
+
 ## Running
 
 ```
 python <kit>/tools/module_map.py [-C DIR] --check [--base REV]
 python <kit>/tools/module_map.py [-C DIR] --baseline
+python <kit>/tools/module_map.py [-C DIR] --page [--write]
+python <kit>/tools/module_map.py [-C DIR] --scope [--base REV]
 python <kit>/tools/module_map.py [-C DIR] --check --map FILE [--ceilings FILE]
 ```
 
@@ -190,7 +224,7 @@ run; it keeps no state.
 
 `--check` prints a summary line, one `REFUSED  from -> to  kind  path:line  (detector: target)`
 line per refused crossing, one line per ratchet (`count / ceiling / goal`), one `RAISED` line per ceiling above the base's
-("Raises"), notes, and
+("Raises"), the page line ("The architecture page"), notes, and
 `module_map: OK` or `module_map: FAIL`. `--map` is a dry run: the map is not checked as an owner
 path, and the output says so.
 
@@ -198,12 +232,18 @@ path, and the output says so.
 `from`, `kind`, `to` of refused crossings for the owner to add to the map, and the ceilings
 file the current tree needs. It needs no owner path.
 
-Exit codes: 0 OK (a baseline always), 1 a refused crossing, a ratchet over its ceiling or a
-ceiling raised above the base's, 2 usage, a refused `.kit.json`, an unusable map or ceilings
-file (here or at the base), a base git cannot read, or git could not list the tree
-(`module_map: NOT CHECKED: ...`).
+Exit codes: 0 OK (a baseline, a page and a scope always), 1 a refused crossing, a ratchet over
+its ceiling, a ceiling raised above the base's or a stale page, 2 usage (`--write` without
+`--page`, `--base` without `--check` or `--scope`), a refused `.kit.json`, an unusable map or
+ceilings file (here or at the base), a base git cannot read, a refused page write, or git could
+not list the tree (`module_map: NOT CHECKED: ...`).
 
-## Later slices
+## Remaining slices
 
-Scope reports for a branch and their weekly sum; a generated architecture page; isolation runs
-that build one module alone; a C# `using` detector; rollout to the first Java repository.
+Not yet scoped; each needs files outside this tool's own:
+
+- the weekly drift sum: gates keep their scope reports, and the weekly upkeep run sums how often
+  a gate widened beyond the changed modules (kitlib/gate or the upkeep tasks);
+- isolation runs: each module's tests, daily, in a sparse checkout holding only that module and
+  its allowed edges (a per-module test command in the map; daily_full and kitlib/gate);
+- a C# `using` detector; rollout to the first Java repository.

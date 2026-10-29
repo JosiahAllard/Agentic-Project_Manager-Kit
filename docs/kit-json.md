@@ -117,6 +117,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `maint_lint.gate_time` ({prefix, bound_s, session}): the gate-time check of tools/maint_lint.py (docs/maint-lint.md "Gate time"): bound_s (1 to 86400, default 900) the seconds a gate step's median time over full gates may reach; prefix the id prefix of the record a plain run files for a step over it (unset: none is filed); session the session that record carries; unset: the check runs at 900 s and files nothing
 - `modules.map` (repo path): the module map file: modules, messaging, allowed edges and ratchets (docs/module-map.md); --check refuses to run unless "owner".paths locks it; unset: no module map
 - `modules.ceilings` (repo path): the ratchet ceilings file, {ratchet id: ceiling} (docs/module-map.md "Ratchets"); unset: every ceiling is 0
+- `modules.page` (repo path): the architecture page generated from the map (docs/module-map.md "The architecture page"); --page --write writes it and --check fails when it does not match the map; unset: no page
 - `pieces`: a table the kit passes through unchecked (a file path or an object)
 - `preflight.engines` (list of string, default []): process-name prefixes listed as running engines
 - `preflight.report_hooks` (list of "module:function", default []): module:function report hooks
