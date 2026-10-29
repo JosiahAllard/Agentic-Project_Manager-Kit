@@ -200,7 +200,7 @@ class RunWords(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(got['jobs'], 2)
         self.assertEqual(sorted(got['verbs']),
-                         sorted(['status', 'start', 'follow', 'fetch', 'clean', 'stop']))
+                         sorted(['status', 'start', 'gate', 'follow', 'fetch', 'clean', 'stop']))
 
     def test_job_is_never_served_over_ssh(self):
         with mock.patch('kitlib.loadnode.box.job_main', side_effect=AssertionError('ran')):
@@ -213,6 +213,8 @@ class RunWords(unittest.TestCase):
             code, _t, _d = self.main(['job', self.JOB, '--base', os.path.abspath(os.sep + 'b')], None)
         self.assertEqual(code, 5)
         self.assertEqual(jm.call_args[0][:2], (self.JOB, os.path.abspath(os.sep + 'b')))
+        from kitlib.loadnode import gaterecord
+        self.assertIs(jm.call_args[1]['verify'], gaterecord.read_record)   # a gate job's record
 
     def test_base_must_be_one_absolute_folder(self):
         self.assertEqual(loadnode.split_base(['serve']), (['serve'], None))

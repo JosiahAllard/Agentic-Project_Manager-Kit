@@ -215,21 +215,28 @@ def _is_kit(top):
 
 
 def _gate_facts(top):
-    return job.gate_facts(top)
+    from kitlib.loadnode import gaterecord
+    return gaterecord.gate_facts(top)
 
 
 def _repo_of(top):
-    return job.repo_of(top)
+    from kitlib.loadnode import gaterecord
+    return gaterecord.repo_of(top)
+
+
+def _importer():
+    from kitlib.loadnode import gaterecord
+    return gaterecord.import_gate_record
 
 
 def _run_gate_main(top):
     """The main machine's own `gate.py -C top --full` (it books the machine lock itself): its exit
     code. A kit checkout's gate is its own tools/gate.py, else this kit's."""
-    import subprocess
+    from kitlib.proc import spawn
     kit = top if _is_kit(top) else KIT_ROOT
     try:
-        return subprocess.call([sys.executable, os.path.join(kit, 'tools', 'gate.py'), '-C', top,
-                                '--full'])
+        return spawn.call([sys.executable, os.path.join(kit, 'tools', 'gate.py'), '-C', top,
+                           '--full'])
     except KeyboardInterrupt:
         return 130
 
@@ -247,7 +254,7 @@ def _node_job(a, node, link, co, cmd=None, job_id=None, gate=None):
                        expect_s=getattr(a, 'expect_s', None), no_wait=getattr(a, 'no_wait', False),
                        note=getattr(a, 'note', None), say=_say, out=_out,
                        notice_dir=_notice_dir(a.kind) if cmd else None, reattach_s=a.reattach,
-                       job=job_id, tool=TOOL, gate=gate)
+                       job=job_id, tool=TOOL, gate=gate, importer=_importer())
 
 
 def _on_node(a, node, co, cmd):

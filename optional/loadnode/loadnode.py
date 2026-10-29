@@ -88,9 +88,10 @@ def main(argv=None, environ=None, out=None, stdin=None, box=None, exec_fn=None, 
     rest, base = split_base(argv)
     cmd = environ.get('SSH_ORIGINAL_COMMAND')
     if rest and rest[0] == 'job' and len(rest) == 2 and cmd is None:
-        from kitlib.loadnode import box as boxmod
+        from kitlib.loadnode import box as boxmod, gaterecord
         return boxmod.job_main(rest[1], base, runner=[sys.executable, '-I', '-B',
-                                                      os.path.realpath(__file__)])
+                                                      os.path.realpath(__file__)],
+                               verify=gaterecord.read_record)
     if rest == ['serve'] and cmd is not None and cmd != SERVED:
         from kitlib.loadnode import box as boxmod
         bout = binout or sys.stdout.buffer

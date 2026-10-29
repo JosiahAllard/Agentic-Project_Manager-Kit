@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib.loadnode import box, job, registry
+from kitlib.loadnode import box, gaterecord, job, registry
 from tests import gitfixture
 from tests.loadnode.test_box import Git, RefGit
 from tests.loadnode.test_registry import KEY
@@ -621,8 +621,7 @@ class GateJob(Base):
         self.assertIn("WARNING: the node's kit is at x", self.said)
 
     def test_a_record_main_refuses_is_exit_15_and_the_job_stays_with_its_follow_line(self):
-        from kitlib.records import gate_ok
-        self.import_error = gate_ok.RecordError('its gate config hash is not the one at the commit')
+        self.import_error = job.RecordRefused('its gate config hash is not the one at the commit')
         self.assertEqual(self.gate_job().run(), job.EXIT_RECORD)
         text = '\n'.join(self.said)
         self.assertIn('the gate passed on box1, and its gate-OK record was not taken: its gate '
@@ -669,6 +668,19 @@ class GateJob(Base):
         self.assertIn('node.py follow box1 %s -C "<checkout>"' % JOB, ' '.join(self.said))
         self.assertEqual(self.imported, [])
 
+    def test_with_no_importer_no_record_is_taken(self):
+        # the lock tool's NodeJob (kitlib.loadnode.dispatch) has none: job.py imports no record code
+        nj = self.node_job(gate=GATE)
+        self.assertIsNone(nj.importer)
+        self.assertEqual(nj.take_record({'sha': SHA, 'record': REC}), job.EXIT_RECORD)
+        self.assertIn('no way to take a gate-OK record in', ' '.join(self.said))
+        self.assertNotIn('clean', self.verbs())
+
+    def test_an_error_that_is_no_refusal_is_not_swallowed(self):
+        self.import_error = KeyError('a bug')
+        with self.assertRaises(KeyError):
+            self.gate_job().run()
+
     def test_a_follow_with_no_repo_name_takes_nothing(self):
         nj = job.NodeJob(NODE, FakeLink(self.box), self.top, None, None, None, None, [],
                          say=self.said.append, job=JOB, importer=self.importer)
@@ -697,8 +709,8 @@ class GateJob(Base):
 
 
 class ImportGateRecord(unittest.TestCase):
-    """import_gate_record around gate_ok.import_record: main's gate config at the commit, the
-    record-folder fallback and the kit-version warning."""
+    """gaterecord.import_gate_record around gate_ok.import_record: main's gate config at the
+    commit, the record-folder fallback, the kit-version warning and a refusal as job.RecordRefused."""
 
     def setUp(self):
         from kitlib.gate import runner
@@ -720,7 +732,7 @@ class ImportGateRecord(unittest.TestCase):
 
     def test_it_checks_against_main_gate_config_at_the_commit(self):
         self.patch(self.runner, 'gate_config_at', lambda top, rev: {'top': top, 'rev': rev})
-        got = job.import_gate_record('T', REC, SHA, {'node': 'n'}, 'my-repo')
+        got = gaterecord.import_gate_record('T', REC, SHA, {'node': 'n'}, 'my-repo')
         self.assertEqual(got, ('P', []))
         self.assertEqual((self.seen['root'], self.seen['commit'], self.seen['repo']),
                          ('T', SHA, 'my-repo'))
@@ -730,14 +742,14 @@ class ImportGateRecord(unittest.TestCase):
         def bad(top, rev):
             raise self.runner.ConfigError('no .kit.json')
         self.patch(self.runner, 'gate_config_at', bad)
-        job.import_gate_record('T', REC, SHA, {}, 'my-repo')
+        gaterecord.import_gate_record('T', REC, SHA, {}, 'my-repo')
         with self.assertRaises(self.gate_ok.RecordError) as cm:
             self.seen['config_at'](SHA)
         self.assertIn('no .kit.json', str(cm.exception))
 
     def test_another_kit_version_is_a_warning_only(self):
         rec = dict(REC, kit={'commit': 'f' * 40})
-        path, warnings = job.import_gate_record('T', rec, SHA, {}, 'my-repo')
+        path, warnings = gaterecord.import_gate_record('T', rec, SHA, {}, 'my-repo')
         self.assertEqual(path, 'P')
         self.assertEqual(len(warnings), 1)
         self.assertIn("the node's kit is at ffffffffffff and this machine's at eeeeeeeeeeee",
@@ -748,16 +760,23 @@ class ImportGateRecord(unittest.TestCase):
             raise self.gate_ok.NoRecordFolder('the machine config sets no dev_drive')
         self.patch(self.gate_ok, 'import_record', no_folder)
         self.patch(self.gate_ok, 'legacy_path', lambda root, commit: (root, commit, 'legacy'))
-        path, warnings = job.import_gate_record('T', REC, SHA, {}, 'my-repo')
+        path, warnings = gaterecord.import_gate_record('T', REC, SHA, {}, 'my-repo')
         self.assertEqual(path, ('T', SHA, 'legacy'))
         self.assertIn('no dev_drive', warnings[0])
 
-    def test_a_refusal_is_raised(self):
+    def test_a_refusal_is_raised_as_record_refused(self):
         def refuse(*a):
             raise self.gate_ok.RecordError('the record is not from a --full gate')
         self.patch(self.gate_ok, 'import_record', refuse)
-        with self.assertRaises(self.gate_ok.RecordError):
-            job.import_gate_record('T', REC, SHA, {}, 'my-repo')
+        with self.assertRaises(job.RecordRefused) as cm:
+            gaterecord.import_gate_record('T', REC, SHA, {}, 'my-repo')
+        self.assertIn('not from a --full gate', str(cm.exception))
+
+    def test_read_record_is_verify_full(self):
+        seen = []
+        self.patch(self.gate_ok, 'verify_full', lambda root, c: seen.append((root, c)) or ('R', None))
+        self.assertEqual(gaterecord.read_record('T', SHA), ('R', None))
+        self.assertEqual(seen, [('T', SHA)])
 
 
 if __name__ == '__main__':

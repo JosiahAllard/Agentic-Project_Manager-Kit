@@ -763,6 +763,14 @@ class RunGate(GateBase):
                                      verify=lambda r, c: ({'commit': 'c' * 40}, None))
         self.assertEqual((res['record'], res['record_why']), (None, 'the record names another commit'))
 
+    def test_with_no_verify_a_pass_sends_no_record_and_says_why(self):
+        d = self.made_gate_job()
+        spec_ = box._read_json(os.path.join(d, 'spec.json'))
+        code = self.box.run_gate(JOB, spec_, popen=FakePopen([0]))
+        res = box._read_json(os.path.join(d, 'result.json'))
+        self.assertEqual((code, res['record']), (0, None))
+        self.assertIn('reads no gate-OK record', res['record_why'])
+
     def test_a_verify_that_raises_still_leaves_a_result(self):
         def boom(r, c):
             raise ValueError('bad json')
@@ -794,9 +802,11 @@ class RunGate(GateBase):
 
     def test_run_job_hands_a_gate_spec_to_run_gate_and_never_runs_a_command(self):
         self.made_gate_job()
+        verify = object()
         with mock.patch.object(box.Box, 'run_gate', return_value=4) as rg:
-            self.assertEqual(self.box.run_job(JOB, run_command=self.fail), 4)
+            self.assertEqual(self.box.run_job(JOB, run_command=self.fail, verify=verify), 4)
         self.assertEqual(rg.call_args[0][0], JOB)
+        self.assertIs(rg.call_args[1]['verify'], verify)
 
 
 @real_git('a per-job bare repo with alternates and its linked worktree: the fake lacks both')

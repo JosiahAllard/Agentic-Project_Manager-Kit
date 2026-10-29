@@ -699,14 +699,16 @@ class Box(object):
         return {'ok': True, 'asked': 'its runner, by SIGTERM'}
 
     # the job runner
-    def run_job(self, job, run_command=None, new_rid=None, store_factory=None, chdir=os.chdir):
+    def run_job(self, job, run_command=None, new_rid=None, store_factory=None, chdir=os.chdir,
+                verify=None):
         """Run `job`'s command under the machine lock: the exit code it ended with. Its log is
-        the job's `log` (the caller has pointed fds 1 and 2 at it)."""
+        the job's `log` (the caller has pointed fds 1 and 2 at it). A gate job goes to run_gate,
+        with `verify`."""
         spec = _read_json(self._p(job, 'spec.json'))
         if spec is None:
             return EXIT_USAGE
         if spec.get('gate') is True:
-            return self.run_gate(job, spec)
+            return self.run_gate(job, spec, verify=verify)
         log = self._p(job, 'log')
 
         def say(text):
@@ -750,15 +752,16 @@ class Box(object):
         machine lock itself (runner_env leaves no MACHINE_LOCK_ variable). A Ctrl+C (the runner's
         SIGTERM: stop) is passed on to it as SIGINT, then a kill after GATE_STOP_S. When it
         passes, result.json carries the gate-OK record it wrote for the sha as `record` (verify(wt,
-        sha) -> (record, why), default gate_ok.verify_full), else why not as `record_why`.
-        popen and verify are the tests'."""
-        import subprocess
+        sha) -> (record, why): the job runner passes kitlib.loadnode.gaterecord.read_record, kept
+        out of this module so the lock tool never reaches the record modules), else why not as
+        `record_why`. popen is spawn.popen, the tests' stand-in."""
+        from kitlib.proc import spawn
         wt = self.tree(spec)
         argv = [sys.executable, '-B', os.path.join(KIT_ROOT, 'tools', 'gate.py'), '-C', wt,
                 '--full']
         how, extra = 'ended', {'gate': True, 'record': None, 'record_why': None}
         try:
-            p = (popen or subprocess.Popen)(argv, cwd=wt, env=runner_env(os.environ, job))
+            p = (popen or spawn.popen)(argv, cwd=wt, env=runner_env(os.environ, job))
         except OSError as e:
             self._result(job, 1, 'error', spec['sha'], 'the gate could not start (%s)' %
                          type(e).__name__, extra)
@@ -778,10 +781,9 @@ class Box(object):
         if how == 'interrupted' and os.path.exists(self._p(job, 'stop.json')):
             how = 'stopped'
         if code == 0:
-            if verify is None:
-                from kitlib.records import gate_ok
-                verify = gate_ok.verify_full
             try:
+                if verify is None:
+                    raise LookupError('this job runner reads no gate-OK record')
                 rec, rwhy = verify(wt, spec['sha'])
             except Exception as e:              # noqa: BLE001 - the result is written anyway
                 rec, rwhy = None, '%s: %s' % (type(e).__name__, e)
@@ -852,9 +854,10 @@ def serve(cmd, stdin, write, box, exec_fn=None):
     return EXIT_OK if d.get('ok') else EXIT_REFUSED
 
 
-def job_main(job, base, runner=None):
+def job_main(job, base, runner=None, verify=None):
     """`loadnode.py job <job>`: the detached runner. Points fds 1 and 2 at the job's log, turns
-    SIGTERM into Ctrl+C (so the run is released and a result written), and runs it."""
+    SIGTERM into Ctrl+C (so the run is released and a result written), and runs it; `verify`
+    reads a gate job's record (Box.run_gate)."""
     box = Box(base, runner=runner)
     if not JOB_RE.fullmatch(job) or not os.path.isdir(box.job_dir(job)):
         return EXIT_USAGE
@@ -869,4 +872,4 @@ def job_main(job, base, runner=None):
         raise KeyboardInterrupt()
     if hasattr(signal, 'SIGTERM'):
         signal.signal(signal.SIGTERM, term)
-    return box.run_job(job)
+    return box.run_job(job, verify=verify)
