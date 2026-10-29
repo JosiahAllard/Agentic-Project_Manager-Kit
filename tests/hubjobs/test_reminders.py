@@ -86,9 +86,14 @@ class RemindersJobTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '3 malformed reminders'):
             self.job()(c)
         self.assertEqual(c.events, [('due', '1')])
+        self.assertFalse(os.path.exists(self.state))    # not marked while an entry is malformed
         with self.assertRaises(ValueError):
             self.job()(c)
-        self.assertEqual(c.events, [('due', '1')])      # the good one is not pushed again
+        self.assertEqual(c.events, [('due', '1'), ('due', '1')])    # handed over again
+        self.put([{'due': '2026-10-01', 'text': 'good'}])           # the file is fixed
+        self.job()(c)
+        self.job()(c)
+        self.assertEqual(len(c.events), 3)
 
     def test_removed_reminder_key_dropped(self):
         self.put([{'due': '2026-10-01', 'text': 'a'}, {'due': '2026-10-02', 'text': 'b'}])
@@ -117,6 +122,44 @@ class RemindersJobTest(unittest.TestCase):
             f.write('nope')
         with self.assertRaises(ValueError):
             self.job()(Ctx())
+
+
+class ThroughJobsTest(unittest.TestCase):
+    """The real runner: ctx.event hands off and never reports delivery."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = os.path.join(self.dir.name, 'reminders.json')
+        with open(self.path, 'w', encoding='utf-8') as f:
+            json.dump([{'due': '2026-10-01', 'text': 'a'}], f)
+
+    def run_with(self, notify):
+        job = reminders.RemindersJob(self.path, today=lambda: TODAY)
+        runner = jobs.Jobs([jobs.Job('reminders', 300, job)], notify=notify)
+        runner.run_now('reminders')
+        return runner.status()['reminders']
+
+    def marked(self):
+        with open(os.path.join(self.dir.name, reminders.STATE_FILE)) as f:
+            return json.load(f)
+
+    def test_marked_after_handoff_with_no_push_worker(self):
+        st = self.run_with(None)
+        self.assertEqual((st['failures'], st['note']), (0, '1 due, 1 new: a'))
+        self.assertEqual(len(self.marked()), 1)
+
+    def test_marked_when_notify_raises(self):
+        def boom(*a):
+            raise OSError('down')
+        st = self.run_with(boom)
+        self.assertEqual(st['failures'], 0)
+        self.assertEqual(len(self.marked()), 1)
+
+    def test_notify_gets_the_due_event(self):
+        seen = []
+        self.run_with(lambda *a: seen.append(a))
+        self.assertEqual(seen, [('reminders', 'due', '1')])
 
 
 class MakeTest(unittest.TestCase):

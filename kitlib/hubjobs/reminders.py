@@ -10,15 +10,21 @@ reminders not pushed before are announced to the PM with one `due` job push (det
 are new). kitlib.hubsite.jobs allows only a token as detail, so the text is not in the push, and
 a newer push of a job replaces one still owed, hence one push per run for all the new ones.
 
-Pushed once, also across a restart: the keys (a hash of due and text) of the reminders pushed are
-kept in reminders-pushed.json next to the reminders file, written atomically (kitlib.fs.replace)
-AFTER the push is handed over, so a crash between the two repeats a push and never loses one. A
-key whose reminder left the file is dropped. A state file that cannot be read counts as empty.
+Handed to the push worker once, also across a restart: the keys (a hash of due and text) of the
+reminders handed over are kept in reminders-pushed.json next to the reminders file, written
+atomically (kitlib.fs.replace) AFTER ctx.event returns. Delivery is best effort: ctx.event only
+hands the push to the in-memory push worker (kitlib.hubsite.jobs swallows a notify failure, does
+nothing when the hub has no push worker, and a restart drops pushes still owed), so the health
+note, which shows the due count and the first text on every run, is the lasting record. A crash
+between the hand-over and the state write repeats a push. A key whose reminder left the file is
+dropped. A state file that cannot be read counts as empty.
 The job never edits the reminders file: removing a reminder is the PM's call.
 
 A malformed entry (not an object, no text, a due that is not a date) is skipped and does not
-stop the others; the run then raises, naming how many were skipped, so health shows it. A
-reminders file that cannot be read or is not a JSON list is a failure too.
+stop the others; the run then raises, naming how many were skipped, so health shows it. While
+any entry is malformed the new keys are not marked, so the new reminders are handed over again each
+run until the file is fixed: the third failure's `failing` push has this job's name and replaces
+a `due` still owed. A reminders file that cannot be read or is not a JSON list is a failure too.
 """
 import datetime
 import hashlib
@@ -81,8 +87,11 @@ class RemindersJob(object):
         if new:
             ctx.event(EVENT, str(len(new)))
         # Written after the push; also when only the keys of removed reminders changed.
-        keep = sorted((pushed & set(key(it) for it in good)) | set(key(it) for it in new))
-        if new or len(keep) != len(pushed):
+        keep = pushed & set(key(it) for it in good)
+        if not bad:             # a failing run's `failing` push may replace this `due`
+            keep |= set(key(it) for it in new)
+        keep = sorted(keep)
+        if keep != sorted(pushed):
             self._write(keep)
         if bad:
             raise ValueError('%d malformed reminder%s skipped in %s'
