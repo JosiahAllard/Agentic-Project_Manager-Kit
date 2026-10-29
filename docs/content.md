@@ -143,7 +143,7 @@ rendered; nor is `compact`, because no per-agent compact key in a Codex agent fi
 (no Codex install here to check). It copies each skill folder to `hosts/codex/shell/skills/<name>/` and owns both folders; the
 copy stays until a live Codex install shows it loads skills from outside its plugin folder
 (hosts/codex/README.md "Not verified"). Its
-manifests are `hosts/codex/shell/plugin.json` (the name and version, the hooks file),
+manifests are `hosts/codex/shell/plugin.json` (the name and version; `./content/skills/`, the hooks file and `mcp.json` named from the export root, where the export places it as `.codex-plugin/plugin.json`, docs/plugin-source.md "Layout"),
 `hosts/codex/shell/mcp.json` (the read-only lock server and the hub server) and `hosts/codex/shell/hooks/hooks.json`
 (every declared hook event running `boot/hook.py codex <event>`, the plugin's copy, as one
 command string), with `hooks.linux.json` beside it as for Claude ("Manifests"): the Linux command
