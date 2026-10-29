@@ -1793,7 +1793,12 @@ def run_command(cmd, kind, repo, slug, **kw):
     .cmd cannot take (script_command), is refused before the run books: 1, no record. The command
     starts in this process's folder; a bare name there that does not start is said with the
     .\\<name> form that runs (bare_hint). A .bat or .cmd, named or found for a name with no
-    extension, starts through cmd.exe (script_command); the record keeps cmd as given."""
+    extension, starts through cmd.exe (script_command); the record keeps cmd as given.
+
+    route: None, or route(cmd, kind, repo, slug, kw) asked after those checks and before the
+    run books. None from it runs the command here; a number is the run's exit code, and nothing
+    is booked here (kitlib.loadnode.dispatch runs it on a load node, docs/load-nodes.md)."""
+    route = kw.pop("route", None)
     store = kw.get("store") or Store()
     kw["store"] = store
     try:
@@ -1802,6 +1807,10 @@ def run_command(cmd, kind, repo, slug, **kw):
     except (bash.BareBashError, ScriptArgError) as e:
         store.say("could not start the command: %s" % e)
         return 1
+    if route is not None:
+        code = route(cmd, kind, repo, slug, kw)
+        if code is not None:
+            return code
     s = book(kind, repo, slug, cmd=cmd, **kw)
     code, how = 1, "not started"
     try:

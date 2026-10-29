@@ -386,5 +386,107 @@ class Cli(StoreCase):
         self.assertFalse(json.loads(out)["enabled"])
 
 
+class LoadNodes(Cli):
+    """run's --node, --artifact and the hidden --registry, and status's `node:` lines. The
+    registry is a temp file (registry.ignored stood in), ssh a runner, the node NodeJob.run."""
+
+    def setUp(self):
+        super().setUp()
+        from kitlib.loadnode import registry
+        from tests import gitfixture
+        from tests.loadnode.test_registry import node, text
+        self.repo = gitfixture.TempRepo(branch="main")
+        self.addCleanup(self.repo.cleanup)
+        self.repo.write("a.txt", "one" + chr(10))
+        self.repo.commit("add a", "a.txt")
+        self.file = os.path.join(self.tmp, "load-nodes.json")
+        with open(self.file, "w", encoding="utf-8") as f:
+            f.write(text(node(memory_mb=4096, repos=["kit"])))
+        p = mock.patch.object(registry, "ignored", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(self.repo.root)
+        self.node_runs = []
+
+    def node_run(self, code):
+        def run(nj):
+            self.node_runs.append((nj.node.name, nj.cmd, nj.artifacts))
+            return code
+        return mock.patch("kitlib.loadnode.job.NodeJob.run", run)
+
+    def ssh(self, runner):
+        return mock.patch("kitlib.loadnode.remote.default_runner", runner)
+
+    def run_on(self, *extra, cmd=None):
+        return self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", "t",
+                         "--no-wait", *extra, cmd=cmd or ["python", "x.py"])
+
+    def test_no_registry_is_no_node_line_and_no_routing(self):
+        def no_ssh(argv, timeout_s):
+            raise AssertionError("ssh was asked")
+        with self.ssh(no_ssh), self.node_run(5):
+            code, out, _ = self.call("status")
+            self.assertEqual(code, 0)
+            self.assertNotIn("node:", out)
+            self.confine(1)
+            code, _, err = self.run_on("--cores", "1", cmd=[sys.executable, "-c",
+                                                            "import sys; sys.exit(3)"])
+        self.assertEqual(code, 3, err)
+        self.assertEqual(self.node_runs, [])
+        self.assertEqual(len(self.store.history_records()), 1)
+
+    def test_status_says_a_node_line_for_each_node(self):
+        from tests.loadnode.test_remote import Runner, ok_reply
+        with self.ssh(Runner(out=ok_reply())):
+            code, out, _ = self.call("status", "--registry", self.file)
+        self.assertEqual(code, 0)
+        self.assertIn("node: box1  ok  cpu 3/4 free", out)
+        with self.ssh(Runner(rc=255, err=b"Host key verification failed.")):
+            code, out, _ = self.call("status", "--registry", self.file)
+        self.assertIn("node: box1  host key mismatch", out)
+        code, out, _ = self.call("status", "--json", "--registry", self.file)
+        self.assertNotIn("node:", out)
+
+    def test_a_named_node_runs_it_there_and_its_code_comes_back(self):
+        with self.node_run(5):
+            code, _, err = self.run_on("--node", "box1", "--registry", self.file,
+                                       "--artifact", "out/*.txt")
+        self.assertEqual(code, 5, err)
+        self.assertEqual(self.node_runs, [("box1", ["python", "x.py"], ["out/*.txt"])])
+        self.assertFalse(os.path.isdir(self.store.path("ended"))
+                         and os.listdir(self.store.path("ended")), "a node's run was booked here")
+
+    def test_node_main_and_a_resource_run_it_here(self):
+        def no_ssh(argv, timeout_s):
+            raise AssertionError("ssh was asked")
+        self.confine(1)
+        for extra in (("--node", "main"), ("--node", "box1", "--node", "main"),
+                      ("--resource", "vm:x")):
+            with self.subTest(extra=extra), self.node_run(5), self.ssh(no_ssh):
+                code, _, err = self.run_on("--registry", self.file, *extra,
+                                           cmd=["python", "-c", "import sys; sys.exit(3)"])
+                self.assertEqual(code, 3, err)
+                self.assertNotIn("load node", err)
+        self.assertEqual(self.node_runs, [])
+        self.assertEqual(len(self.store.history_records()), 3)
+
+    def test_node_usage_is_2_and_books_nothing(self):
+        for extra, want in ((("--node", "nope"), "no node named nope"),
+                            (("--node", "box1", "--cores", "1"), "does not take --cores"),
+                            (("--node", "box1", "--detach"), "does not detach"),
+                            (("--artifact", "../x"), "not a relative glob"),
+                            (("--artifact", "out/caf%s.txt" % chr(0xe9)), "ASCII")):
+            with self.subTest(extra=extra), self.node_run(5):
+                code, _, err = self.run_on("--registry", self.file, *extra)
+                self.assertEqual(code, 2, err)
+                self.assertIn(want, err)
+        self.assertEqual(self.node_runs, [])
+        self.assertFalse(os.path.isdir(self.store.path("ended"))
+                         and os.listdir(self.store.path("ended")))
+        self.assertNotIn("--registry", self.tool.parser().format_help())
+
+
 if __name__ == "__main__":
     unittest.main()

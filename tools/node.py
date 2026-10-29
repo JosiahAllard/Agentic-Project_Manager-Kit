@@ -11,10 +11,8 @@
       run the command on the checkout's HEAD under a machine lock: on the node named, or (auto,
       the default) on whichever of the main machine and the nodes that opted the repository in
       has the kind's slots free now; its output streams here, its artifacts (the files matching
-      each GLOB, relative to the checkout's top) are copied back into the checkout, all or none.
-      Until the next slice (S2b) fixes the node's side of status, auto picks no node (a Linux
-      node's status refuses: its lock's memory read is Windows only) and so runs on main;
-      --node NAME runs on the node named
+      each GLOB, relative to the checkout's top, ASCII) are copied back into the checkout, all
+      or none
   node.py follow NODE JOB [--artifact GLOB]... [-C DIR] [--reattach S]
       stream a job's output from its start to its end, then fetch its artifacts and clean it
   node.py stop NODE JOB
@@ -26,9 +24,11 @@ still listed); 2 usage, or a registry that is missing, invalid or not ignored by
 run and follow: the command's own exit code; 2 usage (an unknown node or kind, a repository the
 node has not opted in, tracked changes not committed for --node NAME); 6 the node was busy; 9 the
 connection was lost (the job runs on: the follow and stop lines are said); 10 the node could not
-be used; 13 the job succeeded but its artifacts did not all come or could not all be copied in
-(none was). With --node auto a node that fails before its job starts, or is busy, gives way to
-the main machine; a job the node started never runs again on main. stop: 0 asked, 1 refused.
+be used (nothing ran); 13 the job succeeded but its artifacts did not all come or could not all be
+copied in (none was); 14 the node started the job but it ended there with no exit code of its own
+or could not be followed; 130 Ctrl+C (a started job is asked to stop). With --node auto a node
+that fails before its job starts, or is busy, gives way to the main machine; a job the node
+started never runs again on main. stop: 0 asked, 1 refused.
 """
 import argparse
 import json
@@ -39,7 +39,7 @@ import sys
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, KIT_ROOT)
 
-from kitlib.loadnode import box, job, registry, remote, reply, route       # noqa: E402
+from kitlib.loadnode import box, dispatch, job, registry, remote, reply, route  # noqa: E402
 
 OK, FAILED, USAGE = 0, 1, 2
 PREFIX = 'node.py:'
@@ -86,8 +86,8 @@ def _reattach(text):
 
 def _glob(text):
     if not box.glob_ok(text):
-        raise argparse.ArgumentTypeError('%r is not a relative glob under the checkout (no "..", '
-                                         'no ".git", "/" between parts)' % text)
+        raise argparse.ArgumentTypeError('%r is not a relative glob under the checkout (%s)'
+                                         % (text, box.GLOB_RULE))
     return text
 
 
@@ -180,15 +180,7 @@ def _need(kind):
 
 
 def _notice_dir(kind):
-    from kitlib.lock import site
-    from kitlib.lock.store import Store
-    try:
-        n = site.notice(Store())
-    except Exception:                       # no notice never stops a run
-        return None
-    if n and (n[1] is None or kind in n[1]):
-        return n[0]
-    return None
+    return dispatch.notice_dir(kind)
 
 
 def _run_main(a, cmd, top):
@@ -221,22 +213,8 @@ def _node_job(a, node, link, co, cmd=None, job_id=None):
 
 
 def _on_node(a, node, co, cmd):
-    """(exit code, fallback): fallback True when nothing ran on the node and main may run it;
-    an OSError once the node has started the job is never one."""
-    nj = None
-    try:
-        with _link(node) as link:
-            nj = _node_job(a, node, link, co, cmd)
-            return nj.run(), False
-    except job.JobError as e:
-        _say(e.message)
-        return e.code, e.fallback
-    except OSError as e:
-        if nj is not None and nj.started:
-            _say('job %s on %s: %s; it is not run again on main' % (nj.job, node.name, e))
-            return job.EXIT_NODE, False
-        _say('%s could not be used: %s' % (node.name, e))
-        return job.EXIT_NODE, True
+    """(exit code, fallback): kitlib.loadnode.dispatch.on_node."""
+    return dispatch.on_node(node, _link, lambda link: _node_job(a, node, link, co, cmd), _say)
 
 
 def cmd_run(a, cmd, runner=None):

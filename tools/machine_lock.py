@@ -10,11 +10,19 @@
   division [--set JSON | --default]                          the owner's division
   game [on|off|set JSON]                                     game mode
 
+run may run the command on a load node instead (kitlib.loadnode.dispatch, docs/load-nodes.md
+"Lock runs on a node"): --node auto (the default) when a node has opted the repository in and
+has more room, --node main never, --node NAME on that node; status adds a `node:` line per node.
+
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.lock, prints and exits.
 Everything it shows or changes goes through kitlib.lock.api. Exit codes: 0 done, the
 command's own code for run, 1 no such record or not stopped, 2 usage or refused, 6 busy
-(--no-wait), 8 --max-wait ran out, 10 the lock cannot be had (fail closed), 11 a hold
-keeps it out, 12 the hold cannot be used.
+(--no-wait), 8 --max-wait ran out, 10 the lock cannot be had (fail closed; with --node NAME,
+the node could not be used: nothing ran), 11 a hold keeps it out, 12 the hold cannot be used.
+A run on a load node also: 9 the connection to the node was lost (the job runs on there: the
+follow and stop lines are said), 13 the job succeeded but its artifacts did not all come (none
+was copied in), 14 the node started the job but it ended there with no exit code of its own or
+could not be followed (it is never run again here).
 """
 import argparse
 import datetime
@@ -36,6 +44,7 @@ from kitlib.lock.run import (ORIGIN_ENV, ScriptArgError, check_resource,  # noqa
                              run_command, script_command)
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
+from kitlib.loadnode import box, dispatch                          # noqa: E402
 from kitlib.proc import bash, process                              # noqa: E402
 # Not used here: loaded at start because kitlib.proc.daemons imports it inside functions that run
 # at the end of a run, and a first load then could read a checkout a landing has rewritten.
@@ -111,6 +120,13 @@ def parse_threads(s):
         raise argparse.ArgumentTypeError(str(e))
 
 
+def parse_glob(s):
+    if not box.glob_ok(s):
+        raise argparse.ArgumentTypeError("%r is not a relative glob under the checkout (%s)"
+                                         % (s, box.GLOB_RULE))
+    return s
+
+
 def parse_json(s):
     try:
         return json.loads(s)
@@ -167,6 +183,14 @@ def parser():
     r.add_argument("--detach", action="store_true",
                    help="run outside this shell; prints '<run id> pid <n>'")
     r.add_argument("--detached-id", help=argparse.SUPPRESS)
+    r.add_argument("--node", default="auto", metavar="auto|main|NAME",
+                   help="where it runs: auto (default) here or on a load node that opted the "
+                        "repository in and has more room, main here only, NAME that load node "
+                        "(docs/load-nodes.md)")
+    r.add_argument("--artifact", action="append", default=[], type=parse_glob, metavar="GLOB",
+                   help="on a load node: files to copy back, relative to the checkout's top "
+                        "(repeatable)")
+    r.add_argument("--registry", help=argparse.SUPPRESS)    # tests: a load node registry file
     b = sub.add_parser("background", allow_abbrev=False,
                        help="a pausable gpu training run in a gpu slot",
                        usage="machine_lock.py background --repo R --slug S [options] -- "
@@ -181,6 +205,7 @@ def parser():
     s.add_argument("id", nargs="?")
     s.add_argument("--json", action="store_true", help="the API snapshot (docs/lock-api.md)")
     s.add_argument("--days", type=int, default=7, help="history stats over the last N days")
+    s.add_argument("--registry", help=argparse.SUPPRESS)    # tests: a load node registry file
     t = sub.add_parser("stop", allow_abbrev=False, help="end a run")
     t.add_argument("id")
     t.add_argument("--force", action="store_true",
@@ -315,16 +340,33 @@ def cmd_run(a, cmd, store, argv):
     except (bash.BareBashError, ScriptArgError) as e:
         say("could not start the command: %s" % e)
         return 1
+    node = getattr(a, "node", "main")           # run only
+    if node not in ("auto", "main") and (a.detach or a.detached_id):
+        say("usage: --node %s: a run on a load node does not detach; follow it with node.py "
+            "follow, or drop --node" % node)
+        return EXIT_USAGE
     if a.detach and not a.detached_id:
         return detach(argv)
     common = dict(store=store, rid=a.detached_id, detached=bool(a.detached_id),
                   expect_s=a.expect_s, note=a.note)
     if a.cmd == "background":
         return run_background(cmd, a.repo, a.slug, **common)
+    router = dispatch.Router(node, a.artifact, registry_file=a.registry, out=job_out)
     return run_command(cmd, a.kind, a.repo, a.slug, cores=a.cores, hold=a.hold,
                        gpu_share=a.gpu_share, wait_s=a.wait_s, no_wait=a.no_wait,
                        on_release_cmd=a.on_release, within=a.within, resource=a.resource,
-                       **common)
+                       route=router, **common)
+
+
+def job_out(data):
+    """A load node job's own output, as it comes."""
+    buf = getattr(sys.stdout, "buffer", None)
+    if buf is None:
+        sys.stdout.write(data.decode("utf-8", "replace"))
+        sys.stdout.flush()
+    else:
+        buf.write(data)
+        buf.flush()
 
 
 def cmd_status(a, store):
@@ -342,6 +384,8 @@ def cmd_status(a, store):
         print(json.dumps(snap, indent=1), flush=True)
     else:
         for line in st.render(snap):
+            out(line)
+        for line in dispatch.status_lines(a.registry, testing=store.testing):
             out(line)
     return 0
 

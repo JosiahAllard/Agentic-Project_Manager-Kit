@@ -136,6 +136,30 @@ class Slot(StoreCase):
         self.assertEqual(code, 4)
         self.assertEqual(len(self.store.history_records()), 1)
 
+    def test_a_route_that_takes_the_run_books_nothing_here(self):
+        """route= (a load node, kitlib.loadnode.dispatch): its number is the run's exit code and
+        this machine books nothing; it is asked with the run's own arguments."""
+        self.confine(1)
+        asked = []
+
+        def route(cmd, kind, repo, slug, kw):
+            asked.append((cmd, kind, repo, slug, kw.get("cores"), kw.get("note")))
+            return 7
+        code = rm.run_command(["never-started.exe"], "engine-test", "kit", "t", cores=1,
+                              note="n", store=self.store, env=clean_env(), route=route)
+        self.assertEqual(code, 7)
+        self.assertEqual(asked, [(["never-started.exe"], "engine-test", "kit", "t", 1, "n")])
+        self.assertEqual(self.store.history_records(), [])
+        self.assertEqual(self.store.live_runs(), [])
+
+    def test_a_route_that_declines_runs_the_command_here(self):
+        self.confine(1)
+        code = rm.run_command([sys.executable, "-c", "import sys; sys.exit(4)"], "engine-test",
+                              "kit", "t", cores=1, store=self.store, env=clean_env(),
+                              route=lambda *a: None)
+        self.assertEqual(code, 4)
+        self.assertEqual(len(self.store.history_records()), 1)
+
 
 NO_CWD = "NoDefaultCurrentDirectoryInExePath"
 
