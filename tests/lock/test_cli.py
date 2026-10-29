@@ -23,7 +23,9 @@ def load_tool():
     return mod
 
 
-class Cli(StoreCase):
+class CliBase(StoreCase):
+    """The tool on a scratch store, with no tests of its own (Cli and LoadNodes hold them)."""
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -57,6 +59,8 @@ class Cli(StoreCase):
                 code = e.code
         return code, out.getvalue(), err.getvalue()
 
+
+class Cli(CliBase):
     def test_status(self):
         code, out, _ = self.call("status", "--json")
         self.assertEqual(code, 0)
@@ -386,7 +390,7 @@ class Cli(StoreCase):
         self.assertFalse(json.loads(out)["enabled"])
 
 
-class LoadNodes(Cli):
+class LoadNodes(CliBase):
     """run's --node, --artifact and the hidden --registry, and status's `node:` lines. The
     registry is a temp file (registry.ignored stood in), ssh a runner, the node NodeJob.run."""
 
