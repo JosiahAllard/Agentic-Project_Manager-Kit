@@ -17,7 +17,7 @@ from kitlib.pmstart import fglock
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import auth, serve, settings
 from tests.home import machine_config, pm_repo
-from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos
+from tests.pmstart import HANDOFF_FAKE, keep_off_launcher_repos, keep_off_session_job
 
 NOW = datetime.datetime(2026, 10, 6, 9, 0)
 FAKES = dict(handoff=HANDOFF_FAKE, reminders={"read": lambda p: "[]"},
@@ -28,6 +28,7 @@ TOKEN = "secret_token_value_" + "x" * auth.MIN_TOKEN
 
 def setUpModule():
     keep_off_launcher_repos()
+    keep_off_session_job()      # the watcher check asks no hub (the hub check is the one tested)
     # the checklist must not read this machine's pm_data setting, foreground lock or heartbeat
     for owner, name, value in ((pmstart, "pm_data_settings", lambda: None),
                                (fglock, "read_live", lambda user32=None: 0),

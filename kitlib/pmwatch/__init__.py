@@ -66,13 +66,16 @@ def _number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def write_heartbeat(path, pid, now, stream, started=None):
+def write_heartbeat(path, pid, now, stream, started=None, yielded=False):
     """Record that pm_watch `pid` polled at `now` (epoch seconds); `stream` is its --stream flag
     (the PM start no longer passes it: docs/pm-watch.md) and `started` its process start time
     (epoch seconds, None when unknown), so a reused pid is not
     taken for the watcher. kitlib.pmstart.watcher reads it to tell a live watcher from a hung or
-    exited one."""
-    save_state(path, {"pid": pid, "beat": now, "stream": bool(stream), "started": started})
+    exited one. `yielded`: its session checks stepped aside for the hub's session-watch job at
+    that pass (Watcher.yielded), so that job does not wait for it (a beat without the field, from
+    an older pm_watch, counts as not stepped aside)."""
+    save_state(path, {"pid": pid, "beat": now, "stream": bool(stream), "started": started,
+                      "yielded": bool(yielded)})
 
 
 def read_heartbeat(path):
@@ -394,19 +397,98 @@ def idle_events(names, newest, fired, nolog, now, minutes, stopped=None):
     return ev, cur, miss
 
 
-def hub_plugin_job_up(load=None, make_client=None):
-    """True when the loopback hub server's GET health `jobs` names its plugin-refresh job
-    (kitlib.hubsite.plugin_job): the hub then owns the plugin refresh. A hub that is down, has no
-    token file or no pointer, or answers anything else, is False. Never raises. `load` and
+def hub_jobs(load=None, make_client=None):
+    """The loopback hub server's GET health `jobs` ({name: health block}), or None when the hub is
+    down, has no token file or no pointer, or answers anything else. Never raises. `load` and
     `make_client` as hub_check."""
     try:
         from kitlib import pmstart
         port = (load or pmstart.hub_settings)().port
         health = (make_client or pmstart._hub_client)(port).get("/health", timeout=pmstart.HUB_SITE_TIMEOUT_S)
         jobs = health.get("jobs") if isinstance(health, dict) else None
-        return isinstance(jobs, dict) and "plugin-refresh" in jobs
+        return jobs if isinstance(jobs, dict) else None
     except Exception:                       # noqa: BLE001 - a hub we cannot read is a hub that is not up
+        return None
+
+
+def hub_plugin_job_up(load=None, make_client=None):
+    """True when the loopback hub server's GET health `jobs` names its plugin-refresh job
+    (kitlib.hubsite.plugin_job): the hub then owns the plugin refresh. A hub that is down, has no
+    token file or no pointer, or answers anything else, is False. Never raises."""
+    return "plugin-refresh" in (hub_jobs(load, make_client) or {})
+
+
+SESSION_JOB = "session-watch"     # the hub's job that runs the session checks (kitlib.hubjobs.session_watch)
+SESSION_JOB_FAILS = 3             # failures in a row that end its cover (kitlib.hubsite.jobs FAIL_PUSH)
+SESSION_JOB_STALE_S = 300         # its last success older than this: not covering (BEAT_STALE's rule)
+
+
+def _count(v):
+    return type(v) is int and v >= 0
+
+
+SESSION_JOB_LIVE_RUNS = 3         # its last run older than this many periods: hung, pm_watch does not yield
+
+
+def session_job_live(block, now):
+    """True when a session-watch health block shows a job pm_watch may step aside for: no failure
+    since its last success (`failures` 0: a job failing before it polls would lose events) and a
+    run (`last_at`, a skip's too) at most SESSION_JOB_LIVE_RUNS times `every_s` before `now`, so a
+    hung job thread, whose failures stay 0, is not trusted. A job that has not run yet has no
+    `last_at`: pm_watch keeps its checks until the first run. Its `ok_at` is not asked for: the job
+    skips while pm_watch is live and not stepped aside, so it has no success before then."""
+    if not isinstance(block, dict) or type(block.get("failures")) is not int or block["failures"] != 0:
         return False
+    every, last = block.get("every_s"), block.get("last_at")
+    return _number(every) and every > 0 and _number(last) and now - last <= SESSION_JOB_LIVE_RUNS * every
+
+
+def hub_session_job_up(load=None, make_client=None, now=None):
+    """True when the hub's GET health `jobs` names the session-watch job and session_job_live
+    passes (`now` default time.time()): pm_watch's session checks then step aside
+    (docs/pm-watch.md "Hub session-watch job"). A hub that is down or unreadable is False. Never
+    raises."""
+    block = (hub_jobs(load, make_client) or {}).get(SESSION_JOB)
+    return session_job_live(block, time.time() if now is None else now)
+
+
+def job_inputs(cfg, default_alerts, notice_dir):
+    """What the hub's session-watch job watches, as (sessions_file, alerts_dir, notice_dir): the
+    config's "pm_watch" keys (`cfg`) with the host's default alerts folder (`default_alerts`) and
+    the configured lock notice folder (`notice_dir`), as kitlib.hubjobs.session_watch reads them."""
+    return cfg.get("sessions_file"), cfg.get("alerts_dir") or default_alerts, notice_dir
+
+
+def session_yield(run, job, up=None):
+    """pm_watch's step-aside test for Watcher(yield_to=...): `up` (default hub_session_job_up), or
+    None when the hub's session-watch job watches other inputs than this run. `run` and `job` are
+    each (sessions_file, alerts_dir, notice_dir) (job: job_inputs). A run whose sessions file,
+    alerts folder or notice folder differs from the job's, or a config with no sessions file (the
+    job then skips every run), never steps aside: its own events would reach no one."""
+    def norm(p):
+        return os.path.normcase(os.path.abspath(p)) if p else None
+    if not run[0] or not job[0] or tuple(map(norm, run)) != tuple(map(norm, job)):
+        return None
+    return up or hub_session_job_up
+
+
+def session_job_healthy(block, now):
+    """True when a session-watch health block (GET health jobs.session-watch) shows the job
+    covering pm_watch's session checks: not failing (`failures` below SESSION_JOB_FAILS) and a
+    success (`ok_at`) at most SESSION_JOB_STALE_S before `now`. A skipping job (pm_watch live, no
+    sessions file) has no fresh success, so it does not count. Anything else is False."""
+    if not isinstance(block, dict) or not _count(block.get("failures")) \
+            or block["failures"] >= SESSION_JOB_FAILS:
+        return False
+    ok = block.get("ok_at")
+    return _number(ok) and now - ok <= SESSION_JOB_STALE_S
+
+
+def hub_session_job_block(load=None, make_client=None):
+    """The session-watch job's health block from the loopback hub, or None (hub down, no such
+    job). Never raises."""
+    block = (hub_jobs(load, make_client) or {}).get(SESSION_JOB)
+    return block if isinstance(block, dict) else None
 
 
 def plugin_check(kit=None, settings=None, spawn=None, alive=None, folders=None, hub_job=None):
@@ -581,12 +663,21 @@ class Watcher:
     rc: check(lost) -> (lines, lost) (rc_check), or None for no REMOTE check; on the idle cadence.
     preload_modules: the host's own modules its checks import late (preload).
     stopped: stopped(name, mtime) -> time or None (stop_log_reader over stop.log beside `sessions`).
+    yield_to: yield_to() -> True while the hub's session-watch job covers the session checks
+    (hub_session_job_up), or None to never step aside; asked once each poll (one that raises is
+    False). While True the session checks (USAGE, RESET, IDLE, STOPPED, BGFAIL, LOCKNOTICE, REMOTE
+    and their ERROR lines) still run and keep the state current, but their lines are dropped, so
+    a hub gone down hands back with nothing repeated; BRANCH, PLUGIN and HUB stay. `yielded` is the
+    latest poll's answer, which the heartbeat carries (write_heartbeat).
     """
 
     def __init__(self, state, branches, usage_reader, alerts_dir, sessions, newest,
                  idle_minutes=20, branch_poll=300, usage_poll=600, idle_poll=300, tip=branch_tip,
-                 notice_dir=None, plugin=None, preload_modules=(), stopped=None, hub=None, rc=None):
+                 notice_dir=None, plugin=None, preload_modules=(), stopped=None, hub=None, rc=None,
+                 yield_to=None):
         preload(preload_modules)
+        self.yield_to = yield_to
+        self.yielded = False
         self.stopped = stop_log_reader(sessions) if stopped is None else stopped
         self.s = state
         self.branches = branches
@@ -629,6 +720,11 @@ class Watcher:
 
     def poll(self, now):
         s, events = self.s, []
+        try:
+            self.yielded = bool(self.yield_to and self.yield_to())
+        except Exception:                           # noqa: BLE001 - an unreadable hub covers nothing
+            self.yielded = False
+        sev = [] if self.yielded else events        # the session checks' lines: dropped while yielded
         tips = s.setdefault("branches", {})
         if now >= self.next_b:
             self.next_b = now + self.branch_poll
@@ -646,34 +742,34 @@ class Watcher:
             try:
                 cur = self.usage_reader()
                 self.fails["usage"] = 0
-                events += usage_events(s.get("usage", {}), cur)
+                sev += usage_events(s.get("usage", {}), cur)
                 s["usage"] = merge_usage(s.get("usage", {}), cur)
             except Exception as e:
-                self._failed("usage", e, events)
+                self._failed("usage", e, sev)
         if now >= self.next_i:
             self.next_i = now + self.idle_poll
             try:
                 ev, s["idle"], s["idle_nolog"] = idle_events(
                     watched_sessions(self.sessions), self.newest, s.get("idle", {}),
                     s.get("idle_nolog", []), now, self.idle_minutes, self.stopped)
-                events += ev
+                sev += ev
                 self.fails["idle"] = 0
             except Exception as e:
-                self._failed("idle", e, events)
+                self._failed("idle", e, sev)
         try:                                        # every loop: a listdir is cheap
             ev, s["bg_alerts"] = alert_events(set(s.get("bg_alerts", [])), self.alerts_dir)
-            events += ev
+            sev += ev
             self.fails["alerts"] = 0
         except Exception as e:
-            self._failed("alerts", e, events)
+            self._failed("alerts", e, sev)
         if self.notice_dir:
             try:
                 ev, s["lock_notices"] = notice_events(set(s.get("lock_notices", [])),
                                                       self.notice_dir)
-                events += ev
+                sev += ev
                 self.fails["notices"] = 0
             except Exception as e:
-                self._failed("notices", e, events)
+                self._failed("notices", e, sev)
         if self.plugin and now >= self.next_p:      # on the branch cadence: a ref read, a json read
             self.next_p = now + self.branch_poll
             try:
@@ -694,8 +790,8 @@ class Watcher:
             self.next_r = now + self.idle_poll
             try:
                 events_rc, s["rc_lost"] = self.rc(s.get("rc_lost", []))
-                events += events_rc
+                sev += events_rc
                 self.fails["rc"] = 0
             except Exception as e:
-                self._failed("rc", e, events)
+                self._failed("rc", e, sev)
         return events
