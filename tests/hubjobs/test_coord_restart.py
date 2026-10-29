@@ -477,15 +477,21 @@ class Job(JobBase):
         self.assertEqual(self.calls, [])
 
 
-class BootDue(unittest.TestCase):
-    def test_only_soon_after_a_boot_and_once_per_boot(self):
-        self.assertTrue(C.boot_due(None, 240, NOW))
-        self.assertTrue(C.boot_due({}, C.BOOT_S - 1, NOW))
-        self.assertFalse(C.boot_due(None, C.BOOT_S, NOW))
-        self.assertFalse(C.boot_due(None, float('inf'), NOW))            # uptime unknown: never
-        self.assertFalse(C.boot_due({'boot_at': NOW - 240 + 30}, 240, NOW))   # this boot, already run
-        self.assertTrue(C.boot_due({'boot_at': NOW - 86400}, 240, NOW))       # an earlier boot
-        self.assertTrue(C.boot_due({'boot_at': 'x'}, 240, NOW))
+class BootAction(unittest.TestCase):
+    def test_once_per_boot_at_any_uptime(self):
+        self.assertEqual(C.boot_action(None, 240, NOW), C.RUN)
+        self.assertEqual(C.boot_action({}, C.BOOT_S - 1, NOW), C.RUN)
+        self.assertEqual(C.boot_action({'boot_at': 'x'}, 240, NOW), C.RUN)       # a bad record is none
+        self.assertIsNone(C.boot_action(None, float('inf'), NOW))              # uptime unknown: never
+        self.assertIsNone(C.boot_action({'boot_at': NOW - 86400}, float('inf'), NOW))
+        self.assertIsNone(C.boot_action({'boot_at': NOW - 240 + 30}, 240, NOW))     # this boot, run
+        self.assertIsNone(C.boot_action({'boot_at': NOW - 7200 - 100}, 7200, NOW))  # within BOOT_SAME_S
+        self.assertEqual(C.boot_action({'boot_at': NOW - 86400}, 240, NOW), C.RUN)  # an earlier boot
+        self.assertEqual(C.boot_action({'boot_at': NOW - 86400}, 7200, NOW), C.RUN)  # late sign-in
+
+    def test_no_boot_kept_and_up_long_only_keeps_the_boot(self):
+        self.assertEqual(C.boot_action(None, C.BOOT_S, NOW), C.MARK)
+        self.assertEqual(C.boot_action({}, 3 * 3600, NOW), C.MARK)
 
 
 class AfterBoot(JobBase):
@@ -520,15 +526,44 @@ class AfterBoot(JobBase):
         self.assertIsInstance(self.run_job(), jobs.Skip)
         self.assertEqual(len(self.spawned), 1)
 
-    def test_a_plain_hub_restart_never_runs_it(self):
-        self.uptime = 3 * 3600
+    def test_no_boot_kept_and_up_long_keeps_the_boot_without_running_it(self):
+        self.uptime = 3 * 3600                                  # a first install, or a lost file
         self.assertIsInstance(self.run_job(), jobs.Skip)
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(self.records()[C.BOOT_KEY], {'boot_at': NOW - 3 * 3600})
         self.uptime = 240                                       # the same process asks only once
         self.now += 300
         self.run_job()
         self.assertEqual(self.spawned, [])
-        self.assertNotIn(C.BOOT_KEY, self.records() if os.path.exists(
-            os.path.join(self.state, C.STATE_FILE)) else {})
+
+    def test_a_late_sign_in_still_runs_it(self):
+        self.write(C.STATE_FILE, {C.BOOT_KEY: {'boot_at': NOW - 86400}})    # an older boot
+        self.uptime = 2 * 3600                                  # the owner signed in 2 h after boot
+        note = self.run_job()
+        self.assertIn('after-reboot started', note)
+        self.assertEqual(len(self.spawned), 1)
+        self.assertEqual(self.records()[C.BOOT_KEY], {'boot_at': NOW - 2 * 3600})
+
+    def test_a_hub_restart_in_the_same_boot_does_not_run_it_at_any_uptime(self):
+        self.write(C.STATE_FILE, {C.BOOT_KEY: {'boot_at': NOW - 2 * 3600}})  # this boot, already run
+        self.uptime = 2 * 3600
+        self.assertIsInstance(self.run_job(), jobs.Skip)
+        self.assertEqual(self.spawned, [])
+
+    def test_a_bad_state_file_still_runs_it_and_writes_nothing(self):
+        bad = os.path.join(self.state, C.STATE_FILE)
+        with open(bad, 'w') as f:
+            f.write('{not json')
+        self.uptime = 240
+        with self.assertRaises(LaunchError):                    # still a failure: the cap is unread
+            self.run_job()
+        self.assertEqual(len(self.spawned), 1)
+        with open(bad) as f:
+            self.assertEqual(f.read(), '{not json')
+        self.now += 300
+        with self.assertRaises(LaunchError):
+            self.run_job()
+        self.assertEqual(len(self.spawned), 1)                  # this hub process asks once
 
     def test_a_bad_sessions_json_still_runs_it(self):
         with open(os.path.join(self.state, 'sessions.json'), 'w') as f:
