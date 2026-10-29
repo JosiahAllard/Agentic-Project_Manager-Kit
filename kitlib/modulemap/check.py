@@ -5,7 +5,8 @@ detector reports is, in this order: into a messaging module (allowed), along an 
 kind (allowed), counted by a ratchet, or refused. A ratchet whose count is over its ceiling fails
 too; one under its ceiling gets a "lower the ceiling" line. A ceiling above the base's is refused
 unless the owner's map raises it (ratchet.py), and so is an architecture page that does not match
-the map (page.py). run() also prints or writes that page and the scope report (scope.py).
+the map (page.py). run() also prints or writes that page and the scope report (scope.py), and
+keeps a scope record when asked (scopelog.py).
 """
 import collections
 import json
@@ -20,6 +21,7 @@ from kitlib.git import repo as gitrepo
 from . import detectors, ratchet
 from . import page as pagemod
 from . import scope as scopemod
+from . import scopelog
 from .load import ROOT, MapError, load_ceilings, load_map
 
 SECTION = 'modules'
@@ -278,10 +280,11 @@ def scope_base(root, cfg, rev):
 
 
 def run(root, cfg, mode, map_path=None, ceilings_path=None, files=None, base_rev=None,
-        write=False):
+        write=False, record=False):
     """`mode` 'check', 'baseline', 'page' or 'scope'. MapError when the map, the ceilings file,
     the base or the tree listing cannot be used. Only a check needs the owner path; a baseline
-    and a scope write nothing, and a page writes only the generated page (`write`)."""
+    writes nothing, a scope writes only its scope record (`record`; scopelog.write, whose failure
+    is a line and never an exit code), and a page writes only the generated page (`write`)."""
     given_map = bool(map_path)
     map_path, ceilings_path, notes = map_paths(root, cfg, map_path, ceilings_path,
                                                require_owner=(mode == 'check'))
@@ -293,7 +296,12 @@ def run(root, cfg, mode, map_path=None, ceilings_path=None, files=None, base_rev
     if mode == 'scope':
         rev, more = scope_base(root, cfg, base_rev)
         paths, mb = scopemod.changed_paths(root, rev)
-        lines = scopemod.report(scopemod.scope_of(mm, paths), '%s (%s)' % (rev, mb[:10]))
+        found = scopemod.scope_of(mm, paths)
+        lines = scopemod.report(found, '%s (%s)' % (rev, mb[:10]))
+        if record:
+            kept, why = scopelog.write(root, found, rev, mb)
+            lines.append('module_map scope: record kept %s' % kept if kept else
+                         'module_map scope: record not kept: %s' % why)
         return Outcome(OK, more + lines)
     ceilings = load_ceilings(ceilings_path)
     if files is None:

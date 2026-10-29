@@ -47,7 +47,8 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-mcp.md` | lock MCP server | lock from an agent | kw: lock-mcp, mcp
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
 - `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup, leftover links, kit.cmd
-- `docs/maint-lint.md` | maintenance lint: read-only upkeep findings (holds, dead pulls and blockers, duplicates, paths gone, worktrees, landed pulls and closes of unlanded work, ledger counts), each with its fix; its weekly schedule and lock slot; its page published on the hub as `maint-lint-<repo>` | linting a repository's upkeep | kw: maint-lint, maint_lint, maintenance, upkeep, schedule
+- `docs/maint-lint.md` | maintenance lint: read-only upkeep findings (holds, dead pulls and blockers, duplicates, paths gone, worktrees, landed pulls and closes of unlanded work, ledger counts, the gates' module scope sum), each with its fix; its weekly schedule and lock slot; its page published on the hub as `maint-lint-<repo>` | linting a repository's upkeep | kw: maint-lint, maint_lint, maintenance, upkeep, schedule
+- `docs/module-map.md` | module boundary check: the map file, kinds, ratchets and ceilings, detectors, the architecture page, the scope report and its records summed weekly, isolation runs | changing what a module may depend on, or reading a change's scope | kw: module-map, module_map, modules, boundary, scope
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
 - `docs/multi-host-plan.md` | multi-host architecture plan (proposal) | changing host adapters, plugins or the bridge | kw: multi-host, codex, host, plugin, bridge
 - `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
@@ -106,6 +107,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/backlog.py` | backlog store (`docs/backlog.md`) | kw: backlog
 - `tools/backlog_audit.py` | backlog audit check (`docs/backlog.md` "Audit log") | kw: backlog_audit
 - `tools/maint_lint.py` | maintenance lint, read-only (`docs/maint-lint.md`) | kw: maint_lint
+- `tools/module_map.py` | module boundary check, scope report and records (`docs/module-map.md`) | kw: module_map
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
 - `tools/allow_rules.py` | print the land permission rules for a repository (`docs/allow-rules.md`) | kw: allow_rules, permissions

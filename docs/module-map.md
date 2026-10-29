@@ -207,7 +207,52 @@ per changed path, then one `widen: M <- C  why` line per module M the change wid
 The last line is `module_map scope: changed A, B; widened by N: M, ...`. A module that changed
 itself is not listed as widened. The report refuses nothing (exit 0) and needs no owner path; a
 base git cannot read is exit 2. A gate step may run it with `"warn": true` so every gate log
-shows the scope.
+shows the scope; with `--record` it also keeps the scope for the weekly sum (next section):
+
+```json
+{"name": "module-scope", "cmd": ["{python}", "<kit>/tools/module_map.py", "-C", "{root}", "--scope",
+                                 "--base", "{base}", "--record"],
+ "warn": true}
+```
+
+## Scope records and the weekly sum
+
+The rule the sum serves: a change runs only the tests of the modules it changes, and the whole
+repository runs only in the daily full run. The sum makes widening visible; it changes no test
+selection and refuses nothing.
+
+`--scope --record` keeps the scope as one record (`kitlib/modulemap/scopelog.py`), then prints
+`module_map scope: record kept <path>`, or `module_map scope: record not kept: <why>` (no dev
+drive, a write that failed); either way the exit is the report's. A change with no changed path
+keeps no record.
+
+- Where: `<dev_drive>/pm-kit/kit-gate-scope/<repo key>/`, a sibling of the gate's other
+  per-repository folders (`kitlib.gate.result.kit_folder` and `repo_key`): one folder for every
+  worktree of the repository, outside every checkout.
+- A record: one JSON file per gate run, `<YYYYMMDDTHHMMSSZ>-<pid>-<4 hex>.json`, written to a
+  dot-named temp file and moved into place, so parallel gates never share a file. Keys (schema
+  1): `schema`, `at`, `head`, `branch` (null on a detached HEAD), `base`, `merge_base`, `paths`
+  (`{path: module}`, the first 200), `paths_total`, `changed` (the changed modules), `widen`
+  (`[{"module", "from", "why"}]`, the report's widen lines) and `widened`.
+- Retention: each write removes records, and stale temp files, older than 28 days.
+
+The weekly maintenance lint (docs/maint-lint.md "Module scope") sums the last 7 days: gate runs,
+distinct heads, the runs that widened, and per route (changed module and why) the modules it
+widened to and its runs. Counts only, never a finding. A repository whose `.kit.json` names no
+module map keeps no record and shows no sum.
+
+Known limits:
+
+- A record cannot tell a branch gate from a landing's merged gate or a `--full` run of the same
+  change; the distinct-heads count softens the double count.
+- A gate on a load node keeps its record in the node's dev drive, which this machine's sum does
+  not read.
+- Records outlive a map edit: a week's sum may mix routes from the old map and the new.
+- A repository that drops its map leaves its folder; no write comes to prune it.
+- With no dev drive set, nothing is kept.
+- Only a gate whose `gate.steps` runs the `--scope --record` step keeps a record; a repository
+  with a map but no such step shows zeros and a note.
+- A record stamped after the lint's own time (a clock set back) is not summed; a note counts it.
 
 ## Isolation runs
 
@@ -320,7 +365,7 @@ Known limits:
 python <kit>/tools/module_map.py [-C DIR] --check [--base REV]
 python <kit>/tools/module_map.py [-C DIR] --baseline
 python <kit>/tools/module_map.py [-C DIR] --page [--write]
-python <kit>/tools/module_map.py [-C DIR] --scope [--base REV]
+python <kit>/tools/module_map.py [-C DIR] --scope [--base REV] [--record]
 python <kit>/tools/module_map.py [-C DIR] --isolate [--module M] [--plan] [--no-rerun]
 python <kit>/tools/module_map.py [-C DIR] --check --map FILE [--ceilings FILE]
 ```
@@ -338,19 +383,20 @@ path, and the output says so.
 `from`, `kind`, `to` of refused crossings for the owner to add to the map, and the ceilings
 file the current tree needs. It needs no owner path.
 
+`--scope` writes nothing but its scope record, and that only with `--record` ("Scope records and
+the weekly sum").
+
 Exit codes: 0 OK (a baseline, a page, a scope and an isolation plan always), 1 a refused
 crossing, a ratchet over its ceiling, a ceiling raised above the base's, a stale page or a module
 whose isolation run did not pass, 2 usage (`--write` without `--page`, `--base` without
-`--check` or `--scope`, an isolation option without `--isolate`, `--isolate` with `--ceilings`,
-or with `--map` but no `--plan`), a refused `.kit.json`, an unusable map or ceilings file (here
-or at the base), a `--module` the map has no test for, a base git cannot read, a refused page
-write, the machine lock refusing an isolation run, or git could not list the tree
-(`module_map: NOT CHECKED: ...`).
+`--check` or `--scope`, `--record` without `--scope`, an isolation option without `--isolate`,
+`--isolate` with `--ceilings`, or with `--map` but no `--plan`), a refused `.kit.json`, an
+unusable map or ceilings file (here or at the base), a `--module` the map has no test for, a base
+git cannot read, a refused page write, the machine lock refusing an isolation run, or git could
+not list the tree (`module_map: NOT CHECKED: ...`).
 
 ## Remaining slices
 
 Not yet scoped; each needs files outside this tool's own:
 
-- the weekly drift sum: gates keep their scope reports, and the weekly upkeep run sums how often
-  a gate widened beyond the changed modules (kitlib/gate or the upkeep tasks);
 - a C# `using` detector; rollout to the first Java repository.

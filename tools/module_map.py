@@ -4,6 +4,7 @@
   module_map.py [-C DIR] --baseline               print the ratchets and ceilings the current tree needs
   module_map.py [-C DIR] --page [--write]         print (or write) the architecture page from the map
   module_map.py [-C DIR] --scope [--base REV]     the changed modules and the modules they widen to
+  module_map.py [-C DIR] --scope --record        ... and keep it as a scope record (a gate step)
   module_map.py [-C DIR] --isolate [--module M] [--plan] [--no-rerun]
                                                   run each module's test in a sparse clone of HEAD
   ... --map FILE [--ceilings FILE]                use these files instead of .kit.json "modules"
@@ -11,7 +12,8 @@
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.modulemap.check, prints and
 exits. --check reads the map .kit.json "modules".map names and refuses unless "owner".paths locks
-it; --map is a dry run that skips that rule. --baseline and --scope write nothing; --page --write
+it; --map is a dry run that skips that rule. --baseline writes nothing; --scope writes only its
+scope record, with --record (docs/module-map.md "Scope records and the weekly sum"); --page --write
 writes only the page .kit.json "modules".page names. --isolate (docs/module-map.md "Isolation
 runs") runs the tests the map names, so it needs the owner-locked map; --map goes with it only
 under --plan, which prints each module's tree and command and runs nothing. It books the machine
@@ -67,6 +69,9 @@ def build_parser():
     p.add_argument('--base', default=None,
                    help='--check: the rev whose ceilings bound these; --scope: the rev the change '
                         'is measured from (default: the main branch)')
+    p.add_argument('--record', action='store_true',
+                   help='--scope: keep the report as a scope record for the weekly sum (a gate '
+                        'step passes it)')
     p.add_argument('--module', default=None, help='--isolate: only this module')
     p.add_argument('--plan', action='store_true',
                    help='--isolate: print each tree and command, book nothing and run nothing')
@@ -82,6 +87,8 @@ def main(argv=None):
         parser.error('--write goes with --page')
     if a.base and not (a.check or a.scope):
         parser.error('--base goes with --check or --scope')
+    if a.record and not a.scope:
+        parser.error('--record goes with --scope')
     if (a.module or a.plan or a.no_rerun) and not a.isolate:
         parser.error('--module, --plan and --no-rerun go with --isolate')
     if a.isolate and (a.ceilings or (a.map and not a.plan)):
@@ -103,7 +110,7 @@ def main(argv=None):
         out = C.run(top, cfg, mode,
                     map_path=os.path.abspath(a.map) if a.map else None,
                     ceilings_path=os.path.abspath(a.ceilings) if a.ceilings else None,
-                    base_rev=a.base, write=a.write)
+                    base_rev=a.base, write=a.write, record=a.record)
     except ConfigError as e:
         say('module_map: refused: kit configuration: %s' % e)
         return 2

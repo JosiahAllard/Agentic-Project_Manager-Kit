@@ -51,6 +51,33 @@ def _section(check, rows, limit):
     return out
 
 
+def _module_scope(s, limit):
+    """The "Module scope" section of the gates' scope sum (kitlib.modulemap.scopelog.summary):
+    nothing when the repository names no module map (None). Module names and edge reasons only,
+    never a path."""
+    if not isinstance(s, dict):
+        return []
+    runs, widened = s.get('runs', 0), s.get('widened', 0)
+    out = ['<h2>Module scope</h2>',
+           '<p>%d gate run%s in %d days kept a scope record (%d head%s); %d widened beyond the '
+           'changed modules%s.</p>' % (
+               runs, '' if runs == 1 else 's', s.get('days', 0), s.get('heads', 0),
+               '' if s.get('heads') == 1 else 's', widened,
+               ' (%d%%)' % round(100.0 * widened / runs) if runs else '')]
+    routes = s.get('routes') or []
+    if not routes:
+        return out
+    shown = routes if limit is None else routes[:limit]
+    out.append('<table><tr><th>Changed module</th><th>Widened to</th><th>Why</th><th>Runs</th></tr>')
+    out += ['<tr><td>%s</td><td>%s</td><td>%s</td><td>%d</td></tr>'
+            % (esc(r.get('from')), esc(', '.join(r.get('modules') or ())), esc(r.get('why')),
+               r.get('runs', 0)) for r in shown]
+    out.append('</table>')
+    if len(shown) < len(routes):
+        out.append('<p>%d more not shown: result.json has them all.</p>' % (len(routes) - len(shown)))
+    return out
+
+
 def _document(result, limit):
     counts = result.get('counts') or {}
     rows = result.get('findings') or []
@@ -80,6 +107,7 @@ def _document(result, limit):
                         '' if ledger.get('conflict_pairs') == 1 else 's',
                         ledger.get('overrides', 0),
                         '' if ledger.get('overrides') == 1 else 's'))
+    body += _module_scope(result.get('module_scope'), limit)
     by_check = {}
     for r in rows:
         by_check.setdefault(r.get('check'), []).append(r)

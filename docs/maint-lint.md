@@ -1,7 +1,8 @@
 # Maintenance lint
 
 `tools/maint_lint.py` lints one repository's upkeep: its backlog store, its worktrees, the
-machine's decision ledger and its gate's step times. The logic is `kitlib/maintlint/`. It writes
+machine's decision ledger, its gate's step times and, with a module map, how often its gates
+widened beyond the changed modules. The logic is `kitlib/maintlint/`. It writes
 only the gate-time record, in a plain run ("Gate time"); it edits no record, no ledger entry, no
 worktree and no git ref. Every finding prints the command that fixes it, and nothing runs that
 command.
@@ -175,6 +176,23 @@ refuses an id it closed before. With no `"maint_lint".gate_time.prefix`, the fin
 nothing is filed. Each outcome, and each store or config refusal, is one `gate time:` line, never
 an error. `--dry-run` files nothing.
 
+## Module scope
+
+`kitlib.modulemap.scopelog.summary`, in the code checkout (as "Path checks"). In a repository
+whose `.kit.json` names a module map, it sums the scope records its gates kept in the last 7 days
+(docs/module-map.md "Scope records and the weekly sum"): gate runs, distinct heads, the runs that
+widened beyond the changed modules (and their distinct heads), and per route (a changed module
+and the reason, such as `via edge build: ...` or `via messaging`) the modules it widened to and
+its runs, most runs first. Counts only: never a finding, so the exit code is unchanged. It shows
+as the result's `module_scope`, a "Module scope" page section (module names and reasons only,
+never a path) and one count line, `module scope: N gate run(s) in 7 days (H head(s)), W widened
+beyond the changed modules (P%)`.
+
+With no module map, `module_scope` is null and nothing shows. With a map and no record in the
+window, the sum is zeros and a note asks whether a gate step runs `module_map.py --scope
+--record`. A record that cannot be read is counted in a note; a folder that cannot be read, or no
+dev drive, is a `module scope NOT CHECKED` note.
+
 ## Known limits
 
 - Gate-OK records are written for passes only, so a slow gate that failed is not a sample.
@@ -204,7 +222,8 @@ The plain run writes two files and prints their paths, the notes, the counts and
 `--dry-run` needs `--out`. It writes only the page there, never `result.json`, and prints the same
 counts.
 
-The result file holds the last run only, written whole. Each finding row holds its `repo`, `check`,
+The result file holds the last run only, written whole. Beside `counts`, `ledger` and `notes`
+it holds `module_scope` ("Module scope"). Each finding row holds its `repo`, `check`,
 `target`, `text`, `fix`, `age`, `fingerprint` and `new`. The fingerprint hashes the repo, the check
 and the target, never the text, so a reworded finding keeps it. A target names the thing itself:
 a record id, a record and a scope member, the sorted ids of duplicates, a worktree path, an audit
