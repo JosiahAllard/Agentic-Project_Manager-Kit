@@ -162,12 +162,14 @@ def default_export_dir(environ=None):
     <profile>/.local/share/pm-kit/plugin, the profile from the password database
     (kitlib.platform.linux.paths.profile), never $HOME or $XDG_DATA_HOME: a cron job, a systemd
     unit and a login shell of the user all get the folder the managed settings name, as they all
-    get the same PM-repo pointer. RefreshError when it cannot be told."""
+    get the same PM-repo pointer. RefreshError when it cannot be told, a Python with no password
+    database module (no pwd: Linux patched in on Windows) included, so a caller that skips the
+    export on RefreshError (kitlib.guard.rules.advice_kit) skips it there too."""
     if kitplatform.NAME == 'linux':
         from kitlib.platform.linux import paths as linux_paths
         try:
             profile = linux_paths.profile()
-        except OSError as e:
+        except (OSError, ImportError) as e:
             raise RefreshError('the profile folder cannot be read (%s): set plugin.export_dir in '
                                'the machine config' % e)
         return posixpath.join(profile, *LINUX_EXPORT)
