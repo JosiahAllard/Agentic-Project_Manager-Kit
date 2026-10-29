@@ -42,7 +42,8 @@ class FakeApps:
         self.addCleanup(shutil.rmtree, self.base, True)
         self.local = os.path.join(self.base, "Local")
         self.apps = os.path.join(self.local, "Microsoft", "WindowsApps")
-        for n in ("python.exe", "python3.exe", "pythonw3.exe", "winget.exe", "bash.exe"):
+        for n in ("python.exe", "python3.exe", "pythonw3.exe", "py.exe", "pyw.exe", "winget.exe",
+                  "bash.exe"):
             touch(os.path.join(self.apps, n))
         self.pkg = touch(os.path.join(self.apps, "PythonSoftwareFoundation.Python.3.12_x",
                                       "python3.12.exe"))
@@ -91,6 +92,32 @@ class AliasCheck(FakeApps, unittest.TestCase):
         w = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
         self.assertTrue(msg.endswith('run "%s" x.py instead'
                                      % (w if os.path.isfile(w) else sys.executable)), msg)
+
+    def test_the_py_launcher_is_shown_the_interpreter_with_its_arguments_left_to_adjust(self):
+        """Red before: py and pyw were not python names, so they were told to name the program's
+        own path."""
+        me = os.path.abspath(sys.executable)
+        msg = self.refused(["py", "-3.12", "x.py"])
+        self.assertTrue(msg.endswith('; run "%s" in place of py instead, with the arguments '
+                                     "adjusted for python (py's own flags, such as -3.12, are not "
+                                     "python's)" % me), msg)
+        w = os.path.join(os.path.dirname(me), "pythonw.exe")
+        self.assertIn('run "%s" in place of pyw instead' % (w if os.path.isfile(w) else me),
+                      self.refused(["pyw", "x.py"]))
+
+    def test_a_store_python_running_the_kit_is_still_refused_and_told_to_use_another(self):
+        """Red before: when this interpreter was itself the alias, its own runs were told to name
+        the program's own path, which no caller could do."""
+        store = os.path.join(self.apps, "python3.exe")
+        with mock.patch.object(sys, "executable", store):
+            for cmd in ([store, "-c", "1"], ["python3", "-V"], ["py", "-V"]):
+                with self.subTest(cmd=cmd):
+                    self.assertTrue(self.refused(cmd).endswith(
+                        "; this kit itself runs under a WindowsApps python (%s): run it under a "
+                        "python.org or Python install manager interpreter instead, not the Store "
+                        "python or its alias" % store))
+            self.assertTrue(self.refused(["winget"]).endswith(
+                "; name the program's own path instead, not the alias"))
 
     def test_what_createprocess_finds_first_is_left_as_given(self):
         """A python.exe in this program's folder wins over PATH (CreateProcess's order), a
@@ -274,6 +301,7 @@ class StopEscape(StoreCase):
         self.assertIn("outside the run's job", lines[0])
         self.assertIn("stop did not end it", lines[0])
         self.assertIn("parent pid", lines[0])
+        self.assertNotIn("Alias", lines[0])
         self.assertIsNone(out.poll(), "a process outside the job was ended")
 
     def test_a_stop_with_nothing_outside_the_job_says_nothing_of_it(self):

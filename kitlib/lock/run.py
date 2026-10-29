@@ -1684,8 +1684,9 @@ class AliasStubError(ScriptArgError):
 
 
 # A python interpreter's name, as the WindowsApps aliases spell it: python, python3, python3.12,
-# pythonw, pythonw3, pythonw3.12 (a trailing .exe dropped first).
-PYTHON_NAME_RE = re.compile(r"^python(w?)(3(\.\d+)?)?$", re.IGNORECASE)
+# pythonw, pythonw3, pythonw3.12, and the py launcher's py and pyw (a trailing .exe dropped first).
+PYTHON_NAME_RE = re.compile(r"^(?:python(?P<w>w?)(?:3(?:\.\d+)?)?|(?P<py>py)(?P<pyw>w?))$",
+                            re.IGNORECASE)
 
 
 def windows_apps_dir():
@@ -1722,31 +1723,45 @@ def created_program(name, dirs=None):
     return None
 
 
-def alias_form(cmd):
-    """The command line to run in place of cmd when its first item names a python interpreter: this
-    interpreter (sys.executable; pythonw.exe beside it for a pythonw name, when it is there) with
-    cmd's arguments. None for any other name, or when sys.executable is itself an alias."""
+def alias_instead(cmd, found):
+    """What alias_check's refusal of cmd (whose program, found, is an alias) tells the caller to do
+    instead. A python name (PYTHON_NAME_RE), or found being this interpreter itself: when
+    sys.executable is itself under WindowsApps (a Store python), to run the kit under a python.org
+    or Python install manager interpreter, as no path here would do; else to run this
+    interpreter (pythonw.exe beside it for a windowed name, when it is there): with cmd's
+    arguments, or, for the py launcher, with them left for the caller to adjust (py's own flags
+    are not python's). Any other name: to name the program's own path."""
     stem = os.path.basename(str(cmd[0]))
     if stem.lower().endswith(".exe"):
         stem = stem[:-4]
     m = PYTHON_NAME_RE.match(stem)
-    if not m or not sys.executable or under_windows_apps(sys.executable):
-        return None
-    exe = os.path.abspath(sys.executable)
-    if m.group(1):
+    me = os.path.abspath(sys.executable) if sys.executable else None
+    if (m or (me and os.path.normcase(found) == os.path.normcase(me))) and \
+            (not me or under_windows_apps(me)):
+        return ("this kit itself runs under a WindowsApps python (%s): run it under a python.org or "
+                "Python install manager interpreter instead, not the Store python or its alias"
+                % (me or "no sys.executable"))
+    if not m:
+        return "name the program's own path instead, not the alias"
+    exe = me
+    if m.group("w") or m.group("pyw"):
         w = os.path.join(os.path.dirname(exe), "pythonw.exe")
         exe = w if os.path.isfile(w) else exe
+    if m.group("py"):
+        return ('run "%s" in place of %s instead, with the arguments adjusted for python (py\'s own '
+                'flags, such as -3.12, are not python\'s)' % (exe, stem))
     rest = subprocess.list2cmdline([str(a) for a in cmd[1:]])
-    return '"%s"%s' % (exe, " " + rest if rest else "")
+    return 'run "%s"%s instead' % (exe, " " + rest if rest else "")
 
 
 def alias_check(cmd):
     """Raises AliasStubError when cmd (an argument list, on Windows) starts a WindowsApps App
     Execution Alias: its first item, or the file CreateProcess finds for it (created_program),
     is under windows_apps_dir(). An alias's launch runs its program outside the job of whoever
-    starts it: unpinned, on every core, and alive after the job is ended. Refused, never swapped:
-    a python name is shown the interpreter to run instead (alias_form). A bare bash is left to
-    kitlib.proc.bash (Git Bash), and so is anything else when LOCALAPPDATA is unset."""
+    starts it: unpinned, on every core, and alive after the job is ended. Refused, never swapped,
+    even when it is this interpreter itself; the refusal says what to do instead (alias_instead).
+    A bare bash is left to kitlib.proc.bash (Git Bash), and so is anything else when LOCALAPPDATA
+    is unset."""
     if kitlib.platform.NAME != "windows" or not isinstance(cmd, (list, tuple)) or not cmd:
         return
     name = str(cmd[0])
@@ -1755,12 +1770,9 @@ def alias_check(cmd):
     found = created_program(name)
     if not found or not under_windows_apps(found):
         return
-    form = alias_form(cmd)
-    instead = ("run %s instead" % form if form
-               else "name the program's own path instead, not the alias")
     raise AliasStubError("%s is the WindowsApps App Execution Alias %s: what it starts runs "
                          "outside the run's job, on every core, and outlives a stop; %s"
-                         % (name, found, instead))
+                         % (name, found, alias_instead(cmd, found)))
 
 
 def path_alias_line():
@@ -1787,7 +1799,10 @@ def escaped(pid, contains, snap=None):
     """[(pid, ctime, exe name)] of the live descendants of the live process pid (a run's command),
     by the parent pid chain of one Toolhelp snapshot (process.descendants), that are outside the
     run's job (contains(pid) == "out"): an App Execution Alias, for one, starts its program
-    outside the job of whoever starts it. Inexact (ESCAPE_CAVEAT): a process whose parent has
+    outside the job of whoever starts it. Measured 2026-10-29, cmd.exe in a job running the
+    python3 alias: the alias's stub (python3.exe) and the interpreter it starts are both outside
+    the job, the stub's parent pid is cmd.exe and the interpreter's is the stub, so the walk finds
+    both while cmd.exe and the stub live. Inexact (ESCAPE_CAVEAT): a process whose parent has
     exited is not found, and a reused pid can be. For a report only: nothing outside the job is
     ever ended. [] off Windows and when the processes cannot be read; never raises an Exception."""
     if kitlib.platform.NAME != "windows":
@@ -1810,8 +1825,8 @@ def escape_lines(rid, found):
     except Exception:                       # noqa: BLE001 - a report only
         return []
     return ["WARNING: run %s: pid %d (%s) descends from the run's command but is outside the run's "
-            "job (an App Execution Alias starts its program so): stop did not end it and it runs "
-            "on, unpinned; the lock never ends a process outside the job (%s)"
+            "job: stop did not end it and it runs on, unpinned; the lock never ends a process "
+            "outside the job (%s)"
             % (rid, p, exe, ESCAPE_CAVEAT) for p, exe in left]
 
 
