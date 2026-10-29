@@ -329,7 +329,10 @@ class GivesTheTurnBack(NodeCase):
         a.start()
         self.addCleanup(a.join, HANG_S)
         self.addCleanup(go.set)
-        self.assertTrue(inside.wait(HANG_S))
+        end = time.monotonic() + HANG_S
+        while not inside.wait(0.05):        # A ending before its gate fails here, not at HANG_S
+            self.assertTrue(a.is_alive(), results)
+            self.assertLess(time.monotonic(), end)
         b = threading.Thread(target=lambda: results.__setitem__('b', self.lander(
             'kit/other', self.main, tip_b, wait_s=120, poll_s=0.05, say=said_b.append).run()))
         b.start()
