@@ -525,7 +525,10 @@ store's git push (the `push` setting).
   heartbeat acknowledges it, a written try ends it, and a try not written is retried on the same
   schedule. It fires again only after the heartbeat was fresh again, and never on a server that has not
   seen a fresh one (it is not kept across a restart). A pm_watch run with its own `--state` path is not
-  seen.
+  seen. The `session-watch` job stands in for the heartbeat: while its health block in `jobs` has fewer
+  than 3 failures and a success at most 300 s old (`kitlib.pmwatch.session_job_healthy`, read through
+  `Api.jobs_seen`) the watcher is `up` and counts as fresh, so no `watcher down` push is sent while the
+  job covers; a job reader that raises covers nothing.
 - Timed jobs: each job is a module of `kitlib/hubjobs` with `make(sources)`, found there by
   `kitlib.hubjobs.makers` (pkgutil; a module named `_...` is a helper, not a job) and run by
   `kitlib.hubsite.jobs`; adding one needs no edit to a shared file (the `kitlib.hubjobs` docstring
@@ -577,9 +580,13 @@ store's git push (the `push` setting).
     PM until it is consumed or expires.
   - A filed answer's live check is read once, when the filing is seen: an asker that ends after it is
     still tried (and reads it at its next start), and a coordinator started after it is not told.
-  - `session-watch` drops the events it saw while pm_watch's heartbeat was fresh, so those of the last
-    300 s before a pm_watch stopped are not pushed; it does not see a pm_watch run with its own
-    `--state`, so both push then; with no push worker its events are not pushed.
+  - `session-watch` drops the events it saw while pm_watch's heartbeat was fresh and not stepped aside
+    (`yielded`), so those of the last 300 s before a pm_watch stopped are not pushed, and one at the
+    hand-over, before the job reads the `yielded` heartbeat, can reach neither; it does not see a pm_watch run with
+    its own `--state`, so both push then, unless pm_watch's `--sessions` is the config's
+    `sessions_file` and it steps aside; with no push worker its events are not pushed. While it
+    covers, a stopped pm_watch's BRANCH and HUB lines reach no one, and no `watcher down` push says so
+    (docs/pm-watch.md "Hub session-watch job").
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py.
 
