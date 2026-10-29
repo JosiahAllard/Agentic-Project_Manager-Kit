@@ -255,8 +255,9 @@ books nothing.
 Each tree is `git clone --shared --no-checkout` of the repository's git common dir, with its
 origin removed and its hooks off, checked out sparse at HEAD's commit. The test runs there without
 `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_CEILING_DIRECTORIES` (`kitlib.git.cmd`
-`SCRUB_ENV`), in the machine-lock slot the run holds; past its timeout, or when the
-lock asks the run to stop, it is ended with its whole process tree. The output of a run that did
+`SCRUB_ENV`), in the machine-lock slot the run holds. It is ended with its whole process tree
+past its timeout, when the lock asks the run to stop, on Ctrl+C or an error, and after it ends,
+pass or fail, before its clone is removed, so nothing it started outlives its module. The output of a run that did
 not pass is printed between marker lines (its last 2000 lines). A module that fails runs again
 in a full clone of the same commit (never in the checkout itself). That tells the two causes
 apart:
@@ -273,7 +274,9 @@ apart:
 The last line is `module_map isolate: OK: N PASS` or `module_map isolate: FAILED: <counts>
 (<modules>)`. The clones live in one run folder, `kit-iso-<pid>-<ctime>-*` in the kit's temp
 folder for the checkout. Each clone is removed when its test ends, and the folder when the run
-ends. The next run removes a folder whose process is gone. Nothing in the source repository is
+ends; one that stays is named in a `module_map isolate: note:` line. The next run removes a
+folder whose process is gone (a link or junction of that name is skipped, never followed) and
+names one it cannot remove. Nothing in the source repository is
 written: a shared clone only reads its objects.
 
 The run books the machine lock as the `daily_full` kind, waiting up to its `max_wait`
@@ -300,7 +303,12 @@ Known limits:
 - `git ls-files` inside a tree still lists the paths the tree leaves out (sparse paths are
   skip-worktree entries, not deletions), so a test that lists the index sees more than it can
   open.
-- Only committed HEAD is isolated, never the work tree or untracked files.
+- Only committed HEAD is isolated, never the work tree or untracked files. The map, though, is
+  read from the work tree: an uncommitted map edit changes the trees and commands a run uses on
+  the committed code.
+- Ending a test's tree spares a build daemon another job may use (kitlib.lock.run `end_tree`),
+  so a Gradle or other build daemon the test started can survive it, still holding files in
+  the clone; the clone's removal then fails and the note line names it.
 - Git LFS is not tested. The clone has no remote, so an LFS object it cannot find locally is
   not fetched: the checkout may fail (ERROR) or leave the pointer file.
 - The tree covers the paths of modules the map names; it does not hide the rest of the machine
