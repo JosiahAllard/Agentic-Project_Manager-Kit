@@ -670,10 +670,12 @@ class LandingWrites(fixtures.GateRepoCase):
         seen = []
 
         def merged_gate(lander):
+            # In the landing's own slot, as Lander.gate runs it: a second booking waits for a
+            # second fake slot, and under the gate's machine-lock run confine(1) may leave one.
             seen.append(result.read(self.repo.root, 'kit/feature', 'land')[0])
             return runner.merged_gate(lander.root, lander.cfg, lander.expect_main,
                                       slug=lander.branch, log_dir=lander.log_dir,
-                                      book_kw=lander.book_kw)
+                                      book_kw=lander.book_kw, slot=lander.slot)
         out = self.lander('kit/feature', self.main, tip, merged_gate=merged_gate).run()
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual((seen[0]['verdict'], seen[0]['tip']), ('running', tip))
