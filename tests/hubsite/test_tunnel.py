@@ -977,7 +977,7 @@ class TunnelHealthTest(TunnelCase):
         status, obj = self.hub.api.call('GET', HEALTH, auth.OWNER)
         self.assertEqual(status, 200)
         self.assertEqual(sorted(obj), ['backlog', 'backlog_at', 'backlog_error', 'backlog_timer',
-                                       'code', 'git', 'ok', 'push', 'revision', 'store',
+                                       'code', 'git', 'jobs', 'ok', 'push', 'revision', 'store',
                                        'unavailable', 'version', 'watcher'])
         # byte for byte: the Api's own answer, git's reason for the owner, and `tunnel` last
         obj['git']['detail'] = GIT_WHY

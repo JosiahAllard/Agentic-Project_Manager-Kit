@@ -1242,9 +1242,10 @@ def _folders(folders):
     return list(folders)
 
 
-def account_folders():
-    """This machine's account folders on the plugin's host (the ones `folders=None` means here)."""
-    return _folders(None)
+def account_folders(home=None):
+    """This machine's account folders on the plugin's host (the ones `folders=None` means here);
+    `home` (default the user's home) as plugin_refresh.py --home names it."""
+    return list(_host().account_folders(home)) if home else _folders(None)
 
 
 def installs(folders=None):
