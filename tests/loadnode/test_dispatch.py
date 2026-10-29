@@ -3,6 +3,7 @@ when it stays here, and what each way out of a node returns. The registry is a t
 repository's, a runner stands in for ssh and NodeJob.run (or its steps) for the node."""
 import contextlib
 import os
+import subprocess
 import types
 import unittest
 from unittest import mock
@@ -105,7 +106,7 @@ class Auto(RouterCase):
         for cmd in (['build.bat'], ['tools\\x.CMD'], ['run.ps1', 'a'], ['C:/Py/python.exe', '-V'],
                     ['powershell', '-c', 'x'], ['pwsh'], ['cmd', '/c', 'x'], ['PwSh.EXE'],
                     ['python', 'C:/x.py'], ['python', 'out\\a.txt'], ['python', '--in=D:\\a'],
-                    ['python', 'd:']):
+                    ['python', 'd:'], ['py', '-3', 'x.py'], ['tool.com'], ['a.VBS', 'x']):
             with self.subTest(cmd=cmd):
                 del self.said[:]
                 self.assertIsNone(self.route(self.router(runner=no_ssh), cmd=cmd))
@@ -232,12 +233,69 @@ class RealRun(RouterCase):
         self.assertIn('Ctrl+C: job %s on box1 asked to stop' % stops[0], self.text())
         self.assertIn('follow box1 %s' % stops[0], self.text())
 
+    def test_a_second_ctrl_c_after_the_start_says_how_to_follow_not_that_nothing_started(self):
+        def follow(nj):
+            raise KeyboardInterrupt
+
+        def stop(nj):
+            raise KeyboardInterrupt
+        self.main_lock['cpu_free'] = 0
+        with self.steps(follow, stop):
+            self.assertEqual(self.route(self.router()), 130)
+        self.assertIn('may still run on box1; it is not run on main', self.text())
+        self.assertIn('node.py" follow box1 j-', self.text())
+        self.assertIn('node.py" stop box1 j-', self.text())
+        self.assertNotIn('nothing was started', self.text())
+
+    def test_a_ctrl_c_on_the_way_out_keeps_the_runs_answer(self):
+        class Link(object):
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, *exc):
+                raise KeyboardInterrupt
+        r = self.router()
+        r.open_link = lambda n: Link()
+        self.main_lock['cpu_free'] = 0
+        with self.steps(lambda nj: None):
+            self.assertEqual(self.route(r), job.EXIT_LOST)
+        self.assertNotIn('nothing was started', self.text())
+
     def test_ctrl_c_before_any_job_runs_nothing_here_or_there(self):
         r = self.router()
         with mock.patch.object(remote, 'query_all', side_effect=KeyboardInterrupt):
             self.assertEqual(self.route(r), 130)
         self.assertIn('Ctrl+C: nothing was started on a load node', self.text())
         self.assertEqual(self.node_runs, [])
+
+
+class NoStartReply(RouterCase):
+    """The real NodeJob.run and start: the push stood in, the start's ssh times out after the
+    request went out. The node may have started the job, so it never runs here."""
+
+    def router(self, where='auto', **kw):
+        class Link(object):
+            def call(self, verb, payload, timeout_s=None):
+                raise subprocess.TimeoutExpired(['ssh'], timeout_s)
+        r = RouterCase.router(self, where, **kw)
+        r.open_link = lambda n: contextlib.nullcontext(Link())
+        return r
+
+    def run_it(self, where):
+        self.main_lock['cpu_free'] = 0
+        with mock.patch.object(job.NodeJob, 'run', REAL_RUN), \
+                mock.patch.object(job.NodeJob, 'push', lambda nj: None):
+            return self.route(self.router(where))
+
+    def test_under_auto_it_is_the_after_start_code_and_never_runs_here(self):
+        self.assertEqual(self.run_it('auto'), job.EXIT_AFTER_START)
+        self.assertNotIn('running here instead', self.text())
+        self.assertIn('may have started on box1', self.text())
+        self.assertIn('node.py" stop box1 j-', self.text())
+
+    def test_a_named_node_is_the_after_start_code_not_10(self):
+        self.assertEqual(self.run_it('box1'), job.EXIT_AFTER_START)
+        self.assertIn('node.py" follow box1 j-', self.text())
 
 
 class Named(RouterCase):

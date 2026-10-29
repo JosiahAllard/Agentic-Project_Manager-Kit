@@ -7,6 +7,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -212,12 +213,51 @@ class Run(Base):
         self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_BUSY, True))
         self.assertIsNone(self.notice('start'))
 
-    def test_a_node_with_no_reply_or_an_old_kit_is_not_usable(self):
-        with self.assertRaises(job.JobError) as cm:
-            self.node_job(FakeLink(self.box, fail_calls={'start'})).run()
-        self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_NODE, True))
-        self.assertIn('Connection timed out', cm.exception.message)
+    def assert_start_unknown(self, nj, why):
+        self.assertEqual(nj.run(), job.EXIT_AFTER_START)
+        self.assertTrue(nj.started)
+        text = '\n'.join(self.said)
+        self.assertIn(why, text)
+        self.assertIn('may have started on box1, so it is not run on main', text)
+        self.assertIn('node.py follow box1 %s' % JOB, text)
+        self.assertIn('node.py stop box1 %s' % JOB, text)
+        self.assertEqual(self.verbs(), ['start'])
 
+    def test_a_start_whose_reply_drops_may_have_started_and_is_never_a_fallback(self):
+        # box.start detaches the job before it replies: a reply lost on the way means the job
+        # may run there, so main never runs it too (or exits 10 while it runs on)
+        class Dropped(FakeLink):
+            def call(self, verb, payload, timeout_s=None):
+                rc, out, err = FakeLink.call(self, verb, payload, timeout_s)
+                if verb == 'start':
+                    return 255, b'', b'Connection reset by 192.168.1.50 port 22\r\n'
+                return rc, out, err
+        nj = self.node_job(Dropped(self.box))
+        self.assert_start_unknown(nj, 'Connection reset')
+        self.assertTrue(os.path.exists(self.box._p(JOB, 'pid.json')))     # it did start there
+
+    def test_a_start_with_no_reply_at_all_is_the_after_start_exit(self):
+        self.assert_start_unknown(self.node_job(FakeLink(self.box, fail_calls={'start'})),
+                                  'Connection timed out')
+
+    def test_a_start_that_times_out_is_the_after_start_exit(self):
+        class Slow(FakeLink):
+            def call(self, verb, payload, timeout_s=None):
+                self.calls.append((verb, payload))
+                raise subprocess.TimeoutExpired(['ssh'], timeout_s)
+        self.assert_start_unknown(self.node_job(Slow(self.box)), 'start on box1: no reply')
+
+    def test_an_ssh_that_does_not_start_sent_nothing_and_falls_back(self):
+        class NoSsh(FakeLink):
+            def call(self, verb, payload, timeout_s=None):
+                raise FileNotFoundError(2, 'no ssh')
+        nj = self.node_job(NoSsh(self.box))
+        with self.assertRaises(job.JobError) as cm:
+            nj.run()
+        self.assertEqual((cm.exception.code, cm.exception.fallback), (job.EXIT_NODE, True))
+        self.assertFalse(nj.started)
+
+    def test_an_old_kit_is_not_usable(self):
         class Old(FakeLink):
             def call(self, verb, payload, timeout_s=None):
                 return 2, b'{"protocol":1,"ok":false,"error":"refused: not a command this node serves"}\n', b''

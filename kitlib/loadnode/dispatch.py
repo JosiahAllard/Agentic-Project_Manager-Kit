@@ -33,8 +33,8 @@ NEST_ENV = 'MACHINE_LOCK_RUN'                  # kitlib.lock.run.NEST_ENV: a run
 STATUS_TIMEOUT_S = 10
 EXIT_INTERRUPTED = 130
 
-WINDOWS_PROGRAMS = ('powershell', 'pwsh', 'cmd')
-WINDOWS_EXTS = ('.bat', '.cmd', '.ps1', '.exe')
+WINDOWS_PROGRAMS = ('powershell', 'pwsh', 'cmd', 'py')     # py: the Windows Python launcher
+WINDOWS_EXTS = ('.bat', '.cmd', '.ps1', '.exe', '.com', '.vbs')
 DRIVE_RE = re.compile(r'(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/]|$)')
 # The run_command arguments a node does not take: a run with any of them set stays here.
 HERE_ONLY = (('cores', '--cores'), ('hold', '--hold'), ('gpu_share', '--gpu-share'),
@@ -43,8 +43,10 @@ HERE_ONLY = (('cores', '--cores'), ('hold', '--hold'), ('gpu_share', '--gpu-shar
 
 
 def windows_only(cmd):
-    """Why `cmd` cannot run on a Linux node, or '': a Windows program (a .bat, .cmd, .ps1 or .exe,
-    or powershell, pwsh or cmd) or an argument with a drive letter or a backslash."""
+    """Why `cmd` cannot run on a Linux node, or '': a Windows program (a .bat, .cmd, .ps1, .exe,
+    .com or .vbs, or powershell, pwsh, cmd or py) or an argument with a drive letter or a
+    backslash. Best effort: a Windows path inside a shell's script (bash -c "... /z/..."), a
+    forward-slash UNC path and the like slip past; --node main keeps such a run here."""
     first = os.path.basename(str(cmd[0]).replace('\\', '/')).lower() if cmd else ''
     if first.endswith(WINDOWS_EXTS) or first in WINDOWS_PROGRAMS:
         return 'the command is a Windows program (%s)' % first
@@ -58,15 +60,18 @@ def on_node(node, open_link, make_job, say):
     """Run one job on `node`: (exit code, fallback). open_link(node) is a context manager giving a
     remote.Link, make_job(link) the job.NodeJob. fallback True: nothing ran on the node and the
     main machine may run it (job.JobError's fallback). An OSError once the node has started the
-    job is EXIT_AFTER_START and never a fallback. Ctrl+C asks the node to stop a started job."""
-    nj = None
+    job is EXIT_AFTER_START and never a fallback. Ctrl+C asks the node to stop a started job; a
+    second Ctrl+C, or one on the way out, says how to follow or stop it. A Ctrl+C before the job
+    exists propagates (nothing was started)."""
+    nj, code = None, None
     try:
         with open_link(node) as link:
             nj = make_job(link)
             try:
-                return nj.run(), False
+                code = nj.run()
             except KeyboardInterrupt:
-                return _interrupted(nj, say), False
+                code = _interrupted(nj, say)
+            return code, False
     except job.JobError as e:
         say(e.message)
         return e.code, e.fallback
@@ -76,6 +81,16 @@ def on_node(node, open_link, make_job, say):
             return job.EXIT_AFTER_START, False
         say('%s could not be used: %s' % (node.name, e))
         return job.EXIT_NODE, True
+    except KeyboardInterrupt:
+        if nj is None:
+            raise
+        if code is not None:                 # on the way out: the run had its answer
+            return code, False
+        say('Ctrl+C again: job %s %s on %s; it is not run on main'
+            % (nj.job, 'may still run' if nj.started else 'was not seen to start', node.name))
+        for line in nj.follow_lines():
+            say(line)
+        return EXIT_INTERRUPTED, False
 
 
 def _interrupted(nj, say):

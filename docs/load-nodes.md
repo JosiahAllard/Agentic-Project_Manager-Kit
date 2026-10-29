@@ -152,14 +152,19 @@ lock holds it, and its exit code comes back as the run's.
   Most of these are silent: no registry, no node has opted the repository in, a run inside
   another lock run (`MACHINE_LOCK_RUN`), an unknown kind, or an option only main has
   (`--cores`, `--hold`, `--gpu-share`, `--within`, `--resource`, `--on-release`, `--detach`
-  and a detached run, and a library caller's own `env=`). The others say `running here, not on a load node: why`: a
-  registry that cannot be used, a Windows command, the run not started in the checkout's top,
+  and a detached run, and a library caller's own `env=`). The others say
+  `running here, not on a load node: why`: a registry that cannot be used, a Windows command, the run not started in the checkout's top,
   uncommitted tracked changes, a start the node would refuse (a `--note` over 200 characters, a
   wait over 7 days), a repo or slug a node does not take, a kind that cannot be sized, or main's
   lock that cannot be read.
-- A Windows command stays on main: its first word ends in `.bat`, `.cmd`, `.ps1` or `.exe`, or is
-  `powershell`, `pwsh` or `cmd`, or an argument holds a drive letter (`C:` followed by a slash or
-  the end) or a backslash (`kitlib.loadnode.dispatch.windows_only`).
+- A node runs committed HEAD from the checkout's top, as `node.py run` does: an untracked or
+  git-ignored file the command needs (a new test file not committed yet, data, build output) is
+  not there, and what the command writes stays on the node unless `--artifact` names it.
+- A Windows command stays on main: its first word ends in `.bat`, `.cmd`, `.ps1`, `.exe`, `.com`
+  or `.vbs`, or is `powershell`, `pwsh`, `cmd` or `py`, or an argument holds a drive letter (`C:`
+  followed by a slash or the end) or a backslash (`kitlib.loadnode.dispatch.windows_only`). The
+  rule is best effort: a Windows path inside a shell's script (`bash -c "... /z/..."`), a
+  forward-slash UNC path and the like slip past it. `--node main` keeps such a run here.
 - `--node main`: the run stays here, and no node is asked.
 - `--node NAME`: the run goes to that node or not at all. Any reason above is usage, exit 2
   (`usage: --node NAME: why`), as is `--detach`; a node that cannot be used before the job starts
@@ -167,9 +172,12 @@ lock holds it, and its exit code comes back as the run's.
 - A node that fails before the job starts, or is busy, gives way to main under auto (`running
   here instead`). Once the node has started the job no failure sends it to main: a LOST
   connection is exit 9 with the follow and stop lines, and a job that ended with no exit code of
-  its own or could not be followed is exit 14.
+  its own or could not be followed is exit 14. A start request that went out with no reply back
+  (its ssh timed out or the link dropped) counts as started: the node may have taken the job, so
+  it is exit 14 with the follow and stop lines, never a run on main and never exit 10.
 - Ctrl+C before the job starts is exit 130 and nothing ran on a node. After it starts, main asks
-  the node to stop the job, says the `node.py follow` line, and exits 130.
+  the node to stop the job, says the `node.py follow` line, and exits 130. A second Ctrl+C while
+  it asks says the follow and stop lines and exits 130.
 - `--artifact GLOB` (repeatable) is the same as `node.py run`'s and is used only on a node.
   `--registry` (hidden, on `run` and `status`) names another registry file, for tests.
 
@@ -184,7 +192,7 @@ lock holds it, and its exit code comes back as the run's.
 | 9 | LOST: the connection did not come back; the job runs on | |
 | 10 | the node could not be used before the job started: unreachable, host key, push, start refused, a kit too old for the run verbs; nothing ran | |
 | 13 | the job succeeded but its artifacts did not all come, or could not all be copied into the checkout (none was) | |
-| 14 | the node started the job, but it ended there with no exit code of its own (its runner vanished, the node lost it) or could not be followed; it is not run again on main | |
+| 14 | the node started the job, but it ended there with no exit code of its own (its runner vanished, the node lost it) or could not be followed; or the start request went out and no reply came back, so the job may run there (the follow and stop lines are said); it is not run again on main | |
 | 130 | Ctrl+C; a started job is asked to stop and the follow line is said | |
 
 `machine_lock.py run` on a node gives the same codes: 2, 6 and 10 only with `--node NAME` (auto

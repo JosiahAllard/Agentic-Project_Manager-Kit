@@ -26,13 +26,13 @@ running on the main machine instead): the job's own exit code when it ended; EXI
 was busy (at its most jobs, or its lock refused to wait); EXIT_NODE the node could not be used
 (unreachable, its host key, the push, a start it refused, a kit too old to serve the run verbs);
 EXIT_AFTER_START the node started the job but it ended there with no exit code of its own (its
-runner vanished, the node lost it) or could not be followed; EXIT_LOST the connection did not come
-back; EXIT_ARTIFACTS the job succeeded but its artifacts did not all come or could not all be
-copied into the checkout (none was). Once
-the node has started the job (`started`), only its lock refusing it as busy (the command never
-ran) is one `--node auto` answers on main; no other failure is, or the job would run twice.
-Nothing here prints: `say(text)` gets every line for the user
-and `out(bytes)` the job's own output.
+runner vanished, the node lost it) or could not be followed, or the start request went out and no
+reply came back (the job may run there: the follow and stop lines are said); EXIT_LOST the
+connection did not come back; EXIT_ARTIFACTS the job succeeded but its artifacts did not all come
+or could not all be copied into the checkout (none was). Once the node has started the job
+(`started`), only its lock refusing it as busy (the command never ran) is one `--node auto`
+answers on main; no other failure is, or the job would run twice. Nothing here prints:
+`say(text)` gets every line for the user and `out(bytes)` the job's own output.
 """
 import collections
 import datetime
@@ -65,6 +65,14 @@ class JobError(Exception):
     def __init__(self, code, message, fallback=False):
         Exception.__init__(self, message)
         self.code, self.message, self.fallback = code, message, fallback
+
+
+class StartUnknown(JobError):
+    """The start request went to the node but no reply came back (ssh timed out or the link
+    dropped): the node may have started the job, so it is EXIT_AFTER_START, never a fallback."""
+
+    def __init__(self, message):
+        JobError.__init__(self, EXIT_AFTER_START, message)
 
 
 def _git_default(args, cwd, env=None, timeout=None):
@@ -176,11 +184,18 @@ class NodeJob(object):
             raise JobError(EXIT_NODE, 'the push to %s failed: %s'
                            % (self.node.name, _push_why(err) or 'git exit %s' % rc), fallback=True)
 
-    def _call(self, verb, payload, fallback=False):
-        """The node's one JSON line reply to `verb`. JobError(EXIT_NODE) for no reply."""
+    def _call(self, verb, payload, fallback=False, sent=None):
+        """The node's one JSON line reply to `verb`. JobError(EXIT_NODE) for no reply; when
+        `sent` is given, a reply that did not come once the request may have gone out (anything
+        but ssh failing to start) is sent(message) instead."""
         try:
             rc, out, err = self.link.call(verb, payload, CALL_TIMEOUT_S)
-        except Exception as e:                        # timed out or ssh did not start
+        except OSError as e:                          # ssh did not start: nothing went out
+            raise JobError(EXIT_NODE, '%s on %s: %s' % (verb, self.node.name, e), fallback)
+        except Exception as e:                        # timed out: ssh was killed
+            if sent:
+                raise sent('%s on %s: no reply (%s)'
+                           % (verb, self.node.name, str(e) or type(e).__name__))
             raise JobError(EXIT_NODE, '%s on %s: %s' % (verb, self.node.name, e), fallback)
         line = out.decode('utf-8', 'replace').strip().splitlines()
         try:
@@ -189,12 +204,16 @@ class NodeJob(object):
             d = None
         if not isinstance(d, dict):
             why = _last(err.decode('utf-8', 'replace')) or 'ssh exit %s' % rc
+            if sent:
+                raise sent('%s on %s gave no reply: %s' % (verb, self.node.name, why))
             raise JobError(EXIT_NODE, '%s on %s gave no reply: %s' % (verb, self.node.name, why),
                            fallback)
         return d
 
     def start(self):
-        d = self._call('start', self.spec(), fallback=True)
+        """The node's ok reply. JobError(fallback True) when it refused the job or was busy, or
+        ssh did not start; StartUnknown when the request went out and no reply came back."""
+        d = self._call('start', self.spec(), fallback=True, sent=StartUnknown)
         if d.get('ok'):
             return d
         err = str(d.get('error') or '')[:300]
@@ -457,16 +476,20 @@ class NodeJob(object):
                      % (self.job, self.notice_dir, e))
 
     # -- the whole run ----------------------------------------------------------------------
-    def lost_lines(self):
-        """What to say when the job is LOST. The follow line names the checkout and the artifact
-        globs again: a follow without them would clean the job and its artifacts with it."""
+    def follow_lines(self):
+        """The lines to follow or stop the job from another call. The follow line names the
+        checkout and the artifact globs again: a follow without them would clean the job and its
+        artifacts with it."""
         fetch = ''
         if self.artifacts:
             fetch = ' -C "%s"%s' % (self.top, ''.join(' --artifact "%s"' % g for g in self.artifacts))
-        return ['LOST: the connection to %s did not come back in %ds; job %s still runs there.'
-                % (self.node.name, self.reattach_s, self.job),
-                '  follow it: %s follow %s %s%s' % (self.tool, self.node.name, self.job, fetch),
+        return ['  follow it: %s follow %s %s%s' % (self.tool, self.node.name, self.job, fetch),
                 '  stop it:   %s stop %s %s' % (self.tool, self.node.name, self.job)]
+
+    def lost_lines(self):
+        """What to say when the job is LOST."""
+        return ['LOST: the connection to %s did not come back in %ds; job %s still runs there.'
+                % (self.node.name, self.reattach_s, self.job)] + self.follow_lines()
 
     def run(self):
         """Push, start, follow, fetch and clean: the exit code (the module docstring). JobError
@@ -477,7 +500,15 @@ class NodeJob(object):
         except box.SpecError as e:
             raise JobError(EXIT_USAGE, 'the node would refuse this job: %s' % e)
         self.push()
-        self.start()
+        try:
+            self.start()
+        except StartUnknown as e:
+            self.started = True          # it may run there: never again on main
+            self.say('%s; job %s may have started on %s, so it is not run on main'
+                     % (e.message, self.job, self.node.name))
+            for line in self.follow_lines():
+                self.say(line)
+            return EXIT_AFTER_START
         self.started = True
         self.say('job %s started on %s at %s' % (self.job, self.node.name, self.sha[:12]))
         self._notice('start', 'Job %s of %s runs on load node %s under its machine lock. Heavy '
