@@ -195,6 +195,7 @@ class OnANode(NodeCase):
         self.assertEqual(kw['tree'], lander.tree)
         self.assertFalse(kw['full'])
         self.assertEqual(kw['kind'], lander.cfg.section('gate')['kind'])
+        self.assertIs(kw['store'], lander.queue_store())    # its lock-window notices' config
         self.assertEqual(len(self.landing_books()), 1)
 
     def test_another_node_that_qualifies_at_the_turn_takes_it(self):

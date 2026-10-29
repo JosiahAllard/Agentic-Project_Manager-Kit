@@ -1817,7 +1817,7 @@ class Lander(object):
                 return lr.run_on_node(node, self.root, self.merge, self.expect_main, self.cfg,
                                       repo_name, runner.slug_of('+'.join(self.branches)),
                                       full=self.full, docs=True, tree=self.tree, kind=kind,
-                                      say=self.say)
+                                      say=self.say, store=self.queue_store())
             except lr.Fallback as e:
                 why = '%s (nothing ran on load node %s)' % (e.why, node.name)
         try:

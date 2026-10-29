@@ -185,7 +185,7 @@ usage, exit 2, and a node whose kit serves no `gate` verb is exit 10.
 
 A kit checkout (this repository) is gated only by its own `tools/gate.py`: a node's installed kit
 would gate it with other code than the checkout's. Auto keeps it on main and says so;
-`--node NAME` is usage, exit 2. No lock-window notices are written for a gate job.
+`--node NAME` is usage, exit 2. A gate job writes lock-window notices as a run job does.
 
 Known limits:
 
@@ -262,7 +262,8 @@ A kit checkout is never gated on a node, by a landing or by `node.py gate`.
     node qualifies where the planned one does not: that node takes it, said as
     `gating on load node <n2>: ...`.
   - Otherwise `run_on_node` runs the land job, with `docs` set as main's merged gate has it, the
-    landing tree, the kind, `full` and the slug.
+    landing tree, the kind, `full` and the slug. It writes lock-window notices as a run job does,
+    read from the landing's machine-lock store (none on a test store).
 - **When the job passes**, its Outcome is the merged gate's: the lines include `ran on load node
   <n> as job <j>`, and the gate-OK record main writes for the merge carries `ran_on` (node, host
   key fingerprint, job) and no `input_keys`. The result record is the same as for any landing.

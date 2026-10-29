@@ -357,7 +357,7 @@ class Gate(unittest.TestCase):
         self.addCleanup(self.repo.cleanup)
         self.repo.write('a.txt', 'one\n')
         self.sha = self.repo.commit('add a', 'a.txt')
-        self.mains, self.node_runs, self.kit = [], [], False
+        self.mains, self.node_runs, self.kit, self.notice_dirs = [], [], False, []
         self.main_lock = {'cpu_slots': 12, 'cpu_free': 2, 'gpu_slots': 0, 'gpu_free': 0,
                           'waiting': 0, 'unreadable': [], 'pending': False}
         self.node_result = 0
@@ -368,6 +368,7 @@ class Gate(unittest.TestCase):
 
         def node_run(nj):
             self.node_runs.append((nj.node.name, nj.sha, nj.repo, nj.gate, nj.cmd, nj.artifacts))
+            self.notice_dirs.append(nj.notice_dir)
             if isinstance(self.node_result, Exception):
                 raise self.node_result
             return self.node_result
@@ -401,6 +402,19 @@ class Gate(unittest.TestCase):
                                            {'base': self.sha, 'remote': 'origin', 'main': 'main'},
                                            [], [])])
         self.assertEqual(self.mains, [])
+
+    def test_a_gate_job_writes_lock_window_notices_for_its_kind(self):
+        # as a run job does (Run): the notice folder the machine config names for the kind
+        asked = []
+
+        def notice_dir(kind):
+            asked.append(kind)
+            return 'N:/notices'
+        with mock.patch.object(node_cli, '_notice_dir', notice_dir):
+            code, _, _ = self.gate('--node', 'box1')
+        self.assertEqual(code, 0)
+        self.assertEqual(asked, ['engine-test'])
+        self.assertEqual(self.notice_dirs, ['N:/notices'])
 
     def test_a_named_node_usage_errors_are_2_and_gate_nothing(self):
         for extra, setup, want in (
