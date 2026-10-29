@@ -80,6 +80,7 @@ import secrets
 import time
 import urllib.parse
 
+from kitlib.fs import replace as fsreplace
 from kitlib.gate import carry as carrymod
 from kitlib.git import cmd as gitcmd
 from kitlib.git import refs
@@ -104,8 +105,12 @@ RANGE_TIP_RE = re.compile(r'^[0-9a-f]{7,64}$')
 # DOS device names: a file called CON.json or nul.x.json is the device, not a file.
 DEVICES = frozenset(['CON', 'PRN', 'AUX', 'NUL'] + ['COM%d' % i for i in range(1, 10)]
                     + ['LPT%d' % i for i in range(1, 10)])
-RETRIES = 5
-RETRY_SLEEP = 0.2
+RETRIES = 5                 # tries of a read, replace or remove while it fails with PermissionError
+RETRY_SLEEP = 0.2           # seconds between them
+# RETRIES as a wait for kitlib.fs.replace: try k starts at least k-1 pauses in, so the last (at
+# 0.8 s or later) is past this bound and the one before it (at 0.6 s) is not; the half pause is
+# the margin for a slow try.
+REPLACE_WAIT = (RETRIES - 1.5) * RETRY_SLEEP
 LOCK_NAME = '.queue.lock'
 LOCK_WAIT_S = 10.0          # how long add, drop and mark_failed wait for the queue lock
 LOCK_STALE_S = 60.0         # a lock file older than this was left by a crash
@@ -371,6 +376,9 @@ def _carried_why(c, tip):
 
 
 def _retry(fn, *args):
+    """fn(*args), tried RETRIES times RETRY_SLEEP apart while it fails with PermissionError. Kept
+    for the entry read (kitlib.fs.replace has no read) and drop()'s remove (a file already gone
+    is False there, where kitlib.fs.replace.remove returns as on success)."""
     for i in range(RETRIES):
         try:
             return fn(*args)
@@ -454,7 +462,7 @@ def _locked(common_dir):
         yield
     finally:
         try:
-            _retry(os.remove, lock)
+            fsreplace.remove(lock, wait=REPLACE_WAIT, pause=RETRY_SLEEP)
         except OSError:                  # left to the stale-lock rule
             pass
 
@@ -467,7 +475,7 @@ def _write(path, entry):
         try:
             with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(json.dumps(entry, sort_keys=True, indent=1) + '\n')
-            _retry(os.replace, tmp, path)
+            fsreplace.replace(tmp, path, wait=REPLACE_WAIT, pause=RETRY_SLEEP)
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
