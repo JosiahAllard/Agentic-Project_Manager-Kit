@@ -648,18 +648,19 @@ class AfterBoot(JobBase):
         self.assertEqual(rec['kit']['account'], '2')
 
 
-WAKE = None                                                 # set in setUpModule
+WAKE = None                                                 # set by WakeFixture.setUp
 
 
-def setUpModule():
-    global WAKE
-    WAKE = C.Wake('its repo has new startable records: KIT-B', ['KIT-B'])
+class WakeFixture(unittest.TestCase):
+    def setUp(self):                                        # per test, so each one is red on the base
+        global WAKE
+        WAKE = C.Wake('its repo has new startable records: KIT-B', ['KIT-B'])
 
 
 STOPPED = {'seen_at': NOW - 900, 'account': '1'}            # with last_stop NOW - 600: deliberate
 
 
-class WakeDecide(unittest.TestCase):
+class WakeDecide(WakeFixture):
     def test_a_wake_lifts_the_deliberate_stop(self):
         d = decide(record=STOPPED, last_stop=NOW - 600, wake=WAKE)
         self.assertEqual((d.start, d.account, d.wake), (True, '1', WAKE))
@@ -694,7 +695,7 @@ class WakeDecide(unittest.TestCase):
         self.assertIsNone(d.wake)
 
 
-class WakeParts(unittest.TestCase):
+class WakeParts(WakeFixture):
     def test_backlog_wake_is_an_id_outside_the_baseline(self):
         w = C.backlog_wake({'KIT-A', 'KIT-C', 'KIT-B'}, ['KIT-A'])
         self.assertEqual(w.ids, ['KIT-B', 'KIT-C'])
