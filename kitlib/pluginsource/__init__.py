@@ -6,7 +6,8 @@ installs from (docs/plugin-source.md).
   remote_main(kit, remote)         the sha the remote's main points at; refuses one not fetched
   export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha but tests/, plugin.json
                                    stamped, each per-platform manifest the running platform's
-                                   (platform_manifests),
+                                   (platform_manifests), each host's own manifest placed
+                                   (host_manifests) and stamped,
                                    the marker naming the kit's main checkout
   export_checkout(folder)          that main checkout, while it still is one, or None
   write_marketplace(root, folder)  <root>/.claude-plugin/marketplace.json names that folder
@@ -70,6 +71,11 @@ HOOKS_FILE = 'hooks/hooks.json'
 # (platform_manifests): the hooks, Codex's MCP servers and Claude's plugin manifest.
 PLATFORM_FILES = (HOOKS_FILE, 'mcp.json', MANIFEST)
 MARKETPLACE = '.claude-plugin/marketplace.json'
+# A host's own plugin manifest, rendered at hosts/<host>/shell/plugin.json: the export also writes
+# it at .<host>-plugin/plugin.json, stamped, where that host looks (host_manifests; Codex reads
+# .codex-plugin/plugin.json; docs/plugin-source.md "Codex"). The host's marketplace file is its
+# own copy step's to write; this module names no host.
+_HOST_MANIFEST = re.compile(r'^hosts/([a-z][a-z0-9-]*)/shell/plugin\.json$')
 CONFIG_KEY = 'plugin'
 LEFT_OUT = 'tests'                   # the top-level folder export leaves out (kitrelease does too)
 _SHA12 = re.compile(r'^[0-9a-f]{12}$')
@@ -322,12 +328,12 @@ def stamped_version(base, count):
     return '%s-main.%d' % (base, count)
 
 
-def stamp(manifest, version):
+def stamp(manifest, version, name=MANIFEST):
     """plugin.json bytes with its one `version` value replaced; every other byte (a BOM, the
-    layout) kept. RefreshError when the file does not hold exactly one."""
+    layout) kept. RefreshError, naming the manifest `name`, when the file does not hold exactly one."""
     found = _VERSION.findall(manifest)
     if len(found) != 1:
-        raise RefreshError('%s holds %d "version" keys, not one' % (MANIFEST, len(found)))
+        raise RefreshError('%s holds %d "version" keys, not one' % (name, len(found)))
     return _VERSION.sub(lambda m: m.group(1) + version.encode('utf-8') + m.group(3), manifest)
 
 
@@ -372,6 +378,18 @@ def folder_name(sha):
     return sha[:12]
 
 
+def host_manifests(oids):
+    """{export path: blob oid} of each host's own plugin manifest: hosts/<host>/shell/plugin.json
+    of the tree (`oids`: {path: oid}) placed at .<host>-plugin/plugin.json, where that host reads
+    it, unless the tree holds that path itself (Claude's .claude-plugin/plugin.json)."""
+    placed = {}
+    for path, oid in oids.items():
+        m = _HOST_MANIFEST.match(path)
+        if m and '.%s-plugin/plugin.json' % m.group(1) not in oids:
+            placed['.%s-plugin/plugin.json' % m.group(1)] = oid
+    return placed
+
+
 def platform_manifests(paths, platform):
     """{manifest path: the path whose bytes the export writes there} for `platform`: each
     PLATFORM_FILES manifest among `paths` (`<dir>/hooks/hooks.json`, `<dir>/mcp.json`,
@@ -393,7 +411,8 @@ def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py', platform
     """<root>/<sha12>: the tracked files at `sha` but the top-level tests/ (LEFT_OUT: no tool reads
     the kit's tests from an export, and they were half its size), plugin.json's version stamped,
     each per-platform manifest holding the running `platform`'s file (platform_manifests; a
-    swapped plugin.json is stamped too), and the marker (`made_by`: the tool that wrote it;
+    swapped plugin.json is stamped too), each host's own manifest written where that host looks
+    and stamped (host_manifests), and the marker (`made_by`: the tool that wrote it;
     `checkout`: the main checkout of `kit`'s repository, left out when git cannot place it). Written into <sha12>.tmp and renamed, so a folder by the
     final name is always whole. An existing folder whose marker names `sha` is kept as it is.
     Returns (folder, version)."""
@@ -418,18 +437,19 @@ def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py', platform
     version = stamped_version(kit_version(manifest[1]), _count(kit, sha))
     oids = {e[3]: e[2] for e in blobs}
     swap = platform_manifests(oids, kitplatform.NAME if platform is None else platform)
+    placed = host_manifests(oids)
     tmp = dest + '.tmp'
     if os.path.lexists(tmp):
         _rmtree(tmp)
     os.makedirs(tmp)
-    for mode, _typ, oid, path in blobs:
+    for path, oid in [(e[3], e[2]) for e in blobs] + sorted(placed.items()):
         oid = oids[swap[path]] if path in swap else oid
         got = data.get(oid)
         if got is None:
             raise RefreshError('git has no blob %s for %s' % (oid[:12], path))
         body = got[1]
-        if path == MANIFEST:
-            body = stamp(body, version)
+        if path == MANIFEST or path in placed:
+            body = stamp(body, version, path)
         full = os.path.join(tmp, *path.split('/'))
         os.makedirs(os.path.dirname(full), exist_ok=True)
         with open(full, 'wb') as fh:
@@ -503,7 +523,9 @@ def marketplace_path(root):
 
 def write_marketplace(root, folder):
     """<root>/.claude-plugin/marketplace.json: the marketplace `pm-kit` whose plugin `pm-kit` is
-    `./<folder>`. The names never change, so agent names (pm-kit:<agent>) and allow entries do not."""
+    `./<folder>`. The names never change, so agent names (pm-kit:<agent>) and allow entries do not.
+    A host with a marketplace file of its own writes it in its copy step (docs/plugin-source.md
+    "Codex")."""
     _write_json(marketplace_path(root), {
         'name': NAME,
         'description': 'The PM kit\'s plugin, exported from pushed kit main (docs/plugin-source.md).',
@@ -626,6 +648,35 @@ def read_in_use(root, procs=None, tasks=None):
     return InUse(texts, named, errors)
 
 
+def with_hosts(in_use, copies):
+    """The in-use reader `in_use` (None: nothing read) with what each plugin-copy step's in_use()
+    names added to its `named`: the export folders a host's own plugin copy was installed from
+    (Codex's: its cache's export markers), which prune then keeps. A step's read that fails,
+    or a base reader that raises, is an error of the InUse, so prune keeps every young export.
+    `in_use` itself when no step has in_use()."""
+    hosts = [(getattr(c, 'label', 'plugin copy'), c.in_use) for c in copies or ()
+             if callable(getattr(c, 'in_use', None))]
+    if not hosts:
+        return in_use
+
+    def read():
+        if in_use is None:
+            u = InUse([], set(), ['nothing but the host plugin copies was read'])
+        else:
+            try:
+                u = in_use()
+            except Exception as e:
+                u = InUse([], set(), ['%s: %s' % (type(e).__name__, e)])
+        named, errors = set(u.named), list(u.errors)
+        for label, host in hosts:
+            try:
+                named |= {n for n in host() if _SHA12.match(n)}
+            except Exception as e:
+                errors.append('the %s plugin copy could not be read (%s: %s)' % (label, type(e).__name__, e))
+        return InUse(u.texts, named, errors)
+    return read
+
+
 def in_use_sha12s(u):
     """Every <sha12> `u` names: a path part of 12 hex digits (not the tail of a uuid), or a lease."""
     found = set(u.named)
@@ -734,7 +785,8 @@ def prune(root, keep=KEEP, now=None, young_days=None, in_use=None, out=None):
             spare.add(n)
     held = sorted(n for _, n in found if n in used and n not in spare)
     if held:
-        say('prune: kept, a running process, scheduled task or pin lease names it: %s' % ', '.join(held))
+        say('prune: kept, a running process, scheduled task, pin lease or host plugin copy names it: %s'
+            % ', '.join(held))
     spare.update(used)
     removed, failed = [], []
     for n in [n for _, n in found if n not in spare] + sorted(stale):
@@ -988,7 +1040,8 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
             alive=None, in_use=None, copies=None):
     """One refresh (tools/plugin_refresh.py). `folders` are the account folders to run in (all of
     them, or those --folder named); `runner` is kitlib.pluginsource.claude.Runner (or a test's);
-    `in_use` is the prune's reader of what is in use (prune; None: the 7-day rule). `copies` are
+    `in_use` is the prune's reader of what is in use (prune; None: the 7-day rule), with what each
+    copy step's in_use() names added (with_hosts). `copies` are
     the hosts' plugin-copy steps (tools/_host.py plugin_copies), each run as step(export folder,
     out, apply) after the account folders, also when they had nothing to do: a step prints its own
     lines and never sets the exit code; None or []: none. After an update that went through, the
@@ -998,6 +1051,7 @@ def refresh(kit, s, folders, out, apply=False, migrate=False, runner=None, now=N
     prints the plan and writes nothing. Returns the exit code: 0 done or nothing to do, 1 refused
     (the whole run or one folder) or a folder failed."""
     root = s.export_dir
+    in_use = with_hosts(in_use, copies)
     try:
         sha = remote_main(kit, s.remote)
         state = read_state(root)
