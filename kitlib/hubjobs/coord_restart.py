@@ -1,10 +1,10 @@
-"""kitlib.hubjobs.coord_restart: the hub server restarts a stopped coordinator on its last account
-(docs/launcher.md "Hub restart").
+"""kitlib.hubjobs.coord_restart: the hub server restarts a stopped coordinator on the account that
+resets first among those under the limit, else its last account (docs/launcher.md "Hub restart").
 
   make(sources) -> jobs.Job | None   the job; None when launcher.state_dir is not set
   decide(key, entry, live, record, last_stop, down_runs, accounts, now) -> Decision
                                      the whole restart decision, pure: no file, process or clock
-                                     is read (the account-pick and sole-restarter work reuse it)
+                                     is read
   last_account(entry, record)        the account a coordinator last ran on, or None
   RestartJob(settings, ...)          its run(ctx): the boot one-shot, then read the state, decide
                                      each entry, start one
@@ -30,8 +30,13 @@ stop.log line with no successor for a session of the stem (`launch.py stop --nam
 --successor, the PM's step on a `ready to stop:` reply) newer than the last time the job saw the
 coordinator alive, or with no sighting at all; a coordinator seen down on fewer than DOWN_RUNS runs
 in a row (a hand-off gets time to start it first); START_CAP starts in
-CAP_WINDOW_S already; a start sooner than BACKOFF_S after the last; no known account; an account
-not signed in; an account at or over accounts.HEADROOM_LIMIT of a window that has not reset.
+CAP_WINDOW_S already; a start sooner than BACKOFF_S after the last.
+
+The account: accounts.restart_pick, the signed-in account with a reading no older than
+pmwatch.STALE_MINUTES under accounts.HEADROOM_LIMIT of both windows whose week resets first (a
+missing, stale or unknown reading never counts as under). With none, the last account as before,
+held when it is not known, not signed in, or at or over accounts.HEADROOM_LIMIT of a window that
+has not reset; a stale reading under the limit still starts there.
 
 The hub is the only thing that restarts agents (the launcher's sign-in task is retired,
 kitlib.launcher.autostart). After a boot it also runs, once, `launch.py after-reboot` as a
@@ -57,7 +62,7 @@ import subprocess
 import sys
 import time
 
-from kitlib import pmstart
+from kitlib import pmstart, pmwatch
 from kitlib.hubsite import jobs
 from kitlib.launcher import accounts as A
 from kitlib.launcher import lookup, state
@@ -165,14 +170,19 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now):
         if now - starts[-1] < wait:
             return _hold('backoff: next start at most every %d s' % wait)
     acct = last_account(entry, record)
+    when = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
+    pick = A.restart_pick(accounts, when, acct, pmwatch.STALE_MINUTES, A.HEADROOM_LIMIT)
+    if pick is not None:
+        return Decision(True, 'start on account %s: a fresh reading under %d%%, its week resets first'
+                        % (pick, A.HEADROOM_LIMIT), pick, 'restarted')
+    # no account with a fresh reading under the limit: the last account, as before
     if acct is None:
         return _hold('no last account known')
     st = accounts.get(acct)
     if st is None or not st.signed_in:
         return _hold('account %s is not signed in' % acct, 'not-signed-in', acct)
     if st.usage is not None:
-        over = A.over_limit(st.usage, datetime.datetime.fromtimestamp(now, datetime.timezone.utc),
-                            A.HEADROOM_LIMIT)
+        over = A.over_limit(st.usage, when, A.HEADROOM_LIMIT)
         if over:
             return _hold('account %s is at %s' % (acct, ' and '.join(over)), 'over-limit', acct)
     return Decision(True, 'start on account %s' % acct, acct,
@@ -462,7 +472,7 @@ class RestartJob(object):
     def _accounts(self):
         out = {}
         for n in self.settings.account_numbers():
-            _, data = A.newest_usage(self.settings, n)
+            _, data = A.newest_usage(self.settings, n, by='updated')   # the reading whose age is judged
             out[str(n)] = AccountState(A.account_signed_in(self.settings, n), data)
         return out
 
