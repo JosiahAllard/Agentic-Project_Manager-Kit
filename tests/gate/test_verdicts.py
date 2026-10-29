@@ -1,5 +1,6 @@
 """kitlib.gate.verdicts: the verdict queue on the scratch repository of tests/gate/fixtures.py
 GateRepoCase."""
+import contextlib
 import json
 import os
 import threading
@@ -63,6 +64,27 @@ class SelfReviewWhy(unittest.TestCase):
                      {'reviewer_id': 'coord-10'}, {'reviewer': 'pm-kit:coordinators-helper'}):
             with self.subTest(**over):
                 self.assertIsNone(V.self_review_why(given('kit/a', tip, risk='High', **over)))
+
+
+class FakeClock(object):
+    """time.monotonic and time.sleep for the `with` of patched(): a sleep is recorded and moves
+    the clock on at once, so a retry loop's tries and pauses are counted exactly."""
+
+    def __init__(self):
+        self.now, self.sleeps = 1000.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
+
+    def patched(self):
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(time, 'monotonic', self.monotonic))
+        stack.enter_context(mock.patch.object(time, 'sleep', self.sleep))
+        return stack
 
 
 class QueueCase(GateRepoCase):
@@ -337,6 +359,35 @@ class Queue(QueueCase):
         self.assertEqual(self.folder_names(), ['kit%2Fa.json'])        # no .tmp left
         self.assertEqual(V.entries(self.common), [old])
 
+    def test_a_replace_held_open_is_tried_five_times_0_2_s_apart_then_a_verdict_error(self):
+        # The equivalence test of _write's move onto kitlib.fs.replace: the loop it replaced
+        # tried RETRIES (5) times, sleeping RETRY_SLEEP (0.2 s) between, then raised the
+        # PermissionError (a VerdictError here). The clock is faked, so the count is exact.
+        for fails, tries, written in ((2, 3, True), (4, 5, True), (5, 5, False), (9, 5, False)):
+            with self.subTest(fails=fails):
+                name = 'held%d' % fails
+                _, tip = self.branch(name, {'%s.txt' % name: 'x\n'})
+                real, calls, clock = os.replace, [], FakeClock()
+
+                def flaky(a, b):
+                    calls.append(b)
+                    if len(calls) <= fails:
+                        raise PermissionError('held open')
+                    return real(a, b)
+                with clock.patched(), mock.patch.object(V.os, 'replace', flaky):
+                    if written:
+                        V.add(self.common, given('kit/' + name, tip))
+                    else:
+                        with self.assertRaises(V.VerdictError) as cm:
+                            V.add(self.common, given('kit/' + name, tip))
+                self.assertEqual(len(calls), tries)
+                self.assertEqual(clock.sleeps, [0.2] * (tries - 1))
+                queued = [e['branch'] for e in V.entries(self.common)]
+                self.assertEqual('kit/' + name in queued, written)
+                if not written:
+                    self.assertIn('held open', str(cm.exception))
+                self.assertEqual([n for n in self.folder_names() if n.endswith('.tmp')], [])
+
     def test_mark_failed_holds_until_a_re_add(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})
         V.add(self.common, given('kit/a', tip))
@@ -609,6 +660,34 @@ class Lock(QueueCase):
         self.assertEqual([(e['tip'], e['state']) for e in V.entries(self.common)],
                          [(tip, V.QUEUED)])
         self.assertEqual(self.folder_names(), ['kit%2Fa.json'])
+
+    def test_a_lock_removal_held_open_is_tried_five_times_0_2_s_apart_then_left(self):
+        # The equivalence test of _locked's lock removal onto kitlib.fs.replace.remove: the loop
+        # it replaced tried RETRIES (5) times, sleeping RETRY_SLEEP (0.2 s) between, and a lock
+        # it could not remove was left to the stale-lock rule; the add itself stands either way.
+        folder = V.queue_dir(self.common)
+        lock = os.path.join(folder, V.LOCK_NAME)
+        for fails, tries, removed in ((2, 3, True), (4, 5, True), (5, 5, False), (9, 5, False)):
+            with self.subTest(fails=fails):
+                name = 'unlock%d' % fails
+                _, tip = self.branch(name, {'%s.txt' % name: 'x\n'})
+                real, calls, clock = os.remove, [], FakeClock()
+
+                def flaky(path):
+                    if os.path.basename(path) == V.LOCK_NAME:
+                        calls.append(path)
+                        if len(calls) <= fails:
+                            raise PermissionError('held open')
+                    return real(path)
+                with clock.patched(), mock.patch.object(V.os, 'remove', flaky):
+                    V.add(self.common, given('kit/' + name, tip))
+                left = os.path.exists(lock)
+                if left:
+                    os.remove(lock)              # as the stale-lock rule would, later
+                self.assertEqual(len(calls), tries)
+                self.assertEqual(clock.sleeps, [0.2] * (tries - 1))
+                self.assertEqual(left, not removed)
+                self.assertIn('kit/' + name, [e['branch'] for e in V.entries(self.common)])
 
     def test_a_held_lock_is_waited_for_and_a_stale_one_removed(self):
         _, tip = self.branch('a', {'a.txt': 'a\n'})

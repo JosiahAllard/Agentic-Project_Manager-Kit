@@ -80,6 +80,7 @@ import time
 
 from kitlib import gate as G
 from kitlib.config import user as kuser
+from kitlib.fs import replace as fsreplace
 from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError
 from kitlib.records import gate_ok
 from kitlib.git import refs, repo
@@ -98,8 +99,12 @@ RUNNING = 'running'
 ERROR = 'error'
 TIMEOUT = 7         # gate.py wait-result: no final record at that tip within --timeout
 POLL_S = 2.0
-RETRIES = 5
-RETRY_SLEEP = 0.2
+RETRIES = 5         # tries of a record's os.replace while it fails with PermissionError
+RETRY_SLEEP = 0.2   # seconds between them
+# RETRIES as a wait for kitlib.fs.replace: try k starts at least k-1 pauses in, so the last (at
+# 0.8 s or later) is past this bound and the one before it (at 0.6 s) is not; the half pause is
+# the margin for a slow try.
+REPLACE_WAIT = (RETRIES - 1.5) * RETRY_SLEEP
 LOCK_WAIT_S = 10.0  # a record's lock is held for one read and one replace; past this, ResultError
 LOCK_PAUSE = 0.02
 MAX_STEM = 120      # longer stems are cut and given a hash, so the file name stays short
@@ -239,16 +244,6 @@ def own_process():
         return os.getpid(), None
 
 
-def _retry(fn, *args):
-    for i in range(RETRIES):
-        try:
-            return fn(*args)
-        except PermissionError:     # a reader holding the old file open (Windows)
-            if i == RETRIES - 1:
-                raise
-            time.sleep(RETRY_SLEEP)
-
-
 def lock_path(path):
     """The lock file of the record at `path`: `.<its file name>.lock` beside it."""
     folder, name = os.path.split(path)
@@ -284,15 +279,16 @@ def _held(path):
 
 
 def _put(path, record):
-    """Replace the record at `path` with `record`: a temp file, then os.replace. The caller
-    holds the record's lock."""
+    """Replace the record at `path` with `record`: a temp file, then os.replace, retried while a
+    reader holds the old file open (PermissionError; kitlib.fs.replace for REPLACE_WAIT). The
+    caller holds the record's lock."""
     folder = os.path.dirname(path)
     try:
         tmp = os.path.join(folder, '.%s.tmp' % secrets.token_hex(6))
         try:
             with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(json.dumps(record, sort_keys=True, indent=1) + '\n')
-            _retry(os.replace, tmp, path)
+            fsreplace.replace(tmp, path, wait=REPLACE_WAIT, pause=RETRY_SLEEP)
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
