@@ -484,11 +484,15 @@ store's git push (the `push` setting).
   schedule. It fires again only after the heartbeat was fresh again, and never on a server that has not
   seen a fresh one (it is not kept across a restart). A pm_watch run with its own `--state` path is not
   seen.
+- Timed jobs (`kitlib.hubsite.jobs`; the one today is the plugin refresh, docs/plugin-source.md "Hub
+  refresh"): at a job's third failure in a row the worker pushes the PM once `[hub push] job <name>
+  failing route:pm attempt:<k>`, and `... recovered` at its next success (`job_event`).
 - Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each round
   that changed it, so a server ended without a clean close loses at most that round; read again at
   start: an entry whose item changed while the server was down fires afresh, one whose item is gone is
   dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous` pick and per
-  give-up, a `watcher down` try as kind `watcher`, id `down`; never a token or any item text; rotated
+  give-up, a `watcher down` try as kind `watcher`, id `down`, a job push as kind `job`, id its name;
+  never a token or any item text; rotated
   once to `.1` past 1 MiB, `push.LOG_MAX`).
 - Status: `GET /api/v1/snapshot` carries `push`, null when the server runs no worker, else
   `PushWorker.status()`: `last` (the state of the latest delivery to the PM, null before the first),
@@ -501,7 +505,8 @@ store's git push (the `push` setting).
   not at once. The snapshot and `GET /api/v1/health` also carry `watcher`: null with no worker, else
   `PushWorker.watcher_status()`, `{"state": "up"|"down"|"none", "age": <seconds or null>}` at the
   worker's latest read (a status that raises is `down` with a null age); the tunnel's health leaves it
-  out ("Serving it"). `GET /api/v1/health` also carries `push`, the snapshot's value from
+  out ("Serving it"). GET health (local) also carries `jobs`: null with no job, else `{<name>: {every_s,
+  runs, failures, running, last_at, ok_at, note, error}}`. `GET /api/v1/health` also carries `push`, the snapshot's value from
   `Api.push_seen`: null with no worker, else `{"state", "last", "undelivered"}`.
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and joins it
   after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take (Claude:

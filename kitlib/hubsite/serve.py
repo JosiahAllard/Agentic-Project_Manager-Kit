@@ -395,18 +395,14 @@ class Sources(object):
                    machine_sources registers them, a scratch store gets none; [] or None: none
       home         the home folder machine_sources read the machine config under (None: the
                    user's), for a job that reads it again
-      plugin_copies  callable() -> [step], each host's plugin-copy step (tools/_host.py
-                   plugin_copies, given by the host's entry point, tools/hub.py) for the plugin
-                   refresh job (kitlib.hubsite.plugin_job); None: no host copy is refreshed
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
                  access_now=None, known_repos=None, push=None, push_dir=None, lock=None,
-                 findings=None, skills=None, jobs=None, home=None, plugin_copies=None):
+                 findings=None, skills=None, jobs=None, home=None):
         self.jobs = list(jobs or [])
         self.home = home
-        self.plugin_copies = plugin_copies
         self.findings = findings
         self.lock = lock
         self.push = push
@@ -548,7 +544,9 @@ def machine_sources(home=None, sync=True):
                   notices=pmwatch.configured_notice_dir(path),
                   agents=agents_dir(), skills=skills_dir(),
                   sync=gitsync.GitSync if sync else None, home=home)
-    if sync:                        # the timed jobs: one registration line each (kitlib.hubsite.jobs)
+    # The timed jobs, one registration line each (kitlib.hubsite.jobs). `sync` is false only for a
+    # scratch store (tools/hub.py serve --store), which runs no machine job.
+    if sync:
         from . import plugin_job
         src.jobs.append(plugin_job.make)
     if pm and pm.get('path'):

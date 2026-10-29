@@ -3,6 +3,7 @@ refresh (kitlib.hubsite.plugin_job, docs/plugin-source.md "Hub refresh").
 
   Job(name, every_s, run, first_s=FIRST_S)   one job: `run(ctx)` every `every_s` seconds, the
                                              first time `first_s` after start
+  Skip(note)                                 what a run returns when it did nothing
   Jobs(jobs, notify=None, log=None)          the jobs of one hub
       .start()                               start each job's thread (once)
       .stop(timeout)                         ask every thread to end and join them: True when all
@@ -14,15 +15,16 @@ refresh (kitlib.hubsite.plugin_job, docs/plugin-source.md "Hub refresh").
 A job's `run(ctx)` gets a Ctx: `ctx.stop`, the event the close sets (a long job looks at it
 between steps), and `ctx.event(word)`, which pushes a job event to the PM (`notify(name, word)`,
 kitlib.hubsite.push PushWorker.job_event; nothing when the hub has no push worker). What run
-returns, a short text or None, is the health block's `note`. What it raises is a failure: its
-class and text are `error`, and `failures` counts the failures since the last run that did not
-raise. At the FAIL_PUSH-th failure in a row the job pushes `failing`, once; the first run that
-does not raise after that pushes `recovered`. A job never runs twice at once: its own thread runs
+returns, a short text or None, is a success and the health block's `note`; a Skip(note) says the
+run did nothing, and only sets `note`. What it raises is a failure: its class and text are
+`error`, and `failures` counts the failures since the last success (skips neither count nor
+reset it). At the FAIL_PUSH-th failure in a row the job pushes `failing`, once; the first
+success after that pushes `recovered`. A job never runs twice at once: its own thread runs
 it, and run_now refuses while it is running.
 
 Health block (GET health `jobs`, kitlib.hubsite.api docstring "Jobs"): {every_s, runs, failures, running,
-last_at, ok_at, note, error}: times are epoch seconds of the last run's end and of the last one
-that did not raise (None before one), `error` the last failure's text while `failures` is not 0
+last_at, ok_at, note, error}: times are epoch seconds of the last run's end and of the last
+success (None before one), `error` the last failure's text while `failures` is not 0
 (else None).
 
 Nothing here knows any job: each is a module that gives a Job, registered in
@@ -40,6 +42,15 @@ ERROR_MAX = 300         # characters of a failure's text kept for health
 class Job(object):
     def __init__(self, name, every_s, run, first_s=FIRST_S):
         self.name, self.every_s, self.run, self.first_s = name, every_s, run, first_s
+
+
+class Skip(object):
+    """What a run returns when it did nothing (nothing to do yet, a switch off, another process
+    busy, a retry not due): `note` goes to health; the failure count, `error`, `ok_at` and the
+    failing episode stay as they were."""
+
+    def __init__(self, note):
+        self.note = note
 
 
 class Ctx(object):
@@ -137,6 +148,11 @@ class Jobs(object):
                     s.pushed = True
                     self._event(s, 'failing')
             else:
+                if isinstance(note, Skip):  # did nothing: the count and the episode stay
+                    s.note = note.note
+                    s.runs += 1
+                    s.last_at = self.clock()
+                    return True
                 s.failures, s.error = 0, None
                 s.note = note if isinstance(note, str) else None
                 s.ok_at = self.clock()

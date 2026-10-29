@@ -749,14 +749,6 @@ def _push_delivery():
         return None, None
 
 
-def _plugin_copies():
-    """Each host's plugin-copy step (tools/_host.py plugin_copies) for the hub's plugin refresh
-    job (kitlib.hubsite.plugin_job, docs/plugin-source.md "Hub refresh"); asked at each refresh,
-    and what it raises is a WARNING line of that refresh."""
-    import _host
-    return _host.plugin_copies()
-
-
 def _serve(a, stop):
     s = settings.load()
     if a.port is not None:
@@ -767,7 +759,6 @@ def _serve(a, stop):
     sources = serve.machine_sources(sync=not scratch)
     if not scratch:
         sources.push, sources.push_dir = _push_delivery()
-        sources.plugin_copies = _plugin_copies
     hub = serve.build(s, sources, log=_log)
 
     def started(h):

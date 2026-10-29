@@ -109,6 +109,27 @@ class RunnerTest(unittest.TestCase):
         js.run_now('j')
         self.assertEqual(self.events, [])
 
+    def test_a_skip_leaves_the_count_and_the_episode_alone_and_pushes_nothing(self):
+        run = Script([Boom('a'), jobs.Skip('busy'), Boom('b'), jobs.Skip('off'), Boom('c'),
+                      jobs.Skip('waiting'), 'done'])
+        js = self.make(jobs.Job('j', 300, run))
+        for _ in range(3):
+            js.run_now('j')
+        st = js.status()['j']
+        self.assertEqual((st['failures'], st['note'], st['ok_at']), (2, 'busy', None),
+                         'a skip neither resets nor adds to the count')
+        js.run_now('j')
+        js.run_now('j')
+        self.assertEqual(self.events, [('j', 'failing')], 'three real failures, skips between')
+        js.run_now('j')
+        st = js.status()['j']
+        self.assertEqual((st['failures'], st['error'], st['note']), (3, 'Boom: c', 'waiting'))
+        self.assertEqual(self.events, [('j', 'failing')], 'a skip is not a recovery')
+        self.t[0] = 300.0
+        js.run_now('j')
+        self.assertEqual(self.events, [('j', 'failing'), ('j', 'recovered')])
+        self.assertEqual((js.status()['j']['ok_at'], js.status()['j']['runs']), (300.0, 7))
+
     def test_a_running_job_is_not_run_twice_at_once(self):
         run = Script(hold=True)
         js = self.make(jobs.Job('j', 300, run))
@@ -274,7 +295,6 @@ class MachineJobsTest(unittest.TestCase):
         job = plugin_job.make(src)
         self.assertEqual((job.name, job.every_s), (plugin_job.NAME, plugin_job.EVERY_S))
         self.assertEqual(job.run.home, self.home)
-        self.assertIsNone(job.run.copies)
 
 
 if __name__ == '__main__':
