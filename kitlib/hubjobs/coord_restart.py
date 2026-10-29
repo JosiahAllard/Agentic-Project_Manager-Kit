@@ -57,7 +57,7 @@ START_TIMEOUT_S = 180          # launch.py start opens a window and polls ~20 s 
 STATE_FILE = 'coord-restart.json'
 STOP_LOG = 'stop.log'
 _NOWIN = 0x08000000            # CREATE_NO_WINDOW
-_STOP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) stopped '([^']*)' .*; successor '([^']*)'")
+_STOP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) stopped '([^']*)' .*; successor '([^']*)'")
 _ACCOUNT = re.compile(r'-a(\d+)(?:-r\d+)?\Z')
 
 AccountState = collections.namedtuple('AccountState', 'signed_in usage')
