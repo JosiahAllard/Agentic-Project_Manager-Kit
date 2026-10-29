@@ -17,7 +17,8 @@ writes: the tool runs whole from one commit.
           or (None, warning) when it cannot, and the caller runs live (fail open)
 
 The exports live in <plugin export root>/pins/<sha12> (kitlib.pluginsource: the machine config's
-plugin.export_dir, default %LOCALAPPDATA%\\pm-kit\\plugin), apart from the plugin's own exports,
+plugin.export_dir, default pluginsource.default_export_dir: %LOCALAPPDATA%\\pm-kit\\plugin, on
+Linux <profile>/.local/share/pm-kit/plugin), apart from the plugin's own exports,
 which pluginsource.prune never confuses with them. A lease per running pinned tool,
 pins/leases/<sha12>-<pid>.json {sha, pid, ctime, child_pid, child_ctime}, keeps its export: each
 pin, under the lock, removes the exports no live lease holds, except the commit it runs.
