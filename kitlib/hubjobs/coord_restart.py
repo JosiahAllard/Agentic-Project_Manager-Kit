@@ -17,7 +17,9 @@ checked, as launch.py's own headroom check does), `over-limit`, `not-signed-in` 
 each once per time the coordinator is down. The hub keeps one owed push per job and a newer one
 replaces it, so a run pushes at most one event: one word, its detail every `KEY:aN` of that word
 that fits the 64-character field, joined by '.'. Only what that event carries counts as told; the
-rest goes out on a later run. A child that exits non-zero or does not end in
+rest goes out on a later run. A start that ends a failing streak (jobs.FAIL_PUSH failures in a row,
+so the framework pushes `recovered` straight after the run, replacing anything owed) pushes its
+`restarted` on the next run instead. A child that exits non-zero or does not end in
 START_TIMEOUT_S is a failure (health), and counts as a start for the backoff and the cap.
 
 Held, never started: a live session of the entry's stem (any account or recycle, the test
@@ -160,8 +162,8 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now):
 
 def local_epoch(text, mktime=time.mktime, localtime=time.localtime):
     """Epoch seconds of a local 'YYYY-MM-DD HH:MM:SS' stamp. In the repeated hour when daylight
-    saving ends the stamp names two instants: the later is taken, so a stop there reads as newer
-    and the coordinator is left down rather than restarted."""
+    saving ends the stamp names two instants: the later is taken, so the stop can read up to an
+    hour late and a sighting after it can still count as older (docs/launcher.md "Hub restart")."""
     st = time.strptime(text, _STAMP)
     fits = []
     for dst in (0, 1):
@@ -239,8 +241,20 @@ class RestartJob(object):
         self.kit = kit or pmstart.KIT_ROOT
         self._down = {}                 # key: runs in a row seen down
         self._told = {}                 # key: the word pushed while it has been down
+        self._fails = 0                 # failures in a row, the framework's count (Skips keep it)
+        self._carry = []                # a start's push kept for the next run (_run)
 
     def __call__(self, ctx):
+        try:
+            result = self._run(ctx)
+        except Exception:
+            self._fails += 1
+            raise
+        if not isinstance(result, jobs.Skip):
+            self._fails = 0
+        return result
+
+    def _run(self, ctx):
         now = self.clock()
         sessions = state.read_sessions(self.settings)
         live = {lookup.rc_name(p.get('CommandLine')) for p in lookup.launched(self.procs())}
@@ -285,8 +299,16 @@ class RestartJob(object):
             self._write_records(records)    # before the start: a crash mid-start still counts
             changed = False
             self._start(key, d)
-            owed.insert(0, (key, d))
             notes.insert(0, '%s: started on account %s' % (key, d.account))
+            if self._fails >= jobs.FAIL_PUSH:
+                # the framework pushes `recovered` after this run, which would replace this push
+                self._carry.append((key, d))
+                owed = []
+            else:
+                owed.insert(0, (key, d))
+        elif self._carry:
+            owed = self._carry + owed
+            self._carry = []
         self._tell(ctx, owed)
         if changed:
             self._write_records(records)

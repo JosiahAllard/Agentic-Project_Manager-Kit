@@ -152,16 +152,16 @@ The hub server's timed job `coord-restart` (`kitlib/hubjobs/coord_restart.py`; d
 - it has had 3 starts in 24 hours (pushed `gave-up`), or the last start was less than 10 minutes (after the first) or 30 minutes (after the second) ago;
 - no account is known, the account is not signed in (`not-signed-in`), or it is at or over `accounts.HEADROOM_LIMIT` (90%) of a window that has not reset (`over-limit`).
 
-A start is pushed as `restarted`, or as `restarted-unchecked` when the account has no usage file, so its limit was not checked (as `check_headroom` does for other launches). A push's detail is `KEY:aN`, and each word goes out once per down spell. The hub keeps one owed push per job and a newer one replaces it, so a run pushes at most one event: one word (a start first, then `gave-up`, `over-limit`, `not-signed-in`), its detail every `KEY:aN` of that word that fits the 64-character field, joined by `.`. Only what that event carries counts as sent; the rest goes out on a later run. A child that exits non-zero or runs past 180 s is a job failure (hub health) and still counts toward the cap. `coord-restart.json` in `launcher.state_dir` keeps `{key: {seen_at, account, starts}}`, so a hub restart keeps the cap. Hub health's `note` lists every entry's state.
+A start is pushed as `restarted`, or as `restarted-unchecked` when the account has no usage file, so its limit was not checked (as `check_headroom` does for other launches). A push's detail is `KEY:aN`, and each word goes out once per down spell. The hub keeps one owed push per job and a newer one replaces it, so a run pushes at most one event: one word (a start first, then `gave-up`, `over-limit`, `not-signed-in`), its detail every `KEY:aN` of that word that fits the 64-character field, joined by `.`. Only what that event carries counts as sent; the rest goes out on a later run. A start that ends a failing streak (3 failures in a row) pushes its `restarted` on the next run, since the hub pushes `recovered` straight after that run and it would replace the start's push. A child that exits non-zero or runs past 180 s is a job failure (hub health) and still counts toward the cap. `coord-restart.json` in `launcher.state_dir` keeps `{key: {seen_at, account, starts}}`, so a hub restart keeps the cap. Hub health's `note` lists every entry's state.
 
 To keep a coordinator down for good, stop it with `launch.py stop --name <name>` and no `--successor` (the PM's step on `ready to stop:`), or set `"autostart": false` on its entry. The PM checklist line and after-reboot are unchanged.
 
 Known limits:
 
 - A window closed by hand writes no stop.log line, so it reads as a crash and is restarted, within the cap.
-- An event still owed when the next run pushes is replaced: the PM gets only the newer one (hub health's `note` still has both).
+- An event still owed when the next run pushes is replaced: the PM gets only the newer one. Hub health's `note` shows the newer run's current state of every entry, not the replaced push.
 - The last account prefers the account the job last saw running over sessions.json `account`, so after a hand-off to another account a start goes to the old account until the job sees the new session run.
-- A stop.log stamp in the repeated hour when daylight saving ends is read as the later of its two instants, so such a stop counts as deliberate rather than a crash.
+- A stop.log stamp in the repeated hour when daylight saving ends is read as the later of its two instants, so the stop can read up to 1 hour later than it happened. A sighting that really came after it then still counts as older: a coordinator restarted by hand in that hour that then crashes is left down.
 
 ## PM relaunch
 

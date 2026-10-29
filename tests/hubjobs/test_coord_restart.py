@@ -397,6 +397,45 @@ class Job(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.state, C.STATE_FILE))
                          and self.records().get('kit', {}).get('starts'))
 
+    def test_a_start_after_a_failing_streak_is_pushed_after_recovered(self):
+        # the runner pushes `recovered` straight after the run that ends the streak, and the hub
+        # keeps one owed push per job: the restart must go out on the next run, not before it
+        pushes = []
+        runner = jobs.Jobs([jobs.Job(C.NAME, C.EVERY_S, self.job)],
+                           notify=lambda name, word, detail=None: pushes.append((word, detail)))
+        bad = os.path.join(self.state, C.STATE_FILE)
+        with open(bad, 'w') as f:
+            f.write('{not json')
+        for _ in range(jobs.FAIL_PUSH):
+            self.now += 300
+            runner.run_now(C.NAME)
+        self.assertEqual(pushes, [('failing', None)])
+        os.remove(bad)
+        for _ in range(2):                  # down once (a Skip keeps the streak), then the start
+            self.now += 300
+            runner.run_now(C.NAME)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(pushes[-1], ('recovered', None))
+        self.now += 300
+        runner.run_now(C.NAME)
+        self.assertEqual(pushes, [('failing', None), ('recovered', None),
+                                  ('restarted-unchecked', 'kit:a1')])
+
+    def test_a_start_with_no_failing_streak_is_pushed_in_its_own_run(self):
+        bad = os.path.join(self.state, C.STATE_FILE)
+        with open(bad, 'w') as f:
+            f.write('{not json')
+        for _ in range(jobs.FAIL_PUSH - 1):
+            self.now += 300
+            with self.assertRaises(LaunchError):
+                self.run_job()
+        os.remove(bad)
+        self.now += 300
+        self.run_job()
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.ctx.events, [('restarted-unchecked', 'kit:a1')])
+
     def test_a_start_that_cannot_run_is_a_failure(self):
         self.code = OSError('no python')
         self.now += 300
