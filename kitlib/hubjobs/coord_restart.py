@@ -2,9 +2,12 @@
 resets first among those under the limit, else its last account (docs/launcher.md "Hub restart").
 
   make(sources) -> jobs.Job | None   the job; None when launcher.state_dir is not set
-  decide(key, entry, live, record, last_stop, down_runs, accounts, now) -> Decision
+  decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=None) -> Decision
                                      the whole restart decision, pure: no file, process or clock
                                      is read
+  backlog_wake(offered, baseline)    a Wake when the offer holds a record id the baseline does not
+  offered_ids(settings, key, entry)  the record ids `backlog.py next --all` offers the entry's
+                                     coordinator (BacklogUnread when the store cannot be read)
   last_account(entry, record)        the account a coordinator last ran on, or None
   RestartJob(settings, ...)          its run(ctx): the boot one-shot, then read the state, decide
                                      each entry, start one
@@ -32,6 +35,18 @@ coordinator alive, or with no sighting at all; a coordinator seen down on fewer 
 in a row (a hand-off gets time to start it first); START_CAP starts in
 CAP_WINDOW_S already; a start sooner than BACKOFF_S after the last.
 
+A wake lifts the deliberate-stop hold, and only it (every other hold still applies): the repo has
+gained startable records, meaning `backlog.py next --all` for the coordinator's session (its
+sessions.json key, and no session too when the key is its repo's name, the repo's main coordinator)
+offers a record id that it did not offer on the first run after that stop that read it (the
+baseline, kept as `held` {stop_at, ids}). So a coordinator woken for some records that stops again
+is not woken for them again. The offer is read only for an entry held on a deliberate stop whose
+autostart and pace_hold (DOWN_RUNS, the cap, the backoff) pass, through kitlib.backlog
+(opener.open_store with no fetch, plan.offer_for), from the store the repo's .kit.json names, else
+the PM data worktree's (store.pm_data_live_store). A store that cannot be read wakes nothing and is
+a note, not a failure. A wake start passes `--prompt` with the reason, the new ids and the
+entry's state note path.
+
 The account: accounts.restart_pick, the signed-in account with a reading no older than
 pmwatch.STALE_MINUTES under accounts.HEADROOM_LIMIT of both windows whose week resets first (a
 missing, stale or unknown reading never counts as under). With none, the last account as before,
@@ -48,8 +63,9 @@ BOOT_S or more, the boot is only kept: that hub start is not a boot's. A bad sta
 no boot kept and nothing is written. after-reboot logs to after-reboot.log itself.
 
 State kept across hub restarts, in <launcher.state_dir>/coord-restart.json:
-{key: {seen_at, account, starts}}: the last time a session of the stem was seen running, the
-account it ran on, and the epoch seconds of the job's own starts; and BOOT_KEY: {boot_at}, the
+{key: {seen_at, account, starts, held}}: the last time a session of the stem was seen running, the
+account it ran on, the epoch seconds of the job's own starts, and the wake baseline of the
+deliberate stop it is held on (dropped once it is seen running); and BOOT_KEY: {boot_at}, the
 boot (epoch seconds) after-reboot last ran for. The down count and what was pushed are in memory
 only, so a hub restart waits DOWN_RUNS runs again.
 """
@@ -93,16 +109,24 @@ DETAIL_MAX = 64                # kitlib.hubsite.push field(): a header field's l
 _STAMP = '%Y-%m-%d %H:%M:%S'
 _FIRST = ('restarted', 'restarted-unchecked', 'gave-up', 'over-limit', 'not-signed-in')
 
+WAKE_IDS_SHOWN = 5             # record ids a wake's reason names before "+N more"
+
 AccountState = collections.namedtuple('AccountState', 'signed_in usage')
+Wake = collections.namedtuple('Wake', 'reason ids')     # why a deliberate stop is started again
+
+
+class BacklogUnread(Exception):
+    """The entry's backlog store could not be read: no wake, and a note."""
 
 
 class Decision(object):
     """start True: start on `account`. `word`: the event to push (None: nothing), `reason`: the
-    note. `unchecked`: a start whose account had no usage file."""
+    note. `unchecked`: a start whose account had no usage file. `wake`: the Wake a start lifting a
+    deliberate stop came from, else None."""
 
-    def __init__(self, start, reason, account=None, word=None, unchecked=False):
+    def __init__(self, start, reason, account=None, word=None, unchecked=False, wake=None):
         self.start, self.reason, self.account = start, reason, account
-        self.word, self.unchecked = word, unchecked
+        self.word, self.unchecked, self.wake = word, unchecked, wake
 
     def __repr__(self):
         return 'Decision(%r, %r, account=%r, word=%r)' % (self.start, self.reason, self.account, self.word)
@@ -140,25 +164,49 @@ def recent_starts(record, now):
                   if isinstance(t, (int, float)) and now - t < CAP_WINDOW_S)
 
 
-def decide(key, entry, live, record, last_stop, down_runs, accounts, now):
-    """The restart decision for one sessions.json entry. `live`: the names of the launched
-    sessions running now; `record`: the job's {seen_at, account, starts} for it (or None);
-    `last_stop`: epoch seconds of the newest stop.log line with no successor for a session of the
-    stem (or None); `down_runs`: the runs in a row, this one included, it was seen down;
-    `accounts`: {account text: AccountState(signed_in, usage data or None)}; `now`: epoch seconds.
-    Reads nothing itself."""
-    if not isinstance(entry, dict) or not entry.get('stem'):
-        return _hold('no stem')
-    if not entry.get('agent'):
-        return _hold('a plain session: not restarted')
-    if entry.get('autostart') is False:
-        return _hold('autostart off')
-    stem = entry['stem']
-    if any((n or '').startswith(stem) for n in live):   # lookup.running_stem's test
-        return _hold('running')
+def deliberate_stop(record, last_stop):
+    """True when `last_stop` (the newest stop with no successor of the stem, or None) is newer than
+    the last sighting in `record`, or there is no sighting: the coordinator was stopped on purpose."""
     seen = (record or {}).get('seen_at')
-    if last_stop is not None and (seen is None or last_stop + STAMP_S > seen):
-        return _hold('stopped on purpose (stop.log, no successor): left down')
+    return last_stop is not None and (seen is None or last_stop + STAMP_S > seen)
+
+
+def shown_ids(ids, most=WAKE_IDS_SHOWN):
+    """'A, B, C' for up to `most` ids, then ' +N more'."""
+    ids = list(ids)
+    text = ', '.join(ids[:most])
+    return text + (' +%d more' % (len(ids) - most) if len(ids) > most else '')
+
+
+def backlog_wake(offered, baseline):
+    """A Wake when `offered` (the record ids next --all offers the coordinator now) holds one that
+    `baseline` (those it offered when the stop was first seen) does not, else None."""
+    new = sorted(set(offered) - set(baseline or ()))
+    if not new:
+        return None
+    return Wake('its repo has new startable records: %s' % shown_ids(new), new)
+
+
+# owner_wake: an owner answer or approval for the repo as a reason (an open hub question) is not
+# built. It would be one more predicate returning a Wake or None, passed to wake_of.
+
+
+def wake_of(*wakes):
+    """The first Wake that is not None, or None."""
+    return next((w for w in wakes if w is not None), None)
+
+
+def wake_prompt(wake, state=None):
+    """The first message of a wake start: why, and what to do first. `state`: the entry's state
+    note path when sessions.json names one (as launcher.start's default prompt names it)."""
+    note = 'your state note' if not state else 'your state note (%s)' % state
+    return 'Started by the hub: %s. Read %s, then run backlog next.' % (wake.reason, note)
+
+
+def pace_hold(record, down_runs, now):
+    """The hold Decision of the cheap holds that do not depend on why it is down (DOWN_RUNS,
+    the start cap, the backoff), or None when they pass. RestartJob reads the backlog for a
+    wake only when this is None and autostart is on."""
     if down_runs < DOWN_RUNS:
         return _hold('down %d of %d runs needed' % (down_runs, DOWN_RUNS))
     starts = recent_starts(record, now)
@@ -169,12 +217,39 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now):
         wait = BACKOFF_S[min(len(starts), len(BACKOFF_S)) - 1]
         if now - starts[-1] < wait:
             return _hold('backoff: next start at most every %d s' % wait)
+    return None
+
+
+def decide(key, entry, live, record, last_stop, down_runs, accounts, now, wake=None):
+    """The restart decision for one sessions.json entry. `live`: the names of the launched
+    sessions running now; `record`: the job's {seen_at, account, starts} for it (or None);
+    `last_stop`: epoch seconds of the newest stop.log line with no successor for a session of the
+    stem (or None); `down_runs`: the runs in a row, this one included, it was seen down;
+    `accounts`: {account text: AccountState(signed_in, usage data or None)}; `now`: epoch seconds;
+    `wake`: a Wake, which lifts the deliberate-stop hold and no other. Reads nothing itself."""
+    if not isinstance(entry, dict) or not entry.get('stem'):
+        return _hold('no stem')
+    if not entry.get('agent'):
+        return _hold('a plain session: not restarted')
+    if entry.get('autostart') is False:
+        return _hold('autostart off')
+    stem = entry['stem']
+    if any((n or '').startswith(stem) for n in live):   # lookup.running_stem's test
+        return _hold('running')
+    if not deliberate_stop(record, last_stop):
+        wake = None                     # a crash restart: nothing to lift, no wake prompt
+    elif wake is None:
+        return _hold('stopped on purpose (stop.log, no successor): left down')
+    woke = '' if wake is None else 'woken (%s): ' % wake.reason
+    held = pace_hold(record, down_runs, now)
+    if held is not None:
+        return held
     acct = last_account(entry, record)
     when = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
     pick = A.restart_pick(accounts, when, acct, pmwatch.STALE_MINUTES, A.HEADROOM_LIMIT)
     if pick is not None:
-        return Decision(True, 'start on account %s: a fresh reading under %d%%, its week resets first'
-                        % (pick, A.HEADROOM_LIMIT), pick, 'restarted')
+        return Decision(True, woke + 'start on account %s: a fresh reading under %d%%, its week '
+                        'resets first' % (pick, A.HEADROOM_LIMIT), pick, 'restarted', wake=wake)
     # no account with a fresh reading under the limit: the last account, as before
     if acct is None:
         return _hold('no last account known')
@@ -185,8 +260,9 @@ def decide(key, entry, live, record, last_stop, down_runs, accounts, now):
         over = A.over_limit(st.usage, when, A.HEADROOM_LIMIT)
         if over:
             return _hold('account %s is at %s' % (acct, ' and '.join(over)), 'over-limit', acct)
-    return Decision(True, 'start on account %s' % acct, acct,
-                    'restarted-unchecked' if st.usage is None else 'restarted', st.usage is None)
+    return Decision(True, woke + 'start on account %s' % acct, acct,
+                    'restarted-unchecked' if st.usage is None else 'restarted', st.usage is None,
+                    wake=wake)
 
 
 def local_epoch(text, mktime=time.mktime, localtime=time.localtime):
@@ -268,9 +344,68 @@ def spawn_detached(argv, cwd):
                        creationflags=_NOWIN)
 
 
-def start_argv(kit, key, account):
-    return [sys.executable, os.path.join(kit, 'tools', 'launch.py'), 'start', '--session', key,
+def start_argv(kit, key, account, prompt=None):
+    argv = [sys.executable, os.path.join(kit, 'tools', 'launch.py'), 'start', '--session', key,
             '--account', str(account)]
+    return argv + (['--prompt', prompt] if prompt else [])
+
+
+def wake_sessions(key, entry):
+    """The backlog `--session` values whose offer is the coordinator's: its sessions.json key, and
+    None (records with no `session:`) too when the key is its repo's name (the repo's main
+    coordinator, as kitlib.launcher.handoff tells one)."""
+    return [key] + ([None] if key == (entry or {}).get('repo') else [])
+
+
+def store_root(settings, repo):
+    """The checkout whose configured backlog store holds `repo`'s records: the repo's folder in
+    launcher.repos when its .kit.json names a "backlog".store, else its PM data worktree when that
+    names one (store.pm_data_live_store), else the repo's folder (the implicit store).
+    BacklogUnread when the repo is not in launcher.repos, its .kit.json cannot be read, or its PM
+    data worktree cannot be found or read: a store that may be the wrong one is never read."""
+    from kitlib import config as kconfig
+    from kitlib.backlog import store as bstore
+    try:
+        root = settings.repo_path(repo)
+    except LaunchError:
+        raise BacklogUnread('repo %r is not in launcher.repos' % (repo,))
+    try:
+        cfg = kconfig.load(root)
+    except (kconfig.ConfigError, OSError) as exc:
+        raise BacklogUnread('its .kit.json cannot be read (%s)' % type(exc).__name__)
+    if cfg.written('backlog', 'store') is not None:
+        return root
+    try:                                # its expected failures come back as `why`; anything else
+        pm_root, named, why = bstore.pm_data_live_store(root)   # is a bug and fails the run
+    except (kconfig.ConfigError, OSError) as exc:
+        raise BacklogUnread('its PM data worktree cannot be found (%s)' % type(exc).__name__)
+    if why:
+        raise BacklogUnread('its PM data worktree cannot be found or read')
+    return pm_root if pm_root is not None and named is not None else root
+
+
+def offered_ids(settings, key, entry):
+    """The record ids `backlog.py next --all` offers the coordinator of sessions.json entry
+    `key` (every session of wake_sessions, the store of store_root), with no fetch: the hub's own
+    backlog fetch keeps the local store fresh. The same offer `next` prints (plan.offer_for: live
+    pulls, unmet `requires:`, the fold-in guard). BacklogUnread when it cannot be read."""
+    from kitlib.backlog import opener, plan
+    from kitlib.backlog import offer as omod
+    from kitlib.backlog.errors import Refusal
+    from kitlib.config import ConfigError
+    root = store_root(settings, (entry or {}).get('repo'))
+    ids, snap, holding = set(), None, None
+    try:
+        for session in wake_sessions(key, entry):
+            ctx = opener.open_store(root, fetch=False, session=session)
+            if snap is None:            # one read of the store and its live pulls for both offers
+                snap = ctx.store.load()
+                holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+            offers, _passed, _holding, _own = plan.offer_for(snap, ctx, cap=None, holding=holding)
+            ids.update(o.rec.id for o in offers)
+    except (Refusal, ConfigError, omod.PartitionError, OSError) as exc:
+        raise BacklogUnread('the store could not be read (%s)' % type(exc).__name__)
+    return ids
 
 
 def run_child(argv, cwd):
@@ -301,10 +436,13 @@ class RestartJob(object):
     kitlib.pmstart.list_processes), `child(argv, cwd)` -> (exit code, lines) (default
     run_child), `clock` epoch seconds, `kit` the kit checkout whose tools/launch.py runs,
     `uptime()` seconds since boot (default uptime_s), `detached(argv, cwd)` the after-reboot
-    start (default spawn_detached)."""
+    start (default spawn_detached), `backlog(key, entry)` the ids the coordinator is offered
+    (default offered_ids; BacklogUnread when unread)."""
 
-    def __init__(self, settings, procs=None, child=None, clock=None, kit=None, uptime=None, detached=None):
+    def __init__(self, settings, procs=None, child=None, clock=None, kit=None, uptime=None, detached=None,
+                 backlog=None):
         self.settings = settings
+        self.backlog = backlog or (lambda key, entry: offered_ids(settings, key, entry))
         self.procs = procs or pmstart.list_processes
         self.child = child or run_child
         self.clock = clock or time.time
@@ -359,8 +497,16 @@ class RestartJob(object):
                 continue
             if stops is None:
                 stops, accts = self._read_stops(), self._accounts()
-            d = decide(key, entry, live, records.get(key), stem_stop(stops, entry['stem']),
-                       self._down[key], accts, now)
+            last_stop = stem_stop(stops, entry['stem'])
+            wake = None
+            if (entry.get('autostart') is not False and deliberate_stop(records.get(key), last_stop)
+                    and pace_hold(records.get(key), self._down[key], now) is None):
+                wake, note, moved = self._wake(key, entry, records, last_stop)
+                changed = changed or moved
+                if note:
+                    notes.append(note)
+            d = decide(key, entry, live, records.get(key), last_stop, self._down[key], accts, now,
+                       wake=wake)
             if not d.start:
                 notes.append('%s: %s' % (key, d.reason))
                 if d.word and self._told.get(key) != d.word:
@@ -369,15 +515,16 @@ class RestartJob(object):
             if ctx.stop.is_set():
                 notes.append('%s: start left for the next run (the hub is closing)' % key)
                 continue
-            started = (key, d)
+            started = (key, d, entry)
         if started is not None:
-            key, d = started
+            key, d, entry = started
             rec = records.setdefault(key, {})
             rec['starts'] = recent_starts(rec, now) + [now]
             self._write_records(records)    # before the start: a crash mid-start still counts
             changed = False
-            self._start(key, d)
-            notes.insert(0, '%s: started on account %s' % (key, d.account))
+            self._start(key, d, entry)
+            notes.insert(0, '%s: started on account %s%s' % (
+                key, d.account, '' if d.wake is None else ' (woken: %s)' % d.wake.reason))
             if self._fails >= jobs.FAIL_PUSH:
                 # the framework pushes `recovered` after this run, which would replace this push
                 self._carry.append((key, d))
@@ -420,8 +567,26 @@ class RestartJob(object):
             return None
         return 'after a boot: launch.py after-reboot started (plain sessions and the PM; after-reboot.log)'
 
-    def _start(self, key, d):
-        argv = start_argv(self.kit, key, d.account)
+    def _wake(self, key, entry, records, last_stop):
+        """(Wake or None, note or None, records changed) for an entry held on the deliberate stop
+        `last_stop` whose autostart and pace_hold pass (a held entry reads nothing). The first
+        such run after that stop keeps the offer as its baseline and wakes nothing; a later run
+        wakes on an id outside it (backlog_wake). A store that cannot be read is a note, never a
+        failure, and leaves the baseline as it was."""
+        try:
+            offered = self.backlog(key, entry)
+        except BacklogUnread as e:
+            return None, '%s: backlog not read, so not woken: %s' % (key, e), False
+        rec = records.setdefault(key, {})
+        held = rec.get('held')
+        if not isinstance(held, dict) or held.get('stop_at') != last_stop:
+            rec['held'] = {'stop_at': last_stop, 'ids': sorted(offered)}
+            return None, None, True
+        return wake_of(backlog_wake(offered, held.get('ids'))), None, False
+
+    def _start(self, key, d, entry):
+        prompt = wake_prompt(d.wake, entry.get('state')) if d.wake else None
+        argv = start_argv(self.kit, key, d.account, prompt)
         try:
             code, lines = self.child(argv, self.kit)
         except subprocess.TimeoutExpired:
@@ -463,6 +628,7 @@ class RestartJob(object):
                 continue
             rec = records.setdefault(key, {})
             rec['seen_at'] = now
+            rec.pop('held', None)       # running again: the stop it was held on is over
             acct = name_account(mine[-1])
             if acct is not None:
                 rec['account'] = acct

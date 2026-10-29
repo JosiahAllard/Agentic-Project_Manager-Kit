@@ -31,8 +31,9 @@ def usage(pct, resets_in=3600, week_in=86400, age=60):
             'seven_day': {'used_percentage': 10, 'resets_at': iso(NOW + week_in)}}
 
 
-def decide(entry=ENTRY, live=(), record=None, last_stop=None, down_runs=2, accounts=OK, now=NOW):
-    return C.decide('kit', entry, set(live), record, last_stop, down_runs, accounts, now)
+def decide(entry=ENTRY, live=(), record=None, last_stop=None, down_runs=2, accounts=OK, now=NOW,
+           **wake):
+    return C.decide('kit', entry, set(live), record, last_stop, down_runs, accounts, now, **wake)
 
 
 class Decide(unittest.TestCase):
@@ -645,6 +646,354 @@ class AfterBoot(JobBase):
         rec = self.records()
         self.assertEqual(rec[C.BOOT_KEY], {'boot_at': NOW - 86400})
         self.assertEqual(rec['kit']['account'], '2')
+
+
+WAKE = None                                                 # set by WakeFixture.setUp
+
+
+class WakeFixture(unittest.TestCase):
+    def setUp(self):                                        # per test, so each one is red on the base
+        global WAKE
+        WAKE = C.Wake('its repo has new startable records: EX-B', ['EX-B'])
+
+
+STOPPED = {'seen_at': NOW - 900, 'account': '1'}            # with last_stop NOW - 600: deliberate
+
+
+class WakeDecide(WakeFixture):
+    def test_a_wake_lifts_the_deliberate_stop(self):
+        d = decide(record=STOPPED, last_stop=NOW - 600, wake=WAKE)
+        self.assertEqual((d.start, d.account, d.wake), (True, '1', WAKE))
+        self.assertIn('woken (its repo has new startable records: EX-B)', d.reason)
+
+    def test_no_wake_still_holds_the_deliberate_stop(self):
+        self.assertIn('on purpose', decide(record=STOPPED, last_stop=NOW - 600).reason)
+
+    def test_a_wake_lifts_no_other_hold(self):
+        self.assertEqual(decide(record=STOPPED, last_stop=NOW - 600, wake=WAKE,
+                                live=['kit-coord-a1']).reason, 'running')
+        self.assertFalse(decide(entry=dict(ENTRY, autostart=False), record=STOPPED,
+                                last_stop=NOW - 600, wake=WAKE).start)
+        self.assertFalse(decide(record=STOPPED, last_stop=NOW - 600, wake=WAKE, down_runs=1).start)
+        capped = dict(STOPPED, starts=[NOW - 20000, NOW - 15000, NOW - 9000])
+        self.assertEqual(decide(record=capped, last_stop=NOW - 600, wake=WAKE).word, 'gave-up')
+        self.assertIn('backoff', decide(record=dict(STOPPED, starts=[NOW - 300]), last_stop=NOW - 600,
+                                        wake=WAKE).reason)
+        d = decide(record=STOPPED, last_stop=NOW - 600, wake=WAKE,
+                   accounts={'1': C.AccountState(True, usage(95))})
+        self.assertEqual((d.start, d.word), (False, 'over-limit'))
+
+    def test_the_account_pick_applies_to_a_wake_start(self):
+        d = decide(record=STOPPED, last_stop=NOW - 600, wake=WAKE,
+                   accounts={'1': C.AccountState(True, usage(50, week_in=3 * 86400)),
+                             '2': C.AccountState(True, usage(50, week_in=86400))})
+        self.assertEqual((d.start, d.account, d.wake), (True, '2', WAKE))
+
+    def test_a_crash_restart_carries_no_wake(self):
+        d = decide(record={'seen_at': NOW - 300, 'account': '1'}, last_stop=NOW - 86400, wake=WAKE)
+        self.assertTrue(d.start)
+        self.assertIsNone(d.wake)
+
+
+class WakeParts(WakeFixture):
+    def test_backlog_wake_is_an_id_outside_the_baseline(self):
+        w = C.backlog_wake({'EX-A', 'EX-C', 'EX-B'}, ['EX-A'])
+        self.assertEqual(w.ids, ['EX-B', 'EX-C'])
+        self.assertEqual(w.reason, 'its repo has new startable records: EX-B, EX-C')
+        self.assertIsNone(C.backlog_wake({'EX-A'}, ['EX-A', 'EX-Z']))
+        self.assertIsNone(C.backlog_wake(set(), []))
+
+    def test_a_long_list_names_five_then_the_rest_as_a_count(self):
+        w = C.backlog_wake(['EX-%d' % i for i in range(8)], [])
+        self.assertTrue(w.reason.endswith('EX-0, EX-1, EX-2, EX-3, EX-4 +3 more'))
+        self.assertEqual(len(w.ids), 8)
+
+    def test_wake_of_takes_the_first_reason(self):
+        self.assertIs(C.wake_of(None, WAKE), WAKE)
+        self.assertIsNone(C.wake_of(None, None))
+
+    def test_the_wake_prompt_names_the_entry_state_note(self):
+        self.assertEqual(C.wake_prompt(WAKE, 'C:/notes/state-kit.md'),
+                         'Started by the hub: its repo has new startable records: EX-B. '
+                         'Read your state note (C:/notes/state-kit.md), then run backlog next.')
+        self.assertTrue(C.wake_prompt(WAKE, '').endswith('Read your state note, then run backlog next.'))
+
+    def test_a_wake_start_passes_a_short_prompt_and_a_plain_start_none(self):
+        argv = C.start_argv('K', 'kit', '2', C.wake_prompt(WAKE))
+        self.assertEqual(argv[-2], '--prompt')
+        self.assertEqual(argv[-1], 'Started by the hub: its repo has new startable records: EX-B. '
+                                   'Read your state note, then run backlog next.')
+        self.assertEqual(C.start_argv('K', 'kit', '2')[-2:], ['--account', '2'])
+
+    def test_the_sessions_of_a_coordinator(self):
+        self.assertEqual(C.wake_sessions('kit', {'repo': 'kitrepo'}), ['kit'])
+        self.assertEqual(C.wake_sessions('game', {'repo': 'game'}), ['game', None])
+
+
+class Rec(object):
+    def __init__(self, rid):
+        self.id = rid
+
+
+class Offered(unittest.TestCase):
+    """offered_ids over stand-ins for the store: the offer of each session, deduplicated."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.repo = os.path.join(self.tmp, 'repo')
+        os.makedirs(self.repo)
+        self.settings = lsettings.Settings({'state_dir': self.tmp,
+                                            'repos': {'game': self.repo, 'kitrepo': self.repo}},
+                                           home=self.tmp)
+        self.by_session = {}
+        self.opened, self.loads = [], []
+
+    def kit_json(self, data):
+        with open(os.path.join(self.repo, '.kit.json'), 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+
+    def offered(self, key, entry, pm=(None, None, None)):
+        from kitlib.backlog import offer as omod
+        from kitlib.backlog import opener, plan
+        from kitlib.backlog import store as bstore
+
+        class Store(object):
+            def __init__(s, session):
+                s.session = session
+
+            def load(s):
+                self.loads.append(s.session)
+                return 'snap'
+
+        class Ctx(object):
+            def __init__(s, root, session):
+                s.root, s.remote, s.store, s.session = root, 'origin', Store(session), session
+
+        def open_store(root, fetch=True, session=None, branch=None):
+            self.opened.append((root, fetch, session))
+            return Ctx(root, session)
+
+        def offer_for(snap, ctx, branch=None, cap=5, seeds=(), holding=None):
+            self.assertEqual((snap, cap, holding), ('snap', None, ['pull']))
+            return [mock.Mock(rec=Rec(r)) for r in self.by_session.get(ctx.session, ())], [], holding, None
+        with mock.patch.object(opener, 'open_store', open_store), \
+                mock.patch.object(plan, 'offer_for', offer_for), \
+                mock.patch.object(omod, 'in_flight_split', lambda snap, root, remote: (['pull'], [], None)), \
+                mock.patch.object(bstore, 'pm_data_live_store', pm if callable(pm) else lambda root: pm):
+            return C.offered_ids(self.settings, key, entry)
+
+    def test_a_session_tagged_coordinator_reads_its_own_session_only(self):
+        self.kit_json({'backlog': {'store': 'ref'}})
+        self.by_session = {'kit': ['EX-A'], None: ['EX-UNTAGGED']}
+        self.assertEqual(self.offered('kit', {'repo': 'kitrepo'}), {'EX-A'})
+        self.assertEqual(self.opened, [(self.repo, False, 'kit')])     # no fetch
+
+    def test_a_main_coordinator_also_reads_the_untagged_records_once_each(self):
+        self.kit_json({'backlog': {'store': 'ref'}})
+        self.by_session = {'game': ['EX-R1', 'EX-R2'], None: ['EX-R2', 'EX-R3']}
+        self.assertEqual(self.offered('game', {'repo': 'game'}), {'EX-R1', 'EX-R2', 'EX-R3'})
+        self.assertEqual([s for _, _, s in self.opened], ['game', None])
+        self.assertEqual(len(self.loads), 1)                          # one store read for both
+
+    def test_a_repo_naming_no_store_reads_its_pm_data_worktree(self):
+        self.kit_json({})
+        pm = os.path.join(self.tmp, 'pm')
+        self.by_session = {'kit': ['EX-A']}
+        self.assertEqual(self.offered('kit', {'repo': 'kitrepo'}, pm=(pm, 'kit/backlog', None)), {'EX-A'})
+        self.assertEqual(self.opened[0][0], pm)
+
+    def test_no_store_named_anywhere_reads_the_repo_itself(self):
+        self.offered('kit', {'repo': 'kitrepo'}, pm=(None, None, None))     # no .kit.json at all
+        self.assertEqual(self.opened[0][0], self.repo)
+        self.opened = []
+        self.offered('kit', {'repo': 'kitrepo'}, pm=(os.path.join(self.tmp, 'pm'), None, None))
+        self.assertEqual(self.opened[0][0], self.repo)                # its PM data names none either
+
+    def test_a_bug_in_the_pm_data_lookup_is_not_taken_for_unread(self):
+        def bug(root):
+            raise KeyError('a bug')
+        with self.assertRaises(KeyError):
+            self.offered('kit', {'repo': 'kitrepo'}, pm=bug)
+        self.assertEqual(self.opened, [])
+
+    def test_what_cannot_be_read_is_unread_and_opens_nothing(self):
+        with self.assertRaises(C.BacklogUnread):
+            self.offered('x', {'repo': 'nowhere'})                    # not in launcher.repos
+        with self.assertRaises(C.BacklogUnread):
+            self.offered('kit', {'repo': 'kitrepo'}, pm=(None, None, 'no worktree has the branch'))
+        self.kit_json('not an object')
+        with self.assertRaises(C.BacklogUnread):
+            self.offered('kit', {'repo': 'kitrepo'})
+        self.assertEqual(self.opened, [])
+
+    def test_a_store_failure_is_unread(self):
+        from kitlib.backlog import offer as omod
+        from kitlib.backlog.errors import Failure
+        self.kit_json({'backlog': {'store': 'ref'}})
+        for exc in (Failure('bad scope'), omod.PartitionError('1 != 2')):
+            def boom(*a, **k):
+                raise exc
+            from kitlib.backlog import opener
+            with mock.patch.object(opener, 'open_store', boom), self.assertRaises(C.BacklogUnread):
+                C.offered_ids(self.settings, 'kit', {'repo': 'kitrepo'})
+
+
+class WakeJob(JobBase):
+    """The job with its backlog read replaced: `self.offer` a set of ids, or an exception."""
+
+    def setUp(self):
+        self.offer = set()
+        self.reads = []
+        super().setUp()
+
+    def new_job(self):
+        return C.RestartJob(self.settings, procs=lambda: [proc(n) for n in self.live],
+                            child=self.child, clock=lambda: self.now, kit=self.tmp,
+                            uptime=lambda: self.uptime, detached=self.detached, backlog=self.backlog)
+
+    def backlog(self, key, entry):
+        self.reads.append(key)
+        if isinstance(self.offer, Exception):
+            raise self.offer
+        return set(self.offer)
+
+    def stop(self, name='kit-coord-a1', after=60):
+        stamp = datetime.datetime.fromtimestamp(self.now + after).strftime('%Y-%m-%d %H:%M:%S')
+        with open(os.path.join(self.state, 'stop.log'), 'a', encoding='utf-8') as f:
+            f.write("%s stopped '%s' claude PID 1, window PID 2, conhost PID 3; successor '-'\n"
+                    % (stamp, name))
+
+    def held_run(self):
+        """Seen running, then stopped on purpose."""
+        self.live = ['kit-coord-a1']
+        self.run_job()
+        self.live = []
+        self.stop()
+
+    def test_the_first_held_run_keeps_a_baseline_and_a_new_record_wakes_it(self):
+        self.offer = {'EX-A'}
+        self.held_run()
+        for _ in range(2):
+            self.now += 300
+            self.run_job()
+        self.assertEqual(self.calls, [])                          # EX-A was offered at the stop
+        self.assertEqual(self.records()['kit']['held']['ids'], ['EX-A'])
+        self.offer = {'EX-A', 'EX-B'}
+        self.now += 300
+        note = self.run_job()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][-4:], ['--account', '1', '--prompt',
+                                              'Started by the hub: its repo has new startable records: '
+                                              'EX-B. Read your state note (x.md), then run backlog '
+                                              'next.'])
+        self.assertIn('kit: started on account 1 (woken: its repo has new startable records: EX-B)', note)
+        self.assertEqual(self.ctx.events, [('restarted-unchecked', 'kit:a1')])
+
+    def test_a_coordinator_that_stops_again_is_not_woken_for_the_same_records(self):
+        self.offer = set()
+        self.held_run()
+        for _ in range(2):                                        # down 1 of 2: not read
+            self.now += 300
+            self.run_job()                                        # then the baseline: nothing offered
+        self.offer = {'EX-B'}
+        self.now += 300
+        self.run_job()
+        self.assertEqual(len(self.calls), 1)                      # woken for EX-B
+        self.live = ['kit-coord-a1']
+        self.now += 300
+        self.run_job()                                            # it came up, found EX-B not for it
+        self.assertNotIn('held', self.records()['kit'])
+        self.live = []
+        self.stop()
+        for _ in range(4):
+            self.now += 3600
+            self.run_job()
+        self.assertEqual(len(self.calls), 1)
+        self.offer = {'EX-B', 'EX-C'}
+        self.now += 3600
+        self.run_job()
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn('EX-C', self.calls[1][-1])
+        self.assertNotIn('EX-B', self.calls[1][-1])
+
+    def test_a_backlog_that_cannot_be_read_is_a_note_not_a_failure(self):
+        self.held_run()
+        self.offer = C.BacklogUnread('the store could not be read (Failure)')
+        for _ in range(3):
+            self.now += 300
+            result = self.run_job()
+        self.assertIsInstance(result, jobs.Skip)
+        self.assertIn('kit: backlog not read, so not woken: the store could not be read (Failure)', result.note)
+        self.assertIn('on purpose', result.note)
+        self.assertEqual(self.calls, [])
+        self.assertNotIn('held', self.records()['kit'])           # no baseline from a failed read
+
+    def test_a_bug_in_the_backlog_read_fails_the_run(self):
+        self.held_run()
+        self.offer = KeyError('a bug')                            # not BacklogUnread
+        self.now += 300
+        self.run_job()                                            # down 1 of 2: not read
+        self.now += 300
+        with self.assertRaises(KeyError):
+            self.run_job()
+
+    def test_an_autostart_off_entry_reads_nothing_and_keeps_no_baseline(self):
+        self.held_run()
+        self.sessions['kit'] = dict(ENTRY, autostart=False)
+        self.write('sessions.json', self.sessions)
+        self.offer = {'EX-A'}
+        for _ in range(3):
+            self.now += 300
+            self.run_job()
+        self.offer = {'EX-A', 'EX-B'}
+        self.now += 300
+        result = self.run_job()
+        self.assertEqual((self.reads, self.calls), ([], []))
+        self.assertNotIn('held', self.records().get('kit', {}))
+        self.assertIsInstance(result, jobs.Skip)                  # down_entries leaves it out
+
+    def test_the_cheap_holds_come_before_the_read(self):
+        self.held_run()
+        self.now += 300
+        self.run_job()                                            # down 1 of 2
+        self.assertEqual(self.reads, [])
+        rec = self.records()
+        rec['kit']['starts'] = [self.now - 60]                    # in its backoff
+        self.write(C.STATE_FILE, rec)
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.reads, [])
+        self.assertNotIn('held', self.records()['kit'])
+
+    def test_a_new_stop_with_no_sighting_between_resets_the_baseline(self):
+        self.held_run()
+        for _ in range(2):
+            self.now += 300
+            self.run_job()                                        # baseline: nothing offered
+        first = self.records()['kit']['held']['stop_at']
+        self.offer = {'EX-B'}
+        self.stop()                                               # stopped again, never seen up
+        self.now += 300
+        self.run_job()
+        held = self.records()['kit']['held']
+        self.assertNotEqual(held['stop_at'], first)
+        self.assertEqual(held['ids'], ['EX-B'])                   # the new stop's baseline
+        self.assertEqual(self.calls, [])
+        self.now += 300
+        self.run_job()
+        self.assertEqual(self.calls, [])                          # EX-B was there at the new stop
+
+    def test_the_backlog_is_read_only_for_a_deliberate_stop(self):
+        self.live = ['kit-coord-a1']
+        self.run_job()                                            # running
+        self.live = []
+        for _ in range(2):
+            self.now += 300
+            self.run_job()                                        # a crash: restarted, no read
+        self.assertEqual(self.reads, [])
+        self.assertEqual(len(self.calls), 1)
+        self.assertNotIn('--prompt', self.calls[0])               # a plain restart keeps today's argv
 
 
 if __name__ == '__main__':
