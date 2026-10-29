@@ -249,7 +249,13 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 - `handoff_file` (optional): the PM's one hand-off file, default `HANDOFF.md` in the PM repository's
   main checkout (the repository holding `sessions_file`, `kitlib.pmstart` `pm_memory_repo`); an absolute
   path is used as is. See "Hand-off file".
-- `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
+- `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`. The hub server's reminders job
+  (`kitlib.hubjobs.reminders`, every 300 s) reads the same file: its health note gives the due
+  count and the first one's text, and it hands the PM one push when new reminders fall due (delivery
+  is best effort: the push worker is in memory and a restart drops pushes still owed, so the health
+  note stays the lasting record; the keys already handed over are in `reminders-pushed.json` next to
+  the file). It never removes a reminder; a malformed entry is skipped and counted as a job failure,
+  and until the file is fixed the new reminders are handed over again each run. The checklist's `reminders` check is unchanged.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.
 - `pm_watch_cmd`: the command the watcher line prints, as written (docs/pm-watch.md), run in the
