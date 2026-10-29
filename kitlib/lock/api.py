@@ -21,6 +21,7 @@ import datetime
 import subprocess
 import time
 
+import kitlib.platform
 from kitlib.lock import game
 from kitlib.lock import holds as hl
 from kitlib.lock import kinds as kinds_mod
@@ -166,7 +167,7 @@ def _hardware(store, L, hw):
         ccds.append({"index": i, "threads": dom, "cpu_slots": slots,
                      "preferred": bool(set(preferred) & set(dom)),
                      "game_pick": bool(slots) and set(slots) == set(game_pick)})
-    mem = process.memory_mb() if not store.testing else None
+    mem = kitlib.platform.memory_mb() if not store.testing else None   # the running platform's
     return {"threads": len(hw["threads"]), "thread_ids": hw["threads"], "groups": hw.get("groups") or [],
             "cores": [{"threads": c["threads"], "smt": c["smt"], "efficiency": c["efficiency"]}
                       for c in hw.get("cores") or []],

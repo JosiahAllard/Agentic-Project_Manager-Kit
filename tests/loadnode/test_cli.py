@@ -184,6 +184,7 @@ class Run(unittest.TestCase):
                 (['--node', 'b2'], ('x',), 'b2 has not opted in my-repo'),
                 (['--artifact', '../x'], ('x',), 'not a relative glob'),
                 (['--artifact', '.git/config'], ('x',), 'not a relative glob'),
+                (['--artifact', 'out/caf%s.txt' % chr(0xe9)], ('x',), 'ASCII'),
                 (['--no-wait', '--max-wait', '5m'], ('x',), 'not allowed with'),
                 (['--max-wait', '9d'], ('x',), 'at most 7d'),
                 (['--reattach', '-1'], ('x',), 'from 0 to 86400')):
@@ -250,9 +251,9 @@ class Run(unittest.TestCase):
                 self.assertIn('running on main instead', text_)
 
     def test_auto_keeps_a_node_failure_after_its_job_started(self):
-        self.node_result = job.JobError(job.EXIT_NODE, 'box1: no reply', fallback=False)
+        self.node_result = job.JobError(job.EXIT_AFTER_START, 'box1: no reply', fallback=False)
         code, _, _ = self.run_()
-        self.assertEqual((code, self.mains), (job.EXIT_NODE, []))
+        self.assertEqual((code, self.mains), (job.EXIT_AFTER_START, []))
 
     def test_an_os_error_after_the_node_took_the_job_never_runs_it_on_main(self):
         # the real NodeJob.run, so its started mark is what tells node.py the node took the job
@@ -262,9 +263,13 @@ class Run(unittest.TestCase):
         for extra in ((), ('--node', 'box1')):
             with self.subTest(extra=extra):
                 self.mains, self.node_runs = [], []
-                with mock.patch.object(job.NodeJob, 'run', REAL_RUN),                         mock.patch.object(job.NodeJob, 'push', lambda nj: None),                         mock.patch.object(job.NodeJob, 'start', lambda nj: {'ok': True}),                         mock.patch.object(job.NodeJob, 'follow', follow):
+                with mock.patch.object(job.NodeJob, 'run', REAL_RUN), \
+                        mock.patch.object(job.NodeJob, 'push', lambda nj: None), \
+                        mock.patch.object(job.NodeJob, 'start', lambda nj: {'ok': True}), \
+                        mock.patch.object(job.NodeJob, 'follow', follow):
                     code, _, err = self.run_(*extra)
-                self.assertEqual((code, self.mains, self.node_runs), (job.EXIT_NODE, [], ['box1']))
+                self.assertEqual((code, self.mains, self.node_runs),
+                                 (job.EXIT_AFTER_START, [], ['box1']))
                 self.assertIn('it is not run again on main', err)
                 self.assertNotIn('running on main instead', err)
 

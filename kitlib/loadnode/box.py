@@ -122,10 +122,14 @@ def _job(v):
     return v
 
 
+GLOB_RULE = 'ASCII, no "..", no ".git", "/" between parts'      # glob_ok, for a usage line
+
+
 def glob_ok(g):
     """True for an artifact glob main may ask for: relative to the checkout's top, '/' between
-    parts, no '..', no '.git' part, nothing absolute, no drive, no control character."""
-    if not isinstance(g, str) or not g or len(g) > GLOB_CAP:
+    parts, no '..', no '.git' part, nothing absolute, no drive, no control character, ASCII only
+    (as the artifact paths: job.artifact_path_ok)."""
+    if not isinstance(g, str) or not g or len(g) > GLOB_CAP or not g.isascii():
         return False
     if g.startswith(('/', '\\')) or ':' in g or '\\' in g or re.search(r'[\x00-\x1f\x7f]', g):
         return False
