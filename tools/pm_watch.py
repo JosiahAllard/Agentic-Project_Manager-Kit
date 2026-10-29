@@ -31,6 +31,10 @@ Events:
                                 per episode, and REMOTE <name> link back when it reads linked again;
                                 reported on the first run too (docs/pm-watch.md "Remote Control link")
   ERROR <what>                  a check failed 3 times running
+While the hub's session-watch job is up (GET health jobs, not failing) and watches the same
+sessions file, the session checks (USAGE, RESET, BGFAIL, LOCKNOTICE, IDLE, STOPPED, REMOTE and
+their ERRORs) print nothing: the job pushes them; the heartbeat says so ("yielded"), and BRANCH,
+PLUGIN and HUB stay here (docs/pm-watch.md "Hub session-watch job").
 State lives in the state file, so a relaunch never repeats an event it already reported. The first
 run only records a baseline, except for PLUGIN and REMOTE, which report what they find then.
   python tools/pm_watch.py [--branch <repo-dir>=<ref> ...]
@@ -91,10 +95,12 @@ def parse(argv, cfg, launcher_set=None):
     return a
 
 
-def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None, rc=None):
+def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None, rc=None,
+         yield_to=None):
     """`plugin`: the PLUGIN check (None: W.plugin_check() over the machine config; False: none).
     `hub`: the HUB check (None: W.hub_check() over the hub server on this machine; False: none).
-    `rc`: the REMOTE check (None: W.rc_check() over the session registry; False: none)."""
+    `rc`: the REMOTE check (None: W.rc_check() over the session registry; False: none).
+    `yield_to`: the session checks' step-aside test (None: W.session_yield(); False: never)."""
     try:
         cfg = W.load_config()
     except kuser.ConfigError as e:
@@ -110,11 +116,13 @@ def main(argv=None, sleep=time.sleep, launcher_set=None, plugin=None, hub=None, 
                   plugin=W.plugin_check() if plugin is None else (plugin or None),
                   hub=W.hub_check() if hub is None else (hub or None),
                   rc=W.rc_check(a.sessions, host.rc_records) if rc is None else (rc or None),
-                  preload_modules=host.PRELOAD)
+                  preload_modules=host.PRELOAD,
+                  yield_to=W.session_yield(a.sessions, cfg) if yield_to is None else (yield_to or None))
     beat, started = W.heartbeat_file(a.state), W.own_start_time()
     return W.run(w, time.time, sleep, lambda s: W.save_state(a.state, s),
                  lambda text: print(text, flush=True),
-                 lambda now: W.write_heartbeat(beat, os.getpid(), now, a.stream, started),
+                 lambda now: W.write_heartbeat(beat, os.getpid(), now, a.stream, started,
+                                               yielded=w.yielded),
                  once=a.once, stream=a.stream)
 
 

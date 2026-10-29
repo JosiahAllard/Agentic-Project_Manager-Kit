@@ -28,6 +28,9 @@ LIVE_S old, pm_watch tells the PM itself: the job still polls and saves its stat
 current when it takes over, but pushes nothing and returns a Skip. Events the job saw in the last
 LIVE_S before a pm_watch stopped are dropped, not pushed late (a duplicate is worse; the push
 worker's `watcher down` covers that moment). A pm_watch run with its own --state is not seen.
+A beat with "yielded": true is a pm_watch that stepped aside for this job (kitlib.pmwatch
+hub_session_job_up): it is not waited for, so the job pushes; a beat without the field (an older
+pm_watch) is waited for as before. So the two never both go silent.
 
 Failures: a check that raises is the Watcher's (ERROR on its third in a row); what escapes (the
 config, the Watcher's build or start, the state write) is the job's failure (kitlib.hubsite.jobs:
@@ -111,7 +114,7 @@ class SessionWatch(object):
             self.started = True
         events = self.watcher.poll(now)
         hb = W.read_heartbeat(W.heartbeat_file(theirs))
-        if hb is not None and now - hb['beat'] <= LIVE_S:
+        if hb is not None and hb.get('yielded') is not True and now - hb['beat'] <= LIVE_S:
             W.save_state(self.path, self.watcher.s)
             return jobs.Skip('pm_watch is live (pid %s): %d event(s) left to it'
                              % (hb['pid'], len(events)))

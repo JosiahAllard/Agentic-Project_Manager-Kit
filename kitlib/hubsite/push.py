@@ -91,8 +91,13 @@ poll() never does, watch() does once. A beat at most WATCHER_STALE_S old is 'up'
 'down', none readable 'none'. When a watcher seen 'up' is no longer, one `watcher down` push goes
 to the PM alone, tried on the same schedule until a try is written or GIVE_UP_S passes; a fresh
 beat acknowledges one still owed, and only after a fresh beat can it fire again. Nothing fires
-for a watcher this worker never saw fresh. watcher_status() -> {"state", "age"} (age in whole
-seconds, None with no beat) is the snapshot's and GET health's `watcher` (Api.watcher_seen).
+for a watcher this worker never saw fresh. The hub's session-watch job stands in for the beat:
+at each read its health block (`jobs`, default Api.jobs_seen: GET health jobs) that
+kitlib.pmwatch.session_job_healthy counts as covering (not failing, a success at most
+SESSION_JOB_STALE_S old) is 'up' too, so a pm_watch that stepped aside or stopped while the job
+pushes its checks is no `watcher down`. watcher_status() -> {"state", "age"} (age in whole
+seconds of the beat, None with no beat; state 'up' also while the job covers) is the
+snapshot's and GET health's `watcher` (Api.watcher_seen).
 
 Jobs (the hub's timed jobs, kitlib.hubsite.jobs): job_event(name, event, detail=None), on any
 thread, owes the PM one `job <name> <event>` push, with `detail:<detail>` after the event when
@@ -360,10 +365,12 @@ def guidance(kind, doc_id, event, recipient, entry=None):
 
 
 class PushWorker(object):
-    def __init__(self, store, api, push, folder, clock=None, log=None, watcher=None):
+    def __init__(self, store, api, push, folder, clock=None, log=None, watcher=None, jobs=None):
         self.store, self.api, self.push, self.folder = store, api, push, folder
         self.clock = clock or time.time
         self.watcher = watcher          # None: watcher_heartbeat, looked up at each read
+        self.jobs = jobs                # None: the api's jobs_seen (GET health jobs), at each read
+        self._job_up = False            # the session-watch job covered at the latest read
         self.log = log or (lambda text: None)
         self._stop = threading.Event()
         self._thread = None
@@ -463,9 +470,21 @@ class PushWorker(object):
         any thread."""
         beat = self._beat
         if beat is None:
-            return {'state': 'none', 'age': None}
+            return {'state': 'up' if self._job_up else 'none', 'age': None}
         age = max(0, int(self.clock() - beat))
-        return {'state': 'up' if age <= WATCHER_STALE_S else 'down', 'age': age}
+        return {'state': 'up' if age <= WATCHER_STALE_S or self._job_up else 'down', 'age': age}
+
+    def _session_job_up(self, now):
+        """True when the hub's session-watch job covers pm_watch's checks (module docstring
+        "Watcher"). A reader that raises is False."""
+        try:
+            read = self.jobs or getattr(self.api, 'jobs_seen', None)
+            blocks = read() if read is not None else None
+            block = blocks.get(pmwatch.SESSION_JOB) if isinstance(blocks, dict) else None
+            return pmwatch.session_job_healthy(block, now)
+        except Exception as e:          # noqa: BLE001 - an unreadable job status covers nothing
+            self.log('push: session-watch status unreadable: %s' % type(e).__name__)
+            return False
 
     def watch(self):
         """Read the watcher's heartbeat and send the `watcher down` push when it is due (module
@@ -480,7 +499,8 @@ class PushWorker(object):
             self.log('push: watcher heartbeat unreadable: %s' % type(e).__name__)
             beat = None
         self._beat = beat
-        if beat is not None and now - beat <= WATCHER_STALE_S:
+        self._job_up = self._session_job_up(now)
+        if (beat is not None and now - beat <= WATCHER_STALE_S) or self._job_up:
             self._armed, self._down = True, None    # fresh: acknowledges a push still owed
         elif self._armed:
             self._armed = False
@@ -497,8 +517,9 @@ class PushWorker(object):
             return
         age = 'none' if beat is None else str(int(now - beat))
         text = ('[hub push] watcher down age:%s route:%s attempt:%d\n'
-                'The PM watcher (pm_watch) has no fresh heartbeat: it stopped or hung. Start it '
-                'again (docs/pm-watch.md); a fresh heartbeat acknowledges this push.'
+                'The PM watcher (pm_watch) has no fresh heartbeat and the hub session-watch job is '
+                'not covering it: it stopped or hung. Start it again (docs/pm-watch.md); a fresh '
+                'heartbeat acknowledges this push.'
                 % (field(age), field(PM_KEY), down['attempt'] + 1))
         sent = self._deliver(PM_KEY, text)
         self._last = sent.state

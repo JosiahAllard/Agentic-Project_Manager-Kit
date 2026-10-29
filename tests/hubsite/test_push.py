@@ -668,6 +668,42 @@ class WatcherTest(PushCase):
         self.watch(push.WATCHER_STALE_S + 1, after=60)
         self.assertEqual(len(self.downs()), 2, 'fresh again, then stale: a second push')
 
+    def test_a_covering_session_watch_job_counts_as_up(self):
+        block = [None]
+        self.worker.jobs = lambda: {'session-watch': block[0]} if block[0] else {}
+        self.watch(10)
+        block[0] = {'failures': 0, 'ok_at': self.t + 50}
+        self.watch(push.WATCHER_STALE_S + 5, after=60)      # pm_watch stale, the job covers
+        self.assertEqual(self.downs(), [])
+        self.assertEqual(self.worker.watcher_status()['state'], 'up')
+        self.watch(None, after=60)                          # no beat at all: still covered
+        self.assertEqual(self.downs(), [])
+        self.assertEqual(self.worker.watcher_status(), {'state': 'up', 'age': None})
+        block[0] = {'failures': 3, 'ok_at': self.t}         # the job fails: nobody covers
+        self.watch(None, after=60)
+        self.assertEqual(len(self.downs()), 1)
+        self.assertEqual(self.worker.watcher_status(), {'state': 'none', 'age': None})
+
+    def test_a_skipping_or_stale_job_does_not_count(self):
+        self.worker.jobs = lambda: {'session-watch': {'failures': 0, 'ok_at': None}}
+        self.watch(10)
+        self.watch(push.WATCHER_STALE_S + 5, after=60)
+        self.assertEqual(len(self.downs()), 1, 'a job that only skipped covers nothing')
+
+    def test_the_default_job_reader_is_the_api_s_health_jobs(self):
+        self.api.jobs_status = lambda: {'session-watch': {'failures': 0, 'ok_at': self.t}}
+        self.watch(10)
+        self.watch(None, after=60)
+        self.assertEqual(self.downs(), [])
+
+    def test_a_job_reader_that_raises_covers_nothing(self):
+        def broken():
+            raise RuntimeError('boom')
+        self.worker.jobs = broken
+        self.watch(10)
+        self.watch(None, after=60)
+        self.assertEqual(len(self.downs()), 1)
+
     def test_a_heartbeat_that_goes_missing_is_down(self):
         self.watch(10)
         self.watch(None, after=60)

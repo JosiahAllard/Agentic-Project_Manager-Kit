@@ -65,9 +65,19 @@ HUB_KEPT_OFF = "hub: (the hub check, kept off this machine by the tests)"
 def keep_off_hub_site():
     """For a module's setUpModule: the checklist's hub check reads no machine config, no token
     and no server; it gives the one line HUB_KEPT_OFF (tests/pmstart/test_hub_site.py tests the
-    check itself). Undone with the module."""
+    check itself), and keep_off_session_job. Undone with the module."""
     from kitlib import pmstart
     p = mock.patch.object(pmstart, "hub_site", lambda procs=(), **kw: [HUB_KEPT_OFF])
+    p.start()
+    unittest.addModuleCleanup(p.stop)
+    keep_off_session_job()
+
+
+def keep_off_session_job():
+    """For a module's setUpModule: the checklist's watcher check asks no hub for its session-watch
+    job (kitlib.pmwatch.hub_session_job_block gives None: no job covers). Undone with the module."""
+    from kitlib import pmwatch
+    p = mock.patch.object(pmwatch, "hub_session_job_block", lambda load=None, make_client=None: None)
     p.start()
     unittest.addModuleCleanup(p.stop)
 
