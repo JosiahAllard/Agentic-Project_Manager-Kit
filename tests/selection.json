@@ -45,6 +45,8 @@
     ["kitlib/hubsite/web/**", ["hubsite"]],
     ["tests/hubsite/**", ["hubsite"]],
     ["tools/hub.py", ["hubsite"]],
+    ["kitlib/hubjobs/**", ["hubjobs", "hubsite"]],
+    ["tests/hubjobs/**", ["hubjobs", "hubsite"]],
     ["kitlib/**", ["skills"]],
     ["kitlib/**", ["host"]],
     ["docs/*.md", ["content"]],
