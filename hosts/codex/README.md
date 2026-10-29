@@ -68,7 +68,8 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
 - **Plugin loading.** Installed from the plugin export in a private `CODEX_HOME` on 0.165.0-alpha.1.2
   (2026-10-29, docs/plugin-source.md "Codex"): the export's `.codex-plugin/plugin.json` gives the 20
   skills from the export's `content/skills/`, the four hooks (untrusted, then trusted) and both MCP
-  servers, which start, all from the plugin cache. Not yet seen: a hook running in a model turn, and
+  servers, which start, all from the plugin cache. Each newly installed version, so every refresh
+  after a push to main, shows the four hooks as modified until the owner trusts them again. Not yet seen: a hook running in a model turn, and
   the owner's desktop install loading the export.
 - **Skills from outside the plugin folder.** Settled by the export: the Codex plugin root is now the
   export folder, so `./content/skills/` is inside it and a cache copy carries it. `shell/skills/` and

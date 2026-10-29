@@ -218,19 +218,20 @@ class InstallTest(InstallCase):
         self.install()
         self.assertEqual(self.calls, [([os.path.realpath(self.exe), 'plugin', 'add', 'pm-kit@pm-kit'], self.home)])
         self.assertIn('codex: installed pm-kit 1.0.0-main.2 from %s (was 1.0.0-main.1)' % self.export, self.text())
-        self.assertIn('the pm-kit hooks changed', self.text())
+        self.assertIn('asks the owner to trust them again', self.text())
 
-    def test_unchanged_hooks_ask_for_no_new_trust(self):
+    def test_a_new_version_asks_for_trust_again_with_unchanged_hooks(self):
+        # Codex's trust hash covers the versioned cache folder (observed on 0.165)
         self.cache('1.0.0-main.1')
         self.install()
         self.assertIn('installed pm-kit 1.0.0-main.2', self.text())
-        self.assertNotIn('hooks changed', self.text())
+        self.assertIn('Codex shows them as modified and asks the owner to trust them again', self.text())
 
     def test_a_first_install_asks_for_the_first_trust(self):
         self.install()
         self.assertIn('installed pm-kit 1.0.0-main.2 from %s (was none)' % self.export, self.text())
         self.assertIn('codex: Codex asks the owner to trust the pm-kit hooks at its next start', self.text())
-        self.assertNotIn('hooks changed', self.text())
+        self.assertNotIn('trust them again', self.text())
 
     def test_a_cache_at_the_exports_version_is_current(self):
         self.cache('1.0.0-main.2')

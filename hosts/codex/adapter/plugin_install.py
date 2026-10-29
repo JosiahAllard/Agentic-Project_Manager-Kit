@@ -188,14 +188,6 @@ def marketplace(export, out, apply=False):
     return True
 
 
-def _read(path):
-    try:
-        with open(path, 'rb') as fh:
-            return fh.read()
-    except OSError:
-        return None
-
-
 def hand_command(home):
     return 'codex plugin add %s (with CODEX_HOME=%s)' % (KEY, home)
 
@@ -254,7 +246,6 @@ def install(export, home, config, out, apply=False, environ=None, run=None):
     except ValueError as e:
         out('codex: not installed (%s): run by hand: %s' % (e, hand_command(home)))
         return
-    old_hooks = [_read(os.path.join(cache_dir(home), v, *HOOKS)) for v in have]
     try:
         r = (run or _run)([exe, 'plugin', 'add', KEY], env)
     except subprocess.TimeoutExpired:
@@ -278,7 +269,10 @@ def install(export, home, config, out, apply=False, environ=None, run=None):
         out('codex: FAILED: codex plugin add exited 0 but the cache holds %s, not %s' % (', '.join(now) or 'none', version))
         return
     out('codex: installed pm-kit %s from %s (was %s); a running Codex loads it at its next start' % (version, export, was))
+    # Codex's hook trust hash covers the hook's cache folder, which names the version: a new
+    # version shows every hook as modified, unchanged hooks.json or not (observed on 0.165).
     if not have:
         out('codex: Codex asks the owner to trust the pm-kit hooks at its next start')
-    elif _read(os.path.join(export, *HOOKS)) not in old_hooks:
-        out('codex: the pm-kit hooks changed: Codex asks the owner to trust them again at its next start')
+    else:
+        out('codex: the pm-kit hooks now run from the new version\'s cache folder: Codex shows them as '
+            'modified and asks the owner to trust them again at its next start')
