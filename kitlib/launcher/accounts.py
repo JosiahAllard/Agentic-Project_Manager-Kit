@@ -1,5 +1,6 @@
 """Claude accounts: which config folder a launch uses, whether it is signed in, how much of its
-usage windows is left, which account to pick (docs/launcher.md "Accounts"), and which account
+usage windows is left, which account to pick (docs/launcher.md "Accounts"; restart_pick for the
+hub's coordinator restart, docs/launcher.md "Hub restart"), and which account
 this session runs on (current_account, for the Action Hub's one copy per account).
 
 Every Claude session's status line writes usage-status.json into its account's config folder:
@@ -175,6 +176,46 @@ def pick(settings, now, limit=PICK_LIMIT):
     ok = [r for r in rows if r[1] is None or r[1] < limit]
     chosen = min(ok or rows, key=lambda r: unknown if r[2] is None else r[2])
     return chosen[0], rows
+
+
+def _fresh_week_reset(data, now, stale_minutes, limit):
+    """The seven-day reset of a reading that is fresh and under `limit`% in both windows, or None.
+    Fresh: an updated_at at most `stale_minutes` whole minutes old (kitlib.pmwatch's stale line).
+    A window whose reset has passed counts as 0% and its week moves on 7 days at a time; a window
+    with no percentage or no reset time is unknown, and unknown is never under the limit."""
+    if not isinstance(data, dict):
+        return None
+    upd = parse_time(data.get('updated_at'))
+    if upd is None or int((now - upd).total_seconds() // 60) > stale_minutes:
+        return None
+    resets = {}
+    for k in WINDOWS:
+        w = data.get(k)
+        reset = parse_time(w.get('resets_at')) if isinstance(w, dict) else None
+        if reset is None:
+            return None
+        if reset > now:
+            pct = w.get('used_percentage')
+            if not isinstance(pct, (int, float)) or isinstance(pct, bool) or pct >= limit:
+                return None
+        resets[k] = reset
+    week = resets['seven_day']
+    while week <= now:
+        week += datetime.timedelta(days=7)
+    return week
+
+
+def restart_pick(states, now, last, stale_minutes, limit=HEADROOM_LIMIT):
+    """The account the hub's coordinator restart starts on (docs/launcher.md "Hub restart"): of
+    `states` {account: (signed_in, usage data or None)}, the signed-in one with a fresh reading
+    under `limit`% of both windows whose week resets soonest; a tie goes to `last`, then the
+    lowest number. None when no account qualifies: a missing, stale or unknown reading never does."""
+    rows = []
+    for n, (signed, data) in states.items():
+        reset = _fresh_week_reset(data, now, stale_minutes, limit) if signed else None
+        if reset is not None:
+            rows.append((reset, str(n) != str(last), int(n) if str(n).isdigit() else float('inf'), str(n)))
+    return min(rows)[3] if rows else None
 
 
 DEFAULT_LABEL = 'default'    # current_account's answer with no launcher accounts or no match
