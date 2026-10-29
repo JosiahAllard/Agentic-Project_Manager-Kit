@@ -427,25 +427,47 @@ def _count(v):
     return type(v) is int and v >= 0
 
 
-def hub_session_job_up(load=None, make_client=None):
-    """True when the hub's GET health `jobs` names the session-watch job and it is not failing
-    (`failures` below SESSION_JOB_FAILS): pm_watch's session checks then step aside
-    (docs/pm-watch.md "Hub session-watch job"). Its `ok_at` is not asked for: the job skips while
-    pm_watch is live and not stepped aside, so it has no success before pm_watch steps aside. A hub
-    that is down or unreadable is False. Never raises."""
+SESSION_JOB_LIVE_RUNS = 3         # its last run older than this many periods: hung, pm_watch does not yield
+
+
+def session_job_live(block, now):
+    """True when a session-watch health block shows a job pm_watch may step aside for: no failure
+    since its last success (`failures` 0: a job failing before it polls would lose events) and a
+    run (`last_at`, a skip's too) at most SESSION_JOB_LIVE_RUNS times `every_s` before `now`, so a
+    hung job thread, whose failures stay 0, is not trusted. A job that has not run yet has no
+    `last_at`: pm_watch keeps its checks until the first run. Its `ok_at` is not asked for: the job
+    skips while pm_watch is live and not stepped aside, so it has no success before then."""
+    if not isinstance(block, dict) or type(block.get("failures")) is not int or block["failures"] != 0:
+        return False
+    every, last = block.get("every_s"), block.get("last_at")
+    return _number(every) and every > 0 and _number(last) and now - last <= SESSION_JOB_LIVE_RUNS * every
+
+
+def hub_session_job_up(load=None, make_client=None, now=None):
+    """True when the hub's GET health `jobs` names the session-watch job and session_job_live
+    passes (`now` default time.time()): pm_watch's session checks then step aside
+    (docs/pm-watch.md "Hub session-watch job"). A hub that is down or unreadable is False. Never
+    raises."""
     block = (hub_jobs(load, make_client) or {}).get(SESSION_JOB)
-    return isinstance(block, dict) and _count(block.get("failures")) \
-        and block["failures"] < SESSION_JOB_FAILS
+    return session_job_live(block, time.time() if now is None else now)
 
 
-def session_yield(sessions, cfg, up=None):
+def job_inputs(cfg, default_alerts, notice_dir):
+    """What the hub's session-watch job watches, as (sessions_file, alerts_dir, notice_dir): the
+    config's "pm_watch" keys (`cfg`) with the host's default alerts folder (`default_alerts`) and
+    the configured lock notice folder (`notice_dir`), as kitlib.hubjobs.session_watch reads them."""
+    return cfg.get("sessions_file"), cfg.get("alerts_dir") or default_alerts, notice_dir
+
+
+def session_yield(run, job, up=None):
     """pm_watch's step-aside test for Watcher(yield_to=...): `up` (default hub_session_job_up), or
-    None when the hub's session-watch job watches other sessions than this run. The job reads the
-    config's sessions_file (`cfg`, the "pm_watch" keys), so a run whose sessions file is another
-    one, or a config with none (the job then skips every run), never steps aside."""
-    theirs = cfg.get("sessions_file")
-    norm = lambda p: os.path.normcase(os.path.abspath(p))
-    if not sessions or not theirs or norm(sessions) != norm(theirs):
+    None when the hub's session-watch job watches other inputs than this run. `run` and `job` are
+    each (sessions_file, alerts_dir, notice_dir) (job: job_inputs). A run whose sessions file,
+    alerts folder or notice folder differs from the job's, or a config with no sessions file (the
+    job then skips every run), never steps aside: its own events would reach no one."""
+    def norm(p):
+        return os.path.normcase(os.path.abspath(p)) if p else None
+    if not run[0] or not job[0] or tuple(map(norm, run)) != tuple(map(norm, job)):
         return None
     return up or hub_session_job_up
 
