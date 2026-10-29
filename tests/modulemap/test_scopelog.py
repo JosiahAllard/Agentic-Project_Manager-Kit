@@ -61,12 +61,14 @@ class RepoCase(unittest.TestCase):
         return name
 
     def cli(self, *argv):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        """The tool's exit code and stdout; its stderr is kept in self.err."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
                 code = cli.main(['-C', self.root] + list(argv))
             except SystemExit as e:
                 code = e.code
+        self.err = err.getvalue()
         return code, out.getvalue()
 
 
@@ -155,6 +157,7 @@ class WriteTest(RepoCase):
     def test_record_goes_with_scope_only(self):
         code, _ = self.cli('--check', '--record')
         self.assertEqual(code, 2)
+        self.assertIn('--record goes with --scope', self.err)
         self.assertFalse(os.path.exists(self.folder()))
 
 
@@ -165,6 +168,7 @@ class NoMapTest(RepoCase):
         self.repo.write('node/n.cs', 'class N2 {}')
         code, out = self.cli('--scope', '--record')
         self.assertEqual(code, 2, out)
+        self.assertIn('no "modules".map', out + self.err)
         self.assertFalse(os.path.exists(self.folder()))
         self.put(NOW, {'schema': 1, 'widen': []})
         self.assertEqual(scopelog.summary(self.root, NOW), (None, []))
